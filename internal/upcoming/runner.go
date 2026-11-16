@@ -209,10 +209,8 @@ func (r *Runner) Run(ctx context.Context) {
 		case <-r.wake:
 			t.Stop()
 			if r.opt.On() {
-				st, _ := r.cat.UpcomingRunState(ctx)
-				if r.due(st) {
-					next = r.opt.Now()
-				}
+				next = r.woken(ctx, next)
+				r.saveNext(ctx, next)
 			}
 			continue
 		case <-r.kick:
@@ -251,6 +249,21 @@ func (r *Runner) resolveOn() bool { return r.opt.Resolve != nil && r.opt.Resolve
 func (r *Runner) due(st catalog.UpcomingRun) bool {
 	last, ok := parseStamp(st.LastSuccessAt)
 	return !ok || r.opt.Now().Sub(last) >= interval
+}
+
+// woken is when the next run is once the job is switched on, the schedule
+// standing at next: now when a full run is due, else no later than when one
+// comes due. A step-1-alone run while the job was off (Resolve) moved the
+// schedule a day on from its own time, which can be most of a day past that.
+func (r *Runner) woken(ctx context.Context, next time.Time) time.Time {
+	st, _ := r.cat.UpcomingRunState(ctx)
+	if r.due(st) {
+		return r.opt.Now()
+	}
+	if last, ok := parseStamp(st.LastSuccessAt); ok && last.Add(interval).Before(next) {
+		return last.Add(interval)
+	}
+	return next
 }
 
 // firstRun is when the first run after the start is: an hour on, or the next

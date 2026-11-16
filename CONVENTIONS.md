@@ -585,7 +585,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   daily with +-1 h jitter, a failed run again hourly three times; `Kick` (wired to `OnBookChange`) makes a
   light run once kicks have been quiet 30 s (at most 10 min: books resolved, series never read are read,
   no feed, no status); `Wake` (PATCH /admin/settings switching the job or metadata on) runs at once when
-  no run has succeeded within the day. A full run: (1) each book with an ASIN/ISBN gets its work id (the
+  no run has succeeded within the day, else no later than when one comes due (`woken`: a step-(1)-alone
+  run while the job was off moved the schedule a day on from its own time; the status's `next_run_at`
+  follows). A full run: (1) each book with an ASIN/ISBN gets its work id (the
   meta cache, else `WorkIDs` in batches of 100; answers rechecked monthly, at most 500 a run); (2) each
   local series (library, `match.SeriesKey`) gets its community series from its works' series named like it
   (primaries first; then give or take an article or "Series"), monthly or when it gains a book or a work;

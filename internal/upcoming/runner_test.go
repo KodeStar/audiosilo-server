@@ -1096,8 +1096,68 @@ func TestRunnerResolveOnlyWhileOff(t *testing.T) {
 	}
 }
 
-// A kick while the job is off but metadata on (Resolve) still makes the light
-// run resolve the new book's work; with Resolve off as well, a kick runs nothing.
+// Switched on after a step-1-alone run moved the schedule a day on: the full
+// run comes when the last success is a day old, not a day after that run; at
+// once when it already is (or nothing ever succeeded); and a schedule already
+// sooner than that stands.
+func TestRunnerWokenAfterResolveOnly(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+	now := f.r.opt.Now()
+	far := now.Add(interval)
+	if got := f.r.woken(ctx, far); !got.Equal(now) {
+		t.Fatalf("never succeeded: woken = %v, want now", got.Sub(now))
+	}
+	succeeded := func(ago time.Duration) {
+		t.Helper()
+		if err := f.cat.SaveUpcomingRunState(ctx, catalog.UpcomingRun{LastSuccessAt: stamp(now.Add(-ago))}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A success 23.5 h ago, and a step-1-alone run since: due in half an hour.
+	succeeded(interval - 30*time.Minute)
+	if got := f.r.woken(ctx, far); got.Sub(now) != 30*time.Minute {
+		t.Fatalf("a success 23.5 h ago: woken in %v, want 30m", got.Sub(now))
+	}
+	if soon := now.Add(10 * time.Minute); !f.r.woken(ctx, soon).Equal(soon) {
+		t.Fatal("a schedule sooner than the day's end stands")
+	}
+	succeeded(interval + time.Hour)
+	if got := f.r.woken(ctx, far); !got.Equal(now) {
+		t.Fatalf("a success over a day ago: woken = %v, want now", got.Sub(now))
+	}
+}
+
+// The schedule takes the sooner time on a wake, and the status shows it: a
+// success 23.5 h ago with the next run an hour on (the start's delay, like a
+// step-1-alone run's day) is run again in half an hour.
+func TestRunnerWakeMovesScheduleUp(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.clock = time.Now()
+	ctx := context.Background()
+	last := f.clock.Add(30*time.Minute - interval)
+	if err := f.cat.SaveUpcomingRunState(ctx, catalog.UpcomingRun{LastSuccessAt: stamp(last)}); err != nil {
+		t.Fatal(err)
+	}
+	runSchedule(t, f)
+	eventually(t, "the first schedule", func() bool {
+		st, _ := f.cat.UpcomingRunState(ctx)
+		next, ok := parseStamp(st.NextRunAt)
+		return ok && next.Sub(f.clock) > 45*time.Minute
+	})
+	f.r.Wake()
+	eventually(t, "the schedule moved up", func() bool {
+		st, _ := f.cat.UpcomingRunState(ctx)
+		next, ok := parseStamp(st.NextRunAt)
+		return ok && next.Sub(f.clock) < 31*time.Minute && next.Sub(f.clock) > 29*time.Minute
+	})
+	if f.md.feedCount() != 0 {
+		t.Fatal("a wake before the run is due runs nothing")
+	}
+}
+
 func TestRunnerKickResolvesWhileOff(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
