@@ -2119,3 +2119,52 @@ func TestMembers_DeleteKeepsRepeatedKeepMembers(t *testing.T) {
 		t.Error("the member not kept survived")
 	}
 }
+
+// DELETE /admin/users/{id}?delete_members= (server#222): the console names the
+// members it showed and the admin chose, so only those go. Allowed: a member
+// added after the page opened survives as an independent account (the empty
+// list too: a person with no members when the page opened). Denied, nothing
+// changed: an id that isn't one of theirs, one keep_members keeps too, and a
+// list that isn't ids.
+func TestMembers_DeleteListedMembersOnly(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	evie, evieTok := m.kid(t, m.adamTok, "Evie")
+	ellis, ellisTok := m.grownup(t, m.adamTok, "Ellis", "all")
+	kit, _ := m.kid(t, m.bobTok, "Kit")
+	userURL := fmt.Sprintf("/api/v1/admin/users/%d", m.adam)
+	for _, bad := range []string{
+		"?delete_members=x",
+		fmt.Sprintf("?delete_members=%d", kit.ID),
+		fmt.Sprintf("?delete_members=%d&keep_members=%d", evie.ID, evie.ID),
+	} {
+		resp, b := m.do(t, "DELETE", userURL+bad, m.adminTok, "")
+		if resp.StatusCode != http.StatusBadRequest || codeOf(b) != "invalid_delete_members" {
+			t.Errorf("%s = %d %s, want 400 invalid_delete_members", bad, resp.StatusCode, b)
+		}
+	}
+	if s := m.status(t, "GET", "/api/v1/me", m.adamTok, ""); s != http.StatusOK {
+		t.Fatal("a refused delete deleted the owner")
+	}
+	// The page read Evie and Ellis; Gus joins before the admin confirms.
+	_, gusTok := m.grownup(t, m.adamTok, "Gus", "all")
+	if s := m.status(t, "DELETE", fmt.Sprintf("%s?delete_members=%d&keep_members=%d", userURL, evie.ID, ellis.ID), m.adminTok, ""); s != http.StatusNoContent {
+		t.Fatalf("delete adam = %d", s)
+	}
+	if s := m.status(t, "GET", "/api/v1/me", evieTok, ""); s != http.StatusUnauthorized {
+		t.Error("the member the admin chose to delete survived")
+	}
+	for name, tok := range map[string]string{"ellis (kept)": ellisTok, "gus (added after)": gusTok} {
+		if u := m.me(t, tok); u.ManagedBy != nil {
+			t.Errorf("%s = %+v, want an independent account", name, u)
+		}
+	}
+	// The empty list (the page showed no members, or the admin unticked them
+	// all) deletes none: bob's Kit stays, an independent account.
+	if s := m.status(t, "DELETE", fmt.Sprintf("/api/v1/admin/users/%d?delete_members=", m.bob), m.adminTok, ""); s != http.StatusNoContent {
+		t.Fatalf("delete bob = %d", s)
+	}
+	if u, err := m.auth.GetUser(context.Background(), kit.ID); err != nil || u.ManagedBy != nil {
+		t.Errorf("Kit, unlisted, after bob's delete = %+v, %v; want an independent account", u, err)
+	}
+}

@@ -50,7 +50,7 @@ import { toast } from '@/lib/toast';
 import { AccessRow } from './access-row';
 import { GiveAccessDialog } from './give-access-dialog';
 import { DeleteMembers, HouseholdCard, MemberAccessCard } from './household';
-import { keptMembers, ownerName } from './household-model';
+import { deleteChoice, ownerName } from './household-model';
 import { InviteDialog } from './invite-dialog';
 import { InviteTable } from './invites-page';
 import { PasswordDialog } from './password-dialog';
@@ -715,12 +715,12 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
         confirmLabel={t('user.danger.deleteAction')}
         typeToConfirm={u.username}
         onConfirm={async () => {
-          const keep = keptMembers(members, keeping);
-          await api.deleteUser(u.id, keep);
+          const { keep, remove } = deleteChoice(members, keeping);
+          await api.deleteUser(u.id, remove, keep);
           invalidatePeople(qc);
           toast.add({
             title: t('user.danger.deleted', { name: u.username }),
-            description: membersOutcome(members.length - keep.length, keep.length, t),
+            description: membersOutcome(remove.length, keep.length, t),
             type: 'success',
           });
           void navigate({ to: '/people/{-$section}', params: { section: undefined } });

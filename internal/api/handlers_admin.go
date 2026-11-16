@@ -329,7 +329,12 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 // (sessions, auth codes, progress/bookmarks/notes/history, share grants) via the
 // schema's cascade, and its household members with it except the ids in
 // ?keep_members=<id>,<id> (or the parameter repeated; kept as ordinary
-// accounts; an id that isn't one of theirs is 400 invalid_keep_members). Two guards: an admin cannot delete their
+// accounts; an id that isn't one of theirs is 400 invalid_keep_members). With
+// ?delete_members=<id>,<id> (present, even empty: the console always sends it)
+// only those members go and every other is kept, so a member added after the
+// console read the list is never deleted unseen (server#222; an id that isn't
+// one of theirs, or one keep_members names, is 400 invalid_delete_members).
+// Two guards: an admin cannot delete their
 // own account (disable it instead - prevents self-lockout and fat-finger loss),
 // and auth.DeleteUser refuses the last enabled admin (ErrLastAdmin → 409).
 func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
@@ -346,6 +351,12 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidKeepMembers, "keep_members must be user ids separated by commas")
 		return
 	}
+	delParam, listed := r.URL.Query()["delete_members"]
+	del, ok := parseIDList(strings.Join(delParam, ","))
+	if !ok {
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidDelMembers, "delete_members must be user ids separated by commas")
+		return
+	}
 	if caller := userFrom(r.Context()); caller != nil && caller.ID == id {
 		writeErrorCode(w, http.StatusBadRequest, codeCannotDeleteSelf, "you cannot delete your own account - disable it instead")
 		return
@@ -355,7 +366,12 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		a.writeUserError(w, err, "could not delete user")
 		return
 	}
-	done, err := a.auth.DeleteUser(r.Context(), id, keep)
+	var done auth.DeletedUser
+	if listed {
+		done, err = a.auth.DeleteUserListed(r.Context(), id, keep, del)
+	} else {
+		done, err = a.auth.DeleteUser(r.Context(), id, keep)
+	}
 	if err != nil {
 		a.writeUserError(w, err, "could not delete user")
 		return
@@ -432,6 +448,8 @@ func (a *API) writeUserError(w http.ResponseWriter, err error, genericMsg string
 		writeErrorCode(w, http.StatusConflict, codeNotLinkable, err.Error())
 	case errors.Is(err, auth.ErrInvalidKeepMembers):
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidKeepMembers, err.Error())
+	case errors.Is(err, auth.ErrInvalidDeleteMembers):
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidDelMembers, err.Error())
 	default:
 		a.log.Warn(genericMsg, "err", err)
 		writeError(w, http.StatusInternalServerError, genericMsg)

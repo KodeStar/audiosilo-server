@@ -1464,13 +1464,24 @@ func (s *Service) ReapIdleDemoUsers(ctx context.Context, cutoff time.Time) (int6
 // cleared, so they keep only their own grants). An id in keep that isn't one of
 // this person's members is ErrInvalidKeepMembers and nothing changes.
 func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (DeletedUser, error) {
+	return s.deleteUser(ctx, id, keep, nil, false)
+}
+
+// DeleteUserListed is DeleteUser that deletes only the members in del (the
+// console's delete dialog, server#222): every other member of the person's is
+// kept as DeleteUser keeps one, so a member added after the dialog read the
+// list is never deleted unseen. An id in del that isn't one of this person's
+// members, or that keep names too, is ErrInvalidDeleteMembers, an id in keep
+// that isn't one ErrInvalidKeepMembers, and nothing changes.
+func (s *Service) DeleteUserListed(ctx context.Context, id int64, keep, del []int64) (DeletedUser, error) {
+	return s.deleteUser(ctx, id, keep, del, true)
+}
+
+// deleteUser is DeleteUser and, listed, DeleteUserListed.
+func (s *Service) deleteUser(ctx context.Context, id int64, keep, del []int64, listed bool) (DeletedUser, error) {
 	keep = slices.Compact(slices.Sorted(slices.Values(keep)))
-	list, err := json.Marshal(append([]int64{}, keep...)) // [] for none, never null
-	if err != nil {
-		return DeletedUser{}, err
-	}
 	var out DeletedUser
-	err = s.db.WithDurableTx(ctx, "DeleteUser", func(tx *sql.Tx) error {
+	err := s.db.WithDurableTx(ctx, "DeleteUser", func(tx *sql.Tx) error {
 		// The account and the last-admin guard are read inside the write, as
 		// UpdateUser's are: two admins removing each other at once can't both
 		// pass the guard.
@@ -1483,14 +1494,24 @@ func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (Delet
 				return err
 			}
 		}
+		kept := keep
+		if listed {
+			if kept, err = keepUnlisted(ctx, tx, id, keep, del); err != nil {
+				return err
+			}
+		}
+		list, err := json.Marshal(append([]int64{}, kept...)) // [] for none, never null
+		if err != nil {
+			return err
+		}
 		if out.MembersKept, err = s.keepMembers(ctx, tx, id, string(list)); err != nil {
 			return err
 		}
-		if len(out.MembersKept) != len(keep) {
+		if len(out.MembersKept) != len(kept) {
 			return ErrInvalidKeepMembers
 		}
-		for _, kept := range keep {
-			if err := leaveOwners(ctx, tx, kept, 0); err != nil {
+		for _, m := range kept {
+			if err := leaveOwners(ctx, tx, m, 0); err != nil {
 				return err
 			}
 		}
@@ -1511,6 +1532,40 @@ func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (Delet
 	}
 	slices.Sort(out.MembersKept)
 	return out, nil
+}
+
+// keepUnlisted is the members of owner's a listed delete keeps: every one not
+// in del, read inside tx, so one added after the caller read the list stays.
+// keep must name members only, del members not in keep (ErrInvalidKeepMembers,
+// ErrInvalidDeleteMembers).
+func keepUnlisted(ctx context.Context, tx *sql.Tx, owner int64, keep, del []int64) ([]int64, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM users WHERE managed_by = ? ORDER BY id`, owner)
+	if err != nil {
+		return nil, err
+	}
+	var members []int64
+	for rows.Next() {
+		var m int64
+		if err := rows.Scan(&m); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		members = append(members, m)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for _, k := range keep {
+		if !slices.Contains(members, k) {
+			return nil, ErrInvalidKeepMembers
+		}
+	}
+	for _, d := range del {
+		if !slices.Contains(members, d) || slices.Contains(keep, d) {
+			return nil, ErrInvalidDeleteMembers
+		}
+	}
+	return slices.DeleteFunc(members, func(m int64) bool { return slices.Contains(del, m) }), nil
 }
 
 // keepMembers makes the ids in list (a JSON array) that are owner's members

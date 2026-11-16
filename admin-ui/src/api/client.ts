@@ -664,13 +664,19 @@ export const api = {
   updateUser: (id: number, patch: UserPatch) =>
     request<AdminUser>('PATCH', `/admin/users/${id}`, patch),
   /**
-   * Deletes a person, and their household members with them except the ids in
-   * `keepMembers`, who become independent accounts.
+   * Deletes a person with the household members in `deleteMembers` (the ones the
+   * dialog showed and the admin left ticked); every other member, `keepMembers` and
+   * any added since the dialog read the list, becomes an independent account. Always
+   * sends `delete_members`, even empty: without it the server deletes every member
+   * not kept (server#222).
    */
-  deleteUser: (id: number, keepMembers: readonly number[] = []) =>
+  deleteUser: (id: number, deleteMembers: readonly number[], keepMembers: readonly number[] = []) =>
     request<void>(
       'DELETE',
-      `/admin/users/${id}${bookQuery({ keep_members: keepMembers.join(',') })}`,
+      `/admin/users/${id}?${new URLSearchParams({
+        delete_members: deleteMembers.join(','),
+        ...(keepMembers.length ? { keep_members: keepMembers.join(',') } : {}),
+      }).toString()}`,
     ),
   clearRecovery: (id: number) => request<void>('DELETE', `/admin/users/${id}/recovery`),
   /**

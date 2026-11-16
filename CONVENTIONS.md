@@ -2550,7 +2550,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `has_members`, 400 `kid_no_password` for a non-empty `password` on a kid or beside assigning one,
   which `""` (clearing) is not; null: "Make independent"); the whole PATCH is one `auth.UpdateUser` transaction that checks every field before
   writing, so a refused field changes nothing; `DELETE ?keep_members=<id>,<id>` (or the parameter repeated) deletes the person's
-  other members with them (400 `invalid_keep_members`). Joining another owner's household signs the
+  other members with them (400 `invalid_keep_members`); with `delete_members=<id>,<id>` (present, even
+  empty: the console always sends the members its dialog showed and left ticked) only those go and every
+  other member is kept, so one added after the page opened is never deleted unseen
+  (`auth.DeleteUserListed`, server#222; 400 `invalid_delete_members` for an id that isn't theirs or one
+  `keep_members` names). Joining another owner's household signs the
   person out of what another owner set up for them (`auth.leaveOwners`: the sessions and API keys made
   on anyone else's devices, by `created_on_token_id`, which would otherwise carry the new owner's
   access to the old owner's phone, the calendar feed link made on one (deleted; `IssueFeedToken`

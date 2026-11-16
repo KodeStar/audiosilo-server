@@ -7,8 +7,8 @@ import {
   displayName,
   peopleGroups,
   type PeopleEntry,
+  deleteChoice,
   independentPatch,
-  keptMembers,
   namedApart,
   ownerName,
 } from './household-model';
@@ -127,17 +127,17 @@ describe('assigning', () => {
   });
 });
 
-describe('keptMembers', () => {
+describe('deleteChoice', () => {
   const members = [{ id: 3 }, { id: 4 }, { id: 7 }];
 
-  it('keeps the members unticked to stay, in list order', () => {
-    expect(keptMembers(members, new Set())).toEqual([]);
-    expect(keptMembers(members, new Set([7, 3]))).toEqual([3, 7]);
-    expect(keptMembers(members, new Set([3, 4, 7]))).toEqual([3, 4, 7]);
+  it('keeps the members unticked to stay and deletes the rest it showed, in list order', () => {
+    expect(deleteChoice(members, new Set())).toEqual({ keep: [], remove: [3, 4, 7] });
+    expect(deleteChoice(members, new Set([7, 3]))).toEqual({ keep: [3, 7], remove: [4] });
+    expect(deleteChoice(members, new Set([3, 4, 7]))).toEqual({ keep: [3, 4, 7], remove: [] });
   });
 
   it('never sends an id that is not one of their members', () => {
-    expect(keptMembers(members, new Set([4, 99]))).toEqual([4]);
-    expect(keptMembers([], new Set([1]))).toEqual([]);
+    expect(deleteChoice(members, new Set([4, 99]))).toEqual({ keep: [4], remove: [3, 7] });
+    expect(deleteChoice([], new Set([1]))).toEqual({ keep: [], remove: [] });
   });
 });

@@ -77,6 +77,9 @@ var (
 	// ErrInvalidKeepMembers is a DeleteUser keep id that isn't one of the
 	// person's members.
 	ErrInvalidKeepMembers = errors.New("keep_members names someone who isn't this person's member")
+	// ErrInvalidDeleteMembers is a DeleteUserListed delete id that isn't one of
+	// the person's members, or one keep names too.
+	ErrInvalidDeleteMembers = errors.New("delete_members names someone who isn't this person's member, or one keep_members keeps")
 	// The admin's "Assign to someone" refusals.
 	ErrOwnerIsMember = errors.New("the new owner is a household member")
 	ErrOwnerIsDemo   = errors.New("the new owner is a demo account")
