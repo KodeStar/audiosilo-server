@@ -266,10 +266,12 @@ func (r *Runner) firstRun(ctx context.Context) time.Time {
 	return now.Add(firstDelay)
 }
 
-// after is when the run after a full one is.
+// after is when the run after a full one is. Only a failed run of the whole
+// job is tried again soon: a step-1-alone run (Resolve) records no failures to
+// stop the retries, so it waits a day like a success.
 func (r *Runner) after(ctx context.Context, err error) time.Time {
 	now := r.opt.Now()
-	if err != nil && !errors.Is(err, context.Canceled) {
+	if err != nil && !errors.Is(err, context.Canceled) && r.opt.On() {
 		if st, e := r.cat.UpcomingRunState(ctx); e == nil && st.Failures <= maxRetries {
 			return now.Add(retryDelay)
 		}
@@ -331,48 +333,46 @@ type seriesKey struct {
 func (r *Runner) RunOnce(ctx context.Context, full bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.opt.On() {
-		if r.resolveOn() {
-			return r.resolveOnly(ctx, full)
+	whole := r.opt.On()
+	on, step := r.opt.On, r.run
+	if !whole {
+		if !r.resolveOn() {
+			return errSwitchedOff
 		}
-		return errSwitchedOff
+		on, step = r.resolveOn, r.resolveOnly
 	}
 	now := r.opt.Now()
-	rctx, stop := r.whileOn(ctx, r.opt.On)
+	rctx, stop := r.whileOn(ctx, on)
 	defer stop()
-	err := r.run(rctx, full, now)
+	err := step(rctx, full, now)
 	if rctx.Err() != nil {
 		return context.Cause(rctx) // cancelled, or switched off
 	}
-	if full {
+	if full && whole {
 		r.record(ctx, now, err)
 	}
 	if err != nil {
-		r.log.Warn("upcoming releases: run failed", "err", err)
+		r.log.Warn("upcoming releases: run failed", "err", err, "resolve_only", !whole)
 	}
 	return err
 }
 
-// resolveOnly is a run's step 1 alone (resolveWorks), for the job switched off
+// resolveOnly is a run's step 1 alone (resolveOwned), for the job switched off
 // with metadata on: the books' work ids, which the player's lists carry,
 // without the series, the watch feed, the items or an announcement. It records
 // no run status, so switching the job on still finds a full run due.
-func (r *Runner) resolveOnly(ctx context.Context, full bool) error {
-	rctx, stop := r.whileOn(ctx, r.resolveOn)
-	defer stop()
-	books, err := r.cat.UpcomingBooks(rctx)
-	if err == nil {
-		_, _, err = r.resolveWorks(rctx, books, full, r.opt.Now())
-	} else {
-		err = fmt.Errorf("reading the books: %w", err)
-	}
-	if rctx.Err() != nil {
-		return context.Cause(rctx)
-	}
-	if err != nil {
-		r.log.Warn("upcoming releases: resolving the books' works failed", "err", err)
-	}
+func (r *Runner) resolveOnly(ctx context.Context, full bool, now time.Time) error {
+	_, _, _, err := r.resolveOwned(ctx, full, now)
 	return err
+}
+
+// resolveOwned is step 1: the owned books, and the work each is (resolveWorks).
+func (r *Runner) resolveOwned(ctx context.Context, full bool, now time.Time) (books []catalog.UpcomingBook, works map[catalog.Ref]string, changed map[catalog.Ref]bool, err error) {
+	if books, err = r.cat.UpcomingBooks(ctx); err != nil {
+		return nil, nil, nil, fmt.Errorf("reading the books: %w", err)
+	}
+	works, changed, err = r.resolveWorks(ctx, books, full, now)
+	return books, works, changed, err
 }
 
 // whileOn is ctx, cancelled with errSwitchedOff once on reports false (looked
@@ -404,11 +404,7 @@ func (r *Runner) whileOn(ctx context.Context, on func() bool) (rctx context.Cont
 }
 
 func (r *Runner) run(ctx context.Context, full bool, now time.Time) error {
-	books, err := r.cat.UpcomingBooks(ctx)
-	if err != nil {
-		return fmt.Errorf("reading the books: %w", err)
-	}
-	works, changed, err := r.resolveWorks(ctx, books, full, now)
+	books, works, changed, err := r.resolveOwned(ctx, full, now)
 	if err != nil {
 		return err
 	}

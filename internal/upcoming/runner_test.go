@@ -1061,6 +1061,11 @@ func TestRunnerResolveOnlyWhileOff(t *testing.T) {
 	if !f.r.due(catalog.UpcomingRun{}) {
 		t.Fatal("switching on after a resolve-only run must find a full run due")
 	}
+	// A failed resolve-only run counts no failure, so it is not retried within
+	// the hour (that would be every hour, for ever): the next is a day on.
+	if next := f.r.after(context.Background(), errors.New("upstream 500")); next.Sub(f.clock) < interval-jitter {
+		t.Fatalf("a failed resolve-only run is next after %v", next.Sub(f.clock))
+	}
 
 	// Metadata off too: nothing at all.
 	resolve.Store(false)
