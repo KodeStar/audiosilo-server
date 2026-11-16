@@ -89,12 +89,18 @@ func (o OIDCConfig) DisplayName() string {
 	return DefaultOIDCName
 }
 
-// EffectiveScopes are the scopes asked for, openid first and once: the
-// configured ones as listed, else DefaultOIDCScopes, without groups while
-// neither admin_group nor allowed_group is set (GroupPolicy). Both groups are
-// live, so this is read at each sign-in.
+// EffectiveScopes are the scopes asked for (OIDCScopes) under this config's
+// own groups.
 func (o OIDCConfig) EffectiveScopes() []string {
-	in := o.Scopes
+	return OIDCScopes(o.Scopes, o.GroupPolicy())
+}
+
+// OIDCScopes are the scopes asked for, openid first and once: configured as
+// listed, else DefaultOIDCScopes, without groups unless groupPolicy (admin_group
+// or allowed_group is set, GroupPolicy; both are live, so a sign-in reads it
+// at its start).
+func OIDCScopes(configured []string, groupPolicy bool) []string {
+	in := configured
 	defaults := len(in) == 0
 	if defaults {
 		in = DefaultOIDCScopes
@@ -102,7 +108,7 @@ func (o OIDCConfig) EffectiveScopes() []string {
 	out := []string{"openid"}
 	for _, s := range in {
 		s = strings.TrimSpace(s)
-		if s == "" || slices.Contains(out, s) || defaults && s == oidcGroupsScope && !o.GroupPolicy() {
+		if s == "" || slices.Contains(out, s) || defaults && s == oidcGroupsScope && !groupPolicy {
 			continue
 		}
 		out = append(out, s)

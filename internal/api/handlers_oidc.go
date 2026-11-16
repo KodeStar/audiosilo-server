@@ -182,12 +182,9 @@ func (a *API) oidcRedirectURI() string { return a.oidcBase() + oidcCallbackPath 
 
 // oidcScopes are the scopes a sign-in asks for now: the provider's, read at
 // start, with groups among the defaults only while the live admin_group or
-// allowed_group is set (config.OIDCConfig.EffectiveScopes).
+// allowed_group is set (config.OIDCScopes).
 func (a *API) oidcScopes() []string {
-	cfg := a.boot.Auth.OIDC
-	live := a.config().Auth.OIDC
-	cfg.AdminGroup, cfg.AllowedGroup = live.AdminGroup, live.AllowedGroup
-	return cfg.EffectiveScopes()
+	return config.OIDCScopes(a.boot.Auth.OIDC.Scopes, a.config().Auth.OIDC.GroupPolicy())
 }
 
 // oidcResult sends the browser to the connect page's result panel. base is
