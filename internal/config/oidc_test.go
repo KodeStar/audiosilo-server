@@ -16,32 +16,41 @@ func TestOIDCDefaults(t *testing.T) {
 	}
 	// No group policy: the defaults ask for no groups (server#406: Keycloak
 	// refuses a scope it has no client scope for, Google and Entra have none).
-	if got := o.EffectiveScopes(); !reflect.DeepEqual(got, []string{"openid", "profile", "email"}) {
+	if got := OIDCScopes(o.Scopes, o.GroupPolicy()); !reflect.DeepEqual(got, []string{"openid", "profile", "email"}) {
 		t.Fatalf("default scopes without a group policy %v", got)
 	}
-	// Either group set: the defaults whole.
+	// admin_group, or allowed_group with auto_create on: the defaults whole.
 	for _, set := range []func(*OIDCConfig){
 		func(o *OIDCConfig) { o.AdminGroup = "admins" },
-		func(o *OIDCConfig) { o.AllowedGroup = "family" },
+		func(o *OIDCConfig) { o.AllowedGroup, o.AutoCreate = "family", true },
 	} {
 		g := o
 		set(&g)
-		if got := g.EffectiveScopes(); !reflect.DeepEqual(got, DefaultOIDCScopes) {
+		if got := OIDCScopes(g.Scopes, g.GroupPolicy()); !reflect.DeepEqual(got, DefaultOIDCScopes) {
 			t.Fatalf("default scopes with a group policy %v", got)
 		}
 	}
-	// A blank group is no policy.
+	// A blank group is no policy, nor allowed_group with auto_create off (it
+	// gates only an account a sign-in makes).
 	o.AdminGroup = "  "
 	if o.GroupPolicy() {
 		t.Fatal("a blank admin_group is a group policy")
 	}
+	o.AllowedGroup = "family"
+	if o.GroupPolicy() {
+		t.Fatal("allowed_group with auto_create off is a group policy")
+	}
+	if got := OIDCScopes(o.Scopes, o.GroupPolicy()); !reflect.DeepEqual(got, []string{"openid", "profile", "email"}) {
+		t.Fatalf("default scopes with allowed_group and auto_create off %v", got)
+	}
+	o.AllowedGroup = ""
 	o.Scopes = []string{"email", " openid ", "email", ""}
-	if got := o.EffectiveScopes(); !reflect.DeepEqual(got, []string{"openid", "email"}) {
+	if got := OIDCScopes(o.Scopes, o.GroupPolicy()); !reflect.DeepEqual(got, []string{"openid", "email"}) {
 		t.Fatalf("scopes %v: openid first, once", got)
 	}
 	// Configured scopes are asked as listed, groups too, policy or not.
 	o.Scopes = []string{"openid", "groups"}
-	if got := o.EffectiveScopes(); !reflect.DeepEqual(got, []string{"openid", "groups"}) {
+	if got := OIDCScopes(o.Scopes, o.GroupPolicy()); !reflect.DeepEqual(got, []string{"openid", "groups"}) {
 		t.Fatalf("configured scopes %v", got)
 	}
 }

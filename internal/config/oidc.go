@@ -39,7 +39,7 @@ type OIDCConfig struct {
 	ClientSecret     string `yaml:"client_secret,omitempty" json:"-"`
 	ClientSecretFile string `yaml:"client_secret_file,omitempty"`
 	// Scopes asked for; empty is DefaultOIDCScopes, with groups only while a
-	// group policy is set (EffectiveScopes). openid is always asked.
+	// group policy is set (OIDCScopes, GroupPolicy). openid is always asked.
 	Scopes []string `yaml:"scopes,omitempty"`
 	// UsernameClaim names the claim a new account's username comes from (empty:
 	// preferred_username); GroupsClaim the claim listing the person's groups
@@ -70,7 +70,7 @@ const (
 )
 
 // DefaultOIDCScopes are the scopes asked for when none are configured, groups
-// only while admin_group or allowed_group is set (EffectiveScopes): Keycloak
+// only while a group policy is set (OIDCScopes, GroupPolicy): Keycloak
 // refuses a scope it has no client scope for (invalid_scope), and Google and
 // Entra have no groups scope at all.
 var DefaultOIDCScopes = []string{"openid", "profile", "email", "groups"}
@@ -89,16 +89,9 @@ func (o OIDCConfig) DisplayName() string {
 	return DefaultOIDCName
 }
 
-// EffectiveScopes are the scopes asked for (OIDCScopes) under this config's
-// own groups.
-func (o OIDCConfig) EffectiveScopes() []string {
-	return OIDCScopes(o.Scopes, o.GroupPolicy())
-}
-
 // OIDCScopes are the scopes asked for, openid first and once: configured as
-// listed, else DefaultOIDCScopes, without groups unless groupPolicy (admin_group
-// or allowed_group is set, GroupPolicy; both are live, so a sign-in reads it
-// at its start).
+// listed, else DefaultOIDCScopes, without groups unless groupPolicy
+// (GroupPolicy; live, so a sign-in reads it at its start).
 func OIDCScopes(configured []string, groupPolicy bool) []string {
 	in := configured
 	defaults := len(in) == 0
@@ -117,9 +110,10 @@ func OIDCScopes(configured []string, groupPolicy bool) []string {
 }
 
 // GroupPolicy reports whether a sign-in's groups decide anything: admin_group
-// or allowed_group is set.
+// is set, or allowed_group is with auto_create on (it gates only an account
+// made by a sign-in, so with auto_create off it decides nothing).
 func (o OIDCConfig) GroupPolicy() bool {
-	return strings.TrimSpace(o.AdminGroup) != "" || strings.TrimSpace(o.AllowedGroup) != ""
+	return strings.TrimSpace(o.AdminGroup) != "" || o.AutoCreate && strings.TrimSpace(o.AllowedGroup) != ""
 }
 
 // EffectiveUsernameClaim is UsernameClaim or its default.

@@ -260,8 +260,8 @@ auth:
     # [AUDIOSILO_OIDC_CLIENT_SECRET] [AUDIOSILO_OIDC_CLIENT_SECRET_FILE]
     # client_secret: ""
     # client_secret_file: ""
-    # Unset: openid, profile, email, and groups only while admin_group or
-    # allowed_group is set. Listed: asked exactly as listed. [AUDIOSILO_OIDC_SCOPES]
+    # Unset: openid, profile, email, and groups only while admin_group is set,
+    # or allowed_group with auto_create on. Listed: asked exactly as listed. [AUDIOSILO_OIDC_SCOPES]
     # scopes: [openid, profile, email, groups]
     # username_claim: preferred_username  # a new account's username [AUDIOSILO_OIDC_USERNAME_CLAIM]
     # groups_claim: groups                # or a namespaced one, https://example.org/groups [AUDIOSILO_OIDC_GROUPS_CLAIM]

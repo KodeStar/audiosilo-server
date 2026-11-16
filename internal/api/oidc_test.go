@@ -1332,10 +1332,20 @@ func TestOIDCScopesFollowGroupPolicy(t *testing.T) {
 			t.Fatalf("settings' default scopes, want %q: %s", want, body)
 		}
 	}
-	check("openid profile email")
-	if resp, body := e.do(t, "PATCH", "/api/v1/admin/settings", tok, `{"signin":{"admin_group":"admins"}}`); resp.StatusCode != 200 {
-		t.Fatalf("save: %d %s", resp.StatusCode, body)
+	save := func(patch string) {
+		t.Helper()
+		if resp, body := e.do(t, "PATCH", "/api/v1/admin/settings", tok, `{"signin":`+patch+`}`); resp.StatusCode != 200 {
+			t.Fatalf("save %s: %d %s", patch, resp.StatusCode, body)
+		}
 	}
+	check("openid profile email")
+	// allowed_group gates only an account a sign-in makes: with auto_create
+	// off it decides nothing, so groups aren't asked for (denied); on, they are.
+	save(`{"allowed_group":"family"}`)
+	check("openid profile email")
+	save(`{"auto_create":true}`)
+	check("openid profile email groups")
+	save(`{"allowed_group":"","auto_create":false,"admin_group":"admins"}`)
 	check("openid profile email groups")
 }
 

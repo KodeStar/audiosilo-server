@@ -181,8 +181,8 @@ func (a *API) oidcBase() string { return strings.TrimRight(a.config().PublicURL,
 func (a *API) oidcRedirectURI() string { return a.oidcBase() + oidcCallbackPath }
 
 // oidcScopes are the scopes a sign-in asks for now: the provider's, read at
-// start, with groups among the defaults only while the live admin_group or
-// allowed_group is set (config.OIDCScopes).
+// start, with groups among the defaults only while the live settings hold a
+// group policy (config.OIDCConfig.GroupPolicy).
 func (a *API) oidcScopes() []string {
 	return config.OIDCScopes(a.boot.Auth.OIDC.Scopes, a.config().Auth.OIDC.GroupPolicy())
 }

@@ -3614,8 +3614,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   on the result panel, not a bare 503; a provider discovered before is probed (its discovery
   document, 3 s, at most every 30 s: `probe`) at `/start` and for the status, so one gone down lands
   on `#oidc=unavailable` and the status says `error`; the scopes are each `/start`'s, `oidcScopes`:
-  `auth.oidc.scopes` as listed, else the defaults with `groups` only while `admin_group` or
-  `allowed_group` is set, server#406), the flow cookie (`Sealer`: AES-GCM under a key made at
+  `auth.oidc.scopes` as listed, else the defaults with `groups` only while `admin_group` is set or
+  `allowed_group` is with `auto_create` on, `GroupPolicy`, server#406), the flow cookie (`Sealer`: AES-GCM under a key made at
   start, so a restart ends flows in flight; `Flow{state, nonce, verifier, redirect_uri, return,
   issued_at}`, ten minutes, the callback's exchange naming the redirect URI `/start` sent; `Replay`
   refuses a state used before, remembering only a flow whose exchange succeeded, so states sent back
