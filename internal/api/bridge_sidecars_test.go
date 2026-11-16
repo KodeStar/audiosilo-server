@@ -199,7 +199,8 @@ func TestBridgeBookPathCap(t *testing.T) {
 // too long" on the Bridge's rescan (path and from), a job's queue and estimate,
 // the jobs and sessions ?path= filters and the Bridge's enrichment (not its
 // invalid_request), on the fixture library and on an unknown one. Allowed: a
-// path at the cap gets each route's ordinary answer.
+// path at the cap gets each route's ordinary answer (a rescan's path and from
+// both at it too).
 func TestBridgeRoutesPathCap(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
@@ -220,6 +221,13 @@ func TestBridgeRoutesPathCap(t *testing.T) {
 			func(int64, string) string { return "/api/v1/bridge/rescan" },
 			func(lib int64, p string) string {
 				return fmt.Sprintf(`{"library_id":%d,"path":"Book","from":%q}`, lib, p)
+			},
+			http.StatusNotFound},
+		{"rescan path and from", "POST", b.bridgeTok,
+			func(int64, string) string { return "/api/v1/bridge/rescan" },
+			func(lib int64, p string) string {
+				// from as long as path: both at the cap fit the body.
+				return fmt.Sprintf(`{"library_id":%d,"path":%q,"from":%q}`, lib, p, "Z"+p[1:])
 			},
 			http.StatusNotFound},
 		{"queue", "POST", b.adminTok,
