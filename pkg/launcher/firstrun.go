@@ -166,6 +166,13 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	if err != nil {
 		return err
 	}
+	dbPath := filepath.Join(abs, "audiosilo.db")
+	// A --data that names no folder (a missing one, or the database file
+	// itself) holds no restore marker either: said as no database, not as a
+	// marker that doesn't read.
+	if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
+		return fmt.Errorf("no database at %s: name the server's data folder with --data before reset-admin", dbPath)
+	}
 	// A restore waiting for the next start replaces this database, and the
 	// password with it: refused, so the password printed is never one that
 	// stops working at the next start. Checked first: a damaged database the
@@ -176,7 +183,6 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	} else if restore != nil {
 		return fmt.Errorf("a restore of %s is waiting for the next start, which replaces this database (and a password set now): start the server once to apply it, or cancel it in the console (Settings > Backups), then run reset-admin again", restore.Name)
 	}
-	dbPath := filepath.Join(abs, "audiosilo.db")
 	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("no database at %s: name the server's data folder with --data before reset-admin", dbPath)
 	} else if err != nil {
@@ -221,6 +227,11 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	// the password came from the log (auth.UpdateUser, in the same write).
 	password := randomSecret(18)
 	if err := authSvc.SetPassword(ctx, u.ID, password, 0); err != nil {
+		if revoked {
+			// The code is gone and the password unchanged: say so, and that
+			// running it again is the way back in.
+			return fmt.Errorf("the auth code printed at first start is revoked, but setting the new password failed (run reset-admin again): %w", err)
+		}
 		return err
 	}
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }

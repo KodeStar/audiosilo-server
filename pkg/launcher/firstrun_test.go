@@ -633,6 +633,17 @@ func TestResetAdminRefusals(t *testing.T) {
 		}
 	})
 
+	// --data naming the database file, not its folder: no database there,
+	// never a restore marker that doesn't read (whose advice is to start the
+	// server).
+	t.Run("the database file as the folder", func(t *testing.T) {
+		dir, _ := resetDir(t, "admin")
+		err := ResetAdmin(ctx, filepath.Join(dir, "audiosilo.db"), "", &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "no database at") || strings.Contains(err.Error(), "restore") {
+			t.Fatalf("err = %v, want no database", err)
+		}
+	})
+
 	// A file that isn't an AudioSilo database is refused as it is, not
 	// migrated into one.
 	t.Run("an empty file", func(t *testing.T) {
