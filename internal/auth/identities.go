@@ -124,10 +124,10 @@ type OIDCResult struct {
 	// sign-in (user_identities.groups_seen), so a sign-in without one is the
 	// provider leaving it out now (Decision.NoGroups says the role stayed).
 	GroupsSeen bool
-	// Token is the single-use token (KindOIDC) an outcome that signs in
-	// minted in the sign-in's own transaction, when asked for (a tokenTTL), so
-	// a sign-out everywhere can't land between the decision and the token and
-	// miss it. "" otherwise.
+	// Token is the single-use token (KindOIDC, tokenTTL long) an outcome that
+	// signs in minted in the sign-in's own transaction, so a sign-out
+	// everywhere can't land between the decision and the token and miss it.
+	// "" otherwise.
 	Token string
 }
 
@@ -154,9 +154,9 @@ func scanAccount(row interface{ Scan(...any) error }, extra ...any) (oidc.Accoun
 // identity, both dropping the row the sign-in waited in; Pending records or
 // refreshes the waiting row (capped, pruned). An outcome that signs in applies the role rule: a
 // demotion that would leave no enabled admin is refused and reported, never
-// an error. With tokenTTL > 0 an outcome that signs in also mints the
-// single-use token the browser finishes with (IssueOIDCToken's kind and
-// life), in the same transaction (OIDCResult.Token).
+// an error. An outcome that signs in also mints the single-use token the
+// browser finishes with (KindOIDC, tokenTTL long, the only token ConsumeOIDC
+// takes), in the same transaction (OIDCResult.Token).
 func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy, tokenTTL time.Duration) (OIDCResult, error) {
 	var res OIDCResult
 	err := s.db.WithDurableTx(ctx, "OIDCSignIn", func(tx *sql.Tx) error {
@@ -216,7 +216,7 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy, 
 			}
 			res.Role = &rs
 		}
-		if res.User, err = getUser(ctx, tx, id); err != nil || tokenTTL <= 0 {
+		if res.User, err = getUser(ctx, tx, id); err != nil {
 			return err
 		}
 		res.Token, err = s.issueToken(ctx, tx, id, KindOIDC, "", tokenTTL)
@@ -225,15 +225,7 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy, 
 	return res, err
 }
 
-// IssueOIDCToken mints the single-use token a sign-in that signed in leaves
-// in the browser's cookie (KindOIDC, ttl long), the only token ConsumeOIDC
-// takes, for an account on its own: the callback's comes from OIDCSignIn's
-// transaction (tokenTTL), so this is the tests' way to one.
-func (s *Service) IssueOIDCToken(ctx context.Context, userID int64, ttl time.Duration) (string, error) {
-	return s.IssueToken(ctx, userID, KindOIDC, "", ttl)
-}
-
-// ConsumeOIDC trades a token IssueOIDCToken minted for its account, once
+// ConsumeOIDC trades a token OIDCSignIn minted (KindOIDC) for its account, once
 // (spendOnce: two racing finishes cannot both win). Any other token (a
 // pairing token, a session) is ErrInvalidToken and left as it was, as is a
 // spent or expired one, or one whose account is disabled or is now a

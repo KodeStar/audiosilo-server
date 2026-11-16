@@ -522,7 +522,7 @@ func TestOIDCFinish(t *testing.T) {
 	}
 	// Denied: an expired one (issued 61 s ago, with its 60 s life).
 	past := auth.New(e.db, func() time.Time { return time.Now().Add(-oidcDoneTTL - time.Second) })
-	stale, err := past.IssueOIDCToken(context.Background(), alice.ID, oidcDoneTTL)
+	stale, err := past.IssueToken(context.Background(), alice.ID, auth.KindOIDC, "", oidcDoneTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,7 +658,7 @@ func TestOIDCFinishCookieName(t *testing.T) {
 		c.Auth.OIDC = config.OIDCConfig{Enabled: true, Issuer: "https://idp.example", ClientID: "audiosilo"}
 	})
 	bob := plain.mustUser(t, "bob", "")
-	tok, err := plain.auth.IssueOIDCToken(context.Background(), bob.ID, oidcDoneTTL)
+	tok, err := plain.auth.IssueToken(context.Background(), bob.ID, auth.KindOIDC, "", oidcDoneTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +690,7 @@ func TestOIDCFinishRefusedWhileOff(t *testing.T) {
 			c.Auth.OIDC = o
 		})
 		alice := e.mustUser(t, "alice", "")
-		tok, err := e.auth.IssueOIDCToken(context.Background(), alice.ID, oidcDoneTTL)
+		tok, err := e.auth.IssueToken(context.Background(), alice.ID, auth.KindOIDC, "", oidcDoneTTL)
 		if err != nil {
 			t.Fatal(err)
 		}

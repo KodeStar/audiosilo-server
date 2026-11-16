@@ -3653,7 +3653,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Domain, so neither a sibling subdomain nor a plain-http answer can plant one; on plain http
   `audiosilo_oidc` on Path `/api/v1/auth/oidc/`, where a network attacker can plant one: no prefix
   without Secure; `oidcCookieName`) is deleted on every callback; a sign-in gets a **60 s
-  single-use token of its own kind** (`auth.KindOIDC`, `IssueOIDCToken`) that is **never in a URL**
+  single-use token of its own kind** (`auth.KindOIDC`, minted in `OIDCSignIn`'s transaction) that is **never in a URL**
   (a link carrying one would sign whoever follows it in as its owner: a login CSRF), only in the
   done cookie (`__Host-audiosilo_oidc_done` or `audiosilo_oidc_done`, named and placed as the flow
   cookie, Max-Age 60), and a 303 to `/admin/#oidc=done` or

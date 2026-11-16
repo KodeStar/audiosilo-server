@@ -293,7 +293,7 @@ func otherKindTokens(t *testing.T, u *upcomingEnv) map[string]string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sso, err := u.auth.IssueOIDCToken(ctx, u.adminID, time.Minute)
+	sso, err := u.auth.IssueToken(ctx, u.adminID, auth.KindOIDC, "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

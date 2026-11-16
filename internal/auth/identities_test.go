@@ -26,7 +26,7 @@ func setEmail(t *testing.T, s *Service, ctx context.Context, id int64, email str
 
 func signIn(t *testing.T, s *Service, ctx context.Context, c oidc.Claims, p oidc.Policy) OIDCResult {
 	t.Helper()
-	res, err := s.OIDCSignIn(ctx, c, p, 0)
+	res, err := s.OIDCSignIn(ctx, c, p, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,7 +678,7 @@ func TestConsumeOIDC(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
 	alice := mustUser(t, s, ctx, "alice", "", RoleUser)
-	sso, err := s.IssueOIDCToken(ctx, alice.ID, time.Minute)
+	sso, err := s.IssueToken(ctx, alice.ID, KindOIDC, "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -714,7 +714,7 @@ func TestConsumeOIDC(t *testing.T) {
 		t.Fatalf("a second finish: %v", err)
 	}
 	// A sign-out everywhere ends one in flight.
-	open, err := s.IssueOIDCToken(ctx, alice.ID, time.Minute)
+	open, err := s.IssueToken(ctx, alice.ID, KindOIDC, "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -758,13 +758,10 @@ func TestOIDCSignInMintsToken(t *testing.T) {
 	if _, err := s.ConsumeOIDC(ctx, res.Token); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("a sign-in's token survived a sign-out everywhere: %v", err)
 	}
-	// No token for a sign-in that waits, nor without a life asked for.
+	// No token for a sign-in that waits.
 	if res, err := s.OIDCSignIn(ctx, claimsFor("sub-b", "", false), oidc.Policy{}, time.Minute); err != nil ||
 		res.Decision.Outcome != oidc.Pending || res.Token != "" {
 		t.Fatalf("pending: %+v %v", res, err)
-	}
-	if res := signIn(t, s, ctx, claimsFor("sub-a", "", false), oidc.Policy{}); res.Token != "" {
-		t.Fatalf("a token minted with no life asked: %+v", res)
 	}
 }
 
@@ -778,7 +775,7 @@ func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
 	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
 	for _, kind := range []string{MemberGrownup, MemberKid} {
 		u := mustUser(t, s, ctx, "joins-"+kind, "", RoleUser)
-		tok, err := s.IssueOIDCToken(ctx, u.ID, time.Minute)
+		tok, err := s.IssueToken(ctx, u.ID, KindOIDC, "", time.Minute)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -790,7 +787,7 @@ func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
 		}
 	}
 	stays := mustUser(t, s, ctx, "stays", "", RoleUser)
-	tok, err := s.IssueOIDCToken(ctx, stays.ID, time.Minute)
+	tok, err := s.IssueToken(ctx, stays.ID, KindOIDC, "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -806,7 +803,7 @@ func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
 	if err := s.UpdateUser(ctx, late.ID, UserChanges{Household: &HouseholdChange{Owner: adam.ID, Kind: MemberGrownup, Access: MemberAll}}); err != nil {
 		t.Fatal(err)
 	}
-	tok, err = s.IssueOIDCToken(ctx, late.ID, time.Minute)
+	tok, err = s.IssueToken(ctx, late.ID, KindOIDC, "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
