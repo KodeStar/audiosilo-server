@@ -2036,9 +2036,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `InterruptMatchRuns` (launcher, at
   start) settles runs a stopped server left: matching -> interrupted, applying ->
   ready (`catalog.SettleMatchRuns(ctx, 0)`, one transaction; a failure is a warning). A run
-  whose finishing write failed (`FinishMatching`, `FinishApply` only log it) or that the start's
-  settle missed is settled too (server#339): `Runner.settleLocked` at the top of `Start` and
-  `Apply` (so a stuck applying run is ready, and can be applied, again), `Runner.SettleOrphans`
+  whose finishing write failed (`FinishMatching`, `FinishApply` log it) settles itself at once,
+  every worker done (`Runner.settleOwn`, server#350). One whose own settle failed too, or that
+  the start's settle missed, is settled too (server#339): `Runner.settleLocked` at the top of
+  `Start` and `Apply` (so a stuck applying run is ready, and can be applied, again; a failure is
+  logged and never refuses the run, `settleBeforeStart`), `Runner.SettleOrphans`
   on an Unlink refused as busy, and Stop (`Runner.Cancel` on a run that isn't the active one:
   `catalog.SettleMatchRun`; `POST .../cancel` 204, audited `book.match_stop` with `"orphan":
   true`; 409 `match_run_not_running` only for a run not marked working). Safe only under the
