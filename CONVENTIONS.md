@@ -4121,11 +4121,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`NoteAdminSignIn`) or a password set on an admin account ends it. A password set on the first-run
   admin, whoever sets it (the account step's `POST /auth/password`, People's `PATCH /admin/users/{id}`,
   another admin's included, `reset-admin`), also ends `printed_password` and deletes the auth code the
-  row names (D4, server#391: it sat in the same log): `auth.UpdateUser` notes it in its own transaction
-  (`notePasswordSet`), so no handler does; each note writes once.
+  row names (D4, server#391: it sat in the same log; a row from before it named one, an upgraded
+  install's, finds the code by its label and shape, as `reset-admin` does: `revokePrintedCode`):
+  `auth.UpdateUser` notes it in its own transaction (`notePasswordSet`), so no handler does; each note
+  writes once.
   No row (an upgraded server, `--setup`) never prints it, so no backfill. **`audiosilo [--data dir]
-  reset-admin [username]`** (`launcher.ResetAdmin`, offline): refuses first a data folder where a restore
-  waits for the next start (`backup.RestorePending`, read before the database, so a damaged database the
+  reset-admin [username]`** (`launcher.ResetAdmin`, offline): refuses a `--data` that is no folder (as no
+  database), then a data folder where a restore waits for the next start (`backup.RestorePending`, read before the database, so a damaged database the
   restore would replace says so), then opens the database (refuses a missing one,
   a file that isn't an AudioSilo database (`store.Inspect`: never migrated here) and one with pending
   migrations), picks the named admin or the only enabled one (exit 2 with the enabled admins listed

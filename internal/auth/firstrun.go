@@ -43,7 +43,7 @@ type firstAdmin struct {
 	// (auth_codes.id and created_at). A rotation in the console keeps the row
 	// but stamps it anew, so a rotated code, which was never printed, no longer
 	// matches. 0 and "" when no code was made, and in a row written before
-	// they were recorded.
+	// they were recorded (revokePrintedCode then finds the code by its shape).
 	CodeID        int64  `json:"code_id,omitempty"`
 	CodeCreatedAt string `json:"code_created_at,omitempty"`
 }
@@ -108,7 +108,7 @@ func (s *Service) NoteAdminSignIn(ctx context.Context) error {
 // the first-run admin's, whoever set it (their own change in the Your account
 // step or People, another admin's, reset-admin), replaces the printed password
 // (printed_password false) and ends the auth code printed beside it in the same
-// log (deletePrintedCode). Writes only what changes.
+// log (revokePrintedCode). Writes only what changes.
 func notePasswordSet(ctx context.Context, tx *sql.Tx, id int64, admin bool, now string) error {
 	fa, err := store.GetState[firstAdmin](ctx, tx, firstAdminKey)
 	if err != nil || fa.UserID == 0 {
@@ -118,7 +118,7 @@ func notePasswordSet(ctx context.Context, tx *sql.Tx, id int64, admin bool, now 
 	next.SignedIn = next.SignedIn || admin
 	if fa.UserID == id {
 		next.ChosePassword = true
-		if _, err := deletePrintedCode(ctx, tx, fa); err != nil {
+		if _, err := revokePrintedCode(ctx, tx, fa, id); err != nil {
 			return err
 		}
 	}
@@ -128,16 +128,33 @@ func notePasswordSet(ctx context.Context, tx *sql.Tx, id int64, admin bool, now 
 	return store.PutState(ctx, tx, firstAdminKey, next, now)
 }
 
-// deletePrintedCode deletes the auth code the row says was printed (CodeID with
-// its CodeCreatedAt: a code rotated since is not it) and reports whether there
-// was one. A row with no code recorded deletes nothing.
-func deletePrintedCode(ctx context.Context, ex sqlExecer, fa firstAdmin) (bool, error) {
-	if fa.CodeID == 0 {
+// revokePrintedCode deletes admin id's first-run auth code, the one printed
+// beside the password, and reports whether there was one. A row that names it
+// (CodeID with its CodeCreatedAt) deletes only that code, and only for its own
+// admin: a code rotated since was never printed and stays. A row that names
+// none (no row, or one written before it named the code: an upgraded install)
+// finds it by its shape: an invite of id's labelled InitialAdminCodeLabel with
+// unlimited uses and no expiry, as only ensureAdmin makes one (an admin's
+// invites carry the label they were given, and the console's always have limits
+// by default); a code rotated since goes too, since such a row can't tell.
+func revokePrintedCode(ctx context.Context, ex sqlExecer, fa firstAdmin, id int64) (bool, error) {
+	var (
+		res sql.Result
+		err error
+	)
+	switch {
+	case fa.CodeID != 0 && fa.UserID != id:
 		return false, nil
+	case fa.CodeID != 0:
+		res, err = ex.ExecContext(ctx,
+			`DELETE FROM auth_codes WHERE id = ? AND user_id = ? AND kind = ? AND created_at = ?`,
+			fa.CodeID, id, CodeInvite, fa.CodeCreatedAt)
+	default:
+		res, err = ex.ExecContext(ctx,
+			`DELETE FROM auth_codes
+			  WHERE user_id = ? AND kind = ? AND label = ? AND max_uses = 0 AND expires_at IS NULL`,
+			id, CodeInvite, InitialAdminCodeLabel)
 	}
-	res, err := ex.ExecContext(ctx,
-		`DELETE FROM auth_codes WHERE id = ? AND user_id = ? AND kind = ? AND created_at = ?`,
-		fa.CodeID, fa.UserID, CodeInvite, fa.CodeCreatedAt)
 	if err != nil {
 		return false, err
 	}
@@ -190,16 +207,12 @@ func (s *Service) PrintedPassword(ctx context.Context, id int64) (bool, error) {
 
 // RevokeInitialAdminCode deletes admin id's first-run auth code, the one the
 // first start printed in the same log as the password (reset-admin ends it
-// before it sets a new password), and reports whether there was one. The
-// first-run row names it (deletePrintedCode), so a code the admin rotated in the
-// console, which was never printed, stays; on an install whose row records no
-// code (from before the row, or before it named the code) it is found by its
-// shape: an invite of id's labelled InitialAdminCodeLabel with unlimited uses
-// and no expiry, as only ensureAdmin makes one (an admin's invites carry the
-// label they were given, and the console's always have limits by default).
-// Devices it paired stay signed in unless their sessions end otherwise (a new
-// password ends them); its unspent pairing tokens go with it (the
-// tokens.auth_code_id cascade).
+// before it sets a new password), and reports whether there was one: the one
+// the first-run row names, so a code the admin rotated in the console, which
+// was never printed, stays, else (an install whose row names none) the one of
+// its shape (revokePrintedCode). Devices it paired stay signed in unless their
+// sessions end otherwise (a new password ends them); its unspent pairing
+// tokens go with it (the tokens.auth_code_id cascade).
 func (s *Service) RevokeInitialAdminCode(ctx context.Context, id int64) (bool, error) {
 	var revoked bool
 	err := s.db.WithDurableTx(ctx, "RevokeInitialAdminCode", func(tx *sql.Tx) error {
@@ -207,21 +220,7 @@ func (s *Service) RevokeInitialAdminCode(ctx context.Context, id int64) (bool, e
 		if err != nil {
 			return err
 		}
-		if fa.CodeID != 0 {
-			if fa.UserID == id {
-				revoked, err = deletePrintedCode(ctx, tx, fa)
-			}
-			return err
-		}
-		res, err := tx.ExecContext(ctx,
-			`DELETE FROM auth_codes
-			  WHERE user_id = ? AND kind = ? AND label = ? AND max_uses = 0 AND expires_at IS NULL`,
-			id, CodeInvite, InitialAdminCodeLabel)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
-		revoked = n > 0
+		revoked, err = revokePrintedCode(ctx, tx, fa, id)
 		return err
 	})
 	return revoked, err

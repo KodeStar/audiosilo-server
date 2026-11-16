@@ -197,3 +197,47 @@ func TestNewPasswordKeepsARotatedCode(t *testing.T) {
 		t.Fatalf("RevokeInitialAdminCode = %v, %v; want nothing revoked", revoked, err)
 	}
 }
+
+// An upgraded install's row names no code (written before it did): a new
+// password on the first-run admin ends the printed code all the same, found by
+// its label and shape as reset-admin finds it, so the account step's "ends the
+// auth code printed beside it" holds there too. Allowed: the admin's other
+// codes, and another admin's password change leaves the code.
+func TestNewPasswordEndsThePrintedCodeOnAnUpgradedRow(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	admin, err := s.CreateUser(ctx, "admin", "first-password", RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	printed, err := s.CreateAuthCode(ctx, admin.ID, InitialAdminCodeLabel, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.CreateAuthCode(ctx, admin.ID, "my phone", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkFirstAdmin(ctx, admin.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	alex, err := s.CreateUser(ctx, "alex", "alex-password", RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPassword(ctx, alex.ID, "alex-new-password", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveAuthCode(ctx, printed); err != nil {
+		t.Fatalf("another admin's password change ended the printed code: %v", err)
+	}
+	if err := s.SetPassword(ctx, admin.ID, "chosen-password", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveAuthCode(ctx, printed); !errors.Is(err, ErrInvalidCode) {
+		t.Fatalf("the printed code after a new password on an upgraded row = %v, want ErrInvalidCode", err)
+	}
+	if _, err := s.ResolveAuthCode(ctx, other); err != nil {
+		t.Errorf("the admin's other code went too: %v", err)
+	}
+}
