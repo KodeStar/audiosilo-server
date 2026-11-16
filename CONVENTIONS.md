@@ -501,8 +501,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.InProgress`), then the requested book's library, then not known to be
   abridged, then library sort order, then path. **Other recordings (`local_others`,
   capability `other_recordings`)**: every other book of an entry's work id the caller can
-  open rides beside `local` as `local_others` `[{library_id, path}]` in that order, never a
-  copy of `local` sharing its ASIN or ISBN (normalized, `meta.otherRecordings`); an entry only
+  open rides beside `local` as `local_others` `[{library_id, path}]` in that order, one per
+  recording: never a copy of `local` or of a book before it sharing its ASIN or ISBN
+  (normalized, `match.Recordings` in `meta.otherRecordings`; the first copy in that order is
+  kept, a book with neither never merged); an entry only
   ever lists recordings of its own work, so no book is on two entries: the current work's entry
   holds the requested book as `local` beside the envelope's work's other books, which match
   `/item`'s `other_recordings` of the rail's series books (a recording filed in no series, or one
@@ -514,8 +516,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ASIN edit holds no stale work until the job resolves it again) (`catalog.workIDExpr`, on
   every list book and `/item` as `work_id`), and `GET /item`
   adds `other_recordings` (list-shape books, `catalog.OtherRecordings`: books libraries,
-  the caller's scopes, the same work key, not itself, not a copy sharing its ASIN or ISBN;
-  its own library first, then title, then narrator; at most 20; metadata on only).
+  the caller's scopes, the same work key, not itself, one per recording: no copy sharing a
+  normalized ASIN or ISBN with it or with a book before it (`match.Recordings`, after the
+  scope filter, so a copy the caller cannot open never stands in for one they can); its own
+  library first, then title, then narrator, the first copy in that order kept; at most 20
+  after the copies are dropped; metadata on only).
   **Next book** (`next_book` capability): `GET /libraries/{id}/next?path=`
   (`handlers_next.go`, `authorizedScope` + `bookForPath` like `item`) answers
   `{source, next?, book?, work?}`; `source` names the step that produced `next`

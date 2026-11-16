@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -252,7 +253,9 @@ func TestOtherRecordings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"Copy/One", "Kemper/One", "Bray/One", "Private/One"}; !reflect.DeepEqual(relPaths(got), want) {
+	// Its own library first: Copy/One, then the rest, but Bray/One, Copy/One's
+	// ASIN again.
+	if want := []string{"Copy/One", "Kemper/One", "Private/One"}; !reflect.DeepEqual(relPaths(got), want) {
 		t.Fatalf("from the other library = %q, want %q", relPaths(got), want)
 	}
 
@@ -268,6 +271,64 @@ func TestOtherRecordings(t *testing.T) {
 		if got, err := f.c.OtherRecordings(f.ctx, tc.scopes, tc.book); err != nil || len(got) != 0 {
 			t.Fatalf("OtherRecordings(%s) = %q, %v", tc.book.RelPath, relPaths(got), err)
 		}
+	}
+}
+
+// TestOtherRecordingsOneEach (server#241): each other recording is listed
+// once. Of copies of one (a shared ASIN or ISBN, normalized) the first in order
+// is kept, the book's own library first, and copies never crowd a recording out
+// of the limit. The pair: a caller who can open only a copy in another library
+// gets that copy, and one who can open only the original never gets the copy.
+func TestOtherRecordingsOneEach(t *testing.T) {
+	t.Parallel()
+	f := newRecordingsFixture(t)
+	var owned []UpcomingOwned
+	add := func(lib int64, path, asin string) {
+		t.Helper()
+		b := Book{LibraryID: lib, RelPath: path, Title: "One", Narrator: "Kemper", ASIN: asin, AddedAt: "2024-01-01T00:00:00Z"}
+		if _, err := f.c.UpsertBook(f.ctx, &b); err != nil {
+			t.Fatal(err)
+		}
+		owned = append(owned, UpcomingOwned{Ref: Ref{LibraryID: lib, Path: path}, IDKey: meta.IDKey(asin, ""),
+			WorkID: "w-one", CheckedAt: "now"})
+	}
+	// Kemper/One again in the second library, and more copies of it in the
+	// first than the limit holds.
+	add(f.other.ID, "Kemper/One", " b0kemper ")
+	for i := range MaxOtherRecordings + 5 {
+		add(f.main.ID, fmt.Sprintf("Kemper/One copy %02d", i), "B0KEMPER")
+	}
+	if err := f.c.SaveUpcomingOwned(f.ctx, owned, nil); err != nil {
+		t.Fatal(err)
+	}
+	me := f.book(t, f.main.ID, "Bray/One")
+	got, err := f.c.OtherRecordings(f.ctx, f.all(), me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Kemper/One", "Private/One", "Abridged/One"}; !reflect.DeepEqual(relPaths(got), want) {
+		t.Fatalf("allowed = %q, want %q", relPaths(got), want)
+	}
+	if got[0].LibraryID != f.main.ID {
+		t.Fatalf("kept %+v, want the book's own library's copy", got[0])
+	}
+
+	// Allowed: only the second library's copy is open to this member, so it is
+	// the recording listed.
+	member := []Scope{{LibraryID: f.main.ID, Paths: []string{"Bray"}}, {LibraryID: f.other.ID, Paths: []string{"Kemper"}}}
+	if got, err = f.c.OtherRecordings(f.ctx, member, me); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].LibraryID != f.other.ID || got[0].RelPath != "Kemper/One" {
+		t.Fatalf("copy only = %+v", got)
+	}
+	// Denied: a copy outside the grant never stands in for the one inside it.
+	member = []Scope{{LibraryID: f.main.ID, Paths: []string{"Bray", "Kemper"}}}
+	if got, err = f.c.OtherRecordings(f.ctx, member, me); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].LibraryID != f.main.ID || got[0].RelPath != "Kemper/One" {
+		t.Fatalf("original only = %+v", got)
 	}
 }
 

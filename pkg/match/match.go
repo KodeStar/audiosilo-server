@@ -1112,6 +1112,32 @@ func NormalizeISBN(s string) string {
 	return strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(strings.TrimSpace(s)))
 }
 
+// Recordings tells the recordings of a work apart by their identifiers: a book
+// sharing a normalized ASIN or ISBN (NormalizeASIN, NormalizeISBN: a tag's
+// case, spaces and hyphens aside) with one seen before is that recording again,
+// a copy. A book with neither is never a copy. The zero value is ready to use.
+type Recordings struct {
+	asins, isbns map[string]bool
+}
+
+// Seen reports whether a book with asin and isbn is a copy of one seen before,
+// and records its identifiers either way, so a copy's other identifier marks
+// its own copies too.
+func (r *Recordings) Seen(asin, isbn string) bool {
+	if r.asins == nil {
+		r.asins, r.isbns = map[string]bool{}, map[string]bool{}
+	}
+	asin, isbn = NormalizeASIN(asin), NormalizeISBN(isbn)
+	seen := (asin != "" && r.asins[asin]) || (isbn != "" && r.isbns[isbn])
+	if asin != "" {
+		r.asins[asin] = true
+	}
+	if isbn != "" {
+		r.isbns[isbn] = true
+	}
+	return seen
+}
+
 var (
 	asinForm = regexp.MustCompile(`^[A-Z0-9]{10}$`)
 	isbnForm = regexp.MustCompile(`^(\d{9}[\dX]|\d{13})$`)

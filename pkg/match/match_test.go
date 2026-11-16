@@ -500,3 +500,26 @@ func TestNormalizeIdentifiers(t *testing.T) {
 		}
 	}
 }
+
+// TestRecordings: a book sharing a normalized ASIN or ISBN with one seen before
+// is a copy, its other identifier then marking copies too; a book with
+// neither, or with only other identifiers, never is.
+func TestRecordings(t *testing.T) {
+	var r Recordings
+	for _, tc := range []struct {
+		asin, isbn string
+		copy       bool
+	}{
+		{"B0GRETA0001", "", false},
+		{" b0greta0001 ", "978-0-00-000000-1", true}, // the same ASIN, respelled
+		{"", "9780000000001", true},                  // the copy's ISBN
+		{"B0DAVINA001", "", false},                   // another narrator
+		{"", "", false},
+		{"", "", false}, // no identifiers: never merged
+		{"B0OTHER0001", "0306406152", false},
+	} {
+		if got := r.Seen(tc.asin, tc.isbn); got != tc.copy {
+			t.Errorf("Seen(%q, %q) = %v, want %v", tc.asin, tc.isbn, got, tc.copy)
+		}
+	}
+}

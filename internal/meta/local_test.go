@@ -559,3 +559,35 @@ func TestPlaceLocalOthersDropCopies(t *testing.T) {
 		t.Fatalf("pick = %+v", works[1].Local)
 	}
 }
+
+// TestPlaceLocalOthersOneEach (server#241): local_others lists each other
+// recording once. Of copies of one (a shared ASIN or ISBN, normalized) the
+// first in the pick's order is listed, the requested library's before
+// another's; a book with neither identifier is never taken for a copy.
+func TestPlaceLocalOthersOneEach(t *testing.T) {
+	rails := []MetaSeries{named("S", "1", "one@1", "two@2")}
+	requested := MetaLocal{LibraryID: 1, Path: "Porter/1"}
+	book := func(lib int64, path, work, asin, isbn string) LocalBook {
+		b := mine(lib, path, "S", 1, work)
+		b.ASIN, b.ISBN = asin, isbn
+		return b
+	}
+	works := PlaceLocal(rails, "one", requested, []LocalBook{
+		book(2, "Jung/1", "one", " b0jung ", ""), // a copy, in another library
+		book(1, "Porter/1", "one", "B0PORTER", ""),
+		book(1, "Jung/1", "one", "B0JUNG", "978-0-00-000002-2"),
+		book(1, "Untagged/1", "one", "", ""),
+		book(2, "Untagged/1", "one", "", ""),
+		book(1, "S/2 a", "two", "B0TWO", ""),
+		book(1, "S/2 b", "two", "B0TWOB", "9780000000035"),
+		book(2, "S/2 b copy", "two", "", "978-0-00-000003-5"),
+		book(1, "S/2 c", "two", "B0TWOC", ""),
+	})[0].Works
+	want := [][]string{{"Jung/1", "Untagged/1", "Untagged/1"}, {"S/2 b", "S/2 c"}}
+	if got := others(works); !reflect.DeepEqual(got, want) {
+		t.Fatalf("others = %q, want %q", got, want)
+	}
+	if l := works[0].LocalOthers[0]; l.LibraryID != 1 {
+		t.Fatalf("copy kept = %+v, want the requested library's", l)
+	}
+}

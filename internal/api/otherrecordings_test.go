@@ -322,6 +322,37 @@ func TestItemAndMetaAgree(t *testing.T) {
 	rail(e.memberTok, memberRail)
 }
 
+// TestOtherRecordingsOneEach (server#241): a recording held twice, Saga/2 Abe
+// and its copy in a second library (the same ASIN), is listed once on another
+// recording's /item and /meta, the copy in the book's own library (/item) or
+// the pick's (/meta) kept.
+func TestOtherRecordingsOneEach(t *testing.T) {
+	t.Parallel()
+	e := recordingsEnv(t, true)
+	ctx := context.Background()
+	second, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Second", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addBooks(t, e.testEnv, second.ID, &catalog.Book{RelPath: "Saga/2 Abe", Series: "Saga", SeriesIndex: 2, ASIN: "b0twoabe", Narrator: "Abe"})
+	if err := e.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{
+		{Ref: catalog.Ref{LibraryID: second.ID, Path: "Saga/2 Abe"}, IDKey: "a:B0TWOABE", WorkID: "two", CheckedAt: "now"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// itemRecordings fails on a recording outside e.lib: the copy never rides.
+	if _, others, _ := itemRecordings(t, e, "Saga/2 Kemper", e.adminTok); !reflect.DeepEqual(others, []string{"Saga/2", "Saga/2 Abe"}) {
+		t.Fatalf("/item others = %q", others)
+	}
+	entries, raw := railEntries(t, e, "Saga/1", e.adminTok)
+	if got, want := entries["two"], (railEntry{local: "Saga/2 Kemper", others: []string{"Saga/2", "Saga/2 Abe"}}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("/meta entry two = %+v, want %+v", got, want)
+	}
+	if strings.Contains(raw, fmt.Sprintf(`"library_id":%d`, second.ID)) {
+		t.Fatalf("/meta lists the second library's copy: %s", raw)
+	}
+}
+
 // TestNextPicksRecording: after a book, Next opens the pick among the next
 // work's recordings: the same narrator first; for a caller without that one, a
 // recording they started and haven't finished, else the first by path.

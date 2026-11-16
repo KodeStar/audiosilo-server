@@ -121,10 +121,11 @@ func ParseSpan(s string) (start, end float64, ok bool) {
 // no slot. requested is placed by rule 1 only; when it is among books, its
 // narrator is the one the pick prefers. Of several books of one work id (other
 // recordings: another narrator, an abridgement, a copy in another library) the
-// pick is Local by pickRank and the rest, in that order, LocalOthers, but for
-// a copy of the pick (otherRecordings). An entry only ever lists recordings of
-// its own work: rule 1's entry lists currentWork's books but requested and its
-// copies, whatever requested's own WorkID, so no book is on two entries.
+// pick is Local by pickRank and the rest, in that order, LocalOthers, one per
+// recording: never a copy of the pick or of a book before it
+// (otherRecordings). An entry only ever lists recordings of its own work: rule
+// 1's entry lists currentWork's books but requested and its copies, whatever
+// requested's own WorkID, so no book is on two entries.
 // books are in preference order (library sort order, then path, as
 // catalog.SeriesBooks returns them), the pick's last tiebreak.
 func PlaceLocal(rails []MetaSeries, currentWork string, requested MetaLocal, books []LocalBook) []MetaSeries {
@@ -288,19 +289,20 @@ func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]p
 	return placement{local: omnibus}, found
 }
 
-// otherRecordings is books as LocalOthers, without a copy of pick (one sharing
-// its ASIN or ISBN, compared normalized by match.NormalizeASIN and
-// match.NormalizeISBN, a tag's case, spaces and hyphens aside: the same
-// recording again, as catalog.OtherRecordings leaves it out); nil when none is
-// left.
+// otherRecordings is books as LocalOthers, one per recording: a book sharing
+// an ASIN or ISBN with pick, or with a book before it (match.Recordings,
+// compared normalized, a tag's case, spaces and hyphens aside), is the same
+// recording again and left out, as catalog.OtherRecordings leaves it out, so of
+// a recording's copies the first in books' order is the one listed; nil when
+// none is left.
 func otherRecordings(books []LocalBook, pick LocalBook) []MetaLocal {
-	asin, isbn := match.NormalizeASIN(pick.ASIN), match.NormalizeISBN(pick.ISBN)
+	var seen match.Recordings
+	seen.Seen(pick.ASIN, pick.ISBN)
 	var out []MetaLocal
 	for _, b := range books {
-		if (asin != "" && asin == match.NormalizeASIN(b.ASIN)) || (isbn != "" && isbn == match.NormalizeISBN(b.ISBN)) {
-			continue
+		if !seen.Seen(b.ASIN, b.ISBN) {
+			out = append(out, b.MetaLocal)
 		}
-		out = append(out, b.MetaLocal)
 	}
 	return out
 }
