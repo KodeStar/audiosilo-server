@@ -1055,10 +1055,11 @@ func TestRunnerResolveOnlyWhileOff(t *testing.T) {
 	if reads := f.md.reads(); len(reads) != 0 || f.md.feedCount() != 0 || len(f.items(t)) != 0 || len(f.announced) != 0 {
 		t.Fatalf("a resolve-only run went past step 1: reads %v, feeds %d, items %v", reads, f.md.feedCount(), f.items(t))
 	}
-	if st, _ := f.cat.UpcomingRunState(context.Background()); st.LastRunAt != "" || st.LastSuccessAt != "" {
-		t.Fatalf("a resolve-only run records no status: %+v", st)
+	st, err := f.cat.UpcomingRunState(context.Background())
+	if err != nil || st.LastRunAt != "" || st.LastSuccessAt != "" {
+		t.Fatalf("a resolve-only run records no status: %+v, %v", st, err)
 	}
-	if !f.r.due(catalog.UpcomingRun{}) {
+	if !f.r.due(st) {
 		t.Fatal("switching on after a resolve-only run must find a full run due")
 	}
 	// A failed resolve-only run counts no failure, so it is not retried within
