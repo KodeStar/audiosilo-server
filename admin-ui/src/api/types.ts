@@ -1589,6 +1589,8 @@ export interface ErrorEnvelope {
   /** Which rule a refused field broke (invalid_target: notify.Reason*), and a length's limit. */
   reason?: string;
   max?: number;
+  /** With code "chapters_invalid": which rule the edited list broke (empty, order, ...). */
+  detail?: string;
 }
 
 // ---- Admin catalog (Phase 2a API, consumed by the Library and Book screens) ----
@@ -1954,6 +1956,10 @@ export interface AdminBookDetail {
    * it has none.
    */
   community_match?: BookMatch;
+  /** The book's edited chapter list, when it has one (chapter_source "edited" while applied). */
+  chapter_edit?: ChapterEdit;
+  /** The files as they are now, for the chapter editor to send back with a save. */
+  chapter_basis: ChapterBasis;
 }
 
 /** A book's recorded community match (catalog.BookMatch, book_matches). */
@@ -1977,7 +1983,29 @@ export interface GeneratedDescription {
  * Where a book's chapters come from: its own files, a community list fitted onto
  * them, or the chapters the Bridge found in the narration of a book with none.
  */
-export type ChapterSource = 'files' | 'community' | 'generated';
+export type ChapterSource = 'files' | 'community' | 'generated' | 'edited';
+
+/**
+ * A book's edited chapter list (server#240): `applied` while its files are the ones it
+ * was made for, `dormant` (kept, not used) once they changed. `edited_by` is null when
+ * that account is gone.
+ */
+export interface ChapterEdit {
+  state: 'applied' | 'dormant';
+  edited_by: string | null;
+  edited_at: string;
+}
+
+/** The files a chapter edit is made for, as the page found them; a PUT sends it back. */
+export interface ChapterBasis {
+  files: { path: string; size: number; duration_ms: number }[];
+}
+
+/** PUT /admin/libraries/{id}/book/chapters: whole-book starts (seconds, ms precision). */
+export interface ChapterEditRequest {
+  basis: ChapterBasis;
+  chapters: { start: number; title: string }[];
+}
 
 /** An admin's choice of chapter source ("generated" is never chosen: it stands in only with no choice). */
 export type ChapterChoice = 'files' | 'community';

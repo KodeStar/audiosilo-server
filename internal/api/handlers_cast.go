@@ -17,7 +17,11 @@ import (
 // token. The caller must be allowed the book (400/403/404 as the media routes
 // answer); a podcast episode is 403 not_a_book. Demo accounts may cast (they can play); an API key may not
 // (denyAPIKey's containment rule: a key never mints another credential, even a
-// cast token, which would die with it).
+// cast token, which would die with it). The console's chapter editor, whose
+// <audio> streams the book the same way, sends "editor": true for an editor token
+// (auth.IssueEditorToken: a shorter life and a cap apart from the person's cast
+// tokens, so editing never ends a cast); it allows no more than a cast token, so
+// any caller may ask for one.
 func (a *API) handleMintCastToken(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return
@@ -25,6 +29,7 @@ func (a *API) handleMintCastToken(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		LibraryID int64  `json:"library_id"`
 		Path      string `json:"path"`
+		Editor    bool   `json:"editor"`
 	}
 	if err := decodeJSON(r, &body, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -46,9 +51,13 @@ func (a *API) handleMintCastToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
-	token, expires, err := a.auth.IssueCastToken(r.Context(), u.ID, credentialFrom(r.Context()).ID, lib.ID, book.RelPath)
+	issue := a.auth.IssueCastToken
+	if body.Editor {
+		issue = a.auth.IssueEditorToken
+	}
+	token, expires, err := issue(r.Context(), u.ID, credentialFrom(r.Context()).ID, lib.ID, book.RelPath)
 	if err != nil {
-		a.log.Warn("mint cast token failed", "user", u.ID, "err", err)
+		a.log.Warn("mint cast token failed", "user", u.ID, "editor", body.Editor, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not start casting")
 		return
 	}

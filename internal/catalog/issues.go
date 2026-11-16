@@ -59,11 +59,13 @@ var issuePredicates = map[string]string{
 	IssueNoCover:    `(b.has_cover IS NOT NULL AND NOT ` + hasCoverExpr + `)`,
 	IssueNoChapters: fmt.Sprintf(`(b.duration > %d AND NOT %s)`, longWithoutChapters, hasChaptersExpr),
 	// A current check only (a stale one is never used, so choosing it would change
-	// nothing); settled by picking either source (a chapter_choices row).
+	// nothing); settled by picking either source (a chapter_choices row) or by
+	// editing the chapters (a chapter_edits row, applied or dormant).
 	IssueDetailedChapters: `(EXISTS(SELECT 1 FROM community_chapters cc
 		WHERE cc.library_id = b.library_id AND cc.path = b.rel_path AND cc.status = 'refine'
 		  AND cc.basis = ` + chapterBasisExpr + `)
-		AND NOT EXISTS(SELECT 1 FROM chapter_choices ch WHERE ch.library_id = b.library_id AND ch.path = b.rel_path))`,
+		AND NOT EXISTS(SELECT 1 FROM chapter_choices ch WHERE ch.library_id = b.library_id AND ch.path = b.rel_path)
+		AND NOT EXISTS(SELECT 1 FROM chapter_edits ce WHERE ce.library_id = b.library_id AND ce.path = b.rel_path))`,
 	IssueUnmatched:   `(NOT ` + matchedExpr + `)`,
 	IssueUnknownASIN: unknownASINExpr,
 	IssueTranscode:   `(NOT ` + directPlayableExpr + `)`,

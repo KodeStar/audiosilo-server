@@ -499,6 +499,13 @@ export function communityState(
         break;
     }
   }
+  // An edited list stands over the community's: nothing to switch to or take.
+  if (d.chapter_source === 'edited') {
+    out.action = undefined;
+    out.titles = [];
+    if (out.line.key === 'book.community.titles') out.line = { key: 'book.community.same' };
+    out.notes.push({ key: 'book.community.edited' });
+  }
   if (d.community_check_failed) out.notes.unshift({ key: 'book.community.lastFailed' });
   if (FITTED_STATUSES.includes(cc.status)) {
     if (det?.omitted?.length) {
@@ -518,7 +525,7 @@ export function communityState(
  * using the community's for (`auto`: found chapters a files choice keeps out
  * stand in again, and a choice no longer holds Detect chapters back), with a
  * note saying what the choice does now. None while the community's part offers
- * a source of its own, so the card never shows two.
+ * a source of its own, so the card never shows two, and none over an edited list.
  */
 export function chapterSourceAction(
   d: Pick<AdminBookDetail, 'chapter_source' | 'chapter_choice' | 'generated_chapters_fit'>,
@@ -527,6 +534,8 @@ export function chapterSourceAction(
   if (d.chapter_source === 'generated') {
     return { source: 'files', label: 'book.community.useFiles' };
   }
+  // An edited list stands over any choice: its own line offers Revert.
+  if (d.chapter_source === 'edited') return undefined;
   if (!d.chapter_choice || d.chapter_source === 'community' || community?.action) return undefined;
   return {
     source: 'auto',

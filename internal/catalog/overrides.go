@@ -716,10 +716,13 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 		`UPDATE chapters SET title = scanned_title WHERE book_id = ? AND title <> scanned_title`, bookID); err != nil {
 		return err
 	}
+	// The renames, unless an admin's own list stands in (its titles are its
+	// own: the renames are dormant until it is reverted).
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE chapters SET title = (SELECT co.title FROM chapter_overrides co
 		     WHERE co.library_id = ?1 AND co.path = ?2 AND `+chapterOverrideMatch+`)
-		 WHERE book_id = ?3 AND EXISTS(SELECT 1 FROM chapter_overrides co
+		 WHERE book_id = ?3 AND (SELECT chapters_source FROM books WHERE id = ?3) <> '`+ChaptersFromEdited+`'
+		   AND EXISTS(SELECT 1 FROM chapter_overrides co
 		     WHERE co.library_id = ?1 AND co.path = ?2 AND `+chapterOverrideMatch+`)`,
 		l.libID, l.path, bookID); err != nil {
 		return err
@@ -1028,6 +1031,17 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	if edit.ChapterSource != "" {
 		if err := setChapterChoice(ctx, tx, Ref{LibraryID: ref.LibraryID, Path: path}, edit.ChapterSource, editor, now); err != nil {
 			return err
+		}
+	}
+	if len(edit.ChapterSet) > 0 || len(edit.ChapterRevert) > 0 {
+		// A rename of an edited list's chapter would never show (the renames
+		// are dormant while an edit applies): its titles are the edit's.
+		var source string
+		if err := tx.QueryRowContext(ctx, `SELECT chapters_source FROM books WHERE id = ?`, bookID).Scan(&source); err != nil {
+			return err
+		}
+		if source == ChaptersFromEdited {
+			return invalid("chapters", "the chapters are an edited list: change a title in the chapter editor")
 		}
 	}
 	for idx, title := range edit.ChapterSet {

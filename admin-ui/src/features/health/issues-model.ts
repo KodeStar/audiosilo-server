@@ -94,20 +94,24 @@ export function fixFor(kind: IssueKind, detect: boolean): IssueFix {
 /**
  * A row's own fix: the category's (fixFor), except Detect chapters for a book
  * whose chapter source an admin chose, whose found chapters would never stand in
- * (the server refuses it: chapters_chosen); `detectChosenNote` says why.
+ * (the server refuses it: chapters_chosen), or whose chapters an admin edited,
+ * which stand over found ones; `detectChosenNote` says why.
  */
-export function rowFix(fix: IssueFix, b: Pick<AdminBook, 'chapter_choice'>): IssueFix {
-  return fix === 'detect' && b.chapter_choice ? null : fix;
+export function rowFix(
+  fix: IssueFix,
+  b: Pick<AdminBook, 'chapter_choice' | 'chapters_source'>,
+): IssueFix {
+  return detectChosenNote(fix, b) ? null : fix;
 }
 
-/** Why a no_chapters row offers no Detect chapters (rowFix): the choice, and where to undo it. */
+/** Why a no_chapters row offers no Detect chapters (rowFix): the edit or the choice, and where to undo it. */
 export function detectChosenNote(
   fix: IssueFix,
-  b: Pick<AdminBook, 'chapter_choice'>,
+  b: Pick<AdminBook, 'chapter_choice' | 'chapters_source'>,
 ): string | undefined {
-  return fix === 'detect' && b.chapter_choice
-    ? `health.detect.chosen.${b.chapter_choice}`
-    : undefined;
+  if (fix !== 'detect') return undefined;
+  if (b.chapters_source === 'edited') return 'health.detect.edited';
+  return b.chapter_choice ? `health.detect.chosen.${b.chapter_choice}` : undefined;
 }
 
 /**

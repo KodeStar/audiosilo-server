@@ -130,6 +130,9 @@ export const keys = {
   match: (libraryId: number, path: string, by: MatchBy) =>
     ['admin', 'book', libraryId, path, 'match', by] as const,
   communityCover: (url: string, size: ThumbSize) => ['admin', 'communityCover', size, url] as const,
+  /** A book's media token for the chapter editor's player: outside `book`, so a page refresh never mints another. */
+  mediaToken: (libraryId: number, path: string) =>
+    ['admin', 'media-token', libraryId, path] as const,
   /** A book's /meta answers (a prefix: a finished Bridge job changes them). */
   bookMeta: (libraryId: number, path: string) => ['meta', libraryId, path] as const,
   /** A book's /meta answer, by identifiers: a new ASIN or ISBN (a new match) asks again. */
@@ -984,6 +987,28 @@ export function useAdminBook(libraryId: number, path: string) {
 
 /** How often a book page asks again while its community chapters are being checked. */
 const CHECK_POLL_MS = 3000;
+
+/** How old the editor's media token may be before a newly opened editor asks for another (it works for four hours). */
+const MEDIA_TOKEN_FRESH_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * A token the chapter editor's <audio> streams the book's files with. It works for
+ * four hours and is kept while the editor is open (a new one would reload the audio
+ * mid-scrub, so neither the window's focus nor a reconnect asks again), then
+ * dropped five minutes after; an editor opened on one two hours old asks for
+ * another. A failed mint isn't retried (the player says so); audio that fails to
+ * load mints again once (the token may have run out or been capped away).
+ */
+export function useBookMediaToken(libraryId: number, path: string) {
+  return useQuery({
+    queryKey: keys.mediaToken(libraryId, path),
+    queryFn: () => api.bookMediaToken(libraryId, path).then((r) => r.token),
+    staleTime: MEDIA_TOKEN_FRESH_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
+  });
+}
 
 /**
  * Community works a book might be. Searched only when asked (the match dialog is
