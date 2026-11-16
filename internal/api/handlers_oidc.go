@@ -292,7 +292,7 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	// 32 random bytes each, base64url.
 	f := oidc.Flow{State: oauth2.GenerateVerifier(), Nonce: oauth2.GenerateVerifier(),
 		Verifier: oauth2.GenerateVerifier(), RedirectURI: a.oidcRedirectURI(), Return: ret}
-	authURL, err := a.oidc.provider.AuthURL(r.Context(), f.RedirectURI, f, a.oidcScopes())
+	authURL, err := a.oidc.provider.AuthURL(r.Context(), f, a.oidcScopes())
 	if err != nil {
 		a.log.Warn("oidc: start failed", "err", err)
 		a.oidcResult(w, r, oidcUnavailable)
@@ -378,7 +378,7 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// environment aren't): a claim's group is, so " admins" would match no one
 	// and every sign-in would lose its admin role.
 	pol := a.config().Auth.OIDC
-	claims, err := a.oidc.provider.Exchange(r.Context(), f.RedirectURI, q.Get("code"), f, pol.GroupPolicy())
+	claims, err := a.oidc.provider.Exchange(r.Context(), q.Get("code"), f, pol.GroupPolicy())
 	if errors.Is(err, oidc.ErrUnavailable) {
 		a.log.Warn("oidc: the provider is unavailable", "err", err)
 		a.oidcResult(w, r, oidcUnavailable)

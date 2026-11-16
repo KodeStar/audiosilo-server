@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -145,9 +146,9 @@ type Provider struct {
 	// The last probe: when, and what failed ("" when the provider answered).
 	probedAt time.Time
 	probeErr string
-	// lacks: a claim userinfo didn't hold ("email", "username") -> until when
-	// it is not asked for it again.
-	lacks map[string]time.Time
+	// Until when userinfo is not asked for the email or the username again
+	// (it didn't hold that claim; zero: ask).
+	emailLackedUntil, usernameLackedUntil time.Time
 
 	probeMu sync.Mutex // one probe at a time; the others take its answer
 }
@@ -173,7 +174,7 @@ func New(s Settings) (*Provider, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Provider{s: s, client: client, ctx: ctx, log: log, lacks: map[string]time.Time{}}, nil
+	return &Provider{s: s, client: client, ctx: ctx, log: log}, nil
 }
 
 // Status reports the discovery's state.
@@ -337,6 +338,8 @@ func (p *Provider) probe(ctx context.Context) error {
 	if err == nil {
 		var resp *http.Response
 		if resp, err = p.client.Do(req); err == nil {
+			// Drained so the connection is reused by the sign-in that follows.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 			_ = resp.Body.Close()
 			if resp.StatusCode != http.StatusOK {
 				msg = "the provider answered " + resp.Status
@@ -344,7 +347,7 @@ func (p *Provider) probe(ctx context.Context) error {
 		}
 	}
 	if err != nil {
-		msg = "the provider can't be reached: " + withoutBody(err.Error())
+		msg = "the provider can't be reached: " + capped(withoutBody(err.Error()))
 	}
 	p.mu.Lock()
 	p.probedAt, p.probeErr = now, msg
@@ -367,11 +370,15 @@ func discoveryError(err error) string {
 	if errors.As(err, &mismatch) {
 		return fmt.Sprintf("the provider calls itself %q, not %q: set issuer to exactly that", mismatch.Discovered, mismatch.Provided)
 	}
-	msg := withoutBody(err.Error())
+	return "discovery failed: " + capped(withoutBody(err.Error()))
+}
+
+// capped cuts a provider failure's wording to 300 bytes for the console.
+func capped(msg string) string {
 	if len(msg) > 300 {
-		msg = msg[:300] + "..."
+		return msg[:300] + "..."
 	}
-	return "discovery failed: " + msg
+	return msg
 }
 
 // keysErrors are how go-oidc starts a failed fetch of the provider's keys (a
@@ -400,7 +407,7 @@ func withoutBody(msg string) string {
 	return msg
 }
 
-// oauthConfig is the client's config for redirectURI.
+// oauthConfig is the client's config for a flow's redirect URI.
 func (p *Provider) oauthConfig(prov *gooidc.Provider, redirectURI string) *oauth2.Config {
 	ep := prov.Endpoint()
 	if p.s.ClientSecret == "" {
@@ -415,10 +422,10 @@ func (p *Provider) oauthConfig(prov *gooidc.Provider, redirectURI string) *oauth
 }
 
 // AuthURL is the provider's authorization URL for a flow asking for scopes:
-// state, nonce and the PKCE S256 challenge of verifier. A provider discovered
+// its redirect URI, state, nonce and the PKCE S256 challenge of its verifier. A provider discovered
 // before is probed first (probe), so one gone down ends the sign-in here as
 // unavailable rather than sending the browser to it.
-func (p *Provider) AuthURL(ctx context.Context, redirectURI string, f Flow, scopes []string) (string, error) {
+func (p *Provider) AuthURL(ctx context.Context, f Flow, scopes []string) (string, error) {
 	ctx, cancel, prov, _, err := p.begin(ctx)
 	defer cancel()
 	if err != nil {
@@ -427,7 +434,7 @@ func (p *Provider) AuthURL(ctx context.Context, redirectURI string, f Flow, scop
 	if err := p.probe(ctx); err != nil {
 		return "", err
 	}
-	cfg := p.oauthConfig(prov, redirectURI)
+	cfg := p.oauthConfig(prov, f.RedirectURI)
 	cfg.Scopes = scopes
 	return cfg.AuthCodeURL(f.State, gooidc.Nonce(f.Nonce), oauth2.S256ChallengeOption(f.Verifier)), nil
 }
@@ -448,7 +455,7 @@ var (
 const issuedAtLeeway = 5 * time.Minute
 
 // Exchange trades a callback's code for the person's claims: the token request
-// with the flow's PKCE verifier, then the ID token's checks (signature by an
+// with the flow's redirect URI and PKCE verifier, then the ID token's checks (signature by an
 // allowed algorithm from the provider's keys, iss, aud holding the client id,
 // azp when present or when there are several audiences, exp, iat no more than
 // five minutes ahead, the flow's nonce), then userinfo for what the ID token
@@ -457,14 +464,14 @@ const issuedAtLeeway = 5 * time.Minute
 // reads it). A userinfo request that fails leaves the ID token's claims, a
 // warning logged: a claim it can't add is absent, which never signs anyone in
 // as more. Every call shares one deadline, the call budget.
-func (p *Provider) Exchange(ctx context.Context, redirectURI, code string, f Flow, needGroups bool) (Claims, error) {
+func (p *Provider) Exchange(ctx context.Context, code string, f Flow, needGroups bool) (Claims, error) {
 	ctx, cancel, prov, verifier, err := p.begin(ctx)
 	defer cancel()
 	if err != nil {
 		return Claims{}, err
 	}
 	octx := context.WithValue(ctx, oauth2.HTTPClient, p.client)
-	tok, err := p.oauthConfig(prov, redirectURI).Exchange(octx, code, oauth2.VerifierOption(f.Verifier))
+	tok, err := p.oauthConfig(prov, f.RedirectURI).Exchange(octx, code, oauth2.VerifierOption(f.Verifier))
 	if err != nil {
 		return Claims{}, outOfTime(ctx, fmt.Errorf("%w: %s", ErrExchange, exchangeError(err)))
 	}
@@ -530,11 +537,8 @@ func (p *Provider) askUserinfo(c Claims, needGroups bool) bool {
 	now := p.s.Now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	ask := func(kind string) bool {
-		until, ok := p.lacks[kind]
-		return !ok || !now.Before(until)
-	}
-	return (c.Email == "" && ask("email")) || (c.Username == "" && ask("username"))
+	return (c.Email == "" && !now.Before(p.emailLackedUntil)) ||
+		(c.Username == "" && !now.Before(p.usernameLackedUntil))
 }
 
 // noteUserinfo records which claims the ID token lacked (before) and userinfo
@@ -543,17 +547,16 @@ func (p *Provider) noteUserinfo(before, after Claims) {
 	until := p.s.Now().Add(userinfoRecheck)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	note := func(kind string, lacked, got bool) {
-		switch {
-		case !lacked:
-		case got:
-			delete(p.lacks, kind)
-		default:
-			p.lacks[kind] = until
+	note := func(lackedUntil *time.Time, lacked, got bool) {
+		if lacked {
+			*lackedUntil = until
+			if got {
+				*lackedUntil = time.Time{}
+			}
 		}
 	}
-	note("email", before.Email == "", after.Email != "")
-	note("username", before.Username == "", after.Username != "")
+	note(&p.emailLackedUntil, before.Email == "", after.Email != "")
+	note(&p.usernameLackedUntil, before.Username == "", after.Username != "")
 }
 
 // exchangeError words a failed token or userinfo request, or a refused ID

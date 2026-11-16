@@ -36,16 +36,7 @@ func newProvider(t *testing.T, idp *oidctest.Provider, secret string) *oidc.Prov
 // signIn runs the flow to the callback: the authorize redirect's code and state.
 func signIn(t *testing.T, p *oidc.Provider, f oidc.Flow) (code string) {
 	t.Helper()
-	authURL, err := p.AuthURL(context.Background(), redirectURI, f, scopes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Get(authURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
+	resp := signInWith(t, p, f, scopes)
 	loc, err := url.Parse(resp.Header.Get("Location"))
 	if err != nil || resp.StatusCode != http.StatusFound {
 		t.Fatalf("authorize: %d %q", resp.StatusCode, resp.Header.Get("Location"))
@@ -57,7 +48,7 @@ func signIn(t *testing.T, p *oidc.Provider, f oidc.Flow) (code string) {
 }
 
 func flow() oidc.Flow {
-	return oidc.Flow{State: "state-1", Nonce: "nonce-1", Verifier: oauth2.GenerateVerifier(), Return: "admin"}
+	return oidc.Flow{State: "state-1", Nonce: "nonce-1", Verifier: oauth2.GenerateVerifier(), RedirectURI: redirectURI, Return: "admin"}
 }
 
 func TestExchangeAllowed(t *testing.T) {
@@ -72,7 +63,7 @@ func TestExchangeAllowed(t *testing.T) {
 			!strings.Contains(q.Get("scope"), "openid") {
 			t.Fatalf("authorize query: %v", q)
 		}
-		c, err := p.Exchange(context.Background(), redirectURI, code, f, true)
+		c, err := p.Exchange(context.Background(), code, f, true)
 		if err != nil {
 			t.Fatalf("secret %q: %v", secret, err)
 		}
@@ -87,7 +78,7 @@ func TestExchangeAllowed(t *testing.T) {
 			t.Fatalf("status %+v", p.Status())
 		}
 		// The code works once.
-		if _, err := p.Exchange(context.Background(), redirectURI, code, f, true); !errors.Is(err, oidc.ErrExchange) {
+		if _, err := p.Exchange(context.Background(), code, f, true); !errors.Is(err, oidc.ErrExchange) {
 			t.Fatalf("a replayed code: %v", err)
 		}
 	}
@@ -99,7 +90,7 @@ func TestExchangeUserinfoFillsGaps(t *testing.T) {
 	idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true})
 	p := newProvider(t, idp, "s3cret")
 	f := flow()
-	c, err := p.Exchange(context.Background(), redirectURI, signIn(t, p, f), f, true)
+	c, err := p.Exchange(context.Background(), signIn(t, p, f), f, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +100,7 @@ func TestExchangeUserinfoFillsGaps(t *testing.T) {
 	// userinfo for another subject is refused.
 	idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true, UserinfoSubject: "sub-mallory"})
 	f = flow()
-	if _, err := p.Exchange(context.Background(), redirectURI, signIn(t, p, f), f, true); !errors.Is(err, oidc.ErrSubMismatch) {
+	if _, err := p.Exchange(context.Background(), signIn(t, p, f), f, true); !errors.Is(err, oidc.ErrSubMismatch) {
 		t.Fatalf("userinfo of another subject: %v", err)
 	}
 }
@@ -121,14 +112,14 @@ func TestExchangeEmailVerifiedString(t *testing.T) {
 	idp := oidctest.New(t, "audiosilo", "s3cret", p2)
 	p := newProvider(t, idp, "s3cret")
 	f := flow()
-	c, err := p.Exchange(context.Background(), redirectURI, signIn(t, p, f), f, true)
+	c, err := p.Exchange(context.Background(), signIn(t, p, f), f, true)
 	if err != nil || !c.EmailVerified {
 		t.Fatalf("email_verified \"true\": %+v %v", c, err)
 	}
 	p2.EmailVerified = false
 	idp.SetPerson(p2)
 	f = flow()
-	if c, err := p.Exchange(context.Background(), redirectURI, signIn(t, p, f), f, true); err != nil || c.EmailVerified {
+	if c, err := p.Exchange(context.Background(), signIn(t, p, f), f, true); err != nil || c.EmailVerified {
 		t.Fatalf("email_verified false: %+v %v", c, err)
 	}
 }
@@ -159,7 +150,7 @@ func TestExchangeDenied(t *testing.T) {
 			idp.SetKnobs(c.knobs)
 			p := newProvider(t, idp, "s3cret")
 			f := flow()
-			if _, err := p.Exchange(context.Background(), redirectURI, signIn(t, p, f), f, true); !errors.Is(err, c.want) {
+			if _, err := p.Exchange(context.Background(), signIn(t, p, f), f, true); !errors.Is(err, c.want) {
 				t.Fatalf("got %v; want %v", err, c.want)
 			}
 		})
@@ -171,7 +162,7 @@ func TestExchangeDenied(t *testing.T) {
 		idp.SetKnobs(k)
 		p := newProvider(t, idp, "s3cret")
 		f := flow()
-		if _, err := p.Exchange(context.Background(), redirectURI, signIn(t, p, f), f, true); err != nil {
+		if _, err := p.Exchange(context.Background(), signIn(t, p, f), f, true); err != nil {
 			t.Fatalf("%+v: %v", k, err)
 		}
 	}
@@ -185,20 +176,21 @@ func TestExchangePKCEAndClient(t *testing.T) {
 	code := signIn(t, p, f)
 	wrong := f
 	wrong.Verifier = oauth2.GenerateVerifier()
-	if _, err := p.Exchange(context.Background(), redirectURI, code, wrong, true); !errors.Is(err, oidc.ErrExchange) {
+	if _, err := p.Exchange(context.Background(), code, wrong, true); !errors.Is(err, oidc.ErrExchange) {
 		t.Fatalf("another verifier: %v", err)
 	}
 	// Another redirect URI than the authorize request's.
 	f = flow()
 	code = signIn(t, p, f)
-	if _, err := p.Exchange(context.Background(), "https://evil.example/cb", code, f, true); !errors.Is(err, oidc.ErrExchange) {
+	f.RedirectURI = "https://evil.example/cb"
+	if _, err := p.Exchange(context.Background(), code, f, true); !errors.Is(err, oidc.ErrExchange) {
 		t.Fatalf("another redirect URI: %v", err)
 	}
 	// A wrong client secret.
 	bad := newProvider(t, idp, "wrong")
 	f = flow()
 	code = signIn(t, bad, f)
-	if _, err := bad.Exchange(context.Background(), redirectURI, code, f, true); !errors.Is(err, oidc.ErrExchange) {
+	if _, err := bad.Exchange(context.Background(), code, f, true); !errors.Is(err, oidc.ErrExchange) {
 		t.Fatalf("a wrong secret: %v", err)
 	}
 }
@@ -215,7 +207,7 @@ func TestDiscoveryBackoff(t *testing.T) {
 	if st := p.Status(); st.State != oidc.StatePending {
 		t.Fatalf("before use: %+v", st)
 	}
-	if _, err := p.AuthURL(context.Background(), redirectURI, flow(), scopes); !errors.Is(err, oidc.ErrUnavailable) {
+	if _, err := p.AuthURL(context.Background(), flow(), scopes); !errors.Is(err, oidc.ErrUnavailable) {
 		t.Fatalf("discovery down: %v", err)
 	}
 	if st := p.Status(); st.State != oidc.StateError || st.Error == "" || st.CheckedAt == "" {
@@ -223,14 +215,14 @@ func TestDiscoveryBackoff(t *testing.T) {
 	}
 	idp.SetKnobs(oidctest.Knobs{})
 	// Within the backoff: not asked again.
-	if _, err := p.AuthURL(context.Background(), redirectURI, flow(), scopes); !errors.Is(err, oidc.ErrUnavailable) {
+	if _, err := p.AuthURL(context.Background(), flow(), scopes); !errors.Is(err, oidc.ErrUnavailable) {
 		t.Fatalf("within the backoff: %v", err)
 	}
 	if n := idp.Calls("discovery"); n != 1 {
 		t.Fatalf("discovery asked %d times within the backoff", n)
 	}
 	now = now.Add(time.Minute)
-	if _, err := p.AuthURL(context.Background(), redirectURI, flow(), scopes); err != nil {
+	if _, err := p.AuthURL(context.Background(), flow(), scopes); err != nil {
 		t.Fatalf("after the backoff: %v", err)
 	}
 	if st := p.Status(); st.State != oidc.StateOK {
@@ -247,11 +239,11 @@ func TestDiscoveryOutlivesTheCaller(t *testing.T) {
 	p := newProvider(t, idp, "s3cret")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, _ = p.AuthURL(ctx, redirectURI, flow(), scopes)
+	_, _ = p.AuthURL(ctx, flow(), scopes)
 	if st := p.Status(); st.State != oidc.StateOK {
 		t.Fatalf("a cancelled caller counted against the provider: %+v", st)
 	}
-	if _, err := p.AuthURL(context.Background(), redirectURI, flow(), scopes); err != nil {
+	if _, err := p.AuthURL(context.Background(), flow(), scopes); err != nil {
 		t.Fatalf("the next caller: %v", err)
 	}
 }
@@ -261,7 +253,7 @@ func TestDiscoveryIssuerMismatch(t *testing.T) {
 	idp := oidctest.New(t, "audiosilo", "s3cret", alice)
 	idp.SetKnobs(oidctest.Knobs{DiscoveryIssuer: "https://elsewhere.example/"})
 	p := newProvider(t, idp, "s3cret")
-	if _, err := p.AuthURL(context.Background(), redirectURI, flow(), scopes); !errors.Is(err, oidc.ErrUnavailable) {
+	if _, err := p.AuthURL(context.Background(), flow(), scopes); !errors.Is(err, oidc.ErrUnavailable) {
 		t.Fatalf("issuer mismatch: %v", err)
 	}
 	if st := p.Status(); !strings.Contains(st.Error, "https://elsewhere.example/") {
@@ -297,7 +289,7 @@ func TestCallsShareOneBudget(t *testing.T) {
 			t.Fatal(err)
 		}
 		began := time.Now()
-		_, err = p.Exchange(context.Background(), redirectURI, code, f, true)
+		_, err = p.Exchange(context.Background(), code, f, true)
 		took := time.Since(began)
 		if tc.ok && err != nil {
 			t.Fatalf("budget %v: %v", tc.budget, err)
@@ -334,10 +326,11 @@ func TestAuthURLAsksForTheGivenScopes(t *testing.T) {
 	}
 }
 
-// signInWith is signIn asking for scopes.
-func signInWith(t *testing.T, p *oidc.Provider, f oidc.Flow, sc []string) {
+// signInWith runs the authorize request asking for sc: the provider's
+// redirect, not followed.
+func signInWith(t *testing.T, p *oidc.Provider, f oidc.Flow, sc []string) *http.Response {
 	t.Helper()
-	authURL, err := p.AuthURL(context.Background(), redirectURI, f, sc)
+	authURL, err := p.AuthURL(context.Background(), f, sc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,6 +340,7 @@ func signInWith(t *testing.T, p *oidc.Provider, f oidc.Flow, sc []string) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
+	return resp
 }
 
 // TestUserinfoFailureFallsBack: a userinfo request that fails leaves the ID
@@ -360,7 +354,7 @@ func TestUserinfoFailureFallsBack(t *testing.T) {
 	idp.SetKnobs(oidctest.Knobs{FailUserinfo: true})
 	p := newProvider(t, idp, "s3cret")
 	f := flow()
-	c, err := p.Exchange(context.Background(), redirectURI, signIn(t, p, f), f, true)
+	c, err := p.Exchange(context.Background(), signIn(t, p, f), f, true)
 	if err != nil {
 		t.Fatalf("a userinfo failure ended the sign-in: %v", err)
 	}
@@ -388,7 +382,7 @@ func TestUserinfoNotAskedForANeverSentClaim(t *testing.T) {
 	exchange := func(needGroups bool) {
 		t.Helper()
 		f := flow()
-		if _, err := p.Exchange(context.Background(), redirectURI, signIn(t, p, f), f, needGroups); err != nil {
+		if _, err := p.Exchange(context.Background(), signIn(t, p, f), f, needGroups); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -430,12 +424,12 @@ func TestProbeSeesTheProviderGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.AuthURL(context.Background(), redirectURI, flow(), scopes); err != nil {
+	if _, err := p.AuthURL(context.Background(), flow(), scopes); err != nil {
 		t.Fatal(err)
 	}
 	idp.SetKnobs(oidctest.Knobs{FailDiscovery: true})
 	// Allowed within the interval: the last answer stands, nothing asked.
-	if _, err := p.AuthURL(context.Background(), redirectURI, flow(), scopes); err != nil {
+	if _, err := p.AuthURL(context.Background(), flow(), scopes); err != nil {
 		t.Fatalf("within the probe's interval: %v", err)
 	}
 	if n := idp.Calls("discovery"); n != 1 {
@@ -443,7 +437,7 @@ func TestProbeSeesTheProviderGone(t *testing.T) {
 	}
 	// Denied: past it, the provider is asked and found gone.
 	now = now.Add(31 * time.Second)
-	if _, err := p.AuthURL(context.Background(), redirectURI, flow(), scopes); !errors.Is(err, oidc.ErrUnavailable) {
+	if _, err := p.AuthURL(context.Background(), flow(), scopes); !errors.Is(err, oidc.ErrUnavailable) {
 		t.Fatalf("a provider gone down: %v", err)
 	}
 	if st := p.Check(context.Background()); st.State != oidc.StateError || !strings.Contains(st.Error, "500") {
@@ -454,7 +448,7 @@ func TestProbeSeesTheProviderGone(t *testing.T) {
 	if st := p.Check(context.Background()); st.State != oidc.StateOK {
 		t.Fatalf("status once it is back: %+v", st)
 	}
-	if _, err := p.AuthURL(context.Background(), redirectURI, flow(), scopes); err != nil {
+	if _, err := p.AuthURL(context.Background(), flow(), scopes); err != nil {
 		t.Fatalf("a sign-in once it is back: %v", err)
 	}
 }
@@ -480,11 +474,11 @@ func TestBudgetStartsAfterAnotherDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { _, _ = p.AuthURL(context.Background(), redirectURI, flow(), scopes) }() // discovers, slowly
-	for idp.Calls("discovery") < 2 {                                                    // the discovery is under way
+	go func() { _, _ = p.AuthURL(context.Background(), flow(), scopes) }() // discovers, slowly
+	for idp.Calls("discovery") < 2 {                                       // the discovery is under way
 		time.Sleep(time.Millisecond)
 	}
-	if _, err := p.Exchange(context.Background(), redirectURI, code, f, false); err != nil {
+	if _, err := p.Exchange(context.Background(), code, f, false); err != nil {
 		t.Fatalf("the wait for another use's discovery was charged to this one: %v", err)
 	}
 }
