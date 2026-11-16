@@ -277,7 +277,7 @@ func pickAdmin(ctx context.Context, authSvc *auth.Service, username string) (*au
 		}
 		return nil, errors.New("there is no admin account yet: start the server, which makes one and prints its password (or opens /setup with --setup)")
 	case 1:
-		return checkEnabled(&admins[0])
+		return &admins[0], nil
 	default:
 		return nil, &UsageError{fmt.Sprintf("there are several admins: name one (audiosilo --data <folder> reset-admin <username>): %s", list)}
 	}

@@ -674,9 +674,6 @@ func TestResetAdminRefusals(t *testing.T) {
 		})
 	}
 
-	// A disabled admin can't sign in with a new password: it doesn't count
-	// toward "the only admin" (allowed: the enabled one is reset, unnamed),
-	// and when every admin is disabled there is none to reset (denied).
 	// The restore marker is read before the database: a damaged database a
 	// waiting restore would replace says so, not "reading the database".
 	t.Run("a restore waiting beside a damaged database", func(t *testing.T) {
@@ -691,6 +688,9 @@ func TestResetAdminRefusals(t *testing.T) {
 		}
 	})
 
+	// A disabled admin can't sign in with a new password: it doesn't count
+	// toward "the only admin" (allowed: the enabled one is reset, unnamed),
+	// and when every admin is disabled there is none to reset (denied).
 	t.Run("a disabled admin beside the only enabled one", func(t *testing.T) {
 		dir, running := resetDir(t, "admin", "alex")
 		alex := disable(t, running, "alex")
