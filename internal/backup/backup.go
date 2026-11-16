@@ -70,6 +70,10 @@ const (
 	resultFile = "restore-result.json"
 )
 
+// MarkerPath is where a restore waiting for the next start is marked in
+// dataDir (RequestRestore writes it, RestorePending reads it).
+func MarkerPath(dataDir string) string { return filepath.Join(dataDir, markerFile) }
+
 // timeLayout is the UTC time in a backup's name.
 const timeLayout = "20060102-150405Z"
 
@@ -620,12 +624,12 @@ func (s *Service) RequestRestore(ctx context.Context, name, by string) (PendingR
 		return PendingRestore{}, err
 	}
 	pr := PendingRestore{Name: name, RequestedAt: s.now().UTC(), RequestedBy: by, Schema: info.Schema}
-	return pr, jsonfile.Write(filepath.Join(s.dataDir, markerFile), pr)
+	return pr, jsonfile.Write(MarkerPath(s.dataDir), pr)
 }
 
 // CancelRestore drops a restore waiting for the next start (nothing waiting is fine).
 func (s *Service) CancelRestore() error {
-	err := os.Remove(filepath.Join(s.dataDir, markerFile))
+	err := os.Remove(MarkerPath(s.dataDir))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -641,7 +645,7 @@ func (s *Service) PendingRestore() (*PendingRestore, error) {
 // any, for a caller with no Service (the reset-admin command); an unreadable
 // marker is an error.
 func RestorePending(dataDir string) (*PendingRestore, error) {
-	return jsonfile.Read[PendingRestore](filepath.Join(dataDir, markerFile))
+	return jsonfile.Read[PendingRestore](MarkerPath(dataDir))
 }
 
 // LastRestore returns how the last restore went, if one was applied or refused.
@@ -657,7 +661,7 @@ func (s *Service) LastRestore() (*RestoreResult, error) {
 // the console, so a backup that can't be restored is reported once instead of
 // stopping every start; a refused restore leaves the database as it was.
 func ApplyPendingRestore(ctx context.Context, dataDir, dir, dbPath string, log *slog.Logger) (*RestoreResult, error) {
-	marker := filepath.Join(dataDir, markerFile)
+	marker := MarkerPath(dataDir)
 	pending, err := jsonfile.Read[PendingRestore](marker)
 	if pending == nil && err == nil {
 		return nil, nil

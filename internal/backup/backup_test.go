@@ -424,7 +424,7 @@ func TestPruneKeepsPendingRestore(t *testing.T) {
 func TestUnreadableMarkerIsDropped(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	marker := filepath.Join(e.dataDir, markerFile)
+	marker := MarkerPath(e.dataDir)
 	if err := os.WriteFile(marker, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +521,7 @@ func TestRestoreRefusedLeavesDatabase(t *testing.T) {
 	}
 
 	// A backup that has since been deleted.
-	if err := jsonfile.Write(filepath.Join(e.dataDir, markerFile), PendingRestore{Name: "audiosilo-gone.db"}); err != nil {
+	if err := jsonfile.Write(MarkerPath(e.dataDir), PendingRestore{Name: "audiosilo-gone.db"}); err != nil {
 		t.Fatal(err)
 	}
 	res, _ = ApplyPendingRestore(ctx, e.dataDir, "", e.dbPath, slogDiscard())

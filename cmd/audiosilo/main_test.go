@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/backup"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
@@ -96,7 +97,7 @@ func TestResetAdminExitCodes(t *testing.T) {
 // console's Restore does (backup.RequestRestore's marker), and returns dir.
 func restoreWaiting(t *testing.T, dir string) string {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, "restore.json"), []byte(`{"name":"audiosilo-2026-11-14.db"}`), 0o600); err != nil {
+	if err := os.WriteFile(backup.MarkerPath(dir), []byte(`{"name":"audiosilo-2026-11-14.db"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return dir
