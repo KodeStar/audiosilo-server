@@ -875,11 +875,11 @@ func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64,
 // as sent is a version this device saw (above 0, at most the row's), the row is
 // not finished, no other device's Stay holds it at a version above that base,
 // no explicit non-listening write (editVersion, explicitWriteSet) came after
-// that base, and the row's time (its
-// device's last span end, span_at, else updated_at) is no more than staySlack
-// after the Stay's end: listening that went on longer after the Stay, or a Stay
-// made offline long ago, is not beaten. A PUT is an old app's listening, not an
-// edit, so only its time counts.
+// that base, and the row's time (its device's last span end, span_at, else
+// updated_at) is no more than staySlack after the Stay's end: listening that
+// went on longer after the Stay, or a Stay made offline long ago, is not
+// beaten. A PUT is an old app's listening, not an edit, so only its time
+// counts.
 func (s *syncRun) staysWin(p syncPrepared, stored *syncRow) bool {
 	sent := p.ev.BaseVersion
 	switch {
@@ -972,7 +972,10 @@ func (s *syncRun) setOther(ctx context.Context, key Ref, place *ListeningOtherPl
 // another device's unfinished row takes nothing, so this device's next base-0
 // span still diverges from that row. An unfinish with no row has nothing to
 // change (applied, nothing written). Both are explicit writes, not listening
-// (explicitWriteSet): they end a Stay's hold and record their edit_version.
+// (explicitWriteSet): they end a Stay's hold and record their edit_version,
+// except an unfinish of a row that isn't finished, which changes neither the
+// place nor the finish (a device that saw the book finished, late), so it
+// leaves a Stay's hold to hold that device's backlog.
 func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error) {
 	key := p.target.Key
 	if s.b.FurthestOnly && p.ev.Kind == EventUnfinish {
@@ -1055,9 +1058,12 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		_, err = s.tx.ExecContext(ctx,
 			`UPDATE progress SET finished = 0, finished_at = NULL, version = ?, device_id = ?, device_name = ?,
 			     updated_at = ?, finish_changed_at = ?,
-			     span_at = ?, span_version = ?, `+endStayHold+`, edit_version = ?
+			     span_at = ?, span_version = ?,
+			     stay_version = CASE WHEN ? THEN NULL ELSE stay_version END,
+			     edit_version = CASE WHEN ? THEN ? ELSE edit_version END
 			  WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
-			version, device, name, updated, at, chainAt, chainVersion, version, s.b.UserID, key.LibraryID, key.Path)
+			version, device, name, updated, at, chainAt, chainVersion, stored.finished, stored.finished, version,
+			s.b.UserID, key.LibraryID, key.Path)
 	}
 	if err != nil {
 		return SyncResult{}, err

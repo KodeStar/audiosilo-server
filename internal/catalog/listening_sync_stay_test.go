@@ -151,6 +151,33 @@ func TestSyncStayHoldsAgainstTheOtherDevice(t *testing.T) {
 	}
 }
 
+// In-batch chaining with S2: the phone's base-0 continues after its Stay in the
+// same POST chain on the Stay's version and keep the hold; the watch's backlog
+// in one POST (a span on its old base, then base-0 spans) is held whole and
+// never chains past the Stay.
+func TestSyncStayInBatchChaining(t *testing.T) {
+	t.Parallel()
+	f := stayFixture(t, 5*time.Minute)
+	a := f.sync(t, f.batch(t, "phone", f.stay(18000, 4*time.Minute, base(2)),
+		f.listen("continue", 18000, 18060, 3*time.Minute, base(0)),
+		f.listen("continue", 18060, 18120, 2*time.Minute, base(0))))
+	for _, r := range a.Results {
+		wantResult(t, r, statusApplied, "")
+	}
+	if p := f.progress(t); p.Position != 18120 || p.Version != 7 || f.stayVersion(t, f.book) != 5 {
+		t.Fatalf("the phone's batch: %+v stay %d", p, f.stayVersion(t, f.book))
+	}
+	a = f.sync(t, f.batch(t, "watch", f.listen("continue", 19800, 20400, 90*time.Second, base(4)),
+		f.listen("continue", 20400, 21000, time.Minute, base(0)),
+		f.listen("continue", 21000, 21600, 30*time.Second, base(0))))
+	for _, r := range a.Results {
+		wantKept(t, r)
+	}
+	if p := f.progress(t); p.Position != 18120 || p.DeviceID != "phone" || f.stayVersion(t, f.book) != 5 {
+		t.Fatalf("the watch's backlog moved the held row: %+v stay %d", p, f.stayVersion(t, f.book))
+	}
+}
+
 // The other device answering with a jump or its own Stay from a base that saw
 // the phone's Stay resolves as before (its Stay then holds the row for it); its
 // Stay from below the phone's is a plain jump the phone's Stay holds out.
@@ -308,6 +335,23 @@ func TestSyncStayBacklogAfterAnEdit(t *testing.T) {
 	res := f.syncOne(t, "watch", f.listen("continue", 19800, 20400, 2*time.Minute, base(4)))
 	if res.Status != statusDiverged || res.Kept != "event" {
 		t.Fatalf("the watch's backlog after the edit: %+v", res)
+	}
+}
+
+// An unfinish of a row that isn't finished (the watch saw the book finished,
+// late) changes nothing, so it keeps the phone's hold: the watch's backlog
+// after it is still kept out.
+func TestSyncStayKeptByANoOpUnfinish(t *testing.T) {
+	t.Parallel()
+	f := stayFixture(t, 5*time.Minute)
+	f.phoneStays(t)
+	wantResult(t, f.syncOne(t, "watch", f.finishEvent(EventUnfinish, 3*time.Minute)), statusApplied, "")
+	if got := f.stayVersion(t, f.book); got != 5 {
+		t.Fatalf("the no-op unfinish ended the hold (stay_version %d)", got)
+	}
+	wantKept(t, f.syncOne(t, "watch", f.listen("continue", 19800, 20400, 2*time.Minute, base(4))))
+	if p := f.progress(t); p.Position != 18000 || p.DeviceID != "phone" {
+		t.Fatalf("the watch's backlog moved the held row: %+v", p)
 	}
 }
 
