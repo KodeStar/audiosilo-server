@@ -497,29 +497,28 @@ func TestPlaceLocalOthers(t *testing.T) {
 	}
 }
 
-// TestPlaceLocalOwnWork: the entry the envelope is for lists the other
-// recordings of requested's own work (its recorded match, as Book.work_id),
-// not of the work its identifiers name, so /meta agrees with /item; with no
-// work of its own, those of the envelope's.
+// TestPlaceLocalOwnWork: an entry only ever lists recordings of its own work.
+// The entry the envelope is for holds requested beside the envelope's work's
+// other books, whatever requested's recorded match: a book of the matched work
+// stays on that work's entry, never on two.
 func TestPlaceLocalOwnWork(t *testing.T) {
 	rails := []MetaSeries{named("S", "2", "one@1", "two@2", "three@3")}
 	requested := MetaLocal{LibraryID: 1, Path: "S/2"}
 	books := []LocalBook{
-		mine(1, "S/2", "S", 2, "matched"),
-		mine(1, "S/2 matched too", "S", 2, "matched"),
+		mine(1, "S/2", "S", 2, "three"), // matched in the console to "three"
 		mine(1, "S/2 by asin", "S", 2, "two"),
+		mine(1, "S/2 other", "S", 2, "two"),
+		mine(1, "S/3", "S", 3, "three"),
 	}
-	works := PlaceLocal(rails, "two", requested, books)[0].Works
-	if works[1].Local == nil || *works[1].Local != requested {
-		t.Fatalf("current entry = %+v", works[1])
-	}
-	if got, want := others(works)[1], []string{"S/2 matched too"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("current entry's others = %q, want %q", got, want)
-	}
-	books[0].WorkID = ""
-	works = PlaceLocal(rails, "two", requested, books)[0].Works
-	if got, want := others(works)[1], []string{"S/2 by asin"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("no work of its own: others = %q, want %q", got, want)
+	for _, work := range []string{"three", "two", ""} {
+		books[0].WorkID = work
+		works := PlaceLocal(rails, "two", requested, books)[0].Works
+		if got, want := locals(works), []string{"", "S/2", "S/3"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("requested's work %q: locals = %q, want %q", work, got, want)
+		}
+		if got, want := others(works), [][]string{nil, {"S/2 by asin", "S/2 other"}, nil}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("requested's work %q: others = %q, want %q", work, got, want)
+		}
 	}
 }
 

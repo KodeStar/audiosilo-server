@@ -121,12 +121,13 @@ func ParseSpan(s string) (start, end float64, ok bool) {
 // narrator is the one the pick prefers. Of several books of one work id (other
 // recordings: another narrator, an abridgement, a copy in another library) the
 // pick is Local by pickRank and the rest, in that order, LocalOthers, but for
-// a copy of the pick (otherRecordings). Rule 1's entry lists every book of
-// requested's own work (its WorkID, the recorded match first like
-// Book.work_id; else currentWork) but requested and its copies, so it agrees
-// with /item's other_recordings when the envelope's work (by the identifiers)
-// is another. books are in preference order (library sort order, then path,
-// as catalog.SeriesBooks returns them), the pick's last tiebreak.
+// a copy of the pick (otherRecordings). An entry only ever lists recordings of
+// its own work: rule 1's entry lists currentWork's books but requested and its
+// copies, so no book is on two entries. When requested's recorded match (its
+// WorkID, as Book.work_id) names another work than currentWork, /item's
+// other_recordings are that work's and the two differ until /meta follows the
+// recorded match. books are in preference order (library sort order, then
+// path, as catalog.SeriesBooks returns them), the pick's last tiebreak.
 func PlaceLocal(rails []MetaSeries, currentWork string, requested MetaLocal, books []LocalBook) []MetaSeries {
 	if len(rails) == 0 {
 		return rails
@@ -152,10 +153,9 @@ func PlaceLocal(rails []MetaSeries, currentWork string, requested MetaLocal, boo
 // placer holds the caller's books indexed for PlaceLocal.
 type placer struct {
 	current string
-	// self is requested among the books (its work id and identifiers), only its
-	// handle when it isn't one. Its own work (its WorkID: the recorded match
-	// first, as the catalog's Book.work_id; else current) is the work whose
-	// other recordings ride beside it, as /item's other_recordings.
+	// self is requested among the books (its narrator and identifiers), only
+	// its handle when it isn't one: the current work's entry holds it as Local,
+	// the current work's other books beside it (its copies left out).
 	self LocalBook
 	// byWork is every book of each known work id (each once), the pick first
 	// (pickRank).
@@ -258,8 +258,7 @@ func (p *placer) view(works []MetaSeriesWork, name string, mains map[string]plac
 func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]placement) (placement, bool) {
 	if w.ID != "" {
 		if w.ID == p.current {
-			own := cmp.Or(p.self.WorkID, p.current)
-			return placement{local: p.self.MetaLocal, others: otherRecordings(p.byWork[own], p.self)}, true
+			return placement{local: p.self.MetaLocal, others: otherRecordings(p.byWork[p.current], p.self)}, true
 		}
 		if books := p.byWork[w.ID]; len(books) > 0 {
 			return placement{local: books[0].MetaLocal, others: otherRecordings(books[1:], books[0])}, true

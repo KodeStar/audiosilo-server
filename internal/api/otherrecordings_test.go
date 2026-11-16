@@ -183,9 +183,15 @@ func TestListWorkIDCacheMiss(t *testing.T) {
 	}
 }
 
-// railTwo is the main rail's entry for work "two" off /meta: its local path and
-// its local_others paths.
-func railTwo(t *testing.T, e *sagaEnv, path, token string) (local string, others []string, raw string) {
+// railEntry is one /meta rail entry's books: its local path and its
+// local_others paths.
+type railEntry struct {
+	local  string
+	others []string
+}
+
+// railEntries is the main rail's placed entries off /meta, by work id.
+func railEntries(t *testing.T, e *sagaEnv, path, token string) (entries map[string]railEntry, raw string) {
 	t.Helper()
 	resp, body := e.do(t, "GET", e.url("meta", path), token, "")
 	if resp.StatusCode != http.StatusOK {
@@ -203,18 +209,26 @@ func railTwo(t *testing.T, e *sagaEnv, path, token string) (local string, others
 	if err := json.Unmarshal([]byte(body), &env); err != nil || len(env.Series) == 0 {
 		t.Fatalf("decode %v: %s", err, body)
 	}
+	entries = map[string]railEntry{}
 	for _, w := range env.Series[0].Works {
-		if w.ID != "two" {
+		if w.Local == nil {
 			continue
 		}
-		if w.Local != nil {
-			local = w.Local.Path
-		}
+		en := railEntry{local: w.Local.Path}
 		for _, o := range w.LocalOthers {
-			others = append(others, o.Path)
+			en.others = append(en.others, o.Path)
 		}
+		entries[w.ID] = en
 	}
-	return local, others, body
+	return entries, body
+}
+
+// railTwo is the main rail's entry for work "two" off /meta: its local path and
+// its local_others paths.
+func railTwo(t *testing.T, e *sagaEnv, path, token string) (local string, others []string, raw string) {
+	t.Helper()
+	entries, raw := railEntries(t, e, path, token)
+	return entries["two"].local, entries["two"].others, raw
 }
 
 // TestMetaLocalOthers is the allowed+denied pair for local_others: the admin's
@@ -250,10 +264,11 @@ func TestMetaLocalOthers(t *testing.T) {
 }
 
 // TestItemAndMetaAgree: the book page's other recordings (/item) and the
-// rail's (/meta, the entry the envelope is for) are the same books: neither
-// holds a copy of the book sharing its ASIN, and a book matched in the console
-// to another work than its ASIN's lists that work's recordings on both, while
-// /meta stays about its ASIN's work.
+// rail's (/meta, the entry the envelope is for) are the same books, neither
+// holding a copy of the book sharing its ASIN. A book matched in the console to
+// another work than its ASIN's is the one case they differ: /item follows the
+// match while /meta stays about the ASIN's work, and each rail entry lists only
+// recordings of its own work, so no book is on two entries.
 func TestItemAndMetaAgree(t *testing.T) {
 	t.Parallel()
 	e := recordingsEnv(t, true)
@@ -268,30 +283,56 @@ func TestItemAndMetaAgree(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
-	agree := func(token, wantWork string, want []string) {
+	// rail checks /meta for Saga/2: about the ASIN's work, placed as want, and
+	// no book on two entries.
+	rail := func(token string, want map[string]railEntry) {
 		t.Helper()
-		work, items, _ := itemRecordings(t, e, "Saga/2", token)
-		local, rail, raw := railTwo(t, e, "Saga/2", token)
-		slices.Sort(items)
-		slices.Sort(rail)
-		if work != wantWork || local != "Saga/2" || !reflect.DeepEqual(items, want) || !reflect.DeepEqual(rail, want) {
-			t.Fatalf("work %q: /item %q, /meta local %q others %q, want %q", work, items, local, rail, want)
-		}
+		entries, raw := railEntries(t, e, "Saga/2", token)
 		if !strings.Contains(raw, `"work":{"id":"two"`) {
 			t.Fatalf("/meta is no longer about the ASIN's work: %s", raw)
 		}
+		on := map[string]string{}
+		for id, en := range entries {
+			for _, p := range append([]string{en.local}, en.others...) {
+				if prev, dup := on[p]; dup {
+					t.Fatalf("%s is on entries %q and %q: %s", p, prev, id, raw)
+				}
+				on[p] = id
+			}
+		}
+		if !reflect.DeepEqual(entries, want) {
+			t.Fatalf("/meta entries = %+v, want %+v", entries, want)
+		}
 	}
-	agree(e.adminTok, "two", []string{"Saga/2 Abe", "Saga/2 Kemper"})
+	item := func(token, wantWork string, want []string) {
+		t.Helper()
+		work, items, _ := itemRecordings(t, e, "Saga/2", token)
+		slices.Sort(items)
+		if work != wantWork || !reflect.DeepEqual(items, want) {
+			t.Fatalf("/item: work %q others %q, want %q %q", work, items, wantWork, want)
+		}
+	}
+	two := railEntry{local: "Saga/2", others: []string{"Saga/2 Abe", "Saga/2 Kemper"}}
+	one := railEntry{local: "Saga/1"}
+	item(e.adminTok, "two", two.others)
+	rail(e.adminTok, map[string]railEntry{"one": one, "two": two, "three": {local: "Saga/3"}})
 	// Denied: the member's grant (Saga/1, Saga/2, Saga/2 Abe) holds neither
 	// the copy, Saga/2 Kemper nor Saga/3.
-	agree(e.memberTok, "two", []string{"Saga/2 Abe"})
+	memberTwo := railEntry{local: "Saga/2", others: []string{"Saga/2 Abe"}}
+	item(e.memberTok, "two", memberTwo.others)
+	rail(e.memberTok, map[string]railEntry{"one": one, "two": memberTwo})
+
+	// Matched in the console to "three": /item lists that work's recordings,
+	// while entry "two" keeps its own and Saga/3 stays on entry "three" alone.
 	if err := e.cat.EditBook(ctx, e.lib.ID, "Saga/2", catalog.BookEdit{
 		Match: &catalog.MatchAnchor{WorkID: "three"}, Source: catalog.SourceCommunity,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	agree(e.adminTok, "three", []string{"Saga/3"})
-	agree(e.memberTok, "three", nil)
+	item(e.adminTok, "three", []string{"Saga/3"})
+	rail(e.adminTok, map[string]railEntry{"one": one, "two": two, "three": {local: "Saga/3"}})
+	item(e.memberTok, "three", nil)
+	rail(e.memberTok, map[string]railEntry{"one": one, "two": memberTwo})
 }
 
 // TestNextPicksRecording: after a book, Next opens the pick among the next
