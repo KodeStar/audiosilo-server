@@ -111,7 +111,8 @@ var (
 	// SQLite unique-constraint string.
 	ErrUsernameTaken = errors.New("username already taken")
 	// ErrUsernameRequired is returned when a new account or a rename
-	// (UserChanges.Username) names no username.
+	// (UserChanges.Username) names no username: "" or only spaces, since a
+	// username is stored trimmed (sign-in trims what is typed).
 	ErrUsernameRequired = errors.New("username is required")
 )
 
@@ -263,6 +264,7 @@ func (s *Service) CreateDemoUser(ctx context.Context, username string) (*User, e
 }
 
 func (s *Service) createUser(ctx context.Context, username, password, role, email string, isDemo bool) (*User, error) {
+	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil, ErrUsernameRequired
 	}
@@ -1528,8 +1530,8 @@ func (s *Service) SetPassword(ctx context.Context, id int64, password string, ke
 // UserChanges is a change to an account (the admin's PATCH /admin/users/{id}):
 // nil leaves a field.
 type UserChanges struct {
-	// Username renames the account (the console's Your account step): not ""
-	// (ErrUsernameRequired), not another account's (ErrUsernameTaken), the
+	// Username renames the account (the console's Your account step), trimmed:
+	// not "" (ErrUsernameRequired), not another account's (ErrUsernameTaken), the
 	// rules a new account's name follows. Sessions, codes and everything else
 	// key on the account's id, so they stay.
 	Username *string
@@ -1594,8 +1596,12 @@ type HouseholdChange struct {
 // (endSessions): whoever knew the old one is signed out wherever they used it.
 // What stays, and why, is endSessions'.
 func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error {
-	if c.Username != nil && *c.Username == "" {
-		return ErrUsernameRequired
+	if c.Username != nil {
+		name := strings.TrimSpace(*c.Username) // stored trimmed, as createUser stores it
+		if name == "" {
+			return ErrUsernameRequired
+		}
+		c.Username = &name
 	}
 	var emailArg any
 	if c.Email != nil {

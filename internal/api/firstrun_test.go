@@ -172,7 +172,8 @@ func TestMemberPasswordKeepsTheHint(t *testing.T) {
 // PATCH /admin/users/{id} {username}: an admin renames an account (their own,
 // in the Your account step), keeping its sessions; the new name signs in, the
 // old one doesn't. Refused, changing nothing: a member (403), signed out (401),
-// "" (400 username_required), another account's name (409 username_taken), an
+// "" or spaces (400 username_required), another account's name, padded or not
+// (409 username_taken), an
 // unknown account (404).
 func TestRenameUser(t *testing.T) {
 	t.Parallel()
@@ -188,7 +189,9 @@ func TestRenameUser(t *testing.T) {
 		{"a member", memberTok, path, `{"username":"boss"}`, http.StatusForbidden, ""},
 		{"signed out", "", path, `{"username":"boss"}`, http.StatusUnauthorized, ""},
 		{"empty", adminTok, path, `{"username":""}`, http.StatusBadRequest, codeUsernameRequired},
+		{"only spaces", adminTok, path, `{"username":"  "}`, http.StatusBadRequest, codeUsernameRequired},
 		{"taken", adminTok, path, `{"username":"member"}`, http.StatusConflict, codeUsernameTaken},
+		{"taken, padded", adminTok, path, `{"username":" member "}`, http.StatusConflict, codeUsernameTaken},
 		{"unknown account", adminTok, "/api/v1/admin/users/99999", `{"username":"boss"}`, http.StatusNotFound, ""},
 	} {
 		resp, body := e.do(t, "PATCH", tc.path, tc.token, tc.body)
@@ -200,7 +203,9 @@ func TestRenameUser(t *testing.T) {
 		t.Fatalf("a refused rename renamed the admin to %q", u.Username)
 	}
 
-	resp, body := e.do(t, "PATCH", path, adminTok, `{"username":"kode"}`)
+	// A name is stored trimmed (sign-in trims what is typed, so " kode " could
+	// never sign in as itself).
+	resp, body := e.do(t, "PATCH", path, adminTok, `{"username":" kode "}`)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"username":"kode"`) {
 		t.Fatalf("rename = %d %s", resp.StatusCode, body)
 	}
