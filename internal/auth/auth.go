@@ -1522,7 +1522,8 @@ type DeletedUser struct {
 // SetPassword sets (or clears) an account's password. A non-empty password is
 // hashed with argon2id; an empty password clears it (only valid for non-admins).
 // A kid's is refused (ErrKidNoPassword: UpdateUser). Replacing or clearing a
-// password the account had ends its sessions but keep (UserChanges.KeepToken).
+// password the account had ends its sessions but keep (UserChanges.KeepToken);
+// the first-run admin's notes follow in the same write (notePasswordSet).
 func (s *Service) SetPassword(ctx context.Context, id int64, password string, keep int64) error {
 	return s.UpdateUser(ctx, id, UserChanges{Password: &password, KeepToken: keep})
 }
@@ -1594,7 +1595,9 @@ type HouseholdChange struct {
 // first password) also ends the person's sessions, all but c.KeepToken, with the
 // open pairing codes and the recovery code a session could have made
 // (endSessions): whoever knew the old one is signed out wherever they used it.
-// What stays, and why, is endSessions'.
+// What stays, and why, is endSessions'. A new password on the first-run admin
+// replaces the printed one and ends the auth code printed beside it
+// (notePasswordSet).
 func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error {
 	if c.Username != nil {
 		name := strings.TrimSpace(*c.Username) // stored trimmed, as createUser stores it
@@ -1769,6 +1772,11 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		}
 		if c.Password != nil && u.HasPassword {
 			if _, err := endSessions(ctx, tx, id, c.KeepToken); err != nil {
+				return err
+			}
+		}
+		if hash != "" {
+			if err := notePasswordSet(ctx, tx, id, curRole == RoleAdmin, s.ts()); err != nil {
 				return err
 			}
 		}

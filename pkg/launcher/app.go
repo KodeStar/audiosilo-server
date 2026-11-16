@@ -440,17 +440,18 @@ func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service,
 		// The admin exists and its password was printed nowhere: record it
 		// all the same, so the next start points at reset-admin (signInHint)
 		// rather than saying nothing about an account nobody can sign in to.
-		if markErr := authSvc.MarkFirstAdmin(ctx, admin.ID); markErr != nil {
+		if markErr := authSvc.MarkFirstAdmin(ctx, admin.ID, ""); markErr != nil {
 			log.Warn("recording the first-run admin failed: later starts won't repeat the sign-in hint", "err", markErr)
 		}
 		return false, err
 	}
 	writeBanner(w, cfg, password, code)
 	// Until an admin signs in with a password, later starts say the password
-	// was printed here (signInHint). After the banner, and never a reason not
-	// to start: the admin exists now, and a start that stopped here would
-	// leave its password printed nowhere.
-	if err := authSvc.MarkFirstAdmin(ctx, admin.ID); err != nil {
+	// was printed here (signInHint); the row names the code printed beside it,
+	// which the admin's new password ends. After the banner, and never a
+	// reason not to start: the admin exists now, and a start that stopped here
+	// would leave its password printed nowhere.
+	if err := authSvc.MarkFirstAdmin(ctx, admin.ID, code); err != nil {
 		log.Warn("recording the first-run admin failed: later starts won't repeat the sign-in hint", "err", err)
 	}
 	return true, nil

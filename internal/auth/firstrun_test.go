@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -25,11 +26,11 @@ func TestFirstAdminState(t *testing.T) {
 	if err := s.NoteAdminSignIn(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.NoteOwnPassword(ctx, admin.ID); err != nil {
-		t.Fatal(err)
-	}
 	if db.ContentGeneration() != gen {
 		t.Error("a note without the row wrote")
+	}
+	if err := s.SetPassword(ctx, admin.ID, "second-password", 0); err != nil {
+		t.Fatal(err)
 	}
 	if u, _ := s.FirstAdminWaiting(ctx); u != nil {
 		t.Error("waiting without the row")
@@ -38,7 +39,7 @@ func TestFirstAdminState(t *testing.T) {
 		t.Error("printed password without the row")
 	}
 
-	if err := s.MarkFirstAdmin(ctx, admin.ID); err != nil {
+	if err := s.MarkFirstAdmin(ctx, admin.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if u, err := s.FirstAdminWaiting(ctx); err != nil || u == nil || u.ID != admin.ID {
@@ -67,21 +68,20 @@ func TestFirstAdminState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gen = db.ContentGeneration()
-	if err := s.NoteOwnPassword(ctx, other.ID); err != nil {
+	if err := s.SetPassword(ctx, other.ID, "alex-second-password", 0); err != nil {
 		t.Fatal(err)
 	}
-	if db.ContentGeneration() != gen {
-		t.Error("another admin's own password wrote")
+	if p, _ := s.PrintedPassword(ctx, admin.ID); !p {
+		t.Error("another admin's own password replaced the printed one")
 	}
-	if err := s.NoteOwnPassword(ctx, admin.ID); err != nil {
+	if err := s.SetPassword(ctx, admin.ID, "chosen-password", 0); err != nil {
 		t.Fatal(err)
 	}
 	if p, _ := s.PrintedPassword(ctx, admin.ID); p {
-		t.Error("printed password after the admin set their own")
+		t.Error("printed password after the admin's was replaced")
 	}
 	// No longer an admin who can sign in (disabled, demoted): no hint names it.
-	if err := s.MarkFirstAdmin(ctx, other.ID); err != nil {
+	if err := s.MarkFirstAdmin(ctx, other.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if u, err := s.FirstAdminWaiting(ctx); err != nil || u == nil || u.ID != other.ID {
@@ -101,10 +101,99 @@ func TestFirstAdminState(t *testing.T) {
 		}
 	}
 	// The account gone: nothing to wait for.
-	if err := s.MarkFirstAdmin(ctx, 9999); err != nil {
+	if err := s.MarkFirstAdmin(ctx, 9999, ""); err != nil {
 		t.Fatal(err)
 	}
 	if u, err := s.FirstAdminWaiting(ctx); err != nil || u != nil {
 		t.Errorf("FirstAdminWaiting for a deleted account = %+v, %v", u, err)
+	}
+}
+
+// A new password on the first-run admin, whoever sets it (the Your account
+// step, another admin, reset-admin: all through UpdateUser), ends the auth
+// code printed beside the old one in the same log (D4, server#391), and
+// printed_password with it. Denied: the printed code pairs no more. Allowed:
+// the admin's other codes, and a code another admin's password change leaves.
+func TestNewPasswordEndsThePrintedCode(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	admin, err := s.CreateUser(ctx, "admin", "first-password", RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	printed, err := s.CreateAuthCode(ctx, admin.ID, InitialAdminCodeLabel, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.CreateAuthCode(ctx, admin.ID, "my phone", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkFirstAdmin(ctx, admin.ID, printed); err != nil {
+		t.Fatal(err)
+	}
+	alex, err := s.CreateUser(ctx, "alex", "alex-password", RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPassword(ctx, alex.ID, "alex-new-password", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveAuthCode(ctx, printed); err != nil {
+		t.Fatalf("another admin's password change ended the printed code: %v", err)
+	}
+	if p, _ := s.PrintedPassword(ctx, admin.ID); !p {
+		t.Fatal("another admin's password change replaced the printed one")
+	}
+	// Another admin resets the first-run admin's password (server#391: the
+	// printed one is gone all the same).
+	if err := s.SetPassword(ctx, admin.ID, "set-by-alex", alex.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveAuthCode(ctx, printed); !errors.Is(err, ErrInvalidCode) {
+		t.Fatalf("the printed code after a new password = %v, want ErrInvalidCode", err)
+	}
+	if p, _ := s.PrintedPassword(ctx, admin.ID); p {
+		t.Error("printed_password after another admin set the first-run admin's")
+	}
+	if _, err := s.ResolveAuthCode(ctx, other); err != nil {
+		t.Errorf("the admin's other code went too: %v", err)
+	}
+}
+
+// A first-run code the admin rotated was never printed: the row names the
+// printed one by id and stamp, which a rotation renews, so a new password
+// leaves the rotated code pairing.
+func TestNewPasswordKeepsARotatedCode(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	admin, err := s.CreateUser(ctx, "admin", "first-password", RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	printed, err := s.CreateAuthCode(ctx, admin.ID, InitialAdminCodeLabel, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkFirstAdmin(ctx, admin.ID, printed); err != nil {
+		t.Fatal(err)
+	}
+	codes, err := s.ListAuthCodes(ctx, admin.ID)
+	if err != nil || len(codes) != 1 {
+		t.Fatalf("codes = %+v, %v", codes, err)
+	}
+	*now = now.Add(time.Hour)
+	rotated, err := s.RotateAuthCode(ctx, codes[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPassword(ctx, admin.ID, "chosen-password", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveAuthCode(ctx, rotated.Code); err != nil {
+		t.Fatalf("a new password ended a rotated code: %v", err)
+	}
+	if revoked, err := s.RevokeInitialAdminCode(ctx, admin.ID); err != nil || revoked {
+		t.Fatalf("RevokeInitialAdminCode = %v, %v; want nothing revoked", revoked, err)
 	}
 }

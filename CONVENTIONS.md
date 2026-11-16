@@ -4071,7 +4071,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   connection's Host and scheme (the server never trusts X-Forwarded-Host/Proto), `proxied` any forwarding
   header (`proxied`), `peer` (only when proxied) the connecting address for `trusted_proxies`;
   `config_libraries` the names the config declares (config.yaml); `printed_password` true while the caller
-  is the banner's admin and has not chosen their own password nor had one from `reset-admin` (`auth.PrintedPassword`); `mount_hints` (only while not finished or
+  is the banner's admin and their password was never replaced (by them, another admin or `reset-admin`: `auth.PrintedPassword`); `mount_hints` (only while not finished or
   while the folder step is skipped, else `[]`) `library.MountHints` (Linux
   `/proc/self/mountinfo`: folders, not system paths or pseudo filesystems, not the data folder, sorted,
   at most 20; `[]` elsewhere). `PUT /admin/setup` `{finished?, dismissed?, steps?}` merges (one writer
@@ -4099,32 +4099,40 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `username_was`; the session stays) and changes the password with the caller's own `POST /auth/password`
   (its wrong current password is 401 `current_password_incorrect`, which the console never treats as a lost
   session). **The sign-in hint** (`auth/firstrun.go`): the banner's `ensureAdmin` writes `server_state`
-  `first_admin` `{user_id, signed_in, chose_password}`; while `signed_in` is false every later start prints
+  `first_admin` `{user_id, signed_in, chose_password, code_id, code_created_at}` (the last two name the auth
+  code printed beside the password: a rotation in the console keeps the row's id but stamps it anew, so a
+  rotated code, never printed, no longer matches); while `signed_in` is false every later start prints
   a framed reminder (`launcher.signInHint`: the console address, the username, and the `reset-admin`
   command, as `docker exec -u <uid>:<gid> <container> ...` inside a container, the server's own ids so the
   command never makes a root-owned file in the data folder; words quoted for the system's shell,
   `quoteWord`: single quotes, double on Windows). The row is written after the banner and a failed write
   only loses the reminder; a start that made the admin but failed before the banner (the auth code's
   write) writes it too, so the next start points at `reset-admin` for a password printed nowhere. Any admin's password sign-in
-  (`NoteAdminSignIn`) or the admin's own password change (`NoteOwnPassword`: `POST /auth/password`, or
-  `PATCH /admin/users/{id}` on their own account, the console's People dialog; a password another admin
-  set is not their own; `reset-admin` notes it too) ends it; each writes once, in one transaction.
+  (`NoteAdminSignIn`) or a password set on an admin account ends it. A password set on the first-run
+  admin, whoever sets it (the account step's `POST /auth/password`, People's `PATCH /admin/users/{id}`,
+  another admin's included, `reset-admin`), also ends `printed_password` and deletes the auth code the
+  row names (D4, server#391: it sat in the same log): `auth.UpdateUser` notes it in its own transaction
+  (`notePasswordSet`), so no handler does; each note writes once.
   No row (an upgraded server, `--setup`) never prints it, so no backfill. **`audiosilo [--data dir]
-  reset-admin [username]`** (`launcher.ResetAdmin`, offline): opens the database (refuses a missing one,
+  reset-admin [username]`** (`launcher.ResetAdmin`, offline): refuses first a data folder where a restore
+  waits for the next start (`backup.RestorePending`, read before the database, so a damaged database the
+  restore would replace says so), then opens the database (refuses a missing one,
   a file that isn't an AudioSilo database (`store.Inspect`: never migrated here) and one with pending
-  migrations, and one a restore waiting for the next start would replace: `backup.RestorePending`), picks the only admin or the named one (exit 2 with the admins listed
-  otherwise; a disabled one is refused), sets a random password through `auth.SetPassword` (the console's
-  rule: every session, pairing code and remembered browser ends), revokes the auth code the first start
-  printed beside the password (`auth.RevokeInitialAdminCode`: that admin's unlimited, never-expiring
-  invite labelled `auth.InitialAdminCodeLabel`, so an install from before `first_admin` is covered too;
-  the output says so when there was one) and prints the password once. The console's account step keeps
-  the code (the phone step points at it) and says to revoke it in People > Invites. A running server
+  migrations), picks the named admin or the only enabled one (exit 2 with the enabled admins listed
+  otherwise; a disabled one is refused, and neither counts nor is listed), revokes the auth code the first
+  start printed beside the password (`auth.RevokeInitialAdminCode`: the one `first_admin` names, so a
+  rotated code stays; on an install whose row names none, from before it did, that admin's unlimited,
+  never-expiring invite labelled `auth.InitialAdminCodeLabel`; the output says so when there was one; a
+  failure refuses the reset with nothing changed), sets a random password through `auth.SetPassword`
+  (the console's rule: every session, pairing code and remembered browser ends) and prints the password
+  once. On Windows a quoted binary path in the printed command takes PowerShell's `&`. The console's
+  account step says a new password ends the code too. A running server
   takes the new password at once; a session it already checked is answered from its token cache (which
   another process's write can't empty) until that server's next content write, or a minute after it last
   read the row (`auth.maxCachedTokenAge`, `TestResetAdminEndsARunningServersSessions`); a restart ends
-  them at once. A reset also ends the sign-in hint (`NoteOwnPassword`: the
-  hint names the first start's password) and, for the first-run admin, `printed_password` (the log's password is gone), and the hint never names a first-run admin since disabled or
-  demoted.
+  them at once. A reset also ends the sign-in hint (the hint names the first start's password) and, for
+  the first-run admin, `printed_password` (the log's password is gone), and the hint never names a
+  first-run admin since disabled or demoted.
   **Marketplace** (server#192): `GET /admin/settings` `metadata.region_chosen` is false only while no
   region was ever set here, in config.yaml or by the environment (`server_state`
   `metadata_region_chosen`, written by any settings save carrying `metadata.region`, "No preference"

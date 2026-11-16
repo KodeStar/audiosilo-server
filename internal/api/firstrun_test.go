@@ -18,7 +18,7 @@ func TestAdminSignInEndsTheFirstRunHint(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newTestEnv(t)
-	if err := e.auth.MarkFirstAdmin(ctx, e.adminID); err != nil {
+	if err := e.auth.MarkFirstAdmin(ctx, e.adminID, ""); err != nil {
 		t.Fatal(err)
 	}
 	waiting := func() bool {
@@ -75,10 +75,10 @@ func printedPassword(t *testing.T, e *testEnv, token string) bool {
 }
 
 // The Your account step's printed_password: true for the first-run admin until
-// they set their own password (POST /auth/password, which also ends the hint);
-// false for an admin with no first-run row (the --setup wizard's, an older
-// install's) and for another admin. A password an admin resets for them (the
-// console, reset-admin) is not their own choice.
+// their password is replaced (POST /auth/password, which also ends the hint, or
+// another admin's reset in People, server#391: the printed one is gone either
+// way); false for an admin with no first-run row (the --setup wizard's, an
+// older install's) and for another admin.
 func TestSetupPrintedPassword(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -87,7 +87,7 @@ func TestSetupPrintedPassword(t *testing.T) {
 	if printedPassword(t, e, adminTok) {
 		t.Fatal("printed_password without a first-run admin")
 	}
-	if err := e.auth.MarkFirstAdmin(ctx, e.adminID); err != nil {
+	if err := e.auth.MarkFirstAdmin(ctx, e.adminID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !printedPassword(t, e, adminTok) {
@@ -106,8 +106,11 @@ func TestSetupPrintedPassword(t *testing.T) {
 		t.Fatalf("reset = %d %s", resp.StatusCode, body)
 	}
 	adminTok, _ = e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
-	if !printedPassword(t, e, adminTok) {
-		t.Error("a password another admin set counted as the admin's own")
+	if printedPassword(t, e, adminTok) {
+		t.Error("printed_password still true after another admin set the first-run admin's")
+	}
+	if err := e.auth.MarkFirstAdmin(ctx, e.adminID, ""); err != nil {
+		t.Fatal(err)
 	}
 	// A wrong current password: 401 with its own code (not a session that
 	// ended), and nothing changes.
@@ -128,6 +131,35 @@ func TestSetupPrintedPassword(t *testing.T) {
 	}
 }
 
+// The Your account step's password change (POST /auth/password) ends the auth
+// code printed beside the first-run password (D4, server#391): it sat in the
+// same log. Denied: the printed code no longer redeems. Allowed: a refused
+// change (wrong current password) leaves it pairing.
+func TestAccountStepPasswordEndsThePrintedCode(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newTestEnv(t)
+	adminTok, _ := opsTokens(t, e)
+	printed, err := e.auth.CreateAuthCode(ctx, e.adminID, auth.InitialAdminCodeLabel, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.auth.MarkFirstAdmin(ctx, e.adminID, printed); err != nil {
+		t.Fatal(err)
+	}
+	e.do(t, "POST", "/api/v1/auth/password", adminTok, `{"password":"my-own-password","current_password":"wrong"}`)
+	if status, _, _ := e.redeemCode(t, printed); status != http.StatusOK {
+		t.Fatalf("a refused change ended the printed code: redeem = %d", status)
+	}
+	if resp, body := e.do(t, "POST", "/api/v1/auth/password", adminTok,
+		`{"password":"my-own-password","current_password":"admin-password"}`); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("own password = %d %s", resp.StatusCode, body)
+	}
+	if status, _, _ := e.redeemCode(t, printed); status != http.StatusUnauthorized {
+		t.Errorf("the printed code after the account step's password = %d, want 401", status)
+	}
+}
+
 // The console's People dialog changes the admin's own password through PATCH
 // /admin/users/{id}: their own choice as much as POST /auth/password's, so the
 // printed password is gone and the hint ends.
@@ -136,7 +168,7 @@ func TestOwnPasswordByPatchReplacesThePrintedOne(t *testing.T) {
 	ctx := context.Background()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
-	if err := e.auth.MarkFirstAdmin(ctx, e.adminID); err != nil {
+	if err := e.auth.MarkFirstAdmin(ctx, e.adminID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if resp, body := e.do(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(e.adminID, 10), adminTok,
@@ -156,7 +188,7 @@ func TestMemberPasswordKeepsTheHint(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newTestEnv(t)
-	if err := e.auth.MarkFirstAdmin(ctx, e.adminID); err != nil {
+	if err := e.auth.MarkFirstAdmin(ctx, e.adminID, ""); err != nil {
 		t.Fatal(err)
 	}
 	_, memberTok := opsTokens(t, e)
@@ -307,7 +339,7 @@ func TestSetupPrintedPasswordUnreadable(t *testing.T) {
 	ctx := context.Background()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
-	if err := e.auth.MarkFirstAdmin(ctx, e.adminID); err != nil {
+	if err := e.auth.MarkFirstAdmin(ctx, e.adminID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !printedPassword(t, e, adminTok) {

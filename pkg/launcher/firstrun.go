@@ -42,7 +42,7 @@ func signInHint(ctx context.Context, cfg *config.Config, authSvc *auth.Service, 
 	if fsaccess.InContainer() {
 		container = "docker exec " + execUser(os.Getuid(), os.Getgid()) + "<container> "
 	}
-	writeSignInHint(w, baseURL(cfg), u.Username, resetAdminCommand(cfg.DataDir, executable(), exec.LookPath), container)
+	writeSignInHint(w, baseURL(cfg), u.Username, resetAdminCommand(runtime.GOOS, cfg.DataDir, executable(), exec.LookPath), container)
 }
 
 // execUser is docker exec's -u for a server running as uid:gid, so the
@@ -85,11 +85,13 @@ func executable() string {
 	return exe
 }
 
-// resetAdminCommand is the reset-admin command line for this server: its own
-// binary (by name when that name on PATH is this binary, else by its path: the
-// linuxserver image's /app/audiosilo/audiosilo is not on PATH) and its data
-// folder.
-func resetAdminCommand(dataDir, exe string, lookPath func(string) (string, error)) string {
+// resetAdminCommand is the reset-admin command line for this server on goos:
+// its own binary (by name when that name on PATH is this binary, else by its
+// path: the linuxserver image's /app/audiosilo/audiosilo is not on PATH) and its
+// data folder. On Windows a quoted binary path takes PowerShell's call operator
+// (& "C:\Program Files\..."): PowerShell reads a quoted first word as a string,
+// not a command.
+func resetAdminCommand(goos, dataDir, exe string, lookPath func(string) (string, error)) string {
 	bin := "audiosilo"
 	if exe != "" {
 		bin = exe
@@ -97,7 +99,11 @@ func resetAdminCommand(dataDir, exe string, lookPath func(string) (string, error
 			bin = filepath.Base(exe)
 		}
 	}
-	return shellQuote(bin) + " --data " + shellQuote(dataDir) + " reset-admin"
+	cmd := quoteWord(goos, bin)
+	if goos == "windows" && strings.HasPrefix(cmd, `"`) {
+		cmd = "& " + cmd
+	}
+	return cmd + " --data " + quoteWord(goos, dataDir) + " reset-admin"
 }
 
 func sameFile(a, b string) bool {
@@ -115,10 +121,6 @@ var (
 	plainWord        = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
 	plainWindowsWord = regexp.MustCompile(`^[A-Za-z0-9_@+=:,./\\-]+$`)
 )
-
-// shellQuote is s as one word of the shell the admin types the command into
-// on this system (quoteWord).
-func shellQuote(s string) string { return quoteWord(runtime.GOOS, s) }
 
 // quoteWord is s as one shell word on goos: as it is when plain, else in
 // single quotes for a POSIX shell, in double quotes on Windows (cmd.exe takes
@@ -148,7 +150,8 @@ func (e *UsageError) Error() string { return e.msg }
 // when there are several). The password is set as the console sets one
 // (auth.SetPassword, nothing kept): the account's sessions, open pairing codes
 // and recovery code end and its browsers are forgotten, and the start's sign-in
-// hint ends with them. It runs beside a running server (SQLite in WAL mode
+// hint ends with them; for the first-run admin the auth code printed beside the
+// password ends first (auth.RevokeInitialAdminCode). It runs beside a running server (SQLite in WAL mode
 // waits its turn): that server checks the new password at once, since a
 // sign-in reads the database, but its token cache can't see this process's
 // write, so a session it already checked is refused only once its row is read
@@ -163,6 +166,16 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	if err != nil {
 		return err
 	}
+	// A restore waiting for the next start replaces this database, and the
+	// password with it: refused, so the password printed is never one that
+	// stops working at the next start. Checked first: a damaged database the
+	// restore would replace is reported as the restore waiting, not as a read
+	// error.
+	if restore, err := backup.RestorePending(abs); err != nil {
+		return fmt.Errorf("reading the restore waiting in %s: %w (start the server once, which reports and drops it, then run reset-admin again)", abs, err)
+	} else if restore != nil {
+		return fmt.Errorf("a restore of %s is waiting for the next start, which replaces this database (and a password set now): start the server once to apply it, or cancel it in the console (Settings > Backups), then run reset-admin again", restore.Name)
+	}
 	dbPath := filepath.Join(abs, "audiosilo.db")
 	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("no database at %s: name the server's data folder with --data before reset-admin", dbPath)
@@ -175,14 +188,6 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	// warn about; it is opened as the server opens it.
 	if _, err := store.Inspect(ctx, dbPath, false); err != nil && !errors.Is(err, store.ErrNewerDatabase) {
 		return fmt.Errorf("reading the database at %s: %w", dbPath, err)
-	}
-	// A restore waiting for the next start replaces this database, and the
-	// password with it: refused, so the password printed is never one that
-	// stops working at the next start.
-	if restore, err := backup.RestorePending(abs); err != nil {
-		return fmt.Errorf("reading the restore waiting in %s: %w (start the server once, which reports and drops it, then run reset-admin again)", abs, err)
-	} else if restore != nil {
-		return fmt.Errorf("a restore of %s is waiting for the next start, which replaces this database (and a password set now): start the server once to apply it, or cancel it in the console (Settings > Backups), then run reset-admin again", restore.Name)
 	}
 	pending, err := store.PendingMigrations(ctx, dbPath)
 	if err != nil {
@@ -202,28 +207,27 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	if err != nil {
 		return err
 	}
+	// The auth code the first start printed sits in the same log as the
+	// password this replaces: it goes too, first, so the answer can say so
+	// (the new password would end it all the same, saying nothing). A code
+	// the admin rotated since was never printed and stays.
+	revoked, err := authSvc.RevokeInitialAdminCode(ctx, u.ID)
+	if err != nil {
+		return fmt.Errorf("revoking the first-run auth code: %w", err)
+	}
+	// Set as the console sets one: whoever ran this holds a working admin
+	// password now, so later starts stop pointing at the first start's, and
+	// when this is the first-run admin the console's account step stops saying
+	// the password came from the log (auth.UpdateUser, in the same write).
 	password := randomSecret(18)
 	if err := authSvc.SetPassword(ctx, u.ID, password, 0); err != nil {
 		return err
 	}
-	// The auth code the first start printed sits in the same log as the
-	// password this replaces: it goes too. A failure is reported after the
-	// password is printed: the old one is gone, so this one must be shown.
-	revoked, revokeErr := authSvc.RevokeInitialAdminCode(ctx, u.ID)
-	// Whoever ran this holds a working admin password now, so later starts stop
-	// pointing at the first start's, and when this is the first-run admin the
-	// password in the log is gone, so the console's account step stops saying
-	// it came from there (auth.NoteOwnPassword). A failed note only leaves
-	// the hint (and that notice) up.
-	_ = authSvc.NoteOwnPassword(ctx, u.ID)
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
 	p("New password for the admin account %q:\n\n  %s\n\n", u.Username, password)
 	p("Sign in to the admin console with it. Every session that used the old password\n")
 	p("is signed out (a running server may answer one it already checked for up to a\n")
 	p("minute; restart the server to end them at once).\n")
-	if revokeErr != nil {
-		return fmt.Errorf("the password is set, but revoking the first-run auth code failed (revoke it in the console, People > Invites): %w", revokeErr)
-	}
 	if revoked {
 		p("\nThe auth code printed at first start no longer works either: invite a device\n")
 		p("from People in the console.\n")
@@ -231,15 +235,22 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	return nil
 }
 
-// pickAdmin is the admin reset-admin resets: the one named, else the only one.
+// pickAdmin is the admin reset-admin resets: the one named, else the only one
+// enabled (a disabled admin can't sign in with a new password, so it neither
+// counts nor is listed).
 func pickAdmin(ctx context.Context, authSvc *auth.Service, username string) (*auth.User, error) {
 	users, err := authSvc.ListUsers(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var admins []auth.User
+	disabled := 0
 	for _, u := range users {
-		if u.Role == auth.RoleAdmin {
+		switch {
+		case u.Role != auth.RoleAdmin:
+		case u.Disabled:
+			disabled++
+		default:
 			admins = append(admins, u)
 		}
 	}
@@ -261,6 +272,9 @@ func pickAdmin(ctx context.Context, authSvc *auth.Service, username string) (*au
 	}
 	switch len(admins) {
 	case 0:
+		if disabled > 0 {
+			return nil, errors.New("every admin account is disabled: a new password wouldn't sign one in")
+		}
 		return nil, errors.New("there is no admin account yet: start the server, which makes one and prints its password (or opens /setup with --setup)")
 	case 1:
 		return checkEnabled(&admins[0])

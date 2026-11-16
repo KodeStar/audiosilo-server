@@ -438,7 +438,8 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 // with them), keeping the caller's, and their open pairing codes and recovery
 // code; API keys, the calendar feed token and Bridge tokens stay (auth.endSessions).
 // A wrong current password is 401 current_password_incorrect. An admin's change
-// ends the start's first-run hint (auth.NoteOwnPassword).
+// ends the start's first-run hint, and the first-run admin's the printed
+// password and auth code (auth.UpdateUser's notePasswordSet).
 func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return
@@ -477,13 +478,6 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		}
 		a.writeUserError(w, err, "could not update password")
 		return
-	}
-	// An admin who set their own password holds it: the start's hint ends,
-	// and the first-run admin's printed password is gone (auth/firstrun.go).
-	if full.Role == auth.RoleAdmin {
-		if err := a.auth.NoteOwnPassword(r.Context(), full.ID); err != nil {
-			a.log.Warn("noting the admin's own password failed", "err", err)
-		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
