@@ -158,6 +158,9 @@ func scanAccount(row interface{ Scan(...any) error }, extra ...any) (oidc.Accoun
 // browser finishes with (KindOIDC, tokenTTL long, the only token ConsumeOIDC
 // takes), in the same transaction (OIDCResult.Token).
 func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy, tokenTTL time.Duration) (OIDCResult, error) {
+	if tokenTTL <= 0 { // issueToken's no-expiry: never for a token a browser carries
+		return OIDCResult{}, errors.New("auth: OIDCSignIn needs a token life")
+	}
 	var res OIDCResult
 	err := s.db.WithDurableTx(ctx, "OIDCSignIn", func(tx *sql.Tx) error {
 		res = OIDCResult{}
@@ -607,6 +610,7 @@ func (s *Service) ListIdentities(ctx context.Context, userID int64) ([]Identity,
 // when it is a password-less admin's way in (decision 5): an identity from the
 // single sign-on that can run now (activeIssuer; an account has at most one
 // per issuer). One from another provider, or while it is off, is no way in.
+// The account's sign-ins not yet finished (KindOIDC tokens) end with it.
 func (s *Service) UnlinkIdentity(ctx context.Context, userID, identityID int64) (Identity, error) {
 	var out Identity
 	err := s.db.WithDurableTx(ctx, "UnlinkIdentity", func(tx *sql.Tx) error {
@@ -630,7 +634,13 @@ func (s *Service) UnlinkIdentity(ctx context.Context, userID, identityID int64) 
 				return ErrAdminNeedsPassword
 			}
 		}
-		_, err = tx.ExecContext(ctx, `DELETE FROM user_identities WHERE id = ?`, identityID)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM user_identities WHERE id = ?`, identityID); err != nil {
+			return err
+		}
+		// A sign-in through it the callback decided and the browser hasn't
+		// finished yet ends with it, as a sign-out everywhere ends one.
+		_, err = tx.ExecContext(ctx, `UPDATE tokens SET revoked = 1 WHERE user_id = ? AND kind = ? AND revoked = 0`,
+			userID, KindOIDC)
 		return err
 	})
 	return out, err

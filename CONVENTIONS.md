@@ -3666,7 +3666,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   minute) and clears it on every other answer, consumes the token once (`ConsumeOIDC`: only
   `KindOIDC`, so a pairing token planted in the cookie, an invite's QR or an own `/auth/pair`, is
   refused and left unspent; `POST /auth/exchange` in turn refuses a `KindOIDC` token; a sign-out
-  everywhere ends one not yet finished, the daily `PruneSingleUseTokens` drops it) and answers exactly as
+  everywhere or an unlink of the account's identity ends one not yet finished, the daily
+  `PruneSingleUseTokens` drops it) and answers exactly as
   `POST /auth/exchange` (the session envelope, `reportSignIn`); 401 code `oidc_no_sign_in` without
   the cookie (nothing charged), `oidc_sign_in_expired` while single sign-on can't run (off since the
   callback: a token outlives a restart; nothing charged, the token left to expire) and for a token

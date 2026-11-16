@@ -500,7 +500,7 @@ func TestPendingGroupsCapped(t *testing.T) {
 }
 
 // TestUnlinkIdentity: unlinking works, except a password-less admin's last way
-// in (decision 5).
+// in (decision 5), and ends the account's sign-ins not yet finished.
 func TestUnlinkIdentity(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -524,8 +524,24 @@ func TestUnlinkIdentity(t *testing.T) {
 	if err := s.UpdateUser(ctx, sso.ID, UserChanges{Password: ptr("a-new-password")}); err != nil {
 		t.Fatal(err)
 	}
+	// A sign-in through it finishes while it is linked (allowed); one not yet
+	// finished when it is unlinked ends with it (denied).
+	done, err := s.IssueToken(ctx, sso.ID, KindOIDC, "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeOIDC(ctx, done); err != nil {
+		t.Fatal(err)
+	}
+	open, err := s.IssueToken(ctx, sso.ID, KindOIDC, "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got, err := s.UnlinkIdentity(ctx, sso.ID, ids[0].ID); err != nil || got.Subject != "sub-sso" {
 		t.Fatalf("unlink with a password: %+v %v", got, err)
+	}
+	if _, err := s.ConsumeOIDC(ctx, open); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("a sign-in survived its identity's unlink: %v", err)
 	}
 }
 
@@ -757,6 +773,10 @@ func TestOIDCSignInMintsToken(t *testing.T) {
 	}
 	if _, err := s.ConsumeOIDC(ctx, res.Token); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("a sign-in's token survived a sign-out everywhere: %v", err)
+	}
+	// Never a token that wouldn't expire.
+	if _, err := s.OIDCSignIn(ctx, claimsFor("sub-a", "", false), oidc.Policy{}, 0); err == nil {
+		t.Fatal("a sign-in with no token life went on")
 	}
 	// No token for a sign-in that waits.
 	if res, err := s.OIDCSignIn(ctx, claimsFor("sub-b", "", false), oidc.Policy{}, time.Minute); err != nil ||
