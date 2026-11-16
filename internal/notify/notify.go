@@ -169,6 +169,12 @@ func (s *Service) Run(ctx context.Context) {
 // subscribed to its kind. It never blocks on sending; a full queue drops the
 // delivery (logged).
 func (s *Service) Emit(ctx context.Context, e Event) {
+	s.emit(ctx, e, nil)
+}
+
+// emit is Emit with a gate: allow (when set) runs after the dedup check and
+// before the event is recorded, and false drops it.
+func (s *Service) emit(ctx context.Context, e Event, allow func() bool) {
 	if s == nil {
 		return
 	}
@@ -178,6 +184,9 @@ func (s *Service) Emit(ctx context.Context, e Event) {
 		if err != nil || seen {
 			return
 		}
+	}
+	if allow != nil && !allow() {
+		return
 	}
 	ev, err := s.cat.RecordServerEvent(ctx, e.Kind, e.Data, e.Dedup)
 	if err != nil {
@@ -887,13 +896,7 @@ func (s *Service) OIDCPending(ctx context.Context, pendingID int64, provider, na
 		data["reason"] = reason
 	}
 	dedup := "pending:" + strconv.FormatInt(pendingID, 10)
-	if seen, err := s.cat.ServerEventSeen(context.WithoutCancel(ctx), KindOIDCPending, dedup); err != nil || seen {
-		return
-	}
-	if !s.takeOIDCPending() {
-		return
-	}
-	s.Emit(ctx, Event{Kind: KindOIDCPending, Data: data, Dedup: dedup})
+	s.emit(ctx, Event{Kind: KindOIDCPending, Data: data, Dedup: dedup}, s.takeOIDCPending)
 }
 
 // takeOIDCPending takes one of the hour's oidc_pending notifications, false
