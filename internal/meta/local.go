@@ -25,7 +25,8 @@ type MetaLocal struct {
 // LocalBook is one of the caller's books PlaceLocal may place: its handle, its
 // local series and index (SeriesIndexEnd: a range's end, an omnibus of books 1-3;
 // else 0), its identifiers, and the community work it is when known ("" when
-// not; PlaceOwned fills it from the identifiers).
+// not; PlaceOwned fills it from the identifiers). Narrator, Started and
+// Abridged decide which of a work's recordings is the pick (pickRank).
 type LocalBook struct {
 	MetaLocal
 	Series         string
@@ -33,6 +34,12 @@ type LocalBook struct {
 	SeriesIndexEnd float64
 	ASIN, ISBN     string
 	WorkID         string
+	// Narrator is the book's narrator credit.
+	Narrator string
+	// Started: the caller has started the book and not finished it.
+	Started bool
+	// Abridged: the book is known to be abridged (unknown counts as not).
+	Abridged bool
 }
 
 // last is the last position b holds in its series: a range's end, else its index.
@@ -51,17 +58,18 @@ func SeriesNames(rails []MetaSeries) []string {
 	return names
 }
 
-// PlaceOwned is PlaceLocal over env's rails for the caller's books, each book's
-// work id read from the cache by its identifiers (CachedWorkID: memory, else the
-// store; never upstream), once per identifiers: a book in several series is a
-// candidate in each. requested is the book env is for. env and books are never
-// modified.
+// PlaceOwned is PlaceLocal over env's rails for the caller's books, a book
+// whose work id the catalog doesn't know (WorkID "") read from the cache by its
+// identifiers (CachedWorkID: memory, else the store; never upstream), once per
+// identifiers: a book in several series is a candidate in each. requested is
+// the book env is for, placed on env's work's entry whatever its own work id
+// (never looked up). env and books are never modified.
 func (s *Service) PlaceOwned(ctx context.Context, env *Enrichment, requested MetaLocal, books []LocalBook) []MetaSeries {
 	cands := slices.Clone(books)
 	type idents struct{ asin, isbn string }
 	works := map[idents]string{}
 	for i := range cands {
-		if cands[i].WorkID != "" {
+		if cands[i].WorkID != "" || cands[i].MetaLocal == requested {
 			continue
 		}
 		k := idents{cands[i].ASIN, cands[i].ISBN}
@@ -94,11 +102,12 @@ func ParseSpan(s string) (start, end float64, ok bool) {
 }
 
 // PlaceLocal returns a copy of rails with Local set on every entry the caller
-// owns, in the main view and in each alternate ordering. rails is never
-// modified. Each entry gets at most one book:
+// owns, in the main view and in each alternate ordering, and LocalOthers on an
+// entry the caller holds more than one recording of. rails is never modified.
+// Each entry gets at most one book as Local:
 //  1. the entry whose work is currentWork is requested, the book the envelope
 //     is for;
-//  2. else the book whose work id (from the cache) is the entry's;
+//  2. else the book whose work id (Book.work_id, else the cache's) is the entry's;
 //  3. else, in an alternate ordering, the book its main view placed for the
 //     same work, so the two views of one work never disagree;
 //  4. else a book of a local series named like this view (match.SeriesKey)
@@ -109,9 +118,16 @@ func ParseSpan(s string) (start, end float64, ok bool) {
 //
 // A book whose work id is known is placed by that id only, never by its index:
 // a book that is another work (a novella numbered like the next volume) holds
-// no slot. requested is placed by rule 1 only. books are in preference order
-// (library sort order, then path, as catalog.SeriesBooks returns them); a book
-// in requested's library is preferred over that order.
+// no slot. requested is placed by rule 1 only; when it is among books, its
+// narrator is the one the pick prefers. Of several books of one work id (other
+// recordings: another narrator, an abridgement, a copy in another library) the
+// pick is Local by pickRank and the rest, in that order, LocalOthers, one per
+// recording: never a copy of the pick or of a book before it
+// (otherRecordings). An entry only ever lists recordings of its own work: rule
+// 1's entry lists currentWork's books but requested and its copies, whatever
+// requested's own WorkID, so no book is on two entries.
+// books are in preference order (library sort order, then path, as
+// catalog.SeriesBooks returns them), the pick's last tiebreak.
 func PlaceLocal(rails []MetaSeries, currentWork string, requested MetaLocal, books []LocalBook) []MetaSeries {
 	if len(rails) == 0 {
 		return rails
@@ -120,7 +136,7 @@ func PlaceLocal(rails []MetaSeries, currentWork string, requested MetaLocal, boo
 	out := make([]MetaSeries, len(rails))
 	for i, rail := range rails {
 		r := rail
-		var mains map[string]MetaLocal
+		var mains map[string]placement
 		r.Works, mains = p.view(rail.Works, rail.Name, nil)
 		if len(rail.Orderings) > 0 {
 			r.Orderings = make([]MetaSeriesOrdering, len(rail.Orderings))
@@ -136,28 +152,50 @@ func PlaceLocal(rails []MetaSeries, currentWork string, requested MetaLocal, boo
 
 // placer holds the caller's books indexed for PlaceLocal.
 type placer struct {
-	current   string
-	requested MetaLocal
-	// byWork is the preferred book of each known work id.
-	byWork map[string]MetaLocal
+	current string
+	// self is requested among the books (its narrator and identifiers), only
+	// its handle when it isn't one: the current work's entry holds it as Local,
+	// the current work's other books beside it (its copies left out).
+	self LocalBook
+	// byWork is every book of each known work id (each once), the pick first
+	// (pickRank).
+	byWork map[string][]LocalBook
 	// byIndex are the numbered books with no known work id, by series key, in
 	// preference order.
 	byIndex map[string][]LocalBook
 }
 
+// placement is the books an entry is placed on: Local and LocalOthers.
+type placement struct {
+	local  MetaLocal
+	others []MetaLocal
+}
+
 func newPlacer(currentWork string, requested MetaLocal, books []LocalBook) *placer {
-	ordered := slices.Clone(books)
-	slices.SortStableFunc(ordered, func(a, b LocalBook) int {
-		return cmp.Compare(rankLibrary(a, requested), rankLibrary(b, requested))
-	})
-	p := &placer{current: currentWork, requested: requested, byWork: map[string]MetaLocal{}, byIndex: map[string][]LocalBook{}}
-	for _, b := range ordered {
+	self := LocalBook{MetaLocal: requested}
+	if i := slices.IndexFunc(books, func(b LocalBook) bool { return b.MetaLocal == requested }); i >= 0 {
+		self = books[i]
+	}
+	narrator := match.Fold(self.Narrator)
+	type ranked struct {
+		book LocalBook
+		rank int
+	}
+	ordered := make([]ranked, len(books))
+	for i, b := range books {
+		ordered[i] = ranked{b, pickRank(b, requested, narrator)}
+	}
+	slices.SortStableFunc(ordered, func(a, b ranked) int { return cmp.Compare(a.rank, b.rank) })
+	p := &placer{current: currentWork, self: self, byWork: map[string][]LocalBook{}, byIndex: map[string][]LocalBook{}}
+	for _, o := range ordered {
+		b := o.book
 		switch {
 		case b.MetaLocal == requested:
 			// Placed on the current work's entry only.
 		case b.WorkID != "":
-			if _, ok := p.byWork[b.WorkID]; !ok {
-				p.byWork[b.WorkID] = b.MetaLocal
+			// A book in several series is a candidate in each: listed once.
+			if !slices.ContainsFunc(p.byWork[b.WorkID], func(o LocalBook) bool { return o.MetaLocal == b.MetaLocal }) {
+				p.byWork[b.WorkID] = append(p.byWork[b.WorkID], b)
 			}
 		case b.SeriesIndex > 0:
 			if k := match.SeriesKey(b.Series); k != "" {
@@ -168,54 +206,70 @@ func newPlacer(currentWork string, requested MetaLocal, books []LocalBook) *plac
 	return p
 }
 
-// rankLibrary sorts the requested book's library first.
-func rankLibrary(b LocalBook, requested MetaLocal) int {
-	if b.LibraryID == requested.LibraryID {
-		return 0
+// pickRank is which of a work's recordings the caller is given first, lower
+// first (server#241): one read by the narrator of the book just finished
+// (requested's, narrator, folded by match.Fold so case, spacing and
+// punctuation aside; none when it has none), then one started and not
+// finished, then one in requested's library, then one not known to be
+// abridged; the books' own order (library sort order, then path) breaks a tie.
+// Each test is one bit, the first the highest.
+func pickRank(b LocalBook, requested MetaLocal, narrator string) int {
+	rank := 0
+	for _, pass := range []bool{
+		narrator != "" && match.Fold(b.Narrator) == narrator,
+		b.Started,
+		b.LibraryID == requested.LibraryID,
+		!b.Abridged,
+	} {
+		rank <<= 1
+		if !pass {
+			rank |= 1
+		}
 	}
-	return 1
+	return rank
 }
 
-// view returns a copy of one view's works (named name) with Local set, and the
-// book it placed on each work id. mains is the main view's placements, for an
-// alternate ordering (nil for the main view itself).
-func (p *placer) view(works []MetaSeriesWork, name string, mains map[string]MetaLocal) ([]MetaSeriesWork, map[string]MetaLocal) {
+// view returns a copy of one view's works (named name) with Local and
+// LocalOthers set, and what it placed on each work id. mains is the main view's
+// placements, for an alternate ordering (nil for the main view itself).
+func (p *placer) view(works []MetaSeriesWork, name string, mains map[string]placement) ([]MetaSeriesWork, map[string]placement) {
 	if works == nil {
 		return nil, nil
 	}
 	byIndex := p.byIndex[match.SeriesKey(name)]
 	out := make([]MetaSeriesWork, len(works))
-	placed := map[string]MetaLocal{}
+	placed := map[string]placement{}
 	for i, w := range works {
 		out[i] = w
-		l, ok := p.place(w, byIndex, mains)
+		pl, ok := p.place(w, byIndex, mains)
 		if !ok {
 			continue
 		}
-		out[i].Local = &l
+		out[i].Local = &pl.local
+		out[i].LocalOthers = pl.others
 		if w.ID != "" {
-			placed[w.ID] = l
+			placed[w.ID] = pl
 		}
 	}
 	return out, placed
 }
 
-// place is the book for one entry, by PlaceLocal's rules.
-func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]MetaLocal) (MetaLocal, bool) {
+// place is the books for one entry, by PlaceLocal's rules.
+func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]placement) (placement, bool) {
 	if w.ID != "" {
 		if w.ID == p.current {
-			return p.requested, true
+			return placement{local: p.self.MetaLocal, others: otherRecordings(p.byWork[p.current], p.self)}, true
 		}
-		if l, ok := p.byWork[w.ID]; ok {
-			return l, true
+		if books := p.byWork[w.ID]; len(books) > 0 {
+			return placement{local: books[0].MetaLocal, others: otherRecordings(books[1:], books[0])}, true
 		}
-		if l, ok := mains[w.ID]; ok {
-			return l, true
+		if pl, ok := mains[w.ID]; ok {
+			return pl, true
 		}
 	}
 	start, end, ok := ParseSpan(w.Position)
 	if !ok {
-		return MetaLocal{}, false
+		return placement{}, false
 	}
 	// A book at exactly this place, else (a single entry) the first omnibus
 	// starting there.
@@ -226,13 +280,32 @@ func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]M
 			continue
 		}
 		if SamePosition(b.last(), end) {
-			return b.MetaLocal, true
+			return placement{local: b.MetaLocal}, true
 		}
 		if start == end && !found && b.SeriesIndexEnd > b.SeriesIndex {
 			omnibus, found = b.MetaLocal, true
 		}
 	}
-	return omnibus, found
+	return placement{local: omnibus}, found
+}
+
+// otherRecordings is books as LocalOthers, one per recording: a book sharing
+// an ASIN with pick, or with a book before it, or an ISBN when either has no
+// ASIN (match.Recordings, compared normalized, a tag's case, spaces and hyphens
+// aside; books with different ASINs never are), is the same recording again
+// and left out, as catalog.OtherRecordings leaves it out, so of
+// a recording's copies the first in books' order is the one listed; nil when
+// none is left.
+func otherRecordings(books []LocalBook, pick LocalBook) []MetaLocal {
+	var seen match.Recordings
+	seen.Seen(pick.ASIN, pick.ISBN)
+	var out []MetaLocal
+	for _, b := range books {
+		if !seen.Seen(b.ASIN, b.ISBN) {
+			out = append(out, b.MetaLocal)
+		}
+	}
+	return out
 }
 
 // nextEntry is the entry after the current work on rail, read as the series

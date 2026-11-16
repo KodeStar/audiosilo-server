@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -1017,5 +1018,168 @@ func TestRunnerWakeOnSwitchOn(t *testing.T) {
 	st, _ := f.cat.UpcomingRunState(context.Background())
 	if next, ok := parseStamp(st.NextRunAt); !ok || next.Sub(f.clock) < interval-jitter {
 		t.Fatalf("after the run, the next is a day on: %+v", st)
+	}
+}
+
+// With the job switched off but metadata on (Resolve), a run is step 1 alone
+// (server#241: every book's work id rides on the player's lists): the books'
+// works are resolved, cache first, but no series is read, no item made, no
+// release announced and no status recorded, so switching the job on still finds
+// a full run due. With Resolve off too, a run makes no call at all, and a book
+// a kick finds is resolved by a light run.
+func TestRunnerResolveOnlyWhileOff(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	var resolve atomic.Bool
+	resolve.Store(true)
+	f.r.opt.Resolve = resolve.Load
+	f.off.Store(true)
+	f.expanse("2011", "2012")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	f.loose(t, f.lib, "Loose", "L1", "")
+	f.md.cached["L1"] = "w-cached" // the cache's answer: no lookup for it
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	owned, err := f.cat.UpcomingOwnedAll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for ref, o := range owned {
+		got[ref.Path] = o.WorkID
+	}
+	if want := map[string]string{"The Expanse/1": "e1", "Loose": "w-cached"}; !maps.Equal(got, want) {
+		t.Fatalf("resolved = %v, want %v", got, want)
+	}
+	if reads := f.md.reads(); len(reads) != 0 || f.md.feedCount() != 0 || len(f.items(t)) != 0 || len(f.announced) != 0 {
+		t.Fatalf("a resolve-only run went past step 1: reads %v, feeds %d, items %v", reads, f.md.feedCount(), f.items(t))
+	}
+	st, err := f.cat.UpcomingRunState(context.Background())
+	if err != nil || st.LastRunAt != "" || st.LastSuccessAt != "" {
+		t.Fatalf("a resolve-only run records no status: %+v, %v", st, err)
+	}
+	if !f.r.due(st) {
+		t.Fatal("switching on after a resolve-only run must find a full run due")
+	}
+	// A failed resolve-only run counts no failure, so it is not retried within
+	// the hour (that would be every hour, for ever): the next is a day on.
+	if next := f.r.after(context.Background(), errors.New("upstream 500")); next.Sub(f.clock) < interval-jitter {
+		t.Fatalf("a failed resolve-only run is next after %v", next.Sub(f.clock))
+	}
+
+	// Metadata off too: nothing at all.
+	resolve.Store(false)
+	f.book(t, f.lib, "The Expanse", 2, "A2", "e2")
+	calls := len(f.md.lookups())
+	if err := f.run(t); !errors.Is(err, errSwitchedOff) || len(f.md.lookups()) != calls {
+		t.Fatalf("run with metadata off = %v, %d lookups (was %d)", err, len(f.md.lookups()), calls)
+	}
+
+	// A light run (a kick) resolves the new book while metadata is on.
+	resolve.Store(true)
+	if err := f.r.RunOnce(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if owned, err = f.cat.UpcomingOwnedAll(context.Background()); err != nil ||
+		owned[catalog.Ref{LibraryID: f.lib.ID, Path: "The Expanse/2"}].WorkID != "e2" {
+		t.Fatalf("after a light run = %v, %v", owned, err)
+	}
+
+	// The job switched on: the full run reads the series and makes items.
+	f.off.Store(false)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if f.md.feedCount() != 1 || len(f.md.reads()) == 0 {
+		t.Fatalf("the full run after switching on: feeds %d", f.md.feedCount())
+	}
+}
+
+// Switched on after a step-1-alone run moved the schedule a day on: the full
+// run comes when the last success is a day old, not a day after that run; at
+// once when it already is (or nothing ever succeeded); and a schedule already
+// sooner than that stands.
+func TestRunnerWokenAfterResolveOnly(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+	now := f.r.opt.Now()
+	far := now.Add(interval)
+	if got := f.r.woken(ctx, far); !got.Equal(now) {
+		t.Fatalf("never succeeded: woken = %v, want now", got.Sub(now))
+	}
+	succeeded := func(ago time.Duration) {
+		t.Helper()
+		if err := f.cat.SaveUpcomingRunState(ctx, catalog.UpcomingRun{LastSuccessAt: stamp(now.Add(-ago))}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A success 23.5 h ago, and a step-1-alone run since: due in half an hour.
+	succeeded(interval - 30*time.Minute)
+	if got := f.r.woken(ctx, far); got.Sub(now) != 30*time.Minute {
+		t.Fatalf("a success 23.5 h ago: woken in %v, want 30m", got.Sub(now))
+	}
+	if soon := now.Add(10 * time.Minute); !f.r.woken(ctx, soon).Equal(soon) {
+		t.Fatal("a schedule sooner than the day's end stands")
+	}
+	succeeded(interval + time.Hour)
+	if got := f.r.woken(ctx, far); !got.Equal(now) {
+		t.Fatalf("a success over a day ago: woken = %v, want now", got.Sub(now))
+	}
+}
+
+// The schedule takes the sooner time on a wake, and the status shows it: a
+// success 23.5 h ago with the next run an hour on (the start's delay, like a
+// step-1-alone run's day) is run again in half an hour.
+func TestRunnerWakeMovesScheduleUp(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.clock = time.Now()
+	ctx := context.Background()
+	last := f.clock.Add(30*time.Minute - interval)
+	if err := f.cat.SaveUpcomingRunState(ctx, catalog.UpcomingRun{LastSuccessAt: stamp(last)}); err != nil {
+		t.Fatal(err)
+	}
+	runSchedule(t, f)
+	eventually(t, "the first schedule", func() bool {
+		st, _ := f.cat.UpcomingRunState(ctx)
+		next, ok := parseStamp(st.NextRunAt)
+		return ok && next.Sub(f.clock) > 45*time.Minute
+	})
+	f.r.Wake()
+	eventually(t, "the schedule moved up", func() bool {
+		st, _ := f.cat.UpcomingRunState(ctx)
+		next, ok := parseStamp(st.NextRunAt)
+		return ok && next.Sub(f.clock) < 31*time.Minute && next.Sub(f.clock) > 29*time.Minute
+	})
+	if f.md.feedCount() != 0 {
+		t.Fatal("a wake before the run is due runs nothing")
+	}
+}
+
+func TestRunnerKickResolvesWhileOff(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.clock = time.Now()
+	f.r.settle = 20 * time.Millisecond
+	var resolve atomic.Bool
+	f.r.opt.Resolve = resolve.Load
+	f.off.Store(true)
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	runSchedule(t, f)
+	f.r.Kick()
+	time.Sleep(150 * time.Millisecond)
+	if n := len(f.md.lookups()); n != 0 {
+		t.Fatalf("a kick with metadata off made %d lookups", n)
+	}
+	resolve.Store(true)
+	f.r.Kick()
+	eventually(t, "the kicked resolve", func() bool {
+		owned, err := f.cat.UpcomingOwnedAll(context.Background())
+		return err == nil && owned[catalog.Ref{LibraryID: f.lib.ID, Path: "The Expanse/1"}].WorkID == "e1"
+	})
+	if f.md.feedCount() != 0 {
+		t.Fatal("a resolve-only run asks no watch feed")
 	}
 }

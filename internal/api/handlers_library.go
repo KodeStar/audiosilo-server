@@ -562,7 +562,30 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	// row) follow it now, not at the next scan.
 	a.scanner.RefreshEbook(r.Context(), *lib, book)
 	book.Readalong = a.readalongOfBook(r.Context(), lib, book)
+	book.OtherRecordings = a.otherRecordings(r.Context(), lib, book)
 	writeJSON(w, http.StatusOK, book)
+}
+
+// otherRecordings is the caller's other recordings of book's community work
+// for /item (catalog.OtherRecordings over their scopes; the `other_recordings`
+// capability): none with metadata off, in a podcasts library, or for a book
+// with no work. It is an extra like `readalong`: a failure to read them is
+// logged and the book goes out without them.
+func (a *API) otherRecordings(ctx context.Context, lib *catalog.Library, book *catalog.Book) []catalog.Book {
+	if !a.metadataOn() || lib.Kind != catalog.KindBooks || book.WorkID == "" {
+		return nil
+	}
+	scopes, err := a.cat.CallerScopes(ctx, callerOf(ctx))
+	if err == nil {
+		var books []catalog.Book
+		if books, err = a.cat.OtherRecordings(ctx, scopes, book); err == nil {
+			return books
+		}
+	}
+	if ctx.Err() == nil {
+		a.log.Warn("load other recordings failed", "err", err, "library", lib.ID, "path", book.RelPath)
+	}
+	return nil
 }
 
 // handleChapters returns a book's normalized playable units. Each chapter

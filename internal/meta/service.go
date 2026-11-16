@@ -227,6 +227,12 @@ type MetaSeriesWork struct {
 	// is set per request on a copy of the rails, never on an envelope the cache
 	// holds.
 	Local *MetaLocal `json:"local,omitempty"`
+	// LocalOthers are the caller's other recordings of this work (another
+	// narrator, an abridgement; server#241), one per recording, the pick's
+	// runners-up in order: Local stays the one to open. They are only
+	// ever this work's, so no book is on two entries (PlaceLocal). Set per
+	// request like Local; omitted when there are none.
+	LocalOthers []MetaLocal `json:"local_others,omitempty"`
 }
 
 // MetaSeries is a full ordered series rail, including the current work.

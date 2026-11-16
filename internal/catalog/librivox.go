@@ -194,8 +194,8 @@ func (c *Catalog) RecordingBooks(ctx context.Context, workID, recordingID string
 }
 
 // WorkRecordingBooks are RecordingBooks for every recording of work workID,
-// by recording id, in one read (book_matches has no index by work, so a work's
-// recordings are not asked for one at a time). A recording with no book has no
+// by recording id, in one read (by idx_book_matches_work), so a work's
+// recordings are not asked for one at a time. A recording with no book has no
 // entry.
 func (c *Catalog) WorkRecordingBooks(ctx context.Context, workID string) (map[string][]Ref, error) {
 	out := map[string][]Ref{}

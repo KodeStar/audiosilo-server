@@ -139,6 +139,11 @@ type Book struct {
 	// books reads them (a refresh looks an identifier-less book up by its work).
 	MatchWorkID      string `json:"-"`
 	MatchRecordingID string `json:"-"`
+	// WorkID is the community work the book is a recording of (workIDExpr: its
+	// recorded match, else the work its ASIN or ISBN resolved to), set on every
+	// read of a book; "", and omitted, when unknown. Books sharing it are other
+	// recordings of one work (OtherRecordings, server#241).
+	WorkID string `json:"work_id,omitempty"`
 	// Released is the date the file's tags give (metadata.ReleaseDate), usually
 	// the recording's: scanned, never edited, and only the admin list's
 	// release-date sort reads it (where a book has no Published).
@@ -208,9 +213,13 @@ type Book struct {
 	// Readalong is the state of the book's read-along map (Bridge Phase 3c,
 	// readalong.go), set by the api on GET /libraries/{id}/item only (never a
 	// list row); nil, and omitted, with no ebook or no valid map.
-	Readalong *Readalong         `json:"readalong,omitempty"`
-	Files     []BookFile         `json:"files,omitempty"`
-	Chapters  []metadata.Chapter `json:"chapters,omitempty"`
+	Readalong *Readalong `json:"readalong,omitempty"`
+	// OtherRecordings are the caller's other recordings of the book's community
+	// work (OtherRecordings, server#241), list shape, set by the api on GET
+	// /libraries/{id}/item only, with metadata on; nil, and omitted, for none.
+	OtherRecordings []Book             `json:"other_recordings,omitempty"`
+	Files           []BookFile         `json:"files,omitempty"`
+	Chapters        []metadata.Chapter `json:"chapters,omitempty"`
 	// ChaptersSource is "community" when Chapters are a community chapter list
 	// fitted onto the audio, "generated" when they are the chapters the Bridge
 	// found in the narration (its chapters.json), "edited" when they are an

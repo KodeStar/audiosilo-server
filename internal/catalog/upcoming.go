@@ -11,7 +11,10 @@ import (
 // Upcoming releases (Track U1, migration 0059): the storage of the background
 // job in internal/upcoming. Every table is derived (rebuildable from the books
 // and the community metadata), path-keyed with no FK to books, and written
-// through the user-state path: no content cache reads any of them.
+// through the user-state path: no content cache reads any of them, but for
+// upcoming_owned's rows, work_id and id_key, which every list book's work id
+// reads (workIDExpr, server#241), so a new or removed row, a changed work or a
+// re-keyed one moves the content generation (store.userStateTables).
 
 // UpcomingBook is one owned book in one of its series, as the job reads the
 // library: its handle, the series (key and spelling; both "" for a book in no

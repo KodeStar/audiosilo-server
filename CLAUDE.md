@@ -109,7 +109,7 @@ admin/connect UI changes. Mapping table:
 ```
 cmd/audiosilo/        entrypoint: flag wiring; delegates to pkg/launcher.Run
 pkg/launcher/         shared run loop (config→store→services→bootstrap→serve) behind cmd/audiosilo; not an embedding API (the overrides the archived audiosilo-manager used were retired in v2.7.0)
-pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle; NewIndex: a candidate list prepared once for many Best calls, the listening import's per-author pools) - same-book identification across messy titles; shared with the Bridge (its Audible import and internal/metaops), usable for server-side enrichment/dedup; BestWith (Best under opt-in Options, with the winning score; NewIndexWith + Index.BestScore its prepared form); options.go: Options and ImportOptions (the Bridge's Audible rules: series "Book N" marker, exact title, wordless fallback, "(Unabridged)" drop), never used by the server's own callers; scan.go: hand-written scanners for its title regexps, checked against them in scan_test.go
+pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle; NewIndex: a candidate list prepared once for many Best calls, the listening import's per-author pools) - same-book identification across messy titles; shared with the Bridge (its Audible import and internal/metaops), usable for server-side enrichment/dedup; Recordings (one recording's copies told apart: the same ASIN, else the same ISBN when either has none; other_recordings and local_others); BestWith (Best under opt-in Options, with the winning score; NewIndexWith + Index.BestScore its prepared form); options.go: Options and ImportOptions (the Bridge's Audible rules: series "Book N" marker, exact title, wordless fallback, "(Unabridged)" drop), never used by the server's own callers; scan.go: hand-written scanners for its title regexps, checked against them in scan_test.go
 internal/config/      YAML + env config, validation, secure defaults
 internal/store/       SQLite open + embedded migrations (internal/store/migrations); engine*.go: the library (modernc, pure Go; native C with -tags sqlite_native); stmtcache.go: each connection keeps its statements prepared (see SQLite in CONVENTIONS.md)
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
@@ -339,7 +339,10 @@ issuer+subject); see Single sign-on in CONVENTIONS.md. `0078` (server#240) adds 
 chapter list made in the console's chapter editor: a `metadata.ChapterList` with the files it was made on, the first
 chapter source while those are the book's files, dormant otherwise; durable, path-keyed, no FK to the index, moved
 with the book, never copied onto a joined one; see Community chapters (Edited chapters) in CONVENTIONS.md) and
-`cast_grants.editor` (1 for a token the editor's player streams with, capped apart from the person's cast tokens).
+`cast_grants.editor` (1 for a token the editor's player streams with, capped apart from the person's cast tokens). `0079` (server#241)
+adds `idx_book_matches_work` (a book's community work key is `book_matches.work_id`, else a non-empty
+`upcoming_owned.work_id` resolved from the book's current identifiers (`id_key`): `catalog.workIDExpr`, `Book.work_id`; `catalog.OtherRecordings` finds a work's
+books by it; see Community metadata lookup (Other recordings) in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -446,7 +449,7 @@ keep this index in step (one line per topic).
   See the plan file.
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
-`upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`,
+`upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`, `other_recordings`,
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
 `household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`, `readalong`, `upcoming`,
@@ -469,8 +472,9 @@ below and Your listening). `transcode` already reflects whether ffmpeg is config
 `metadata` reflects whether the Phase 1.5 metadata lookup is live
 (`metadataOn()`: a valid `metadata.base_url` at start AND the live
 `metadata.enabled`, which the admin can toggle at `PATCH /admin/settings`);
-`meta_bundle` (`/meta`'s `include=previous` / `spoilers=hide`) and `meta_covers`
-(`GET /libraries/{id}/meta/cover`) track `metadata`. `upcoming` (`GET /me/upcoming`) is `metadata`
+`meta_bundle` (`/meta`'s `include=previous` / `spoilers=hide`), `meta_covers`
+(`GET /libraries/{id}/meta/cover`) and `other_recordings` (`/item`'s `other_recordings`, `/meta`'s
+`local_others`; `Book.work_id` rides on every book regardless) track `metadata`. `upcoming` (`GET /me/upcoming`) is `metadata`
 AND the live `upcoming.enabled`; `upcoming_calendar` (the calendar feed) and `upcoming_covers`
 (`GET /me/upcoming/cover`) are exactly `upcoming` (see Upcoming releases in CONVENTIONS.md).
 `renditions` is ffmpeg configured AND the rendition cache open (a data dir), with the kinds

@@ -68,6 +68,7 @@ type sagaEnv struct {
 	*testEnv
 	lib                 *catalog.Library
 	adminTok, memberTok string
+	memberID            int64
 }
 
 func (e *sagaEnv) url(endpoint, path string) string {
@@ -77,6 +78,17 @@ func (e *sagaEnv) url(endpoint, path string) string {
 func newSagaEnv(t *testing.T, metadataOn bool, books ...*catalog.Book) *sagaEnv {
 	t.Helper()
 	return newLibraryEnv(t, sagaMetaserve(t), metadataOn, books...)
+}
+
+// addBooks indexes books in library lib, each titled by its path.
+func addBooks(t *testing.T, e *testEnv, lib int64, books ...*catalog.Book) {
+	t.Helper()
+	for _, b := range books {
+		b.LibraryID, b.Title, b.Format, b.AddedAt = lib, b.RelPath, "m4b", "2024-01-01T00:00:00Z"
+		if _, err := e.cat.UpsertBook(context.Background(), b); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // newLibraryEnv is newSagaEnv's library, member and admin over the metadata
@@ -92,12 +104,7 @@ func newLibraryEnv(t *testing.T, mock *httptest.Server, metadataOn bool, books .
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, b := range books {
-		b.LibraryID, b.Title, b.Format, b.AddedAt = lib.ID, b.RelPath, "m4b", "2024-01-01T00:00:00Z"
-		if _, err := e.cat.UpsertBook(ctx, b); err != nil {
-			t.Fatal(err)
-		}
-	}
+	addBooks(t, e, lib.ID, books...)
 	adminTok, memberTok, memberID := adminAndMember(t, e)
 	share, _ := e.cat.CreateShare(ctx, catalog.Share{Name: "Saga start"})
 	if err := e.cat.AddSharePaths(ctx, share.ID, []catalog.PathRule{{LibraryID: lib.ID, Path: "Saga/1"}, {LibraryID: lib.ID, Path: "Saga/2"}}); err != nil {
@@ -106,7 +113,7 @@ func newLibraryEnv(t *testing.T, mock *httptest.Server, metadataOn bool, books .
 	if err := e.cat.GrantShare(ctx, memberID, share.ID); err != nil {
 		t.Fatal(err)
 	}
-	return &sagaEnv{testEnv: e, lib: lib, adminTok: adminTok, memberTok: memberTok}
+	return &sagaEnv{testEnv: e, lib: lib, adminTok: adminTok, memberTok: memberTok, memberID: memberID}
 }
 
 // sagaBooks is the default Saga library.
@@ -122,33 +129,10 @@ func sagaBooks() []*catalog.Book {
 // railLocals is the main rail's local path per work id ("" = not owned).
 func railLocals(t *testing.T, e *sagaEnv, path, token string) map[string]string {
 	t.Helper()
-	resp, body := e.do(t, "GET", e.url("meta", path), token, "")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("meta %s = %d %s", path, resp.StatusCode, body)
-	}
-	var env struct {
-		Series []struct {
-			Works []struct {
-				ID    string `json:"id"`
-				Local *struct {
-					LibraryID int64  `json:"library_id"`
-					Path      string `json:"path"`
-				} `json:"local"`
-			} `json:"works"`
-		} `json:"series"`
-	}
-	if err := json.Unmarshal([]byte(body), &env); err != nil || len(env.Series) == 0 {
-		t.Fatalf("decode %v: %s", err, body)
-	}
-	out := map[string]string{}
-	for _, w := range env.Series[0].Works {
-		out[w.ID] = ""
-		if w.Local != nil {
-			if w.Local.LibraryID != e.lib.ID {
-				t.Fatalf("local library = %d", w.Local.LibraryID)
-			}
-			out[w.ID] = w.Local.Path
-		}
+	entries, _ := railEntries(t, e, path, token)
+	out := make(map[string]string, len(entries))
+	for id, en := range entries {
+		out[id] = en.local
 	}
 	return out
 }

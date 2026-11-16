@@ -285,7 +285,10 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		// Upcoming releases: daily, and a light pass once a burst of new or
 		// edited books settles (new works, new series).
 		a.upcoming = upcoming.New(cat, metaSvc, upcoming.Options{
-			On:       a.upcomingOn,
+			On: a.upcomingOn,
+			// The books' work ids (step 1) whenever metadata is on: they ride on
+			// the player's lists (other recordings together, server#241).
+			Resolve:  a.metadataOn,
 			Window:   func() int { return a.config().Upcoming.Window() },
 			Announce: a.announceReleases,
 			Log:      log,

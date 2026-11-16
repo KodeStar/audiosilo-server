@@ -1112,6 +1112,60 @@ func NormalizeISBN(s string) string {
 	return strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(strings.TrimSpace(s)))
 }
 
+// Recordings tells the recordings of a work apart by their identifiers,
+// compared normalized (NormalizeASIN, NormalizeISBN: a tag's case, spaces and
+// hyphens aside). Two books are copies of one recording when their ASINs are
+// equal; when either has no ASIN, when their ISBNs are equal. Two books with
+// different ASINs are never copies, whatever their ISBNs: an audiobook's ISBN
+// is often the print edition's, which every recording of the work shares. A
+// book with neither is never a copy. The zero value is ready to use.
+type Recordings struct {
+	seen []recording
+}
+
+// recording is one recording Recordings has seen: its ASIN ("" until a copy
+// carrying one is seen) and every ISBN its copies carried.
+type recording struct {
+	asin  string
+	isbns []string
+}
+
+// Seen reports whether a book with asin and isbn is a copy of a recording seen
+// before, and records it either way: a copy adds its identifiers to its
+// recording, so a copy's other identifier marks the recording's copies too,
+// and a recording known by an ASIN never takes in a book with another.
+func (r *Recordings) Seen(asin, isbn string) bool {
+	asin, isbn = NormalizeASIN(asin), NormalizeISBN(isbn)
+	if asin == "" && isbn == "" {
+		return false
+	}
+	i := -1
+	if asin != "" {
+		i = slices.IndexFunc(r.seen, func(g recording) bool { return g.asin == asin })
+	}
+	if i < 0 && isbn != "" {
+		i = slices.IndexFunc(r.seen, func(g recording) bool {
+			return (asin == "" || g.asin == "") && slices.Contains(g.isbns, isbn)
+		})
+	}
+	if i < 0 {
+		g := recording{asin: asin}
+		if isbn != "" {
+			g.isbns = []string{isbn}
+		}
+		r.seen = append(r.seen, g)
+		return false
+	}
+	g := &r.seen[i]
+	if g.asin == "" {
+		g.asin = asin
+	}
+	if isbn != "" && !slices.Contains(g.isbns, isbn) {
+		g.isbns = append(g.isbns, isbn)
+	}
+	return true
+}
+
 var (
 	asinForm = regexp.MustCompile(`^[A-Z0-9]{10}$`)
 	isbnForm = regexp.MustCompile(`^(\d{9}[\dX]|\d{13})$`)

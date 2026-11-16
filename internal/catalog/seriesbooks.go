@@ -104,14 +104,7 @@ func (c *Catalog) seriesMembers(ctx context.Context, scopes []Scope, keys []stri
 	for len(ids) > 0 { // every match (ids come unordered), then the order and the cap
 		part := ids[:min(len(ids), 500)]
 		ids = ids[len(part):]
-		more, err := queryRows(ctx, c.db, func(r *sql.Rows, b *Book) error {
-			dest, finish := bookDest(b)
-			if err := r.Scan(dest...); err != nil {
-				return err
-			}
-			finish()
-			return nil
-		}, `SELECT `+prefixCols("b.")+` FROM books b CROSS JOIN libraries l ON l.id = b.library_id
+		more, err := queryRows(ctx, c.db, scanBookRow, `SELECT `+prefixCols("b.")+` FROM books b CROSS JOIN libraries l ON l.id = b.library_id
 			 WHERE l.kind='books' AND b.id IN (`+placeholders(len(part))+`) ORDER BY l.sort_order, l.name, l.id, b.rel_path`, part...)
 		if err != nil {
 			return nil, err
@@ -233,7 +226,7 @@ func (c *Catalog) nextInOneSeries(ctx context.Context, libraryID int64, relPath 
 // row anyway, and nextInOneSeries stops reading at the first book it takes.
 func laterSeriesMembers(libraryID int64, relPath string, series string, index float64, scope Scope) (string, []any) {
 	q, args := numberedSeriesMembers(libraryID, relPath, series, scope)
-	return `SELECT ` + bookCols + `, pos FROM (` + q + `) ORDER BY pos <= ?, pos, pos_end, rel_path`, append(args, index)
+	return `SELECT ` + derivedBookCols + `, pos FROM (` + q + `) ORDER BY pos <= ?, pos, pos_end, rel_path`, append(args, index)
 }
 
 // numberedSeriesMembers is the query, and its args, of the books in the series
@@ -292,7 +285,7 @@ func (c *Catalog) EarlierInSeries(ctx context.Context, libraryID int64, book *Bo
 	q, args := numberedSeriesMembers(libraryID, book.RelPath, series.Name, Scope{LibraryID: libraryID, AllowAll: true})
 	// writeAttachments stores '' for a file a book doesn't have. The nearest are
 	// read (newest position first), then put back into reading order.
-	rows, err := c.db.QueryContext(ctx, `SELECT `+bookCols+`, pos, pos_end FROM (`+q+`) m
+	rows, err := c.db.QueryContext(ctx, `SELECT `+derivedBookCols+`, pos, pos_end FROM (`+q+`) m
 		   LEFT JOIN book_attachments a ON a.book_id = m.id
 		 WHERE pos < ? AND COALESCE(a.recaps, '') = ''
 		 ORDER BY pos DESC, pos_end DESC, rel_path DESC LIMIT ?`, append(args, series.Position, maxEarlierInSeries)...)

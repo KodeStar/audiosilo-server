@@ -302,6 +302,17 @@ func TestPlaceOwned(t *testing.T) {
 	if want := []string{"S/1", "S/2", "S/novella"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("placed after a restart = %q, want %q", got, want)
 	}
+
+	// requested is placed on env's work's entry whatever its own work id, so
+	// its identifiers are never looked up: the store is not read for it.
+	fresh := NewService("http://meta.invalid", nil)
+	fresh.SetStore(store)
+	loads := store.loads.Load()
+	mine := []LocalBook{{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/1"}, Series: "S", SeriesIndex: 1, ASIN: "B0REQUESTED"}}
+	got = locals(fresh.PlaceOwned(context.Background(), env, MetaLocal{LibraryID: 1, Path: "S/1"}, mine)[0].Works)
+	if want := []string{"S/1", "", ""}; !reflect.DeepEqual(got, want) || store.loads.Load() != loads {
+		t.Fatalf("requested: placed %q (want %q), store reads %d", got, want, store.loads.Load()-loads)
+	}
 }
 
 func TestRailOrder(t *testing.T) {
@@ -394,5 +405,191 @@ func TestNextRail(t *testing.T) {
 				t.Fatalf("NextRail = %d (%q), want %d (%q)", got, gotEntry, tc.want, tc.entry)
 			}
 		})
+	}
+}
+
+// others reads each entry's local_others paths off works (nil = none).
+func others(works []MetaSeriesWork) [][]string {
+	out := make([][]string, len(works))
+	for i, w := range works {
+		for _, l := range w.LocalOthers {
+			out[i] = append(out[i], l.Path)
+		}
+	}
+	return out
+}
+
+// TestPlaceLocalPickTable (server#241): of several recordings of the next work
+// the pick is one read by the narrator of the book just finished, then one
+// started and not finished, then one in its library, then one not known to be
+// abridged, then the books' own order; the rest ride as local_others in that
+// order.
+func TestPlaceLocalPickTable(t *testing.T) {
+	rails := []MetaSeries{named("S", "1", "one@1", "two@2")}
+	requested := MetaLocal{LibraryID: 1, Path: "S/1"}
+	book := func(lib int64, path, narrator string, started, abridged bool) LocalBook {
+		b := mine(lib, path, "S", 2, "two")
+		b.Narrator, b.Started, b.Abridged = narrator, started, abridged
+		return b
+	}
+	finished := mine(1, "S/1", "S", 1, "one")
+	finished.Narrator = "R. C. Bray"
+	for _, tc := range []struct {
+		name  string
+		books []LocalBook
+		want  []string // the pick, then local_others
+	}{
+		{"same narrator beats started, library and abridged",
+			[]LocalBook{book(1, "A", "Kemper", true, false), book(2, "B", " r.c.  BRAY ", false, true)},
+			[]string{"B", "A"}},
+		{"started beats library and abridged",
+			[]LocalBook{book(1, "A", "Kemper", false, false), book(2, "B", "Abe", true, true)},
+			[]string{"B", "A"}},
+		{"same library beats abridged",
+			[]LocalBook{book(2, "A", "Kemper", false, false), book(1, "B", "Abe", false, true)},
+			[]string{"B", "A"}},
+		{"unabridged beats the books' order",
+			[]LocalBook{book(1, "A", "Kemper", false, true), book(1, "B", "Abe", false, false)},
+			[]string{"B", "A"}},
+		{"then the books' order (library sort order, then path)",
+			[]LocalBook{book(2, "C", "Kemper", false, false), book(2, "A", "Abe", false, false), book(1, "Z", "Zed", true, false), book(1, "Y", "Yan", true, false)},
+			[]string{"Z", "Y", "C", "A"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			works := PlaceLocal(rails, "one", requested, append([]LocalBook{finished}, tc.books...))[0].Works
+			got := append([]string{works[1].Local.Path}, others(works)[1]...)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("pick + others = %q, want %q", got, tc.want)
+			}
+			// The current work's entry is the requested book, alone.
+			if works[0].Local == nil || *works[0].Local != requested || works[0].LocalOthers != nil {
+				t.Fatalf("current entry = %+v", works[0])
+			}
+		})
+	}
+	// Without the requested book among the books, no narrator is preferred.
+	works := PlaceLocal(rails, "one", requested, []LocalBook{book(2, "A", "", false, false), book(2, "B", "R. C. Bray", false, false)})[0].Works
+	if works[1].Local.Path != "A" {
+		t.Fatalf("pick without a narrator = %+v", works[1].Local)
+	}
+}
+
+// TestPlaceLocalOthers: local_others lists every other recording of an entry's
+// work once (a book in several series is a candidate in each), on the current
+// work's entry too (every book of the work but the requested one), and in an
+// alternate ordering as in the main view; an entry placed by its index has none.
+func TestPlaceLocalOthers(t *testing.T) {
+	r := named("S", "1", "one@1", "two@2", "three@3")
+	r.Orderings = []MetaSeriesOrdering{{Name: "Chronological", Works: r.Works}}
+	requested := MetaLocal{LibraryID: 1, Path: "S/1"}
+	books := []LocalBook{
+		mine(1, "S/1", "S", 1, "one"),
+		mine(1, "S/1 other", "S", 1, "one"),
+		mine(1, "S/2 a", "S", 2, "two"),
+		mine(1, "S/2 a", "Other series", 7, "two"), // the same book in another series
+		mine(1, "S/2 b", "S", 2, "two"),
+		mine(1, "S/3", "S", 3, ""),
+		mine(1, "S/3 too", "S", 3, ""),
+	}
+	out := PlaceLocal([]MetaSeries{r}, "one", requested, books)
+	for _, view := range [][]MetaSeriesWork{out[0].Works, out[0].Orderings[0].Works} {
+		if got, want := locals(view), []string{"S/1", "S/2 a", "S/3"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("locals = %q, want %q", got, want)
+		}
+		if got, want := others(view), [][]string{{"S/1 other"}, {"S/2 b"}, nil}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("others = %q, want %q", got, want)
+		}
+	}
+	// The rails passed in are never annotated.
+	for _, w := range r.Works {
+		if w.Local != nil || w.LocalOthers != nil {
+			t.Fatalf("input rail annotated: %+v", w)
+		}
+	}
+}
+
+// TestPlaceLocalOwnWork: an entry only ever lists recordings of its own work.
+// The entry the envelope is for holds requested beside the envelope's work's
+// other books, whatever requested's recorded match: a book of the matched work
+// stays on that work's entry, never on two.
+func TestPlaceLocalOwnWork(t *testing.T) {
+	rails := []MetaSeries{named("S", "2", "one@1", "two@2", "three@3")}
+	requested := MetaLocal{LibraryID: 1, Path: "S/2"}
+	books := []LocalBook{
+		mine(1, "S/2", "S", 2, "three"), // matched in the console to "three"
+		mine(1, "S/2 by asin", "S", 2, "two"),
+		mine(1, "S/2 other", "S", 2, "two"),
+		mine(1, "S/3", "S", 3, "three"),
+	}
+	for _, work := range []string{"three", "two", ""} {
+		books[0].WorkID = work
+		works := PlaceLocal(rails, "two", requested, books)[0].Works
+		if got, want := locals(works), []string{"", "S/2", "S/3"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("requested's work %q: locals = %q, want %q", work, got, want)
+		}
+		if got, want := others(works), [][]string{nil, {"S/2 by asin", "S/2 other"}, nil}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("requested's work %q: others = %q, want %q", work, got, want)
+		}
+	}
+}
+
+// TestPlaceLocalOthersDropCopies: local_others never holds a copy of the
+// entry's book (the pick, or requested on its own entry) sharing its ASIN, or
+// its ISBN when either has no ASIN, in normalized form, as /item's
+// other_recordings leaves it out; a book with another ASIN stays.
+func TestPlaceLocalOthersDropCopies(t *testing.T) {
+	rails := []MetaSeries{named("S", "1", "one@1", "two@2")}
+	requested := MetaLocal{LibraryID: 1, Path: "S/1"}
+	book := func(path, work, asin, isbn string) LocalBook {
+		b := mine(1, path, "S", 1, work)
+		b.ASIN, b.ISBN = asin, isbn
+		return b
+	}
+	works := PlaceLocal(rails, "one", requested, []LocalBook{
+		book("S/1", "one", "B0ONE", "978-0-00-000001-1"),
+		book("S/1 copy", "one", "", "9780000000011"),
+		book("S/1 other", "one", "B0OTHER", ""),
+		book("S/1 zed", "one", "B0ZED", "978 0000000011"), // another ASIN: the pick's ISBN never merges it
+		book("S/2 a", "two", "B0TWO", ""),
+		book("S/2 a copy", "two", " b0two ", ""),
+		book("S/2 b", "two", "B0TWOB", ""),
+	})[0].Works
+	if got, want := others(works), [][]string{{"S/1 other", "S/1 zed"}, {"S/2 b"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("others = %q, want %q", got, want)
+	}
+	if works[1].Local == nil || works[1].Local.Path != "S/2 a" {
+		t.Fatalf("pick = %+v", works[1].Local)
+	}
+}
+
+// TestPlaceLocalOthersOneEach (server#241): local_others lists each other
+// recording once. Of copies of one (a shared ASIN, else ISBN, normalized) the
+// first in the pick's order is listed, the requested library's before
+// another's; a book with neither identifier is never taken for a copy.
+func TestPlaceLocalOthersOneEach(t *testing.T) {
+	rails := []MetaSeries{named("S", "1", "one@1", "two@2")}
+	requested := MetaLocal{LibraryID: 1, Path: "Porter/1"}
+	book := func(lib int64, path, work, asin, isbn string) LocalBook {
+		b := mine(lib, path, "S", 1, work)
+		b.ASIN, b.ISBN = asin, isbn
+		return b
+	}
+	works := PlaceLocal(rails, "one", requested, []LocalBook{
+		book(2, "Jung/1", "one", " b0jung ", ""), // a copy, in another library
+		book(1, "Porter/1", "one", "B0PORTER", ""),
+		book(1, "Jung/1", "one", "B0JUNG", "978-0-00-000002-2"),
+		book(1, "Untagged/1", "one", "", ""),
+		book(2, "Untagged/1", "one", "", ""),
+		book(1, "S/2 a", "two", "B0TWO", ""),
+		book(1, "S/2 b", "two", "B0TWOB", "9780000000035"),
+		book(2, "S/2 b copy", "two", "", "978-0-00-000003-5"),
+		book(1, "S/2 c", "two", "B0TWOC", ""),
+	})[0].Works
+	want := [][]string{{"Jung/1", "Untagged/1", "Untagged/1"}, {"S/2 b", "S/2 c"}}
+	if got := others(works); !reflect.DeepEqual(got, want) {
+		t.Fatalf("others = %q, want %q", got, want)
+	}
+	if l := works[0].LocalOthers[0]; l.LibraryID != 1 {
+		t.Fatalf("copy kept = %+v, want the requested library's", l)
 	}
 }

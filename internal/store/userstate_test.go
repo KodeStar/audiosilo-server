@@ -117,6 +117,17 @@ func TestUserStateWritesLeaveTheContentGeneration(t *testing.T) {
 	still("ASIN sent", exec(`UPDATE unknown_asin_reports SET sent_at = 'c' WHERE asin = 'B0ABCDEFGH'`))
 	moved("ASIN now known", exec(`UPDATE unknown_asin_reports SET checked_at = 'd', unknown = 0 WHERE asin = 'B0ABCDEFGH'`))
 	moved("ASIN forgotten", exec(`DELETE FROM unknown_asin_reports WHERE asin = 'B0ABCDEFGH'`))
+	// An owned book's community work (server#241): its work_id rides on every
+	// list book (catalog.workIDExpr) while its id_key is the book's, so a new or
+	// removed row, a new work or a new key is content; a look-up that only
+	// renews when it was checked is not.
+	ownedSave := `INSERT INTO upcoming_owned(library_id, path, id_key, work_id, checked_at) VALUES(1, 'Book', ?, ?, ?)
+		ON CONFLICT(library_id, path) DO UPDATE SET id_key = excluded.id_key, work_id = excluded.work_id, checked_at = excluded.checked_at`
+	moved("owned work resolved", exec(ownedSave, "a:B0ABCDEFGH", "w1", "a"))
+	still("owned work checked again", exec(ownedSave, "a:B0ABCDEFGH", "w1", "b"))
+	moved("owned work's identifiers re-keyed", exec(ownedSave, "i:9780000000000", "w1", "c"))
+	moved("owned work changed", exec(ownedSave, "a:B0ABCDEFGH", "w2", "d"))
+	moved("owned work forgotten", exec(`DELETE FROM upcoming_owned WHERE library_id = 1 AND path = 'Book'`))
 	// A default write moves it whatever it writes.
 	moved("default progress update", func() error {
 		_, err := db.ExecContext(ctx, saveProgress, 4.0)

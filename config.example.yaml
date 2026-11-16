@@ -229,6 +229,9 @@ metadata:
 # list), and tells the admin about a new release in one (the book_released
 # notification). It makes no call while metadata is off; in mirror mode the
 # local copy answers. The first run records what is there without announcing it.
+# Switched off with metadata on, it still looks up which community work each
+# book is (once a day and after a scan), so the player can keep a work's
+# recordings together; nothing else.
 upcoming:
   enabled: true                          # Settings > Metadata [AUDIOSILO_UPCOMING_ENABLED]
   # How many days back a release still counts as new (1-365; applies after a

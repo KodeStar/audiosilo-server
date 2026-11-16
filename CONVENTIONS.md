@@ -491,11 +491,38 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   punctuation and spacing ignored; a book in several series is a candidate in each,
   at its position there) and `meta.PlaceLocal`
   places them: the current work's entry -> the requested book; else the book whose
-  work id `CachedWorkID` knows; else (orderings) the main view's book for that work;
+  work id is known (`Book.work_id`, the shared column `catalog.workIDExpr`, else what
+  `CachedWorkID` knows); else (orderings) the main view's book for that work;
   else the series position == the entry's numeric position on a series named like that
   view (a range entry "1-3" holds a book at that range; an entry at one number a book at it,
-  else a book whose range starts there; `parseSpan`). A book with a known work id is never placed by index; one book per entry;
-  ties: the requested book's library, then library sort order, then path.
+  else a book whose range starts there; `parseSpan`). A book with a known work id is never placed by index; one book per entry
+  as `local`, the pick (`pickRank`, server#241): the narrator of the requested book (the
+  one just finished, for Next), then a book the caller started and hasn't finished
+  (`catalog.InProgress`), then the requested book's library, then not known to be
+  abridged, then library sort order, then path. **Other recordings (`local_others`,
+  capability `other_recordings`)**: every other book of an entry's work id the caller can
+  open rides beside `local` as `local_others` `[{library_id, path}]` in that order, one per
+  recording: never a copy of `local` or of a book before it sharing its ASIN, or its ISBN
+  when either has no ASIN (normalized, `match.Recordings` in `meta.otherRecordings`; two
+  different ASINs never merge whatever their ISBNs, as recordings often share the print
+  ISBN; the first copy in that order is kept, a book with neither never merged); an entry only
+  ever lists recordings of its own work, so no book is on two entries: the current work's entry
+  holds the requested book as `local` beside the envelope's work's other books, which match
+  `/item`'s `other_recordings` of the rail's series books (a recording filed in no series, or one
+  only the cache has resolved, can still differ) except when the book's console match names
+  another work than its ASIN's (`/item` follows the match, `/meta` its ASIN); an entry placed by its index
+  has none; per request like `local`, never on a cached envelope. A book's
+  work key is `book_matches.work_id`, else a non-empty `upcoming_owned.work_id` while that
+  row's `id_key` is the book's identifiers' (`meta.IDKey`, in SQL `idKeyExpr`: a retag or an
+  ASIN edit holds no stale work until the job resolves it again) (`catalog.workIDExpr`, on
+  every list book and `/item` as `work_id`), and `GET /item`
+  adds `other_recordings` (list-shape books, `catalog.OtherRecordings`: books libraries,
+  the caller's scopes, the same work key, not itself, one per recording: no copy sharing a
+  normalized ASIN, or an ISBN when either has no ASIN, with it or with a book before it
+  (`match.Recordings`, the same rule as `local_others`, after the
+  scope filter, so a copy the caller cannot open never stands in for one they can); its own
+  library first, then title, then narrator, the first copy in that order kept; at most 20
+  after the copies are dropped; metadata on only).
   **Next book** (`next_book` capability): `GET /libraries/{id}/next?path=`
   (`handlers_next.go`, `authorizedScope` + `bookForPath` like `item`) answers
   `{source, next?, book?, work?}`; `source` names the step that produced `next`
@@ -572,18 +599,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   daily with +-1 h jitter, a failed run again hourly three times; `Kick` (wired to `OnBookChange`) makes a
   light run once kicks have been quiet 30 s (at most 10 min: books resolved, series never read are read,
   no feed, no status); `Wake` (PATCH /admin/settings switching the job or metadata on) runs at once when
-  no run has succeeded within the day. A full run: (1) each book with an ASIN/ISBN gets its work id (the
+  no run has succeeded within the day, else no later than when one comes due (`woken`: a step-(1)-alone
+  run while the job was off moved the schedule a day on from its own time; the status's `next_run_at`
+  follows). A full run: (1) each book with an ASIN/ISBN gets its work id (the
   meta cache, else `WorkIDs` in batches of 100; answers rechecked monthly, at most 500 a run); (2) each
   local series (library, `match.SeriesKey`) gets its community series from its works' series named like it
   (primaries first; then give or take an article or "Series"), monthly or when it gains a book or a work;
   (3) metaserve's watch feed, 50 series a request (split when full), says which series have news; (4)
   `series/{id}` is read when new, with news, or a week old (2 at a time; a 404 marks it gone, dropped after
-  a week); (5) classify; (6) announce. It makes no call while `upcomingOn()` is false (metadata on AND
-  `upcoming.enabled`, live), and a run in flight stops within a second when switched off (`whileOn`,
+  a week); (5) classify; (6) announce. With metadata on and `upcoming.enabled` off, a run (scheduled or
+  kicked) is step (1) alone (`Options.Resolve`, `resolveOnly`: no series, feed, items, announcement or
+  status; server#241, a book's `work_id` rides on the player's lists). It makes no call while
+  `metadataOn()` is false, and a run in flight stops within a second when switched off (`whileOn`,
   `errSwitchedOff`: a cancellation, no status recorded, no retry). In mirror mode every call goes to the
   local copy. A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
   path-keyed, no FK to `books`, cascaded with the library, written through the user-state path; no
-  content cache reads them): `upcoming_owned` (book -> work id and the identifiers it was resolved by),
+  content cache reads them but `upcoming_owned`'s rows, `work_id` and `id_key`, the list books' `work_id`,
+  so a new or removed row, a changed work or a re-keyed one moves the content generation, a re-check does not):
+  `upcoming_owned` (book -> work id and the identifiers it was resolved by),
   `upcoming_series` (local series -> community series ids, `''` for none found, `classified_at`),
   `meta_series` (a community series' members as last read, `ok`/`gone`), `upcoming_items` (one row per
   work a local series lacks, its kind, title, authors and cover, `first_seen_at`, `announced_at`) and
@@ -831,8 +864,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   not: Health ranks duplicate copies by how many people have progress on them) and, for
   `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
   `bridge_status` (`heartbeat_at`, `status`), `bridge_jobs` (`lease_until`, `updated_at`,
-  `progress`) and `unknown_asin_reports` (`checked_at`, `sent_at`: Health's `unknown_asin` reads
-  the rest), which columns an UPDATE may change by value (the hook reads a row only up to
+  `progress`), `unknown_asin_reports` (`checked_at`, `sent_at`: Health's `unknown_asin` reads
+  the rest) and `upcoming_owned` (`checked_at`: the list books' `work_id` reads the
+  rest, server#241), which columns an UPDATE may change by value (the hook reads a row only up to
   the rule's last watched column, `watchedChanged`, so a freed column after them, the
   heartbeat's up to 64 KiB `status`, is never copied; S263-HOOK). Anything else on a listed table
   moves the generation; a table the list doesn't name is a misfiling (logged; a panic in a
@@ -846,7 +880,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   complete poll's `refused_at` cleared and `refusal_ended_at` stamped), the scheduler's `MarkAudibleQueued` (`last_queued_at`) and
   `MarkAudibleSyncQueued` (`sync_queued_at`), an ended sync's `FoldAudibleSync` (`last_sync_at`, `refused_at`),
   `PutMetaCache`, the upcoming releases job's tables
-  (`upcoming_owned`, `upcoming_series`, `meta_series`, `upcoming_items`, `upcoming_announced`: derived,
+  (`upcoming_owned` while it only renews `checked_at`, `upcoming_series`, `meta_series`,
+  `upcoming_items`, `upcoming_announced`: derived,
   read only by `/me/upcoming` and the job), the token touch in
   `auth.Service.resolve` (which then drops that token's cached row, so the next request reads
   its new last-seen and address; a lookup that read the row before the touch never caches it
@@ -862,7 +897,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   read by what is cached). There is no global "every write" counter: nothing reads one.
   Each consumer, audited against the tables its answer reads:
   the list cache's player lists (`/libraries/{id}/books`, `/books/recent`, `/search`, a books
-  library's authors/narrators/series: `books` and its side tables, `libraries`; scopes computed
+  library's authors/narrators/series: `books` and its side tables, `libraries`, and for a
+  book's `work_id` `book_matches` and `upcoming_owned`'s rows, `work_id` and `id_key`; scopes computed
   per request from shares, grants and members' `collection_shares`, into the key) and the
   admin's `/admin/books` first page and facets read no user state but `unknown_asin_reports`
   (`?issue=unknown_asin`); Health `/admin/issues` reads `progress` row counts (the duplicate
