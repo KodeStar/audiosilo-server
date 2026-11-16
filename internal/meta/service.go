@@ -229,8 +229,10 @@ type MetaSeriesWork struct {
 	Local *MetaLocal `json:"local,omitempty"`
 	// LocalOthers are the caller's other recordings of this work (another
 	// narrator, an abridgement, a copy in another library; server#241), the
-	// pick's runners-up in order: Local stays the one to open. Set per request
-	// like Local; omitted when there are none.
+	// pick's runners-up in order: Local stays the one to open. On the current
+	// work's entry they are the requested book's own work's, which is another
+	// when its recorded match differs from the envelope's (PlaceLocal). Set
+	// per request like Local; omitted when there are none.
 	LocalOthers []MetaLocal `json:"local_others,omitempty"`
 }
 

@@ -502,10 +502,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   abridged, then library sort order, then path. **Other recordings (`local_others`,
   capability `other_recordings`)**: every other book of an entry's work id the caller can
   open rides beside `local` as `local_others` `[{library_id, path}]` in that order, never a
-  copy of `local` sharing its ASIN or ISBN (normalized, `sameRecording`); the current work's
+  copy of `local` sharing its ASIN or ISBN (normalized, `meta.otherRecordings`); the current work's
   entry lists every book of the requested book's own work (its `work_id`, the recorded match
-  first, else the envelope's work) but itself, so it agrees with `/item`'s
-  `other_recordings` while `/meta` stays about its ASIN's work; an entry placed by its index
+  first, else the envelope's work) but itself, so of the rail's series books it agrees with
+  `/item`'s `other_recordings` while `/meta` stays about its ASIN's work (a recording filed
+  in no series, or one only the cache has resolved, can still differ); an entry placed by its index
   has none; per request like `local`, never on a cached envelope. A book's
   work key is `book_matches.work_id`, else a non-empty `upcoming_owned.work_id` while that
   row's `id_key` is the book's identifiers' (`meta.IDKey`, in SQL `idKeyExpr`: a retag or an

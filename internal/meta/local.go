@@ -121,7 +121,7 @@ func ParseSpan(s string) (start, end float64, ok bool) {
 // narrator is the one the pick prefers. Of several books of one work id (other
 // recordings: another narrator, an abridgement, a copy in another library) the
 // pick is Local by pickRank and the rest, in that order, LocalOthers, but for
-// a copy of the pick (sameRecording). Rule 1's entry lists every book of
+// a copy of the pick (otherRecordings). Rule 1's entry lists every book of
 // requested's own work (its WorkID, the recorded match first like
 // Book.work_id; else currentWork) but requested and its copies, so it agrees
 // with /item's other_recordings when the envelope's work (by the identifiers)
@@ -291,24 +291,20 @@ func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]p
 }
 
 // otherRecordings is books as LocalOthers, without a copy of pick (one sharing
-// its ASIN or ISBN, compared normalized: the same recording again, as
-// catalog.OtherRecordings leaves it out); nil when none is left.
+// its ASIN or ISBN, compared normalized by match.NormalizeASIN and
+// match.NormalizeISBN, a tag's case, spaces and hyphens aside: the same
+// recording again, as catalog.OtherRecordings leaves it out); nil when none is
+// left.
 func otherRecordings(books []LocalBook, pick LocalBook) []MetaLocal {
+	asin, isbn := match.NormalizeASIN(pick.ASIN), match.NormalizeISBN(pick.ISBN)
 	var out []MetaLocal
 	for _, b := range books {
-		if !sameRecording(b, pick) {
-			out = append(out, b.MetaLocal)
+		if (asin != "" && asin == match.NormalizeASIN(b.ASIN)) || (isbn != "" && isbn == match.NormalizeISBN(b.ISBN)) {
+			continue
 		}
+		out = append(out, b.MetaLocal)
 	}
 	return out
-}
-
-// sameRecording reports whether a and b share an ASIN or an ISBN
-// (match.NormalizeASIN, match.NormalizeISBN: a tag's case, spaces and hyphens
-// aside).
-func sameRecording(a, b LocalBook) bool {
-	asin, isbn := match.NormalizeASIN(a.ASIN), match.NormalizeISBN(a.ISBN)
-	return (asin != "" && asin == match.NormalizeASIN(b.ASIN)) || (isbn != "" && isbn == match.NormalizeISBN(b.ISBN))
 }
 
 // nextEntry is the entry after the current work on rail, read as the series
