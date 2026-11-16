@@ -3705,12 +3705,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   an unknown field, or a listen without a number for `from_pos` or `to_pos` (a null would read as 0:00) is that
   event's `rejected` `invalid`, as is a `path` over `MaxPathBytes` (4096 bytes as sent, `relpath.MaxBytes`, server#289;
   the content routes and the routes that store a path answer one with 400 `path is too long`: `pathInScope` (`scopedPath`
-  and `scopedPathIn` check first), `pathTooLong` for a route taking a path outside it (the admin's folder override and
-  enrichment, browse, a list's remove, the Bridge's book read); before the library is looked up, server#291, so an
-  unknown one answers the 400 and an event's over-cap path is `invalid` before any lookup. A podcast's show or episode
-  path is capped by `feed.ShowPath` / `EpisodePath`, and the Bridge's enrichment PUT by its own check, each the route's
-  400 `invalid_request`. The admin's Bridge estimate and queue, the Bridge's rescan and the jobs and sessions filters
-  take no cap: each looks a book up first (an over-cap path finds none) or only filters, storing nothing). The handler
+  and `scopedPathIn` check first), `pathTooLong` for a route taking a path outside it (the admin's folder override,
+  browse, a list's remove, the admin's Bridge estimate and queue, the Bridge jobs and sessions `?path=` filters, the
+  Bridge's book read, rescan (`path` and `from`) and enrichment PUT, server#359); before the library is looked up,
+  server#291, so an unknown one answers the 400 and an event's over-cap path is `invalid` before any lookup. A
+  podcast's show or episode path is capped by `feed.ShowPath` / `EpisodePath`, the route's 400 `invalid_request`). The handler
   resolves each distinct
   `(library_id, path)` as PUT progress does (`scopedPathIn`: 403 -> `no_access`, 404 -> `not_found`, a path
   cleaning to nothing or over the cap -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'

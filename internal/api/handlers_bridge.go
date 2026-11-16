@@ -659,6 +659,9 @@ func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 	if req.From != nil {
 		rawFrom = *req.From
 	}
+	if pathTooLong(w, req.Path) || pathTooLong(w, rawFrom) {
+		return
+	}
 	from := catalog.CleanRelPath(rawFrom)
 	switch {
 	case req.Mode != "" && req.Mode != rescanFull && req.Mode != rescanAttachments:
@@ -883,6 +886,9 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 	}
 	nj := bridge.NewJob{Kind: req.Kind, LibraryID: req.LibraryID, Params: req.Params, RequestedBy: userFrom(r.Context()).ID}
 	if req.Path != nil {
+		if pathTooLong(w, *req.Path) {
+			return
+		}
 		if p := catalog.CleanRelPath(*req.Path); p != "" {
 			nj.Path = &p
 		}
@@ -994,6 +1000,9 @@ func (a *API) handleAdminBridgeJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if q.Has("path") {
+		if pathTooLong(w, q.Get("path")) {
+			return
+		}
 		p := catalog.CleanRelPath(q.Get("path"))
 		f.Path = &p
 	}

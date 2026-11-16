@@ -243,8 +243,10 @@ func (a *API) handleBridgeBooks(w http.ResponseWriter, r *http.Request) {
 
 // handleBridgeEnrichment serves PUT /bridge/libraries/{id}/enrichment?path=
 // {"asin": ".."}: the ASIN of an Audible title the Bridge matched to the book
-// without doubt, for a book with none. 204; 404 no such book (none in a books
-// library); 409 asin_set when it has another, or an admin's ASIN edit.
+// without doubt, for a book with none. 204; 400 "path is too long" past
+// catalog.MaxPathBytes (pathTooLong), invalid_request with no path or ASIN; 404
+// no such book (none in a books library); 409 asin_set when it has another, or
+// an admin's ASIN edit.
 func (a *API) handleBridgeEnrichment(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -252,7 +254,10 @@ func (a *API) handleBridgeEnrichment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := r.URL.Query().Get("path")
-	if path == "" || len(path) > catalog.MaxPathBytes {
+	if pathTooLong(w, path) {
+		return
+	}
+	if path == "" {
 		writeErrorCode(w, http.StatusBadRequest, "invalid_request", "a book path is required")
 		return
 	}
