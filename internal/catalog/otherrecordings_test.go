@@ -38,8 +38,9 @@ func newRecordingsFixture(t *testing.T) *recordingsFixture {
 		{LibraryID: f.main.ID, RelPath: "Kemper/One", Title: "One", Narrator: "Kemper", ASIN: "B0KEMPER"},
 		// Another recording in the second library, matched in the console.
 		{LibraryID: f.other.ID, RelPath: "Abridged/One", Title: "One (Abridged)", Narrator: "Abe"},
-		// The same recording again (same ASIN as the page's book): a duplicate.
-		{LibraryID: f.other.ID, RelPath: "Copy/One", Title: "One", Narrator: "R. C. Bray", ASIN: "B0BRAY"},
+		// The same recording again (the page's book's ASIN, tagged in lower
+		// case): a duplicate.
+		{LibraryID: f.other.ID, RelPath: "Copy/One", Title: "One", Narrator: "R. C. Bray", ASIN: "b0bray"},
 		// Its ASIN resolved to w-one, but the console matched it to w-two.
 		{LibraryID: f.main.ID, RelPath: "Rematched/Two", Title: "Two", Narrator: "Kemper", ASIN: "B0WRONG"},
 		// Private: outside a member's grant.

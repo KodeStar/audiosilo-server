@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"slices"
+
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // Other recordings together (server#241): the books of a books library that are
@@ -16,10 +18,11 @@ const MaxOtherRecordings = 20
 
 // OtherRecordings returns the other books within scopes that are recordings of
 // book's community work (its WorkID, workIDExpr), list shape: books libraries
-// only, not book itself, and not a copy sharing its ASIN or ISBN (the same
-// recording again, Health's duplicate). The book's own library comes first,
-// then by title, then narrator, then path; at most MaxOtherRecordings. None
-// when the book has no work.
+// only, not book itself, and not a copy sharing its ASIN or ISBN, compared in
+// their normalized forms (match.NormalizeASIN, match.NormalizeISBN: a tag's
+// case, spaces and hyphens aside), the same recording again. The book's own
+// library comes first, then by title, then narrator, then path; at most
+// MaxOtherRecordings. None when the book has no work.
 //
 // The candidates are found by the work id indexes on both sides
 // (idx_book_matches_work, idx_upcoming_owned_work) and each kept only when its
@@ -32,8 +35,9 @@ func (c *Catalog) OtherRecordings(ctx context.Context, scopes []Scope, book *Boo
 		return nil, nil
 	}
 	frag, fargs := scopesFilterSQL("b.library_id", "b.rel_path", scopes)
+	asin, isbn := match.NormalizeASIN(book.ASIN), match.NormalizeISBN(book.ISBN)
 	args := slices.Concat([]any{work, work}, fargs,
-		[]any{book.LibraryID, book.RelPath, work, book.ASIN, book.ISBN, book.LibraryID, MaxOtherRecordings})
+		[]any{book.LibraryID, book.RelPath, work, asin, asin, isbn, isbn, book.LibraryID, MaxOtherRecordings})
 	return queryRows(ctx, c.db, scanBookRow, `SELECT `+prefixCols("b.")+` FROM (
 		    SELECT library_id, path FROM book_matches WHERE work_id = ?
 		    UNION
@@ -44,7 +48,8 @@ func (c *Catalog) OtherRecordings(ctx context.Context, scopes []Scope, book *Boo
 		 WHERE l.kind = 'books' AND `+frag+`
 		   AND NOT (b.library_id = ? AND b.rel_path = ?)
 		   AND `+workIDExpr("b")+` = ?
-		   AND NOT (b.asin <> '' AND b.asin = ?) AND NOT (b.isbn <> '' AND b.isbn = ?)
+		   AND NOT (? <> '' AND UPPER(TRIM(b.asin)) = ?)
+		   AND NOT (? <> '' AND UPPER(REPLACE(REPLACE(b.isbn, '-', ''), ' ', '')) = ?)
 		 ORDER BY b.library_id <> ?, b.title COLLATE NOCASE, b.narrator COLLATE NOCASE, b.library_id, b.rel_path
 		 LIMIT ?`, args...)
 }
