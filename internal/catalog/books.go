@@ -842,17 +842,15 @@ func deleteBook(ctx context.Context, tx *sql.Tx, id int64) error {
 	return err
 }
 
-// bookBaseCols are the books table's own columns a Book reads; bookCols adds
-// its community work id.
+// bookBaseCols are the books table's own columns a Book reads; bookCols and
+// prefixCols add its community work id.
 const bookBaseCols = `id, library_id, rel_path, is_folder, title, author, series,
 	series_index, series_index_end, more_series, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
 	added_at, content_hash, published, has_cover, cover_art, cover_color, attachments_sig,
 	subtitle, publisher, language, abridged, genres, tags, ebook_path, ebook_size`
 
-// bookCols is a Book's columns selected FROM books (unaliased): bookBaseCols,
-// then its work_id (workIDExpr). prefixCols is the same for an aliased books
-// table, and derivedBookCols for a derived table whose rows prefixCols selected.
-var bookCols = bookBaseCols + `, ` + workIDExpr("books") + ` AS work_id`
+// bookCols is a Book's columns selected FROM books (unaliased), work_id last.
+var bookCols = prefixCols("books.")
 
 // derivedBookCols is bookCols read off a derived table (a subquery in FROM)
 // that selected prefixCols: the work id is already its work_id column.
@@ -901,12 +899,22 @@ func bookDest(b *Book) (dest []any, finish func()) {
 
 func scanBook(row interface{ Scan(...any) error }) (*Book, error) {
 	var b Book
-	dest, finish := bookDest(&b)
-	if err := row.Scan(dest...); err != nil {
+	if err := scanBookInto(row, &b); err != nil {
 		return nil, err
 	}
-	finish()
 	return &b, nil
+}
+
+// scanBookRow scans one row of bookCols into b: queryRows' callback for books.
+func scanBookRow(r *sql.Rows, b *Book) error { return scanBookInto(r, b) }
+
+func scanBookInto(row interface{ Scan(...any) error }, b *Book) error {
+	dest, finish := bookDest(b)
+	if err := row.Scan(dest...); err != nil {
+		return err
+	}
+	finish()
+	return nil
 }
 
 // GetBookByPath returns a book by its library + relative path, including files

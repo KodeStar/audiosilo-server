@@ -104,14 +104,7 @@ func (c *Catalog) seriesMembers(ctx context.Context, scopes []Scope, keys []stri
 	for len(ids) > 0 { // every match (ids come unordered), then the order and the cap
 		part := ids[:min(len(ids), 500)]
 		ids = ids[len(part):]
-		more, err := queryRows(ctx, c.db, func(r *sql.Rows, b *Book) error {
-			dest, finish := bookDest(b)
-			if err := r.Scan(dest...); err != nil {
-				return err
-			}
-			finish()
-			return nil
-		}, `SELECT `+prefixCols("b.")+` FROM books b CROSS JOIN libraries l ON l.id = b.library_id
+		more, err := queryRows(ctx, c.db, scanBookRow, `SELECT `+prefixCols("b.")+` FROM books b CROSS JOIN libraries l ON l.id = b.library_id
 			 WHERE l.kind='books' AND b.id IN (`+placeholders(len(part))+`) ORDER BY l.sort_order, l.name, l.id, b.rel_path`, part...)
 		if err != nil {
 			return nil, err

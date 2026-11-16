@@ -54,8 +54,8 @@ func (c *Catalog) Search(ctx context.Context, query string, scopes []Scope, limi
 	return dedupBooks(cands, limit), nil
 }
 
-// prefixCols is bookCols for a books table aliased p ("b."): each column
-// prefixed, then the work id (workIDExpr) as work_id.
+// prefixCols is a Book's columns for a books table named or aliased p ("b."):
+// bookBaseCols, each prefixed, then the work id (workIDExpr) as work_id.
 func prefixCols(p string) string {
 	cols := strings.Split(bookBaseCols, ",")
 	for i, c := range cols {

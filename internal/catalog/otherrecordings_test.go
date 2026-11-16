@@ -143,7 +143,15 @@ func TestBookWorkID(t *testing.T) {
 func TestOtherRecordings(t *testing.T) {
 	t.Parallel()
 	f := newRecordingsFixture(t)
-	me := Ref{LibraryID: f.main.ID, Path: "Bray/One"}
+	book := func(lib int64, path string) *Book {
+		t.Helper()
+		b, err := f.c.GetBookByPath(f.ctx, lib, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	me := book(f.main.ID, "Bray/One")
 
 	got, err := f.c.OtherRecordings(f.ctx, f.all(), me)
 	if err != nil {
@@ -168,7 +176,7 @@ func TestOtherRecordings(t *testing.T) {
 	}
 
 	// Seen from the second library: its own library first.
-	got, err = f.c.OtherRecordings(f.ctx, f.all(), Ref{LibraryID: f.other.ID, Path: "Abridged/One"})
+	got, err = f.c.OtherRecordings(f.ctx, f.all(), book(f.other.ID, "Abridged/One"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,18 +184,17 @@ func TestOtherRecordings(t *testing.T) {
 		t.Fatalf("from the other library = %q, want %q", relPaths(got), want)
 	}
 
-	// None: no work, an unknown book, no scopes, or a book alone with its work.
+	// None: no work, no scopes, or a book alone with its work.
 	for _, tc := range []struct {
 		scopes []Scope
-		ref    Ref
+		book   *Book
 	}{
-		{f.all(), Ref{LibraryID: f.main.ID, Path: "Else/Three"}},
-		{f.all(), Ref{LibraryID: f.main.ID, Path: "Missing"}},
+		{f.all(), book(f.main.ID, "Else/Three")},
 		{nil, me},
-		{f.all(), Ref{LibraryID: f.main.ID, Path: "Rematched/Two"}},
+		{f.all(), book(f.main.ID, "Rematched/Two")},
 	} {
-		if got, err := f.c.OtherRecordings(f.ctx, tc.scopes, tc.ref); err != nil || len(got) != 0 {
-			t.Fatalf("OtherRecordings(%+v) = %q, %v", tc.ref, relPaths(got), err)
+		if got, err := f.c.OtherRecordings(f.ctx, tc.scopes, tc.book); err != nil || len(got) != 0 {
+			t.Fatalf("OtherRecordings(%s) = %q, %v", tc.book.RelPath, relPaths(got), err)
 		}
 	}
 }

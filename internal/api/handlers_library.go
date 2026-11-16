@@ -578,7 +578,7 @@ func (a *API) otherRecordings(ctx context.Context, lib *catalog.Library, book *c
 	scopes, err := a.cat.CallerScopes(ctx, callerOf(ctx))
 	if err == nil {
 		var books []catalog.Book
-		if books, err = a.cat.OtherRecordings(ctx, scopes, catalog.Ref{LibraryID: lib.ID, Path: book.RelPath}); err == nil {
+		if books, err = a.cat.OtherRecordings(ctx, scopes, book); err == nil {
 			return books
 		}
 	}
