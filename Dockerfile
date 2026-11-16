@@ -9,7 +9,7 @@
 # holding only its static web export, built with baseUrl=/web). Override per
 # release: --build-arg WEB_IMAGE=ghcr.io/<owner>/audiosilo-web:<version> (the
 # reference must be lowercase). Declared before any FROM so it is usable in the
-# `FROM ${WEB_IMAGE}` below. To build a server-only image (web_player off, /web
+# web stage's FROM below. To build a server-only image (web_player off, /web
 # unmounted), comment out the web stage and the COPY --from=web line.
 ARG WEB_IMAGE=ghcr.io/kodestar/audiosilo-web:latest
 # The web image is static files FROM scratch, published for linux/amd64 only, so

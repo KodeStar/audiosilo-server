@@ -48,6 +48,12 @@ docker build --build-arg WEB_IMAGE=ghcr.io/kodestar/audiosilo-web:latest \
 docker push ghcr.io/kodestar/audiosilo-server:dev
 ```
 
+The web image is published for `linux/amd64` only (static files, which any
+platform can copy). The `WEB_PLATFORM` build arg (default `linux/amd64`) makes
+every target, and a build on an arm64 host, take that copy;
+`scripts/fetch-web-player.sh` reads the same variable from the environment. Set
+it only for a locally built web image of another platform.
+
 ## 2b - native binaries (GitHub Releases)
 
 The same `v*` tag also triggers `.github/workflows/release.yml` (GoReleaser,
