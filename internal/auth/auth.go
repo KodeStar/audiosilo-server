@@ -1543,16 +1543,16 @@ func keepUnlisted(ctx context.Context, tx *sql.Tx, owner int64, keep, del []int6
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
 	var members []int64
 	for rows.Next() {
 		var m int64
 		if err := rows.Scan(&m); err != nil {
-			_ = rows.Close()
 			return nil, err
 		}
 		members = append(members, m)
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	for _, k := range keep {
