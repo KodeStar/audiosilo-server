@@ -342,7 +342,11 @@ with the book, never copied onto a joined one; see Community chapters (Edited ch
 `cast_grants.editor` (1 for a token the editor's player streams with, capped apart from the person's cast tokens). `0079` (server#241)
 adds `idx_book_matches_work` (a book's community work key is `book_matches.work_id`, else a non-empty
 `upcoming_owned.work_id` resolved from the book's current identifiers (`id_key`): `catalog.workIDExpr`, `Book.work_id`; `catalog.OtherRecordings` finds a work's
-books by it; see Community metadata lookup (Other recordings) in CONVENTIONS.md).
+books by it; see Community metadata lookup (Other recordings) in CONVENTIONS.md). `0080` (row 9c-2) adds
+`progress.stay_version` (the version a sync `stay` span wrote: while set, another device's span on a base below it
+never moves the place; cleared by every other writer) and `progress.edit_version` (the version of the row's last
+explicit write that is not listening: a PATCH, an import's apply or undo, a move or join, a sync finish or unfinish;
+a Stay on a base below it is a plain jump); see Listening sync (Stay wins) in CONVENTIONS.md.
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -407,7 +411,7 @@ keep this index in step (one line per topic).
   - User/account admin
   - Admin stats
   - Progress reconciliation
-  - Listening sync (Sync v2, Track W1, `catalog/listening_sync.go`: events, the backstop, other_place, file remap, `put` events)
+  - Listening sync (Sync v2, Track W1, `catalog/listening_sync.go`: events, the backstop, other_place, file remap, `put` events, Stay wins)
   - Chapters are normalized
   - Community chapters (incl. Generated chapters, Bridge Phase 1d, and Edited chapters, server#240)
   - Podcasts (Bridge Phases 2c-1, 2c-2a, 2c-2b and 2c-3: discovery, OPML import/export)
@@ -453,7 +457,7 @@ keep this index in step (one line per topic).
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
 `household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`, `readalong`, `upcoming`,
-`upcoming_calendar`, `upcoming_covers`, `listening_sync`, `renditions`, `oidc`), plus one flag per managed module (`contributions`, `podcasts`, `audible`); flip them on
+`upcoming_calendar`, `upcoming_covers`, `listening_sync`, `listening_stay`, `renditions`, `oidc`), plus one flag per managed module (`contributions`, `podcasts`, `audible`); flip them on
 as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
 the `bridge: {version, features}` block beside `capabilities` for a signed-in caller only (see The Bridge above). `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player

@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"testing"
@@ -124,15 +125,23 @@ func (f *importFixture) importSessions(t *testing.T, userID int64, at ...time.Ti
 // writes w, and returns its id.
 func (f *importFixture) applyWrite(t *testing.T, userID int64, w *ImportWrite) int64 {
 	t.Helper()
-	imps, err := f.c.CreateImports(f.ctx, []Import{{UserID: userID, Source: ImportSourceABS, SourceURL: "http://abs"}})
+	return applyImport(t, f.ctx, f.c, userID, func(ImportState) (*ImportWrite, error) { return w, nil })
+}
+
+// applyImport applies a new import for userID (from an ABS) that writes what
+// write builds from the import's state, and returns its id.
+func applyImport(t *testing.T, ctx context.Context, c *Catalog, userID int64,
+	write func(ImportState) (*ImportWrite, error)) int64 {
+	t.Helper()
+	imps, err := c.CreateImports(ctx, []Import{{UserID: userID, Source: ImportSourceABS, SourceURL: "http://abs"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := imps[0].ID
-	if err := f.c.FinishImportFetch(f.ctx, id, "abs", []byte("payload"), ImportPlan{}); err != nil {
+	if err := c.FinishImportFetch(ctx, id, "abs", []byte("payload"), ImportPlan{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.c.ApplyImport(f.ctx, id, func(ImportState) (*ImportWrite, error) { return w, nil }); err != nil {
+	if _, err := c.ApplyImport(ctx, id, write); err != nil {
 		t.Fatal(err)
 	}
 	return id

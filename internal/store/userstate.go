@@ -58,7 +58,7 @@ var userStateTables = map[string]tableRule{
 	"progress": {free: []string{"position", "duration", "finished", "playback_speed", "version", "device_id",
 		"updated_at", "started_at", "finished_at", "device_name", "finish_changed_at", "other_position",
 		"other_device_id", "other_device_name", "other_at", "other_version", "span_at", "span_version",
-		"change_seq"}},
+		"change_seq", "stay_version", "edit_version"}},
 	// The one-row counter progress.change_seq is drawn from (migration 0066):
 	// bumped by the progress and audible_titles triggers, read by no cache.
 	"progress_change_counter": {free: []string{"seq"}},
