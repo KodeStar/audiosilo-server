@@ -109,11 +109,11 @@ func TestRefreshApplyWritesOnlyWhatTheReviewShowed(t *testing.T) {
 	}
 }
 
-// TestRefreshApplyDropsItemsUnchangedSince (server#332): items that had a
+// TestRefreshApplySkipsItemsUnchangedSince (server#355): items that had a
 // change under the scope when recorded but have none now (the books took it
-// since) are left out as the apply passes them, dropped from its total in
-// batches, and the apply still ends at its total.
-func TestRefreshApplyDropsItemsUnchangedSince(t *testing.T) {
+// since) are skipped as nothing_to_change, never left pending with no word of
+// why, and the apply ends at its total.
+func TestRefreshApplySkipsItemsUnchangedSince(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
@@ -138,9 +138,14 @@ func TestRefreshApplyDropsItemsUnchangedSince(t *testing.T) {
 	if started.ApplyTotal != n+changed {
 		t.Fatalf("started = %+v, want every item taken", started)
 	}
-	if ended.Status != catalog.MatchApplied || ended.ApplyTotal != changed || ended.ApplyDone != changed ||
-		ended.Counts.Applied != changed || ended.Counts.Pending != n || ended.Counts.Skipped != 0 {
-		t.Fatalf("run after apply = %+v, want %d of %d applied, %d left pending", ended, changed, changed, n)
+	if ended.Status != catalog.MatchApplied || ended.ApplyTotal != n+changed || ended.ApplyDone != n+changed ||
+		ended.Counts.Applied != changed || ended.Counts.Pending != 0 || ended.Counts.Skipped != n {
+		t.Fatalf("run after apply = %+v, want %d applied, %d skipped", ended, changed, n)
+	}
+	for _, it := range e.items(t, run, "") {
+		if it.Applied == catalog.ItemSkipped && it.Detail != "nothing_to_change" {
+			t.Fatalf("skipped item = %+v, want nothing_to_change", it.MatchRunItem)
+		}
 	}
 }
 

@@ -96,17 +96,6 @@ const DetailCoverPending = "cover_pending"
 // the one the cover was planned for.
 const DetailCoverSuperseded = "cover_superseded"
 
-// detailUnchanged is applyItem's answer for a refresh item with nothing to
-// change under the scope now, though it had when recorded (one with nothing
-// then is never read: catalog.MatchItemsToApply): the apply leaves it out, as
-// an exclusion does (catalog.DropApplyItems, dropBatch at a time), rather than
-// marking it skipped, so the console sends no exclusion for it (server#332).
-// Internal: never stored.
-const detailUnchanged = "unchanged"
-
-// dropBatch is how many such items an apply drops from its total in one write.
-const dropBatch = 100
-
 // ErrBusy is a start or apply asked while a run is working: one at a time. It is
 // catalog.ErrMatchRunBusy, the Unlink refusal, so one errors.Is matches both.
 var ErrBusy = catalog.ErrMatchRunBusy
@@ -652,9 +641,8 @@ func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (
 	if err := r.cat.BeginApply(ctx, runID, o.Scope, len(items)); err != nil {
 		return nil, err
 	}
-	// Read before the apply starts: a refresh's apply_total shrinks as it leaves
-	// out items with nothing to change now (DropApplyItems), so the run returned
-	// (and the audit's "books") is every item it takes, never a racy part of it.
+	// Read before the apply starts, so the run returned (and the audit's
+	// "books") is every item it takes, never a racy part of it.
 	started, err := r.cat.GetMatchRun(ctx, runID)
 	work := r.begin(base, runID)
 	r.wg.Go(func() {
@@ -674,27 +662,8 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 		off = off || !r.enabled()
 		return !off
 	}
-	// Items left out as unchanged now are counted up and dropped from the total
-	// a batch at a time (and the rest before the run settles), never a write
-	// each: the total only ever runs ahead of what is left, so apply_done stays
-	// within it and reaches it.
-	var dropped atomic.Int64
-	drop := func(n int64) {
-		if n == 0 {
-			return
-		}
-		if err := r.cat.DropApplyItems(context.WithoutCancel(ctx), run.ID, int(n)); err != nil {
-			r.log.Error("drop match items failed", "run", run.ID, "items", n, "err", err)
-		}
-	}
 	pool.Each(ctx, applyWorkers, items, enabled, func(it *catalog.MatchRunItem) {
 		applied, detail := r.applyItem(ctx, run, it, o)
-		if detail == detailUnchanged {
-			if dropped.Add(1)%dropBatch == 0 {
-				drop(dropBatch)
-			}
-			return
-		}
 		// Stopped mid-item: what the stop may have cut short (a failure, a cover
 		// not taken) stays to apply, so the next apply takes it again; what went in
 		// is marked, so it counts as applied rather than coming back as nothing to
@@ -712,7 +681,6 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 			r.log.Error("mark match item failed", "run", run.ID, "item", it.ID, "err", err)
 		}
 	})
-	drop(dropped.Load() % dropBatch) // the workers are done: the rest
 	if ctx.Err() != nil && !r.stoppedByAdmin() {
 		return // the server is stopping: the next start puts it back to ready (InterruptMatchRuns, settleLocked)
 	}
@@ -726,8 +694,7 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 }
 
 // applyItem writes one item's plan to its book: applied, skipped (nothing to
-// change, or no book there now) or failed, with a code saying why; a refresh
-// item with nothing to change is none of them (detailUnchanged). A community
+// change, or no book there now) or failed, with a code saying why. A community
 // match it records (Writes.Anchor) goes in with the fields, in one transaction:
 // made "auto" for a confident item, "accepted" for a review item the admin
 // included, and a refresh's heal keeps how the book was matched.
@@ -748,9 +715,10 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 	}
 	w := planFor(mode, o.Scope, st, it)
 	if w.Empty() {
-		if mode == catalog.MatchModeRefresh {
-			return "", detailUnchanged
-		}
+		// A refresh item too: it had a change when the run recorded it (one with
+		// none is never read: MatchItemsToApply), so the review showed one, and
+		// the book took it since, or no longer has what it was found by
+		// (server#355).
 		return catalog.ItemSkipped, "nothing_to_change"
 	}
 	edits := len(w.Set) > 0 || len(w.Revert) > 0 || w.Anchor != nil

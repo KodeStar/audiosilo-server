@@ -2014,14 +2014,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   filters it in SQL, so an empty refresh's Done starts at `apply_total` 0, and a book that
   changed since so planning now would write something the review never showed is left
   alone; the review (`Runner.Items`) shows no change under that scope either, so its
-  `leftOut` count and the apply agree. One that had a change then but none now: `applyItem` answers the internal
-  `detailUnchanged` for an empty `planFor`, and the apply counts these up and drops them with
-  `catalog.DropApplyItems` (`apply_total - n`, never below `apply_done`), `dropBatch` (100) at
-  a time and the rest before the run settles, instead of marking each. Either way the item
-  stays `applied` '' as an exclusion leaves it (pending, not skipped), and `apply_done` ends
-  at `apply_total`. That includes one whose book no longer has what it was found by. An item
-  recorded before 0070 (`unchanged` '') is planned as before. A match or repick item with nothing to change is still `skipped` /
-  `nothing_to_change`. The review counts refresh rows with no changes under the selected
+  `leftOut` count and the apply agree; it stays `applied` '' as an exclusion leaves it. One
+  that had a change then but none now (the book took it since, or no longer has what it was
+  found by) is `skipped` / `nothing_to_change`, as a match or repick item with nothing to
+  change is (server#355), so the review says why; `apply_done` ends at `apply_total` either
+  way. An item recorded before 0070 (`unchanged` '') is planned as before. The review counts refresh rows with no changes under the selected
   scope (a healed recorded match counts as a change) as left out (`picksForScope`'s
   `leftOut`, `applyCount(run, picks, leftOut)`) and never sends them, reading all confident
   pages with a separate `useAllMatchRunItems` query (200 per page, no focus refetch)

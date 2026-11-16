@@ -798,31 +798,3 @@ func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 		t.Fatalf("none read, none there = %+v, want it written", a)
 	}
 }
-
-// TestDropApplyItems: an apply's total drops by n at once, never below what it
-// has done; n <= 0 writes nothing.
-func TestDropApplyItems(t *testing.T) {
-	t.Parallel()
-	c, ctx := newTestCatalog(t)
-	id, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeRefresh, Total: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := c.FinishMatching(ctx, id, MatchReady, ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.BeginApply(ctx, id, "fill", 10); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.db.ExecContext(ctx, `UPDATE match_runs SET apply_done = 4 WHERE id = ?`, id); err != nil {
-		t.Fatal(err)
-	}
-	for _, step := range []struct{ n, want int }{{0, 10}, {3, 7}, {5, 4}} {
-		if err := c.DropApplyItems(ctx, id, step.n); err != nil {
-			t.Fatal(err)
-		}
-		if r, err := c.GetMatchRun(ctx, id); err != nil || r.ApplyTotal != step.want || r.ApplyDone != 4 {
-			t.Fatalf("drop %d: run %+v %v, want total %d", step.n, r, err, step.want)
-		}
-	}
-}

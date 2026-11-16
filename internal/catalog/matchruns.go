@@ -250,23 +250,6 @@ func (c *Catalog) MarkMatchItem(ctx context.Context, runID, itemID int64, applie
 	})
 }
 
-// DropApplyItems leaves n items out of a working apply: its total counts n
-// fewer (never below what it has done), and the items are not marked (still
-// pending, as an exclusion leaves them). A refresh's items that had a change
-// under the scope when recorded but have none now (server#332), counted up and
-// dropped in batches, so the apply ends at its total without the console
-// excluding each such item.
-func (c *Catalog) DropApplyItems(ctx context.Context, runID int64, n int) error {
-	if n <= 0 {
-		return nil
-	}
-	return c.db.WithTx(ctx, "DropApplyItems", func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			`UPDATE match_runs SET apply_total = max(apply_total - ?, apply_done) WHERE id = ?`, n, runID)
-		return err
-	})
-}
-
 // FinishApply ends an apply: applied, or (cancelled) back to ready, its applied
 // items marked, so the rest can be applied later.
 func (c *Catalog) FinishApply(ctx context.Context, runID int64, cancelled bool) error {
