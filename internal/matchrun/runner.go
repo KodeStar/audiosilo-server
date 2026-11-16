@@ -734,15 +734,16 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 			switch {
 			case mode != catalog.MatchModeMatch:
 				// The book's own match, healed or its identifiers recorded
-				// (planRefresh, planFor's repick): kept how it was made, and
-				// only while it is still the one read here, so a match made by
-				// hand meanwhile stays (BookEdit.MatchIf).
+				// (planRefresh, planFor's repick): kept how it was made.
 				how = st.Anchor.How
-				was := st.Anchor
-				edit.MatchIf = &was
 			case it.Outcome == catalog.OutcomeAuto:
 				how = catalog.MatchHowAuto
 			}
+			// Only while the book's match is still the one read here (none, for
+			// a match item: matchedSince): a match made by hand meanwhile stays
+			// with its values, and the whole edit is skipped (BookEdit.MatchIf).
+			was := st.Anchor
+			edit.MatchIf = &was
 			m := *w.Anchor
 			m.How, m.RunID = how, run.ID
 			edit.Match = &m
@@ -753,6 +754,9 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 		if err := r.cat.EditBook(ctx, it.LibraryID, it.Path, edit); err != nil {
 			if errors.Is(err, catalog.ErrNotFound) {
 				return catalog.ItemSkipped, "book_gone"
+			}
+			if errors.Is(err, catalog.ErrMatchedSince) {
+				return catalog.ItemSkipped, "matched_since"
 			}
 			if ctx.Err() == nil {
 				r.log.Warn("match apply edit failed", "library", it.LibraryID, "path", it.Path, "err", err)

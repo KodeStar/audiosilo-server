@@ -808,9 +808,11 @@ type BookEdit struct {
 	// MatchIf, beside a Match naming a work, writes it only while the book's
 	// recorded match is still this one (its work, recording and offered
 	// identifiers; a zero MatchIf: none recorded), checked in the edit's
-	// transaction; else the match is left as it is and the rest of the edit
-	// applies. A run's bookkeeping of a match it read (a refresh's heal or new
-	// identifier, a repick's ASIN), so a match made by hand meanwhile stays.
+	// transaction; else nothing of the edit is written and EditBook returns
+	// ErrMatchedSince. A run's bookkeeping of a match it read (a refresh's heal
+	// or new identifier, a repick's ASIN, a match item's new match), so a match
+	// made by hand meanwhile stays, and so do its values: an ASIN taken from the
+	// old match would outrank it (server#354).
 	MatchIf *MatchAnchor
 	Source  string
 	UserID  int64
@@ -888,7 +890,8 @@ func (e BookEdit) normalize() (BookEdit, error) {
 // for a revert) and the books row, its chapters and its FTS row are rebuilt, all in
 // one transaction. ErrNotFound when no book is indexed at the path.
 // An Unlink returns ErrMatchRunBusy while a match run that covers the book's
-// library (or every library) is applying.
+// library (or every library) is applying; an edit whose MatchIf no longer holds
+// returns ErrMatchedSince, having written nothing.
 func (c *Catalog) EditBook(ctx context.Context, libraryID int64, path string, edit BookEdit) error {
 	edit, err := edit.normalize()
 	if err != nil {

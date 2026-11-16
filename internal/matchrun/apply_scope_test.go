@@ -195,7 +195,9 @@ func TestRepickRecordsTheNewASINAsOffered(t *testing.T) {
 
 // TestRefreshHealLeavesAHandMatchMadeMeanwhile: a refresh's identifier fill
 // records its match only while the book's match is still the one the apply
-// read: one made by hand between the read and the write stays.
+// read: one made by hand between the read and the write stays, and so does the
+// rest of the book: the old match's ASIN would outrank the hand match
+// (server#354). The item is skipped as matched_since.
 func TestRefreshHealLeavesAHandMatchMadeMeanwhile(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
@@ -222,5 +224,49 @@ func TestRefreshHealLeavesAHandMatchMadeMeanwhile(t *testing.T) {
 	e.applyAndWait(t, run, ScopeFill)
 	if a := e.anchorOf(t, path); a.WorkID != "hand-work" || a.RecordingID != "hand-rec" {
 		t.Fatalf("anchor = %+v, want the hand match kept", a)
+	}
+	if a := e.field(t, path, catalog.FieldASIN); a.Value != "" {
+		t.Fatalf("asin = %+v, want the old match's ASIN left out", a)
+	}
+	if it := e.items(t, run, "")[0]; it.Applied != catalog.ItemSkipped || it.Detail != "matched_since" {
+		t.Fatalf("item = %+v, want skipped matched_since", it.MatchRunItem)
+	}
+}
+
+// TestMatchApplyLeavesAHandMatchMadeMeanwhile: a match item records its match
+// only while the book still has none, checked in the edit's transaction: one
+// made by hand after the apply read the book stays with its values, and the
+// item is skipped as matched_since.
+func TestMatchApplyLeavesAHandMatchMadeMeanwhile(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	const path = "A/One"
+	e.book(t, path, "One", "", nil)
+	e.matcher.byTitle["One"] = []meta.MatchCandidate{cand("the-martian", 97, "")}
+	run := e.start(t, catalog.MatchModeMatch, "")
+	if run.Counts.Auto != 1 {
+		t.Fatalf("run = %+v", run)
+	}
+	e.runner.beforeEdit = func(*catalog.MatchRunItem) {
+		if err := e.cat.EditBook(ctx, e.lib, path, catalog.BookEdit{
+			Set:   map[string]string{catalog.FieldTitle: "Hand Title"},
+			Match: &catalog.MatchAnchor{WorkID: "hand-work", RecordingID: "hand-rec"}, Source: catalog.SourceCommunity,
+		}); err != nil {
+			t.Error(err)
+		}
+	}
+	e.applyAndWait(t, run, ScopeOverwrite)
+	if a := e.anchorOf(t, path); a.WorkID != "hand-work" || a.How != catalog.MatchHowAccepted {
+		t.Fatalf("anchor = %+v, want the hand match kept", a)
+	}
+	if f := e.field(t, path, catalog.FieldTitle); f.Value != "Hand Title" {
+		t.Fatalf("title = %+v, want the hand match's", f)
+	}
+	if f := e.field(t, path, catalog.FieldASIN); f.Value != "" {
+		t.Fatalf("asin = %+v, want the run's left out", f)
+	}
+	if it := e.items(t, run, catalog.OutcomeAuto)[0]; it.Applied != catalog.ItemSkipped || it.Detail != "matched_since" {
+		t.Fatalf("item = %+v, want skipped matched_since", it.MatchRunItem)
 	}
 }
