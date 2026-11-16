@@ -62,13 +62,14 @@ func SeriesNames(rails []MetaSeries) []string {
 // whose work id the catalog doesn't know (WorkID "") read from the cache by its
 // identifiers (CachedWorkID: memory, else the store; never upstream), once per
 // identifiers: a book in several series is a candidate in each. requested is
-// the book env is for. env and books are never modified.
+// the book env is for, placed on env's work's entry whatever its own work id
+// (never looked up). env and books are never modified.
 func (s *Service) PlaceOwned(ctx context.Context, env *Enrichment, requested MetaLocal, books []LocalBook) []MetaSeries {
 	cands := slices.Clone(books)
 	type idents struct{ asin, isbn string }
 	works := map[idents]string{}
 	for i := range cands {
-		if cands[i].WorkID != "" {
+		if cands[i].WorkID != "" || cands[i].MetaLocal == requested {
 			continue
 		}
 		k := idents{cands[i].ASIN, cands[i].ISBN}
@@ -123,11 +124,9 @@ func ParseSpan(s string) (start, end float64, ok bool) {
 // pick is Local by pickRank and the rest, in that order, LocalOthers, but for
 // a copy of the pick (otherRecordings). An entry only ever lists recordings of
 // its own work: rule 1's entry lists currentWork's books but requested and its
-// copies, so no book is on two entries. When requested's recorded match (its
-// WorkID, as Book.work_id) names another work than currentWork, /item's
-// other_recordings are that work's and the two differ until /meta follows the
-// recorded match. books are in preference order (library sort order, then
-// path, as catalog.SeriesBooks returns them), the pick's last tiebreak.
+// copies, whatever requested's own WorkID, so no book is on two entries.
+// books are in preference order (library sort order, then path, as
+// catalog.SeriesBooks returns them), the pick's last tiebreak.
 func PlaceLocal(rails []MetaSeries, currentWork string, requested MetaLocal, books []LocalBook) []MetaSeries {
 	if len(rails) == 0 {
 		return rails
