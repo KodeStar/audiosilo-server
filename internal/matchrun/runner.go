@@ -593,7 +593,7 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 			// would be with no match to fall back on, with nothing to apply
 			// (server#342).
 			item.Outcome, item.Detail, item.Score = catalog.OutcomeNone, DetailIdentifierUnknown, 0
-			item.Proposal, item.Unchanged = catalog.MatchProposal{}, nil
+			item.Proposal, item.Unchanged = catalog.MatchProposal{Values: map[string]string{}}, nil
 			return item, nil
 		}
 		return nil, nil
