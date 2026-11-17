@@ -4178,7 +4178,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   while the folder step is skipped, else `[]`) `library.MountHints` (Linux
   `/proc/self/mountinfo`: folders, not system paths or pseudo filesystems, not the data folder, sorted,
   at most 20; `[]` elsewhere). `PUT /admin/setup` `{finished?, dismissed?, steps?}` merges (one writer
-  transaction), returns the state, audited `settings.setup`; 400 `invalid_setup_step`
+  transaction), returns the state, audited `settings.setup`; the patch that finishes the flow also marks
+  every step still without an outcome (server#183): `folder` done when a books library exists, the rest
+  skipped, so the console sends only the step it leaves; 400 `invalid_setup_step`
   (`catalog.ErrInvalidSetupStep`). **Preview** `POST /admin/setup/preview` `{root, ignore_patterns?}` ->
   `{root, counts: {audio_files, folder_books, file_books, capped}, same_root, samples: [{rel_path, tags,
   path, abs}], blanks: {tags, path}, suggested}`: checks the folder as the folder picker does
@@ -4191,10 +4193,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   its ffprobe via `metadata.ExtractContext` and left out, fewer samples, `capped` untouched) 8 samples spread evenly over the path-sorted books as a scan reads names (`setNames`: tags over
   `DeriveFromPath`, `readABS`; no fingerprint, chapters or covers), and names each both ways with
   `catalog.ResolveScanned` (the stored book's own `bookLayers.scannedFields`, so preview and library never
-  disagree). `blanks` counts, per source on its own, empty title/author/series and a missing position
+  disagree): `tags` as a tags-first library shows it, `path` from the folders alone (the names a scan reads
+  with no tags, then path-first; no tag fills what they leave, so a tag's narrator or author never shows
+  under "From folders", server#271). `blanks` counts, per source on its own, empty title/author/series and a missing position
   beside a series (never the narrator: both modes take it from the tags): the tags before any path
-  fallback (a generic title counting as none), the folders as `metadata.FromPathLayout` reads them; the
-  columns stay the resolved names, narrator included.
+  fallback (a generic title counting as none), the folders as `metadata.FromPathLayout` reads them.
   `suggested` is the source with fewer, the tags on a tie. Read-only: never a file's contents, never an
   index write (in the audit test's `notAudited`).
   **Account step** (server#369, the first step): the console renames the admin with `PATCH
@@ -4247,4 +4250,6 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   region was ever set here, in config.yaml or by the environment (`server_state`
   `metadata_region_chosen`, written by any settings save carrying `metadata.region`, "No preference"
   included); the metadata step preselects the browser's nearest store (`lib/nearest-region.ts`: languages,
-  then time zone) and Settings offers it (`RegionSuggestion`).
+  then time zone; a language placing the US store gives way to a zone placing another, server#391) and
+  Settings offers it (`RegionSuggestion`). With nothing to place a store the step preselects none and
+  saves no region the admin didn't touch, so the server stays "never chosen".

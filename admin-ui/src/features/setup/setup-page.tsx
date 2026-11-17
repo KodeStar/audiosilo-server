@@ -3,7 +3,6 @@ import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Check, CircleDashed } from 'lucide-react';
-import { api } from '@/api/client';
 import {
   keys,
   saveSetup,
@@ -34,7 +33,6 @@ import { FolderStep } from './folder-step';
 import { NamingStep } from './naming-step';
 import { BackupsStep, MetadataStep, ReachStep } from './settings-steps';
 import {
-  finishMarks,
   folderLost,
   hasBookLibrary,
   nextStep,
@@ -170,17 +168,10 @@ function Flow({
   const leave = async (mark: SetupMark) => {
     const to = nextStep(current, state, draftNow.current);
     const finishing = to === null && !state.finished;
-    if (finishing) {
-      // The marks as the server has them now, not as this tab last read them:
-      // a step another tab recorded since must not be marked skipped over it.
-      const fresh = await qc.fetchQuery({ queryKey: keys.setup, queryFn: api.setup });
-      await saveSetup(qc, {
-        steps: finishMarks(fresh.state.steps, current, mark, hasBookLibrary(props.libraries)),
-        finished: true,
-      });
-    } else {
-      await saveSetup(qc, { steps: { [current]: mark } });
-    }
+    // Finishing sends only this step's mark: the server marks the steps left
+    // without one in the same write (the folder step done once a books library
+    // exists, the rest skipped), so a step another tab recorded keeps its own.
+    await saveSetup(qc, { steps: { [current]: mark }, ...(finishing ? { finished: true } : {}) });
     if (to) return go(to);
     if (finishing) {
       // A restart-only choice (a local metadata copy, the HTTPS mode) is named

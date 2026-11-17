@@ -20,6 +20,7 @@ import { ScheduleInput } from '@/features/settings/schedule-input';
 import { errorMessage } from '@/lib/errors';
 import { browserNearestRegion } from '@/lib/nearest-region';
 import { regionOptions } from '@/lib/regions';
+import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import {
   addressMismatch,
@@ -70,7 +71,9 @@ function useCreateDraftLibrary({ draft, setDraft, onCreated }: StepProps) {
  * created, so its first scan and first matches use them; Skip keeps the
  * settings as they are and still creates it. A marketplace never chosen starts
  * at the one nearest the admin (server#192), and Continue saves it even when
- * it is the saved value, so it counts as chosen.
+ * it is the saved value, so it counts as chosen; with nothing to place one
+ * (nearestRegion null) the field keeps the saved value and only an edit saves
+ * it (server#391).
  */
 export function MetadataStep(props: StepProps) {
   const { settings, leave, back, last, draft } = props;
@@ -91,7 +94,9 @@ export function MetadataStep(props: StepProps) {
     // marketplace only while the switch shows it.
     const draft = m.available ? { enabled, mode } : { mode };
     let patch = unlockedPatch(settings, 'metadata', enabled ? { ...draft, region } : draft);
-    if (enabled && offered) patch = { ...patch, metadata: { ...patch?.metadata, region } };
+    if (enabled && suggested) {
+      patch = { ...patch, metadata: { ...patch?.metadata, region } };
+    }
     await save(patch);
     await create();
     await leave('done');
@@ -189,16 +194,18 @@ export function MetadataStep(props: StepProps) {
 }
 
 /**
- * The reach step: how people reach the server. The address this browser uses, offered
- * as the public or the home address (pairing QR codes are built from them); a
- * reverse proxy whose address isn't trusted yet, offered for trusted_proxies;
- * and the HTTPS mode with what it means for phones (restart settings, marked).
+ * The reach step: how people reach the server. Its name, as the apps and
+ * invites show it (server#184); the address this browser uses, offered as the
+ * public or the home address (pairing QR codes are built from them); a reverse
+ * proxy whose address isn't trusted yet, offered for trusted_proxies; and the
+ * HTTPS mode with what it means for phones (restart settings, marked).
  */
 export function ReachStep({ env, settings, leave, back, last }: StepProps) {
   const { t } = useTranslation();
   const save = useSaveStepSettings();
   const g = settings.general;
   const n = settings.network;
+  const [name, setName] = useState(g.name);
   const [publicUrl, setPublicUrl] = useState(g.public_url);
   const [lanUrl, setLanUrl] = useState(g.lan_url);
   const [proxies, setProxies] = useState(n.trusted_proxies);
@@ -234,7 +241,7 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
     try {
       await save(
         mergePatches(
-          unlockedPatch(settings, 'general', { public_url: pub, lan_url: lan }),
+          unlockedPatch(settings, 'general', { name: name.trim(), public_url: pub, lan_url: lan }),
           unlockedPatch(settings, 'network', { trusted_proxies: proxies, tls_home_http: homeHttp }),
         ),
       );
@@ -287,6 +294,24 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
         </div>
 
         <div className="divide-y">
+          <SettingRow
+            title={t('settings.general.name')}
+            badges={<SettingBadges settings={settings} id="general.name" />}
+            htmlFor="setup-server-name"
+            description={t('settings.general.nameBody')}
+            descriptionId="setup-server-name-desc"
+          >
+            <Input
+              id="setup-server-name"
+              className="w-full sm:w-[320px]"
+              autoComplete="off"
+              placeholder={DEFAULT_SERVER_NAME}
+              value={name}
+              disabled={!editable(settings, 'general.name')}
+              onChange={(e) => setName(e.target.value)}
+              aria-describedby="setup-server-name-desc"
+            />
+          </SettingRow>
           <SettingRow
             title={t('settings.general.public_url')}
             badges={<SettingBadges settings={settings} id="general.public_url" />}

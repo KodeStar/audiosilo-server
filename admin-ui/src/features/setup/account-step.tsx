@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { KeyRound } from 'lucide-react';
+import { CircleCheck, KeyRound } from 'lucide-react';
 import { ApiError, WRONG_CURRENT_PASSWORD, api } from '@/api/client';
 import { invalidatePeople, notePasswordChosen } from '@/api/hooks';
 import { MIN_PASSWORD } from '@/api/types';
@@ -24,7 +24,9 @@ const USERNAME_CODES = ['username_taken', 'username_required'];
  * password through the account's own change (which asks for the current one and
  * keeps this session). While the admin still has the password the server
  * printed in its log (env.printed_password) a new one is asked for; otherwise
- * it is optional. Skip keeps both.
+ * it is optional. Skip keeps both. A password changed when the rename is then
+ * refused stays said (server#391), and Skip then keeps the name only: the step
+ * is done.
  */
 export function AccountStep({ env, leave, back, last }: StepProps) {
   const { t } = useTranslation();
@@ -39,6 +41,8 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
     current: '',
   });
   const [errors, setErrors] = useState<Partial<Record<AccountField, string>>>({});
+  // The password changed on this visit, whatever happens to the name after it.
+  const [passwordChanged, setPasswordChanged] = useState(false);
   const set = (field: AccountField) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setDraft((d) => ({ ...d, [field]: e.target.value }));
   const fail = (field: AccountField, message: string): never => {
@@ -68,6 +72,7 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
       // Done: a retry (the rename's refusal below) doesn't send it again, and
       // the step (now, or opened again with Back) no longer asks for one.
       notePasswordChosen(qc);
+      setPasswordChanged(true);
       setDraft((d) => ({ ...d, password: '', repeat: '', current: '' }));
     }
     if (plan.rename) {
@@ -108,7 +113,16 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
   return (
     <>
       <div className="flex max-w-[460px] flex-col gap-5">
-        {printed ? (
+        {passwordChanged ? (
+          <Notice
+            tone="info"
+            icon={CircleCheck}
+            role="status"
+            title={t('setup.account.passwordChanged')}
+          >
+            {t('setup.account.passwordChangedBody', { name: me.username })}
+          </Notice>
+        ) : printed ? (
           <Notice tone="warn" icon={KeyRound} role="status" title={t('setup.account.printed')}>
             {t('setup.account.printedBody')}
           </Notice>
@@ -147,10 +161,13 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
       </div>
       <StepFooter
         back={back}
-        onSkip={() => leave('skipped')}
+        // With the password changed the step is done: Skip keeps only the name.
+        onSkip={() => leave(passwordChanged ? 'done' : 'skipped')}
         onContinue={onContinue}
         last={last}
-        skipLabel={t('setup.account.keep', { name: me.username })}
+        skipLabel={t(passwordChanged ? 'setup.account.keepName' : 'setup.account.keep', {
+          name: me.username,
+        })}
       />
     </>
   );

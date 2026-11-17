@@ -10,6 +10,7 @@ import {
   invalidateAfterSourceChange,
   invalidateLibraries,
   invalidatePeople,
+  keys,
   noteScanStarted,
   useDirs,
   useLibraries,
@@ -112,7 +113,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   const [browsing, setBrowsing] = useState(false);
   // A library config.yaml declares keeps its name and folder there (the server
   // refuses changing them, 409 config_library): shown, not editable.
-  const setup = useSetup().data;
+  const setup = useSetup({ locks: true }).data;
   const fromConfig = !!library && configLibrary(setup, library.name);
   const current = splitSchedule(library?.scan_schedule ?? '');
   const form = useForm<Values>({
@@ -129,6 +130,17 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
     },
   });
   const { errors, isSubmitting } = form.formState;
+  // A lock learned with the form open (a restart since the setup was read: the
+  // 409 below, or the next read) puts the stored name and folder back. They are
+  // shown, not edited, so a refused edit must not stay in the fields, or in the
+  // toast of the save that follows.
+  const lockedName = fromConfig ? library?.name : undefined;
+  const lockedRoot = fromConfig ? library?.root : undefined;
+  useEffect(() => {
+    if (lockedName === undefined || lockedRoot === undefined) return;
+    form.setValue('name', lockedName);
+    form.setValue('folder', lockedRoot);
+  }, [lockedName, lockedRoot, form]);
 
   /**
    * Grants a new library to every listener: how many grants failed, or none
@@ -209,6 +221,12 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       });
       onDone();
     } catch (err) {
+      // The config declares it, which the console's copy of the setup didn't
+      // know yet (a restart since): read it again so the form and card lock.
+      if (err instanceof ApiError && err.code === 'config_library') {
+        // exact: the folder previews share the key's prefix and haven't changed.
+        void qc.invalidateQueries({ queryKey: keys.setup, exact: true });
+      }
       const field = (err instanceof ApiError && err.code && FIELD_BY_CODE[err.code]) || 'folder';
       form.setError(field, { message: errorMessage(err, t) });
     }
@@ -422,8 +440,11 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   );
 }
 
-/** The server's folders, one level at a time, starting at `start` ("" = the filesystem root). */
-function ServerFolderPicker({
+/**
+ * The server's folders, one level at a time, starting at `start` ("" = the
+ * filesystem root). Also the setup flow's folder step's Browse.
+ */
+export function ServerFolderPicker({
   start,
   selected,
   onChoose,

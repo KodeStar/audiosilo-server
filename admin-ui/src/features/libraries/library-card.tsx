@@ -73,7 +73,7 @@ export function LibraryCard({
   const queued = !running && !!l.scan.queued;
   // A podcast library has no book tooling (detection, export).
   const isPodcasts = l.kind === 'podcasts';
-  const fromConfig = configLibrary(useSetup().data, l.name);
+  const fromConfig = configLibrary(useSetup({ locks: true }).data, l.name);
 
   // Personal, each copy is its own row with its path, tags and description: a
   // file for the admin's own scripts (the menu warns before it is made), never

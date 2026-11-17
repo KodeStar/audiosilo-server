@@ -1,5 +1,12 @@
 import { ApiError } from '@/api/client';
-import type { PreviewSample, SetupMarks, SetupRequest, SetupState, SetupStepId } from '@/api/types';
+import {
+  SETUP_STEPS,
+  type PreviewSample,
+  type SetupMarks,
+  type SetupRequest,
+  type SetupState,
+  type SetupStepId,
+} from '@/api/types';
 import {
   idle,
   libraries,
@@ -13,7 +20,6 @@ import {
   booksScanning,
   compareField,
   disagreements,
-  finishMarks,
   defaultLibraryName,
   folderErrorKey,
   isHomeHost,
@@ -165,41 +171,13 @@ describe('nextStep and previousStep', () => {
 describe('the Finish setting up card', () => {
   const skipped = { folder: 'done', abs: 'skipped', bridge: 'skipped' } as const;
 
-  it('Finish marks every step without a mark as skipped, so the card lists them', () => {
-    const marks = { account: 'done', folder: 'skipped', naming: 'done', reach: 'done' } as const;
-    const sent = finishMarks(marks, 'phone', 'done', false);
-    expect(sent).toEqual({
-      metadata: 'skipped',
-      abs: 'skipped',
-      backups: 'skipped',
-      bridge: 'skipped',
-      phone: 'done',
-    });
-    const after = state({ finished: true, steps: { ...marks, ...sent } });
-    expect(skippedSteps(after, false)).toEqual(['folder', 'metadata', 'abs', 'backups', 'bridge']);
-    // A stepper jump straight to the end leaves even the account and folder on the card.
-    expect(
-      skippedSteps(
-        state({ finished: true, steps: finishMarks({}, 'phone', 'skipped', false) }),
-        false,
-      ),
-    ).toEqual([
-      'account',
-      'folder',
-      'naming',
-      'metadata',
-      'reach',
-      'abs',
-      'backups',
-      'bridge',
-      'phone',
-    ]);
+  it('lists every skipped step in flow order, the account and folder included', () => {
+    // As the server leaves a flow finished from a stepper jump to the end.
+    const all = Object.fromEntries(SETUP_STEPS.map((id) => [id, 'skipped'])) as SetupMarks;
+    expect(skippedSteps(state({ finished: true, steps: all }), false)).toEqual([...SETUP_STEPS]);
   });
 
-  it('a library on the server satisfies the folder step: Finish marks it done, the card leaves it out', () => {
-    expect(finishMarks({}, 'bridge', 'done', true).folder).toBe('done');
-    // Its own mark stands; only an unmarked step is filled in.
-    expect(finishMarks({ folder: 'skipped' }, 'bridge', 'done', true).folder).toBeUndefined();
+  it('a library on the server satisfies the folder step: the card leaves it out', () => {
     const s = state({ finished: true, steps: { folder: 'skipped', abs: 'skipped' } });
     expect(skippedSteps(s, true)).toEqual(['abs']);
     expect(skippedSteps(s, false)).toEqual(['folder', 'abs']);

@@ -66,7 +66,12 @@ func readSetupState(ctx context.Context, q querier) (SetupState, error) {
 
 // UpdateSetupState merges p into the flow's progress in one transaction and
 // returns what it stored. ErrInvalidSetupStep (nothing stored) for a step id or
-// outcome it doesn't know.
+// outcome it doesn't know. The patch that finishes the flow also marks every
+// step still without an outcome (passed over in the stepper, or never reached;
+// a step another tab recorded keeps its own): the folder step done when the
+// server has a books library, whoever added it, the rest skipped, so the
+// Overview card lists what is left (server#183: the console sends only the
+// step it leaves).
 func (c *Catalog) UpdateSetupState(ctx context.Context, p SetupPatch) (SetupState, error) {
 	for id, outcome := range p.Steps {
 		if !slices.Contains(SetupSteps, id) {
@@ -82,6 +87,7 @@ func (c *Catalog) UpdateSetupState(ctx context.Context, p SetupPatch) (SetupStat
 		if st, err = readSetupState(ctx, tx); err != nil {
 			return err
 		}
+		finishing := p.Finished != nil && *p.Finished && !st.Finished
 		if p.Finished != nil {
 			st.Finished = *p.Finished
 		}
@@ -89,12 +95,38 @@ func (c *Catalog) UpdateSetupState(ctx context.Context, p SetupPatch) (SetupStat
 			st.Dismissed = *p.Dismissed
 		}
 		maps.Copy(st.Steps, p.Steps)
+		if finishing {
+			if err := fillUnmarkedSteps(ctx, tx, st.Steps); err != nil {
+				return err
+			}
+		}
 		return putServerState(ctx, tx, setupKey, st, c.stamp())
 	})
 	if err != nil {
 		return SetupState{}, err
 	}
 	return st, nil
+}
+
+// fillUnmarkedSteps gives every step in steps without an outcome the one
+// finishing the flow records: done for the folder step once a books library
+// exists (a podcast library holds no books), skipped for the rest.
+func fillUnmarkedSteps(ctx context.Context, q querier, steps map[string]string) error {
+	var hasBooks bool
+	if err := q.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM libraries WHERE kind = ?)`, KindBooks).Scan(&hasBooks); err != nil {
+		return fmt.Errorf("books library: %w", err)
+	}
+	for _, id := range SetupSteps {
+		if steps[id] != "" {
+			continue
+		}
+		steps[id] = SetupStepSkipped
+		if id == "folder" && hasBooks {
+			steps[id] = SetupStepDone
+		}
+	}
+	return nil
 }
 
 // CheckLibraryRoot is library create's root check for a books library at root,

@@ -214,8 +214,10 @@ function SampleTable({
         {t('setup.naming.summary', {
           tags: formatNumber(p.blanks.tags, lang),
           path: formatNumber(p.blanks.path, lang),
-        })}{' '}
-        {t('setup.naming.differ', { count: differ, formatted: formatNumber(differ, lang) })}
+        })}
+        {differ > 0
+          ? ` ${t('setup.naming.differ', { count: differ, formatted: formatNumber(differ, lang) })}`
+          : null}
       </p>
       <ul className="flex flex-col gap-3" aria-label={t('setup.naming.samples')}>
         {p.samples.map((s) => (

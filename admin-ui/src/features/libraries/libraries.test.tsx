@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
@@ -15,7 +15,10 @@ function routes(over: Record<string, MockRoute> = {}) {
 }
 
 beforeEach(() => setToken('stored'));
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 describe('libraries', () => {
   it.each([0, 1, 4])('counts %i podcast episodes', async (count) => {
@@ -836,11 +839,14 @@ describe('libraries, 2.4.0 fixes', () => {
   });
 
   it("lets a library the console added be renamed, and puts the server's config refusal on the name", async () => {
-    mockFetch(
+    // The console read the setup before a restart made the config declare Fiction.
+    let declared: string[] = [];
+    const calls = mockFetch(
       routes({
-        'PATCH /admin/libraries/1': {
-          status: 409,
-          body: { error: 'declared in config', code: 'config_library' },
+        'GET /admin/setup': () => ({ body: setupEnvelope({}, { config_libraries: declared }) }),
+        'PATCH /admin/libraries/1': () => {
+          declared = ['Fiction'];
+          return { status: 409, body: { error: 'declared in config', code: 'config_library' } };
         },
       }),
     );
@@ -857,6 +863,37 @@ describe('libraries, 2.4.0 fixes', () => {
     await user.type(name, 'Novels');
     await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(name).toHaveAttribute('aria-invalid', 'true'));
-    expect(within(dialog).getByText(/set in config.yaml/)).toBeInTheDocument();
+    expect(within(dialog).getAllByText(/set in config.yaml/)[0]).toBeInTheDocument();
+    // The setup is read again (server#197): the name locks, and so does the card.
+    await waitFor(() => expect(name).toHaveAttribute('readonly'));
+    // The refused name doesn't stay in a field that can no longer be edited.
+    await waitFor(() => expect(name).toHaveValue('Fiction'));
+    expect(calls.filter((c) => c.path === '/admin/setup').length).toBeGreaterThan(1);
+    await user.keyboard('{Escape}');
+    expect(await within(fiction).findByText('From your config')).toBeInTheDocument();
+  });
+
+  it('reads the config-declared libraries again after a minute, on a new visit (server#197)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    let declared: string[] = [];
+    const calls = mockFetch(
+      routes({
+        'GET /admin/setup': () => ({ body: setupEnvelope({}, { config_libraries: declared }) }),
+      }),
+    );
+    const { router } = renderApp('/library/libraries');
+    const fiction = await screen.findByRole('listitem', { name: 'Fiction' });
+    expect(within(fiction).queryByText('From your config')).toBeNull();
+    const reads = () => calls.filter((c) => c.path === '/admin/setup').length;
+    const first = reads();
+    // A restart with Fiction in config.yaml; the admin comes back to the page later.
+    declared = ['Fiction'];
+    act(() => router.history.push('/'));
+    await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Fiction' })).toBeNull());
+    vi.setSystemTime(Date.now() + 61_000);
+    act(() => router.history.push('/library/libraries'));
+    const again = await screen.findByRole('listitem', { name: 'Fiction' });
+    expect(await within(again).findByText('From your config')).toBeInTheDocument();
+    expect(reads()).toBeGreaterThan(first);
   });
 });

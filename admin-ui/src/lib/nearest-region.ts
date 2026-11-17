@@ -2,8 +2,9 @@ import { MATCH_REGIONS } from '@/api/types';
 
 // The Audible marketplace nearest the admin (server#192), for a server whose
 // metadata.region was never chosen (settings metadata.region_chosen false): from
-// the region of the browser's languages in order, then its time zone, else the
-// US store. Only ever offered: nothing is saved until the admin saves.
+// the region of the browser's languages in order, then its time zone, else none
+// (server#391: no guess, so nothing is saved as if chosen). Only ever offered:
+// nothing is saved until the admin saves.
 
 export type Region = (typeof MATCH_REGIONS)[number];
 
@@ -160,18 +161,24 @@ export function regionFromTimeZone(zone: string): Region | null {
 
 /**
  * The marketplace nearest the admin: the first of `languages` whose region we
- * place, else the time zone's, else the US store.
+ * place, else the time zone's, else null (nothing to go on). A language that
+ * places the US store gives way to a time zone placing another (server#391):
+ * en-US is many a browser's language far from the US, the clock rarely lies.
  */
-export function nearestRegion(languages: readonly string[], timeZone: string | undefined): Region {
+export function nearestRegion(
+  languages: readonly string[],
+  timeZone: string | undefined,
+): Region | null {
+  const zone = (timeZone && regionFromTimeZone(timeZone)) || null;
   for (const tag of languages) {
     const r = regionFromLanguage(tag);
-    if (r) return r;
+    if (r) return r === 'us' && zone ? zone : r;
   }
-  return (timeZone && regionFromTimeZone(timeZone)) || 'us';
+  return zone;
 }
 
 /** nearestRegion from this browser's languages and time zone. */
-export function browserNearestRegion(): Region {
+export function browserNearestRegion(): Region | null {
   let zone: string | undefined;
   try {
     zone = Intl.DateTimeFormat().resolvedOptions().timeZone;

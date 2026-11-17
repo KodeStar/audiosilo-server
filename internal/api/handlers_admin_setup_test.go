@@ -155,8 +155,9 @@ func TestAdminSetupPut(t *testing.T) {
 	if err := json.Unmarshal([]byte(b), &st); err != nil {
 		t.Fatal(err)
 	}
-	if !st.Finished || st.Dismissed || len(st.Steps) != 3 || st.Steps["folder"] != "done" ||
-		st.Steps["naming"] != "done" || st.Steps["bridge"] != "skipped" {
+	// Finishing marks the steps it left unmarked skipped (server#183): all nine.
+	if !st.Finished || st.Dismissed || len(st.Steps) != len(catalog.SetupSteps) || st.Steps["folder"] != "done" ||
+		st.Steps["naming"] != "done" || st.Steps["bridge"] != "skipped" || st.Steps["phone"] != "skipped" {
 		t.Errorf("merged state = %s", b)
 	}
 	events := settingsAudit(t, e)
@@ -181,7 +182,7 @@ func TestAdminSetupPut(t *testing.T) {
 			}
 		}
 	}
-	if got := setupStateOf(t, e); got.Dismissed || len(got.Steps) != 3 {
+	if got := setupStateOf(t, e); got.Dismissed || len(got.Steps) != len(catalog.SetupSteps) {
 		t.Errorf("a refused PUT stored something: %+v", got)
 	}
 	if got := len(settingsAudit(t, e)); got != 2 {
@@ -309,8 +310,10 @@ func TestAdminSetupPreviewTwoColumns(t *testing.T) {
 		t.Fatalf("samples = %s", b)
 	}
 	loose, filed := p.Samples[0], p.Samples[1]
+	// The folders' column is the folders alone: a loose file's has no author
+	// (server#271 ADMIN-06), where the tags' column has the tag's.
 	if loose.RelPath != "Loose.m4b" || loose.Tags.Title != "The Final Empire" || loose.Path.Title != "Loose" ||
-		loose.Tags.Author != "Brandon Sanderson" || loose.Path.Author != "Brandon Sanderson" {
+		loose.Tags.Author != "Brandon Sanderson" || loose.Path.Author != "" {
 		t.Errorf("loose sample = %+v", loose)
 	}
 	wantTags := catalog.ScannedNames{Title: "Unsouled", Author: "Will Wight", Series: "Some Series", Position: "3"}
@@ -358,7 +361,9 @@ func TestAdminSetupMountHintsWhileOpen(t *testing.T) {
 	if got := hints(); got != "/audiobooks" || reads.Load() != 1 {
 		t.Errorf("open flow: hints %q after %d reads, want /audiobooks read once", got, reads.Load())
 	}
-	if resp, body := e.do(t, "PUT", "/api/v1/admin/setup", adminTok, `{"finished":true}`); resp.StatusCode != http.StatusOK {
+	// Finished with the folder step done (finishing with no books library would
+	// mark it skipped, server#183, and keep the hints).
+	if resp, body := e.do(t, "PUT", "/api/v1/admin/setup", adminTok, `{"finished":true,"steps":{"folder":"done"}}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("PUT finished = %d %s", resp.StatusCode, body)
 	}
 	if got := hints(); got != "" || reads.Load() != 1 {

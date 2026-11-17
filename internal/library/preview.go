@@ -76,9 +76,9 @@ type Preview struct {
 	Samples []PreviewSample `json:"samples"`
 	// Blanks counts, over the samples, the names each source leaves empty on its
 	// own (blanks): the tags before any path fallback, and the folders as a
-	// library that prefers them reads them (metadata.FromPathLayout). The
-	// columns show the resolved names, so a source's blanks can be filled there
-	// by the other source.
+	// library that prefers them reads them (metadata.FromPathLayout). The tags'
+	// column shows the resolved names, so its blanks can be filled there by the
+	// folders; the folders' column fills none from the tags.
 	Blanks PreviewBlanks `json:"blanks"`
 	// Suggested is the metadata source with fewer blanks, the tags on a tie:
 	// catalog.MetadataFromTags or catalog.MetadataFromPath.
@@ -102,8 +102,9 @@ type PreviewBlanks struct {
 }
 
 // PreviewSample is one book named as a library that prefers its tags would
-// name it (Tags) and as one that prefers its folders would (Path). ABS is set
-// when its folder holds an Audiobookshelf metadata.json, which goes over both.
+// name it (Tags) and as its folders alone name it, before the tags fill what
+// they leave (Path). ABS is set when its folder holds an Audiobookshelf
+// metadata.json, which goes over both.
 type PreviewSample struct {
 	RelPath string               `json:"rel_path"`
 	Tags    catalog.ScannedNames `json:"tags"`
@@ -204,18 +205,25 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 }
 
 // previewSample reads b's names as a scan does and names it both ways, with
-// the names each source leaves empty on its own.
+// the names each source leaves empty on its own. The folders' side is the
+// folders alone, as a library that prefers them reads them before the tags fill
+// what they leave (a scan reading no tags: setNames with none), so the column
+// headed "From folders" never shows a tag's narrator or author (server#271
+// ADMIN-06); a metadata.json goes over both.
 func (s *Scanner) previewSample(ctx context.Context, lib catalog.Library, b *catalog.Book) (PreviewSample, PreviewBlanks) {
 	md, _ := metadata.ExtractContext(ctx, absOf(lib, primaryPath(b)), s.ffprobePath)
 	own := PreviewBlanks{Tags: blanks(tagNames(md)), Path: blanks(namesOf(metadata.FromPathLayout(b.RelPath, b.IsFolder)))}
+	folders := *b
+	setNames(&folders, nil)
 	setNames(b, md)
 	if b.IsFolder {
 		b.ABS.File, _ = s.readABS(lib, b.RelPath, b.ABS.Sig)
+		folders.ABS.File = b.ABS.File
 	}
 	return PreviewSample{
 		RelPath: b.RelPath,
 		Tags:    catalog.ResolveScanned(b, catalog.MetadataFromTags),
-		Path:    catalog.ResolveScanned(b, catalog.MetadataFromPath),
+		Path:    catalog.ResolveScanned(&folders, catalog.MetadataFromPath),
 		ABS:     b.ABS.File != nil,
 	}, own
 }

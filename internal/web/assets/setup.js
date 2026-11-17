@@ -15,6 +15,15 @@ function showError(msg) {
   m.classList.add("show");
 }
 
+// A server refusal as a sentence: its own words start lowercase
+// ("password must be at least 8 characters").
+function sentence(msg) {
+  const s = msg.trim();
+  if (!s) return "Setup failed.";
+  const first = s.charAt(0).toUpperCase() + s.slice(1);
+  return /[.!?]$/.test(first) ? first : first + ".";
+}
+
 $("setup-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("setup-msg").classList.remove("show");
@@ -31,7 +40,7 @@ $("setup-form").addEventListener("submit", async (e) => {
       }),
     });
     const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data.error || "Setup failed.");
+    if (!resp.ok) throw new Error(sentence(data.error || ""));
     $("setup-form").classList.add("hidden");
     $("setup-done").classList.remove("hidden");
   } catch (err) {

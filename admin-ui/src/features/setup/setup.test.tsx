@@ -1,13 +1,14 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getToken, setToken } from '@/api/token';
-import type {
-  AdminLibrary,
-  AdminSettings,
-  LibraryPreview,
-  SetupEnvelope,
-  SetupPatch,
-  SetupState,
+import {
+  SETUP_STEPS,
+  type AdminLibrary,
+  type AdminSettings,
+  type LibraryPreview,
+  type SetupEnvelope,
+  type SetupPatch,
+  type SetupState,
 } from '@/api/types';
 import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
 import {
@@ -29,7 +30,10 @@ import { signedInRoutes } from '@/test/routes';
 // the metadata step, a locked setting, and Finish.
 
 beforeEach(() => setToken('stored'));
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 const names = (o: Partial<LibraryPreview['samples'][number]['tags']> = {}) => ({
   title: '',
@@ -71,7 +75,11 @@ function flowRoutes(
     'GET /admin/setup': () => ({ body: setupEnvelope(state, env) }),
     'PUT /admin/setup': (req) => {
       const p = req.body as SetupPatch;
+      const finishing = p.finished === true && !state.finished;
       Object.assign(state, { ...p, steps: { ...state.steps, ...p.steps } });
+      // As catalog.UpdateSetupState: finishing marks every unmarked step
+      // skipped (no books library here, so the folder step too).
+      if (finishing) for (const id of SETUP_STEPS) state.steps[id] ??= 'skipped';
       return { body: state };
     },
     'POST /admin/setup/preview': { body: preview },
@@ -220,11 +228,42 @@ describe('the folder step', () => {
     await user.click(screen.getByRole('button', { name: 'Check folder' }));
     expect(
       await screen.findByText(
-        /\/Users\/me\/Audiobooks isn't there, or the server can't read it\. In Docker/,
+        /\/Users\/me\/Audiobooks isn't there, isn't a folder, or the server can't read it\. In Docker/,
       ),
     ).toBeVisible();
     // Nothing to name until a folder is found (ADMIN-06).
     expect(screen.queryByLabelText('Library name')).not.toBeInTheDocument();
+  });
+
+  it("Browse picks a folder from the server's and checks it (server#184)", async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        {},
+        {
+          'GET /admin/fs/dirs': (req) =>
+            req.query.get('path') === '/mnt'
+              ? {
+                  body: {
+                    path: '/mnt',
+                    parent: '/',
+                    dirs: [{ name: 'books', path: '/mnt/books' }],
+                  },
+                }
+              : { body: { path: '/', dirs: [{ name: 'mnt', path: '/mnt' }] } },
+        },
+      ),
+    );
+    renderApp('/setup');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Browse' }));
+    await user.click(await screen.findByRole('button', { name: 'mnt' }));
+    await user.click(await screen.findByRole('button', { name: 'Choose books' }));
+    expect(screen.getByLabelText('Books folder')).toHaveValue('/mnt/books');
+    expect(await screen.findByText('Found 812 audio files')).toBeVisible();
+    // The picker closes once a folder is chosen.
+    expect(screen.queryByRole('button', { name: 'Choose books' })).toBeNull();
+    const post = calls.find((c) => c.path === '/admin/setup/preview');
+    expect(post?.body).toEqual({ root: '/mnt/books' });
   });
 
   it('refuses a relative path before asking the server', async () => {
@@ -278,6 +317,13 @@ describe('folder, naming and metadata', () => {
     expect(await screen.findByRole('heading', { name: 'How are your books named?' })).toBeVisible();
     const samples = screen.getByRole('list', { name: 'Sample books' });
     expect(within(samples).getByText('Pratchett/Discworld/04 - Mort')).toBeVisible();
+    // The blanks in words, and nothing about disagreeing while none do (ADMIN-06).
+    expect(
+      screen.getByText(
+        'Gaps in these samples: 4 in the tags, 1 in the folder names. Either way, the narrator comes from the tags.',
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/disagree on/)).toBeNull();
     expect(screen.getByRole('radio', { name: /Folder names first/ })).toBeChecked();
     expect(calls.some((c) => c.path === '/admin/libraries' && c.method === 'POST')).toBe(false);
     await user.click(screen.getByRole('button', { name: 'Continue' }));
@@ -303,6 +349,26 @@ describe('folder, naming and metadata', () => {
     ]);
     // The scan shows from here on.
     expect(await screen.findByRole('region', { name: 'Library scans' })).toBeVisible();
+  });
+
+  it('says how many details the two disagree on, when they do (ADMIN-06)', async () => {
+    localStorage.setItem(
+      'audiosilo.setup.draft',
+      JSON.stringify({ root: '/audiobooks', name: 'Audiobooks' }),
+    );
+    const sample = preview.samples[0];
+    mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done' } },
+        {
+          'POST /admin/setup/preview': {
+            body: { ...preview, samples: [{ ...sample, tags: names({ title: 'Mortality' }) }] },
+          },
+        },
+      ),
+    );
+    renderApp('/setup?step=naming');
+    expect(await screen.findByText(/The two disagree on 1 detail, marked below\./)).toBeVisible();
   });
 
   it('keeps the pick made for each library the naming step offers', async () => {
@@ -546,6 +612,46 @@ describe('the reach step', () => {
     expect(patch?.body).toEqual({ general: { lan_url: 'http://192.168.1.20:8080' } });
   });
 
+  it('saves the server name with the addresses (server#184)', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        {},
+        { 'PATCH /admin/settings': (req) => ({ body: settingsWith(req.body as object) }) },
+      ),
+    );
+    renderApp('/setup?step=reach');
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Server name'), '  Home library ');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Coming from Audiobookshelf?' });
+    const patch = calls.find((c) => c.method === 'PATCH' && c.path === '/admin/settings');
+    expect(patch?.body).toEqual({ general: { name: 'Home library' } });
+  });
+
+  it('shows a server name the environment sets, and leaves it out', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        {},
+        {
+          'GET /admin/settings': {
+            body: settingsWith({
+              general: { ...settingsWith().general, name: 'Attic' },
+              locked: { 'general.name': 'AUDIOSILO_NAME' },
+            }),
+          },
+        },
+      ),
+    );
+    renderApp('/setup?step=reach');
+    const name = await screen.findByLabelText('Server name');
+    expect(name).toBeDisabled();
+    expect(name).toHaveValue('Attic');
+    expect(screen.getByText('Set by AUDIOSILO_NAME')).toBeVisible();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Coming from Audiobookshelf?' });
+    expect(calls.some((c) => c.method === 'PATCH' && c.path === '/admin/settings')).toBe(false);
+  });
+
   it('never offers a loopback address (localhost) as the home or public address', async () => {
     mockFetch(flowRoutes());
     browseAt('http://localhost:8080/admin/setup');
@@ -618,24 +724,10 @@ describe('the end of the flow', () => {
     await screen.findByRole('img', { name: 'Pairing QR code for your phone' });
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    // Reached by a jump: every step without a mark goes down as skipped,
-    // the folder too, since no library was made. Finish counts the phone
-    // step as done, so the card doesn't ask for it at once (ADMIN-05).
-    expect(puts(calls)).toEqual([
-      {
-        steps: {
-          folder: 'skipped',
-          naming: 'skipped',
-          metadata: 'skipped',
-          reach: 'skipped',
-          abs: 'skipped',
-          backups: 'skipped',
-          bridge: 'skipped',
-          phone: 'done',
-        },
-        finished: true,
-      },
-    ]);
+    // Reached by a jump: Finish sends only the phone step, counted as done so
+    // the card doesn't ask for it at once (ADMIN-05); the server marks every
+    // step without a mark skipped, the folder too, since no library was made.
+    expect(puts(calls)).toEqual([{ steps: { phone: 'done' }, finished: true }]);
     const card = await screen.findByRole('region', { name: 'Finish setting up' });
     expect(within(card).getByRole('link', { name: /Where are your books/ })).toBeVisible();
     expect(within(card).queryByRole('link', { name: /Connect a phone/ })).toBeNull();
@@ -673,7 +765,7 @@ describe('the end of the flow', () => {
     ]);
   });
 
-  it('Finish keeps the marks already made and skips only the unmarked steps', async () => {
+  it('Finish keeps the marks already made, sending only its own step', async () => {
     const calls = mockFetch(
       flowRoutes(
         { steps: { folder: 'done', naming: 'done', metadata: 'done', reach: 'skipped' } },
@@ -684,12 +776,7 @@ describe('the end of the flow', () => {
     await screen.findByRole('img', { name: 'Pairing QR code for your phone' });
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    expect(puts(calls)).toEqual([
-      {
-        steps: { abs: 'skipped', backups: 'skipped', bridge: 'skipped', phone: 'done' },
-        finished: true,
-      },
-    ]);
+    expect(puts(calls)).toEqual([{ steps: { phone: 'done' }, finished: true }]);
     const card = await screen.findByRole('region', { name: 'Finish setting up' });
     expect(within(card).queryByRole('link', { name: /Where are your books/ })).toBeNull();
     expect(within(card).getByRole('link', { name: /reach the server/ })).toBeVisible();
@@ -743,6 +830,20 @@ describe('the 2.4.0 fixes', () => {
     const newCode = screen.getByRole('button', { name: 'New code' });
     expect(newCode).toBeEnabled();
     expect(newCode.closest('.opacity-45')).toBeNull();
+  });
+
+  it('records the phone step skipped when its link is unreachable (ADMIN-13.5)', async () => {
+    browseAt('http://127.0.0.1:8080/admin/setup');
+    const calls = mockFetch(
+      flowRoutes(
+        { finished: true, steps: { phone: 'skipped' } },
+        { 'POST /auth/pair': pairAt('http://127.0.0.1:8080/web/connect?token=p1&sid=s1') },
+      ),
+    );
+    renderApp('/setup?step=phone');
+    await screen.findByText("A phone can't reach 127.0.0.1:8080");
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
+    await waitFor(() => expect(puts(calls)).toEqual([{ steps: { phone: 'skipped' } }]));
   });
 
   it('points the phone at the home address when the page is open at a loopback one', async () => {
@@ -854,7 +955,7 @@ describe('the 2.4.0 fixes', () => {
     expect(puts(calls)).toEqual([{ steps: { naming: 'skipped' } }]);
   });
 
-  it("Finish reads the marks again, so another tab's are kept (R-10)", async () => {
+  it("Finish sends only its own step, so another tab's marks are kept (R-10, server#183)", async () => {
     const steps: SetupState['steps'] = {};
     const calls = mockFetch(flowRoutes({ steps }, { 'POST /auth/pair': pairOk }));
     const { router } = renderApp('/setup?step=phone');
@@ -863,9 +964,8 @@ describe('the 2.4.0 fixes', () => {
     steps.backups = 'done';
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    const finish = puts(calls).at(-1) as SetupPatch;
-    expect(finish.finished).toBe(true);
-    expect(finish.steps).not.toHaveProperty('backups');
+    expect(puts(calls).at(-1)).toEqual({ steps: { phone: 'done' }, finished: true });
+    expect(steps.backups).toBe('done');
   });
 
   it('Finish says a restart is still due for a choice made in the flow (ADMIN-03)', async () => {
@@ -1052,6 +1152,32 @@ describe('the account step (server#369)', () => {
     ]);
   });
 
+  it('a name refused after the password changed says so, and Skip records the step done (server#391)', async () => {
+    const calls = mockFetch(
+      accountRoutes(true, {
+        'PATCH /admin/users/1': {
+          status: 409,
+          body: { error: 'username already taken', code: 'username_taken' },
+        },
+      }),
+    );
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Your account' });
+    const user = userEvent.setup();
+    await user.clear(screen.getByLabelText('Username'));
+    await user.type(screen.getByLabelText('Username'), 'sam');
+    await user.type(screen.getByLabelText('New password'), 'a-new-password');
+    await user.type(screen.getByLabelText('New password again'), 'a-new-password');
+    await user.type(screen.getByLabelText('Current password'), 'from-the-log');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByText(/Someone already has that name/)).toBeVisible();
+    expect(screen.getByText('Your new password is saved')).toBeVisible();
+    expect(screen.queryByText('Your password came from the server log')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Keep chris' }));
+    expect(await screen.findByRole('heading', { name: 'Where are your books?' })).toBeVisible();
+    expect(puts(calls)).toEqual([{ steps: { account: 'done' } }]);
+  });
+
   it('a name someone has shows under the field, and nothing else is sent', async () => {
     const calls = mockFetch(
       accountRoutes(false, {
@@ -1104,6 +1230,8 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
   const appliedImport = importRow({ status: 'applied', applied_at: '2026-11-14T10:05:00Z' });
 
   it('holds Connect while the first scan runs, then offers Match automatically', async () => {
+    // The libraries poll each second while a scan runs: the clock is the test's.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     let scanning = true;
     const calls = mockFetch(
       flowRoutes(
@@ -1139,13 +1267,18 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
     await user.type(within(connect).getByLabelText('API token'), 'abs-token');
     await user.keyboard('{Enter}');
     expect(calls.some((c) => c.path === '/admin/imports/abs/users')).toBe(false);
-    expect(screen.queryByRole('link', { name: 'Match automatically' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: 'Match automatically (opens in a new tab)' }),
+    ).not.toBeInTheDocument();
 
     // The scan ends: Connect works, and the offer opens Health in a new tab.
     scanning = false;
-    await waitFor(() => expect(button).toBeEnabled(), { timeout: 3000 });
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    await waitFor(() => expect(button).toBeEnabled());
     expect(within(connect).queryByText(/Wait for the scan to finish/)).not.toBeInTheDocument();
-    const offer = await screen.findByRole('link', { name: 'Match automatically' });
+    const offer = await screen.findByRole('link', {
+      name: 'Match automatically (opens in a new tab)',
+    });
     expect(offer).toHaveAttribute('href', '/admin/health?issue=unmatched');
     expect(offer).toHaveAttribute('target', '_blank');
     expect(screen.getByText('3 books not matched')).toBeVisible();
@@ -1157,6 +1290,97 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
     await waitFor(() =>
       expect(calls.some((c) => c.path === '/admin/imports/abs/users')).toBe(true),
     );
+  });
+
+  it('says the folder step comes first while there is no books library (server#396)', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'skipped', naming: 'skipped' } },
+        { 'GET /admin/users': { body: { users: [] } } },
+      ),
+    );
+    renderApp('/setup?step=abs');
+    const connect = await screen.findByRole('region', { name: 'Connect to Audiobookshelf' });
+    expect(
+      within(connect).getByText(/Add your books folder first \(Where are your books\?\)/, {
+        selector: '[role="status"]',
+      }),
+    ).toBeVisible();
+    expect(within(connect).getByRole('button', { name: 'Connect' })).toBeDisabled();
+    const user = userEvent.setup();
+    await user.type(
+      within(connect).getByRole('textbox', { name: 'Audiobookshelf address' }),
+      'http://192.168.1.20:13378',
+    );
+    await user.type(within(connect).getByLabelText('API token'), 'abs-token');
+    await user.keyboard('{Enter}');
+    expect(calls.some((c) => c.path === '/admin/imports/abs/users')).toBe(false);
+  });
+
+  it('holds Start and Apply while a scan runs, with one Back while mapping (server#396)', async () => {
+    let scanning = false;
+    const review = importRow({
+      status: 'review',
+      summary: {
+        items: 2,
+        matched: { path: 2, asin: 0, isbn: 0, title: 0 },
+        unmatched: 0,
+        sessions: 5,
+        skipped_after_cutoff: 0,
+        listened: 3600,
+        estimated: 0,
+        progress: 1,
+        finished: 0,
+        bookmarks: 0,
+        first_listen: '2026-01-01T00:00:00Z',
+        last_listen: '2026-02-01T00:00:00Z',
+      },
+    });
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done', naming: 'done' } },
+        {
+          'GET /admin/libraries': () => ({
+            body: {
+              libraries: libraries([
+                { scan: scanning ? { ...idle, running: true, total: 40, done: 12 } : idle },
+              ]),
+            },
+          }),
+          'GET /admin/imports': { body: { imports: [review] } },
+          'GET /admin/users': { body: { users: [admin] } },
+          'POST /admin/imports/abs/users': {
+            body: {
+              users: [{ abs_id: 'u1', username: 'chris', type: 'root', suggested_user_id: 1 }],
+            },
+          },
+        },
+      ),
+    );
+    const { queryClient } = renderApp('/setup?step=abs');
+    const connect = await screen.findByRole('region', { name: 'Connect to Audiobookshelf' });
+    const user = userEvent.setup();
+    await user.type(
+      within(connect).getByRole('textbox', { name: 'Audiobookshelf address' }),
+      'http://192.168.1.20:13378',
+    );
+    await user.type(within(connect).getByLabelText('API token'), 'abs-token');
+    expect(screen.getAllByRole('button', { name: 'Back' })).toHaveLength(1);
+    await user.click(within(connect).getByRole('button', { name: 'Connect' }));
+    // Mapping: the map card's Back only, the step's waits until it closes.
+    await screen.findByRole('combobox', { name: 'AudioSilo person for chris' });
+    expect(screen.getAllByRole('button', { name: 'Back' })).toHaveLength(1);
+
+    // A scan starts (a rescan, a library added in another tab): Start and Apply wait.
+    scanning = true;
+    await act(() => queryClient.invalidateQueries({ queryKey: ['admin', 'libraries'] }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Fetch history for/ })).toBeDisabled(),
+    );
+    const card = screen.getByRole('region', { name: 'samantha → sam' });
+    expect(within(card).getByRole('button', { name: 'Apply for sam' })).toBeDisabled();
+    expect(within(card).getByText(/Wait for the scan to finish/)).toBeVisible();
+    expect(calls.some((c) => c.method === 'POST' && c.path === '/admin/imports/abs')).toBe(false);
   });
 
   it('offers Match automatically once an import is applied, and Continue still ends the step', async () => {
@@ -1174,12 +1398,13 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
     renderApp('/setup?step=abs');
     const history = await screen.findByRole('region', { name: 'Past imports' });
     expect(await within(history).findByText('3 books not matched')).toBeVisible();
-    expect(within(history).getByRole('link', { name: 'Match automatically' })).toHaveAttribute(
-      'target',
-      '_blank',
-    );
+    expect(
+      within(history).getByRole('link', { name: 'Match automatically (opens in a new tab)' }),
+    ).toHaveAttribute('target', '_blank');
     // One offer, not a second one under the import.
-    expect(screen.getAllByRole('link', { name: 'Match automatically' })).toHaveLength(1);
+    expect(
+      screen.getAllByRole('link', { name: 'Match automatically (opens in a new tab)' }),
+    ).toHaveLength(1);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(puts(calls)).toEqual([{ steps: { abs: 'done' } }]));
   });
@@ -1207,12 +1432,22 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
     await screen.findByRole('region', { name: 'Connect to Audiobookshelf' });
     // The count is here before the imports: no offer yet, it would move when they arrive.
     await expect(
-      screen.findByRole('link', { name: 'Match automatically' }, { timeout: 250 }),
+      screen.findByRole(
+        'link',
+        { name: 'Match automatically (opens in a new tab)' },
+        { timeout: 250 },
+      ),
     ).rejects.toThrow();
     answer();
     const history = await screen.findByRole('region', { name: 'Past imports' });
-    expect(await within(history).findByRole('link', { name: 'Match automatically' })).toBeVisible();
-    expect(screen.getAllByRole('link', { name: 'Match automatically' })).toHaveLength(1);
+    expect(
+      await within(history).findByRole('link', {
+        name: 'Match automatically (opens in a new tab)',
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getAllByRole('link', { name: 'Match automatically (opens in a new tab)' }),
+    ).toHaveLength(1);
   });
 });
 
@@ -1241,9 +1476,9 @@ describe('the marketplace nearest the admin (server#192)', () => {
   });
 
   it('saves the preselection even when it is the US store, so it counts as chosen', async () => {
-    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['nl-NL']);
+    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['en-US']);
     vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
-      timeZone: 'Europe/Amsterdam',
+      timeZone: 'America/Chicago',
     } as Intl.ResolvedDateTimeFormatOptions);
     const calls = mockFetch(metadataRoutes({ region_chosen: false }));
     renderApp('/setup?step=metadata');
@@ -1251,6 +1486,30 @@ describe('the marketplace nearest the admin (server#192)', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
     await screen.findByRole('heading', { name: 'How will people reach the server?' });
     expect(patches(calls)).toEqual([{ metadata: { region: 'us' } }]);
+  });
+
+  it('preselects by the time zone over an en-US browser (server#391)', async () => {
+    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['en-US', 'en']);
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      timeZone: 'Europe/Paris',
+    } as Intl.ResolvedDateTimeFormatOptions);
+    mockFetch(metadataRoutes({ region_chosen: false }));
+    renderApp('/setup?step=metadata');
+    expect(await screen.findByLabelText('Audible marketplace')).toHaveValue('fr');
+  });
+
+  it('with nothing to place a store, keeps no preference and saves nothing as chosen (server#391)', async () => {
+    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['nl-NL']);
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      timeZone: 'Europe/Amsterdam',
+    } as Intl.ResolvedDateTimeFormatOptions);
+    const calls = mockFetch(metadataRoutes({ region_chosen: false }));
+    renderApp('/setup?step=metadata');
+    expect(await screen.findByLabelText('Audible marketplace')).toHaveValue('');
+    expect(screen.queryByText(/Picked from your browser's language and time zone/)).toBeNull();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'How will people reach the server?' });
+    expect(patches(calls)).toEqual([]);
   });
 
   it.each([

@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"errors"
+	"maps"
 	"path/filepath"
 	"testing"
 
@@ -25,8 +26,8 @@ func TestSetupState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"folder": SetupStepDone, "naming": SetupStepSkipped}
-	if !st.Finished || st.Dismissed || len(st.Steps) != 2 || st.Steps["folder"] != want["folder"] || st.Steps["naming"] != want["naming"] {
+	// Finishing marks every step left unmarked skipped, beside the two named.
+	if !st.Finished || st.Dismissed || len(st.Steps) != len(SetupSteps) || st.Steps["folder"] != SetupStepDone || st.Steps["naming"] != SetupStepSkipped || st.Steps["phone"] != SetupStepSkipped {
 		t.Fatalf("merged state = %+v", st)
 	}
 	for _, steps := range []map[string]string{{"wizard": SetupStepDone}, {"folder": "later"}, {"bridge": ""}} {
@@ -34,9 +35,75 @@ func TestSetupState(t *testing.T) {
 			t.Errorf("steps %v = %v, want ErrInvalidSetupStep", steps, err)
 		}
 	}
-	if got, _ := c.SetupState(ctx); got.Dismissed || len(got.Steps) != 2 {
+	if got, _ := c.SetupState(ctx); got.Dismissed || len(got.Steps) != len(SetupSteps) {
 		t.Errorf("a refused update stored something: %+v", got)
 	}
+}
+
+// The patch that finishes the flow marks the steps it left unmarked (server#183):
+// the folder step done once a books library exists, the rest skipped, and a step
+// another tab marked keeps its own. Before a books library (a podcast one holds
+// no books) the folder step is skipped too; a later finish (the flow already
+// finished) fills nothing.
+func TestSetupFinishFillsUnmarkedSteps(t *testing.T) {
+	t.Parallel()
+	yes := true
+	finish := func(c *Catalog, steps map[string]string) SetupState {
+		t.Helper()
+		st, err := c.UpdateSetupState(t.Context(), SetupPatch{Finished: &yes, Steps: steps})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+
+	t.Run("with a books library", func(t *testing.T) {
+		t.Parallel()
+		c, ctx := newTestCatalog(t)
+		if _, err := c.CreateLibrary(ctx, Library{Name: "Books", Root: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+		// Another tab recorded the backups step done; this one leaves the phone step.
+		if _, err := c.UpdateSetupState(ctx, SetupPatch{Steps: map[string]string{"account": SetupStepDone, "backups": SetupStepDone}}); err != nil {
+			t.Fatal(err)
+		}
+		st := finish(c, map[string]string{"phone": SetupStepDone})
+		want := map[string]string{
+			"account": SetupStepDone, "folder": SetupStepDone, "naming": SetupStepSkipped,
+			"metadata": SetupStepSkipped, "reach": SetupStepSkipped, "abs": SetupStepSkipped,
+			"backups": SetupStepDone, "bridge": SetupStepSkipped, "phone": SetupStepDone,
+		}
+		if !st.Finished || !maps.Equal(st.Steps, want) {
+			t.Fatalf("finished state = %+v, want steps %v", st, want)
+		}
+		if got, _ := c.SetupState(ctx); !maps.Equal(got.Steps, want) {
+			t.Errorf("stored steps = %v, want %v", got.Steps, want)
+		}
+	})
+
+	t.Run("podcasts only", func(t *testing.T) {
+		t.Parallel()
+		c, ctx := newTestCatalog(t)
+		if _, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts}); err != nil {
+			t.Fatal(err)
+		}
+		if st := finish(c, map[string]string{"phone": SetupStepSkipped}); st.Steps["folder"] != SetupStepSkipped {
+			t.Errorf("folder = %q with only a podcast library, want skipped", st.Steps["folder"])
+		}
+	})
+
+	t.Run("already finished", func(t *testing.T) {
+		t.Parallel()
+		c, ctx := newTestCatalog(t)
+		// A server marked finished with no marks (0053, an upgraded server): a
+		// finish sent again records only what it names.
+		if err := putServerState(ctx, c.db, setupKey, SetupState{Finished: true, Steps: map[string]string{}}, c.stamp()); err != nil {
+			t.Fatal(err)
+		}
+		if st := finish(c, map[string]string{"bridge": SetupStepDone}); len(st.Steps) != 1 {
+			t.Errorf("steps = %v, want only bridge", st.Steps)
+		}
+	})
 }
 
 // The preview's root check refuses exactly what a books library create refuses

@@ -12,6 +12,7 @@ import {
 } from '@tanstack/react-query';
 import { refKey, refOf } from '@/lib/book-route';
 import { isBookLibrary } from '@/lib/library-kind';
+import { scanActive } from '@/lib/library-scan';
 import { compact } from '@/lib/utils';
 import {
   api,
@@ -428,26 +429,40 @@ export function useAudit(filter: AuditFilter) {
   });
 }
 
+/** How long the config-declared libraries count as fresh where they lock a library. */
+const CONFIG_LOCKS_STALE_MS = 60_000;
+
 /**
  * The first-run flow's state, how this request reached the server, the
  * config-declared libraries and the mount hints. Fresh for the session: the
- * flow and the Overview card write it through saveSetup.
+ * flow and the Overview card write it through saveSetup. Read for the library
+ * locks (`locks`), it is read again after a minute, on focus or a new mount,
+ * since a restart with another config.yaml changes them (server#197); a 409
+ * config_library reads it at once.
  */
-export function useSetup() {
-  return useQuery({ queryKey: keys.setup, queryFn: api.setup, staleTime: Infinity });
+export function useSetup({ locks = false }: { locks?: boolean } = {}) {
+  return useQuery({
+    queryKey: keys.setup,
+    queryFn: api.setup,
+    staleTime: locks ? CONFIG_LOCKS_STALE_MS : Infinity,
+  });
 }
 
 /** Saves a change to the setup state (PUT /admin/setup) and puts the answer in the cache. */
 export async function saveSetup(qc: QueryClient, patch: SetupPatch) {
   const state = await api.updateSetup(patch);
+  // A read for the library locks begun before the save may still hold the old
+  // state: discard that reply before publishing the PUT's answer (exact: the
+  // folder previews share the key's prefix).
+  await qc.cancelQueries({ queryKey: keys.setup, exact: true });
   qc.setQueryData<SetupEnvelope>(keys.setup, (env) => (env ? { ...env, state } : env));
   return state;
 }
 
 /**
  * The signed-in admin chose their own password (the flow's account step, or
- * People's dialog on their own account): the setup envelope, read once a
- * session, stops saying they still have the one the server printed, and the
+ * People's dialog on their own account): the setup envelope, which the flow
+ * never reads again, stops saying they still have the one the server printed, and the
  * invites list loses the auth code printed beside it (the server ends it with
  * the printed password).
  */
@@ -615,11 +630,6 @@ export function useLibraries() {
 export function useBookLibraries(): AdminLibrary[] | undefined {
   const data = useLibraries().data;
   return useMemo(() => data?.filter(isBookLibrary), [data]);
-}
-
-/** Whether a library's scan runs or waits in the job queue. */
-export function scanActive(l: AdminLibrary) {
-  return l.scan.running || !!l.scan.queued;
 }
 
 /** The libraries whose folder can't be read right now. */

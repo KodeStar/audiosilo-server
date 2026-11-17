@@ -3,6 +3,7 @@ package web
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/web/adminui"
 	"github.com/kodestar/audiosilo-server/internal/web/spa"
 )
@@ -295,6 +297,11 @@ func TestSetupPageAssets(t *testing.T) {
 		if !strings.Contains(strings.ToLower(m[1]), "src=") {
 			t.Errorf("setup.html has an inline <script> that breaks the strict CSP: %.40q", m[2])
 		}
+	}
+	// The browser checks the password's minimum before sending (server#271
+	// ADMIN-13.1), at the server's own.
+	if minAttr := fmt.Sprintf(`minlength="%d"`, auth.MinPasswordLen); !strings.Contains(html, minAttr) {
+		t.Errorf("the setup page's password field must carry %s", minAttr)
 	}
 }
 

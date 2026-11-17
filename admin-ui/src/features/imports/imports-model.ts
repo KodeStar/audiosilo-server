@@ -190,8 +190,21 @@ const FAILURE_CODES = [
   'fetch_failed',
 ] as const;
 
-/** The i18n key of what to do about a failed import (by its error_code). */
-export function failureHintKey(code: string): string {
+/** Whether an Audiobookshelf address is a plain http:// one. */
+export function isPlainHttp(url: string): boolean {
+  return /^http:\/\//i.test(url.trim());
+}
+
+/**
+ * The i18n key of what to do about a failed import (by its error_code). An
+ * untrusted certificate behind a plain http:// address means that address
+ * redirects to https, so "use the http:// address" would name the one that
+ * failed (server#396).
+ */
+export function failureHintKey(code: string, sourceUrl = ''): string {
+  if (code === 'abs_certificate' && isPlainHttp(sourceUrl)) {
+    return 'imports.failure.abs_certificate_redirect';
+  }
   return (FAILURE_CODES as readonly string[]).includes(code)
     ? `imports.failure.${code}`
     : 'imports.failure.fetch_failed';

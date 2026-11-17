@@ -68,6 +68,10 @@ describe('the nearest marketplace in Settings', () => {
     ['an admin nearest the US store', { region_chosen: false }, ['en-US']],
   ])('offers nothing for %s', async (_, metadata, langs) => {
     vi.spyOn(navigator, 'languages', 'get').mockReturnValue(langs);
+    // A US zone, so the machine's own can't place another store.
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      timeZone: 'America/New_York',
+    } as Intl.ResolvedDateTimeFormatOptions);
     open(settingsWithMetadata(metadata));
     expect(await screen.findByRole('combobox', { name: 'Audible marketplace' })).toBeVisible();
     expect(screen.queryByText(/Nearest to you/)).toBeNull();

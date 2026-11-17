@@ -215,6 +215,21 @@ describe('summary', () => {
     expect(failureHintKey('something_new')).toBe('imports.failure.fetch_failed');
   });
 
+  it('words an untrusted certificate behind a plain http address as a redirect (server#396)', () => {
+    expect(failureHintKey('abs_certificate', 'http://abs.lan:13378')).toBe(
+      'imports.failure.abs_certificate_redirect',
+    );
+    expect(failureHintKey('abs_certificate', ' HTTP://abs.lan')).toBe(
+      'imports.failure.abs_certificate_redirect',
+    );
+    expect(failureHintKey('abs_certificate', 'https://abs.lan')).toBe(
+      'imports.failure.abs_certificate',
+    );
+    expect(failureHintKey('abs_unreachable', 'http://abs.lan')).toBe(
+      'imports.failure.abs_unreachable',
+    );
+  });
+
   it('shows the address without its scheme', () => {
     expect(sourceHost('https://abs.example.com/')).toBe('abs.example.com');
     expect(sourceHost('http://nas:13378/audiobookshelf/')).toBe('nas:13378/audiobookshelf');
