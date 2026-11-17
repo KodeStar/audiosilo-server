@@ -1219,14 +1219,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `API.streamWait`, 45 s from the request's start, `waitLeft`: past a sleeping disk's spin-up, under
   AVPlayer's 60 s resource timeout, as a 503 is no retry for it) as a 503 `share_not_answering` with
   `Retry-After`. A file cache's background run opens its source unbounded (once the request's look
-  answered), and a warm looks first under the cache's run time.
+  answered); its own stats of the source (`Open`, `Status`, `Queue`, `RefusedFor`, a warm's first look) are
+  given a scan's look time (`media.sourceWait`), never none, so one on a share that stopped answering since never
+  holds its mount's slot for good. A remux download that falls back to the live transcode gives the transcode's
+  look at least `API.fileWait`, the remux's waits being no looks.
   The scan gives each the probe's time (`Scanner.probeTimeout`); an on-demand read (`/item`'s index, an admin's
   Re-read and the Bridge's rescan through `rescanAt`) gives each `API.fileWait` instead (SRV-15c:
   `library.WithLookTimeout` on its context, `Scanner.lookTimeout`, kept by the read `leadIndex` goes on with), well
   under the request timeout, so a share that stopped answering is its 503 `share_not_answering`, not the timeout's:
-  `resolveBook`'s looks (the join, the stat, `dirPresent`'s lstat and listings, the folder's listing, the walks of a
-  disc set, the metadata.json and `.audiosilo` looks, a given-up one its answer), `ebookOnDisk` and the files beside
-  the audio; the audio's own read keeps the probe's time. With a book's audio read cut short
+  `resolveBook`'s looks (the join, the stat, `dirPresent`'s lstat and listings, the folder's listing and its audio
+  files' lstats, the walks of a disc set, a disc that wouldn't list among them, the metadata.json and `.audiosilo`
+  looks, a given-up one its answer), `bookOnDisk`'s and `renamedFolders`' looks, `RefreshAttachments`' join and
+  reads, `ebookOnDisk` and the files beside the audio; the audio's own read keeps the probe's time. With a book's audio read cut short
   none of its side files is looked at (each would wait out its time too); one given up on otherwise
   keeps the book as stored (`library.givenUp.keep`: `ReadCutShort`, never `LengthOnly`) with an
   `unreadable` problem on that file (over a lasting one), which `problemCleared` clears once the file
@@ -1245,11 +1249,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   503 `share_not_answering`). The walk's own looks are bounded the same way (SRV-15c: `walkDir`'s root lstat and
   listings, a `.audiosilo` folder's listing, a metadata.json's lstat, `statAudio`'s lstat of each audio file, the
   probe's time each): a folder that won't list, or whose audio file's lstat is given up on (`dropUnanswered`, with
-  the other discs of a disc set it is joined into), is skipped for that run, which is then partial (its books kept
+  every disc folder beside it, so neither a book joined from a disc set nor the discs' split is built from the
+  discs that answered), is skipped for that run, which is then partial (its books kept
   as stored, never pruned nor rewritten without a part) and records an `unreadable` path in the run's log; a
   `.audiosilo` folder that won't list keeps its book's attachments as stored. So do the scan's tag-only suspect
   check (`suspectFromTags`, `metadata.ExtractTags` under the scan's context and time) and its read-along ebook
-  hashing (`EbookDigestNow`'s look and hash, each a `metadata.Bounded` call; the hashing stops at the first given
+  hashing (`EbookDigestNow`'s look, and `EbookDigest`'s open and each of its reads, each a `metadata.Bounded` call,
+  so a large ebook on a slow share that answers is hashed whatever it takes; the hashing stops at the first given
   up on; `/item` and `GET /readalong` give theirs `API.fileWait`). A re-index
   where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`), or whose
   length ran out of time even read alone (an ffprobe time-out, `ProbeTimedOut` without one:

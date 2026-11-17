@@ -140,7 +140,7 @@ func TestStreamWaitsOutADiskSpinningUp(t *testing.T) {
 // A request still waiting for its book's read when the server stops (/item's
 // shared read, an admin's Re-read) is a 503 to try again (the read ended by the
 // stop), not a 500 "context canceled". Not parallel:
-// metadata.HoldOpensForTests swaps the mount lookup.
+// metadata.HoldReadsForTests swaps the mount lookup.
 func TestBookReadWaitingAtShutdownIs503(t *testing.T) {
 	for _, c := range []struct{ name, method, endpoint string }{
 		{"item", "GET", "/item"},
@@ -164,7 +164,7 @@ func TestBookReadWaitingAtShutdownIs503(t *testing.T) {
 			base, stop := context.WithCancel(context.Background())
 			defer stop()
 			e.api.SetBaseContext(base)
-			release := metadata.HoldOpensForTests(part) // the book's read waits on its part
+			release := metadata.HoldReadsForTests(part) // the book's read waits on its part (its lstat answers)
 			t.Cleanup(release)
 
 			type answer struct {
