@@ -12,7 +12,8 @@ import (
 // that stopped answering, is given up on at the preview's time (the sample
 // read's open is bounded): the preview answers then, without that sample,
 // and frees its mount's place, so the previews after it on that mount run
-// too, more than previewsPerMount of them. Not parallel:
+// too, more than previewsPerMount of them; a preview on another mount reads
+// as ever. Not parallel:
 // metadata.HoldOpensForTests swaps the mount lookup.
 func TestPreviewHungFileIsBounded(t *testing.T) {
 	root := t.TempDir()
@@ -30,5 +31,8 @@ func TestPreviewHungFileIsBounded(t *testing.T) {
 		if took := time.Since(start); took > lim.MaxTime+previewGrace {
 			t.Errorf("the preview answered after %v, want it by its time", took)
 		}
+	}
+	if p, err := s.Preview(t.Context(), previewFixture(t), nil, PreviewLimits{}); err != nil || p.Counts.AudioFiles == 0 {
+		t.Errorf("a preview on another mount: %+v, %v, want it read", p, err)
 	}
 }

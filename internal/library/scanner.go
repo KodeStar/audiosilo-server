@@ -671,9 +671,12 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// Rows indexed before migration 0016 have no cover flag; fill it with a
 				// tag read (no ffprobe) rather than re-indexing the book.
 				// A file that can't be opened right now (a flaky mount) is left unknown
-				// for the next scan rather than recorded as having no cover.
+				// for the next scan rather than recorded as having no cover; one whose
+				// bounded fingerprint just failed is not opened again unbounded (a
+				// share that stopped answering, a FIFO).
 				primary := absOf(lib, primaryPath(b))
-				if old.HasCover == nil && readable(primary) {
+				fingerprintFailed := old.ContentHash == "" && b.ContentHash == ""
+				if old.HasCover == nil && !fingerprintFailed && readable(primary) {
 					_, _, coverBackfill[b.RelPath] = media.EmbeddedCover(primary)
 				}
 				// A sidecar image replaced in place changes no audio: its own

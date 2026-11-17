@@ -26,8 +26,12 @@ var (
 // a process stuck in one) can't be interrupted, and would hold its caller for
 // good. ok is false when ctx ended first: fn is left to finish (or not) on its
 // own goroutine, counted in stuck until it does, and drop (when not nil) is
-// handed what it then returns, a file to close.
+// handed what it then returns, a file to close. With ctx ended already fn is
+// not run (ok false, nothing counted).
 func await[T any](ctx context.Context, stuck *stuckReads, fn func() T, drop func(T)) (v T, ok bool) {
+	if ctx.Err() != nil {
+		return v, false
+	}
 	done := make(chan T, 1)
 	var state atomic.Int32 // readRunning, readAbandoned or readReturned
 	go func() {

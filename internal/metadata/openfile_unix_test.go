@@ -29,7 +29,7 @@ func TestFIFOIsNotRead(t *testing.T) {
 			if err != nil {
 				t.Skipf("can't hold the FIFO open: %v", err)
 			}
-			defer w.Close()
+			t.Cleanup(func() { _ = w.Close() })
 		}
 		start := time.Now()
 		m, err := ExtractTimeout(context.Background(), path, "/no/such/ffprobe", time.Minute)
