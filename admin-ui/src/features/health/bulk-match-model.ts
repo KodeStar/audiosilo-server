@@ -6,6 +6,7 @@ import type {
   MatchRunMode,
   MatchScope,
 } from '@/api/types';
+import { runtimeOff } from '@/features/book/match-model';
 import { rangeOf } from '@/features/library/books/use-selection';
 
 // Bulk matching on Health > Not matched (STYLEGUIDE.md "Health triage"): what the
@@ -57,7 +58,7 @@ export function firstReviewTab(run: MatchRun): MatchOutcome {
  * for review (meta.PlausibleRuntimeOff; a recording the book's narrator reads
  * may be further off, which the console can't tell).
  */
-export const PLAUSIBLE_RUNTIME_OFF = 0.1;
+const PLAUSIBLE_RUNTIME_OFF = 0.1;
 
 /**
  * The book's length now and its proposed recording's, in seconds, for an item
@@ -69,15 +70,12 @@ export function heldLengths(
   item: Pick<MatchRunItem, 'detail' | 'proposal' | 'book'>,
 ): { book: number; recording: number } | undefined {
   const book = item.book.duration ?? 0;
-  const recording = (item.proposal.runtime_min ?? 0) * 60;
-  if (book <= 0 || recording <= 0) return undefined;
-  if (item.detail === 'length_differs') return { book, recording };
-  if (
-    item.detail === 'identifier_disagrees' &&
-    Math.abs(recording - book) / book > PLAUSIBLE_RUNTIME_OFF
-  )
-    return { book, recording };
-  return undefined;
+  const off = runtimeOff(item.proposal.runtime_min, book);
+  if (off === undefined) return undefined;
+  const held =
+    item.detail === 'length_differs' ||
+    (item.detail === 'identifier_disagrees' && off > PLAUSIBLE_RUNTIME_OFF);
+  return held ? { book, recording: (item.proposal.runtime_min ?? 0) * 60 } : undefined;
 }
 
 /**

@@ -215,25 +215,39 @@ export type LengthCompare =
   { kind: 'match' } | { kind: 'close' | 'longer' | 'shorter'; seconds: number } | undefined;
 
 /**
+ * How far a recording of runtimeMin minutes is from a book of bookSeconds, as a
+ * fraction of the book's length (meta.RuntimeOff); undefined when either is unknown.
+ */
+export function runtimeOff(
+  runtimeMin: number | undefined,
+  bookSeconds: number,
+): number | undefined {
+  if (!runtimeMin || runtimeMin <= 0 || bookSeconds <= 0) return undefined;
+  return Math.abs(runtimeMin * 60 - bookSeconds) / bookSeconds;
+}
+
+/**
  * How far a recording may be off the files and still "match": the 2% a match
  * run's automatic rule allows (matchrun.AnchorRuntimeOff), so the dialog never
  * says a length matches that a run holds for review.
  */
-export const LENGTH_MATCH_OFF = 0.02;
+const LENGTH_MATCH_OFF = 0.02;
 /** How far off it still reads "close" rather than longer or shorter. */
-export const LENGTH_CLOSE_OFF = 0.05;
+const LENGTH_CLOSE_OFF = 0.05;
 
 /** A recording's runtime against the files: within 2% "matches", within 5% "close", else how far off. */
 export function lengthComparison(
   runtimeMin: number | undefined,
   bookSeconds: number,
 ): LengthCompare {
-  if (!runtimeMin || bookSeconds <= 0) return undefined;
-  const diff = runtimeMin * 60 - bookSeconds;
-  const off = Math.abs(diff);
-  if (off <= bookSeconds * LENGTH_MATCH_OFF) return { kind: 'match' };
-  if (off <= bookSeconds * LENGTH_CLOSE_OFF) return { kind: 'close', seconds: off };
-  return { kind: diff > 0 ? 'longer' : 'shorter', seconds: off };
+  const off = runtimeOff(runtimeMin, bookSeconds);
+  if (off === undefined) return undefined;
+  if (off <= LENGTH_MATCH_OFF) return { kind: 'match' };
+  const diff = (runtimeMin ?? 0) * 60 - bookSeconds;
+  const seconds = Math.abs(diff);
+  return off <= LENGTH_CLOSE_OFF
+    ? { kind: 'close', seconds }
+    : { kind: diff > 0 ? 'longer' : 'shorter', seconds };
 }
 
 /**
