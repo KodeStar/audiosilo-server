@@ -431,14 +431,18 @@ export function useSetup({ locks = false }: { locks?: boolean } = {}) {
 /** Saves a change to the setup state (PUT /admin/setup) and puts the answer in the cache. */
 export async function saveSetup(qc: QueryClient, patch: SetupPatch) {
   const state = await api.updateSetup(patch);
+  // A read for the library locks begun before the save may still hold the old
+  // state: discard that reply before publishing the PUT's answer (exact: the
+  // folder previews share the key's prefix).
+  await qc.cancelQueries({ queryKey: keys.setup, exact: true });
   qc.setQueryData<SetupEnvelope>(keys.setup, (env) => (env ? { ...env, state } : env));
   return state;
 }
 
 /**
  * The signed-in admin chose their own password (the flow's account step, or
- * People's dialog on their own account): the setup envelope, read once a
- * session, stops saying they still have the one the server printed, and the
+ * People's dialog on their own account): the setup envelope, which the flow
+ * never reads again, stops saying they still have the one the server printed, and the
  * invites list loses the auth code printed beside it (the server ends it with
  * the printed password).
  */
