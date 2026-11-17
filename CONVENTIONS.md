@@ -1195,10 +1195,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `StatBounded`, `LstatBounded`, `ReadDirBounded`; `metadata.GaveUp` names its two errors,
   `ErrNotAnswered` and `ErrReadRefused`; `HoldOpensForTests` holds them too): the files beside a
   book's audio (the ABS metadata.json read, the attachments' lstats and reads, the ebook check,
-  `findCover`'s stats and listing, `LookArt` (`ArtFile`'s `SafeJoin` and the stat) for the
-  cover version, `stampAddedAt`'s lstat, `problemCleared`'s stat), the backfill's embedded cover read
+  `coverLook.find`'s stats and listing, `LookArt` (`ArtFile`'s `SafeJoin` and the stat) for the
+  cover version, `stampAddedAt`'s statx and lstat, `problemCleared`'s stat), the backfill's embedded cover read
   (`media.EmbeddedCover`), `RefreshEbook`'s look, and in the API every cover (full, thumbnail, a
-  show's: `serveArt`, `coverArt`, `readSidecar`) and a stream's open and stat (`media.ServeFile`),
+  show's: `serveArt`, `coverArt`, `readSidecar`) and a stream's open and stat (`media.ServeFile`; a regular file only, `metadata.OpenRegular`, so a FIFO is a 404 at once, never an open held and counted on its mount),
   each given up on after `API.fileWait` (10 s) as a 503 `share_not_answering` with `Retry-After`.
   The scan gives each the probe's time (`Scanner.probeTimeout`). With a book's audio read cut short
   none of its side files is looked at (each would wait out its time too); one given up on otherwise
@@ -3028,7 +3028,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   segment by name (`library.ContentPath`, the one statement of the rule: `ContentJoin` for a path that
   names content, `IndexPathWithin`, `listDir`, and `scopedPathIn` for every path-taking route, a
   hidden path reading as missing, 404), so a book's `.audiosilo/` never becomes a phantom book or a
-  streamable file; `findCover` never takes a hidden file (an AppleDouble `._x.jpg`) as a cover. Audited `bridge.code`, `bridge.paired` (system),
+  streamable file; `coverLook.find` never takes a hidden file (an AppleDouble `._x.jpg`) as a cover. Audited `bridge.code`, `bridge.paired` (system),
   `bridge.unpair`, `bridge.job`, `bridge.cancel`. `SetBridge` before `Handler()` (the launcher always calls it).
   **Community jobs (Phase 2b, `bridge/contribute.go`)**: two kinds that file to the community metadata
   database with the Bridge's GitHub sign-in and write nothing into the library (no
