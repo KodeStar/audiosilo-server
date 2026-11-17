@@ -251,6 +251,21 @@ describe('audible accounts kept without a Bridge or the module (server#294)', ()
     expect(within(card).getByRole('button', { name: 'Remove...' })).toBeEnabled();
   });
 
+  it('reads them once while unpaired: nothing but Remove changes them', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const calls = mockFetch(routes(true, { 'GET /admin/bridge': { body: unpaired } }));
+      renderApp('/server?topic=bridge');
+      await screen.findByRole('heading', { name: 'Audible accounts' });
+      const reads = () => calls.filter((c) => c.path === '/admin/audible/accounts').length;
+      const before = reads();
+      await act(() => vi.advanceTimersByTimeAsync(90_000));
+      expect(reads()).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('leaves the card out while unpaired with no accounts', async () => {
     const calls = mockFetch(
       routes(true, {

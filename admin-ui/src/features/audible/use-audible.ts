@@ -35,13 +35,16 @@ const TITLES_PAGE = 50;
 
 /**
  * The Audible accounts: read with the module on or off (the route is outside
- * its toggle), so Settings > Modules lists those kept while it is off.
+ * its toggle), so Settings > Modules lists those kept while it is off. Asked
+ * again every 30 seconds unless `poll` is false: with the module off or no
+ * Bridge paired nothing changes them but this console's Remove, which
+ * invalidates the list itself.
  */
-export function useAudibleAccounts() {
+export function useAudibleAccounts({ poll = true } = {}) {
   return useQuery({
     queryKey: keys.audibleAccounts,
     queryFn: api.audibleAccounts,
-    refetchInterval: ACCOUNTS_POLL_MS,
+    refetchInterval: poll ? ACCOUNTS_POLL_MS : false,
   });
 }
 

@@ -11,7 +11,7 @@ import { useAudibleAccounts } from './use-audible';
  */
 export function KeptAudibleAccounts() {
   const { t } = useTranslation();
-  const accounts = useAudibleAccounts();
+  const accounts = useAudibleAccounts({ poll: false });
   const list = accounts.data?.accounts ?? [];
   if (list.length === 0) return null;
   return (

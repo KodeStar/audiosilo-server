@@ -33,7 +33,8 @@ import { useAudibleAccounts, useBackups, useCheckNow, type Backups } from './use
  * up everything; Phase 4c: whether its places sync (set there too).
  * hideWhenEmpty leaves the card out while there are no accounts (Settings >
  * Bridge with no Bridge paired: only accounts kept from an earlier one, so
- * their Remove stays reachable, server#294).
+ * their Remove stays reachable, server#294), and then reads them once: with no
+ * Bridge nothing but Remove changes them.
  */
 export function AudibleAccountsCard({
   uiUrl,
@@ -43,7 +44,7 @@ export function AudibleAccountsCard({
   hideWhenEmpty?: boolean;
 }) {
   const { t } = useTranslation();
-  const accounts = useAudibleAccounts();
+  const accounts = useAudibleAccounts({ poll: !hideWhenEmpty });
   const bridge = useAudibleBridge();
   const { checkNow, busy } = useCheckNow();
   const backups = useBackups();
