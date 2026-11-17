@@ -339,19 +339,24 @@ func (a *API) makeThumbnail(ctx context.Context, lib *catalog.Library, path stri
 	if raw == nil {
 		return nil, nil
 	}
-	return a.decodeThumbnail(ctx, raw, size, "library", lib.ID, "path", path)
+	return a.decodeThumbnail(ctx, raw, size, false, "library", lib.ID, "path", path)
 }
 
-// decodeThumbnail scales art to size (media.Thumbnail), one of the decodes thumbSem
-// bounds: nil when the art can't be decoded, an error only when ctx ended. logArgs
-// name the art in the debug log.
-func (a *API) decodeThumbnail(ctx context.Context, raw []byte, size int, logArgs ...any) ([]byte, error) {
+// decodeThumbnail scales art to size (media.Thumbnail; media.ThumbnailJPEG when
+// reencode, so a small JPEG never comes back as its own bytes), one of the
+// decodes thumbSem bounds: nil when the art can't be decoded, an error only when
+// ctx ended. logArgs name the art in the debug log.
+func (a *API) decodeThumbnail(ctx context.Context, raw []byte, size int, reencode bool, logArgs ...any) ([]byte, error) {
 	select {
 	case a.thumbSem <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	jpg, err := media.Thumbnail(raw, size)
+	thumb := media.Thumbnail
+	if reencode {
+		thumb = media.ThumbnailJPEG
+	}
+	jpg, err := thumb(raw, size)
 	<-a.thumbSem
 	if err != nil {
 		a.log.Debug("cover thumbnail failed", append([]any{"err", err}, logArgs...)...)

@@ -88,9 +88,31 @@ func coverHost(t *testing.T) (*httptest.Server, []byte) {
 		t.Fatalf("big cover is %d bytes, want between the upload cap and the fetch cap", bigPNG.Len())
 	}
 	mux.HandleFunc("/big.png", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(bigPNG.Bytes()) })
+	// A JPEG within storedCoverSide yet larger than an upload may be, drawn turned
+	// (EXIF orientation 6), which media.Thumbnail hands back as its own bytes.
+	var turned bytes.Buffer
+	if err := jpeg.Encode(&turned, big.SubImage(image.Rect(0, 0, 400, 400)), nil); err != nil {
+		t.Fatal(err)
+	}
+	turnedJPEG := turnedJPEGOver(turned.Bytes(), catalog.MaxCoverBytes)
+	mux.HandleFunc("/turned.jpg", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(turnedJPEG) })
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, small
+}
+
+// turnedJPEGOver is jpg with an EXIF orientation of 6 and comment segments after
+// its start, padded past n bytes.
+func turnedJPEGOver(jpg []byte, n int) []byte {
+	seg := func(marker byte, payload []byte) []byte {
+		return append(binary.BigEndian.AppendUint16([]byte{0xFF, marker}, uint16(len(payload)+2)), payload...)
+	}
+	tiff := []byte("MM\x00\x2a\x00\x00\x00\x08\x00\x01\x01\x12\x00\x03\x00\x00\x00\x01\x00\x06\x00\x00\x00\x00\x00\x00")
+	out := append([]byte{0xFF, 0xD8}, seg(0xE1, append([]byte("Exif\x00\x00"), tiff...))...)
+	for len(out) <= n {
+		out = append(out, seg(0xFE, make([]byte, 65000))...)
+	}
+	return append(out, jpg[2:]...)
 }
 
 // pngHeader is the start of a PNG claiming w x h pixels: its signature and IHDR,
@@ -230,6 +252,18 @@ func TestSetCommunityCover(t *testing.T) {
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(cv.Data))
 	if err != nil || format != "jpeg" || cfg.Width != storedCoverSide || len(cv.Data) > catalog.MaxCoverBytes {
 		t.Fatalf("big cover stored as %s %dx%d, %d bytes (%v)", format, cfg.Width, cfg.Height, len(cv.Data), err)
+	}
+	// So is a JPEG within storedCoverSide that a viewer draws turned: re-encoded,
+	// not refused as too large (server#213).
+	if code, body := set(adminTok, url, host.URL+"/turned.jpg"); code != http.StatusOK {
+		t.Fatalf("set turned = %d %s", code, body)
+	}
+	if cv, err = e.cat.Cover(ctx, libID, p); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, format, err = image.DecodeConfig(bytes.NewReader(cv.Data)); err != nil || format != "jpeg" ||
+		cfg.Width != 400 || len(cv.Data) > catalog.MaxCoverBytes {
+		t.Fatalf("turned cover stored as %s %dx%d, %d bytes (%v)", format, cfg.Width, cfg.Height, len(cv.Data), err)
 	}
 }
 
