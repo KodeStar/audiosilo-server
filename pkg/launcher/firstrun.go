@@ -169,8 +169,11 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	dbPath := filepath.Join(abs, "audiosilo.db")
 	// A --data that names no folder (a missing one, or the database file
 	// itself) holds no restore marker either: said as no database, not as a
-	// marker that doesn't read.
-	if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
+	// marker that doesn't read. One this user can't reach (a folder above it
+	// closed to them) is reported as that, never as the wrong folder.
+	if fi, err := os.Stat(abs); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	} else if err != nil || !fi.IsDir() {
 		return fmt.Errorf("no database at %s: name the server's data folder with --data before reset-admin", dbPath)
 	}
 	// A restore waiting for the next start replaces this database, and the

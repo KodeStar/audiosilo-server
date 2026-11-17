@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -675,6 +676,36 @@ func TestResetAdminRefusals(t *testing.T) {
 			err := ResetAdmin(ctx, dir, "", &out)
 			if err == nil || !strings.Contains(err.Error(), marker.want) || !strings.Contains(err.Error(), "start the server once") {
 				t.Fatalf("err = %v, want %q", err, marker.want)
+	t.Run("a folder that isn't there", func(t *testing.T) {
+		err := ResetAdmin(ctx, filepath.Join(t.TempDir(), "missing"), "", &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "no database at") {
+			t.Fatalf("err = %v, want no database", err)
+		}
+	})
+
+	// A folder this user can't reach (one above it closed to them: the
+	// service's own) is reported as that, never as the wrong folder, which
+	// would send the admin looking for another instead of running it as the
+	// server's user.
+	t.Run("a folder this user can't reach", func(t *testing.T) {
+		if runtime.GOOS == "windows" || os.Getuid() == 0 {
+			t.Skip("needs a folder mode that closes it to this user")
+		}
+		closed := filepath.Join(t.TempDir(), "service")
+		dir := filepath.Join(closed, "data")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(closed, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(closed, 0o700) }) //nolint:gosec // the test's own folder, reopened for its removal
+		err := ResetAdmin(ctx, dir, "", &bytes.Buffer{})
+		if !errors.Is(err, os.ErrPermission) || strings.Contains(err.Error(), "no database at") {
+			t.Fatalf("err = %v, want permission denied", err)
+		}
+	})
+
 			}
 			if out.Len() > 0 {
 				t.Errorf("printed %q on a refusal", out.String())
