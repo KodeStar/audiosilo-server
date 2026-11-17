@@ -645,11 +645,13 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		}
 		old, existed := sigs[b.RelPath]
 		if existed && old.MTime == b.MTime && old.Size == b.Size &&
-			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) &&
+			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) && !old.DurationStale &&
 			((s.ffprobePath == "" && !s.rereadUnprobed(lib.ID, b)) || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
 			!s.problemCleared(ctx, lib, old, slots) {
 			// Unchanged since last scan, its files in the order stored (a book
-			// indexed in byte order before #160 is read again in natural order);
+			// indexed in byte order before #160 is read again in natural order),
+			// its lengths read by today's revision (an MP3 book indexed before
+			// SRV-16 is read again once, its header-less VBR files counted);
 			// only skip the probe when a prior probe already stored both duration
 			// and codec (so books indexed before the codec column get it
 			// backfilled), or, with no ffprobe, the in-process probe has had its

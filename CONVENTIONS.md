@@ -1146,8 +1146,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a failed fetch retried no sooner than 24 h later (`.release-fetch-failed`), server#269; a download
   unpacks in a `.download-*` folder inside the one it fills, removed at the next start if a stop left it). Anything a reader does
   not model exactly is `unsure` and that one file goes to ffprobe, silently (a debug line,
-  `metadata.SetLogger`'s logger, names the file and the reason, a probe limit's included): VBR MP3 with no
-  Xing/VBRI (decision 1: ffprobe's estimate kept), a concatenated MP3, a FLAC CUESHEET or ID3
+  `metadata.SetLogger`'s logger, names the file and the reason, a probe limit's included): a VBR MP3 with no
+  Xing/VBRI whose frames can't be counted in time (see the frame count below), a concatenated MP3, a FLAC CUESHEET or ID3
   prefix, fragmented/compressed MP4, an unknown handler or sample entry, multi-stream Ogg, an MKA
   with no duration or a second SeekHead, another container named .mp3 (WAV, FLAC, Ogg, MKV, MP4),
   a chapter track whose one edit needs keyframes or a DTS shift (stss/ctts; its samples are cut
@@ -1211,7 +1211,22 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   alone, as an ffprobe time-out; a scan reads an unchanged book with no stored duration or codec
   again once per server run (`Scanner.rereadUnprobed`), so a server that ran without ffprobe
   gets its books' lengths from its first scan since. `metadata.ExtractTags` reads tags alone. A
-  key `applyProbe` starts reading joins `probeTagKeys`. A CBR MP3's bitrate-estimated duration counts each ID3 picture read_apic
+  key `applyProbe` starts reading joins `probeTagKeys`. **The one departure from parity (SRV-16)**: a VBR MP3
+  with no Xing/VBRI header (its first 64 frames or the frames at 20-80% of the file differ in bitrate:
+  `mp3ConstantBitrate`) has its frames counted, header to header from the first to the trailing ID3v1/APEv2
+  tags (`mp3Uncounted.count`, `mp3FrameCount`; resyncing past junk, a frame cut off by the end dropped), where
+  ffprobe estimates its length from a bitrate (139.42 s for 150.05 s of audio: seeks in the file landed up to
+  ~7% off). The count reads the whole file in 1 MiB windows straight from it (`blockFile.raw`), bounded on
+  its own as ffprobe's run would be (the ffprobe timeout and the caller's context, the file's size in bytes,
+  each read waited for under them, `await`), never on the hot path (a file with a header, or CBR, is not
+  counted); cut short, the file goes to ffprobe (its estimate) as before, and with no ffprobe a count out of
+  time is a `ProbeTimedOut`. The result is `probeResult.Counted` (`ProbeView.Counted`: `Diff` leaves its
+  duration out; `countedFixtures` in the golden test holds each fixture's decoded length). With an ffprobe
+  whose release has no rules, an MP3's estimate is replaced the same way after ffprobe answers
+  (`countedMP3`). A stored book read before this (`books.duration_rev` < `catalog.durationRev`, 0082) that
+  holds an MP3 is `Signature.DurationStale`: the next scan indexes it once more, its files unchanged, and
+  every index writes the current revision (bump it, and `durationStaleExpr`'s filter, when a change to the
+  length reading should re-read stored books). A CBR MP3's bitrate-estimated duration counts each ID3 picture read_apic
   keeps (its stream's 1/90000 can round past the audio's). Tests: `testdata/probe` (~100 fixtures, < 3 MB, made by
   `scripts/gen-probe-fixtures.sh` with `cmd/mkfixtures`) and `golden-<release>.json` per known
   release (`cmd/probediff -golden`; the script writes the Docker image's via docker), checked with
@@ -1243,8 +1258,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`-protocol_whitelist fd|pipe`, the demuxer ffmpeg's guess); no `-xerror` (it fails a whole encode on one damaged
   MP3 frame, ffmpeg 7.1 tested). Its duration is the source's (within 0.1 s on MP3 and M4B), so positions and
   chapters (CROSS-REPO §6) hold; since a read error partway still exits 0, a copy more than 1 s short of the
-  source's exact duration (`metadata.ExactDuration`, the in-process probe; skipped when it is unsure, as for a VBR
-  MP3 with no Xing/VBRI header, or can't measure the copy) is not cached and is remembered as a refusal (422
+  source's exact duration (`metadata.ExactDuration`, the in-process probe, a header-less VBR MP3's frames counted;
+  skipped when it is unsure, or can't measure the copy) is not cached and is remembered as a refusal (422
   `rendition_failed`, state `failed`), since a source short itself (a truncated MP3 whose Xing header names the
   whole length) would otherwise be encoded again on every request; like every refusal it is forgotten after an
   hour (`cacheRefusalTTL`), so a read error partway is tried again then. The cache is the remux's `media.FileCache` over another `cacheSpec`: key
