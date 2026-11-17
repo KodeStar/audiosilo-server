@@ -545,8 +545,8 @@ unavailable), `warn`, `info`, `safe` (green shield: "Safety stop: nothing was de
 ### Invite card _custom_
 
 Deep ink card with pink/plum radial glows, three fanned covers from the share, server mark, a QR code,
-"Uncle Ray, your audiobooks are waiting." Below: read-only mono link + Copy, uses/expiry, "code rides in
-the link fragment, never in server logs".
+"Uncle Ray, your audiobooks are waiting." Below: read-only mono link + Copy, uses/expiry, "the code is
+never sent to the server with the link, so it stays out of its logs".
 
 ### Danger zone
 

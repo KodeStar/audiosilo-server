@@ -228,8 +228,8 @@ function Shelf({
               ? `${t(state === 'preorder' ? 'series.preorder' : 'series.newRelease')} · `
               : '';
             // The date runs in a line of its own beside the title; the state word
-            // leads it only where the whole line fits (else the date alone, its
-            // colour still saying which, the spine's label all of it).
+            // leads it only where the whole line fits (else a small mark does, the
+            // spine's label saying all of it).
             const showState = Boolean(stateWord) && spineFitsLabel(height, stateWord + date, phone);
             const label =
               state === 'preorder'

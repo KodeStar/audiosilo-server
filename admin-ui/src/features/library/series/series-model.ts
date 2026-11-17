@@ -466,8 +466,8 @@ export function spineHeight(seconds: number, key: string): number {
 /**
  * Whether a missing entry's spine, `heightPct` of the shelf, has room for its
  * whole release label `label` ("Preorder · 24 Nov 2026") in the line it runs in
- * beside the title; when not, the spine shows the date alone (its colour still
- * says preorder or new; the spine's own label says it all). The sizes are
+ * beside the title; when not, the spine shows the date behind a small mark of
+ * its state (preorder or new; the spine's own label says it all). The sizes are
  * globals.css's: the shelf (232 px, 200 on a phone), the spine's padding,
  * dashed border and number (a 15.75 px line and its 10 px margin), and the
  * date's mono characters (JetBrains Mono's 0.6em of 10 px, 9 on a phone, plus
