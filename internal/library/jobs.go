@@ -272,7 +272,7 @@ func (s *Scanner) run(ctx, jctx context.Context, j *Job) {
 		}
 		return
 	}
-	if !catalog.KnownKind(lib.Kind) {
+	if !catalog.KnownKind(lib.Kind) && (j.Trigger == TriggerSchedule || j.Trigger == TriggerStartup) {
 		s.skipUnknownKind(lib)
 		return
 	}
@@ -308,11 +308,13 @@ func (s *Scanner) run(ctx, jctx context.Context, j *Job) {
 	}
 }
 
-// skipUnknownKind drops a job for a library of a kind this server doesn't know
-// (a newer AudioSilo's, left by a rollback: ErrUnknownKind): it is never
-// scanned, and a failed run and its "scan failed" alert at every scheduled scan
-// and restart would only repeat that. One log line per library instead, and the
-// schedule counts from now (skipped) so the next tick doesn't queue it again.
+// skipUnknownKind drops a scheduled or startup job for a library of a kind this
+// server doesn't know (a newer AudioSilo's, left by a rollback: ErrUnknownKind):
+// it is never scanned, and a failed run and its "scan failed" alert at every
+// scheduled scan and restart would only repeat that. One log line per library
+// instead, and the schedule counts from now (skipped) so the next tick doesn't
+// queue it again. A scan an admin asked for, or a setting change, still runs and
+// fails, so the run and its alert name the cause.
 func (s *Scanner) skipUnknownKind(lib *catalog.Library) {
 	s.mu.Lock()
 	said := s.jobs.unknownKind[lib.ID]

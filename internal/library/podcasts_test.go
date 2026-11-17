@@ -317,10 +317,12 @@ func TestScanRefusesAnUnknownLibraryKind(t *testing.T) {
 	}
 }
 
-// A scan job for a library of a kind this server doesn't know records no run
-// and raises no "scan failed" alert, at every scheduled scan or restart: it is
-// skipped with one log line per library, and the schedule counts from the skip
-// (server#361). Allowed: the same job for a known kind runs and reports.
+// A scheduled or startup scan job for a library of a kind this server doesn't
+// know records no run and raises no "scan failed" alert: it is skipped with one
+// log line per library, and the schedule counts from the skip (server#361). A
+// manual or setting-change scan of it still records a failed run whose report
+// names the cause, so the admin who asked sees why. Allowed: the same job for a
+// known kind runs and reports.
 func TestScanJobSkipsAnUnknownLibraryKind(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -373,5 +375,20 @@ func TestScanJobSkipsAnUnknownLibraryKind(t *testing.T) {
 	s.mu.Unlock()
 	if skipped.Before(before) {
 		t.Errorf("skipped at %v, want the schedule to count from the skip", skipped)
+	}
+
+	for _, trigger := range []string{TriggerManual, TriggerChange} {
+		n := len(reports)
+		runJob(trigger)
+		if len(reports) != n+1 {
+			t.Fatalf("%s: %d reports, want one more", trigger, len(reports)-n)
+		}
+		if r := reports[n]; r.Status != catalog.RunFailed || r.RunID == 0 ||
+			!strings.Contains(r.Detail, "doesn't know the library's kind") {
+			t.Errorf("%s: report %+v, want a recorded failed run naming the unknown kind", trigger, r)
+		}
+	}
+	if runs, _ := cat.ListScanRuns(ctx, lib.ID, 0, 10); len(runs) != 3 {
+		t.Errorf("%d runs recorded, want the known kind's and the two asked-for scans'", len(runs))
 	}
 }

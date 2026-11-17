@@ -2963,9 +2963,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Artwork belongs to the show.
   A library kind this server does not know (`catalog.KnownKind`; a newer server's, left by a
   rollback) is never scanned as books: `Scan` fails with `library.ErrUnknownKind` and a targeted index
-  refuses any library that isn't `books` (`resolveBook`, `ErrNotIndexable`). A scan job for one records
-  no run and raises no "scan failed" alert (`skipUnknownKind`: one log line per library, and the
-  schedule counts from the skip), so a rollback doesn't alert at every scheduled scan and restart.
+  refuses any library that isn't `books` (`resolveBook`, `ErrNotIndexable`). A scheduled or startup scan
+  job for one records no run and raises no "scan failed" alert (`skipUnknownKind`: one log line per
+  library, and the schedule counts from the skip), so a rollback doesn't alert at every scheduled scan
+  and restart; a manual or setting-change scan still records a failed run, and its alert, naming the cause.
   `catalog.Caller.Podcasts` comes from this request's credential via `api.callerOf(ctx)` and
   `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players need
   `PodcastPlayerMinVersion` (2.2.0, the first with podcast views; numeric X.Y.Z, a pre-release
