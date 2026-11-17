@@ -13,7 +13,6 @@ import {
   type PreviewSample,
   type SettingsPatch,
   type SettingsSection,
-  type SetupMark,
   type SetupMarks,
   type SetupRequest,
   type SetupState,
@@ -39,8 +38,9 @@ export function stepIndex(id: SetupStepId): number {
 /**
  * The one rule for the folder step: a books library on the server satisfies
  * it, whatever its mark (it was added here, by config, or by an older setup
- * page); `hasLibraries` is hasBookLibrary's answer. Where the flow opens, what
- * Finish marks and what the Overview card lists all follow it.
+ * page); `hasLibraries` is hasBookLibrary's answer. Where the flow opens and
+ * what the Overview card lists follow it, as Finish does on the server
+ * (catalog.UpdateSetupState marks an unmarked folder step done by it).
  */
 export function folderSatisfied(hasLibraries: boolean): boolean {
   return hasLibraries;
@@ -127,26 +127,6 @@ export function skippedSteps(state: SetupState, hasLibraries: boolean): SetupSte
   return SETUP_STEPS.filter(
     (id) => state.steps[id] === 'skipped' && !(id === 'folder' && folderSatisfied(hasLibraries)),
   );
-}
-
-/**
- * The marks Finish sends: the step left with its own mark, and every step
- * without one (passed over by the stepper, or never reached) as skipped, so
- * the Overview card lists what is left; an unmarked folder step is done once
- * the server has a library (folderSatisfied). `marks` should be the server's
- * current marks (read again just before Finish), so a step another tab
- * recorded isn't overwritten.
- */
-export function finishMarks(
-  marks: SetupMarks,
-  current: SetupStepId,
-  mark: SetupMark,
-  hasLibraries: boolean,
-): SetupMarks {
-  const left = SETUP_STEPS.filter((id) => id !== current && !marks[id]);
-  const unmarked = (id: SetupStepId): SetupMark =>
-    id === 'folder' && folderSatisfied(hasLibraries) ? 'done' : 'skipped';
-  return { ...Object.fromEntries(left.map((id) => [id, unmarked(id)])), [current]: mark };
 }
 
 /**

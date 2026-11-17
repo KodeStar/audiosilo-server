@@ -1,13 +1,14 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getToken, setToken } from '@/api/token';
-import type {
-  AdminLibrary,
-  AdminSettings,
-  LibraryPreview,
-  SetupEnvelope,
-  SetupPatch,
-  SetupState,
+import {
+  SETUP_STEPS,
+  type AdminLibrary,
+  type AdminSettings,
+  type LibraryPreview,
+  type SetupEnvelope,
+  type SetupPatch,
+  type SetupState,
 } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import {
@@ -71,7 +72,11 @@ function flowRoutes(
     'GET /admin/setup': () => ({ body: setupEnvelope(state, env) }),
     'PUT /admin/setup': (req) => {
       const p = req.body as SetupPatch;
+      const finishing = p.finished === true && !state.finished;
       Object.assign(state, { ...p, steps: { ...state.steps, ...p.steps } });
+      // As catalog.UpdateSetupState: finishing marks every unmarked step
+      // skipped (no books library here, so the folder step too).
+      if (finishing) for (const id of SETUP_STEPS) state.steps[id] ??= 'skipped';
       return { body: state };
     },
     'POST /admin/setup/preview': { body: preview },
@@ -594,24 +599,10 @@ describe('the end of the flow', () => {
     await screen.findByRole('img', { name: 'Pairing QR code for your phone' });
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    // Reached by a jump: every step without a mark goes down as skipped,
-    // the folder too, since no library was made. Finish counts the phone
-    // step as done, so the card doesn't ask for it at once (ADMIN-05).
-    expect(puts(calls)).toEqual([
-      {
-        steps: {
-          folder: 'skipped',
-          naming: 'skipped',
-          metadata: 'skipped',
-          reach: 'skipped',
-          abs: 'skipped',
-          backups: 'skipped',
-          bridge: 'skipped',
-          phone: 'done',
-        },
-        finished: true,
-      },
-    ]);
+    // Reached by a jump: Finish sends only the phone step, counted as done so
+    // the card doesn't ask for it at once (ADMIN-05); the server marks every
+    // step without a mark skipped, the folder too, since no library was made.
+    expect(puts(calls)).toEqual([{ steps: { phone: 'done' }, finished: true }]);
     const card = await screen.findByRole('region', { name: 'Finish setting up' });
     expect(within(card).getByRole('link', { name: /Where are your books/ })).toBeVisible();
     expect(within(card).queryByRole('link', { name: /Connect a phone/ })).toBeNull();
@@ -649,7 +640,7 @@ describe('the end of the flow', () => {
     ]);
   });
 
-  it('Finish keeps the marks already made and skips only the unmarked steps', async () => {
+  it('Finish keeps the marks already made, sending only its own step', async () => {
     const calls = mockFetch(
       flowRoutes(
         { steps: { folder: 'done', naming: 'done', metadata: 'done', reach: 'skipped' } },
@@ -660,12 +651,7 @@ describe('the end of the flow', () => {
     await screen.findByRole('img', { name: 'Pairing QR code for your phone' });
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    expect(puts(calls)).toEqual([
-      {
-        steps: { abs: 'skipped', backups: 'skipped', bridge: 'skipped', phone: 'done' },
-        finished: true,
-      },
-    ]);
+    expect(puts(calls)).toEqual([{ steps: { phone: 'done' }, finished: true }]);
     const card = await screen.findByRole('region', { name: 'Finish setting up' });
     expect(within(card).queryByRole('link', { name: /Where are your books/ })).toBeNull();
     expect(within(card).getByRole('link', { name: /reach the server/ })).toBeVisible();
@@ -830,7 +816,7 @@ describe('the 2.4.0 fixes', () => {
     expect(puts(calls)).toEqual([{ steps: { naming: 'skipped' } }]);
   });
 
-  it("Finish reads the marks again, so another tab's are kept (R-10)", async () => {
+  it("Finish sends only its own step, so another tab's marks are kept (R-10, server#183)", async () => {
     const steps: SetupState['steps'] = {};
     const calls = mockFetch(flowRoutes({ steps }, { 'POST /auth/pair': pairOk }));
     const { router } = renderApp('/setup?step=phone');
@@ -839,9 +825,8 @@ describe('the 2.4.0 fixes', () => {
     steps.backups = 'done';
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    const finish = puts(calls).at(-1) as SetupPatch;
-    expect(finish.finished).toBe(true);
-    expect(finish.steps).not.toHaveProperty('backups');
+    expect(puts(calls).at(-1)).toEqual({ steps: { phone: 'done' }, finished: true });
+    expect(steps.backups).toBe('done');
   });
 
   it('Finish says a restart is still due for a choice made in the flow (ADMIN-03)', async () => {
