@@ -3006,7 +3006,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   The catalog applies this gate before admin shortcuts, on single and multiple library scopes
   and library lists. The console's views of another person (user detail, a progress edit) take
   that person's access under the viewing request's gate. Background callers and cast tokens keep
-  it false. Private shows then narrow
+  it false. `GET /libraries` also lists no podcasts library while the podcasts module is off
+  (`handleListLibraries`, server#179); the other routes keep the client gate alone. Private shows then narrow
   every player's scope, including admins, to shows they follow. A follow records the feed.json
   `show_id`, so a different show reusing the same path requires fresh proof. A granted library
   with no visible shows still serves empty lists; content paths remain denied. Knowing a feed URL proves access

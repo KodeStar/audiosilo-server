@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
@@ -47,9 +48,14 @@ func seesPodcasts(ctx context.Context) bool {
 }
 
 // handleListLibraries lists libraries the caller can reach (via any share, or
-// for a household member through their owner: the member rule).
+// for a household member through their owner: the member rule). A podcasts
+// library is listed only while the podcasts module is on (server#179): turned
+// off, the player shows none, as an old client never sees one; what's in it
+// waits for the module to come back.
 func (a *API) handleListLibraries(w http.ResponseWriter, r *http.Request) {
-	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(r.Context()))
+	who := callerOf(r.Context())
+	who.Podcasts = who.Podcasts && a.moduleOn(bridge.ModulePodcasts)
+	libs, err := a.cat.CallerLibraries(r.Context(), who)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list libraries")
 		return

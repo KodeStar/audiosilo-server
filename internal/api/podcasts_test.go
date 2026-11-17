@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -76,6 +77,59 @@ func podcastHeaders() map[string]string {
 func podcastRoute(id int64, suffix string) string {
 	return fmt.Sprintf("/api/v1/libraries/%d/%s", id, suffix)
 }
+
+// GET /libraries lists a podcasts library only while the podcasts module is
+// on (server#179): turned off, neither a new client nor an old one (never
+// shown one) lists it, an admin's included; turned back on, a new client lists
+// it again. A books library is listed either way.
+func TestPodcastLibraryHiddenWhileModuleOff(t *testing.T) {
+	b, uid, _ := podcastEnv(t, false)
+	ctx := context.Background()
+	libs, err := b.cat.ListLibraries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	books := libs[slices.IndexFunc(libs, func(l catalog.Library) bool { return l.Kind == catalog.KindBooks })]
+	if err := b.cat.GrantWholeLibrary(ctx, uid, books.ID); err != nil {
+		t.Fatal(err)
+	}
+	listed := func(tok, client string) (podcasts, booksListed bool) {
+		t.Helper()
+		resp, body := b.doHeaders(t, "GET", "/api/v1/libraries", tok, "", map[string]string{auth.ClientHeader: client})
+		if resp.StatusCode != 200 {
+			t.Fatalf("libraries: %d %s", resp.StatusCode, body)
+		}
+		var list struct{ Libraries []catalog.Library }
+		decodeInto(t, body, &list)
+		for _, l := range list.Libraries {
+			podcasts = podcasts || l.ID == b.lib.ID
+			booksListed = booksListed || l.ID == books.ID
+		}
+		return podcasts, booksListed
+	}
+	const newClient, oldClient = "AudioSilo/2.7.0 (web)", "AudioSilo/2.1.0 (web)"
+	for name, tok := range map[string]string{"listener": b.userTok, "admin": b.adminTok} {
+		if p, bk := listed(tok, newClient); !p || !bk {
+			t.Fatalf("%s, module on: podcasts %t books %t, want both", name, p, bk)
+		}
+	}
+	podcastsModule(t, b, false)
+	for name, tok := range map[string]string{"listener": b.userTok, "admin": b.adminTok} {
+		for _, client := range []string{newClient, oldClient} {
+			if p, bk := listed(tok, client); p || !bk {
+				t.Errorf("%s (%s), module off: podcasts %t books %t, want books only", name, client, p, bk)
+			}
+		}
+	}
+	podcastsModule(t, b, true)
+	if p, _ := listed(b.userTok, newClient); !p {
+		t.Fatal("module back on: the podcasts library is still hidden")
+	}
+	if p, _ := listed(b.userTok, oldClient); p {
+		t.Fatal("an old client lists a podcasts library")
+	}
+}
+
 func TestPodcastClientGateMatrix(t *testing.T) {
 	b, uid, f := podcastEnv(t, false)
 	ctx := context.Background()
