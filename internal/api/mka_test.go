@@ -458,10 +458,13 @@ type coldAnswer struct {
 // getAsync GETs the env's stream URL for mkaFile with query on its own
 // goroutine, never failing the test from there (t.Fatal must not run off the
 // test's goroutine, or a failed request would leave the test waiting).
-func (m *mkaEnv) getAsync(query string) <-chan coldAnswer {
+func (m *mkaEnv) getAsync(query string) <-chan coldAnswer { return m.getAsyncOf(mkaFile, query) }
+
+// getAsyncOf is getAsync for the audio file at path.
+func (m *mkaEnv) getAsyncOf(path, query string) <-chan coldAnswer {
 	got := make(chan coldAnswer, 1)
 	go func() {
-		req, err := http.NewRequest("GET", m.srv.URL+m.url("stream", mkaFile)+query, nil)
+		req, err := http.NewRequest("GET", m.srv.URL+m.url("stream", path)+query, nil)
 		if err != nil {
 			got <- coldAnswer{err: err}
 			return
@@ -588,6 +591,28 @@ func TestMatroskaColdRemuxWaitBounded(t *testing.T) {
 				t.Fatalf("download past the wait = %q, want book.mp3", got)
 			}
 		})
+	}
+}
+
+// TestMatroskaRefusedPastTheStreamBound (SRV-15c): a download that waited for a
+// remux past the stream's bound (streamWait), which then refused the file (not
+// MP3 inside), is served the stored file: the waits were no looks at the file,
+// so its open still gets a look's time, never the 1 ns left of the bound and a
+// 503 share_not_answering from a share that answers.
+func TestMatroskaRefusedPastTheStreamBound(t *testing.T) {
+	t.Parallel()
+	m := newMKAEnv(t)
+	m.api.ffmpeg = "ffmpeg"
+	m.api.remuxWait = 20 * time.Millisecond
+	m.api.streamWait = 100 * time.Millisecond
+	release := holdRuns(t, m.api.remux)
+	got := m.getAsyncOf(mkaAACFile, "&download=1")
+	time.Sleep(3 * m.api.streamWait) // inside the longer wait, past the stream's bound
+	release()
+	a := await(t, got)
+	if a.resp.StatusCode != http.StatusOK || a.resp.Header.Get("Content-Type") != "audio/x-matroska" || a.body == "" {
+		t.Fatalf("refused past the stream's bound = %d %q (%d bytes), want the stored file", a.resp.StatusCode,
+			a.resp.Header.Get("Content-Type"), len(a.body))
 	}
 }
 

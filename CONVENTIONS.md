@@ -1221,8 +1221,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `Retry-After`. A file cache's background run opens its source unbounded (once the request's look
   answered); its own stats of the source (`Open`, `Status`, `Queue`, `RefusedFor`, a warm's first look) are
   given a scan's look time (`media.sourceWait`), never none, so one on a share that stopped answering since never
-  holds its mount's slot for good. A remux download that falls back to the live transcode gives the transcode's
-  look at least `API.fileWait`, the remux's waits being no looks.
+  holds its mount's slot for good. A stream that waited on a remux gives its next look (the live transcode's it
+  falls back to, or the stored file's open once the remux refused the file) at least `API.fileWait`
+  (`API.afterWait`), the remux's waits being no looks.
   The scan gives each the probe's time (`Scanner.probeTimeout`); an on-demand read (`/item`'s index, an admin's
   Re-read and the Bridge's rescan through `rescanAt`) gives each `API.fileWait` instead (SRV-15c:
   `library.WithLookTimeout` on its context, `Scanner.lookTimeout`, kept by the read `leadIndex` goes on with), well

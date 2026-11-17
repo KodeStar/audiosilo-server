@@ -829,7 +829,8 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	download := r.URL.Query().Get("download") == "1"
 	if a.remuxOn() && strings.EqualFold(filepath.Ext(rel), ".mka") && r.URL.Query().Get("original") != "1" {
-		if a.serveRemuxed(w, r, lib.ID, rel, abs, download, deadline) {
+		var served bool
+		if served, deadline = a.serveRemuxed(w, r, lib.ID, rel, abs, download, deadline); served {
 			return
 		}
 	}
@@ -843,6 +844,17 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 // with none.
 func waitLeft(deadline time.Time) time.Duration {
 	return max(time.Until(deadline), time.Nanosecond)
+}
+
+// afterWait is a stream's deadline once it has waited on something that was no
+// look at the file (a remux running): moved on to leave the next look at least
+// a look's time (fileWait), not a bound the wait may have used up, which would
+// answer 503 share_not_answering from a share that answers.
+func (a *API) afterWait(deadline time.Time) time.Time {
+	if d := time.Now().Add(a.fileWait); d.After(deadline) {
+		return d
+	}
+	return deadline
 }
 
 // lookAtSource is media.Source's look at abs, the copy a remux or rendition
@@ -941,12 +953,14 @@ func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloa
 // request is a download (whose saved copy would otherwise be the lossy
 // transcode) or every transcode slot is busy (which would otherwise be a 503). It reports
 // false, having written nothing, when the stored file should be served instead
-// (ErrRefused: not MP3 inside, or no regular file there); true also when
+// (ErrRefused: not MP3 inside, or no regular file there), with the deadline
+// that file's open has (afterWait: the waits for a remux that then refused the
+// file were no looks at it); true also when
 // the request went away while waiting. Its look at abs (media.Source) given up
 // on at the stream's deadline is a 503 share_not_answering.
-func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, download bool, deadline time.Time) bool {
+func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, download bool, deadline time.Time) (served bool, left time.Time) {
 	if answered, err := lookAtSource(w, r, abs, deadline); answered || err != nil {
-		return answered // err: no regular file there, the stored file's answer (a 404)
+		return answered, deadline // err: no regular file there, the stored file's answer (a 404)
 	}
 	wait, cancel := context.WithTimeout(r.Context(), a.remuxWait)
 	defer cancel()
@@ -972,26 +986,24 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		}
 	}
 	if err != nil {
+		// The waits for the remux were no looks at the file (the share answered
+		// lookAtSource): the next look, the transcode's or the stored file's
+		// open, is given at least a look's time (a download whose remux ran
+		// long, or refused the file late).
+		deadline = a.afterWait(deadline)
 		switch {
 		case r.Context().Err() != nil:
-			return true
+			return true, deadline
 		case errors.Is(err, media.ErrRefused):
-			return false
+			return false, deadline
 		case a.baseCtx.Err() != nil:
 			// The server is stopping, and its remux with it: no new transcode now.
 			writeError(w, http.StatusServiceUnavailable, "the server is shutting down")
-			return true
+			return true, deadline
 		case running:
 			// Still remuxing (it goes on): this request is transcoded.
 		case !errors.Is(err, media.ErrUnavailable):
 			a.log.Warn("remux failed: transcoding Matroska instead", "path", abs, "err", err)
-		}
-		// The waits for the remux were no looks at the file (the share answered
-		// lookAtSource): the transcode's look is given at least a look's time,
-		// not a stream's bound those waits may have used up (a 503
-		// share_not_answering for a download whose remux ran long).
-		if d := time.Now().Add(a.fileWait); d.After(deadline) {
-			deadline = d
 		}
 		downloadName := ""
 		if download {
@@ -999,13 +1011,13 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		}
 		if held != nil {
 			a.transcodeHeld(w, r, abs, downloadName, a.noteTranscode(r, lib, rel), deadline)
-			return true
+			return true, deadline
 		}
 		a.serveTranscode(w, r, lib, rel, abs, downloadName, deadline)
-		return true
+		return true, deadline
 	}
 	serveCopy(w, r, f, etag, name, download)
-	return true
+	return true, deadline
 }
 
 // beginTranscode admits one ?transcode=1 request for the file at rel: 503 when
