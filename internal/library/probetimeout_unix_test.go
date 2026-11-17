@@ -15,13 +15,13 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
-// A part whose ffprobe run times out keeps the book's length (server#360):
-// the live check's repro, a part swapped for a FIFO held open by a writer that
-// never writes, so ffprobe's read waits until it is killed, alone too. The
-// re-index keeps the stored book whole (length, chapters) and records the
-// part's time-out, not counted as updated; once the part is back, the next
-// scan reads the book again.
-func TestPartWhoseProbeTimesOutKeepsTheBookLength(t *testing.T) {
+// A part swapped for a FIFO keeps the book's length (server#360): the live
+// check's repro, a FIFO held open by a writer that never writes, which once
+// held ffprobe's read until it was killed. It is turned away unread (no
+// regular file, its tags unread), so the re-index keeps the stored book whole
+// (length, chapters) and records the part's problem, not counted as updated;
+// once the part is back, the next scan reads the book again.
+func TestFIFOPartKeepsTheBookLength(t *testing.T) {
 	t.Parallel()
 	ffprobe, err := exec.LookPath("ffprobe")
 	if err != nil {
@@ -71,12 +71,12 @@ func TestPartWhoseProbeTimesOutKeepsTheBookLength(t *testing.T) {
 	if err := syscall.Mkfifo(part2, 0o644); err != nil {
 		t.Skipf("no FIFO here: %v", err)
 	}
-	writer, err := os.OpenFile(part2, os.O_RDWR, 0) // a writer, so a reader's open returns and its read waits
+	writer, err := os.OpenFile(part2, os.O_RDWR, 0) // a writer, so an open that waited for one would return and its read wait
 	if err != nil {
 		t.Skipf("can't hold the FIFO open: %v", err)
 	}
 	defer writer.Close()
-	s.probeTimeout = 500 * time.Millisecond
+	s.probeTimeout = 500 * time.Millisecond // short, should the FIFO be read after all
 	res, err := s.Scan(ctx, *lib)
 	if err != nil {
 		t.Fatal(err)

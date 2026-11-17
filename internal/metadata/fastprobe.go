@@ -342,13 +342,6 @@ func (b *blockFile) waitRead(p []byte, off int64) (int, error) {
 	return r.n, r.err
 }
 
-// An await's call: still running, abandoned by its waiter, or returned.
-const (
-	readRunning int32 = iota
-	readAbandoned
-	readReturned
-)
-
 // maxAbandonedReads is how many reads await may have given up on (an open,
 // a pread, an ffprobe run) that have not returned yet, on one mount (mounts.Of), before a new read from a file
 // there is refused (reads already under way may still be given up on, so the

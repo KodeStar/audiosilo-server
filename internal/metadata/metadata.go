@@ -382,24 +382,14 @@ func TimedOutForTests(path string) *Metadata {
 // often it is called). For a test that isn't parallel (it swaps the mount
 // lookup every read makes); it panics outside a test binary.
 func HangMountForTests(dir string) (release func()) {
-	if !testing.Testing() {
-		panic("metadata.HangMountForTests called outside a test binary")
-	}
-	was := stuckByMount.Mount
-	key := "hung-for-tests:" + dir
-	stuckByMount.Mount = func(p string) (string, string) {
-		if mounts.Within(p, dir) {
-			return key, dir
-		}
-		return was(p)
-	}
+	restore := ownMountForTests("HangMountForTests", "hung-for-tests:", dir)
 	hung := stuckByMount.For(dir)
 	hung.n.Add(maxAbandonedReads)
 	return sync.OnceFunc(func() {
 		for range maxAbandonedReads {
 			hung.release()
 		}
-		stuckByMount.Mount = was
+		restore()
 	})
 }
 
@@ -410,17 +400,7 @@ func HangMountForTests(dir string) (release func()) {
 // parallel (it swaps the mount lookup every read makes); it panics outside a
 // test binary.
 func HoldOpensForTests(dir string) (release func()) {
-	if !testing.Testing() {
-		panic("metadata.HoldOpensForTests called outside a test binary")
-	}
-	was := stuckByMount.Mount
-	key := "held-for-tests:" + dir
-	stuckByMount.Mount = func(p string) (string, string) {
-		if mounts.Within(p, dir) {
-			return key, dir
-		}
-		return was(p)
-	}
+	restore := ownMountForTests("HoldOpensForTests", "held-for-tests:", dir)
 	held := make(chan struct{})
 	hook := func(p string) {
 		if mounts.Within(p, dir) {
@@ -431,8 +411,26 @@ func HoldOpensForTests(dir string) (release func()) {
 	return sync.OnceFunc(func() {
 		close(held)
 		heldOpens.Store(nil)
-		stuckByMount.Mount = was
+		restore()
 	})
+}
+
+// ownMountForTests keys the files under dir by a mount of their own (prefix
+// and dir) until restore; caller names the test hook for its panic outside a
+// test binary.
+func ownMountForTests(caller, prefix, dir string) (restore func()) {
+	if !testing.Testing() {
+		panic("metadata." + caller + " called outside a test binary")
+	}
+	was := stuckByMount.Mount
+	key := prefix + dir
+	stuckByMount.Mount = func(p string) (string, string) {
+		if mounts.Within(p, dir) {
+			return key, dir
+		}
+		return was(p)
+	}
+	return func() { stuckByMount.Mount = was }
 }
 
 // ffprobeForced reports whether ForceFFprobeForTests named ffprobePath.

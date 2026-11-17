@@ -56,6 +56,13 @@ func await[T any](ctx context.Context, stuck *stuckReads, fn func() T, drop func
 	}
 }
 
+// An await's call: still running, abandoned by its waiter, or returned.
+const (
+	readRunning int32 = iota
+	readAbandoned
+	readReturned
+)
+
 // heldOpens is HoldOpensForTests's hook, called before each open; nil outside
 // a test.
 var heldOpens atomic.Pointer[func(path string)]
@@ -146,9 +153,8 @@ func Fingerprint(ctx context.Context, path string, timeout time.Duration) string
 		h.Write(head[:n])
 		if b.size > fingerprintChunk {
 			tail := make([]byte, fingerprintChunk)
-			if m, err := b.raw(tail, b.size-fingerprintChunk); err == nil || m > 0 {
-				h.Write(tail[:m])
-			}
+			m, _ := b.raw(tail, b.size-fingerprintChunk)
+			h.Write(tail[:m])
 		}
 	}); why != "" {
 		return ""

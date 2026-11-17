@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -142,8 +143,15 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 // graceAfter is a context that ends grace after ctx does, or at stop.
 func graceAfter(ctx context.Context, grace time.Duration) (context.Context, context.CancelFunc) {
 	g, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	unhook := context.AfterFunc(ctx, func() { time.AfterFunc(grace, cancel) })
-	return g, func() { unhook(); cancel() }
+	var timer atomic.Pointer[time.Timer]
+	unhook := context.AfterFunc(ctx, func() { timer.Store(time.AfterFunc(grace, cancel)) })
+	return g, func() {
+		unhook()
+		if t := timer.Load(); t != nil {
+			t.Stop()
+		}
+		cancel()
+	}
 }
 
 // ffContextAddr is the address in FFmpeg's log prefix, "[mov,mp4 @ 0x7de824000]".
