@@ -130,6 +130,17 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
     },
   });
   const { errors, isSubmitting } = form.formState;
+  // A lock learned with the form open (a restart since the setup was read: the
+  // 409 below, or the next read) puts the stored name and folder back. They are
+  // shown, not edited, so a refused edit must not stay in the fields, or in the
+  // toast of the save that follows.
+  const lockedName = fromConfig ? library?.name : undefined;
+  const lockedRoot = fromConfig ? library?.root : undefined;
+  useEffect(() => {
+    if (lockedName === undefined || lockedRoot === undefined) return;
+    form.setValue('name', lockedName);
+    form.setValue('folder', lockedRoot);
+  }, [lockedName, lockedRoot, form]);
 
   /**
    * Grants a new library to every listener: how many grants failed, or none

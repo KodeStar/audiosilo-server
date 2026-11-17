@@ -863,6 +863,8 @@ describe('libraries, 2.4.0 fixes', () => {
     expect(within(dialog).getAllByText(/set in config.yaml/)[0]).toBeInTheDocument();
     // The setup is read again (server#197): the name locks, and so does the card.
     await waitFor(() => expect(name).toHaveAttribute('readonly'));
+    // The refused name doesn't stay in a field that can no longer be edited.
+    await waitFor(() => expect(name).toHaveValue('Fiction'));
     expect(calls.filter((c) => c.path === '/admin/setup').length).toBeGreaterThan(1);
     await user.keyboard('{Escape}');
     expect(await within(fiction).findByText('From your config')).toBeInTheDocument();
