@@ -1661,7 +1661,8 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 
 // The reasons the server records as a job's error when it cancels the job
 // itself, not an admin (the console words a cancel by them, BRIDGE-02, and
-// keeps a copy of these strings: admin-ui generate-model.ts).
+// keeps a copy of these strings: admin-ui generate-model.ts, checked by
+// TestCancelReasonsMatchConsole).
 const (
 	// CancelMoved: MoveJobs, the book moved onto another open job of its kind.
 	CancelMoved = "the book moved onto another job of this kind"
@@ -1675,18 +1676,17 @@ const (
 // Audible account's job's (CancelAudibleRemoved, CancelAudiblePaused,
 // CancelAudibleSyncOff).
 func IsCancelReason(text string) bool {
-	switch text {
-	case CancelMoved, CancelReplacedRequest, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff:
-		return true
-	}
+	return slices.Contains(cancelReasons(), text)
+}
+
+// cancelReasons is every reason IsCancelReason knows, the list the console's
+// copy (SERVER_CANCEL_REASONS) is checked against (TestCancelReasonsMatchConsole).
+func cancelReasons() []string {
+	out := []string{CancelMoved, CancelReplacedRequest, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff}
 	for _, spec := range kinds {
-		for _, reason := range spec.cancelsOpen {
-			if text == reason {
-				return true
-			}
-		}
+		out = slices.AppendSeq(out, maps.Values(spec.cancelsOpen))
 	}
-	return false
+	return out
 }
 
 // cancelOpenTx cancels the open job with dedupe key key, inside tx, as Cancel

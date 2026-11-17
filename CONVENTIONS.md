@@ -855,7 +855,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestCompressExclusions` row (GET and HEAD) proving it is answered identity. The answer is gzipped (BestSpeed) when it is `application/json`, at least
   1 KiB, has no Content-Encoding or ETag of its own and the client takes gzip; every JSON answer
   to a compressible request carries `Vary: Accept-Encoding`. The list cache stores each answer's
-  gzip beside it and sends that on a hit (`writeCachedJSON`), so a hit compresses nothing.
+  gzip beside it and sends that on a hit (`writeCachedJSON`), so a hit compresses nothing. A whole
+  answer gzipped in memory (the list cache's, a read-along map, a console file) is `spa.Gzip` at a
+  level (BestSpeed per request, the default for a file), nil when gzip saves nothing.
 - **List cache** (`api/listcache.go`, server#243): `GET /libraries/{id}/books` (a
   books library), `/books/recent`, `/search` and a books library's browse lists
   (`/libraries/{id}/authors`, `/narrators`, `/series`) keep their encoded answer

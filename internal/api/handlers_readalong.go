@@ -1,6 +1,7 @@
 package api
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -114,7 +115,7 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", "application/json; charset=utf-8")
 	body := data
 	if wantGzip {
-		if gz := spa.Gzipped(data); gz != nil {
+		if gz := spa.Gzip(data, gzip.DefaultCompression); gz != nil {
 			h.Set("Content-Encoding", "gzip")
 			body = gz
 		}

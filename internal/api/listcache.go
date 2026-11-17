@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/web/spa"
 )
 
 // The list cache (server#243) keeps the encoded answers of the player's book
@@ -157,7 +158,7 @@ func (a *API) cachedList(w http.ResponseWriter, r *http.Request, gen uint64, cac
 			// Only an answer the cache can keep: one too big for it is
 			// compressed by the middleware, and only for a client that takes it.
 			if n := buf.Len(); n >= gzipMinSize && n <= listCacheMaxEntry {
-				gz = gzipBytes(buf.Bytes())
+				gz = spa.Gzip(buf.Bytes(), gzipLevel) // nil when it saves nothing: sent as is
 			}
 			a.lists.put(gen, key, buf.Bytes(), gz)
 		}

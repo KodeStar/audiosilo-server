@@ -16,6 +16,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/web/spa"
 )
 
 // bigJSON is a JSON answer comfortably over gzipMinSize.
@@ -144,7 +145,7 @@ func TestCompressLeavesOtherAnswers(t *testing.T) {
 		}
 	}
 
-	pre := gzipBytes(bigJSON)
+	pre := spa.Gzip(bigJSON, gzipLevel)
 	encoded := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Encoding", "gzip")
@@ -389,9 +390,9 @@ func TestListCacheKeepsGzip(t *testing.T) {
 		t.Fatal("the stored gzip is not the answer sent")
 	}
 	// A hit sends the stored bytes: swap them for a marker's gzip.
-	marker := []byte(`{"cached":"gzip"}` + "\n")
+	marker := []byte(`{"cached":"` + strings.Repeat("gzip", 64) + `"}` + "\n") // long enough that gzip shrinks it
 	e.api.lists.mu.Lock()
-	got.gz = gzipBytes(marker)
+	got.gz = spa.Gzip(marker, gzipLevel)
 	e.api.lists.mu.Unlock()
 	resp, hit := e.raw(t, "GET", p, tok, true, nil)
 	if resp.Header.Get("Content-Encoding") != "gzip" || !bytes.Equal(gunzip(t, hit), marker) ||
@@ -458,7 +459,7 @@ func TestCompressLeavesMediaAndCredentials(t *testing.T) {
 // request, for the S5 note: go test -run - -bench ListCacheHit ./internal/api.
 func BenchmarkListCacheHit(b *testing.B) {
 	body := bytes.Repeat([]byte(`{"title":"The Rather Long Title of Book","author":"Author","path":"Author/Book.m4b","duration":36000},`), 200)
-	gz := gzipBytes(body)
+	gz := spa.Gzip(body, gzipLevel)
 	r := httptest.NewRequest("GET", "/api/v1/libraries/1/books", nil)
 	r = r.WithContext(context.WithValue(r.Context(), gzipKey, true))
 	b.Run("stored-gzip", func(b *testing.B) {
@@ -468,7 +469,7 @@ func BenchmarkListCacheHit(b *testing.B) {
 	})
 	b.Run("gzip-per-hit", func(b *testing.B) {
 		for b.Loop() {
-			_ = gzipBytes(body)
+			_ = spa.Gzip(body, gzipLevel)
 		}
 	})
 	b.Logf("raw %d bytes, gzip %d bytes", len(body), len(gz))

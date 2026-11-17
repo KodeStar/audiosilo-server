@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"net/http"
@@ -110,26 +109,13 @@ func compress(next http.Handler) http.Handler {
 	})
 }
 
-// gzipWriters keeps the compressors between requests (each holds ~800 KB of
-// state at BestSpeed; allocating one per answer would cost more than the
-// compression).
+// gzipWriters keeps the streaming gzipWriter's compressors between requests
+// (each holds ~800 KB of state at BestSpeed; allocating one per answer would
+// cost more than the compression). A whole answer in memory is spa.Gzip's.
 var gzipWriters = sync.Pool{New: func() any {
 	zw, _ := gzip.NewWriterLevel(nil, gzipLevel)
 	return zw
 }}
-
-// gzipBytes is body gzipped at gzipLevel.
-func gzipBytes(body []byte) []byte {
-	var buf bytes.Buffer
-	buf.Grow(len(body) / 4)
-	zw := gzipWriters.Get().(*gzip.Writer)
-	zw.Reset(&buf)
-	_, _ = zw.Write(body)
-	_ = zw.Close()
-	zw.Reset(nil) // let go of buf
-	gzipWriters.Put(zw)
-	return buf.Bytes()
-}
 
 // gzipWriter holds back a JSON answer until it is known to be at least
 // gzipMinSize, then gzips it; anything else passes straight through. It

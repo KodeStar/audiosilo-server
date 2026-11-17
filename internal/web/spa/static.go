@@ -243,7 +243,7 @@ func (rep *fileRep) load(name string, content io.ReadSeeker) error {
 			return err
 		}
 		sum.Write(data)
-		rep.gz = Gzipped(data)
+		rep.gz = Gzip(data, gzip.DefaultCompression)
 	} else if _, err := io.Copy(sum, content); err != nil {
 		return err
 	}
@@ -255,17 +255,44 @@ func (rep *fileRep) load(name string, content io.ReadSeeker) error {
 	return nil
 }
 
-// Gzipped compresses data at the default level (a few percent larger than the
-// best, several times faster on the first request for a big bundle), or returns
-// nil when that doesn't make it smaller.
-func Gzipped(data []byte) []byte {
+// Gzip is the one gzip of a whole answer in memory (a file here, the api's
+// cached JSON lists and read-along maps): data compressed at level, or nil when
+// that doesn't make it smaller (or level isn't one gzip takes). A file uses
+// gzip.DefaultCompression (a few percent larger than the best, several times
+// faster on the first request for a big bundle); a JSON answer made per request
+// uses gzip.BestSpeed. The compressors are pooled per level: each holds ~800 KB
+// of state, which costs more to allocate per answer than the compression.
+func Gzip(data []byte, level int) []byte {
+	pool, ok := gzipPools.Load(level)
+	if !ok {
+		pool, _ = gzipPools.LoadOrStore(level, &sync.Pool{New: func() any {
+			zw, err := gzip.NewWriterLevel(nil, level)
+			if err != nil {
+				return nil
+			}
+			return zw
+		}})
+	}
+	p := pool.(*sync.Pool)
+	zw, _ := p.Get().(*gzip.Writer)
+	if zw == nil {
+		return nil
+	}
 	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(data); err != nil || zw.Close() != nil || buf.Len() >= len(data) {
+	buf.Grow(len(data) / 4)
+	zw.Reset(&buf)
+	_, werr := zw.Write(data)
+	cerr := zw.Close()
+	zw.Reset(nil) // let go of buf
+	p.Put(zw)
+	if werr != nil || cerr != nil || buf.Len() >= len(data) {
 		return nil
 	}
 	return buf.Bytes()
 }
+
+// gzipPools is Gzip's compressors, a *sync.Pool per level.
+var gzipPools sync.Map
 
 // serveGzip writes rep's gzip form. http.ServeContent can't: it leaves out
 // Content-Length whenever Content-Encoding is set and offers byte ranges, which

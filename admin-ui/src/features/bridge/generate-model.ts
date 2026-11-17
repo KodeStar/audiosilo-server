@@ -542,7 +542,8 @@ export function parkHint(
  * CancelAudibleSyncOff; also on a working job it asked
  * to stop, kept through the Bridge's reports): shown as a sentence. Any other
  * error on a cancelled job is the park's or the Bridge's own text (a
- * supervisor's, say), never shown (BRIDGE-02).
+ * supervisor's, say), never shown (BRIDGE-02). The server's
+ * TestCancelReasonsMatchConsole (internal/bridge) fails when the two lists differ.
  */
 const SERVER_CANCEL_REASONS: readonly string[] = [
   'a generate job for the book replaced it',
