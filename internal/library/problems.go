@@ -18,9 +18,9 @@ import (
 
 // Read problem codes (books.scan_error).
 const (
-	problemUnreadable = "unreadable"   // a file couldn't be opened
-	problemEmptyFile  = "empty_file"   // a file is 0 bytes
-	problemProbe      = "probe_failed" // ffprobe couldn't read a file
+	problemUnreadable = catalog.ProblemUnreadable // a file couldn't be opened
+	problemEmptyFile  = "empty_file"              // a file is 0 bytes
+	problemProbe      = "probe_failed"            // ffprobe couldn't read a file
 )
 
 // noteProblem records the first read problem found among a book's files: file is

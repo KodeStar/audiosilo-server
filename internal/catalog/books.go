@@ -239,6 +239,12 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 	return id, refreshEffective(ctx, tx, id)
 }
 
+// ProblemUnreadable is the read problem (books.scan_error) of a file that
+// couldn't be read: the scanner's, and ResolveSources' for a book whose stored
+// scan doesn't decode (recordScannedUnreadable). A scan reads the file it names
+// again, and the whole book once that file reads.
+const ProblemUnreadable = "unreadable"
+
 // recordReadProblem records b's read problem (ScanError, ScanErrorFile,
 // ScanErrorDetail) on the stored row at b's path and nothing else: every field
 // a scan wrote (names, duration, codec, chapters, cover flag, mtime and size,

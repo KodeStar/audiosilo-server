@@ -116,8 +116,8 @@ func TestResolveSourcesOvertaken(t *testing.T) {
 }
 
 // TestResolveSourcesFailingLibrary: a library whose books can't be re-resolved
-// stays due and is reported, while the other libraries due in the same pass are
-// still re-resolved and cleared.
+// (its writes fail) stays due and is reported, while the other libraries due in
+// the same pass are still re-resolved and cleared.
 func TestResolveSourcesFailingLibrary(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -134,7 +134,8 @@ func TestResolveSourcesFailingLibrary(t *testing.T) {
 		libs[i] = lib
 	}
 	bad, good := libs[0], libs[1]
-	if _, err := c.db.ExecContext(ctx, `UPDATE books SET scanned = '{broken' WHERE library_id = ?`, bad.ID); err != nil {
+	if _, err := c.db.ExecContext(ctx, `CREATE TRIGGER fail_resolve BEFORE UPDATE OF title ON books
+		WHEN OLD.library_id = `+strconv.FormatInt(bad.ID, 10)+` BEGIN SELECT RAISE(ABORT, 'disk says no'); END`); err != nil {
 		t.Fatal(err)
 	}
 	source := MetadataFromPath
@@ -155,6 +156,81 @@ func TestResolveSourcesFailingLibrary(t *testing.T) {
 	}
 	if _, ok := due[bad.ID]; !ok || len(due) != 1 {
 		t.Fatalf("due = %v, want the failing library alone", due)
+	}
+}
+
+// TestResolveSourcesSkipsUnreadableBook: a book whose stored scan doesn't
+// decode, among readable ones, is passed over with a read problem naming its
+// first file (so the next scan reads it again and Health lists it), going over
+// a problem on a later part (which may never clear) but not one on that first
+// file; the rest of the library is re-resolved, and the library is no longer
+// due, the pass reporting nothing.
+func TestResolveSourcesSkipsUnreadableBook(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{"Author/Series/01 - One", "Author/Series/02 - Two", "Author/Series/03 - Three",
+		"Author/Series/04 - Four", "Author/Series/05 - Five"}
+	broken, later, keeps := paths[1], paths[2], paths[4]
+	for _, p := range paths {
+		b := &Book{LibraryID: lib.ID, RelPath: p, IsFolder: true, Title: "Tagged",
+			Files: []BookFile{{RelPath: p + "/01.mp3"}, {RelPath: p + "/02.mp3", Seq: 1}}}
+		switch p {
+		case later:
+			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = "probe_failed", p+"/02.mp3", "bad data"
+		case keeps:
+			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = ProblemUnreadable, p+"/01.mp3", "permission denied"
+		}
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A single-file book's problem names the book's own file.
+	const loose = "Author/Loose.m4b"
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: loose, Title: "Tagged"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET scanned = '{broken' WHERE library_id = ? AND rel_path IN (?, ?, ?, ?)`,
+		lib.ID, broken, later, keeps, loose); err != nil {
+		t.Fatal(err)
+	}
+	setMetadataSource(t, c, ctx, lib.ID, MetadataFromPath)
+	want := map[string]string{paths[0]: "One", broken: "Tagged", later: "Tagged", paths[3]: "Four", keeps: "Tagged"}
+	for p, title := range want {
+		if got := mustBook(t, c, ctx, lib.ID, p).Title; got != title {
+			t.Errorf("%s title = %q, want %q", p, got, title)
+		}
+	}
+	problem := func(p string) [3]string {
+		t.Helper()
+		var out [3]string
+		if err := c.db.QueryRowContext(ctx,
+			`SELECT scan_error, scan_error_file, scan_error_detail FROM books WHERE library_id = ? AND rel_path = ?`,
+			lib.ID, p).Scan(&out[0], &out[1], &out[2]); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if got := problem(broken); got != [3]string{ProblemUnreadable, broken + "/01.mp3", scannedUnreadableDetail} {
+		t.Errorf("the unreadable book's problem = %q, want unreadable on its first file", got)
+	}
+	if got := problem(loose); got != [3]string{ProblemUnreadable, loose, scannedUnreadableDetail} {
+		t.Errorf("the unreadable single-file book's problem = %q, want unreadable on its file", got)
+	}
+	if got := problem(later); got != [3]string{ProblemUnreadable, later + "/01.mp3", scannedUnreadableDetail} {
+		t.Errorf("the later part's problem = %q, want it replaced by the first file's", got)
+	}
+	if got := problem(keeps); got != [3]string{ProblemUnreadable, keeps + "/01.mp3", "permission denied"} {
+		t.Errorf("the first file's recorded problem = %q, want it kept", got)
+	}
+	if got := problem(paths[0]); got != [3]string{} {
+		t.Errorf("a readable book's problem = %q, want none", got)
+	}
+	if due, err := getServerState[map[int64]int64](ctx, c.db, resolveKey); err != nil || len(due) != 0 {
+		t.Fatalf("still due: %v, %v", due, err)
 	}
 }
 

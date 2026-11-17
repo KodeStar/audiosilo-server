@@ -205,9 +205,12 @@ func (c *Catalog) markResolve(ctx context.Context, tx *sql.Tx, id int64) error {
 // library whose metadata source changed (markResolve), a batch of books a
 // transaction, and returns once none is due. A library switched again while it
 // runs is started again; one gone meanwhile has no books left. What is due is
-// in the database, so a run a stop cut short goes on at the next start. A
-// library that fails is left due and the others still run: the pass returns
-// its errors rather than starting again (it would fail the same way).
+// in the database, so a run a stop cut short goes on at the next start. A book
+// whose stored scan doesn't decode is passed over with a read problem recorded
+// (recordScannedUnreadable), so it neither holds its library due nor starts
+// each retry over. A library that fails is left due and the others still run:
+// the pass returns its errors rather than starting again (it would fail the
+// same way).
 func (c *Catalog) ResolveSources(ctx context.Context) error {
 	for {
 		due, err := getServerState[map[int64]int64](ctx, c.db, resolveKey)
@@ -248,7 +251,14 @@ func (c *Catalog) resolveLibrary(ctx context.Context, lib, gen int64) error {
 				return err
 			}
 			for _, id := range ids {
-				if err := refreshEffective(ctx, tx, id); err != nil {
+				if err := refreshEffective(ctx, tx, id); errors.Is(err, errScannedUnreadable) {
+					// Its snapshot fails to decode before anything of the book is
+					// written: the rest of the batch goes on.
+					err = recordScannedUnreadable(ctx, tx, id)
+					if err != nil {
+						return err
+					}
+				} else if err != nil {
 					return err
 				}
 			}
@@ -272,6 +282,34 @@ func (c *Catalog) resolveLibrary(ctx context.Context, lib, gen int64) error {
 		}
 		after = ids[len(ids)-1]
 	}
+}
+
+// scannedUnreadableDetail is the detail of a book's read problem when its
+// stored scan doesn't decode (Health: "<file> couldn't be read: <detail>").
+const scannedUnreadableDetail = "what its last scan stored is damaged, so the next scan reads it again"
+
+// recordScannedUnreadable records a read problem on book id, whose stored scan
+// doesn't decode, naming its first audio file (the scanner's primaryPath): the
+// next scan finds that file reads (problemCleared) and reads the whole book
+// again, which writes a new snapshot and records any problem of its files
+// afresh, and Health lists the book meanwhile. It goes over a problem already
+// recorded (one on a later part, an empty file, data ffprobe rejects), which
+// may never clear and so never bring the scan back to the book, except the
+// same problem on that first file: the scan reads the book again once it opens.
+func recordScannedUnreadable(ctx context.Context, tx *sql.Tx, id int64) error {
+	var first string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT CASE WHEN is_folder
+		     THEN COALESCE((SELECT f.rel_path FROM book_files f WHERE f.book_id = books.id ORDER BY f.seq LIMIT 1), rel_path)
+		     ELSE rel_path END
+		   FROM books WHERE id = ?`, id).Scan(&first); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx,
+		`UPDATE books SET scan_error = ?1, scan_error_file = ?2, scan_error_detail = ?3
+		  WHERE id = ?4 AND NOT (scan_error = ?1 AND scan_error_file = ?2)`,
+		ProblemUnreadable, first, scannedUnreadableDetail, id)
+	return err
 }
 
 // joinPatterns and splitPatterns store an ignore list as one pattern per line.

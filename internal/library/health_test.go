@@ -578,6 +578,63 @@ func TestFixedReadProblemClears(t *testing.T) {
 	}
 }
 
+// A book whose stored scan is damaged, passed over by a metadata source
+// re-resolve with a read problem on its first file, is read again by the next
+// scan though nothing of it changed on disk: its problem goes, and its new
+// snapshot resolves for the library's source.
+func TestUnreadableSnapshotReadAgain(t *testing.T) {
+	t.Parallel()
+	db := storetest.Open(t)
+	cat, ctx := catalog.New(db, time.Now), context.Background()
+	audio := testAudio(t)
+	root := t.TempDir()
+	writeFile(t, root, "Author/Series/01 - One/01.m4b", audio)
+	writeFile(t, root, "Author/Series/01 - One/02.m4b", audio)
+	writeFile(t, root, "Author/Series/02 - Two/01.m4b", audio)
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewScanner(cat, "", slog.Default())
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	const broken = "Author/Series/01 - One"
+	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = '{broken' WHERE rel_path = ?`, broken); err != nil {
+		t.Fatal(err)
+	}
+	source := catalog.MetadataFromPath
+	if _, _, err := cat.UpdateLibrary(ctx, lib.ID, catalog.LibraryPatch{MetadataSource: &source}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.ResolveSources(ctx); err != nil {
+		t.Fatal(err)
+	}
+	problems := func() []catalog.AdminBook {
+		page, err := cat.ListAdminBooks(ctx, catalog.AdminListOptions{Filter: catalog.BookFilter{Issue: catalog.IssueScanError}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return page.Books
+	}
+	if got := problems(); len(got) != 1 || got[0].ScanError != problemUnreadable || got[0].ScanErrorFile != broken+"/01.m4b" {
+		t.Fatalf("problems = %+v, want %s unreadable on its first file", got, broken)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if got := problems(); len(got) != 0 {
+		t.Fatalf("the re-read book still has a problem: %+v", got)
+	}
+	d, err := cat.AdminBookDetail(ctx, lib.ID, broken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Fields[catalog.FieldTitle]; got.Value != "One" || got.Source != catalog.SourcePath {
+		t.Fatalf("title = %+v, want the path's", got)
+	}
+}
+
 // A book whose one file can't be opened is otherwise kept as any unchanged book
 // is: an Audiobookshelf metadata.json and an ebook put beside it are recorded by
 // the next scan, its problem staying listed, and it is read once the file opens.
