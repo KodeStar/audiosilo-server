@@ -3495,11 +3495,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   its folder before `VACUUM INTO`, and wraps a refusal at any later step (the chmod, the rename),
   so a refused one is `permission_denied` with `Result.Detail` (not on the wire) carried into the
   `backup_failed` event's `detail` and the notification's text, announced before the run shows as over
-  (the console reads the bell's feed again when a run it watched ends, and every 5 s while the bell is
-  open); a backups folder the server can't list answers `GET /admin/backups` 500 `permission_denied`
-  with that sentence as its message, which the Backups page shows (server#383). A read-only mount
-  (`EROFS`, docker's `:ro`) counts as refused (`IsPermission`, so `permission_denied`) but its fix is
-  `ReadOnlyHint` ("mount it read and write"), never owner advice. A container started with `--user`
+  (the console reads the bell's feed again when the Backups page sees a new outcome, a run that ended
+  or one refused before the answer to "Back up now", and every 5 s while the bell is open); a backups
+  folder the server can't list answers `GET /admin/backups` 500 `permission_denied` with that sentence
+  as its message, which the Backups page shows (server#383), and so do a delete the folder refuses and
+  a download or restore of a backup the server can't read (`Open`, `Delete` and `RequestRestore` wrap
+  as `List` does). A read-only mount (`EROFS`, docker's `:ro`) counts as refused (`IsPermission`, so
+  `permission_denied`) but its fix is `readOnlyHint` ("mount it read and write"), never owner advice.
+  A container started with `--user`
   (the entrypoint exports `AUDIOSILO_STARTED_AS_USER=1`; the image's `PUID` is in every container's
   environment, so it can't tell) gets `user: "<owner>"`, not PUID/PGID. A scan stops on a library root
   it can stat but not list (`CheckRead`: unavailable, not an empty library scanned OK). The Docker

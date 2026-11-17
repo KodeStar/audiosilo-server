@@ -231,12 +231,37 @@ func TestBackupListUnreadableFolder(t *testing.T) {
 	if err := os.Chmod(dir, 0o500); err != nil { // listable, not writable
 		t.Fatal(err)
 	}
-	resp, body = e.do(t, "DELETE", "/api/v1/admin/backups/"+name, adminTok, "")
-	got.Code = ""
-	_ = json.Unmarshal([]byte(body), &got)
-	if resp.StatusCode != http.StatusInternalServerError || got.Code != "permission_denied" {
-		t.Fatalf("delete in an unwritable folder = %d %s, want 500 permission_denied", resp.StatusCode, body)
+	refused := func(what, method, path, want string) {
+		t.Helper()
+		resp, body := e.do(t, method, path, adminTok, "")
+		var got struct{ Error, Code string }
+		_ = json.Unmarshal([]byte(body), &got)
+		if resp.StatusCode != http.StatusInternalServerError || got.Code != "permission_denied" || !strings.HasPrefix(got.Error, want) {
+			t.Fatalf("%s = %d %s, want 500 permission_denied starting %q", what, resp.StatusCode, body, want)
+		}
 	}
+	refused("delete in an unwritable folder", "DELETE", "/api/v1/admin/backups/"+name,
+		"the server can't write to "+dir+": permission denied. The server runs as user ")
+
+	// A folder the server may not look in is not "no such backup".
+	if err := os.Chmod(dir, 0o600); err != nil { // listable, not searchable
+		t.Fatal(err)
+	}
+	refused("delete in an unsearchable folder", "DELETE", "/api/v1/admin/backups/"+name,
+		"the server can't read "+dir+": permission denied. The server runs as user ")
+
+	// A backup the server may not read can't be downloaded or restored, and is
+	// not called damaged.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, name)
+	if err := os.Chmod(file, 0); err != nil {
+		t.Fatal(err)
+	}
+	want = "the server can't read " + file + ": permission denied. The server runs as user "
+	refused("download of an unreadable backup", "GET", "/api/v1/admin/backups/"+name, want)
+	refused("restore of an unreadable backup", "POST", "/api/v1/admin/backups/"+name+"/restore", want)
 }
 
 func TestBackupSettings(t *testing.T) {
