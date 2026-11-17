@@ -1,10 +1,7 @@
 package library
 
 import (
-	"bytes"
-	"encoding/binary"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,21 +9,6 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
-
-// headerlessVBR is n MPEG-1 layer III frames at 44.1 kHz whose bitrate varies,
-// with no Xing or VBRI header (as lame -t writes a VBR file), and their length
-// in seconds.
-func headerlessVBR(n int) ([]byte, float64) {
-	var out bytes.Buffer
-	for i := range n {
-		bi := []uint32{9, 11, 10}[i%3]                         // 128, 192, 160 kbit/s
-		size := 144 * []int{128, 192, 160}[i%3] * 1000 / 44100 // no padding
-		f := make([]byte, size)
-		binary.BigEndian.PutUint32(f, 0xFFFB0000|bi<<12)
-		out.Write(f)
-	}
-	return out.Bytes(), float64(n) * 1152 / 44100
-}
 
 // A book holding an MP3 that an older server indexed (duration_rev 0, its VBR
 // file's length a bitrate's estimate) is indexed once more by the next scan,
@@ -38,14 +20,10 @@ func TestScanRereadsLengthsOfAnOlderRevision(t *testing.T) {
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
-	data, secs := headerlessVBR(2000)
-	path := filepath.Join(root, "Author", "Book.mp3")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// A header-less VBR file (lame -t) and the length ffmpeg decodes it to
+	// (metadata's countedFixtures).
+	copyFixture(t, filepath.Join("..", "metadata", "testdata", "probe", "lame-vbr-noxing.mp3"), filepath.Join(root, "Author", "Book.mp3"))
+	const secs = 5.328980
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
 	s := NewScanner(cat, "", slog.Default())
 	duration := func() float64 {
@@ -64,7 +42,7 @@ func TestScanRereadsLengthsOfAnOlderRevision(t *testing.T) {
 	}
 
 	// As an older server left it: the estimate, and no revision.
-	if _, err := db.ExecContext(ctx, `UPDATE books SET duration = 46.4, duration_rev = 0`); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE books SET duration = 5.0799, duration_rev = 0`); err != nil {
 		t.Fatal(err)
 	}
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 1 {
