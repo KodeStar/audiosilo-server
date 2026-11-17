@@ -93,6 +93,8 @@
   "home.server.open": "Ajustes del servidor",
   "home.server.version": "Versión",
   "home.server.address": "Dirección",
+  "home.server.addressHome": "red doméstica",
+  "home.server.addressBrowser": "La dirección de este navegador. Indica la del servidor en Ajustes del servidor.",
   "home.server.transcoding": "Transcodificación",
   "home.server.webPlayer": "Reproductor web",
   "home.server.metadata": "Metadatos de la comunidad",

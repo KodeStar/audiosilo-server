@@ -93,6 +93,8 @@
   "home.server.open": "Réglages du serveur",
   "home.server.version": "Version",
   "home.server.address": "Adresse",
+  "home.server.addressHome": "réseau domestique",
+  "home.server.addressBrowser": "L'adresse de ce navigateur. Indiquez celle du serveur dans Réglages du serveur.",
   "home.server.transcoding": "Transcodage",
   "home.server.webPlayer": "Lecteur web",
   "home.server.metadata": "Métadonnées communautaires",

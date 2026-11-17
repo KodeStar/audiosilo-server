@@ -93,6 +93,8 @@
   "home.server.open": "Servereinstellungen",
   "home.server.version": "Version",
   "home.server.address": "Adresse",
+  "home.server.addressHome": "Heimnetz",
+  "home.server.addressBrowser": "Die Adresse dieses Browsers. Die eigene Adresse des Servers legst du in den Servereinstellungen fest.",
   "home.server.transcoding": "Transkodierung",
   "home.server.webPlayer": "Web-Player",
   "home.server.metadata": "Community-Metadaten",

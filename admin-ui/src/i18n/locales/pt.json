@@ -93,6 +93,8 @@
   "home.server.open": "Definições do servidor",
   "home.server.version": "Versão",
   "home.server.address": "Endereço",
+  "home.server.addressHome": "rede doméstica",
+  "home.server.addressBrowser": "O endereço deste navegador. Defina o do servidor em Definições do servidor.",
   "home.server.transcoding": "Transcodificação",
   "home.server.webPlayer": "Leitor web",
   "home.server.metadata": "Metadados da comunidade",
