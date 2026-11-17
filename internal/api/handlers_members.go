@@ -358,7 +358,9 @@ func (a *API) handleMemberPair(w http.ResponseWriter, r *http.Request) {
 
 // handleMemberDevices answers GET /me/household/members/{id}/devices: the
 // member's live sessions and API keys, as a bare array ([] for none); current is
-// always false (none of them makes this request).
+// always false (none of them makes this request), and a grown-up's last_ip is
+// "" (auth.MemberDevices: only a kid's addresses are their owner's to see,
+// server#190).
 func (a *API) handleMemberDevices(w http.ResponseWriter, r *http.Request) {
 	id, ok := memberID(w, r)
 	if !ok {
