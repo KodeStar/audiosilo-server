@@ -507,6 +507,12 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	books, err := a.cat.Search(r.Context(), r.URL.Query().Get("q"), scopes, queryInt(r, "limit", 50))
 	if err != nil {
+		// The player aborts a type-ahead search on the next keystroke: a
+		// request that gave up is no failure, so no log line.
+		if errors.Is(r.Context().Err(), context.Canceled) {
+			writeError(w, http.StatusInternalServerError, "search failed")
+			return
+		}
 		a.writeCatalogError(w, err, "search failed", "search failed", "user", userFrom(r.Context()).ID, "scopes", len(scopes))
 		return
 	}
