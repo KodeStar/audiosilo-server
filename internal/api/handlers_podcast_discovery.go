@@ -325,6 +325,10 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 		writeNoStoreError(w, http.StatusRequestEntityTooLarge, "opml_limit", "The OPML document is over a size limit.", 0)
 		return
 	}
+	// A document that isn't OPML followed nothing: its token goes back, so the
+	// person can send the right file at once rather than meet 429 (server#219).
+	// An over-limit one keeps the charge, its read and parse the budget's.
+	a.opml.imports.Refund(quotaKey(r))
 	writeNoStoreError(w, http.StatusBadRequest, "invalid_opml", "Invalid OPML document.", 0)
 }
 

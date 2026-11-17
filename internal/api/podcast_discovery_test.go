@@ -379,6 +379,19 @@ func TestOPMLImportRefusals(t *testing.T) {
 			if openSubscribes(t, b) != 0 {
 				t.Fatal("a refused upload had effects")
 			}
+			// server#219: a damaged document gives its token back, so the next
+			// upload straight after is read (the same answer, not 429); an
+			// over-limit one keeps the charge.
+			if tc.status == 400 || tc.status == 413 {
+				h := podcastHeaders()
+				h["Content-Type"] = tc.ctype
+				resp, body := b.doHeaders(t, "POST", fmt.Sprintf("/api/v1/podcasts/opml/import?library_id=%d", b.lib.ID), b.userTok, tc.body, h)
+				if tc.status == 400 {
+					wantErr(t, resp, body, 400, "invalid_opml")
+				} else {
+					wantErr(t, resp, body, 429, "opml_rate_limited")
+				}
+			}
 		})
 	}
 	h := podcastHeaders()
