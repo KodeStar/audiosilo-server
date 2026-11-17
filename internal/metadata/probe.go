@@ -90,9 +90,16 @@ func probe(parent context.Context, path, ffprobePath string, timeout time.Durati
 	return res, nil
 }
 
+// ffprobeKillGrace is how long runFFprobe waits for an ffprobe killed at its
+// time-out to end before leaving it (tests shorten it).
+var ffprobeKillGrace = 5 * time.Second
+
 // runFFprobe runs ffprobe on path and returns its answer. -select_streams a:0
 // limits -show_streams to the first audio stream so we read the codec that
-// actually needs (or doesn't need) transcoding.
+// actually needs (or doesn't need) transcoding. One killed at its time-out
+// that has not ended ffprobeKillGrace later (stuck in a read the kernel won't
+// interrupt: an NFS share on macOS) is left to end on its own, counted on
+// path's mount as a read given up on (await), and answers as timed out.
 func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.Duration) (*ffprobeOutput, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -105,7 +112,20 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 		"-select_streams", "a:0",
 		path,
 	)
-	out, err := cmd.Output()
+	type ran struct {
+		out []byte
+		err error
+	}
+	wait, stop := graceAfter(ctx, ffprobeKillGrace)
+	defer stop()
+	r, ok := await(wait, stuckByMount.For(path), func() ran {
+		out, err := cmd.Output()
+		return ran{out, err}
+	}, nil)
+	out, err := r.out, r.err
+	if !ok {
+		err = context.Cause(ctx)
+	}
 	if err != nil {
 		if parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return nil, fmt.Errorf("%w after %s", ErrProbeTimeout, timeout)
@@ -117,6 +137,13 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 		return nil, err
 	}
 	return &parsed, nil
+}
+
+// graceAfter is a context that ends grace after ctx does, or at stop.
+func graceAfter(ctx context.Context, grace time.Duration) (context.Context, context.CancelFunc) {
+	g, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	unhook := context.AfterFunc(ctx, func() { time.AfterFunc(grace, cancel) })
+	return g, func() { unhook(); cancel() }
 }
 
 // ffContextAddr is the address in FFmpeg's log prefix, "[mov,mp4 @ 0x7de824000]".
