@@ -360,7 +360,8 @@ export async function checkMetaMirror(qc: QueryClient): Promise<MetaMirrorStatus
 
 /**
  * The backups, their state and any restore waiting; polled each second while one
- * is made. When one seen running ends, the bell reads the feed again, so a
+ * is made. When a new outcome shows (a run ended, or one refused at once was
+ * over before the answer that started it), the bell reads the feed again, so a
  * failure shows there at once (the server records it before the run ends).
  */
 export function useBackups() {
@@ -370,14 +371,16 @@ export function useBackups() {
     queryFn: api.backups,
     refetchInterval: (q) => (q.state.data?.status.running ? 1000 : false),
   });
-  const running = query.data?.status.running;
-  const wasRunning = useRef(false);
+  // When the newest attempt ended ('' for none yet); undefined until loaded.
+  const lastAt = query.data ? (query.data.status.last?.at ?? '') : undefined;
+  const seenLastAt = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (wasRunning.current && running === false) {
+    if (lastAt === undefined) return;
+    if (seenLastAt.current !== undefined && seenLastAt.current !== lastAt) {
       void qc.invalidateQueries({ queryKey: keys.events });
     }
-    wasRunning.current = running === true;
-  }, [running, qc]);
+    seenLastAt.current = lastAt;
+  }, [lastAt, qc]);
   return query;
 }
 

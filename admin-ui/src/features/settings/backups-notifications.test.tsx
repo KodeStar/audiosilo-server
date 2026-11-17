@@ -145,6 +145,39 @@ describe('backups', () => {
     await waitFor(() => expect(feedReads()).toBeGreaterThan(before));
   });
 
+  it('reads the bell again for a backup refused before its own answer (server#383)', async () => {
+    // A folder that refuses the server fails the backup at once: the answer to
+    // "Back up now" already shows it over, never running.
+    const status = backupsEnv().status;
+    const calls = mockFetch(
+      routes({
+        'POST /admin/backups': {
+          status: 202,
+          body: backupsEnv({
+            status: {
+              ...status,
+              last: {
+                at: '2026-10-04T15:00:00Z',
+                ok: false,
+                trigger: 'manual',
+                error: 'permission_denied',
+              },
+            },
+          }),
+        },
+      }),
+    );
+    renderApp('/server?topic=backups');
+    const user = userEvent.setup();
+    const feedReads = () => calls.filter((c) => c.path === '/admin/events').length;
+    const button = await screen.findByRole('button', { name: 'Back up now' });
+    await waitFor(() => expect(feedReads()).toBeGreaterThan(0));
+    const before = feedReads();
+    await user.click(button);
+    expect(await screen.findByText('The backup failed')).toBeInTheDocument();
+    await waitFor(() => expect(feedReads()).toBeGreaterThan(before));
+  });
+
   it('asks for the word before scheduling a restore, then offers to cancel it', async () => {
     const pending = {
       name: 'audiosilo-20261004-030000Z-scheduled.db',
