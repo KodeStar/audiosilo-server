@@ -211,12 +211,15 @@ func (c *Catalog) PatchAudibleTitle(ctx context.Context, account, asin string, p
 
 // checkDestOwnFolder refuses (a bridge.ErrAudibleDestPath) a destination whose
 // folder is a disc folder (metadata.IsDiscFolder: "CD 3") directly inside a
-// book indexed in account's library: the scan joins it into that book, so the
-// backup's fold would refuse it (ErrImportNotOwn) only after the whole
-// download and its placement in the other book's folder (bridge#46). The
-// destination's folder is its last segment, or the one above a file name with
-// an audio extension, as the Bridge reads it. A paused account (no library)
-// has no book to check.
+// folder of account's library that is an indexed book, or that holds a `book`
+// folder override (one disc there on its own, "Book/CD 1", is its own book
+// until a second makes the disc set the override joins): the scan joins the
+// disc into that book, so the backup's fold would refuse it (ErrImportNotOwn)
+// only after the whole download and its placement in the other book's folder
+// (bridge#46). Without an override, discs stay books of their own and the
+// destination is allowed. The destination's folder is its last segment, or the
+// one above a file name with an audio extension, as the Bridge reads it. A
+// paused account (no library) has no book to check.
 func checkDestOwnFolder(ctx context.Context, tx *sql.Tx, account, dest string) error {
 	folder := dest
 	if metadata.IsAudio(dest) {
@@ -226,13 +229,14 @@ func checkDestOwnFolder(ctx context.Context, tx *sql.Tx, account, dest string) e
 	if dest == "" || book == "." || !metadata.IsDiscFolder(path.Base(folder)) {
 		return nil
 	}
-	var inBook bool
+	var joins bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM audible_accounts a JOIN books b ON b.library_id = a.library_id
-		  WHERE a.account = ? AND b.rel_path = ?)`, account, book).Scan(&inBook)
+		  WHERE a.account = ?1 AND b.rel_path = ?2) OR EXISTS(SELECT 1 FROM audible_accounts a JOIN folder_overrides o ON o.library_id = a.library_id
+		  WHERE a.account = ?1 AND o.path = ?2 AND o.mode = ?3)`, account, book, OverrideBook).Scan(&joins)
 	if err != nil {
 		return err
 	}
-	if inBook {
+	if joins {
 		return fmt.Errorf("%w: %s is a disc folder of the book %s, which the backup would join; pick a folder of its own", bridge.ErrAudibleDestPath, folder, book)
 	}
 	return nil

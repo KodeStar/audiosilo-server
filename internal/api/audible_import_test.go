@@ -223,11 +223,14 @@ func TestAudibleBackupFlow(t *testing.T) {
 	}
 }
 
-// A destination in a new disc folder of an indexed book ("Author/Book/CD 3")
-// is refused when it is set (400 invalid_dest_path): the scan would join it
-// into that book, and the backup's fold refuse it only after the download
-// (bridge#46). Allowed: a folder of its own beside the book, a disc folder
-// under a folder that is no book, and a file named like a disc beside them.
+// A destination in a new disc folder of an indexed book ("Author/Book/CD 3"),
+// or of a folder with a `book` override ("Saga", one disc indexed on its own
+// until a second makes the disc set it joins), is refused when it is set (400
+// invalid_dest_path): the scan would join it into that book, and the backup's
+// fold refuse it only after the download (bridge#46). Allowed: a folder of its
+// own beside the book, a disc folder under a folder that is no book, beside a
+// disc with no override (discs stay books of their own), and a file named like
+// a disc beside them.
 func TestAudibleDestPathRefusesDiscFolderOfABook(t *testing.T) {
 	t.Parallel()
 	b := backupEnv(t, title("B000000001", "One", "available", 0, ""))
@@ -236,7 +239,17 @@ func TestAudibleDestPathRefusesDiscFolderOfABook(t *testing.T) {
 		resp, out := b.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001", b.adminTok, fmt.Sprintf(`{"dest_path":%q}`, dest))
 		return resp.StatusCode, out
 	}
-	for _, dest := range []string{mistbornBook + "/CD 3", mistbornBook + "/Disc2/One.m4b", cradleBook + "/cd1"} {
+	// One disc on its own is its own book: a second beside it makes a disc set,
+	// which only a `book` override on the folder joins.
+	for _, rel := range []string{"Lone/Saga/CD 1", "Solo/Saga/CD 1"} {
+		if _, err := b.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: b.lib.ID, RelPath: rel, Title: "Saga", IsFolder: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.cat.SetFolderOverride(context.Background(), b.lib.ID, "Lone/Saga", catalog.OverrideBook); err != nil {
+		t.Fatal(err)
+	}
+	for _, dest := range []string{mistbornBook + "/CD 3", mistbornBook + "/Disc2/One.m4b", cradleBook + "/cd1", "Lone/Saga/CD 2", "Lone/Saga/CD 1/One.m4b"} {
 		if code, out := patch(dest); code != http.StatusBadRequest || codeOf(out) != "invalid_dest_path" {
 			t.Errorf("dest %q: %d %s, want 400 invalid_dest_path", dest, code, out)
 		}
@@ -244,7 +257,7 @@ func TestAudibleDestPathRefusesDiscFolderOfABook(t *testing.T) {
 			t.Fatalf("a refused destination was stored: %q", x.DestPath)
 		}
 	}
-	for _, dest := range []string{"Brandon Sanderson/Mistborn 2", "Brandon Sanderson/New/CD 1", "Brandon Sanderson/CD 3.m4b", ""} {
+	for _, dest := range []string{"Brandon Sanderson/Mistborn 2", "Brandon Sanderson/New/CD 1", "Brandon Sanderson/CD 3.m4b", "Lone/CD 1", "Solo/Saga/CD 2", ""} {
 		if code, out := patch(dest); code != http.StatusOK {
 			t.Errorf("dest %q: %d %s, want 200", dest, code, out)
 		}
