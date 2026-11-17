@@ -9,8 +9,38 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
+
+// headerlessSecs is the length ffmpeg decodes lame-vbr-noxing.mp3 to (metadata's
+// countedFixtures).
+const headerlessSecs = 5.328980
+
+// headerlessBook is a library holding one book, a header-less VBR MP3 (lame
+// -t), and a scanner with no ffprobe, not yet scanned.
+func headerlessBook(t *testing.T) (*store.DB, *catalog.Catalog, *catalog.Library, *Scanner) {
+	t.Helper()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	copyFixture(t, filepath.Join("..", "metadata", "testdata", "probe", "lame-vbr-noxing.mp3"), filepath.Join(root, "Author", "Book.mp3"))
+	lib, err := cat.CreateLibrary(t.Context(), catalog.Library{Name: "L", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db, cat, lib, NewScanner(cat, "", slog.Default())
+}
+
+// bookDuration is the one book's stored duration.
+func bookDuration(t *testing.T, db *store.DB) float64 {
+	t.Helper()
+	var d float64
+	if err := db.QueryRowContext(t.Context(), `SELECT duration FROM books`).Scan(&d); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
 
 // A book holding an MP3 that an older server indexed (duration_rev 0, its VBR
 // file's length a bitrate's estimate) is indexed once more by the next scan,
@@ -19,28 +49,13 @@ import (
 func TestScanRereadsLengthsOfAnOlderRevision(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db := storetest.Open(t)
-	cat := catalog.New(db, time.Now)
-	root := t.TempDir()
-	// A header-less VBR file (lame -t) and the length ffmpeg decodes it to
-	// (metadata's countedFixtures).
-	copyFixture(t, filepath.Join("..", "metadata", "testdata", "probe", "lame-vbr-noxing.mp3"), filepath.Join(root, "Author", "Book.mp3"))
-	const secs = 5.328980
-	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
-	s := NewScanner(cat, "", slog.Default())
-	duration := func() float64 {
-		t.Helper()
-		var d float64
-		if err := db.QueryRowContext(ctx, `SELECT duration FROM books`).Scan(&d); err != nil {
-			t.Fatal(err)
-		}
-		return d
-	}
+	db, _, lib, s := headerlessBook(t)
+	duration := func() float64 { return bookDuration(t, db) }
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Added != 1 {
 		t.Fatalf("first scan = %+v, %v", res, err)
 	}
-	if d := duration(); d < secs-0.001 || d > secs+0.001 {
-		t.Fatalf("duration %v, want the frames counted, %v", d, secs)
+	if d := duration(); d < headerlessSecs-0.001 || d > headerlessSecs+0.001 {
+		t.Fatalf("duration %v, want the frames counted, %v", d, headerlessSecs)
 	}
 
 	// As an older server left it: the estimate, and no revision.
@@ -50,8 +65,8 @@ func TestScanRereadsLengthsOfAnOlderRevision(t *testing.T) {
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 1 {
 		t.Fatalf("rescan = %+v, %v; want the book read again", res, err)
 	}
-	if d := duration(); d < secs-0.001 || d > secs+0.001 {
-		t.Errorf("after the rescan: duration %v, want %v", d, secs)
+	if d := duration(); d < headerlessSecs-0.001 || d > headerlessSecs+0.001 {
+		t.Errorf("after the rescan: duration %v, want %v", d, headerlessSecs)
 	}
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 0 {
 		t.Errorf("third scan = %+v, %v; want the book left be", res, err)
@@ -66,13 +81,8 @@ func TestScanRereadsLengthsOfAnOlderRevision(t *testing.T) {
 func TestScanRereadsAnUncountedLength(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db := storetest.Open(t)
-	cat := catalog.New(db, time.Now)
-	root := t.TempDir()
-	copyFixture(t, filepath.Join("..", "metadata", "testdata", "probe", "lame-vbr-noxing.mp3"), filepath.Join(root, "Author", "Book.mp3"))
-	const secs, estimate = 5.328980, 5.0799
-	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
-	s := NewScanner(cat, "", slog.Default())
+	db, cat, lib, s := headerlessBook(t)
+	const estimate = 5.0799
 	// The count out of time, as on a slow disk: ffprobe's estimate stands.
 	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
 		md := extractFile(ctx, p, ffprobe, timeout)
@@ -81,9 +91,7 @@ func TestScanRereadsAnUncountedLength(t *testing.T) {
 	}
 	book := func() (d float64, stale bool) {
 		t.Helper()
-		if err := db.QueryRowContext(ctx, `SELECT duration FROM books`).Scan(&d); err != nil {
-			t.Fatal(err)
-		}
+		d = bookDuration(t, db)
 		sigs, err := cat.Signatures(ctx, lib.ID)
 		if err != nil {
 			t.Fatal(err)
@@ -108,8 +116,8 @@ func TestScanRereadsAnUncountedLength(t *testing.T) {
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 1 {
 		t.Fatalf("rescan = %+v, %v; want the book read again", res, err)
 	}
-	if d, stale := book(); d < secs-0.001 || d > secs+0.001 || stale {
-		t.Errorf("counted: duration %v stale %t, want %v, the revision stamped", d, stale, secs)
+	if d, stale := book(); d < headerlessSecs-0.001 || d > headerlessSecs+0.001 || stale {
+		t.Errorf("counted: duration %v stale %t, want %v, the revision stamped", d, stale, headerlessSecs)
 	}
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 0 {
 		t.Errorf("fourth scan = %+v, %v; want the book left be", res, err)

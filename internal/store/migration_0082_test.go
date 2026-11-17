@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -28,35 +29,10 @@ func TestMigration0082StartsBooksWithNoMP3AtRevision1(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	type rev struct {
-		rev int
-		at  string
-	}
-	want := map[string]rev{
-		"Loose.mp3": {0, ""}, "Mixed": {0, ""},
-		"Loose.m4b": {1, "i2"}, "Parts": {1, "i4"},
-	}
-	rows, err := db.QueryContext(ctx, `SELECT rel_path, duration_rev, COALESCE(duration_rev_indexed_at, '') FROM books`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	n := 0
-	for rows.Next() {
-		var p string
-		var got rev
-		if err := rows.Scan(&p, &got.rev, &got.at); err != nil {
-			t.Fatal(err)
-		}
-		n++
-		if got != want[p] {
-			t.Errorf("%s: revision %+v, want %+v", p, got, want[p])
-		}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if n != len(want) {
-		t.Errorf("%d books, want %d", n, len(want))
+	got := lines(t, db, `SELECT rel_path || ' ' || duration_rev || ' ' || COALESCE(duration_rev_indexed_at, '-')
+		FROM books ORDER BY rel_path`)
+	want := []string{"Loose.m4b 1 i2", "Loose.mp3 0 -", "Mixed 0 -", "Parts 1 i4"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("revisions:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
