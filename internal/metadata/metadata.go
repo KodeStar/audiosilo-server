@@ -359,6 +359,18 @@ func UnreadForTests(path string, refused bool) *Metadata {
 	return &Metadata{Format: fileFormat(path), tagsUnread: true, readRefused: refused}
 }
 
+// TimedOutForTests is the reading of a file whose tags were read but whose
+// length's in-process read ran out of time with no ffprobe to ask
+// (ProbeTimedOut alone): for tests of what a scan does with one, which a real
+// read gives only on a file whose probe outlasts its deadline. It panics
+// outside a test binary.
+func TimedOutForTests(path string) *Metadata {
+	if !testing.Testing() {
+		panic("metadata.TimedOutForTests called outside a test binary")
+	}
+	return &Metadata{Format: fileFormat(path), timedOut: true}
+}
+
 // HangMountForTests makes dir a mount of its own whose reads hang: the files
 // under it are keyed by a mount of their own and that mount's count of hung
 // reads is at maxAbandonedReads, so every read there is refused (ReadRefused)

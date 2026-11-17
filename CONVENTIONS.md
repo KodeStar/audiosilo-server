@@ -1160,17 +1160,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   not opened and no ffprobe run, its tags unread, logged once (with the mount) until they have all
   returned. Per mount (server#360): one hung share stops reads only from itself, every other
   library's mount reads as ever; `internal/mounts` names a path's mount from the mount table alone
-  (`/proc/self/mountinfo`, macOS `getfsstat` `MNT_NOWAIT`, re-read every 10 s; elsewhere, or
+  (`/proc/self/mountinfo`, macOS `getfsstat` `MNT_NOWAIT`, re-read every 10 s on a goroutine of its own, only the first read the caller's; elsewhere, or
   unreadable, the volume root: one key, as the old process-wide cap). A re-index
   where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`), or whose
   length ran out of time even read alone (an ffprobe time-out, `ProbeTimedOut` without one:
   `library.readCutShort`; a part on a share that hung mid-read, the FIFO repro of server#360),
   sets `Book.ReadCutShort`, and rewrites nothing of the stored book (`catalog.recordReadProblem`: names,
   length, codec, chapters, cover flag, mtime and size stay as the last full read left them) but
-  its read problem, `unreadable` ("reading it timed out", or for a refused read "too many earlier reads
+  its read problem, `unreadable` ("reading it timed out", a `ProbeTimedOut` too, or for a refused read "too many earlier reads
   from the same drive or share are stuck", with ffprobe or without; `probe_failed` for an ffprobe
-  time-out), so the next scan reads it again (the stored
-  mtime and size are the old ones, else `problemCleared`); a new book read so is written with the
+  time-out: `noteProblem` records one for every `readCutShort`), so the next scan reads it again (the stored
+  mtime and size are the old ones, else `problemCleared`, which a read still cut short, its length
+  out of time included, never clears); a new book read so is written with the
   path's names. With no
   ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules
   (`noFFprobeRules`, decision 2, server#269): a file it is unsure of has no duration and no

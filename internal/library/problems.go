@@ -43,6 +43,11 @@ func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata
 		// problem with ffprobe or without (ffprobe may still have read its
 		// length), so the next scan looks again (problemCleared).
 		b.ScanError, b.ScanErrorDetail = problemUnreadable, tagsUnreadDetail
+	case md.ProbeTimedOut():
+		// With no ffprobe, its length's in-process read ran out of time even
+		// alone (readCutShort): the stored book is kept, so it needs a problem
+		// that says why, and that the next scan looks at again.
+		b.ScanError, b.ScanErrorDetail = problemUnreadable, tagsUnreadDetail
 	case md != nil && md.ProbeErr != nil:
 		b.ScanError, b.ScanErrorDetail = problemProbe, md.ProbeErr.Error()
 	default:
@@ -84,7 +89,9 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 		return false
 	}
 	s.noteRejected(abs, at, md)
-	return md.OpenErr == nil && !md.TagsUnread() && (!probe || md.ProbeErr == nil)
+	// A read cut short again (readCutShort: its length still out of time
+	// included) has not cleared: the full re-index would only keep the book.
+	return md.OpenErr == nil && !readCutShort(md) && (!probe || md.ProbeErr == nil)
 }
 
 // tagsUnreadDetail is the detail of a file that opened but wasn't read in

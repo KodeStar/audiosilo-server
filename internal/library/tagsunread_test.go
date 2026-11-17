@@ -138,3 +138,82 @@ func TestReindexWithAReadCutShortKeepsTheStoredBook(t *testing.T) {
 		})
 	}
 }
+
+// With no ffprobe, a part whose length's in-process read runs out of time even
+// alone (ProbeTimedOut, its tags read) keeps the stored book as a read cut short
+// does, and records why (server#360): never the book kept with no problem, which
+// would leave Health silent and clear one recorded before.
+func TestReindexWithALengthTimeOutRecordsItsProblem(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	const book = "Author/Book"
+	for _, part := range []string{"01.mp3", "02.mp3"} {
+		silence(t, root, book+"/"+part, 1, "album=Real Title", "artist=Real Author")
+	}
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, "", slog.Default())
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	read := func() (title string, duration float64, problem, file, detail string) {
+		t.Helper()
+		if err := db.QueryRowContext(ctx, `SELECT title, duration, scan_error, scan_error_file, scan_error_detail
+			FROM books WHERE rel_path = ?`, book).Scan(&title, &duration, &problem, &file, &detail); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	title, duration, _, _, _ := read()
+	if title != "Real Title" || duration <= 0 {
+		t.Fatalf("first scan = %q, %v; want the tags' title and a length", title, duration)
+	}
+
+	part2 := filepath.Join(root, filepath.FromSlash(book+"/02.mp3"))
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(part2, later, later); err != nil {
+		t.Fatal(err)
+	}
+	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		if strings.HasSuffix(filepath.ToSlash(p), book+"/02.mp3") {
+			return metadata.TimedOutForTests(p)
+		}
+		return extractFile(ctx, p, ffprobe, timeout)
+	}
+	res, err := s.Scan(ctx, *lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotTitle, gotDuration, problem, file, detail := read()
+	if gotTitle != title || gotDuration != duration || res.Updated != 0 {
+		t.Errorf("re-index with a part's length out of time = %q, %v, %d updated; want the stored book kept", gotTitle, gotDuration, res.Updated)
+	}
+	if problem != problemUnreadable || file != book+"/02.mp3" || detail != tagsUnreadDetail {
+		t.Errorf("recorded problem = %q on %q (%q), want %q on the part (%q)", problem, file, detail, problemUnreadable, tagsUnreadDetail)
+	}
+}
+
+// problemCleared asks the recorded file again and counts a read whose length
+// is still out of time as not cleared (readCutShort), so an unchanged book
+// whose problem remains is not read whole on every scan only to be kept.
+func TestProblemClearedNotWhileTheLengthTimesOut(t *testing.T) {
+	t.Parallel()
+	s := NewScanner(nil, "", slog.Default())
+	lib := catalog.Library{Root: t.TempDir()}
+	sig := catalog.Signature{ScanError: problemUnreadable, ScanErrorFile: "Book/02.mp3"}
+	slots := newReadSlots(1, time.Second)
+	slots.readFile = func(_ context.Context, p, _ string, _ time.Duration) *metadata.Metadata {
+		return metadata.TimedOutForTests(p)
+	}
+	if s.problemCleared(t.Context(), lib, sig, slots) {
+		t.Error("a length still out of time cleared the problem")
+	}
+	slots.readFile = func(_ context.Context, p, _ string, _ time.Duration) *metadata.Metadata {
+		return &metadata.Metadata{Format: "mp3", Duration: 1}
+	}
+	if !s.problemCleared(t.Context(), lib, sig, slots) {
+		t.Error("a read that answers in full did not clear the problem")
+	}
+}
