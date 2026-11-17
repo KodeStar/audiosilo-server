@@ -1508,9 +1508,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   canonical `"1-3"` (input `1 - 3` and the en dash too; `metadata.ParseSeriesRange`: 0 < start <
   end <= 100000, a span of at most `metadata.MaxSeriesSpan` = 100, since the slots a range covers
   are counted one by one); `refreshEffective` writes its start to `series_index` (what every
-  client reads) and its end to `series_index_end` (`ParseSeriesPosition`, which takes a single
-  position only from 0 to 100000, never NaN or an infinity, as a series-part tag of "nan" once failed
-  the book's insert; `FormatSeriesRange` the stored text). A `more_series` entry carries one as `position_end` (`SeriesRef.PositionEnd`,
+  client reads) and its end to `series_index_end` (`ParseSeriesPosition`, which never reads
+  NaN or an infinity, as a series-part tag of "nan" once failed the book's insert; a stored single
+  position out of range still reads as it is, and a series-part tag's is bounded from 0 to 100000 where
+  it is read, `seriesPartTag`, as an edit's is, `ValidSeriesPosition`; `FormatSeriesRange` the stored text). A `more_series` entry carries one as `position_end` (`SeriesRef.PositionEnd`,
   omitempty; `book_more_series.position_end`). Player `Book` JSON: `series_index_end` and
   `series_list[].position_end`, both omitempty; the admin book row `series_index_end`. `seriesSwap`
   carries a range both ways; the series aggregate's `positions` hold every whole number inside a
