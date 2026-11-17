@@ -3111,7 +3111,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   cannot change a replacement show's validators, failures, gone or secret flags. Subscribe repair
   and poll params capture the expected identity; a poll naming an identity the show no longer has
   (none when it has no row) is 409 `identity_changed` (`checkPodcastTarget`), so a stale request never
-  replaces the current show's open poll. Fetch outcomes have a separate backoff summary
+  replaces the current show's open poll. Check now (`handlePodcastCheck`) looks once more on that refusal,
+  at the show as it is now (the caller's follow of the new identity included), so one tapped during a
+  re-subscribe is queued and only an identity replaced twice is the 409. Fetch outcomes have a separate backoff summary
   (30 minutes doubling to 24 hours, larger Retry-After capped at 24 hours); cancellation and
   identity replacement do not count as failures. Fold before pruning terminal fetch/retain history.
   Policies are durable `(library_id,show_path,show_id)` preferences, reset for a replacement,

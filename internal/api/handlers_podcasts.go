@@ -381,25 +381,32 @@ func (a *API) handlePodcastCheck(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "podcast scope failed", "Could not check access.")
 		return
 	}
-	show, err := a.cat.PodcastShow(r.Context(), lib.ID, req.Path, userFrom(r.Context()).ID)
-	if errors.Is(err, catalog.ErrNotFound) || err == nil && (!show.Following || !scope.VisibleInBrowse(req.Path)) {
-		writeShowNotFound(w)
-		return
-	}
-	if err != nil {
-		a.writeCatalogError(w, err, "check podcast failed", "Could not load show.")
-		return
-	}
-	if _, ok := a.podcastBridgeReady(w, r, bridge.KindPodcastPoll); !ok {
-		return
-	}
-	job, err := a.bridge.OpenJob(r.Context(), bridge.KindPodcastPoll, lib.ID, show.Path)
-	if err != nil {
-		a.writeCatalogError(w, err, "find open podcast poll failed", "Could not check show.")
-		return
-	}
-	if job == nil {
-		st, err := a.cat.PodcastState(r.Context(), lib.ID, show.Path)
+	// The show's identity may be replaced (a re-subscribe) between the reads
+	// here and the queue's check of it: the check is then made once more, of the
+	// show as it is now (the caller's follow of it included), and is 409
+	// identity_changed only when that identity was replaced too.
+	var job *bridge.Job
+	for retried := false; ; retried = true {
+		show, err := a.cat.PodcastShow(r.Context(), lib.ID, req.Path, userFrom(r.Context()).ID)
+		if errors.Is(err, catalog.ErrNotFound) || err == nil && (!show.Following || !scope.VisibleInBrowse(req.Path)) {
+			writeShowNotFound(w)
+			return
+		}
+		if err != nil {
+			a.writeCatalogError(w, err, "check podcast failed", "Could not load show.")
+			return
+		}
+		if _, ok := a.podcastBridgeReady(w, r, bridge.KindPodcastPoll); !ok {
+			return
+		}
+		if job, err = a.bridge.OpenJob(r.Context(), bridge.KindPodcastPoll, lib.ID, show.Path); err != nil {
+			a.writeCatalogError(w, err, "find open podcast poll failed", "Could not check show.")
+			return
+		}
+		if job != nil {
+			break
+		}
+		st, err := a.podcastState(r.Context(), lib.ID, show.Path)
 		if err != nil {
 			a.writeCatalogError(w, err, "load feed state failed", "Could not check show.")
 			return
@@ -413,9 +420,13 @@ func (a *API) handlePodcastCheck(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		job, _, err = a.bridge.Enqueue(r.Context(), bridge.NewJob{Kind: bridge.KindPodcastPoll, LibraryID: &lib.ID, Path: &show.Path, Params: st.PollParams(), RequestedBy: userFrom(r.Context()).ID})
+		if errors.Is(err, bridge.ErrIdentityChanged) && !retried {
+			continue
+		}
 		if !a.podcastQueueError(w, err) {
 			return
 		}
+		break
 	}
 	writeJSON(w, 202, map[string]any{"request": map[string]any{"id": job.ID, "state": job.State}})
 }

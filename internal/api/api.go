@@ -115,6 +115,11 @@ type API struct {
 	// scanner.IndexPathWithin, a field so tests can count the re-reads.
 	indexPath func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool) (*catalog.Book, error)
 
+	// podcastState reads a show's feed state for its Check now
+	// (catalog.PodcastState), a field so tests can replace the show's identity
+	// after it is read.
+	podcastState func(ctx context.Context, lib int64, show string) (catalog.PodcastFeedState, error)
+
 	// fetchCover fetches a community cover image (meta.Service.FetchCover, which
 	// connects to public addresses only), a field so tests can serve covers from
 	// loopback. nil with meta; the handlers that use it check metadataOn first.
@@ -248,6 +253,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		cat:            cat,
 		scanner:        scanner,
 		indexPath:      scanner.IndexPathWithin,
+		podcastState:   cat.PodcastState,
 		ffmpeg:         ffmpeg,
 		meta:           metaSvc,
 		log:            log,
