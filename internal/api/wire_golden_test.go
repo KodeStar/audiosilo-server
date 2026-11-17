@@ -14,8 +14,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // Wire goldens (audiosilo#96, server#347): the shape of each important player
@@ -338,10 +341,10 @@ func wireCases(t *testing.T) []wireCase {
 		{name: "auth-redeem", route: "POST /api/v1/auth/redeem", body: func(t *testing.T) string {
 			return wireOK(t, m.testEnv, "POST", "/api/v1/auth/redeem", "", `{"code":"`+newCode(t)+`"}`)
 		}},
-		{name: "auth-exchange", route: "POST /api/v1/auth/exchange", body: func(t *testing.T) string {
-			status, pairing, _ := m.redeemCode(t, newCode(t))
-			if status != http.StatusOK {
-				t.Fatalf("redeem = %d", status)
+		{name: "auth-exchange", route: "POST /api/v1/auth/exchange (a household member's pairing)", body: func(t *testing.T) string {
+			_, pairing, err := m.auth.MemberPairing(context.Background(), m.adminID, m.member, time.Minute)
+			if err != nil {
+				t.Fatal(err)
 			}
 			status, b := m.exchangeToken(t, pairing, "Wire phone")
 			if status != http.StatusOK {
@@ -349,7 +352,7 @@ func wireCases(t *testing.T) []wireCase {
 			}
 			return b
 		}},
-		{name: "me", route: "GET /api/v1/me", body: get("/api/v1/me", m.samTok)},
+		{name: "me", route: "GET /api/v1/me (a household member)", body: get("/api/v1/me", m.memberTok)},
 		{name: "libraries", route: "GET /api/v1/libraries (an admin: with root)", body: get("/api/v1/libraries", m.adminTok)},
 		{name: "fs", route: "GET /api/v1/libraries/{id}/fs?path=Will Wight", body: lib("fs", "Will Wight")},
 		{name: "books", route: "GET /api/v1/libraries/{id}/books", body: get(libRoute+"/books", m.samTok)},
@@ -381,40 +384,73 @@ func wireOK(t *testing.T, e *testEnv, method, path, tok, body string) string {
 	return b
 }
 
-// wireMainEnv: the fixture library scanned, a listener (sam) granted it with a
-// place, a bookmark and a finished book, and a second library holding a book the
-// mock metaserve matches.
+// wireMainEnv: a copy of the fixture library with Cradle dressed in every
+// optional field a seed can cheaply give it (an Audiobookshelf metadata.json, an
+// ebook and its read-along map), scanned; a listener (sam) granted it with a
+// place and a bookmark; a household member of the admin's; watch renditions on;
+// and a second library holding a book the mock metaserve matches. A field a
+// golden should guard has to appear here: an omitempty one left unset is absent
+// from the shape, so its removal would pass.
 type wireMainEnv struct {
 	*testEnv
-	lib      *catalog.Library
-	metaLib  int64
-	adminTok string
-	samTok   string
+	lib       *catalog.Library
+	metaLib   int64
+	adminTok  string
+	samTok    string
+	member    int64
+	memberTok string
 }
 
 // metaBook is the book the mock metaserve matches.
 const metaBook = "Andy Weir/The Martian"
 
+// cradleABS is Cradle's Audiobookshelf metadata.json: two series (series_list,
+// the main one a range), and the descriptive fields /item carries.
+const cradleABS = `{"title":"Unsouled","subtitle":"Cradle, Book 1","authors":["Will Wight"],"narrators":["Travis Baldree"],
+	"series":[{"name":"Cradle","sequence":"1-2"},{"name":"Sacred Valley","sequence":"1"}],
+	"publishedDate":"2016-06-01","description":"A boy with no power.","publisher":"Hidden Gnome","language":"English",
+	"abridged":true,"genres":["Fantasy"],"tags":["progression"],"isbn":"9780989671767","asin":"B01H1CYG2M"}`
+
 func newWireMainEnv(t *testing.T) *wireMainEnv {
 	t.Helper()
+	ctx := context.Background()
 	e := newMetaEnvMock(t, true, &mockMetaserve{match: true})
-	lib := newFixtureLibrary(t, e)
+	e.api.ffmpeg = "ffmpeg" // renditions on (nothing here encodes one)
+	root := copyFixtures(t, cradlePart, "Will Wight/Cradle/02 - Soulsmith.m4b", syncMistborn)
+	epub := testEpub(t, false)
+	writeMap(t, root, cradleBook+"/"+metadata.ABSFileName, []byte(cradleABS))
+	writeMap(t, root, cradleBook+"/Book.epub", epub)
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanFixture(t, e, lib)
+	writeMap(t, root, cradleBook+"/.audiosilo/readalong.json",
+		readalongMapJSON(t, sha256Hex(epub), bookAudio(t, e.cat, lib.ID, cradleBook)))
+	scanFixture(t, e, lib)
+
 	sam, samTok := newUserWithSession(t, e, "sam", false)
-	if err := e.cat.GrantWholeLibrary(context.Background(), sam, lib.ID); err != nil {
+	if err := e.cat.GrantWholeLibrary(ctx, sam, lib.ID); err != nil {
 		t.Fatal(err)
 	}
 	wireOK(t, e, "PUT", bookURL(lib.ID, "progress", cradleBook), samTok, `{"position":42,"duration":120}`)
 	wireOK(t, e, "POST", bookURL(lib.ID, "bookmarks", cradleBook), samTok, `{"position":12,"note":"here","label":"favourite"}`)
-
-	metaLib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Matched", Root: t.TempDir()})
+	member, _, _, err := e.auth.CreateMember(ctx, e.adminID, auth.NewMember{Name: "Pip", Kind: auth.MemberGrownup,
+		Access: auth.MemberAll}, auth.MemberPolicy{Enabled: true, Max: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: metaLib.ID, RelPath: metaBook,
+
+	metaLib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Matched", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: metaLib.ID, RelPath: metaBook,
 		Title: "The Martian", Author: "Andy Weir", ASIN: "B00B5HZGUG", AddedAt: "2020-01-01"}); err != nil {
 		t.Fatal(err)
 	}
-	return &wireMainEnv{testEnv: e, lib: lib, metaLib: metaLib.ID, adminTok: adminSession(t, e), samTok: samTok}
+	return &wireMainEnv{testEnv: e, lib: lib, metaLib: metaLib.ID, adminTok: adminSession(t, e), samTok: samTok,
+		member: member.ID, memberTok: e.session(t, member.ID)}
 }
 
 // newWireHouseEnv: sam and pat share their listening, sam has listened.

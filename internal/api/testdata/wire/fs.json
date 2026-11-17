@@ -11,6 +11,9 @@
         "mod_time": "number",
         "name": "string",
         "path": "string",
+        "series": "string",
+        "series_index": "number",
+        "series_index_end": "number",
         "size": "number",
         "title": "string"
       }

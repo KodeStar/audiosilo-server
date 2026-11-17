@@ -1,14 +1,18 @@
 {
-  "route": "GET /api/v1/me",
+  "route": "GET /api/v1/me (a household member)",
   "shape": {
     "disabled": "boolean",
+    "display_name": "string",
     "has_password": "boolean",
     "has_recovery": "boolean",
     "id": "number",
     "is_demo": "boolean",
     "last_seen_at": "string",
-    "managed_by": "null",
-    "member_kind": "null",
+    "managed_by": {
+      "id": "number",
+      "username": "string"
+    },
+    "member_kind": "string",
     "role": "string",
     "username": "string"
   }

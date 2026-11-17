@@ -56,7 +56,9 @@
       "enabled": "boolean"
     },
     "name": "string",
-    "renditions": [],
+    "renditions": [
+      "string"
+    ],
     "server_id": "string",
     "version": "string"
   }
