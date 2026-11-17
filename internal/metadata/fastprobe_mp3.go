@@ -916,10 +916,17 @@ func (u *mp3Uncounted) count(ctx context.Context, b *blockFile, timeout time.Dur
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errProbeDeadline)
 	defer cancel()
 	var frames int64
+	whole := false
 	if why := b.boundedBy(ctx, b.size+countSlack, func() {
-		frames = mp3FrameCount(b, u.off, mp3AudioEnd(b, u.off), u.first)
+		frames, whole = mp3FrameCount(b, u.off, mp3AudioEnd(b, u.off), u.first)
 	}); why != "" {
 		return nil, why
+	}
+	if !whole {
+		// Not one stream: its sample rate, MPEG version or layer changes (a
+		// concatenation), or its frames are free-format. Its length from the
+		// first frame's rate would leave the rest out.
+		return nil, "frames lost: over an eighth of the audio is no frame of the first's stream"
 	}
 	if frames == 0 {
 		// A read error (fastProbe reports b.err) or no frames at all.
@@ -977,9 +984,12 @@ func mp3FrameSize(h, ref uint32) int64 {
 // time for one whose next frame follows it too, as the decoder's parser
 // resyncs. A last frame running past end is cut off, and still counted: the
 // parser hands the decoder what there is of it, and the decoder outputs a
-// whole frame's samples (ffmpeg decodes one with only its header left).
-func mp3FrameCount(b *blockFile, off, end int64, ref uint32) (frames int64) {
+// whole frame's samples (ffmpeg decodes one with only its header left). whole
+// is false, the count given up, once more than mp3MaxJunk of the audio was
+// skipped: frames of another stream (a sample rate that changes), not junk.
+func mp3FrameCount(b *blockFile, off, end int64, ref uint32) (frames int64, whole bool) {
 	w := mp3Window{b: b, end: end, buf: make([]byte, 0, min(mp3WindowSize, max(end-off, 0)))}
+	maxJunk, junk := (end-off)/mp3MaxJunk, int64(0)
 	for pos := off; pos+4 <= end; {
 		if fs := mp3FrameSize(w.u32(pos), ref); fs > 0 {
 			frames++
@@ -988,6 +998,9 @@ func mp3FrameCount(b *blockFile, off, end int64, ref uint32) (frames int64) {
 		}
 		// Lost sync: the next frame whose own next one is a frame, or the end.
 		for pos++; pos+4 <= end; pos++ {
+			if junk++; junk > maxJunk {
+				return frames, false
+			}
 			b.tick()
 			w.ensure(pos, mp3MaxFrame+4)
 			fs := mp3FrameSize(w.u32(pos), ref)
@@ -996,8 +1009,13 @@ func mp3FrameCount(b *blockFile, off, end int64, ref uint32) (frames int64) {
 			}
 		}
 	}
-	return frames
+	return frames, true
 }
+
+// mp3MaxJunk is the share of an MP3's audio a frame count skips as junk (a
+// damaged frame, an ID3v2 tag between parts) before it gives up, one over it:
+// an eighth.
+const mp3MaxJunk = 8
 
 // mp3MaxFrame bounds a layer III frame's size (320 kbit/s at 32 kHz, padded),
 // so a resync's look at the next frame stays in its window.

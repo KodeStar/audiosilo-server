@@ -122,6 +122,29 @@ func TestCountsHeaderlessVBRFrames(t *testing.T) {
 	}
 }
 
+// A header-less VBR MP3 whose sample rate changes half way (two files at 44.1
+// and 48 kHz joined) is not counted: the frames at the second rate are no
+// junk to skip, and the first rate's length would leave them out. ffprobe
+// reads it, as before SRV-16.
+func TestRateChangeIsNotCounted(t *testing.T) {
+	t.Parallel()
+	data := vbrFrames(1000)
+	for i := range 1000 {
+		h := uint32(0xFFFB0000) | uint32([]byte{9, 11, 10}[i%3])<<12 | 1<<10 // 48 kHz
+		m, ok := decodeMPA(h)
+		if !ok {
+			t.Fatal("bad frame header")
+		}
+		f := make([]byte, m.frameSize)
+		binary.BigEndian.PutUint32(f, h)
+		data = append(data, f...)
+	}
+	p, reason, _ := probeBytes(t, t.Context(), data, maxProbeTime)
+	if p != nil || !strings.Contains(reason, "frames lost") {
+		t.Fatalf("answer %+v, reason %q; want it left to ffprobe as frames lost", p, reason)
+	}
+}
+
 // A header-less MP3 whose sampled frames share one bitrate keeps the
 // constant bitrate's estimate (right for true CBR), with no count: only the
 // frames sampled are read, not the file.

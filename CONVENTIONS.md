@@ -1214,7 +1214,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   key `applyProbe` starts reading joins `probeTagKeys`. **The one departure from parity (SRV-16)**: a VBR MP3
   with no Xing/VBRI header (its first 64 frames or the frames at 20-80% of the file differ in bitrate:
   `mp3ConstantBitrate`) has its frames counted, header to header from the first to the trailing ID3v1/APEv2
-  tags (`mp3Uncounted.count`, `mp3FrameCount`; resyncing past junk, a frame cut off by the end dropped), where
+  tags (`mp3Uncounted.count`, `mp3FrameCount`; resyncing past junk, but giving the file to ffprobe once over an eighth of the audio was skipped (`mp3MaxJunk`: a
+  sample rate that changes, free-format frames); a last frame cut off by the end counted, as ffmpeg decodes it), where
   ffprobe estimates its length from a bitrate (139.42 s for 150.05 s of audio: seeks in the file landed up to
   ~7% off). The count reads the whole file in 1 MiB windows straight from it (`blockFile.raw`), bounded on
   its own as ffprobe's run would be (the ffprobe timeout and the caller's context, the file's size in bytes,
@@ -1222,11 +1223,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   counted); cut short, the file goes to ffprobe (its estimate) as before, and with no ffprobe a count out of
   time is a `ProbeTimedOut`. The result is `probeResult.Counted` (`ProbeView.Counted`: `Diff` leaves its
   duration out; `countedFixtures` in the golden test holds each fixture's decoded length). With an ffprobe
-  whose release has no rules, an MP3's estimate is replaced the same way after ffprobe answers
-  (`countedMP3`). A stored book read before this (`books.duration_rev` < `catalog.durationRev`, 0082) that
-  holds an MP3 is `Signature.DurationStale`: the next scan indexes it once more, its files unchanged, and
-  every index writes the current revision (bump it, and `durationStaleExpr`'s filter, when a change to the
-  length reading should re-read stored books). A CBR MP3's bitrate-estimated duration counts each ID3 picture read_apic
+  whose release has no rules, an MP3's estimate is replaced the same way after ffprobe answers (`readFile`'s
+  count, `Metadata.counted`). A stored book read before this (`books.duration_rev` < `catalog.durationRev`,
+  0082, or a `duration_rev_indexed_at` that is not the row's `indexed_at`: an older server re-indexed it
+  since, as `fileOrderExpr`) that holds an MP3 is `Signature.DurationStale`: the next scan indexes it once
+  more, its files unchanged, and every index writes the current revision with its `indexed_at` (bump it, and
+  `durationStaleExpr`'s filter, when a change to the length reading should re-read stored books). A
+  multi-file book whose parts' lengths change moves a listener's whole-book place on it (its parts' offsets
+  move): no remap, as for the natural file order (#160). A CBR MP3's bitrate-estimated duration counts each ID3 picture read_apic
   keeps (its stream's 1/90000 can round past the audio's). Tests: `testdata/probe` (~100 fixtures, < 3 MB, made by
   `scripts/gen-probe-fixtures.sh` with `cmd/mkfixtures`) and `golden-<release>.json` per known
   release (`cmd/probediff -golden`; the script writes the Docker image's via docker), checked with
