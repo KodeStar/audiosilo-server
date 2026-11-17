@@ -412,12 +412,20 @@ func (c *Catalog) changed() {
 	}
 }
 
+// generations is a database whose reads may be cached (store.DB): both its
+// generations, so an answer keyed on the listener one is never cached over a
+// database that has only the content one.
+type generations interface {
+	ContentGeneration() uint64
+	ListenerGeneration() uint64
+}
+
 // ContentGeneration is the database's content generation
 // (store.DB.ContentGeneration) and whether there is one: a catalog over
 // something else (a transaction's snapshot, a test double) has none, and
 // nothing may be cached on it.
 func (c *Catalog) ContentGeneration() (uint64, bool) {
-	g, ok := c.db.(interface{ ContentGeneration() uint64 })
+	g, ok := c.db.(generations)
 	if !ok {
 		return 0, false
 	}
@@ -426,10 +434,10 @@ func (c *Catalog) ContentGeneration() (uint64, bool) {
 
 // ListenerGeneration is the database's listener generation
 // (store.DB.ListenerGeneration: who listens to which book), 0 when there is
-// none (ContentGeneration says whether an answer may be cached). An answer that
+// none (ContentGeneration then says nothing may be cached). An answer that
 // reads which progress rows exist keys on both.
 func (c *Catalog) ListenerGeneration() uint64 {
-	if g, ok := c.db.(interface{ ListenerGeneration() uint64 }); ok {
+	if g, ok := c.db.(generations); ok {
 		return g.ListenerGeneration()
 	}
 	return 0

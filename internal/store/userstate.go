@@ -50,8 +50,10 @@ type tableRule struct {
 // durable per-user state: the community metadata cache (meta_cache, derived)
 // and the console's bell (server_events) are listed, favourites and goals are
 // not. No content cache reads what a rule lets through, bar the token cache,
-// whose touch drops the row it changed; a new cache that would needs a key of
-// its own, or that table out of the list (CONVENTIONS.md, Content generation).
+// whose touch drops the row it changed, and the Health summary and its
+// duplicates, which read which progress rows exist and key on the listener
+// generation too; a new cache that would needs a key of its own, or that table
+// out of the list (CONVENTIONS.md, Content generation).
 var userStateTables = map[string]tableRule{
 	// A progress row's fields are no list's. A new or removed row changes who
 	// listens to each copy, which the Health summary and its duplicates read

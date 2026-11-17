@@ -36,7 +36,9 @@ import (
 // on and the entry is never served again. A user-state write leaves it, and
 // none of these answers reads what such a write changes (store's
 // userStateTables, checked as each one runs; CONVENTIONS.md, Content
-// generation), so listening keeps them warm. The cache only ever saves work
+// generation), but for the Health summary, which reads which progress rows
+// exist and so keys on the listener generation too (handleIssues), so
+// listening keeps them warm. The cache only ever saves work
 // between content writes; it never decides what is current.
 const (
 	listCacheBytes    = 8 << 20 // the whole cache
