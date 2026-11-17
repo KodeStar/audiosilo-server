@@ -92,8 +92,8 @@ func TestBookReleasedAnnouncedOncePerRun(t *testing.T) {
 	}
 	clock := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
 	r := upcoming.New(e.cat, announceMeta{rec}, upcoming.Options{
-		Now:      func() time.Time { return clock },
-		Window:   func() int { return 90 },
+		Now:    func() time.Time { return clock },
+		Window: func() int { return 90 },
 		Announce: func(ctx context.Context, releases []upcoming.Release) {
 			upcoming.Announce(ctx, e.api.rt.Notify, releases)
 		},
