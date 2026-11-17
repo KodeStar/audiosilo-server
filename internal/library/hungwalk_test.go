@@ -277,3 +277,56 @@ func TestIndexMovedWithTheOldPathHeldGivesUp(t *testing.T) {
 		t.Error("the old book once known gone was kept, want the move carried")
 	}
 }
+
+// A book in a folder the walk gave up on is not known gone (SRV-15c): a copy
+// of it the same partial run finds elsewhere is a new book, never the stuck
+// book moved, so its listening state stays on its path; a book that did move
+// in that run (its old path gone from disk) still carries its state. Not
+// parallel: metadata.HoldOpensForTests swaps the mount lookup.
+func TestAPartialScanMovesNoStateFromAFolderThatDoesNotAnswer(t *testing.T) {
+	for _, held := range []string{"Author/Stuck", "Author/Stuck/01.mp3"} {
+		t.Run(held, func(t *testing.T) {
+			ctx := t.Context()
+			db := storetest.Open(t)
+			cat := catalog.New(db, time.Now)
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			stuck, moving := make([]byte, 1<<10), make([]byte, 2<<10)
+			writeFile(t, root, "Author/Stuck/01.mp3", stuck)
+			writeFile(t, root, "Author/Moving/01.mp3", moving)
+			lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+			s := NewScanner(cat, "", slog.Default())
+			s.probeTimeout = 200 * time.Millisecond
+			if res := scanWithin(t, s, *lib, 20*time.Second); res.Added != 2 {
+				t.Fatalf("added %d, want both books", res.Added)
+			}
+			uid := seedUserID(t, db)
+			ref := func(p string) catalog.Ref { return catalog.Ref{LibraryID: lib.ID, Path: p} }
+			for _, p := range []string{"Author/Stuck", "Author/Moving"} {
+				if _, err := cat.SaveProgress(ctx, uid, catalog.Progress{Ref: ref(p), Position: 42}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeFile(t, root, "Other/Copy/01.mp3", stuck) // the stuck book's bytes, and so its fingerprint
+			if err := os.Rename(filepath.Join(root, "Author/Moving"), filepath.Join(root, "Other/Moved")); err != nil {
+				t.Fatal(err)
+			}
+
+			release := metadata.HoldOpensForTests(filepath.Join(root, filepath.FromSlash(held)))
+			t.Cleanup(release)
+			res := scanWithin(t, s, *lib, 20*time.Second)
+			if !res.Partial || res.Moved != 1 || res.Added != 1 {
+				t.Errorf("scan with %s held: partial %v, moved %d, added %d; want a partial run, the real move, the copy added",
+					held, res.Partial, res.Moved, res.Added)
+			}
+			for p, want := range map[string]bool{"Author/Stuck": true, "Other/Copy": false, "Author/Moving": false, "Other/Moved": true} {
+				if got, _ := cat.GetProgress(ctx, uid, ref(p)); (got != nil) != want {
+					t.Errorf("progress at %s = %+v, want it there: %v", p, got, want)
+				}
+			}
+			release()
+		})
+	}
+}

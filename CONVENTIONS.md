@@ -1251,7 +1251,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   probe's time each): a folder that won't list, or whose audio file's lstat is given up on (`dropUnanswered`, with
   every disc folder beside it, so neither a book joined from a disc set nor the discs' split is built from the
   discs that answered), is skipped for that run, which is then partial (its books kept
-  as stored, never pruned nor rewritten without a part) and records an `unreadable` path in the run's log; a
+  as stored, never pruned nor rewritten without a part, their listening state never moved to a copy elsewhere:
+  `detectMoves` below) and records an `unreadable` path in the run's log; a
   `.audiosilo` folder that won't list keeps its book's attachments as stored. So do the scan's tag-only suspect
   check (`suspectFromTags`, `metadata.ExtractTags` under the scan's context and time) and its read-along ebook
   hashing (`EbookDigestNow`'s look, and `EbookDigest`'s open and each of its reads, each a `metadata.Bounded` call,
@@ -1403,7 +1404,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rule-less share, so such a share is an ordinary one whose folders can be changed.
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
-  durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its
+  durable state old→new (`catalog.MoveDurableState`). After a partial discovery (a folder unreadable, or
+  given up on: a share that stopped answering) a book not found is not known gone, so each old path a new
+  book matches is looked at first (`bookOnDisk`, bounded, erring toward present) and only one gone from disk
+  moves: a copy of a stuck book never takes its state. A folder book's fingerprint is its
   first file's; one indexed in byte order before #160 still matches by the file that order
   put first (`byteFirstFingerprint`, in `detectMoves` and `IndexMoved`). The on-demand index of a
   book not indexed yet (a renamed folder opened from Folders before a scan, server#209) looks too:

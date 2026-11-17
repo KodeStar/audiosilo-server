@@ -383,7 +383,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 
 	// Carry user state across moved/renamed files before indexing. A moved book is
 	// counted once, as moved: not as new at its new path, nor as removed at its old.
-	moves := s.detectMoves(ctx, lib, sigs, books, keep, rl)
+	// After a partial discovery a book not found is not known gone (its folder
+	// unreadable, or on a share that stopped answering), so only one gone from
+	// disk moves.
+	moves := s.detectMoves(ctx, lib, sigs, books, keep, partialDiscovery, rl)
 	res.Moved = len(moves)
 	movedTo := make(map[string]bool, len(moves))
 	for _, to := range moves {
@@ -2884,8 +2887,15 @@ func (s *Scanner) fingerprint(ctx context.Context, absPath string) string {
 // disappeared and appeared, keeping fingerprinting off the hot path of normal scans.
 // found is the paths of books (discovery's). It returns the moves it carried
 // state across (old path -> new path), logging each to rl.
+//
+// partial says discovery did not see the whole tree (a folder unreadable, or
+// given up on: a share that stopped answering), so a book it did not find is
+// not known gone: a copy of it found elsewhere would take its listening state
+// while the book itself is kept. Each old path a new book matches is then
+// looked at (bookOnDisk, bounded, erring toward present), and only one gone
+// from disk moves.
 func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map[string]catalog.Signature,
-	books []*catalog.Book, found map[string]bool, rl *runLog) (moved map[string]string) {
+	books []*catalog.Book, found map[string]bool, partial bool, rl *runLog) (moved map[string]string) {
 	var disappeared []string
 	for relPath := range sigs {
 		if !found[relPath] {
@@ -2919,6 +2929,15 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 		was := s.byteFirstFingerprint(ctx, lib, nb)
 		for oldPath, ofp := range oldFP {
 			if (ofp != fp && ofp != was) || reclassified(oldPath, sigs[oldPath], nb) {
+				continue
+			}
+			if partial && s.bookOnDisk(ctx, lib, oldPath) {
+				// Not known gone: its state stays, and it is not looked at again
+				// for another new book (on a share that stopped answering each
+				// look waits out its time).
+				s.log.Info("move ignored: the old book is not known gone after a partial discovery",
+					"library", lib.Name, "from", oldPath, "to", nb.RelPath)
+				delete(oldFP, oldPath)
 				continue
 			}
 			if s.carryMove(ctx, lib, oldPath, nb.RelPath, rl) {
