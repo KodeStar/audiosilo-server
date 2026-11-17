@@ -1,12 +1,15 @@
 package library
 
 import (
+	"context"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
 	"time"
 
@@ -72,6 +75,77 @@ func TestAScanSkipsAFolderThatDoesNotAnswer(t *testing.T) {
 			release()
 			if res := scanWithin(t, s, *lib, 20*time.Second); res.Partial || res.Removed != 0 {
 				t.Errorf("the scan once the share answers: partial %v, removed %d; want a whole walk", res.Partial, res.Removed)
+			}
+		})
+	}
+}
+
+// An audio file's lstat that fails as a share does (EIO, ESTALE: a
+// soft-mounted NFS share; EACCES) says nothing about whether the file is
+// there: its folder is skipped for the run as one whose look was given up on
+// (partial, an unreadable path logged), so a folder book keeps its parts and a
+// single-file book its row. ENOENT is the file gone: the part drops. Not
+// parallel: it swaps lstatAudio.
+func TestAScanKeepsABookWhoseAudioLstatFails(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+	}{
+		{"EIO", syscall.EIO},
+		{"ESTALE", syscall.ESTALE},
+		{"EACCES", syscall.EACCES},
+		{"ENOENT", syscall.ENOENT},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := t.Context()
+			db := storetest.Open(t)
+			cat := catalog.New(db, time.Now)
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, root, "Author/Book/01.mp3", make([]byte, 1<<10))
+			writeFile(t, root, "Author/Book/02.mp3", make([]byte, 1<<10))
+			writeFile(t, root, "Loose.mp3", make([]byte, 1<<10))
+			writeFile(t, root, "Author/Fine/01.mp3", make([]byte, 1<<10)) // the rest of the library
+			lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+			s := NewScanner(cat, "", slog.Default())
+			if res := scanWithin(t, s, *lib, 20*time.Second); res.Added != 3 {
+				t.Fatalf("added %d, want the three books", res.Added)
+			}
+
+			failing := map[string]bool{
+				filepath.Join(root, "Author", "Book", "02.mp3"): true,
+				filepath.Join(root, "Loose.mp3"):                true,
+			}
+			was := lstatAudio
+			lstatAudio = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+				if failing[p] {
+					return nil, &fs.PathError{Op: "lstat", Path: p, Err: c.err}
+				}
+				return was(ctx, p, timeout)
+			}
+			t.Cleanup(func() { lstatAudio = was })
+			res := scanWithin(t, s, *lib, 20*time.Second)
+			if !res.Partial || res.Removed != 0 {
+				t.Errorf("scan with %v: partial %v, removed %d; want a partial run, none removed", c.err, res.Partial, res.Removed)
+			}
+			gone := c.err == syscall.ENOENT
+			for _, dir := range []string{"Author/Book", ""} {
+				logged := slices.ContainsFunc(res.Log, func(e catalog.RunEvent) bool { return e.Kind == "unreadable" && e.Path == dir })
+				if logged == gone {
+					t.Errorf("scan with %v logged %+v; want %q unreadable: %v", c.err, res.Log, dir, !gone)
+				}
+			}
+			wantParts := 2
+			if gone {
+				wantParts = 1
+			}
+			if b, err := cat.GetBookByPath(ctx, lib.ID, "Author/Book"); err != nil || len(b.Files) != wantParts {
+				t.Errorf("the folder book after %v = %+v (%v), want %d parts", c.err, b, err, wantParts)
+			}
+			if _, err := cat.GetBookByPath(ctx, lib.ID, "Loose.mp3"); err != nil {
+				t.Errorf("the single-file book after %v = %v, want its row kept", c.err, err)
 			}
 		})
 	}

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -1775,7 +1776,10 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 // answering, long after its waiter has gone (a setup preview's, at its time,
 // with the preview's slot for the mount held meanwhile). Each lstat is a
 // metadata.Bounded call (ctx, at most timeout): unanswered is the folders with
-// one given up on, each with that error (a share that stopped answering).
+// one given up on, each with that error (a share that stopped answering), or
+// with one whose lstat failed as a share does (shareFault), its error made a
+// look given up on: the file listed a moment ago says nothing about whether it
+// is there, so its book is kept as stored rather than built without it.
 func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, timeout time.Duration) (gone int, unanswered map[string]error, err error) {
 	type dirFile struct {
 		dir string
@@ -1796,7 +1800,10 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, time
 		if ctx.Err() != nil {
 			return
 		}
-		info, err := metadata.LstatBounded(ctx, f.f.abs, timeout) // the entry's Info, bounded
+		info, err := lstatAudio(ctx, f.f.abs, timeout) // the entry's Info, bounded
+		if shareFault(err) && !metadata.GaveUp(err) {
+			err = fmt.Errorf("%w: %w", metadata.ErrNotAnswered, err)
+		}
 		switch {
 		case metadata.GaveUp(err):
 			mu.Lock()
@@ -1810,6 +1817,19 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, time
 		f.f.de = newStatEntry(f.f.de, info, err)
 	})
 	return int(missing.Load()), unanswered, ctx.Err()
+}
+
+// lstatAudio is statAudio's look at each audio file (a test injects a share's
+// errors through it).
+var lstatAudio = metadata.LstatBounded
+
+// shareFault reports whether err, an lstat's of a file its folder listed, is
+// how a share fails rather than an answer about the file: EIO or ESTALE (a
+// soft-mounted NFS share whose server stopped answering, or a handle it lost)
+// or EACCES (a share refusing a look it allowed the listing). ENOENT is not:
+// the file is gone.
+func shareFault(err error) bool {
+	return errors.Is(err, syscall.EIO) || errors.Is(err, syscall.ESTALE) || errors.Is(err, syscall.EACCES)
 }
 
 // statEntry is a directory entry whose Info statAudio has read, keeping only
