@@ -1229,8 +1229,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   since, as `fileOrderExpr`) that holds an MP3 is `Signature.DurationStale`: the next scan indexes it once
   more, its files unchanged, and every index writes the current revision with its `indexed_at` (bump it, and
   `durationStaleExpr`'s filter, when a change to the length reading should re-read stored books), except one
-  that left a header-less VBR file uncounted (a deadline, a read error, a count given up:
-  `Metadata.LengthUncounted`, `Book.LengthUncounted`), which writes 0 so the next scan reads it again; 0082
+  that left a header-less VBR file uncounted for now (a deadline, a read error: `Metadata.LengthUncounted`,
+  `Book.LengthUncounted`; never a count that gave up, which reads the same every time), which writes 0 so
+  the next scan reads it again (a scan reads one counted beside others again alone first); 0082
   starts a book with no MP3 at the current revision. A
   multi-file book whose parts' lengths change moves a listener's whole-book place on it (its parts' offsets
   move): no remap, as for the natural file order (#160). A CBR MP3's bitrate-estimated duration counts each ID3 picture read_apic

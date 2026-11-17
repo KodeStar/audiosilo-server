@@ -157,7 +157,10 @@ func timedOutReason(reason string) bool {
 // header: ffprobe estimates its length from a bitrate (up to ~7% off, SRV-16),
 // so its frames are counted instead (mp3Uncounted.count, with bounds of its
 // own: the whole file is read), and the result is Counted. One whose count
-// fails (a bound passed, a read error, given up) is uncounted.
+// may yet succeed (out of time, the caller's context ended, a read that
+// failed) is uncounted, as is an MP3 whose probe ran out of time before it
+// could tell: the scan reads it again. A count that gave up (frames of another
+// stream) or found no frames reads the same every time, so it is not.
 func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Duration) (p *probeResult, reason string, uncounted bool) {
 	pctx, cancel := context.WithTimeoutCause(ctx, min(timeout, maxProbeTime), errProbeDeadline)
 	defer cancel()
@@ -178,7 +181,7 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 			err = unsure("format " + format)
 		}
 	}); why != "" {
-		return nil, why, false
+		return nil, why, format == "mp3" && (timedOutReason(why) || ctx.Err() != nil)
 	}
 	uc, headerless := errors.AsType[*mp3Uncounted](err)
 	if headerless && b.err == nil {
@@ -192,7 +195,7 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 		}
 	}
 	p, reason = probeAnswer(b, p, err)
-	return p, reason, headerless && reason != ""
+	return p, reason, headerless && reason != "" && (b.err != nil || timedOutReason(reason) || ctx.Err() != nil)
 }
 
 // probeAnswer is fastProbe's answer from a reader's: p, or why there is none.

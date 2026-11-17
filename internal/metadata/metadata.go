@@ -107,16 +107,19 @@ type Metadata struct {
 	// has its frames counted (readFile's count): its length in seconds, which
 	// replaces ffprobe's estimate. 0 for any other file.
 	counted float64
-	// uncounted: a VBR MP3 with no Xing or VBRI header whose frames could not
-	// be counted (LengthUncounted).
+	// uncounted: a VBR MP3 with no Xing or VBRI header whose frames a read
+	// given time may count, or an MP3 whose probe ran out of time before it
+	// could tell (LengthUncounted).
 	uncounted bool
 }
 
 // LengthUncounted reports whether the file is a VBR MP3 with no Xing or VBRI
-// header whose frames could not be counted (its count ran out of time, a read
-// failed, or it gave up on frames of another stream), so its Duration is
-// ffprobe's estimate from a bitrate, or none (SRV-16). A scan reads the book
-// again (catalog.Book.LengthUncounted).
+// header whose frames went uncounted for now (its count ran out of time, the
+// caller's context ended or a read failed), or an MP3 whose probe ran out of
+// time before it could tell, so its Duration may be ffprobe's estimate from a
+// bitrate, or none (SRV-16). A scan reads the book again
+// (catalog.Book.LengthUncounted). A count that gave up (frames of another
+// stream) or found no frames is not: it reads the same every time.
 func (m *Metadata) LengthUncounted() bool { return m != nil && m.uncounted }
 
 // ProbeTimedOut reports whether, with no ffprobe configured, the file's read

@@ -140,9 +140,14 @@ func TestRateChangeIsNotCounted(t *testing.T) {
 		binary.BigEndian.PutUint32(f, h)
 		data = append(data, f...)
 	}
-	p, reason, _ := probeBytes(t, t.Context(), data, maxProbeTime)
+	b := newBlockFile(bytes.NewReader(data), int64(len(data)))
+	b.ff = ff8
+	p, reason, uncounted := fastProbe(t.Context(), b, "mp3", maxProbeTime)
 	if p != nil || !strings.Contains(reason, "frames lost") {
 		t.Fatalf("answer %+v, reason %q; want it left to ffprobe as frames lost", p, reason)
+	}
+	if uncounted {
+		t.Error("marked uncounted: a count given up reads the same every time, so the scan would read the book on every run")
 	}
 }
 
@@ -243,6 +248,25 @@ func TestCountIsBounded(t *testing.T) {
 				t.Errorf("gave up after %v", took)
 			}
 		})
+	}
+}
+
+// An MP3 whose probe runs out of time before it can tell whether the file is
+// a header-less VBR one is marked uncounted all the same: ffprobe's estimate
+// answers for it, and the scan reads it again rather than stamp the estimate.
+func TestProbeOutOfTimeIsUncounted(t *testing.T) {
+	t.Parallel()
+	data := vbrFrames(1000)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	b := newBlockFile(hangBetween{r: bytes.NewReader(data), from: 0, to: int64(len(data)), hang: hang}, int64(len(data)))
+	b.ff = ff8
+	p, reason, uncounted := fastProbe(t.Context(), b, "mp3", 100*time.Millisecond)
+	if p != nil || !timedOutReason(reason) {
+		t.Fatalf("answer %+v, reason %q; want the probe out of time", p, reason)
+	}
+	if !uncounted {
+		t.Error("not marked uncounted: the scan would stamp ffprobe's estimate as counted")
 	}
 }
 

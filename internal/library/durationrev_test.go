@@ -50,11 +50,10 @@ func TestScanRereadsLengthsOfAnOlderRevision(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	db, _, lib, s := headerlessBook(t)
-	duration := func() float64 { return bookDuration(t, db) }
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Added != 1 {
 		t.Fatalf("first scan = %+v, %v", res, err)
 	}
-	if d := duration(); d < headerlessSecs-0.001 || d > headerlessSecs+0.001 {
+	if d := bookDuration(t, db); d < headerlessSecs-0.001 || d > headerlessSecs+0.001 {
 		t.Fatalf("duration %v, want the frames counted, %v", d, headerlessSecs)
 	}
 
@@ -65,7 +64,7 @@ func TestScanRereadsLengthsOfAnOlderRevision(t *testing.T) {
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 1 {
 		t.Fatalf("rescan = %+v, %v; want the book read again", res, err)
 	}
-	if d := duration(); d < headerlessSecs-0.001 || d > headerlessSecs+0.001 {
+	if d := bookDuration(t, db); d < headerlessSecs-0.001 || d > headerlessSecs+0.001 {
 		t.Errorf("after the rescan: duration %v, want %v", d, headerlessSecs)
 	}
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 0 {
