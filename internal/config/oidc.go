@@ -221,11 +221,14 @@ func fixOIDCAllowedGroup(c *Config) error {
 	return fixGroup(&c.Auth.OIDC.AllowedGroup)
 }
 
-// fixGroup is fixText's rule for a group name, its length counted in bytes.
+// fixGroup is fixText's rule for a group name, its length counted in bytes
+// too (fixText's bound is in characters).
 func fixGroup(p *string) error {
-	*p = strings.TrimSpace(*p)
+	if err := fixText(p, MaxOIDCGroup, "a group name"); err != nil {
+		return err
+	}
 	if len(*p) > MaxOIDCGroup {
 		return fmt.Errorf("a group name can be at most %d bytes", MaxOIDCGroup)
 	}
-	return fixText(p, MaxOIDCGroup, "a group name")
+	return nil
 }

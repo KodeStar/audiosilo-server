@@ -364,7 +364,7 @@ func (p *Provider) probe(ctx context.Context) error {
 		}
 	}
 	if err != nil {
-		msg = "the provider can't be reached: " + capped(withoutBody(err.Error()))
+		msg = "the provider can't be reached: " + capped(withoutBody(err.Error()), 300)
 	}
 	p.mu.Lock()
 	p.probedAt, p.probeErr = now, msg
@@ -387,13 +387,14 @@ func discoveryError(err error) string {
 	if errors.As(err, &mismatch) {
 		return fmt.Sprintf("the provider calls itself %q, not %q: set issuer to exactly that", mismatch.Discovered, mismatch.Provided)
 	}
-	return "discovery failed: " + capped(withoutBody(err.Error()))
+	return "discovery failed: " + capped(withoutBody(err.Error()), 300)
 }
 
-// capped cuts a provider failure's wording to 300 bytes for the console.
-func capped(msg string) string {
-	if len(msg) > 300 {
-		return msg[:300] + "..."
+// capped cuts a provider failure's wording to limit bytes (the console, a log
+// line).
+func capped(msg string, limit int) string {
+	if len(msg) > limit {
+		return msg[:limit] + "..."
 	}
 	return msg
 }
@@ -439,9 +440,9 @@ func (p *Provider) oauthConfig(prov *gooidc.Provider, redirectURI string) *oauth
 }
 
 // AuthURL is the provider's authorization URL for a flow asking for scopes:
-// its redirect URI, state, nonce and the PKCE S256 challenge of its verifier. A provider discovered
-// before is probed first (probe), so one gone down ends the sign-in here as
-// unavailable rather than sending the browser to it.
+// its redirect URI, state, nonce and the PKCE S256 challenge of its verifier.
+// A provider discovered before is probed first (probe), so one gone down ends
+// the sign-in here as unavailable rather than sending the browser to it.
 func (p *Provider) AuthURL(ctx context.Context, f Flow, scopes []string) (string, error) {
 	ctx, cancel, prov, _, err := p.begin(ctx)
 	defer cancel()
@@ -627,8 +628,5 @@ func exchangeError(err error) string {
 			msg = re.Response.Status
 		}
 	}
-	if len(msg) > 200 {
-		msg = msg[:200] + "..."
-	}
-	return msg
+	return capped(msg, 200)
 }

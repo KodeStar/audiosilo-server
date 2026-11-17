@@ -12,10 +12,11 @@ import (
 )
 
 // The flow cookie: what /start chose (state, nonce, PKCE verifier, the
-// redirect URI it sent the provider, where the sign-in returns) carried to /callback in the browser, sealed with AES-GCM under
-// a key made at start and held only in memory, so no database row exists for an
-// anonymous /start and a restart ends every flow under way. It is valid for
-// FlowMaxAge after /start and once (Replay).
+// redirect URI it sent the provider, where the sign-in returns) carried to
+// /callback in the browser, sealed with AES-GCM under a key made at start and
+// held only in memory, so no database row exists for an anonymous /start and a
+// restart ends every flow under way. It is valid for FlowMaxAge after /start
+// and once (Replay).
 
 // FlowMaxAge is how long a flow may take, /start to /callback.
 const FlowMaxAge = 10 * time.Minute

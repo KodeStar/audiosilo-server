@@ -3677,8 +3677,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   callback: a token outlives a restart; nothing charged, the token left to expire) and for a token
   spent, expired, unknown, of
   another kind or its
-  account's disabled, or now a household member or demo account (one that joined between the
-  callback's decision and its token) (charged to `oidcLimiter`, the callback's, never `redeemLimiter`: any page can make a visitor's browser fail ten exchanges, which must not lock that address out of finishing). The console finishes on
+  account's disabled, or now a household member or demo account (a second check: the token is minted
+  with the decision, and `leaveOwners` ends the open one of an account joining a household) (charged to `oidcLimiter`, the callback's, never `redeemLimiter`: any page can make a visitor's browser fail ten exchanges, which must not lock that address out of finishing). The console finishes on
   `#oidc=done` (`main.tsx` strips it before the router), signs a non-admin straight back out, and
   keeps a stored session when the finish signs no admin in; anything else
   lands on `/connect#oidc=<reason>` (off, unavailable, pending, disabled, not_allowed, failed, expired,

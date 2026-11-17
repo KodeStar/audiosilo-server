@@ -237,9 +237,9 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy, 
 // (spendOnce: two racing finishes cannot both win). Any other token (a
 // pairing token, a session) is ErrInvalidToken and left as it was, as is a
 // spent or expired one, or one whose account is disabled or is now a
-// household member or a demo account (which single sign-on never signs in:
-// the callback's decision and its token are two writes, so an account can
-// join a household between them, after leaveOwners had no token to end).
+// household member or a demo account (which single sign-on never signs in;
+// leaveOwners ends the open token of an account joining a household, so this
+// is the second check, and the one for a demo account).
 func (s *Service) ConsumeOIDC(ctx context.Context, secret string) (*User, error) {
 	hash := hashSecret(secret)
 	u, _, err := s.lookupToken(ctx, hash, KindOIDC)

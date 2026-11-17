@@ -374,9 +374,8 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail(oidcFailed, "flow return", nil)
 		return
 	}
-	// The groups trimmed as the console saves them (config.yaml and the
-	// environment aren't): a claim's group is, so " admins" would match no one
-	// and every sign-in would lose its admin role.
+	// The policy as it is now (live): read once, so the exchange asks userinfo
+	// for the groups the decision below reads.
 	pol := a.config().Auth.OIDC
 	claims, err := a.oidc.provider.Exchange(r.Context(), q.Get("code"), f, pol.GroupPolicy())
 	if errors.Is(err, oidc.ErrUnavailable) {
@@ -395,8 +394,11 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail(oidcFailed, "flow used before", nil)
 		return
 	}
-	// The finish token is minted in the sign-in's own transaction: a sign-out
-	// everywhere can't land between the decision and the token and miss it.
+	// The groups trimmed as the console saves them (config.yaml and the
+	// environment aren't): a claim's group is, so " admins" would match no one
+	// and every sign-in would lose its admin role. The finish token is minted
+	// in the sign-in's own transaction: a sign-out everywhere can't land
+	// between the decision and the token and miss it.
 	res, err := a.auth.OIDCSignIn(r.Context(), claims, oidc.Policy{
 		AutoCreate: pol.AutoCreate, AllowedGroup: strings.TrimSpace(pol.AllowedGroup), AdminGroup: strings.TrimSpace(pol.AdminGroup),
 	}, oidcDoneTTL)
