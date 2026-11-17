@@ -31,13 +31,6 @@ import {
 } from './series-model';
 import { useInView } from '@/lib/use-in-view';
 
-/**
- * One series: its name (a link to its books), author and what the server
- * holds, then the books as spines on a shelf (missing entries as dashed ghosts,
- * from the community rail of one of its books, fetched once the card nears the
- * viewport). The matched books are then resolved to their community works, so
- * each lands on its own entry whatever its series index says.
- */
 /** The page's width, read once for every card (SeriesPage). */
 export interface ShelfLayout {
   /** Wide enough for the fan of covers beside the spines (1024px and up). */
@@ -46,6 +39,13 @@ export interface ShelfLayout {
   phone: boolean;
 }
 
+/**
+ * One series: its name (a link to its books), author and what the server
+ * holds, then the books as spines on a shelf (missing entries as dashed ghosts,
+ * from the community rail of one of its books, fetched once the card nears the
+ * viewport). The matched books are then resolved to their community works, so
+ * each lands on its own entry whatever its series index says.
+ */
 export function SeriesCard({
   series: s,
   books,

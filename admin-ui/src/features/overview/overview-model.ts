@@ -1,5 +1,5 @@
 import type { LibraryStat, ListeningRow, ListeningSession } from '@/api/types';
-import { liveSummary, sortLive } from '@/features/activity/live-model';
+import { liveSummary, compareLive } from '@/features/activity/live-model';
 import { refKey } from '@/lib/book-route';
 import { isBookLibrary } from '@/lib/library-kind';
 
@@ -33,17 +33,18 @@ const key = (r: { user_id: number; library_id: number; path: string }) =>
  * how many devices.
  */
 function groupLive(live: readonly ListeningSession[]): LiveListening[] {
-  const groups = new Map<string, ListeningSession[]>();
+  const groups = new Map<string, { session: ListeningSession; devices: Set<number> }>();
   for (const s of live) {
     const k = key(s);
-    groups.set(k, [...(groups.get(k) ?? []), s]);
+    const g = groups.get(k);
+    if (!g) groups.set(k, { session: s, devices: new Set([s.device_id]) });
+    else {
+      g.devices.add(s.device_id);
+      if (Date.parse(s.last_at) > Date.parse(g.session.last_at)) g.session = s;
+    }
   }
-  const cards = new Map<ListeningSession, LiveListening>();
-  for (const [id, group] of groups) {
-    const session = group.reduce((a, b) => (Date.parse(b.last_at) > Date.parse(a.last_at) ? b : a));
-    cards.set(session, { id, session, devices: new Set(group.map((s) => s.device_id)).size });
-  }
-  return sortLive([...cards.keys()]).map((session) => cards.get(session)!);
+  const cards = [...groups].map(([id, g]) => ({ id, session: g.session, devices: g.devices.size }));
+  return cards.sort((a, b) => compareLive(a.session, b.session));
 }
 
 /**

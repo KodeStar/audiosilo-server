@@ -138,7 +138,7 @@ func snapToFiles(starts, fileStarts []int64) bool {
 	for _, fs := range fileStarts {
 		best, bestD := -1, int64(0)
 		for i, s := range starts {
-			d := abs64(s - fs)
+			d := max(s-fs, fs-s)
 			if taken[i] || d > fileStartSnapMS {
 				continue
 			}
@@ -152,14 +152,6 @@ func snapToFiles(starts, fileStarts []int64) bool {
 		starts[best], taken[best] = fs, true
 	}
 	return true
-}
-
-// abs64 is n's distance from 0.
-func abs64(n int64) int64 {
-	if n < 0 {
-		return -n
-	}
-	return n
 }
 
 // checkChapterEdit is an edit's chapters as its list stores them (titles

@@ -69,13 +69,14 @@ export function usePaletteSearch(
   // Copies that would read alike (two of a book in one library) name their
   // folder too, so the rows can be told apart (ADMIN-13.4).
   const alike = new Map<string, number>();
-  const alikeKey = (b: { title: string }, line: string) => `${b.title}\0${line}`;
-  for (const { b, line } of found)
-    alike.set(alikeKey(b, line), (alike.get(alikeKey(b, line)) ?? 0) + 1);
+  for (const { b, line } of found) {
+    const k = `${b.title}\0${line}`;
+    alike.set(k, (alike.get(k) ?? 0) + 1);
+  }
   const books = found.map<PaletteEntry>(({ b, line }) => ({
     id: `book:${refKey(b)}`,
     title: b.title,
-    subtitle: (alike.get(alikeKey(b, line)) ?? 0) > 1 ? `${line} · ${b.path}` : line,
+    subtitle: (alike.get(`${b.title}\0${line}`) ?? 0) > 1 ? `${line} · ${b.path}` : line,
     visual: (
       <BookCover
         libraryId={b.library_id}

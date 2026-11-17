@@ -6,11 +6,14 @@ import type { ListeningSession } from '@/api/types';
 
 /** Live sessions in the order the Live page shows them: playing first, then the newest save. */
 export function sortLive(sessions: readonly ListeningSession[]): ListeningSession[] {
-  const rank = (s: ListeningSession) => (s.state === 'playing' ? 0 : 1);
-  return [...sessions].sort(
-    (a, b) => rank(a) - rank(b) || Date.parse(b.last_at) - Date.parse(a.last_at),
-  );
+  return [...sessions].sort(compareLive);
 }
+
+const rank = (s: ListeningSession) => (s.state === 'playing' ? 0 : 1);
+
+/** sortLive's order for two sessions. */
+export const compareLive = (a: ListeningSession, b: ListeningSession) =>
+  rank(a) - rank(b) || Date.parse(b.last_at) - Date.parse(a.last_at);
 
 /** A live list's headline numbers: streams, how many play direct, and distinct listeners. */
 export function liveSummary(sessions: readonly ListeningSession[]) {

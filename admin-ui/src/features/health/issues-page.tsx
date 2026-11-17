@@ -44,18 +44,9 @@ export function IssuesPage() {
   // of category or of the ignored view, so its ignored groups can be reached
   // when the count (within each library) has none, and a reload keeps it.
   const across = !!search.across;
-  const go = (next: { issue?: IssueKind; ignored?: true }) =>
-    void navigate({
-      to: '.',
-      search: across ? { ...next, across: true } : next,
-      replace: true,
-    });
-  const setAcross = (on: boolean) =>
-    void navigate({
-      to: '.',
-      search: { issue: search.issue, ignored: search.ignored, across: on || undefined },
-      replace: true,
-    });
+  const go = (next: { issue?: IssueKind; ignored?: true }, on = across) =>
+    void navigate({ to: '.', search: { ...next, across: on || undefined }, replace: true });
+  const setAcross = (on: boolean) => go({ issue: search.issue, ignored: search.ignored }, on);
   // Without ?issue= the page opens the first category needing attention and keeps
   // it open: clearing it shows "All clear" rather than jumping to the next one.
   const [opened, setOpened] = useState<IssueKind>();

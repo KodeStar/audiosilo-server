@@ -16,6 +16,7 @@ import { GenerateStatus } from '@/features/bridge/generate-status';
 import { useBookGenerateJob, useBridgeLink } from '@/features/bridge/use-generate';
 import { toastError } from '@/lib/errors';
 import { formatClock, formatDateTime, formatDuration } from '@/lib/format';
+import { isBookLibrary } from '@/lib/library-kind';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
@@ -72,7 +73,8 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   const chapterEdit = detail.chapter_edit;
   // An episode's chapters are its feed's: the server refuses an edit in a
   // podcast library (409 not_book_library), so none is offered there.
-  const podcast = useLibraries().data?.find((l) => l.id === b.library_id)?.kind === 'podcasts';
+  const library = useLibraries().data?.find((l) => l.id === b.library_id);
+  const podcast = library !== undefined && !isBookLibrary(library);
   // The chapter a ribbon click asked for: its row scrolls into view.
   const [jump, setJump] = useState<number | null>(null);
   const problem = chapterProblem(chapters, b.duration);
