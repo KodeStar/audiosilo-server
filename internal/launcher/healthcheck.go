@@ -16,7 +16,8 @@ import (
 
 // healthcheckTimeout bounds one healthcheck: the server's /healthz answers within
 // its own two-second database probe, so this leaves room for a slow handshake and
-// still ends well inside Docker's default ten-second HEALTHCHECK timeout.
+// still ends well inside the image's ten-second HEALTHCHECK timeout (the
+// Dockerfile's --timeout; Docker's own default is thirty).
 const healthcheckTimeout = 5 * time.Second
 
 // Healthcheck asks the server running from dataDir whether it is healthy: a GET
