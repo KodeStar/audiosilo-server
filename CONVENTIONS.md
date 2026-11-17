@@ -1252,7 +1252,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   503 `share_not_answering`). The walk's own looks are bounded the same way (SRV-15c: `walkDir`'s root lstat and
   listings, a `.audiosilo` folder's listing, a metadata.json's lstat, `statAudio`'s lstat of each audio file, the
   probe's time each): a folder that won't list, or whose audio file's lstat is given up on or fails as a share
-  does (`shareFault`: EIO, ESTALE, EACCES; ENOENT is the file gone) (`dropUnanswered`, with
+  does (`shareFault`: EIO, ESTALE, a permission; ENOENT is the file gone; `dropUnanswered`, with
   every disc folder directly in it or in a folder above it, so neither a book joined from a disc set nor the discs' split
   is built from the discs that answered, or from a set that is one only for want of the folder not looked at),
   is skipped for that run, which is then partial (its books kept

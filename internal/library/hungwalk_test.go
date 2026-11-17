@@ -88,13 +88,15 @@ func TestAScanSkipsAFolderThatDoesNotAnswer(t *testing.T) {
 // parallel: it swaps lstatAudio.
 func TestAScanKeepsABookWhoseAudioLstatFails(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		err  error
+		name  string
+		err   error
+		parts int // the folder book's after the scan: 1 once its part is gone
 	}{
-		{"EIO", syscall.EIO},
-		{"ESTALE", syscall.ESTALE},
-		{"EACCES", syscall.EACCES},
-		{"ENOENT", syscall.ENOENT},
+		{"EIO", syscall.EIO, 2},
+		{"ESTALE", syscall.ESTALE, 2},
+		{"EACCES", syscall.EACCES, 2},
+		{"EPERM", syscall.EPERM, 2},
+		{"ENOENT", syscall.ENOENT, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctx := t.Context()
@@ -130,19 +132,15 @@ func TestAScanKeepsABookWhoseAudioLstatFails(t *testing.T) {
 			if !res.Partial || res.Removed != 0 {
 				t.Errorf("scan with %v: partial %v, removed %d; want a partial run, none removed", c.err, res.Partial, res.Removed)
 			}
-			gone := c.err == syscall.ENOENT
+			wantLogged := c.parts == 2 // a share's fault, not the files gone
 			for _, dir := range []string{"Author/Book", ""} {
 				logged := slices.ContainsFunc(res.Log, func(e catalog.RunEvent) bool { return e.Kind == "unreadable" && e.Path == dir })
-				if logged == gone {
-					t.Errorf("scan with %v logged %+v; want %q unreadable: %v", c.err, res.Log, dir, !gone)
+				if logged != wantLogged {
+					t.Errorf("scan with %v logged %+v; want %q unreadable: %v", c.err, res.Log, dir, wantLogged)
 				}
 			}
-			wantParts := 2
-			if gone {
-				wantParts = 1
-			}
-			if b, err := cat.GetBookByPath(ctx, lib.ID, "Author/Book"); err != nil || len(b.Files) != wantParts {
-				t.Errorf("the folder book after %v = %+v (%v), want %d parts", c.err, b, err, wantParts)
+			if b, err := cat.GetBookByPath(ctx, lib.ID, "Author/Book"); err != nil || len(b.Files) != c.parts {
+				t.Errorf("the folder book after %v = %+v (%v), want %d parts", c.err, b, err, c.parts)
 			}
 			if _, err := cat.GetBookByPath(ctx, lib.ID, "Loose.mp3"); err != nil {
 				t.Errorf("the single-file book after %v = %v, want its row kept", c.err, err)

@@ -1800,8 +1800,16 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, time
 		if ctx.Err() != nil {
 			return
 		}
+		mu.Lock()
+		_, skip := unanswered[f.dir]
+		mu.Unlock()
+		if skip {
+			// Its folder is dropped anyway; on a share that stopped answering
+			// each look would wait out its time.
+			return
+		}
 		info, err := lstatAudio(ctx, f.f.abs, timeout) // the entry's Info, bounded
-		if shareFault(err) && !metadata.GaveUp(err) {
+		if shareFault(err) {
 			err = fmt.Errorf("%w: %w", metadata.ErrNotAnswered, err)
 		}
 		switch {
@@ -1826,10 +1834,10 @@ var lstatAudio = metadata.LstatBounded
 // shareFault reports whether err, an lstat's of a file its folder listed, is
 // how a share fails rather than an answer about the file: EIO or ESTALE (a
 // soft-mounted NFS share whose server stopped answering, or a handle it lost)
-// or EACCES (a share refusing a look it allowed the listing). ENOENT is not:
-// the file is gone.
+// or a permission (EACCES, EPERM: a share refusing a look it allowed the
+// listing). ENOENT is not: the file is gone.
 func shareFault(err error) bool {
-	return errors.Is(err, syscall.EIO) || errors.Is(err, syscall.ESTALE) || errors.Is(err, syscall.EACCES)
+	return errors.Is(err, syscall.EIO) || errors.Is(err, syscall.ESTALE) || errors.Is(err, fs.ErrPermission)
 }
 
 // statEntry is a directory entry whose Info statAudio has read, keeping only
