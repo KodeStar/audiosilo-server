@@ -481,11 +481,11 @@ func writeBanner(w io.Writer, cfg *config.Config, password, code string) {
 	p("  Auth code      : %s\n", code)
 	p("  Config file    : %s\n", config.Path(cfg.DataDir))
 	p("--------------------------------------------------------\n")
+	console := "Finish setting up"
 	if cfg.Setup.Skip {
-		p(" Admin console: open %s/admin and sign in as admin.\n", base)
-	} else {
-		p(" Finish setting up: open %s/admin and sign in as admin.\n", base)
+		console = "Admin console"
 	}
+	p(" %s: open %s/admin and sign in as admin.\n", console, base)
 	p(" Connect a device: open %s/ and enter the auth code.\n", base)
 	p(" (API: POST /api/v1/auth/redeem or /api/v1/auth/login.)\n")
 	p("========================================================\n")
