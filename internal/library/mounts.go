@@ -52,8 +52,9 @@ func MountHints(exclude ...string) []string {
 // excluded, sorted, without repeats, at most maxMountHints.
 func mountHints(r io.Reader, exclude []string, isDir func(string) bool) []string {
 	out := []string{}
-	_ = mounts.Scan(r, func(point, fstype string) { // a table cut short offers what it read
-		if pseudoFS[fstype] || systemPath(point) || slices.Contains(out, point) {
+	_ = mounts.Scan(r, func(m mounts.Mount) { // a table cut short offers what it read
+		point := m.Point
+		if pseudoFS[m.FSType] || systemPath(point) || slices.Contains(out, point) {
 			return
 		}
 		if slices.ContainsFunc(exclude, func(e string) bool { return e != "" && filepath.Clean(e) == point }) {

@@ -1161,7 +1161,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   returned. Per mount (server#360): one hung share stops reads only from itself, every other
   library's mount reads as ever; `internal/mounts` names a path's mount from the mount table alone
   (`/proc/self/mountinfo`, macOS `getfsstat` `MNT_NOWAIT`, re-read every 10 s on a goroutine of its own, only the first read the caller's, a re-read that fails keeping the last table; elsewhere, or
-  unreadable at the first read, the volume root: one key, as the old process-wide cap). A re-index
+  unreadable at the first read, the volume root: one key, as the old process-wide cap). A mount's key is
+  the filesystem it is of (`Mount.Device`: mountinfo's `major:minor`, macOS's fsid), not its mount
+  point: a share unmounted lazily and mounted again at the same path starts with nothing stuck, and
+  two bind mounts of one share have one cap. A re-index
   where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`), or whose
   length ran out of time even read alone (an ffprobe time-out, `ProbeTimedOut` without one:
   `library.readCutShort`; a part on a share that hung mid-read, the FIFO repro of server#360),

@@ -32,11 +32,11 @@ func TestPreviewHungFileIsBounded(t *testing.T) {
 	t.Cleanup(func() { unblockFIFO(t, fifo, previewsPerMount) })
 	other := previewFixture(t)
 	s := NewScanner(nil, "", slog.Default())
-	s.previews.Mount = func(p string) string {
+	s.previews.Mount = func(p string) (string, string) {
 		if p == root {
-			return "hung"
+			return "hung", root
 		}
-		return "other"
+		return "other", "/"
 	}
 	lim := PreviewLimits{MaxTime: 100 * time.Millisecond}
 	for range previewsPerMount {

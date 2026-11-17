@@ -4,10 +4,17 @@
 // audio reads, the folder picker's listings, the setup preview) are bounded per
 // mount with it (PerMount), so one hung share holds back only the reads on it,
 // never every library's (server#360).
+//
+// A mount is told from another by the filesystem it is of (Mount.Device), not
+// by where it is mounted: a share unmounted lazily and mounted again at the
+// same path is a new filesystem with nothing stuck on it, and two bind mounts
+// of one share (two libraries of one NAS in a container) are one filesystem
+// with one bound.
 package mounts
 
 import (
 	"bufio"
+	"cmp"
 	"io"
 	"path/filepath"
 	"strconv"
@@ -21,9 +28,19 @@ import (
 // again, so a share mounted while the server runs is told apart soon after.
 const tableTTL = 10 * time.Second
 
-// snapshot is one read of the mount table: its mount points, and when.
+// Mount is one mount in the mount table: where it is mounted, its filesystem
+// type (mountinfo alone) and the filesystem it is of, which is what tells one
+// mount from another: mountinfo's device number (major:minor, the same for
+// every mount of one filesystem and new for each filesystem mounted), macOS's
+// filesystem ID. An empty Device is told by its Point.
+type Mount struct {
+	Point, FSType, Device string
+}
+
+// snapshot is one read of the mount table: each mount point's key (its
+// Device, or the point itself with none), and when.
 type snapshot struct {
-	points map[string]struct{}
+	points map[string]string
 	read   time.Time
 }
 
@@ -35,22 +52,24 @@ var (
 	refreshing atomic.Bool
 )
 
-// Of is the mount point holding path, an absolute path (cleaned here): the
+// Of is the mount holding path, an absolute path (cleaned here): point is the
 // longest mount point in the mount table that is path or a folder above it, by
 // the path's text alone, so a path reached through a symlink into another
-// mount is keyed by where the link sits. With no table to read (an OS this
-// does not read it on, or one whose first read failed) it is the path's volume
-// root ("/", "C:\"), one key for every path, as a single bound was before; a
-// later read that fails keeps the last table (newSnapshot).
-func Of(path string) string {
+// mount is told by where the link sits; key is that mount's filesystem
+// (Mount.Device), the same for every mount of it and another once the path is
+// mounted anew. With no table to read (an OS this does not read it on, or one
+// whose first read failed) both are the path's volume root ("/", "C:\"), one
+// key for every path, as a single bound was before; a later read that fails
+// keeps the last table (newSnapshot).
+func Of(path string) (key, point string) {
 	return longest(current(), filepath.Clean(path))
 }
 
-// current is the mount table's points. The first read is the caller's; after
+// current is the mount table's points, each with its key. The first read is the caller's; after
 // that a read once tableTTL old is read again on a goroutine of its own, the
 // callers keeping to the last read meanwhile, so no caller (a scan's reader, a
 // picker request before its time-out starts) ever waits on the table again.
-func current() map[string]struct{} {
+func current() map[string]string {
 	s := table.Load()
 	if s == nil {
 		s = newSnapshot(nil, readTable)
@@ -74,24 +93,28 @@ func current() map[string]struct{} {
 // share's stuck reads can leave it) says nothing of the mounts, and one key for
 // every path then would stop the other mounts' reads with the hung one's. With
 // no read before, it holds what the failed read gave (none: the volume root).
-func newSnapshot(prev *snapshot, read func() ([]string, error)) *snapshot {
+func newSnapshot(prev *snapshot, read func() ([]Mount, error)) *snapshot {
 	list, err := read()
 	if err != nil && prev != nil {
 		return &snapshot{points: prev.points, read: time.Now()}
 	}
-	points := make(map[string]struct{}, len(list))
-	for _, p := range list {
-		points[filepath.Clean(p)] = struct{}{}
+	// A mount over another at the same point is listed after it: the last one
+	// is the one a path there is on.
+	points := make(map[string]string, len(list))
+	for _, m := range list {
+		point := filepath.Clean(m.Point)
+		points[point] = cmp.Or(m.Device, point)
 	}
 	return &snapshot{points: points, read: time.Now()}
 }
 
-// longest is the longest of points that is path or a folder above it, else
-// path's volume root: path and its parents looked up in turn.
-func longest(points map[string]struct{}, path string) string {
+// longest is the longest of points that is path or a folder above it, with its
+// key, else path's volume root for both: path and its parents looked up in
+// turn.
+func longest(points map[string]string, path string) (key, point string) {
 	for p := path; ; {
-		if _, ok := points[p]; ok {
-			return p
+		if key, ok := points[p]; ok {
+			return key, p
 		}
 		parent := filepath.Dir(p)
 		if parent == p {
@@ -99,7 +122,8 @@ func longest(points map[string]struct{}, path string) string {
 		}
 		p = parent
 	}
-	return filepath.VolumeName(path) + string(filepath.Separator)
+	root := filepath.VolumeName(path) + string(filepath.Separator)
+	return root, root
 }
 
 // Within reports whether path is dir or under it, by whole segments (/mnt/nas
@@ -114,57 +138,62 @@ func Within(path, dir string) bool {
 	return strings.HasSuffix(dir, string(filepath.Separator)) || path[len(dir)] == filepath.Separator
 }
 
-// PerMount is a value per mount (Of), made by its newValue when a path on that
-// mount first asks for it and kept: there are only as many as the mount table
-// has, or one when it can't be read.
+// PerMount is a value per mount (Of's key: per filesystem mounted), made by its
+// newValue when a path on that mount first asks for it and kept: there are only
+// as many as the filesystems the mount table has held, or one when it can't be
+// read. A share mounted anew has a value of its own, the one before left to the
+// reads still held on it.
 type PerMount[T any] struct {
-	// Mount names a path's mount: Of, or a test's stand-in.
-	Mount    func(path string) string
-	newValue func(mount string) T
-	by       sync.Map // mount -> T
+	// Mount names a path's mount, its key and its mount point: Of, or a test's
+	// stand-in.
+	Mount func(path string) (key, point string)
+	// newValue is handed the mount point of the path that first asked (the
+	// mount's name, for a log).
+	newValue func(point string) T
+	by       sync.Map // key -> T
 }
 
 // NewPerMount is a PerMount making each mount's value with newValue.
-func NewPerMount[T any](newValue func(mount string) T) *PerMount[T] {
+func NewPerMount[T any](newValue func(point string) T) *PerMount[T] {
 	return &PerMount[T]{Mount: Of, newValue: newValue}
 }
 
 // For is the value of the mount path is on.
 func (m *PerMount[T]) For(path string) T {
-	key := m.Mount(path)
+	key, point := m.Mount(path)
 	if v, ok := m.by.Load(key); ok {
 		return v.(T)
 	}
-	v, _ := m.by.LoadOrStore(key, m.newValue(key))
+	v, _ := m.by.LoadOrStore(key, m.newValue(point))
 	return v.(T)
 }
 
-// Scan calls fn with each mount point and filesystem type in r, a
-// /proc/self/mountinfo table (ParseLine), skipping lines that aren't a mount.
-func Scan(r io.Reader, fn func(point, fstype string)) error {
+// Scan calls fn with each mount in r, a /proc/self/mountinfo table
+// (ParseLine), skipping lines that aren't a mount.
+func Scan(r io.Reader, fn func(Mount)) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
-		if point, fstype, ok := ParseLine(sc.Text()); ok {
-			fn(point, fstype)
+		if m, ok := ParseLine(sc.Text()); ok {
+			fn(m)
 		}
 	}
 	return sc.Err()
 }
 
-// ParseLine reads one /proc/self/mountinfo line (proc(5)): the mount point is
-// the fifth field, octal-escaped, and the filesystem type the first field after
-// the " - " separator.
-func ParseLine(line string) (point, fstype string, ok bool) {
+// ParseLine reads one /proc/self/mountinfo line (proc(5)): the device number
+// is the third field, the mount point the fifth, octal-escaped, and the
+// filesystem type the first field after the " - " separator.
+func ParseLine(line string) (m Mount, ok bool) {
 	before, after, found := strings.Cut(line, " - ")
 	if !found {
-		return "", "", false
+		return Mount{}, false
 	}
 	fields, tail := strings.Fields(before), strings.Fields(after)
 	if len(fields) < 5 || len(tail) < 1 {
-		return "", "", false
+		return Mount{}, false
 	}
-	return filepath.Clean(unescape(fields[4])), tail[0], true
+	return Mount{Point: filepath.Clean(unescape(fields[4])), FSType: tail[0], Device: fields[2]}, true
 }
 
 // unescape undoes mountinfo's octal escapes ("\040" is a space).

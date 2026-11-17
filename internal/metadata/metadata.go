@@ -383,9 +383,9 @@ func HangMountForTests(dir string) (release func()) {
 	}
 	was := stuckByMount.Mount
 	key := "hung-for-tests:" + dir
-	stuckByMount.Mount = func(p string) string {
+	stuckByMount.Mount = func(p string) (string, string) {
 		if mounts.Within(p, dir) {
-			return key
+			return key, dir
 		}
 		return was(p)
 	}

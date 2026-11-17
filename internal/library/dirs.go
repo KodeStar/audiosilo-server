@@ -140,8 +140,9 @@ func (l *DirLister) CheckRoot(ctx context.Context, root string) (string, error) 
 	return boundedRead(ctx, l.slots.For(root), l.timeout, l.log, func(context.Context) (string, error) { return l.check(root) })
 }
 
-// newMountSlots is n slots per mount (mounts.Of), a mount's made when a read
-// there first asks for them.
+// newMountSlots is n slots per mount (mounts.Of: per filesystem mounted, so a
+// share mounted anew has its own and two bind mounts of one share them), a
+// mount's made when a read there first asks for them.
 func newMountSlots(n int) *mounts.PerMount[chan struct{}] {
 	return mounts.NewPerMount(func(string) chan struct{} { return make(chan struct{}, n) })
 }

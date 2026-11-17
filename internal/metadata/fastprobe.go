@@ -375,9 +375,11 @@ const (
 const maxAbandonedReads = 16
 
 // stuckReads counts one mount's reads waitRead gave up on that have not
-// returned.
+// returned: one filesystem's, wherever it is mounted (mounts.Of's key), so a
+// share mounted anew starts at none and two bind mounts of one share count
+// together.
 type stuckReads struct {
-	mount string
+	mount string // its mount point, as the first file read from it found it (the log's)
 	n     atomic.Int32
 	// logged: the cap's hit was logged since n was last 0.
 	logged atomic.Bool
@@ -385,7 +387,7 @@ type stuckReads struct {
 
 // stuckByMount is the stuckReads of each mount a file was read from (its
 // Mount a test's stand-in): one per mount, never removed.
-var stuckByMount = mounts.NewPerMount(func(mount string) *stuckReads { return &stuckReads{mount: mount} })
+var stuckByMount = mounts.NewPerMount(func(point string) *stuckReads { return &stuckReads{mount: point} })
 
 // unknownMount counts the abandoned reads of a blockFile not read from a named
 // file (newBlockFile's default: ExactDuration's of a reader with no Name, a

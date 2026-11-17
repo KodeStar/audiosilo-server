@@ -814,11 +814,11 @@ func TestAbandonedReadsAreCapped(t *testing.T) {
 	share := t.TempDir()
 	hungKey, otherKey := t.Name()+":hung", t.Name()+":other"
 	wasOf := stuckByMount.Mount
-	stuckByMount.Mount = func(p string) string {
+	stuckByMount.Mount = func(p string) (string, string) {
 		if strings.HasPrefix(p, share) {
-			return hungKey
+			return hungKey, hungKey
 		}
-		return otherKey
+		return otherKey, otherKey
 	}
 	t.Cleanup(func() { stuckByMount.Mount = wasOf })
 	hung := stuckByMount.For(filepath.Join(share, "any.mp3"))
@@ -871,7 +871,7 @@ func TestAbandonedReadsAreCapped(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	stuckByMount.Mount = func(string) string { return hungKey } // the fixture on the share that came back
+	stuckByMount.Mount = func(string) (string, string) { return hungKey, hungKey } // the fixture on the share that came back
 	m, err := Extract(fixture("mp3-v23-chap.mp3"), "")
 	if err != nil || m.TagsUnread() || m.Duration <= 0 {
 		t.Errorf("read after the hung reads returned = %+v (err %v), want it read", m, err)
