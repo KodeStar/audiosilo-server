@@ -163,16 +163,14 @@ export function showFinishCard(
 }
 
 /**
- * What the console does about the flow, for a server that hasn't finished it.
- * The first page a browser session opened on decides, once (openedOn), not the
- * page showing when the state arrives (server#383): 'go' sends the admin to the
- * flow when the session opened on the Overview (a plain visit to /admin) and is
- * still there; 'stay' leaves a deep link (the flow's own links open in a new
- * tab, a bookmark, a page reloaded, the flow itself) on the page it names
- * (server#365), even when the admin moved on to the Overview before the state
- * loaded, and leaves an admin who moved on from the Overview where they went.
- * 'none' is nothing to decide: no state yet, a finished server, or a session
- * that has decided already.
+ * What the console does about the flow, for a server that hasn't finished it,
+ * decided once per browser session: 'go' sends the admin to the flow when the
+ * session opened on the Overview (a plain visit to /admin) and is still there
+ * (pathname), not when it moved on before the state loaded (server#383); 'stay'
+ * leaves anything else where it is: a deep link (the flow's own links open in a
+ * new tab, a bookmark, a page reloaded, the flow itself, server#365) or a page
+ * the admin moved on to. 'none' is nothing to decide: no state yet, a finished
+ * server, or a session that has decided already.
  */
 export function redirectDecision(
   state: SetupState | undefined,
