@@ -362,13 +362,6 @@ func wireCases(t *testing.T) []wireCase {
 		return func(t *testing.T) string { return wireOK(t, e, method, path, tok, body) }
 	}
 	get := func(path, tok string) func(*testing.T) string { return call(m.testEnv, "GET", path, tok, "") }
-	newCode := func(t *testing.T) string {
-		code, err := m.auth.CreateAuthCode(context.Background(), m.adminID, "wire", 0, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return code
-	}
 	lib := func(endpoint, path string) func(*testing.T) string {
 		return get(bookURL(m.lib.ID, endpoint, path), m.samTok)
 	}
@@ -377,9 +370,8 @@ func wireCases(t *testing.T) []wireCase {
 	return []wireCase{
 		{name: "server", route: "GET /api/v1/server (signed in)", body: get("/api/v1/server", m.adminTok)},
 		{name: "server-anonymous", route: "GET /api/v1/server", body: get("/api/v1/server", "")},
-		{name: "auth-redeem", route: "POST /api/v1/auth/redeem", body: func(t *testing.T) string {
-			return wireOK(t, m.testEnv, "POST", "/api/v1/auth/redeem", "", `{"code":"`+newCode(t)+`"}`)
-		}},
+		{name: "auth-redeem", route: "POST /api/v1/auth/redeem", body: call(m.testEnv, "POST", "/api/v1/auth/redeem", "",
+			`{"code":"`+m.authCode+`"}`)},
 		{name: "auth-exchange", route: "POST /api/v1/auth/exchange (a household member's pairing)", body: func(t *testing.T) string {
 			_, pairing, err := m.auth.MemberPairing(context.Background(), m.adminID, m.member, time.Minute)
 			if err != nil {
