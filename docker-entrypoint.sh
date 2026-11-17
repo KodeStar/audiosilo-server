@@ -5,9 +5,9 @@
 # and the backups in it, when it is set) and drop privileges; the server itself
 # never runs as root. The chown of /data stops at a folder mounted inside it (a
 # backups share at /data/backups keeps its owner, server#382); a file mounted
-# inside it (a config.yaml) is chowned. On NAS setups set
-# PUID/PGID to the owner of your appdata (Unraid: PUID=99 PGID=100; Synology:
-# often 1026:100; or run `id` for your user).
+# inside it (a config.yaml) is chowned. On NAS setups set PUID/PGID to the owner
+# of your appdata (Unraid: PUID=99 PGID=100; Synology: often 1026:100; or run
+# `id` for your user).
 #
 # A chown can fail without saying so (a NAS share with ACLs, a read-only mount), so
 # the entrypoint then checks, as the user the server runs as, that the data folder
@@ -169,8 +169,8 @@ nested_mounts() {
 # misses those: a volume or a bind mount from the same host disk has the same
 # device number, so each folder mount point is pruned by name too (a glob, so its
 # pattern characters escaped). A file mounted there (a config.yaml) is no folder
-# and is chowned, as it always was. What already belongs to $RUN_AS is left alone, so
-# a start writes nothing to a data folder that is already right.
+# and is chowned, as it always was. What already belongs to $RUN_AS is left
+# alone, so a start writes nothing to a data folder that is already right.
 chown_data() {
   set -- "$DATA" -xdev
   while IFS= read -r m; do
