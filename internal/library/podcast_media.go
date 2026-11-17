@@ -75,16 +75,17 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 // so a new copy is a new file), or its size or mtime moved; OpenPodcast's
 // other checks (the signature against the pin, the publish barrier, the audio
 // file's identity and size) still run on every open. A copy whose mtime is
-// within feedRacyWindow of its read is not remembered (git's racy-clean
-// rule): a rewrite in place, or onto a reused inode, inside the file system's
-// timestamp granularity could keep the size and mtime the memo checks.
+// within feedRacyWindow of the moment its read began is not remembered (git's
+// racy-clean rule): a rewrite in place, or onto a reused inode, inside the
+// file system's timestamp granularity could keep the size and mtime the memo
+// checks.
 var podcastFeeds feedMemo
 
 const (
 	// maxFeedMemo bounds the remembered copies: one per show streamed lately.
 	maxFeedMemo = 64
-	// feedRacyWindow is how old a copy's mtime must be when it is read to be
-	// remembered: past the coarsest timestamps a library may sit on (FAT's
+	// feedRacyWindow is how old a copy's mtime must be when its read begins to
+	// be remembered: past the coarsest timestamps a library may sit on (FAT's
 	// two seconds; a second on some network shares).
 	feedRacyWindow = 2 * time.Second
 )
@@ -127,6 +128,9 @@ func (c *feedCopy) holds(rel, showID, id string, fetch feed.Fetch) bool {
 // read; feed.ReadFile's error otherwise.
 // before is filename's Lstat, taken by the caller before the call.
 func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, error) {
+	// Asked before the read: a write that lands while it runs, or between it
+	// and the stat below, must fall outside the mtime's granule to be seen.
+	settled := time.Since(before.ModTime()) >= feedRacyWindow
 	m.mu.Lock()
 	c := m.feeds[filename]
 	m.mu.Unlock()
@@ -145,8 +149,8 @@ func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, e
 	}
 	// Remembered only when the file read is the one stat'ed before (one
 	// replaced meanwhile may have been read in either version), and its mtime
-	// is past the racy window (one written since could keep it).
-	if after, err := os.Lstat(filename); err == nil && sameFeedFile(before, after) && time.Since(before.ModTime()) >= feedRacyWindow {
+	// was past the racy window (one written since could keep it).
+	if after, err := os.Lstat(filename); settled && err == nil && sameFeedFile(before, after) {
 		m.mu.Lock()
 		if _, held := m.feeds[filename]; m.feeds == nil || (!held && len(m.feeds) >= maxFeedMemo) {
 			m.feeds = map[string]*feedCopy{}
