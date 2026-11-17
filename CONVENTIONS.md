@@ -31,6 +31,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   A test never holds code to a time in milliseconds: CI's shared runners take several times as long as a laptop,
   and more when busy. How a read grows is compared across sizes on the one machine (`TestSeriesKeyScale`) and
   its shape held by its plan (`queryPlan`: `TestNextInSeriesPlan`, `TestIssueCountsPlan`).
+- **Wire goldens (`internal/api/wire_golden_test.go`, `internal/api/testdata/wire/`, audiosilo#96, server#347)**: the
+  shape of each important player envelope (`/server`, the session and pairing envelopes, `/me`, the library
+  lists, `/item`, `/chapters`, progress, `/me/listening/sync`, bookmarks, `/meta`, `/me/upcoming`,
+  `/household/listening`), produced by the real handlers against seeded envs: each field's JSON type, never a
+  value, so ids and times never churn it. `TestWireGolden` fails on any change: a field removed or retyped
+  breaks shipped clients (CROSS-REPO.md §15), and an addition must show in the diff. After an intended change
+  run `go test ./internal/api -run TestWireGolden -update`; the player keeps a copy (`src/api/__wire__/`,
+  `npm run wire:sync`) its parity test checks against `types.ts`, so a wire change re-syncs it. A new
+  envelope worth guarding is a `wireCases` entry; a value that only appears with data (an `omitempty` field)
+  needs a seed that sets it, and an empty array, an empty object or a null fails unless its case names it in
+  `empty` (it pins nothing of the real value).
 - **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
   The executor sorts filenames and skips exact recorded names, allowing a missing lower-numbered

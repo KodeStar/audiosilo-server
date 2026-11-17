@@ -1,0 +1,72 @@
+{
+  "route": "GET /api/v1/libraries/{id}/item?path=<a two-file book>",
+  "shape": {
+    "abridged": "boolean",
+    "added_at": "string",
+    "asin": "string",
+    "author": "string",
+    "chapters": [
+      {
+        "book_offset": "number",
+        "end": "number",
+        "file_index": "number",
+        "file_path": "string",
+        "index": "number",
+        "start": "number",
+        "title": "string"
+      }
+    ],
+    "codec": "string",
+    "cover_version": "string",
+    "description": "string",
+    "direct_playable": "boolean",
+    "duration": "number",
+    "ebook": {
+      "path": "string",
+      "size": "number"
+    },
+    "files": [
+      {
+        "duration": "number",
+        "format": "string",
+        "rel_path": "string",
+        "seq": "number",
+        "size": "number"
+      }
+    ],
+    "format": "string",
+    "genres": [
+      "string"
+    ],
+    "id": "number",
+    "is_folder": "boolean",
+    "isbn": "string",
+    "language": "string",
+    "library_id": "number",
+    "narrator": "string",
+    "published": "string",
+    "publisher": "string",
+    "readalong": {
+      "coverage": "number",
+      "generated_at": "string",
+      "state": "string"
+    },
+    "rel_path": "string",
+    "series": "string",
+    "series_index": "number",
+    "series_index_end": "number",
+    "series_list": [
+      {
+        "name": "string",
+        "position": "number",
+        "position_end": "number"
+      }
+    ],
+    "size": "number",
+    "subtitle": "string",
+    "tags": [
+      "string"
+    ],
+    "title": "string"
+  }
+}

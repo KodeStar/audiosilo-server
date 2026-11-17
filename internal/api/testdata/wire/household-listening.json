@@ -1,0 +1,22 @@
+{
+  "route": "GET /api/v1/household/listening (sharing, one other person listening)",
+  "shape": {
+    "listening": [
+      {
+        "author": "string",
+        "chapter": "string",
+        "chapter_index": "number",
+        "duration": "number",
+        "library_id": "number",
+        "path": "string",
+        "position": "number",
+        "state": "string",
+        "title": "string",
+        "updated_at": "string",
+        "user_id": "number",
+        "username": "string"
+      }
+    ],
+    "sharing": "boolean"
+  }
+}

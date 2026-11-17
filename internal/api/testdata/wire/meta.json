@@ -1,0 +1,89 @@
+{
+  "route": "GET /api/v1/libraries/{id}/meta?path=<a matched book>",
+  "shape": {
+    "matched": "boolean",
+    "recording": {
+      "chapter_count": "number",
+      "cover_url": "string",
+      "id": "string",
+      "narrators": [
+        {
+          "id": "string",
+          "name": "string"
+        }
+      ],
+      "publisher": "string",
+      "release_date": "string",
+      "runtime_min": "number"
+    },
+    "series": [
+      {
+        "id": "string",
+        "name": "string",
+        "position": "string",
+        "works": [
+          {
+            "authors": [
+              {
+                "id": "string",
+                "name": "string"
+              }
+            ],
+            "id": "string",
+            "local": {
+              "library_id": "number",
+              "path": "string"
+            },
+            "position": "string",
+            "title": "string",
+            "web_url": "string"
+          }
+        ]
+      }
+    ],
+    "web_url": "string",
+    "work": {
+      "attribution": {
+        "credit": "string",
+        "license": "string",
+        "license_url": "string",
+        "source_url": "string"
+      },
+      "authors": [
+        {
+          "id": "string",
+          "name": "string"
+        }
+      ],
+      "characters": [
+        {
+          "description": "string",
+          "id": "string",
+          "name": "string",
+          "reveal": {
+            "chapter": "number"
+          },
+          "role": "string"
+        }
+      ],
+      "description": "string",
+      "first_published": "string",
+      "id": "string",
+      "language": "string",
+      "recap_summary": {
+        "ending": "string",
+        "in_short": "string"
+      },
+      "recaps": [
+        {
+          "scope": "string",
+          "text": "string",
+          "through": {
+            "chapter": "number"
+          }
+        }
+      ],
+      "title": "string"
+    }
+  }
+}

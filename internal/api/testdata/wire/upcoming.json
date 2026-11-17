@@ -1,0 +1,36 @@
+{
+  "route": "GET /api/v1/me/upcoming",
+  "shape": {
+    "generated_at": "string",
+    "items": [
+      {
+        "first_seen_at": "string",
+        "kind": "string",
+        "local": {
+          "library_id": "number",
+          "series": "string"
+        },
+        "release_date": "string",
+        "series": {
+          "id": "string",
+          "name": "string",
+          "position": "string"
+        },
+        "work": {
+          "authors": [
+            {
+              "id": "string",
+              "name": "string"
+            }
+          ],
+          "cover_url": "string",
+          "id": "string",
+          "title": "string",
+          "web_url": "string"
+        }
+      }
+    ],
+    "status": "string",
+    "window_days": "number"
+  }
+}

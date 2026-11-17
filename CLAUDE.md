@@ -369,6 +369,7 @@ keep this index in step (one line per topic).
 
 - **Conventions**
   - Every feature ships with a test
+  - Wire goldens (`internal/api/wire_golden_test.go`, `testdata/wire/`: the player envelopes' shapes, `-update`, the player's copy)
   - Migrations are append-only
   - Secrets
   - Connect / invite / pairing flow

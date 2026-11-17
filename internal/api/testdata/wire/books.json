@@ -1,0 +1,49 @@
+{
+  "route": "GET /api/v1/libraries/{id}/books",
+  "shape": {
+    "books": [
+      {
+        "abridged": "boolean",
+        "added_at": "string",
+        "asin": "string",
+        "author": "string",
+        "codec": "string",
+        "cover_version": "string",
+        "duration": "number",
+        "ebook": {
+          "path": "string",
+          "size": "number"
+        },
+        "format": "string",
+        "genres": [
+          "string"
+        ],
+        "id": "number",
+        "is_folder": "boolean",
+        "isbn": "string",
+        "language": "string",
+        "library_id": "number",
+        "narrator": "string",
+        "published": "string",
+        "publisher": "string",
+        "rel_path": "string",
+        "series": "string",
+        "series_index": "number",
+        "series_index_end": "number",
+        "series_list": [
+          {
+            "name": "string",
+            "position": "number",
+            "position_end": "number"
+          }
+        ],
+        "size": "number",
+        "subtitle": "string",
+        "tags": [
+          "string"
+        ],
+        "title": "string"
+      }
+    ]
+  }
+}

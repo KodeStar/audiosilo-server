@@ -1,0 +1,17 @@
+{
+  "route": "GET /api/v1/libraries/{id}/series",
+  "shape": {
+    "series": [
+      {
+        "author": "string",
+        "books": "number",
+        "duration": "number",
+        "extra_books": "number",
+        "name": "string",
+        "positions": [
+          "number"
+        ]
+      }
+    ]
+  }
+}
