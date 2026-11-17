@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/upcoming"
 )
 
@@ -89,27 +88,6 @@ func (a *API) writeUpcomingError(w http.ResponseWriter, r *http.Request, err err
 	}
 	a.writeCatalogError(w, err, op, msg)
 }
-
-// announceReleases is the job's book_released: one event naming the first few
-// releases as "Title (Series #position)" (Release.Label).
-func (a *API) announceReleases(ctx context.Context, releases []upcoming.Release) {
-	if a.rt.Notify == nil || len(releases) == 0 {
-		return
-	}
-	titles := make([]string, 0, maxReleaseTitles)
-	ids := make([]string, 0, len(releases))
-	for i, rel := range releases {
-		ids = append(ids, rel.WorkID)
-		if i < maxReleaseTitles {
-			titles = append(titles, rel.Label())
-		}
-	}
-	a.rt.Notify.BooksReleased(ctx, len(releases), titles, "released:"+notify.SetDigest(ids))
-}
-
-// maxReleaseTitles is how many releases a book_released event names (the rest
-// are counted). Its dedupe key is a digest of the run's work ids.
-const maxReleaseTitles = 5
 
 // upcomingStatus is the job's state for Settings > Metadata, nil without one.
 func (a *API) upcomingStatus(ctx context.Context) *upcoming.Status {

@@ -47,7 +47,7 @@ self-contained for home users: `-tags embedplayer` bakes the web player into the
 binary (`internal/web/player/`, gitignored, populated from
 the pinned web image by `scripts/fetch-web-player.sh`) so `/web` works with no
 `web_dir`. **ffmpeg/ffprobe are NOT bundled** (large, and usually already present):
-`pkg/launcher.resolveTools` prefers a local copy (explicit `--ffmpeg`/`--ffprobe`
+`internal/launcher.resolveTools` prefers a local copy (explicit `--ffmpeg`/`--ffprobe`
 path → next to the binary → `$PATH`) and, only if none is found, auto-downloads a
 cached static build into `<data>/tools` (`internal/toolfetch`, HTTPS, self-checked
 by running `-version`; degrades gracefully offline and retries next start). Native
@@ -64,7 +64,7 @@ server" flow (`/admin`; see First-run setup in CONVENTIONS.md); the `library_nam
 **fragment** (`/setup#token=…`, never logged), POST verifies it in constant time,
 and the wizard **self-closes the moment an admin exists** (`GET /setup` then redirects to `/admin`, as
 when never enabled: one answer, so the console's sign-in page probes it without a 404).
-`API.EnableSetup(token)` turns it on; `pkg/launcher` prints the URL.
+`API.EnableSetup(token)` turns it on; `internal/launcher` prints the URL.
 
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
 && golangci-lint run`**, plus **`scripts/build-admin.sh`** (npm ci, then `npm run check` =
@@ -107,8 +107,8 @@ admin/connect UI changes. Mapping table:
 ## Package layout
 
 ```
-cmd/audiosilo/        entrypoint: flag wiring; delegates to pkg/launcher.Run
-pkg/launcher/         shared run loop (config→store→services→bootstrap→serve) behind cmd/audiosilo; not an embedding API (the overrides the archived audiosilo-manager used were retired in v2.7.0)
+cmd/audiosilo/        entrypoint: flag wiring; delegates to internal/launcher.Run
+internal/launcher/    shared run loop (config→store→services→bootstrap→serve) behind cmd/audiosilo; not an embedding API (the overrides the archived audiosilo-manager used were retired in v2.7.0)
 pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle; NewIndex: a candidate list prepared once for many Best calls, the listening import's per-author pools) - same-book identification across messy titles; shared with the Bridge (its Audible import and internal/metaops), usable for server-side enrichment/dedup; Recordings (one recording's copies told apart: the same ASIN, else the same ISBN when the later book has none; other_recordings and local_others); BestWith (Best under opt-in Options, with the winning score; NewIndexWith + Index.BestScore its prepared form); options.go: Options and ImportOptions (the Bridge's Audible rules: series "Book N" marker, exact title, wordless fallback, "(Unabridged)" drop), never used by the server's own callers; scan.go: hand-written scanners for its title regexps, checked against them in scan_test.go
 internal/config/      YAML + env config, validation, secure defaults
 internal/store/       SQLite open + embedded migrations (internal/store/migrations); engine*.go: the library (modernc, pure Go; native C with -tags sqlite_native); stmtcache.go: each connection keeps its statements prepared (see SQLite in CONVENTIONS.md)
@@ -123,7 +123,7 @@ internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service
 internal/chapteralign/ fits a community recording's chapter list onto a book's own audio (pure, no I/O): anchors by title + time, places the rest in proportion, snaps each to its pause (an injected Prober); classifies fill/titles/refine/restructure/same or why not (length_mismatch, structure_mismatch, crosses_files). testdata/mythos is a real 34-vs-174-chapter golden case
 internal/chaptercheck/ the community chapter check: a background pass (every 10 min, and on Catalog.OnBookChange) and on request (Start), meta.RecordingChapters -> chapteralign (ffmpeg silencedetect via media.DetectSilences) -> catalog.SaveCommunityChapters
 internal/covercolors/ the background cover colour pass: Runner reads the colour of every book whose cover may have art and holds none for it (catalog.CoverColorsDue), one at a time, once the start or a burst of OnBookChange kicks has been quiet 30 s (<= 10 min), and hourly; the reading is api.colorCover (a cached thumbnail, else an UNCACHED 160 px one), handed in as its Colorer; art with no colour is recorded as such (cover_color = the version alone; CoverSource.ColorRead, while Colored stays "has a colour", so a thumbnail that decodes still records over it); art files that aren't there (an unmounted share) are covercolors.ErrArtMissing: left due, not a failure
-internal/upcoming/    upcoming releases (Track U1): Classify (pure: preorder, released, missing), the daily job (Runner: Run/Kick/Wake, silent first-run baseline, book_released once per work via upcoming_announced) and List (GET /me/upcoming); ics.go: ICS (Track U3, pure: the list as the calendar feed); see Upcoming releases in CONVENTIONS.md
+internal/upcoming/    upcoming releases (Track U1): Classify (pure: preorder, released, missing), the daily job (Runner: Run/Kick/Wake, silent first-run baseline, book_released once per work via upcoming_announced) and List (GET /me/upcoming); announce.go: Announce, a run's book_released event; ics.go: ICS (Track U3, pure: the list as the calendar feed); see Upcoming releases in CONVENTIONS.md
 internal/coverage/    the opt-in daily report of unknown Audible ASINs (LibraForge C3, metadata.report_unknown): Runner (Run/Wake/RunOnce: candidates from catalog.UnknownASINCandidates, meta.Service.KnownASIN lookups (only a 404 is unknown), the POST via meta.Service.ReportUnknownASINs, quiet week on not_offered); see Unknown ASIN report in CONVENTIONS.md
 internal/pool/        Each: work over a list a few items at a time (the background jobs that wait on the community service share it); schedule.go: WhileOn (a run cancelled once its switch goes off) and Jittered, the daily jobs' (coverage, upcoming)
 internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace, or refreshes the details of matched books by their ASIN/ISBN, else their recorded community work), records each book's best candidate for review, and applies the admin's picks under a scope, recording the match (`book_matches`) with the fields (plan.go is the one statement of what each scope writes; Classify's E6 rule applies a store listing with no ASIN/ISBN unasked on firmer ground)

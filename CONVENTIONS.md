@@ -643,7 +643,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   makes an announcement once per work across series and across an item leaving and coming back (a copy
   added then removed); a work the server holds a copy of anywhere is marked without a word. The mark is
   written even when the run is being stopped (`context.WithoutCancel`). **`book_released`** is one event
-  per run (`api.announceReleases`: up to 5 titles as "Title (Series #position)", `upcoming.Release.Label`,
+  per run (`upcoming.Announce`: up to 5 titles as "Title (Series #position)", `upcoming.Release.Label`,
   the count of all, dedupe key a digest of the run's work ids). Config `upcoming.enabled` (live,
   `AUDIOSILO_UPCOMING_ENABLED`, console Settings > Metadata, setting id `metadata.upcoming`) and `upcoming.window_days` (1-365, default
   90, restart, `AUDIOSILO_UPCOMING_WINDOW_DAYS`; 0 or anything outside refuses to load). The route is 404

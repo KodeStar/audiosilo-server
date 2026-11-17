@@ -300,10 +300,13 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 			On: a.upcomingOn,
 			// The books' work ids (step 1) whenever metadata is on: they ride on
 			// the player's lists (other recordings together, server#241).
-			Resolve:  a.metadataOn,
-			Window:   func() int { return a.config().Upcoming.Window() },
-			Announce: a.announceReleases,
-			Log:      log,
+			Resolve: a.metadataOn,
+			Window:  func() int { return a.config().Upcoming.Window() },
+			// The live notifications, read when a run announces.
+			Announce: func(ctx context.Context, releases []upcoming.Release) {
+				upcoming.Announce(ctx, a.rt.Notify, releases)
+			},
+			Log: log,
 		})
 		a.kickUpcoming = a.upcoming.Kick
 		cat.OnBookChange(a.upcoming.Kick)
