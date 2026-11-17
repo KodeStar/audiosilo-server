@@ -813,20 +813,25 @@ func (c *Catalog) AddSharePath(ctx context.Context, shareID int64, rule PathRule
 var ErrLibraryGrant = errors.New("the share is a library grant")
 
 // refuseLibraryGrant is ErrLibraryGrant for a marked share, read inside the
-// edit's transaction so a grant made meanwhile can't slip past it.
-func refuseLibraryGrant(ctx context.Context, tx *sql.Tx, shareID int64) error {
-	var marked bool
+// edit's transaction so a grant made meanwhile can't slip past it. With own
+// set, only an edit of the grant's own rule is refused (the whole of the
+// library it marks): any other rule on it is a stray one an older version let
+// an admin add, which may go (server#361).
+func refuseLibraryGrant(ctx context.Context, tx *sql.Tx, shareID int64, own *PathRule) error {
+	var whole sql.NullInt64
 	err := tx.QueryRowContext(ctx,
-		`SELECT whole_library_id IS NOT NULL FROM shares WHERE id = ?`, shareID).Scan(&marked)
+		`SELECT whole_library_id FROM shares WHERE id = ?`, shareID).Scan(&whole)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil // no such share: the edit writes nothing (the foreign key refuses an add)
 	case err != nil:
 		return err
-	case marked:
-		return ErrLibraryGrant
+	case !whole.Valid:
+		return nil
+	case own != nil && (own.LibraryID != whole.Int64 || CleanRelPath(own.Path) != ""):
+		return nil
 	}
-	return nil
+	return ErrLibraryGrant
 }
 
 // AddSharePaths adds several path rules to a share in one transaction (adding a
@@ -834,7 +839,7 @@ func refuseLibraryGrant(ctx context.Context, tx *sql.Tx, shareID int64) error {
 // ErrLibraryGrant.
 func (c *Catalog) AddSharePaths(ctx context.Context, shareID int64, rules []PathRule) error {
 	return c.db.WithTx(ctx, "AddSharePaths", func(tx *sql.Tx) error {
-		if err := refuseLibraryGrant(ctx, tx, shareID); err != nil {
+		if err := refuseLibraryGrant(ctx, tx, shareID, nil); err != nil {
 			return err
 		}
 		for _, rule := range rules {
@@ -849,10 +854,11 @@ func (c *Catalog) AddSharePaths(ctx context.Context, shareID int64, rules []Path
 }
 
 // RemoveSharePath removes a path rule from a share, durably (DeleteShare). A
-// library grant is ErrLibraryGrant.
+// library grant's own rule (its whole library) is ErrLibraryGrant; a stray rule
+// on one goes like any other.
 func (c *Catalog) RemoveSharePath(ctx context.Context, shareID int64, rule PathRule) error {
 	return c.db.WithDurableTx(ctx, "RemoveSharePath", func(tx *sql.Tx) error {
-		if err := refuseLibraryGrant(ctx, tx, shareID); err != nil {
+		if err := refuseLibraryGrant(ctx, tx, shareID, &rule); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx,
