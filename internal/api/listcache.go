@@ -158,7 +158,9 @@ func (a *API) cachedList(w http.ResponseWriter, r *http.Request, gen uint64, cac
 			// Only an answer the cache can keep: one too big for it is
 			// compressed by the middleware, and only for a client that takes it.
 			if n := buf.Len(); n >= gzipMinSize && n <= listCacheMaxEntry {
-				gz = spa.Gzip(buf.Bytes(), gzipLevel) // nil when it saves nothing: sent as is
+				// nil when it saves nothing: such an answer goes out through
+				// the middleware, like one too big for the cache
+				gz = spa.Gzip(buf.Bytes(), gzipLevel)
 			}
 			a.lists.put(gen, key, buf.Bytes(), gz)
 		}
