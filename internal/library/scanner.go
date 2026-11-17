@@ -1974,11 +1974,18 @@ func (s *Scanner) ReindexPath(ctx context.Context, lib catalog.Library, relPath 
 	if err != nil {
 		return nil, err
 	}
+	return s.readOwn(ctx, lib, book, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
+}
+
+// readOwn reads book itself (leadIndex, the state at from carried first) once
+// no read of it is under way (startFlight), then loads what it stored
+// (awaitFlight): ReindexPath's and IndexMoved's read, which neither joins.
+func (s *Scanner) readOwn(ctx context.Context, lib catalog.Library, book *catalog.Book, from func(context.Context) string) (*catalog.Book, error) {
 	f, err := s.startFlight(ctx, bookKey{lib.ID, book.RelPath})
 	if err != nil {
 		return nil, err
 	}
-	go s.leadIndex(ctx, lib, book, f, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
+	go s.leadIndex(ctx, lib, book, f, from)
 	return s.awaitFlight(ctx, f)
 }
 
@@ -2310,12 +2317,8 @@ func (s *Scanner) IndexMoved(ctx context.Context, lib catalog.Library, relPath, 
 	if err != nil {
 		return nil, err
 	}
-	f, err := s.startFlight(ctx, bookKey{lib.ID, book.RelPath}) // after a read of the book under way
-	if err != nil {
-		return nil, err
-	}
-	go s.leadIndex(ctx, lib, book, f, func(context.Context) string { return from })
-	return s.awaitFlight(ctx, f)
+	// After a read of the book under way.
+	return s.readOwn(ctx, lib, book, func(context.Context) string { return from })
 }
 
 // indexBookFrom indexes book (indexBook) after carrying the durable state of the
