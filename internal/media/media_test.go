@@ -83,7 +83,9 @@ func TestServeFile(t *testing.T) {
 
 	t.Run("full request sets audio content type and accept-ranges", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), path, false, time.Minute)
+		if err := ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), path, false, time.Minute); err != nil {
+			t.Fatal(err)
+		}
 		res := rec.Result()
 		defer res.Body.Close()
 		if res.StatusCode != http.StatusOK {
@@ -101,7 +103,9 @@ func TestServeFile(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.Header.Set("Range", "bytes=0-9")
-		ServeFile(rec, req, path, false, time.Minute)
+		if err := ServeFile(rec, req, path, false, time.Minute); err != nil {
+			t.Fatal(err)
+		}
 		if rec.Code != http.StatusPartialContent {
 			t.Fatalf("status = %d, want 206", rec.Code)
 		}
@@ -109,7 +113,9 @@ func TestServeFile(t *testing.T) {
 
 	t.Run("download sets a quoted Content-Disposition", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), path, true, time.Minute)
+		if err := ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), path, true, time.Minute); err != nil {
+			t.Fatal(err)
+		}
 		if cd := rec.Header().Get("Content-Disposition"); cd != `attachment; filename="song.mp3"` {
 			t.Fatalf("Content-Disposition = %q", cd)
 		}
@@ -117,7 +123,9 @@ func TestServeFile(t *testing.T) {
 
 	t.Run("missing file is 404", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), filepath.Join(dir, "missing.mp3"), false, time.Minute)
+		if err := ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), filepath.Join(dir, "missing.mp3"), false, time.Minute); err != nil {
+			t.Fatal(err)
+		}
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("status = %d, want 404", rec.Code)
 		}

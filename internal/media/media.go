@@ -140,9 +140,11 @@ func audioContentType(ext string) string {
 // true a Content-Disposition attachment header is set so browsers save the file.
 // Its open and stat are one metadata.Bounded call (the request's context, at
 // most wait, the per-mount cap of a scan's reads): a file on a share that
-// stopped answering is a 503 with Retry-After once that is given up on, never a
-// handler held for good (the reads that follow are the client's to wait for).
-func ServeFile(w http.ResponseWriter, r *http.Request, absPath string, download bool, wait time.Duration) {
+// stopped answering is given up on, never a handler held for good (the reads
+// that follow are the client's to wait for). That error (metadata.GaveUp) is
+// returned with nothing written, for the caller to answer; every other outcome
+// is answered here and returns nil.
+func ServeFile(w http.ResponseWriter, r *http.Request, absPath string, download bool, wait time.Duration) error {
 	type opened struct {
 		f    *os.File
 		info os.FileInfo
@@ -161,19 +163,18 @@ func ServeFile(w http.ResponseWriter, r *http.Request, absPath string, download 
 	}, func(o opened) { _ = o.f.Close() })
 	switch {
 	case metadata.GaveUp(err):
-		w.Header().Set("Retry-After", "30")
-		http.Error(w, "the drive or share holding this file is not answering", http.StatusServiceUnavailable)
-		return
+		return err
 	case err != nil:
 		http.Error(w, "not found", http.StatusNotFound)
-		return
+		return nil
 	}
 	defer o.f.Close()
 	if o.info.IsDir() {
 		http.Error(w, "not found", http.StatusNotFound)
-		return
+		return nil
 	}
 	ServeOpened(w, r, o.f, download)
+	return nil
 }
 
 // ServeOpened serves an already verified descriptor without reopening its path.

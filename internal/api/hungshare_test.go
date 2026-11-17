@@ -62,7 +62,7 @@ func TestCoverOnAHeldShareAnswersQuickly(t *testing.T) {
 	for _, u := range []string{coverURL(libID, "Sidecar", ""), coverURL(libID, "Sidecar", "96"), stream} {
 		start := time.Now()
 		resp, body := e.do(t, "GET", u, adminTok, "")
-		if resp.StatusCode != http.StatusServiceUnavailable || (!strings.Contains(u, "/stream") && !strings.Contains(body, codeShareNotAnswering)) {
+		if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) || resp.Header.Get("Retry-After") != "30" {
 			t.Errorf("GET %s on a held share = %d %s, want 503 %s", u, resp.StatusCode, body, codeShareNotAnswering)
 		}
 		if took := time.Since(start); took > 5*time.Second {

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/base64"
@@ -11,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -455,15 +453,17 @@ func (a *API) coverArt(ctx context.Context, lib *catalog.Library, path string, s
 			return cv.Data, nil
 		}}
 	}
-	art, ok, err := library.LookArt(ctx, lib.Root, src, a.fileWait)
-	switch {
-	case !ok, errors.Is(err, fs.ErrNotExist):
+	art, err := library.LookArt(ctx, lib.Root, src, a.fileWait)
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
-	case err != nil:
+	}
+	if err != nil {
 		// Unreadable rather than missing (a share that stopped answering
 		// included: metadata.GaveUp): try again next time.
 		return &artSource{version: "x", load: func() ([]byte, error) { return nil, err }}
-	case art.Version() == "": // not a regular file
+	}
+	version := art.Version()
+	if version == "" { // not a regular file
 		return nil
 	}
 	load := func() ([]byte, error) {
@@ -473,7 +473,7 @@ func (a *API) coverArt(ctx context.Context, lib *catalog.Library, path string, s
 	if art.Kind == catalog.ArtSidecar {
 		load = func() ([]byte, error) { return a.readSidecar(ctx, art.Abs) }
 	}
-	return &artSource{version: art.Version(), load: load}
+	return &artSource{version: version, load: load}
 }
 
 // serveArt answers with the art of src (a book's own, or a show's sidecar) in
@@ -482,22 +482,12 @@ func (a *API) coverArt(ctx context.Context, lib *catalog.Library, path string, s
 // Every look at it is bounded (fileWait): art on a share that stopped answering
 // is a quick 503 share_not_answering, never a handler held for good.
 func (a *API) serveArt(w http.ResponseWriter, r *http.Request, root string, src catalog.CoverSource) {
-	art, ok, err := library.LookArt(r.Context(), root, src, a.fileWait)
-	var data []byte
-	mime := ""
-	switch {
-	case !ok, err != nil, art.Version() == "": // none, gone, unreadable, not a regular file
-	case art.Kind == catalog.ArtSidecar:
-		data, err = a.readSidecar(r.Context(), art.Abs)
-	default:
-		data, mime, err = media.EmbeddedCover(r.Context(), art.Abs, a.fileWait)
-	}
+	art, err := library.LookArt(r.Context(), root, src, a.fileWait)
 	switch {
 	case metadata.GaveUp(err):
 		writeShareNotAnswering(w)
 		return
-	case data == nil:
-		// None, gone, unreadable, or too large to serve.
+	case err != nil, art.Version() == "": // none, gone, unreadable, not a regular file
 		writeError(w, http.StatusNotFound, "no cover")
 		return
 	}
@@ -505,13 +495,27 @@ func (a *API) serveArt(w http.ResponseWriter, r *http.Request, root string, src 
 	// browser keeps it fresh by heuristic (a tenth of the file's age), so a
 	// custom cover uploaded later would go unseen for weeks, not a day. Set only
 	// for art that is there, so a 404 is never cached.
-	w.Header().Set("Cache-Control", coverCache)
 	if art.Kind == catalog.ArtSidecar {
-		// Range, conditional requests and the type from the file's name, as
-		// serving the file did.
-		http.ServeContent(w, r, filepath.Base(art.Abs), art.Info.ModTime(), bytes.NewReader(data))
+		// Served from the open file: Range, conditional requests (a 304 reads
+		// none of it) and the type from the file's name.
+		w.Header().Set("Cache-Control", coverCache)
+		if err := media.ServeFile(w, r, art.Abs, false, a.fileWait); err != nil {
+			w.Header().Del("Cache-Control")
+			writeShareNotAnswering(w)
+		}
 		return
 	}
+	data, mime, err := media.EmbeddedCover(r.Context(), art.Abs, a.fileWait)
+	switch {
+	case metadata.GaveUp(err):
+		writeShareNotAnswering(w)
+		return
+	case data == nil:
+		// No art, or a file that can't be read.
+		writeError(w, http.StatusNotFound, "no cover")
+		return
+	}
+	w.Header().Set("Cache-Control", coverCache)
 	w.Header().Set("Content-Type", mime)
 	_, _ = w.Write(data)
 }
@@ -534,12 +538,3 @@ func (a *API) readSidecar(ctx context.Context, abs string) ([]byte, error) {
 // fileWaitTimeout is API.fileWait: long enough for a cold read from a slow
 // disk or share, well under the request timeout.
 const fileWaitTimeout = 10 * time.Second
-
-// writeShareNotAnswering is the 503 for a library file a look at was given up
-// on (metadata.GaveUp): its drive or share stopped answering, or enough looks
-// there hang already that this one wasn't tried.
-func writeShareNotAnswering(w http.ResponseWriter) {
-	w.Header().Set("Retry-After", "30")
-	writeErrorCode(w, http.StatusServiceUnavailable, codeShareNotAnswering,
-		"the drive or share holding this file is not answering; try again later")
-}

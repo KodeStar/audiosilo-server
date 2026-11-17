@@ -819,7 +819,9 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	media.ServeFile(w, r, abs, download, a.fileWait)
+	if err := media.ServeFile(w, r, abs, download, a.fileWait); err != nil {
+		writeShareNotAnswering(w)
+	}
 }
 
 // audioFile is the stream's guard on rel (scope-checked already): its absolute

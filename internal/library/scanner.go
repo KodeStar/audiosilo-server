@@ -1210,36 +1210,27 @@ func (a Art) Version() string {
 // LookArt is ArtFile with the file's stat, the two (SafeJoin's lstats and the
 // stat) one metadata.Bounded call under ctx, given up on after timeout, so art
 // on a share that stopped answering costs a scan or a cover request at most
-// that (metadata.GaveUp). ok is false when no file inside root is named; err is
-// the stat's (fs.ErrNotExist: gone) or a look given up on.
-func LookArt(ctx context.Context, root string, src catalog.CoverSource, timeout time.Duration) (art Art, ok bool, err error) {
-	type found struct {
-		art Art
-		ok  bool
-	}
+// that (metadata.GaveUp). err is fs.ErrNotExist when no file inside root is
+// named or it is gone, else the stat's or a look given up on.
+func LookArt(ctx context.Context, root string, src catalog.CoverSource, timeout time.Duration) (Art, error) {
 	at := filepath.Join(root, filepath.FromSlash(cmp.Or(src.CoverPath, src.AudioPath)))
-	f, err := metadata.Bounded(ctx, at, timeout, func() (found, error) {
+	return metadata.Bounded(ctx, at, timeout, func() (Art, error) {
 		kind, abs, ok := ArtFile(root, src)
 		if !ok {
-			return found{}, nil
+			return Art{}, fs.ErrNotExist
 		}
 		info, err := os.Stat(abs)
-		return found{Art{Kind: kind, Abs: abs, Info: info}, true}, err
+		return Art{Kind: kind, Abs: abs, Info: info}, err
 	}, nil)
-	if err != nil && !f.ok {
-		// Given up on, ctx's end or a panic: no answer, not "no art".
-		return Art{}, true, err
-	}
-	return f.art, f.ok, err
 }
 
 // artVersion is the version of src's art file (ArtFile) as the cover handler
 // names it (Art.Version). "" when that file can't be read now, its look given
 // up on after timeout included (LookArt; noted in gaveUp).
 func artVersion(ctx context.Context, root string, src catalog.CoverSource, timeout time.Duration, gaveUp *givenUp) string {
-	art, ok, err := LookArt(ctx, root, src, timeout)
+	art, err := LookArt(ctx, root, src, timeout)
 	gaveUp.note(cmp.Or(src.CoverPath, src.AudioPath), err)
-	if !ok || err != nil {
+	if err != nil {
 		return ""
 	}
 	return art.Version()

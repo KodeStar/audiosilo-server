@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -285,7 +286,7 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 	case errors.Is(err, library.ErrStopping):
 		// A read of the book the server's stop ended (the request was still
 		// waiting for it): try again once the server is back.
-		w.Header().Set("Retry-After", "10")
+		setRetryAfter(w, 10*time.Second)
 		writeErrorCode(w, http.StatusServiceUnavailable, codeStopping, "the server is stopping; try again shortly")
 	case metadata.GaveUp(err):
 		writeShareNotAnswering(w)
@@ -387,4 +388,13 @@ func apiNoRoute(mux *http.ServeMux) http.Handler {
 		}
 		writeErrorCode(w, http.StatusNotFound, codeNotFound, "not found")
 	})
+}
+
+// writeShareNotAnswering is the 503 for a library file a look at was given up
+// on (metadata.GaveUp): its drive or share stopped answering, or enough looks
+// there hang already that this one wasn't tried.
+func writeShareNotAnswering(w http.ResponseWriter) {
+	setRetryAfter(w, 30*time.Second)
+	writeErrorCode(w, http.StatusServiceUnavailable, codeShareNotAnswering,
+		"the drive or share holding this file is not answering; try again later")
 }
