@@ -11,9 +11,10 @@ import (
 
 // Pacer keeps one bulk run's requests to the remote service evenly spaced, under a
 // rate, and counts what the service asked it to wait: how many waits, and the wall
-// time they cover (the run's workers wait side by side, so their waits overlap). It goes in the run's context
-// (WithPacer) rather than on the Service, so only the run is paced: an admin's dialog
-// and a listener's lookup beside it are not, and don't spend its slots.
+// time they cover (the run's workers wait side by side, so their waits overlap). It
+// goes in the run's context (WithPacer) rather than on the Service, so only the run
+// is paced: an admin's dialog and a listener's lookup beside it are not, and don't
+// spend its slots.
 //
 // The spacing happens in the remote leg's transport (pacedTransport), so a request a
 // local copy answers (mirror mode) takes no slot, one it fails over to the remote
