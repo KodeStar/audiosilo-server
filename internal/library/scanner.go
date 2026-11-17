@@ -354,7 +354,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// per-file output, so bookend it with logs - otherwise a long scan looks hung.
 	s.log.Info("scan started: discovering books", "library", lib.Name, "root", lib.Root)
 	ignore := ParseIgnore(lib.IgnorePatterns)
-	books, epubs, partialDiscovery, err := discoverAuto(ctx, lib, overrides, ignore, s.log, rl, nil, s.walkWidth())
+	books, epubs, partialDiscovery, err := discoverAuto(ctx, lib, overrides, ignore, s.log, rl, nil, s.walkWidth(), s.probeTimeout)
 	if err != nil {
 		return res, err
 	}
@@ -740,7 +740,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// Rows indexed before 0017 haven't been checked for holding several
 				// books; the same kind of tag read does it.
 				if old.SuspectUnchecked && b.IsFolder {
-					if n, ok := suspectFromTags(lib, b); ok {
+					if n, ok := suspectFromTags(ctx, lib, b, s.probeTimeout); ok {
 						suspectBackfill[b.RelPath] = n
 					}
 				}
@@ -1507,21 +1507,38 @@ func partTitle(relPath string) string {
 //
 // limit bounds the walk (nil for none, as a scan walks): once it is reached the
 // books of the folders walked so far come back with errWalkCapped. width is how
-// many filesystem calls the walk makes at once (Scanner.walkWidth). epubs are
+// many filesystem calls the walk makes at once (Scanner.walkWidth), and timeout
+// how long each may take (metadata.Bounded; the probe's time for a scan): a
+// folder on a share that stopped answering is skipped for this walk, which is
+// then partial (its books kept as stored), and logged and recorded as an
+// unreadable path. epubs are
 // the walk's .epub entries by folder (sidecarFiles.epubs), which a scan turns
 // into its books' ebook candidates (ebooksOfWalk) and a setup preview ignores.
-func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string]string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap, width int) (books []*catalog.Book, epubs map[string][]fs.DirEntry, hadErrors bool, err error) {
+func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string]string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap, width int, timeout time.Duration) (books []*catalog.Book, epubs map[string][]fs.DirEntry, hadErrors bool, err error) {
 	walkRoot := lib.Root
 	if resolved, rerr := filepath.EvalSymlinks(lib.Root); rerr == nil {
 		walkRoot = resolved
 	}
-	dirs, side, hadErrors, err := audioDirs(ctx, lib, walkRoot, "", ignore, log, rl, limit, width)
+	dirs, side, hadErrors, err := audioDirs(ctx, lib, walkRoot, "", ignore, log, rl, limit, width, timeout)
 	if err != nil && !errors.Is(err, errWalkCapped) {
 		return nil, nil, hadErrors, err
 	}
-	gone, serr := statAudio(ctx, dirs, width)
+	gone, unanswered, serr := statAudio(ctx, dirs, width, timeout)
 	if serr != nil {
 		return nil, nil, hadErrors, serr
+	}
+	if len(unanswered) > 0 {
+		// Folders with a file whose look was given up on: their books drop out
+		// of this walk (built without that file, one would lose a part), so it
+		// is partial, as with a folder that wouldn't list.
+		hadErrors = true
+		dropUnanswered(dirs, unanswered, overrides)
+		for dir, uerr := range unanswered {
+			log.Warn("skipping a folder whose files didn't answer during discovery", "library", lib.Name, "path", absOf(lib, dir), "err", uerr)
+			if rl != nil {
+				rl.add("warn", "unreadable", func(e *catalog.RunEvent) { e.Path, e.Detail = dir, fsaccess.Cause(uerr) })
+			}
+		}
 	}
 	if gone > 0 {
 		// Files listed by the walk but no longer there when looked at: the tree
@@ -1577,6 +1594,28 @@ func ebooksOfWalk(lib catalog.Library, books []*catalog.Book, epubs map[string][
 	}
 }
 
+// dropUnanswered drops from dirs (audioDirs') the folders a look was given up on
+// in (unanswered, statAudio's), and every other disc folder of a disc set one of
+// them is joined into (joinRoot): a joined book built from the discs that
+// answered would lose the others' parts.
+func dropUnanswered(dirs map[string][]audioFile, unanswered map[string]error, overrides map[string]string) {
+	sets := discSets(maps.Keys(dirs))
+	isDiscSet := func(p string) bool { return sets[p] }
+	roots := map[string]bool{}
+	for dir := range unanswered {
+		if root, ok := joinRoot(overrides, dir, isDiscSet); ok {
+			roots[root] = true
+		}
+	}
+	for dir := range dirs {
+		if _, ok := unanswered[dir]; ok {
+			delete(dirs, dir)
+		} else if root, ok := joinRoot(overrides, dir, isDiscSet); ok && roots[root] {
+			delete(dirs, dir)
+		}
+	}
+}
+
 // booksOf turns the folders that directly hold audio (dirs: library-relative, with
 // their audio files, as audioDirs found them for the whole library) into books:
 // each folder's own (booksInDir), except that the disc folders of a disc set with a
@@ -1614,9 +1653,11 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 // skipped, even when its own name begins with a dot. side is the metadata files
 // found in the same walk (sidecarFiles). limit bounds the walk (nil for none):
 // reaching it stops the walk with errWalkCapped, dirs holding what it found.
-// width is how many folders it lists at once (walkDir); its audio files are not
+// width is how many folders it lists at once (walkDir), timeout how long each
+// look may take (metadata.Bounded: walkDir's listings, a .audiosilo folder's,
+// a metadata.json's lstat); its audio files are not
 // looked at (statAudio: the callers building books from them do that).
-func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap, width int) (dirs map[string][]audioFile, side sidecarFiles, hadErrors bool, err error) {
+func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap, width int, timeout time.Duration) (dirs map[string][]audioFile, side sidecarFiles, hadErrors bool, err error) {
 	dirs = map[string][]audioFile{}
 	side = sidecarFiles{abs: map[string]catalog.ABSReading{}, attachments: map[string]attachmentFiles{}, unlisted: map[string]bool{},
 		epubs: map[string][]fs.DirEntry{}}
@@ -1634,7 +1675,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 		width = 1
 	}
 	descend := func(p string, d fs.DirEntry) bool { return !skipped(d, path.Join(fromRel, relPathOf(walkFrom, p))) }
-	err = walkDir(ctx, walkFrom, width, descend, func(p string, d fs.DirEntry, walkErr error) error {
+	err = walkDir(ctx, walkFrom, width, timeout, descend, func(p string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -1656,7 +1697,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			// A book's .audiosilo folder is listed once, never walked into: it holds
 			// the Bridge's attachments, never audio.
 			if rel != fromRel && isAttachmentsDir(d, rel, ignore) {
-				files, lerr := listAttachments(p)
+				files, lerr := listAttachments(ctx, p, timeout)
 				switch {
 				case lerr != nil:
 					// Its books keep what is stored (Unread). No audio lives here, so
@@ -1682,12 +1723,15 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			return nil
 		}
 		if isABSEntry(d, rel, ignore) {
-			if sig, serr := absEntrySig(ctx, lib, rel, d, ignore); serr != nil {
+			if sig, serr := absEntrySig(ctx, lib, rel, d, ignore, timeout); serr != nil {
 				// Not to be looked at right now (a flaky mount): its book keeps the
 				// stored reading (ABSReading.Unread) rather than losing its ABS
 				// values until the next scan.
 				side.abs[dirOf(rel)] = catalog.ABSReading{Unread: true}
 				log.Warn("could not look at an Audiobookshelf metadata.json", "library", lib.Name, "path", absOf(lib, rel), "err", serr)
+				if rl != nil && metadata.GaveUp(serr) {
+					rl.add("warn", "unreadable", func(e *catalog.RunEvent) { e.Path, e.Detail = rel, fsaccess.Cause(serr) })
+				}
 			} else {
 				side.abs[dirOf(rel)] = catalog.ABSReading{Sig: sig}
 			}
@@ -1720,28 +1764,43 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 // unread: their caller stops rather than building books from them, which would
 // look at each of those files one at a time, on a share that may have stopped
 // answering, long after its waiter has gone (a setup preview's, at its time,
-// with the preview's slot for the mount held meanwhile).
-func statAudio(ctx context.Context, dirs map[string][]audioFile, width int) (gone int, err error) {
-	var files []*audioFile
-	for _, audio := range dirs {
+// with the preview's slot for the mount held meanwhile). Each lstat is a
+// metadata.Bounded call (ctx, at most timeout): unanswered is the folders with
+// one given up on, each with that error (a share that stopped answering).
+func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, timeout time.Duration) (gone int, unanswered map[string]error, err error) {
+	type dirFile struct {
+		dir string
+		f   *audioFile
+	}
+	var files []dirFile
+	for dir, audio := range dirs {
 		for i := range audio {
-			files = append(files, &audio[i])
+			files = append(files, dirFile{dir, &audio[i]})
 		}
 	}
 	var missing atomic.Int64
-	pool.Each(ctx, min(width, len(files)), files, func() bool { return true }, func(f **audioFile) {
+	var mu sync.Mutex
+	unanswered = map[string]error{}
+	pool.Each(ctx, min(width, len(files)), files, func() bool { return true }, func(f *dirFile) {
 		// The pool may still hand a file out as ctx ends (its select picks either):
 		// none is looked at once it has.
 		if ctx.Err() != nil {
 			return
 		}
-		info, err := (*f).de.Info()
-		if errors.Is(err, fs.ErrNotExist) {
+		info, err := metadata.LstatBounded(ctx, f.f.abs, timeout) // the entry's Info, bounded
+		switch {
+		case metadata.GaveUp(err):
+			mu.Lock()
+			if _, ok := unanswered[f.dir]; !ok {
+				unanswered[f.dir] = err
+			}
+			mu.Unlock()
+		case errors.Is(err, fs.ErrNotExist):
 			missing.Add(1)
 		}
-		(*f).de = newStatEntry((*f).de, info, err)
+		f.f.de = newStatEntry(f.f.de, info, err)
 	})
-	return int(missing.Load()), ctx.Err()
+	return int(missing.Load()), unanswered, ctx.Err()
 }
 
 // statEntry is a directory entry whose Info statAudio has read, keeping only
@@ -1802,13 +1861,18 @@ func isABSEntry(de fs.DirEntry, rel string, ignore *Ignore) bool {
 
 // absEntrySig is the signature of the Audiobookshelf metadata.json the walk
 // found as d (isABSEntry) at library-relative rel: from its lstat, looked at once
-// more when that fails (absSigAt, bounded by ctx and the probe's time; "" when it
-// has gone since the listing). err is a file that couldn't be looked at right now.
-func absEntrySig(ctx context.Context, lib catalog.Library, rel string, d fs.DirEntry, ignore *Ignore) (string, error) {
-	if info, err := d.Info(); err == nil {
+// more when that fails (absSigAt; "" when it has gone since the listing), each a
+// metadata.Bounded call (ctx, at most timeout). err is a file that couldn't be
+// looked at right now, one given up on included (not looked at again).
+func absEntrySig(ctx context.Context, lib catalog.Library, rel string, d fs.DirEntry, ignore *Ignore, timeout time.Duration) (string, error) {
+	info, err := metadata.LstatBounded(ctx, absOf(lib, rel), timeout) // d's Info, bounded
+	switch {
+	case err == nil:
 		return metadata.ABSSignature(info), nil
+	case metadata.GaveUp(err) || ctx.Err() != nil:
+		return "", err
 	}
-	return absSigAt(ctx, lib, dirOf(rel), ignore, metadata.ProbeTimeout)
+	return absSigAt(ctx, lib, dirOf(rel), ignore, timeout)
 }
 
 // absSigAt is the signature of the Audiobookshelf metadata.json the scan reads
@@ -2577,7 +2641,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 		} else if len(own) == 0 || !metadata.IsDiscFolder(path.Base(dirRel)) {
 			return false
 		}
-		dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, p), p, ignore, s.log, nil, nil, s.walkWidth())
+		dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, p), p, ignore, s.log, nil, nil, s.walkWidth(), look)
 		if err != nil {
 			walkErr = err
 			return false
@@ -2588,8 +2652,14 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	var candidates []*catalog.Book
 	if root, ok := joinRoot(overrides, dirRel, isDiscSet); ok {
 		// The joined book is built from all of them.
-		if _, err := statAudio(ctx, discs, s.walkWidth()); err != nil {
+		_, unanswered, err := statAudio(ctx, discs, s.walkWidth(), look)
+		if err != nil {
 			return nil, err
+		}
+		for dir := range discs {
+			if uerr := unanswered[dir]; uerr != nil {
+				return nil, uerr // a part whose look was given up on: the book can't be known now
+			}
 		}
 		if b := joinedBook(lib, root, discs); b != nil {
 			candidates = []*catalog.Book{b}
@@ -2743,7 +2813,7 @@ func (s *Scanner) splitParentOf(ctx context.Context, lib catalog.Library, b *cat
 	if !b.IsFolder || parent == "" || !metadata.IsDiscFolder(path.Base(b.RelPath)) {
 		return "", nil
 	}
-	dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, parent), parent, ignore, s.log, nil, nil, s.walkWidth())
+	dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, parent), parent, ignore, s.log, nil, nil, s.walkWidth(), s.lookTimeout(ctx))
 	if err != nil {
 		return "", err
 	}

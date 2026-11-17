@@ -956,7 +956,7 @@ func TestWalkReadsWhatAudioEntriesReads(t *testing.T) {
 	}
 	lib := catalog.Library{Name: "L", Root: root}
 	ignore := ParseIgnore([]string{"*.sample.mp3", "Extras/"})
-	dirs, _, partial, err := audioDirs(t.Context(), lib, root, "", ignore, slog.Default(), nil, nil, walkIO)
+	dirs, _, partial, err := audioDirs(t.Context(), lib, root, "", ignore, slog.Default(), nil, nil, walkIO, time.Minute)
 	if err != nil || partial {
 		t.Fatalf("walk: partial %v, err %v", partial, err)
 	}

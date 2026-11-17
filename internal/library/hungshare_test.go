@@ -1,6 +1,7 @@
 package library
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -14,10 +15,12 @@ import (
 )
 
 // One hung share stops reads only from itself (server#360): with the reads on
-// library A's share stuck (its mount's count of hung reads at the cap), a
-// re-index of A refuses the read and keeps its book whole, while library B, on
-// another mount, reads its changed book as ever. Once A's share answers, A
-// reads again. Not parallel: metadata.HangMountForTests swaps the mount lookup.
+// library A's share stuck (its mount's count of hung reads at the cap), a scan
+// of A refuses even the walk's looks (SRV-15c), so it finds nothing and stops
+// as a library that isn't there (ErrLibraryUnavailable), its book kept whole,
+// while library B, on another mount, reads its changed book as ever. Once A's
+// share answers, A reads again. Not parallel: metadata.HangMountForTests swaps
+// the mount lookup.
 func TestHungShareLeavesOtherLibrariesReading(t *testing.T) {
 	ffprobe, _ := exec.LookPath("ffprobe") // "" reads in process: either way
 	ctx := t.Context()
@@ -60,16 +63,15 @@ func TestHungShareLeavesOtherLibrariesReading(t *testing.T) {
 
 	release := metadata.HangMountForTests(sides["A"].root)
 	t.Cleanup(release)
-	resA, err := s.Scan(ctx, *sides["A"].lib)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := s.Scan(ctx, *sides["A"].lib); !errors.Is(err, ErrLibraryUnavailable) {
+		t.Errorf("A's scan on the hung share = %v, want it stopped as unavailable", err)
 	}
 	resB, err := s.Scan(ctx, *sides["B"].lib)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if title, problem, detail := read("A"); title != "Title A" || problem != problemUnreadable || detail != readRefusedDetail || resA.Updated != 0 {
-		t.Errorf("A on the hung share = %q, %q (%q), %d updated; want kept whole, its read refused", title, problem, detail, resA.Updated)
+	if title, problem, _ := read("A"); title != "Title A" || problem != "" {
+		t.Errorf("A on the hung share = %q, %q; want it kept whole", title, problem)
 	}
 	if title, problem, _ := read("B"); title != "New B" || problem != "" || resB.Updated != 1 {
 		t.Errorf("B beside the hung share = %q, %q, %d updated; want it read", title, problem, resB.Updated)

@@ -54,7 +54,13 @@ func TestHeldSideReadsLetTheScanFinish(t *testing.T) {
 				return problem, file, detail, column
 			}
 
-			release := metadata.HoldOpensForTests(filepath.Join(root, filepath.FromSlash(c.file)))
+			hold := metadata.HoldOpensForTests
+			if c.name == "metadata.json" {
+				// Its lstat answers (the walk's, from a share's cached
+				// attributes) while its read hangs.
+				hold = metadata.HoldReadsForTests
+			}
+			release := hold(filepath.Join(root, filepath.FromSlash(c.file)))
 			t.Cleanup(release)
 			if res := scanWithin(t, s, *lib, 20*time.Second); res.Added != 1 {
 				t.Fatalf("added %d, want the book written with what there is", res.Added)

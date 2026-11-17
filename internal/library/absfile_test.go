@@ -259,7 +259,7 @@ func TestABSEntrySigInfoFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := failingInfo{fs.FileInfoToDirEntry(info)}
-	if sig, err := absEntrySig(t.Context(), lib, rel, d, nil); err != nil || sig != metadata.ABSSignature(info) {
+	if sig, err := absEntrySig(t.Context(), lib, rel, d, nil, time.Minute); err != nil || sig != metadata.ABSSignature(info) {
 		t.Errorf("Info failed, file there: %q, %v; want %q", sig, err, metadata.ABSSignature(info))
 	}
 
@@ -271,7 +271,7 @@ func TestABSEntrySigInfoFails(t *testing.T) {
 	if _, err := os.Lstat(file); err == nil {
 		t.Skip("folder permissions don't stop this user (root?)")
 	}
-	if sig, err := absEntrySig(t.Context(), lib, rel, d, nil); err == nil {
+	if sig, err := absEntrySig(t.Context(), lib, rel, d, nil, time.Minute); err == nil {
 		t.Errorf("not to be looked at: %q, nil; want an error", sig)
 	}
 	if err := os.Chmod(dir, 0o755); err != nil {
@@ -281,7 +281,7 @@ func TestABSEntrySigInfoFails(t *testing.T) {
 	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
-	if sig, err := absEntrySig(t.Context(), lib, rel, d, nil); err != nil || sig != "" {
+	if sig, err := absEntrySig(t.Context(), lib, rel, d, nil, time.Minute); err != nil || sig != "" {
 		t.Errorf("gone since the listing: %q, %v; want none", sig, err)
 	}
 }

@@ -45,6 +45,12 @@ func GaveUp(err error) bool {
 // mount never pass the cap together. A panic in fn is its error, never the
 // server's.
 func Bounded[T any](ctx context.Context, path string, timeout time.Duration, fn func() (T, error), drop func(T)) (T, error) {
+	return bounded(ctx, path, timeout, false, fn, drop)
+}
+
+// bounded is Bounded, look saying the call only looks at path (a stat, a
+// listing: HoldReadsForTests lets it answer).
+func bounded[T any](ctx context.Context, path string, timeout time.Duration, look bool, fn func() (T, error), drop func(T)) (T, error) {
 	var zero T
 	if err := ctx.Err(); err != nil {
 		return zero, err
@@ -90,7 +96,7 @@ func Bounded[T any](ctx context.Context, path string, timeout time.Duration, fn 
 			}
 		}()
 		if hook := heldOpens.Load(); hook != nil {
-			(*hook)(path)
+			(*hook)(path, look)
 		}
 		r.v, r.err = fn()
 		return r
@@ -110,15 +116,15 @@ func Bounded[T any](ctx context.Context, path string, timeout time.Duration, fn 
 
 // StatBounded is os.Stat of path as a Bounded call.
 func StatBounded(ctx context.Context, path string, timeout time.Duration) (fs.FileInfo, error) {
-	return Bounded(ctx, path, timeout, func() (fs.FileInfo, error) { return os.Stat(path) }, nil)
+	return bounded(ctx, path, timeout, true, func() (fs.FileInfo, error) { return os.Stat(path) }, nil)
 }
 
 // LstatBounded is os.Lstat of path as a Bounded call.
 func LstatBounded(ctx context.Context, path string, timeout time.Duration) (fs.FileInfo, error) {
-	return Bounded(ctx, path, timeout, func() (fs.FileInfo, error) { return os.Lstat(path) }, nil)
+	return bounded(ctx, path, timeout, true, func() (fs.FileInfo, error) { return os.Lstat(path) }, nil)
 }
 
 // ReadDirBounded is os.ReadDir of path as a Bounded call.
 func ReadDirBounded(ctx context.Context, path string, timeout time.Duration) ([]fs.DirEntry, error) {
-	return Bounded(ctx, path, timeout, func() ([]fs.DirEntry, error) { return os.ReadDir(path) }, nil)
+	return bounded(ctx, path, timeout, true, func() ([]fs.DirEntry, error) { return os.ReadDir(path) }, nil)
 }

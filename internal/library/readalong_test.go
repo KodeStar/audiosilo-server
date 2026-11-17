@@ -42,7 +42,7 @@ func TestAttachmentsSigWithReadalong(t *testing.T) {
 	for _, name := range []string{"characters.json", "bridge.json", "readalong.json", "Loose.readalong.json"} {
 		writeAt(t, dir, name, "{}", at)
 	}
-	files, err := listAttachments(dir)
+	files, err := listAttachments(t.Context(), dir, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

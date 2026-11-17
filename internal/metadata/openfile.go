@@ -67,9 +67,10 @@ const (
 	readReturned
 )
 
-// heldOpens is HoldOpensForTests's hook, called before each open; nil outside
-// a test.
-var heldOpens atomic.Pointer[func(path string)]
+// heldOpens is HoldOpensForTests's hook, called before each open and Bounded
+// call, look true for one that only looks at the path (StatBounded,
+// LstatBounded, ReadDirBounded); nil outside a test.
+var heldOpens atomic.Pointer[func(path string, look bool)]
 
 // OpenRegular is openRegular for the files a request or a scan opens outside
 // the audio reads (a stream, a cover): a FIFO named as one is turned away at
@@ -82,7 +83,7 @@ func OpenRegular(path string) (*os.File, os.FileInfo, error) { return openRegula
 // regular file.
 func openRegular(path string) (*os.File, os.FileInfo, error) {
 	if hook := heldOpens.Load(); hook != nil {
-		(*hook)(path)
+		(*hook)(path, false)
 	}
 	f, err := os.OpenFile(path, openFlags, 0)
 	if err != nil {

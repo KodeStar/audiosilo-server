@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strconv"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -38,7 +39,8 @@ const (
 // head fails its checks, a book with no ebook or no map, a part's path or a
 // podcast library is 404 no_readalong; a map made from another ebook or other
 // audio is 409 readalong_stale; one outside scope 403; a file that can't be
-// read now 500, logged.
+// read now 500, logged, but the map's read or the ebook's look or hash given
+// up on (fileWait: a share that stopped answering) 503 share_not_answering.
 func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 	lib, rel, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
@@ -58,10 +60,21 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusNotFound, codeNoReadalong, msgNoReadalong)
 		return
 	}
-	data, info, err := library.ReadReadalongMap(*lib, book.RelPath, book.IsFolder)
+	type readalongMap struct {
+		data []byte
+		info fs.FileInfo
+	}
+	m, err := metadata.Bounded(r.Context(), filepath.Join(lib.Root, filepath.FromSlash(book.RelPath)), a.fileWait, func() (readalongMap, error) {
+		data, info, err := library.ReadReadalongMap(*lib, book.RelPath, book.IsFolder)
+		return readalongMap{data, info}, err
+	}, nil)
+	data, info := m.data, m.info
 	switch {
 	case errors.Is(err, library.ErrNoReadalong):
 		writeErrorCode(w, http.StatusNotFound, codeNoReadalong, msgNoReadalong)
+		return
+	case metadata.GaveUp(err):
+		writeShareNotAnswering(w)
 		return
 	case err != nil:
 		a.log.Warn("read read-along failed", "library", lib.ID, "path", book.RelPath, "err", err)
@@ -78,7 +91,7 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 	idx, err := a.cat.BookReadalongAt(ctx, lib.ID, book.RelPath)
 	var digest string
 	if err == nil {
-		digest, err = a.scanner.EbookDigestNow(ctx, *lib, idx, book.RelPath, book.Ebook.Path, book.IsFolder)
+		digest, err = a.scanner.EbookDigestNow(ctx, *lib, idx, book.RelPath, book.Ebook.Path, book.IsFolder, a.fileWait)
 	}
 	switch {
 	case errors.Is(err, library.ErrNoEbook), errors.Is(err, fs.ErrNotExist):
@@ -160,7 +173,7 @@ func (a *API) readalongOf(ctx context.Context, lib *catalog.Library, bookPath st
 	if idx.Head == nil {
 		return nil
 	}
-	sha, err := a.scanner.EbookDigestNow(ctx, *lib, idx, bookPath, ebookPath, folder)
+	sha, err := a.scanner.EbookDigestNow(ctx, *lib, idx, bookPath, ebookPath, folder, a.fileWait)
 	if err != nil {
 		// An ebook gone since the last scan is no read-along, not a failure.
 		if !errors.Is(err, library.ErrNoEbook) && !errors.Is(err, fs.ErrNotExist) {

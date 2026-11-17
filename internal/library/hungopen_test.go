@@ -43,7 +43,7 @@ func scanWithin(t *testing.T, s *Scanner, lib catalog.Library, limit time.Durati
 // with the mount's count full, the rest are refused at once. The scan finishes
 // with every book recorded as unreadable, so the next scan (another library's,
 // queued behind it) runs, and reads as ever. Not parallel:
-// metadata.HoldOpensForTests swaps the mount lookup.
+// metadata.HoldReadsForTests swaps the mount lookup.
 func TestHeldOpensLetTheScanFinish(t *testing.T) {
 	ctx := t.Context()
 	db := storetest.Open(t)
@@ -63,7 +63,9 @@ func TestHeldOpensLetTheScanFinish(t *testing.T) {
 	s.probeTimeout = 200 * time.Millisecond
 	s.concurrency = 4
 
-	release := metadata.HoldOpensForTests(held)
+	// The share's folder listings and attributes answer (cached), its files'
+	// opens don't.
+	release := metadata.HoldReadsForTests(held)
 	t.Cleanup(release)
 	if res := scanWithin(t, s, *libA, 20*time.Second); res.Added != books {
 		t.Errorf("held share's scan added %d, want every book written with what there is", res.Added)

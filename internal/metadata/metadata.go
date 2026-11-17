@@ -243,10 +243,12 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 
 // ExtractTags reads only the tags of the file at path (and the iTunes
 // narrator): no probe, in-process or ffprobe, so no duration, codec or
-// chapters. An OpenErr when it can't be opened.
-func ExtractTags(path string) *Metadata {
+// chapters. An OpenErr when it can't be opened. The read is bounded as a
+// probe's tag read is (readFile): by ctx and timeout, cut short past them
+// (TagsUnread), and refused on a mount whose reads hang (ReadRefused).
+func ExtractTags(ctx context.Context, path string, timeout time.Duration) *Metadata {
 	m := &Metadata{Format: fileFormat(path)}
-	if _, _, err := readFile(context.Background(), m, path, ffNone, false, ProbeTimeout); err != nil {
+	if _, _, err := readFile(ctx, m, path, ffNone, false, timeout); err != nil {
 		m.OpenErr = err
 	}
 	return m
@@ -465,9 +467,28 @@ func HoldOpensForTests(dir string) (release func()) {
 // dir's own mount. (A restore while a held call still runs is safe, as in
 // HoldOpensForTests: the lookup is swapped atomically.)
 func HoldOpensUntilForTests(dir string, held <-chan struct{}) (restore func()) {
-	restoreMount := ownMountForTests("HoldOpensUntilForTests", "held-for-tests:", dir)
-	hook := func(p string) {
-		if mounts.Within(p, dir) {
+	return holdForTests("HoldOpensUntilForTests", dir, held, true)
+}
+
+// HoldReadsForTests is HoldOpensForTests for the opens and reads alone: a
+// look at a path under dir (StatBounded, LstatBounded, ReadDirBounded: a
+// stat, a listing) answers, as on a share whose folder listings and
+// attributes are cached while its files' reads hang.
+func HoldReadsForTests(dir string) (release func()) {
+	held := make(chan struct{})
+	restore := holdForTests("HoldReadsForTests", dir, held, false)
+	return sync.OnceFunc(func() {
+		close(held)
+		restore()
+	})
+}
+
+// holdForTests holds the calls on paths under dir until held closes (looks
+// too when looks), dir a mount of its own until restore.
+func holdForTests(caller, dir string, held <-chan struct{}, looks bool) (restore func()) {
+	restoreMount := ownMountForTests(caller, "held-for-tests:", dir)
+	hook := func(p string, look bool) {
+		if (looks || !look) && mounts.Within(p, dir) {
 			<-held
 		}
 	}

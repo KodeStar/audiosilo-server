@@ -55,7 +55,7 @@ func TestHeldOpenIsAbandonedAndCounted(t *testing.T) {
 	for hung.n.Load() < maxAbandonedReads {
 		Fingerprint(context.Background(), path, time.Millisecond)
 	}
-	if m := ExtractTags(path); !m.ReadRefused() {
+	if m := ExtractTags(t.Context(), path, ProbeTimeout); !m.ReadRefused() {
 		t.Errorf("an open at the cap = %+v, want it refused", m)
 	}
 	release()

@@ -1,11 +1,11 @@
 package library
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -72,10 +72,12 @@ func knownAttachment(name string) bool {
 
 // listAttachments lists the .audiosilo folder at absDir once: its known regular
 // files (a link or anything else is never read). A folder that is gone lists
-// nothing; one that can't be listed right now (permissions, a flaky mount) is an
-// error, never "no attachments", so what is stored for it stays.
-func listAttachments(absDir string) (attachmentFiles, error) {
-	entries, err := os.ReadDir(absDir)
+// nothing; one that can't be listed right now (permissions, a flaky mount, a
+// share that stopped answering: the listing and each lstat are
+// metadata.Bounded calls, ctx and at most timeout) is an error, never "no
+// attachments", so what is stored for it stays.
+func listAttachments(ctx context.Context, absDir string, timeout time.Duration) (attachmentFiles, error) {
+	entries, err := metadata.ReadDirBounded(ctx, absDir, timeout)
 	if err != nil {
 		return nil, absentOK(err)
 	}
@@ -84,7 +86,10 @@ func listAttachments(absDir string) (attachmentFiles, error) {
 		if !e.Type().IsRegular() || !knownAttachment(e.Name()) {
 			continue
 		}
-		info, err := e.Info()
+		info, err := metadata.LstatBounded(ctx, filepath.Join(absDir, e.Name()), timeout) // e's Info, bounded
+		if metadata.GaveUp(err) || ctx.Err() != nil {
+			return nil, cmp.Or(err, ctx.Err())
+		}
 		if err != nil {
 			continue
 		}

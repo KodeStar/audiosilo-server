@@ -1242,7 +1242,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   has not returned (`waitFlight`; a scan's read that has returned is waited on until its batch
   write): a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
   rest; an on-demand read gives up as a look at a share that stopped answering (`metadata.GaveUp`,
-  503 `share_not_answering`). The walk's own listings and lstats are not bounded yet. A re-index
+  503 `share_not_answering`). The walk's own looks are bounded the same way (SRV-15c: `walkDir`'s root lstat and
+  listings, a `.audiosilo` folder's listing, a metadata.json's lstat, `statAudio`'s lstat of each audio file, the
+  probe's time each): a folder that won't list, or whose audio file's lstat is given up on (`dropUnanswered`, with
+  the other discs of a disc set it is joined into), is skipped for that run, which is then partial (its books kept
+  as stored, never pruned nor rewritten without a part) and records an `unreadable` path in the run's log; a
+  `.audiosilo` folder that won't list keeps its book's attachments as stored. So do the scan's tag-only suspect
+  check (`suspectFromTags`, `metadata.ExtractTags` under the scan's context and time) and its read-along ebook
+  hashing (`EbookDigestNow`'s look and hash, each a `metadata.Bounded` call; the hashing stops at the first given
+  up on; `/item` and `GET /readalong` give theirs `API.fileWait`). A re-index
   where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`), or whose
   length ran out of time even read alone (an ffprobe time-out, `ProbeTimedOut` without one:
   `library.readCutShort`; a part on a share that hung mid-read), or with a file that is no regular

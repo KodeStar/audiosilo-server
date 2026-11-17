@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -427,4 +428,29 @@ func digestCurrent(t *testing.T, cat *catalog.Catalog, libID int64, rel string) 
 		t.Fatal(err)
 	}
 	return len(due) == 0
+}
+
+// GET /readalong of a book on a share that stopped answering answers 503
+// share_not_answering with Retry-After once the map's read (or the ebook's
+// look) is given up on (fileWait), not a handler held until the request times
+// out (SRV-15c); once the share answers the map is served. Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
+func TestReadalongOnAHeldShareAnswers(t *testing.T) {
+	e := newReadalongEnv(t)
+	e.api.fileWait = 200 * time.Millisecond
+	release := metadata.HoldOpensForTests(filepath.Join(e.root, filepath.FromSlash(ebookBook)))
+	t.Cleanup(release)
+	start := time.Now()
+	resp, body := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, "")
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) || resp.Header.Get("Retry-After") != "30" {
+		t.Errorf("GET readalong on a held share = %d %s, want 503 %s", resp.StatusCode, body, codeShareNotAnswering)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("GET readalong took %v, want it answered once the read is given up on", took)
+	}
+	release()
+	e.api.fileWait = 10 * time.Second
+	if resp, body := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusOK || body != string(e.maps[ebookBook]) {
+		t.Errorf("GET readalong once the share answers = %d %.80s, want the map", resp.StatusCode, body)
+	}
 }
