@@ -337,6 +337,35 @@ func TestBannerNamesConsoleAndConnectPage(t *testing.T) {
 			t.Errorf("banner lacks %q:\n%s", want, got)
 		}
 	}
+	if !strings.Contains(got, "Finish setting up") {
+		t.Errorf("banner doesn't offer the setup flow:\n%s", got)
+	}
+}
+
+// Under setup.skip the first-run flow is already marked finished, so the banner
+// names the console without offering setup, and still shows the credentials and
+// the connect page.
+func TestBannerUnderSetupSkipOffersNoSetup(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	cfg.PublicURL = "https://books.example.com/"
+	cfg.Setup.Skip = true
+	var out bytes.Buffer
+	writeBanner(&out, cfg, "s3cret-pass", "CODE-1234")
+	got := out.String()
+	for _, want := range []string{
+		"Admin console: open https://books.example.com/admin and sign in as admin",
+		"open https://books.example.com/ and enter the auth code",
+		"Admin username : admin",
+		"Admin password : s3cret-pass",
+		"Auth code      : CODE-1234",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("banner lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(strings.ToLower(got), "setting up") {
+		t.Errorf("banner offers setup under setup.skip:\n%s", got)
+	}
 }
 
 // A data folder the server may not write to, or a database in it the server may

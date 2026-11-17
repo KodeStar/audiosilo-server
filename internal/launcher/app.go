@@ -468,7 +468,8 @@ func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service,
 }
 
 // writeBanner writes the first-run credentials banner: the console (where the
-// "Set up your server" flow lives) first, then the connect page for a device.
+// "Set up your server" flow lives, unless setup.skip marked it finished) first,
+// then the connect page for a device.
 func writeBanner(w io.Writer, cfg *config.Config, password, code string) {
 	base := baseURL(cfg)
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
@@ -480,7 +481,11 @@ func writeBanner(w io.Writer, cfg *config.Config, password, code string) {
 	p("  Auth code      : %s\n", code)
 	p("  Config file    : %s\n", config.Path(cfg.DataDir))
 	p("--------------------------------------------------------\n")
-	p(" Finish setting up: open %s/admin and sign in as admin.\n", base)
+	if cfg.Setup.Skip {
+		p(" Admin console: open %s/admin and sign in as admin.\n", base)
+	} else {
+		p(" Finish setting up: open %s/admin and sign in as admin.\n", base)
+	}
 	p(" Connect a device: open %s/ and enter the auth code.\n", base)
 	p(" (API: POST /api/v1/auth/redeem or /api/v1/auth/login.)\n")
 	p("========================================================\n")
