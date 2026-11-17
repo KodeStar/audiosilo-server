@@ -74,7 +74,12 @@ func TestWireGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ent := range entries {
-		name := strings.TrimSuffix(ent.Name(), ".json")
+		// Only a golden: a .DS_Store or an editor's backup beside them is not
+		// one, and -update must never delete it.
+		name, isGolden := strings.CutSuffix(ent.Name(), ".json")
+		if ent.IsDir() || !isGolden {
+			continue
+		}
 		if !seen[name] {
 			if *updateWire {
 				if err := os.Remove(filepath.Join(wireDir, ent.Name())); err != nil {
