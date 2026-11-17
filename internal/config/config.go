@@ -181,6 +181,16 @@ const (
 	MaxMaxMembers     = 50
 )
 
+// SetupConfig controls the admin console's "Set up your server" flow.
+type SetupConfig struct {
+	// Skip marks the flow finished at start, so the console never opens it (an
+	// install configured by script or config.yaml, a public demo). Steps the
+	// admin finished keep their outcome; the rest read as skipped, and the
+	// Overview's reminder card is dismissed. A flow already finished is left as
+	// it is. Read once at start (setup.skip, AUDIOSILO_SETUP_SKIP; server#184).
+	Skip bool `yaml:"skip"`
+}
+
 // ScanConfig tunes library scans.
 type ScanConfig struct {
 	// Concurrency is how many audio files a scan reads at once (tags and ffprobe):
@@ -479,6 +489,8 @@ type Config struct {
 	RateLimit RateLimitConfig `yaml:"rate_limit,omitempty"`
 	// Database tunes the SQLite database (boot only).
 	Database DatabaseConfig `yaml:"database,omitempty"`
+	// Setup is the admin console's first-run flow (boot only).
+	Setup SetupConfig `yaml:"setup,omitempty"`
 
 	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
 	// to that variable's name; file is the config as config.yaml had it, before the

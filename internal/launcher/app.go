@@ -203,6 +203,15 @@ func Run(ctx context.Context, opts Options) error {
 	if err := syncLibraries(ctx, cfg, cat, log); err != nil {
 		return err
 	}
+	// setup.skip: the console's first-run flow is marked finished, after the
+	// config's libraries exist so its folder step reads as done.
+	if cfg.Setup.Skip {
+		if skipped, err := cat.SkipSetup(ctx); err != nil {
+			log.Warn("skipping the first-run setup failed", "err", err)
+		} else if skipped {
+			log.Info("first-run setup marked finished (setup.skip)")
+		}
+	}
 	scanner.Start(ctx)
 	if _, err := scanner.EnqueueAll(ctx, library.TriggerStartup, nil); err != nil {
 		log.Warn("startup scan: list libraries failed", "err", err)

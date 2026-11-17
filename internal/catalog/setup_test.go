@@ -106,6 +106,42 @@ func TestSetupFinishFillsUnmarkedSteps(t *testing.T) {
 	})
 }
 
+// setup.skip (server#184): a fresh flow is finished and dismissed, the folder
+// step done once a books library exists, a step the admin marked keeping its
+// outcome; a flow already finished is left as it is (an admin's reopened card
+// survives every later start).
+func TestSkipSetup(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	if _, err := c.CreateLibrary(ctx, Library{Name: "Books", Root: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UpdateSetupState(ctx, SetupPatch{Steps: map[string]string{"backups": SetupStepDone}}); err != nil {
+		t.Fatal(err)
+	}
+	skipped, err := c.SkipSetup(ctx)
+	if err != nil || !skipped {
+		t.Fatalf("SkipSetup = %v, %v; want true", skipped, err)
+	}
+	st, err := c.SetupState(ctx)
+	if err != nil || !st.Finished || !st.Dismissed || len(st.Steps) != len(SetupSteps) ||
+		st.Steps["folder"] != SetupStepDone || st.Steps["backups"] != SetupStepDone || st.Steps["phone"] != SetupStepSkipped {
+		t.Fatalf("state after SkipSetup = %+v, %v", st, err)
+	}
+
+	// The admin reopens the card; the next start's SkipSetup changes nothing.
+	no := false
+	if _, err := c.UpdateSetupState(ctx, SetupPatch{Dismissed: &no}); err != nil {
+		t.Fatal(err)
+	}
+	if skipped, err := c.SkipSetup(ctx); err != nil || skipped {
+		t.Fatalf("SkipSetup on a finished flow = %v, %v; want false", skipped, err)
+	}
+	if st, _ := c.SetupState(ctx); st.Dismissed || !st.Finished {
+		t.Errorf("a finished flow was changed: %+v", st)
+	}
+}
+
 // The preview's root check refuses exactly what a books library create refuses
 // (a root overlapping a podcast library, either way round), allows what it allows
 // (a books root beside or inside another books root), and names a library already

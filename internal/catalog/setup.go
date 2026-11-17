@@ -108,6 +108,27 @@ func (c *Catalog) UpdateSetupState(ctx context.Context, p SetupPatch) (SetupStat
 	return st, nil
 }
 
+// SkipSetup finishes and dismisses the flow for a server whose config skips it
+// (setup.skip, server#184: a scripted install, a demo), marking each step
+// without an outcome as finishing it does. One transaction; a finished flow is
+// left as it is (skipped false), so a later start never undoes an admin's
+// reopened card.
+func (c *Catalog) SkipSetup(ctx context.Context) (skipped bool, err error) {
+	err = c.db.WithTx(ctx, "SkipSetup", func(tx *sql.Tx) error {
+		st, err := readSetupState(ctx, tx)
+		if err != nil || st.Finished {
+			return err
+		}
+		st.Finished, st.Dismissed = true, true
+		if err := fillUnmarkedSteps(ctx, tx, st.Steps); err != nil {
+			return err
+		}
+		skipped = true
+		return putServerState(ctx, tx, setupKey, st, c.stamp())
+	})
+	return skipped, err
+}
+
 // fillUnmarkedSteps gives every step in steps without an outcome the one
 // finishing the flow records: done for the folder step once a books library
 // exists (a podcast library holds no books), skipped for the rest.

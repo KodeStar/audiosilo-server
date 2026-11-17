@@ -4367,7 +4367,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   transaction), returns the state, audited `settings.setup`; the patch that finishes the flow also marks
   every step still without an outcome (server#183): `folder` done when a books library exists, the rest
   skipped, so the console sends only the step it leaves; 400 `invalid_setup_step`
-  (`catalog.ErrInvalidSetupStep`). **Preview** `POST /admin/setup/preview` `{root, ignore_patterns?}` ->
+  (`catalog.ErrInvalidSetupStep`). **`setup.skip`** (`AUDIOSILO_SETUP_SKIP`, boot only, server#184): each
+  start, after the config's libraries are synced, `catalog.SkipSetup` finishes and dismisses a flow not
+  yet finished (one transaction, the same unmarked-step fill), so a scripted install or a demo never
+  opens it; a finished flow is left alone, so a card the admin reopened stays. **Preview** `POST /admin/setup/preview` `{root, ignore_patterns?}` ->
   `{root, counts: {audio_files, folder_books, file_books, capped}, same_root, samples: [{rel_path, tags,
   path, abs}], blanks: {tags, path}, suggested}`: checks the folder as the folder picker does
   (`library.CheckRoot` behind the picker's `DirLister`, so a hung mount is 404 at its time-out: 400 `path_not_absolute`, 404 `folder_unreadable`; library create checks neither;

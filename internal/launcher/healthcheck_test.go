@@ -3,13 +3,20 @@ package launcher
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
 func TestHealthURL(t *testing.T) {
@@ -130,4 +137,40 @@ func badConfigDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// A real start answers the healthcheck, and setup.skip finishes the console's
+// first-run flow at start (server#184) while a start without it leaves the
+// flow to the console.
+func TestRunHealthcheckAndSetupSkip(t *testing.T) {
+	for _, skip := range []bool{true, false} {
+		data := t.TempDir()
+		addr := freeAddr(t)
+		cfgYAML := fmt.Sprintf("bind: %q\ntls:\n  mode: \"off\"\nupdate_check: false\nsetup:\n  skip: %t\n", addr, skip)
+		if err := os.WriteFile(config.Path(data), []byte(cfgYAML), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ctx, stop := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- Run(ctx, Options{DataDir: data, Log: discardLog()}) }()
+		waitFor(t, "the healthcheck", func() bool { return Healthcheck(ctx, data, io.Discard) == nil })
+		stop()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("Run did not stop")
+		}
+		db, err := store.Open(context.Background(), filepath.Join(data, "audiosilo.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := catalog.New(db, time.Now).SetupState(context.Background())
+		_ = db.Close()
+		if err != nil || st.Finished != skip || st.Dismissed != skip {
+			t.Errorf("setup.skip %t: state = %+v, %v", skip, st, err)
+		}
+	}
 }
