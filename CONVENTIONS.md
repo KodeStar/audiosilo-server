@@ -1252,7 +1252,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   503 `share_not_answering`). The walk's own looks are bounded the same way (SRV-15c: `walkDir`'s root lstat and
   listings, a `.audiosilo` folder's listing, a metadata.json's lstat, `statAudio`'s lstat of each audio file, the
   probe's time each): a folder that won't list, or whose audio file's lstat is given up on or fails as a share
-  does (`shareFault`: EIO, ESTALE, a permission; ENOENT is the file gone; `dropUnanswered`, with
+  does (`shareFault`: any error but the file gone (ENOENT, ENOTDIR): EIO, ESTALE, ENOTCONN, a permission; `dropUnanswered`, with
   every disc folder directly in it or in a folder above it, so neither a book joined from a disc set nor the discs' split
   is built from the discs that answered, or from a set that is one only for want of the folder not looked at),
   is skipped for that run, which is then partial (its books kept
@@ -1411,8 +1411,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). After a partial discovery (a folder unreadable, or
   given up on: a share that stopped answering) a book not found is not known gone, so each old path a new
-  book matches is looked at first (`bookOnDisk`, bounded, erring toward present; a look given up on is
-  `diskUnknown`, never gone) and only one gone from disk
+  book matches is looked at first (`bookOnDisk`, bounded, erring toward present; a look given up on, or one
+  failed as a share does that a retry may get past (`transientFault`: EIO, ESTALE, ENOTCONN, ETIMEDOUT,
+  EHOSTDOWN), is `diskUnknown`, never gone; a permission counts as present) and only one gone from disk
   moves: a copy of a stuck book never takes its state. A folder book's fingerprint is its
   first file's; one indexed in byte order before #160 still matches by the file that order
   put first (`byteFirstFingerprint`, in `detectMoves` and `IndexMoved`). The on-demand index of a

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"maps"
@@ -1810,7 +1811,7 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, time
 		}
 		info, err := lstatAudio(ctx, f.f.abs, timeout) // the entry's Info, bounded
 		if shareFault(err) {
-			err = fmt.Errorf("%w: %w", metadata.ErrNotAnswered, err)
+			err = gaveUpOn{err}
 		}
 		switch {
 		case metadata.GaveUp(err):
@@ -1832,13 +1833,38 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, time
 var lstatAudio = metadata.LstatBounded
 
 // shareFault reports whether err, an lstat's of a file its folder listed, is
-// how a share fails rather than an answer about the file: EIO or ESTALE (a
-// soft-mounted NFS share whose server stopped answering, or a handle it lost)
-// or a permission (EACCES, EPERM: a share refusing a look it allowed the
-// listing). ENOENT is not: the file is gone.
+// how a share fails rather than an answer about the file: any error but the
+// file gone (ENOENT, ENOTDIR: a folder above it replaced), a look given up on
+// already (metadata.GaveUp) or ctx's. EIO or ESTALE (a soft-mounted NFS share
+// whose server stopped answering, or a handle it lost), ENOTCONN or ETIMEDOUT
+// (a FUSE pool or a network mount that dropped), a permission (EACCES, EPERM:
+// a share refusing a look it allowed the listing) among them.
 func shareFault(err error) bool {
-	return errors.Is(err, syscall.EIO) || errors.Is(err, syscall.ESTALE) || errors.Is(err, fs.ErrPermission)
+	return err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) &&
+		!metadata.GaveUp(err) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
+
+// transientFault reports whether err is a share's fault that trying again may
+// get past: EIO, ESTALE, ENOTCONN, ETIMEDOUT or EHOSTDOWN. Not a permission,
+// which stays until an admin changes it, nor any other shareFault (a link
+// loop, a name the share refuses), which a retry would only meet again.
+func transientFault(err error) bool {
+	for _, errno := range []syscall.Errno{syscall.EIO, syscall.ESTALE, syscall.ENOTCONN, syscall.ETIMEDOUT, syscall.EHOSTDOWN} {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
+}
+
+// gaveUpOn is a shareFault's error made a look given up on (metadata.GaveUp
+// reports it), keeping the share's own message (a permission is not "did not
+// answer in time" in a run's log).
+type gaveUpOn struct{ err error }
+
+func (e gaveUpOn) Error() string        { return e.err.Error() }
+func (e gaveUpOn) Unwrap() error        { return e.err }
+func (e gaveUpOn) Is(target error) bool { return target == metadata.ErrNotAnswered }
 
 // statEntry is a directory entry whose Info statAudio has read, keeping only
 // what a book is built from (folderBook, fileBook: the size and mtime), not the
@@ -2839,16 +2865,27 @@ func (s *Scanner) carryFrom(ctx context.Context, lib catalog.Library, from strin
 	case diskUnknown:
 		return unknown("whether the old book is still on disk can't be known")
 	}
+	if old.ContentHash == "" {
+		return ignored("the fingerprints differ")
+	}
 	if nb.ContentHash == "" {
 		var ferr error
 		nb.ContentHash, ferr = metadata.FingerprintErr(ctx, absOf(lib, primaryPath(nb)), s.probeTimeout) // reused by enrich
-		if metadata.GaveUp(ferr) && old.ContentHash != "" {
+		if fingerprintUnknown(ferr) {
 			return unknown("the new book's fingerprint couldn't be read")
 		}
 	}
-	if nb.ContentHash == "" || old.ContentHash == "" ||
-		(nb.ContentHash != old.ContentHash && s.byteFirstFingerprint(ctx, lib, nb) != old.ContentHash) {
+	if nb.ContentHash == "" {
 		return ignored("the fingerprints differ")
+	}
+	if nb.ContentHash != old.ContentHash {
+		was, werr := s.byteFirstFingerprintErr(ctx, lib, nb)
+		if fingerprintUnknown(werr) {
+			return unknown("the new book's first file by bytes couldn't be read")
+		}
+		if was != old.ContentHash {
+			return ignored("the fingerprints differ")
+		}
 	}
 	if reclassified(from, catalog.Signature{Size: old.Size, IsFolder: old.IsFolder}, nb) {
 		return ignored("one folder seen two ways, not a move")
@@ -2865,12 +2902,13 @@ type onDisk int
 
 const (
 	// diskPresent: a book resolves at the path, or the path can't be checked
-	// (a permission, a flaky share), so its state stays where it is.
+	// (a permission), so its state stays where it is.
 	diskPresent onDisk = iota
 	// diskGone: no book is at the path any more.
 	diskGone
-	// diskUnknown: a look was given up on (a share that stopped answering) or
-	// ctx ended, so whether the book is there can't be known now.
+	// diskUnknown: a look was given up on (a share that stopped answering),
+	// failed as a share does (transientFault: EIO, ESTALE) or ctx ended, so
+	// whether the book is there can't be known now.
 	diskUnknown
 )
 
@@ -2880,12 +2918,13 @@ const (
 // case-insensitive disk counts as gone). It errs toward present: a path it
 // can't check keeps its state where it is. Its looks are metadata.Bounded
 // calls (ctx, at most lookTimeout): one given up on (a share that stopped
-// answering) is diskUnknown, which no caller takes as gone either.
+// answering), or failed as a share does but for a permission (transientFault),
+// is diskUnknown, which no caller takes as gone either.
 func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel string) onDisk {
-	// A path that can't be stat'ed, or a folder that can't be listed (a
-	// permission), can't be checked: resolveBook would read it as no book (it
-	// wraps a failed stat as ErrNotIndexable, and lists an unreadable folder as
-	// empty), so it counts as present here.
+	// A path that can't be stat'ed, a folder that can't be listed, or an audio
+	// file's lstat refused (a permission, a link loop), can't be checked: resolveBook would
+	// read it as no book (it wraps a failed stat as ErrNotIndexable, and lists
+	// an unreadable folder as empty), so it counts as present here.
 	abs := absOf(lib, rel)
 	look := s.lookTimeout(ctx)
 	info, err := metadata.StatBounded(ctx, abs, look)
@@ -2894,7 +2933,7 @@ func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel strin
 	}
 	switch {
 	case err == nil:
-	case metadata.Unanswered(ctx, err):
+	case metadata.Unanswered(ctx, err), transientFault(err):
 		return diskUnknown
 	case errors.Is(err, fs.ErrNotExist):
 		return diskGone
@@ -2902,9 +2941,12 @@ func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel strin
 		return diskPresent
 	}
 	b, err := s.resolveBook(ctx, lib, rel, nil)
+	var fault gaveUpOn
 	switch {
 	case errors.Is(err, ErrNotIndexable), err == nil && b.RelPath != rel:
 		return diskGone
+	case errors.As(err, &fault) && !transientFault(fault.err):
+		return diskPresent // an audio file's lstat refused for good (statAudio's shareFault)
 	case err != nil && metadata.Unanswered(ctx, err):
 		return diskUnknown
 	}
@@ -3041,8 +3083,15 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 // stored that file's fingerprint, so a book moved before its first re-index is
 // still found by it. "" when it is the same file.
 func (s *Scanner) byteFirstFingerprint(ctx context.Context, lib catalog.Library, b *catalog.Book) string {
+	fp, _ := s.byteFirstFingerprintErr(ctx, lib, b)
+	return fp
+}
+
+// byteFirstFingerprintErr is byteFirstFingerprint with why it is ""
+// (metadata.FingerprintErr's error; nil when the book has no such file).
+func (s *Scanner) byteFirstFingerprintErr(ctx context.Context, lib catalog.Library, b *catalog.Book) (string, error) {
 	if !b.IsFolder || len(b.Files) < 2 {
-		return ""
+		return "", nil
 	}
 	first := b.Files[0].RelPath
 	byteFirst, dir := first, path.Dir(first)
@@ -3052,9 +3101,18 @@ func (s *Scanner) byteFirstFingerprint(ctx context.Context, lib catalog.Library,
 		}
 	}
 	if byteFirst == first {
-		return ""
+		return "", nil
 	}
-	return s.fingerprint(ctx, absOf(lib, byteFirst))
+	return metadata.FingerprintErr(ctx, absOf(lib, byteFirst), s.probeTimeout)
+}
+
+// fingerprintUnknown reports whether err, a fingerprint read's
+// (metadata.FingerprintErr), says the file can't be read now rather than how
+// it is: given up on, failed as a share does that a retry may get past
+// (transientFault), or cut short as it was read. Not a lasting refusal (a
+// permission, no regular file), which a retry would only meet again.
+func fingerprintUnknown(err error) bool {
+	return metadata.GaveUp(err) || transientFault(err) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // carryMove migrates a moved book's durable state from oldPath to newPath

@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"maps"
@@ -81,8 +82,8 @@ func TestAScanSkipsAFolderThatDoesNotAnswer(t *testing.T) {
 }
 
 // An audio file's lstat that fails as a share does (EIO, ESTALE: a
-// soft-mounted NFS share; EACCES) says nothing about whether the file is
-// there: its folder is skipped for the run as one whose look was given up on
+// soft-mounted NFS share; ENOTCONN: a FUSE pool; EACCES) says nothing about
+// whether the file is there: its folder is skipped for the run as one whose look was given up on
 // (partial, an unreadable path logged), so a folder book keeps its parts and a
 // single-file book its row. ENOENT is the file gone: the part drops. Not
 // parallel: it swaps lstatAudio.
@@ -96,6 +97,7 @@ func TestAScanKeepsABookWhoseAudioLstatFails(t *testing.T) {
 		{"ESTALE", syscall.ESTALE, 2},
 		{"EACCES", syscall.EACCES, 2},
 		{"EPERM", syscall.EPERM, 2},
+		{"ENOTCONN", syscall.ENOTCONN, 2}, // a FUSE pool that dropped
 		{"ENOENT", syscall.ENOENT, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -146,6 +148,74 @@ func TestAScanKeepsABookWhoseAudioLstatFails(t *testing.T) {
 				t.Errorf("the single-file book after %v = %v, want its row kept", c.err, err)
 			}
 		})
+	}
+}
+
+// bookOnDisk tells a book it can't look at now (an audio file's lstat failing
+// as a share does that a retry may get past) from one it can't check for good
+// (a permission: present, its state kept where it is) and from one gone. Not
+// parallel: it swaps lstatAudio.
+func TestBookOnDiskTellsAShareFaultFromAPermission(t *testing.T) {
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "Author/Book/01.mp3", make([]byte, 1<<10))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, "", slog.Default())
+	part := filepath.Join(root, "Author", "Book", "01.mp3")
+	was := lstatAudio
+	t.Cleanup(func() { lstatAudio = was })
+	for _, c := range []struct {
+		err  error
+		want onDisk
+	}{
+		{nil, diskPresent},
+		{syscall.EIO, diskUnknown},
+		{syscall.ENOTCONN, diskUnknown},
+		{syscall.EACCES, diskPresent},
+		{syscall.ELOOP, diskPresent},
+	} {
+		lstatAudio = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+			if c.err != nil && p == part {
+				return nil, &fs.PathError{Op: "lstat", Path: p, Err: c.err}
+			}
+			return was(ctx, p, timeout)
+		}
+		if got := s.bookOnDisk(ctx, *lib, "Author/Book"); got != c.want {
+			t.Errorf("bookOnDisk with its audio's lstat failing %v = %v, want %v", c.err, got, c.want)
+		}
+	}
+	lstatAudio = was
+	if got := s.bookOnDisk(ctx, *lib, "Author/Gone"); got != diskGone {
+		t.Errorf("bookOnDisk of a path not on disk = %v, want gone", got)
+	}
+}
+
+// A fingerprint missing for a reason a retry may get past (given up on, a
+// share's EIO or ENOTCONN, a read cut short) leaves a move unknown; one
+// refused for good (a permission, no regular file, the file gone) does not.
+func TestFingerprintUnknown(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{metadata.ErrNotAnswered, true},
+		{metadata.ErrReadRefused, true},
+		{&fs.PathError{Op: "read", Err: syscall.EIO}, true},
+		{&fs.PathError{Op: "open", Err: syscall.ENOTCONN}, true},
+		{io.ErrUnexpectedEOF, true},
+		{&fs.PathError{Op: "open", Err: syscall.EACCES}, false},
+		{metadata.ErrNotRegular, false},
+		{&fs.PathError{Op: "open", Err: syscall.ENOENT}, false},
+		{nil, false},
+	} {
+		if got := fingerprintUnknown(c.err); got != c.want {
+			t.Errorf("fingerprintUnknown(%v) = %v, want %v", c.err, got, c.want)
+		}
 	}
 }
 

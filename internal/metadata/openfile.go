@@ -155,7 +155,8 @@ func Fingerprint(ctx context.Context, path string, timeout time.Duration) string
 
 // FingerprintErr is Fingerprint with why it is "": an error GaveUp reports
 // when its open or reads were given up on (refused, or not answered in time),
-// else the open's own (the file gone, no regular file).
+// else the open's own (the file gone, no regular file) or a read's that came
+// back short (EIO).
 func FingerprintErr(ctx context.Context, path string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
 	defer cancel()
@@ -180,6 +181,11 @@ func FingerprintErr(ctx context.Context, path string, timeout time.Duration) (st
 		}
 	}); why != "" {
 		return "", fmt.Errorf("%s: %s: %w", path, why, ErrNotAnswered)
+	}
+	if b.err != nil {
+		// A short read (EIO on a soft-mounted share, the file cut short as it
+		// was read): a hash of what came back is no fingerprint of the file.
+		return "", fmt.Errorf("%s: %w", path, b.err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
