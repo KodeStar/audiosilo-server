@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
+	"slices"
 	"syscall"
 	"time"
 )
@@ -80,4 +82,11 @@ func Control(allowed func(netip.AddrPort) bool) func(network, address string, c 
 // Dialer is a net.Dialer with the guard's Control and a connect timeout.
 func Dialer(allowed func(netip.AddrPort) bool, timeout time.Duration) *net.Dialer {
 	return &net.Dialer{Timeout: timeout, Control: Control(allowed)}
+}
+
+// Downgrade reports whether following a redirect to req, after the requests
+// in via, would step down from https to anything else: the guarded clients'
+// CheckRedirect refuses it, so a fetch begun over https stays on it.
+func Downgrade(req *http.Request, via []*http.Request) bool {
+	return req.URL.Scheme != "https" && slices.ContainsFunc(via, func(r *http.Request) bool { return r.URL.Scheme == "https" })
 }

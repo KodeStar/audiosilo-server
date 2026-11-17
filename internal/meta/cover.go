@@ -67,9 +67,8 @@ func newCoverClient(allowed func(netip.AddrPort) bool) *http.Client {
 			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 				return ErrCoverURL
 			}
-			// Never from https down to http (server#219), as discovery's
-			// artwork fetches refuse it.
-			if req.URL.Scheme == "http" && slices.ContainsFunc(via, func(r *http.Request) bool { return r.URL.Scheme == "https" }) {
+			// Never from https down to http (server#219).
+			if netguard.Downgrade(req, via) {
 				return errCoverDowngrade
 			}
 			return nil

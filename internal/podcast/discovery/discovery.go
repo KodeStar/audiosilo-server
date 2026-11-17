@@ -236,10 +236,8 @@ func checkArtRedirect(req *http.Request, via []*http.Request) error {
 	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 		return errRedirect
 	}
-	for _, prev := range via {
-		if prev.URL.Scheme == "https" && req.URL.Scheme != "https" {
-			return errRedirect
-		}
+	if netguard.Downgrade(req, via) {
+		return errRedirect
 	}
 	return nil
 }
