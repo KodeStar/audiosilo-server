@@ -49,7 +49,7 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 		},
 		"API key delete": func() func() error {
 			u := user()
-			_, meta, err := s.IssueAPIToken(ctx, u.ID, "key")
+			_, meta, err := s.IssueAPIToken(ctx, u.ID, 0, "key")
 			if err != nil {
 				t.Fatal(err)
 			}

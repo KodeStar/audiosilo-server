@@ -26,7 +26,7 @@ func mintSamKinds(t *testing.T, c *castEnv) samKinds {
 	}
 	k := samKinds{phone: c.samTok, laptop: laptop,
 		castPhone: c.castToken(t, cradleBook), castLaptop: c.castTokenFrom(t, laptop, cradleBook)}
-	if k.key, _, err = c.auth.IssueAPIToken(ctx, c.sam, "script"); err != nil {
+	if k.key, _, err = c.auth.IssueAPIToken(ctx, c.sam, 0, "script"); err != nil {
 		t.Fatal(err)
 	}
 	if k.feed, _, err = c.auth.IssueFeedToken(ctx, c.sam, 0); err != nil {
@@ -304,7 +304,8 @@ func TestSignOutEverywhereRoute(t *testing.T) {
 // password change and the admin's Sign out everywhere end the household
 // members' sessions made on the owner's other devices, on the very next
 // request; the member on the device the change was made on stays, and so do
-// another owner's members. A refused change ends nothing.
+// another owner's members. With a sign-in go the API keys the member made from
+// it (D5, server#361). A refused change ends nothing.
 func TestOwnersPasswordAndSignOutEndMembersSessions(t *testing.T) {
 	t.Parallel()
 	m := newMemberEnv(t)
@@ -315,13 +316,16 @@ func TestOwnersPasswordAndSignOutEndMembersSessions(t *testing.T) {
 	}
 	_, onLaptop := m.kid(t, laptop, "Evie")
 	_, onPhone := m.grownup(t, m.adamTok, "Ellis", "all")
+	_, gusOnLaptop := m.grownup(t, laptop, "Gus", "all")
+	_, keyOnLaptop := m.mintAPIKey(t, gusOnLaptop, "dash")
+	_, keyOnPhone := m.mintAPIKey(t, onPhone, "dash")
 	_, bobs := m.kid(t, m.bobTok, "Kit")
 	status := func(tok string) int {
 		t.Helper()
 		resp, _ := m.do(t, "GET", "/api/v1/me", tok, "")
 		return resp.StatusCode
 	}
-	for _, tok := range []string{onLaptop, onPhone, bobs} {
+	for _, tok := range []string{onLaptop, onPhone, keyOnLaptop, keyOnPhone, bobs} {
 		if s := status(tok); s != http.StatusOK {
 			t.Fatalf("setup: a member's session = %d", s)
 		}
@@ -344,8 +348,14 @@ func TestOwnersPasswordAndSignOutEndMembersSessions(t *testing.T) {
 	if s := status(onLaptop); s != http.StatusUnauthorized {
 		t.Fatalf("the member on the owner's laptop = %d, want 401", s)
 	}
+	if s := status(keyOnLaptop); s != http.StatusUnauthorized {
+		t.Fatalf("a member's API key made on the owner's laptop = %d, want 401", s)
+	}
 	if s := status(onPhone); s != http.StatusOK {
 		t.Fatalf("the member on the phone the change was made on = %d, want 200", s)
+	}
+	if s := status(keyOnPhone); s != http.StatusOK {
+		t.Fatalf("a member's API key made on the phone the change was made on = %d, want 200", s)
 	}
 
 	// Sign out everywhere (nothing kept) ends the member on the phone too.
@@ -355,6 +365,9 @@ func TestOwnersPasswordAndSignOutEndMembersSessions(t *testing.T) {
 	}
 	if s := status(onPhone); s != http.StatusUnauthorized {
 		t.Fatalf("the member on the owner's phone after Sign out everywhere = %d, want 401", s)
+	}
+	if s := status(keyOnPhone); s != http.StatusUnauthorized {
+		t.Fatalf("a member's API key made on the owner's phone after Sign out everywhere = %d, want 401", s)
 	}
 	if s := status(bobs); s != http.StatusOK {
 		t.Fatalf("another owner's member = %d, want 200", s)

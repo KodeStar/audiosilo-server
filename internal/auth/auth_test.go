@@ -162,6 +162,46 @@ func TestCreateAuthenticateUser(t *testing.T) {
 	}
 }
 
+// A username is stored trimmed at create and rename (server#255): sign-in
+// trims what is typed, so " bob " could never sign in as itself. Allowed: the
+// trimmed name, which signs in. Denied: a name of spaces (ErrUsernameRequired)
+// and a padded copy of another account's (ErrUsernameTaken), each changing
+// nothing.
+func TestUsernamesTrimmed(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	bob, err := s.CreateUser(ctx, " bob ", "bob-password", RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bob.Username != "bob" {
+		t.Fatalf("created %q, want bob", bob.Username)
+	}
+	if _, err := s.Authenticate(ctx, "bob", "bob-password"); err != nil {
+		t.Fatalf("the trimmed name doesn't sign in: %v", err)
+	}
+	if _, err := s.CreateUser(ctx, "\t ", "", RoleUser); !errors.Is(err, ErrUsernameRequired) {
+		t.Fatalf("create with a blank name = %v, want ErrUsernameRequired", err)
+	}
+	if _, err := s.CreateUser(ctx, "bob  ", "", RoleUser); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("create with a padded taken name = %v, want ErrUsernameTaken", err)
+	}
+	blank := "  "
+	if err := s.UpdateUser(ctx, bob.ID, UserChanges{Username: &blank}); !errors.Is(err, ErrUsernameRequired) {
+		t.Fatalf("rename to spaces = %v, want ErrUsernameRequired", err)
+	}
+	padded := "  robert "
+	if err := s.UpdateUser(ctx, bob.ID, UserChanges{Username: &padded}); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := s.GetUser(ctx, bob.ID); u.Username != "robert" {
+		t.Fatalf("renamed to %q, want robert", u.Username)
+	}
+	if padded != "  robert " {
+		t.Fatalf("UpdateUser changed the caller's string to %q", padded)
+	}
+}
+
 // TestPasswordLengthBoundary pins the MinPasswordLen boundary through both
 // CreateUser and SetPassword: a 7-char password is rejected, an 8-char one is
 // accepted, and an empty password is allowed (password-less non-admin).
@@ -846,7 +886,7 @@ func TestAPITokenLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secret, meta, err := s.IssueAPIToken(ctx, user.ID, "cron job")
+	secret, meta, err := s.IssueAPIToken(ctx, user.ID, 0, "cron job")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -907,7 +947,7 @@ func TestRevokeTokenByIDScoping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, meta, err := s.IssueAPIToken(ctx, owner.ID, "key")
+	_, meta, err := s.IssueAPIToken(ctx, owner.ID, 0, "key")
 	if err != nil {
 		t.Fatal(err)
 	}

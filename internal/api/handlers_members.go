@@ -34,6 +34,7 @@ const (
 	codeInvalidName        = "invalid_name"
 	codeInvalidCollections = "invalid_collections"
 	codeInvalidKeepMembers = "invalid_keep_members"
+	codeInvalidDelMembers  = "invalid_delete_members"
 	codeMemberFields       = "member_fields_required"
 	codeOwnerIsMember      = "owner_is_member"
 	codeOwnerIsDemo        = "owner_is_demo"

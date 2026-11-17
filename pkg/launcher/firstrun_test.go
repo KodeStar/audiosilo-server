@@ -9,11 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/backup"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
@@ -96,7 +98,7 @@ func TestNoSignInHintWithoutAPrintedPassword(t *testing.T) {
 // command outside one.
 func TestWriteSignInHint(t *testing.T) {
 	var out bytes.Buffer
-	writeSignInHint(&out, "http://nas:8080", "admin", "audiosilo --data /data reset-admin", "docker exec -u 99:100 <container> ")
+	writeSignInHint(&out, "http://nas:8080", "admin", "audiosilo --data /data reset-admin", "", "docker exec -u 99:100 <container> ")
 	for _, want := range []string{
 		`Sign in at http://nas:8080/admin as "admin"`,
 		"the container's log",
@@ -107,9 +109,18 @@ func TestWriteSignInHint(t *testing.T) {
 		}
 	}
 	out.Reset()
-	writeSignInHint(&out, "https://books.example.com", "admin", "/opt/as/audiosilo --data /srv/as reset-admin", "")
-	if s := out.String(); strings.Contains(s, "docker") || !strings.Contains(s, "\n   /opt/as/audiosilo --data /srv/as reset-admin\n") {
+	writeSignInHint(&out, "https://books.example.com", "admin", "/opt/as/audiosilo --data /srv/as reset-admin", "", "")
+	if s := out.String(); strings.Contains(s, "docker") ||
+		!strings.Contains(s, " Lost it? Set a new one:\n   /opt/as/audiosilo --data /srv/as reset-admin\n") {
 		t.Errorf("hint outside a container:\n%s", s)
+	}
+	// A command written for one shell names it: cmd.exe takes neither
+	// PowerShell's & nor its single quotes.
+	out.Reset()
+	command := `& 'C:\Program Files\AudioSilo\audiosilo.exe' --data C:\AudioSilo reset-admin`
+	writeSignInHint(&out, "http://localhost:8080", "admin", command, "PowerShell", "")
+	if s := out.String(); !strings.Contains(s, " Lost it? Set a new one (in PowerShell):\n   "+command+"\n") {
+		t.Errorf("hint for a quoted Windows binary:\n%s", s)
 	}
 }
 
@@ -154,21 +165,58 @@ func TestResetAdminCommand(t *testing.T) {
 		{"unknown binary", "/data", "", onPath, "audiosilo --data /data reset-admin"},
 		{"a space", "/srv/audio silo", exe, onPath, "audiosilo --data '/srv/audio silo' reset-admin"},
 	} {
-		if got := resetAdminCommand(tc.data, tc.exe, tc.look); got != tc.want {
-			t.Errorf("%s: resetAdminCommand = %q, want %q", tc.name, got, tc.want)
+		got, shell := resetAdminCommand("linux", tc.data, tc.exe, tc.look)
+		if got != tc.want || shell != "" {
+			t.Errorf("%s: resetAdminCommand = %q for %q, want %q for any shell", tc.name, got, shell, tc.want)
 		}
 	}
 }
 
-// On Windows a path's backslashes are plain and a word with a space takes
-// double quotes: cmd.exe reads a single quote as part of the word.
+// On Windows a word that needs quoting is written for PowerShell, and the
+// command says so: single quotes, which keep a $ as it is, and the call
+// operator & before a quoted binary path (a quoted first word is a string
+// there, not a command). A line of plain words names no shell: cmd.exe reads
+// it the same.
+func TestResetAdminCommandOnWindows(t *testing.T) {
+	notOnPath := func(string) (string, error) { return "", errors.New("not found") }
+	for _, tc := range []struct{ exe, data, want, shell string }{
+		{`C:\Program Files\AudioSilo\audiosilo.exe`, `C:\Program Files\AudioSilo\data`,
+			`& 'C:\Program Files\AudioSilo\audiosilo.exe' --data 'C:\Program Files\AudioSilo\data' reset-admin`, "PowerShell"},
+		{`C:\AudioSilo\audiosilo.exe`, `D:\$Books\data`,
+			`C:\AudioSilo\audiosilo.exe --data 'D:\$Books\data' reset-admin`, "PowerShell"},
+		{`C:\Users\O'Neil\audiosilo.exe`, `C:\AudioSilo\data`,
+			`& 'C:\Users\O''Neil\audiosilo.exe' --data C:\AudioSilo\data reset-admin`, "PowerShell"},
+		{`C:\AudioSilo\audiosilo.exe`, `C:\AudioSilo\data`, `C:\AudioSilo\audiosilo.exe --data C:\AudioSilo\data reset-admin`, ""},
+	} {
+		got, shell := resetAdminCommand("windows", tc.data, tc.exe, notOnPath)
+		if got != tc.want || shell != tc.shell {
+			t.Errorf("resetAdminCommand(windows, %q, %q) = %q for %q, want %q for %q", tc.exe, tc.data, got, shell, tc.want, tc.shell)
+		}
+	}
+}
+
+// On Windows a path's backslashes are plain, and a word that isn't plain takes
+// PowerShell's single quotes, where nothing expands: a $ or a % stays as it is
+// (double quotes would expand the first in PowerShell, and cmd.exe the second),
+// and a single quote inside is doubled, the typographic ones PowerShell reads
+// as one included.
 func TestQuoteWord(t *testing.T) {
 	for _, tc := range []struct{ goos, in, want string }{
 		{"linux", "/data", "/data"},
 		{"linux", "/srv/audio silo", "'/srv/audio silo'"},
 		{"linux", "/srv/it's", `'/srv/it'\''s'`},
 		{"windows", `C:\AudioSilo\audiosilo.exe`, `C:\AudioSilo\audiosilo.exe`},
-		{"windows", `C:\Program Files\AudioSilo\data`, `"C:\Program Files\AudioSilo\data"`},
+		{"windows", `C:\Program Files\AudioSilo\data`, `'C:\Program Files\AudioSilo\data'`},
+		{"windows", `D:\$Recycle\data`, `'D:\$Recycle\data'`},
+		{"windows", `D:\100%\data`, `'D:\100%\data'`},
+		{"windows", "D:\\a`b", "'D:\\a`b'"},
+		{"windows", `D:\Tom & Co (old);x\data`, `'D:\Tom & Co (old);x\data'`},
+		{"windows", `D:\Kate's books`, `'D:\Kate''s books'`},
+		{"windows", "D:\\Kate\u2019s books", "'D:\\Kate\u2019\u2019s books'"},
+		{"windows", "D:\\\u2018a\u201ab\u201bc", "'D:\\\u2018\u2018a\u201a\u201ab\u201b\u201bc'"},
+		// PowerShell splits a bare word at a comma and reads a leading @ as a splat.
+		{"windows", `D:\Books,Audio\data`, `'D:\Books,Audio\data'`},
+		{"windows", `@data`, `'@data'`},
 	} {
 		if got := quoteWord(tc.goos, tc.in); got != tc.want {
 			t.Errorf("quoteWord(%s, %q) = %q, want %q", tc.goos, tc.in, got, tc.want)
@@ -192,7 +240,7 @@ func passwordIn(t *testing.T, out string) string {
 // does (backup.RequestRestore's marker file).
 func writeRestoreMarker(t *testing.T, dir, body string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, "restore.json"), []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(backup.MarkerPath(dir), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -269,9 +317,9 @@ func TestResetAdminRevokesTheFirstRunCode(t *testing.T) {
 	}
 }
 
-// A revocation that fails after the password is set still prints the
-// password (the old one is gone) and then reports the failure.
-func TestResetAdminPrintsThePasswordWhenTheRevokeFails(t *testing.T) {
+// The first-run code goes before the password is set, so a revocation that
+// fails refuses the reset with nothing printed and the old password working.
+func TestResetAdminWhenTheRevokeFails(t *testing.T) {
 	ctx := context.Background()
 	dir, running := resetDir(t, "admin")
 	admin, err := running.Authenticate(ctx, "admin", "old-password-admin")
@@ -292,11 +340,62 @@ func TestResetAdminPrintsThePasswordWhenTheRevokeFails(t *testing.T) {
 	}
 	var out bytes.Buffer
 	err = ResetAdmin(ctx, dir, "", &out)
-	if err == nil || !strings.Contains(err.Error(), "revoking the first-run auth code failed") {
+	if err == nil || !strings.Contains(err.Error(), "revoking the first-run auth code") {
 		t.Fatalf("err = %v, want the revoke's failure", err)
 	}
-	if _, err := running.Authenticate(ctx, "admin", passwordIn(t, out.String())); err != nil {
-		t.Errorf("the printed password doesn't sign in: %v", err)
+	if out.Len() > 0 {
+		t.Errorf("printed %q on a refusal", out.String())
+	}
+	if _, err := running.Authenticate(ctx, "admin", "old-password-admin"); err != nil {
+		t.Errorf("the password changed on a refused reset: %v", err)
+	}
+}
+
+// A first-run code the admin rotated in the console was never printed (D4,
+// server#391): reset-admin finds the printed one by the id and stamp the first
+// start recorded, so the rotated code keeps pairing and the answer says
+// nothing of a code. An install whose row names no code (from before it did)
+// still loses its printed code by its label and shape.
+func TestResetAdminKeepsARotatedFirstRunCode(t *testing.T) {
+	ctx := context.Background()
+	path := storetest.Path(t)
+	db, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	clock := time.Now()
+	running := auth.New(db, func() time.Time { return clock })
+	var banner bytes.Buffer
+	if _, err := ensureAdmin(ctx, config.Default(t.TempDir()), running, &banner, discardLog()); err != nil {
+		t.Fatal(err)
+	}
+	m := codeLine.FindStringSubmatch(banner.String())
+	if m == nil {
+		t.Fatalf("no auth code in the banner:\n%s", banner.String())
+	}
+	admin, err := running.ResolveAuthCode(ctx, m[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	codes, err := running.ListAuthCodes(ctx, admin.User.ID)
+	if err != nil || len(codes) != 1 {
+		t.Fatalf("codes = %+v, %v", codes, err)
+	}
+	clock = clock.Add(time.Hour)
+	rotated, err := running.RotateAuthCode(ctx, codes[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := ResetAdmin(ctx, filepath.Dir(path), "", &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "auth code") {
+		t.Errorf("a reset that kept the rotated code speaks of one:\n%s", out.String())
+	}
+	if _, err := running.ResolveAuthCode(ctx, rotated.Code); err != nil {
+		t.Errorf("reset-admin revoked a code the admin rotated: %v", err)
 	}
 }
 
@@ -566,6 +665,47 @@ func TestResetAdminRefusals(t *testing.T) {
 		}
 	})
 
+	// --data naming the database file, not its folder: no database there,
+	// never a restore marker that doesn't read (whose advice is to start the
+	// server).
+	t.Run("the database file as the folder", func(t *testing.T) {
+		dir, _ := resetDir(t, "admin")
+		err := ResetAdmin(ctx, filepath.Join(dir, "audiosilo.db"), "", &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "no database at") || strings.Contains(err.Error(), "restore") {
+			t.Fatalf("err = %v, want no database", err)
+		}
+	})
+
+	t.Run("a folder that isn't there", func(t *testing.T) {
+		err := ResetAdmin(ctx, filepath.Join(t.TempDir(), "missing"), "", &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "no database at") {
+			t.Fatalf("err = %v, want no database", err)
+		}
+	})
+
+	// A folder this user can't reach (one above it closed to them: the
+	// service's own) is reported as that, never as the wrong folder, which
+	// would send the admin looking for another instead of running it as the
+	// server's user.
+	t.Run("a folder this user can't reach", func(t *testing.T) {
+		if runtime.GOOS == "windows" || os.Getuid() == 0 {
+			t.Skip("needs a folder mode that closes it to this user")
+		}
+		closed := filepath.Join(t.TempDir(), "service")
+		dir := filepath.Join(closed, "data")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(closed, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(closed, 0o700) }) //nolint:gosec // the test's own folder, reopened for its removal
+		err := ResetAdmin(ctx, dir, "", &bytes.Buffer{})
+		if !errors.Is(err, os.ErrPermission) || strings.Contains(err.Error(), "no database at") {
+			t.Fatalf("err = %v, want permission denied", err)
+		}
+	})
+
 	// A file that isn't an AudioSilo database is refused as it is, not
 	// migrated into one.
 	t.Run("an empty file", func(t *testing.T) {
@@ -607,20 +747,75 @@ func TestResetAdminRefusals(t *testing.T) {
 		})
 	}
 
-	t.Run("a disabled admin", func(t *testing.T) {
+	// The restore marker is read before the database: a damaged database a
+	// waiting restore would replace says so, not "reading the database".
+	t.Run("a restore waiting beside a damaged database", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "audiosilo.db"), []byte("not a database"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		writeRestoreMarker(t, dir, `{"name":"audiosilo-2026-11-14.db"}`)
+		err := ResetAdmin(ctx, dir, "", &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "a restore of audiosilo-2026-11-14.db is waiting") {
+			t.Fatalf("err = %v, want the restore waiting", err)
+		}
+	})
+
+	// A disabled admin can't sign in with a new password: it doesn't count
+	// toward "the only admin" (allowed: the enabled one is reset, unnamed),
+	// and when every admin is disabled there is none to reset (denied).
+	t.Run("a disabled admin beside the only enabled one", func(t *testing.T) {
 		dir, running := resetDir(t, "admin", "alex")
-		alex, err := running.Authenticate(ctx, "alex", "old-password-alex")
+		alex := disable(t, running, "alex")
+		var out bytes.Buffer
+		if err := ResetAdmin(ctx, dir, "", &out); err != nil || !strings.Contains(out.String(), `"admin"`) {
+			t.Fatalf("err = %v, out:\n%s; want admin reset", err, out.String())
+		}
+		if err := running.CheckPassword(ctx, alex.ID, "old-password-alex"); err != nil {
+			t.Errorf("the disabled admin's password changed: %v", err)
+		}
+	})
+	t.Run("every admin disabled", func(t *testing.T) {
+		dir, running := resetDir(t, "admin", "alex")
+		disable(t, running, "alex")
+		// The last enabled admin can't be disabled through auth (its guard):
+		// as another process's write.
+		db, err := store.Open(ctx, filepath.Join(dir, "audiosilo.db"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		disabled := true
-		if err := running.UpdateUser(ctx, alex.ID, auth.UserChanges{Disabled: &disabled}); err != nil {
+		t.Cleanup(func() { _ = db.Close() })
+		if _, err := db.ExecContext(ctx, `UPDATE users SET disabled = 1 WHERE username = 'admin'`); err != nil {
 			t.Fatal(err)
 		}
+		err = ResetAdmin(ctx, dir, "", &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "every admin account is disabled") {
+			t.Fatalf("err = %v, want the every-admin-disabled refusal", err)
+		}
+	})
+
+	t.Run("a disabled admin", func(t *testing.T) {
+		dir, running := resetDir(t, "admin", "alex")
+		disable(t, running, "alex")
 		if err := ResetAdmin(ctx, dir, "alex", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "is disabled") {
 			t.Fatalf("err = %v, want the disabled refusal", err)
 		}
 	})
+}
+
+// disable disables the account named (its password is resetDir's) and
+// returns it.
+func disable(t *testing.T, authSvc *auth.Service, name string) *auth.User {
+	t.Helper()
+	u, err := authSvc.Authenticate(context.Background(), name, "old-password-"+name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := true
+	if err := authSvc.UpdateUser(context.Background(), u.ID, auth.UserChanges{Disabled: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	return u
 }
 
 // Verification C1's own sequence, on a running server's handle: a console

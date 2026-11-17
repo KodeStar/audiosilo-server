@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -61,7 +62,7 @@ func mintEveryKind(t *testing.T, s *Service, ctx context.Context, name string) e
 	if k.castLaptop, _, err = s.IssueCastToken(ctx, admin.ID, laptopID, 3, "Author/Book"); err != nil {
 		t.Fatal(err)
 	}
-	if k.key, _, err = s.IssueAPIToken(ctx, admin.ID, "script"); err != nil {
+	if k.key, _, err = s.IssueAPIToken(ctx, admin.ID, 0, "script"); err != nil {
 		t.Fatal(err)
 	}
 	k.feed = mustFeed(t, s, ctx, admin.ID, k.phoneID)
@@ -402,4 +403,232 @@ func TestNoPasswordChangeKeepsMembers(t *testing.T) {
 	if _, _, err := s.lookupToken(ctx, hashSecret(h.pairing), KindPairing); err != nil {
 		t.Errorf("an edit without a password ended a member's pairing code: %v", err)
 	}
+}
+
+// grownUpCredentials is an owner's grown-up member's API keys and calendar
+// links: made from a sign-in on the owner's laptop, on the owner's phone (the
+// device kept), and on the member's own device, plus another member's link made
+// on their own device.
+type grownUpCredentials struct {
+	owner                             *User
+	phoneID                           int64
+	keyOnLaptop, keyOnPhone, keyOwn   string
+	feedOnLaptop, otherMembersOwnFeed string
+}
+
+func mintGrownUpCredentials(t *testing.T, s *Service, ctx context.Context) grownUpCredentials {
+	t.Helper()
+	owner := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	_, phone := mustSession(t, s, ctx, owner.ID, "phone")
+	_, laptop := mustSession(t, s, ctx, owner.ID, "laptop")
+	gus := mustMember(t, s, ctx, owner.ID, NewMember{Name: "Gus", Kind: MemberGrownup, Access: MemberAll})
+	hal := mustMember(t, s, ctx, owner.ID, NewMember{Name: "Hal", Kind: MemberGrownup, Access: MemberAll})
+	// A member's session made on one of the owner's devices, or on the member's
+	// own (no created_on_token_id), as the session id a request carries.
+	sessionOn := func(member, on int64) int64 {
+		t.Helper()
+		if on == 0 {
+			_, id := mustSession(t, s, ctx, member, "own phone")
+			return id
+		}
+		tok, _, err := s.MemberSession(ctx, owner.ID, member, "here", on)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, cred, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cred.ID
+	}
+	key := func(member, session int64) string {
+		t.Helper()
+		k, _, err := s.IssueAPIToken(ctx, member, session, "dash")
+		if err != nil {
+			t.Fatal(err)
+		}
+		warm(t, s, k, KindSession, KindAPI)
+		return k
+	}
+	gusLaptop := sessionOn(gus.ID, laptop)
+	return grownUpCredentials{
+		owner:               owner,
+		phoneID:             phone,
+		keyOnLaptop:         key(gus.ID, gusLaptop),
+		keyOnPhone:          key(gus.ID, sessionOn(gus.ID, phone)),
+		keyOwn:              key(gus.ID, sessionOn(gus.ID, 0)),
+		feedOnLaptop:        mustFeed(t, s, ctx, gus.ID, gusLaptop),
+		otherMembersOwnFeed: mustFeed(t, s, ctx, hal.ID, sessionOn(hal.ID, 0)),
+	}
+}
+
+func (g grownUpCredentials) check(t *testing.T, s *Service, ctx context.Context, phoneKept bool) {
+	t.Helper()
+	want := func(what string, live bool, err error) { t.Helper(); wantLive(t, what, live, err) }
+	key := func(k string) error {
+		_, _, err := s.ResolveRequest(ctx, k, Presence{}, KindSession, KindAPI)
+		return err
+	}
+	feed := func(f string) error { _, _, err := s.ResolveRequest(ctx, f, Presence{}, KindFeed); return err }
+	want("the member's key made on the owner's laptop", false, key(g.keyOnLaptop))
+	want("the member's calendar link made on the owner's laptop", false, feed(g.feedOnLaptop))
+	want("the member's key made on the kept phone", phoneKept, key(g.keyOnPhone))
+	want("the member's key made on their own device", true, key(g.keyOwn))
+	want("another member's link made on their own device", true, feed(g.otherMembersOwnFeed))
+}
+
+// Security-critical (D5, server#361): the owner's password change ends the API
+// keys and calendar links their grown-up members made while signed in on the
+// owner's other devices, as it ends those sign-ins; what a member made on the
+// device kept, or on their own device, stays.
+func TestPasswordChangeEndsMembersKeysAndLinks(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	g := mintGrownUpCredentials(t, s, ctx)
+	if err := s.SetPassword(ctx, g.owner.ID, "a-new-password", g.phoneID); err != nil {
+		t.Fatal(err)
+	}
+	g.check(t, s, ctx, true)
+}
+
+// Security-critical (D5): Sign out everywhere does the same, the device kept
+// or none; an edit with no password ends none of them.
+func TestSignOutEverywhereEndsMembersKeysAndLinks(t *testing.T) {
+	t.Parallel()
+	for _, keepPhone := range []bool{false, true} {
+		s, ctx := newTestService(t)
+		g := mintGrownUpCredentials(t, s, ctx)
+		keep := int64(0)
+		if keepPhone {
+			keep = g.phoneID
+		}
+		if _, err := s.SignOutEverywhere(ctx, g.owner.ID, keep); err != nil {
+			t.Fatal(err)
+		}
+		g.check(t, s, ctx, keepPhone)
+	}
+	s, ctx := newTestService(t)
+	g := mintGrownUpCredentials(t, s, ctx)
+	if err := s.UpdateUser(ctx, g.owner.ID, UserChanges{CanAddMembers: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{g.keyOnLaptop, g.keyOnPhone, g.keyOwn} {
+		if _, _, err := s.ResolveRequest(ctx, k, Presence{}, KindSession, KindAPI); err != nil {
+			t.Errorf("an edit without a password ended a member's key: %v", err)
+		}
+	}
+	if _, _, err := s.ResolveRequest(ctx, g.feedOnLaptop, Presence{}, KindFeed); err != nil {
+		t.Errorf("an edit without a password ended a member's link: %v", err)
+	}
+}
+
+// Security-critical (D5): a member's request that passed the route's check just
+// before the owner's Sign out everywhere committed mints nothing from the
+// sign-in that ended (madeOn, inside the mint's own write): a key or link made
+// then would be made after the pass that ends them, and outlive it. Denied: a
+// key and a link from the ended sign-in. Allowed: the link the refused mint
+// would have replaced keeps working, and both mint from the member's own
+// device, still signed in.
+func TestMintFromAnEndedSessionRefused(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	owner := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	_, laptop := mustSession(t, s, ctx, owner.ID, "laptop")
+	gus := mustMember(t, s, ctx, owner.ID, NewMember{Name: "Gus", Kind: MemberGrownup, Access: MemberAll})
+	tok, _, err := s.MemberSession(ctx, owner.ID, gus.ID, "here", laptop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, onLaptop, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, own := mustSession(t, s, ctx, gus.ID, "own phone")
+	link := mustFeed(t, s, ctx, gus.ID, own)
+	if _, err := s.SignOutEverywhere(ctx, owner.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.IssueAPIToken(ctx, gus.ID, onLaptop.ID, "dash"); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("a key from the ended sign-in = %v, want ErrInvalidToken", err)
+	}
+	if _, _, err := s.IssueFeedToken(ctx, gus.ID, onLaptop.ID); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("a link from the ended sign-in = %v, want ErrInvalidToken", err)
+	}
+	if keys, err := s.ListAPITokens(ctx, gus.ID); err != nil || len(keys) != 0 {
+		t.Errorf("keys after the refused mint = %+v, %v; want none", keys, err)
+	}
+	if _, _, err := s.ResolveRequest(ctx, link, Presence{}, KindFeed); err != nil {
+		t.Errorf("the refused mint ended the link it would have replaced: %v", err)
+	}
+	if _, _, err := s.IssueAPIToken(ctx, gus.ID, own, "dash"); err != nil {
+		t.Errorf("a key from the member's own device: %v", err)
+	}
+	mustFeed(t, s, ctx, gus.ID, own)
+}
+
+// Security-critical (D5): signing a device out with its members ends a
+// member's calendar link made there, as it ends their sign-in and API key made
+// there (and as the owner's password change does). Denied: a link ended by the
+// device's sign-out alone, by another device's with its members, another
+// owner's member's link recorded on the device (bad data), and the owner's own.
+// A member whose sign-in there already ended loses the link without being
+// named: a link is no sign-in.
+func TestDeviceRevokeWithMembersEndsALinkMadeThere(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	owner := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	_, laptop := mustSession(t, s, ctx, owner.ID, "laptop")
+	_, tablet := mustSession(t, s, ctx, owner.ID, "tablet")
+	_, phone := mustSession(t, s, ctx, owner.ID, "phone")
+	member := func(of *User, name string) Member {
+		t.Helper()
+		return mustMember(t, s, ctx, of.ID, NewMember{Name: name, Kind: MemberGrownup, Access: MemberAll})
+	}
+	// A member's link minted from a sign-in on device on, with that sign-in's id.
+	linkOn := func(of *User, m Member, on int64) (string, int64) {
+		t.Helper()
+		tok, _, err := s.MemberSession(ctx, of.ID, m.ID, "here", on)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, cred, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return mustFeed(t, s, ctx, m.ID, cred.ID), cred.ID
+	}
+	gus, hal, ivy := member(owner, "Gus"), member(owner, "Hal"), member(owner, "Ivy")
+	gusLink, _ := linkOn(owner, gus, laptop)
+	halLink, _ := linkOn(owner, hal, phone)
+	ivyLink, ivyThere := linkOn(owner, ivy, laptop)
+	if err := s.RevokeOwnDevice(ctx, ivy.ID, ivyThere); err != nil {
+		t.Fatal(err)
+	}
+	kitLink, _ := linkOn(bob, member(bob, "Kit"), laptop)
+	ownLink := mustFeed(t, s, ctx, owner.ID, laptop)
+	live := func(what, link string, want bool) {
+		t.Helper()
+		_, _, err := s.ResolveRequest(ctx, link, Presence{}, KindFeed)
+		wantLive(t, what, want, err)
+	}
+
+	if _, err := s.RevokeOwnDeviceAndMembers(ctx, owner.ID, phone, false); err != nil {
+		t.Fatal(err)
+	}
+	live("a member's link after the device's sign-out without its members", halLink, true)
+	if _, err := s.RevokeOwnDeviceAndMembers(ctx, owner.ID, tablet, true); err != nil {
+		t.Fatal(err)
+	}
+	live("a member's link made on another device", gusLink, true)
+
+	gone, err := s.RevokeOwnDeviceAndMembers(ctx, owner.ID, laptop, true)
+	if err != nil || !slices.Equal(gone, []string{gus.Username}) {
+		t.Fatalf("revoke with members = %v, %v; want only the member signed in there", gone, err)
+	}
+	live("a member's link made on the device", gusLink, false)
+	live("the link of a member whose sign-in there had ended", ivyLink, false)
+	live("a member's link made on a device signed out without its members", halLink, true)
+	live("another owner's member's link", kitLink, true)
+	live("the owner's own link", ownLink, true)
 }

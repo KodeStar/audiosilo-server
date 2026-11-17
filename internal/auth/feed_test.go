@@ -50,7 +50,7 @@ func TestFeedTokenOnlyOnTheFeed(t *testing.T) {
 	}
 	// And no other credential of the person's is a feed token.
 	sess, _ := s.IssueToken(ctx, sam.ID, KindSession, "phone", 0)
-	key, _, _ := s.IssueAPIToken(ctx, sam.ID, "cron")
+	key, _, _ := s.IssueAPIToken(ctx, sam.ID, 0, "cron")
 	pairing, _ := s.IssueToken(ctx, sam.ID, KindPairing, "", 10*time.Minute)
 	for name, secret := range map[string]string{"session": sess, "api key": key, "pairing": pairing} {
 		if _, _, err := s.ResolveRequest(ctx, secret, Presence{}, KindFeed); !errors.Is(err, ErrInvalidToken) {

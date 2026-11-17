@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/subtle"
 	"net/http"
+	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/web"
@@ -77,7 +78,8 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "invalid setup token")
 		return
 	}
-	if req.Username == "" {
+	// No name (or only spaces, which CreateUser trims away) is the default.
+	if strings.TrimSpace(req.Username) == "" {
 		req.Username = "admin"
 	}
 	// CreateUser enforces the password rules (admins must have one). The admin

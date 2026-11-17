@@ -66,8 +66,9 @@ func TestSetupWizardAccountOnly(t *testing.T) {
 		t.Fatal("a refused setup created an admin")
 	}
 
-	code, b := do("POST", "/setup", `{"token":"`+tok+`","username":"boss","password":"longenough"}`)
-	if code != http.StatusCreated || !strings.Contains(b, `"user"`) || strings.Contains(b, `"library"`) {
+	// A name of spaces is no name: the default "admin", never 400.
+	code, b := do("POST", "/setup", `{"token":"`+tok+`","username":"  ","password":"longenough"}`)
+	if code != http.StatusCreated || !strings.Contains(b, `"username":"admin"`) || strings.Contains(b, `"library"`) {
 		t.Fatalf("POST /setup account only = %d %s, want 201 with the user and no library", code, b)
 	}
 	if ok, _ := authSvc.AdminExists(ctx); !ok {

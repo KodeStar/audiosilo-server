@@ -229,7 +229,7 @@ func TestMembers_KindChangeClearsCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, _ := s.IssueToken(ctx, ellis.ID, KindSession, "Ellis's phone", 0)
-	key, _, _ := s.IssueAPIToken(ctx, ellis.ID, "dash")
+	key, _, _ := s.IssueAPIToken(ctx, ellis.ID, 0, "dash")
 	pairing, _ := s.IssueToken(ctx, ellis.ID, KindPairing, "", 10*time.Minute)
 	if _, err := s.GenerateRecoveryCode(ctx, ellis.ID); err != nil {
 		t.Fatal(err)
@@ -374,6 +374,13 @@ func TestMembers_SignIns(t *testing.T) {
 	_, pc2, _ := s.ResolveRequest(ctx, phone2, Presence{}, KindSession)
 	e2, _, _ := s.MemberSession(ctx, adam.ID, evie.ID, "phone 2", pc2.ID)
 	l2, _, _ := s.MemberSession(ctx, adam.ID, ellis.ID, "phone 2", pc2.ID)
+	// An API key Ellis made while signed in there records the phone too
+	// (IssueAPIToken's madeOn), so it goes with the device.
+	_, l2Cred, _ := s.ResolveRequest(ctx, l2, Presence{}, KindSession)
+	l2Key, _, err := s.IssueAPIToken(ctx, ellis.ID, l2Cred.ID, "dash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	gone, err = s.RevokeOwnDeviceAndMembers(ctx, adam.ID, pc2.ID, true)
 	if err != nil || !slices.Equal(gone, []string{ellis.Username, evie.Username}) {
 		t.Fatalf("revoke with members = %v %v", gone, err)
@@ -382,6 +389,9 @@ func TestMembers_SignIns(t *testing.T) {
 		if _, err := s.ResolveToken(ctx, tok, KindSession); !errors.Is(err, ErrInvalidToken) {
 			t.Error("member token made on the phone survived")
 		}
+	}
+	if _, err := s.ResolveToken(ctx, l2Key, KindAPI); !errors.Is(err, ErrInvalidToken) {
+		t.Error("a member's API key made on the phone survived its sign-out")
 	}
 	for _, tok := range []string{evieElsewhere, evieHere, ellisHere, bobKidTok} {
 		if _, err := s.ResolveToken(ctx, tok, KindSession); err != nil {
@@ -439,7 +449,7 @@ func TestMembers_AdminAssign(t *testing.T) {
 	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
 	demo, _ := s.CreateDemoUser(ctx, "demo_1")
 	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
-	key, _, _ := s.IssueAPIToken(ctx, bob.ID, "dash")
+	key, _, _ := s.IssueAPIToken(ctx, bob.ID, 0, "dash")
 
 	for name, c := range map[string]struct {
 		id, owner int64
@@ -621,7 +631,7 @@ func TestMembers_KidRefusedInTheWrite(t *testing.T) {
 	evie := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll})
 	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
 	mint := map[string]func(id int64) error{
-		"API key":       func(id int64) error { _, _, err := s.IssueAPIToken(ctx, id, "dash"); return err },
+		"API key":       func(id int64) error { _, _, err := s.IssueAPIToken(ctx, id, 0, "dash"); return err },
 		"recovery code": func(id int64) error { _, err := s.GenerateRecoveryCode(ctx, id); return err },
 		"own pairing":   func(id int64) error { _, err := s.IssueOwnPairingToken(ctx, id, time.Minute); return err },
 	}

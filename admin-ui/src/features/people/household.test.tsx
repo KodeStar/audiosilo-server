@@ -211,6 +211,8 @@ describe("an owner's page", () => {
     const del = calls.find((c) => c.method === 'DELETE');
     expect(del?.path).toBe('/admin/users/5');
     expect(del?.query.get('keep_members')).toBe('7');
+    // Only the members the dialog showed go (server#222): one added since is kept.
+    expect(del?.query.get('delete_members')).toBe('6');
     expect(
       await screen.findByText(
         '1 household member was deleted too. 1 household member is now an independent account.',
@@ -218,7 +220,7 @@ describe("an owner's page", () => {
     ).toBeInTheDocument();
   });
 
-  it('sends no keep list when every member goes too', async () => {
+  it('lists every member it showed, and no keep list, when every member goes too', async () => {
     const calls = mockFetch(routes({ 'DELETE /admin/users/5': { status: 204 } }));
     renderApp('/people/user/5?tab=account');
     const user = userEvent.setup();
@@ -227,7 +229,9 @@ describe("an owner's page", () => {
     await user.type(within(dialog).getByRole('textbox'), 'adam');
     await user.click(within(dialog).getByRole('button', { name: 'Delete account' }));
     await waitFor(() => expect(calls.some((c) => c.method === 'DELETE')).toBe(true));
-    expect(calls.find((c) => c.method === 'DELETE')?.query.has('keep_members')).toBe(false);
+    const del = calls.find((c) => c.method === 'DELETE');
+    expect(del?.query.has('keep_members')).toBe(false);
+    expect(del?.query.get('delete_members')).toBe('6,7');
   });
 
   it('asks nothing about members for someone without any', async () => {
@@ -237,6 +241,19 @@ describe("an owner's page", () => {
     await user.click(await screen.findByRole('button', { name: 'Delete account' }));
     const dialog = await screen.findByRole('dialog', { name: 'Delete sam?' });
     expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
+  });
+
+  it('deletes someone shown without members with an empty delete list', async () => {
+    const calls = mockFetch(routes({ 'DELETE /admin/users/2': { status: 204 } }));
+    renderApp('/people/user/2?tab=account');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Delete account' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete sam?' });
+    await user.type(within(dialog).getByRole('textbox'), 'sam');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete account' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'DELETE')).toBe(true));
+    // Present and empty: a member added after the page opened is kept, not deleted unseen.
+    expect(calls.find((c) => c.method === 'DELETE')?.query.get('delete_members')).toBe('');
   });
 });
 

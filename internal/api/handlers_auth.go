@@ -195,14 +195,7 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	rc, err := a.auth.ResolveAuthCode(r.Context(), req.Code)
 	if err != nil {
 		a.redeemLimiter.Fail(ip)
-		switch {
-		case errors.Is(err, auth.ErrCodeExhausted):
-			writeErrorCode(w, http.StatusUnauthorized, codeInviteUsed, "invite already used on all its devices - ask for a new invite")
-		case errors.Is(err, auth.ErrCodeExpired):
-			writeErrorCode(w, http.StatusUnauthorized, codeInviteExpired, "invite has expired - ask for a new invite")
-		default:
-			writeError(w, http.StatusUnauthorized, "invalid or expired auth code")
-		}
+		writeInviteError(w, err, "invalid or expired auth code")
 		return
 	}
 	a.redeemLimiter.Reset(ip)
@@ -221,6 +214,19 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	payload.UsesRemaining = rc.UsesRemaining()
 	payload.Admin = rc.User.Role == auth.RoleAdmin
 	writeJSON(w, http.StatusOK, payload)
+}
+
+// writeInviteError answers a refused code or pairing token: a 401 naming an
+// invite that is used up or expired, else the plain fallback message.
+func writeInviteError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, auth.ErrCodeExhausted):
+		writeErrorCode(w, http.StatusUnauthorized, codeInviteUsed, "invite already used on all its devices - ask for a new invite")
+	case errors.Is(err, auth.ErrCodeExpired):
+		writeErrorCode(w, http.StatusUnauthorized, codeInviteExpired, "invite has expired - ask for a new invite")
+	default:
+		writeError(w, http.StatusUnauthorized, fallback)
+	}
 }
 
 // handleExchange turns a pairing token (scanned from a QR) into a durable,
@@ -246,14 +252,7 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	u, codeKind, err := a.auth.ConsumePairing(r.Context(), req.PairingToken)
 	if err != nil {
 		a.redeemLimiter.Fail(ip)
-		switch {
-		case errors.Is(err, auth.ErrCodeExhausted):
-			writeError(w, http.StatusUnauthorized, "invite already used on all its devices - ask for a new invite")
-		case errors.Is(err, auth.ErrCodeExpired):
-			writeError(w, http.StatusUnauthorized, "invite has expired - ask for a new invite")
-		default:
-			writeError(w, http.StatusUnauthorized, "invalid or expired pairing token")
-		}
+		writeInviteError(w, err, "invalid or expired pairing token")
 		return
 	}
 	a.redeemLimiter.Reset(ip)
@@ -436,9 +435,12 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 // empty password so a user can't lock themselves out. Refused for demo accounts.
 // Changing an existing password ends the user's other sessions (their cast tokens
 // with them), keeping the caller's, and their open pairing codes and recovery
-// code; API keys, the calendar feed token and Bridge tokens stay (auth.endSessions).
+// code, and their household members' sign-ins, API keys and calendar links
+// made on their other devices; their own API keys, calendar feed token and
+// Bridge tokens stay (auth.endSessions).
 // A wrong current password is 401 current_password_incorrect. An admin's change
-// ends the start's first-run hint (auth.NoteOwnPassword).
+// ends the start's first-run hint, and the first-run admin's the printed
+// password and auth code (auth.UpdateUser's notePasswordSet).
 func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return
@@ -477,13 +479,6 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		}
 		a.writeUserError(w, err, "could not update password")
 		return
-	}
-	// An admin who set their own password holds it: the start's hint ends,
-	// and the first-run admin's printed password is gone (auth/firstrun.go).
-	if full.Role == auth.RoleAdmin {
-		if err := a.auth.NoteOwnPassword(r.Context(), full.ID); err != nil {
-			a.log.Warn("noting the admin's own password failed", "err", err)
-		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -543,6 +538,19 @@ func denyAPIKey(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+// writeSessionEnded answers 401, as the auth middleware does, for a credential
+// mint that auth refused inside its own write because the request's session was
+// signed out after the middleware checked it (auth.ErrInvalidToken from
+// auth.madeOn: a password change or Sign out everywhere committed in between),
+// and reports whether it did.
+func writeSessionEnded(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, auth.ErrInvalidToken) {
+		return false
+	}
+	writeError(w, http.StatusUnauthorized, "invalid or expired token")
+	return true
 }
 
 // gateSelfService applies the guards shared by the self-service account
@@ -621,8 +629,8 @@ func (a *API) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "label is too long")
 		return
 	}
-	secret, meta, err := a.auth.IssueAPIToken(r.Context(), full.ID, label)
-	if writeKidRefusal(w, err) {
+	secret, meta, err := a.auth.IssueAPIToken(r.Context(), full.ID, credentialFrom(r.Context()).ID, label)
+	if writeKidRefusal(w, err) || writeSessionEnded(w, err) {
 		return
 	}
 	if err != nil {

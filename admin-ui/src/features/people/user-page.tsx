@@ -50,7 +50,7 @@ import { toast } from '@/lib/toast';
 import { AccessRow } from './access-row';
 import { GiveAccessDialog } from './give-access-dialog';
 import { DeleteMembers, HouseholdCard, MemberAccessCard } from './household';
-import { keptMembers, ownerName } from './household-model';
+import { deleteChoice, ownerName } from './household-model';
 import { InviteDialog } from './invite-dialog';
 import { InviteTable } from './invites-page';
 import { PasswordDialog } from './password-dialog';
@@ -217,7 +217,8 @@ function UserView({ detail }: { detail: UserDetail }) {
 /**
  * Signs a person out of every device (server#281): their sessions end, and with
  * them anything they are casting, their open pairing codes and their recovery
- * code; API keys and calendar links stay. Offered while they have a session the
+ * code, and their household members' sign-ins, API keys and calendar links made
+ * on those devices; their own API keys and calendar links stay. Offered while they have a session the
  * console isn't using. The words say how they get back in: a password, their
  * single sign-on (sso, its provider's name) or a new invite, or a kid's owner.
  */
@@ -714,12 +715,12 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
         confirmLabel={t('user.danger.deleteAction')}
         typeToConfirm={u.username}
         onConfirm={async () => {
-          const keep = keptMembers(members, keeping);
-          await api.deleteUser(u.id, keep);
+          const { keep, remove } = deleteChoice(members, keeping);
+          await api.deleteUser(u.id, remove, keep);
           invalidatePeople(qc);
           toast.add({
             title: t('user.danger.deleted', { name: u.username }),
-            description: membersOutcome(members.length - keep.length, keep.length, t),
+            description: membersOutcome(remove.length, keep.length, t),
             type: 'success',
           });
           void navigate({ to: '/people/{-$section}', params: { section: undefined } });

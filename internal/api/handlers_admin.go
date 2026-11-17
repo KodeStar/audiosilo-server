@@ -295,15 +295,6 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load user")
 		return
 	}
-	// An admin who set their own password here (People's password dialog on
-	// their own account) chose it, as POST /auth/password's caller does: the
-	// first-run admin's printed password is gone and the start's hint ends
-	// (auth/firstrun.go). One another admin set for them is not their choice.
-	if req.Password != nil && *req.Password != "" && u.ID == userFrom(r.Context()).ID && u.Role == auth.RoleAdmin {
-		if err := a.auth.NoteOwnPassword(r.Context(), u.ID); err != nil {
-			a.log.Warn("noting the admin's own password failed", "err", err)
-		}
-	}
 	// The password itself never: only that it changed (or was cleared).
 	details := map[string]any{}
 	if req.Username != nil && was != u.Username {
@@ -338,7 +329,12 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 // (sessions, auth codes, progress/bookmarks/notes/history, share grants) via the
 // schema's cascade, and its household members with it except the ids in
 // ?keep_members=<id>,<id> (or the parameter repeated; kept as ordinary
-// accounts; an id that isn't one of theirs is 400 invalid_keep_members). Two guards: an admin cannot delete their
+// accounts; an id that isn't one of theirs is 400 invalid_keep_members). With
+// ?delete_members=<id>,<id> (present, even empty: the console always sends it)
+// only those members go and every other is kept, so a member added after the
+// console read the list is never deleted unseen (server#222; an id that isn't
+// one of theirs, or one keep_members names, is 400 invalid_delete_members).
+// Two guards: an admin cannot delete their
 // own account (disable it instead - prevents self-lockout and fat-finger loss),
 // and auth.DeleteUser refuses the last enabled admin (ErrLastAdmin → 409).
 func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
@@ -350,9 +346,16 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	// Every keep_members value counts (?keep_members=3,7 and the repeated
 	// ?keep_members=3&keep_members=7 alike): reading only the first would delete
 	// the members a client asked to keep.
-	keep, ok := parseIDList(strings.Join(r.URL.Query()["keep_members"], ","))
+	query := r.URL.Query()
+	keep, ok := parseIDList(strings.Join(query["keep_members"], ","))
 	if !ok {
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidKeepMembers, "keep_members must be user ids separated by commas")
+		return
+	}
+	delParam, listed := query["delete_members"]
+	del, ok := parseIDList(strings.Join(delParam, ","))
+	if !ok {
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidDelMembers, "delete_members must be user ids separated by commas")
 		return
 	}
 	if caller := userFrom(r.Context()); caller != nil && caller.ID == id {
@@ -364,7 +367,12 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		a.writeUserError(w, err, "could not delete user")
 		return
 	}
-	done, err := a.auth.DeleteUser(r.Context(), id, keep)
+	var done auth.DeletedUser
+	if listed {
+		done, err = a.auth.DeleteUserListed(r.Context(), id, keep, del)
+	} else {
+		done, err = a.auth.DeleteUser(r.Context(), id, keep)
+	}
 	if err != nil {
 		a.writeUserError(w, err, "could not delete user")
 		return
@@ -441,6 +449,8 @@ func (a *API) writeUserError(w http.ResponseWriter, err error, genericMsg string
 		writeErrorCode(w, http.StatusConflict, codeNotLinkable, err.Error())
 	case errors.Is(err, auth.ErrInvalidKeepMembers):
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidKeepMembers, err.Error())
+	case errors.Is(err, auth.ErrInvalidDeleteMembers):
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidDelMembers, err.Error())
 	default:
 		a.log.Warn(genericMsg, "err", err)
 		writeError(w, http.StatusInternalServerError, genericMsg)
@@ -614,9 +624,10 @@ func (a *API) handleAdminClearRecovery(w http.ResponseWriter, r *http.Request) {
 // handleSignOutEverywhere signs a person out of every phone, tablet and browser
 // (the console's "Sign out everywhere"): it ends all their sessions, and the cast
 // tokens minted from them, keeping the admin's own when it is their own account,
-// with their open pairing codes and recovery code; API keys, the calendar feed
-// token and Bridge tokens stay (auth.endSessions). Answers {"signed_out": n}, the
-// sessions it ended.
+// with their open pairing codes and recovery code, and their household members'
+// sign-ins, API keys and calendar links made on those devices; their own API
+// keys, calendar feed token and Bridge tokens stay (auth.endSessions). Answers
+// {"signed_out": n}, the sessions it ended.
 func (a *API) handleSignOutEverywhere(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {

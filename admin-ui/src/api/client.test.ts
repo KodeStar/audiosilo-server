@@ -26,12 +26,14 @@ describe('api client', () => {
     expect(forbidden).toHaveBeenCalledTimes(1);
   });
 
-  it("deletes a person, keeping the household members it's told to as ?keep_members=", async () => {
+  it('deletes a person with the members it lists, keeping the rest, as ?delete_members=', async () => {
     setToken('tok-1');
     const calls = mockFetch({ 'DELETE /admin/users/1': { status: 204 } });
-    await api.deleteUser(1);
     await api.deleteUser(1, []);
-    await api.deleteUser(1, [3, 7]);
+    await api.deleteUser(1, [4], []);
+    await api.deleteUser(1, [4], [3, 7]);
+    // Always sent, even empty: the server then deletes no member it wasn't told to.
+    expect(calls.map((c) => c.query.get('delete_members'))).toEqual(['', '4', '4']);
     expect(calls.map((c) => c.query.get('keep_members'))).toEqual([null, null, '3,7']);
     expect(calls.every((c) => c.body === undefined)).toBe(true);
   });

@@ -156,9 +156,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and their recovery code (its linked pairing tokens
   cascade). Their household members go the same way where the person put them (server#285): a member's
   session made on any of the person's devices but the kept one (`created_on_token_id`, the device
-  revoke's `also_members` rule, a device signed out earlier included) and every member's open pairing
-  code; a member's own paired device stays, and `signed_out` counts the person's sessions only. API keys stay (listed and revoked on their own: the device lists, `/auth/tokens`), and so
-  do the calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`; the console has no
+  revoke's `also_members` rule, a device signed out earlier included), with the API keys and the
+  calendar feed link the member made from such a session (D5, server#361: `IssueAPIToken` and
+  `IssueFeedToken` record the session's device, `auth.madeOn`, which refuses a mint from a session signed
+  out since the request's check, `ErrInvalidToken`, a 401: the pass has already run; a key made before
+  v2.7.0 recorded none and stays), and every member's open pairing code; a member's own paired device stays, with what was
+  made on it, and `signed_out` counts the person's sessions only. The person's own API keys stay (listed
+  and revoked on their own: the device lists, `/auth/tokens`), and so
+  do their calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`; the console has no
   lever for it) and Bridge tokens (the Bridge's); an invite is the admin's (listed and revoked in the
   console). A cast token needs no write (its parent is checked on every request, `castGrant`). The
   write moves the content generation, so the token cache refuses an ended token on the very next
@@ -2538,7 +2543,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   both ways because a kid has no row (no kid filter of their own). `/me` and the session envelope carry
   `managed_by` (`{id, username}`|null), `member_kind` and, for a member only, `display_name` (omitted otherwise); `/me/devices` rows carry `member_sign_ins`
   (always `[]` for a member, with no read) and `DELETE /me/devices/{id}?also_members=1` signs those out in the same transaction
-  (`{current, members_signed_out}`; each member signed out is audited `member.device_revoke`). The list's `reason` is `auth.MayAddMembers` (the one may-add ladder,
+  (`{current, members_signed_out}`; each member signed out is audited `member.device_revoke`), with the
+  API keys and the calendar feed link those members made from a sign-in there (D5: the link is deleted
+  and adds nothing to the count). The list's `reason` is `auth.MayAddMembers` (the one may-add ladder,
   which `CreateMember` runs too). Admin: user objects add `member_access`, `can_add_members`,
   `members_count`, `display_name` and, on `managed_by` only there, the owner's own `display_name`
   (`api.adminUser`/`adminOwner`; the player's `managed_by` never carries it, and `/me`'s
@@ -2551,7 +2558,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `has_members`, 400 `kid_no_password` for a non-empty `password` on a kid or beside assigning one,
   which `""` (clearing) is not; null: "Make independent"); the whole PATCH is one `auth.UpdateUser` transaction that checks every field before
   writing, so a refused field changes nothing; `DELETE ?keep_members=<id>,<id>` (or the parameter repeated) deletes the person's
-  other members with them (400 `invalid_keep_members`). Joining another owner's household signs the
+  other members with them (400 `invalid_keep_members`); with `delete_members=<id>,<id>` (present, even
+  empty: the console always sends the members its dialog showed and left ticked) only those go and every
+  other member is kept, so one added after the page opened is never deleted unseen
+  (`auth.DeleteUserListed`, server#222; 400 `invalid_delete_members` for an id that isn't theirs or one
+  `keep_members` names). Joining another owner's household signs the
   person out of what another owner set up for them (`auth.leaveOwners`: the sessions and API keys made
   on anyone else's devices, by `created_on_token_id`, which would otherwise carry the new owner's
   access to the old owner's phone, the calendar feed link made on one (deleted; `IssueFeedToken`
@@ -2572,8 +2583,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `tokens` row of kind `cast` (`auth.IssueCastToken`: SHA-256 hash only, `expires_at` 24 h in whole
   seconds, `castTokenTTL`) plus a `cast_grants` row (the book, and `parent_token_id`: the caller's
   own token); one transaction deletes every dead cast token (`pruneCastTokensSQL`: expired, or no
-  grant, or its parent gone, signed out or expired) and keeps the person's newest
-  `maxCastTokens` (20). The console's chapter editor streams a book the same way and sends
+  grant, or its parent gone, signed out or expired) and keeps the newest `maxCastTokens` (20) the
+  sending token minted, so a run of casts on one device never ends the cast another device of the person
+  is playing (server#216), and the person's newest `maxCastTokensPerPerson` (100) over all their devices
+  (`trimCastTokensSQL`). The console's chapter editor streams a book the same way and sends
   `"editor": true` (console-only, additive; a player never sends it): `auth.IssueEditorToken` mints the same
   token with `cast_grants.editor = 1` (`0078`), a 4 h life (`editorTokenTTL`) and a cap of its own
   (`maxEditorTokens`, 5), each cap counting only its own use, so editing many books never drops a token a
@@ -4116,7 +4129,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   connection's Host and scheme (the server never trusts X-Forwarded-Host/Proto), `proxied` any forwarding
   header (`proxied`), `peer` (only when proxied) the connecting address for `trusted_proxies`;
   `config_libraries` the names the config declares (config.yaml); `printed_password` true while the caller
-  is the banner's admin and has not chosen their own password nor had one from `reset-admin` (`auth.PrintedPassword`); `mount_hints` (only while not finished or
+  is the banner's admin and their password was never replaced (by them, another admin or `reset-admin`: `auth.PrintedPassword`); `mount_hints` (only while not finished or
   while the folder step is skipped, else `[]`) `library.MountHints` (Linux
   `/proc/self/mountinfo`: folders, not system paths or pseudo filesystems, not the data folder, sorted,
   at most 20; `[]` elsewhere). `PUT /admin/setup` `{finished?, dismissed?, steps?}` merges (one writer
@@ -4144,32 +4157,47 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `username_was`; the session stays) and changes the password with the caller's own `POST /auth/password`
   (its wrong current password is 401 `current_password_incorrect`, which the console never treats as a lost
   session). **The sign-in hint** (`auth/firstrun.go`): the banner's `ensureAdmin` writes `server_state`
-  `first_admin` `{user_id, signed_in, chose_password}`; while `signed_in` is false every later start prints
+  `first_admin` `{user_id, signed_in, chose_password, code_id, code_created_at}` (the last two name the auth
+  code printed beside the password: a rotation in the console keeps the row's id but stamps it anew, so a
+  rotated code, never printed, no longer matches); while `signed_in` is false every later start prints
   a framed reminder (`launcher.signInHint`: the console address, the username, and the `reset-admin`
   command, as `docker exec -u <uid>:<gid> <container> ...` inside a container, the server's own ids so the
   command never makes a root-owned file in the data folder; words quoted for the system's shell,
   `quoteWord`: single quotes, double on Windows). The row is written after the banner and a failed write
   only loses the reminder; a start that made the admin but failed before the banner (the auth code's
   write) writes it too, so the next start points at `reset-admin` for a password printed nowhere. Any admin's password sign-in
-  (`NoteAdminSignIn`) or the admin's own password change (`NoteOwnPassword`: `POST /auth/password`, or
-  `PATCH /admin/users/{id}` on their own account, the console's People dialog; a password another admin
-  set is not their own; `reset-admin` notes it too) ends it; each writes once, in one transaction.
+  (`NoteAdminSignIn`) or a password set on an admin account ends it. A password set on the first-run
+  admin, whoever sets it (the account step's `POST /auth/password`, People's `PATCH /admin/users/{id}`,
+  another admin's included, `reset-admin`), or cleared (an admin with single sign-on; that alone leaves
+  the hint), also ends `printed_password` and deletes the auth code the
+  row names (D4, server#391: it sat in the same log; a row from before it named one, an upgraded
+  install's, finds the code by its label and shape, as `reset-admin` does: `revokePrintedCode`):
+  `auth.UpdateUser` notes it in its own transaction (`notePasswordSet`), so no handler does; each note
+  writes once.
   No row (an upgraded server, `--setup`) never prints it, so no backfill. **`audiosilo [--data dir]
-  reset-admin [username]`** (`launcher.ResetAdmin`, offline): opens the database (refuses a missing one,
+  reset-admin [username]`** (`launcher.ResetAdmin`, offline): refuses a `--data` that is no folder (as no
+  database), then a data folder where a restore waits for the next start (`backup.RestorePending`, read before the database, so a damaged database the
+  restore would replace says so), then opens the database (refuses a missing one,
   a file that isn't an AudioSilo database (`store.Inspect`: never migrated here) and one with pending
-  migrations, and one a restore waiting for the next start would replace: `backup.RestorePending`), picks the only admin or the named one (exit 2 with the admins listed
-  otherwise; a disabled one is refused), sets a random password through `auth.SetPassword` (the console's
-  rule: every session, pairing code and remembered browser ends), revokes the auth code the first start
-  printed beside the password (`auth.RevokeInitialAdminCode`: that admin's unlimited, never-expiring
-  invite labelled `auth.InitialAdminCodeLabel`, so an install from before `first_admin` is covered too;
-  the output says so when there was one) and prints the password once. The console's account step keeps
-  the code (the phone step points at it) and says to revoke it in People > Invites. A running server
+  migrations), picks the named admin or the only enabled one (exit 2 with the enabled admins listed
+  otherwise; a disabled one is refused, and neither counts nor is listed), revokes the auth code the first
+  start printed beside the password (`auth.RevokeInitialAdminCode`: the one `first_admin` names, so a
+  rotated code stays; on an install whose row names none, from before it did, that admin's unlimited,
+  never-expiring invite labelled `auth.InitialAdminCodeLabel`; the output says so when there was one; a
+  failure refuses the reset with nothing changed), sets a random password through `auth.SetPassword`
+  (the console's rule: every session, pairing code and remembered browser ends) and prints the password
+  once. On Windows a word of the printed command that isn't plain is written for PowerShell, and the hint
+  then says so, "(in PowerShell)": single quotes (nothing expands there: a `$` or a `%` in a path stays,
+  and a quote inside is doubled, the typographic ones PowerShell reads as one included), a quoted binary
+  path behind the call operator `&`, and a word with a comma or an `@` quoted too (PowerShell splits the
+  first and splats the second); a command of plain words names no shell (cmd.exe reads it the same). The console's
+  account step says a new password ends the code too. A running server
   takes the new password at once; a session it already checked is answered from its token cache (which
   another process's write can't empty) until that server's next content write, or a minute after it last
   read the row (`auth.maxCachedTokenAge`, `TestResetAdminEndsARunningServersSessions`); a restart ends
-  them at once. A reset also ends the sign-in hint (`NoteOwnPassword`: the
-  hint names the first start's password) and, for the first-run admin, `printed_password` (the log's password is gone), and the hint never names a first-run admin since disabled or
-  demoted.
+  them at once. A reset also ends the sign-in hint (the hint names the first start's password) and, for
+  the first-run admin, `printed_password` (the log's password is gone), and the hint never names a
+  first-run admin since disabled or demoted.
   **Marketplace** (server#192): `GET /admin/settings` `metadata.region_chosen` is false only while no
   region was ever set here, in config.yaml or by the environment (`server_state`
   `metadata_region_chosen`, written by any settings save carrying `metadata.region`, "No preference"

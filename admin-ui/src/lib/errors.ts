@@ -75,6 +75,8 @@ const BY_CODE: Record<string, string> = {
   // Minting or rotating an invite for a kid (409): a kid holds none.
   kid_account: 'errors.kidAccount',
   invalid_keep_members: 'errors.invalidKeepMembers',
+  // A member the delete dialog listed is no longer theirs (the owner removed it).
+  invalid_delete_members: 'errors.invalidKeepMembers',
   // The Bridge: queueing a job kind the paired Bridge doesn't run, cancelling a
   // job that already ended.
   kind_unavailable: 'errors.kindUnavailable',

@@ -101,13 +101,18 @@ export function assignPatch(ownerId: number, kind: MemberKind, access: MemberAcc
 export const independentPatch: UserPatch = { managed_by: null };
 
 /**
- * The members a delete keeps (`?keep_members=`): those of the person's members
- * unticked to stay as independent accounts, in list order (an id that isn't one
- * of theirs is never sent).
+ * The members a delete keeps (`?keep_members=`) and deletes (`?delete_members=`):
+ * those of the person's members the dialog showed, unticked to stay as independent
+ * accounts or left ticked to go, in list order (an id that isn't one of theirs is
+ * never sent). A member the dialog never showed is in neither, and the server keeps it.
  */
-export function keptMembers(
+export function deleteChoice(
   members: readonly Pick<AdminMember, 'id'>[],
   keeping: ReadonlySet<number>,
-): number[] {
-  return members.filter((m) => keeping.has(m.id)).map((m) => m.id);
+): { keep: number[]; remove: number[] } {
+  const ids = members.map((m) => m.id);
+  return {
+    keep: ids.filter((id) => keeping.has(id)),
+    remove: ids.filter((id) => !keeping.has(id)),
+  };
 }

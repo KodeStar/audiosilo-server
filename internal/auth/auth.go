@@ -111,7 +111,8 @@ var (
 	// SQLite unique-constraint string.
 	ErrUsernameTaken = errors.New("username already taken")
 	// ErrUsernameRequired is returned when a new account or a rename
-	// (UserChanges.Username) names no username.
+	// (UserChanges.Username) names no username: "" or only spaces, since a
+	// username is stored trimmed (sign-in trims what is typed).
 	ErrUsernameRequired = errors.New("username is required")
 )
 
@@ -262,9 +263,19 @@ func (s *Service) CreateDemoUser(ctx context.Context, username string) (*User, e
 	return s.createUser(ctx, username, "", RoleUser, "", true)
 }
 
+// cleanUsername is a username as stored: trimmed, and refused when empty.
+func cleanUsername(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", ErrUsernameRequired
+	}
+	return name, nil
+}
+
 func (s *Service) createUser(ctx context.Context, username, password, role, email string, isDemo bool) (*User, error) {
-	if username == "" {
-		return nil, ErrUsernameRequired
+	username, err := cleanUsername(username)
+	if err != nil {
+		return nil, err
 	}
 	if role != RoleAdmin {
 		role = RoleUser
@@ -439,6 +450,33 @@ func (s *Service) IssueSession(ctx context.Context, u *User, deviceName, signInK
 // browser key of a password sign-in ("" otherwise).
 func (s *Service) insertToken(ctx context.Context, ex sqlExecer, userID int64, hash, kind, deviceName string, expires, authCodeID any, signInKey string) (sql.Result, error) {
 	return s.insertTokenOn(ctx, ex, userID, hash, kind, deviceName, expires, authCodeID, signInKey, nil, s.ts())
+}
+
+// madeOn is the device userID's token session was made on (its
+// created_on_token_id: a household member's sign-in on their owner's device),
+// for a credential minted from it to record; NULL for any other session, an
+// unknown one or another person's. A session signed out since the request
+// authenticated with it is ErrInvalidToken, read inside the mint's own
+// transaction as IssueSession reads the password: an owner's password change or
+// Sign out everywhere that committed in between (endSessions) has already
+// passed over the credential this would make, which would outlive the sign-in
+// it was made from.
+func madeOn(ctx context.Context, tx *sql.Tx, userID, session int64) (sql.NullInt64, error) {
+	var (
+		on      sql.NullInt64
+		revoked bool
+	)
+	err := tx.QueryRowContext(ctx, `SELECT created_on_token_id, revoked FROM tokens WHERE id = ? AND user_id = ?`,
+		session, userID).Scan(&on, &revoked)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return on, nil
+	case err != nil:
+		return on, err
+	case revoked:
+		return on, ErrInvalidToken
+	}
+	return on, nil
 }
 
 // insertTokenOn is insertToken recording createdOn, the owner's token a household
@@ -711,9 +749,15 @@ func scanAPIToken(row interface{ Scan(...any) error }) (APIToken, error) {
 // IssueAPIToken mints a personal API key (kind=api, no expiry) for a user and
 // returns the plaintext secret (shown once) plus the stored row's metadata for
 // the create response. The secret is stored only as a hash. label is carried in
-// device_name; callers trim/validate it before calling. A kid's is refused
-// inside the write (ErrKidAccount, refuseKid).
-func (s *Service) IssueAPIToken(ctx context.Context, userID int64, label string) (string, APIToken, error) {
+// device_name; callers trim/validate it before calling. session is the token
+// the request authenticated with: the key records the device that session was
+// made on (madeOn: a household member's sign-in on their owner's device), so
+// the owner's password change and Sign out everywhere end a member's key made
+// there as they end that sign-in (endSessions, server#361), and so do the
+// device revoke's alsoMembers and leaveOwners. A kid's is refused inside the
+// write (ErrKidAccount, refuseKid), and so is one from a session signed out
+// since the request's check (ErrInvalidToken, madeOn).
+func (s *Service) IssueAPIToken(ctx context.Context, userID, session int64, label string) (string, APIToken, error) {
 	secret, hash, err := generateToken()
 	if err != nil {
 		return "", APIToken{}, err
@@ -723,7 +767,11 @@ func (s *Service) IssueAPIToken(ctx context.Context, userID int64, label string)
 		if err := refuseKid(ctx, tx, userID); err != nil {
 			return err
 		}
-		res, err := s.insertToken(ctx, tx, userID, hash, KindAPI, label, nil, nil, "")
+		on, err := madeOn(ctx, tx, userID, session)
+		if err != nil {
+			return err
+		}
+		res, err := s.insertTokenOn(ctx, tx, userID, hash, KindAPI, label, nil, nil, "", on, s.ts())
 		if err != nil {
 			return err
 		}
@@ -1441,13 +1489,24 @@ func (s *Service) ReapIdleDemoUsers(ctx context.Context, cutoff time.Time) (int6
 // cleared, so they keep only their own grants). An id in keep that isn't one of
 // this person's members is ErrInvalidKeepMembers and nothing changes.
 func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (DeletedUser, error) {
+	return s.deleteUser(ctx, id, keep, nil, false)
+}
+
+// DeleteUserListed is DeleteUser that deletes only the members in del (the
+// console's delete dialog, server#222): every other member of the person's is
+// kept as DeleteUser keeps one, so a member added after the dialog read the
+// list is never deleted unseen. An id in del that isn't one of this person's
+// members, or that keep names too, is ErrInvalidDeleteMembers, an id in keep
+// that isn't one ErrInvalidKeepMembers, and nothing changes.
+func (s *Service) DeleteUserListed(ctx context.Context, id int64, keep, del []int64) (DeletedUser, error) {
+	return s.deleteUser(ctx, id, keep, del, true)
+}
+
+// deleteUser is DeleteUser and, listed, DeleteUserListed.
+func (s *Service) deleteUser(ctx context.Context, id int64, keep, del []int64, listed bool) (DeletedUser, error) {
 	keep = slices.Compact(slices.Sorted(slices.Values(keep)))
-	list, err := json.Marshal(append([]int64{}, keep...)) // [] for none, never null
-	if err != nil {
-		return DeletedUser{}, err
-	}
 	var out DeletedUser
-	err = s.db.WithDurableTx(ctx, "DeleteUser", func(tx *sql.Tx) error {
+	err := s.db.WithDurableTx(ctx, "DeleteUser", func(tx *sql.Tx) error {
 		// The account and the last-admin guard are read inside the write, as
 		// UpdateUser's are: two admins removing each other at once can't both
 		// pass the guard.
@@ -1460,14 +1519,24 @@ func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (Delet
 				return err
 			}
 		}
+		kept := keep
+		if listed {
+			if kept, err = keepUnlisted(ctx, tx, id, keep, del); err != nil {
+				return err
+			}
+		}
+		list, err := json.Marshal(append([]int64{}, kept...)) // [] for none, never null
+		if err != nil {
+			return err
+		}
 		if out.MembersKept, err = s.keepMembers(ctx, tx, id, string(list)); err != nil {
 			return err
 		}
-		if len(out.MembersKept) != len(keep) {
+		if len(out.MembersKept) != len(kept) {
 			return ErrInvalidKeepMembers
 		}
-		for _, kept := range keep {
-			if err := leaveOwners(ctx, tx, kept, 0); err != nil {
+		for _, m := range kept {
+			if err := leaveOwners(ctx, tx, m, 0); err != nil {
 				return err
 			}
 		}
@@ -1488,6 +1557,40 @@ func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (Delet
 	}
 	slices.Sort(out.MembersKept)
 	return out, nil
+}
+
+// keepUnlisted is the members of owner's a listed delete keeps: every one not
+// in del, read inside tx, so one added after the caller read the list stays.
+// keep must name members only, del members not in keep (ErrInvalidKeepMembers,
+// ErrInvalidDeleteMembers).
+func keepUnlisted(ctx context.Context, tx *sql.Tx, owner int64, keep, del []int64) ([]int64, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM users WHERE managed_by = ? ORDER BY id`, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var members []int64
+	for rows.Next() {
+		var m int64
+		if err := rows.Scan(&m); err != nil {
+			return nil, err
+		}
+		members = append(members, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, k := range keep {
+		if !slices.Contains(members, k) {
+			return nil, ErrInvalidKeepMembers
+		}
+	}
+	for _, d := range del {
+		if !slices.Contains(members, d) || slices.Contains(keep, d) {
+			return nil, ErrInvalidDeleteMembers
+		}
+	}
+	return slices.DeleteFunc(members, func(m int64) bool { return slices.Contains(del, m) }), nil
 }
 
 // keepMembers makes the ids in list (a JSON array) that are owner's members
@@ -1522,7 +1625,8 @@ type DeletedUser struct {
 // SetPassword sets (or clears) an account's password. A non-empty password is
 // hashed with argon2id; an empty password clears it (only valid for non-admins).
 // A kid's is refused (ErrKidNoPassword: UpdateUser). Replacing or clearing a
-// password the account had ends its sessions but keep (UserChanges.KeepToken).
+// password the account had ends its sessions but keep (UserChanges.KeepToken);
+// the first-run admin's notes follow in the same write (notePasswordSet).
 func (s *Service) SetPassword(ctx context.Context, id int64, password string, keep int64) error {
 	return s.UpdateUser(ctx, id, UserChanges{Password: &password, KeepToken: keep})
 }
@@ -1530,8 +1634,8 @@ func (s *Service) SetPassword(ctx context.Context, id int64, password string, ke
 // UserChanges is a change to an account (the admin's PATCH /admin/users/{id}):
 // nil leaves a field.
 type UserChanges struct {
-	// Username renames the account (the console's Your account step): not ""
-	// (ErrUsernameRequired), not another account's (ErrUsernameTaken), the
+	// Username renames the account (the console's Your account step), trimmed:
+	// not "" (ErrUsernameRequired), not another account's (ErrUsernameTaken), the
 	// rules a new account's name follows. Sessions, codes and everything else
 	// key on the account's id, so they stay.
 	Username *string
@@ -1594,10 +1698,16 @@ type HouseholdChange struct {
 // first password) also ends the person's sessions, all but c.KeepToken, with the
 // open pairing codes and the recovery code a session could have made
 // (endSessions): whoever knew the old one is signed out wherever they used it.
-// What stays, and why, is endSessions'.
+// What stays, and why, is endSessions'. A new password on the first-run admin
+// replaces the printed one and ends the auth code printed beside it, and so
+// does clearing it (notePasswordSet).
 func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error {
-	if c.Username != nil && *c.Username == "" {
-		return ErrUsernameRequired
+	if c.Username != nil {
+		name, err := cleanUsername(*c.Username)
+		if err != nil {
+			return err
+		}
+		c.Username = &name
 	}
 	var emailArg any
 	if c.Email != nil {
@@ -1772,6 +1882,11 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 				return err
 			}
 		}
+		if c.Password != nil {
+			if err := notePasswordSet(ctx, tx, id, hash != "" && curRole == RoleAdmin, s.ts()); err != nil {
+				return err
+			}
+		}
 		// A move to another household, or out of one (leaveOwners).
 		switch {
 		case assign && (u.ManagedBy == nil || u.ManagedBy.ID != h.Owner):
@@ -1823,13 +1938,15 @@ func forgetBrowsers(ctx context.Context, ex sqlExecer, userID int64) error {
 // leaveOwners ends them), a single sign-on not yet finished (KindOIDC) and their
 // recovery code (its linked pairing tokens cascade). Their household members go the same way where the person put them
 // (server#285): a member's session made on any of the person's devices but keep
-// (created_on_token_id, the record the device revoke's alsoMembers reads; only
-// sessions here, a member's API keys stay as the person's do), and every
-// member's open pairing code (a pairing code records no device, so one a
-// grown-up member minted on their own device goes too). A member's own device,
-// paired before, stays signed in. API keys stay (listed and revoked on
-// their own), and so do the calendar feed token (the person's to end) and Bridge
-// tokens (the Bridge's). A cast token needs no write: it is refused once its
+// (created_on_token_id, the record the device revoke's alsoMembers reads), with
+// the API keys and the calendar feed link the member made from such a session
+// (which record the same device, madeOn; server#361: the person's sign-in there
+// is what let them be made), and every member's open pairing code (a pairing
+// code records no device, so one a grown-up member minted on their own device
+// goes too). A member's own device, paired before, stays signed in, with what
+// was made on it. The person's own API keys stay (listed and revoked on their
+// own), and so do their calendar feed token (theirs to end) and Bridge tokens
+// (the Bridge's). A cast token needs no write: it is refused once its
 // parent is revoked (cast.go). The write moves the content generation, so the
 // token cache reads an ended token again and refuses it on the very next request.
 // It returns how many of the person's own sessions it ended.
@@ -1853,12 +1970,20 @@ func endSessions(ctx context.Context, tx *sql.Tx, userID, keep int64) (int64, er
 		`DELETE FROM auth_codes WHERE user_id = ? AND kind = ?`, userID, CodeRecovery); err != nil {
 		return 0, err
 	}
+	const (
+		members   = `user_id IN (SELECT id FROM users WHERE managed_by = ?1)`
+		onDevices = `created_on_token_id IN (SELECT id FROM tokens WHERE user_id = ?1 AND id != ?2)`
+	)
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE tokens SET revoked = 1
-		  WHERE revoked = 0 AND user_id IN (SELECT id FROM users WHERE managed_by = ?1)
-		    AND ((kind = ?2 AND created_on_token_id IN (SELECT id FROM tokens WHERE user_id = ?1 AND id != ?3))
-		         OR (kind = ?4 AND auth_code_id IS NULL))`,
-		userID, KindSession, keep, KindPairing); err != nil {
+		  WHERE revoked = 0 AND `+members+`
+		    AND ((kind IN (?3, ?4) AND `+onDevices+`) OR (kind = ?5 AND auth_code_id IS NULL))`,
+		userID, keep, KindSession, KindAPI, KindPairing); err != nil {
+		return 0, err
+	}
+	// A feed row is deleted, never revoked (feed.go).
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM tokens WHERE kind = '`+KindFeed+`' AND `+members+` AND `+onDevices, userID, keep); err != nil {
 		return 0, err
 	}
 	return n, nil
