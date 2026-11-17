@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/kodestar/audiosilo-server/internal/backup"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
@@ -26,9 +27,16 @@ func (a *API) backupsOff(w http.ResponseWriter) bool {
 }
 
 // writeBackups answers with GET /admin/backups' envelope: the files, the service's
-// state and any restore waiting for (or applied at) a start.
+// state and any restore waiting for (or applied at) a start. A backups folder the
+// server may not list answers 500 permission_denied with the folder, the
+// server's user and the fix as its message (server#383), which the console shows.
 func (a *API) writeBackups(w http.ResponseWriter, status int) {
 	env, err := a.backupsEnvelope()
+	if fsaccess.IsPermission(err) {
+		a.log.Warn("backups: list", "err", err)
+		writeErrorCode(w, http.StatusInternalServerError, codePermissionDenied, err.Error())
+		return
+	}
 	if err != nil {
 		a.writeCatalogError(w, err, "backups: list", "could not list the backups")
 		return

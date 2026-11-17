@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -186,6 +187,36 @@ func TestBackupLifecycle(t *testing.T) {
 	want := "backup.delete,backup.restore_cancel,backup.restore,backup.download,backup.create"
 	if strings.Join(actions, ",") != want {
 		t.Fatalf("audit = %v, want %s", actions, want)
+	}
+}
+
+// A backups folder the server may not list answers with the folder, the
+// server's user and the fix, not "could not list the backups" (server#383); a
+// listable one answers the list.
+func TestBackupListUnreadableFolder(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes don't refuse this user")
+	}
+	e := newTestEnv(t)
+	adminTok, _ := opsTokens(t, e)
+	dir := e.backups.Status().Dir
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := e.do(t, "GET", "/api/v1/admin/backups", adminTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("listable folder = %d %s", resp.StatusCode, body)
+	}
+	if err := os.Chmod(dir, 0o300); err != nil { // writable, not listable
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	resp, body := e.do(t, "GET", "/api/v1/admin/backups", adminTok, "")
+	var got struct{ Error, Code string }
+	_ = json.Unmarshal([]byte(body), &got)
+	want := "the server can't read " + dir + ": permission denied. The server runs as user "
+	if resp.StatusCode != http.StatusInternalServerError || got.Code != "permission_denied" || !strings.HasPrefix(got.Error, want) {
+		t.Fatalf("unlistable folder = %d %s, want 500 permission_denied starting %q", resp.StatusCode, body, want)
 	}
 }
 

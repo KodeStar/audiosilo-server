@@ -95,6 +95,7 @@ const (
 	codePasswordTooShort         = "password_too_short"
 	codeCannotDeleteSelf         = "cannot_delete_self"
 	codeFolderUnreadable         = "folder_unreadable"
+	codePermissionDenied         = "permission_denied" // a folder the server may not use; the message names it, the user and the fix
 	codePathNotAbsolute          = "path_not_absolute"
 	codeInvalidOverride          = "invalid_override" // + "field": the field it names
 	codeBookNotFound             = "book_not_found"

@@ -357,14 +357,16 @@ func (s *Service) make(ctx context.Context, trigger string) (Backup, error) {
 			s.prune()
 		}
 	}
+	// A backup stopped because the server is stopping didn't fail: don't announce
+	// it. Announced before the run is marked over, so a console that sees it end
+	// finds the event in the feed (the bell reads it again then).
+	if err != nil && ctx.Err() == nil && s.OnFailure != nil {
+		s.OnFailure(res)
+	}
 	s.mu.Lock()
 	s.running = false
 	s.last = &res
 	s.mu.Unlock()
-	// A backup stopped because the server is stopping didn't fail: don't announce it.
-	if err != nil && ctx.Err() == nil && s.OnFailure != nil {
-		s.OnFailure(res)
-	}
 	return b, err
 }
 
@@ -425,7 +427,7 @@ func (s *Service) CheckFolder() error {
 // reason is a backup failure in a few plain words for the console.
 func reason(err error) string {
 	switch {
-	case errors.Is(err, os.ErrPermission):
+	case fsaccess.IsPermission(err): // a read-only mount (docker's :ro) too
 		return "permission_denied"
 	case strings.Contains(err.Error(), "disk is full") || strings.Contains(err.Error(), "no space left"):
 		return "disk_full"
