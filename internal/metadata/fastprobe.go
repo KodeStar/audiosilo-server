@@ -349,7 +349,9 @@ func (b *blockFile) raw(p []byte, off int64) (int, error) {
 // its own goroutine, counted in its mount's stuckReads until it does (the file
 // stays open as long: its descriptor is closed only once the read returns).
 // Every caller's buffer is its own, made for this read on the stack the panic
-// unwinds (a block, bytesAt's, dhowden's), so nothing reads p after that.
+// unwinds (a block, bytesAt's, dhowden's) or dropped with it (a frame count's
+// window, kept from read to read: the panic ends the count), so nothing reads
+// p after that.
 func (b *blockFile) waitRead(p []byte, off int64) (int, error) {
 	type res struct {
 		n   int
