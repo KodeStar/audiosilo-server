@@ -44,13 +44,15 @@ type offlineLibrary struct {
 // included). It is exact: any content write (a fix, an ignore, a scan) moves
 // the generation, and the next request counts again (server#245). Two tables
 // written as user state are read: how many people have progress on each
-// duplicate copy (its ranking), so a progress row added, removed or moved to
-// another book is a content write too, a save to an existing row is not; and
-// which ASINs the unknown-ASIN report found unknown (unknown_asin), so a row
-// added or removed there, or its answer changed, is one as well, a lookup
-// that only renews its times is not (store's userStateTables).
+// duplicate copy (its ranking), so the key also takes the listener generation
+// (a progress row added or removed moves it, a save to an existing row does
+// not; one moved to another book is a content write: server#263); and which
+// ASINs the unknown-ASIN report found unknown (unknown_asin), so a row added
+// or removed there, or its answer changed, is a content write, a lookup that
+// only renews its times is not (store's userStateTables).
 func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
 	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
+	listeners, _ := a.cat.ListenerGeneration()
 	kinds := slices.DeleteFunc(slices.Clone(catalog.IssueKinds), func(k string) bool {
 		return (k == catalog.IssueUnmatched && !a.metadataOn()) ||
 			(k == catalog.IssueUnknownASIN && !a.reportUnknownOn())
@@ -60,7 +62,7 @@ func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "issue counts failed", "could not check the libraries")
 		return
 	}
-	write := a.cachedList(w, r, gen, cacheable, nil, kinds, offline)
+	write := a.cachedList(w, r, gen, cacheable, nil, kinds, offline, listeners)
 	if write == nil {
 		return
 	}

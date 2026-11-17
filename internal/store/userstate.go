@@ -34,6 +34,9 @@ type tableRule struct {
 	// rows: inserting and deleting rows is user state. Without it only an
 	// UPDATE is, and a new or removed row moves the content generation.
 	rows bool
+	// listeners: a new or removed row (rows must be set) moves the listener
+	// generation (DB.ListenerGeneration), what the Health summary also keys on.
+	listeners bool
 	// free, when not nil, are the only columns an UPDATE may change (by value)
 	// and stay user state; nil is any column.
 	free []string
@@ -50,12 +53,15 @@ type tableRule struct {
 // whose touch drops the row it changed; a new cache that would needs a key of
 // its own, or that table out of the list (CONVENTIONS.md, Content generation).
 var userStateTables = map[string]tableRule{
-	// A progress row's fields are no list's, but a new, removed or re-keyed row
-	// changes the Health summary's duplicate ranking (how many people listen to
-	// each copy: catalog.duplicateSets), so its key (user_id, library_id,
-	// rel_path) is watched, and only its key (TestUserStateProgressWatchesItsKey:
+	// A progress row's fields are no list's. A new or removed row changes who
+	// listens to each copy, which the Health summary and its duplicates read
+	// (catalog.duplicateSets ranks copies by it), so it moves the listener
+	// generation they key on as well (server#263), not the content one every
+	// list keys on: a listener starting a book no longer empties the lists. A
+	// re-keyed row (an UPDATE of user_id, library_id or rel_path) is content,
+	// so the key is watched, and only the key (TestUserStateProgressWatchesItsKey:
 	// a new column belongs here, or every sync span empties the caches).
-	"progress": {free: []string{"position", "duration", "finished", "playback_speed", "version", "device_id",
+	"progress": {rows: true, listeners: true, free: []string{"position", "duration", "finished", "playback_speed", "version", "device_id",
 		"updated_at", "started_at", "finished_at", "device_name", "finish_changed_at", "other_position",
 		"other_device_id", "other_device_name", "other_at", "other_version", "span_at", "span_version",
 		"change_seq", "stay_version", "edit_version"}},
@@ -223,6 +229,9 @@ func (db *DB) userStateWrite(ctx context.Context, name string, start time.Time, 
 		if w.content {
 			db.content.Add(1)
 		}
+		if w.listeners {
+			db.listeners.Add(1)
+		}
 		if w.misfiled != "" {
 			db.misfiled(w.misfiled)
 		}
@@ -256,6 +265,9 @@ type userStateWatch struct {
 	rules map[string]tableRule
 	// content: a change outside the rules (the content generation moves).
 	content bool
+	// listeners: a row added or removed in a table whose rule counts them
+	// (tableRule.listeners: the listener generation moves).
+	listeners bool
 	// misfiled is a table the rules don't name that the write changed.
 	misfiled string
 }
@@ -282,6 +294,9 @@ func (w *userStateWatch) unset(conn *sql.Conn) {
 // deleted.
 func (w *userStateWatch) change(d *preUpdate) {
 	rule, ok := w.rules[d.table]
+	if rule.listeners && d.op != opUpdate {
+		w.listeners = true
+	}
 	switch {
 	case !ok:
 		w.content = true

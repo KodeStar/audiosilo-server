@@ -80,18 +80,43 @@ func TestUserStateWritesLeaveTheContentGeneration(t *testing.T) {
 		VALUES(1, 1, 'Book', ?, 100, 0, 1, 1, 0, 'now')
 		ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET position = excluded.position`
 
-	// A new progress row is content (Health's duplicates count listeners), an
-	// update of its fields is not, and one moving it to another key is.
-	moved("progress insert", exec(saveProgress, 1.0))
-	still("progress update", exec(saveProgress, 2.0))
+	// A new progress row is not content but moves the listener generation
+	// (Health's duplicates count listeners: server#263), an update of its
+	// fields moves neither, and one moving it to another key is content.
+	listeners := func(name string, wantMoved bool, f func() error) func() error {
+		return func() error {
+			before := db.ListenerGeneration()
+			err := f()
+			if after := db.ListenerGeneration(); (after != before) != wantMoved {
+				t.Errorf("%s: listener generation %d -> %d, want moved %v", name, before, after, wantMoved)
+			}
+			return err
+		}
+	}
+	still("progress insert", listeners("progress insert", true, exec(saveProgress, 1.0)))
+	still("progress update", listeners("progress update", false, exec(saveProgress, 2.0)))
 	still("progress update in a tx", func() error {
 		return db.WithUserStateTx(ctx, "test", func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, saveProgress, 3.0)
 			return err
 		})
 	})
-	moved("progress re-key", exec(`UPDATE progress SET rel_path = 'Moved' WHERE user_id = 1`))
+	moved("progress re-key", listeners("progress re-key", false, exec(`UPDATE progress SET rel_path = 'Moved' WHERE user_id = 1`)))
 	moved("progress re-key back", exec(`UPDATE progress SET rel_path = 'Book' WHERE user_id = 1`))
+	still("progress delete", listeners("progress delete", true, exec(`DELETE FROM progress WHERE rel_path = 'Book'`)))
+	still("progress insert again", listeners("progress insert again", true, exec(saveProgress, 1.5)))
+	still("progress insert rolled back", listeners("progress insert rolled back", true,
+		rollback(`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed, version, device_id, updated_at)
+			VALUES(1, 1, 'Other', 1, 100, 0, 1, 1, 0, 'now')`)))
+	moved("default progress insert", listeners("default progress insert", false, func() error {
+		_, err := db.ExecContext(ctx, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed, version, device_id, updated_at)
+			VALUES(1, 1, 'Third', 1, 100, 0, 1, 1, 0, 'now')`)
+		return err
+	}))
+	moved("default progress delete", func() error {
+		_, err := db.ExecContext(ctx, `DELETE FROM progress WHERE rel_path = 'Third'`)
+		return err
+	})
 	still("bookmark insert", exec(`INSERT INTO bookmarks(user_id, library_id, rel_path, position, created_at) VALUES(1, 1, 'Book', 5, 'now')`))
 	still("bookmark delete", exec(`DELETE FROM bookmarks WHERE user_id = 1`))
 	still("token touch", exec(`UPDATE tokens SET last_seen = 'now', last_ip = '10.0.0.1', client_app = 'web' WHERE id = 1`))
@@ -147,7 +172,7 @@ func TestUserStateWritesLeaveTheContentGeneration(t *testing.T) {
 	// that changed content before rolling back still moves it (the check is on
 	// what it changed); a default one moves it, as ever.
 	still("user-state rollback", rollback(saveProgress, 9.0))
-	moved("user-state rollback of content", rollback(`DELETE FROM progress`))
+	moved("user-state rollback of content", rollback(`UPDATE progress SET rel_path = 'Elsewhere'`))
 	moved("default rollback", func() error {
 		_ = db.WithTx(ctx, "test", func(*sql.Tx) error { return boom })
 		return nil

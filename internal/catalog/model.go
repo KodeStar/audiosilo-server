@@ -421,6 +421,18 @@ func (c *Catalog) ContentGeneration() (uint64, bool) {
 	return g.ContentGeneration(), true
 }
 
+// ListenerGeneration is the database's listener generation
+// (store.DB.ListenerGeneration: who listens to which book) and whether there is
+// one, as ContentGeneration. An answer that reads which progress rows exist
+// keys on both.
+func (c *Catalog) ListenerGeneration() (uint64, bool) {
+	g, ok := c.db.(interface{ ListenerGeneration() uint64 })
+	if !ok {
+		return 0, false
+	}
+	return g.ListenerGeneration(), true
+}
+
 // New returns a Catalog. now may be nil to use time.Now.
 func New(db *store.DB, now func() time.Time) *Catalog {
 	if now == nil {
