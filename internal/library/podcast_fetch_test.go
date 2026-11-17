@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,10 @@ import (
 )
 
 func podcastDiskFixture(t *testing.T) (context.Context, *catalog.Catalog, *catalog.Library, *Scanner, *feed.File, string) {
+	return podcastDiskFixtureTB(t)
+}
+
+func podcastDiskFixtureTB(t testing.TB) (context.Context, *catalog.Catalog, *catalog.Library, *Scanner, *feed.File, string) {
 	t.Helper()
 	ctx := context.Background()
 	cat := catalog.New(storetest.Open(t), time.Now)
@@ -43,7 +48,7 @@ func podcastDiskFixture(t *testing.T) (context.Context, *catalog.Catalog, *catal
 	scanner := NewScanner(cat, "must-not-probe", slog.Default())
 	return ctx, cat, lib, scanner, f, dir
 }
-func writePodcastFixture(t *testing.T, dest, name string) {
+func writePodcastFixture(t testing.TB, dest, name string) {
 	t.Helper()
 	raw, err := os.ReadFile("../podcast/testdata/phase2c2/" + name)
 	if err != nil {
@@ -220,5 +225,68 @@ func TestPodcastDescriptorSurvivesRenameAndLinksDenied(t *testing.T) {
 	os.Symlink(filepath.Join(dir, "attachments"), filepath.Join(dir, ".audiosilo"))
 	if _, _, err = OpenPodcast(ctx, cat, *lib, ep.Path); err == nil {
 		t.Fatal("attachment-directory symlink served")
+	}
+}
+
+// TestPodcastFeedMemo (server#180): an episode opens again from the feed copy
+// read before (allowed), and a feed.json replaced by another file at the same
+// size and mtime, whose episode no longer names the pinned generation, is read
+// again and refused (denied), as is the copy remembered for a show once its
+// episode is gone from a new copy.
+func TestPodcastFeedMemo(t *testing.T) {
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
+	ep := f.Episodes[0]
+	writePodcastFixture(t, filepath.Join(lib.Root, filepath.FromSlash(ep.Path)), "chap-v24-reverse.mp3")
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	filename := filepath.Join(dir, "feed.json")
+	for range 2 {
+		opened, _, err := OpenPodcast(ctx, cat, *lib, ep.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opened.Close()
+	}
+	podcastFeeds.mu.Lock()
+	var remembered *feedCopy
+	for name, c := range podcastFeeds.feeds { // under the root's real path
+		if strings.HasSuffix(name, filepath.Join(filepath.Base(dir), "feed.json")) && c.showID == f.ShowID {
+			remembered = c
+		}
+	}
+	podcastFeeds.mu.Unlock()
+	if remembered == nil {
+		t.Fatal("the feed copy read was not remembered")
+	}
+	// Another file, same size and mtime (so the pin's feed signature still
+	// matches), its episode's digest changed in one hex digit.
+	raw, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := ep.Fetch.SHA256
+	swapped := digest[:len(digest)-1] + map[bool]string{true: "0", false: "1"}[digest[len(digest)-1] != '0']
+	changed := strings.Replace(string(raw), digest, swapped, 1)
+	if changed == string(raw) {
+		t.Fatal("the fixture's digest is not in its feed")
+	}
+	tmp := filename + ".tmp"
+	if err := os.WriteFile(tmp, []byte(changed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(tmp, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, filename); err != nil {
+		t.Fatal(err)
+	}
+	if opened, _, err := OpenPodcast(ctx, cat, *lib, ep.Path); err == nil {
+		opened.Close()
+		t.Fatal("served from the feed copy remembered for another file")
 	}
 }

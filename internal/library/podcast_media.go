@@ -6,7 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"reflect"
+	"sync"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
@@ -39,18 +39,8 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 		if feedSignatureMust(filename) != pin.FeedSig || podcastBarrier(dir, path.Base(rel)) != nil {
 			return nil, nil, ErrNotIndexable
 		}
-		current, err := feed.ReadFile(filename, show, nil)
-		if err != nil {
-			return nil, nil, ErrNotIndexable
-		}
-		matches := false
-		for _, ep := range current.Episodes {
-			if ep.Path == rel && ep.ID == pin.EpisodeID && current.ShowID == pin.ShowID && reflect.DeepEqual(ep.Fetch, pin.Fetch) {
-				matches = true
-				break
-			}
-		}
-		if !matches {
+		current, err := podcastFeeds.read(filename, show)
+		if err != nil || !current.holds(rel, pin.ShowID, pin.EpisodeID, *pin.Fetch) {
 			return nil, nil, ErrNotIndexable
 		}
 		abs := filepath.Join(dir, path.Base(rel))
@@ -73,4 +63,92 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 		}
 	}
 	return nil, nil, ErrNotIndexable
+}
+
+// The downloaded episodes of the feed.json copies OpenPodcast read last
+// (server#180). Every stream request opens its episode again (a player's Range
+// requests, a seek), and parsing the show's feed.json each time cost about
+// 14 ms and 10 MB for a 1,000-episode show. A copy is read again once its file
+// is not the one read (os.SameFile: the Bridge replaces feed.json by a rename,
+// so a new copy is a new file), or its size or mtime moved; OpenPodcast's
+// other checks (the signature against the pin, the publish barrier, the audio
+// file's identity and size) still run on every open.
+var podcastFeeds = feedMemo{max: maxFeedMemo}
+
+// maxFeedMemo bounds the remembered copies: one per show streamed lately.
+const maxFeedMemo = 64
+
+// feedMemo is the copies remembered, by feed.json's path.
+type feedMemo struct {
+	mu    sync.Mutex
+	max   int
+	feeds map[string]*feedCopy
+}
+
+// feedCopy is one feed.json copy's downloaded episodes, by path.
+type feedCopy struct {
+	info     os.FileInfo // the file read, taken before and checked after the read
+	showID   string
+	episodes map[string][]feedEpisode
+}
+
+// feedEpisode is a downloaded episode as its feed names it.
+type feedEpisode struct {
+	id    string
+	fetch feed.Fetch
+}
+
+// holds reports whether the copy names episode id at rel, in show showID, with
+// fetch: the generation the index pinned.
+func (c *feedCopy) holds(rel, showID, id string, fetch feed.Fetch) bool {
+	if c.showID != showID {
+		return false
+	}
+	for _, ep := range c.episodes[rel] {
+		if ep.id == id && ep.fetch == fetch {
+			return true
+		}
+	}
+	return false
+}
+
+// read is filename's copy (show's feed.json), remembered while the file is
+// the one read, at the size and mtime read; feed.ReadFile's error otherwise.
+func (m *feedMemo) read(filename, show string) (*feedCopy, error) {
+	before, err := os.Lstat(filename)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	c := m.feeds[filename]
+	m.mu.Unlock()
+	if c != nil && sameFeedFile(c.info, before) {
+		return c, nil
+	}
+	f, err := feed.ReadFile(filename, show, nil)
+	if err != nil {
+		return nil, err
+	}
+	c = &feedCopy{info: before, showID: f.ShowID, episodes: map[string][]feedEpisode{}}
+	for _, ep := range f.Episodes {
+		if ep.Fetch != nil {
+			c.episodes[ep.Path] = append(c.episodes[ep.Path], feedEpisode{id: ep.ID, fetch: *ep.Fetch})
+		}
+	}
+	// Remembered only when the file read is the one stat'ed before: one
+	// replaced meanwhile may have been read in either version.
+	if after, err := os.Lstat(filename); err == nil && sameFeedFile(before, after) {
+		m.mu.Lock()
+		if m.feeds == nil || len(m.feeds) >= m.max {
+			m.feeds = map[string]*feedCopy{}
+		}
+		m.feeds[filename] = c
+		m.mu.Unlock()
+	}
+	return c, nil
+}
+
+// sameFeedFile reports whether a and b are one file at one size and mtime.
+func sameFeedFile(a, b os.FileInfo) bool {
+	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
 }
