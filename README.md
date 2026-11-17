@@ -206,8 +206,8 @@ it they `t.Skip` and the suite still passes. Install `ffmpeg` to run them
 [official installer](https://golangci-lint.run/welcome/install/)).
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs tests + coverage,
-race tests + lint on the native SQLite engine, lint with the test floor (and a
-non-gating dead-code report), the admin console's checks and a booted snapshot of
+race tests + lint on the native SQLite engine, lint with the test floor, a
+non-gating dead-code report, the admin console's checks and a booted snapshot of
 the native release build on every pull request and push to `main`, and **gates
 merges** (a pinned static ffmpeg is put on PATH in CI so the gated tests run). The image build
 ([`image.yml`](.github/workflows/image.yml)) stays separate: it publishes a
