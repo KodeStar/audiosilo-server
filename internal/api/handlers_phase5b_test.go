@@ -192,7 +192,7 @@ func TestBackupLifecycle(t *testing.T) {
 
 // A backups folder the server may not list answers with the folder, the
 // server's user and the fix, not "could not list the backups" (server#383); a
-// listable one answers the list.
+// listable one answers the list. Every backups route answers permission_denied.
 func TestBackupListUnreadableFolder(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
@@ -217,6 +217,25 @@ func TestBackupListUnreadableFolder(t *testing.T) {
 	want := "the server can't read " + dir + ": permission denied. The server runs as user "
 	if resp.StatusCode != http.StatusInternalServerError || got.Code != "permission_denied" || !strings.HasPrefix(got.Error, want) {
 		t.Fatalf("unlistable folder = %d %s, want 500 permission_denied starting %q", resp.StatusCode, body, want)
+	}
+
+	// The other backups routes say the same: a backup in a folder the server may
+	// not write to can't be deleted, and the answer says why.
+	name := "audiosilo-junk.db"
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil { // listable, not writable
+		t.Fatal(err)
+	}
+	resp, body = e.do(t, "DELETE", "/api/v1/admin/backups/"+name, adminTok, "")
+	got.Code = ""
+	_ = json.Unmarshal([]byte(body), &got)
+	if resp.StatusCode != http.StatusInternalServerError || got.Code != "permission_denied" {
+		t.Fatalf("delete in an unwritable folder = %d %s, want 500 permission_denied", resp.StatusCode, body)
 	}
 }
 

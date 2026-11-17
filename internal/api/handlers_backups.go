@@ -27,18 +27,11 @@ func (a *API) backupsOff(w http.ResponseWriter) bool {
 }
 
 // writeBackups answers with GET /admin/backups' envelope: the files, the service's
-// state and any restore waiting for (or applied at) a start. A backups folder the
-// server may not list answers 500 permission_denied with the folder, the
-// server's user and the fix as its message (server#383), which the console shows.
+// state and any restore waiting for (or applied at) a start.
 func (a *API) writeBackups(w http.ResponseWriter, status int) {
 	env, err := a.backupsEnvelope()
-	if fsaccess.IsPermission(err) {
-		a.log.Warn("backups: list", "err", err)
-		writeErrorCode(w, http.StatusInternalServerError, codePermissionDenied, err.Error())
-		return
-	}
 	if err != nil {
-		a.writeCatalogError(w, err, "backups: list", "could not list the backups")
+		a.writeBackupError(w, err, "backups: list", "could not list the backups")
 		return
 	}
 	writeJSON(w, status, env)
@@ -104,7 +97,7 @@ func (a *API) handleDownloadBackup(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	f, b, err := a.rt.Backups.Open(name)
 	if err != nil {
-		a.writeBackupError(w, err, "backups: open")
+		a.writeBackupError(w, err, "backups: open", backupUnreadable)
 		return
 	}
 	defer func() { _ = f.Close() }()
@@ -127,7 +120,7 @@ func (a *API) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.PathValue("name")
 	if err := a.rt.Backups.Delete(name); err != nil {
-		a.writeBackupError(w, err, "backups: delete")
+		a.writeBackupError(w, err, "backups: delete", backupUnreadable)
 		return
 	}
 	a.audit(r, "backup.delete", name, nil)
@@ -145,7 +138,7 @@ func (a *API) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	pending, err := a.rt.Backups.RequestRestore(r.Context(), name, u.Username)
 	if err != nil {
-		a.writeBackupError(w, err, "backups: request restore")
+		a.writeBackupError(w, err, "backups: request restore", backupUnreadable)
 		return
 	}
 	a.audit(r, "backup.restore", name, map[string]any{"schema": pending.Schema})
@@ -172,8 +165,14 @@ func (a *API) handleCancelRestore(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// writeBackupError maps the backup service's refusals.
-func (a *API) writeBackupError(w http.ResponseWriter, err error, op string) {
+// backupUnreadable is writeBackupError's answer to a failure it has no words for.
+const backupUnreadable = "the backup could not be read"
+
+// writeBackupError maps the backup service's refusals; anything else is a 500
+// saying generic. A backups folder the server may not use answers 500
+// permission_denied with the folder, the server's user and the fix as its
+// message (server#383), which the console shows.
+func (a *API) writeBackupError(w http.ResponseWriter, err error, op, generic string) {
 	switch {
 	case errors.Is(err, backup.ErrNotFound):
 		writeErrorCode(w, http.StatusNotFound, codeBackupNotFound, "no such backup")
@@ -183,7 +182,10 @@ func (a *API) writeBackupError(w http.ResponseWriter, err error, op string) {
 	case errors.Is(err, store.ErrNotADatabase):
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidBackup,
 			"this file is damaged or isn't an AudioSilo backup")
+	case fsaccess.IsPermission(err):
+		a.log.Warn(op, "err", err)
+		writeErrorCode(w, http.StatusInternalServerError, codePermissionDenied, err.Error())
 	default:
-		a.writeCatalogError(w, err, op, "the backup could not be read")
+		a.writeCatalogError(w, err, op, generic)
 	}
 }
