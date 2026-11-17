@@ -648,11 +648,18 @@ export const api = {
           mode,
         })
       : request<unknown>('DELETE', `/admin/libraries/${id}/folder-override${pathQuery(path)}`),
-  /** A folder of a library, as the player browses it (books annotated, overrides shown). */
-  browse: (libraryId: number, path: string) =>
+  /**
+   * A folder of a library, as the player browses it (books annotated, overrides
+   * shown): 500 entries from `offset`, `next_offset` set when there are more.
+   */
+  browse: (libraryId: number, path: string, offset = 0) =>
     request<FsListing>(
       'GET',
-      `/libraries/${libraryId}/fs?${new URLSearchParams({ path, limit: '500' }).toString()}`,
+      `/libraries/${libraryId}/fs?${new URLSearchParams({
+        path,
+        limit: '500',
+        ...(offset > 0 ? { offset: String(offset) } : {}),
+      }).toString()}`,
     ),
   /** The newest books of a library (covers for its card). */
   recentBooks: (libraryId: number, limit: number) =>

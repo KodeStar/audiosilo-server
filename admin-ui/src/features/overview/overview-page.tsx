@@ -473,10 +473,7 @@ function ServerCard() {
         </span>
       ),
     ],
-    [
-      t('home.server.address'),
-      <span className="font-mono text-[12.5px]">{window.location.host}</span>,
-    ],
+    [t('home.server.address'), settings.data && <ServerAddress general={settings.data.general} />],
     [
       t('home.server.transcoding'),
       <CapabilityStatus status={capability(server.data, 'transcode')} />,
@@ -507,6 +504,40 @@ function ServerCard() {
       </div>
       <FactList rows={rows} />
     </section>
+  );
+}
+
+/**
+ * Where the server is reached: its configured public address, then its home
+ * network one; this browser's host only when neither is set, and said so (it
+ * may be an address only this machine uses, a tunnel or localhost).
+ */
+function ServerAddress({ general }: { general: AdminSettings['general'] }) {
+  const { t } = useTranslation();
+  const addresses: { url: string; note?: string }[] = [];
+  if (general.public_url) addresses.push({ url: general.public_url });
+  if (general.lan_url && general.lan_url !== general.public_url) {
+    addresses.push({ url: general.lan_url, note: t('home.server.addressHome') });
+  }
+  if (addresses.length === 0) {
+    return (
+      <span className="flex flex-col">
+        <span className="font-mono text-[12.5px]">{window.location.host}</span>
+        <span className="text-[12.5px] text-muted-foreground">
+          {t('home.server.addressBrowser')}
+        </span>
+      </span>
+    );
+  }
+  return (
+    <span className="flex flex-col">
+      {addresses.map((a) => (
+        <span key={a.url}>
+          <span className="font-mono text-[12.5px]">{a.url}</span>
+          {a.note ? <span className="text-muted-foreground"> · {a.note}</span> : null}
+        </span>
+      ))}
+    </span>
   );
 }
 

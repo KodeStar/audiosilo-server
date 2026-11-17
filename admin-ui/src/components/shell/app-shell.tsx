@@ -5,6 +5,7 @@ import { CommandPalette } from './command-palette';
 import { PaletteContext, type PaletteControls } from './palette-context';
 import { TabBar } from './tab-bar';
 import { TopBar } from './top-bar';
+import { UpdateNotice } from './update-notice';
 
 function isEditable(el: Element | null): boolean {
   if (!el) return false;
@@ -13,8 +14,9 @@ function isEditable(el: Element | null): boolean {
 }
 
 /**
- * The signed-in console: top bar, the routed page, mobile tab bar, ⌘K palette,
- * and the one watcher that refreshes what a finished scan changed.
+ * The signed-in console: top bar, the routed page (under the notice of a
+ * server updated since the tab opened), mobile tab bar, ⌘K palette, and the one
+ * watcher that refreshes what a finished scan changed.
  */
 export function AppShell() {
   useScanWatcher();
@@ -46,6 +48,7 @@ export function AppShell() {
     <PaletteContext.Provider value={palette}>
       <TopBar />
       <main id="main">
+        <UpdateNotice />
         <Outlet />
       </main>
       <TabBar />

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Link, type ErrorComponentProps } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { RotateCw, TriangleAlert } from 'lucide-react';
+import { PageMessage } from '@/components/page-message';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { isChunkLoadError, reloadOnce } from '@/lib/stale-build';
 
@@ -19,26 +20,23 @@ export function RouteError({ error }: ErrorComponentProps) {
     if (stale) reloadOnce();
   }, [stale]);
   return (
-    <div
+    <PageMessage
       role="alert"
-      className="mx-auto flex max-w-[1440px] flex-col items-center gap-2.5 px-4 py-16 text-center"
-    >
-      <span className="grid size-10 place-items-center rounded-[11px] bg-destructive-soft text-destructive">
-        <TriangleAlert className="size-5" aria-hidden="true" />
-      </span>
-      <h2 className="h2">{t(stale ? 'routeError.staleTitle' : 'routeError.title')}</h2>
-      <p className="max-w-md text-muted-foreground">
-        {t(stale ? 'routeError.staleBody' : 'routeError.body')}
-      </p>
-      <div className="mt-2 flex flex-wrap justify-center gap-2">
-        <Button onClick={() => window.location.reload()}>
-          <RotateCw aria-hidden="true" />
-          {t('routeError.reload')}
-        </Button>
-        <Link to="/" className={buttonVariants({ variant: 'outline' })}>
-          {t('notFound.home')}
-        </Link>
-      </div>
-    </div>
+      icon={TriangleAlert}
+      tone="bad"
+      title={t(stale ? 'routeError.staleTitle' : 'routeError.title')}
+      body={t(stale ? 'routeError.staleBody' : 'routeError.body')}
+      actions={
+        <>
+          <Button onClick={() => window.location.reload()}>
+            <RotateCw aria-hidden="true" />
+            {t('routeError.reload')}
+          </Button>
+          <Link to="/" className={buttonVariants({ variant: 'outline' })}>
+            {t('notFound.home')}
+          </Link>
+        </>
+      }
+    />
   );
 }

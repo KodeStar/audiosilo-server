@@ -4,7 +4,9 @@ import {
   ancestorsOf,
   audioFilesOf,
   entryIn,
+  foldersIn,
   joinChoices,
+  joinPages,
   offersBook,
   offersCollection,
   treeKeyAction,
@@ -110,7 +112,7 @@ describe('treeRows', () => {
       p === 'Sanderson'
         ? { failed: true }
         : p === ''
-          ? { data: { ...FS[''], next_offset: 500 } }
+          ? { data: { ...FS[''], entries: foldersIn(FS['']), next_offset: 500 } }
           : undefined;
     expect(paths(treeRows(state, new Set(['Sanderson'])))).toEqual([
       'Sanderson',
@@ -118,6 +120,51 @@ describe('treeRows', () => {
       'Pratchett',
       'more:',
     ]);
+  });
+
+  it('has no Show more once the pages loaded reach the files: every folder is listed', () => {
+    // Folders come before files, so the entries past loose.mp3 are files too.
+    const state = (p: string): ListingState | undefined =>
+      p === '' ? { data: { ...FS[''], total: 900, next_offset: 500 } } : undefined;
+    expect(paths(treeRows(state, new Set()))).toEqual(['Sanderson', 'Pratchett']);
+  });
+});
+
+describe('joinPages', () => {
+  const page1 = listing('', [dir('A'), dir('B')], { total: 5, next_offset: 2 });
+  const page2 = listing('', [dir('C'), dir('D')], { total: 5, offset: 2, next_offset: 4 });
+  const page3 = listing('', [dir('E')], { total: 5, offset: 4 });
+  const names = (s: ListingState) => s.data?.entries.map((e) => e.name);
+
+  it("lists the pages loaded in order, with the last one's next offset", () => {
+    const two = joinPages({ data: page1 }, [{ data: page2 }]);
+    expect(names(two)).toEqual(['A', 'B', 'C', 'D']);
+    expect(two.data?.next_offset).toBe(4);
+    const all = joinPages({ data: page1 }, [{ data: page2 }, { data: page3 }]);
+    expect(names(all)).toEqual(['A', 'B', 'C', 'D', 'E']);
+    expect(all.data?.next_offset).toBeUndefined();
+    expect(all.more).toBeUndefined();
+  });
+
+  it('stops at a page still loading or failed, and says which', () => {
+    const loading = joinPages({ data: page1 }, [{}]);
+    expect(names(loading)).toEqual(['A', 'B']);
+    expect(loading.more).toBe('loading');
+    expect(joinPages({ data: page1 }, [{ data: page2 }, { failed: true }]).more).toBe('failed');
+    // The first page not there yet is the listing's own state.
+    expect(joinPages({ failed: true }, [{ data: page2 }])).toEqual({ failed: true });
+  });
+
+  it('puts Show more under a folder with entries past its pages', () => {
+    const state = (p: string) => (p === '' ? joinPages({ data: page1 }, [{}]) : undefined);
+    expect(treeRows(state, new Set()).at(-1)).toEqual({
+      kind: 'more',
+      parent: '',
+      level: 1,
+      shown: 2,
+      total: 5,
+      state: 'loading',
+    });
   });
 });
 
@@ -226,6 +273,7 @@ it('offers the choices that mean something for a folder', () => {
 
 it('offers "Always one book" in the detection dialog where it means something', () => {
   expect(offersBook({ is_book: true })).toBe(true); // a book (its own audio, or joined)
+  expect(offersBook({ pending_book: true })).toBe(true); // a book once the first scan reads it
   expect(offersBook({ split_discs: true })).toBe(true); // discs to join
   expect(offersBook({ override: 'collection' })).toBe(true); // its own audio, split
   expect(offersBook({ override: 'book' })).toBe(true); // what it is set to

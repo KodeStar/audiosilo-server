@@ -470,7 +470,9 @@ Ink (`--primary`) background, 22px icon tile, title + one-line description, one 
 Opened from the top-bar omnisearch, ⌘K / Ctrl+K or `/`. It opens over the omnisearch so it reads as
 the field expanding. Groups: Actions, Books (cover thumb), People (avatar), Authors, Series, Narrators,
 Shares, Settings, Go to. Items are 48px with a 36px leading visual, title with the match in `--brand-ink`
-bold, muted subtitle; `↵` hint on the active row; footer with key hints and result count.
+bold, muted subtitle; `↵` hint on the active row; footer with key hints and result count. The active
+row follows the first entry while it is on it, so results that arrive later (the server's books)
+take Enter; once moved by the user it stays.
 
 ### Cover _custom, signature_
 

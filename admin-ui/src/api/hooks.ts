@@ -110,6 +110,9 @@ export const keys = {
   /** Every listing of one library's folders (a prefix: a scan changes them). */
   browseLibrary: (libraryId: number) => ['fs', libraryId] as const,
   browse: (libraryId: number, path: string) => ['fs', libraryId, path] as const,
+  /** A later page of a folder's listing, from `offset` (under `browse`, so its refetches reach it). */
+  browsePage: (libraryId: number, path: string, offset: number) =>
+    ['fs', libraryId, path, offset] as const,
   dirs: (path: string) => ['admin', 'dirs', path] as const,
   users: ['admin', 'users'] as const,
   user: (id: number) => ['admin', 'user', id] as const,
@@ -159,8 +162,10 @@ export const keys = {
   /** Every Activity period and listening-days query (a prefix). */
   activityAll: ['admin', 'activity'] as const,
   activity: (range: string) => ['admin', 'activity', range] as const,
+  /** Every period of one person's listening days (a prefix; 0 is everyone). */
+  listeningDaysOf: (userId: number) => ['admin', 'activity', 'days', userId] as const,
   listeningDays: (range: string, userId: number) =>
-    ['admin', 'activity', 'days', range, userId] as const,
+    ['admin', 'activity', 'days', userId, range] as const,
   /** Live sessions and every session list (a prefix). */
   sessions: ['admin', 'sessions'] as const,
   liveSessions: ['admin', 'sessions', 'live'] as const,
@@ -186,6 +191,25 @@ export function invalidatePeople(qc: QueryClient) {
   }
 }
 
+/**
+ * Drops what the console holds for deleted people (their page and progress,
+ * devices, imports and listening days), so nothing asks the server for them
+ * again: each would only answer 404. Call it once their page is gone, with
+ * invalidatePeople for the lists they were on.
+ */
+export function forgetUsers(qc: QueryClient, ids: readonly number[]) {
+  for (const id of ids) {
+    for (const key of [
+      keys.user(id),
+      keys.userDevices(id),
+      keys.importList(id),
+      keys.listeningDaysOf(id),
+    ]) {
+      qc.removeQueries({ queryKey: key });
+    }
+  }
+}
+
 /** Refetches what a library change touches: the list, the overview, shares (labels). */
 export function invalidateLibraries(qc: QueryClient) {
   for (const key of [keys.libraries, keys.stats, keys.shares]) {
@@ -193,8 +217,22 @@ export function invalidateLibraries(qc: QueryClient) {
   }
 }
 
+const serverInfoQuery = { queryKey: keys.server, queryFn: api.serverInfo, staleTime: 5 * 60_000 };
+
 export function useServerInfo() {
-  return useQuery({ queryKey: keys.server, queryFn: api.serverInfo, staleTime: 5 * 60_000 });
+  return useQuery(serverInfoQuery);
+}
+
+/**
+ * useServerInfo read again on every focus and every 5 minutes: the shell's
+ * update notice, so a tab left open across an upgrade learns of it.
+ */
+export function useServerInfoLive() {
+  return useQuery({
+    ...serverInfoQuery,
+    refetchInterval: 5 * 60_000,
+    refetchOnWindowFocus: 'always',
+  });
 }
 
 /**

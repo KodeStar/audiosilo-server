@@ -2978,7 +2978,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or `podcasts`). Creating or re-rooting either kind may never overlap a podcast root in either
   direction (clean absolute paths, checked under the writer). Config sync logs a root clash and
   skips that entry, keeping its existing library when present, so startup continues. API creates
-  and patches still refuse it with 409 `root_overlaps`. Podcast libraries are indexed only
+  and patches still refuse it with 409 `root_overlaps`. Two books libraries may share a folder or
+  nest one inside the other (their books are then listed twice, once in each): the server allows
+  it, and the console's Add library and folder edit ask first (`bookRootOverlap`, ADMIN-14). Podcast libraries are indexed only
   from regular, non-symlinked `feed.json` v1 files in top-level non-hidden show folders, capped at
   32 MiB and 20,000 episodes. Unknown fields are ignored; a future version skips the show. Episode
   paths are validated, one level below their show, unique and audio-only; no tags, probes,

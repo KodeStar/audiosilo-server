@@ -1,4 +1,5 @@
-import type { AdminModule, AdminUser, SetupEnvelope } from '@/api/types';
+import type { AdminLibrary, AdminModule, AdminUser, SetupEnvelope } from '@/api/types';
+import { separatorOf } from '@/lib/paths';
 
 /**
  * Who "Give everyone access" grants a new library to: every enabled account
@@ -29,4 +30,49 @@ export function podcastsHintKey(m: AdminModule | undefined): string {
   if (m.enabled && bridge) return 'libraries.form.kindHintReady';
   if (m.enabled) return 'libraries.form.kindHintBridge';
   return bridge ? 'libraries.form.kindHintModule' : 'libraries.form.kindHint';
+}
+
+/** How a folder sits against another books library's: its folder, inside it, or holding it. */
+export interface RootOverlap {
+  name: string;
+  how: 'same' | 'inside' | 'holds';
+}
+
+/**
+ * A server path near enough as the server cleans it to compare two: a drive
+ * path's "/" as "\\", no doubled separators and none trailing ("/" and "C:\\"
+ * stay as they are).
+ */
+const cleanRoot = (p: string) => {
+  const sep = separatorOf(p.trim());
+  const one = p.trim().replace(sep === '\\' ? /[\\/]+/g : /\/+/g, sep);
+  const trimmed = one.replace(/[\\/]+$/, '');
+  return trimmed === '' || /^[A-Za-z]:$/.test(trimmed) ? one : trimmed;
+};
+
+/**
+ * The first books library (other than `editingId`) whose folder is `folder`,
+ * holds it or sits inside it (ADMIN-14). The server allows a books library
+ * there, but the books under both folders are then listed twice, once in each
+ * library, so the console asks first. Podcast libraries are left out: the
+ * server refuses any overlap with one (409 root_overlaps). Paths compare as
+ * the server's do, once cleaned: case and all.
+ */
+export function bookRootOverlap(
+  folder: string,
+  libraries: readonly Pick<AdminLibrary, 'id' | 'name' | 'root' | 'kind'>[],
+  editingId?: number,
+): RootOverlap | undefined {
+  const root = cleanRoot(folder);
+  if (!root) return undefined;
+  const sep = separatorOf(root);
+  const under = (a: string, b: string) => a.startsWith(b.endsWith(sep) ? b : b + sep);
+  for (const l of libraries) {
+    if (l.id === editingId || l.kind !== 'books') continue;
+    const other = cleanRoot(l.root);
+    if (other === root) return { name: l.name, how: 'same' };
+    if (under(root, other)) return { name: l.name, how: 'inside' };
+    if (under(other, root)) return { name: l.name, how: 'holds' };
+  }
+  return undefined;
 }

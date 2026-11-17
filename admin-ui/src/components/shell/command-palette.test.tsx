@@ -110,4 +110,47 @@ describe('palette search', () => {
     );
     await waitFor(() => expect(router.state.location.search).toEqual({ q: 'wxyz' }));
   });
+
+  // The server's books arrive after the static entries matched (ADMIN-13): the
+  // highlight Enter acts on follows them to the top, unless the user moved it.
+  function slowBooks() {
+    let release = () => {};
+    const answered = new Promise<void>((r) => (release = r));
+    const route: MockRoute = async () => {
+      await answered;
+      return { body: { books: [books[0]] } };
+    };
+    return { route, release };
+  }
+  const selectedOption = () =>
+    screen.getAllByRole('option').find((o) => o.getAttribute('aria-selected') === 'true');
+
+  it('moves the highlight to the first result when results arrive above it', async () => {
+    const slow = slowBooks();
+    mockFetch(routes({ 'GET /admin/books': slow.route }));
+    const { router } = renderApp();
+    const user = userEvent.setup();
+    await user.type(await openPalette(), 'dark');
+    await screen.findByRole('option', { name: /Search all books/ });
+    expect(selectedOption()).toHaveAccessibleName(/Use the dark theme/);
+    slow.release();
+    await screen.findByRole('option', { name: /The Way of Kings/ });
+    await waitFor(() => expect(selectedOption()).toHaveAccessibleName(/The Way of Kings/));
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/library/book'));
+  });
+
+  it('leaves the highlight where the user moved it when results arrive', async () => {
+    const slow = slowBooks();
+    mockFetch(routes({ 'GET /admin/books': slow.route }));
+    renderApp();
+    const user = userEvent.setup();
+    await user.type(await openPalette(), 'dark');
+    await screen.findByRole('option', { name: /Search all books/ });
+    await user.keyboard('{ArrowDown}');
+    expect(selectedOption()).toHaveAccessibleName(/Search all books/);
+    slow.release();
+    await screen.findByRole('option', { name: /The Way of Kings/ });
+    expect(selectedOption()).toHaveAccessibleName(/Search all books/);
+  });
 });

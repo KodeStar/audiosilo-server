@@ -265,6 +265,53 @@ describe('overview', () => {
     expect(await within(server).findByText('v0.9.2')).toBeInTheDocument();
   });
 
+  it("shows the server's configured addresses, not the browser's host", async () => {
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/settings': {
+          body: settingsWith({
+            general: {
+              ...settingsWith().general,
+              public_url: 'https://books.example.com',
+              lan_url: 'http://192.168.1.20:8080',
+            },
+          }),
+        },
+      }),
+    );
+    renderApp();
+    const server = await screen.findByRole('region', { name: 'Server' });
+    expect(await within(server).findByText('https://books.example.com')).toBeInTheDocument();
+    expect(within(server).getByText('http://192.168.1.20:8080')).toBeInTheDocument();
+    expect(within(server).getByText(/home network/)).toBeInTheDocument();
+    expect(within(server).queryByText(window.location.host)).toBeNull();
+  });
+
+  it('shows one address when the public and home network ones are the same', async () => {
+    const url = 'http://192.168.1.20:8080';
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/settings': {
+          body: settingsWith({
+            general: { ...settingsWith().general, public_url: url, lan_url: url },
+          }),
+        },
+      }),
+    );
+    renderApp();
+    const server = await screen.findByRole('region', { name: 'Server' });
+    expect(await within(server).findAllByText(url)).toHaveLength(1);
+    expect(within(server).queryByText(/home network/)).toBeNull();
+  });
+
+  it("falls back to the browser's host, saying so, when no address is set", async () => {
+    mockFetch(signedInRoutes());
+    renderApp();
+    const server = await screen.findByRole('region', { name: 'Server' });
+    expect(await within(server).findByText(window.location.host)).toBeInTheDocument();
+    expect(within(server).getByText(/This browser's address/)).toBeInTheDocument();
+  });
+
   it('says nobody is listening once, with no "0 people" (ADMIN-12)', async () => {
     mockFetch(signedInRoutes());
     renderApp();

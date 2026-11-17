@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { AdminModule, AdminUser, SetupEnvelope } from '@/api/types';
-import { configLibrary, everyoneToGrant, podcastsHintKey } from './library-access';
+import type { AdminLibrary, AdminModule, AdminUser, SetupEnvelope } from '@/api/types';
+import { bookRootOverlap, configLibrary, everyoneToGrant, podcastsHintKey } from './library-access';
 
 const user = (u: Partial<AdminUser>): AdminUser =>
   ({ id: 1, username: 'u', role: 'user', disabled: false, ...u }) as AdminUser;
@@ -46,5 +46,49 @@ describe('podcastsHintKey', () => {
   });
   it('falls back to the general hint before the modules load', () => {
     expect(podcastsHintKey(undefined)).toBe('libraries.form.kindHint');
+  });
+});
+
+describe('bookRootOverlap', () => {
+  const lib = (id: number, name: string, root: string, kind: AdminLibrary['kind'] = 'books') => ({
+    id,
+    name,
+    root,
+    kind,
+  });
+  const libs = [
+    lib(1, 'Fiction', '/mnt/books/fiction/'),
+    lib(2, 'Podcasts', '/mnt/podcasts', 'podcasts'),
+  ];
+
+  it('finds a books library at the folder, holding it, or inside it', () => {
+    expect(bookRootOverlap('/mnt/books/fiction', libs)).toEqual({ name: 'Fiction', how: 'same' });
+    expect(bookRootOverlap('/mnt/books/fiction/Pratchett', libs)).toEqual({
+      name: 'Fiction',
+      how: 'inside',
+    });
+    expect(bookRootOverlap('/mnt/books/', libs)).toEqual({ name: 'Fiction', how: 'holds' });
+    expect(bookRootOverlap('/', libs)).toEqual({ name: 'Fiction', how: 'holds' });
+    expect(bookRootOverlap('/mnt//books/fiction', libs)).toEqual({ name: 'Fiction', how: 'same' });
+  });
+
+  it('leaves out a sibling, a longer name, podcast libraries and the library being edited', () => {
+    expect(bookRootOverlap('/mnt/books/nonfiction', libs)).toBeUndefined();
+    expect(bookRootOverlap('/mnt/books/fiction2', libs)).toBeUndefined();
+    expect(bookRootOverlap('/mnt/podcasts/books', libs)).toBeUndefined();
+    expect(bookRootOverlap('/mnt/books/fiction/x', libs, 1)).toBeUndefined();
+    expect(bookRootOverlap('  ', libs)).toBeUndefined();
+  });
+
+  it('reads Windows paths with their separator', () => {
+    const win = [lib(3, 'Books', 'D:\\Audio\\Books')];
+    expect(bookRootOverlap('D:\\Audio\\Books\\Kids', win)).toEqual({
+      name: 'Books',
+      how: 'inside',
+    });
+    expect(bookRootOverlap('D:\\', win)).toEqual({ name: 'Books', how: 'holds' });
+    // Typed with forward slashes: the server stores it with its own.
+    expect(bookRootOverlap('D:/Audio/Books/Kids', win)).toEqual({ name: 'Books', how: 'inside' });
+    expect(bookRootOverlap('D:\\Audio\\Books2', win)).toBeUndefined();
   });
 });

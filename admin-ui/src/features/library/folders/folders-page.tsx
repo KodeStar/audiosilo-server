@@ -21,12 +21,19 @@ import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { rescanLibrary } from '@/features/libraries/rescan';
+import { relParent } from '@/lib/paths';
 import { LibraryFilter } from '../library-filter';
 import { useUpdateSearch } from '../library-param';
 import type { LibrarySearch } from '../library-search';
 import { FolderDetail } from './folder-detail';
 import { FolderTree } from './folder-tree';
-import { treeRows, visibleListings, withAncestors, type ListingState } from './folders-model';
+import {
+  joinPages,
+  treeRows,
+  visibleListings,
+  withAncestors,
+  type ListingState,
+} from './folders-model';
 
 /**
  * Library > Folders: a library's folders as a tree, and for the selected one
@@ -137,22 +144,46 @@ function FolderExplorer({
     if (folder) setExpanded((e) => withAncestors(e, folder));
   }
 
+  // The later pages Show more asked for, by folder: a folder lists 500 entries a page.
+  const [pages, setPages] = useState<ReadonlyMap<string, readonly number[]>>(() => new Map());
+
   // The open folders' listings, plus the selected one's (it says whether that
-  // folder has subfolders, so its chevron is right before it is opened).
+  // folder has subfolders, so its chevron is right before it is opened), each
+  // with the later pages asked for.
   const paths = visibleListings(expanded);
   if (folder && !paths.includes(folder)) paths.push(folder);
+  const asked = paths.flatMap((p) => [
+    { path: p, offset: 0 },
+    ...(pages.get(p) ?? []).map((offset) => ({ path: p, offset })),
+  ]);
   const results = useQueries({
-    queries: paths.map((p) => ({
-      queryKey: keys.browse(library.id, p),
-      queryFn: () => api.browse(library.id, p),
+    queries: asked.map(({ path: p, offset }) => ({
+      queryKey: offset ? keys.browsePage(library.id, p, offset) : keys.browse(library.id, p),
+      queryFn: () => api.browse(library.id, p, offset),
     })),
   });
-  const byPath = new Map(paths.map((p, i) => [p, results[i]]));
-  const listing = (p: string): ListingState | undefined => {
-    const q = byPath.get(p);
-    return q && { data: q.data, failed: q.isError };
+  const byPath = new Map<string, (typeof results)[number][]>();
+  asked.forEach(({ path: p }, i) => byPath.set(p, [...(byPath.get(p) ?? []), results[i]]));
+  const state = (q: (typeof results)[number]): ListingState => ({
+    data: q.data,
+    failed: q.isError,
+  });
+  // Each folder's pages joined once per render: the tree, the detail and Show more all read them.
+  const listings = new Map(
+    [...byPath].map(([p, [first, ...later]]) => [p, joinPages(state(first), later.map(state))]),
+  );
+  const listing = (p: string): ListingState | undefined => listings.get(p);
+  const root = byPath.get('')![0];
+
+  // Show more: the next page after what has loaded, or the one that failed again
+  // (as joinPages reads it: a page that kept its entries through a failed
+  // refresh is still listed, and isn't the one to ask for).
+  const showMore = (p: string) => {
+    const failed = byPath.get(p)?.find((q) => q.isError && !q.data);
+    if (failed) return void failed.refetch();
+    const next = listing(p)?.data?.next_offset;
+    if (next) setPages((prev) => new Map(prev).set(p, [...(prev.get(p) ?? []), next]));
   };
-  const root = byPath.get('')!;
 
   const toggle = (path: string, open: boolean) =>
     setExpanded((prev) => {
@@ -199,7 +230,8 @@ function FolderExplorer({
             selected={folder}
             onSelect={onSelect}
             onToggle={toggle}
-            onRetry={(p) => void byPath.get(p)?.refetch()}
+            onRetry={(p) => void byPath.get(p)?.[0].refetch()}
+            onMore={showMore}
           />
         ) : (
           <div className="flex flex-col gap-1.5 p-2" role="status" aria-label={t('common.loading')}>
@@ -210,7 +242,11 @@ function FolderExplorer({
         )}
       </Card>
       {folder ? (
-        <FolderDetail library={library} path={folder} />
+        <FolderDetail
+          library={library}
+          path={folder}
+          parentListing={listing(relParent(folder))?.data}
+        />
       ) : (
         <EmptyState
           icon={FolderSearch}
