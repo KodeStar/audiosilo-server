@@ -158,6 +158,9 @@ type bookRead struct {
 	// The book's flight (Scanner.startFlight), held from before the read until
 	// the book is written or dropped; nil when the scan stopped first.
 	flight *indexFlight
+	// left is set once the scan stopped and left this read under way: the
+	// flight's indexFlight.left.
+	left atomic.Bool
 }
 
 // endFlight ends the read's flight once its book is written (err nil) or not,

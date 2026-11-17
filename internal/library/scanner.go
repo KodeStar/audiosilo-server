@@ -621,7 +621,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// ctx), so it is waited for up to stopGrace; one still under way then (held
 	// in a call a share that stopped answering never returns from) is left to
 	// end on its own, its book's flight with it, and counted
-	// (Scanner.readsLeft), so the scan ends and the next one runs.
+	// (Scanner.readsLeft), so the scan ends and the next one runs: its flight
+	// marked left (bookRead.left), so the next scan keeps that book as stored
+	// rather than wait for it (keepLeft).
 	stopped := func(err error) (*ScanResult, error) {
 		flush()
 		grace := time.NewTimer(stopGrace)
@@ -640,6 +642,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				continue
 			}
 			left++
+			r.left.Store(true)
 			s.readsLeft.Add(1)
 			go func() {
 				<-r.done
@@ -824,7 +827,11 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			defer close(r.done)
 			// Not beside an on-demand read of the book (indexShared, IndexMoved),
 			// and one asked for while this read is under way waits for its write.
-			f, err := s.startFlight(ctx, bookKey{lib.ID, b.RelPath})
+			f, err := s.startFlight(ctx, bookKey{lib.ID, b.RelPath}, &r.left)
+			if errors.Is(err, errReadLeft) {
+				s.keepLeft(ctx, lib, b, old)
+				return
+			}
 			if err != nil {
 				return // the scan stopped: writeNext sees it
 			}
@@ -1173,6 +1180,30 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 		b.ArtVersion = artVersion(ctx, lib.Root, b.ArtFiles(), s.probeTimeout, &gaveUp)
 	}
 	gaveUp.keep(b)
+}
+
+// keepLeft is a scan's reading of book b when a stopped scan left a read of it
+// under way (errReadLeft): nothing of it is read, so it is kept as stored
+// (ReadCutShort; a new one written with its path's names) with an unreadable
+// problem, the one stored when there is one (old) or else on its first audio
+// file, so Health lists it and the next scan looks at it again; the rest of
+// the library scans meanwhile.
+func (s *Scanner) keepLeft(ctx context.Context, lib catalog.Library, b *catalog.Book, old catalog.Signature) {
+	if b.AddedAt == "" {
+		stampAddedAt(ctx, lib, b, s.probeTimeout)
+	}
+	setNames(b, nil)
+	if b.IsFolder {
+		b.ABS = catalog.ABSReading{Unread: true}
+	}
+	b.Attachments = catalog.AttachmentsReading{Unread: true}
+	b.EbookFile = catalog.EbookReading{Unread: true}
+	file := primaryPath(b)
+	if old.ScanError == problemUnreadable && old.ScanErrorFile != "" {
+		file = old.ScanErrorFile
+	}
+	b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = problemUnreadable, file, tagsUnreadDetail
+	b.ReadCutShort, b.LengthOnly = true, false
 }
 
 // ArtFile is the file a book's own art (no custom cover) is read from, the one
@@ -2135,7 +2166,7 @@ func (s *Scanner) ReindexPath(ctx context.Context, lib catalog.Library, relPath 
 // no read of it is under way (startFlight), then loads what it stored
 // (awaitFlight): ReindexPath's and IndexMoved's read, which neither joins.
 func (s *Scanner) readOwn(ctx context.Context, lib catalog.Library, book *catalog.Book, from func(context.Context) string) (*catalog.Book, error) {
-	f, err := s.startFlight(ctx, bookKey{lib.ID, book.RelPath})
+	f, err := s.startFlight(ctx, bookKey{lib.ID, book.RelPath}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2170,7 +2201,15 @@ type indexFlight struct {
 	key  bookKey
 	done chan struct{}
 	err  error
+	// left, a scan's read's (bookRead.left), is set once the scan stopped and
+	// left that read under way (Scanner.readsLeft): held in a call that may
+	// never return, so a later scan does not wait for it (startFlight).
+	left *atomic.Bool
 }
+
+// errReadLeft is startFlight's error, for a scan's read, when the book's
+// flight is a read a stopped scan left under way (indexFlight.left).
+var errReadLeft = errors.New("library: an earlier scan's read of this book is still under way")
 
 // errReadDropped is a flight's outcome when a scan read the book but did not
 // write it (the scan stopped, or the write failed): its waiters read it
@@ -2189,7 +2228,7 @@ const indexTimeout = 10 * time.Minute
 // stopped, a read past indexTimeout) reads the book itself.
 func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *catalog.Book) (*catalog.Book, error) {
 	for {
-		f, lead := s.claimFlight(bookKey{lib.ID, book.RelPath})
+		f, lead := s.claimFlight(bookKey{lib.ID, book.RelPath}, nil)
 		if lead {
 			go s.leadIndex(ctx, lib, book, f, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
 		}
@@ -2233,12 +2272,18 @@ func readGivenUp(err error) bool {
 // waiting for one that is (ctx's error when ctx ends first). The caller ends it
 // with endFlight. A scan and IndexMoved take a book this way: neither can join a
 // read made without them (a scan writes in its own batches, IndexMoved carries
-// its book's state first), but neither reads it beside one either.
-func (s *Scanner) startFlight(ctx context.Context, key bookKey) (*indexFlight, error) {
+// its book's state first), but neither reads it beside one either. A scan's
+// read passes its left (bookRead.left; nil otherwise), and is not kept waiting
+// on a read a stopped scan left under way: errReadLeft at once, as that read
+// may never return and the scan would stall at the book.
+func (s *Scanner) startFlight(ctx context.Context, key bookKey, left *atomic.Bool) (*indexFlight, error) {
 	for {
-		f, lead := s.claimFlight(key)
+		f, lead := s.claimFlight(key, left)
 		if lead {
 			return f, nil
+		}
+		if left != nil && f.left != nil && f.left.Load() {
+			return nil, errReadLeft
 		}
 		select {
 		case <-ctx.Done():
@@ -2249,14 +2294,14 @@ func (s *Scanner) startFlight(ctx context.Context, key bookKey) (*indexFlight, e
 }
 
 // claimFlight is the flight of key under way, or a new one registered for the
-// caller to lead (lead true) when there is none.
-func (s *Scanner) claimFlight(key bookKey) (f *indexFlight, lead bool) {
+// caller to lead (lead true) when there is none, with left (indexFlight.left).
+func (s *Scanner) claimFlight(key bookKey, left *atomic.Bool) (f *indexFlight, lead bool) {
 	s.flightMu.Lock()
 	defer s.flightMu.Unlock()
 	if f, busy := s.flights[key]; busy {
 		return f, false
 	}
-	f = &indexFlight{key: key, done: make(chan struct{})}
+	f = &indexFlight{key: key, done: make(chan struct{}), left: left}
 	s.flights[key] = f
 	return f, true
 }

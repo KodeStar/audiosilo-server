@@ -154,7 +154,7 @@ func TestIndexPathAfterADroppedRead(t *testing.T) {
 	once := count()
 
 	// A scan's read of the book under way (Scan takes it so), then dropped.
-	f, err := s.startFlight(ctx, bookKey{lib.ID, "A/Book"})
+	f, err := s.startFlight(ctx, bookKey{lib.ID, "A/Book"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestIndexPathAfterADroppedRead(t *testing.T) {
 
 	// A read that failed is that failure for its waiters, not a read of their own.
 	failed := errors.New("write failed")
-	f, err = s.startFlight(ctx, bookKey{lib.ID, "A/Twin"})
+	f, err = s.startFlight(ctx, bookKey{lib.ID, "A/Twin"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestReindexPathReadsAfresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	once := count()
-	f, err := s.startFlight(ctx, bookKey{lib.ID, "A/Book"})
+	f, err := s.startFlight(ctx, bookKey{lib.ID, "A/Book"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -167,6 +169,87 @@ func TestStopDuringAStuckRead(t *testing.T) {
 	}
 	if _, err := s.IndexPath(ctx, *libA, "Author/Book"); err != nil {
 		t.Errorf("index the book once its read returned: %v", err)
+	}
+}
+
+// A later scan does not wait on a book whose read a stopped scan left stuck
+// (its flight held until that read returns, which may be never): it keeps the
+// book as stored with an unreadable problem and scans the rest of the library.
+// Once the read returns, the next scan reads the book as ever.
+func TestALaterScanSkipsABookWhoseReadWasLeft(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	writeFile(t, root, "Author/Book/01.mp3", make([]byte, 1<<10))
+	writeFile(t, root, "Author/Other/01.mp3", make([]byte, 1<<10))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, "", slog.Default())
+	held := filepath.Join(root, "Author", "Book", "01.mp3")
+	var hold atomic.Bool
+	started, unblock := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	s.readFile = func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
+		if hold.Load() && absPath == held {
+			once.Do(func() { close(started) })
+			<-unblock // ignores ctx, as a call stuck in the kernel does
+		}
+		return extractFile(ctx, absPath, ffprobePath, timeout)
+	}
+	if res := scanWithin(t, s, *lib, 20*time.Second); res.Added != 2 {
+		t.Fatalf("first scan added %d, want both books", res.Added)
+	}
+	row := func(rel string) (size int64, problem, file string) {
+		t.Helper()
+		if err := db.QueryRowContext(ctx, `SELECT size, scan_error, scan_error_file FROM books WHERE library_id = ? AND rel_path = ?`,
+			lib.ID, rel).Scan(&size, &problem, &file); err != nil {
+			t.Fatal(err)
+		}
+		return size, problem, file
+	}
+
+	// The book changed on disk, and its read hangs: a scan stopped there
+	// leaves the read under way.
+	writeFile(t, root, "Author/Book/01.mp3", make([]byte, 2<<10))
+	writeFile(t, root, "Author/New/01.mp3", make([]byte, 1<<10))
+	hold.Store(true)
+	scanCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Scan(scanCtx, *lib)
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("stopped scan = %v, want context.Canceled", err)
+	}
+	if n := s.readsLeft.Load(); n != 1 {
+		t.Fatalf("reads left = %d, want the stuck one", n)
+	}
+
+	scanWithin(t, s, *lib, 10*time.Second)
+	if size, problem, file := row("Author/Book"); size != 1<<10 || problem != problemUnreadable || file != "Author/Book/01.mp3" {
+		t.Errorf("the book left stuck: size %d, problem %q on %q; want the stored row kept (%d) with %q on its file",
+			size, problem, file, 1<<10, problemUnreadable)
+	}
+	if size, problem, _ := row("Author/New"); size != 1<<10 || problem != "" {
+		t.Errorf("the book after it: size %d, problem %q; want it read", size, problem)
+	}
+
+	close(unblock)
+	deadline := time.Now().Add(10 * time.Second)
+	for s.readsLeft.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the left read never ended its flight")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	hold.Store(false)
+	scanWithin(t, s, *lib, 20*time.Second)
+	if size, problem, _ := row("Author/Book"); size != 2<<10 || problem != "" {
+		t.Errorf("the book once its read returned: size %d, problem %q; want it read again", size, problem)
 	}
 }
 
