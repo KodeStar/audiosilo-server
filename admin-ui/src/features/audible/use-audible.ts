@@ -59,13 +59,17 @@ export function useAudibleTitles(f: {
   matched: MatchedFilter;
   q: string;
 }) {
+  // Keyed on what the server is asked, not the filter: "Not here" and "Needs a
+  // look" read the same titles (the second narrows them here), so they share
+  // the pages loaded.
+  const matched = matchedParam(f.matched);
   const pages = useInfiniteQuery({
-    queryKey: keys.audibleTitles(f.account, f.state, f.matched, f.q),
+    queryKey: keys.audibleTitles(f.account, f.state, String(matched ?? ''), f.q),
     queryFn: ({ pageParam }) =>
       api.audibleTitles({
         account: f.account || undefined,
         state: f.state || undefined,
-        matched: matchedParam(f.matched),
+        matched,
         q: f.q || undefined,
         after: pageParam,
         limit: TITLES_PAGE,

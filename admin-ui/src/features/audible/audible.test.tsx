@@ -622,12 +622,15 @@ describe('settings > audible', () => {
   });
 
   it('lists the titles whose planned backup needs a look, preorders first', async () => {
+    let askedNotHere = 0;
     mockFetch(
       routes(true, {
-        'GET /admin/audible/titles': (req) => ({
-          body: {
-            titles:
-              req.query.get('matched') === '0'
+        'GET /admin/audible/titles': (req) => {
+          const notHere = req.query.get('matched') === '0';
+          if (notHere) askedNotHere++;
+          return {
+            body: {
+              titles: notHere
                 ? [
                     title({
                       asin: 'B000000002',
@@ -651,16 +654,17 @@ describe('settings > audible', () => {
                     }),
                   ]
                 : [title()],
-            next: '',
-          },
-        }),
+              next: '',
+            },
+          };
+        },
       }),
     );
     renderApp('/server?topic=audible');
     await screen.findByRole('list', { name: 'Audible titles' });
-    await userEvent
-      .setup()
-      .selectOptions(screen.getByRole('combobox', { name: 'On this server' }), 'look');
+    const user = userEvent.setup();
+    const onServer = screen.getByRole('combobox', { name: 'On this server' });
+    await user.selectOptions(onServer, 'look');
     await waitFor(() => expect(screen.queryByText('Quiet One')).not.toBeInTheDocument());
     const list = await screen.findByRole('list', { name: 'Audible titles' });
     const rows = within(list).getAllByRole('listitem');
@@ -669,6 +673,11 @@ describe('settings > audible', () => {
     expect(within(rows[0]).getByText(/the first book of its series here/)).toBeInTheDocument();
     expect(within(rows[1]).getByText('New Author')).toBeInTheDocument();
     expect(within(rows[1]).getByText(/a new author folder/)).toBeInTheDocument();
+    // "Not here" asks the server the same thing, so it shows the pages already
+    // read rather than asking again.
+    await user.selectOptions(onServer, 'missing');
+    expect(await screen.findByText('Quiet One')).toBeInTheDocument();
+    expect(askedNotHere).toBe(1);
   });
 
   it('says so when there are none, and when a filter matches nothing', async () => {
