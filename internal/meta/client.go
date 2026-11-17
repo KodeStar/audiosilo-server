@@ -407,10 +407,11 @@ type upstreamSearch struct {
 // upstreamMatchResult is one GET works/match result, best first: a work card
 // (only the id and cover are needed; the full document is fetched by id) with
 // its score, reasons and the recording an identifier named. Work and SeriesFacts
-// answer expand=work, on the best result by Candidates' order alone (not always the
-// first): GET works/{id} byte for byte, and factsOf's input by series id. A series
-// with no entry is unknown; no Work (an older metaserve, its budget spent) means
-// the details are to be fetched.
+// answer expand=work,lean, on the best result by Candidates' order alone (not always
+// the first): GET works/{id} without the sidecars (an older metaserve, which does not
+// read lean, sends the whole document), and factsOf's input by series id. A series
+// with no entry is unknown; no Work (an older metaserve, its budget spent, a best
+// under expand_min) means the details are to be fetched or the best dropped.
 type upstreamMatchResult struct {
 	ID          string                  `json:"id"`
 	CoverURL    *string                 `json:"cover_url"`

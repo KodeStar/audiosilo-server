@@ -1934,9 +1934,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   off stops it (an apply too: back to ready, as a cancel; every endpoint, cancel
   included, 404s `metadata_off` then). What a run costs the service: a match sets
   `MatchQuery.BestOnly` and `NoDetailsBelow` (`ReviewFloor`), which the dialog never does, for
-  `expand=work` on works/match (one wait a book: `bestCandidates` reads `work` and `series_facts`
-  off the result `compareMatches` calls best, an identifier hit winning a tie, so maybe `results[1]`;
-  the facts fill the `s:` cache). It reads the whole of `cands[0]` and of `cands[1]` only `Score` and
+  `expand=work,lean` and `expand_min=<ReviewFloor>` on works/match (one wait a book: `bestCandidates`
+  reads `work` and `series_facts` off the result `compareMatches` calls best, an identifier hit
+  winning a tie, so maybe `results[1]`; the facts fill the `s:` cache). `lean` leaves the work's
+  sidecars (characters, recaps, `recap_summary`, `position_scale`) out, so that work is partial: it
+  is read into the candidate only, never the `w:` cache, the store or an enrichment. `expand_min`
+  skips the work of a best under the floor (an identifier hit scores 100). An older metaserve
+  ignores both and inlines the whole work, which reads the same. It reads the whole of `cands[0]` and of `cands[1]` only `Score` and
   `IdentifierHit()` (`Classify`), so every other candidate is a stub. `work` absent on the best (an
   older metaserve, its budget spent) is the fetch path for the best alone, and nothing for a weak
   best no identifier found; a best that is gone (404) gives way to the next, but one that can't be read

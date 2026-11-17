@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -499,5 +500,50 @@ func TestKnownASINMirrorStaysLocal(t *testing.T) {
 	}
 	if remote.Load() == before {
 		t.Fatal("a lookup the copy failed was not asked of the remote service")
+	}
+}
+
+// A bulk match against the local copy (metaserve's own pkg/query) gets the lean work,
+// smaller than the whole one, and still reads the best's details; a later full read
+// of that work, through Service.Work or an enrichment, has its sidecars.
+func TestMirrorLeanMatchKeepsFullReadsWhole(t *testing.T) {
+	remote, remoteHits := mirrortest.Remote(t)
+	s := NewService(remote.URL, nil)
+	m := newFakeMirror(t)
+	s.SetMirror(m, nil)
+	ctx := context.Background()
+	q := MatchQuery{Title: "Project Hail Mary", Author: "Andy Weir", Limit: 2, BestOnly: true, NoDetailsBelow: 60}
+
+	answer := func(v url.Values) string {
+		rec := httptest.NewRecorder()
+		m.h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/works/match?"+v.Encode(), nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("works/match?%s = %d", v.Encode(), rec.Code)
+		}
+		return rec.Body.String()
+	}
+	lean := matchParams(q, "", "", "")
+	whole := matchParams(q, "", "", "")
+	whole.Set("expand", matchExpandWork)
+	leanBody, wholeBody := answer(lean), answer(whole)
+	if !strings.Contains(wholeBody, `"characters"`) || strings.Contains(leanBody, `"characters"`) || !strings.Contains(leanBody, `"work":`) {
+		t.Fatalf("lean answer must inline the work without its sidecars:\nlean %s\nwhole %s", leanBody, wholeBody)
+	}
+	t.Logf("works/match answer: %d bytes whole, %d lean", len(wholeBody), len(leanBody))
+
+	cands, err := s.Candidates(ctx, q)
+	if err != nil || len(cands) == 0 || cands[0].WorkID != querytest.ASINWork || cands[0].Title == "" {
+		t.Fatalf("Candidates = %+v, %v", cands, err)
+	}
+	work, err := s.Work(ctx, querytest.ASINWork)
+	if err != nil || len(work.Characters) == 0 || work.RecapSummary == nil {
+		t.Fatalf("Work after a lean match = %+v, %v, want its sidecars", work, err)
+	}
+	env, err := s.Enrich(ctx, querytest.ASIN, "")
+	if err != nil || len(env.Work.Characters) == 0 {
+		t.Fatalf("Enrich after a lean match = %+v, %v, want its sidecars", env, err)
+	}
+	if n := remoteHits.Load(); n != 0 {
+		t.Fatalf("the remote service was asked %d times", n)
 	}
 }
