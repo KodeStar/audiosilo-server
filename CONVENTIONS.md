@@ -1386,8 +1386,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   books `catalog.ReadalongEbooksDue` lists (a stored valid head, an ebook, a digest not current) through
   `library.EbookDigest` (`OpenEbook`), skipping one whose stored digest is already of the file on disk
   (`Scanner.EbookDigestNow`: a request recorded it before the scan), and `SetEbookDigest` records it
-  with the signature of the file it hashed, only while the row still names that ebook (`ebook_path`):
-  a request may record one for a file newer than the last scan, which that scan then finds current. Hashing every ebook would read a
+  with the signature of the file it hashed, only while the row still names that ebook (`ebook_path`)
+  and still holds the digest its caller read as stale (`ebook_hashed_sig` as read before hashing), so
+  a slow hash of an older file never overwrites a newer one recorded meanwhile (server#265): a request
+  may record one for a file newer than the last scan, which that scan then finds current. An EPUB
+  replaced by one of the same size and mtime (and name) keeps the old digest until either changes:
+  the signature is `size:mtime:name` (a known limit). Hashing every ebook would read a
   library whole over a network share.
 - **Metadata overrides (admin redesign Phase 2a, `catalog/overrides.go`)**: an admin's
   edits never touch files. A `books` row holds the **effective** values - what the scan
