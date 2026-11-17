@@ -118,6 +118,11 @@ func (r *Runner) Run(ctx context.Context) {
 	if !r.waitReady(ctx) {
 		return
 	}
+	// The first pass finds what the kicks sent during the wait were for.
+	select {
+	case <-r.kick:
+	default:
+	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
