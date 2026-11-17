@@ -301,13 +301,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   fallback -> up to 3 series rails, one per ordering family) behind a bounded in-memory TTL cache (24h
   positive / 1h not-found / 2min transport-error, ~2048-entry cap) so a hot path
   or a down upstream isn't hammered; the api handler (`handlers_meta.go`) is
-  transport-only. **From the recorded match** (LibriVox L5): a book with no asin/isbn, or whose
-  identifier upstream doesn't know (`ErrNotFound`), answers from its `book_matches` row
-  (`catalog.BookMatchAt`, `bookEnvelope`) through `meta.Service.EnrichMatch` (works/{id} via
+  transport-only. **From the recorded match** (LibriVox L5; one work rule, server#412): a book with
+  no asin/isbn, whose identifier upstream doesn't know (`ErrNotFound`) or can't answer (an outage:
+  the match's stored answer serves, server#375), or whose `book_matches` row names another work
+  than its identifiers resolve to, answers from that row (`catalog.BookMatchAt`, `bookEnrichment`,
+  shared by `bookEnvelope` and `/next`'s `communityNext`, so both follow `/item`'s
+  `catalog.workIDExpr`) through `meta.Service.EnrichMatch` (works/{id} via
   `workDetail`, `fetchWork`'s read without its `workSem` slot (the id comes from a book the server
   holds, as `compose`'s), the recording it names treated as a lookup-named one, no lookup), cached
   exactly as `Enrich` (shared `enrich`) under its own key space `m:<work id>/<recording id>` (each part
-  `url.PathEscape`d); a book its identifiers match never reads its match. Degradation: disabled ->
+  `url.PathEscape`d); the row is read only when `Book.WorkID` (the recorded work first) differs
+  from the identifiers' work, and a recorded work upstream lacks (or can't answer) leaves the
+  identifiers' answer standing. Degradation: disabled ->
   404 (and the `metadata` capability is false, so clients hide the UI); no asin/isbn match and no
   recorded match -> `200
   {"matched": false}` (with a `work` of the book's own when the Bridge generated
@@ -476,7 +481,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `meta.Answer`, never claims the credit); `MetaRecording`
   carries `chapter_count` and, on a LibriVox recording only (`librivox_id > 0`), `librivox`
   `{id, url, zip_url}` (`librivoxOf`: metaserve's `links.librivox`/`links.zip`, each kept only
-  as an absolute http(s) URL, never built from the id; LibriVox L5).
+  as an absolute http(s) URL on `librivox.org` or `archive.org` or a subdomain, with no userinfo
+  and its scheme lower-cased (`librivoxURL`, `absoluteHTTPURL`, fe#291), never built from the id;
+  LibriVox L5).
   `Service.CachedWorkID` answers an identifier's work id
   from the cache alone: memory, else its enrichment's stored row, fresh or stale
   (never the upstream), so placement does not flip with a restart or an eviction.
@@ -503,14 +510,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   capability `other_recordings`)**: every other book of an entry's work id the caller can
   open rides beside `local` as `local_others` `[{library_id, path}]` in that order, one per
   recording: never a copy of `local` or of a book before it sharing its ASIN, or its ISBN
-  when either has no ASIN (normalized, `match.Recordings` in `meta.otherRecordings`; two
+  when the later book has no ASIN (normalized, `match.Recordings` in `meta.otherRecordings`; two
   different ASINs never merge whatever their ISBNs, as recordings often share the print
-  ISBN; the first copy in that order is kept, a book with neither never merged); an entry only
+  ISBN, and a book with an ASIN is never taken in by an ISBN alone, so an ISBN-only copy
+  seen first never hides an ASIN recording sharing its print ISBN (server#412; one sorted after
+  such a recording is its copy); the first copy in that order is kept, a book with neither never merged); an entry only
   ever lists recordings of its own work, so no book is on two entries: the current work's entry
   holds the requested book as `local` beside the envelope's work's other books, which match
   `/item`'s `other_recordings` of the rail's series books (a recording filed in no series, or one
-  only the cache has resolved, can still differ) except when the book's console match names
-  another work than its ASIN's (`/item` follows the match, `/meta` its ASIN); an entry placed by its index
+  only the cache has resolved, can still differ); an entry placed by its index
   has none; per request like `local`, never on a cached envelope. A book's
   work key is `book_matches.work_id`, else a non-empty `upcoming_owned.work_id` while that
   row's `id_key` is the book's identifiers' (`meta.IDKey`, in SQL `idKeyExpr`: a retag or an
@@ -518,7 +526,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   every list book and `/item` as `work_id`), and `GET /item`
   adds `other_recordings` (list-shape books, `catalog.OtherRecordings`: books libraries,
   the caller's scopes, the same work key, not itself, one per recording: no copy sharing a
-  normalized ASIN, or an ISBN when either has no ASIN, with it or with a book before it
+  normalized ASIN, or an ISBN when the later book has no ASIN, with it or with a book before it
   (`match.Recordings`, the same rule as `local_others`, after the
   scope filter, so a copy the caller cannot open never stands in for one they can); its own
   library first, then title, then narrator, the first copy in that order kept; at most 20
@@ -727,7 +735,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Redirects are never followed (`http.ErrUseLastResponse`). **Answers**: a 202 with `accepted` marks that chunk's
   `sent_at` (even mid-stop, `WithoutCancel`); 404, 405, a 3xx or a 2xx without `accepted` is `not_offered` (one
   INFO line, no call for 7 days: `quiet_until`); 429, 5xx or anything else marks nothing (`failed`, next day). An
-  `unknown` row a recheck finds known forgets its `sent_at`. **Storage**: `unknown_asin_reports(asin PK, checked_at,
+  `unknown` row a recheck finds known forgets its `sent_at`, as does one any other identifier lookup finds
+  (`meta.Service.SetASINFound`, wired to `catalog.ClearUnknownASIN`: a player's /meta, the upcoming job's
+  work ids, the chapter check), so a book the community added leaves Health's list at once, not at the
+  monthly recheck (server#392; a read first, so a lookup of an ASIN the report doesn't hold writes nothing). **Storage**: `unknown_asin_reports(asin PK, checked_at,
   unknown, sent_at)`, no path or book (disposable; user-state writes, but a row added or removed or its `unknown`
   changed moves the content generation: Health reads it). **Health** (server#370): `catalog.IssueUnknownASIN`
   (`unknown_asin`) lists a book whose own ASIN a row marks unknown, with no ISBN, no `book_matches` row and no
@@ -1871,9 +1882,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire
   name stays), the series' naming and a refresh's `MatchedBooks`. What needs an identifier tests
   asin/isbn itself and stays identifier-only: community chapters, the unknown-ASIN report, upcoming,
-  a repick (`CommunityASINBooks`), the Bridge's estimate, `/next`'s community rail and the console's chapter check,
-  Series rail and Suggest corrections. `/meta` reads the row when the book has no identifier or its
-  lookup is a not-found (`meta.Service.EnrichMatch`, see Community metadata lookup). Path-keyed state: a move carries it with the book's edits as one
+  a repick (`CommunityASINBooks`), the Bridge's estimate and the console's chapter check,
+  Series rail and Suggest corrections. `/meta` and `/next`'s community rail read the row when the book
+  has no identifier, its lookup is a not-found or fails, or the row names another work than its
+  identifiers' (`bookEnrichment`, `meta.Service.EnrichMatch`, see Community metadata lookup). Path-keyed state: a move carries it with the book's edits as one
   set, a join copies the first part's, a rescan or rebuild keeps it, `ClearCommunityMatches` drops it
   (counted in `books`); the book page carries it as `community_match {work_id, recording_id, how,
   matched_at, web_url}` (omitted when none), a review's change as `match` (the console lists it when no
