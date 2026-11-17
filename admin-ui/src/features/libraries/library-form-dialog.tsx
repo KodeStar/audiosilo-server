@@ -224,7 +224,8 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       // The config declares it, which the console's copy of the setup didn't
       // know yet (a restart since): read it again so the form and card lock.
       if (err instanceof ApiError && err.code === 'config_library') {
-        void qc.invalidateQueries({ queryKey: keys.setup });
+        // exact: the folder previews share the key's prefix and haven't changed.
+        void qc.invalidateQueries({ queryKey: keys.setup, exact: true });
       }
       const field = (err instanceof ApiError && err.code && FIELD_BY_CODE[err.code]) || 'folder';
       form.setError(field, { message: errorMessage(err, t) });
