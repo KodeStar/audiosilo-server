@@ -313,13 +313,24 @@ export function platformLabel(platform: string): string {
 }
 
 /**
+ * How an app id reads: AudioSilo's own apps ("AudioSilo" from the player,
+ * "audiosilo-watch" from the Apple Watch and Wear OS apps, fe#220) as
+ * "AudioSilo", the platform saying which; anything else as sent.
+ */
+function appLabel(app: string): string {
+  const key = app.toLowerCase();
+  return key === 'audiosilo' || key === 'audiosilo-watch' ? 'AudioSilo' : app;
+}
+
+/**
  * The parts of a client's label: the app with its version, and the platform
- * ("AudioSilo 1.4.2", "iOS"). The console and unknown apps are named by the caller
- * (they need a translation).
+ * ("AudioSilo 1.4.2", "iOS"; a watch's "AudioSilo 2.6.0", "Apple Watch"). The
+ * console and unknown apps are named by the caller (they need a translation).
  */
 export function clientParts(client: Pick<ClientInfo, 'app' | 'version' | 'platform'>) {
+  const app = appLabel(client.app);
   return {
-    app: client.version ? `${client.app} ${client.version}` : client.app,
+    app: client.version ? `${app} ${client.version}` : app,
     platform: client.platform ? platformLabel(client.platform) : '',
   };
 }
