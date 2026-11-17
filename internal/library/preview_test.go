@@ -35,7 +35,8 @@ func previewScanner() *Scanner { return NewScanner(nil, "", slog.Default()) }
 
 // The preview counts what a scan would find and names every book both ways
 // with the catalog's resolver: from the tags (over the path's baseline), and
-// from the folders (over the tags). An Audiobookshelf metadata.json goes over
+// from the folders alone (no tag fills what they leave: the loose file has no
+// author there, server#271 ADMIN-06). An Audiobookshelf metadata.json goes over
 // both. Nothing is indexed (the scanner has no catalog at all).
 func TestPreviewNamesBothWays(t *testing.T) {
 	t.Parallel()
@@ -55,7 +56,7 @@ func TestPreviewNamesBothWays(t *testing.T) {
 		"Author X/Book Y": "tags={Title:Book Y Author:Abs Author Narrator: Series: Position:} " +
 			"path={Title:Book Y Author:Abs Author Narrator: Series: Position:} abs=true",
 		"Loose.m4b": "tags={Title:Shade's First Rule Author:A. F. Kay Narrator: Series: Position:} " +
-			"path={Title:Loose Author:A. F. Kay Narrator: Series: Position:} abs=false",
+			"path={Title:Loose Author: Narrator: Series: Position:} abs=false",
 		"Somebody Else/Some Series/03 - Other Title": "tags={Title:Unsouled Author:Will Wight Narrator: Series:Some Series Position:3} " +
 			"path={Title:Other Title Author:Somebody Else Narrator: Series:Some Series Position:3} abs=false",
 	}

@@ -310,8 +310,10 @@ func TestAdminSetupPreviewTwoColumns(t *testing.T) {
 		t.Fatalf("samples = %s", b)
 	}
 	loose, filed := p.Samples[0], p.Samples[1]
+	// The folders' column is the folders alone: a loose file's has no author
+	// (server#271 ADMIN-06), where the tags' column has the tag's.
 	if loose.RelPath != "Loose.m4b" || loose.Tags.Title != "The Final Empire" || loose.Path.Title != "Loose" ||
-		loose.Tags.Author != "Brandon Sanderson" || loose.Path.Author != "Brandon Sanderson" {
+		loose.Tags.Author != "Brandon Sanderson" || loose.Path.Author != "" {
 		t.Errorf("loose sample = %+v", loose)
 	}
 	wantTags := catalog.ScannedNames{Title: "Unsouled", Author: "Will Wight", Series: "Some Series", Position: "3"}

@@ -9,15 +9,31 @@ function setupToken() {
   return h.get("token") || "";
 }
 
+// The server's minimum (auth.MinPasswordLen); the field's minlength says the same.
+const MIN_PASSWORD = 8;
+
 function showError(msg) {
   const m = $("setup-msg");
   m.textContent = msg;
   m.classList.add("show");
 }
 
+// A server refusal as a sentence: its own words start lowercase
+// ("password must be at least 8 characters").
+function sentence(msg) {
+  const s = msg.trim();
+  if (!s) return "Setup failed.";
+  const first = s.charAt(0).toUpperCase() + s.slice(1);
+  return /[.!?]$/.test(first) ? first : first + ".";
+}
+
 $("setup-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("setup-msg").classList.remove("show");
+  if ($("password").value.length < MIN_PASSWORD) {
+    showError(`Choose a password of at least ${MIN_PASSWORD} characters.`);
+    return;
+  }
   const btn = $("setup-submit");
   btn.disabled = true;
   try {
@@ -31,7 +47,7 @@ $("setup-form").addEventListener("submit", async (e) => {
       }),
     });
     const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data.error || "Setup failed.");
+    if (!resp.ok) throw new Error(sentence(data.error || ""));
     $("setup-form").classList.add("hidden");
     $("setup-done").classList.remove("hidden");
   } catch (err) {

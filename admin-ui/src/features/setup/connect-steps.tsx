@@ -187,7 +187,8 @@ export function PhoneStep({ settings, leave, back, last }: StepProps) {
       <StepFooter
         back={back}
         onSkip={() => leave('skipped')}
-        onContinue={() => leave('done')}
+        // A phone can't open a loopback link: the step is still to do (ADMIN-13.5).
+        onContinue={() => leave(loopback ? 'skipped' : 'done')}
         last={last}
       />
     </>

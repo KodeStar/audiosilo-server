@@ -290,6 +290,13 @@ describe('folder, naming and metadata', () => {
     expect(await screen.findByRole('heading', { name: 'How are your books named?' })).toBeVisible();
     const samples = screen.getByRole('list', { name: 'Sample books' });
     expect(within(samples).getByText('Pratchett/Discworld/04 - Mort')).toBeVisible();
+    // The blanks in words, and nothing about disagreeing while none do (ADMIN-06).
+    expect(
+      screen.getByText(
+        'Gaps in these samples: 4 in the tags, 1 in the folder names. Either way, the narrator comes from the tags.',
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/disagree on/)).toBeNull();
     expect(screen.getByRole('radio', { name: /Folder names first/ })).toBeChecked();
     expect(calls.some((c) => c.path === '/admin/libraries' && c.method === 'POST')).toBe(false);
     await user.click(screen.getByRole('button', { name: 'Continue' }));
@@ -315,6 +322,26 @@ describe('folder, naming and metadata', () => {
     ]);
     // The scan shows from here on.
     expect(await screen.findByRole('region', { name: 'Library scans' })).toBeVisible();
+  });
+
+  it('says how many details the two disagree on, when they do (ADMIN-06)', async () => {
+    localStorage.setItem(
+      'audiosilo.setup.draft',
+      JSON.stringify({ root: '/audiobooks', name: 'Audiobooks' }),
+    );
+    const sample = preview.samples[0];
+    mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done' } },
+        {
+          'POST /admin/setup/preview': {
+            body: { ...preview, samples: [{ ...sample, tags: names({ title: 'Mortality' }) }] },
+          },
+        },
+      ),
+    );
+    renderApp('/setup?step=naming');
+    expect(await screen.findByText(/The two disagree on 1 detail, marked below\./)).toBeVisible();
   });
 
   it('keeps the pick made for each library the naming step offers', async () => {
@@ -776,6 +803,20 @@ describe('the 2.4.0 fixes', () => {
     const newCode = screen.getByRole('button', { name: 'New code' });
     expect(newCode).toBeEnabled();
     expect(newCode.closest('.opacity-45')).toBeNull();
+  });
+
+  it('records the phone step skipped when its link is unreachable (ADMIN-13.5)', async () => {
+    browseAt('http://127.0.0.1:8080/admin/setup');
+    const calls = mockFetch(
+      flowRoutes(
+        { finished: true, steps: { phone: 'skipped' } },
+        { 'POST /auth/pair': pairAt('http://127.0.0.1:8080/web/connect?token=p1&sid=s1') },
+      ),
+    );
+    renderApp('/setup?step=phone');
+    await screen.findByText("A phone can't reach 127.0.0.1:8080");
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
+    await waitFor(() => expect(puts(calls)).toEqual([{ steps: { phone: 'skipped' } }]));
   });
 
   it('points the phone at the home address when the page is open at a loopback one', async () => {
