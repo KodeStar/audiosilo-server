@@ -47,10 +47,9 @@ import type { StepProps } from './step-actions';
 export function AbsStep({ libraries, leave, back, last }: StepProps) {
   const { t } = useTranslation();
   const [mapping, setMapping] = useState(false);
-  const scanning = booksScanning(libraries);
   const blocked: Blocked | undefined = !hasBookLibrary(libraries)
     ? { reason: t('setup.abs.noLibrary'), waiting: false }
-    : scanning
+    : booksScanning(libraries)
       ? { reason: t('setup.abs.waitScan'), waiting: true }
       : undefined;
   return (
@@ -61,7 +60,7 @@ export function AbsStep({ libraries, leave, back, last }: StepProps) {
           <li>{t('setup.abs.import')}</li>
           <li>{t('setup.abs.metadata')}</li>
         </ul>
-        <ImportFlow embedded blocked={blocked} offerMatch={!scanning} onMapping={setMapping} />
+        <ImportFlow embedded blocked={blocked} offerMatch={!blocked} onMapping={setMapping} />
       </div>
       <StepFooter
         back={mapping ? null : back}
