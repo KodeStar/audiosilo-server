@@ -58,6 +58,10 @@ type Job struct {
 	Progress *ScanProgress `json:"progress,omitempty"`
 
 	cancel context.CancelFunc
+	// asked is set when an admin or a setting change asked for the library while
+	// this unattended job waited, so the job is no longer one nobody asked for
+	// (see skipUnknownKind).
+	asked bool
 }
 
 // jobQueue is the queue's state; Scanner.mu guards it.
@@ -117,6 +121,9 @@ func (s *Scanner) Enqueue(lib catalog.Library, trigger string, startedBy *int64)
 	q := &s.jobs
 	for _, j := range q.queued {
 		if j.LibraryID == lib.ID {
+			if !unattended(trigger) {
+				j.asked = true
+			}
 			return j.snapshot()
 		}
 	}
@@ -278,7 +285,7 @@ func (s *Scanner) run(ctx, jctx context.Context, j *Job) {
 		}
 		return
 	}
-	if !catalog.KnownKind(lib.Kind) && unattended(j.Trigger) {
+	if !catalog.KnownKind(lib.Kind) && unattended(j.Trigger) && !j.asked {
 		s.skipUnknownKind(lib)
 		return
 	}
@@ -320,7 +327,8 @@ func (s *Scanner) run(ctx, jctx context.Context, j *Job) {
 // scheduled scan and restart would only repeat that. One log line per library
 // instead, and the schedule counts from now (skipped) so the next tick doesn't
 // queue it again. A scan an admin asked for, or a setting change, still runs and
-// fails, so the run and its alert name the cause.
+// fails, so the run and its alert name the cause, also when the ask joined a
+// waiting scheduled or startup job (Job.asked).
 func (s *Scanner) skipUnknownKind(lib *catalog.Library) {
 	s.mu.Lock()
 	said := s.jobs.unknownKind[lib.ID]

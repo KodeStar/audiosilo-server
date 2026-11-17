@@ -388,4 +388,21 @@ func TestScanJobSkipsAnUnknownLibraryKind(t *testing.T) {
 			t.Errorf("%s: report %+v, want a recorded failed run naming the unknown kind", trigger, r)
 		}
 	}
+
+	// An admin's Scan that joins a startup job still waiting (a rollback's
+	// restart queues every library) runs and fails like its own would.
+	s.Enqueue(*lib, TriggerStartup, nil)
+	s.Enqueue(*lib, TriggerManual, nil)
+	s.mu.Lock()
+	queued := s.jobs.queued
+	s.jobs.queued = nil
+	s.mu.Unlock()
+	if len(queued) != 1 {
+		t.Fatalf("%d jobs queued, want the one", len(queued))
+	}
+	n := len(reports)
+	s.run(ctx, ctx, queued[0])
+	if len(reports) != n+1 || reports[n].Status != catalog.RunFailed {
+		t.Errorf("joined startup job: reports %+v, want one failed run", reports[n:])
+	}
 }

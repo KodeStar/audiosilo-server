@@ -2966,7 +2966,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   refuses any library that isn't `books` (`resolveBook`, `ErrNotIndexable`). A scheduled or startup scan
   job for one records no run and raises no "scan failed" alert (`skipUnknownKind`: one log line per
   library, and the schedule counts from the skip), so a rollback doesn't alert at every scheduled scan
-  and restart; a manual or setting-change scan still records a failed run, and its alert, naming the cause.
+  and restart; a manual or setting-change scan, also one that joined a waiting scheduled or startup job
+  (`Job.asked`), still records a failed run, and its alert, naming the cause.
   `catalog.Caller.Podcasts` comes from this request's credential via `api.callerOf(ctx)` and
   `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players need
   `PodcastPlayerMinVersion` (2.2.0, the first with podcast views; numeric X.Y.Z, a pre-release
