@@ -811,26 +811,52 @@ func pickRecording(recs []upstreamRecording, recordingID string) *MetaRecording 
 }
 
 // librivoxOf is a recording's LibriVox block: nil unless it names a LibriVox
-// project, with each link dropped unless it is an absolute http(s) URL, so a
-// client can open it as it stands.
+// project, with each link dropped unless it is an absolute http(s) URL on
+// LibriVox's or the Internet Archive's own hosts (librivoxURL), so a client can
+// open it as it stands, under the label it gives it.
 func librivoxOf(rec *upstreamRecording) *MetaLibrivox {
 	if rec.LibrivoxID <= 0 {
 		return nil
 	}
 	return &MetaLibrivox{
 		ID:     rec.LibrivoxID,
-		URL:    absoluteHTTPURL(rec.Links.Librivox),
-		ZipURL: absoluteHTTPURL(rec.Links.Zip),
+		URL:    librivoxURL(rec.Links.Librivox),
+		ZipURL: librivoxURL(rec.Links.Zip),
 	}
 }
 
-// absoluteHTTPURL returns raw when it is an absolute http or https URL with a
-// host (httpURL), else "".
-func absoluteHTTPURL(raw string) string {
-	if httpURL(raw) == nil {
+// librivoxHosts are the hosts a LibriVox link may name, each or a subdomain of
+// it: the project's pages, and the archive its recordings are on (a zip is on a
+// numbered *.archive.org node).
+var librivoxHosts = []string{"librivox.org", "archive.org"}
+
+// librivoxURL is absoluteHTTPURL's answer when its host is one of librivoxHosts
+// or a subdomain of one, else "" (fe#291: a link labelled LibriVox goes there).
+func librivoxURL(raw string) string {
+	out := absoluteHTTPURL(raw)
+	if out == "" {
 		return ""
 	}
-	return raw
+	host := strings.ToLower(strings.TrimSuffix(httpURL(out).Hostname(), "."))
+	for _, h := range librivoxHosts {
+		if host == h || strings.HasSuffix(host, "."+h) {
+			return out
+		}
+	}
+	return ""
+}
+
+// absoluteHTTPURL returns raw when it is an absolute http or https URL with a
+// host (httpURL) and no user name or password in it, its scheme lower-cased
+// ("HTTPS://" is "https://"), else "": a link a client opens as it stands.
+func absoluteHTTPURL(raw string) string {
+	u := httpURL(raw)
+	if u == nil || u.User != nil {
+		return ""
+	}
+	// url.Parse lower-cases the scheme it reads off raw's start; the rest of
+	// raw is kept as written.
+	return u.Scheme + raw[len(u.Scheme):]
 }
 
 // httpURL is raw parsed when it is an absolute http or https URL with a host,

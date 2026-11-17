@@ -70,8 +70,8 @@ func TestLibrivoxAbsentOnRetail(t *testing.T) {
 }
 
 // TestLibrivoxOf: the block exists only for a positive project id, and each
-// link survives only as an absolute http(s) URL with a host; it is never built
-// from the id.
+// link survives only as an absolute http(s) URL on LibriVox's or the archive's
+// hosts, without userinfo; it is never built from the id.
 func TestLibrivoxOf(t *testing.T) {
 	for name, tc := range map[string]struct {
 		rec  upstreamRecording
@@ -88,6 +88,14 @@ func TestLibrivoxOf(t *testing.T) {
 		"no host":         {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https:///x/"}}, &MetaLibrivox{ID: 9}},
 		"other schemes":   {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "ftp://librivox.org/x/", Zip: "data:text/html,hi"}}, &MetaLibrivox{ID: 9}},
 		"unparseable":     {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://librivox.org/%zz"}}, &MetaLibrivox{ID: 9}},
+		// fe#291: a link labelled LibriVox names LibriVox's or the archive's
+		// own host (or a subdomain), with no user name, its scheme lower-cased.
+		"archive node":    {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://www.LibriVox.org/x/", Zip: "https://ia800.us.archive.org/x.zip"}}, &MetaLibrivox{ID: 9, URL: "https://www.LibriVox.org/x/", ZipURL: "https://ia800.us.archive.org/x.zip"}},
+		"upper scheme":    {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "HTTPS://librivox.org/x/"}}, &MetaLibrivox{ID: 9, URL: "https://librivox.org/x/"}},
+		"another host":    {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://example.com/librivox.org/", Zip: "https://archive.org.example.com/x.zip"}}, &MetaLibrivox{ID: 9}},
+		"look-alike host": {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://notlibrivox.org/x/", Zip: "https://fakearchive.org/x.zip"}}, &MetaLibrivox{ID: 9}},
+		"userinfo":        {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://librivox.org@example.com/x/", Zip: "https://user:pw@archive.org/x.zip"}}, &MetaLibrivox{ID: 9}},
+		"empty userinfo":  {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://@librivox.org/x/"}}, &MetaLibrivox{ID: 9}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := librivoxOf(&tc.rec)
