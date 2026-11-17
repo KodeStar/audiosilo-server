@@ -1298,7 +1298,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   drives it. `GET /fs` annotates each entry's effective `override`.
   **Joined books (`library/joined.go`)**: `book` joins only a **disc set** (`discSets`): a
   folder below the root with no audio of its own whose every folder holding audio beneath
-  it is a disc folder (`isDiscFolder`: cd/disc/disk + number) **directly** in it, at least
+  it is a disc folder (`metadata.IsDiscFolder`: cd/disc/disk + number) **directly** in it, at least
   two (`minDiscs`; one disc already reads as one book). A CD rip (`Book/CD1`, `Book/CD2`,
   ...) becomes ONE book of its discs' audio (hidden/ignore rules applied), with no books for
   the discs. Any other folder keeps `book`'s old meaning (its own files; without any, a

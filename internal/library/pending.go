@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // The bounds of the pending pass (MarkPendingBooks). pendingTime is one
@@ -84,7 +85,7 @@ func pendingBook(lib catalog.Library, rel string, overrides map[string]string, i
 		if p == rel {
 			return !own && isDiscSet(p)
 		}
-		return own && isDiscFolder(path.Base(rel)) && isDiscSet(p)
+		return own && metadata.IsDiscFolder(path.Base(rel)) && isDiscSet(p)
 	}); ok {
 		return root == rel
 	}
