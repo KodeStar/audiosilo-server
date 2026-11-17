@@ -230,6 +230,7 @@ func TestPodcastDescriptorSurvivesRenameAndLinksDenied(t *testing.T) {
 // again and refused (denied), as is the copy remembered for a show once its
 // episode is gone from a new copy.
 func TestPodcastFeedMemo(t *testing.T) {
+	t.Parallel()
 	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
 	ep := f.Episodes[0]
 	writePodcastFixture(t, filepath.Join(lib.Root, filepath.FromSlash(ep.Path)), "chap-v24-reverse.mp3")
@@ -280,6 +281,7 @@ func TestPodcastFeedMemo(t *testing.T) {
 // the same size and mtime (a timestamp too coarse to tell the writes apart),
 // its episode no longer naming the pinned generation, is read again and refused.
 func TestPodcastFeedMemoRacy(t *testing.T) {
+	t.Parallel()
 	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
 	ep := f.Episodes[0]
 	writePodcastFixture(t, filepath.Join(lib.Root, filepath.FromSlash(ep.Path)), "chap-v24-reverse.mp3")
