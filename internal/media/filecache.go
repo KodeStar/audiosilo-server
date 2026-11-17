@@ -245,10 +245,11 @@ func source(abs string) (os.FileInfo, error) {
 }
 
 // Open returns the cached copy of abs (the caller has SafeJoined it) and its
-// strong ETag (the spec's); the copy's own mtime is its Last-Modified, never
-// the source's, so a validator a client kept for the stored file never matches
-// it. The caller closes the file. A cold key runs under runCtx (the server's
-// lifetime, bounded by the spec's timeout) while this call waits on ctx: a
+// strong ETag (the spec's), the copy's one validator: it is served with no
+// Last-Modified (the copy's mtime is the cache's LRU clock, moved on a hit), so
+// a validator a client kept for the stored file never matches it. The caller
+// closes the file. A cold key runs under runCtx (the server's lifetime,
+// bounded by the spec's timeout) while this call waits on ctx: a
 // request that leaves, or stops waiting, doesn't stop the run the others wait
 // for. The errors are ErrRefused (with ErrNoSource when abs is no regular
 // file), ErrPending wrapping ctx's error when ctx ended first, or one that says

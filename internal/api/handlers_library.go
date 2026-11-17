@@ -871,8 +871,8 @@ func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloa
 }
 
 // serveRemuxed answers with abs's remuxed MP3 (media.NewRemuxer) with Range and
-// its own validators: a strong ETag from the cache key and the copy's mtime as
-// Last-Modified, so an If-Range or If-Modified-Since a client kept from the
+// its own validator: a strong ETag from the cache key and no Last-Modified
+// (serveCopy), so an If-Range or If-Modified-Since a client kept from the
 // stored Matroska (a 2.4.x download) never earns a 304 or MP3 bytes spliced
 // onto Matroska. When the remux can't be had now (still running after
 // remuxColdWait, ErrUnavailable, an ffmpeg or cache failure) it answers
