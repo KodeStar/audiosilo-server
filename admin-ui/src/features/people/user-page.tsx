@@ -612,10 +612,12 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
       setConfirmingRole(true);
       return;
     }
-    applyRole(role);
+    void applyRole(role);
   };
 
-  const applyRole = (role: User['role']) => {
+  // Resolves once the change is made (or has said why it wasn't), so the
+  // owner-role confirm stays busy until then.
+  const applyRole = async (role: User['role']) => {
     // An admin needs a way into the console (owner decision 5): a password, or
     // a single sign-on from the provider the server runs. With neither, ask for
     // a password in the same step; the server's answer stays the authority.
@@ -624,7 +626,7 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
       return;
     }
     const done = role === 'admin' ? 'user.account.nowAdmin' : 'user.account.nowListener';
-    void patch({ role }, t(done, { name: u.username }));
+    await patch({ role }, t(done, { name: u.username }));
   };
 
   return (
@@ -714,13 +716,15 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
         open={confirmingRole}
         onOpenChange={setConfirmingRole}
         icon={ShieldCheck}
+        tone="info"
+        destructive={false}
         title={t('user.account.roleOwnerTitle', { name: u.username })}
         description={t(
           ownerRole === 'admin' ? 'user.account.roleOwnerAdmin' : 'user.account.roleOwnerListener',
           { name: u.username },
         )}
         confirmLabel={t('user.account.roleOwnerConfirm')}
-        onConfirm={async () => applyRole(ownerRole)}
+        onConfirm={() => applyRole(ownerRole)}
       />
       <ConfirmDialog
         open={disabling}
