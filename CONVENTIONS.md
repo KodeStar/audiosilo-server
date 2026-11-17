@@ -31,7 +31,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   A test never holds code to a time in milliseconds: CI's shared runners take several times as long as a laptop,
   and more when busy. How a read grows is compared across sizes on the one machine (`TestSeriesKeyScale`) and
   its shape held by its plan (`queryPlan`: `TestNextInSeriesPlan`, `TestIssueCountsPlan`).
-- **Wire goldens (`api/wire_golden_test.go`, `internal/api/testdata/wire/`, audiosilo#96, server#347)**: the
+- **Wire goldens (`internal/api/wire_golden_test.go`, `internal/api/testdata/wire/`, audiosilo#96, server#347)**: the
   shape of each important player envelope (`/server`, the session and pairing envelopes, `/me`, the library
   lists, `/item`, `/chapters`, progress, `/me/listening/sync`, bookmarks, `/meta`, `/me/upcoming`,
   `/household/listening`), produced by the real handlers against seeded envs: each field's JSON type, never a

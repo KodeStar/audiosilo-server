@@ -6,16 +6,15 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
@@ -27,7 +26,8 @@ import (
 //	"string" | "number" | "boolean" | "null"   a scalar
 //	{ "field": <shape>, ... }                  an object
 //	[ <shape> ]                                an array, its elements merged ([] when empty)
-//	{ "$or": [ <shape>, ... ] }                elements of an array that differ in type
+//	{ "$or": [ <shape>, ... ] }                elements of an array that differ in type,
+//	                                           one shape per kind, sorted by kind
 //
 // The test fails when a handler's output shape differs from its golden: a field
 // gone or retyped (a breaking change for shipped clients, CROSS-REPO.md §15) and
@@ -46,7 +46,7 @@ const wireDir = "testdata/wire"
 // wireCase is one golden: the route it documents and the scenario producing it.
 type wireCase struct {
 	name  string // the file's name, without .json
-	route string // documentation only: the method, the route and the query used
+	route string // the method, the route and the query used, recorded in the golden
 	body  func(t *testing.T) string
 }
 
@@ -54,15 +54,13 @@ func TestWireGolden(t *testing.T) {
 	t.Parallel()
 	cases := wireCases(t)
 	seen := map[string]bool{}
-	t.Run("envelopes", func(t *testing.T) {
-		for _, c := range cases {
-			if seen[c.name] {
-				t.Fatalf("two cases named %q", c.name)
-			}
-			seen[c.name] = true
-			t.Run(c.name, func(t *testing.T) { checkWireGolden(t, c) })
+	for _, c := range cases {
+		if seen[c.name] {
+			t.Fatalf("two cases named %q", c.name)
 		}
-	})
+		seen[c.name] = true
+		t.Run(c.name, func(t *testing.T) { checkWireGolden(t, c) })
+	}
 	// A golden with no case is a stale file: the player would keep checking a
 	// shape nothing produces any more.
 	entries, err := os.ReadDir(wireDir)
@@ -104,9 +102,6 @@ func checkWireGolden(t *testing.T, c wireCase) {
 		enc.SetEscapeHTML(false) // the routes' <placeholders> stay readable
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(got); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(wireDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(file, out.Bytes(), 0o644); err != nil {
@@ -164,7 +159,7 @@ func shapeOf(v any) any {
 	panic(fmt.Sprintf("shapeOf: %T", v))
 }
 
-// shapeKind is a shape's kind: its scalar name, "object" or "array".
+// shapeKind is a shape's kind: its scalar name, "object", "array" or "$or".
 func shapeKind(s any) string {
 	switch x := s.(type) {
 	case string:
@@ -186,11 +181,9 @@ func shapeKind(s any) string {
 func mergeShape(a, b any) any {
 	alts := map[string]any{}
 	add := func(s any) {
-		var list []any
-		if m, ok := s.(map[string]any); ok && shapeKind(s) == "$or" {
-			list = m["$or"].([]any)
-		} else {
-			list = []any{s}
+		list := []any{s}
+		if shapeKind(s) == "$or" {
+			list = s.(map[string]any)["$or"].([]any)
 		}
 		for _, s := range list {
 			k := shapeKind(s)
@@ -199,12 +192,8 @@ func mergeShape(a, b any) any {
 			case !ok:
 				alts[k] = s
 			case k == "object":
-				pm, sm := prev.(map[string]any), s.(map[string]any)
-				out := make(map[string]any, len(pm))
-				for f, v := range pm {
-					out[f] = v
-				}
-				for f, v := range sm {
+				out := maps.Clone(prev.(map[string]any))
+				for f, v := range s.(map[string]any) {
 					if pv, ok := out[f]; ok {
 						out[f] = mergeShape(pv, v)
 					} else {
@@ -225,19 +214,12 @@ func mergeShape(a, b any) any {
 	}
 	add(a)
 	add(b)
-	if len(alts) == 1 {
-		for _, s := range alts {
-			return s
-		}
-	}
-	kinds := make([]string, 0, len(alts))
-	for k := range alts {
-		kinds = append(kinds, k)
-	}
-	sort.Strings(kinds)
-	out := make([]any, 0, len(kinds))
-	for _, k := range kinds {
+	out := make([]any, 0, len(alts))
+	for _, k := range slices.Sorted(maps.Keys(alts)) {
 		out = append(out, alts[k])
+	}
+	if len(out) == 1 {
+		return out[0]
 	}
 	return map[string]any{"$or": out}
 }
@@ -315,6 +297,7 @@ func TestShapeOf(t *testing.T) {
 	if !slices.Equal(d, want2) {
 		t.Fatalf("diff = %q, want %q", d, want2)
 	}
+
 }
 
 // wireCases builds the scenarios' envs and the cases reading them. The cases
@@ -323,8 +306,16 @@ func TestShapeOf(t *testing.T) {
 func wireCases(t *testing.T) []wireCase {
 	t.Helper()
 	m, h, u := newWireMainEnv(t), newWireHouseEnv(t), newUpcomingEnv(t)
-	get := func(path, tok string) func(*testing.T) string {
-		return func(t *testing.T) string { return wireOK(t, m.testEnv, "GET", path, tok, "") }
+	call := func(e *testEnv, method, path, tok, body string) func(*testing.T) string {
+		return func(t *testing.T) string { return wireOK(t, e, method, path, tok, body) }
+	}
+	get := func(path, tok string) func(*testing.T) string { return call(m.testEnv, "GET", path, tok, "") }
+	newCode := func(t *testing.T) string {
+		code, err := m.auth.CreateAuthCode(context.Background(), m.adminID, "wire", 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return code
 	}
 	lib := func(endpoint, path string) func(*testing.T) string {
 		return get(bookURL(m.lib.ID, endpoint, path), m.samTok)
@@ -335,23 +326,18 @@ func wireCases(t *testing.T) []wireCase {
 		{name: "server", route: "GET /api/v1/server (signed in)", body: get("/api/v1/server", m.adminTok)},
 		{name: "server-anonymous", route: "GET /api/v1/server", body: get("/api/v1/server", "")},
 		{name: "auth-redeem", route: "POST /api/v1/auth/redeem", body: func(t *testing.T) string {
-			code, err := m.auth.CreateAuthCode(context.Background(), m.adminID, "wire", 0, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return wireOK(t, m.testEnv, "POST", "/api/v1/auth/redeem", "", `{"code":"`+code+`"}`)
+			return wireOK(t, m.testEnv, "POST", "/api/v1/auth/redeem", "", `{"code":"`+newCode(t)+`"}`)
 		}},
 		{name: "auth-exchange", route: "POST /api/v1/auth/exchange", body: func(t *testing.T) string {
-			code, err := m.auth.CreateAuthCode(context.Background(), m.adminID, "wire", 0, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			status, pairing, _ := m.redeemCode(t, code)
+			status, pairing, _ := m.redeemCode(t, newCode(t))
 			if status != http.StatusOK {
 				t.Fatalf("redeem = %d", status)
 			}
-			return wireOK(t, m.testEnv, "POST", "/api/v1/auth/exchange", "",
-				`{"pairing_token":"`+pairing+`","device_name":"Wire phone"}`)
+			status, b := m.exchangeToken(t, pairing, "Wire phone")
+			if status != http.StatusOK {
+				t.Fatalf("exchange = %d %s", status, b)
+			}
+			return b
 		}},
 		{name: "me", route: "GET /api/v1/me", body: get("/api/v1/me", m.samTok)},
 		{name: "libraries", route: "GET /api/v1/libraries (an admin: with root)", body: get("/api/v1/libraries", m.adminTok)},
@@ -364,24 +350,14 @@ func wireCases(t *testing.T) []wireCase {
 		{name: "chapters", route: "GET /api/v1/libraries/{id}/chapters?path=<a two-file book>", body: lib("chapters", cradleBook)},
 		{name: "progress", route: "GET /api/v1/libraries/{id}/progress?path=<a book>", body: lib("progress", cradleBook)},
 		{name: "me-progress", route: "GET /api/v1/me/progress", body: get("/api/v1/me/progress", m.samTok)},
-		{name: "listening-sync", route: "POST /api/v1/me/listening/sync", body: func(t *testing.T) string {
-			return wireOK(t, m.testEnv, "POST", syncURL, m.samTok,
-				syncBody("wire-device", listenJSON("wire-1", m.lib.ID, syncMistborn, 0, 60, "")))
-		}},
+		{name: "listening-sync", route: "POST /api/v1/me/listening/sync", body: call(m.testEnv, "POST", syncURL, m.samTok,
+			syncBody("wire-device", listenJSON("wire-1", m.lib.ID, syncMistborn, 0, 60, "")))},
 		{name: "bookmarks", route: "GET /api/v1/libraries/{id}/bookmarks?path=<a book>", body: lib("bookmarks", cradleBook)},
-		{name: "meta", route: "GET /api/v1/libraries/{id}/meta?path=<a matched book>", body: func(t *testing.T) string {
-			return wireOK(t, m.testEnv, "GET", bookURL(m.metaLib, "meta", "Andy Weir/The Martian"), m.adminTok, "")
-		}},
-		{name: "upcoming", route: "GET /api/v1/me/upcoming", body: func(t *testing.T) string {
-			tok, err := u.auth.IssueToken(context.Background(), u.adminID, auth.KindSession, "wire", 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return wireOK(t, u.testEnv, "GET", upcomingPath, tok, "")
-		}},
-		{name: "household-listening", route: "GET /api/v1/household/listening (sharing, one other person listening)", body: func(t *testing.T) string {
-			return wireOK(t, h.testEnv, "GET", "/api/v1/household/listening", h.patTok, "")
-		}},
+		{name: "meta", route: "GET /api/v1/libraries/{id}/meta?path=<a matched book>",
+			body: get(bookURL(m.metaLib, "meta", metaBook), m.adminTok)},
+		{name: "upcoming", route: "GET /api/v1/me/upcoming", body: call(u.testEnv, "GET", upcomingPath, adminSession(t, u.testEnv), "")},
+		{name: "household-listening", route: "GET /api/v1/household/listening (sharing, one other person listening)",
+			body: call(h.testEnv, "GET", "/api/v1/household/listening", h.patTok, "")},
 	}
 }
 
@@ -406,35 +382,29 @@ type wireMainEnv struct {
 	samTok   string
 }
 
+// metaBook is the book the mock metaserve matches.
+const metaBook = "Andy Weir/The Martian"
+
 func newWireMainEnv(t *testing.T) *wireMainEnv {
 	t.Helper()
-	ctx := context.Background()
 	e := newMetaEnvMock(t, true, &mockMetaserve{match: true})
 	lib := newFixtureLibrary(t, e)
-	m := &wireMainEnv{testEnv: e, lib: lib}
-	adminTok, err := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "admin phone", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.adminTok = adminTok
 	sam, samTok := newUserWithSession(t, e, "sam", false)
-	m.samTok = samTok
-	if err := e.cat.GrantWholeLibrary(ctx, sam, lib.ID); err != nil {
+	if err := e.cat.GrantWholeLibrary(context.Background(), sam, lib.ID); err != nil {
 		t.Fatal(err)
 	}
 	wireOK(t, e, "PUT", bookURL(lib.ID, "progress", cradleBook), samTok, `{"position":42,"duration":120}`)
 	wireOK(t, e, "POST", bookURL(lib.ID, "bookmarks", cradleBook), samTok, `{"position":12,"note":"here","label":"favourite"}`)
 
-	metaLib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Matched", Root: t.TempDir()})
+	metaLib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Matched", Root: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: metaLib.ID, RelPath: "Andy Weir/The Martian",
+	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: metaLib.ID, RelPath: metaBook,
 		Title: "The Martian", Author: "Andy Weir", ASIN: "B00B5HZGUG", AddedAt: "2020-01-01"}); err != nil {
 		t.Fatal(err)
 	}
-	m.metaLib = metaLib.ID
-	return m
+	return &wireMainEnv{testEnv: e, lib: lib, metaLib: metaLib.ID, adminTok: adminSession(t, e), samTok: samTok}
 }
 
 // newWireHouseEnv: sam and pat share their listening, sam has listened.
