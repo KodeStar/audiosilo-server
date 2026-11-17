@@ -76,7 +76,7 @@ export type TreeRow =
   /** A placeholder under `parent` while its listing loads, or once it failed. */
   | { kind: 'loading'; parent: string; level: number }
   | { kind: 'error'; parent: string; level: number }
-  /** Show more under `parent`, whose listing has entries past the pages loaded. */
+  /** Show more under `parent`, whose listing may have folders past the pages loaded. */
   | {
       kind: 'more';
       parent: string;
@@ -121,8 +121,10 @@ export function treeRows(
       });
       if (open && expandable) walk(entry.path, level + 1);
     });
-    if (state.data.next_offset) {
-      const { entries, total } = state.data;
+    // A listing puts folders before files (library.listDir), so one whose loaded
+    // pages end on a file has no folders left to show: the tree lists folders only.
+    const { entries, total, next_offset } = state.data;
+    if (next_offset && entries.at(-1)?.is_dir) {
       rows.push({ kind: 'more', parent, level, shown: entries.length, total, state: state.more });
     }
   };

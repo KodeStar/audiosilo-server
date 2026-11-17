@@ -4,6 +4,7 @@ import {
   ancestorsOf,
   audioFilesOf,
   entryIn,
+  foldersIn,
   joinChoices,
   joinPages,
   offersBook,
@@ -111,7 +112,7 @@ describe('treeRows', () => {
       p === 'Sanderson'
         ? { failed: true }
         : p === ''
-          ? { data: { ...FS[''], next_offset: 500 } }
+          ? { data: { ...FS[''], entries: foldersIn(FS['']), next_offset: 500 } }
           : undefined;
     expect(paths(treeRows(state, new Set(['Sanderson'])))).toEqual([
       'Sanderson',
@@ -119,6 +120,13 @@ describe('treeRows', () => {
       'Pratchett',
       'more:',
     ]);
+  });
+
+  it('has no Show more once the pages loaded reach the files: every folder is listed', () => {
+    // Folders come before files, so the entries past loose.mp3 are files too.
+    const state = (p: string): ListingState | undefined =>
+      p === '' ? { data: { ...FS[''], total: 900, next_offset: 500 } } : undefined;
+    expect(paths(treeRows(state, new Set()))).toEqual(['Sanderson', 'Pratchett']);
   });
 });
 
