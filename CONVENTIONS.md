@@ -3000,8 +3000,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `full` (or none) indexes it (`IndexPath`; with `from`, the book's path before a move the Bridge made,
   `Scanner.IndexMoved` carries its durable state when the old book is gone from disk and the
   fingerprints match, else ignores it; when that can't be known now (a look at the old path, or the new
-  book's fingerprint, given up on) it carries and indexes nothing and answers 503 `share_not_answering`,
-  as it does when its read kept the new book as stored), mode `attachments` re-reads only the book's `.audiosilo/` files
+  book's fingerprint (`metadata.FingerprintErr`), given up on) it carries and indexes nothing and answers 503
+  `share_not_answering`, as it does when its read kept the new book as stored (`readOwn`)), mode `attachments` re-reads only the book's `.audiosilo/` files
   (`Scanner.RefreshAttachments`, answering `{path, attachments: {characters, recaps, description, chapters, bridge, readalong}}`); 404
   `not_indexable`. Console: `GET /admin/bridge` (pairing, online, heartbeat, kinds, features, each
   library with the Bridge's mapping, workers, `ui_url`), `GET`/`POST /admin/bridge/jobs`, `GET

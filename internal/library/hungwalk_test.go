@@ -312,57 +312,90 @@ func TestRefreshAttachmentsOnAHeldShareGivesUp(t *testing.T) {
 // the same call carries the state. Not parallel: metadata.HoldOpensForTests
 // swaps the mount lookup.
 func TestIndexMovedWithTheOldPathHeldGivesUp(t *testing.T) {
-	ctx := t.Context()
-	db := storetest.Open(t)
-	cat := catalog.New(db, time.Now)
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, root, "Old/Book/01.mp3", make([]byte, 1<<10))
-	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
-	s := NewScanner(cat, "", slog.Default())
-	s.probeTimeout = time.Minute
-	if res := scanWithin(t, s, *lib, 20*time.Second); res.Added != 1 {
-		t.Fatalf("added %d, want the book", res.Added)
-	}
-	uid := seedUserID(t, db)
-	ref := func(p string) catalog.Ref { return catalog.Ref{LibraryID: lib.ID, Path: p} }
-	if _, err := cat.SaveProgress(ctx, uid, catalog.Progress{Ref: ref("Old/Book"), Position: 42}); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(filepath.Join(root, "Old"), filepath.Join(root, "New")); err != nil {
-		t.Fatal(err)
-	}
+	m := newMovedBook(t)
+	m.s.probeTimeout = time.Minute
 
 	// Old is gone, but on a share that stopped answering that can't be known.
-	release := metadata.HoldOpensForTests(filepath.Join(root, "Old"))
+	release := metadata.HoldOpensForTests(filepath.Join(m.root, "Old"))
 	t.Cleanup(release)
 	start := time.Now()
-	if b, err := s.IndexMoved(WithLookTimeout(ctx, 100*time.Millisecond), *lib, "New/Book", "Old/Book"); !metadata.GaveUp(err) {
-		t.Fatalf("IndexMoved with the old path held = %+v, %v; want a look given up on", b, err)
-	}
+	m.wantUnknown(t, WithLookTimeout(m.ctx, 100*time.Millisecond))
 	if took := time.Since(start); took > 10*time.Second {
 		t.Errorf("IndexMoved took %v, want the old path given up on at the look's time", took)
 	}
-	if _, err := cat.GetBookByPath(ctx, lib.ID, "Old/Book"); err != nil {
-		t.Errorf("the old book, not known gone, = %v; want it kept", err)
-	}
-	if b, err := cat.GetBookByPath(ctx, lib.ID, "New/Book"); err == nil {
-		t.Errorf("the new book was indexed (%+v) with its move unknown, want it left new for the retry or a scan", b)
-	}
-	if got, _ := cat.GetProgress(ctx, uid, ref("New/Book")); got != nil {
-		t.Errorf("progress at the new path = %+v, want nothing carried", got)
-	}
 
 	release()
-	if b, err := s.IndexMoved(WithLookTimeout(ctx, 10*time.Second), *lib, "New/Book", "Old/Book"); err != nil || b.RelPath != "New/Book" {
+	m.wantCarried(t)
+}
+
+// movedBook is a library whose one book, scanned at Old/Book with a
+// listener's progress, has since been renamed to New/Book on disk, for
+// IndexMoved's tests.
+type movedBook struct {
+	ctx  context.Context
+	cat  *catalog.Catalog
+	s    *Scanner
+	lib  *catalog.Library
+	root string
+	uid  int64
+}
+
+func newMovedBook(t *testing.T) *movedBook {
+	t.Helper()
+	m := &movedBook{ctx: t.Context()}
+	db := storetest.Open(t)
+	m.cat = catalog.New(db, time.Now)
+	var err error
+	if m.root, err = filepath.EvalSymlinks(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, m.root, "Old/Book/01.mp3", make([]byte, 1<<10))
+	m.lib, _ = m.cat.CreateLibrary(m.ctx, catalog.Library{Name: "L", Root: m.root})
+	m.s = NewScanner(m.cat, "", slog.Default())
+	if res := scanWithin(t, m.s, *m.lib, 20*time.Second); res.Added != 1 {
+		t.Fatalf("added %d, want the book", res.Added)
+	}
+	m.uid = seedUserID(t, db)
+	if _, err := m.cat.SaveProgress(m.ctx, m.uid, catalog.Progress{Ref: m.ref("Old/Book"), Position: 42}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(m.root, "Old"), filepath.Join(m.root, "New")); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func (m *movedBook) ref(p string) catalog.Ref { return catalog.Ref{LibraryID: m.lib.ID, Path: p} }
+
+// wantUnknown checks IndexMoved under ctx is a look given up on that carries
+// and indexes nothing: the old book keeps its row and progress, and the new
+// path stays new for the retry or a scan.
+func (m *movedBook) wantUnknown(t *testing.T, ctx context.Context) {
+	t.Helper()
+	if b, err := m.s.IndexMoved(ctx, *m.lib, "New/Book", "Old/Book"); !metadata.GaveUp(err) {
+		t.Fatalf("IndexMoved with the move unknown = %+v, %v; want a look given up on", b, err)
+	}
+	if _, err := m.cat.GetBookByPath(m.ctx, m.lib.ID, "Old/Book"); err != nil {
+		t.Errorf("the old book, not known moved, = %v; want it kept", err)
+	}
+	if b, err := m.cat.GetBookByPath(m.ctx, m.lib.ID, "New/Book"); err == nil {
+		t.Errorf("the new book was indexed (%+v) with its move unknown, want it left new", b)
+	}
+	if got, _ := m.cat.GetProgress(m.ctx, m.uid, m.ref("New/Book")); got != nil {
+		t.Errorf("progress at the new path = %+v, want nothing carried", got)
+	}
+}
+
+// wantCarried checks IndexMoved, once the share answers, carries the move.
+func (m *movedBook) wantCarried(t *testing.T) {
+	t.Helper()
+	if b, err := m.s.IndexMoved(WithLookTimeout(m.ctx, 10*time.Second), *m.lib, "New/Book", "Old/Book"); err != nil || b.RelPath != "New/Book" {
 		t.Fatalf("IndexMoved once the share answers = %+v, %v", b, err)
 	}
-	if _, err := cat.GetBookByPath(ctx, lib.ID, "Old/Book"); err == nil {
-		t.Error("the old book once known gone was kept, want the move carried")
+	if _, err := m.cat.GetBookByPath(m.ctx, m.lib.ID, "Old/Book"); err == nil {
+		t.Error("the old book once known moved was kept, want the move carried")
 	}
-	if got, _ := cat.GetProgress(ctx, uid, ref("New/Book")); got == nil || got.Position != 42 {
+	if got, _ := m.cat.GetProgress(m.ctx, m.uid, m.ref("New/Book")); got == nil || got.Position != 42 {
 		t.Errorf("progress at the new path once the share answers = %+v, want it carried", got)
 	}
 }
@@ -373,44 +406,15 @@ func TestIndexMovedWithTheOldPathHeldGivesUp(t *testing.T) {
 // rather than a new book indexed beside a row whose state the next scan would
 // strand. Not parallel: metadata.HoldReadsForTests swaps the mount lookup.
 func TestIndexMovedWithTheNewBookUnreadGivesUp(t *testing.T) {
-	ctx := t.Context()
-	db := storetest.Open(t)
-	cat := catalog.New(db, time.Now)
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, root, "Old/Book/01.mp3", make([]byte, 1<<10))
-	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
-	s := NewScanner(cat, "", slog.Default())
-	if res := scanWithin(t, s, *lib, 20*time.Second); res.Added != 1 {
-		t.Fatalf("added %d, want the book", res.Added)
-	}
-	if err := os.Rename(filepath.Join(root, "Old"), filepath.Join(root, "New")); err != nil {
-		t.Fatal(err)
-	}
-
-	s.probeTimeout = 200 * time.Millisecond // the fingerprint's time
-	release := metadata.HoldReadsForTests(filepath.Join(root, "New", "Book", "01.mp3"))
+	m := newMovedBook(t)
+	m.s.probeTimeout = 200 * time.Millisecond // the fingerprint's time
+	release := metadata.HoldReadsForTests(filepath.Join(m.root, "New", "Book", "01.mp3"))
 	t.Cleanup(release)
-	if b, err := s.IndexMoved(WithLookTimeout(ctx, 10*time.Second), *lib, "New/Book", "Old/Book"); !metadata.GaveUp(err) {
-		t.Fatalf("IndexMoved with the new book unread = %+v, %v; want a look given up on", b, err)
-	}
-	if _, err := cat.GetBookByPath(ctx, lib.ID, "Old/Book"); err != nil {
-		t.Errorf("the old book = %v; want it kept until the move is known", err)
-	}
-	if b, err := cat.GetBookByPath(ctx, lib.ID, "New/Book"); err == nil {
-		t.Errorf("the new book was indexed (%+v) with its move unknown, want it left new", b)
-	}
+	m.wantUnknown(t, WithLookTimeout(m.ctx, 10*time.Second))
 
 	release()
-	s.probeTimeout = time.Minute
-	if b, err := s.IndexMoved(WithLookTimeout(ctx, 10*time.Second), *lib, "New/Book", "Old/Book"); err != nil || b.RelPath != "New/Book" {
-		t.Fatalf("IndexMoved once the share answers = %+v, %v", b, err)
-	}
-	if _, err := cat.GetBookByPath(ctx, lib.ID, "Old/Book"); err == nil {
-		t.Error("the old book once the move is known was kept, want the move carried")
-	}
+	m.s.probeTimeout = time.Minute
+	m.wantCarried(t)
 }
 
 // A book in a folder the walk gave up on is not known gone (SRV-15c): a copy

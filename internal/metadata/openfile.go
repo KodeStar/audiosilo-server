@@ -149,11 +149,22 @@ const fingerprintChunk = 64 << 10
 // are (openBlockFile): timeout and ctx. "" when it can't be read in that time,
 // or at all.
 func Fingerprint(ctx context.Context, path string, timeout time.Duration) string {
+	fp, _ := FingerprintErr(ctx, path, timeout)
+	return fp
+}
+
+// FingerprintErr is Fingerprint with why it is "": an error GaveUp reports
+// when its open or reads were given up on (refused, or not answered in time),
+// else the open's own (the file gone, no regular file).
+func FingerprintErr(ctx context.Context, path string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
 	defer cancel()
 	b, f, err := openBlockFile(ctx, path)
+	if errors.Is(err, errOpenAbandoned) {
+		return "", fmt.Errorf("%s: %w", path, ErrNotAnswered)
+	}
 	if err != nil {
-		return ""
+		return "", err
 	}
 	defer f.Close()
 	h := sha256.New()
@@ -168,7 +179,7 @@ func Fingerprint(ctx context.Context, path string, timeout time.Duration) string
 			h.Write(tail[:m])
 		}
 	}); why != "" {
-		return ""
+		return "", fmt.Errorf("%s: %s: %w", path, why, ErrNotAnswered)
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

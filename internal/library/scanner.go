@@ -2284,25 +2284,27 @@ func (s *Scanner) ReindexPath(ctx context.Context, lib catalog.Library, relPath 
 	if err != nil {
 		return nil, err
 	}
-	b, err := s.readOwn(ctx, lib, book, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
-	// book is the read's (leadIndex's), done with once readOwn has loaded
-	// what it stored.
-	if err == nil && book.ReadCutShort && book.ScanError == problemUnreadable {
-		return nil, fmt.Errorf("library: reading %q: %w", book.ScanErrorFile, metadata.ErrNotAnswered)
-	}
-	return b, err
+	return s.readOwn(ctx, lib, book, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
 }
 
 // readOwn reads book itself (leadIndex, the state at from carried first) once
 // no read of it is under way (startFlight), then loads what it stored
-// (awaitFlight): ReindexPath's and IndexMoved's read, which neither joins.
+// (awaitFlight): ReindexPath's and IndexMoved's read, which neither joins. A
+// read that kept the book as stored (ReadCutShort with an unreadable problem)
+// is a look given up on (metadata.ErrNotAnswered), as its caller asked for
+// the book as it is on disk now.
 func (s *Scanner) readOwn(ctx context.Context, lib catalog.Library, book *catalog.Book, from func(context.Context) string) (*catalog.Book, error) {
 	f, err := s.startFlight(ctx, bookKey{lib.ID, book.RelPath}, nil)
 	if err != nil {
 		return nil, err
 	}
 	go s.leadIndex(ctx, lib, book, f, from)
-	return s.awaitFlight(ctx, f, false)
+	b, err := s.awaitFlight(ctx, f, false)
+	// book is the read's (leadIndex's), done with once the flight has ended.
+	if err == nil && book.ReadCutShort && book.ScanError == problemUnreadable {
+		return nil, fmt.Errorf("library: reading %q: %w", book.ScanErrorFile, metadata.ErrNotAnswered)
+	}
+	return b, err
 }
 
 // tagRead is an unchanged book whose primary file a scan reads for its
@@ -2564,8 +2566,11 @@ func (s *Scanner) movedFrom(ctx context.Context, lib catalog.Library, book *cata
 		return ""
 	}
 	for _, p := range candidates {
-		if s.bookOnDisk(ctx, lib, p) == diskGone {
+		switch s.bookOnDisk(ctx, lib, p) {
+		case diskGone:
 			return p
+		case diskUnknown:
+			return "" // the others' looks would wait on the same share
 		}
 	}
 	return ""
@@ -2769,19 +2774,15 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 // and nothing indexed, and the error is a look given up on
 // (metadata.ErrNotAnswered, the API's 503 share_not_answering): the caller
 // tries again, and a scan meanwhile still sees the new path as new, so its move
-// detection can carry the state. A read that kept the new book as stored (as
-// ReindexPath's) is a look given up on too, its state carried already.
+// detection can carry the state. A read that kept the new book as stored
+// (readOwn) is a look given up on too, its state carried already.
 func (s *Scanner) IndexMoved(ctx context.Context, lib catalog.Library, relPath, from string) (*catalog.Book, error) {
 	book, err := s.resolveBook(ctx, lib, relPath, nil)
 	if err != nil {
 		return nil, err
 	}
 	// After a read of the book under way.
-	b, err := s.readOwn(ctx, lib, book, func(context.Context) string { return from })
-	if err == nil && book.ReadCutShort && book.ScanError == problemUnreadable {
-		return nil, fmt.Errorf("library: reading %q: %w", book.ScanErrorFile, metadata.ErrNotAnswered)
-	}
-	return b, err
+	return s.readOwn(ctx, lib, book, func(context.Context) string { return from })
 }
 
 // indexBookFrom indexes book (indexBook) after carrying the durable state of the
@@ -2789,12 +2790,9 @@ func (s *Scanner) IndexMoved(ctx context.Context, lib catalog.Library, relPath, 
 // "": none), then drops the old book's row. Its caller (leadIndex) runs it past
 // the end of the request that asked for it.
 func (s *Scanner) indexBookFrom(ctx context.Context, lib catalog.Library, book *catalog.Book, from string) error {
-	moved := false
-	if from != "" && from != book.RelPath {
-		var err error
-		if moved, err = s.carryFrom(ctx, lib, from, book); err != nil {
-			return err
-		}
+	moved, err := s.carryFrom(ctx, lib, from, book)
+	if err != nil {
+		return err
 	}
 	if err := s.indexBook(ctx, lib, book); err != nil {
 		return err
@@ -2812,11 +2810,15 @@ func (s *Scanner) indexBookFrom(ctx context.Context, lib catalog.Library, book *
 // carryFrom carries the durable state of the indexed book at from to nb, the
 // book now at its new path (not indexed yet), when it is the same book moved: no
 // book at from on disk, an equal fingerprint, and not one folder seen two ways
-// (reclassified). It reports whether it carried; why it didn't is logged. When
-// that can't be known now (bookOnDisk's diskUnknown, or nb's fingerprint not
-// read while the old book has one) it carries nothing and its error is a look
-// given up on (metadata.ErrNotAnswered).
+// (reclassified). It reports whether it carried (never for a from of "" or
+// nb's own path); why it didn't is logged. When
+// that can't be known now (bookOnDisk's diskUnknown, or nb's fingerprint
+// given up on while the old book has one) it carries nothing and its error is
+// a look given up on (metadata.ErrNotAnswered).
 func (s *Scanner) carryFrom(ctx context.Context, lib catalog.Library, from string, nb *catalog.Book) (bool, error) {
+	if from == "" || from == nb.RelPath {
+		return false, nil
+	}
 	ignored := func(why string, args ...any) (bool, error) {
 		s.log.Info("move ignored: "+why, append([]any{"library", lib.Name, "from", from, "to", nb.RelPath}, args...)...)
 		return false, nil
@@ -2838,10 +2840,11 @@ func (s *Scanner) carryFrom(ctx context.Context, lib catalog.Library, from strin
 		return unknown("whether the old book is still on disk can't be known")
 	}
 	if nb.ContentHash == "" {
-		nb.ContentHash = s.fingerprint(ctx, absOf(lib, primaryPath(nb))) // reused by enrich
-	}
-	if nb.ContentHash == "" && old.ContentHash != "" {
-		return unknown("the new book's fingerprint couldn't be read")
+		var ferr error
+		nb.ContentHash, ferr = metadata.FingerprintErr(ctx, absOf(lib, primaryPath(nb)), s.probeTimeout) // reused by enrich
+		if metadata.GaveUp(ferr) && old.ContentHash != "" {
+			return unknown("the new book's fingerprint couldn't be read")
+		}
 	}
 	if nb.ContentHash == "" || old.ContentHash == "" ||
 		(nb.ContentHash != old.ContentHash && s.byteFirstFingerprint(ctx, lib, nb) != old.ContentHash) {
@@ -2880,35 +2883,30 @@ const (
 // answering) is diskUnknown, which no caller takes as gone either.
 func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel string) onDisk {
 	// A path that can't be stat'ed, or a folder that can't be listed (a
-	// permission, a flaky share), can't be checked: resolveBook would read it as
-	// no book (it wraps a failed stat as ErrNotIndexable, and lists an unreadable
-	// folder as empty), so it counts as present here.
-	failed := func(err error) onDisk {
-		switch {
-		case metadata.Unanswered(ctx, err):
-			return diskUnknown
-		case errors.Is(err, fs.ErrNotExist):
-			return diskGone
-		}
-		return diskPresent
-	}
+	// permission), can't be checked: resolveBook would read it as no book (it
+	// wraps a failed stat as ErrNotIndexable, and lists an unreadable folder as
+	// empty), so it counts as present here.
 	abs := absOf(lib, rel)
 	look := s.lookTimeout(ctx)
 	info, err := metadata.StatBounded(ctx, abs, look)
-	if err != nil {
-		return failed(err)
+	if err == nil && info.IsDir() {
+		_, err = metadata.ReadDirBounded(ctx, abs, look)
 	}
-	if info.IsDir() {
-		if _, err := metadata.ReadDirBounded(ctx, abs, look); err != nil {
-			return failed(err)
-		}
+	switch {
+	case err == nil:
+	case metadata.Unanswered(ctx, err):
+		return diskUnknown
+	case errors.Is(err, fs.ErrNotExist):
+		return diskGone
+	default:
+		return diskPresent
 	}
 	b, err := s.resolveBook(ctx, lib, rel, nil)
 	switch {
-	case err != nil && metadata.Unanswered(ctx, err):
-		return diskUnknown
 	case errors.Is(err, ErrNotIndexable), err == nil && b.RelPath != rel:
 		return diskGone
+	case err != nil && metadata.Unanswered(ctx, err):
+		return diskUnknown
 	}
 	return diskPresent
 }

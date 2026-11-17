@@ -43,8 +43,8 @@ func TestHeldOpenIsAbandonedAndCounted(t *testing.T) {
 	if err != nil || m.OpenErr != nil || !m.TagsUnread() || m.ReadRefused() || !m.ProbeTimedOut() {
 		t.Fatalf("held open = %+v (err %v), want it out of time, not refused", m, err)
 	}
-	if fp := Fingerprint(context.Background(), path, 20*time.Millisecond); fp != "" {
-		t.Errorf("fingerprint of a held open = %q, want none", fp)
+	if fp, err := FingerprintErr(context.Background(), path, 20*time.Millisecond); fp != "" || !GaveUp(err) {
+		t.Errorf("fingerprint of a held open = %q, %v; want none, given up on", fp, err)
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("held opens took %v, want them given up at their deadline", d)
@@ -57,6 +57,9 @@ func TestHeldOpenIsAbandonedAndCounted(t *testing.T) {
 	}
 	if m := ExtractTags(t.Context(), path, ProbeTimeout); !m.ReadRefused() {
 		t.Errorf("an open at the cap = %+v, want it refused", m)
+	}
+	if _, err := FingerprintErr(t.Context(), path, ProbeTimeout); !GaveUp(err) {
+		t.Errorf("a fingerprint at the cap = %v, want it given up on", err)
 	}
 	release()
 	waitUncounted(t, hung)
