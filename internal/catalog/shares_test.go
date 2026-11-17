@@ -315,6 +315,53 @@ func TestDeleteLibraryDropsItsGrantShares(t *testing.T) {
 	}
 }
 
+// A grant share that also holds another library's folders (an older version
+// let an admin add them) outlives its library, and is then an ordinary share:
+// the mark goes with the whole-library rule, so its folders can be changed
+// again. Denied before the delete: it is a library grant (ErrLibraryGrant).
+func TestDeleteLibraryUnmarksTheGrantSharesItLeaves(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+	other, _ := c.CreateLibrary(ctx, Library{Name: "Other", Root: "/tmp/other"})
+	if err := c.GrantWholeLibrary(ctx, seedUser(t, c, ctx), kids.ID); err != nil {
+		t.Fatal(err)
+	}
+	shares, _ := c.ListShares(ctx)
+	if len(shares) != 1 || shares[0].WholeLibraryID == nil {
+		t.Fatalf("precondition: shares = %+v; want one marked grant", shares)
+	}
+	grant := shares[0].ID
+	kept := PathRule{LibraryID: other.ID, Path: "Saga"}
+	if err := c.AddSharePath(ctx, grant, kept); err != nil {
+		t.Fatal(err)
+	}
+	more := PathRule{LibraryID: other.ID, Path: "More"}
+	if err := c.AddSharePaths(ctx, grant, []PathRule{more}); !errors.Is(err, ErrLibraryGrant) {
+		t.Fatalf("add to the grant = %v; want ErrLibraryGrant", err)
+	}
+
+	if err := c.DeleteLibrary(ctx, kids.ID); err != nil {
+		t.Fatal(err)
+	}
+	left, err := c.GetShare(ctx, grant)
+	if err != nil {
+		t.Fatalf("the share holding another library's folder: %v", err)
+	}
+	if left.WholeLibraryID != nil || len(left.Paths) != 1 || left.Paths[0] != kept {
+		t.Fatalf("after deleting its library: mark %v, rules %+v; want no mark and %+v", left.WholeLibraryID, left.Paths, kept)
+	}
+	if err := c.AddSharePaths(ctx, grant, []PathRule{more}); err != nil {
+		t.Fatalf("add to the share it left = %v", err)
+	}
+	if err := c.RemoveSharePath(ctx, grant, kept); err != nil {
+		t.Fatalf("remove from the share it left = %v", err)
+	}
+	if after, _ := c.GetShare(ctx, grant); len(after.Paths) != 1 || after.Paths[0] != more {
+		t.Fatalf("the share's rules = %+v; want %+v", after.Paths, more)
+	}
+}
+
 // First grants of one library sent together (two tabs, a burst of demo
 // sessions) all get the one grant share: each looks for it before any has
 // committed, and the transaction that makes it looks again (server#230's

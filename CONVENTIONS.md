@@ -1255,7 +1255,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   share again first: write transactions run one at a time, so first grants sent together share one.
   A marked grant's rules change only by granting or revoking the library: `POST`/`DELETE
   /admin/shares/{id}/paths` on one is 409 `library_grant` (`catalog.ErrLibraryGrant`, read inside the
-  edit's transaction; server#254), as the console never offers it.
+  edit's transaction; server#254), as the console never offers it. The mark stays only while the share
+  holds that library's `""` rule: `DeleteLibrary` clears it on a grant share it leaves (one that also
+  holds another library's folders), and `0081` cleared the marks older versions left on a narrowed or
+  rule-less share, so such a share is an ordinary one whose folders can be changed.
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its

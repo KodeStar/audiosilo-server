@@ -226,11 +226,17 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 		// The library's whole-library grant shares grant nothing once it's gone
 		// (their rule cascades away); drop them rather than leave empty shares.
 		// One that also holds another library's rules still grants those, so it
-		// stays.
+		// stays, as an ordinary share: its whole-library rule goes with the
+		// library, and a mark left on it would keep its folders closed to any
+		// change (ErrLibraryGrant) while it gives no whole library.
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM shares WHERE whole_library_id = ?
 			    AND NOT EXISTS (SELECT 1 FROM share_paths sp
 			                     WHERE sp.share_id = shares.id AND sp.library_id != ?)`, id, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE shares SET whole_library_id = NULL WHERE whole_library_id = ?`, id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx,
