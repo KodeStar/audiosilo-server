@@ -1965,6 +1965,23 @@ func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relP
 	return s.indexShared(ctx, lib, book)
 }
 
+// ReindexPath is IndexPath for a caller who asks for the book as it is on disk
+// now (an admin's Re-read): it waits for a read of the book under way, a scan's
+// included, then reads the book itself rather than loading what that read
+// stored, which may be older than the change the caller wants picked up.
+func (s *Scanner) ReindexPath(ctx context.Context, lib catalog.Library, relPath string) (*catalog.Book, error) {
+	book, err := s.resolveBook(ctx, lib, relPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	f, err := s.startFlight(ctx, bookKey{lib.ID, book.RelPath})
+	if err != nil {
+		return nil, err
+	}
+	go s.leadIndex(ctx, lib, book, f, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
+	return s.awaitFlight(ctx, f)
+}
+
 // tagRead is an unchanged book whose primary file a scan reads for its
 // backfills (readTags): what to read, what for, and the reading.
 type tagRead struct {

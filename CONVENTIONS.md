@@ -960,7 +960,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   deadline, so a cancelled request never throws its probes away (server#211); it ends with the server
   (`Scanner.SetBaseContext`, from the API's base context), writing nothing then. A scan's read of a book and the Bridge's
   `IndexMoved` take the same per-book flight (`startFlight`): no two reads of one book run side by side, and an on-demand
-  index asked for during a scan's read waits for the scan's write and loads it. The on-demand index takes a path only in its on-disk
+  index asked for during a scan's read waits for the scan's write and loads it. An admin's Re-read
+  (`rescanPath`) is `ReindexPath` instead: it waits for the read under way, then reads the book itself, as what that
+  read stored may be older than the change the admin wants picked up. The on-demand index takes a path only in its on-disk
   spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a
   case-insensitive filesystem a case variant opens the same folder, and indexing it would add a
   duplicate book everyone sees, so it is a 404. `stream` serves an

@@ -196,6 +196,39 @@ func TestIndexPathAfterADroppedRead(t *testing.T) {
 	}
 }
 
+// TestReindexPathReadsAfresh: an explicit re-read asked for while another read
+// of the book is under way (a scan's, held until its write) waits for it, then
+// reads the book itself: what the earlier read stored may be older than the
+// change the re-read was asked for.
+func TestReindexPathReadsAfresh(t *testing.T) {
+	t.Parallel()
+	s, lib, ctx, count := newSlowProbeEnv(t)
+	if _, err := s.IndexPath(ctx, lib, "A/Book"); err != nil {
+		t.Fatal(err)
+	}
+	once := count()
+	f, err := s.startFlight(ctx, bookKey{lib.ID, "A/Book"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan error, 1)
+	go func() {
+		_, err := s.ReindexPath(ctx, lib, "A/Book")
+		got <- err
+	}()
+	time.Sleep(100 * time.Millisecond) // the re-read waits on the flight
+	if n := count(); n != once {
+		t.Fatalf("the re-read read beside the read under way: %d probes, want %d", n, once)
+	}
+	s.endFlight(f, nil) // that read's book is written
+	if err := <-got; err != nil {
+		t.Fatal(err)
+	}
+	if n := count() - once; n != once {
+		t.Fatalf("the re-read probed %d times; a read of its own probes %d", n, once)
+	}
+}
+
 // TestIndexPathEndsWithTheServer: a read that outlives its request still ends
 // with the server (SetBaseContext): stopped, it writes nothing.
 func TestIndexPathEndsWithTheServer(t *testing.T) {
