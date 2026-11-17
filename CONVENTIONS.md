@@ -1434,7 +1434,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   values, tags and path alike, path-first libraries included (ABS's own default ranks it above the
   tags): `bookLayers.overABS`, in `scannedFields` before `titlePosition`. `metadata.ParseABSFile` is
   lenient (a wrongly typed value costs that value; <= 4 MiB): title, subtitle, authors and
-  narrators joined with ", " (strings or `{name}`), series `"Name #seq"` (the first is the main series
+  narrators joined with ", " (strings or `{name}`; "; " when a name holds a comma, "Le Guin, Ursula
+  K.", so `names.Split` reads the people the file lists: `joinCredit`), series `"Name #seq"` (the first is the main series
   with its position, the rest `more_series`; a series without a position keeps the tag's only while
   it is the same series, by `seriesKey`), `publishedDate` else `publishedYear` as `published`, the
   HTML description as plain text, publisher, language, `abridged` (only `true` says anything: ABS
@@ -1446,7 +1447,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   none) and `abs_indexed_at` the `indexed_at` it was read for (NULL before `0046`), narrow columns
   first so `Signatures` reads no JSON; `UpsertBook` writes all three (`absColumns`; nothing for a
   file book). Discovery records each folder's file signature from the walk itself (`audioDirs`'
-  `absFiles`, the walk's own entry, no extra directory read; `IndexPath`, with no walk, stats it: `absSigAt`), and `enrich` reads
+  `absFiles`, the walk's own entry, no extra directory read; `IndexPath`, with no walk, stats it: `absSigAt`;
+  an entry whose lstat fails is stat'ed once more, `absEntrySig`), and `enrich` reads
   the file only when there is one (`Scanner.readABS`). An unchanged book whose signature differs,
   or that has a file not read for this index (`abs_indexed_at` NULL, or another index's: an older
   server re-indexed it), is read without a re-index: `Signature.ABSSig`/`ABSUnchecked`,
@@ -1457,9 +1459,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   row without it). `metadata.ReadABSFile` reads a regular file only, never through a link (one
   swapped in after the walk included: `os.SameFile` on the opened file). A file that can't be used
   (not JSON, too large, not a regular file: `metadata.ErrABSFileInvalid`) keeps its signature (read
-  again once it changes); one that can't be read right now (gone since the walk, a flaky mount) is
-  left as it was by the backfill and recorded as none by a re-index, so the next scan reads it
-  again (`readABS`' `read`); both log a warning. Known gap: a position read from an ABS title (`titlePosition`) shows as `tag`.
+  again once it changes); one that can't be looked at or read right now (a flaky mount) is
+  left as it was by the backfill and by a re-index (`ABSReading.Unread`: `UpsertBook` keeps the stored
+  `abs_sig` and `abs_file` with no `abs_indexed_at`, so the book keeps its ABS values and the next scan
+  reads it again; server#213); both log a warning. Known gap: a position read from an ABS title (`titlePosition`) shows as `tag`.
   **Bridge attachments** (`metadata/attachments.go`, `library/attachments.go`, `catalog/attachments.go`,
   migrations `0048`, `0050`, `0051`, `0058`; BRIDGE-PLAN.md Phases 1a, 1c, 1d and 3c): the Bridge writes a book's generated `characters.json`,
   `recaps.json`, `description.json`, `chapters.json` (chapters found in the narration), `bridge.json` (provenance) and
@@ -1505,8 +1508,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   canonical `"1-3"` (input `1 - 3` and the en dash too; `metadata.ParseSeriesRange`: 0 < start <
   end <= 100000, a span of at most `metadata.MaxSeriesSpan` = 100, since the slots a range covers
   are counted one by one); `refreshEffective` writes its start to `series_index` (what every
-  client reads) and its end to `series_index_end` (`ParseSeriesPosition`; `FormatSeriesRange` the
-  stored text). A `more_series` entry carries one as `position_end` (`SeriesRef.PositionEnd`,
+  client reads) and its end to `series_index_end` (`ParseSeriesPosition`, which takes a single
+  position only from 0 to 100000, never NaN or an infinity, as a series-part tag of "nan" once failed
+  the book's insert; `FormatSeriesRange` the stored text). A `more_series` entry carries one as `position_end` (`SeriesRef.PositionEnd`,
   omitempty; `book_more_series.position_end`). Player `Book` JSON: `series_index_end` and
   `series_list[].position_end`, both omitempty; the admin book row `series_index_end`. `seriesSwap`
   carries a range both ways; the series aggregate's `positions` hold every whole number inside a
