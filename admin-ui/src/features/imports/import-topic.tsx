@@ -646,6 +646,7 @@ function ReviewCard({ imp, all, blocked }: { imp: Import; all: Import[]; blocked
   const replaced = replacedBy(imp, all);
   const onlyIdentifiers = imp.summary ? identifierOnlyBooks(imp.summary) : 0;
   const keepsApplied = wouldOnlyUndo(imp, all);
+  const blockedId = blocked && imp.status === 'review' ? `import-${imp.id}-blocked` : undefined;
 
   return (
     <Card aria-labelledby={titleId}>
@@ -690,9 +691,7 @@ function ReviewCard({ imp, all, blocked }: { imp: Import; all: Import[]; blocked
       {imp.status === 'review' && imp.summary ? <CutoffEditor imp={imp} /> : null}
       {imp.status !== 'fetching' ? (
         <div className="flex flex-wrap items-center justify-end gap-2 border-t px-5 py-3.5">
-          {blocked && imp.status === 'review' ? (
-            <BlockedNote id={`import-${imp.id}-blocked`} blocked={blocked} />
-          ) : null}
+          {blocked && blockedId ? <BlockedNote id={blockedId} blocked={blocked} /> : null}
           <Button
             variant="ghost"
             disabled={discarding || importBusy(imp)}
@@ -709,9 +708,7 @@ function ReviewCard({ imp, all, blocked }: { imp: Import; all: Import[]; blocked
                 keepsApplied ||
                 !!blocked
               }
-              aria-describedby={
-                blocked && imp.status === 'review' ? `import-${imp.id}-blocked` : undefined
-              }
+              aria-describedby={blockedId}
               onClick={() => setApplying(true)}
             >
               {imp.status === 'applying' ? (

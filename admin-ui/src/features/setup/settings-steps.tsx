@@ -20,6 +20,7 @@ import { ScheduleInput } from '@/features/settings/schedule-input';
 import { errorMessage } from '@/lib/errors';
 import { browserNearestRegion } from '@/lib/nearest-region';
 import { regionOptions } from '@/lib/regions';
+import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import {
   addressMismatch,
@@ -93,7 +94,7 @@ export function MetadataStep(props: StepProps) {
     // marketplace only while the switch shows it.
     const draft = m.available ? { enabled, mode } : { mode };
     let patch = unlockedPatch(settings, 'metadata', enabled ? { ...draft, region } : draft);
-    if (enabled && offered && suggested) {
+    if (enabled && suggested) {
       patch = { ...patch, metadata: { ...patch?.metadata, region } };
     }
     await save(patch);
@@ -304,7 +305,7 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
               id="setup-server-name"
               className="w-full sm:w-[320px]"
               autoComplete="off"
-              placeholder="AudioSilo"
+              placeholder={DEFAULT_SERVER_NAME}
               value={name}
               disabled={!editable(settings, 'general.name')}
               onChange={(e) => setName(e.target.value)}
