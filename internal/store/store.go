@@ -272,7 +272,9 @@ func (db *DB) Ping(ctx context.Context) error {
 // in it sees one snapshot of the database (WAL), whatever commits meanwhile, so
 // a read made of several queries (a library export) reads them all at one
 // moment. It never takes the writer, except on a database with no reader pool
-// of its own (an in-memory one), where the two are one.
+// of its own (an in-memory one), where the two are one: there fn holds the one
+// connection, so a write through the store while it runs (from fn or anyone
+// else) waits for it to return.
 func (db *DB) WithReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := db.reader.BeginTx(ctx, nil)
 	if err != nil {
