@@ -151,6 +151,12 @@ type RetentionCheck struct {
 // reads through one too, on a read transaction (WithReadTx).
 type snapshotDB struct{ tx *sql.Tx }
 
+// onSnapshot is a catalog that reads and writes only through tx (snapshotDB),
+// with c's clock and test hooks.
+func (c *Catalog) onSnapshot(tx *sql.Tx) *Catalog {
+	return &Catalog{db: snapshotDB{tx: tx}, now: c.now, exportPaged: c.exportPaged}
+}
+
 func (s snapshotDB) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
 	return s.tx.QueryContext(ctx, q, args...)
 }
@@ -187,7 +193,7 @@ func (c *Catalog) PodcastRetentionCheck(ctx context.Context, lib int64, req Rete
 	out := RetentionCheck{LibraryID: lib, ShowPath: path.Dir(req.Path), RetentionRequest: req}
 	var finishedAt, deadline time.Time
 	err := c.db.WithTx(ctx, "PodcastRetentionCheck", func(tx *sql.Tx) error {
-		snapshot := &Catalog{db: snapshotDB{tx: tx}, now: c.now}
+		snapshot := c.onSnapshot(tx)
 		pin, err := snapshot.PodcastPin(ctx, lib, req.Path)
 		if err != nil {
 			return err

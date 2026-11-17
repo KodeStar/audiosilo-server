@@ -179,8 +179,7 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 	// (a book re-keyed past the cursor) nor pair a row with another moment's
 	// counts.
 	err = c.db.WithReadTx(ctx, func(tx *sql.Tx) error {
-		snapshot := &Catalog{db: snapshotDB{tx: tx}, now: c.now, exportPaged: c.exportPaged}
-		return snapshot.exportBooks(ctx, out, libraryID, opt)
+		return c.onSnapshot(tx).exportBooks(ctx, out, libraryID, opt)
 	})
 	if err != nil {
 		return nil, err
