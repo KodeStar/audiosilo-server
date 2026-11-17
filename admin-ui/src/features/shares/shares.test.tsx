@@ -180,6 +180,32 @@ describe('shares', () => {
     });
   });
 
+  it("removes a stray rule from a library grant, never the grant's own (server#361)", async () => {
+    const stray = { library_id: 1, path: 'Agatha Christie' };
+    const calls = mockFetch(
+      routes({
+        'GET /admin/shares': {
+          body: {
+            shares: [kidsShare, { ...fictionGrant, paths: [...fictionGrant.paths!, stray] }],
+          },
+        },
+        'DELETE /admin/shares/8/paths': { status: 204 },
+      }),
+    );
+    renderApp('/people/shares');
+    const user = userEvent.setup();
+    const nav = await screen.findByRole('navigation', { name: 'Shares' });
+    await user.click(await within(nav).findByRole('button', { name: /^Fiction/ }));
+    const grant = await screen.findByRole('region', { name: 'Fiction' });
+    expect(within(grant).queryByRole('button', { name: 'Remove Fiction' })).not.toBeInTheDocument();
+    await user.click(
+      within(grant).getByRole('button', { name: 'Remove Fiction › Agatha Christie' }),
+    );
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === '/admin/shares/8/paths')?.body).toEqual(stray),
+    );
+  });
+
   it('deletes a share after saying who loses access', async () => {
     const calls = mockFetch(routes({ 'DELETE /admin/shares/7': { status: 204 } }));
     renderApp('/people/shares');

@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/api/client';
 import { invalidatePeople, useLibraries, useShares, useUsers } from '@/api/hooks';
-import type { AdminShare, User } from '@/api/types';
+import type { AdminShare, PathRule, User } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { EmptyState } from '@/components/empty-state';
 import { Monogram } from '@/components/monogram';
@@ -202,6 +202,10 @@ function ShareDetail({ share: s }: { share: AdminShare }) {
   // library only while it holds that library's rule (server#230).
   const isGrant = isLibraryGrant(s);
   const isLibrary = wholeLibraryOf(s) !== undefined;
+  // A grant's own rule (its whole library) stays; a stray rule an older version
+  // let onto it can go (server#361).
+  const removable = (r: PathRule) =>
+    !isGrant || r.library_id !== s.whole_library_id || r.path !== '';
   const libs = libraries.data ?? [];
   const people = users.data ?? [];
   const members = people.filter((u) => s.member_ids.includes(u.id));
@@ -277,7 +281,7 @@ function ShareDetail({ share: s }: { share: AdminShare }) {
                       </span>
                     ) : null}
                   </span>
-                  {!isGrant ? (
+                  {removable(r) ? (
                     <Button
                       variant="ghost"
                       size="icon-sm"
