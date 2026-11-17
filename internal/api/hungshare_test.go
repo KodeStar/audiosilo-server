@@ -119,7 +119,7 @@ func TestStreamWaitsOutADiskSpinningUp(t *testing.T) {
 	e.api.fileWait, e.api.streamWait = 200*time.Millisecond, 10*time.Second
 	// The hold ends while the stream's open waits (spun), the mount lookup
 	// put back only once every request is done (restore), so the open's own
-	// lookup never races it.
+	// lookups still name the held folder's mount.
 	spun := make(chan struct{})
 	var spinOnce sync.Once
 	spin := func() { spinOnce.Do(func() { close(spun) }) }

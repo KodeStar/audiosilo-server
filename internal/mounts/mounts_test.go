@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 )
 
@@ -137,16 +138,52 @@ func TestPerMount(t *testing.T) {
 	t.Parallel()
 	made := 0
 	m := NewPerMount(func(point string) *string { made++; return &point })
-	m.Mount = func(p string) (string, string) {
+	m.SetMount(func(p string) (string, string) {
 		point := filepath.Dir(p)
 		if point == "/bind" {
 			return "/x", point // another mount of /x's filesystem
 		}
 		return point, point
-	}
+	})
 	a, b, c, d := m.For("/x/1"), m.For("/x/2"), m.For("/y/1"), m.For("/bind/1")
 	if a != b || *a != "/x" || c == a || *c != "/y" || d != a || made != 2 {
 		t.Errorf("For = %q %q %q %q (%d made), want one per mount", *a, *b, *c, *d, made)
+	}
+}
+
+// SetMount's stand-in names the mounts until its restore puts back the lookup
+// before it, swapped while reads look the lookup up (run with -race: a read
+// left under way when a test's cleanup restores the lookup is no data race).
+func TestPerMountSetMount(t *testing.T) {
+	t.Parallel()
+	m := NewPerMount(func(point string) string { return point })
+	outer := m.SetMount(func(string) (string, string) { return "outer", "/outer" })
+	stop, reading := make(chan struct{}), make(chan struct{})
+	var reads sync.WaitGroup
+	reads.Go(func() {
+		m.For("/x")
+		close(reading)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				m.For("/x")
+			}
+		}
+	})
+	<-reading // the swaps below overlap the reads
+	for range 100 {
+		m.SetMount(func(string) (string, string) { return "inner", "/inner" })()
+	}
+	if got := m.For("/x"); got != "/outer" {
+		t.Errorf("For after the inner stand-in's restore = %q, want the outer stand-in's /outer", got)
+	}
+	close(stop)
+	reads.Wait()
+	outer()
+	if _, point := Of("/x"); m.For("/x") != point {
+		t.Errorf("For after the outer restore = %q, want Of's mount point %q", m.For("/x"), point)
 	}
 }
 

@@ -409,7 +409,7 @@ type stuckReads struct {
 }
 
 // stuckByMount is the stuckReads of each mount a file was read from (its
-// Mount a test's stand-in): one per mount, never removed.
+// lookup a test's stand-in, SetMount): one per mount, never removed.
 var stuckByMount = mounts.NewPerMount(func(point string) *stuckReads {
 	return &stuckReads{mount: point, calls: make(chan struct{}, maxAbandonedReads)}
 })

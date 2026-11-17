@@ -461,8 +461,9 @@ func HoldOpensForTests(dir string) (release func()) {
 // HoldOpensUntilForTests is HoldOpensForTests with the calls held until held
 // closes, and the mount lookup put back only by restore: a test that lets a
 // held call answer while it is under way (a disk spinning up) closes held then,
-// and restores once that call is done, so the lookup the call makes never
-// races the restore.
+// and restores once that call is done, so the call's later lookups still name
+// dir's own mount. (A restore while a held call still runs is safe, as in
+// HoldOpensForTests: the lookup is swapped atomically.)
 func HoldOpensUntilForTests(dir string, held <-chan struct{}) (restore func()) {
 	restoreMount := ownMountForTests("HoldOpensUntilForTests", "held-for-tests:", dir)
 	hook := func(p string) {
@@ -484,15 +485,14 @@ func ownMountForTests(caller, prefix, dir string) (restore func()) {
 	if !testing.Testing() {
 		panic("metadata." + caller + " called outside a test binary")
 	}
-	was := stuckByMount.Mount
+	was := stuckByMount.Mount()
 	key := prefix + dir
-	stuckByMount.Mount = func(p string) (string, string) {
+	return stuckByMount.SetMount(func(p string) (string, string) {
 		if mounts.Within(p, dir) {
 			return key, dir
 		}
 		return was(p)
-	}
-	return func() { stuckByMount.Mount = was }
+	})
 }
 
 // ffprobeForced reports whether ForceFFprobeForTests named ffprobePath.
