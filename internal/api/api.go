@@ -475,6 +475,15 @@ func (a *API) startResolve(failed int) <-chan struct{} {
 	return done
 }
 
+// resolvePending reports whether a re-resolve is under way or, having failed,
+// waits to be run again (resolveRetry): a run that ended (resolveSources'
+// channel closed) with one pending left books on their old metadata source.
+func (a *API) resolvePending() bool {
+	a.resolveMu.Lock()
+	defer a.resolveMu.Unlock()
+	return a.resolving != nil || a.resolveRetry != nil
+}
+
 // resolveOnce is one run of catalog.ResolveSources. A panic in it is that run's
 // failure: on this goroutine it would otherwise take the server down, and again
 // at every start while the library stays due.

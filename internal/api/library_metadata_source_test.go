@@ -135,6 +135,31 @@ func TestResolveSourcesRetried(t *testing.T) {
 	}
 }
 
+// A source change whose re-resolve failed (it is run again later) answers
+// resolving: its books are not on the new source yet, whatever the run's end.
+func TestSourceChangeWhoseResolveFailedSaysResolving(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Main", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.api.resolveRetryAfter = time.Hour
+	e.api.resolveRun = func(context.Context) error { return errors.New("database is locked") }
+	t.Cleanup(func() {
+		e.api.resolveMu.Lock()
+		defer e.api.resolveMu.Unlock()
+		if e.api.resolveRetry != nil {
+			e.api.resolveRetry.Stop()
+		}
+	})
+	resp, body := e.do(t, "PATCH", "/api/v1/admin/libraries/"+strconv.FormatInt(lib.ID, 10), adminTok, `{"metadata_source":"path"}`)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"resolving":true`) {
+		t.Fatalf("source PATCH whose re-resolve failed = %d %s, want 200 and resolving", resp.StatusCode, body)
+	}
+}
+
 // TestResolveSourcesPanic: a re-resolve that panics is a failed run, retried as
 // one, rather than the end of the server (and of every start after it, the
 // library still being due).

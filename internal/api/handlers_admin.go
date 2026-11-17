@@ -903,11 +903,11 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 	a.audit(r, "library.update", updated.Name, req.changes())
 	resolving := false
 	if req.MetadataSource != nil {
-		resolving = !awaitResolve(r.Context(), a.resolveSources())
+		resolving = !awaitResolve(r.Context(), a.resolveSources()) || a.resolvePending()
 	}
 	// Resolving: the books are still taking the new metadata source when this
-	// answers (a large library finishes in the background), so the console says
-	// so rather than "updated".
+	// answers (a large library finishes in the background, a run that failed
+	// is run again later), so the console says so rather than "updated".
 	resp := struct {
 		*catalog.Library
 		Job       *library.Job `json:"job,omitempty"`
