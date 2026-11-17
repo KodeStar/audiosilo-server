@@ -160,7 +160,7 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 			continue
 		}
 		if r.bookID == 0 {
-			r.nameFromHolding(ctx, c)
+			c.nameFromHolding(ctx, &r.HouseListeningRow)
 		}
 		if r.Title == "" {
 			r.Title = path.Base(r.Path) // not indexed (any more): the path names it
@@ -191,15 +191,19 @@ type houseRow struct {
 // discs were joined into one book shows that book's title and author, not
 // "CD1" (server#222). The chapter stays unread: the session's position is on
 // the disc's own timeline, not the joined book's. A failed lookup leaves the
-// path to name it, as for a book no longer indexed.
-func (r *houseRow) nameFromHolding(ctx context.Context, c *Catalog) {
-	b, err := c.GetBookHolding(ctx, r.LibraryID, r.Path)
+// path to name it, as for a book no longer indexed. Only the two columns are
+// read: the route is polled while a person shares.
+func (c *Catalog) nameFromHolding(ctx context.Context, r *HouseListeningRow) {
+	id, _, err := c.bookHolding(ctx, r.LibraryID, r.Path, false)
 	if err != nil {
 		return
 	}
-	r.Title = b.Title
-	if b.Author != "" {
-		r.Author = &b.Author
+	var (
+		title  string
+		author *string
+	)
+	if c.db.QueryRowContext(ctx, `SELECT title, NULLIF(author, '') FROM books WHERE id = ?`, id).Scan(&title, &author) == nil {
+		r.Title, r.Author = title, author
 	}
 }
 
