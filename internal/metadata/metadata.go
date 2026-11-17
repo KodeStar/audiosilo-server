@@ -294,9 +294,9 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, count b
 		// Its open did not answer in time: as a tag read out of time (below).
 		return nil, tagsCutShort(m, path, "limit: "+context.Cause(rctx).Error()), nil
 	case errors.Is(err, errNotRegular):
-		// A FIFO (or a device) is never read as audio: unreadable, and a
-		// stored book it is a part of is kept as it is (TagsUnread).
-		m.tagsUnread = true
+		// A FIFO (or a device) is never read as audio: an OpenErr like any
+		// file that can't be opened, a known bad file, not a read cut short
+		// (the scan keeps the book only while its other files are unchanged).
 		return nil, "", err
 	case err != nil:
 		return nil, "", err

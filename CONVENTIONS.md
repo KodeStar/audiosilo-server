@@ -1174,7 +1174,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the deadline (`metadata.await`: `openBlockFile`, `blockFile.waitRead`), so an open or a pread on a share
   that stopped answering costs a goroutine (and the file open) until it returns, never a stuck reader;
   an open given up on is a tag read out of time. The file is opened `O_NONBLOCK` and must be a regular
-  file (a FIFO is turned away at once, `OpenErr` and `TagsUnread`, never waited for nor read as audio).
+  file (a FIFO is turned away at once, `OpenErr` `metadata.ErrNotRegular`, never waited for nor read as audio:
+  a known bad file, not a read cut short, see `Book.LengthOnly` below).
   A scan's move fingerprint (`metadata.Fingerprint`, skipped after a read cut short) is bounded the same
   way, and an ffprobe killed at its time-out that has not ended 5 s later (`ffprobeKillGrace`; stuck in an
   NFS read on macOS) is left and counted as an abandoned read. Once `maxAbandonedReads` (16) such reads are outstanding on one mount
@@ -1210,7 +1211,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   waits on the scan's context too). The walk's own listings and lstats are not bounded yet. A re-index
   where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`), or whose
   length ran out of time even read alone (an ffprobe time-out, `ProbeTimedOut` without one:
-  `library.readCutShort`; a part on a share that hung mid-read, the FIFO repro of server#360),
+  `library.readCutShort`; a part on a share that hung mid-read), or with a file that is no regular
+  file (a FIFO, `library.lengthUnread`),
   sets `Book.ReadCutShort`, and rewrites nothing of the stored book (`catalog.recordReadProblem`: names,
   length, codec, chapters, cover flag, mtime and size stay as the last full read left them) but
   its read problem, `unreadable` ("reading it timed out", a `ProbeTimedOut` too, or for a refused read "too many earlier reads
@@ -1219,10 +1221,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   earlier part's lasting problem, as the record is what `problemCleared` asks again), so the next scan reads it again (the stored
   mtime and size are the old ones, else `problemCleared`, which a read still cut short, its length
   out of time included, never clears); a new book read so is written with the
-  path's names. Only a length out of time (`Book.LengthOnly`: every file's tags read, none cut short
-  or refused) can repeat on every scan (a damaged part), so it keeps the book only while its files
-  are the stored ones (`catalog.sameFiles`: the paths in order, and each size but the timed-out
-  parts' own, `BookFile.LengthUnread`); with a part added, gone, renamed or changed the book is
+  path's names. Only a length out of time or a file that is no regular file (`Book.LengthOnly`:
+  every file's tags read, none cut short or refused) can repeat on every scan (a damaged part, a
+  FIFO left in a book's folder), so it keeps the book only while its files are the stored ones
+  (`catalog.sameFiles`: the paths in order, and each size but the timed-out or non-regular parts'
+  own, `BookFile.LengthUnread`); with a part added, gone, renamed or changed the book is
   written whole with the part's problem (counted as updated), never held at a file list that is no
   longer on disk. With no
   ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules

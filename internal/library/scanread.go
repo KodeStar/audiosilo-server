@@ -77,12 +77,24 @@ func lengthTimedOut(md *metadata.Metadata) bool {
 }
 
 // readCutShort reports whether md's read leaves the file unknown, or its
-// length: cut short or refused (TagsUnread), or its length's read out of time
-// even alone (lengthTimedOut: a part on a share that stopped answering mid-read,
-// a FIFO; server#360). A book with such a file is kept as stored
-// (catalog.Book.ReadCutShort), never rewritten without that file's length.
+// length: cut short or refused (TagsUnread), or its length unread
+// (lengthUnread). A book with such a file is kept as stored
+// (catalog.Book.ReadCutShort), never rewritten without that file's length; one
+// whose files' tags were all read is kept only while its files are the stored
+// ones (catalog.Book.LengthOnly).
 func readCutShort(md *metadata.Metadata) bool {
-	return md.TagsUnread() || lengthTimedOut(md)
+	return md.TagsUnread() || lengthUnread(md)
+}
+
+// lengthUnread reports whether md has no length for its file that a read
+// could give: its length's read out of time even alone (lengthTimedOut: a part
+// on a share that stopped answering mid-read; server#360), or a file that is
+// no regular file (metadata.ErrNotRegular: a FIFO, a device). The latter is a
+// known bad file, not a read cut short: with its book's other files unchanged
+// the stored book stays, and a change to another part rewrites it
+// (catalog.Book.LengthOnly, BookFile.LengthUnread).
+func lengthUnread(md *metadata.Metadata) bool {
+	return lengthTimedOut(md) || (md != nil && errors.Is(md.OpenErr, metadata.ErrNotRegular))
 }
 
 // read is metadata.ExtractTimeout holding a slot, and whether another read ran

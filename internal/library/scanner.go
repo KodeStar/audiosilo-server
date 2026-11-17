@@ -1388,7 +1388,7 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 		md := mds[i]
 		tagsUnread = tagsUnread || md.TagsUnread()
 		b.LengthUncounted = b.LengthUncounted || md.LengthUncounted()
-		f.LengthUnread = lengthTimedOut(md)
+		f.LengthUnread = lengthUnread(md)
 		if readCutShort(md) && !b.ReadCutShort {
 			// Its length and chapters unknown: see enrich. The book is kept as
 			// stored, and what brings the next scan back to it is the problem

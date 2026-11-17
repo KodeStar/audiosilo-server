@@ -14,8 +14,8 @@ import (
 
 // A FIFO named as audio is never waited for nor read (server#360): with no
 // writer its open would wait for one, with a writer that never writes its
-// reads would. Either way it is no regular file, at once: an OpenErr, its tags
-// unread (a stored book it is a part of is kept), no ffprobe run, no
+// reads would. Either way it is no regular file, at once: an OpenErr (a known
+// bad file, its tags not "unread" as a read cut short is), no ffprobe run, no
 // fingerprint.
 func TestFIFOIsNotRead(t *testing.T) {
 	t.Parallel()
@@ -33,7 +33,7 @@ func TestFIFOIsNotRead(t *testing.T) {
 		}
 		start := time.Now()
 		m, err := ExtractTimeout(context.Background(), path, "/no/such/ffprobe", time.Minute)
-		if err != nil || !errors.Is(m.OpenErr, errNotRegular) || !m.TagsUnread() || m.ProbeErr != nil {
+		if err != nil || !errors.Is(m.OpenErr, ErrNotRegular) || m.TagsUnread() || m.ProbeErr != nil {
 			t.Errorf("writer %v: FIFO read = %+v (err %v), want it not a regular file, no ffprobe", writer, m, err)
 		}
 		if fp := Fingerprint(context.Background(), path, time.Minute); fp != "" {
