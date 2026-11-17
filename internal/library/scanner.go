@@ -2118,7 +2118,9 @@ func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *cata
 	if base := s.base.Load(); base != nil {
 		defer context.AfterFunc(*base, cancel)()
 	}
-	if err = s.indexBookFrom(ctx, lib, book, from(ctx)); err != nil {
+	// Logged here: the request that began the read may be gone. A read the
+	// server's stop ended is no failure.
+	if err = s.indexBookFrom(ctx, lib, book, from(ctx)); err != nil && !s.stopped() {
 		s.log.Warn("index book failed", "library", lib.Name, "path", book.RelPath, "err", err)
 	}
 }
