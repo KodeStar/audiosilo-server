@@ -155,35 +155,27 @@ can_read() {
   as_user timeout "$WAIT" find "$1" -mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>&1
 }
 
-# The folders mounted inside the data folder, one a line. A file mounted there
-# (a config.yaml bind-mounted at /data/config.yaml) is not one: the chown takes it
-# as it always has. A mount point that doesn't answer counts as a folder.
+# The points mounted inside the data folder, folders and files, one a line.
 nested_mounts() {
   mounts | while read -r _ _ point; do
-    case "$point" in
-      "$DATA"/*)
-        rc=0
-        is_dir "$point" || rc=$?
-        if [ "$rc" -ne 1 ]; then printf '%s\n' "$point"; fi
-        ;;
-    esac
+    case "$point" in "$DATA"/*) printf '%s\n' "$point" ;; esac
   done
   return 0
 }
 
-# Changes the owner of the data folder and everything in it (a file mounted
-# inside it too), never what a link points at (chown -h) and never a folder
-# mounted inside it or anything under one (server#382): a backups share at
-# /data/backups, another app's files. -xdev alone
+# Changes the owner of the data folder and everything in it, never what a link
+# points at (chown -h) and never a folder mounted inside it or anything under one
+# (server#382): a backups share at /data/backups, another app's files. -xdev alone
 # misses those: a volume or a bind mount from the same host disk has the same
-# device number, so each mount point is pruned by name too (a glob, so its
-# pattern characters escaped). What already belongs to $RUN_AS is left alone, so
+# device number, so each folder mount point is pruned by name too (a glob, so its
+# pattern characters escaped). A file mounted there (a config.yaml) is no folder
+# and is chowned, as it always was. What already belongs to $RUN_AS is left alone, so
 # a start writes nothing to a data folder that is already right.
 chown_data() {
   set -- "$DATA" -xdev
   while IFS= read -r m; do
     [ -n "$m" ] || continue
-    set -- "$@" -path "$(printf '%s' "$m" | sed 's/[][*?\\]/\\&/g')" -prune -o
+    set -- "$@" -path "$(printf '%s' "$m" | sed 's/[][*?\\]/\\&/g')" -type d -prune -o
   done <<EOF
 $(nested_mounts)
 EOF

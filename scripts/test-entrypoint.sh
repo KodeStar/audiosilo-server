@@ -205,9 +205,8 @@ expect "nested mount keeps its owner" "$owners" \
 #     read it, while a folder mounted beside it keeps its owner. Both come from
 #     another filesystem, so -xdev is crossed too.
 FILEM=$(vol filem 0:0 755)
-docker run --rm -v "$FILEM:/v" "$RUN_ID" sh -c 'echo "listen: :8080" >/v/config.yaml && chmod 600 /v/config.yaml'
 out=$(docker run --rm --privileged -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" -v "$FILEM:/data" "$RUN_ID" sh -c '
-  mkdir -p /src /data/backups && mount -t tmpfs tmpfs /src && mkdir /src/backups &&
+  mkdir -p /src /data/backups && touch /data/config.yaml && mount -t tmpfs tmpfs /src && mkdir /src/backups &&
     printf "listen: :8080\n" >/src/config.yaml && chmod 600 /src/config.yaml && touch /src/backups/theirs.db &&
     chown -R 1026:100 /src/backups && mount --bind /src/config.yaml /data/config.yaml &&
     mount --bind /src/backups /data/backups &&
