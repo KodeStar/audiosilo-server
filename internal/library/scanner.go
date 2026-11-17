@@ -2029,7 +2029,9 @@ func foundAdded(info fs.FileInfo) int64 {
 // at none of them again, only a book discovery couldn't stat. Each file's
 // look (Linux's statx, the lstat) is one metadata.Bounded call under ctx and
 // timeout; once one is given up on (a share that stopped answering) the rest
-// are not looked at, each would wait out its time too.
+// are not looked at, each would wait out its time too: that file and the rest
+// take the walk's time (b.FoundAdded: the mtime on Linux, as on a filesystem
+// with no birth time), and only a book built without it is stamped now.
 func stampAddedAt(ctx context.Context, lib catalog.Library, b *catalog.Book, timeout time.Duration) {
 	var paths []string
 	if b.IsFolder {
@@ -2059,19 +2061,33 @@ func stampAddedAt(ctx context.Context, lib catalog.Library, b *catalog.Book, tim
 			return addedAt(abs, info), nil
 		}, nil)
 		if metadata.GaveUp(err) || ctx.Err() != nil {
+			if haveFound {
+				// The walk's time of this file and the rest (no system call):
+				// added_at is never written again, and now would hold a book
+				// years old at the top of Recently added for good.
+				for _, found := range b.FoundAdded[i:] {
+					added = earlierAdded(added, formatAdded(found))
+				}
+			}
 			break
 		}
 		if err != nil {
 			continue
 		}
-		if added == "" || a < added {
-			added = a
-		}
+		added = earlierAdded(added, a)
 	}
 	if added == "" {
 		added = now()
 	}
 	b.AddedAt = added
+}
+
+// earlierAdded is the earlier of two addedAt times, "" being none.
+func earlierAdded(a, b string) string {
+	if a == "" || (b != "" && b < a) {
+		return b
+	}
+	return a
 }
 
 // fileBook builds a single-file book for the audio file at absPath (its AddedAt

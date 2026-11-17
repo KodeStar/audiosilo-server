@@ -255,29 +255,42 @@ func waitNoReadsLeft(t *testing.T, s *Scanner) {
 }
 
 // stampAddedAt's look at each file (Linux's statx included, not only the
-// lstat) is bounded: a book on a share that stopped answering is stamped now,
-// first seen, after one look's time, not one per file (the rest are not looked
-// at once one is given up on). Not parallel: metadata.HoldOpensForTests.
+// lstat) is bounded: a book on a share that stopped answering is stamped
+// after one look's time, not one per file (the rest are not looked at once one
+// is given up on), with the walk's time of its files, the earliest, where the
+// walk gave one: added_at is never written again, so now would put a book
+// years old at the top of Recently added for good. A book built without the
+// walk's times is stamped now, first seen. Not parallel:
+// metadata.HoldOpensForTests.
 func TestStampAddedAtOnAHeldShare(t *testing.T) {
 	root := t.TempDir()
 	lib := catalog.Library{Root: root}
+	walked := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
 	b := catalog.Book{RelPath: "A/Book", IsFolder: true}
 	for i := range 5 {
 		rel := fmt.Sprintf("A/Book/%02d.mp3", i)
 		writeFile(t, root, rel, []byte("x"))
 		b.Files = append(b.Files, catalog.BookFile{RelPath: rel})
-		b.FoundAdded = append(b.FoundAdded, time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC).Unix())
+		// The earliest is not the first: the rest count though never looked at.
+		b.FoundAdded = append(b.FoundAdded, walked.Add(time.Duration(4-i)*time.Hour).Unix())
 	}
 	release := metadata.HoldOpensForTests(filepath.Join(root, "A", "Book"))
 	t.Cleanup(release)
 	const look = 200 * time.Millisecond
-	before := time.Now().UTC().Add(-time.Second)
+
 	start := time.Now()
 	stampAddedAt(t.Context(), lib, &b, look)
 	if took := time.Since(start); took > 3*look {
 		t.Errorf("stampAddedAt on a held share took %v, want one look's time (%v)", took, look)
 	}
-	if at, err := time.Parse(time.RFC3339, b.AddedAt); err != nil || at.Before(before.Truncate(time.Second)) {
-		t.Errorf("added_at on a held share = %q (%v), want now", b.AddedAt, err)
+	if want := walked.Format(time.RFC3339); b.AddedAt != want {
+		t.Errorf("added_at on a held share = %q, want the walk's earliest %q", b.AddedAt, want)
+	}
+
+	unwalked := catalog.Book{RelPath: b.RelPath, IsFolder: true, Files: b.Files}
+	before := time.Now().UTC().Add(-time.Second)
+	stampAddedAt(t.Context(), lib, &unwalked, look)
+	if at, err := time.Parse(time.RFC3339, unwalked.AddedAt); err != nil || at.Before(before.Truncate(time.Second)) {
+		t.Errorf("added_at on a held share with no walk's time = %q (%v), want now", unwalked.AddedAt, err)
 	}
 }
