@@ -104,12 +104,15 @@ ENV AUDIOSILO_WEB_DIR=/app/web \
 VOLUME /data
 EXPOSE 8080
 # Liveness: the server asks its own /healthz on the bind address and TLS mode
-# config.yaml and the AUDIOSILO_* environment give it (no shell or curl needed;
-# server#217). This only marks the container unhealthy: an orchestrator's
-# liveness probe or an autoheal sidecar restarts it (see the README). The start
-# period covers a first start's or an upgrade's migrations on a large library.
-# Keep the --data in step with the CMD below.
+# config.yaml and the AUDIOSILO_* environment give it (no curl needed;
+# server#217). It runs as the server does: Docker starts a check as root, past
+# the entrypoint, so as root it drops to PUID:PGID (su-exec, as the entrypoint
+# does) and reads config.yaml with the server's own access, which root may not
+# have (an NFS share with root_squash). This only marks the container
+# unhealthy: an orchestrator's liveness probe or an autoheal sidecar restarts it
+# (see the README). The start period covers a first start's or an upgrade's
+# migrations on a large library. Keep the --data in step with the CMD below.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=2m --retries=3 \
-    CMD ["audiosilo", "--data", "/data", "healthcheck"]
+    CMD ["sh", "-c", "if [ \"$(id -u)\" = 0 ]; then exec su-exec \"${PUID:-1000}:${PGID:-1000}\" audiosilo --data /data healthcheck; fi; exec audiosilo --data /data healthcheck"]
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["audiosilo", "--data", "/data"]
