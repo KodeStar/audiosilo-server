@@ -101,6 +101,51 @@ func TestFetchCover(t *testing.T) {
 	}
 }
 
+// A cover redirect never goes from https down to http (server#219): refused
+// at the hop, nothing fetched over plain http. Allowed: https to https, and
+// http up to https.
+func TestFetchCoverRefusesHTTPSDowngrade(t *testing.T) {
+	t.Parallel()
+	img := bytes.Repeat([]byte{0xff}, 100)
+	plainHit := false
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		plainHit = true
+		_, _ = w.Write(img)
+	}))
+	defer plain.Close()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/cover.jpg", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(img) })
+	mux.HandleFunc("/down", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+"/cover.jpg", http.StatusFound)
+	})
+	mux.HandleFunc("/moved", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/cover.jpg", http.StatusFound)
+	})
+	secure := httptest.NewTLSServer(mux)
+	defer secure.Close()
+	upgrade := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, secure.URL+"/cover.jpg", http.StatusFound)
+	}))
+	defer upgrade.Close()
+
+	s := NewService("http://meta.invalid", nil)
+	s.covers = newCoverClient(func(ap netip.AddrPort) bool { return ap.Addr().IsLoopback() })
+	// Trust the test server's certificate, as the client trusts a public one.
+	s.covers.Transport.(*http.Transport).TLSClientConfig = secure.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	ctx := context.Background()
+	if _, err := s.FetchCover(ctx, secure.URL+"/down", 1<<20); !errors.Is(err, errCoverDowngrade) {
+		t.Fatalf("https to http = %v, want errCoverDowngrade", err)
+	}
+	if plainHit {
+		t.Fatal("the plain http cover was fetched")
+	}
+	for _, u := range []string{secure.URL + "/moved", upgrade.URL + "/up"} {
+		if got, err := s.FetchCover(ctx, u, 1<<20); err != nil || !bytes.Equal(got, img) {
+			t.Errorf("%s = %d bytes, %v; want the image", u, len(got), err)
+		}
+	}
+}
+
 func TestHandsOutCover(t *testing.T) {
 	e := &Enrichment{
 		Recording: &MetaRecording{CoverURL: "https://img/rec.jpg"},
