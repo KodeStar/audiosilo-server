@@ -241,12 +241,12 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 // finishChangedValue and finishChangedSet are the one statement of the rule
 // every progress upsert that writes finished follows (Sync v2: a finish or
 // unfinish event older than the change is then "older" and can't undo it):
-// SaveProgressFrom, EditProgress and an import's progressUpsert, each binding
-// the finished value as ?6 and the change's time as ?13 (the sync's own finish
-// writes stamp it directly). finishChangedValue is finish_changed_at in the
-// VALUES: the time when the row is inserted finished, else NULL;
-// finishChangedSet its ON CONFLICT assignment: the time when the write flips
-// finished, else the row's own.
+// SaveProgressFrom and an import's progressUpsert, each binding the finished
+// value as ?6 and the change's time as ?13 (the sync's own finish writes stamp
+// it directly, and EditProgress on any explicit finished, server#363).
+// finishChangedValue is finish_changed_at in the VALUES: the time when the row
+// is inserted finished, else NULL; finishChangedSet its ON CONFLICT assignment:
+// the time when the write flips finished, else the row's own.
 const (
 	finishChangedValue = `CASE WHEN ?6 THEN ?13 END`
 	finishChangedSet   = `finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN ?13

@@ -104,6 +104,9 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	brief := q.Get("brief") == "1"
+	if pathTooLong(w, q.Get("path")) {
+		return
+	}
 	libraryID, ok := parseOptionalID(q.Get("library_id"))
 	path := catalog.CleanRelPath(q.Get("path"))
 	if !ok || libraryID <= 0 || path == "" {

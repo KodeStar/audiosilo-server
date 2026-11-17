@@ -651,13 +651,23 @@ func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 		Mode      string  `json:"mode"`
 		From      *string `json:"from"`
 	}
-	if err := decodeJSON(r, &req, 8<<10); err != nil || req.LibraryID <= 0 || catalog.CleanRelPath(req.Path) == "" {
+	// The body holds path and from each up to the cap, with room for JSON's
+	// escapes, so two paths at the cap get the route's answer, not a 400.
+	if err := decodeJSON(r, &req, 4*catalog.MaxPathBytes); err != nil || req.LibraryID <= 0 {
 		writeError(w, http.StatusBadRequest, "library_id and path are required")
 		return
 	}
 	rawFrom := ""
 	if req.From != nil {
 		rawFrom = *req.From
+	}
+	if pathTooLong(w, req.Path) || pathTooLong(w, rawFrom) {
+		return
+	}
+	p := catalog.CleanRelPath(req.Path)
+	if p == "" {
+		writeError(w, http.StatusBadRequest, "library_id and path are required")
+		return
 	}
 	from := catalog.CleanRelPath(rawFrom)
 	switch {
@@ -675,7 +685,6 @@ func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p := catalog.CleanRelPath(req.Path)
 	if lib.Kind == catalog.KindPodcasts {
 		if req.Mode == rescanAttachments || req.From != nil {
 			writeError(w, 400, "Podcast rescans take a show path only.")
@@ -883,6 +892,9 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 	}
 	nj := bridge.NewJob{Kind: req.Kind, LibraryID: req.LibraryID, Params: req.Params, RequestedBy: userFrom(r.Context()).ID}
 	if req.Path != nil {
+		if pathTooLong(w, *req.Path) {
+			return
+		}
 		if p := catalog.CleanRelPath(*req.Path); p != "" {
 			nj.Path = &p
 		}
@@ -994,6 +1006,9 @@ func (a *API) handleAdminBridgeJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if q.Has("path") {
+		if pathTooLong(w, q.Get("path")) {
+			return
+		}
 		p := catalog.CleanRelPath(q.Get("path"))
 		f.Path = &p
 	}

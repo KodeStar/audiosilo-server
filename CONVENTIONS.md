@@ -2457,8 +2457,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the CALLER's current scopes (`ScopesAllow`), else the person is dropped, never shown on an older
   in-scope book. A row is `{user_id, username, library_id, path, title, author|null, state, position,
   duration|null, chapter|null, chapter_index|null, updated_at}` (newest first; `state` `playing`
-  within 60 s, `paused` within `SessionGap` (`SessionPlaying`/`SessionPaused`), else `recent`; `title` the index's, else the path's last
-  segment; `duration` the index's, else the session's, null for 0; chapter fields as the live
+  within 150 s (`playingWindow`: a background player saves every 60 s, server#364), `paused`
+  within `SessionGap` (`SessionPlaying`/`SessionPaused`), else `recent`; `title` the index's, else
+  the path's last segment; `duration` the index's, else the session's, null for 0; chapter fields as the live
   sessions', via the shared `chapterCache`; `updated_at` the newest save, fixed-width ms UTC). It
   NEVER carries a device, address, app or token: `HouseListeningRow` has no such field, unlike the
   admin-only `LiveSessions` (never reuse that for anything a non-admin sees). Polling only (the
@@ -3704,12 +3705,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   an unknown field, or a listen without a number for `from_pos` or `to_pos` (a null would read as 0:00) is that
   event's `rejected` `invalid`, as is a `path` over `MaxPathBytes` (4096 bytes as sent, `relpath.MaxBytes`, server#289;
   the content routes and the routes that store a path answer one with 400 `path is too long`: `pathInScope` (`scopedPath`
-  and `scopedPathIn` check first), `pathTooLong` for a route taking a path outside it (the admin's folder override and
-  enrichment, browse, a list's remove, the Bridge's book read); before the library is looked up, server#291, so an
-  unknown one answers the 400 and an event's over-cap path is `invalid` before any lookup. A podcast's show or episode
-  path is capped by `feed.ShowPath` / `EpisodePath`, and the Bridge's enrichment PUT by its own check, each the route's
-  400 `invalid_request`. The admin's Bridge estimate and queue, the Bridge's rescan and the jobs and sessions filters
-  take no cap: each looks a book up first (an over-cap path finds none) or only filters, storing nothing). The handler
+  and `scopedPathIn` check first), `pathTooLong` for a route taking a path outside it (the admin's folder override,
+  browse, a list's remove, the admin's Bridge estimate and queue, the Bridge jobs and sessions `?path=` filters, the
+  Bridge's book read, rescan (`path` and `from`) and enrichment PUT, server#359); before the library is looked up,
+  server#291, so an unknown one answers the 400 and an event's over-cap path is `invalid` before any lookup. A
+  podcast's show or episode path is capped by `feed.ShowPath` / `EpisodePath`, the route's 400 `invalid_request`). The handler
   resolves each distinct
   `(library_id, path)` as PUT progress does (`scopedPathIn`: 403 -> `no_access`, 404 -> `not_found`, a path
   cleaning to nothing or over the cap -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
@@ -3755,10 +3755,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Rejected events are never stored. `listening_events` is pruned at 120 days (`PruneListeningEvents`, from
   `pkg/launcher.retention`). The legacy PUT stays last-write-wins (finished included) and is logged as a `put`
   event (`SaveProgressFrom`), stores `device_name` and `finish_changed_at` (at its `updated_at`, never past
-  the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too (the upserts through one
-  fragment, `finishChangedValue` / `finishChangedSet`, binding finished as ?6 and the time as ?13), so an
-  older sync finish/unfinish can't undo it: `EditProgress` (own and admin PATCH) at now, an import's apply and
-  undo (`progressUpsert`) at the row's `updated_at` capped at now (`finishChangeStamp`, the PUT's rule; an undo of a
+  the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too, so an
+  older sync finish/unfinish can't undo it: `EditProgress` (own and admin PATCH) at now, on ANY explicit
+  `finished` even one that flips nothing (server#363; bound from Go, kept by `COALESCE` when the edit names
+  none), an import's apply and
+  undo (`progressUpsert`, through the PUT's fragment `finishChangedValue` / `finishChangedSet`, finished as
+  ?6 and the time as ?13) at the row's `updated_at` capped at now (`finishChangeStamp`, the PUT's rule; an undo of a
   row the import had moved on at now, a re-import's too), a move or
   join keeping the newer of the two. Progress reads
   carry `device_name` and `other_place` (omitempty). The chain lasts across POSTs (server#289, `0062`,
@@ -3789,9 +3791,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   chaining), never moves the place: an apply becomes kept-stored, its place offered (`setOther`); a device whose
   base is at or above it saw the Stay and resolves as before. The Stay's own device writing again keeps the hold
   (`writePlace` keeps `stay_version` while the row stays its device's); every other writer clears it: another
-  device's applied span (an Audible furthest-only place too), `endSpanChain` (PUT, PATCH, an import's apply and
+  device's applied span (an Audible furthest-only place heard after the Stay too), `endSpanChain` (PUT, PATCH, an import's apply and
   undo, a move or join) and a finish or unfinish (not an unfinish of a row that isn't finished: it changes nothing,
-  so it keeps the hold and records no `edit_version`).
+  so it keeps the hold and records no `edit_version`; nor an Audible finish heard at or before the Stay,
+  which is `behind`).
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
   multi-file mp3 parts share one shape: each chapter carries `file_path` (the
   library-relative file to stream via `/stream?path=`), in-file `start`/`end`, and
@@ -3950,9 +3953,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (the row's `updated_at` never moves back, its playback speed and offer kept; the player's own reconcile then moves
   or offers, and a device's diverged span offers Audible's place by name); at or behind it, or on a finished row,
   `not_applied` `behind` (no offer, nothing stored on the row), and so is a listen heard at or before the row's
-  `finish_changed_at` (a place from before a finish or a restart here is the old reading's); a place past the book's end by more than 5% plus 2
+  `finish_changed_at` (a place from before a finish or a restart here is the old reading's), and so is one heard at
+  or before the Stay that holds a row (`beforeStay`, `stay_version` set: the listener chose that place, and
+  the other device's earlier place must not come back through Audible, server#415; the Stay's time is its own span's
+  end, the newest applied `stay` span of the row's device in `listening_events`, never the row's `updated_at`, which
+  moves on as the Stay's device listens: a place heard in the Audible app since the Stay still applies); a place past the book's end by more than 5% plus 2
   min (`furthestPastEndRatio`, the manager's wrong-match guard) is `rejected` `duration_mismatch`, one just past it
-  is the end; an unfinish is `behind`; a finish is any finish. The device id `audible:<account>` is this route's
+  is the end; an unfinish is `behind`; a finish is any finish, except one heard at or before the Stay that holds the row
+  (`behind`, `beforeStay`: the Bridge sends a place at the end as a listen and a finish). The device id `audible:<account>` is this route's
   alone: `/me/listening/sync` refuses a batch naming one (400), a legacy PUT naming one (a row echoed back) saves under
   none, and `EditProgress` clears it on the row it edits (the edit reaches the feed, and Audible's next place can't
   undo it unseen), as a listening import does on a row it moves on (`importer.mergeProgress`, the device name too;

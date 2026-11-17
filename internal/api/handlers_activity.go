@@ -70,6 +70,9 @@ func (a *API) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		f.BeforeAt = t
 	}
 	if v := q.Get("path"); v != "" {
+		if pathTooLong(w, v) {
+			return
+		}
 		if f.LibraryID == 0 {
 			writeError(w, http.StatusBadRequest, "path needs library_id")
 			return

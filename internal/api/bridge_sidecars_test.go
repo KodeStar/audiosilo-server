@@ -194,6 +194,83 @@ func TestBridgeBookPathCap(t *testing.T) {
 	}
 }
 
+// server#359: the routes that take a path outside pathInScope and had no cap
+// check it first. Denied: one byte over catalog.MaxPathBytes is 400 "path is
+// too long" on the Bridge's rescan (path and from), a job's queue and estimate,
+// the jobs and sessions ?path= filters and the Bridge's enrichment (not its
+// invalid_request), on the fixture library and on an unknown one. Allowed: a
+// path at the cap gets each route's ordinary answer (a rescan's path and from
+// both at it too).
+func TestBridgeRoutesPathCap(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	atCap := "Long/" + strings.Repeat("a", catalog.MaxPathBytes-len("Long/"))
+	over := atCap + "b"
+	type route struct {
+		name, method, tok string
+		url, body         func(lib int64, p string) string
+		ok                int // the at-cap answer on the fixture library
+	}
+	q := url.QueryEscape
+	routes := []route{
+		{"rescan path", "POST", b.bridgeTok,
+			func(int64, string) string { return "/api/v1/bridge/rescan" },
+			func(lib int64, p string) string { return fmt.Sprintf(`{"library_id":%d,"path":%q}`, lib, p) },
+			http.StatusNotFound},
+		{"rescan from", "POST", b.bridgeTok,
+			func(int64, string) string { return "/api/v1/bridge/rescan" },
+			func(lib int64, p string) string {
+				return fmt.Sprintf(`{"library_id":%d,"path":"Book","from":%q}`, lib, p)
+			},
+			http.StatusNotFound},
+		{"rescan path and from", "POST", b.bridgeTok,
+			func(int64, string) string { return "/api/v1/bridge/rescan" },
+			func(lib int64, p string) string {
+				// from as long as path: both at the cap fit the body.
+				return fmt.Sprintf(`{"library_id":%d,"path":%q,"from":%q}`, lib, p, "Z"+p[1:])
+			},
+			http.StatusNotFound},
+		{"queue", "POST", b.adminTok,
+			func(int64, string) string { return "/api/v1/admin/bridge/jobs" },
+			func(lib int64, p string) string {
+				return fmt.Sprintf(`{"kind":%q,"library_id":%d,"path":%q}`, bridge.KindVerify, lib, p)
+			},
+			http.StatusNotFound},
+		{"estimate", "GET", b.adminTok,
+			func(lib int64, p string) string {
+				return fmt.Sprintf("/api/v1/admin/bridge/estimate?library_id=%d&path=%s", lib, q(p))
+			},
+			func(int64, string) string { return "" }, http.StatusNotFound},
+		{"jobs filter", "GET", b.adminTok,
+			func(lib int64, p string) string {
+				return fmt.Sprintf("/api/v1/admin/bridge/jobs?library_id=%d&path=%s", lib, q(p))
+			},
+			func(int64, string) string { return "" }, http.StatusOK},
+		{"sessions filter", "GET", b.adminTok,
+			func(lib int64, p string) string {
+				return fmt.Sprintf("/api/v1/admin/sessions?library_id=%d&path=%s", lib, q(p))
+			},
+			func(int64, string) string { return "" }, http.StatusOK},
+		{"enrichment", "PUT", b.bridgeTok,
+			func(lib int64, p string) string {
+				return fmt.Sprintf("/api/v1/bridge/libraries/%d/enrichment?path=%s", lib, q(p))
+			},
+			func(int64, string) string { return `{"asin":"B00FLIJJSY"}` }, http.StatusNotFound},
+	}
+	for _, rt := range routes {
+		for _, lib := range []int64{b.lib.ID, 999999} {
+			resp, body := b.do(t, rt.method, rt.url(lib, over), rt.tok, rt.body(lib, over))
+			if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "path is too long") {
+				t.Errorf("%s over the cap, library %d: %d %s, want 400 path is too long", rt.name, lib, resp.StatusCode, body)
+			}
+		}
+		resp, body := b.do(t, rt.method, rt.url(b.lib.ID, atCap), rt.tok, rt.body(b.lib.ID, atCap))
+		if resp.StatusCode != rt.ok || strings.Contains(body, "path is too long") {
+			t.Errorf("%s at the cap: %d %s, want %d", rt.name, resp.StatusCode, body, rt.ok)
+		}
+	}
+}
+
 // The work id is the metadata cache's: none before the book is looked up (no
 // upstream call from the Bridge's route), then the cached one.
 func TestBridgeBookFactsWorkID(t *testing.T) {

@@ -255,7 +255,8 @@ const msgPathTooLong = "path is too long"
 // pathTooLong answers 400 msgPathTooLong for a raw path no file can have
 // (true), before it is cleaned, looked up (a library, a book's ancestors) or
 // stored: a route that takes a path outside pathInScope (an admin's folder
-// override or enrichment, browse, a list's remove, the Bridge's book read)
+// override, browse, a list's remove, the sessions and Bridge jobs filters, a
+// Bridge job or estimate, the Bridge's book read, rescan and enrichment)
 // checks it first, before the library is looked up.
 func pathTooLong(w http.ResponseWriter, rawPath string) bool {
 	if len(rawPath) <= catalog.MaxPathBytes {
