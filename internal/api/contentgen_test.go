@@ -46,8 +46,8 @@ func (c *contentGenEnv) warm(t *testing.T) {
 			t.Fatalf("GET %s: %d %s", p, resp.StatusCode, body)
 		}
 	}
-	if n := c.cacheEntries(); n != len(c.paths) {
-		t.Fatalf("cache entries = %d, want %d", n, len(c.paths))
+	if n := c.cacheEntries(); n < len(c.paths) {
+		t.Fatalf("cache entries = %d, want at least %d", n, len(c.paths))
 	}
 	c.cachedBodies(contentGenMarker)
 }
@@ -75,14 +75,24 @@ func (c *contentGenEnv) must(t *testing.T, method, path, body string) {
 // listening sessions), bookmarks, history, ratings, the queue and the token's
 // own last-seen touch between two list requests leave every cached answer in
 // place: the second request is a hit, and the content generation never moved.
+// A book's first save (a new progress row) leaves them too, but for the Health
+// summary, which ranks duplicate copies by their listeners (server#263).
 func TestListeningKeepsTheListCacheWarm(t *testing.T) {
 	t.Parallel()
 	c := newContentGenEnv(t)
-	// The book's first save makes its progress row: content (Health's
-	// duplicates count each copy's listeners), so it is made before the warm-up.
-	c.must(t, "PUT", bookURL(c.lib.ID, "progress", "A/Alpha One.m4b"), `{"position":1,"duration":60}`)
 	c.warm(t)
 	gen := c.db.ContentGeneration()
+	listeners := c.db.ListenerGeneration()
+	c.must(t, "PUT", bookURL(c.lib.ID, "progress", "A/Alpha One.m4b"), `{"position":1,"duration":60}`)
+	if c.db.ListenerGeneration() == listeners {
+		t.Error("a first save left the listener generation")
+	}
+	for p, hit := range c.answeredFromCache(t) {
+		if health := p == "/api/v1/admin/issues"; hit == health {
+			t.Errorf("GET %s after a first save: answered from the cache %v, want %v", p, hit, !health)
+		}
+	}
+	c.warm(t)
 
 	for i := 2; i < 6; i++ {
 		c.must(t, "PUT", bookURL(c.lib.ID, "progress", "A/Alpha One.m4b"), fmt.Sprintf(`{"position":%d,"duration":60}`, i))
@@ -128,8 +138,8 @@ func TestListeningKeepsTheListCacheWarm(t *testing.T) {
 }
 
 // TestContentWritesEmptyTheListCache (server#258): each content write between
-// two list requests (a re-index renaming a book, a book's edit, a first
-// progress row, a grant, a collection) is a miss whose answer is fresh.
+// two list requests (a re-index renaming a book, a book's edit, a grant, a
+// collection) is a miss whose answer is fresh.
 func TestContentWritesEmptyTheListCache(t *testing.T) {
 	t.Parallel()
 	c := newContentGenEnv(t)
@@ -156,14 +166,6 @@ func TestContentWritesEmptyTheListCache(t *testing.T) {
 		{"book edit", func() error {
 			return c.cat.EditBook(ctx, c.lib.ID, "B/Beta.m4b", catalog.BookEdit{Set: map[string]string{"title": "Beta Edited"}})
 		}, `"title":"Beta Edited"`},
-		{"first progress row", func() error {
-			resp, _ := c.do(t, "PUT", bookURL(c.lib.ID, "progress", "B/Beta.m4b"),
-				c.tok, `{"position":1,"duration":60}`)
-			if resp.StatusCode != http.StatusOK {
-				return fmt.Errorf("progress PUT %d", resp.StatusCode)
-			}
-			return nil
-		}, `"books"`},
 		{"grant", func() error { return c.cat.GrantShare(ctx, member.ID, share.ID) }, `"books"`},
 		{"collection", func() error {
 			_, err := c.cat.CreateCollection(ctx, member.ID, "Mine", "")

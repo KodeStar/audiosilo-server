@@ -370,7 +370,7 @@ func sameLength(a, b float64) bool {
 	return math.Abs(a-b) <= math.Max(60, 0.02*math.Max(a, b))
 }
 
-// duplicateSets finds the groups of copies within each library (of one library,
+// findDuplicateSets finds the groups of copies within each library (of one library,
 // or all with libraryID 0): books sharing an identity signal (identitySignals),
 // except that audio must also match in size (an identical first part is not a
 // copy) and author/title/narrator only joins copies of a matching length (an
@@ -383,7 +383,7 @@ func sameLength(a, b float64) bool {
 // every library). The Health count never asks for across. The discs of a book
 // split across disc folders look alike (one title, similar lengths) but are
 // listed under their own issue, whose fix joins them, so they never group either.
-func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64, across bool) ([]dupRow, []dupSet, error) {
+func (c *Catalog) findDuplicateSets(ctx context.Context, libraryID int64, across bool) ([]dupRow, []dupSet, error) {
 	readLib := libraryID
 	if across {
 		readLib = 0
@@ -497,9 +497,10 @@ func betterCopy(a, b dupRow) bool {
 // DuplicatePage returns a page of the groups of copies (duplicateSets) with each
 // copy's admin row: the open ones, or with q.Ignored only the ones every member
 // of which an admin ignored (a new copy brings a group back). q.Across also groups
-// copies in different libraries (duplicateSets). The groups are found afresh for
-// every page (it reads the library's rows, not the admin rows, which only the
-// page's copies need) and paged by keyset on their order, the kept copy's library
+// copies in different libraries (duplicateSets). The groups are found once a
+// generation (duplicateSets keeps them; they read the library's rows, not the
+// admin rows, which only the page's copies need) and paged by keyset on their
+// order, the kept copy's library
 // and path: a cursor names the last group's, so a group that comes or goes
 // between pages moves nothing else. ErrInvalidCursor for a cursor that isn't one.
 func (c *Catalog) DuplicatePage(ctx context.Context, q DuplicateQuery) (DuplicatePage, error) {
@@ -519,8 +520,9 @@ func (c *Catalog) DuplicatePage(ctx context.Context, q DuplicateQuery) (Duplicat
 	if err != nil {
 		return DuplicatePage{}, err
 	}
-	// Filtered before paging, so every ignored group can be reached to show again.
-	sets = slices.DeleteFunc(sets, func(s dupSet) bool { return s.ignored != q.Ignored })
+	// Filtered before paging, so every ignored group can be reached to show
+	// again (into a slice of its own: sets may be the cache's).
+	sets = slices.DeleteFunc(slices.Clone(sets), func(s dupSet) bool { return s.ignored != q.Ignored })
 	page := DuplicatePage{Total: len(sets), Groups: []DuplicateGroup{}}
 	if q.Cursor != "" {
 		// The first group past the cursor, in duplicateSets' order.

@@ -344,6 +344,9 @@ type Catalog struct {
 	podcastVisit      Ref
 	// libs is GetLibrary's rows while no content is written.
 	libs store.GenMap[int64, Library]
+	// dups is duplicateSets' groups while no content is written and no
+	// listener starts or drops a book (duplicatecache.go).
+	dups store.GenMap[dupKey, dupFound]
 	// exportPaged, tests only, runs after each page ExportLibraryBooks reads.
 	exportPaged func()
 }
@@ -409,16 +412,35 @@ func (c *Catalog) changed() {
 	}
 }
 
+// generations is a database whose reads may be cached (store.DB): both its
+// generations, so an answer keyed on the listener one is never cached over a
+// database that has only the content one.
+type generations interface {
+	ContentGeneration() uint64
+	ListenerGeneration() uint64
+}
+
 // ContentGeneration is the database's content generation
 // (store.DB.ContentGeneration) and whether there is one: a catalog over
 // something else (a transaction's snapshot, a test double) has none, and
 // nothing may be cached on it.
 func (c *Catalog) ContentGeneration() (uint64, bool) {
-	g, ok := c.db.(interface{ ContentGeneration() uint64 })
+	g, ok := c.db.(generations)
 	if !ok {
 		return 0, false
 	}
 	return g.ContentGeneration(), true
+}
+
+// ListenerGeneration is the database's listener generation
+// (store.DB.ListenerGeneration: who listens to which book), 0 when there is
+// none (ContentGeneration then says nothing may be cached). An answer that
+// reads which progress rows exist keys on both.
+func (c *Catalog) ListenerGeneration() uint64 {
+	if g, ok := c.db.(generations); ok {
+		return g.ListenerGeneration()
+	}
+	return 0
 }
 
 // New returns a Catalog. now may be nil to use time.Now.
@@ -426,7 +448,9 @@ func New(db *store.DB, now func() time.Time) *Catalog {
 	if now == nil {
 		now = time.Now
 	}
-	return &Catalog{db: db, now: now}
+	c := &Catalog{db: db, now: now}
+	c.dups.Max = maxDuplicateCaches
+	return c
 }
 
 // Ping verifies the underlying database is reachable for reads (backs GET /healthz).

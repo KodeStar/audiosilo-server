@@ -41,6 +41,8 @@ type perfEnv struct {
 	token   string
 	libID   int64
 	db      *store.DB
+	cat     *catalog.Catalog
+	userID  int64 // the admin's
 	root    string
 	books   []string // the seeded books' paths, in seeding order
 }
@@ -184,7 +186,7 @@ func seedPerfLibrary(tb testing.TB, n int) *perfEnv {
 	cfg.RateLimit.Token = config.RateBucket{Rate: 1e9, Burst: 1e9}
 	cfg.RateLimit.Media = config.RateBucket{Rate: 1e9, Burst: 1e9}
 	a := New(cfg, authSvc, cat, library.NewScanner(cat, "", slog.Default()), "", slog.Default())
-	return &perfEnv{handler: a.Handler(), token: token, libID: lib.ID, db: db, root: root, books: paths}
+	return &perfEnv{handler: a.Handler(), token: token, libID: lib.ID, db: db, cat: cat, userID: admin.ID, root: root, books: paths}
 }
 
 // perfRequests are the harness's requests (apps.py latency_spec, AudioSilo),
@@ -277,11 +279,91 @@ func BenchmarkPerfAdmin(b *testing.B) {
 	})
 }
 
-// benchRequests runs a sub-benchmark per {name, path}, twice: repeated (as the
-// harness asks: answered from the list cache) and after a write each time (the
-// generation moves, so the answer is built).
-func (e *perfEnv) benchRequests(b *testing.B, reqs [][2]string) {
+// BenchmarkPerfListening times the browse lists and the Health summary after a
+// listener's first save on a book (a new progress row) before each request, as
+// a household that starts books sees them (server#263 item 1).
+//
+//	go test ./internal/api -run '^$' -bench BenchmarkPerfListening -benchtime 2s
+func BenchmarkPerfListening(b *testing.B) {
+	e := seedPerfLibrary(b, perfBooks())
 	ctx := context.Background()
+	n := 0
+	for _, r := range [][2]string{
+		{"series", fmt.Sprintf("/api/v1/libraries/%d/series", e.libID)},
+		{"authors", fmt.Sprintf("/api/v1/libraries/%d/authors", e.libID)},
+		{"library_page1", fmt.Sprintf("/api/v1/libraries/%d/books?sort=recent&limit=200", e.libID)},
+		{"admin_issues", "/api/v1/admin/issues"},
+	} {
+		b.Run(r[0]+"/after_first_save", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				b.StopTimer()
+				// A new row each time: the admin's first save on the next book.
+				ref := catalog.Ref{LibraryID: e.libID, Path: e.books[n%len(e.books)]}
+				if n >= len(e.books) {
+					if _, err := e.db.ExecContext(ctx, `DELETE FROM progress WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
+						e.userID, ref.LibraryID, ref.Path); err != nil {
+						b.Fatal(err)
+					}
+					e.serve(r[1]) // the delete is content: warm the cache again
+				}
+				n++
+				if _, err := e.cat.SaveProgress(ctx, e.userID, catalog.Progress{Ref: ref, Position: 12, Duration: 600}); err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				if rec := e.serve(r[1]); rec.Code != http.StatusOK {
+					b.Fatalf("%s: %d", r[1], rec.Code)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkPerfDuplicates times Health > Duplicates over AUDIOSILO_PERF_BOOKS
+// books with a copy of every tenth (an M4B beside an MP3 folder, say): the
+// first page, the next one, and the Health summary that counts the groups,
+// each with the content unchanged since the last request (server#270 item 3).
+//
+//	go test ./internal/api -run '^$' -bench BenchmarkPerfDuplicates -benchtime 2s
+func BenchmarkPerfDuplicates(b *testing.B) {
+	e := seedPerfLibrary(b, perfBooks())
+	ctx := context.Background()
+	for i, p := range e.books {
+		if i%10 != 0 {
+			continue
+		}
+		bk, err := e.cat.GetBookByPath(ctx, e.libID, p)
+		if err != nil {
+			b.Fatal(err)
+		}
+		cp := *bk
+		cp.ID, cp.RelPath, cp.IsFolder, cp.ContentHash = 0, p+" (copy).m4b", false, fmt.Sprintf("copy%d", i)
+		cp.Files = []catalog.BookFile{{RelPath: cp.RelPath, Duration: bk.Duration, Format: "m4b", Codec: "aac", Size: bk.Size}}
+		cp.Chapters = nil
+		if _, err := e.cat.UpsertBook(ctx, &cp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	page := "/api/v1/admin/issues/duplicates?limit=50"
+	var first struct {
+		Next  string `json:"next_cursor"`
+		Total int    `json:"total"`
+	}
+	e.getJSON(b, page, &first)
+	if first.Total == 0 || first.Next == "" {
+		b.Fatalf("seeded duplicates: %+v", first)
+	}
+	e.benchCachedRequests(b, [][2]string{
+		{"duplicates_page1", page},
+		{"duplicates_page2", page + "&cursor=" + url.QueryEscape(first.Next)},
+		{"admin_issues", "/api/v1/admin/issues"},
+	})
+}
+
+// benchCachedRequests runs a sub-benchmark per {name, path}, the request
+// repeated with nothing written in between.
+func (e *perfEnv) benchCachedRequests(b *testing.B, reqs [][2]string) {
 	for _, r := range reqs {
 		b.Run(r[0], func(b *testing.B) {
 			b.ReportAllocs()
@@ -291,6 +373,16 @@ func (e *perfEnv) benchRequests(b *testing.B, reqs [][2]string) {
 				}
 			}
 		})
+	}
+}
+
+// benchRequests runs a sub-benchmark per {name, path}, twice: repeated (as the
+// harness asks: answered from the list cache) and after a write each time (the
+// generation moves, so the answer is built).
+func (e *perfEnv) benchRequests(b *testing.B, reqs [][2]string) {
+	ctx := context.Background()
+	e.benchCachedRequests(b, reqs)
+	for _, r := range reqs {
 		b.Run(r[0]+"/uncached", func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {

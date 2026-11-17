@@ -56,6 +56,10 @@ type DB struct {
 	// write on the writer pool has finished, except a user-state one that
 	// changed only user state (userstate.go).
 	content atomic.Uint64
+	// listeners is the listener generation (ListenerGeneration): moved after a
+	// user-state write that added or removed a row of a table whose rule
+	// counts them (progress: who listens to what).
+	listeners atomic.Uint64
 	// userState is each user-state table's rule as this database's schema
 	// spells it (userStateRules), read once migrations have run.
 	userState map[string]tableRule
@@ -258,6 +262,16 @@ func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.R
 // moves for every other write, a no-op or failed one included, so it says only
 // "no content was written since", never what changed.
 func (db *DB) ContentGeneration() uint64 { return db.content.Load() }
+
+// ListenerGeneration moves after a user-state write (ExecUserState,
+// WithUserStateTx) that added or removed a progress row, a rolled-back one too:
+// who listens to which book, which the content generation leaves alone so a
+// listener starting a book keeps the lists warm. Any other write to progress
+// (a re-key, a default write) moves the content generation instead. An answer
+// that reads which progress rows exist (the Health summary and its duplicates:
+// how many people listen to each copy) keys on both, each read before its
+// first read, as ContentGeneration says.
+func (db *DB) ListenerGeneration() uint64 { return db.listeners.Load() }
 
 // Ping verifies the database is reachable for reads. It runs a trivial query on
 // the reader pool (a stronger check than a bare connection ping) and backs the

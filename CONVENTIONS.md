@@ -884,7 +884,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   through); a handler that adds one must leave the cache. The admin console's `GET /admin/books` first pages and
   `/admin/books/facets` use it too (keyed like a list, no scopes: an admin sees
   every book), and so does the Health summary `GET /admin/issues` (server#245),
-  whose key also takes `cachedList`'s extra inputs: the kinds it counts and the
+  whose key also takes `cachedList`'s extra inputs: the kinds it counts, the listener
+  generation (a new or removed progress row: Content generation) and the
   offline libraries (a filesystem probe made before the lookup, so a root going
   away needs no write to show).
 - **Content generation** (`store/userstate.go`, server#258): `store.DB.ContentGeneration`
@@ -896,8 +897,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   cache reads, not the data model's durable per-user state: `meta_cache` (derived) and
   `server_events` are listed, favourites and goals are not. The check is SQLite's pre-update
   hook on the writer's connection for the write's duration, so triggers and foreign-key actions
-  count: per table, a rule says whether new and removed rows are user state (`progress`'s are
-  not: Health ranks duplicate copies by how many people have progress on them) and, for
+  count: per table, a rule says whether new and removed rows are user state (`progress`'s are,
+  but they move the listener generation, `store.DB.ListenerGeneration`, instead: Health ranks
+  duplicate copies by how many people have progress on them, so the Health summary and its
+  duplicates key on both generations, and a listener starting a book leaves the lists warm;
+  server#263) and, for
   `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
   `bridge_status` (`heartbeat_at`, `status`), `bridge_jobs` (`lease_until`, `updated_at`,
   `progress`), `match_runs` (`done`), `unknown_asin_reports` (`checked_at`, `sent_at`: Health's `unknown_asin` reads
@@ -908,7 +912,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   moves the generation; a table the list doesn't name is a misfiling (logged; a panic in a
   test binary), and a rule's table or column a newer server's schema lacks (a rollback) only
   makes more writes content. Durability (`WithDurableTx`) is orthogonal. The user-state
-  writes: `SaveProgress` (an update of the row), `RecordHeartbeat` (listening sessions),
+  writes: `SaveProgress` (a new row moves the listener generation), `RecordHeartbeat` (listening sessions),
   bookmarks and notes (add, edit, delete), `AddHistory`,
   `SetRating` / `DeleteRating`, the queue (`AddToQueue`, `SetQueue`, `RemoveFromQueue`),
   `SaveReadingProgress`, `SyncListening` (Sync v2: `listening_events`, progress, sessions, history), `RecordServerEvent`,
@@ -938,8 +942,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book's `work_id` `book_matches` and `upcoming_owned`'s rows, `work_id` and `id_key`; scopes computed
   per request from shares, grants and members' `collection_shares`, into the key) and the
   admin's `/admin/books` first page and facets read no user state but `unknown_asin_reports`
-  (`?issue=unknown_asin`); Health `/admin/issues` reads `progress` row counts (the duplicate
-  ranking), hence `progress`'s row rule, and which `unknown_asin_reports` rows are `unknown` (its
+  (`?issue=unknown_asin`); Health `/admin/issues` and `catalog.Catalog.dups` (the duplicate
+  groups, `catalog/duplicatecache.go`) read `progress` row counts (the duplicate ranking), hence
+  `progress`'s row rule and the listener generation in their keys, and which `unknown_asin_reports` rows are `unknown` (its
   `unknown_asin` kind), hence that table's rule (rows and `unknown` watched, `checked_at` and
   `sent_at` free), and its offline libraries' listener counts are computed per request
   into the key; `Catalog.libs` reads `libraries` only; the token cache (`auth/tokencache.go`)
@@ -2436,7 +2441,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   libraries with books/listeners + `checked_at`), `GET /admin/issues/duplicates` (the open
   groups, or with `?ignored=true` only the ignored ones; `catalog.DuplicatePage`: `?limit=` groups
   (<= 500, the default) after `?cursor=`, keyset on the kept copy's library + path, a paged one
-  ending early past 300 copies; `{groups, total, next_cursor?}`), `POST`/`DELETE /admin/issues/ignore` (<= 1000), `POST
+  ending early past 300 copies; `{groups, total, next_cursor?}`; the groups are found once per
+  content and listener generation and kept for the summary and every page, `Catalog.dups`,
+  server#270), `POST`/`DELETE /admin/issues/ignore` (<= 1000), `POST
   /admin/libraries/{id}/book/rescan?path=` (`IndexPath` now, on a context detached from the
   request timeout so a slow re-read is still saved; 404 `not_indexable`), `GET
   /admin/jobs` (running + queued + schedules), `DELETE /admin/jobs/{id}`, `POST /admin/scan`
