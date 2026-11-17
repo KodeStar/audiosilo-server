@@ -144,7 +144,7 @@ func (a *API) fetchCommunityThumbnail(ctx context.Context, key, rawURL string, s
 	case err != nil:
 		return nil, err
 	default:
-		if jpg, err = a.decodeThumbnail(ctx, raw, size, false, "url", rawURL); err != nil {
+		if jpg, err = a.decodeThumbnail(ctx, media.Thumbnail, raw, size, "url", rawURL); err != nil {
 			return nil, err
 		}
 	}
@@ -344,7 +344,7 @@ func (a *API) keepableCover(ctx context.Context, data []byte, rawURL string) ([]
 	case len(data) <= catalog.MaxCoverBytes:
 		return data, nil
 	}
-	jpg, err := a.decodeThumbnail(ctx, data, storedCoverSide, true, "url", rawURL)
+	jpg, err := a.decodeThumbnail(ctx, media.ThumbnailJPEG, data, storedCoverSide, "url", rawURL)
 	if err == nil && jpg == nil {
 		err = catalog.ErrUnsupportedImage
 	}
