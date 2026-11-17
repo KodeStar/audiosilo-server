@@ -103,5 +103,13 @@ ENV AUDIOSILO_WEB_DIR=/app/web \
     PGID=1000
 VOLUME /data
 EXPOSE 8080
+# Liveness: the server asks its own /healthz on the bind address and TLS mode
+# config.yaml and the AUDIOSILO_* environment give it (no shell or curl needed;
+# server#217). This only marks the container unhealthy: an orchestrator's
+# liveness probe or an autoheal sidecar restarts it (see the README). The start
+# period covers a first start's or an upgrade's migrations on a large library.
+# Keep the --data in step with the CMD below.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=2m --retries=3 \
+    CMD ["audiosilo", "--data", "/data", "healthcheck"]
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["audiosilo", "--data", "/data"]

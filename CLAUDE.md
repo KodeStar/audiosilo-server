@@ -36,7 +36,9 @@ Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe),
 `--ffmpeg` (`""` disables on-the-fly transcoding), `--setup` (first-run **web
 setup wizard** instead of the auto-admin banner - see below). Commands: `version`,
 `reset-admin [username]` (a new admin password, printed once: lost first-run password; flags go
-before the command, `audiosilo --data /data reset-admin`; see First-run setup in CONVENTIONS.md).
+before the command, `audiosilo --data /data reset-admin`; see First-run setup in CONVENTIONS.md),
+`healthcheck` (`launcher.Healthcheck`: GET `/healthz` on the bind address and TLS mode `config.yaml` +
+env give, exit 0 on 200, else 1; the Dockerfile's `HEALTHCHECK`, server#217).
 
 **Native distribution** (GoReleaser → GitHub Releases on `v*` tags, see
 `.goreleaser.yml` + `.github/workflows/release.yml`, and the workspace

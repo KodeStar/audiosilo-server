@@ -183,6 +183,15 @@ runs with `--user`; "mounted read-only" for a `:ro` data or backups mount). Upda
 server or the bundled player - is always a new image:
 `docker compose pull && docker compose up -d`.
 
+**Health check.** The image has a `HEALTHCHECK`: `audiosilo --data /data healthcheck`
+asks the server's own `/healthz` on the port and TLS mode from `config.yaml` and the
+`AUDIOSILO_*` environment, and exits 0 when the database answers (`docker ps` shows
+`healthy`). Docker only marks the container `unhealthy`; to restart a stuck server (an
+NFS hard mount that stopped answering) pair it with an orchestrator liveness probe or
+an autoheal sidecar such as `willfarrell/autoheal` (see the comment in
+`docker-compose.yml`). A bind or TLS change saved in the console counts from the next
+start, and the check asks the saved address, so restart after one.
+
 ## Testing & CI
 
 Run the same checks CI runs, locally:
