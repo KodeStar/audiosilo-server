@@ -50,8 +50,11 @@ func EbookDigest(ctx context.Context, root, rel string, noLink bool) (sha, sig s
 // while the file on disk still has the signature it was computed for (one
 // stat; the index's ebook_sig is only as new as the last scan, so an EPUB
 // replaced since is never answered with the old file's digest), else hashed
-// now and recorded with the new file's signature (HashEbook). ErrNoEbook (or
-// fs.ErrNotExist) when there is no such file now.
+// now (EbookDigest) and recorded with the new file's signature, only while the
+// index still names that ebook and holds the digest idx read
+// (catalog.SetEbookDigest: a slow hash never overwrites a newer one recorded
+// meanwhile). A failure to record it is logged, never the answer's. ErrNoEbook
+// (or fs.ErrNotExist) when there is no such file now.
 func (s *Scanner) EbookDigestNow(ctx context.Context, lib catalog.Library, idx catalog.ReadalongIndexed, bookPath, ebookPath string, folder bool) (string, error) {
 	_, info, err := lookEbook(lib.Root, ebookPath, folder)
 	if err != nil {
@@ -60,7 +63,14 @@ func (s *Scanner) EbookDigestNow(ctx context.Context, lib catalog.Library, idx c
 	if idx.HashedSig == catalog.EbookSig(path.Base(ebookPath), info) {
 		return idx.EbookSHA256, nil
 	}
-	return s.HashEbook(ctx, lib, bookPath, ebookPath, folder)
+	sha, sig, err := EbookDigest(ctx, lib.Root, ebookPath, folder)
+	if err != nil {
+		return "", err
+	}
+	if err := s.cat.SetEbookDigest(ctx, lib.ID, bookPath, ebookPath, idx.HashedSig, sig, sha); err != nil {
+		s.log.Warn("record ebook digest failed", "library", lib.Name, "path", bookPath, "err", err)
+	}
+	return sha, nil
 }
 
 // ctxReader is r that fails with ctx's error once ctx is done.
@@ -95,26 +105,13 @@ func (s *Scanner) hashReadalongEbooks(ctx context.Context, lib catalog.Library, 
 		// EbookDigestNow hashes only when the stored digest isn't the file's on
 		// disk: a request may have recorded one for a file newer than the index
 		// (an attachments rescan before the next scan records its ebook_sig).
+		// It records only over the digest read as due here, so one a request
+		// records while this hash runs stands.
 		idx := catalog.ReadalongIndexed{HashedSig: d.HashedSig}
 		if _, err := s.EbookDigestNow(ctx, lib, idx, d.BookPath, d.EbookPath, d.IsFolder); err != nil {
 			s.log.Warn("hash ebook failed", "library", lib.Name, "path", d.EbookPath, "err", err)
 		}
 	}
-}
-
-// HashEbook hashes the ebook (ebookPath) of the book at bookPath now
-// (EbookDigest) and records the digest with the signature of the file it hashed
-// (only while the index still names that ebook: catalog.SetEbookDigest). A
-// failure to record it is logged, never the answer's.
-func (s *Scanner) HashEbook(ctx context.Context, lib catalog.Library, bookPath, ebookPath string, folder bool) (string, error) {
-	sha, sig, err := EbookDigest(ctx, lib.Root, ebookPath, folder)
-	if err != nil {
-		return "", err
-	}
-	if err := s.cat.SetEbookDigest(ctx, lib.ID, bookPath, ebookPath, sig, sha); err != nil {
-		s.log.Warn("record ebook digest failed", "library", lib.Name, "path", bookPath, "err", err)
-	}
-	return sha, nil
 }
 
 // ReadReadalongMap reads the read-along map of the book at bookPath (folder

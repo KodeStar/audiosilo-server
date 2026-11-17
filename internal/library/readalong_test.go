@@ -90,7 +90,7 @@ func TestScannerReadsReadalong(t *testing.T) {
 	}
 	for _, rel := range []string{"A/Book", "Loose.m4b"} {
 		got, err := cat.BookReadalongAt(ctx, lib.ID, rel)
-		if err != nil || got.Head == nil || !got.DigestCurrent || got.EbookSHA256 != digestOf(epub) {
+		if err != nil || got.Head == nil || !digestCurrent(t, cat, lib.ID, rel) || got.EbookSHA256 != digestOf(epub) {
 			t.Errorf("%s: %+v, %v; want the head and the ebook hashed", rel, got, err)
 		}
 	}
@@ -111,7 +111,7 @@ func TestScannerReadsReadalong(t *testing.T) {
 	if _, err := s.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := cat.BookReadalongAt(ctx, lib.ID, "A/Book"); !got.DigestCurrent || got.EbookSHA256 != digestOf(edited) {
+	if got, _ := cat.BookReadalongAt(ctx, lib.ID, "A/Book"); !digestCurrent(t, cat, lib.ID, "A/Book") || got.EbookSHA256 != digestOf(edited) {
 		t.Errorf("after the ebook changed: %+v; want it hashed again", got)
 	}
 	if after := indexedAt(t, db, lib.ID, "A/Book"); after != before {
@@ -138,7 +138,7 @@ func TestRefreshAttachmentsHashesReadalong(t *testing.T) {
 	if err != nil || got.Attachments != (AttachmentsHeld{Readalong: true}) {
 		t.Fatalf("refresh = %+v, %v", got, err)
 	}
-	if ra, _ := cat.BookReadalongAt(ctx, lib.ID, "A/Book"); ra.Head == nil || !ra.DigestCurrent || ra.EbookSHA256 != digestOf(epub) {
+	if ra, _ := cat.BookReadalongAt(ctx, lib.ID, "A/Book"); ra.Head == nil || !digestCurrent(t, cat, lib.ID, "A/Book") || ra.EbookSHA256 != digestOf(epub) {
 		t.Errorf("after the refresh: %+v", ra)
 	}
 }
@@ -211,4 +211,15 @@ func TestEbookDigest(t *testing.T) {
 	if _, _, err := EbookDigest(done, root, "A/b.epub", true); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled: err = %v, want context.Canceled", err)
 	}
+}
+
+// digestCurrent reports whether the book at rel's stored ebook digest is current
+// for the ebook the index records (no longer due: catalog.ReadalongEbooksDue).
+func digestCurrent(t *testing.T, cat *catalog.Catalog, libID int64, rel string) bool {
+	t.Helper()
+	due, err := cat.ReadalongEbooksDue(context.Background(), libID, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(due) == 0
 }

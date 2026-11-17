@@ -344,7 +344,7 @@ func TestReadalongHashesOnDemand(t *testing.T) {
 		t.Fatalf("item with no digest = %s", got)
 	}
 	idx, err := e.cat.BookReadalongAt(context.Background(), e.lib.ID, ebookBook)
-	if err != nil || !idx.DigestCurrent || idx.EbookSHA256 != sha256Hex(e.epub) {
+	if err != nil || !digestCurrent(t, e.cat, e.lib.ID, ebookBook) || idx.EbookSHA256 != sha256Hex(e.epub) {
 		t.Fatalf("after the item: %+v, %v; want the digest kept", idx, err)
 	}
 	if resp, _ := e.do(t, "GET", e.at("readalong", looseBook), e.annTok, ""); resp.StatusCode != http.StatusOK {
@@ -365,7 +365,7 @@ func TestReadalongEbookReplacedBeforeScan(t *testing.T) {
 	e := newReadalongEnv(t)
 	ctx := context.Background()
 	before, err := e.cat.BookReadalongAt(ctx, e.lib.ID, ebookBook)
-	if err != nil || !before.DigestCurrent {
+	if err != nil || !digestCurrent(t, e.cat, e.lib.ID, ebookBook) {
 		t.Fatalf("before = %+v, %v", before, err)
 	}
 	// Trusted while the file is unchanged: a stored digest that isn't the
@@ -394,7 +394,7 @@ func TestReadalongEbookReplacedBeforeScan(t *testing.T) {
 	after, err := e.cat.BookReadalongAt(ctx, e.lib.ID, ebookBook)
 	// The book's page (/item) records the new file in the index too
 	// (BRIDGE-16), so the digest is current for it already.
-	if err != nil || after.EbookSHA256 != sha256Hex(edited) || after.HashedSig == before.HashedSig || !after.DigestCurrent {
+	if err != nil || after.EbookSHA256 != sha256Hex(edited) || after.HashedSig == before.HashedSig || !digestCurrent(t, e.cat, e.lib.ID, ebookBook) {
 		t.Errorf("after = %+v, %v; want the new file's digest kept under its own signature, the index on it", after, err)
 	}
 	writeMap(t, e.root, mapPaths[ebookBook], readalongMapJSON(t, sha256Hex(edited), bookAudio(t, e.cat, e.lib.ID, ebookBook)))
@@ -403,7 +403,7 @@ func TestReadalongEbookReplacedBeforeScan(t *testing.T) {
 	}
 	// The scan that records the new file finds its digest already current.
 	scanFixture(t, e.testEnv, e.lib)
-	if idx, _ := e.cat.BookReadalongAt(ctx, e.lib.ID, ebookBook); !idx.DigestCurrent || idx.EbookSHA256 != sha256Hex(edited) {
+	if idx, _ := e.cat.BookReadalongAt(ctx, e.lib.ID, ebookBook); !digestCurrent(t, e.cat, e.lib.ID, ebookBook) || idx.EbookSHA256 != sha256Hex(edited) {
 		t.Errorf("after the scan = %+v", idx)
 	}
 }
@@ -416,4 +416,15 @@ func TestReadalongCapability(t *testing.T) {
 	if !strings.Contains(body, `"readalong":true`) {
 		t.Errorf("capabilities = %s", body)
 	}
+}
+
+// digestCurrent reports whether the book at rel's stored ebook digest is current
+// for the ebook the index records (no longer due: catalog.ReadalongEbooksDue).
+func digestCurrent(t *testing.T, cat *catalog.Catalog, libID int64, rel string) bool {
+	t.Helper()
+	due, err := cat.ReadalongEbooksDue(context.Background(), libID, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(due) == 0
 }
