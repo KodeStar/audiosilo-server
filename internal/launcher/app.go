@@ -203,6 +203,15 @@ func Run(ctx context.Context, opts Options) error {
 	if err := syncLibraries(ctx, cfg, cat, log); err != nil {
 		return err
 	}
+	// setup.skip: the console's first-run flow is marked finished, after the
+	// config's libraries exist so its folder step reads as done.
+	if cfg.Setup.Skip {
+		if skipped, err := cat.SkipSetup(ctx); err != nil {
+			log.Warn("skipping the first-run setup failed", "err", err)
+		} else if skipped {
+			log.Info("first-run setup marked finished (setup.skip)")
+		}
+	}
 	scanner.Start(ctx)
 	if _, err := scanner.EnqueueAll(ctx, library.TriggerStartup, nil); err != nil {
 		log.Warn("startup scan: list libraries failed", "err", err)
@@ -458,8 +467,9 @@ func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service,
 	return true, nil
 }
 
-// writeBanner writes the first-run credentials banner: the console (where the
-// "Set up your server" flow lives) first, then the connect page for a device.
+// writeBanner writes the first-run credentials banner: the console first (where
+// the "Set up your server" flow lives, named plainly under setup.skip, which
+// finishes the flow later in this start), then the connect page for a device.
 func writeBanner(w io.Writer, cfg *config.Config, password, code string) {
 	base := baseURL(cfg)
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
@@ -471,7 +481,11 @@ func writeBanner(w io.Writer, cfg *config.Config, password, code string) {
 	p("  Auth code      : %s\n", code)
 	p("  Config file    : %s\n", config.Path(cfg.DataDir))
 	p("--------------------------------------------------------\n")
-	p(" Finish setting up: open %s/admin and sign in as admin.\n", base)
+	console := "Finish setting up"
+	if cfg.Setup.Skip {
+		console = "Admin console"
+	}
+	p(" %s: open %s/admin and sign in as admin.\n", console, base)
 	p(" Connect a device: open %s/ and enter the auth code.\n", base)
 	p(" (API: POST /api/v1/auth/redeem or /api/v1/auth/login.)\n")
 	p("========================================================\n")

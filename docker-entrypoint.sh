@@ -22,9 +22,36 @@
 # compose `user:`), we skip the chown/drop, run the same checks and exec as that
 # user, with AUDIOSILO_STARTED_AS_USER=1 so the server's own fix names `user:`
 # too, not PUID/PGID (internal/fsaccess).
+#
+# `docker-entrypoint.sh healthcheck` is the image's HEALTHCHECK: it runs
+# `audiosilo --data <folder> healthcheck` as the server's user on the data
+# folder the start resolved from the command's --data, recorded in $DATA_RECORD
+# since a check never sees the start's command (/data when there is no record).
 set -e
 
+DATA_RECORD=/tmp/audiosilo-data-dir
+
+if [ "$#" = 1 ] && [ "$1" = healthcheck ]; then
+  d=""
+  IFS= read -r d 2>/dev/null <"$DATA_RECORD" || true # the record ends in no newline; IFS= keeps its spaces
+  [ -n "$d" ] || d=/data
+  # Docker starts a check as root, past this script: drop to the server's user,
+  # whose access to config.yaml root may not have (an NFS share with root_squash).
+  set --
+  if [ "$(id -u)" = 0 ]; then set -- su-exec "${PUID:-1000}:${PGID:-1000}"; fi
+  exec "$@" audiosilo --data "$d" healthcheck
+fi
+
 say() { printf 'audiosilo: %s\n' "$*" >&2; }
+
+# Records the data folder $1, made absolute, in $DATA_RECORD: removed first and
+# made anew with noclobber (O_EXCL), so a link left at its name is never written
+# through. One that can't be written (a read-only /tmp) leaves the check on /data.
+record_data_dir() {
+  case "$1" in /*) d="$1" ;; *) d="$(pwd)" && d="${d%/}/$1" ;; esac
+  rm -f "$DATA_RECORD" 2>/dev/null || true # one left in place (a folder) fails the O_EXCL create below
+  (set -C && printf '%s' "$d" >"$DATA_RECORD") 2>/dev/null || true
+}
 
 # The --data folder the command names (the image's CMD says /data).
 data_dir() {
@@ -260,6 +287,7 @@ reap_watchers() {
 
 WAIT=5 # seconds a check of a mounted folder may take
 DATA=$(trim "$(data_dir "$@")")
+record_data_dir "$DATA"
 BACKUPS=$(trim "${AUDIOSILO_BACKUP_DIR:-}")
 if ! usable_path "$BACKUPS"; then BACKUPS=""; fi
 DATA_CHOWN_FAILED=""

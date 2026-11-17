@@ -137,6 +137,10 @@ var fields = []field{
 		ptr: func(c *Config) any { return &c.RateLimit.Media.Rate }},
 	{key: "rate_limit.media.burst", env: "AUDIOSILO_RATE_LIMIT_MEDIA_BURST", restart: true,
 		ptr: func(c *Config) any { return &c.RateLimit.Media.Burst }},
+	// Skip the console's first-run flow (launcher, catalog.SkipSetup): read once
+	// at start, no console setting.
+	{key: "setup.skip", env: "AUDIOSILO_SETUP_SKIP", restart: true,
+		ptr: func(c *Config) any { return &c.Setup.Skip }},
 	// How many files a scan reads at once: read once at start, no console setting.
 	{key: "scan.concurrency", env: "AUDIOSILO_SCAN_CONCURRENCY", restart: true,
 		ptr: func(c *Config) any { return &c.Scan.Concurrency }},

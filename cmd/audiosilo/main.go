@@ -3,7 +3,9 @@
 //
 // On first run it generates an admin account and an auth code, printing both to
 // stdout exactly once; `audiosilo --data <folder> reset-admin [username]` sets
-// a new admin password when that one is lost. Configuration lives in <data>/config.yaml. The actual run
+// a new admin password when that one is lost, and `audiosilo --data <folder>
+// healthcheck` asks the running server's /healthz (the Docker image's
+// HEALTHCHECK). Configuration lives in <data>/config.yaml. The actual run
 // loop lives in internal/launcher.
 package main
 
@@ -51,7 +53,9 @@ func main() {
 // touches the data directory; "reset-admin [username]" sets a new password on an
 // admin of the server in dataDir (launcher.ResetAdmin) and exits 0, 1 when it
 // fails, or 2 when asked wrongly (launcher.UsageError); anything else is a usage
-// error (exit 2, as the flag package exits on a bad flag).
+// error (exit 2, as the flag package exits on a bad flag). "healthcheck" asks the
+// server running from dataDir whether it is healthy (launcher.Healthcheck) and
+// exits 0 when it is, 1 when it is not.
 func command(args []string, dataDir string, stdout, stderr io.Writer) (code int, done bool) {
 	switch {
 	case len(args) == 0:
@@ -64,10 +68,25 @@ func command(args []string, dataDir string, stdout, stderr io.Writer) (code int,
 		return 2, true
 	case args[0] == "reset-admin":
 		return resetAdmin(args[1:], dataDir, stdout, stderr), true
+	case len(args) == 1 && args[0] == "healthcheck":
+		return healthcheck(dataDir, stdout, stderr), true
+	case args[0] == "healthcheck":
+		_, _ = fmt.Fprintln(stderr, "audiosilo: usage: audiosilo [--data <folder>] healthcheck (flags go before the command)")
+		return 2, true
 	default:
-		fmt.Fprintf(stderr, "audiosilo: unknown command %q (the commands are \"version\" and \"reset-admin\"; run with -h for the flags)\n", args[0])
+		fmt.Fprintf(stderr, "audiosilo: unknown command %q (the commands are \"version\", \"reset-admin\" and \"healthcheck\"; run with -h for the flags)\n", args[0])
 		return 2, true
 	}
+}
+
+// healthcheck runs the healthcheck command: 0 when the server answers healthy,
+// 1 with the reason on stderr when it doesn't.
+func healthcheck(dataDir string, stdout, stderr io.Writer) int {
+	if err := launcher.Healthcheck(context.Background(), dataDir, stdout); err != nil {
+		_, _ = fmt.Fprintln(stderr, "audiosilo: healthcheck:", err)
+		return 1
+	}
+	return 0
 }
 
 // resetAdmin runs reset-admin with the arguments after it: none, or the admin's

@@ -120,6 +120,14 @@ libraries: []
 # - name: "Main"
 #   root: "/srv/audiobooks"
 
+# The admin console's "Set up your server" flow, which opens on a new server's
+# first console visit. skip: true marks it finished at start, for an install set
+# up by script or by this file (a public demo too): steps already done keep
+# their mark, the rest read as skipped, and the Overview's reminder card is
+# dismissed. A flow already finished is left as it is. Read at start only.
+# setup:
+#   skip: false # [AUDIOSILO_SETUP_SKIP]
+
 # Library scans. A scan reads several audio files at once (their tags, then
 # ffprobe) and writes the index in one place, so its result is the same however
 # many it reads. Read at start only: no console setting.

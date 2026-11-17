@@ -31,3 +31,17 @@ services:
       # AUDIOSILO_PUBLIC_URL: "https://books.example.com"  # used in QR/invite links
       # AUDIOSILO_TLS_MODE: "off"                          # behind a TLS-terminating proxy
       AUDIOSILO_WEB_DIR: /app/web
+    # The image's HEALTHCHECK (`audiosilo healthcheck` on the container's --data
+    # folder, the server's /healthz) marks the container unhealthy when the server
+    # stops answering; Docker doesn't restart it for that. Its ten-minute start
+    # period lets an upgrade's migrations finish first. To restart it, add a
+    # label and an autoheal sidecar:
+    # labels:
+    #   autoheal: "true"
+  # autoheal:
+  #   image: willfarrell/autoheal:latest
+  #   restart: unless-stopped
+  #   environment:
+  #     AUTOHEAL_CONTAINER_LABEL: autoheal
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock

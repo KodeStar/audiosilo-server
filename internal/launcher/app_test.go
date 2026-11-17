@@ -320,21 +320,36 @@ func TestRecordRestore(t *testing.T) {
 
 // TestBannerNamesConsoleAndConnectPage (CONNECT-05): the first-run banner sends
 // a new admin to the console (where "Set up your server" lives) and names the
-// connect page for a device, with the credentials it shows once.
+// connect page for a device, with the credentials it shows once. Under
+// setup.skip the flow is already marked finished, so it names the console
+// without offering setup.
 func TestBannerNamesConsoleAndConnectPage(t *testing.T) {
-	cfg := config.Default(t.TempDir())
-	cfg.PublicURL = "https://books.example.com/"
-	var out bytes.Buffer
-	writeBanner(&out, cfg, "s3cret-pass", "CODE-1234")
-	got := out.String()
-	for _, want := range []string{
-		"open https://books.example.com/admin and sign in as admin",
-		"open https://books.example.com/ and enter the auth code",
-		"Admin password : s3cret-pass",
-		"Auth code      : CODE-1234",
+	for _, tc := range []struct {
+		skip            bool
+		console, absent string
+	}{
+		{false, "Finish setting up", "Admin console"},
+		{true, "Admin console", "setting up"},
 	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("banner lacks %q:\n%s", want, got)
+		cfg := config.Default(t.TempDir())
+		cfg.PublicURL = "https://books.example.com/"
+		cfg.Setup.Skip = tc.skip
+		var out bytes.Buffer
+		writeBanner(&out, cfg, "s3cret-pass", "CODE-1234")
+		got := out.String()
+		for _, want := range []string{
+			tc.console + ": open https://books.example.com/admin and sign in as admin",
+			"open https://books.example.com/ and enter the auth code",
+			"Admin username : admin",
+			"Admin password : s3cret-pass",
+			"Auth code      : CODE-1234",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("skip=%v: banner lacks %q:\n%s", tc.skip, want, got)
+			}
+		}
+		if strings.Contains(got, tc.absent) {
+			t.Errorf("skip=%v: banner says %q:\n%s", tc.skip, tc.absent, got)
 		}
 	}
 }

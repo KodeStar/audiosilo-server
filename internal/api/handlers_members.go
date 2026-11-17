@@ -260,7 +260,8 @@ func (a *API) handleListMembers(w http.ResponseWriter, r *http.Request) {
 // handleCreateMember answers POST /me/household/members {name, kind, access,
 // sign_in_here?, collection_ids?} (strict): 201 {member, session?}. With
 // sign_in_here the member is signed in on the caller's device (a session named
-// as the caller's, recording it as created_on_token_id).
+// as the caller's, recording it as created_on_token_id), reported as a new
+// device (server#190).
 func (a *API) handleCreateMember(w http.ResponseWriter, r *http.Request) {
 	owner := a.memberOwner(w, r, true)
 	if owner == nil {
@@ -298,6 +299,7 @@ func (a *API) handleCreateMember(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{"member": member}
 	if signedIn != nil {
+		a.reportSignIn(r, signedIn, cred.DeviceName, false)
 		out["session"] = a.sessionEnvelope(r, secret, signedIn)
 	}
 	writeJSON(w, http.StatusCreated, out)
@@ -305,7 +307,8 @@ func (a *API) handleCreateMember(w http.ResponseWriter, r *http.Request) {
 
 // handleMemberSession answers POST /me/household/members/{id}/session: 201 and
 // the session envelope of the member signed in on the caller's device (409
-// member_disabled for a member the admin disabled).
+// member_disabled for a member the admin disabled), reported as a new device
+// like any sign-in (server#190).
 func (a *API) handleMemberSession(w http.ResponseWriter, r *http.Request) {
 	id, ok := memberID(w, r)
 	if !ok {
@@ -322,6 +325,7 @@ func (a *API) handleMemberSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "member.session", u.Username, map[string]any{"member": u.Username})
+	a.reportSignIn(r, u, cred.DeviceName, false)
 	writeJSON(w, http.StatusCreated, a.sessionEnvelope(r, secret, u))
 }
 
@@ -354,7 +358,9 @@ func (a *API) handleMemberPair(w http.ResponseWriter, r *http.Request) {
 
 // handleMemberDevices answers GET /me/household/members/{id}/devices: the
 // member's live sessions and API keys, as a bare array ([] for none); current is
-// always false (none of them makes this request).
+// always false (none of them makes this request), and a grown-up's last_ip is
+// "" (auth.MemberDevices: only a kid's addresses are their owner's to see,
+// server#190).
 func (a *API) handleMemberDevices(w http.ResponseWriter, r *http.Request) {
 	id, ok := memberID(w, r)
 	if !ok {

@@ -1,9 +1,9 @@
 #!/bin/sh
 # Exercises docker-entrypoint.sh on the image's base (Alpine with su-exec), as
 # root and as a --user, against folders the server's user can and can't use
-# (server#368), with folders, a file and device nodes mounted inside the data folder (server#382) and
-# read-only mounts (server#383). Needs Docker and network access for `apk add su-exec`. Run from
-# the repository root:
+# (server#368), with folders, a file and device nodes mounted inside the data folder (server#382),
+# read-only mounts (server#383) and its healthcheck mode. Needs Docker and network access for
+# `apk add su-exec`. Run from the repository root:
 #
 #   scripts/test-entrypoint.sh
 #
@@ -22,8 +22,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# A base with su-exec, as the image has it.
-printf 'FROM %s\nRUN apk add --no-cache su-exec\n' "$IMG" | docker build -q -t "$RUN_ID" - >/dev/null
+# A base with su-exec, as the image has it, and a stand-in for the server that
+# says how it was asked and as whom (case 15's healthcheck).
+docker build -q -t "$RUN_ID" --build-arg IMG="$IMG" - >/dev/null <<'DOCKERFILE'
+ARG IMG
+FROM $IMG
+RUN apk add --no-cache su-exec
+RUN printf '#!/bin/sh\necho "audiosilo $* as $(id -u):$(id -g)"\n' >/usr/local/bin/audiosilo && chmod 755 /usr/local/bin/audiosilo
+DOCKERFILE
 
 # vol NAME OWNER MODE: a volume whose root belongs to OWNER with MODE.
 vol() {
@@ -230,6 +236,43 @@ out=$(docker run --rm --privileged -v "$EP:/usr/local/bin/docker-entrypoint.sh:r
 expect "device and pipe mounted in the data folder keep their owner" "$out" \
   "^/data/config.yaml 1000:1000 regular" "^/data/backups 1026:100 directory$" \
   "^/data/null 1026:100 character special" "^/data/pipe 1026:100 fifo" "!WARNING"
+
+# 15. The healthcheck mode asks the data folder the start resolved from the
+#     command's --data (any spelling, a relative one made absolute), /data when
+#     no start recorded one, as the server's user. hc START DOCKER-ARGS...: a
+#     start with the words of START ("" for none), then the healthcheck.
+hc() {
+  start="$1"
+  shift
+  docker run --rm -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$@" "$RUN_ID" sh -c '
+    if [ -n "$1" ]; then sh /usr/local/bin/docker-entrypoint.sh true $1 >/dev/null 2>&1; fi
+    sh /usr/local/bin/docker-entrypoint.sh healthcheck' sh "$start" 2>&1 || true
+}
+expect "healthcheck on --data /config" "$(hc "--data /config")" "^audiosilo --data /config healthcheck as 1000:1000$"
+expect "healthcheck with no start recorded" "$(hc "")" "^audiosilo --data /data healthcheck as 1000:1000$"
+expect "healthcheck on --data=/config/ as PUID:PGID" "$(hc "--data=/config/" -e PUID=1026 -e PGID=100)" \
+  "^audiosilo --data /config healthcheck as 1026:100$"
+expect "healthcheck on a relative --data" "$(hc "--data config" -w /srv)" "^audiosilo --data /srv/config healthcheck as"
+expect "healthcheck on a relative --data from /" "$(hc "-data config")" "^audiosilo --data /config healthcheck as"
+expect "healthcheck under --user" "$(hc "--data /config" --user 1026:100)" \
+  "^audiosilo --data /config healthcheck as 1026:100$"
+
+# 15b. A link left at the record's name is replaced, never written through: the
+#      server's user could plant one for root to follow at the next start.
+out=$(docker run --rm -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -c '
+  echo keep >/etc/victim && ln -s /etc/victim /tmp/audiosilo-data-dir &&
+    sh /usr/local/bin/docker-entrypoint.sh true --data /config >/dev/null 2>&1
+  cat /etc/victim; [ -L /tmp/audiosilo-data-dir ] || echo "record $(cat /tmp/audiosilo-data-dir)"' 2>&1 || true)
+expect "a link at the record is replaced" "$out" "^keep$" "^record /config$"
+
+# 15c. A record that can't be replaced (a folder at its name) never stops the
+#      start: the server still runs and the check falls back to /data.
+out=$(docker run --rm -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -c '
+  mkdir /tmp/audiosilo-data-dir &&
+    sh /usr/local/bin/docker-entrypoint.sh audiosilo --data /config 2>/dev/null &&
+    sh /usr/local/bin/docker-entrypoint.sh healthcheck' 2>&1 || true)
+expect "a folder at the record keeps the start" "$out" "^audiosilo --data /config as 1000:1000$" \
+  "^audiosilo --data /data healthcheck as 1000:1000$"
 
 [ "$FAILS" -eq 0 ] || { echo "$FAILS failed"; exit 1; }
 echo "all passed"

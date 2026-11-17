@@ -52,6 +52,9 @@ func Run(ctx context.Context, cfg *config.Config, handler http.Handler, log *slo
 		ReadTimeout: 30 * time.Second,
 		IdleTimeout: 120 * time.Second,
 	}
+	if cfg.TLS.Mode == config.TLSAutocert {
+		srv.ErrorLog = autocertErrorLog()
+	}
 
 	errCh := make(chan error, 1)
 	switch {
