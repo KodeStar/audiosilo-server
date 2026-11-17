@@ -70,10 +70,7 @@ func ContributeWork(raw json.RawMessage, workID string) json.RawMessage {
 		return raw
 	}
 	p.WorkID = workID
-	out, err := json.Marshal(p)
-	if err != nil {
-		return raw
-	}
+	out, _ := json.Marshal(p) // strings only: it can't fail
 	return out
 }
 

@@ -4,12 +4,10 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -258,7 +256,7 @@ func scopesJSONFilterSQL(libCol, pathCol string, scopes []Scope) (string, []any)
 			continue
 		}
 		for _, p := range s.Paths {
-			keys = append(keys, strconv.FormatInt(s.LibraryID, 10)+":"+strings.ToUpper(hex.EncodeToString([]byte(p))))
+			keys = append(keys, fmt.Sprintf("%d:%X", s.LibraryID, p)) // hex(p) is upper case too
 		}
 	}
 	var ors []string

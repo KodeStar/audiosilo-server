@@ -346,9 +346,6 @@ func (c *Catalog) MarkAudibleSyncQueued(ctx context.Context, account string) err
 // usual; audible_sign_in, Audible refusing the sign-in for now, among them). A
 // user-state write.
 func (c *Catalog) FoldAudibleSync(ctx context.Context, job bridge.Job) error {
-	if job.Kind != bridge.KindAudibleSync && job.Kind != bridge.KindAudiblePoll {
-		return nil
-	}
 	account, err := bridge.AudibleAccountOf(job)
 	if err != nil {
 		return err
