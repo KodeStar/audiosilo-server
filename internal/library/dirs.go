@@ -1,13 +1,13 @@
 package library
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -124,7 +124,11 @@ func (l *DirLister) List(ctx context.Context, dir string, limit int) (*DirListin
 	if dir != "" && !filepath.IsAbs(dir) {
 		return nil, ErrNotAbsolute // refused at once, never waiting for a slot
 	}
-	return boundedRead(ctx, l.slots.For(cmp.Or(dir, filesystemRoot())), l.timeout, l.log, func(context.Context) (*DirListing, error) { return l.list(dir, limit) })
+	mount := dir
+	if mount == "" { // the roots' listing: asked only then, never for a typed path
+		mount = filesystemRoot()
+	}
+	return boundedRead(ctx, l.slots.For(mount), l.timeout, l.log, func(context.Context) (*DirListing, error) { return l.list(dir, limit) })
 }
 
 // CheckRoot is CheckRoot(root) within the same slots and time-out as a
@@ -188,19 +192,29 @@ func boundedRead[T any](ctx context.Context, slots chan struct{}, timeout time.D
 		v, err := read(ctx)
 		done <- readResult[T]{v: v, err: err}
 	}()
+	var r readResult[T]
 	select {
-	case r := <-done:
-		if r.panicked != nil {
-			panic(fmt.Sprintf("folder read panicked: %v\n%s", r.panicked, r.stack))
-		}
-		return r.v, r.err
+	case r = <-done:
 	case <-ctx.Done():
-		return zero, ErrDirsTimedOut
+		select {
+		case r = <-done: // it answered as its time ran out: the answer stands
+		default:
+			return zero, ErrDirsTimedOut
+		}
 	}
+	if r.panicked != nil {
+		panic(fmt.Sprintf("folder read panicked: %v\n%s", r.panicked, r.stack))
+	}
+	return r.v, r.err
 }
 
 // filesystemRoot is "/" on Unix and the working directory's drive (C:\) on Windows.
+// Only Windows asks for the working directory: off it, Getwd's stats of "." and
+// $PWD (which can hang on a share) would only ever give "/".
 func filesystemRoot() string {
+	if runtime.GOOS != "windows" {
+		return string(filepath.Separator)
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		return string(filepath.Separator)
