@@ -10,6 +10,7 @@ import {
   invalidateAfterSourceChange,
   invalidateLibraries,
   invalidatePeople,
+  keys,
   noteScanStarted,
   useDirs,
   useLibraries,
@@ -112,7 +113,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   const [browsing, setBrowsing] = useState(false);
   // A library config.yaml declares keeps its name and folder there (the server
   // refuses changing them, 409 config_library): shown, not editable.
-  const setup = useSetup().data;
+  const setup = useSetup({ locks: true }).data;
   const fromConfig = !!library && configLibrary(setup, library.name);
   const current = splitSchedule(library?.scan_schedule ?? '');
   const form = useForm<Values>({
@@ -209,6 +210,11 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       });
       onDone();
     } catch (err) {
+      // The config declares it, which the console's copy of the setup didn't
+      // know yet (a restart since): read it again so the form and card lock.
+      if (err instanceof ApiError && err.code === 'config_library') {
+        void qc.invalidateQueries({ queryKey: keys.setup });
+      }
       const field = (err instanceof ApiError && err.code && FIELD_BY_CODE[err.code]) || 'folder';
       form.setError(field, { message: errorMessage(err, t) });
     }

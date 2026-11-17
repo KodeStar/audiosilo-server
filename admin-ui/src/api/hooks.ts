@@ -409,13 +409,23 @@ export function useAudit(filter: AuditFilter) {
   });
 }
 
+/** How long the config-declared libraries count as fresh where they lock a library. */
+const CONFIG_LOCKS_STALE_MS = 60_000;
+
 /**
  * The first-run flow's state, how this request reached the server, the
  * config-declared libraries and the mount hints. Fresh for the session: the
- * flow and the Overview card write it through saveSetup.
+ * flow and the Overview card write it through saveSetup. Read for the library
+ * locks (`locks`), it is read again after a minute, on focus or a new mount,
+ * since a restart with another config.yaml changes them (server#197); a 409
+ * config_library reads it at once.
  */
-export function useSetup() {
-  return useQuery({ queryKey: keys.setup, queryFn: api.setup, staleTime: Infinity });
+export function useSetup({ locks = false }: { locks?: boolean } = {}) {
+  return useQuery({
+    queryKey: keys.setup,
+    queryFn: api.setup,
+    staleTime: locks ? CONFIG_LOCKS_STALE_MS : Infinity,
+  });
 }
 
 /** Saves a change to the setup state (PUT /admin/setup) and puts the answer in the cache. */
