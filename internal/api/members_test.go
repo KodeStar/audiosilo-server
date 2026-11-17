@@ -18,6 +18,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/notify"
 )
 
 // Household members (Phase 8b-1): the server test table of the plan, one test
@@ -954,18 +955,11 @@ func TestMembers_SignInsReachTheFeed(t *testing.T) {
 	if s := m.status(t, "POST", memberURL(ellis.ID, "session"), m.bobTok, ""); s != http.StatusNotFound {
 		t.Fatalf("bob's sign-in of adam's member = %d", s)
 	}
-	_, b := m.do(t, "GET", "/api/v1/admin/events?kind=new_device&limit=50", m.adminTok, "")
-	var feed struct {
-		Events []catalog.ServerEvent `json:"events"`
-	}
-	if err := json.Unmarshal([]byte(b), &feed); err != nil {
-		t.Fatal(err)
-	}
 	var got []string
-	for _, ev := range feed.Events {
+	for _, ev := range serverEvents(t, m.testEnv, notify.KindNewDevice) {
 		got = append(got, fmt.Sprint(ev.Data["user"], "@", ev.Data["device"]))
 	}
-	want := []string{ellis.Username + "@" + devices[0].Name, evie.Username + "@" + devices[0].Name}
+	want := []string{evie.Username + "@" + devices[0].Name, ellis.Username + "@" + devices[0].Name}
 	if !slices.Equal(got, want) {
 		t.Fatalf("new devices = %v, want %v", got, want)
 	}

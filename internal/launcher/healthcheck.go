@@ -14,10 +14,10 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
 
-// HealthcheckTimeout bounds one healthcheck: the server's /healthz answers within
+// healthcheckTimeout bounds one healthcheck: the server's /healthz answers within
 // its own two-second database probe, so this leaves room for a slow handshake and
 // still ends well inside Docker's default ten-second HEALTHCHECK timeout.
-const HealthcheckTimeout = 5 * time.Second
+const healthcheckTimeout = 5 * time.Second
 
 // Healthcheck asks the server running from dataDir whether it is healthy: a GET
 // of /healthz on the address config.yaml and the AUDIOSILO_* environment give
@@ -48,7 +48,7 @@ func Healthcheck(ctx context.Context, dataDir string, w io.Writer) error {
 		return err
 	}
 	client := &http.Client{
-		Timeout: HealthcheckTimeout,
+		Timeout: healthcheckTimeout,
 		Transport: &http.Transport{
 			Proxy: nil, // never through an HTTP(S)_PROXY the container sets: this is the server asking itself
 			TLSClientConfig: &tls.Config{

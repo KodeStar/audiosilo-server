@@ -82,9 +82,7 @@ func command(args []string, dataDir string, stdout, stderr io.Writer) (code int,
 // healthcheck runs the healthcheck command: 0 when the server answers healthy,
 // 1 with the reason on stderr when it doesn't.
 func healthcheck(dataDir string, stdout, stderr io.Writer) int {
-	ctx, cancel := context.WithTimeout(context.Background(), launcher.HealthcheckTimeout)
-	defer cancel()
-	if err := launcher.Healthcheck(ctx, dataDir, stdout); err != nil {
+	if err := launcher.Healthcheck(context.Background(), dataDir, stdout); err != nil {
 		_, _ = fmt.Fprintln(stderr, "audiosilo: healthcheck:", err)
 		return 1
 	}

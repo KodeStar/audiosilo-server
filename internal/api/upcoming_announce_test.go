@@ -46,10 +46,10 @@ func (m announceMeta) WatchFeed(context.Context, []string, int) ([]meta.FeedItem
 	return nil, nil
 }
 
-// releasedEvents is the book_released events so far, oldest first.
-func releasedEvents(t *testing.T, e *testEnv) []catalog.ServerEvent {
+// serverEvents is the feed's events of kind so far, oldest first.
+func serverEvents(t *testing.T, e *testEnv, kind string) []catalog.ServerEvent {
 	t.Helper()
-	events, _, err := e.cat.ListServerEvents(context.Background(), 0, 50, notify.KindBookReleased)
+	events, _, err := e.cat.ListServerEvents(context.Background(), 0, 50, kind)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestBookReleasedAnnouncedOncePerRun(t *testing.T) {
 	if err := r.RunOnce(ctx, true); err != nil {
 		t.Fatal(err)
 	}
-	if got := releasedEvents(t, e); len(got) != 0 {
+	if got := serverEvents(t, e, notify.KindBookReleased); len(got) != 0 {
 		t.Fatalf("the baseline run announced %+v", got)
 	}
 
@@ -110,7 +110,7 @@ func TestBookReleasedAnnouncedOncePerRun(t *testing.T) {
 	if err := r.RunOnce(ctx, true); err != nil {
 		t.Fatal(err)
 	}
-	got := releasedEvents(t, e)
+	got := serverEvents(t, e, notify.KindBookReleased)
 	if len(got) != 1 {
 		t.Fatalf("one run's releases make one event, got %d", len(got))
 	}
@@ -129,7 +129,7 @@ func TestBookReleasedAnnouncedOncePerRun(t *testing.T) {
 	if err := r.RunOnce(ctx, true); err != nil {
 		t.Fatal(err)
 	}
-	if got := releasedEvents(t, e); len(got) != 1 {
+	if got := serverEvents(t, e, notify.KindBookReleased); len(got) != 1 {
 		t.Fatalf("a release is announced once: %d events", len(got))
 	}
 }
@@ -141,7 +141,7 @@ func TestAnnounceReleasesTitles(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := context.Background()
 	upcoming.Announce(ctx, e.api.rt.Notify, nil)
-	if got := releasedEvents(t, e); len(got) != 0 {
+	if got := serverEvents(t, e, notify.KindBookReleased); len(got) != 0 {
 		t.Fatalf("no release made an event: %+v", got)
 	}
 	upcoming.Announce(ctx, e.api.rt.Notify, []upcoming.Release{
@@ -149,7 +149,7 @@ func TestAnnounceReleasesTitles(t *testing.T) {
 		{WorkID: "b", Title: "Beta", Series: "Saga"},
 		{WorkID: "c"},
 	})
-	got := releasedEvents(t, e)
+	got := serverEvents(t, e, notify.KindBookReleased)
 	if len(got) != 1 {
 		t.Fatalf("events = %+v", got)
 	}
@@ -158,7 +158,7 @@ func TestAnnounceReleasesTitles(t *testing.T) {
 	}
 	// The same releases again (a run repeated): the dedupe key holds it to one.
 	upcoming.Announce(ctx, e.api.rt.Notify, []upcoming.Release{{WorkID: "c"}, {WorkID: "b"}, {WorkID: "a"}})
-	if got := releasedEvents(t, e); len(got) != 1 {
+	if got := serverEvents(t, e, notify.KindBookReleased); len(got) != 1 {
 		t.Fatalf("the same releases twice made %d events", len(got))
 	}
 }

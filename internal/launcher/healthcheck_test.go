@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -75,10 +74,6 @@ func healthz(status int) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		if status == http.StatusFound {
-			http.Redirect(w, r, "https://example.com/healthz", status)
-			return
-		}
 		w.WriteHeader(status)
 	}
 }
@@ -87,17 +82,14 @@ func healthz(status int) http.HandlerFunc {
 // off and over https (a self-signed certificate, not checked) with TLS on.
 func TestHealthcheckHealthy(t *testing.T) {
 	ctx := context.Background()
-	for _, tc := range []struct {
-		mode  config.TLSMode
-		tlsOn bool
-	}{{config.TLSOff, false}, {config.TLSSelfSigned, true}} {
-		addr := healthServer(t, tc.tlsOn, healthz(http.StatusOK))
+	for _, mode := range []config.TLSMode{config.TLSOff, config.TLSSelfSigned} {
+		addr := healthServer(t, mode != config.TLSOff, healthz(http.StatusOK))
 		var out bytes.Buffer
-		if err := Healthcheck(ctx, healthDataDir(t, addr, tc.mode), &out); err != nil {
-			t.Fatalf("%s: Healthcheck = %v, want healthy", tc.mode, err)
+		if err := Healthcheck(ctx, healthDataDir(t, addr, mode), &out); err != nil {
+			t.Fatalf("%s: Healthcheck = %v, want healthy", mode, err)
 		}
 		if !strings.HasPrefix(out.String(), "ok: ") {
-			t.Errorf("%s: output %q, want ok", tc.mode, out.String())
+			t.Errorf("%s: output %q, want ok", mode, out.String())
 		}
 	}
 }
@@ -106,37 +98,17 @@ func TestHealthcheckHealthy(t *testing.T) {
 // the wrong scheme for the port and a config that doesn't read.
 func TestHealthcheckUnhealthy(t *testing.T) {
 	ctx := context.Background()
-	closed := func() string {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		addr := ln.Addr().String()
-		_ = ln.Close()
-		return addr
-	}
 	for name, dir := range map[string]string{
 		"503":            healthDataDir(t, healthServer(t, false, healthz(http.StatusServiceUnavailable)), config.TLSOff),
-		"redirect":       healthDataDir(t, healthServer(t, false, healthz(http.StatusFound)), config.TLSOff),
-		"not listening":  healthDataDir(t, closed(), config.TLSOff),
+		"redirect":       healthDataDir(t, healthServer(t, false, http.RedirectHandler("https://example.com/healthz", http.StatusFound).ServeHTTP), config.TLSOff),
+		"not listening":  healthDataDir(t, freeAddr(t), config.TLSOff),
 		"https on http":  healthDataDir(t, healthServer(t, false, healthz(http.StatusOK)), config.TLSSelfSigned),
-		"unreadable cfg": badConfigDir(t),
+		"unreadable cfg": healthDataDir(t, "no-port", config.TLSOff),
 	} {
 		if err := Healthcheck(ctx, dir, &bytes.Buffer{}); err == nil {
 			t.Errorf("%s: Healthcheck = nil, want unhealthy", name)
 		}
 	}
-}
-
-func badConfigDir(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	cfg := config.Default(dir)
-	cfg.Bind = "no-port"
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	return dir
 }
 
 // A real start answers the healthcheck, and setup.skip finishes the console's
