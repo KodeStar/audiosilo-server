@@ -1,4 +1,4 @@
-import { isChunkLoadError, reloadOnce } from './stale-build';
+import { isChunkLoadError, reloadOnce, versionWatch } from './stale-build';
 
 // UPG-01: a tab on an older build reloads into the new one once, never in a loop.
 
@@ -44,5 +44,18 @@ describe('isChunkLoadError', () => {
     expect(isChunkLoadError(new Error('Unable to preload CSS for /admin/assets/x.css'))).toBe(true);
     expect(isChunkLoadError(new Error('Cannot read properties of undefined'))).toBe(false);
     expect(isChunkLoadError(undefined)).toBe(false);
+  });
+});
+
+describe('versionWatch', () => {
+  it('says the server was updated once it answers another version than the first', () => {
+    const updated = versionWatch();
+    expect(updated(undefined)).toBe(false);
+    expect(updated('2.6.0')).toBe(false);
+    expect(updated('2.6.0')).toBe(false);
+    expect(updated('2.7.0')).toBe(true);
+    // Still against the version the tab loaded with, not the last one seen.
+    expect(updated('2.7.0')).toBe(true);
+    expect(updated(undefined)).toBe(false);
   });
 });

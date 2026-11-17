@@ -44,3 +44,19 @@ export function isChunkLoadError(err: unknown): boolean {
     message,
   );
 }
+
+/**
+ * A watch on the server's version: true once it answers another version than
+ * the first it was given. The console comes from the server it talks to, so
+ * the version this tab first saw is the console's own, and a new one means an
+ * upgrade since the tab opened: its API calls still run the old console's code
+ * (server#197).
+ */
+export function versionWatch(): (version: string | undefined) => boolean {
+  let first: string | undefined;
+  return (version) => {
+    if (!version) return false;
+    first ??= version;
+    return version !== first;
+  };
+}

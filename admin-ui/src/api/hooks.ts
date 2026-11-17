@@ -198,6 +198,20 @@ export function useServerInfo() {
 }
 
 /**
+ * useServerInfo read again on every focus and every 5 minutes: the shell's
+ * update notice, so a tab left open across an upgrade learns of it.
+ */
+export function useServerInfoLive() {
+  return useQuery({
+    queryKey: keys.server,
+    queryFn: api.serverInfo,
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+    refetchOnWindowFocus: 'always',
+  });
+}
+
+/**
  * The single sign-on as the server runs it, and its provider's discovery (tried
  * when due by the request itself, so a minute's staleness is enough).
  */
