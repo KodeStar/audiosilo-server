@@ -16,7 +16,7 @@ import (
 //
 //	go test ./internal/library -run '^$' -bench BenchmarkOpenPodcast
 func BenchmarkOpenPodcast(b *testing.B) {
-	ctx, cat, lib, s, f, dir := podcastDiskFixtureTB(b)
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(b)
 	ep := f.Episodes[0]
 	writePodcastFixture(b, filepath.Join(lib.Root, filepath.FromSlash(ep.Path)), "chap-v24-reverse.mp3")
 	raw, err := os.ReadFile(filepath.Join(dir, "feed.json"))

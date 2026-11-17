@@ -17,11 +17,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
-func podcastDiskFixture(t *testing.T) (context.Context, *catalog.Catalog, *catalog.Library, *Scanner, *feed.File, string) {
-	return podcastDiskFixtureTB(t)
-}
-
-func podcastDiskFixtureTB(t testing.TB) (context.Context, *catalog.Catalog, *catalog.Library, *Scanner, *feed.File, string) {
+func podcastDiskFixture(t testing.TB) (context.Context, *catalog.Catalog, *catalog.Library, *Scanner, *feed.File, string) {
 	t.Helper()
 	ctx := context.Background()
 	cat := catalog.New(storetest.Open(t), time.Now)
@@ -248,15 +244,14 @@ func TestPodcastFeedMemo(t *testing.T) {
 		}
 		opened.Close()
 	}
-	podcastFeeds.mu.Lock()
-	var remembered *feedCopy
-	for name, c := range podcastFeeds.feeds { // under the root's real path
-		if strings.HasSuffix(name, filepath.Join(filepath.Base(dir), "feed.json")) && c.showID == f.ShowID {
-			remembered = c
-		}
+	real, err := filepath.EvalSymlinks(filename) // remembered under the root's real path
+	if err != nil {
+		t.Fatal(err)
 	}
+	podcastFeeds.mu.Lock()
+	remembered := podcastFeeds.feeds[real]
 	podcastFeeds.mu.Unlock()
-	if remembered == nil {
+	if remembered == nil || remembered.showID != f.ShowID {
 		t.Fatal("the feed copy read was not remembered")
 	}
 	// Another file, same size and mtime (so the pin's feed signature still
@@ -270,7 +265,11 @@ func TestPodcastFeedMemo(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := ep.Fetch.SHA256
-	swapped := digest[:len(digest)-1] + map[bool]string{true: "0", false: "1"}[digest[len(digest)-1] != '0']
+	last := "0"
+	if strings.HasSuffix(digest, "0") {
+		last = "1"
+	}
+	swapped := digest[:len(digest)-1] + last
 	changed := strings.Replace(string(raw), digest, swapped, 1)
 	if changed == string(raw) {
 		t.Fatal("the fixture's digest is not in its feed")

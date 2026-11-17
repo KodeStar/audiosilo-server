@@ -36,10 +36,11 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 			return nil, nil, ErrNotIndexable
 		}
 		filename := filepath.Join(dir, "feed.json")
-		if feedSignatureMust(filename) != pin.FeedSig || podcastBarrier(dir, path.Base(rel)) != nil {
+		feedInfo, err := os.Lstat(filename)
+		if err != nil || feedSignature(feedInfo) != pin.FeedSig || podcastBarrier(dir, path.Base(rel)) != nil {
 			return nil, nil, ErrNotIndexable
 		}
-		current, err := podcastFeeds.read(filename, show)
+		current, err := podcastFeeds.read(filename, show, feedInfo)
 		if err != nil || !current.holds(rel, pin.ShowID, pin.EpisodeID, *pin.Fetch) {
 			return nil, nil, ErrNotIndexable
 		}
@@ -73,7 +74,7 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 // so a new copy is a new file), or its size or mtime moved; OpenPodcast's
 // other checks (the signature against the pin, the publish barrier, the audio
 // file's identity and size) still run on every open.
-var podcastFeeds = feedMemo{max: maxFeedMemo}
+var podcastFeeds feedMemo
 
 // maxFeedMemo bounds the remembered copies: one per show streamed lately.
 const maxFeedMemo = 64
@@ -81,7 +82,6 @@ const maxFeedMemo = 64
 // feedMemo is the copies remembered, by feed.json's path.
 type feedMemo struct {
 	mu    sync.Mutex
-	max   int
 	feeds map[string]*feedCopy
 }
 
@@ -114,11 +114,8 @@ func (c *feedCopy) holds(rel, showID, id string, fetch feed.Fetch) bool {
 
 // read is filename's copy (show's feed.json), remembered while the file is
 // the one read, at the size and mtime read; feed.ReadFile's error otherwise.
-func (m *feedMemo) read(filename, show string) (*feedCopy, error) {
-	before, err := os.Lstat(filename)
-	if err != nil {
-		return nil, err
-	}
+// before is filename's Lstat, taken by the caller before the call.
+func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, error) {
 	m.mu.Lock()
 	c := m.feeds[filename]
 	m.mu.Unlock()
@@ -139,7 +136,7 @@ func (m *feedMemo) read(filename, show string) (*feedCopy, error) {
 	// replaced meanwhile may have been read in either version.
 	if after, err := os.Lstat(filename); err == nil && sameFeedFile(before, after) {
 		m.mu.Lock()
-		if m.feeds == nil || len(m.feeds) >= m.max {
+		if m.feeds == nil || len(m.feeds) >= maxFeedMemo {
 			m.feeds = map[string]*feedCopy{}
 		}
 		m.feeds[filename] = c
@@ -148,7 +145,8 @@ func (m *feedMemo) read(filename, show string) (*feedCopy, error) {
 	return c, nil
 }
 
-// sameFeedFile reports whether a and b are one file at one size and mtime.
+// sameFeedFile reports whether a and b are one file at one signature (size and
+// mtime: feedSignature, what the index pins).
 func sameFeedFile(a, b os.FileInfo) bool {
-	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
+	return os.SameFile(a, b) && feedSignature(a) == feedSignature(b)
 }
