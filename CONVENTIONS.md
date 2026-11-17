@@ -1229,7 +1229,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`Book.AudioFiles`: a single-file book, which has no `book_files` rows, is its own file), the book resolved as
   `/item` does (a part path names its book; `requireAuth`, so no `?token=`). A download is not a
   listen: none of it marks a session or a transcode. A watch client is `audiosilo-watch/<ver> (watchos|wearos)`
-  in `X-AudioSilo-Client`, shown as a watch in the console. Tests: `media/rendition_test.go` (args, keys,
+  in `X-AudioSilo-Client`, shown as a watch in the console, named "AudioSilo" (`clientParts`, the platform saying which). Tests: `media/rendition_test.go` (args, keys,
   a real encode's codec, channels, rate, bit rate, duration and moov-first, Range/If-Range, queue and status,
   refusal, a trackless copy refused, the bound on Queue and Open, eviction per cache, the shared disk guard),
   `api/renditions_test.go` (capability, stream, 503 pending, 503 rendition_error, refusals, scope allowed and
