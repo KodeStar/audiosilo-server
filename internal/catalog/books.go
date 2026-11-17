@@ -91,9 +91,9 @@ func (c *Catalog) UpsertBooks(ctx context.Context, books []*Book, budget time.Du
 
 // upsertBook is UpsertBook's writes, in tx.
 func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, error) {
-	// A read cut short (Book.TagsUnread) rewrites nothing of a book indexed
+	// A read cut short (Book.ReadCutShort) rewrites nothing of a book indexed
 	// before: only its read problem is recorded, so the next scan reads it again.
-	if b.TagsUnread {
+	if b.ReadCutShort {
 		if id, ok, err := recordReadProblem(ctx, tx, b); err != nil || ok {
 			return id, err
 		}

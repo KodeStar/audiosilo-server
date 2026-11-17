@@ -41,6 +41,9 @@ type Scanner struct {
 	jobs     jobQueue               // guarded by mu
 
 	roots *rootProber // bounded, cached checks that a library root is reachable
+	// previews are the setup previews under way per mount (Preview), a hung one
+	// holding its slot until it returns.
+	previews *mountSlots
 
 	// The on-demand indexes under way (IndexPathWithin), by book: a concurrent
 	// request for the same book waits on the one read rather than reading the
@@ -174,6 +177,7 @@ func NewScanner(cat *catalog.Catalog, ffprobePath string, log *slog.Logger) *Sca
 		flights:     map[bookKey]*indexFlight{},
 		jobs:        newJobQueue(),
 		roots:       newRootProber(),
+		previews:    newMountSlots(previewsPerMount),
 
 		probeTimeout: metadata.ProbeTimeout,
 	}
@@ -530,7 +534,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			})
 		}
 		switch {
-		case r.existed && b.TagsUnread:
+		case r.existed && b.ReadCutShort:
 			// Kept whole: UpsertBook recorded only its read problem (counted
 			// above), nothing of the book was updated.
 		case r.existed:
@@ -984,12 +988,13 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 		at = &fileState{mtime: b.MTime, size: b.Size}
 	}
 	s.noteRejected(abs, at, md)
-	// A read cut short or refused (a share that stopped answering) knows nothing
-	// of the file: UpsertBook then rewrites nothing of a stored book but its
-	// read problem, rather than path-only names and no length, codec, chapters,
+	// A read cut short or refused (a share that stopped answering), or one whose
+	// length ran out of time (readCutShort), knows nothing of the file, or not
+	// its length: UpsertBook then rewrites nothing of a stored book but its read
+	// problem, rather than path-only names and no length, codec, chapters,
 	// cover, date or genres; a new book is written with what there is. A folder
 	// book's other parts count too (buildMultiFileChapters).
-	b.TagsUnread = md.TagsUnread()
+	b.ReadCutShort = readCutShort(md)
 	setNames(b, md)
 	if md != nil {
 		b.Released = md.Released
@@ -1219,8 +1224,8 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 		f := &b.Files[i]
 		md := mds[i]
 		noteProblem(b, f.RelPath, f.Size, md)
-		if md.TagsUnread() {
-			b.TagsUnread = true // its length and chapters unknown: see enrich
+		if readCutShort(md) {
+			b.ReadCutShort = true // its length and chapters unknown: see enrich
 		}
 		if i > 0 { // the first is enrich's reading, noted there
 			s.noteRejected(absOf(lib, f.RelPath), nil, md)

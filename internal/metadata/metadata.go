@@ -119,8 +119,8 @@ func (m *Metadata) ProbeTimedOut() bool { return m != nil && m.timedOut }
 func (m *Metadata) TagsUnread() bool { return m != nil && m.tagsUnread }
 
 // ReadRefused reports whether the file was not read at all, not even opened,
-// because maxAbandonedReads earlier reads have not returned (a share that
-// stopped answering); TagsUnread holds too.
+// because maxAbandonedReads earlier reads from its mount have not returned (a
+// share that stopped answering); TagsUnread holds too.
 func (m *Metadata) ReadRefused() bool { return m != nil && m.readRefused }
 
 // AudioExtensions are the file extensions AudioSilo treats as audiobooks.
@@ -227,7 +227,8 @@ func ExtractTags(path string) *Metadata {
 }
 
 // reasonSaturated is readFile's reason when it read nothing because
-// maxAbandonedReads reads hang already (readsSaturated).
+// maxAbandonedReads reads from the file's mount hang already
+// (stuckReads.saturated).
 const reasonSaturated = "reads saturated: earlier reads have not returned"
 
 // errTagsUnread stands for dhowden's answer when its read was cut short.
@@ -248,9 +249,11 @@ func fileFormat(path string) string {
 // (ffprobe, killable, answers). The file is closed when it returns, before any
 // ffprobe run. An error: it could not be opened.
 func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout time.Duration) (p *probeResult, reason string, err error) {
-	if readsSaturated() {
-		// Enough reads hang already (a share that stopped answering): this one
-		// fails fast, the file not opened, its tags unread and no probe.
+	stuck := stuckOn(path)
+	if stuck.saturated() {
+		// Enough reads from this file's mount hang already (a share that
+		// stopped answering): this one fails fast, the file not opened, its
+		// tags unread and no probe. Files on other mounts read as ever.
 		m.tagsUnread, m.readRefused = true, true
 		return nil, reasonSaturated, nil
 	}
@@ -268,6 +271,7 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout
 		return nil, "no size", nil
 	}
 	b := newBlockFile(f, info.Size())
+	b.stuck = stuck
 	rctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
 	defer cancel()
 	var md tag.Metadata
@@ -344,13 +348,42 @@ func ForceFFprobeForTests(ffprobePath string) {
 
 // UnreadForTests is the reading of a file whose read was cut short (its tags
 // unread), or, with refused, not tried at all (ReadRefused): for tests of what
-// a scan does with one, which can't fill the process-wide count of hung reads
-// without stopping every other test's reads. It panics outside a test binary.
+// a scan does with one file, which can't fill its mount's count of hung reads
+// without stopping every other test's reads from that mount. It panics outside
+// a test binary.
 func UnreadForTests(path string, refused bool) *Metadata {
 	if !testing.Testing() {
 		panic("metadata.UnreadForTests called outside a test binary")
 	}
 	return &Metadata{Format: fileFormat(path), tagsUnread: true, readRefused: refused}
+}
+
+// HangMountForTests makes dir a mount of its own whose reads hang: the files
+// under it are keyed by a mount of their own and that mount's count of hung
+// reads is at maxAbandonedReads, so every read there is refused (ReadRefused)
+// while every other path reads as ever. release undoes it (once, however
+// often it is called). For a test that isn't parallel (it swaps the mount
+// lookup every read makes); it panics outside a test binary.
+func HangMountForTests(dir string) (release func()) {
+	if !testing.Testing() {
+		panic("metadata.HangMountForTests called outside a test binary")
+	}
+	was := mountOf
+	key := "hung-for-tests:" + dir
+	mountOf = func(p string) string {
+		if p == dir || strings.HasPrefix(p, dir+string(filepath.Separator)) {
+			return key
+		}
+		return was(p)
+	}
+	hung := stuckOn(dir)
+	hung.n.Add(maxAbandonedReads)
+	return sync.OnceFunc(func() {
+		if hung.n.Add(-maxAbandonedReads) == 0 {
+			hung.logged.Store(false)
+		}
+		mountOf = was
+	})
 }
 
 // ffprobeForced reports whether ForceFFprobeForTests named ffprobePath.

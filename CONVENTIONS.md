@@ -252,7 +252,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   library queued before the request returns so the first poll sees it; `GET /admin/invites` lists every account's invites (`auth.ListInvites`, never a
   code); `GET /admin/fs/dirs?path=` is the add-library folder picker (`library.ListDirs`:
   absolute paths, folder names only, no dot-folders, 1,000-entry cap; behind a `library.DirLister`,
-  4 listings at once and 5 s each, so a hung mount answers 404 `folder_unreadable`); `GET /admin/shares` adds
+  4 listings at once per mount (`mountSlots` keyed by `mounts.Of`) and 5 s each, so a hung mount
+  answers 404 `folder_unreadable` while the other mounts list); `GET /admin/shares` adds
   `member_ids` (`catalog.ShareMembers`).
 - **Community metadata lookup (Phase 1.5, `internal/meta`)**: `GET
   /api/v1/libraries/{id}/meta?path=` (authed, scope-checked via `authorizedPath`
@@ -1153,14 +1154,22 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   unread and the probe still runs (a narrator walk past it keeps them). While armed every read from the file runs on its own goroutine and is waited for
   only until the deadline (`blockFile.waitRead`), so a pread on a share that stopped answering
   costs a goroutine (and the file open) until it returns, never a stuck reader (`os.Open`/`Stat`
-  are not bounded); once `maxAbandonedReads` (16) such reads are outstanding process-wide
-  (`abandonedReads`; reads already under way can take it past that) a new read fails fast (`readsSaturated`, `reasonSaturated`), the file
-  not opened and no ffprobe run, its tags unread, logged once until they have all returned. A re-index
-  where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`;
-  `Book.TagsUnread`) rewrites nothing of the stored book (`catalog.recordReadProblem`: names,
+  are not bounded); once `maxAbandonedReads` (16) such reads are outstanding on one mount
+  (`stuckReads` per `mounts.Of` key, `stuckOn`; reads already under way can take it past that) a new
+  read from a file there fails fast (`stuckReads.saturated`, `reasonSaturated`), the file
+  not opened and no ffprobe run, its tags unread, logged once (with the mount) until they have all
+  returned. Per mount (server#360): one hung share stops reads only from itself, every other
+  library's mount reads as ever; `internal/mounts` names a path's mount from the mount table alone
+  (`/proc/self/mountinfo`, macOS `getfsstat` `MNT_NOWAIT`, re-read every 10 s; elsewhere, or
+  unreadable, the volume root: one key, as the old process-wide cap). A re-index
+  where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`), or whose
+  length ran out of time even read alone (an ffprobe time-out, `ProbeTimedOut` without one:
+  `library.readCutShort`; a part on a share that hung mid-read, the FIFO repro of server#360),
+  sets `Book.ReadCutShort`, and rewrites nothing of the stored book (`catalog.recordReadProblem`: names,
   length, codec, chapters, cover flag, mtime and size stay as the last full read left them) but
   its read problem, `unreadable` ("reading it timed out", or for a refused read "too many earlier reads
-  are stuck", on this library or another, with ffprobe or without), so the next scan reads it again (the stored
+  from the same drive or share are stuck", with ffprobe or without; `probe_failed` for an ffprobe
+  time-out), so the next scan reads it again (the stored
   mtime and size are the old ones, else `problemCleared`); a new book read so is written with the
   path's names. With no
   ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules
@@ -4242,7 +4251,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.ErrInvalidSetupStep`). **Preview** `POST /admin/setup/preview` `{root, ignore_patterns?}` ->
   `{root, counts: {audio_files, folder_books, file_books, capped}, same_root, samples: [{rel_path, tags,
   path, abs}], blanks: {tags, path}, suggested}`: checks the folder as the folder picker does
-  (`library.CheckRoot` behind the picker's `DirLister`, so a hung mount is 404 at its time-out: 400 `path_not_absolute`, 404 `folder_unreadable`; library create checks neither),
+  (`library.CheckRoot` behind the picker's `DirLister`, so a hung mount is 404 at its time-out: 400 `path_not_absolute`, 404 `folder_unreadable`; library create checks neither;
+  the walk and sample reads run on a goroutine of their own, waited for until the preview's time and
+  2 s more (`previewGrace`), then 404 `folder_unreadable` (`ErrDirsTimedOut`: a mount under the root
+  that hung), at most 2 previews per mount (`previewsPerMount`), a hung one holding its slot),
   the root as library create does (`catalog.CheckLibraryRoot`, the same `checkLibraryRoot` read outside
   the writer: 409 `root_overlaps`) and the ignore rules (400 `invalid_pattern`), and
   `same_root` names a library already at exactly the root (a warning; create allows it). It walks as a
