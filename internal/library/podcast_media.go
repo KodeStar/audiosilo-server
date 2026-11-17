@@ -96,11 +96,12 @@ type feedMemo struct {
 	feeds map[string]*feedCopy
 }
 
-// feedCopy is one feed.json copy's downloaded episodes, by path.
+// feedCopy is one feed.json copy's downloaded episodes, by path (a path names
+// one episode: feed.ReadFile keeps the first).
 type feedCopy struct {
 	info     os.FileInfo // the file read, taken before and checked after the read
 	showID   string
-	episodes map[string][]feedEpisode
+	episodes map[string]feedEpisode
 }
 
 // feedEpisode is a downloaded episode as its feed names it.
@@ -112,15 +113,8 @@ type feedEpisode struct {
 // holds reports whether the copy names episode id at rel, in show showID, with
 // fetch: the generation the index pinned.
 func (c *feedCopy) holds(rel, showID, id string, fetch feed.Fetch) bool {
-	if c.showID != showID {
-		return false
-	}
-	for _, ep := range c.episodes[rel] {
-		if ep.id == id && ep.fetch == fetch {
-			return true
-		}
-	}
-	return false
+	ep, ok := c.episodes[rel]
+	return ok && c.showID == showID && ep.id == id && ep.fetch == fetch
 }
 
 // read is filename's copy (show's feed.json), remembered (once its mtime is
@@ -128,23 +122,23 @@ func (c *feedCopy) holds(rel, showID, id string, fetch feed.Fetch) bool {
 // read; feed.ReadFile's error otherwise.
 // before is filename's Lstat, taken by the caller before the call.
 func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, error) {
-	// Asked before the read: a write that lands while it runs, or between it
-	// and the stat below, must fall outside the mtime's granule to be seen.
-	settled := time.Since(before.ModTime()) >= feedRacyWindow
 	m.mu.Lock()
 	c := m.feeds[filename]
 	m.mu.Unlock()
 	if c != nil && sameFeedFile(c.info, before) {
 		return c, nil
 	}
+	// Asked before the read: a write that lands while it runs, or between it
+	// and the stat below, must fall outside the mtime's granule to be seen.
+	settled := time.Since(before.ModTime()) >= feedRacyWindow
 	f, err := feed.ReadFile(filename, show, nil)
 	if err != nil {
 		return nil, err
 	}
-	c = &feedCopy{info: before, showID: f.ShowID, episodes: map[string][]feedEpisode{}}
+	c = &feedCopy{info: before, showID: f.ShowID, episodes: map[string]feedEpisode{}}
 	for _, ep := range f.Episodes {
 		if ep.Fetch != nil {
-			c.episodes[ep.Path] = append(c.episodes[ep.Path], feedEpisode{id: ep.ID, fetch: *ep.Fetch})
+			c.episodes[ep.Path] = feedEpisode{id: ep.ID, fetch: *ep.Fetch}
 		}
 	}
 	// Remembered only when the file read is the one stat'ed before (one
