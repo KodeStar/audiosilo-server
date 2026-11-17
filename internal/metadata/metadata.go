@@ -294,9 +294,9 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, count b
 		// Its open did not answer in time: as a tag read out of time (below).
 		return nil, tagsCutShort(m, path, "limit: "+context.Cause(rctx).Error()), nil
 	case errors.Is(err, errNotRegular):
-		// A FIFO (or a device) is never read as audio: unreadable, and a
-		// stored book it is a part of is kept as it is (TagsUnread).
-		m.tagsUnread = true
+		// A FIFO (or a device) is never read as audio: an OpenErr like any
+		// file that can't be opened, a known bad file, not a read cut short
+		// (the scan keeps the book only while its other files are unchanged).
 		return nil, "", err
 	case err != nil:
 		return nil, "", err
@@ -443,14 +443,29 @@ func HangMountForTests(dir string) (release func()) {
 }
 
 // HoldOpensForTests makes dir a mount of its own (its count of hung reads at
-// none) whose opens don't answer: every open under it waits until release
-// (once, however often it is called), as an open on a share that stopped
-// answering does, while every other path opens as ever. For a test that isn't
+// none) whose opens don't answer: every open under it, and every Bounded call
+// on a path under it, waits until release (once, however often it is called),
+// as one on a share that stopped answering does, while every other path opens
+// as ever. dir may name one file, to hold only the calls on it. For a test that isn't
 // parallel (it swaps the mount lookup every read makes); it panics outside a
 // test binary.
 func HoldOpensForTests(dir string) (release func()) {
-	restore := ownMountForTests("HoldOpensForTests", "held-for-tests:", dir)
 	held := make(chan struct{})
+	restore := HoldOpensUntilForTests(dir, held)
+	return sync.OnceFunc(func() {
+		close(held)
+		restore()
+	})
+}
+
+// HoldOpensUntilForTests is HoldOpensForTests with the calls held until held
+// closes, and the mount lookup put back only by restore: a test that lets a
+// held call answer while it is under way (a disk spinning up) closes held then,
+// and restores once that call is done, so the call's later lookups still name
+// dir's own mount. (A restore while a held call still runs is safe, as in
+// HoldOpensForTests: the lookup is swapped atomically.)
+func HoldOpensUntilForTests(dir string, held <-chan struct{}) (restore func()) {
+	restoreMount := ownMountForTests("HoldOpensUntilForTests", "held-for-tests:", dir)
 	hook := func(p string) {
 		if mounts.Within(p, dir) {
 			<-held
@@ -458,9 +473,8 @@ func HoldOpensForTests(dir string) (release func()) {
 	}
 	heldOpens.Store(&hook)
 	return sync.OnceFunc(func() {
-		close(held)
 		heldOpens.Store(nil)
-		restore()
+		restoreMount()
 	})
 }
 
@@ -471,15 +485,14 @@ func ownMountForTests(caller, prefix, dir string) (restore func()) {
 	if !testing.Testing() {
 		panic("metadata." + caller + " called outside a test binary")
 	}
-	was := stuckByMount.Mount
+	was := stuckByMount.Mount()
 	key := prefix + dir
-	stuckByMount.Mount = func(p string) (string, string) {
+	return stuckByMount.SetMount(func(p string) (string, string) {
 		if mounts.Within(p, dir) {
 			return key, dir
 		}
 		return was(p)
-	}
-	return func() { stuckByMount.Mount = was }
+	})
 }
 
 // ffprobeForced reports whether ForceFFprobeForTests named ffprobePath.

@@ -47,20 +47,20 @@ func TestStampAddedAt(t *testing.T) {
 	folder := catalog.Book{RelPath: "A/Book", IsFolder: true, Files: []catalog.BookFile{
 		{RelPath: "A/Book/gone.mp3"}, {RelPath: "A/Book/01.mp3"}, {RelPath: "A/Book/02.mp3"},
 	}}
-	stampAddedAt(lib, &folder)
+	stampAddedAt(t.Context(), lib, &folder, time.Minute)
 	if folder.AddedAt != want {
 		t.Errorf("folder book added_at = %q, want the earliest file's %q", folder.AddedAt, want)
 	}
 
 	loose := catalog.Book{RelPath: "loose.mp3"}
-	stampAddedAt(lib, &loose)
+	stampAddedAt(t.Context(), lib, &loose, time.Minute)
 	if loose.AddedAt != of("loose.mp3") {
 		t.Errorf("single-file book added_at = %q, want %q", loose.AddedAt, of("loose.mp3"))
 	}
 
 	before := time.Now().UTC().Add(-time.Second)
 	gone := catalog.Book{RelPath: "Gone", IsFolder: true, Files: []catalog.BookFile{{RelPath: "Gone/x.mp3"}}}
-	stampAddedAt(lib, &gone)
+	stampAddedAt(t.Context(), lib, &gone, time.Minute)
 	at, err := time.Parse(time.RFC3339, gone.AddedAt)
 	if err != nil || at.Before(before.Truncate(time.Second)) {
 		t.Errorf("a book with no files left added_at = %q (%v), want now", gone.AddedAt, err)
@@ -110,8 +110,8 @@ func TestStampAddedAtFromDiscovery(t *testing.T) {
 		}
 		fresh := *b
 		fresh.FoundAdded = nil // the old path: an lstat (and on Linux a statx) a file
-		stampAddedAt(lib, &fresh)
-		stampAddedAt(lib, b)
+		stampAddedAt(t.Context(), lib, &fresh, time.Minute)
+		stampAddedAt(t.Context(), lib, b, time.Minute)
 		if b.AddedAt != fresh.AddedAt {
 			t.Errorf("%s: added_at from discovery %q, from a fresh lstat %q", b.RelPath, b.AddedAt, fresh.AddedAt)
 		}
@@ -126,7 +126,7 @@ func TestStampAddedAtTakesNoSecondLstat(t *testing.T) {
 	lib := catalog.Library{Root: t.TempDir()}
 	found := time.Date(2003, 4, 5, 6, 7, 8, 0, time.UTC)
 	b := catalog.Book{RelPath: "gone.mp3", FoundAdded: []int64{found.Unix()}}
-	stampAddedAt(lib, &b)
+	stampAddedAt(t.Context(), lib, &b, time.Minute)
 	if runtime.GOOS == "linux" {
 		if b.AddedAt == found.Format(time.RFC3339) {
 			t.Errorf("a file gone since discovery stamped %q, want now (as an lstat finding it gone)", b.AddedAt)

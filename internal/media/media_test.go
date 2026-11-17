@@ -2,7 +2,9 @@ package media
 
 import (
 	"bytes"
+	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAudioContentType(t *testing.T) {
@@ -80,7 +83,9 @@ func TestServeFile(t *testing.T) {
 
 	t.Run("full request sets audio content type and accept-ranges", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), path, false)
+		if err := ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), path, false, time.Minute); err != nil {
+			t.Fatal(err)
+		}
 		res := rec.Result()
 		defer res.Body.Close()
 		if res.StatusCode != http.StatusOK {
@@ -98,7 +103,9 @@ func TestServeFile(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.Header.Set("Range", "bytes=0-9")
-		ServeFile(rec, req, path, false)
+		if err := ServeFile(rec, req, path, false, time.Minute); err != nil {
+			t.Fatal(err)
+		}
 		if rec.Code != http.StatusPartialContent {
 			t.Fatalf("status = %d, want 206", rec.Code)
 		}
@@ -106,7 +113,9 @@ func TestServeFile(t *testing.T) {
 
 	t.Run("download sets a quoted Content-Disposition", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), path, true)
+		if err := ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), path, true, time.Minute); err != nil {
+			t.Fatal(err)
+		}
 		if cd := rec.Header().Get("Content-Disposition"); cd != `attachment; filename="song.mp3"` {
 			t.Fatalf("Content-Disposition = %q", cd)
 		}
@@ -114,7 +123,9 @@ func TestServeFile(t *testing.T) {
 
 	t.Run("missing file is 404", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), filepath.Join(dir, "missing.mp3"), false)
+		if err := ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), filepath.Join(dir, "missing.mp3"), false, time.Minute); err != nil {
+			t.Fatal(err)
+		}
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("status = %d, want 404", rec.Code)
 		}
@@ -192,14 +203,14 @@ func TestEmbeddedCover(t *testing.T) {
 		if _, err := os.Stat(src); err != nil {
 			t.Skipf("fixture missing: %v", err)
 		}
-		if _, _, ok := EmbeddedCover(src); ok {
-			t.Fatal("EmbeddedCover reported art for a fixture that has none")
+		if data, _, err := EmbeddedCover(t.Context(), src, time.Minute); data != nil || err != nil {
+			t.Fatalf("EmbeddedCover of a fixture that has none = %d bytes, %v; want no art, no error", len(data), err)
 		}
 	})
 
-	t.Run("missing file reports ok=false", func(t *testing.T) {
-		if _, _, ok := EmbeddedCover(filepath.Join(t.TempDir(), "nope.m4b")); ok {
-			t.Fatal("EmbeddedCover reported art for a missing file")
+	t.Run("missing file is an error, no art", func(t *testing.T) {
+		if data, _, err := EmbeddedCover(t.Context(), filepath.Join(t.TempDir(), "nope.m4b"), time.Minute); data != nil || !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("EmbeddedCover of a missing file = %d bytes, %v; want no art and its error", len(data), err)
 		}
 	})
 
@@ -223,9 +234,9 @@ func TestEmbeddedCover(t *testing.T) {
 			t.Skipf("ffmpeg could not build an art-bearing fixture: %v\n%s", err, out)
 		}
 
-		data, mime, ok := EmbeddedCover(path)
-		if !ok {
-			t.Fatal("EmbeddedCover ok = false, want true for a fixture with embedded art")
+		data, mime, err := EmbeddedCover(t.Context(), path, time.Minute)
+		if err != nil {
+			t.Fatalf("EmbeddedCover: %v, want the art of a fixture with embedded art", err)
 		}
 		if len(data) == 0 {
 			t.Fatal("EmbeddedCover returned empty data for a fixture with embedded art")

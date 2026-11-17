@@ -11,6 +11,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
@@ -483,6 +484,11 @@ func (a *API) servePodcastCover(w http.ResponseWriter, r *http.Request, lib *cat
 		jpg, ok := a.thumbs.Get(key)
 		if !ok {
 			if jpg, err = a.makeThumbnail(r.Context(), lib, show.Path, art, size); err != nil {
+				if metadata.GaveUp(err) {
+					// Art on a share that stopped answering: try again, not "none".
+					writeShareNotAnswering(w)
+					return
+				}
 				writeError(w, 404, "no cover")
 				return
 			}
@@ -495,10 +501,5 @@ func (a *API) servePodcastCover(w http.ResponseWriter, r *http.Request, lib *cat
 		conditional{etag: thumbETag("podcast", size, catalog.CoverVersion(art.version)), cacheControl: coverCache}.serve(w, r, "image/jpeg", jpg)
 		return
 	}
-	abs, err := library.SafeJoin(lib.Root, show.CoverPath)
-	if err != nil {
-		writeError(w, 404, "no cover")
-		return
-	}
-	serveSidecarCover(w, r, abs)
+	a.serveArt(w, r, lib.Root, catalog.CoverSource{CoverPath: show.CoverPath})
 }

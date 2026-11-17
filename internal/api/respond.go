@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/notify"
 )
 
@@ -107,6 +109,8 @@ const (
 	codeModuleOff                = "module_off"   // a managed module's route while the module is off (modules.go)
 	codeUnsupportedImage         = "unsupported_image"
 	codeCoverUnavailable         = "cover_unavailable"
+	codeShareNotAnswering        = "share_not_answering" // 503: a cover's or stream's file on a drive or share that stopped answering, or an on-demand read of a book another read of it holds past a look's time (metadata.GaveUp)
+	codeStopping                 = "stopping"            // 503: a read the server's stop ended (library.ErrStopping)
 	codeTooLarge                 = "too_large"
 	codeInvalidSchedule          = "invalid_schedule"
 	codeInvalidPattern           = "invalid_pattern"
@@ -279,6 +283,13 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		errors.Is(err, catalog.ErrNoteBodyTooLong), errors.Is(err, catalog.ErrInvalidPosition),
 		errors.Is(err, catalog.ErrNothingToChange):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, library.ErrStopping):
+		// A read of the book the server's stop ended (the request was still
+		// waiting for it): try again once the server is back.
+		setRetryAfter(w, 10*time.Second)
+		writeErrorCode(w, http.StatusServiceUnavailable, codeStopping, "the server is stopping; try again shortly")
+	case metadata.GaveUp(err):
+		writeShareNotAnswering(w)
 	case errors.Is(err, context.DeadlineExceeded):
 		// A bounded lookup that ran out of time (a stalled writer) is the
 		// timeout middleware's 503, also on the one route it doesn't wrap that
@@ -377,4 +388,13 @@ func apiNoRoute(mux *http.ServeMux) http.Handler {
 		}
 		writeErrorCode(w, http.StatusNotFound, codeNotFound, "not found")
 	})
+}
+
+// writeShareNotAnswering is the 503 for a library file a look at was given up
+// on (metadata.GaveUp): its drive or share stopped answering, or enough looks
+// there hang already that this one wasn't tried.
+func writeShareNotAnswering(w http.ResponseWriter) {
+	setRetryAfter(w, 30*time.Second)
+	writeErrorCode(w, http.StatusServiceUnavailable, codeShareNotAnswering,
+		"the drive or share holding this file is not answering; try again later")
 }

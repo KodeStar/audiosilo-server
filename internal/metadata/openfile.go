@@ -71,6 +71,12 @@ const (
 // a test.
 var heldOpens atomic.Pointer[func(path string)]
 
+// OpenRegular is openRegular for the files a request or a scan opens outside
+// the audio reads (a stream, a cover): a FIFO named as one is turned away at
+// once (ErrNotRegular) rather than waited on for a writer that may never come,
+// which would hold a Bounded call, counted on its mount, for good.
+func OpenRegular(path string) (*os.File, os.FileInfo, error) { return openRegular(path) }
+
 // openRegular opens the file at path for reading, without waiting for a
 // writer when it is a FIFO (openFlags), and stats it: an error when it is no
 // regular file.

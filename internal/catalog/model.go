@@ -201,14 +201,17 @@ type Book struct {
 	// ReadCutShort: the scan's read of one of the book's files was cut short or
 	// refused (metadata.Metadata.TagsUnread: a share that stopped answering), or
 	// ran out of time for its length (an ffprobe time-out, or ProbeTimedOut with
-	// none: library.readCutShort), so what the book holds is unknown, not empty.
+	// none: library.readCutShort), or one is no regular file (a FIFO), or a look
+	// at a file beside the audio (a cover, an ebook, a metadata.json, an
+	// attachment) was given up on (library.givenUp), so what the book holds is
+	// unknown, not empty.
 	// UpsertBook then rewrites nothing of a book indexed before but its read
 	// problem (recordReadProblem); a new one is written with what the scan has
 	// (the path's names).
 	ReadCutShort bool `json:"-"`
 	// LengthOnly narrows ReadCutShort: every file's tags were read and only a
-	// length ran out of time (BookFile.LengthUnread), no read cut short or
-	// refused. A share that stopped answering comes back, but a length can run
+	// length ran out of time or a file is no regular file (BookFile.LengthUnread),
+	// no read cut short or refused. A share that stopped answering comes back, but a length can run
 	// out of time on every scan (a damaged part), and the stored book kept each
 	// time would hold a file list of the day it first did. So such a book is
 	// kept only while its files are the stored ones (sameFiles): with a part
@@ -292,9 +295,10 @@ type BookFile struct {
 	// player reads the book-level codec.
 	Codec string `json:"-"`
 	Size  int64  `json:"size"`
-	// LengthUnread: the scan's read of this file ran out of time for its length
-	// (Book.LengthOnly), so its size isn't held against the stored one's: it may
-	// be the file that changed, its new length not known yet.
+	// LengthUnread: the scan's read of this file ran out of time for its length,
+	// or it is no regular file (Book.LengthOnly), so its size isn't held against
+	// the stored one's: it may be the file that changed, its new length not known
+	// yet.
 	LengthUnread bool `json:"-"`
 }
 

@@ -969,7 +969,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   library and book path), each request scope-checked before it joins. The read runs on a goroutine of its own
   (`leadIndex`, up to `indexTimeout`, its probes too) and is stored even when every request waiting on it has ended, each at its own
   deadline, so a cancelled request never throws its probes away (server#211); it ends with the server
-  (`Scanner.SetBaseContext`, from the API's base context), writing nothing then. A scan's read of a book and the Bridge's
+  (`Scanner.SetBaseContext`, from the API's base context), writing nothing then, and a request still
+  waiting on it answers 503 `stopping` with `Retry-After` (`library.ErrStopping`, `indexShared`; an admin's Re-read and the Bridge's rescan too, `rescanAt`), not a 500. A scan's read of a book and the Bridge's
   `IndexMoved` take the same per-book flight (`startFlight`): no two reads of one book run side by side, and an on-demand
   index asked for during a scan's read waits for the scan's write and loads it. An admin's Re-read
   (`rescanPath`) is `ReindexPath` instead: it waits for the read under way, then reads the book itself, as what that
@@ -1174,7 +1175,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the deadline (`metadata.await`: `openBlockFile`, `blockFile.waitRead`), so an open or a pread on a share
   that stopped answering costs a goroutine (and the file open) until it returns, never a stuck reader;
   an open given up on is a tag read out of time. The file is opened `O_NONBLOCK` and must be a regular
-  file (a FIFO is turned away at once, `OpenErr` and `TagsUnread`, never waited for nor read as audio).
+  file (a FIFO is turned away at once, `OpenErr` `metadata.ErrNotRegular`, never waited for nor read as audio:
+  a known bad file, not a read cut short, see `Book.LengthOnly` below).
   A scan's move fingerprint (`metadata.Fingerprint`, skipped after a read cut short) is bounded the same
   way, and an ffprobe killed at its time-out that has not ended 5 s later (`ffprobeKillGrace`; stuck in an
   NFS read on macOS) is left and counted as an abandoned read. Once `maxAbandonedReads` (16) such reads are outstanding on one mount
@@ -1187,10 +1189,45 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   unreadable at the first read, the volume root: one key, as the old process-wide cap). A mount's key is
   the filesystem it is of (`Mount.Device`: mountinfo's `major:minor`, macOS's fsid), not its mount
   point: a share unmounted lazily and mounted again at the same path starts with nothing stuck, and
-  two bind mounts of one share have one cap. A re-index
+  two bind mounts of one share have one cap. Every other look at a library file a scan, an on-demand
+  index or a request makes on a share that may stop answering goes through the same bound
+  (`metadata.Bounded`, SRV-15b: the call on a goroutine of its own, waited for while its context lives
+  and at most a timeout, counted on the path's mount when given up on, refused at once at the cap,
+  made only with one of its mount's `maxAbandonedReads` slots held until it returns, so a burst on a
+  share that just stopped answering (a page of covers) makes no more calls than the cap;
+  `StatBounded`, `LstatBounded`, `ReadDirBounded`; `metadata.GaveUp` names its two errors,
+  `ErrNotAnswered` and `ErrReadRefused`; `HoldOpensForTests` holds them too): the files beside a
+  book's audio (the ABS metadata.json read, the attachments' lstats and reads, the ebook check,
+  `coverLook.find`'s stats and listing, `LookArt` (`ArtFile`'s `SafeJoin` and the stat) for the
+  cover version, `stampAddedAt`'s statx and lstat, `problemCleared`'s look), the backfill's embedded cover read
+  (`media.EmbeddedCover`), and in the API `/item`'s look at the book's ebook (`RefreshEbook`, given
+  `API.fileWait` and answering with the stored ebook past it: the probe's time is the request's own),
+  every cover (full, thumbnail, a
+  show's: `serveArt`, `coverArt`, `readSidecar`) and a stream's open and stat (`media.ServeFile`; a regular file only, `metadata.OpenRegular`, so a FIFO is a 404 at once, never an open held and counted on its mount),
+  each given up on after `API.fileWait` (10 s; a stream's open after `API.streamWait`, 45 s: past a
+  sleeping disk's spin-up, under AVPlayer's 60 s resource timeout, as a 503 is no retry for it) as a
+  503 `share_not_answering` with `Retry-After`.
+  The scan gives each the probe's time (`Scanner.probeTimeout`). With a book's audio read cut short
+  none of its side files is looked at (each would wait out its time too); one given up on otherwise
+  keeps the book as stored (`library.givenUp.keep`: `ReadCutShort`, never `LengthOnly`) with an
+  `unreadable` problem on that file (over a lasting one), which `problemCleared` clears once the file
+  answers the kind of bounded call that gave up (`sideAnswers`: a folder's listing, a cover image's
+  stat, any other file's read of its last bytes, as a stat can answer from a cache while reads hang;
+  gone counts too); a backfill's given-up read keeps what is stored and
+  records nothing. A scan stopped while a read is still under way (held in a call nothing bounds)
+  waits for it up to `stopGrace` (2 s), then leaves it to end on its own, its book's flight with
+  it, counted in `Scanner.readsLeft` and logged, so the scan ends and the next runs (`writeNext`
+  waits on the scan's context too); no later read waits on that read's flight
+  (`bookRead.left`, `errReadLeft`), and none waits on any other read of the book (a scan's
+  or an on-demand one, maybe stuck the same way) for more than `probeTimeout` while that read
+  has not returned (`waitFlight`; a scan's read that has returned is waited on until its batch
+  write): a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
+  rest; an on-demand read gives up as a look at a share that stopped answering (`metadata.GaveUp`,
+  503 `share_not_answering`). The walk's own listings and lstats are not bounded yet. A re-index
   where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`), or whose
   length ran out of time even read alone (an ffprobe time-out, `ProbeTimedOut` without one:
-  `library.readCutShort`; a part on a share that hung mid-read, the FIFO repro of server#360),
+  `library.readCutShort`; a part on a share that hung mid-read), or with a file that is no regular
+  file (a FIFO, `library.lengthUnread`),
   sets `Book.ReadCutShort`, and rewrites nothing of the stored book (`catalog.recordReadProblem`: names,
   length, codec, chapters, cover flag, mtime and size stay as the last full read left them) but
   its read problem, `unreadable` ("reading it timed out", a `ProbeTimedOut` too, or for a refused read "too many earlier reads
@@ -1199,10 +1236,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   earlier part's lasting problem, as the record is what `problemCleared` asks again), so the next scan reads it again (the stored
   mtime and size are the old ones, else `problemCleared`, which a read still cut short, its length
   out of time included, never clears); a new book read so is written with the
-  path's names. Only a length out of time (`Book.LengthOnly`: every file's tags read, none cut short
-  or refused) can repeat on every scan (a damaged part), so it keeps the book only while its files
-  are the stored ones (`catalog.sameFiles`: the paths in order, and each size but the timed-out
-  parts' own, `BookFile.LengthUnread`); with a part added, gone, renamed or changed the book is
+  path's names. Only a length out of time or a file that is no regular file (`Book.LengthOnly`:
+  every file's tags read, none cut short or refused) can repeat on every scan (a damaged part, a
+  FIFO left in a book's folder), so it keeps the book only while its files are the stored ones
+  (`catalog.sameFiles`: the paths in order, and each size but the timed-out or non-regular parts'
+  own, `BookFile.LengthUnread`); with a part added, gone, renamed or changed the book is
   written whole with the part's problem (counted as updated), never held at a file list that is no
   longer on disk. With no
   ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules
@@ -1552,7 +1590,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   row without it). `metadata.ReadABSFile` reads a regular file only, never through a link (one
   swapped in after the walk included: `os.SameFile` on the opened file). A file that can't be used
   (not JSON, too large, not a regular file: `metadata.ErrABSFileInvalid`) keeps its signature (read
-  again once it changes); one that can't be looked at or read right now (a flaky mount) is
+  again once it changes); one that can't be looked at or read right now (a flaky mount, a share that
+  stopped answering: its lstat and read are `metadata.Bounded` calls, see In-process probe) is
   left as it was by the backfill and by a re-index (`ABSReading.Unread`: `UpsertBook` keeps the stored
   `abs_sig` and `abs_file` with no `abs_indexed_at`, so the book keeps its ABS values and the next scan
   reads it again; server#213); both log a warning. Known gap: a position read from an ABS title (`titlePosition`) shows as `tag`.
@@ -1661,7 +1700,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or start). The
   PATCH runs it (`API.resolveSources`, one run at a time) and waits up to 20 s, never closer than 2 s
   to its deadline (`awaitResolve`): a library small enough answers re-resolved (about 1 s per 5,000
-  books), a large one answers at once with the rest going on (server#213).
+  books), a large one answers at once with the rest going on (server#213) and `"resolving": true` in
+  the answer (omitted otherwise; true too when the run failed and waits to be run again,
+  `API.resolvePending`), which the console's toast reports as finishing in the background.
   `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
   NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
   with a tag read (`media.EmbeddedCover`, no ffprobe). A `scanned` snapshot carries `@rev` (`scannedRevKey`), the path baseline's revision: one
@@ -3005,7 +3046,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   segment by name (`library.ContentPath`, the one statement of the rule: `ContentJoin` for a path that
   names content, `IndexPathWithin`, `listDir`, and `scopedPathIn` for every path-taking route, a
   hidden path reading as missing, 404), so a book's `.audiosilo/` never becomes a phantom book or a
-  streamable file; `findCover` never takes a hidden file (an AppleDouble `._x.jpg`) as a cover. Audited `bridge.code`, `bridge.paired` (system),
+  streamable file; `coverLook.find` never takes a hidden file (an AppleDouble `._x.jpg`) as a cover. Audited `bridge.code`, `bridge.paired` (system),
   `bridge.unpair`, `bridge.job`, `bridge.cancel`. `SetBridge` before `Handler()` (the launcher always calls it).
   **Community jobs (Phase 2b, `bridge/contribute.go`)**: two kinds that file to the community metadata
   database with the Bridge's GitHub sign-in and write nothing into the library (no

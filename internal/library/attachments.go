@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -128,13 +129,14 @@ func isAttachmentsDir(de fs.DirEntry, rel string, ignore *Ignore) bool {
 // a book indexed with no walk (IndexPath) or refreshed alone (RefreshAttachments).
 // It looks up only b's own names (at most one per known name), not the whole
 // folder, which single-file books share. An error is a folder or file that
-// couldn't be looked at right now (never one that isn't there): the caller keeps
-// what is stored rather than reading it as none.
-func attachmentsSigAt(lib catalog.Library, b *catalog.Book, ignore *Ignore) (string, error) {
+// couldn't be looked at right now (never one that isn't there), each lstat given
+// up on after timeout included (metadata.LstatBounded): the caller keeps what is
+// stored rather than reading it as none.
+func attachmentsSigAt(ctx context.Context, lib catalog.Library, b *catalog.Book, ignore *Ignore, timeout time.Duration) (string, error) {
 	dir, prefix := attachmentsPlace(b)
 	rel := path.Join(dir, metadata.AttachmentsDir)
 	abs := absOf(lib, rel)
-	info, err := os.Lstat(abs)
+	info, err := metadata.LstatBounded(ctx, abs, timeout)
 	if err != nil {
 		return "", absentOK(err)
 	}
@@ -143,7 +145,7 @@ func attachmentsSigAt(lib catalog.Library, b *catalog.Book, ignore *Ignore) (str
 	}
 	files := attachmentFiles{}
 	for _, known := range metadata.AttachmentNames {
-		fi, err := os.Lstat(filepath.Join(abs, prefix+known))
+		fi, err := metadata.LstatBounded(ctx, filepath.Join(abs, prefix+known), timeout)
 		if err != nil {
 			if err := absentOK(err); err != nil {
 				return "", err
@@ -162,42 +164,59 @@ func attachmentsSigAt(lib catalog.Library, b *catalog.Book, ignore *Ignore) (str
 // not the format, too large, a link; logged) is left out, and that reading is
 // recorded with its signature, so it isn't read again until it changes. read is
 // false, with no files, when a file couldn't be read right now (gone since the
-// walk, a flaky mount; logged): the caller records nothing, keeping what is
-// stored, so the next scan reads them again. Never a part of the set: a reading
-// recorded without one of its files would read as complete.
-func (s *Scanner) readAttachments(lib catalog.Library, b *catalog.Book, sig string) (files metadata.AttachmentFiles, read bool) {
+// walk, a flaky mount, a share that stopped answering: each read is a
+// metadata.Bounded call, given up on after the probe's time and noted in
+// gaveUp; logged): the caller records nothing, keeping what is stored, so the
+// next scan reads them again. Never a part of the set: a reading recorded
+// without one of its files would read as complete.
+func (s *Scanner) readAttachments(ctx context.Context, lib catalog.Library, b *catalog.Book, sig string, gaveUp *givenUp) (files metadata.AttachmentFiles, read bool) {
 	if sig == "" {
 		return files, true
 	}
 	dir, prefix := attachmentsPlace(b)
-	read = true
 	for _, name := range metadata.AttachmentSigNames(sig) {
 		rel := path.Join(dir, metadata.AttachmentsDir, prefix+name)
 		p := absOf(lib, rel)
-		var err error
-		switch name {
-		case metadata.AttachmentCharacters:
-			files.Characters, err = metadata.ReadCharacters(p)
-		case metadata.AttachmentRecaps:
-			files.Recaps, err = metadata.ReadRecaps(p)
-		case metadata.AttachmentDescription:
-			files.Description, err = metadata.ReadDescription(p)
-		case metadata.AttachmentChapters:
-			files.Chapters, err = metadata.ReadChapterList(p)
-		case metadata.AttachmentBridge:
-			files.Provenance, err = metadata.ReadProvenance(p)
-		case metadata.AttachmentReadalong:
-			files.Readalong, err = metadata.ReadReadalong(p)
-		}
+		// The read fills a copy: a read given up on may still end later.
+		cur := files
+		got, err := metadata.Bounded(ctx, p, s.probeTimeout, func() (metadata.AttachmentFiles, error) {
+			err := readAttachment(&cur, name, p)
+			return cur, err
+		}, nil)
 		if err != nil {
 			s.log.Warn("unusable .audiosilo attachment", "library", lib.Name, "path", rel, "err", err)
-			read = read && errors.Is(err, metadata.ErrAttachmentInvalid)
+			gaveUp.note(rel, err)
+			if !errors.Is(err, metadata.ErrAttachmentInvalid) {
+				// Not read right now: nothing of the set is recorded, so the
+				// rest are not read (on a share that stopped answering each
+				// would wait out its time too).
+				return metadata.AttachmentFiles{}, false
+			}
+			continue
 		}
-	}
-	if !read {
-		return metadata.AttachmentFiles{}, false
+		files = got
 	}
 	return files, true
+}
+
+// readAttachment reads the attachment named name (one of
+// metadata.AttachmentNames) at p into its field of files.
+func readAttachment(files *metadata.AttachmentFiles, name, p string) (err error) {
+	switch name {
+	case metadata.AttachmentCharacters:
+		files.Characters, err = metadata.ReadCharacters(p)
+	case metadata.AttachmentRecaps:
+		files.Recaps, err = metadata.ReadRecaps(p)
+	case metadata.AttachmentDescription:
+		files.Description, err = metadata.ReadDescription(p)
+	case metadata.AttachmentChapters:
+		files.Chapters, err = metadata.ReadChapterList(p)
+	case metadata.AttachmentBridge:
+		files.Provenance, err = metadata.ReadProvenance(p)
+	case metadata.AttachmentReadalong:
+		files.Readalong, err = metadata.ReadReadalong(p)
+	}
+	return err
 }
 
 // AttachmentsRefresh is what RefreshAttachments indexed for a book: its path and
@@ -241,11 +260,11 @@ func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, r
 	if err != nil {
 		return nil, err
 	}
-	sig, err := attachmentsSigAt(lib, book, ParseIgnore(lib.IgnorePatterns))
+	sig, err := attachmentsSigAt(ctx, lib, book, ParseIgnore(lib.IgnorePatterns), s.probeTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("the attachments of %q couldn't be listed: %w", book.RelPath, err)
 	}
-	files, read := s.readAttachments(lib, book, sig)
+	files, read := s.readAttachments(ctx, lib, book, sig, nil)
 	if !read {
 		return nil, fmt.Errorf("the attachments of %q couldn't be read", book.RelPath)
 	}

@@ -235,7 +235,8 @@ func (a *API) rescanPath(w http.ResponseWriter, lib *catalog.Library, p string) 
 
 // rescanAt runs read, a re-read of what is at p in lib, as rescanPath does: on a
 // context detached from the request timeout, a path with no book a 404 with code
-// not_indexable, anything else the catalog error's answer. It answers the error
+// not_indexable, a read the server's stop ended a 503 stopping, anything else
+// the catalog error's answer. It answers the error
 // itself and reports whether there was none.
 func rescanAt[T any](a *API, w http.ResponseWriter, lib *catalog.Library, p string, read func(context.Context) (T, error)) (T, bool) {
 	ctx, cancel := context.WithTimeout(a.baseCtx, rescanBookTimeout)
@@ -246,6 +247,11 @@ func rescanAt[T any](a *API, w http.ResponseWriter, lib *catalog.Library, p stri
 		return out, false
 	}
 	if err != nil {
+		if a.baseCtx.Err() != nil {
+			// The server's stop ended the read (its context is the server's):
+			// a 503 to try again, as a waiting /item's, not a failure.
+			err = errors.Join(library.ErrStopping, err)
+		}
 		a.writeCatalogError(w, err, "rescan failed", "could not rescan the book", "library", lib.ID, "path", p)
 		return out, false
 	}

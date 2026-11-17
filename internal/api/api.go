@@ -202,6 +202,14 @@ type API struct {
 	thumbs     *media.ThumbCache
 	coverReads chan struct{}
 	thumbSem   chan struct{}
+	// fileWait is how long a request waits for a look at a library file (a
+	// cover's stat and read) before answering 503, or with what is stored
+	// (/item's look at the book's ebook), and streamWait for a stream's open:
+	// each is a metadata.Bounded call, so one on a share that stopped
+	// answering never holds its handler (fileWaitTimeout, streamOpenTimeout;
+	// fields so tests can shorten them).
+	fileWait   time.Duration
+	streamWait time.Duration
 	// communityReads bounds the community covers being fetched or waiting to be
 	// decoded for thumbnails, across requests (handlers_community_covers.go), as
 	// coverReads does the library's own art.
@@ -288,6 +296,8 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		favouriteWait:  favouriteIndexWait,
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
 		coverReads:     make(chan struct{}, maxCoverReads),
+		fileWait:       fileWaitTimeout,
+		streamWait:     streamOpenTimeout,
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
 		communityReads: make(chan struct{}, maxCommunityCoverReads),
 		streams:        catalog.NewStreamMarks(),
@@ -463,6 +473,15 @@ func (a *API) startResolve(failed int) <-chan struct{} {
 		}
 	}()
 	return done
+}
+
+// resolvePending reports whether a re-resolve is under way or, having failed,
+// waits to be run again (resolveRetry): a run that ended (resolveSources'
+// channel closed) with one pending left books on their old metadata source.
+func (a *API) resolvePending() bool {
+	a.resolveMu.Lock()
+	defer a.resolveMu.Unlock()
+	return a.resolving != nil || a.resolveRetry != nil
 }
 
 // resolveOnce is one run of catalog.ResolveSources. A panic in it is that run's

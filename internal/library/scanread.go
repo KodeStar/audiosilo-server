@@ -35,6 +35,16 @@ func newReadSlots(n int, timeout time.Duration) *readSlots {
 	return &readSlots{ch: make(chan struct{}, max(n, 1)), timeout: timeout, readFile: extractFile}
 }
 
+// readSlots is newReadSlots for this scanner's reads: probeTimeout each, through
+// its readFile when one is set.
+func (s *Scanner) readSlots(n int) *readSlots {
+	slots := newReadSlots(n, s.probeTimeout)
+	if s.readFile != nil {
+		slots.readFile = s.readFile
+	}
+	return slots
+}
+
 // extractFile is metadata.ExtractTimeout's reading (it never errs).
 func extractFile(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
 	md, _ := metadata.ExtractTimeout(ctx, absPath, ffprobePath, timeout)
@@ -45,7 +55,8 @@ func extractFile(ctx context.Context, absPath, ffprobePath string, timeout time.
 func (r *readSlots) size() int { return cap(r.ch) }
 
 // extract is metadata.ExtractTimeout holding a slot while it reads; nil when
-// ctx ends while it waits for one (stopped: the scan drops the reading).
+// ctx ends before it is done (stopped: the scan drops the reading, which the
+// stop may have cut short).
 //
 // A read whose ffprobe ran out of time while others were reading is read again
 // on its own: files sharing a slow disk or a busy share can each take longer
@@ -57,6 +68,11 @@ func (r *readSlots) size() int { return cap(r.ch) }
 // length would otherwise be ffprobe's estimate until a later scan.
 func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *metadata.Metadata {
 	md, shared := r.read(ctx, absPath, ffprobePath)
+	if ctx.Err() != nil {
+		// Stopped (an MP3's count cut short is uncounted): dropped, never
+		// retried behind a read stuck on a share.
+		return nil
+	}
 	if !shared || !(lengthTimedOut(md) || md.LengthUncounted()) {
 		return md
 	}
@@ -64,7 +80,7 @@ func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *m
 	r.alone.Lock()
 	defer r.alone.Unlock()
 	if ctx.Err() != nil {
-		return md // stopped: dropped by the scan
+		return nil // stopped while it waited: dropped by the scan
 	}
 	return r.readFile(ctx, absPath, ffprobePath, r.timeout)
 }
@@ -77,12 +93,24 @@ func lengthTimedOut(md *metadata.Metadata) bool {
 }
 
 // readCutShort reports whether md's read leaves the file unknown, or its
-// length: cut short or refused (TagsUnread), or its length's read out of time
-// even alone (lengthTimedOut: a part on a share that stopped answering mid-read,
-// a FIFO; server#360). A book with such a file is kept as stored
-// (catalog.Book.ReadCutShort), never rewritten without that file's length.
+// length: cut short or refused (TagsUnread), or its length unread
+// (lengthUnread). A book with such a file is kept as stored
+// (catalog.Book.ReadCutShort), never rewritten without that file's length; one
+// whose files' tags were all read is kept only while its files are the stored
+// ones (catalog.Book.LengthOnly).
 func readCutShort(md *metadata.Metadata) bool {
-	return md.TagsUnread() || lengthTimedOut(md)
+	return md.TagsUnread() || lengthUnread(md)
+}
+
+// lengthUnread reports whether md has no length for its file that a read
+// could give: its length's read out of time even alone (lengthTimedOut: a part
+// on a share that stopped answering mid-read; server#360), or a file that is
+// no regular file (metadata.ErrNotRegular: a FIFO, a device). The latter is a
+// known bad file, not a read cut short: with its book's other files unchanged
+// the stored book stays, and a change to another part rewrites it
+// (catalog.Book.LengthOnly, BookFile.LengthUnread).
+func lengthUnread(md *metadata.Metadata) bool {
+	return lengthTimedOut(md) || (md != nil && errors.Is(md.OpenErr, metadata.ErrNotRegular))
 }
 
 // read is metadata.ExtractTimeout holding a slot, and whether another read ran
@@ -146,6 +174,9 @@ type bookRead struct {
 	// The book's flight (Scanner.startFlight), held from before the read until
 	// the book is written or dropped; nil when the scan stopped first.
 	flight *indexFlight
+	// left is set once the scan stopped and left this read under way, for
+	// the flight's waiters (indexFlight.scan).
+	left atomic.Bool
 }
 
 // endFlight ends the read's flight once its book is written (err nil) or not,

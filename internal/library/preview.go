@@ -241,7 +241,7 @@ func (s *Scanner) previewSample(ctx context.Context, lib catalog.Library, b *cat
 	setNames(&folders, nil)
 	setNames(b, md)
 	if b.IsFolder {
-		b.ABS.File, _ = s.readABS(lib, b.RelPath, b.ABS.Sig)
+		b.ABS.File, _ = s.readABS(ctx, lib, b.RelPath, b.ABS.Sig, nil)
 		folders.ABS.File = b.ABS.File
 	}
 	return PreviewSample{

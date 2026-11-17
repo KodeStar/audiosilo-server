@@ -27,11 +27,11 @@ func TestFFprobeThatWontEndIsLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wasGrace, wasOf := ffprobeKillGrace, stuckByMount.Mount
+	wasGrace := ffprobeKillGrace
 	ffprobeKillGrace = 100 * time.Millisecond
 	key := t.Name()
-	stuckByMount.Mount = func(string) (string, string) { return key, key }
-	t.Cleanup(func() { ffprobeKillGrace, stuckByMount.Mount = wasGrace, wasOf })
+	t.Cleanup(stuckByMount.SetMount(func(string) (string, string) { return key, key }))
+	t.Cleanup(func() { ffprobeKillGrace = wasGrace })
 	stuck := stuckByMount.For(dir)
 
 	start := time.Now()

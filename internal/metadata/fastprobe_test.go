@@ -807,7 +807,7 @@ func TestBlockFileBudgetBeforeAllocation(t *testing.T) {
 // there fails fast, the file not opened and no ffprobe run, its tags unread,
 // logged once; a file on another mount reads as ever; as the hung reads
 // return, reads from the hung mount work again. Not parallel: it swaps
-// stuckByMount.Mount.
+// stuckByMount's mount lookup.
 func TestAbandonedReadsAreCapped(t *testing.T) {
 	var logged bytes.Buffer
 	was := probeLog.Load()
@@ -820,14 +820,12 @@ func TestAbandonedReadsAreCapped(t *testing.T) {
 	// Two mounts: the hung share (a folder of its own) and every other path.
 	share := t.TempDir()
 	hungKey, otherKey := t.Name()+":hung", t.Name()+":other"
-	wasOf := stuckByMount.Mount
-	stuckByMount.Mount = func(p string) (string, string) {
+	t.Cleanup(stuckByMount.SetMount(func(p string) (string, string) {
 		if strings.HasPrefix(p, share) {
 			return hungKey, hungKey
 		}
 		return otherKey, otherKey
-	}
-	t.Cleanup(func() { stuckByMount.Mount = wasOf })
+	}))
 	hung := stuckByMount.For(filepath.Join(share, "any.mp3"))
 
 	src := bytes.NewReader(make([]byte, 1<<20))
@@ -878,7 +876,7 @@ func TestAbandonedReadsAreCapped(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	stuckByMount.Mount = func(string) (string, string) { return hungKey, hungKey } // the fixture on the share that came back
+	t.Cleanup(stuckByMount.SetMount(func(string) (string, string) { return hungKey, hungKey })) // the fixture on the share that came back
 	m, err := Extract(fixture("mp3-v23-chap.mp3"), "")
 	if err != nil || m.TagsUnread() || m.Duration <= 0 {
 		t.Errorf("read after the hung reads returned = %+v (err %v), want it read", m, err)

@@ -12,10 +12,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // BookEbook finds the ebook that sits beside a book's audio, the one the
@@ -55,7 +57,7 @@ func BookEbook(root, relPath string, folder bool) string {
 	} else {
 		found = ebookNamed(root, sidecarDir(relPath, folder), ebookName(relPath))
 	}
-	r, _ := checkEbook(root, found)
+	r, _ := checkEbook(context.Background(), root, found, metadata.ProbeTimeout, nil)
 	return r.Path
 }
 
@@ -238,8 +240,10 @@ func ebookFound(root, rel string, info fs.FileInfo) catalog.EbookReading {
 // signature alone, so a scan that finds its book unchanged doesn't open it again
 // until it changes. ok is false when it couldn't be read right now (Unread, gone
 // since it was listed, it won't open, a read fails on a flaky mount): the caller
-// keeps what is stored, so the next scan looks again.
-func checkEbook(root string, r catalog.EbookReading) (_ catalog.EbookReading, ok bool) {
+// keeps what is stored, so the next scan looks again. Its open and reads are one
+// metadata.Bounded call under ctx, given up on after timeout (a share that
+// stopped answering; noted in gaveUp).
+func checkEbook(ctx context.Context, root string, r catalog.EbookReading, timeout time.Duration, gaveUp *givenUp) (_ catalog.EbookReading, ok bool) {
 	switch {
 	case r.Unread:
 		return catalog.EbookReading{}, false
@@ -248,22 +252,30 @@ func checkEbook(root string, r catalog.EbookReading) (_ catalog.EbookReading, ok
 	case r.Sig == "":
 		return catalog.EbookReading{}, false // gone since it was listed
 	}
-	f, info, err := OpenEbook(root, r.Path, false)
-	switch {
-	case errors.Is(err, ErrNoEbook):
-		return catalog.EbookReading{Sig: r.Sig}, true
-	case err != nil:
-		return catalog.EbookReading{}, false
-	}
-	defer func() { _ = f.Close() }()
-	readable, err := readableEpub(f, info.Size())
+	got, err := metadata.Bounded(ctx, filepath.Join(root, filepath.FromSlash(r.Path)), timeout, func() (catalog.EbookReading, error) {
+		f, info, err := OpenEbook(root, r.Path, false)
+		switch {
+		case errors.Is(err, ErrNoEbook):
+			return catalog.EbookReading{Sig: r.Sig}, nil
+		case err != nil:
+			return catalog.EbookReading{}, err
+		}
+		defer func() { _ = f.Close() }()
+		readable, err := readableEpub(f, info.Size())
+		if err != nil {
+			return catalog.EbookReading{}, err
+		}
+		got := r
+		if !readable {
+			got.Path = ""
+		}
+		return got, nil
+	}, nil)
 	if err != nil {
+		gaveUp.note(r.Path, err)
 		return catalog.EbookReading{}, false
 	}
-	if !readable {
-		r.Path = ""
-	}
-	return r, true
+	return got, true
 }
 
 // ErrNoEbook is OpenEbook's answer for a name that holds no ebook to open: one
@@ -385,13 +397,19 @@ func readableEpub(r io.ReaderAt, size int64) (bool, error) {
 // recorded: a recorded none is never read again here, so Read would wait for the
 // next scan, while the next request reads the file again. A file gone, or one
 // that can't be read right now, is left for the next scan; a failure to record
-// is logged.
-func (s *Scanner) RefreshEbook(ctx context.Context, lib catalog.Library, book *catalog.Book) {
+// is logged. The look and the check are metadata.Bounded calls given wait, the
+// caller's (a request's, well under its own time: the scan's probe time is a
+// whole request's, and a book on a share that stopped answering would then
+// answer nothing, where what is stored is right there).
+func (s *Scanner) RefreshEbook(ctx context.Context, lib catalog.Library, book *catalog.Book, wait time.Duration) {
 	if book.Ebook == nil {
 		return
 	}
 	rel := book.Ebook.Path
-	_, info, err := lookEbook(lib.Root, rel, book.IsFolder)
+	info, err := metadata.Bounded(ctx, absOf(lib, rel), wait, func() (fs.FileInfo, error) {
+		_, info, err := lookEbook(lib.Root, rel, book.IsFolder)
+		return info, err
+	}, nil)
 	if err != nil {
 		return
 	}
@@ -400,7 +418,7 @@ func (s *Scanner) RefreshEbook(ctx context.Context, lib catalog.Library, book *c
 	if err != nil || was.Sig == sig {
 		return
 	}
-	r, ok := checkEbook(lib.Root, catalog.EbookReading{Path: rel, Sig: sig, Size: info.Size()})
+	r, ok := checkEbook(ctx, lib.Root, catalog.EbookReading{Path: rel, Sig: sig, Size: info.Size()}, wait, nil)
 	if !ok {
 		return
 	}

@@ -144,9 +144,9 @@ func Within(path, dir string) bool {
 // read. A share mounted anew has a value of its own, the one before left to the
 // reads still held on it.
 type PerMount[T any] struct {
-	// Mount names a path's mount, its key and its mount point: Of, or a test's
-	// stand-in.
-	Mount func(path string) (key, point string)
+	// mount names a path's mount, its key and its mount point: Of, or a test's
+	// stand-in (SetMount).
+	mount atomic.Pointer[func(path string) (key, point string)]
 	// newValue is handed the mount point of the path that first asked (the
 	// mount's name, for a log).
 	newValue func(point string) T
@@ -155,12 +155,30 @@ type PerMount[T any] struct {
 
 // NewPerMount is a PerMount making each mount's value with newValue.
 func NewPerMount[T any](newValue func(point string) T) *PerMount[T] {
-	return &PerMount[T]{Mount: Of, newValue: newValue}
+	m := &PerMount[T]{newValue: newValue}
+	m.SetMount(Of)
+	return m
+}
+
+// SetMount puts mount, a test's stand-in, in place of the lookup naming each
+// path's mount (its key and mount point) until restore puts back the one
+// before. Swapped atomically, so a read a test left held, still under way when
+// the test's cleanup restores the lookup, is no data race: it looks up its
+// mount with the stand-in or the restored lookup.
+func (m *PerMount[T]) SetMount(mount func(path string) (key, point string)) (restore func()) {
+	was := m.mount.Swap(&mount)
+	return func() { m.mount.Store(was) }
+}
+
+// Mount is the lookup naming each path's mount: Of, or SetMount's stand-in (a
+// test's, for one of its own to fall back on).
+func (m *PerMount[T]) Mount() func(path string) (key, point string) {
+	return *m.mount.Load()
 }
 
 // For is the value of the mount path is on.
 func (m *PerMount[T]) For(path string) T {
-	key, point := m.Mount(path)
+	key, point := m.Mount()(path)
 	if v, ok := m.by.Load(key); ok {
 		return v.(T)
 	}

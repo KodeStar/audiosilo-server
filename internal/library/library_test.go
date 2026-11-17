@@ -511,14 +511,15 @@ func TestFindCoverSkipsHiddenFiles(t *testing.T) {
 	writeFile(t, root, "Author/Book/._Book - Cover.jpg", []byte("resource fork"))
 	writeFile(t, root, "Author/Book/Book - Cover.jpg", []byte("img"))
 	writeFile(t, root, "Author/Book/.hidden.png", []byte("img"))
-	if got := findCover(root, book, true); got != "Author/Book/Book - Cover.jpg" {
-		t.Fatalf("findCover = %q, want the real image", got)
+	look := coverLook{ctx: t.Context(), root: root, timeout: time.Minute}
+	if got := look.find(book, true); got != "Author/Book/Book - Cover.jpg" {
+		t.Fatalf("coverLook.find = %q, want the real image", got)
 	}
 	stubs := filepath.Join(root, "Author", "Stubs")
 	writeFile(t, root, "Author/Stubs/._art.png", []byte("resource fork"))
 	writeFile(t, root, "Author/Stubs/.cover.jpg", []byte("img"))
-	if got := findCover(root, stubs, true); got != "" {
-		t.Fatalf("findCover = %q, want none (only hidden files)", got)
+	if got := look.find(stubs, true); got != "" {
+		t.Fatalf("coverLook.find = %q, want none (only hidden files)", got)
 	}
 }
 

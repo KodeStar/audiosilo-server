@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strconv"
 	"sync"
@@ -19,6 +18,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/covercolors"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // Cover thumbnails, for the player (GET /libraries/{id}/cover?size=, below) and
@@ -202,6 +202,9 @@ func (a *API) handleCoverThumbnail(w http.ResponseWriter, r *http.Request, lib *
 	}
 	jpg, rec, err := a.coverThumbnail(ctx, lib, path, src, art, size)
 	switch {
+	case metadata.GaveUp(err):
+		writeShareNotAnswering(w)
+		return
 	case err != nil:
 		if ctx.Err() == nil {
 			a.log.Warn("cover thumbnail failed", "err", err, "library", lib.ID, "path", path)
@@ -449,47 +452,97 @@ func (a *API) coverArt(ctx context.Context, lib *catalog.Library, path string, s
 			return cv.Data, nil
 		}}
 	}
-	kind, abs, ok := library.ArtFile(lib.Root, src)
-	if !ok {
+	art, err := library.LookArt(ctx, lib.Root, src, a.fileWait)
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
-	if kind == catalog.ArtSidecar {
-		return fileArt(kind, abs, func() ([]byte, error) {
-			f, err := os.Open(abs)
-			if err != nil {
-				return nil, err
-			}
-			defer f.Close()
-			return media.ReadLimited(f, maxSidecarBytes)
-		})
+	if err != nil {
+		// Unreadable rather than missing (a share that stopped answering
+		// included: metadata.GaveUp): try again next time.
+		return &artSource{version: "x", load: func() ([]byte, error) { return nil, err }}
 	}
-	return fileArt(kind, abs, func() ([]byte, error) {
-		data, _, ok := media.EmbeddedCover(abs)
-		if !ok {
-			// No art, or a file that couldn't be read: EmbeddedCover can't
-			// tell them apart. One that won't even open (a mount in trouble,
-			// out of file descriptors) is a failure worth retrying, not "no
-			// art" cached for this version.
-			f, err := os.Open(abs)
-			if err != nil {
-				return nil, err
-			}
-			_ = f.Close()
-		}
-		return data, nil
-	})
+	version := art.Version()
+	if version == "" { // not a regular file
+		return nil
+	}
+	load := func() ([]byte, error) {
+		data, _, err := media.EmbeddedCover(ctx, art.Abs, a.fileWait)
+		return data, err
+	}
+	if art.Kind == catalog.ArtSidecar {
+		load = func() ([]byte, error) { return a.readSidecar(ctx, art.Abs) }
+	}
+	return &artSource{version: version, load: load}
 }
 
-// fileArt is art read from a file, versioned by its size and modification time. A
-// file that is gone or not a regular file has no art.
-func fileArt(kind, abs string, load func() ([]byte, error)) *artSource {
-	fi, err := os.Stat(abs)
-	if err != nil || !fi.Mode().IsRegular() {
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			// Unreadable rather than missing: try again next time.
-			return &artSource{version: "x", load: func() ([]byte, error) { return nil, err }}
-		}
-		return nil
+// serveArt answers with the art of src (a book's own, or a show's sidecar) in
+// the library at root, from the file the one rule names that the thumbnails and
+// the scan's cover_version read too (library.ArtFile): 404 when there is none.
+// Every look at it is bounded (fileWait): art on a share that stopped answering
+// is a quick 503 share_not_answering, never a handler held for good.
+func (a *API) serveArt(w http.ResponseWriter, r *http.Request, root string, src catalog.CoverSource) {
+	art, err := library.LookArt(r.Context(), root, src, a.fileWait)
+	switch {
+	case metadata.GaveUp(err):
+		writeShareNotAnswering(w)
+		return
+	case err != nil, art.Version() == "": // none, gone, unreadable, not a regular file
+		writeError(w, http.StatusNotFound, "no cover")
+		return
 	}
-	return &artSource{version: catalog.FileArtVersion(kind, fi.Size(), fi.ModTime()), load: load}
+	// The same lifetime for a sidecar image as embedded art: without one a
+	// browser keeps it fresh by heuristic (a tenth of the file's age), so a
+	// custom cover uploaded later would go unseen for weeks, not a day. Set only
+	// for art that is there, so a 404 is never cached.
+	if art.Kind == catalog.ArtSidecar {
+		// Served from the open file: Range, conditional requests (a 304 reads
+		// none of it) and the type from the file's name.
+		w.Header().Set("Cache-Control", coverCache)
+		if err := media.ServeFile(w, r, art.Abs, false, a.fileWait); err != nil {
+			w.Header().Del("Cache-Control")
+			writeShareNotAnswering(w)
+		}
+		return
+	}
+	data, mime, err := media.EmbeddedCover(r.Context(), art.Abs, a.fileWait)
+	switch {
+	case metadata.GaveUp(err):
+		writeShareNotAnswering(w)
+		return
+	case data == nil:
+		// No art, or a file that can't be read.
+		writeError(w, http.StatusNotFound, "no cover")
+		return
+	}
+	w.Header().Set("Cache-Control", coverCache)
+	w.Header().Set("Content-Type", mime)
+	_, _ = w.Write(data)
 }
+
+// readSidecar reads the sidecar image at abs whole (up to maxSidecarBytes,
+// media.ErrImageTooLarge past it), its open and reads one metadata.Bounded call:
+// a share that stopped answering costs the request fileWait at most
+// (metadata.GaveUp).
+func (a *API) readSidecar(ctx context.Context, abs string) ([]byte, error) {
+	return metadata.Bounded(ctx, abs, a.fileWait, func() ([]byte, error) {
+		f, _, err := metadata.OpenRegular(abs)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		return media.ReadLimited(f, maxSidecarBytes)
+	}, nil)
+}
+
+// fileWaitTimeout is API.fileWait: long enough for a cold read from a slow
+// disk or share, well under the request timeout.
+const fileWaitTimeout = 10 * time.Second
+
+// streamOpenTimeout is API.streamWait, a stream's open. Longer than
+// fileWaitTimeout: a sleeping NAS or USB disk takes longer than that to spin
+// up, and a player waits for the audio it asked for where a cover can come
+// later. A 503 is no retry for AVPlayer, so play would fail where it used to
+// start late. Shorter than AVPlayer's resource timeout (about 60 s), so a
+// share that stopped answering is still a 503 the player hears, not a request
+// it gave up on itself.
+const streamOpenTimeout = 45 * time.Second

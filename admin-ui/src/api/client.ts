@@ -639,9 +639,13 @@ export const api = {
   libraries: () => request<{ libraries: AdminLibrary[] }>('GET', '/admin/libraries'),
   createLibrary: (lib: LibraryRequest & { name: string; root: string }) =>
     request<Library>('POST', '/admin/libraries', lib),
-  /** Fields left out are kept; a new root or new ignore rules queue a rescan (`job`). */
+  /**
+   * Fields left out are kept; a new root or new ignore rules queue a rescan
+   * (`job`). A new metadata source re-resolves the books without one:
+   * `resolving` when a large library is still at it as this answers.
+   */
   updateLibrary: (id: number, lib: LibraryRequest) =>
-    request<Library & { job?: Job }>('PATCH', `/admin/libraries/${id}`, lib),
+    request<Library & { job?: Job; resolving?: boolean }>('PATCH', `/admin/libraries/${id}`, lib),
   deleteLibrary: (id: number) => request<void>('DELETE', `/admin/libraries/${id}`),
   reorderLibraries: (ids: number[]) =>
     request<{ libraries: AdminLibrary[] }>('PUT', '/admin/libraries/order', { ids }),

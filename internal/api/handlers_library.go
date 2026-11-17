@@ -570,8 +570,9 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	dp := a.directPlayable(book)
 	book.DirectPlayable = &dp
 	// An EPUB replaced in place since the index read it: its size (and the
-	// row) follow it now, not at the next scan.
-	a.scanner.RefreshEbook(r.Context(), *lib, book)
+	// row) follow it now, not at the next scan. On a share that stopped
+	// answering the look is given up on (fileWait) and the stored one answers.
+	a.scanner.RefreshEbook(r.Context(), *lib, book, a.fileWait)
 	book.Readalong = a.readalongOfBook(r.Context(), lib, book)
 	book.OtherRecordings = a.otherRecordings(r.Context(), lib, book)
 	writeJSON(w, http.StatusOK, book)
@@ -819,7 +820,9 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	media.ServeFile(w, r, abs, download)
+	if err := media.ServeFile(w, r, abs, download, a.streamWait); err != nil {
+		writeShareNotAnswering(w)
+	}
 }
 
 // audioFile is the stream's guard on rel (scope-checked already): its absolute
@@ -1019,35 +1022,5 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	if a.answerCustomCover(w, r, lib.ID, book.RelPath) {
 		return
 	}
-	// The file the book's own art is in, by the one rule the thumbnails and the
-	// scan's cover_version read too (library.ArtFile).
-	kind, abs, ok := library.ArtFile(lib.Root, book.ArtFiles())
-	if !ok {
-		writeError(w, http.StatusNotFound, "no cover")
-		return
-	}
-	if kind == catalog.ArtSidecar {
-		serveSidecarCover(w, r, abs)
-		return
-	}
-	data, mime, ok := media.EmbeddedCover(abs)
-	if !ok {
-		writeError(w, http.StatusNotFound, "no cover")
-		return
-	}
-	w.Header().Set("Content-Type", mime)
-	w.Header().Set("Cache-Control", coverCache)
-	_, _ = w.Write(data)
-}
-
-// serveSidecarCover serves the image file at abs with the same lifetime as
-// embedded art. Without one a browser keeps a sidecar image fresh by heuristic
-// (a tenth of the file's age), so a custom cover uploaded later would go unseen
-// for weeks, not a day. Set only for a file that is there, so a 404 is never
-// cached.
-func serveSidecarCover(w http.ResponseWriter, r *http.Request, abs string) {
-	if fi, err := os.Stat(abs); err == nil && fi.Mode().IsRegular() {
-		w.Header().Set("Cache-Control", coverCache)
-	}
-	media.ServeFile(w, r, abs, false)
+	a.serveArt(w, r, lib.Root, book.ArtFiles())
 }
