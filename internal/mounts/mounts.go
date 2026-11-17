@@ -39,8 +39,9 @@ var (
 // longest mount point in the mount table that is path or a folder above it, by
 // the path's text alone, so a path reached through a symlink into another
 // mount is keyed by where the link sits. With no table to read (an OS this
-// does not read it on, or a read that failed) it is the path's volume root
-// ("/", "C:\"), one key for every path, as a single bound was before.
+// does not read it on, or one whose first read failed) it is the path's volume
+// root ("/", "C:\"), one key for every path, as a single bound was before; a
+// later read that fails keeps the last table (newSnapshot).
 func Of(path string) string {
 	return longest(current(), filepath.Clean(path))
 }
@@ -52,7 +53,7 @@ func Of(path string) string {
 func current() map[string]struct{} {
 	s := table.Load()
 	if s == nil {
-		s = readSnapshot()
+		s = newSnapshot(nil, readTable)
 		if !table.CompareAndSwap(nil, s) {
 			return table.Load().points // another first read landed first
 		}
@@ -61,15 +62,23 @@ func current() map[string]struct{} {
 	if time.Since(s.read) > tableTTL && refreshing.CompareAndSwap(false, true) {
 		go func() {
 			defer refreshing.Store(false)
-			table.Store(readSnapshot())
+			table.Store(newSnapshot(s, readTable))
 		}()
 	}
 	return s.points
 }
 
-// readSnapshot reads the mount table (none on a failed read: the volume root).
-func readSnapshot() *snapshot {
-	list, _ := readTable()
+// newSnapshot is a read of the mount table (read: readTable, or a test's). A
+// read that fails keeps the last one's points (prev), read again a tableTTL
+// later: a table that can't be read right now (no descriptor left, as a hung
+// share's stuck reads can leave it) says nothing of the mounts, and one key for
+// every path then would stop the other mounts' reads with the hung one's. With
+// no read before, it holds what the failed read gave (none: the volume root).
+func newSnapshot(prev *snapshot, read func() ([]string, error)) *snapshot {
+	list, err := read()
+	if err != nil && prev != nil {
+		return &snapshot{points: prev.points, read: time.Now()}
+	}
 	points := make(map[string]struct{}, len(list))
 	for _, p := range list {
 		points[filepath.Clean(p)] = struct{}{}

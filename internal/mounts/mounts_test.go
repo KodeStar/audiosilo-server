@@ -1,6 +1,7 @@
 package mounts
 
 import (
+	"errors"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -29,6 +30,30 @@ func TestLongest(t *testing.T) {
 	}
 	if got := longest(nil, "/mnt/nas/x"); got != "/" {
 		t.Errorf("no table: %q, want the volume root", got)
+	}
+}
+
+// A read of the table that fails keeps the last read's mount points, so the
+// paths keep their mounts' keys (never one key for all of them until the next
+// read); the first read has none to keep, and a later one that answers
+// replaces them.
+func TestNewSnapshotKeepsTheLastTableOnAFailedRead(t *testing.T) {
+	t.Parallel()
+	failed := func() ([]string, error) { return nil, errors.New("too many open files") }
+	if first := newSnapshot(nil, failed); len(first.points) != 0 {
+		t.Errorf("a failed first read holds %v, want no mount points", first.points)
+	}
+	good := newSnapshot(nil, func() ([]string, error) { return []string{"/", "/mnt/nas/"}, nil })
+	if _, ok := good.points["/mnt/nas"]; !ok || len(good.points) != 2 {
+		t.Fatalf("a read = %v, want its two mount points, cleaned", good.points)
+	}
+	kept := newSnapshot(good, failed)
+	if _, ok := kept.points["/mnt/nas"]; !ok || len(kept.points) != 2 || kept.read.Before(good.read) {
+		t.Errorf("a failed read after it = %v, want the last table kept", kept.points)
+	}
+	next := newSnapshot(kept, func() ([]string, error) { return []string{"/"}, nil })
+	if _, ok := next.points["/mnt/nas"]; ok || len(next.points) != 1 {
+		t.Errorf("a read that answers after it = %v, want the new table", next.points)
 	}
 }
 
