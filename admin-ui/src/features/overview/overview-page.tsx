@@ -149,8 +149,8 @@ export function OverviewPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {split.live.map((s) => (
-              <LiveCard key={s.id} session={s} lang={lang} />
+            {split.live.map((l) => (
+              <LiveCard key={l.session.id} session={l.session} devices={l.devices} lang={lang} />
             ))}
           </div>
         )}
@@ -270,7 +270,16 @@ function OfflineLibraries() {
   );
 }
 
-function LiveCard({ session: s, lang }: { session: ListeningSession; lang: string }) {
+function LiveCard({
+  session: s,
+  devices,
+  lang,
+}: {
+  session: ListeningSession;
+  /** How many devices the person has this book live on (one card for them all). */
+  devices: number;
+  lang: string;
+}) {
   const { t } = useTranslation();
   const frac = progressFraction(s.position, s.duration);
   const title = s.title || s.path;
@@ -292,7 +301,10 @@ function LiveCard({ session: s, lang }: { session: ListeningSession; lang: strin
         </div>
         <ProgressBar fraction={frac} label={t('home.progressAria', { title })} />
         <div className="flex justify-between gap-2 text-[11.5px] text-subtle-foreground tabular-nums">
-          <span>{formatPercent(frac, lang)}</span>
+          <span>
+            {formatPercent(frac, lang)}
+            {devices > 1 ? ` · ${t('home.live.devices', { count: devices })}` : null}
+          </span>
           <SessionState state={s.state} />
         </div>
       </div>

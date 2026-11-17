@@ -44,7 +44,7 @@ describe('splitListening', () => {
     const older = row({ path: 'older', updated_at: new Date(now - 3_600_000).toISOString() });
     const done = row({ path: 'done', finished: true });
     const s = splitListening([older, done, live], [session({ path: 'live' })]);
-    expect(s.live.map((x) => x.path)).toEqual(['live']);
+    expect(s.live.map((x) => x.session.path)).toEqual(['live']);
     expect(s.recent.map((r) => r.path)).toEqual(['done', 'older']);
     expect(s.inProgress).toBe(2);
   });
@@ -58,8 +58,26 @@ describe('splitListening', () => {
         session({ id: 3, user_id: 2, path: 'c' }),
       ],
     );
-    expect(s.live.map((x) => x.id)).toEqual([2, 3, 1]);
+    expect(s.live.map((x) => x.session.id)).toEqual([2, 3, 1]);
     expect(s.listeners).toBe(2);
+  });
+
+  it('shows one card per person and book, the newest session on it, with its devices', () => {
+    const at = (min: number) => new Date(now - min * 60_000).toISOString();
+    const s = splitListening(
+      [],
+      [
+        session({ id: 1, device_id: 1, state: 'playing', last_at: at(5) }),
+        session({ id: 2, device_id: 2, state: 'paused', last_at: at(1) }),
+        // Another person on the same book is a card of their own.
+        session({ id: 3, user_id: 2, device_id: 3, last_at: at(2) }),
+      ],
+    );
+    expect(s.live.map((x) => [x.session.id, x.devices])).toEqual([
+      [3, 1],
+      [2, 2],
+    ]);
+    expect(s.live[1].session.state).toBe('paused');
   });
 
   it('caps the recent list', () => {

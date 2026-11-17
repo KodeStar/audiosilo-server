@@ -6,9 +6,15 @@ import { isBookLibrary } from '@/lib/library-kind';
 /** The recent-listening list on Overview shows at most this many rows. */
 export const RECENT_LIMIT = 8;
 
+/** One person on one book right now: the newest of their live sessions on it, and on how many devices. */
+export interface LiveListening {
+  session: ListeningSession;
+  devices: number;
+}
+
 export interface ListeningSplit {
-  /** The server's live sessions (one per device), playing first. */
-  live: ListeningSession[];
+  /** Who is listening to what right now, one card per person and book, playing first. */
+  live: LiveListening[];
   /** Distinct people among `live` (one person can listen on two devices). */
   listeners: number;
   /** The newest progress that isn't live right now. */
@@ -20,9 +26,31 @@ const key = (r: { user_id: number; library_id: number; path: string }) =>
   `${r.user_id}\0${refKey(r)}`;
 
 /**
+ * The live sessions one card per person and book (server#186): a book playing on
+ * a phone and a speaker is one card, its state the newest session's, saying on
+ * how many devices.
+ */
+function groupLive(live: readonly ListeningSession[]): LiveListening[] {
+  const groups = new Map<string, ListeningSession[]>();
+  for (const s of live) {
+    const k = key(s);
+    groups.set(k, [...(groups.get(k) ?? []), s]);
+  }
+  const cards = [...groups.values()].map((group) => ({
+    session: group.reduce((a, b) => (Date.parse(b.last_at) > Date.parse(a.last_at) ? b : a)),
+    devices: new Set(group.map((s) => s.device_id)).size,
+  }));
+  const devices = new Map(cards.map((c) => [c.session, c.devices]));
+  return sortLive(cards.map((c) => c.session)).map((session) => ({
+    session,
+    devices: devices.get(session) ?? 1,
+  }));
+}
+
+/**
  * Splits the Overview's listening into who is listening right now (the server's
- * live sessions) and the recent history (the admin progress feed, newest first,
- * without the books being listened to now).
+ * live sessions, one card per person and book) and the recent history (the
+ * admin progress feed, newest first, without the books being listened to now).
  */
 export function splitListening(
   rows: readonly ListeningRow[],
@@ -31,7 +59,7 @@ export function splitListening(
   const sorted = [...rows].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
   const now = new Set(live.map(key));
   return {
-    live: sortLive(live),
+    live: groupLive(live),
     listeners: liveSummary(live).listeners,
     recent: sorted.filter((r) => !now.has(key(r))).slice(0, RECENT_LIMIT),
     inProgress: sorted.filter((r) => !r.finished).length,
