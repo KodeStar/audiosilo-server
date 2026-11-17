@@ -503,11 +503,11 @@ func TestCastTokenRevocation(t *testing.T) {
 	ok(http.StatusUnauthorized, "deleted user")
 }
 
-// A sender at the cap that re-mints (the player does after a refused load or a
-// mid-book error) evicts its least recently used token, never the one a
-// receiver is streaming with. Allowed: the first token minted, streamed since,
-// still streams. Denied: the idle token minted after it is evicted, a 401 on
-// stream.
+// A sender at the cap that mints again (another book, or the same one after a
+// relaunch: the player's token cache is in memory) evicts its least recently
+// used token, never the one a receiver is streaming with. Allowed: the first
+// token minted, streamed since, still streams. Denied: the idle token minted
+// after it is evicted, a 401 on stream.
 func TestCastTokenCapKeepsTheTokenInUse(t *testing.T) {
 	t.Parallel()
 	c := newCastEnv(t)
