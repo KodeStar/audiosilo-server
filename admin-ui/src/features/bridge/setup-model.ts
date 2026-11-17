@@ -131,8 +131,8 @@ export type GenerateNeed = 'asr' | 'agent' | 'libraries';
  * needs: the agent's credential first (no worker can stand in for it, so it is
  * the reason the player gives too, BRIDGE-09), then speech recognition or this
  * library's mapping in the checklist's order (the libraries step counts only
- * when this library is the one the Bridge can't write to yet). These count whether or not the
- * checklist marks them required: a Bridge where one is optional (the agent,
+ * when this library is the one the Bridge can't write to yet). These count
+ * whether or not the checklist marks them required: a Bridge where one is optional (the agent,
  * bridge#36: it runs other jobs without one) still can't generate without it,
  * and the job would park. Undefined without an online Bridge's checklist, or
  * when nothing it needs is missing (budget and GitHub never stop a run here:

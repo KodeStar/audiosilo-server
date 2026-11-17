@@ -34,8 +34,8 @@ import { useBridgeJobs } from './use-bridge';
 
 /**
  * The Bridge's jobs, newest first, a page at a time, maybe in one state and of
- * one kind: what
- * each is about, where it stands, who asked, and Cancel for an open one.
+ * one kind: what each is about, where it stands, who asked, and Cancel for an
+ * open one.
  * `hideWhenEmpty` (no Bridge paired) renders nothing until there is a job.
  * `uiUrl` (the Bridge's own page) links a parked generate job into it.
  */

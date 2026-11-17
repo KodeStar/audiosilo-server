@@ -61,8 +61,8 @@ const JOBS_PAGE = 30;
 
 /**
  * The Bridge's jobs, newest first, a page at a time (`fetchOlder` for older
- * ones), maybe in one state and of one kind. Every loaded page is asked again, every 3 s while
- * any job on them is open, else every 30 s: an infinite query refetches its
+ * ones), maybe in one state and of one kind. Every loaded page is asked again,
+ * every 3 s while any job on them is open, else every 30 s: an infinite query refetches its
  * pages one after another from fresh cursors, so a job still running on an
  * older page stays current (a requeued job keeps its old id, and claims take the
  * oldest queued first), and none is listed twice or skipped when new jobs push
