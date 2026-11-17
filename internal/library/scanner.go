@@ -719,8 +719,8 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				}
 				// A file new, changed or gone since the last read, or one not read for
 				// this index (none to read leaves an unread row as it is: nothing to add).
-				// One that can't be read right now keeps the row's reading for the next scan.
-				// One that couldn't be looked at right now keeps what is stored.
+				// One that can't be looked at or read right now keeps the row's reading
+				// for the next scan.
 				if b.IsFolder && !b.ABS.Unread && (old.ABSSig != b.ABS.Sig || (old.ABSUnchecked && b.ABS.Sig != "")) {
 					if f, read := s.readABS(lib, b.RelPath, b.ABS.Sig); read {
 						absBackfill[b.RelPath] = catalog.ABSReading{Sig: b.ABS.Sig, File: f}
