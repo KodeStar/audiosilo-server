@@ -5,7 +5,8 @@ import "testing"
 // A book indexed by today's revision of the length reading is never stale; one
 // indexed before it (duration_rev 0, as migration 0082 leaves every book) is
 // stale when it holds an MP3, its own format or a part's, so the next scan
-// reads it once more (SRV-16); a book with no MP3 is not.
+// reads it once more (SRV-16); a book with no MP3 is not. So is one an older
+// server re-indexed since (its indexed_at not the revision's).
 func TestSignaturesDurationStale(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -55,5 +56,13 @@ func TestSignaturesDurationStale(t *testing.T) {
 	}
 	if stale()["Loose.mp3"] {
 		t.Error("Loose.mp3: still stale once indexed again")
+	}
+	// An older server run against this database (a rollback) re-indexes the row
+	// in place: its own indexed_at and its estimate, the revision left as it was.
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET indexed_at = '2026-01-01T00:00:00Z' WHERE rel_path = 'Loose.mp3'`); err != nil {
+		t.Fatal(err)
+	}
+	if !stale()["Loose.mp3"] {
+		t.Error("Loose.mp3: not stale once an older server re-indexed it")
 	}
 }
