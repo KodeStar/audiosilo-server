@@ -27,9 +27,9 @@ type snapshot struct {
 	read   time.Time
 }
 
-// table is the last read of the mount table; refreshing is held by the one
-// caller reading it again, the others keeping to the last read meanwhile, so
-// a scan's readers never wait on the table.
+// table is the last read of the mount table; refreshing is held while one
+// goroutine reads it again (current), the callers keeping to the last read
+// meanwhile.
 var (
 	table      atomic.Pointer[snapshot]
 	refreshing atomic.Bool
@@ -45,21 +45,25 @@ func Of(path string) string {
 	return longest(current(), filepath.Clean(path))
 }
 
-// current is the mount table's points, read again once tableTTL old.
+// current is the mount table's points. The first read is the caller's; after
+// that a read once tableTTL old is read again on a goroutine of its own, the
+// callers keeping to the last read meanwhile, so no caller (a scan's reader, a
+// picker request before its time-out starts) ever waits on the table again.
 func current() map[string]struct{} {
 	s := table.Load()
-	if s != nil && time.Since(s.read) <= tableTTL {
+	if s == nil {
+		s = readSnapshot()
+		if !table.CompareAndSwap(nil, s) {
+			return table.Load().points // another first read landed first
+		}
 		return s.points
 	}
-	if !refreshing.CompareAndSwap(false, true) {
-		if s != nil {
-			return s.points // another caller is reading it again
-		}
-		return readSnapshot().points // the first read, raced: read it here too
+	if time.Since(s.read) > tableTTL && refreshing.CompareAndSwap(false, true) {
+		go func() {
+			defer refreshing.Store(false)
+			table.Store(readSnapshot())
+		}()
 	}
-	defer refreshing.Store(false)
-	s = readSnapshot()
-	table.Store(s)
 	return s.points
 }
 
