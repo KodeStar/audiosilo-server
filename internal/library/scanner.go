@@ -2588,9 +2588,9 @@ func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *cata
 // fingerprint that is no longer on disk. "" when there is none, or when the book
 // is indexed already. carryFrom checks it as it checks IndexMoved's from.
 //
-// When that can't be known now (the book's fingerprints can't be read for a
-// reason a retry may get past, fingerprintUnknown, or a candidate's look is
-// bookOnDisk's diskUnknown) its error is a look given up on
+// When that can't be known now (a book not indexed whose fingerprints can't be
+// read for a reason a retry may get past, fingerprintUnknown, or a candidate's
+// look is bookOnDisk's diskUnknown) its error is a look given up on
 // (metadata.ErrNotAnswered) and nothing is indexed: a book indexed without the
 // state it moved from would leave that state on the old row, which the next
 // scan prunes. A later call, once the share answers, carries it.
@@ -2598,26 +2598,29 @@ func (s *Scanner) movedFrom(ctx context.Context, lib catalog.Library, book *cata
 	unknown := func(why string) (string, error) {
 		return "", fmt.Errorf("library: indexing %q: %s: %w", book.RelPath, why, metadata.ErrNotAnswered)
 	}
-	var ferr error
-	if book.ContentHash == "" {
-		book.ContentHash, ferr = metadata.FingerprintErr(ctx, absOf(lib, primaryPath(book)), s.probeTimeout) // reused by enrich
-	}
-	was, werr := s.byteFirstFingerprintErr(ctx, lib, book)
-	if fingerprintUnknown(ferr) || fingerprintUnknown(werr) {
-		// No fingerprint to look for its old path by: only a book indexed
-		// already (MoveCandidates' own rule) has none to look for.
-		switch _, err := s.cat.GetBookByPath(ctx, lib.ID, book.RelPath); {
-		case errors.Is(err, catalog.ErrNotFound):
-			return unknown("its fingerprint couldn't be read")
-		case err != nil:
-			s.log.Warn("looking for a moved book failed", "library", lib.Name, "path", book.RelPath, "err", err)
-		}
-		return "", nil
-	}
-	candidates, err := s.cat.MoveCandidates(ctx, lib.ID, book.RelPath, []string{book.ContentHash, was})
-	if err != nil {
+	failed := func(err error) (string, error) {
 		s.log.Warn("looking for a moved book failed", "library", lib.Name, "path", book.RelPath, "err", err)
 		return "", nil
+	}
+	_, err := s.cat.GetBookByPath(ctx, lib.ID, book.RelPath)
+	indexed := err == nil
+	if err != nil && !errors.Is(err, catalog.ErrNotFound) {
+		return failed(err)
+	}
+	var ferr error
+	if book.ContentHash == "" {
+		book.ContentHash, ferr = s.fingerprintErr(ctx, lib, book) // reused by enrich
+	}
+	if indexed {
+		return "", nil
+	}
+	if fingerprintUnknown(ferr) {
+		return unknown("its fingerprint couldn't be read")
+	}
+	was, werr := s.byteFirstFingerprintErr(ctx, lib, book)
+	candidates, err := s.cat.MoveCandidates(ctx, lib.ID, book.RelPath, []string{book.ContentHash, was})
+	if err != nil {
+		return failed(err)
 	}
 	for _, p := range candidates {
 		switch s.bookOnDisk(ctx, lib, p) {
@@ -2627,6 +2630,10 @@ func (s *Scanner) movedFrom(ctx context.Context, lib catalog.Library, book *cata
 			// The others' looks would wait on the same share.
 			return unknown(fmt.Sprintf("whether the book indexed at %q is still on disk can't be known", p))
 		}
+	}
+	if fingerprintUnknown(werr) {
+		// A book indexed before #160 may be found only by that file's.
+		return unknown("its first file by bytes couldn't be read")
 	}
 	return "", nil
 }
@@ -2899,7 +2906,7 @@ func (s *Scanner) carryFrom(ctx context.Context, lib catalog.Library, from strin
 	}
 	if nb.ContentHash == "" {
 		var ferr error
-		nb.ContentHash, ferr = metadata.FingerprintErr(ctx, absOf(lib, primaryPath(nb)), s.probeTimeout) // reused by enrich
+		nb.ContentHash, ferr = s.fingerprintErr(ctx, lib, nb) // reused by enrich
 		if fingerprintUnknown(ferr) {
 			return unknown("the new book's fingerprint couldn't be read")
 		}
@@ -3033,6 +3040,12 @@ func ext(name string) string {
 // are: "" when it can't be read in that time.
 func (s *Scanner) fingerprint(ctx context.Context, absPath string) string {
 	return metadata.Fingerprint(ctx, absPath, s.probeTimeout)
+}
+
+// fingerprintErr is book b's fingerprint (its primary file's, as fingerprint
+// reads it) with why it is "" (metadata.FingerprintErr's error).
+func (s *Scanner) fingerprintErr(ctx context.Context, lib catalog.Library, b *catalog.Book) (string, error) {
+	return metadata.FingerprintErr(ctx, absOf(lib, primaryPath(b)), s.probeTimeout)
 }
 
 // detectMoves migrates durable user state (progress/bookmarks/notes/history)
