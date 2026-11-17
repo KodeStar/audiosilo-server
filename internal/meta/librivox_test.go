@@ -96,6 +96,13 @@ func TestLibrivoxOf(t *testing.T) {
 		"look-alike host": {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://notlibrivox.org/x/", Zip: "https://fakearchive.org/x.zip"}}, &MetaLibrivox{ID: 9}},
 		"userinfo":        {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://librivox.org@example.com/x/", Zip: "https://user:pw@archive.org/x.zip"}}, &MetaLibrivox{ID: 9}},
 		"empty userinfo":  {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://@librivox.org/x/"}}, &MetaLibrivox{ID: 9}},
+		// A host an allow-list can't trust: a letter that lower-cases to an
+		// ASCII one (another domain to a browser), written out or escaped, and
+		// a full-width "/" or "#" a client may fold into the end of the host.
+		"folding letter": {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://l\u0130brivox.org/x/", Zip: "https://arch%C4%B0ve.org/x.zip"}}, &MetaLibrivox{ID: 9}},
+		"full-width end": {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://example.com\uff0f.librivox.org/x/", Zip: "https://example.com\uff03.archive.org/x.zip"}}, &MetaLibrivox{ID: 9}},
+		"odd host bytes": {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://example.com\u00a0.librivox.org/x/", Zip: "https://example.com;.archive.org/x.zip"}}, &MetaLibrivox{ID: 9}},
+		"dot and port":   {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://librivox.org.:443/x/", Zip: "https://archive.org../x.zip"}}, &MetaLibrivox{ID: 9, URL: "https://librivox.org.:443/x/"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := librivoxOf(&tc.rec)

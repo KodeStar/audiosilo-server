@@ -482,7 +482,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   carries `chapter_count` and, on a LibriVox recording only (`librivox_id > 0`), `librivox`
   `{id, url, zip_url}` (`librivoxOf`: metaserve's `links.librivox`/`links.zip`, each kept only
   as an absolute http(s) URL on `librivox.org` or `archive.org` or a subdomain, with no userinfo
-  and its scheme lower-cased (`librivoxURL`, `absoluteHTTPURL`, fe#291), never built from the id;
+  and its scheme lower-cased, its host ASCII letters, digits, hyphens and dots alone (`plainHost`: no
+  letter that folds to an ASCII one, no full-width delimiter a client may read as the host's end)
+  (`librivoxURL`, `absoluteHTTPURL`, fe#291), never built from the id;
   LibriVox L5).
   `Service.CachedWorkID` answers an identifier's work id
   from the cache alone: memory, else its enrichment's stored row, fresh or stale

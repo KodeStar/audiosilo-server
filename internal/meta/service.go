@@ -832,18 +832,39 @@ var librivoxHosts = []string{"librivox.org", "archive.org"}
 
 // librivoxURL is absoluteHTTPURL's answer when its host is one of librivoxHosts
 // or a subdomain of one, else "" (fe#291: a link labelled LibriVox goes there).
+// The host must be a plain one (plainHost): this reads it as url.Parse does, and
+// a client that opens the link may read anything else another way.
 func librivoxURL(raw string) string {
 	out, u := absoluteHTTP(raw)
 	if u == nil {
 		return ""
 	}
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	host := strings.TrimSuffix(u.Hostname(), ".")
+	if !plainHost(host) {
+		return ""
+	}
+	host = strings.ToLower(host)
 	for _, h := range librivoxHosts {
 		if host == h || strings.HasSuffix(host, "."+h) {
 			return out
 		}
 	}
 	return ""
+}
+
+// plainHost reports whether host is made of ASCII letters, digits, hyphens and
+// dots alone. Anything else is no host name an allow-list can trust: a letter
+// that only lower-cases to an ASCII one ("\u0130" to "i") is another domain to
+// a browser, and a full-width "/", "?", "#" or "@" ends the host early for a
+// client that folds it to its ASCII form.
+func plainHost(host string) bool {
+	for i := range len(host) {
+		c := host[i]
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return host != ""
 }
 
 // absoluteHTTPURL returns raw when it is an absolute http or https URL with a
