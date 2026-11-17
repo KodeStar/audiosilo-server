@@ -209,7 +209,7 @@ func applyProbe(m *Metadata, p *probeResult) {
 	}
 	m.setHints(t) // ffprobe names a TXXX and an MP4 freeform item by its name
 	if v := t["series-part"]; v != "" {
-		if start, end, ok := ParseSeriesPosition(v); ok {
+		if start, end, ok := seriesPartTag(v); ok {
 			m.SeriesIndex, m.SeriesIndexEnd = start, end // a range: an omnibus, "1-3"
 		}
 	}

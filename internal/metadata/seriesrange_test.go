@@ -42,7 +42,10 @@ func TestParseSeriesPosition(t *testing.T) {
 		"": {0, 0, 0}, "one": {0, 0, 0}, "3-1": {0, 0, 0},
 		// ParseFloat reads these; a series position never is one (server#213).
 		"inf": {0, 0, 0}, "-Inf": {0, 0, 0}, "nan": {0, 0, 0}, "NaN": {0, 0, 0}, "infinity": {0, 0, 0},
-		"1e400": {0, 0, 0}, "-1": {0, 0, 0}, "100001": {0, 0, 0}, "100000": {100000, 0, 1}, "0": {0, 0, 1},
+		"1e400": {0, 0, 0}, "0": {0, 0, 1},
+		// Out of range reads as it is (a stored value an edit refuses to list);
+		// a tag's is bounded where it is read (seriesPartTag).
+		"100001": {100001, 0, 1},
 	} {
 		start, end, ok := ParseSeriesPosition(in)
 		if start != want[0] || end != want[1] || ok != (want[2] == 1) {
@@ -57,7 +60,7 @@ func TestApplyProbeSeriesPartRange(t *testing.T) {
 	if m.SeriesIndex != 1 || m.SeriesIndexEnd != 3 {
 		t.Errorf("series-part 1-3 = %v-%v, want 1-3", m.SeriesIndex, m.SeriesIndexEnd)
 	}
-	for _, part := range []string{"one", "nan", "inf", "-infinity", "1e400"} {
+	for _, part := range []string{"one", "nan", "inf", "-infinity", "1e400", "-1", "100001"} {
 		m = &Metadata{}
 		applyProbe(m, &probeResult{Tags: map[string]string{"series": "Omnibus", "series-part": part}})
 		if m.SeriesIndex != 0 || m.SeriesIndexEnd != 0 {
