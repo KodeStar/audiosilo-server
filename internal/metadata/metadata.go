@@ -594,6 +594,21 @@ func ReleaseDate(v string) string {
 	return out
 }
 
+// partialDateRE is a date's shape as the catalogue writes one: YYYY, YYYY-MM
+// or YYYY-MM-DD.
+var partialDateRE = regexp.MustCompile(`^\d{4}(-\d{2}(-\d{2})?)?$`)
+
+// ValidDate reports whether v is YYYY, YYYY-MM or YYYY-MM-DD naming a real
+// date ("2026-02-30" is not): a published date an admin edits, or corrects in
+// the community.
+func ValidDate(v string) bool {
+	if !partialDateRE.MatchString(v) {
+		return false
+	}
+	_, err := time.Parse(map[int]string{4: "2006", 7: "2006-01", 10: "2006-01-02"}[len(v)], v)
+	return err == nil
+}
+
 // firstReleaseDate is the first of vals that reads as a date (ReleaseDate), so a
 // placeholder in one tag ("0000") doesn't hide a real date in the next.
 func firstReleaseDate(vals ...string) string {

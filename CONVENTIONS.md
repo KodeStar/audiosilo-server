@@ -2937,7 +2937,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   trailing `&#32;` is refused too; its issueform's `formValue`: an HTML character reference ending in
   `;` is the character it names, a whitespace one a space, so `&#x202E;` is refused as U+202E is); a
   `corrected` that so read and trimmed (`asRead`) is empty or `current` (the record's value as it
-  spells it) changes nothing; evidence left as `_No response_`, the form's blank, or reading as nothing
+  spells it) changes nothing; a corrected `published` must be a real date, `YYYY`, `YYYY-MM` or
+  `YYYY-MM-DD` (`metadata.ValidDate`, the edit's own rule; the Bridge files it as `release_date`);
+  evidence left as `_No response_`, the form's blank, or reading as nothing
   is none), the values stored as sent: what the Bridge or the community would refuse when filing is a
   400 now). Its params cap is its own, 128 KiB (`kindSpec.maxParams`, every other kind 16 KiB as sent): a batch at every bound
   sent by an ASCII-only encoder (each character outside the BMP two `\u` escapes) is about 120 KB, and

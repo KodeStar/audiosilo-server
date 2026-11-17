@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-meta/pkg/model"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // Phase 2b's community jobs (BRIDGE-PLAN.md "Community contributions"): the
@@ -144,7 +146,8 @@ type Correction struct {
 // characters for the recording's other identifiers and the region; 1 to
 // MaxCorrections changes, each of a CorrectionFields field (once each), its
 // values trimmed, single-line and at most 500 characters, the corrected one set
-// and different from the current one as the community reads it (asRead);
+// and different from the current one as the community reads it (asRead), a
+// published one a real date (metadata.ValidDate);
 // evidence required (none when it reads as nothing), at most 2000 characters
 // (line breaks kept) both as written and as the community's issue carries it
 // (issueLength). Neither a value nor the evidence holds a control character
@@ -210,6 +213,11 @@ func parseCorrect(raw json.RawMessage) (CorrectParams, error) {
 		// "Tom &amp; Jerry".
 		if corrected := asRead(c.Corrected); corrected == "" || corrected == c.Current {
 			return p, invalid("%s: the corrected value must be set and differ from the current one", c.Field)
+		}
+		// The Bridge files a published date as the community's release_date,
+		// which takes a real date only.
+		if c.Field == "published" && !metadata.ValidDate(c.Corrected) {
+			return p, invalid("published: the corrected value must be YYYY, YYYY-MM or YYYY-MM-DD")
 		}
 	}
 	p.Evidence = strings.TrimSpace(strings.ReplaceAll(p.Evidence, "\r\n", "\n"))

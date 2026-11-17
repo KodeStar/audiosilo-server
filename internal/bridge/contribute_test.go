@@ -344,6 +344,10 @@ func TestCorrectQueueRules(t *testing.T) {
 		"recording id not a slug": `{"work_id":"w","recording_id":"Not A Slug","changes":[` + change("title", "a", "b") + `],"evidence":"e"}`,
 		"evidence too long as filed": `{"work_id":"w","changes":[` + change("title", "a", "b") + `],"evidence":"#` +
 			strings.Repeat("e", maxEvidence-1) + `"}`,
+		// The community's release_date takes a real date only (server#218).
+		"published not a date":  body(change("published", "2010", "soon")),
+		"published no such day": body(change("published", "2010", "2026-02-30")),
+		"published a timestamp": body(change("published", "2010", "2026-02-03T00:00:00Z")),
 	} {
 		if _, _, err := q.correct(params, ptr("Author/Other")); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v, want ErrInvalid", name, err)
@@ -352,7 +356,11 @@ func TestCorrectQueueRules(t *testing.T) {
 	// Every field of the list is taken; the values keep their characters.
 	var all []string
 	for _, f := range CorrectionFields {
-		all = append(all, change(f, "", "Ünïcode "+f))
+		v := "Ünïcode " + f
+		if f == "published" {
+			v = "2026-02" // a date, as the field must be
+		}
+		all = append(all, change(f, "", v))
 	}
 	if p, err := CheckCorrect(json.RawMessage(body(all...))); err != nil || len(p.Changes) != len(CorrectionFields) ||
 		p.Changes[0].Corrected != "Ünïcode title" {
@@ -390,14 +398,21 @@ func fill(s string, n int) string {
 	return string([]rune(strings.Repeat(s, n))[:n])
 }
 
+// maxPublished is the longest published value a correction may carry.
+const maxPublished = "2026-02-03"
+
 // maxCorrection is a meta.correct batch at every bound: each field once, both
-// values and the evidence at their most characters (s repeated), encoded by
-// enc.
+// values (a corrected published one a date) and the evidence at their most
+// characters (s repeated), encoded by enc.
 func maxCorrection(enc func(string) string, current, corrected, evidence string) string {
 	var changes []string
 	for _, f := range CorrectionFields {
+		value := enc(fill(corrected, maxCorrectionValue))
+		if f == "published" {
+			value = enc(maxPublished) // a date, never longer
+		}
 		changes = append(changes, fmt.Sprintf(`{"field":%q,"current":%s,"corrected":%s}`, f,
-			enc(fill(current, maxCorrectionValue)), enc(fill(corrected, maxCorrectionValue))))
+			enc(fill(current, maxCorrectionValue)), value))
 	}
 	return `{"work_id":"w","changes":[` + strings.Join(changes, ",") + `],"evidence":` +
 		enc(fill(evidence, maxEvidence)) + `}`
@@ -578,8 +593,12 @@ func TestCorrectStoredParamsFitTheBridge(t *testing.T) {
 	q.beatSetup(t, true, true, KindVerify, KindCorrect)
 	var changes []string
 	for _, f := range CorrectionFields {
+		value := strings.Repeat(">", maxCorrectionValue)
+		if f == "published" {
+			value = maxPublished
+		}
 		changes = append(changes, fmt.Sprintf(`{"field":%q,"current":%q,"corrected":%q}`, f,
-			strings.Repeat("<", maxCorrectionValue), strings.Repeat(">", maxCorrectionValue)))
+			strings.Repeat("<", maxCorrectionValue), value))
 	}
 	id := strings.Repeat("<", maxCorrectIDLen)
 	params := fmt.Sprintf(`{"work_id":%q,"recording_id":%q,"asin":%q,"isbn":%q,"region":%q,"changes":[%s],"evidence":%q,"source":%q}`,
