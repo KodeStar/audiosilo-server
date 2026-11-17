@@ -390,3 +390,39 @@ func newSlowProbeEnv(t *testing.T) (*Scanner, catalog.Library, context.Context, 
 	})
 	return NewScanner(cat, probe, nil), *lib, ctx, count
 }
+
+// TestWaitFlightBoundsOnlyTheRead: a wait on another's read gives up once a
+// look's time has passed with the read not returned, but a scan's read that
+// has returned is waited on until the scan writes its book (its batch write
+// can come later than a look's time), and one a stopped scan left is given up
+// on at once.
+func TestWaitFlightBoundsOnlyTheRead(t *testing.T) {
+	t.Parallel()
+	s := &Scanner{probeTimeout: 50 * time.Millisecond}
+	flight := func(read bool) *indexFlight {
+		r := &bookRead{done: make(chan struct{})}
+		if read {
+			close(r.done)
+		}
+		return &indexFlight{done: make(chan struct{}), scan: r}
+	}
+
+	if err := s.waitFlight(t.Context(), flight(false)); !errors.Is(err, errReadLeft) {
+		t.Errorf("a read not returned: %v, want errReadLeft", err)
+	}
+	if err := s.waitFlight(t.Context(), &indexFlight{done: make(chan struct{})}); !errors.Is(err, errReadLeft) {
+		t.Errorf("an on-demand read not returned: %v, want errReadLeft", err)
+	}
+	left := flight(false)
+	left.scan.left.Store(true)
+	began := time.Now()
+	if err := s.waitFlight(t.Context(), left); !errors.Is(err, errReadLeft) || time.Since(began) >= s.probeTimeout {
+		t.Errorf("a read a stopped scan left: %v after %v, want errReadLeft at once", err, time.Since(began))
+	}
+
+	written := flight(true)
+	time.AfterFunc(4*s.probeTimeout, func() { close(written.done) })
+	if err := s.waitFlight(t.Context(), written); err != nil {
+		t.Errorf("a scan's read waiting for its write: %v, want it waited for", err)
+	}
+}

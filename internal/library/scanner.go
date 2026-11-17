@@ -826,7 +826,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// and one asked for while this read is under way waits for its write.
 			// A read of it that has not returned in time is not waited on further:
 			// the book is kept as stored for this scan.
-			f, err := s.startFlight(ctx, bookKey{lib.ID, b.RelPath}, &r.left)
+			f, err := s.startFlight(ctx, bookKey{lib.ID, b.RelPath}, r)
 			if errors.Is(err, errReadLeft) {
 				s.keepLeft(ctx, lib, b, old)
 				return
@@ -2216,15 +2216,17 @@ type indexFlight struct {
 	key  bookKey
 	done chan struct{}
 	err  error
-	// left, a scan's read's (bookRead.left), is set once the scan stopped and
-	// left that read under way (Scanner.readsLeft): held in a call that may
-	// never return, so no later read waits for it (waitFlight).
-	left *atomic.Bool
+	// scan is the scan's read that leads the flight (nil for an on-demand
+	// one): its book is written only after the read, in the scan's batches, so
+	// the flight can outlast the read (waitFlight), and a stopped scan marks
+	// the read it left under way (bookRead.left; Scanner.readsLeft), held in a
+	// call that may never return, so no later read waits for it.
+	scan *bookRead
 }
 
 // errReadLeft is waitFlight's error when another read of the book may never
-// return: one a stopped scan left under way (indexFlight.left), or one not
-// ended within a look's time. It is a look given up on (metadata.GaveUp): an
+// return: one a stopped scan left under way (bookRead.left), or one not
+// returned within a look's time. It is a look given up on (metadata.GaveUp): an
 // on-demand read's caller answers 503 share_not_answering, and a scan keeps
 // the book as stored (keepLeft).
 var errReadLeft = fmt.Errorf("library: another read of this book has not returned: %w", metadata.ErrNotAnswered)
@@ -2275,11 +2277,12 @@ func (s *Scanner) awaitFlight(ctx context.Context, f *indexFlight, joined bool) 
 		if err := s.waitFlight(ctx, f); err != nil {
 			return nil, err
 		}
-	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-f.done:
+	} else {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-f.done:
+		}
 	}
 	if f.err != nil {
 		return nil, f.err
@@ -2298,10 +2301,10 @@ func readGivenUp(err error) bool {
 // ends it with endFlight. A scan and IndexMoved take a book this way: neither
 // can join a read made without them (a scan writes in its own batches,
 // IndexMoved carries its book's state first), but neither reads it beside one
-// either. A scan's read passes its left (bookRead.left; nil otherwise).
-func (s *Scanner) startFlight(ctx context.Context, key bookKey, left *atomic.Bool) (*indexFlight, error) {
+// either. A scan's read passes itself (indexFlight.scan; nil otherwise).
+func (s *Scanner) startFlight(ctx context.Context, key bookKey, scan *bookRead) (*indexFlight, error) {
 	for {
-		f, lead := s.claimFlight(key, left)
+		f, lead := s.claimFlight(key, scan)
 		if lead {
 			return f, nil
 		}
@@ -2316,33 +2319,40 @@ func (s *Scanner) startFlight(ctx context.Context, key bookKey, left *atomic.Boo
 // in a call a share that stopped answering never returns from) is not waited
 // on for good, or a scan would stall at the book and a request wait out its
 // time: errReadLeft at once for one a stopped scan left under way
-// (indexFlight.left), and for any other once a look's time (probeTimeout) has
-// passed without it ending.
+// (bookRead.left), and for any other once a look's time (probeTimeout) has
+// passed with it not returned. A scan's read that has returned is waited on
+// until the scan writes its book.
 func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
-	if f.left != nil && f.left.Load() {
+	if f.scan != nil && f.scan.left.Load() {
 		return errReadLeft
 	}
 	wait := time.NewTimer(s.probeTimeout)
 	defer wait.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-f.done:
-		return nil
-	case <-wait.C:
-		return errReadLeft
+	expired := wait.C
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-f.done:
+			return nil
+		case <-expired:
+			if f.scan == nil || !f.scan.finished() {
+				return errReadLeft
+			}
+			expired = nil
+		}
 	}
 }
 
 // claimFlight is the flight of key under way, or a new one registered for the
-// caller to lead (lead true) when there is none, with left (indexFlight.left).
-func (s *Scanner) claimFlight(key bookKey, left *atomic.Bool) (f *indexFlight, lead bool) {
+// caller to lead (lead true) when there is none, led by scan (indexFlight.scan).
+func (s *Scanner) claimFlight(key bookKey, scan *bookRead) (f *indexFlight, lead bool) {
 	s.flightMu.Lock()
 	defer s.flightMu.Unlock()
 	if f, busy := s.flights[key]; busy {
 		return f, false
 	}
-	f = &indexFlight{key: key, done: make(chan struct{}), left: left}
+	f = &indexFlight{key: key, done: make(chan struct{}), scan: scan}
 	s.flights[key] = f
 	return f, true
 }
