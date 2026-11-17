@@ -253,8 +253,41 @@ function PaletteBody({ close }: { close: () => void }) {
     })),
   ];
 
+  const shown = {
+    actions: rankEntries(actions, search),
+    pages: rankEntries(pages, search),
+    sections: searching ? rankEntries(sections, search) : [],
+    settings: rankEntries(settings, search),
+  };
+  // The highlight (cmdk's value, held here): cmdk puts it on the first entry
+  // when the search changes, but results that arrive later (the server's
+  // books, the people lists) land above it, so it would stay on "Search all
+  // books" and Enter would open that. While it sits on the first entry, it
+  // moves with the first entry; once the user moved it, it stays.
+  const first = [
+    ...shown.actions,
+    ...found.groups.flatMap((g) => g.entries),
+    ...shown.pages,
+    ...shown.sections,
+    ...shown.settings,
+    ...found.fallback,
+  ][0]?.id;
+  const [selected, setSelected] = useState('');
+  const [shownFirst, setShownFirst] = useState(first);
+  if (first !== shownFirst) {
+    setShownFirst(first);
+    if (first && (selected === '' || selected === shownFirst)) setSelected(first);
+  }
+
   return (
-    <Command label={t('palette.title')} loop shouldFilter={false} className="flex flex-col">
+    <Command
+      label={t('palette.title')}
+      loop
+      shouldFilter={false}
+      value={selected}
+      onValueChange={setSelected}
+      className="flex flex-col"
+    >
       <div className="flex h-[60px] items-center gap-3 border-b px-[18px]">
         <Search className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <Command.Input
@@ -270,7 +303,7 @@ function PaletteBody({ close }: { close: () => void }) {
         <Command.Empty className="flex flex-col items-center gap-2 px-5 py-10 text-center">
           <EmptyState />
         </Command.Empty>
-        <PaletteGroup heading={t('palette.group.actions')} entries={rankEntries(actions, search)} />
+        <PaletteGroup heading={t('palette.group.actions')} entries={shown.actions} />
         {found.searchingBooks ? (
           <Command.Loading className="px-2.5 py-2 text-[12.5px] text-muted-foreground">
             {t('palette.searching')}
@@ -279,17 +312,9 @@ function PaletteBody({ close }: { close: () => void }) {
         {found.groups.map((g) => (
           <PaletteGroup key={g.heading} heading={g.heading} entries={g.entries} />
         ))}
-        <PaletteGroup heading={t('palette.group.goTo')} entries={rankEntries(pages, search)} />
-        {searching ? (
-          <PaletteGroup
-            heading={t('palette.group.sections')}
-            entries={rankEntries(sections, search)}
-          />
-        ) : null}
-        <PaletteGroup
-          heading={t('palette.group.settings')}
-          entries={rankEntries(settings, search)}
-        />
+        <PaletteGroup heading={t('palette.group.goTo')} entries={shown.pages} />
+        <PaletteGroup heading={t('palette.group.sections')} entries={shown.sections} />
+        <PaletteGroup heading={t('palette.group.settings')} entries={shown.settings} />
         <PaletteGroup heading={t('palette.group.search')} entries={found.fallback} />
       </Command.List>
       <Footer />
