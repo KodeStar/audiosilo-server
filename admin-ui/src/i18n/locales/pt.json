@@ -1490,6 +1490,7 @@
   "health.reason.unreadable": "Não foi possível ler {{file}}: {{detail}}",
   "health.reason.empty_file": "{{file}} está vazio (0 bytes)",
   "health.reason.probe_failed": "Não foi possível ler {{file}} como áudio. Pode estar danificado ou não ser um ficheiro de áudio.",
+  "health.reason.probe_timeout": "A leitura de {{file}} como áudio demorou demasiado. O disco ou a unidade de rede podem estar lentos; a próxima análise tentará de novo.",
   "health.reason.suspect_one": "{{files}} partes longas com títulos diferentes. Provavelmente {{count}} livro numa pasta",
   "health.reason.suspect_other": "{{files}} partes longas com títulos diferentes. Provavelmente {{count}} livros numa pasta",
   "health.reason.suspect_many": "{{files}} partes longas com títulos diferentes. Provavelmente {{count}} livros numa pasta",

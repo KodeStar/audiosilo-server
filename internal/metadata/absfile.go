@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -196,8 +197,8 @@ func ParseABSFile(data []byte) (*ABSFile, error) {
 	out := &ABSFile{
 		Title:       absScalar(j.Title),
 		Subtitle:    absScalar(j.Subtitle),
-		Author:      strings.Join(absNames(j.Authors), ", "),
-		Narrator:    strings.Join(absNames(j.Narrators), ", "),
+		Author:      joinCredit(absNames(j.Authors)),
+		Narrator:    joinCredit(absNames(j.Narrators)),
 		Published:   firstReleaseDate(absScalar(j.PublishedDate), absScalar(j.PublishedYear)),
 		Description: htmlText(absScalar(j.Description)),
 		Publisher:   absScalar(j.Publisher),
@@ -221,6 +222,18 @@ func absList(v json.RawMessage) []json.RawMessage {
 	var items []json.RawMessage
 	_ = json.Unmarshal(v, &items)
 	return items
+}
+
+// joinCredit is one credit naming these people: joined by ", ", as a credit
+// usually reads, unless a name holds a comma itself ("Le Guin, Ursula K."), when
+// "; " keeps the people apart (names.Split reads a comma between them as part of
+// a name, or as a separator inside one).
+func joinCredit(people []string) string {
+	sep := ", "
+	if slices.ContainsFunc(people, func(n string) bool { return strings.Contains(n, ",") }) {
+		sep = "; "
+	}
+	return strings.Join(people, sep)
 }
 
 // absNames is the names in a list (of people, genres or tags), each a string or

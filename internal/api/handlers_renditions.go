@@ -61,11 +61,12 @@ func writeRetry(w http.ResponseWriter, retry time.Duration, code, msg string) {
 }
 
 // serveRendition answers GET /stream?rendition=<kind> for the audio file rel
-// (already scope-checked): its rendition with Range and its own validators (a
-// strong ETag naming the encode, the copy's mtime), ?download=1 an attachment
-// named <stem>.m4a. A cold encode is waited for up to renditionWait, then 503
-// rendition_pending while it goes on under the server's context; never a live
-// transcode (not rangeable, so a watch couldn't resume it).
+// (already scope-checked): its rendition with Range and its own validator (a
+// strong ETag naming the encode; no Last-Modified, serveCopy), ?download=1 an
+// attachment named <stem>.m4a. A cold encode is waited for up to
+// renditionWait, then 503 rendition_pending while it goes on under the server's
+// context; never a live transcode (not rangeable, so a watch couldn't resume
+// it).
 func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel, kind string) {
 	if !a.renditionKindAllowed(w, lib, kind) {
 		return

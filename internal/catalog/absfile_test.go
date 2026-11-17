@@ -193,3 +193,39 @@ func TestSetABSFiles(t *testing.T) {
 		t.Error("recorded for this index: should be checked")
 	}
 }
+
+// TestUpsertBookKeepsUnreadABSFile: a re-index whose ABS file couldn't be looked
+// at or read right now (ABSReading.Unread) keeps the stored reading, its
+// signature included, and leaves it unchecked so the next scan reads it again;
+// a reading that isn't Unread replaces it.
+func TestUpsertBookKeepsUnreadABSFile(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const p = "Author/Book"
+	upsert := func(r ABSReading) {
+		t.Helper()
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, IsFolder: true, Title: "Tag Title", ABS: r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upsert(ABSReading{Sig: "5:5", File: &metadata.ABSFile{ASIN: "B000000002", Series: []metadata.ABSSeries{{Name: "Cradle", Position: "2"}}}})
+
+	upsert(ABSReading{Unread: true})
+	b, _ := c.GetBookByPath(ctx, lib.ID, p)
+	if b.ASIN != "B000000002" || b.Series != "Cradle" {
+		t.Errorf("unread re-index: asin %q series %q, want the stored reading kept", b.ASIN, b.Series)
+	}
+	sigs, _ := c.Signatures(ctx, lib.ID)
+	if s := sigs[p]; s.ABSSig != "5:5" || !s.ABSUnchecked {
+		t.Errorf("unread re-index: signature %+v, want 5:5 kept and unchecked", s)
+	}
+
+	upsert(ABSReading{}) // read: no file now
+	if b, _ := c.GetBookByPath(ctx, lib.ID, p); b.ASIN != "" || b.Series != "" {
+		t.Errorf("file gone: asin %q series %q, want none", b.ASIN, b.Series)
+	}
+	if sigs, _ = c.Signatures(ctx, lib.ID); sigs[p].ABSSig != "" || sigs[p].ABSUnchecked {
+		t.Errorf("file gone: signature %+v, want none, checked", sigs[p])
+	}
+}

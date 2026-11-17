@@ -112,3 +112,28 @@ func TestRecentBooksScopes(t *testing.T) {
 	wantPaths(t, "recent, one scope of one path", recent(alone, 10), "shared/b10", "shared/b5")
 	wantPaths(t, "recent, one scope of one path, limit 1", recent(alone, 1), "shared/b10")
 }
+
+// TestRecentBooksManyScopes: past maxRecentArms scopes (more libraries than
+// SQLite takes UNION arms) the shelf still answers, newest first, each scope's
+// rules kept, rather than failing (server#260).
+func TestRecentBooksManyScopes(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	libA, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: t.TempDir()})
+	libB, _ := c.CreateLibrary(ctx, Library{Name: "B", Root: t.TempDir()})
+	for i, b := range []struct {
+		lib int64
+		rel string
+	}{{libA.ID, "a1"}, {libB.ID, "hidden/b2"}, {libB.ID, "shared/b3"}} {
+		upsert(t, c, &Book{LibraryID: b.lib, RelPath: b.rel, Title: b.rel, AddedAt: fmt.Sprintf("2024-01-%02dT00:00:00Z", i+1)})
+	}
+	scopes := []Scope{{LibraryID: libA.ID, AllowAll: true}, {LibraryID: libB.ID, Paths: []string{"shared"}}}
+	for id := int64(1000); len(scopes) <= maxRecentArms; id++ {
+		scopes = append(scopes, Scope{LibraryID: id, AllowAll: true}) // libraries with no books
+	}
+	got, err := c.RecentBooks(ctx, scopes, 10)
+	if err != nil {
+		t.Fatalf("%d scopes: %v", len(scopes), err)
+	}
+	wantPaths(t, "recent past the arm limit", relPaths(got), "shared/b3", "a1")
+}

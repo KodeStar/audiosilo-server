@@ -36,7 +36,9 @@ type ffprobeOutput struct {
 const ProbeTimeout = 30 * time.Second
 
 // ErrProbeTimeout is a ProbeErr when ffprobe ran out of time (killed, not a
-// file it couldn't read): a slow disk or a busy one may read it given time.
+// file it couldn't read): a slow disk or a busy one may read it given time. The
+// console's Health page tells a time-out from a damaged file by its text at the
+// start of the stored detail (admin-ui issues-model.ts PROBE_TIMEOUT).
 var ErrProbeTimeout = errors.New("ffprobe timed out")
 
 // ErrProbeRejected matches a ProbeErr when ffprobe read the file and rejected
@@ -207,7 +209,7 @@ func applyProbe(m *Metadata, p *probeResult) {
 	}
 	m.setHints(t) // ffprobe names a TXXX and an MP4 freeform item by its name
 	if v := t["series-part"]; v != "" {
-		if start, end, ok := ParseSeriesPosition(v); ok {
+		if start, end, ok := seriesPartTag(v); ok {
 			m.SeriesIndex, m.SeriesIndexEnd = start, end // a range: an omnibus, "1-3"
 		}
 	}

@@ -169,7 +169,11 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     -- list back over them when it should.
 		     scanned_chapters=excluded.scanned_chapters, chapters_hash=excluded.chapters_hash,
 		     chapters_source='', chapters_fit='',
-		     abs_sig=excluded.abs_sig, abs_indexed_at=excluded.abs_indexed_at, abs_file=excluded.abs_file,
+		     -- An ABS file that could not be read right now (ABSReading.Unread)
+		     -- keeps the stored reading, unchecked.
+		     abs_sig=CASE WHEN ? THEN books.abs_sig ELSE excluded.abs_sig END,
+		     abs_indexed_at=excluded.abs_indexed_at,
+		     abs_file=CASE WHEN ? THEN books.abs_file ELSE excluded.abs_file END,
 		     attachments_sig=CASE WHEN excluded.attachments_indexed_at IS NULL THEN books.attachments_sig
 		                          ELSE excluded.attachments_sig END,
 		     attachments_indexed_at=excluded.attachments_indexed_at,
@@ -189,8 +193,8 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 		b.Released, b.TagASIN, b.TagISBN, b.TagLanguage, string(scannedChapters), chaptersHash(string(scannedChapters)),
 		absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
-		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.EbookFile.Unread, b.EbookFile.Unread,
-		b.EbookFile.Unread).Scan(&id); err != nil {
+		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.ABS.Unread, b.ABS.Unread, b.EbookFile.Unread,
+		b.EbookFile.Unread, b.EbookFile.Unread).Scan(&id); err != nil {
 		return 0, err
 	}
 	b.ID = id
@@ -1343,15 +1347,17 @@ func (c *Catalog) RecentBooks(ctx context.Context, scopes []Scope, limit int) ([
 // an arm, so the sort holds ids, not every row under the path read whole (each
 // with its book_files count). Two or more paths SQLite already plans as
 // a read of the library, which the walk never exceeds. The kind check is once
-// per arm, so a podcasts library's arm reads nothing.
+// per arm, so a podcasts library's arm reads nothing. Past maxRecentArms scopes
+// (a server with more libraries than SQLite takes arms) they go in one ORed
+// WHERE after all: the slower plan, never a query SQLite refuses.
 func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
 	fetch := dedupFetch(limit)
-	if len(scopes) == 1 && !seeksPath(scopes[0]) {
+	if (len(scopes) == 1 && !seeksPath(scopes[0])) || len(scopes) > maxRecentArms {
 		filter, args := scopesFilterSQL("b.library_id", "b.rel_path", scopes)
 		return `SELECT ` + prefixCols("b.") + dedupCols + `
 		FROM books b` + dedupJoins + `
 		WHERE l.kind = 'books' AND ` + filter + `
-		ORDER BY ` + recentOrder(scopes[0]) + ` LIMIT ?`, append(args, fetch)
+		ORDER BY b.added_at DESC, b.id DESC LIMIT ?`, append(args, fetch)
 	}
 	arms := make([]string, len(scopes))
 	var args []any
@@ -1370,10 +1376,15 @@ func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
 		ORDER BY r.added_at DESC, r.id DESC`, append(args, fetch)
 }
 
-// recentOrder is a recent-shelf read's ORDER BY for scope s, one scope's alone
-// or an arm's (recentBooksQuery): newest first along idx_books_lib_added, except
-// for a scope of exactly one path rule, whose "+" hint keeps the index order out
-// so the read seeks the path and sorts what it holds (S260-RECENT).
+// maxRecentArms is the most arms recentBooksQuery's UNION may hold: SQLite's
+// SQLITE_MAX_COMPOUND_SELECT, 500 by default in both engines.
+const maxRecentArms = 500
+
+// recentOrder is the ORDER BY of a recent-shelf arm for scope s
+// (recentBooksQuery; one scope of one path rule is an arm even alone): newest
+// first along idx_books_lib_added, except for a scope of exactly one path rule,
+// whose "+" hint keeps the index order out so the read seeks the path and sorts
+// what it holds (S260-RECENT).
 func recentOrder(s Scope) string {
 	if seeksPath(s) {
 		return "+b.added_at DESC, +b.id DESC" // no index order: seek, then sort

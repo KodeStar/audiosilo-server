@@ -839,18 +839,15 @@ func copyName(abs, ext string) string {
 }
 
 // serveCopy answers with a cached copy f (media.FileCache.Open) and closes it:
-// Range, the copy's strong etag, and its own mtime as Last-Modified (never the
-// source's, so a validator a client kept for the stored file never matches),
-// download an attachment named name.
+// Range and the copy's strong etag, download an attachment named name. No
+// Last-Modified: the copy's mtime is the cache's LRU clock (moved on a hit), so
+// a client resuming by date (If-Range) would get the whole file again; it
+// resumes by the etag, which a date validator kept for the stored file never
+// matches either.
 func serveCopy(w http.ResponseWriter, r *http.Request, f *os.File, etag, name string, download bool) {
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not read the cached copy")
-		return
-	}
 	w.Header().Set("ETag", etag)
-	media.ServeOpenedAs(w, r, f, name, info.ModTime(), download)
+	media.ServeOpenedAs(w, r, f, name, time.Time{}, download)
 }
 
 // serveTranscode answers with the live MP3 transcode of the library file abs
@@ -874,8 +871,8 @@ func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloa
 }
 
 // serveRemuxed answers with abs's remuxed MP3 (media.NewRemuxer) with Range and
-// its own validators: a strong ETag from the cache key and the copy's mtime as
-// Last-Modified, so an If-Range or If-Modified-Since a client kept from the
+// its own validator: a strong ETag from the cache key and no Last-Modified
+// (serveCopy), so an If-Range or If-Modified-Since a client kept from the
 // stored Matroska (a 2.4.x download) never earns a 304 or MP3 bytes spliced
 // onto Matroska. When the remux can't be had now (still running after
 // remuxColdWait, ErrUnavailable, an ffmpeg or cache failure) it answers

@@ -1490,6 +1490,7 @@
   "health.reason.unreadable": "Impossibile leggere {{file}}: {{detail}}",
   "health.reason.empty_file": "{{file}} è vuoto (0 byte)",
   "health.reason.probe_failed": "Non è stato possibile leggere {{file}} come audio. Potrebbe essere danneggiato o non essere un file audio.",
+  "health.reason.probe_timeout": "La lettura di {{file}} come audio ha richiesto troppo tempo. Il disco o l'unità di rete potrebbero essere lenti; la prossima scansione riproverà.",
   "health.reason.suspect_one": "{{files}} parti lunghe con titoli diversi. Probabilmente {{count}} libro in una cartella",
   "health.reason.suspect_other": "{{files}} parti lunghe con titoli diversi. Probabilmente {{count}} libri in una cartella",
   "health.reason.suspect_many": "{{files}} parti lunghe con titoli diversi. Probabilmente {{count}} libri in una cartella",

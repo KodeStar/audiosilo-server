@@ -792,6 +792,9 @@ func TestIndexPathMovesEveryListenersFolderFavourite(t *testing.T) {
 			}
 			out = append(out, p)
 		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
 		return out
 	}
 

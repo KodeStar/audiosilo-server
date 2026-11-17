@@ -172,8 +172,9 @@ func SetAttachment(h http.Header, name string) {
 
 // ServeOpenedAs serves the open file f with Range under the name name (the
 // download filename and the extension fallback for its type) and modTime as
-// its Last-Modified: a remuxed copy is served as the source's stem with .mp3
-// and the copy's own mtime.
+// its Last-Modified (none for the zero time): a cached copy (a remux, a
+// rendition) is served as the source's stem with its own extension and no
+// Last-Modified, its etag set by the caller.
 func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name string, modTime time.Time, download bool) {
 	if download {
 		SetAttachment(w.Header(), name)

@@ -1061,9 +1061,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   not `transcode=1` or `rendition=`) serves, at the SAME URL, its lossless copy to MP3 (`media.NewRemuxer`, a `FileCache`: `-f matroska`
   forced, `-protocol_whitelist fd`, `-xerror` so a read error fails the run rather than leaving a short
   copy, `-c:a copy`, `+bitexact`, chapters as ID3 CHAP frames), as
-  `audio/mpeg` with Range and its own validators (a strong ETag `"remux-<key>"`, Last-Modified the
-  copy's mtime, never the source's: a 2.4.x client's If-Range / If-Modified-Since for the stored
-  Matroska gets the whole MP3, never a 304 or a spliced range), `download=1` named `<stem>.mp3`; `original=1`
+  `audio/mpeg` with Range and its own validator (a strong ETag `"remux-<key>"`, and no Last-Modified:
+  the copy's mtime is the cache's LRU clock, server#289; never the source's: a 2.4.x client's If-Range /
+  If-Modified-Since for the stored Matroska, or any date If-Range, gets the whole MP3, never a 304 or a
+  spliced range), `download=1` named `<stem>.mp3`; `original=1`
   serves the stored bytes. Old native builds stream it with no change (an old iOS build saves a
   download under `.mka`, which AVFoundation won't open offline). The cache is
   `<data>/cache/remux/<sha256(abs, size, mtime)>.mp3` (0700, made again if it went; `.part` synced then
@@ -1211,7 +1212,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   for anything but `watch`, and for a podcast library: the watch has no podcasts, and a watch client never
   sees one anyway, `auth.SeesPodcasts`), `renditionsOn` (404 `rendition_unavailable`: no ffmpeg or no data dir),
   audio and a regular file (404); then the copy, served with Range (`http.ServeContent`), `audio/mp4`, a strong
-  ETag `"rw1-<key>-<size>"` (If-Range resumes only the same encode), Last-Modified the copy's mtime,
+  ETag `"rw1-<key>-<size>"` (If-Range resumes only the same encode), no Last-Modified (`serveCopy`),
   `download=1` named `<stem>.m4a`. A cold encode is waited for up to `renditionWait` (45 s, the remux's
   download wait), then 503 `rendition_pending` with `Retry-After: 15` while it goes on under `baseCtx`; never a
   live transcode. 422 `rendition_failed` is a remembered refusal (ffmpeg's, or a short copy; for an hour), with
@@ -1404,8 +1405,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   books `catalog.ReadalongEbooksDue` lists (a stored valid head, an ebook, a digest not current) through
   `library.EbookDigest` (`OpenEbook`), skipping one whose stored digest is already of the file on disk
   (`Scanner.EbookDigestNow`: a request recorded it before the scan), and `SetEbookDigest` records it
-  with the signature of the file it hashed, only while the row still names that ebook (`ebook_path`):
-  a request may record one for a file newer than the last scan, which that scan then finds current. Hashing every ebook would read a
+  with the signature of the file it hashed, only while the row still names that ebook (`ebook_path`)
+  and still holds the digest its caller read as stale (`ebook_hashed_sig` as read before hashing), so
+  a slow hash of an older file never overwrites a newer one recorded meanwhile (server#265): a request
+  may record one for a file newer than the last scan, which that scan then finds current. An EPUB
+  replaced by one of the same size and mtime (and name) keeps the old digest until either changes:
+  the signature is `size:mtime:name` (a known limit). Hashing every ebook would read a
   library whole over a network share.
 - **Metadata overrides (admin redesign Phase 2a, `catalog/overrides.go`)**: an admin's
   edits never touch files. A `books` row holds the **effective** values - what the scan
@@ -1447,7 +1452,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   values, tags and path alike, path-first libraries included (ABS's own default ranks it above the
   tags): `bookLayers.overABS`, in `scannedFields` before `titlePosition`. `metadata.ParseABSFile` is
   lenient (a wrongly typed value costs that value; <= 4 MiB): title, subtitle, authors and
-  narrators joined with ", " (strings or `{name}`), series `"Name #seq"` (the first is the main series
+  narrators joined with ", " (strings or `{name}`; "; " when a name holds a comma, "Le Guin, Ursula
+  K.", so `names.Split` reads the people the file lists: `joinCredit`), series `"Name #seq"` (the first is the main series
   with its position, the rest `more_series`; a series without a position keeps the tag's only while
   it is the same series, by `seriesKey`), `publishedDate` else `publishedYear` as `published`, the
   HTML description as plain text, publisher, language, `abridged` (only `true` says anything: ABS
@@ -1459,7 +1465,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   none) and `abs_indexed_at` the `indexed_at` it was read for (NULL before `0046`), narrow columns
   first so `Signatures` reads no JSON; `UpsertBook` writes all three (`absColumns`; nothing for a
   file book). Discovery records each folder's file signature from the walk itself (`audioDirs`'
-  `absFiles`, the walk's own entry, no extra directory read; `IndexPath`, with no walk, stats it: `absSigAt`), and `enrich` reads
+  `absFiles`, the walk's own entry, no extra directory read; `IndexPath`, with no walk, stats it: `absSigAt`;
+  an entry whose lstat fails is stat'ed once more, `absEntrySig`), and `enrich` reads
   the file only when there is one (`Scanner.readABS`). An unchanged book whose signature differs,
   or that has a file not read for this index (`abs_indexed_at` NULL, or another index's: an older
   server re-indexed it), is read without a re-index: `Signature.ABSSig`/`ABSUnchecked`,
@@ -1470,9 +1477,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   row without it). `metadata.ReadABSFile` reads a regular file only, never through a link (one
   swapped in after the walk included: `os.SameFile` on the opened file). A file that can't be used
   (not JSON, too large, not a regular file: `metadata.ErrABSFileInvalid`) keeps its signature (read
-  again once it changes); one that can't be read right now (gone since the walk, a flaky mount) is
-  left as it was by the backfill and recorded as none by a re-index, so the next scan reads it
-  again (`readABS`' `read`); both log a warning. Known gap: a position read from an ABS title (`titlePosition`) shows as `tag`.
+  again once it changes); one that can't be looked at or read right now (a flaky mount) is
+  left as it was by the backfill and by a re-index (`ABSReading.Unread`: `UpsertBook` keeps the stored
+  `abs_sig` and `abs_file` with no `abs_indexed_at`, so the book keeps its ABS values and the next scan
+  reads it again; server#213); both log a warning. Known gap: a position read from an ABS title (`titlePosition`) shows as `tag`.
   **Bridge attachments** (`metadata/attachments.go`, `library/attachments.go`, `catalog/attachments.go`,
   migrations `0048`, `0050`, `0051`, `0058`; BRIDGE-PLAN.md Phases 1a, 1c, 1d and 3c): the Bridge writes a book's generated `characters.json`,
   `recaps.json`, `description.json`, `chapters.json` (chapters found in the narration), `bridge.json` (provenance) and
@@ -1518,8 +1526,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   canonical `"1-3"` (input `1 - 3` and the en dash too; `metadata.ParseSeriesRange`: 0 < start <
   end <= 100000, a span of at most `metadata.MaxSeriesSpan` = 100, since the slots a range covers
   are counted one by one); `refreshEffective` writes its start to `series_index` (what every
-  client reads) and its end to `series_index_end` (`ParseSeriesPosition`; `FormatSeriesRange` the
-  stored text). A `more_series` entry carries one as `position_end` (`SeriesRef.PositionEnd`,
+  client reads) and its end to `series_index_end` (`ParseSeriesPosition`, which never reads
+  NaN or an infinity, as a series-part tag of "nan" once failed the book's insert; a stored single
+  position out of range still reads as it is, and a series-part tag's is bounded from 0 to 100000 where
+  it is read, `seriesPartTag`, as an edit's is, `ValidSeriesPosition`; `FormatSeriesRange` the stored text). A `more_series` entry carries one as `position_end` (`SeriesRef.PositionEnd`,
   omitempty; `book_more_series.position_end`). Player `Book` JSON: `series_index_end` and
   `series_list[].position_end`, both omitempty; the admin book row `series_index_end`. `seriesSwap`
   carries a range both ways; the series aggregate's `positions` hold every whole number inside a
@@ -2980,7 +2990,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Artwork belongs to the show.
   A library kind this server does not know (`catalog.KnownKind`; a newer server's, left by a
   rollback) is never scanned as books: `Scan` fails with `library.ErrUnknownKind` and a targeted index
-  refuses any library that isn't `books` (`resolveBook`, `ErrNotIndexable`).
+  refuses any library that isn't `books` (`resolveBook`, `ErrNotIndexable`). A scheduled or startup scan
+  job for one records no run and raises no "scan failed" alert (`skipUnknownKind`: one log line per
+  library, and the schedule counts from the skip), so a rollback doesn't alert at every scheduled scan
+  and restart; a manual or setting-change scan, also one that joined a waiting scheduled or startup job
+  (`Job.asked`), still records a failed run, and its alert, naming the cause.
   `catalog.Caller.Podcasts` comes from this request's credential via `api.callerOf(ctx)` and
   `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players need
   `PodcastPlayerMinVersion` (2.2.0, the first with podcast views; numeric X.Y.Z, a pre-release
@@ -3895,7 +3909,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   asked for fits again). A pass the service keeps failing (5 in a row) waits for the
   next tick whatever kicks it, and a book a check failed for waits an hour, so it
   can't hold up the books behind it. A kick waits 5 s for the kicks behind it (a
-  scan kicks once per book), so a burst is one pass. The book page's
+  scan kicks once per book), so a burst is one pass. In mirror mode the first pass after a start
+  (the first with metadata on: no copy loads while it is off) waits for the local copy (`mirrorReady`,
+  at most 10 min, server#282), so a start sends no lookups to the service while the copy loads. The book page's
   `community_check_failed` says the last check failed (the service, or the 4-minute
   pause budget of a 5-minute check: past it, the rest are left unsnapped).
   `refreshEffective` -> `applyChapterSource` (after an admin's edited list, Edited chapters below) puts the

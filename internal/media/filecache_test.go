@@ -386,7 +386,8 @@ func TestRemuxerFailurePartwayIsNotARefusal(t *testing.T) {
 // TestRemuxerReadErrorIsNotARefusal (server#212): a run that failed reading
 // the source before it wrote anything (a network mount's hiccup: ffmpeg logs
 // EIO) is not the file's refusal: not remembered, so the next request tries
-// again. Denied: the same exit with no read error in the log is a refusal.
+// again. Denied: the same exit with no read error in the log is a refusal, as
+// is one whose log only quotes the words.
 func TestRemuxerReadErrorIsNotARefusal(t *testing.T) {
 	t.Parallel()
 	status := exitStatus(t)
@@ -398,6 +399,9 @@ func TestRemuxerReadErrorIsNotARefusal(t *testing.T) {
 		{"fd:: Input/output error", false, 2},
 		{"Error during demuxing: I/O error", false, 2},
 		{"Stream map '0:a:0' matches no streams.", true, 1},
+		// The words in a file's own text are no read error (server#361).
+		{"[mp3 @ 0x1] Invalid tag 'I/O error' (title)\nStream map '0:a:0' matches no streams.", true, 1},
+		{"Error while decoding stream #0:0: Input/output error\n[out#0] Nothing was written", false, 2},
 	} {
 		var runs atomic.Int32
 		m, src := fakeRemuxer(t, func(string, string) error {

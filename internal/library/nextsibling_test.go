@@ -113,3 +113,28 @@ func pendingEntry(name string) Entry {
 	e.PendingBook = true
 	return e
 }
+
+// TestNameCollatorMatchesPlayer: NextSibling's order agrees with the player's
+// (a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'}),
+// audiosilo-frontend src/playback/next-book.ts) on accents, punctuation and
+// leading zeros, so the server and the player offer the same next book. Each
+// want is what Node 24's ICU answered (en-US).
+func TestNameCollatorMatchesPlayer(t *testing.T) {
+	t.Parallel()
+	names := newNameCollator()
+	for _, tc := range []struct {
+		a, b string
+		want int
+	}{
+		{"Émile", "Emile 2", -1}, {"Emile", "Émile 2", -1}, {"Äpfel", "Apfel 2", -1}, {"Œdipus", "Oedipus 2", -1},
+		{"résumé", "resume", 0}, {"ß", "ss", 0}, {"Book 1", "book 1", 0}, {"a", "B", -1},
+		{"Book 1.5", "Book 2", -1}, {"Book 1.5", "Book 1", 1}, {"Book 9", "Book 10", -1}, {"Book 02", "Book 1", 1},
+		{"Book #2", "Book 3", -1}, {"Book #2", "Book 1", -1}, {"Book 2", "Book #2", 1},
+		{"Book - 2", "Book 10", -1}, {"Book_2", "Book 10", 1}, {"Vol. 2", "Vol 10", 1},
+		{"Part 1 - Intro", "Part 1", 1}, {"The Hobbit", "Hobbit 2", 1},
+	} {
+		if got := names.CompareString(tc.a, tc.b); got != tc.want {
+			t.Errorf("compare(%q, %q) = %d, the player's is %d", tc.a, tc.b, got, tc.want)
+		}
+	}
+}

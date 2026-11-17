@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/names"
 )
 
 // The file a user posted (ABS 2.x, "Store metadata with item"), trimmed of its
@@ -83,6 +85,26 @@ func TestParseABSFileSeriesAndPeople(t *testing.T) {
 	}
 	if got.Published != "1987-11-12" {
 		t.Errorf("published = %q, want the date over the year", got.Published)
+	}
+}
+
+// A name that holds a comma ("Surname, Given") is kept apart from the next by
+// "; ", so names.Split reads the credit as the people the file lists; without
+// one the credit reads as it always did, joined by ", " (server#213).
+func TestParseABSFileReversedNames(t *testing.T) {
+	t.Parallel()
+	got, err := ParseABSFile([]byte(`{
+		"authors": ["Le Guin, Ursula K.", "Neil Gaiman"],
+		"narrators": ["Le Guin, Ursula K."]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Author != "Le Guin, Ursula K.; Neil Gaiman" || got.Narrator != "Le Guin, Ursula K." {
+		t.Errorf("people = %q / %q", got.Author, got.Narrator)
+	}
+	if people := names.Split(got.Author); !reflect.DeepEqual(people, []string{"Le Guin, Ursula K.", "Neil Gaiman"}) {
+		t.Errorf("names.Split(%q) = %q, want the two people", got.Author, people)
 	}
 }
 

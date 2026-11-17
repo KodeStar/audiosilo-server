@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -49,12 +50,36 @@ func ValidSeriesRange(start, end float64) bool {
 	return start > 0 && end > start && end <= MaxSeriesPosition && end-start <= MaxSeriesSpan
 }
 
-// ParseSeriesPosition reads a series position: a number (ParseFloat's, end 0, as
-// a series-part tag and a stored series_index were always read: no spaces) or a
-// range (ParseSeriesRange: its start and end). ok is false for anything else.
+// ValidSeriesPosition reports whether v is a single series position a book may
+// hold: 0 <= v <= MaxSeriesPosition. (NaN fails these comparisons too.)
+func ValidSeriesPosition(v float64) bool {
+	return v >= 0 && v <= MaxSeriesPosition
+}
+
+// ParseSeriesPosition reads a series position: a finite number (ParseFloat's,
+// end 0, as a series-part tag and a stored series_index were always read: no
+// spaces) or a range (ParseSeriesRange: its start and end). ok is false for
+// anything else, NaN and the infinities included: ParseFloat reads "nan", "inf"
+// and "1e400", and a NaN series index fails the book's insert. A stored value
+// out of range still reads as it is (an edit refuses to list it); a tag's is
+// bounded where it is read (seriesPartTag).
 func ParseSeriesPosition(s string) (start, end float64, ok bool) {
 	if v, err := strconv.ParseFloat(s, 64); err == nil {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, 0, false
+		}
 		return v, 0, true
 	}
 	return ParseSeriesRange(s)
+}
+
+// seriesPartTag reads a series-part tag's position (ParseSeriesPosition) as a
+// book's: a single one ValidSeriesPosition, as an edit of the field takes it;
+// ok is false for anything else.
+func seriesPartTag(s string) (start, end float64, ok bool) {
+	start, end, ok = ParseSeriesPosition(s)
+	if !ok || (end == 0 && !ValidSeriesPosition(start)) {
+		return 0, 0, false
+	}
+	return start, end, true
 }

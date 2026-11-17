@@ -211,9 +211,9 @@ func TestMatroskaMP3IsRemuxed(t *testing.T) {
 
 	resp, body := m.do(t, "GET", m.url("stream", mkaFile), m.token, "")
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "audio/mpeg" ||
-		resp.Header.Get("Accept-Ranges") != "bytes" || resp.Header.Get("Last-Modified") == "" ||
+		resp.Header.Get("Accept-Ranges") != "bytes" || resp.Header.Get("Last-Modified") != "" ||
 		resp.Header.Get("Content-Length") != strconv.Itoa(len(body)) {
-		t.Fatalf("stream = %d %v, want 200 audio/mpeg with Range and a length", resp.StatusCode, resp.Header)
+		t.Fatalf("stream = %d %v, want 200 audio/mpeg with Range, a length and no Last-Modified", resp.StatusCode, resp.Header)
 	}
 	if body[:3] != "ID3" {
 		t.Fatalf("remuxed stream starts %q, want an ID3 tag", body[:3])
@@ -591,10 +591,11 @@ func TestMatroskaColdRemuxWaitBounded(t *testing.T) {
 	}
 }
 
-// TestMatroskaRemuxValidators: the remux carries its own validators (a strong
-// ETag, the copy's mtime as Last-Modified), so the If-Range and
-// If-Modified-Since a 2.4.x client kept from the stored Matroska get the whole
-// MP3, never a 304 or MP3 bytes for a Matroska range; its own validators work.
+// TestMatroskaRemuxValidators: the remux carries its own validator (a strong
+// ETag) and no Last-Modified (the copy's mtime is the cache's LRU clock, which
+// moves: server#289), so the If-Range and If-Modified-Since a 2.4.x client kept
+// from the stored Matroska get the whole MP3, never a 304 or MP3 bytes for a
+// Matroska range, and so does any date If-Range; its ETag resumes.
 func TestMatroskaRemuxValidators(t *testing.T) {
 	t.Parallel()
 	m := newMKAEnv(t)
@@ -613,9 +614,10 @@ func TestMatroskaRemuxValidators(t *testing.T) {
 
 	resp, body := m.do(t, "GET", m.url("stream", mkaFile), m.token, "")
 	etag, lm := resp.Header.Get("ETag"), resp.Header.Get("Last-Modified")
-	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(etag, `"remux-`) || lm == "" || lm == oldLM {
-		t.Fatalf("remux = %d ETag %q Last-Modified %q (stored %q), want a strong ETag and the copy's mtime", resp.StatusCode, etag, lm, oldLM)
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(etag, `"remux-`) || lm != "" {
+		t.Fatalf("remux = %d ETag %q Last-Modified %q, want a strong ETag and no Last-Modified", resp.StatusCode, etag, lm)
 	}
+	now := time.Now().UTC().Format(http.TimeFormat)
 
 	for _, c := range []struct {
 		name    string
@@ -625,6 +627,7 @@ func TestMatroskaRemuxValidators(t *testing.T) {
 	}{
 		{"2.4.x If-Range", map[string]string{"Range": "bytes=0-99", "If-Range": oldLM}, http.StatusOK, len(body)},
 		{"2.4.x If-Modified-Since", map[string]string{"If-Modified-Since": oldLM}, http.StatusOK, len(body)},
+		{"a date If-Range", map[string]string{"Range": "bytes=0-99", "If-Range": now}, http.StatusOK, len(body)},
 		{"own If-Range", map[string]string{"Range": "bytes=0-99", "If-Range": etag}, http.StatusPartialContent, 100},
 		{"own If-None-Match", map[string]string{"If-None-Match": etag}, http.StatusNotModified, 0},
 	} {

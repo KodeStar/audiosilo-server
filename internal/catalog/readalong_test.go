@@ -114,7 +114,7 @@ func TestReadalongIndex(t *testing.T) {
 		}
 	}
 	got, err := c.BookReadalongAt(ctx, lib.ID, "Mapped")
-	if err != nil || got.Head == nil || got.Head.Ebook.SHA256 != shaA || got.DigestCurrent || got.EbookSHA256 != "" {
+	if err != nil || got.Head == nil || got.Head.Ebook.SHA256 != shaA || got.HashedSig != "" || got.EbookSHA256 != "" {
 		t.Fatalf("indexed = %+v, %v", got, err)
 	}
 	if b, _ := c.GetBookByPath(ctx, lib.ID, "Mapped"); b.Generated || b.Readalong != nil {
@@ -134,7 +134,7 @@ func TestReadalongIndex(t *testing.T) {
 		t.Errorf("due for NoMap = %+v", due)
 	}
 	// A digest of an ebook the row no longer names is never recorded.
-	if err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/old.epub", "10:1:old.epub", shaB); err != nil {
+	if err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/old.epub", "", "10:1:old.epub", shaB); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := c.BookReadalongAt(ctx, lib.ID, "Mapped"); got.HashedSig != "" || got.EbookSHA256 != "" {
@@ -142,21 +142,29 @@ func TestReadalongIndex(t *testing.T) {
 	}
 	// One of the file on disk newer than the last scan is kept with its own
 	// signature: current for a request that finds that file, not for the index.
-	if err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/b.epub", "11:1:b.epub", shaB); err != nil {
+	if err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/b.epub", "", "11:1:b.epub", shaB); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := c.BookReadalongAt(ctx, lib.ID, "Mapped"); got.DigestCurrent || got.HashedSig != "11:1:b.epub" || got.EbookSHA256 != shaB {
+	if got, _ := c.BookReadalongAt(ctx, lib.ID, "Mapped"); got.HashedSig != "11:1:b.epub" || got.EbookSHA256 != shaB {
 		t.Errorf("a digest of a newer file: %+v", got)
+	}
+	// A slow hash of the older file, started when no digest was stored (the
+	// scan's due read), is not recorded over it (server#265).
+	if err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/b.epub", "", "10:1:b.epub", shaA); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := c.BookReadalongAt(ctx, lib.ID, "Mapped"); got.HashedSig != "11:1:b.epub" || got.EbookSHA256 != shaB {
+		t.Errorf("a slow hash of the older file overwrote the newer digest: %+v", got)
 	}
 	// Still due for the index, with the signature its digest is of, so the
 	// scan's hashing can tell the file on disk is already hashed.
 	if due, _ := c.ReadalongEbooksDue(ctx, lib.ID, "Mapped"); len(due) != 1 || due[0].HashedSig != "11:1:b.epub" {
 		t.Errorf("due after a newer file's digest = %+v", due)
 	}
-	if err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/b.epub", "10:1:b.epub", shaA); err != nil {
+	if err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/b.epub", "11:1:b.epub", "10:1:b.epub", shaA); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := c.BookReadalongAt(ctx, lib.ID, "Mapped"); !got.DigestCurrent || got.EbookSHA256 != shaA || got.HashedSig != "10:1:b.epub" {
+	if got, _ := c.BookReadalongAt(ctx, lib.ID, "Mapped"); got.EbookSHA256 != shaA || got.HashedSig != "10:1:b.epub" {
 		t.Errorf("recorded digest: %+v", got)
 	}
 	if due, _ := c.ReadalongEbooksDue(ctx, lib.ID, ""); len(due) != 0 {
@@ -165,9 +173,6 @@ func TestReadalongIndex(t *testing.T) {
 	// The ebook changes: the digest is no longer current, and it is due again.
 	if err := c.SetEbooks(ctx, lib.ID, map[string]EbookReading{"Mapped": {Path: "Mapped/b.epub", Sig: "12:2:b.epub", Size: 12}}); err != nil {
 		t.Fatal(err)
-	}
-	if got, _ := c.BookReadalongAt(ctx, lib.ID, "Mapped"); got.DigestCurrent {
-		t.Errorf("after the ebook changed: %+v", got)
 	}
 	if due, _ := c.ReadalongEbooksDue(ctx, lib.ID, "Mapped"); len(due) != 1 {
 		t.Errorf("due after the ebook changed = %+v", due)

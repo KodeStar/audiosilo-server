@@ -245,10 +245,11 @@ func source(abs string) (os.FileInfo, error) {
 }
 
 // Open returns the cached copy of abs (the caller has SafeJoined it) and its
-// strong ETag (the spec's); the copy's own mtime is its Last-Modified, never
-// the source's, so a validator a client kept for the stored file never matches
-// it. The caller closes the file. A cold key runs under runCtx (the server's
-// lifetime, bounded by the spec's timeout) while this call waits on ctx: a
+// strong ETag (the spec's), the copy's one validator: it is served with no
+// Last-Modified (the copy's mtime is the cache's LRU clock, moved on a hit), so
+// a validator a client kept for the stored file never matches it. The caller
+// closes the file. A cold key runs under runCtx (the server's lifetime,
+// bounded by the spec's timeout) while this call waits on ctx: a
 // request that leaves, or stops waiting, doesn't stop the run the others wait
 // for. The errors are ErrRefused (with ErrNoSource when abs is no regular
 // file), ErrPending wrapping ctx's error when ctx ended first, or one that says
@@ -655,11 +656,18 @@ func refused(err error, out string) bool {
 }
 
 // readFailed reports whether a run's error (its stderr included, runFFmpeg)
-// names an I/O error: the system's strerror for EIO, as ffmpeg prints it, or
-// ffmpeg's own wording where it has none.
+// has a line that ends in an I/O error, as ffmpeg reports one ("fd:: ...",
+// "Error during demuxing: ..."): the system's strerror for EIO, or ffmpeg's own
+// wording where it has none. Only a line's end counts, so a tag or title that
+// merely holds the words (quoted in a warning about it) is no read error.
 func readFailed(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "Input/output error") || strings.Contains(msg, "I/O error")
+	for line := range strings.Lines(err.Error()) {
+		line = strings.TrimSpace(line)
+		if strings.HasSuffix(line, ": Input/output error") || strings.HasSuffix(line, ": I/O error") {
+			return true
+		}
+	}
+	return false
 }
 
 // syncFile flushes path's bytes to disk before the rename that names it, so a

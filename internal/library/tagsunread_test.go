@@ -89,8 +89,13 @@ func TestReindexWithAReadCutShortKeepsTheStoredBook(t *testing.T) {
 			fresh := "Some Folder/New Arrival"
 			silence(t, root, fresh+"/01.mp3", 1, "album=Tagged Title", "artist=Real Author")
 			s.probeTimeout = time.Nanosecond
-			if _, err := s.Scan(ctx, *lib); err != nil {
+			res, err := s.Scan(ctx, *lib)
+			if err != nil {
 				t.Fatal(err)
+			}
+			// Kept whole is not updated (server#360).
+			if res.Updated != 0 || res.Added != 1 {
+				t.Errorf("re-index with its reads cut short: %d updated, %d added; want 0 and the new book", res.Updated, res.Added)
 			}
 			if got, want := read(kept), stored(problemUnreadable, tagsUnreadDetail); got != want {
 				t.Errorf("re-index with its reads cut short = %+v, want the stored book kept, %+v", got, want)
@@ -108,8 +113,11 @@ func TestReindexWithAReadCutShortKeepsTheStoredBook(t *testing.T) {
 				}
 				return extractFile(ctx, p, ffprobe, timeout)
 			}
-			if _, err := s.Scan(ctx, *lib); err != nil {
+			if res, err = s.Scan(ctx, *lib); err != nil {
 				t.Fatal(err)
+			}
+			if res.Updated != 1 {
+				t.Errorf("re-index with a part's read refused: %d updated, want only the new book read again", res.Updated)
 			}
 			if got, want := read(kept), stored(problemUnreadable, readRefusedDetail); got != want {
 				t.Errorf("re-index with a part's read refused = %+v, want the stored book kept, %+v", got, want)

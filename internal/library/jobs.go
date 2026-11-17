@@ -30,6 +30,12 @@ const (
 	TriggerChange   = "change"   // a library or folder setting changed
 )
 
+// unattended reports whether a trigger is one nobody asked for: a schedule or the
+// server's start.
+func unattended(trigger string) bool {
+	return trigger == TriggerSchedule || trigger == TriggerStartup
+}
+
 // scanTimeout caps a requested scan (see jobContext).
 const scanTimeout = time.Hour
 
@@ -52,6 +58,10 @@ type Job struct {
 	Progress *ScanProgress `json:"progress,omitempty"`
 
 	cancel context.CancelFunc
+	// asked is set when an admin or a setting change asked for the library while
+	// this unattended job waited, so the job is no longer one nobody asked for
+	// (see skipUnknownKind).
+	asked bool
 }
 
 // jobQueue is the queue's state; Scanner.mu guards it.
@@ -66,10 +76,13 @@ type jobQueue struct {
 	// already running. The schedule counts from it as from a scan start, so the next
 	// tick doesn't queue the same slot again.
 	skipped map[int64]time.Time
+	// unknownKind are the libraries whose kind this server doesn't know that a
+	// job has come to (ErrUnknownKind), so each is said once, not at every scan.
+	unknownKind map[int64]bool
 }
 
 func newJobQueue() jobQueue {
-	return jobQueue{wake: make(chan struct{}, 1), skipped: map[int64]time.Time{}}
+	return jobQueue{wake: make(chan struct{}, 1), skipped: map[int64]time.Time{}, unknownKind: map[int64]bool{}}
 }
 
 // queuedFor reports whether a job for the library waits.
@@ -108,10 +121,13 @@ func (s *Scanner) Enqueue(lib catalog.Library, trigger string, startedBy *int64)
 	q := &s.jobs
 	for _, j := range q.queued {
 		if j.LibraryID == lib.ID {
+			if !unattended(trigger) {
+				j.asked = true
+			}
 			return j.snapshot()
 		}
 	}
-	if r := q.running; r != nil && r.LibraryID == lib.ID && (trigger == TriggerSchedule || trigger == TriggerStartup) {
+	if r := q.running; r != nil && r.LibraryID == lib.ID && unattended(trigger) {
 		if trigger == TriggerSchedule {
 			// The running scan stands in for this slot, though it may have started
 			// before the slot was due.
@@ -269,6 +285,10 @@ func (s *Scanner) run(ctx, jctx context.Context, j *Job) {
 		}
 		return
 	}
+	if !catalog.KnownKind(lib.Kind) && unattended(j.Trigger) && !j.asked {
+		s.skipUnknownKind(lib)
+		return
+	}
 	// The run is recorded even if the server stops mid-scan, so writes use a
 	// context that outlives ctx.
 	db := context.WithoutCancel(ctx)
@@ -298,6 +318,26 @@ func (s *Scanner) run(ctx, jctx context.Context, j *Job) {
 			r.Detail = closing.Detail
 		}
 		s.OnRunFinished(db, r)
+	}
+}
+
+// skipUnknownKind drops a scheduled or startup job for a library of a kind this
+// server doesn't know (a newer AudioSilo's, left by a rollback: ErrUnknownKind):
+// it is never scanned, and a failed run and its "scan failed" alert at every
+// scheduled scan and restart would only repeat that. One log line per library
+// instead, and the schedule counts from now (skipped) so the next tick doesn't
+// queue it again. A scan an admin asked for, or a setting change, still runs and
+// fails, so the run and its alert name the cause, also when the ask joined a
+// waiting scheduled or startup job (Job.asked).
+func (s *Scanner) skipUnknownKind(lib *catalog.Library) {
+	s.mu.Lock()
+	said := s.jobs.unknownKind[lib.ID]
+	s.jobs.unknownKind[lib.ID] = true
+	s.jobs.skipped[lib.ID] = time.Now()
+	s.mu.Unlock()
+	if !said {
+		s.log.Warn("library left alone: this server doesn't know its kind (made by a newer AudioSilo?)",
+			"library", lib.Name, "kind", lib.Kind)
 	}
 }
 

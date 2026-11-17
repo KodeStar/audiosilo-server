@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -97,7 +96,6 @@ const (
 	maxShortField   = 500
 	maxLanguage     = 64
 	maxDescription  = 20000
-	maxSeriesIndex  = metadata.MaxSeriesPosition
 	maxChapterTitle = 500
 )
 
@@ -149,7 +147,7 @@ func normalizeOverride(field, value string) (string, error) {
 			return FormatSeriesRange(start, end), nil // an omnibus: "1-3"
 		}
 		f, err := strconv.ParseFloat(v, 64)
-		if err != nil || math.IsNaN(f) || f < 0 || f > maxSeriesIndex {
+		if err != nil || !metadata.ValidSeriesPosition(f) {
 			return "", invalid(field, "must be a number from 0 to 100000, or a range like 1-3")
 		}
 		return FormatSeriesPosition(f), nil

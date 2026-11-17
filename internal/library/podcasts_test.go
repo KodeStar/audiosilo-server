@@ -1,12 +1,16 @@
 package library
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -310,5 +314,112 @@ func TestScanRefusesAnUnknownLibraryKind(t *testing.T) {
 	}
 	if catalog.KnownKind("ebooks") || !catalog.KnownKind(catalog.KindBooks) || !catalog.KnownKind(catalog.KindPodcasts) {
 		t.Fatal("KnownKind")
+	}
+}
+
+// A scheduled or startup scan job for a library of a kind this server doesn't
+// know records no run and raises no "scan failed" alert: it is skipped with one
+// log line per library, and the schedule counts from the skip (server#361). A
+// manual or setting-change scan of it still records a failed run whose report
+// names the cause, so the admin who asked sees why. Allowed: the same job for a
+// known kind runs and reports.
+func TestScanJobSkipsAnUnknownLibraryKind(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Books", Root: t.TempDir(), Kind: catalog.KindBooks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logged bytes.Buffer
+	s := NewScanner(cat, "", slog.New(slog.NewTextHandler(&logged, nil)))
+	var reports []RunReport
+	s.OnRunFinished = func(_ context.Context, r RunReport) { reports = append(reports, r) }
+	runJob := func(trigger string) {
+		t.Helper()
+		s.run(ctx, ctx, &Job{LibraryID: lib.ID, Trigger: trigger})
+	}
+	runJob(TriggerSchedule)
+	if len(reports) != 1 || reports[0].Status != catalog.RunOK {
+		t.Fatalf("known kind: reports %+v, want one ok run", reports)
+	}
+
+	// As a newer server's schema would let it be (this one's CHECK refuses it).
+	if err := db.WithTx(ctx, "unknown kind", func(tx *sql.Tx) error {
+		for _, q := range []string{`PRAGMA ignore_check_constraints = ON`,
+			`UPDATE libraries SET kind = 'ebooks' WHERE id = ` + strconv.FormatInt(lib.ID, 10),
+			`PRAGMA ignore_check_constraints = OFF`} {
+			if _, err := tx.ExecContext(ctx, q); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now()
+	runJob(TriggerStartup)
+	runJob(TriggerSchedule)
+	if len(reports) != 1 {
+		t.Errorf("unknown kind: reports %+v, want none past the known kind's", reports[1:])
+	}
+	if runs, _ := cat.ListScanRuns(ctx, lib.ID, 0, 10); len(runs) != 1 {
+		t.Errorf("unknown kind: %d runs recorded, want only the known kind's", len(runs))
+	}
+	if n := strings.Count(logged.String(), "library left alone"); n != 1 {
+		t.Errorf("said %d times, want once:\n%s", n, logged.String())
+	}
+	s.mu.Lock()
+	skipped := s.jobs.skipped[lib.ID]
+	s.mu.Unlock()
+	if skipped.Before(before) {
+		t.Errorf("skipped at %v, want the schedule to count from the skip", skipped)
+	}
+
+	for _, trigger := range []string{TriggerManual, TriggerChange} {
+		n := len(reports)
+		runJob(trigger)
+		if len(reports) != n+1 {
+			t.Fatalf("%s: %d reports, want one more", trigger, len(reports)-n)
+		}
+		if r := reports[n]; r.Status != catalog.RunFailed || r.RunID == 0 ||
+			!strings.Contains(r.Detail, ErrUnknownKind.Error()) {
+			t.Errorf("%s: report %+v, want a recorded failed run naming the unknown kind", trigger, r)
+		}
+	}
+
+	// An admin's Scan or a setting change that joins a scheduled or startup job
+	// still waiting (a rollback's restart queues every library) runs and fails
+	// like its own would; a schedule or a restart joining one stays skipped.
+	for _, c := range []struct{ first, then string }{
+		{TriggerStartup, TriggerManual},
+		{TriggerSchedule, TriggerChange},
+		{TriggerStartup, TriggerSchedule},
+	} {
+		s.Enqueue(*lib, c.first, nil)
+		s.Enqueue(*lib, c.then, nil)
+		s.mu.Lock()
+		queued := s.jobs.queued
+		s.jobs.queued = nil
+		s.mu.Unlock()
+		if len(queued) != 1 {
+			t.Fatalf("%s then %s: %d jobs queued, want the one", c.first, c.then, len(queued))
+		}
+		n := len(reports)
+		s.run(ctx, ctx, queued[0])
+		if unattended(c.then) {
+			if len(reports) != n {
+				t.Errorf("%s then %s: reports %+v, want none", c.first, c.then, reports[n:])
+			}
+			continue
+		}
+		if len(reports) != n+1 {
+			t.Fatalf("%s then %s: %d reports, want one more", c.first, c.then, len(reports)-n)
+		}
+		if r := reports[n]; r.Status != catalog.RunFailed || r.RunID == 0 ||
+			!strings.Contains(r.Detail, ErrUnknownKind.Error()) {
+			t.Errorf("%s then %s: report %+v, want a recorded failed run naming the unknown kind", c.first, c.then, r)
+		}
 	}
 }
