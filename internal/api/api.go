@@ -5,9 +5,11 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -434,7 +436,7 @@ func (a *API) startResolve(failed int) <-chan struct{} {
 	a.resolving = done
 	go func() {
 		for {
-			err := a.resolveRun(a.baseCtx)
+			err := a.resolveOnce()
 			if a.baseCtx.Err() != nil {
 				err = nil // stopped: what is left goes on at the next start
 			}
@@ -461,6 +463,19 @@ func (a *API) startResolve(failed int) <-chan struct{} {
 		}
 	}()
 	return done
+}
+
+// resolveOnce is one run of catalog.ResolveSources. A panic in it is that run's
+// failure: on this goroutine it would otherwise take the server down, and again
+// at every start while the library stays due.
+func (a *API) resolveOnce() (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			a.log.Error("re-resolving books for a new metadata source panicked", "panic", p, "stack", string(debug.Stack()))
+			err = fmt.Errorf("re-resolve panicked: %v", p)
+		}
+	}()
+	return a.resolveRun(a.baseCtx)
 }
 
 // StartChapterChecks starts the background community chapter checks

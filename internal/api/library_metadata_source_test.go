@@ -129,3 +129,24 @@ func TestResolveSourcesRetried(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveSourcesPanic: a re-resolve that panics is a failed run, retried as
+// one, rather than the end of the server (and of every start after it, the
+// library still being due).
+func TestResolveSourcesPanic(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	var runs atomic.Int32
+	e.api.resolveRetryAfter = time.Millisecond
+	e.api.resolveRun = func(context.Context) error {
+		if runs.Add(1) == 1 {
+			panic("a book no resolve expected")
+		}
+		return nil
+	}
+	<-e.api.resolveSources()
+	resolveIdle(t, e.api)
+	if got := runs.Load(); got != 2 {
+		t.Fatalf("the re-resolve ran %d times, want the panic and one more", got)
+	}
+}
