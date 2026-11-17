@@ -223,6 +223,34 @@ func TestAudibleBackupFlow(t *testing.T) {
 	}
 }
 
+// A destination in a new disc folder of an indexed book ("Author/Book/CD 3")
+// is refused when it is set (400 invalid_dest_path): the scan would join it
+// into that book, and the backup's fold refuse it only after the download
+// (bridge#46). Allowed: a folder of its own beside the book, a disc folder
+// under a folder that is no book, and a file named like a disc beside them.
+func TestAudibleDestPathRefusesDiscFolderOfABook(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t, title("B000000001", "One", "available", 0, ""))
+	patch := func(dest string) (int, string) {
+		t.Helper()
+		resp, out := b.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001", b.adminTok, fmt.Sprintf(`{"dest_path":%q}`, dest))
+		return resp.StatusCode, out
+	}
+	for _, dest := range []string{mistbornBook + "/CD 3", mistbornBook + "/Disc2/One.m4b", cradleBook + "/cd1"} {
+		if code, out := patch(dest); code != http.StatusBadRequest || codeOf(out) != "invalid_dest_path" {
+			t.Errorf("dest %q: %d %s, want 400 invalid_dest_path", dest, code, out)
+		}
+		if x := b.audibleTitle(t, "B000000001"); x.DestPath != "" {
+			t.Fatalf("a refused destination was stored: %q", x.DestPath)
+		}
+	}
+	for _, dest := range []string{"Brandon Sanderson/Mistborn 2", "Brandon Sanderson/New/CD 1", "Brandon Sanderson/CD 3.m4b", ""} {
+		if code, out := patch(dest); code != http.StatusOK {
+			t.Errorf("dest %q: %d %s, want 200", dest, code, out)
+		}
+	}
+}
+
 // Deleting a person cancels the open jobs of the Audible accounts the
 // deletion took with them (bridge#46): a queued backup and a backup the Bridge
 // is running (asked to stop), with the account's reason. Denied: another

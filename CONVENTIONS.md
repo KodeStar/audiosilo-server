@@ -3279,7 +3279,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   gated by `ModuleFor`; params `{account, asin, library_id, dest_path, template}` (strict here, read leniently
   by the Bridge; `dest_path` is the title's library-relative file path, or a folder for it when the last
   segment has no audio extension (a template's too), or `''`, `CheckAudibleDestPath`; library and template
-  are the account's at queue time), the row's `library_id` set, deduped per `|account|asin`. Priorities: a console Back up 0
+  are the account's at queue time), the row's `library_id` set, deduped per `|account|asin`. Priorities (`bridge`'s bands, `priority.go`): a console Back up 0
   (a preorder's pending request too, when a poll queues it, with no requester), a policy -10 with no
   requester (as the podcast scheduler's fetches), Back up everything -20 (below new episodes: a bulk backup
   in the Bridge's one download slot never holds them back). `SetAudibleImport` records the job on the title
@@ -3317,7 +3317,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`{queued}`: `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, the
   latest import not a `done` one whose book is still indexed (a refused fold, `ErrImportNotOwn`, isn't
   queued again; a done one whose book left the library is), a failed or cancelled one again; a console Back up of one contested or done title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
-  `invalid_dest_path`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
+  `invalid_dest_path`, also for a disc folder ("CD 3") directly inside an indexed book, which the scan
+  would join into it: `checkDestOwnFolder`, `metadata.IsDiscFolder`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
   `invalid_policy` / `invalid_template`), audited: a queued Back up `bridge.job` (kind `audible.import`; also
   when recording it on the title failed), a pending one `bridge.audible.backup`, then `bridge.audible.backup_all`
   / `title` / `account` (the audit guard reads `moduleRoutes.Admin` routes too). The

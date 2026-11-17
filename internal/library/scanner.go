@@ -1133,31 +1133,8 @@ func chooseTitle(embedded, pathDerived string) string {
 	return pathDerived
 }
 
-// isDiscFolder reports whether a folder name is a disc/part subfolder like "CD1",
-// "CD 2" or "Disc 3" - used to look one level up for a multi-CD book's cover.
-func isDiscFolder(name string) bool {
-	n := strings.NewReplacer(" ", "", "-", "", ".", "", "_", "").Replace(strings.ToLower(strings.TrimSpace(name)))
-	for _, p := range []string{"cd", "disc", "disk"} {
-		if !strings.HasPrefix(n, p) {
-			continue
-		}
-		rest := n[len(p):]
-		if rest == "" {
-			return true
-		}
-		allDigits := true
-		for _, r := range rest {
-			if r < '0' || r > '9' {
-				allDigits = false
-				break
-			}
-		}
-		if allDigits {
-			return true
-		}
-	}
-	return false
-}
+// isDiscFolder is metadata.IsDiscFolder: a disc/part subfolder like "CD1".
+func isDiscFolder(name string) bool { return metadata.IsDiscFolder(name) }
 
 // imageExts are image types accepted as a fallback cover when no conventionally
 // named file is present.
