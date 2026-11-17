@@ -2368,10 +2368,11 @@ export interface BookMeta {
 
 /**
  * catalog.MatchMode*: a run over unmatched books, a second look at community ASINs,
- * or a lookup of matched books by their ASIN/ISBN (a store listing with neither: by
- * its recorded community match), to fill in their details.
+ * a lookup of matched books by their ASIN/ISBN (a store listing with neither: by
+ * its recorded community match), to fill in their details, or a run over the books
+ * whose own ASIN the community doesn't know (Health's unknown_asin), by their title.
  */
-export type MatchRunMode = 'match' | 'repick' | 'refresh';
+export type MatchRunMode = 'match' | 'repick' | 'refresh' | 'unknown_asin';
 
 /** catalog.Match* statuses. matching and applying are working. */
 export type MatchRunStatus =

@@ -10,7 +10,7 @@ import type {
   BridgeStatus,
 } from '@/api/types';
 import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
-import { settingsWith } from '@/test/fixtures';
+import { settingsWith, systemStatus } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 import en from '@/i18n/locales/en.json';
@@ -23,7 +23,9 @@ import {
   chosenAccount,
   cleanDest,
   importStatus,
+  lookList,
   matchedParam,
+  needsLook,
   plannedLine,
   plannedPlaceholder,
   pollTarget,
@@ -221,6 +223,7 @@ describe('audible model', () => {
     expect(matchedParam('matched')).toBe(1);
     expect(matchedParam('missing')).toBe(0);
     expect(matchedParam('')).toBeUndefined();
+    expect(matchedParam('look')).toBe(0);
     const a = account();
     const b = account({ id: 'acct0002' });
     expect(pollTarget([a], '')).toBe(a);
@@ -233,6 +236,157 @@ describe('audible model', () => {
     expect(titleByline(title({ authors: [], series: [] }))).toBe('');
     const t = ((k: string, o?: Record<string, string>) => `${k}:${o?.name}:${o?.store}`) as never;
     expect(accountName(t, account({ label: '' }))).toBe('audible.account.unnamed:Chris:US');
+  });
+});
+
+describe('audible accounts kept without a Bridge or the module (server#294)', () => {
+  const unpaired = { ...bridgeStatus, paired: false, online: false, kinds: [] };
+
+  it('lists them on Settings > Bridge while no Bridge is paired, with Remove', async () => {
+    mockFetch(routes(true, { 'GET /admin/bridge': { body: unpaired } }));
+    renderApp('/server?topic=bridge');
+    const heading = await screen.findByRole('heading', { name: 'Audible accounts' });
+    const card = heading.closest('section') as HTMLElement;
+    expect(await within(card).findByText('Chris (US)')).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Remove...' })).toBeEnabled();
+  });
+
+  it('leaves the card out while unpaired with no accounts', async () => {
+    const calls = mockFetch(
+      routes(true, {
+        'GET /admin/bridge': { body: unpaired },
+        'GET /admin/audible/accounts': { body: { accounts: [] } },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    await waitFor(() => expect(calls.some((c) => c.path === '/admin/audible/accounts')).toBe(true));
+    expect(screen.queryByRole('heading', { name: 'Audible accounts' })).not.toBeInTheDocument();
+  });
+
+  it('leaves the card out while unpaired with the module off', async () => {
+    const calls = mockFetch(routes(false, { 'GET /admin/bridge': { body: unpaired } }));
+    renderApp('/server?topic=bridge');
+    expect(await screen.findByRole('button', { name: 'Connect a Bridge' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Audible accounts' })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.path.startsWith('/admin/audible'))).toBe(false);
+  });
+
+  it('lists them on Settings > Modules while the module is off, and removes one', async () => {
+    let removed = false;
+    const calls = mockFetch(
+      routes(false, {
+        'GET /admin/system': { body: systemStatus() },
+        'GET /admin/modules': {
+          body: {
+            modules: [
+              {
+                id: 'audible',
+                enabled: false,
+                active: false,
+                requires_bridge: 'audible',
+                bridge_state: 'offline',
+              },
+            ],
+          },
+        },
+        'GET /admin/audible/accounts': () => ({
+          body: { accounts: removed ? [] : [account()] },
+        }),
+        'DELETE /admin/audible/accounts/acct0001': () => {
+          removed = true;
+          return { status: 204 };
+        },
+      }),
+    );
+    renderApp('/server?topic=modules');
+    const kept = await screen.findByRole('heading', { name: "Accounts kept while it's off" });
+    const section = kept.closest('section') as HTMLElement;
+    expect(within(section).getByText('Chris (US)')).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(within(section).getByRole('button', { name: 'Remove...' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Remove Chris (US)?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.method === 'DELETE' && c.path === '/admin/audible/accounts/acct0001'),
+      ).toBe(true),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('heading', { name: "Accounts kept while it's off" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("says on the Bridge's Audible setup step that the module is off, with the way to Modules", async () => {
+    mockFetch(
+      routes(false, {
+        'GET /admin/bridge': {
+          body: {
+            ...bridgeStatus,
+            setup: {
+              items: [
+                { id: 'paired', done: true, required: true },
+                { id: 'audible', done: true, required: false },
+              ],
+              can_contribute: false,
+            },
+          },
+        },
+      }),
+    );
+    const { router } = renderApp('/server?topic=bridge');
+    expect(
+      await screen.findByText("The Audible module is off, so the accounts aren't checked."),
+    ).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('link', { name: 'Open Modules' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ topic: 'modules' }));
+  });
+
+  it('says nothing of the module on the setup step while it is on', async () => {
+    mockFetch(
+      routes(true, {
+        'GET /admin/bridge': {
+          body: {
+            ...bridgeStatus,
+            setup: {
+              items: [{ id: 'audible', done: true, required: false }],
+              can_contribute: false,
+            },
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    expect(await screen.findByText('Audible signed in')).toBeInTheDocument();
+    expect(screen.queryByText(/The Audible module is off/)).not.toBeInTheDocument();
+  });
+
+  it('lists nothing on Settings > Modules while the module is on', async () => {
+    const calls = mockFetch(
+      routes(true, {
+        'GET /admin/system': { body: systemStatus() },
+        'GET /admin/modules': {
+          body: {
+            modules: [
+              {
+                id: 'audible',
+                enabled: true,
+                active: false,
+                requires_bridge: 'audible',
+                bridge_state: 'offline',
+              },
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=modules');
+    expect(await screen.findByRole('heading', { name: 'Audible' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: "Accounts kept while it's off" }),
+    ).not.toBeInTheDocument();
+    expect(calls.some((c) => c.path === '/admin/audible/accounts')).toBe(false);
   });
 });
 
@@ -257,6 +411,7 @@ describe('settings > bridge > audible accounts', () => {
               account({
                 id: 'acct0002',
                 label: 'Sam (UK)',
+                marketplace: 'uk',
                 library_id: null,
                 library: null,
                 paused: true,
@@ -284,6 +439,10 @@ describe('settings > bridge > audible accounts', () => {
     expect(within(rows[0]).getByText('Fiction')).toBeInTheDocument();
     expect(within(rows[0]).getByText('30 titles, 12 on this server')).toBeInTheDocument();
     expect(within(rows[0]).getByText('Only books you choose')).toBeInTheDocument();
+    // The store as its domain, and a check under a minute ago as "just now".
+    expect(within(rows[0]).getByText('audible.com')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('audible.co.uk')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('Checked just now')).toBeInTheDocument();
     expect(within(rows[1]).getByText('Paused')).toBeInTheDocument();
     expect(within(rows[1]).getByText('1 title, 0 on this server')).toBeInTheDocument();
     expect(within(rows[1]).getByRole('button', { name: 'Check now' })).toBeDisabled();
@@ -349,6 +508,12 @@ describe('settings > bridge > audible accounts', () => {
         /To sign the device out of Amazon, remove it on the Bridge's Accounts page too/,
       ),
     ).toBeInTheDocument();
+    // What else goes: open checks, backups and syncs (bridge#47), and the
+    // Bridge's mapping that would fail until mapped again (server#294).
+    expect(
+      within(dialog).getByText(/any check, backup or sync that hasn't finished is cancelled/),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/its checks fail until you map it again/)).toBeInTheDocument();
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
     await user.click(within(dialog).getByRole('button', { name: 'Remove' }));
     await waitFor(() =>
@@ -439,6 +604,56 @@ describe('settings > audible', () => {
     expect(screen.queryByRole('combobox', { name: 'Account' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Check now' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Remove...' })).toBeInTheDocument();
+  });
+
+  it('lists the titles whose planned backup needs a look, preorders first', async () => {
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/titles': (req) => ({
+          body: {
+            titles:
+              req.query.get('matched') === '0'
+                ? [
+                    title({
+                      asin: 'B000000002',
+                      title: 'Quiet One',
+                      match: null,
+                      planned: plan({ kind: 'standalone', siblings: 0 }),
+                    }),
+                    title({
+                      asin: 'B000000003',
+                      title: 'New Author',
+                      match: null,
+                      planned: plan({ kind: 'standalone', siblings: 0, state: 'new' }),
+                    }),
+                    title({
+                      asin: 'B000000004',
+                      title: 'Coming Soon',
+                      state: 'preorder',
+                      release_date: '2026-12-20',
+                      match: null,
+                      planned: plan({ kind: 'series_new', siblings: 0 }),
+                    }),
+                  ]
+                : [title()],
+            next: '',
+          },
+        }),
+      }),
+    );
+    renderApp('/server?topic=audible');
+    await screen.findByRole('list', { name: 'Audible titles' });
+    await userEvent
+      .setup()
+      .selectOptions(screen.getByRole('combobox', { name: 'On this server' }), 'look');
+    await waitFor(() => expect(screen.queryByText('Quiet One')).not.toBeInTheDocument());
+    const list = await screen.findByRole('list', { name: 'Audible titles' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByText('Coming Soon')).toBeInTheDocument();
+    expect(within(rows[0]).getByText(/the first book of its series here/)).toBeInTheDocument();
+    expect(within(rows[1]).getByText('New Author')).toBeInTheDocument();
+    expect(within(rows[1]).getByText(/a new author folder/)).toBeInTheDocument();
   });
 
   it('says so when there are none, and when a filter matches nothing', async () => {
@@ -754,6 +969,35 @@ describe('audible backups', () => {
   });
 });
 
+describe('needs a look', () => {
+  const quiet = plan({ kind: 'standalone', siblings: 0 });
+  const newAuthor = plan({ kind: 'standalone', siblings: 0, state: 'new' });
+
+  it('keeps the titles not here whose planned backup warns', () => {
+    expect(needsLook(title({ match: null, planned: newAuthor }), '')).toBe(true);
+    expect(needsLook(title({ match: null, planned: quiet }), '')).toBe(false);
+    // Here already, or nothing to back up: never listed.
+    expect(needsLook(title({ planned: newAuthor }), '')).toBe(false);
+    expect(needsLook(title({ match: null, state: 'gone', planned: newAuthor }), '')).toBe(false);
+    expect(needsLook(title({ match: null, state: 'unavailable', planned: newAuthor }), '')).toBe(
+      false,
+    );
+    // A destination of the admin's own isn't the plan's to warn about.
+    expect(needsLook(title({ match: null, planned: newAuthor, dest_path: 'Mine/Book' }), '')).toBe(
+      false,
+    );
+  });
+
+  it('lists preorders first, else in order', () => {
+    const a = title({ asin: 'A', match: null, planned: newAuthor });
+    const b = title({ asin: 'B', match: null, planned: quiet });
+    const c = title({ asin: 'C', match: null, state: 'preorder', planned: newAuthor });
+    const d = title({ asin: 'D', match: null, planned: plan({ kind: 'series_new', siblings: 0 }) });
+    const got = lookList([a, b, c, d], new Map([['acct0001', '']]));
+    expect(got.map((x) => x.asin)).toEqual(['C', 'A', 'D']);
+  });
+});
+
 describe('unmatched titles, explained', () => {
   it('words a planned destination, its warnings and a stale template', () => {
     expect(plannedLine(title({ match: null }), '')).toBeNull();
@@ -763,9 +1007,10 @@ describe('unmatched titles, explained', () => {
       warn: false,
       stale: false,
     });
+    // A new series warns: the series may be here under another name (server#372).
     expect(
-      plannedLine({ planned: plan({ kind: 'series_new', siblings: 0 }), dest_path: '' }, '')?.key,
-    ).toBe('audible.planned.seriesNew');
+      plannedLine({ planned: plan({ kind: 'series_new', siblings: 0 }), dest_path: '' }, ''),
+    ).toMatchObject({ key: 'audible.planned.seriesNew', warn: true });
     expect(
       plannedLine({ planned: plan({ kind: 'standalone', siblings: 0 }), dest_path: '' }, '')?.key,
     ).toBe('audible.planned.joinsAuthor');
@@ -793,12 +1038,27 @@ describe('unmatched titles, explained', () => {
       plannedLine({ planned: plan({ template: '{Author}/{Series}/{Title}' }), dest_path: '' }, '')
         ?.key,
     ).toBe('audible.planned.seriesExisting');
+    // A new top folder warns: with the automatic placement it is a new author
+    // folder, with a template just a new folder (server#372).
     expect(
       plannedLine(
         { planned: plan({ kind: 'standalone', siblings: 0, state: 'new' }), dest_path: '' },
         '',
-      )?.key,
-    ).toBe('audible.planned.standalone');
+      ),
+    ).toMatchObject({ key: 'audible.planned.newAuthor', warn: true });
+    expect(
+      plannedLine(
+        {
+          planned: plan({ kind: 'series_new', siblings: 0, state: 'new', template: '{Title}' }),
+          dest_path: '',
+        },
+        '{Title}',
+      ),
+    ).toMatchObject({ key: 'audible.planned.newFolder', warn: true });
+    // A title joining an author folder, with no series of its own, is quiet.
+    expect(
+      plannedLine({ planned: plan({ kind: 'standalone', siblings: 0 }), dest_path: '' }, ''),
+    ).toMatchObject({ key: 'audible.planned.joinsAuthor', warn: false });
     const exists = plannedLine(
       { planned: plan({ state: 'exists', conflict: 'book' }), dest_path: '' },
       '',

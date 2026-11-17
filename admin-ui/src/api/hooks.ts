@@ -30,6 +30,7 @@ import type {
   AdminBookDetail,
   AdminBookPage,
   AdminLibrary,
+  AdminSettings,
   AuditFilter,
   BookRef,
   Import,
@@ -231,12 +232,21 @@ export function useStats() {
 /** Report status changes asynchronously after a save; only its mounted topic polls, at most twice a minute. */
 export const REPORT_STATUS_POLL_MS = 30_000;
 
-export function useSettings(pollReport = false) {
+/**
+ * The settings. pollReport, the Metadata topic's, says from the settings last
+ * read whether to ask again for the report's status (its rule:
+ * settings-model's pollsReport); asked after each read, so polling stops once
+ * the status settles (server#335).
+ */
+export function useSettings(pollReport?: (settings: AdminSettings) => boolean) {
   return useQuery({
     queryKey: keys.settings,
     queryFn: api.settings,
     staleTime: 5 * 60_000,
-    refetchInterval: pollReport ? REPORT_STATUS_POLL_MS : false,
+    refetchInterval: (query) =>
+      pollReport && query.state.data && pollReport(query.state.data)
+        ? REPORT_STATUS_POLL_MS
+        : false,
   });
 }
 

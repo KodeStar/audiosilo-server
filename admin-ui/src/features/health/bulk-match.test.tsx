@@ -332,6 +332,35 @@ describe('bulk matching', () => {
     );
   });
 
+  it('starts the title run on the unknown-ASIN category, with no refresh or repick (server#392)', async () => {
+    const summary = issuesSummary();
+    summary.categories.push({ kind: 'unknown_asin', count: 3, ignored: 0, samples: [] });
+    const calls = mockFetch(
+      routes([], {
+        'GET /admin/issues': { body: summary },
+        'POST /admin/match-runs': { status: 202, body: run({ status: 'matching' }) },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unknown_asin');
+    const card = (await screen.findByRole('heading', { name: 'Match automatically' })).closest(
+      'section',
+    )!;
+    expect(
+      within(card).getByText(/An ASIN you set yourself is never replaced/),
+    ).toBeInTheDocument();
+    const start = await within(card).findByRole('button', { name: 'Find matches by title' });
+    expect(within(card).queryByRole('button', { name: 'Find matches' })).toBeNull();
+    expect(within(card).queryByRole('button', { name: 'Fill in matched books' })).toBeNull();
+    expect(within(card).queryByRole('button', { name: 'Use United Kingdom ASINs' })).toBeNull();
+    await user.click(start);
+    await waitFor(() =>
+      expect(
+        calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs')?.body,
+      ).toEqual({ mode: 'unknown_asin' }),
+    );
+  });
+
   it('starts a refresh over the matched books', async () => {
     const calls = mockFetch(
       routes([], { 'POST /admin/match-runs': { status: 202, body: run({ status: 'matching' }) } }),

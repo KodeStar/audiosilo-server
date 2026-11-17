@@ -753,8 +753,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (off, the table is not kept current, and an empty card would read as all clear). **Wire**: GET /admin/settings
   `metadata.report_unknown` and read-only `metadata.report_status` = `{"state":"never|ok|not_offered|failed",
   "last_run_at"?, "last_sent"}` (both absent without the job: no service, or a demo server, so the console shows
-  no switch there, server#314). The mounted Metadata topic polls status every 30 s while metadata and reporting
-  are on, until the run after the switch was turned on has been recorded (server#335). Trigger by hand: switch it
+  no switch there, server#314). The mounted Metadata topic polls status every 30 s (`pollsReport`) only while metadata and
+  reporting are on and a run is near: one never ran, or a switch-on saved there in the last 10 minutes whose
+  run is not recorded yet; a settled status changes once a day and is not polled (server#335). A `failed` run
+  with `last_sent` > 0 says how many went in before it stopped. Trigger by hand: switch it
   off and on in the console (runs when none ran within 23 h; an active 7-day quiet period still applies,
   measured from the last attempt, and toggling never resets it); to run again sooner, delete
   `server_state('unknown_asin_report')` and the `unknown_asin_reports` rows, then switch it off and on.
@@ -3276,10 +3278,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   waits its interval.
   **Console**: Settings > Bridge's Audible accounts card (`features/audible/audible-accounts-card.tsx`,
   read-only mapping, links to the Bridge's Accounts tab, Check now and Remove per account) while the module
-  is on, and Settings > Audible (`audible-topic.tsx`, a `MODULE_PAGES` page: the titles with account, state
-  and on-this-server filters, search, and Check now and Remove for the chosen or only account; Remove
-  (`remove-account-button.tsx`) confirms first, saying it removes the account from this server only and that
+  is on (with no Bridge paired too, `hideWhenEmpty`: accounts kept from an earlier one stay removable), and
+  Settings > Audible (`audible-topic.tsx`, a `MODULE_PAGES` page: the titles with account, state
+  and on-this-server filters, "Needs a look" among them (`lookList`, client-side over the pages read with
+  `matched=0`: not here, not `unavailable` or `gone`, and `plannedLine` warns; preorders first), search, and
+  Check now and Remove for the chosen or only account; Remove
+  (`remove-account-button.tsx`) confirms first, saying it removes the account from this server only, that its
+  unfinished checks, backups and syncs are cancelled, that a Bridge still mapping it fails its checks, and that
   the Bridge's Accounts page signs the device out of Amazon); the loaded titles refresh when an account's `last_poll_at` moves, `useTitlesAfterPolls`).
+  With the module off, Settings > Modules' Audible card lists the accounts kept (`kept-accounts.tsx`), each
+  with Remove, and the Bridge's Setup card says on the Audible step that the module is off, linking Modules
+  (server#294).
   Job-start actions use the existing Bridge status: unpaired shows a pairing link and disables them;
   unsupported kinds are disabled too. A paired offline Bridge can still queue a kind it offers, with
   guidance that the job waits for it to return. Account settings and removal remain available.
@@ -3376,7 +3385,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   change plans by the new one; a claimed poll runs as claimed. **Console**:
   `PlannedNote` (`audible-topic.tsx`, `plannedLine`; none on an `unavailable` or `gone` title, which can't be backed
   up): "Will go to {path}, beside N books of its series" and the like,
-  "(planned at the last check)", warning tone on `exists` or `error`, a note when the plan's template differs from
+  "(planned at the last check)", warning tone on `exists` or `error`, and on a plan that starts a new top
+  folder (`state` `new`: a new author folder with the automatic placement, a new folder with a template) or a
+  new series (`series_new`), where the Bridge most likely missed one the library has under another spelling
+  (server#372), a note when the plan's template differs from
   the account's now, and "Your destination is checked when the backup starts" instead while a `dest_path` is set;
   Destination...'s placeholder is the planned path, never its value (`plannedPlaceholder`). `ReasonNote`: `contested`
   explained with the other titles and the book linked (`bookRoute`), a plain sentence without data (this title isn't

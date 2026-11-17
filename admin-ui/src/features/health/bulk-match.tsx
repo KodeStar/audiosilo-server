@@ -100,9 +100,12 @@ import {
  * that already have an ASIN or ISBN up by it, and books matched to a store listing
  * by their recorded community work, to fill in their details (an identifier alone,
  * from an enrichment or an ids-only apply, brought none). Runs work on the server,
- * so the card follows the newest one by polling, whoever started it.
+ * so the card follows the newest one by polling, whoever started it. On Health's
+ * unknown-ASIN category (`issue`), the card starts the one run that matches those
+ * books by their title, never replacing an ASIN an admin set (server#392).
  */
-export function BulkMatch() {
+export function BulkMatch({ issue = 'unmatched' }: { issue?: 'unmatched' | 'unknown_asin' }) {
+  const unknown = issue === 'unknown_asin';
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
@@ -170,7 +173,11 @@ export function BulkMatch() {
             {t('health.bulkMatch.title')}
           </h3>
           <p className="text-[13px] text-muted-foreground">
-            {phase === 'idle' ? t('health.bulkMatch.body') : t('health.bulkMatch.bodyRunning')}
+            {phase !== 'idle'
+              ? t('health.bulkMatch.bodyRunning')
+              : unknown
+                ? t('health.bulkMatch.unknownBody')
+                : t('health.bulkMatch.body')}
           </p>
         </div>
       </div>
@@ -220,26 +227,30 @@ export function BulkMatch() {
               onChange={setLibraryId}
               label={t('health.bulkMatch.library')}
             />
-            <Button disabled={busy} onClick={() => void start('match')}>
+            <Button disabled={busy} onClick={() => void start(unknown ? 'unknown_asin' : 'match')}>
               {busy ? (
                 <LoaderCircle className="animate-spin" aria-hidden="true" />
               ) : (
                 <Sparkles aria-hidden="true" />
               )}
-              {t('health.bulkMatch.start')}
+              {t(unknown ? 'health.bulkMatch.unknownStart' : 'health.bulkMatch.start')}
             </Button>
-            <Button variant="outline" disabled={busy} onClick={() => void start('refresh')}>
-              {t('health.bulkMatch.refresh')}
-            </Button>
-            {region ? (
+            {unknown ? null : (
+              <Button variant="outline" disabled={busy} onClick={() => void start('refresh')}>
+                {t('health.bulkMatch.refresh')}
+              </Button>
+            )}
+            {region && !unknown ? (
               <Button variant="outline" disabled={busy} onClick={() => void start('repick')}>
                 {t('health.bulkMatch.repick', { country: regionName(region, lang) })}
               </Button>
             ) : null}
           </div>
-          <p className="text-[12.5px] text-subtle-foreground">
-            {t('health.bulkMatch.refreshHint')}
-          </p>
+          {unknown ? null : (
+            <p className="text-[12.5px] text-subtle-foreground">
+              {t('health.bulkMatch.refreshHint')}
+            </p>
+          )}
           <p className="text-[12.5px] text-subtle-foreground">
             {t('health.bulkMatch.privacy')}{' '}
             {region ? (
@@ -500,11 +511,13 @@ function ReviewDialog({
   // nothing to change, so it sends only the admin's own exclusions.
   const finishEmpty = run.mode === 'refresh' && autoReady && count === 0;
   const country = regionName(run.region, lang);
+  const matchHeading = {
+    title: t('health.bulkMatch.reviewTitle'),
+    description: t('health.bulkMatch.reviewDescription'),
+  };
   const headings: Record<MatchRunMode, { title: string; description: string }> = {
-    match: {
-      title: t('health.bulkMatch.reviewTitle'),
-      description: t('health.bulkMatch.reviewDescription'),
-    },
+    match: matchHeading,
+    unknown_asin: matchHeading,
     repick: {
       title: t('health.bulkMatch.repickTitle', { country }),
       description: t('health.bulkMatch.repickDescription', { store: storeOf(run.region) }),

@@ -161,7 +161,9 @@ export function IssuesPage() {
               </Button>
             ) : null}
           </div>
-          {cat.kind === 'unmatched' && !ignored ? <BulkMatch /> : null}
+          {(cat.kind === 'unmatched' || cat.kind === 'unknown_asin') && !ignored ? (
+            <BulkMatch issue={cat.kind} />
+          ) : null}
           {isBookKind(cat.kind) ? (
             <IssueBooks key={`${cat.kind}:${ignored}`} kind={cat.kind} ignored={ignored} />
           ) : cat.kind === 'series_spellings' ? (

@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate, useSearch } from '@tanstack/react-router';
-import { useEffect, useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import {
@@ -33,7 +33,7 @@ import { StatusText } from '@/components/status-text';
 import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
-import { formatDate, formatNumber, formatRelative } from '@/lib/format';
+import { formatDate, formatNumber, formatRecent } from '@/lib/format';
 import { regionOptions } from '@/lib/regions';
 import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
@@ -55,10 +55,12 @@ import {
   certificateLook,
   lockOf,
   METADATA_MODES,
+  pollsReport,
   SESSION_DAYS_RANGE,
   SETTINGS_PAGES,
   visiblePages,
   type CertStatus,
+  type ReportWatch,
   type SettingsPage,
 } from './settings-model';
 
@@ -425,7 +427,12 @@ function PlayersTopic({ settings }: { settings: AdminSettings }) {
 function MetadataTopic({ settings }: { settings: AdminSettings }) {
   const { t, i18n } = useTranslation();
   const m = settings.metadata;
-  useSettings(Boolean(m.enabled && m.report_unknown));
+  // A switch-on saved here: its run (at once, unless one ran within the day)
+  // is watched for a few minutes; otherwise only a report that never ran is
+  // polled (pollsReport, server#335).
+  const [watch, setWatch] = useState<ReportWatch | null>(null);
+  const watchRun = () => setWatch({ at: Date.now(), lastRun: m.report_status?.last_run_at });
+  useSettings((s) => pollsReport(s.metadata, watch, Date.now()));
   return (
     <>
       <Card aria-labelledby="metadata-title">
@@ -449,13 +456,14 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
               describedBy="metadata-switch-desc"
               patch={(on) => ({ metadata: { enabled: on } })}
               failedTitle={t('settings.metadata.failed')}
-              onSaved={(on) =>
+              onSaved={(on) => {
+                if (on && m.report_unknown) watchRun();
                 toast.add({
                   title: on ? t('settings.metadata.on') : t('settings.metadata.off'),
                   description: on ? undefined : t('settings.metadata.offBody'),
                   type: 'success',
-                })
-              }
+                });
+              }}
             />
           </SettingRow>
           {m.enabled && m.available ? <MetadataStatusRow /> : null}
@@ -473,6 +481,7 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
               field="report_unknown"
               name="report"
               runText={<ReportRunText status={m.report_status} />}
+              onTurnedOn={watchRun}
             />
           ) : null}
         </div>
@@ -546,12 +555,15 @@ function JobRow({
   field,
   name,
   runText,
+  onTurnedOn,
 }: {
   settings: AdminSettings;
   field: 'upcoming' | 'report_unknown';
   /** The i18n key and element id stem: settings.metadata.<name>, <name>-switch. */
   name: 'upcoming' | 'report';
   runText: ReactNode;
+  /** Called once a save has turned the job on. */
+  onTurnedOn?: () => void;
 }) {
   const { t } = useTranslation();
   const m = settings.metadata;
@@ -579,12 +591,13 @@ function JobRow({
         describedBy={`${name}-switch-desc`}
         patch={(v) => ({ metadata: { [field]: v } })}
         failedTitle={t(`settings.metadata.${name}Failed`)}
-        onSaved={(v) =>
+        onSaved={(v) => {
+          if (v) onTurnedOn?.();
           toast.add({
             title: v ? t(`settings.metadata.${name}On`) : t(`settings.metadata.${name}Off`),
             type: 'success',
-          })
-        }
+          });
+        }}
       />
     </SettingRow>
   );
@@ -595,7 +608,7 @@ function ReportRunText({ status }: { status?: ReportStatus }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const state = status?.state ?? 'never';
-  const when = status?.last_run_at ? formatRelative(status.last_run_at, lang) : '';
+  const when = status?.last_run_at ? formatRecent(status.last_run_at, lang, t) : '';
   let text: string;
   switch (state) {
     case 'ok':
@@ -611,7 +624,14 @@ function ReportRunText({ status }: { status?: ReportStatus }) {
       text = t('settings.metadata.reportNotOffered', { when });
       break;
     case 'failed':
-      text = t('settings.metadata.reportLastFailed', { when });
+      // A run can fail after some of its reports went in (server#314).
+      text = status?.last_sent
+        ? t('settings.metadata.reportLastFailedSent', {
+            when,
+            count: status.last_sent,
+            formatted: formatNumber(status.last_sent, lang),
+          })
+        : t('settings.metadata.reportLastFailed', { when });
       break;
     default:
       text = t('settings.metadata.reportNever');
@@ -654,7 +674,7 @@ const isLastRunOK = (s: UpcomingStatus) =>
 
 function upcomingRunText(t: TFunction, s: UpcomingStatus | undefined, lang: string): string {
   if (!s?.last_run_at) return t('settings.metadata.upcomingNever');
-  const when = formatRelative(s.last_run_at, lang);
+  const when = formatRecent(s.last_run_at, lang, t);
   if (!isLastRunOK(s)) {
     return t('settings.metadata.upcomingLastFailed', { when, error: s.last_error ?? '' });
   }

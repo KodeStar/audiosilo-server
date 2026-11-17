@@ -17,6 +17,7 @@ import {
   accountName,
   chosenAccount,
   importStatus,
+  lookList,
   plannedLine,
   pollTarget,
   REASON_CONTESTED,
@@ -45,7 +46,8 @@ import {
  * Settings > Audible (Bridge Phase 4a; a page of the audible module, listed
  * only while it is on): every title the Bridge's Audible accounts own, which are
  * on this server and which aren't, filtered by account, state and whether it is
- * here, searched by title, author or ASIN. Check now asks the Bridge to look at
+ * here (or "Needs a look": not here, and its planned backup warns), searched by
+ * title, author or ASIN. Check now asks the Bridge to look at
  * an account's library again, and Remove takes an account the Bridge can no
  * longer remove off this server. Phase 4b: each title's backup and its actions
  * (Back up, Not this book, a destination), and Back up everything.
@@ -67,6 +69,7 @@ export function AudibleTopic() {
   const target = pollTarget(list, account);
   const names = new Map(list.map((a) => [a.id, accountName(t, a)] as const));
   const templates = new Map(list.map((a) => [a.id, a.template] as const));
+  const rows = matched === 'look' ? lookList(titles.rows, templates) : titles.rows;
   const paused = new Set(list.filter((a) => a.paused).map((a) => a.id));
   const filtered = Boolean(account || state || matched || q);
 
@@ -153,6 +156,7 @@ export function AudibleTopic() {
           <option value="">{t('audible.titles.anyServer')}</option>
           <option value="matched">{t('audible.titles.matched')}</option>
           <option value="missing">{t('audible.titles.missing')}</option>
+          <option value="look">{t('audible.titles.needsLook')}</option>
         </NativeSelect>
       </div>
       <p className="border-t px-5 py-2.5 text-[12.5px] text-muted-foreground">
@@ -170,7 +174,7 @@ export function AudibleTopic() {
         <div className="p-5">
           <div className="skel h-24 rounded-lg" role="status" aria-label={t('common.loading')} />
         </div>
-      ) : titles.rows.length === 0 ? (
+      ) : rows.length === 0 ? (
         <CardEmpty
           icon={Headphones}
           title={
@@ -190,7 +194,7 @@ export function AudibleTopic() {
         />
       ) : (
         <ul className="flex flex-col divide-y" aria-label={t('audible.titles.title')}>
-          {titles.rows.map((x) => (
+          {rows.map((x) => (
             <TitleRow
               key={`${x.account}/${x.asin}`}
               title={x}

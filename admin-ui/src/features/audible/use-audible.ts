@@ -33,7 +33,10 @@ const TITLES_POLL_MS = 5000;
 
 const TITLES_PAGE = 50;
 
-/** The Audible accounts (shown only while the module is on: 404 module_off otherwise). */
+/**
+ * The Audible accounts: read with the module on or off (the route is outside
+ * its toggle), so Settings > Modules lists those kept while it is off.
+ */
 export function useAudibleAccounts() {
   return useQuery({
     queryKey: keys.audibleAccounts,

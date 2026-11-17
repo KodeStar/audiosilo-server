@@ -11,6 +11,7 @@ import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { KeptAudibleAccounts } from '@/features/audible/kept-accounts';
 import { CardEmpty } from './card-empty';
 import { InstantSwitch, SettingBadges } from './settings-form';
 import { lockOf, type SettingId } from './settings-model';
@@ -29,7 +30,8 @@ const BRIDGE_TONE: Record<ModuleBridgeState, StatusTone> = {
  * each (GET /admin/modules, in the server's order). A card's switch saves the
  * module's toggle at once (locked when the environment sets it), says where it
  * stands with the Bridge it needs, and notes when it is on but still hidden
- * from listeners because the Bridge isn't ready.
+ * from listeners because the Bridge isn't ready. Audible's, while off, lists
+ * the accounts kept, each with Remove.
  */
 export function ModulesTopic({ settings }: { settings: AdminSettings }) {
   const { t } = useTranslation();
@@ -129,6 +131,8 @@ function ModuleCard({ module: m, settings }: { module: AdminModule; settings: Ad
           {t(`settings.module.${m.id}.hidden`, { defaultValue: t('settings.modules.hidden') })}
         </Notice>
       ) : null}
+      {/* Off, the accounts the server keeps, so one can be removed (server#294). */}
+      {m.id === 'audible' && !enabled ? <KeptAudibleAccounts /> : null}
     </Card>
   );
 }
