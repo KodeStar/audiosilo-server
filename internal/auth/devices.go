@@ -87,7 +87,14 @@ type Device struct {
 // ListDevices returns the live (not revoked, not expired) session and API-key
 // tokens of one user, or of everyone when userID is 0, most recently seen first.
 func (s *Service) ListDevices(ctx context.Context, userID int64) ([]Device, error) {
-	rows, err := s.db.QueryContext(ctx,
+	return s.listDevices(ctx, s.db, userID)
+}
+
+// listDevices is ListDevices read through q (a read transaction's snapshot).
+func (s *Service) listDevices(ctx context.Context, q interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}, userID int64) ([]Device, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT t.id, t.user_id, u.username, t.kind, t.device_name, t.client_app, t.client_version,
 		        t.client_platform, t.created_at, t.last_seen, t.last_ip, t.expires_at
 		   FROM tokens t JOIN users u ON u.id = t.user_id

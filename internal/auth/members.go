@@ -612,21 +612,27 @@ func (s *Service) MemberPairing(ctx context.Context, owner, id int64, ttl time.D
 
 // MemberDevices lists owner's member id's live sessions and API keys, as the
 // owner sees them: a grown-up's without their addresses (LastIP "", server#190),
-// a kid's with them. The member is read after the devices, so a switch to
-// grown-up committed before that read always hides them.
+// a kid's with them. The member and their devices are read in one snapshot, so
+// a switch to grown-up never leaves the addresses of a later read showing.
 func (s *Service) MemberDevices(ctx context.Context, owner, id int64) ([]Device, error) {
-	devices, err := s.ListDevices(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	m, err := s.Member(ctx, owner, id)
-	if err != nil {
-		return nil, err
-	}
-	if m.Kind != MemberKid {
-		for i := range devices {
-			devices[i].LastIP = ""
+	var devices []Device
+	err := s.db.WithReadTx(ctx, func(tx *sql.Tx) error {
+		m, err := s.memberOf(ctx, tx, owner, id)
+		if err != nil {
+			return err
 		}
+		if devices, err = s.listDevices(ctx, tx, id); err != nil {
+			return err
+		}
+		if m.Kind != MemberKid {
+			for i := range devices {
+				devices[i].LastIP = ""
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return devices, nil
 }
