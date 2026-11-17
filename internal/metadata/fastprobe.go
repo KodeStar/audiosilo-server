@@ -381,8 +381,9 @@ func (b *blockFile) waitRead(p []byte, off int64) (int, error) {
 // maxAbandonedReads is how many reads await may have given up on (an open,
 // a pread, an ffprobe run) that have not returned yet, on one mount (mounts.Of), before a new read from a file
 // there is refused (audio reads already under way may still be given up on, so
-// the count can pass it by the reads running at once; Bounded calls can't:
-// stuckReads.calls). Each holds a goroutine and
+// the count can pass it by the reads running at once; Bounded calls add at
+// most the cap to it, as only that many are made at once: stuckReads.calls).
+// Each holds a goroutine and
 // its file open, so a share that stays hung would otherwise leak a descriptor
 // per attempt (server#269): past it a read there fails fast, the file not
 // opened (openBlockFile, errReadRefused), until an abandoned read returns. Per
