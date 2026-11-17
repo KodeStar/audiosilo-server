@@ -236,6 +236,9 @@ func TestCountIsBounded(t *testing.T) {
 			if timedOutReason(reason) != tc.timedOut {
 				t.Errorf("reason %q: timed out %t, want %t", reason, !tc.timedOut, tc.timedOut)
 			}
+			if !b.uncounted {
+				t.Error("not marked uncounted: the scan would stamp the estimate as counted")
+			}
 			if took := time.Since(start); took > 5*time.Second {
 				t.Errorf("gave up after %v", took)
 			}
@@ -279,6 +282,16 @@ func TestCountStopsAtAReadError(t *testing.T) {
 	}
 	if n := f.fails.Load(); n != 1 {
 		t.Errorf("%d reads failed, want the count ended at the first", n)
+	}
+	if !b.uncounted {
+		t.Error("not marked uncounted: the scan would stamp the estimate as counted")
+	}
+	// Read again whole, it is counted, and the mark goes.
+	b = newBlockFile(bytes.NewReader(data), int64(len(data)))
+	b.ff = ff8
+	b.uncounted = true
+	if p, reason := fastProbe(t.Context(), b, "mp3", maxProbeTime); reason != "" || !p.Counted || b.uncounted {
+		t.Errorf("read again: reason %q uncounted %t, want the frames counted", reason, b.uncounted)
 	}
 }
 

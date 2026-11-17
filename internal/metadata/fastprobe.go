@@ -156,7 +156,8 @@ func timedOutReason(reason string) bool {
 // The one answer that is not ffprobe's is a VBR MP3's with no Xing or VBRI
 // header: ffprobe estimates its length from a bitrate (up to ~7% off, SRV-16),
 // so its frames are counted instead (mp3Uncounted.count, with bounds of its
-// own: the whole file is read), and the result is Counted.
+// own: the whole file is read), and the result is Counted. One whose count
+// fails (a bound passed, a read error, given up) sets b.uncounted.
 func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Duration) (p *probeResult, reason string) {
 	pctx, cancel := context.WithTimeoutCause(ctx, min(timeout, maxProbeTime), errProbeDeadline)
 	defer cancel()
@@ -179,7 +180,8 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 	}); why != "" {
 		return nil, why
 	}
-	if uc, ok := errors.AsType[*mp3Uncounted](err); ok && b.err == nil {
+	uc, headerless := errors.AsType[*mp3Uncounted](err)
+	if headerless && b.err == nil {
 		var why string
 		if p, why = uc.count(ctx, b, timeout); why != "" {
 			// The deadline's own words last, so a count out of time reads as
@@ -189,6 +191,13 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 			err = nil
 		}
 	}
+	p, reason = probeAnswer(b, p, err)
+	b.uncounted = headerless && reason != ""
+	return p, reason
+}
+
+// probeAnswer is fastProbe's answer from a reader's: p, or why there is none.
+func probeAnswer(b *blockFile, p *probeResult, err error) (*probeResult, string) {
 	switch {
 	case b.err != nil:
 		return nil, "read: " + b.err.Error()
@@ -281,6 +290,10 @@ type blockFile struct {
 	ctx    context.Context // the probe's, its deadline included; nil when not armed
 	budget int64           // bytes the probe may still read from the file
 	ticks  uint32          // tick's calls, so ctx is looked at every 256th
+
+	// uncounted: fastProbe met a VBR MP3 with no Xing or VBRI header and could
+	// not count its frames (Metadata.LengthUncounted).
+	uncounted bool
 }
 
 func newBlockFile(f io.ReaderAt, size int64) *blockFile {

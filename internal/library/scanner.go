@@ -1017,6 +1017,10 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// written whole after all (catalog.Book.LengthOnly); a folder book's parts
 	// say which it is (buildMultiFileChapters).
 	b.LengthOnly = b.ReadCutShort && !md.TagsUnread()
+	// A header-less VBR MP3 whose frames went uncounted (its length ffprobe's
+	// estimate) leaves the book's length revision unstamped, so the next scan
+	// reads it again; a folder book's other parts count too.
+	b.LengthUncounted = md.LengthUncounted()
 	setNames(b, md)
 	if md != nil {
 		b.Released = md.Released
@@ -1247,6 +1251,7 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 		f := &b.Files[i]
 		md := mds[i]
 		tagsUnread = tagsUnread || md.TagsUnread()
+		b.LengthUncounted = b.LengthUncounted || md.LengthUncounted()
 		f.LengthUnread = lengthTimedOut(md)
 		if readCutShort(md) && !b.ReadCutShort {
 			// Its length and chapters unknown: see enrich. The book is kept as

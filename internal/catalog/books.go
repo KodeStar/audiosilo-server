@@ -161,7 +161,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
 		     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at,
 		     file_order, file_order_indexed_at, ebook_path, ebook_sig, ebook_size, duration_rev, duration_rev_indexed_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,1,?,?,'','',?,?,?,?,?,?,?,?,?,?,`+durationRev+`,?)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,1,?,?,'','',?,?,?,?,?,?,?,?,?,?,CASE WHEN ? THEN 0 ELSE `+durationRev+` END,?)
 		 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 		     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 		     series=excluded.series, series_index=excluded.series_index,
@@ -206,7 +206,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 		b.Released, b.TagASIN, b.TagISBN, b.TagLanguage, string(scannedChapters), chaptersHash(string(scannedChapters)),
 		absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
-		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), indexedAt, b.ABS.Unread, b.ABS.Unread, b.EbookFile.Unread,
+		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.LengthUncounted, indexedAt, b.ABS.Unread, b.ABS.Unread, b.EbookFile.Unread,
 		b.EbookFile.Unread, b.EbookFile.Unread).Scan(&id); err != nil {
 		return 0, err
 	}
@@ -492,7 +492,8 @@ type Signature struct {
 // SQL: every index writes it (books.duration_rev, 0082), with its indexed_at
 // (duration_rev_indexed_at). 1 counts the frames of a VBR MP3 with no Xing or
 // VBRI header (metadata's probe, SRV-16), where earlier servers stored a
-// bitrate's estimate. A book read before it is DurationStale
+// bitrate's estimate; an index that left one uncounted (Book.LengthUncounted)
+// writes 0, no revision. A book read before it is DurationStale
 // (durationStaleExpr) and indexed once more.
 const durationRev = "1"
 

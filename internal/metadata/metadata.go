@@ -107,7 +107,17 @@ type Metadata struct {
 	// has its frames counted (readFile's count): its length in seconds, which
 	// replaces ffprobe's estimate. 0 for any other file.
 	counted float64
+	// uncounted: a VBR MP3 with no Xing or VBRI header whose frames could not
+	// be counted (LengthUncounted).
+	uncounted bool
 }
+
+// LengthUncounted reports whether the file is a VBR MP3 with no Xing or VBRI
+// header whose frames could not be counted (its count ran out of time, a read
+// failed, or it gave up on frames of another stream), so its Duration is
+// ffprobe's estimate from a bitrate, or none (SRV-16). A scan reads the book
+// again (catalog.Book.LengthUncounted).
+func (m *Metadata) LengthUncounted() bool { return m != nil && m.uncounted }
 
 // ProbeTimedOut reports whether, with no ffprobe configured, the file's read
 // ran out of its time (the tag read's or the in-process probe's deadline) and
@@ -320,11 +330,13 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, count b
 			if p, why := fastProbe(ctx, b, m.Format, timeout); why == "" && p.Counted {
 				m.counted = p.Duration
 			}
+			m.uncounted = b.uncounted
 		}
 		return nil, "", nil
 	}
 	b.ff = ff
 	p, reason = fastProbe(ctx, b, m.Format, timeout)
+	m.uncounted = b.uncounted
 	if reason != "" {
 		// Silent by design (ffprobe answers instead), but worth seeing when a
 		// scan is slower than expected: which files, and why (server#269).
@@ -395,6 +407,18 @@ func TimedOutForTests(path string) *Metadata {
 		panic("metadata.TimedOutForTests called outside a test binary")
 	}
 	return &Metadata{Format: fileFormat(path), timedOut: true}
+}
+
+// UncountedForTests marks m as LengthUncounted (a header-less VBR MP3 whose
+// count ran out of time) and returns it: for tests of what a scan does with
+// one, which a real read gives only on a file whose count outlasts its
+// deadline. It panics outside a test binary.
+func UncountedForTests(m *Metadata) *Metadata {
+	if !testing.Testing() {
+		panic("metadata.UncountedForTests called outside a test binary")
+	}
+	m.uncounted = true
+	return m
 }
 
 // HangMountForTests makes dir a mount of its own whose reads hang: the files
