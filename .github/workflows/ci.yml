@@ -1,10 +1,11 @@
 # Gates every pull request and push to main on tests + coverage, race tests +
 # lint on the native SQLite engine the image ships, lint (govet included, with
-# the per-package test floor and a dead-code report), the admin console's own
-# gate (admin-ui: typecheck, lint, prettier, vitest) and a snapshot of the
-# native release build booted as the release's smoke test boots it. The five
-# jobs run side by side; the image build (image.yml) stays separate and runs on
-# tags (releases) and pushes to main (:edge).
+# the per-package test floor), the admin console's own gate (admin-ui:
+# typecheck, lint, prettier, vitest) and a snapshot of the native release build
+# booted as the release's smoke test boots it, with a non-gating dead-code
+# report beside them. The six jobs run side by side; the image build
+# (image.yml) stays separate and runs on tags (releases) and pushes to main
+# (:edge).
 name: ci
 
 on:
@@ -122,19 +123,29 @@ jobs:
       - name: Test floor
         run: scripts/test-floor.sh
 
-      # A report, not a gate (server#220): functions no non-test code reaches.
-      # Test helpers and test-only seams are expected here; read it for code a
-      # change left without a caller. Its list is in the run's summary.
+  # A report, not a gate (server#220): functions no non-test code reaches. Test
+  # helpers and test-only seams are expected here; read it for code a change
+  # left without a caller. Its list is in the run's summary. A job of its own:
+  # the whole-program analysis would lengthen the lint job.
+  deadcode:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Dead code report (non-gating)
-        continue-on-error: true
         run: |
-          go run golang.org/x/tools/cmd/deadcode@v0.52.0 ./... | tee deadcode.txt
           {
             echo '### deadcode (non-gating)'
             echo '```'
-            cat deadcode.txt
+            go run golang.org/x/tools/cmd/deadcode@v0.52.0 ./...
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   # The release's linux_amd64 build (.goreleaser.yml: the native SQLite engine,
   # static, the web player and the console embedded) as a snapshot, booted as
