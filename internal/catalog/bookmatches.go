@@ -141,8 +141,8 @@ func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, 
 }
 
 // BookMatchAt is the recorded community match of the book at (libraryID,
-// path), nil when it has none (/meta's fallback for a book its identifiers
-// don't match).
+// path), nil when it has none (/meta's and /next's work when it names another
+// than the book's identifiers do, or they match nothing: api.bookEnrichment).
 func (c *Catalog) BookMatchAt(ctx context.Context, libraryID int64, path string) (*BookMatch, error) {
 	return bookAnchor(ctx, c.db, libraryID, path)
 }
