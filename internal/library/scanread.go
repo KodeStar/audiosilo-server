@@ -35,6 +35,16 @@ func newReadSlots(n int, timeout time.Duration) *readSlots {
 	return &readSlots{ch: make(chan struct{}, max(n, 1)), timeout: timeout, readFile: extractFile}
 }
 
+// readSlots is newReadSlots for this scanner's reads: probeTimeout each, through
+// its readFile when one is set.
+func (s *Scanner) readSlots(n int) *readSlots {
+	slots := newReadSlots(n, s.probeTimeout)
+	if s.readFile != nil {
+		slots.readFile = s.readFile
+	}
+	return slots
+}
+
 // extractFile is metadata.ExtractTimeout's reading (it never errs).
 func extractFile(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
 	md, _ := metadata.ExtractTimeout(ctx, absPath, ffprobePath, timeout)

@@ -73,8 +73,8 @@ type Scanner struct {
 	// batched, when set (tests), hears each book a scan takes into its write
 	// batch, with the batch's length then.
 	batched func(n int)
-	// readFile, when set (tests), stands in for each scan read's
-	// metadata.ExtractTimeout (readSlots.readFile).
+	// readFile, when set (tests), stands in for each scan's and on-demand
+	// index's metadata.ExtractTimeout (readSlots.readFile).
 	readFile func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata
 
 	// The files this server has seen ffprobe reject (problemCleared), by
@@ -430,10 +430,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// (Signature.RevStamp): stamped with today's revision (StampScannedRev), so
 	// later scans don't test them again.
 	var revBackfill []string
-	slots := newReadSlots(s.readers(), s.probeTimeout)
-	if s.readFile != nil {
-		slots.readFile = s.readFile
-	}
+	slots := s.readSlots(s.readers())
 	// The path, genre, tag hint, ABS, attachments, file order and ebook backfills are
 	// written as they go: a large one (most of a library laid out Author/Title, or
 	// every folder book of a library ABS has managed, read once after an upgrade)
@@ -827,6 +824,8 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			defer close(r.done)
 			// Not beside an on-demand read of the book (indexShared, IndexMoved),
 			// and one asked for while this read is under way waits for its write.
+			// A read of it that has not returned in time is not waited on further:
+			// the book is kept as stored for this scan.
 			f, err := s.startFlight(ctx, bookKey{lib.ID, b.RelPath}, &r.left)
 			if errors.Is(err, errReadLeft) {
 				s.keepLeft(ctx, lib, b, old)
@@ -1182,8 +1181,9 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	gaveUp.keep(b)
 }
 
-// keepLeft is a scan's reading of book b when a stopped scan left a read of it
-// under way (errReadLeft): nothing of it is read, so it is kept as stored
+// keepLeft is a scan's reading of book b when another read of it may never
+// return (errReadLeft: one a stopped scan left under way, or an on-demand one
+// not ended in time): nothing of it is read, so it is kept as stored
 // (ReadCutShort; a new one written with its path's names) with an unreadable
 // problem, the one stored when there is one (old) or else on its first audio
 // file, so Health lists it and the next scan looks at it again; the rest of
@@ -2218,13 +2218,16 @@ type indexFlight struct {
 	err  error
 	// left, a scan's read's (bookRead.left), is set once the scan stopped and
 	// left that read under way (Scanner.readsLeft): held in a call that may
-	// never return, so a later scan does not wait for it (startFlight).
+	// never return, so no later read waits for it (waitFlight).
 	left *atomic.Bool
 }
 
-// errReadLeft is startFlight's error, for a scan's read, when the book's
-// flight is a read a stopped scan left under way (indexFlight.left).
-var errReadLeft = errors.New("library: an earlier scan's read of this book is still under way")
+// errReadLeft is waitFlight's error when another read of the book may never
+// return: one a stopped scan left under way (indexFlight.left), or one not
+// ended within a look's time. It is a look given up on (metadata.GaveUp): an
+// on-demand read's caller answers 503 share_not_answering, and a scan keeps
+// the book as stored (keepLeft).
+var errReadLeft = fmt.Errorf("library: another read of this book has not returned: %w", metadata.ErrNotAnswered)
 
 // errReadDropped is a flight's outcome when a scan read the book but did not
 // write it (the scan stopped, or the write failed): its waiters read it
@@ -2240,12 +2243,15 @@ const indexTimeout = 10 * time.Minute
 // a scan's): each waits for that read and loads the book it stored, its own
 // copy. A caller whose own request ends stops waiting, the one that began the
 // read too (the read goes on: leadIndex); one whose read was given up (a scan
-// stopped, a read past indexTimeout) reads the book itself.
+// stopped, a read past indexTimeout) reads the book itself. One waiting on
+// another's read that has not returned in time gives up on it (waitFlight).
 func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *catalog.Book) (*catalog.Book, error) {
 	for {
 		f, lead := s.claimFlight(bookKey{lib.ID, book.RelPath}, nil)
 		if lead {
 			go s.leadIndex(ctx, lib, book, f, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
+		} else if err := s.waitFlight(ctx, f); err != nil {
+			return nil, err
 		}
 		b, err := s.awaitFlight(ctx, f)
 		if !readGivenUp(err) || ctx.Err() != nil {
@@ -2284,27 +2290,43 @@ func readGivenUp(err error) bool {
 }
 
 // startFlight registers a flight for key once no read of the book is under way,
-// waiting for one that is (ctx's error when ctx ends first). The caller ends it
-// with endFlight. A scan and IndexMoved take a book this way: neither can join a
-// read made without them (a scan writes in its own batches, IndexMoved carries
-// its book's state first), but neither reads it beside one either. A scan's
-// read passes its left (bookRead.left; nil otherwise), and is not kept waiting
-// on a read a stopped scan left under way: errReadLeft at once, as that read
-// may never return and the scan would stall at the book.
+// waiting for one that is (waitFlight's error when it gives up). The caller
+// ends it with endFlight. A scan and IndexMoved take a book this way: neither
+// can join a read made without them (a scan writes in its own batches,
+// IndexMoved carries its book's state first), but neither reads it beside one
+// either. A scan's read passes its left (bookRead.left; nil otherwise).
 func (s *Scanner) startFlight(ctx context.Context, key bookKey, left *atomic.Bool) (*indexFlight, error) {
 	for {
 		f, lead := s.claimFlight(key, left)
 		if lead {
 			return f, nil
 		}
-		if left != nil && f.left != nil && f.left.Load() {
-			return nil, errReadLeft
+		if err := s.waitFlight(ctx, f); err != nil {
+			return nil, err
 		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-f.done:
-		}
+	}
+}
+
+// waitFlight waits for flight f, another's read of the book, to end: nil once
+// it has, ctx's error when ctx ends first. A read that may never return (held
+// in a call a share that stopped answering never returns from) is not waited
+// on for good, or a scan would stall at the book and a request wait out its
+// time: errReadLeft at once for one a stopped scan left under way
+// (indexFlight.left), and for any other once a look's time (probeTimeout) has
+// passed without it ending.
+func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
+	if f.left != nil && f.left.Load() {
+		return errReadLeft
+	}
+	wait := time.NewTimer(s.probeTimeout)
+	defer wait.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-f.done:
+		return nil
+	case <-wait.C:
+		return errReadLeft
 	}
 }
 
@@ -2404,7 +2426,7 @@ func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *cata
 	// book resolved for another reason (bookOnDisk, a shared read's waiters)
 	// never needs it.
 	book.EbookFile = ebookOnDisk(lib.Root, book.RelPath, book.IsFolder)
-	s.enrich(ctx, lib, book, newReadSlots(1, s.probeTimeout))
+	s.enrich(ctx, lib, book, s.readSlots(1))
 	// UpsertBook layers any path-keyed enrichment and metadata overrides onto the
 	// scanned values in the same transaction.
 	_, err := s.cat.UpsertBook(ctx, book)

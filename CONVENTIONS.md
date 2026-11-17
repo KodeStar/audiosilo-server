@@ -1217,9 +1217,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   records nothing. A scan stopped while a read is still under way (held in a call nothing bounds)
   waits for it up to `stopGrace` (2 s), then leaves it to end on its own, its book's flight with
   it, counted in `Scanner.readsLeft` and logged, so the scan ends and the next runs (`writeNext`
-  waits on the scan's context too); a later scan does not wait on that read's flight
-  (`indexFlight.left`, `errReadLeft`) but keeps the book as stored with an `unreadable` problem
-  (`keepLeft`) and scans the rest. The walk's own listings and lstats are not bounded yet. A re-index
+  waits on the scan's context too); no later read waits on that read's flight
+  (`indexFlight.left`, `errReadLeft`), and none waits on any other read of the book (a scan's
+  or an on-demand one, maybe stuck the same way) for more than `probeTimeout` (`waitFlight`):
+  a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
+  rest; an on-demand read gives up as a look at a share that stopped answering (`metadata.GaveUp`,
+  503 `share_not_answering`). The walk's own listings and lstats are not bounded yet. A re-index
   where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`), or whose
   length ran out of time even read alone (an ffprobe time-out, `ProbeTimedOut` without one:
   `library.readCutShort`; a part on a share that hung mid-read), or with a file that is no regular

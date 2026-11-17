@@ -128,9 +128,10 @@ func TestStopDuringAStuckRead(t *testing.T) {
 	libB, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Healthy", Root: healthy})
 	s := NewScanner(cat, "", slog.Default())
 	started, unblock := make(chan struct{}), make(chan struct{})
+	var once sync.Once
 	s.readFile = func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
 		if mounts.Within(absPath, held) {
-			close(started)
+			once.Do(func() { close(started) })
 			<-unblock // ignores ctx, as a call stuck in the kernel does
 		}
 		return extractFile(ctx, absPath, ffprobePath, timeout)
@@ -239,6 +240,128 @@ func TestALaterScanSkipsABookWhoseReadWasLeft(t *testing.T) {
 	scanWithin(t, s, *lib, 20*time.Second)
 	if size, problem, _ := row("Author/Book"); size != 2<<10 || problem != "" {
 		t.Errorf("the book once its read returned: size %d, problem %q; want it read again", size, problem)
+	}
+}
+
+// holdRead makes s's reads of the file at held hang, ignoring their context as a
+// call stuck in the kernel does, until unblock: started closes once one is held.
+func holdRead(s *Scanner, held string) (started, unblock chan struct{}) {
+	started, unblock = make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	s.readFile = func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
+		if absPath == held {
+			once.Do(func() { close(started) })
+			<-unblock
+		}
+		return extractFile(ctx, absPath, ffprobePath, timeout)
+	}
+	return started, unblock
+}
+
+// A scan does not wait for good on a book an on-demand read is stuck reading
+// (its request gone, the read held in a call nothing bounds): after a look's
+// time it keeps the book as stored with an unreadable problem and scans the
+// rest of the library. The on-demand read stores the book once it returns.
+func TestAScanSkipsABookAStuckOnDemandReadHolds(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	writeFile(t, root, "Author/Book/01.mp3", make([]byte, 1<<10))
+	writeFile(t, root, "Author/Other/01.mp3", make([]byte, 1<<10))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, "", slog.Default())
+	s.probeTimeout = 200 * time.Millisecond
+	started, unblock := holdRead(s, filepath.Join(root, "Author", "Book", "01.mp3"))
+	defer func() {
+		select {
+		case <-unblock:
+		default:
+			close(unblock)
+		}
+	}()
+
+	read := make(chan error, 1)
+	go func() {
+		_, err := s.IndexPath(ctx, *lib, "Author/Book")
+		read <- err
+	}()
+	<-started
+	scanWithin(t, s, *lib, 10*time.Second)
+	problem := func(rel string) string {
+		t.Helper()
+		var p string
+		if err := db.QueryRowContext(ctx, `SELECT scan_error FROM books WHERE library_id = ? AND rel_path = ?`,
+			lib.ID, rel).Scan(&p); err != nil {
+			t.Fatalf("%s: %v", rel, err)
+		}
+		return p
+	}
+	if p := problem("Author/Book"); p != problemUnreadable {
+		t.Errorf("the book the stuck read holds: problem %q, want %q", p, problemUnreadable)
+	}
+	if p := problem("Author/Other"); p != "" {
+		t.Errorf("the book after it: problem %q, want it read", p)
+	}
+
+	close(unblock)
+	if err := <-read; err != nil {
+		t.Errorf("the on-demand read once it returned: %v", err)
+	}
+	if p := problem("Author/Book"); p != "" {
+		t.Errorf("the book once the on-demand read stored it: problem %q, want none", p)
+	}
+}
+
+// An on-demand read of a book a scan's read is stuck on (held in a call
+// nothing bounds) does not wait out its request: after a look's time it gives
+// up, as a look at a share that stopped answering (metadata.GaveUp, which the
+// API answers 503 share_not_answering), the shared read and a read of its own
+// alike.
+func TestAnOnDemandReadGivesUpOnAStuckScanRead(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	writeFile(t, root, "Author/Book/01.mp3", make([]byte, 1<<10))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, "", slog.Default())
+	s.probeTimeout = 200 * time.Millisecond
+	started, unblock := holdRead(s, filepath.Join(root, "Author", "Book", "01.mp3"))
+
+	scanned := make(chan error, 1)
+	go func() {
+		_, err := s.Scan(ctx, *lib)
+		scanned <- err
+	}()
+	<-started
+	for name, read := range map[string]func() (*catalog.Book, error){
+		"IndexPath":   func() (*catalog.Book, error) { return s.IndexPath(ctx, *lib, "Author/Book") },
+		"ReindexPath": func() (*catalog.Book, error) { return s.ReindexPath(ctx, *lib, "Author/Book") },
+	} {
+		began := time.Now()
+		b, err := read()
+		if took := time.Since(began); took > 5*time.Second {
+			t.Errorf("%s waited %v on the stuck read", name, took)
+		}
+		if b != nil || !metadata.GaveUp(err) {
+			t.Errorf("%s = %+v, %v; want given up (metadata.GaveUp)", name, b, err)
+		}
+	}
+
+	close(unblock)
+	select {
+	case err := <-scanned:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the scan did not finish once its read returned")
+	}
+	if _, err := s.IndexPath(ctx, *lib, "Author/Book"); err != nil {
+		t.Errorf("index the book once the scan's read returned: %v", err)
 	}
 }
 
