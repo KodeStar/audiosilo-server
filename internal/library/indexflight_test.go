@@ -78,7 +78,7 @@ func TestIndexPathLeaderCancelled(t *testing.T) {
 		lead <- answer{b, err}
 	}()
 	// The leader is probing: join it, then end the leader's request.
-	waitFlight(t, s, lib, "A/Book")
+	waitFlight(t, s, lib, "A/Book", true)
 	wait := make(chan answer, 1)
 	go func() {
 		b, err := s.IndexPath(ctx, lib, "A/Book/02.mp3")
@@ -115,7 +115,7 @@ func TestIndexMovedSharesTheFlight(t *testing.T) {
 		_, err := s.IndexMoved(ctx, lib, "A/Book", "")
 		moved <- err
 	}()
-	waitFlight(t, s, lib, "A/Book")
+	waitFlight(t, s, lib, "A/Book", true)
 	b, err := s.IndexPath(ctx, lib, "A/Book/02.mp3")
 	if err != nil || b == nil || b.RelPath != "A/Book" {
 		t.Fatalf("on-demand index beside IndexMoved: %+v, %v", b, err)
@@ -132,14 +132,13 @@ func TestIndexMovedSharesTheFlight(t *testing.T) {
 		_, err := s.IndexPath(ctx, lib, "A/Twin/01.mp3")
 		moved <- err
 	}()
-	waitFlight(t, s, lib, "A/Twin")
+	waitFlight(t, s, lib, "A/Twin", true)
 	if _, err := s.IndexMoved(ctx, lib, "A/Twin", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-moved; err != nil {
 		t.Fatal(err)
 	}
-	noOverlap(t, count)
 }
 
 // TestScanSharesTheFlight: a scan and an on-demand index of the same book never
@@ -156,7 +155,7 @@ func TestScanSharesTheFlight(t *testing.T) {
 			_, err := s.Scan(ctx, lib)
 			scanned <- err
 		}()
-		waitFlight(t, s, lib, "A/Book")
+		waitFlight(t, s, lib, "A/Book", true)
 		b, err := s.IndexPath(ctx, lib, "A/Book")
 		if err != nil || b == nil || b.RelPath != "A/Book" {
 			t.Fatalf("on-demand index during the scan: %+v, %v", b, err)
@@ -172,71 +171,46 @@ func TestScanSharesTheFlight(t *testing.T) {
 		if after := count(); 3*(after-before) != after {
 			t.Errorf("probes: %d, of which the last read of a book took %d; the scan's two books and one more read should be 3 reads", after, after-before)
 		}
-		noOverlap(t, count)
 	})
 	t.Run("scan during an on-demand index", func(t *testing.T) {
 		t.Parallel()
-		s, lib, ctx, count := newSlowProbeEnv(t)
+		s, lib, ctx, _ := newSlowProbeEnv(t)
 		read := make(chan error, 1)
 		go func() {
 			_, err := s.IndexPath(ctx, lib, "A/Book")
 			read <- err
 		}()
-		waitFlight(t, s, lib, "A/Book")
+		waitFlight(t, s, lib, "A/Book", true)
 		if _, err := s.Scan(ctx, lib); err != nil {
 			t.Fatal(err)
 		}
 		if err := <-read; err != nil {
 			t.Fatal(err)
 		}
-		noOverlap(t, count)
 	})
 }
 
-// waitFlight waits until a read of the book at rel is under way.
-func waitFlight(t *testing.T, s *Scanner, lib catalog.Library, rel string) {
-	t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
-		s.flightMu.Lock()
-		_, ok := s.flights[bookKey{lib.ID, rel}]
-		s.flightMu.Unlock()
-		if ok {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("no read of %s began", rel)
-		}
-	}
-}
-
-// waitNoFlight waits until no read of the book at rel is under way.
-func waitNoFlight(t *testing.T, s *Scanner, lib catalog.Library, rel string) {
+// waitFlight waits until a read of the book at rel is under way (underway) or
+// until none is.
+func waitFlight(t *testing.T, s *Scanner, lib catalog.Library, rel string, underway bool) {
 	t.Helper()
 	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(5 * time.Millisecond) {
 		s.flightMu.Lock()
 		_, ok := s.flights[bookKey{lib.ID, rel}]
 		s.flightMu.Unlock()
-		if !ok {
+		if ok == underway {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the read of %s never ended", rel)
+			t.Fatalf("waited for a read of %s under way to be %v", rel, underway)
 		}
-	}
-}
-
-// noOverlap fails when the stand-in ffprobe ran twice on one file at once.
-func noOverlap(t *testing.T, count func() int) {
-	t.Helper()
-	if count() < 0 {
-		t.Error("one file was probed by two reads at once")
 	}
 }
 
 // newSlowProbeEnv is a scanner whose stand-in ffprobe takes half a second and
 // notes each run (count), so on-demand indexes overlap, over a library holding
-// two two-file books, A/Book and A/Twin. count is negative once two runs probed
-// one file at once (noOverlap).
+// two two-file books, A/Book and A/Twin. The test fails when two runs probed
+// one file at once.
 func newSlowProbeEnv(t *testing.T) (*Scanner, catalog.Library, context.Context, func() int) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -272,10 +246,12 @@ func newSlowProbeEnv(t *testing.T) (*Scanner, catalog.Library, context.Context, 
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(b, []byte("overlap\n")) {
-			return -1
-		}
 		return bytes.Count(b, []byte("run\n"))
 	}
+	t.Cleanup(func() {
+		if b, _ := os.ReadFile(runs); bytes.Contains(b, []byte("overlap\n")) {
+			t.Error("one file was probed by two reads at once")
+		}
+	})
 	return NewScanner(cat, probe, nil), *lib, ctx, count
 }

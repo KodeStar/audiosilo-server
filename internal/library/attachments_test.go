@@ -632,7 +632,7 @@ func TestIndexPathFollowsAMoveWhenCancelled(t *testing.T) {
 	if _, err := s.IndexPath(reqCtx, *lib, "New/Book"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("IndexPath cancelled mid-read: %v, want context.Canceled", err)
 	}
-	waitNoFlight(t, s, *lib, "New/Book") // the read goes on past the request
+	waitFlight(t, s, *lib, "New/Book", false) // the read goes on past the request
 	if got := bookPaths(t, cat, lib.ID); !slices.Equal(got, []string{"New/Book"}) {
 		t.Fatalf("books = %q, want the moved book only", got)
 	}

@@ -144,7 +144,6 @@ type bookRead struct {
 	done    chan struct{}
 	// The book's flight (Scanner.startFlight), held from before the read until
 	// the book is written or dropped; nil when the scan stopped first.
-	key    bookKey
 	flight *indexFlight
 }
 
@@ -158,7 +157,7 @@ func (r *bookRead) endFlight(s *Scanner, err error) {
 	if err != nil {
 		err = errReadDropped
 	}
-	s.endFlight(r.key, r.flight, err)
+	s.endFlight(r.flight, err)
 	r.flight = nil
 }
 

@@ -770,13 +770,13 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// whose row has gone since the scan began is first seen now.
 			b.AddedAt = now()
 		}
-		r := &bookRead{book: b, existed: existed, done: make(chan struct{}), key: bookKey{lib.ID, b.RelPath}}
+		r := &bookRead{book: b, existed: existed, done: make(chan struct{})}
 		pending = append(pending, r)
 		go func() {
 			defer close(r.done)
 			// Not beside an on-demand read of the book (indexShared, IndexMoved),
 			// and one asked for while this read is under way waits for its write.
-			f, err := s.startFlight(ctx, r.key)
+			f, err := s.startFlight(ctx, bookKey{lib.ID, b.RelPath})
 			if err != nil {
 				return // the scan stopped: writeNext sees it
 			}
@@ -1981,10 +1981,11 @@ type bookKey struct {
 	relPath   string
 }
 
-// indexFlight is one read of a book under way, by an on-demand index
+// indexFlight is one read of book key under way, by an on-demand index
 // (indexShared, IndexMoved) or a scan (Scan's reads): done closes once it has
 // ended, err nil when the book is stored at its path.
 type indexFlight struct {
+	key  bookKey
 	done chan struct{}
 	err  error
 }
@@ -2005,26 +2006,21 @@ const indexTimeout = 10 * time.Minute
 // read too (the read goes on: leadIndex); one whose read was given up (a scan
 // stopped, a read past indexTimeout) reads the book itself.
 func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *catalog.Book) (*catalog.Book, error) {
-	key := bookKey{lib.ID, book.RelPath}
 	for {
-		s.flightMu.Lock()
-		f, waiting := s.flights[key]
-		if !waiting {
-			f = &indexFlight{done: make(chan struct{})}
-			s.flights[key] = f
-			go s.leadIndex(ctx, lib, book, key, f, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
+		f, lead := s.claimFlight(bookKey{lib.ID, book.RelPath})
+		if lead {
+			go s.leadIndex(ctx, lib, book, f, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
 		}
-		s.flightMu.Unlock()
-		b, err := s.awaitFlight(ctx, lib.ID, key, f)
+		b, err := s.awaitFlight(ctx, f)
 		if !readGivenUp(err) || ctx.Err() != nil {
 			return b, err
 		}
 	}
 }
 
-// awaitFlight waits for flight f of key to end, then loads the book it stored;
-// ctx's error when ctx ends first, the flight's when it stored none.
-func (s *Scanner) awaitFlight(ctx context.Context, libraryID int64, key bookKey, f *indexFlight) (*catalog.Book, error) {
+// awaitFlight waits for flight f to end, then loads the book it stored; ctx's
+// error when ctx ends first, the flight's when it stored none.
+func (s *Scanner) awaitFlight(ctx context.Context, f *indexFlight) (*catalog.Book, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -2033,7 +2029,7 @@ func (s *Scanner) awaitFlight(ctx context.Context, libraryID int64, key bookKey,
 	if f.err != nil {
 		return nil, f.err
 	}
-	return s.cat.GetBookByPath(ctx, libraryID, key.relPath)
+	return s.cat.GetBookByPath(ctx, f.key.libraryID, f.key.relPath)
 }
 
 // readGivenUp reports whether a flight's error says its read was given up
@@ -2049,14 +2045,8 @@ func readGivenUp(err error) bool {
 // its book's state first), but neither reads it beside one either.
 func (s *Scanner) startFlight(ctx context.Context, key bookKey) (*indexFlight, error) {
 	for {
-		s.flightMu.Lock()
-		f, busy := s.flights[key]
-		if !busy {
-			f = &indexFlight{done: make(chan struct{})}
-			s.flights[key] = f
-		}
-		s.flightMu.Unlock()
-		if !busy {
+		f, lead := s.claimFlight(key)
+		if lead {
 			return f, nil
 		}
 		select {
@@ -2067,11 +2057,24 @@ func (s *Scanner) startFlight(ctx context.Context, key bookKey) (*indexFlight, e
 	}
 }
 
-// endFlight ends flight f of key with its outcome, for its waiters.
-func (s *Scanner) endFlight(key bookKey, f *indexFlight, err error) {
+// claimFlight is the flight of key under way, or a new one registered for the
+// caller to lead (lead true) when there is none.
+func (s *Scanner) claimFlight(key bookKey) (f *indexFlight, lead bool) {
+	s.flightMu.Lock()
+	defer s.flightMu.Unlock()
+	if f, busy := s.flights[key]; busy {
+		return f, false
+	}
+	f = &indexFlight{key: key, done: make(chan struct{})}
+	s.flights[key] = f
+	return f, true
+}
+
+// endFlight ends flight f with its outcome, for its waiters.
+func (s *Scanner) endFlight(f *indexFlight, err error) {
 	f.err = err
 	s.flightMu.Lock()
-	delete(s.flights, key)
+	delete(s.flights, f.key)
 	s.flightMu.Unlock()
 	close(f.done)
 }
@@ -2087,13 +2090,13 @@ var errIndexAborted = errors.New("library: the shared index of this book did not
 // for it, and throwing the read away at its last write would leave the next
 // request to read the book again from scratch (server#211), or a moved book's
 // state on a path with no row.
-func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *catalog.Book, key bookKey, f *indexFlight, from func(context.Context) string) {
+func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *catalog.Book, f *indexFlight, from func(context.Context) string) {
 	err := errIndexAborted // until indexBookFrom returns
 	defer func() {
 		if p := recover(); p != nil {
 			s.log.Error("index book panicked", "library", lib.Name, "path", book.RelPath, "panic", p)
 		}
-		s.endFlight(key, f, err)
+		s.endFlight(f, err)
 	}()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), indexTimeout)
 	defer cancel()
@@ -2272,13 +2275,12 @@ func (s *Scanner) IndexMoved(ctx context.Context, lib catalog.Library, relPath, 
 	if err != nil {
 		return nil, err
 	}
-	key := bookKey{lib.ID, book.RelPath}
-	f, err := s.startFlight(ctx, key) // after a read of the book under way
+	f, err := s.startFlight(ctx, bookKey{lib.ID, book.RelPath}) // after a read of the book under way
 	if err != nil {
 		return nil, err
 	}
-	go s.leadIndex(ctx, lib, book, key, f, func(context.Context) string { return from })
-	return s.awaitFlight(ctx, lib.ID, key, f)
+	go s.leadIndex(ctx, lib, book, f, func(context.Context) string { return from })
+	return s.awaitFlight(ctx, f)
 }
 
 // indexBookFrom indexes book (indexBook) after carrying the durable state of the
