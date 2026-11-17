@@ -1169,7 +1169,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   length, codec, chapters, cover flag, mtime and size stay as the last full read left them) but
   its read problem, `unreadable` ("reading it timed out", a `ProbeTimedOut` too, or for a refused read "too many earlier reads
   from the same drive or share are stuck", with ffprobe or without; `probe_failed` for an ffprobe
-  time-out: `noteProblem` records one for every `readCutShort`), so the next scan reads it again (the stored
+  time-out: `noteProblem` records one for every `readCutShort`, a folder book's first part cut short going over an
+  earlier part's lasting problem, as the record is what `problemCleared` asks again), so the next scan reads it again (the stored
   mtime and size are the old ones, else `problemCleared`, which a read still cut short, its length
   out of time included, never clears); a new book read so is written with the
   path's names. With no

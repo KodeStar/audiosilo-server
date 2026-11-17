@@ -25,7 +25,8 @@ const (
 
 // noteProblem records the first read problem found among a book's files: file is
 // the library-relative path of the file just read, size its size, md what reading
-// it gave.
+// it gave. (The first part whose read was cut short goes over an earlier part's
+// problem: buildMultiFileChapters.)
 func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata) {
 	if b.ScanError != "" {
 		return

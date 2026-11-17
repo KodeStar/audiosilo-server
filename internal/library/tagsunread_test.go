@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -215,5 +216,53 @@ func TestProblemClearedNotWhileTheLengthTimesOut(t *testing.T) {
 	}
 	if !s.problemCleared(t.Context(), lib, sig, slots) {
 		t.Error("a read that answers in full did not clear the problem")
+	}
+}
+
+// A kept book records the part whose read was cut short, over an earlier
+// part's lasting problem (a file ffprobe can't read): that record is what the
+// next scan's problemCleared looks at again, so an unchanged book is read
+// whole once the part answers, rather than kept as stored for good behind a
+// problem that never clears.
+func TestKeptBookRecordsThePartCutShortOverAnEarlierProblem(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	const book = "Author/Book"
+	for _, part := range []string{"01.mp3", "02.mp3", "03.mp3"} {
+		silence(t, root, book+"/"+part, 1, "album=Real Title", "artist=Real Author")
+	}
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, "", slog.Default())
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(root, filepath.FromSlash(book+"/03.mp3")), later, later); err != nil {
+		t.Fatal(err)
+	}
+	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		md := extractFile(ctx, p, ffprobe, timeout)
+		switch {
+		case strings.HasSuffix(filepath.ToSlash(p), book+"/01.mp3"):
+			md.ProbeErr = errors.New("Invalid data found when processing input")
+		case strings.HasSuffix(filepath.ToSlash(p), book+"/03.mp3"):
+			return metadata.TimedOutForTests(p)
+		}
+		return md
+	}
+	res, err := s.Scan(ctx, *lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var problem, file string
+	if err := db.QueryRowContext(ctx, `SELECT scan_error, scan_error_file FROM books WHERE rel_path = ?`, book).
+		Scan(&problem, &file); err != nil {
+		t.Fatal(err)
+	}
+	if problem != problemUnreadable || file != book+"/03.mp3" || res.Updated != 0 {
+		t.Errorf("recorded %q on %q, %d updated; want the kept book's problem on the part cut short", problem, file, res.Updated)
 	}
 }

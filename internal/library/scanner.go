@@ -1224,10 +1224,15 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 	for i := range b.Files {
 		f := &b.Files[i]
 		md := mds[i]
-		noteProblem(b, f.RelPath, f.Size, md)
-		if readCutShort(md) {
-			b.ReadCutShort = true // its length and chapters unknown: see enrich
+		if readCutShort(md) && !b.ReadCutShort {
+			// Its length and chapters unknown: see enrich. The book is kept as
+			// stored, and what brings the next scan back to it is the problem
+			// recorded (problemCleared), so this part's goes over an earlier
+			// part's lasting one, which would never clear.
+			b.ReadCutShort = true
+			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = "", "", ""
 		}
+		noteProblem(b, f.RelPath, f.Size, md)
 		if i > 0 { // the first is enrich's reading, noted there
 			s.noteRejected(absOf(lib, f.RelPath), nil, md)
 		}
