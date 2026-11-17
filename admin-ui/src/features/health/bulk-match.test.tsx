@@ -470,7 +470,39 @@ describe('bulk matching', () => {
     await user.click(await within(dialog).findByRole('button', { name: /Not found/ }));
     expect(
       await within(dialog).findByText(
-        'Only weak community matches (the best scored 42 of 100): find it by hand from the book page',
+        'Only weak community matches (the best scored 42 of 100): match it by hand',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("opens a run with only weak matches on the books it didn't find (server#307)", async () => {
+    const weak: MatchRunItem = {
+      ...confident,
+      id: 13,
+      path: 'Someone/Garbage',
+      outcome: 'none',
+      score: 42,
+      detail: 'weak_match',
+      book: { title: 'Garbage', author: 'Someone' },
+      changes: {},
+    };
+    const onlyWeak = run();
+    onlyWeak.counts = { ...onlyWeak.counts, auto: 0, pending: 0, review: 0, none: 1 };
+    mockFetch(
+      routes([onlyWeak], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: { items: req.query.get('outcome') === 'none' ? [weak] : [], next_after: 0 },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    expect(await screen.findByText('The last run found nothing to apply.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: "See the books it didn't find" }));
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      await within(dialog).findByText(
+        'Only weak community matches (the best scored 42 of 100): match it by hand',
       ),
     ).toBeInTheDocument();
   });
@@ -1189,16 +1221,19 @@ describe('bulk matching', () => {
     expect(screen.queryByText(/Last run applied/)).not.toBeInTheDocument();
   });
 
-  it('says a run the service stopped early kept what it checked (server#306)', async () => {
+  it('says a run the service stopped early kept what it checked (server#306, server#352)', async () => {
+    const stopped = run({ error: 'metadata_unavailable', total: 120, done: 40 });
+    // The ten the service never answered for weren't checked.
+    stopped.counts = { ...stopped.counts, error: 10 };
     mockFetch(
-      routes([run({ error: 'metadata_unavailable', total: 120, done: 40 })], {
+      routes([stopped], {
         'GET /admin/match-runs/5/items': { body: { items: [confident], next_after: 0 } },
       }),
     );
     renderApp('/health?issue=unmatched');
     expect(
       await screen.findByText(
-        "This run stopped early: the community metadata service didn't answer. 40 of 120 books were checked; review them, then run again for the rest.",
+        "This run stopped early: the community metadata service didn't answer. 30 of 120 books were checked; review them, then run again for the rest.",
       ),
     ).toBeInTheDocument();
     // Its answers are there to review and apply.
@@ -1261,8 +1296,38 @@ describe('bulk matching', () => {
     expect(box).not.toBeChecked();
     expect(
       within(box.closest('li')!).getByText(
-        "Held for review: the ASIN or ISBN in its tags or from an Audiobookshelf import may name another book, as its title or series position doesn't agree",
+        "Held for review: the ASIN or ISBN from its tags or an Audiobookshelf import may belong to another book, as the title or series position doesn't match",
       ),
+    ).toBeInTheDocument();
+  });
+
+  it('gives the lengths of an item held for its identifier when they differ too (server#352)', async () => {
+    const both: MatchRunItem = {
+      ...doubtful,
+      score: 100,
+      runner_up: 0,
+      detail: 'identifier_disagrees',
+      proposal: { ...doubtful.proposal, runtime_min: 600 },
+      book: { ...doubtful.book, duration: 8 * 3600 },
+    };
+    mockFetch(
+      routes([run()], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items: req.query.get('outcome') === 'review' ? [both] : [confident],
+            next_after: 0,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: /To review/ }));
+    const box = await within(dialog).findByRole('checkbox', { name: 'Apply to Artemis' });
+    expect(
+      within(box.closest('li')!).getByText('The book is 8h long, this recording 10h'),
     ).toBeInTheDocument();
   });
 

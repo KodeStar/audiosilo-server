@@ -212,17 +212,28 @@ export function acceptRequest(
 }
 
 export type LengthCompare =
-  { kind: 'match' } | { kind: 'longer' | 'shorter'; seconds: number } | undefined;
+  { kind: 'match' } | { kind: 'close' | 'longer' | 'shorter'; seconds: number } | undefined;
 
-/** A recording's runtime against the files: within 5% "matches", else how far off. */
+/**
+ * How far a recording may be off the files and still "match": the 2% a match
+ * run's automatic rule allows (matchrun.AnchorRuntimeOff), so the dialog never
+ * says a length matches that a run holds for review.
+ */
+export const LENGTH_MATCH_OFF = 0.02;
+/** How far off it still reads "close" rather than longer or shorter. */
+export const LENGTH_CLOSE_OFF = 0.05;
+
+/** A recording's runtime against the files: within 2% "matches", within 5% "close", else how far off. */
 export function lengthComparison(
   runtimeMin: number | undefined,
   bookSeconds: number,
 ): LengthCompare {
   if (!runtimeMin || bookSeconds <= 0) return undefined;
   const diff = runtimeMin * 60 - bookSeconds;
-  if (Math.abs(diff) <= bookSeconds * 0.05) return { kind: 'match' };
-  return { kind: diff > 0 ? 'longer' : 'shorter', seconds: Math.abs(diff) };
+  const off = Math.abs(diff);
+  if (off <= bookSeconds * LENGTH_MATCH_OFF) return { kind: 'match' };
+  if (off <= bookSeconds * LENGTH_CLOSE_OFF) return { kind: 'close', seconds: off };
+  return { kind: diff > 0 ? 'longer' : 'shorter', seconds: off };
 }
 
 /**

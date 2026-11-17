@@ -69,9 +69,12 @@ import { cn } from '@/lib/utils';
 import {
   NO_PICKS,
   applyCount,
+  answeredCount,
   applyRequest,
   bulkPhase,
   changeParts,
+  firstReviewTab,
+  heldLengths,
   isChosen,
   hasCloseScore,
   picksForScope,
@@ -79,6 +82,7 @@ import {
   leaveOut,
   runFraction,
   runProgress,
+  seesNotFound,
   stoppedEarly,
   togglePick,
   togglePickRange,
@@ -181,7 +185,7 @@ export function BulkMatch() {
           {stoppedEarly(run) ? (
             <p role="status" className="w-full text-[12.5px] text-warning">
               {t('health.bulkMatch.stoppedEarly', {
-                done: formatNumber(run.done, lang),
+                done: formatNumber(answeredCount(run), lang),
                 total: formatNumber(run.total, lang),
               })}
             </p>
@@ -204,6 +208,11 @@ export function BulkMatch() {
       ) : (
         <>
           {run ? <LastRun run={run} lang={lang} /> : null}
+          {seesNotFound(run) ? (
+            <Button variant="link" className="self-start" onClick={() => setReviewing(true)}>
+              {t('health.bulkMatch.seeNotFound')}
+            </Button>
+          ) : null}
           <div className="flex flex-wrap items-center gap-2">
             <LibrarySelect
               value={libraryId}
@@ -251,7 +260,7 @@ export function BulkMatch() {
         </>
       )}
 
-      {run && phase === 'ready' ? (
+      {run && (phase === 'ready' || seesNotFound(run)) ? (
         <ReviewDialog run={run} open={reviewing} onOpenChange={setReviewing} />
       ) : null}
     </section>
@@ -392,7 +401,7 @@ function ReviewDialog({
   // A refresh takes fill or overwrite only (matchrun.ScopesFor): it keeps a book's
   // own ASIN or ISBN, and either fills in a store listing's from its recording.
   const scopes = run.mode === 'refresh' ? MATCH_SCOPES.filter((s) => s !== 'ids') : MATCH_SCOPES;
-  const firstTab: MatchOutcome = run.counts.pending || repick ? 'auto' : 'review';
+  const firstTab = firstReviewTab(run);
   const [tab, setTab] = useState<MatchOutcome>(firstTab);
   const [picks, setPicks] = useState<Picks>(NO_PICKS);
   const [loaded, setLoaded] = useState<ReadonlyMap<number, MatchRunItem>>(() => new Map());
@@ -791,13 +800,15 @@ function ItemRow({
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
   // An item held for its length says both, the book's as it is now: none once
   // they read the same (the book's length changed since the run, server#355).
-  const lengths =
-    item.detail === 'length_differs' && p.runtime_min && item.book.duration
-      ? {
-          book: formatDuration(item.book.duration, lang),
-          recording: formatDuration(p.runtime_min * 60, lang),
-        }
-      : undefined;
+  // One held for its identifier says them too when they are that far apart (the
+  // run records one reason, server#352).
+  const held = heldLengths(item);
+  const lengths = held
+    ? {
+        book: formatDuration(held.book, lang),
+        recording: formatDuration(held.recording, lang),
+      }
+    : undefined;
   const heldForLength = lengths && lengths.book !== lengths.recording ? lengths : undefined;
   const seriesLine = (refs: SeriesRef[]) =>
     refs
@@ -898,14 +909,19 @@ function ItemRow({
             )}
           </span>
         )}
-        {candidate && heldForLength ? (
-          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
-            {t('health.bulkMatch.item.lengthDiffers', heldForLength)}
-          </span>
-        ) : null}
         {candidate && item.detail === 'identifier_disagrees' ? (
           <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
             {t('health.bulkMatch.item.identifierDisagrees')}
+          </span>
+        ) : null}
+        {candidate && heldForLength ? (
+          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
+            {t(
+              item.detail === 'identifier_disagrees'
+                ? 'health.bulkMatch.item.lengthToo'
+                : 'health.bulkMatch.item.lengthDiffers',
+              heldForLength,
+            )}
           </span>
         ) : null}
         {candidate && item.detail === 'dramatization_only' ? (

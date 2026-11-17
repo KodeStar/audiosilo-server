@@ -1,3 +1,4 @@
+import en from '@/i18n/locales/en.json';
 import { adminBook } from '@/test/library-fixtures';
 import { issuesSummary } from '@/test/fixtures';
 import {
@@ -60,6 +61,13 @@ it('says why a book is listed, per category', () => {
     key: 'health.reason.detailed_chapters',
     values: { count: 34 },
   });
+});
+
+it('never says a book not matched has no ASIN: one from its tags is only a hint (server#307)', () => {
+  expect(issueReason('unmatched', adminBook({ asin: 'B0TAGHINT1' }))).toEqual({
+    key: 'health.reason.unmatched',
+  });
+  expect((en as Record<string, string>)['health.reason.unmatched']).not.toMatch(/ASIN|ISBN/);
 });
 
 it('says why a book without chapters got none from the community', () => {

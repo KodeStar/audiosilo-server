@@ -119,6 +119,10 @@ const BY_CODE: Record<string, string> = {
   no_ebook: 'errors.noEbook',
   // Library > LibriVox: the recording is on this server already.
   in_library: 'errors.librivoxInLibrary',
+  // Settings > Audible: a title's destination, an account's placement template
+  // (bridge.CheckAudibleDestPath, CheckAudibleTemplate).
+  invalid_dest_path: 'errors.invalidDestPath',
+  invalid_template: 'errors.invalidTemplate',
 };
 
 /** A failure as one sentence for a toast or a field. */

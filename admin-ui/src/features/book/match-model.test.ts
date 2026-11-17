@@ -276,9 +276,12 @@ describe('compare', () => {
 });
 
 describe('lengthComparison', () => {
-  it('matches within 5%, else says how far off', () => {
+  it('matches within 2%, is close within 5%, else says how far off', () => {
     expect(lengthComparison(2730, 163800)).toEqual({ kind: 'match' });
-    expect(lengthComparison(2860, 163800)).toEqual({ kind: 'match' });
+    // 2% is the most a match run applies unasked; up to 5% is close (server#331).
+    expect(lengthComparison(2784, 163800)).toEqual({ kind: 'match' });
+    expect(lengthComparison(2860, 163800)).toEqual({ kind: 'close', seconds: 7800 });
+    expect(lengthComparison(2600, 163800)).toEqual({ kind: 'close', seconds: 7800 });
     expect(lengthComparison(3000, 163800)).toEqual({ kind: 'longer', seconds: 16200 });
     expect(lengthComparison(2000, 163800)).toEqual({ kind: 'shorter', seconds: 43800 });
     expect(lengthComparison(undefined, 163800)).toBeUndefined();

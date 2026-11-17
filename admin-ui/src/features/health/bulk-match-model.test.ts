@@ -2,16 +2,20 @@ import type { MatchRun, MatchRunItem } from '@/api/types';
 import { regionName, regionOptions, regionTag } from '@/lib/regions';
 import {
   NO_PICKS,
+  answeredCount,
   applyCount,
   picksForScope,
   hasCloseScore,
   applyRequest,
   bulkPhase,
   changeParts,
+  firstReviewTab,
+  heldLengths,
   isChosen,
   isPickable,
   leaveOut,
   runFraction,
+  seesNotFound,
   stoppedEarly,
   togglePick,
   togglePickRange,
@@ -79,6 +83,46 @@ describe('bulkPhase', () => {
   it('treats a ready run with nothing left to apply as done', () => {
     expect(bulkPhase(run({}, { pending: 0, review: 0 }))).toBe('idle');
     expect(bulkPhase(run({}, { pending: 0, review: 1 }))).toBe('ready');
+  });
+});
+
+describe('a run seen for what it found (server#307, server#352)', () => {
+  it("offers a finished run's books it didn't find, and opens on them", () => {
+    const weak = run({}, { auto: 0, pending: 0, review: 0, none: 3 });
+    expect(seesNotFound(weak)).toBe(true);
+    expect(firstReviewTab(weak)).toBe('none');
+    expect(seesNotFound(run({ status: 'applied' }, { pending: 0, review: 0 }))).toBe(true);
+    // A run still to review opens as before, and offers no second way in.
+    expect(seesNotFound(run())).toBe(false);
+    expect(firstReviewTab(run())).toBe('auto');
+    expect(firstReviewTab(run({}, { pending: 0 }))).toBe('review');
+    expect(firstReviewTab(run({ mode: 'repick' }, { pending: 0 }))).toBe('auto');
+    expect(seesNotFound(run({ status: 'cancelled' }, { pending: 0, review: 0 }))).toBe(false);
+    expect(seesNotFound(run({}, { pending: 0, review: 0, none: 0 }))).toBe(false);
+    expect(seesNotFound(undefined)).toBe(false);
+  });
+
+  it('counts only the books the service answered', () => {
+    expect(answeredCount(run({ done: 16 }, { error: 10 }))).toBe(6);
+    expect(answeredCount(run({ done: 2 }, { error: 3 }))).toBe(0);
+  });
+
+  it("gives the lengths of an item held for its length, or its identifier when they're far apart", () => {
+    const held = (detail: string, runtime: number, duration: number) =>
+      heldLengths(
+        item({
+          outcome: 'review',
+          detail,
+          proposal: { values: {}, runtime_min: runtime },
+          book: { title: 'B', author: 'A', duration },
+        }),
+      );
+    expect(held('length_differs', 600, 36000)).toEqual({ book: 36000, recording: 36000 });
+    expect(held('identifier_disagrees', 600, 28800)).toEqual({ book: 28800, recording: 36000 });
+    // Within 10%: the identifier is the only reason given.
+    expect(held('identifier_disagrees', 600, 34000)).toBeUndefined();
+    expect(held('dramatization_only', 600, 28800)).toBeUndefined();
+    expect(held('length_differs', 0, 28800)).toBeUndefined();
   });
 });
 
