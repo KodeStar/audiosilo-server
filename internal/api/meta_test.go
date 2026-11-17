@@ -735,25 +735,29 @@ func TestMetaLibrivoxRecording(t *testing.T) {
 	})
 }
 
+// anchorMatch records path's community match as the console does: work, and
+// recording when not "".
+func anchorMatch(t *testing.T, e *testEnv, libID int64, path, work, recording string) {
+	t.Helper()
+	if err := e.cat.EditBook(context.Background(), libID, path, catalog.BookEdit{
+		Match: &catalog.MatchAnchor{WorkID: work, RecordingID: recording}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestMetaRecordedMatch: a book its identifiers don't match (it has none, or
 // upstream doesn't know them) answers /meta from its recorded community match
 // (the console's), LibriVox block included; one with no match stays unmatched;
-// a book its ASIN matches ignores its recorded match; and the route's scope
-// check still comes first.
+// a recorded work upstream doesn't know leaves the ASIN's answer (one it knows
+// wins: TestWorkRuleFollowsRecordedMatch); and the route's scope check still
+// comes first.
 func TestMetaRecordedMatch(t *testing.T) {
 	t.Parallel()
 	lv := strings.Replace(martianWorkBody, `"id":"rec1",`,
 		`"id":"rec1","librivox_id":47,"links":{"librivox":"https://librivox.org/the-martian-by-andy-weir/"},`, 1)
 	if lv == martianWorkBody {
 		t.Fatal("fixture replace did not apply")
-	}
-	anchor := func(t *testing.T, e *testEnv, libID int64, path, work, recording string) {
-		t.Helper()
-		if err := e.cat.EditBook(context.Background(), libID, path, catalog.BookEdit{
-			Match: &catalog.MatchAnchor{WorkID: work, RecordingID: recording}, Source: catalog.SourceCommunity,
-		}); err != nil {
-			t.Fatal(err)
-		}
 	}
 	get := func(t *testing.T, e *testEnv, libID int64, path string) string {
 		t.Helper()
@@ -764,7 +768,7 @@ func TestMetaRecordedMatch(t *testing.T) {
 		t.Parallel()
 		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
 		libID := seedBook(t, e, "LibriVox/The Martian", "")
-		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		anchorMatch(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
 		body := get(t, e, libID, "LibriVox/The Martian")
 		for _, want := range []string{`"matched":true`, `"recording":{"id":"rec1"`, `"librivox":{"id":47,"url":"https://librivox.org/the-martian-by-andy-weir/"}`} {
 			if !strings.Contains(body, want) {
@@ -784,7 +788,7 @@ func TestMetaRecordedMatch(t *testing.T) {
 		t.Parallel()
 		e := newMetaEnvMock(t, true, &mockMetaserve{lookupCode: http.StatusNotFound, work: lv})
 		libID := seedBook(t, e, "LibriVox/The Martian", "B0UNKNOWN")
-		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		anchorMatch(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
 		if body := get(t, e, libID, "LibriVox/The Martian"); !strings.Contains(body, `"librivox":{"id":47`) {
 			t.Fatalf("meta = %s, want the recorded match", body)
 		}
@@ -800,7 +804,7 @@ func TestMetaRecordedMatch(t *testing.T) {
 		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID, RelPath: "LibriVox/Other", Title: "Other", Author: "LibriVox", AddedAt: "2020-01-01"}); err != nil {
 			t.Fatal(err)
 		}
-		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		anchorMatch(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
 		tok := adminSession(t, e)
 		if resp, body := e.do(t, "GET", metaCoverPath(libID, "LibriVox/The Martian", "https://c/1.jpg", ""), tok, ""); resp.StatusCode != http.StatusBadGateway || !strings.Contains(body, "cover_unavailable") {
 			t.Fatalf("matched book's cover = %d %s, want it handed out (502 cover_unavailable from the stubbed fetch)", resp.StatusCode, body)
@@ -809,13 +813,14 @@ func TestMetaRecordedMatch(t *testing.T) {
 			t.Fatalf("unmatched book's cover = %d %s, want 404", resp.StatusCode, body)
 		}
 	})
-	t.Run("matched ASIN ignores the recorded match", func(t *testing.T) {
+	t.Run("a recorded work upstream lacks keeps the ASIN's", func(t *testing.T) {
 		t.Parallel()
 		e := newMetaEnvMock(t, true, &mockMetaserve{})
 		libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
-		// The mock knows no "artemis" work: had the match been asked, the
-		// answer would be unmatched.
-		anchor(t, e, libID, "Andy Weir/The Martian", "artemis", "")
+		// The mock knows no "artemis" work: the match is asked (it names
+		// another work than the ASIN's, server#412) and its 404 leaves the
+		// ASIN's answer standing rather than unmatching the book.
+		anchorMatch(t, e, libID, "Andy Weir/The Martian", "artemis", "")
 		if body := get(t, e, libID, "Andy Weir/The Martian"); !strings.Contains(body, `"matched":true,"work":{"id":"the-martian"`) {
 			t.Fatalf("meta = %s, want the ASIN's work", body)
 		}
@@ -824,11 +829,11 @@ func TestMetaRecordedMatch(t *testing.T) {
 		t.Parallel()
 		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
 		libID := seedBook(t, e, "LibriVox/The Martian", "")
-		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		anchorMatch(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
 		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID, RelPath: "Other/Secret", Title: "Secret", Author: "Other", AddedAt: "2020-01-01"}); err != nil {
 			t.Fatal(err)
 		}
-		anchor(t, e, libID, "Other/Secret", "the-martian", "rec1")
+		anchorMatch(t, e, libID, "Other/Secret", "the-martian", "rec1")
 		kid, tok := newUserWithSession(t, e, "kid", false)
 		share, err := e.cat.CreateShare(context.Background(), catalog.Share{Name: "LibriVox only",
 			Paths: []catalog.PathRule{{LibraryID: libID, Path: "LibriVox"}}})
@@ -846,4 +851,33 @@ func TestMetaRecordedMatch(t *testing.T) {
 			t.Fatalf("out-of-scope meta = %d %s, want 403", resp.StatusCode, body)
 		}
 	})
+}
+
+// TestMetaClearsUnknownASIN (server#392): a /meta lookup that finds an ASIN the
+// unknown-ASIN report holds as unknown takes it off the report (and Health's
+// unknown_asin list) at once; one that finds nothing leaves it.
+func TestMetaClearsUnknownASIN(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		lookupCode int
+		unknown    bool
+	}{"found": {0, false}, "still unknown": {http.StatusNotFound, true}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newMetaEnvMock(t, true, &mockMetaserve{lookupCode: tc.lookupCode})
+			libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
+			ctx := context.Background()
+			if err := e.cat.SaveASINChecks(ctx, []catalog.ASINCheck{{ASIN: "B00FLIJJSY", Unknown: true}}, "2026-11-01T00:00:00.000Z"); err != nil {
+				t.Fatal(err)
+			}
+			getGenerated(t, e, libID, "Andy Weir/The Martian", "", adminSession(t, e))
+			rows, err := e.cat.UnknownASINRows(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := rows["B00FLIJJSY"].Unknown; got != tc.unknown {
+				t.Fatalf("unknown after /meta = %v, want %v", got, tc.unknown)
+			}
+		})
+	}
 }

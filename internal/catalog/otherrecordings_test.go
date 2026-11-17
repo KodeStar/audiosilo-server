@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 	"testing"
@@ -432,5 +433,35 @@ func TestInProgress(t *testing.T) {
 	}
 	if got, err := f.c.InProgress(f.ctx, uid+1, refs); err != nil || len(got) != 0 {
 		t.Fatalf("another user's = %v, %v", got, err)
+	}
+}
+
+// TestUpcomingOwnedWorksIDKey (server#412): a book holds the work the upcoming
+// job resolved only while it still carries the identifiers that work was
+// resolved by (id_key, compared normalized), as workIDExpr reads it.
+func TestUpcomingOwnedWorksIDKey(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Main", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, asin := range map[string]string{"Retagged/One": "B0NEW", "Kept/Two": " b0two "} {
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: path, Title: path, ASIN: asin, AddedAt: "2020-01-01"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.SaveUpcomingOwned(ctx, []UpcomingOwned{
+		{Ref: Ref{LibraryID: lib.ID, Path: "Retagged/One"}, IDKey: "a:B0OLD", WorkID: "w-old", CheckedAt: "now"},
+		{Ref: Ref{LibraryID: lib.ID, Path: "Kept/Two"}, IDKey: "a:B0TWO", WorkID: "w-two", CheckedAt: "now"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"w-two": true}
+	for name, scopes := range map[string][]Scope{"all": nil, "scoped": {{LibraryID: lib.ID, AllowAll: true}}} {
+		got, err := c.UpcomingOwnedWorks(ctx, scopes, scopes == nil, []string{"w-old", "w-two"})
+		if err != nil || !maps.Equal(got, want) {
+			t.Fatalf("%s: owned = %v, %v, want %v (a retagged book holds no stale work)", name, got, err, want)
+		}
 	}
 }

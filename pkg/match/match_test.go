@@ -502,10 +502,10 @@ func TestNormalizeIdentifiers(t *testing.T) {
 }
 
 // TestRecordings: a book sharing a normalized ASIN with one seen before is a
-// copy, and so is one sharing an ISBN when either has no ASIN, its other
-// identifier then marking copies too; books with different ASINs never are,
-// whatever their ISBNs, and a book with neither, or with only other
-// identifiers, never is.
+// copy, and so is one with no ASIN sharing an ISBN, an ASIN copy's ISBN then
+// marking copies too; a book with an ASIN is never a copy by its ISBN alone,
+// so books with different ASINs never are, whatever their ISBNs, and a book
+// with neither, or with only other identifiers, never is.
 func TestRecordings(t *testing.T) {
 	type book struct {
 		asin, isbn string
@@ -530,21 +530,23 @@ func TestRecordings(t *testing.T) {
 			{"b0zed00001", "", true},
 			{"B0THIRD001", "9780000000002", false},
 		},
-		// A book with only an ISBN seen first: the first ASIN sharing it is that
-		// recording, and from then on another ASIN is not.
+		// A book with only an ISBN seen first hides no ASIN recording sharing
+		// it, whichever sorts first (server#412): each stays its own recording.
 		"ISBN first": {
 			{"", "9780000000003", false},
-			{"B0KEMPER01", "9780000000003", true},
+			{"B0KEMPER01", "9780000000003", false},
 			{"B0ZED00001", "9780000000003", false},
 			{"B0KEMPER01", "", true},
 			{"", "978 0000000003", true},
 		},
 	} {
-		var r Recordings
-		for _, b := range books {
-			if got := r.Seen(b.asin, b.isbn); got != b.copy {
-				t.Errorf("%s: Seen(%q, %q) = %v, want %v", name, b.asin, b.isbn, got, b.copy)
+		t.Run(name, func(t *testing.T) {
+			var r Recordings
+			for _, b := range books {
+				if got := r.Seen(b.asin, b.isbn); got != b.copy {
+					t.Errorf("Seen(%q, %q) = %v, want %v", b.asin, b.isbn, got, b.copy)
+				}
 			}
-		}
+		})
 	}
 }

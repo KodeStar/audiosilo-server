@@ -533,27 +533,34 @@ func TestPlaceLocalOwnWork(t *testing.T) {
 	}
 }
 
+// identified is one of the local_others tests' books: work's recording at path
+// in library lib, in series "S" at 1, with asin and isbn.
+func identified(lib int64, path, work, asin, isbn string) LocalBook {
+	b := mine(lib, path, "S", 1, work)
+	b.ASIN, b.ISBN = asin, isbn
+	return b
+}
+
+// placeIdentified places books (identified) on the local_others tests' rail,
+// "S" holding works one and two, for requested (work one): its entries.
+func placeIdentified(requested MetaLocal, books ...LocalBook) []MetaSeriesWork {
+	return PlaceLocal([]MetaSeries{named("S", "1", "one@1", "two@2")}, "one", requested, books)[0].Works
+}
+
 // TestPlaceLocalOthersDropCopies: local_others never holds a copy of the
 // entry's book (the pick, or requested on its own entry) sharing its ASIN, or
-// its ISBN when either has no ASIN, in normalized form, as /item's
+// its ISBN when the copy has no ASIN, in normalized form, as /item's
 // other_recordings leaves it out; a book with another ASIN stays.
 func TestPlaceLocalOthersDropCopies(t *testing.T) {
-	rails := []MetaSeries{named("S", "1", "one@1", "two@2")}
-	requested := MetaLocal{LibraryID: 1, Path: "S/1"}
-	book := func(path, work, asin, isbn string) LocalBook {
-		b := mine(1, path, "S", 1, work)
-		b.ASIN, b.ISBN = asin, isbn
-		return b
-	}
-	works := PlaceLocal(rails, "one", requested, []LocalBook{
-		book("S/1", "one", "B0ONE", "978-0-00-000001-1"),
-		book("S/1 copy", "one", "", "9780000000011"),
-		book("S/1 other", "one", "B0OTHER", ""),
-		book("S/1 zed", "one", "B0ZED", "978 0000000011"), // another ASIN: the pick's ISBN never merges it
-		book("S/2 a", "two", "B0TWO", ""),
-		book("S/2 a copy", "two", " b0two ", ""),
-		book("S/2 b", "two", "B0TWOB", ""),
-	})[0].Works
+	works := placeIdentified(MetaLocal{LibraryID: 1, Path: "S/1"},
+		identified(1, "S/1", "one", "B0ONE", "978-0-00-000001-1"),
+		identified(1, "S/1 copy", "one", "", "9780000000011"),
+		identified(1, "S/1 other", "one", "B0OTHER", ""),
+		identified(1, "S/1 zed", "one", "B0ZED", "978 0000000011"), // another ASIN: the pick's ISBN never merges it
+		identified(1, "S/2 a", "two", "B0TWO", ""),
+		identified(1, "S/2 a copy", "two", " b0two ", ""),
+		identified(1, "S/2 b", "two", "B0TWOB", ""),
+	)
 	if got, want := others(works), [][]string{{"S/1 other", "S/1 zed"}, {"S/2 b"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("others = %q, want %q", got, want)
 	}
@@ -567,24 +574,17 @@ func TestPlaceLocalOthersDropCopies(t *testing.T) {
 // first in the pick's order is listed, the requested library's before
 // another's; a book with neither identifier is never taken for a copy.
 func TestPlaceLocalOthersOneEach(t *testing.T) {
-	rails := []MetaSeries{named("S", "1", "one@1", "two@2")}
-	requested := MetaLocal{LibraryID: 1, Path: "Porter/1"}
-	book := func(lib int64, path, work, asin, isbn string) LocalBook {
-		b := mine(lib, path, "S", 1, work)
-		b.ASIN, b.ISBN = asin, isbn
-		return b
-	}
-	works := PlaceLocal(rails, "one", requested, []LocalBook{
-		book(2, "Jung/1", "one", " b0jung ", ""), // a copy, in another library
-		book(1, "Porter/1", "one", "B0PORTER", ""),
-		book(1, "Jung/1", "one", "B0JUNG", "978-0-00-000002-2"),
-		book(1, "Untagged/1", "one", "", ""),
-		book(2, "Untagged/1", "one", "", ""),
-		book(1, "S/2 a", "two", "B0TWO", ""),
-		book(1, "S/2 b", "two", "B0TWOB", "9780000000035"),
-		book(2, "S/2 b copy", "two", "", "978-0-00-000003-5"),
-		book(1, "S/2 c", "two", "B0TWOC", ""),
-	})[0].Works
+	works := placeIdentified(MetaLocal{LibraryID: 1, Path: "Porter/1"},
+		identified(2, "Jung/1", "one", " b0jung ", ""), // a copy, in another library
+		identified(1, "Porter/1", "one", "B0PORTER", ""),
+		identified(1, "Jung/1", "one", "B0JUNG", "978-0-00-000002-2"),
+		identified(1, "Untagged/1", "one", "", ""),
+		identified(2, "Untagged/1", "one", "", ""),
+		identified(1, "S/2 a", "two", "B0TWO", ""),
+		identified(1, "S/2 b", "two", "B0TWOB", "9780000000035"),
+		identified(2, "S/2 b copy", "two", "", "978-0-00-000003-5"),
+		identified(1, "S/2 c", "two", "B0TWOC", ""),
+	)
 	want := [][]string{{"Jung/1", "Untagged/1", "Untagged/1"}, {"S/2 b", "S/2 c"}}
 	if got := others(works); !reflect.DeepEqual(got, want) {
 		t.Fatalf("others = %q, want %q", got, want)

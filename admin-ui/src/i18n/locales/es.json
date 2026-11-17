@@ -1001,6 +1001,7 @@
   "book.match.none": "Nada en la base de datos de la comunidad coincide. Prueba otras palabras, o un ASIN o ISBN.",
   "book.match.notInDatabase": "Este libro aún no está en la base de datos de la comunidad. Se sigue reproduciendo con normalidad.",
   "book.match.notInDatabaseBooks": "Estos libros aún no están en la base de datos de la comunidad. Se siguen reproduciendo con normalidad.",
+  "book.match.weakOnly": "Ninguno se parece mucho, así que puede que el libro aún no esté en la base de datos de la comunidad.",
   "book.match.addIt": "Añadirlo",
   "book.match.addItAria": "Añadir {{title}} a la base de datos de la comunidad en meta.audiosilo.app (se abre en una pestaña nueva)",
   "book.match.helpComplete": "<settings>Ayudar a completar la base de datos de la comunidad</settings> le envía los ASIN de tus libros que no conoce, para que se puedan añadir.",

@@ -8,12 +8,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/meta"
 	"github.com/kodestar/audiosilo-server/internal/upcoming"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -69,6 +71,22 @@ func (u *upcomingEnv) book(t *testing.T, libID int64, path, series string, pos f
 	t.Helper()
 	if _, err := u.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID, RelPath: path, Title: path,
 		Author: "A", Series: series, SeriesIndex: pos, AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ownedCopy indexes a book at path in libID carrying asin, resolved by the
+// upcoming job to workID (an upcoming_owned row under the book's own id_key, as
+// the job writes it: a row under another key holds no work).
+func (u *upcomingEnv) ownedCopy(t *testing.T, libID int64, path, asin, workID string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := u.cat.UpsertBook(ctx, &catalog.Book{LibraryID: libID, RelPath: path, Title: path,
+		Author: "A", ASIN: asin, AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{{Ref: catalog.Ref{LibraryID: libID, Path: path},
+		IDKey: meta.IDKey(asin, ""), WorkID: workID, CheckedAt: "2026-10-20T04:00:00.000Z"}}, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -184,18 +202,10 @@ func TestUpcomingOwnCopyElsewhere(t *testing.T) {
 	t.Parallel()
 	u := newUpcomingEnv(t)
 	ctx := context.Background()
-	other, err := u.cat.CreateLibrary(ctx, catalog.Library{Name: "Other", Root: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	u.book(t, other.ID, "Loose/Caliban", "", 0)
-	if err := u.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{{Ref: catalog.Ref{LibraryID: other.ID, Path: "Loose/Caliban"},
-		IDKey: "a:B0", WorkID: "e2", CheckedAt: "2026-10-20T04:00:00.000Z"}}, nil); err != nil {
-		t.Fatal(err)
-	}
+	other := holdCopy(t, u, "Loose/Caliban", "B0CALIBAN1", "e2")
 	// The same series held in the other library too: e3 is listed once.
-	u.book(t, other.ID, "Expanse/1", "The Expanse", 1)
-	u.series(t, other.ID, "The Expanse", "expanse", []catalog.MetaSeriesMember{
+	u.book(t, other, "Expanse/1", "The Expanse", 1)
+	u.series(t, other, "The Expanse", "expanse", []catalog.MetaSeriesMember{
 		{WorkID: "e2", Position: "2", ReleaseDate: "2012"}, {WorkID: "e3", Position: "3", ReleaseDate: "2026-10-01"},
 	},
 		[]catalog.UpcomingItem{{WorkID: "e3", Kind: catalog.UpcomingReleased, ReleaseDate: "2026-10-01", Position: "3"}})
@@ -348,5 +358,34 @@ func TestUpcomingRefusals(t *testing.T) {
 	// The kid's grown-up is answered.
 	if r, b := m.do(t, "GET", upcomingPath, m.adamTok, ""); r.StatusCode != http.StatusOK || !strings.Contains(b, `"status":"pending"`) {
 		t.Fatalf("grown-up = %d %s", r.StatusCode, b)
+	}
+}
+
+// TestMetadataOnKicksResolve (server#412): metadata switched back on kicks the
+// upcoming job's light run, with the job itself on or off, so books indexed
+// meanwhile get their works now; nothing else in the settings does.
+func TestMetadataOnKicksResolve(t *testing.T) {
+	t.Parallel()
+	e := newMetaEnvMock(t, true, &mockMetaserve{})
+	var kicks atomic.Int32
+	e.api.kickUpcoming = func() { kicks.Add(1) }
+	tok := adminSession(t, e)
+	for _, step := range []struct {
+		patch string
+		kicks int32
+	}{
+		{`{"metadata":{"enabled":false,"upcoming":false}}`, 0},
+		{`{"metadata":{"enabled":true}}`, 1},  // back on, the job off
+		{`{"metadata":{"upcoming":true}}`, 1}, // the job on: Wake's, no kick
+		{`{"metadata":{"enabled":false}}`, 1},
+		{`{"metadata":{"enabled":true}}`, 2},                  // back on with the job
+		{`{"metadata":{"enabled":true,"upcoming":false}}`, 2}, // already on
+	} {
+		if r, b := e.do(t, "PATCH", "/api/v1/admin/settings", tok, step.patch); r.StatusCode != http.StatusOK {
+			t.Fatalf("%s = %d %s", step.patch, r.StatusCode, b)
+		}
+		if got := kicks.Load(); got != step.kicks {
+			t.Fatalf("after %s: %d kicks, want %d", step.patch, got, step.kicks)
+		}
 	}
 }

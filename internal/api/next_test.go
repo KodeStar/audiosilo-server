@@ -930,3 +930,68 @@ func TestFavouriteIndexOutlastsTheRequest(t *testing.T) {
 		t.Fatalf("favourited pending book not saved after the request: %v %v", b, err)
 	}
 }
+
+// TestWorkRuleFollowsRecordedMatch (server#412, server#375): /meta and /next
+// answer about a book's recorded community match when it names another work
+// than the book's ASIN, or when the book has no identifier (a console-matched
+// LibriVox download), and an outage on the ASIN serves the match's answer.
+func TestWorkRuleFollowsRecordedMatch(t *testing.T) {
+	t.Parallel()
+	e := newSagaEnv(t, true,
+		// Matched by hand to work one, with no identifier: the Yearsley Alice
+		// (server#412's live repro).
+		&catalog.Book{RelPath: "Saga/1 Yearsley", Series: "Saga", SeriesIndex: 1, Narrator: "Yearsley"},
+		// Two recordings of work two: Klett's sorts first.
+		&catalog.Book{RelPath: "Saga/2 Klett", Series: "Saga", SeriesIndex: 2, Narrator: "Klett", ASIN: "B0TWO"},
+		&catalog.Book{RelPath: "Saga/2 Yearsley", Series: "Saga", SeriesIndex: 2, Narrator: "Yearsley"},
+		// Its ASIN is work one's, its recorded match work three.
+		&catalog.Book{RelPath: "Rematched", ASIN: "B0ONE"},
+		// Its ASIN's lookup fails; its recorded match is work one.
+		&catalog.Book{RelPath: "Outage", ASIN: "B0DOWN"},
+	)
+	anchorMatch(t, e.testEnv, e.lib.ID, "Saga/1 Yearsley", "one", "")
+	anchorMatch(t, e.testEnv, e.lib.ID, "Saga/2 Yearsley", "two", "")
+	anchorMatch(t, e.testEnv, e.lib.ID, "Rematched", "three", "")
+	anchorMatch(t, e.testEnv, e.lib.ID, "Outage", "one", "")
+	metaWork := func(path string) string {
+		t.Helper()
+		resp, body := e.do(t, "GET", e.url("meta", path), e.adminTok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("meta %s = %d %s", path, resp.StatusCode, body)
+		}
+		var env struct {
+			Work *struct {
+				ID string `json:"id"`
+			} `json:"work"`
+		}
+		if err := json.Unmarshal([]byte(body), &env); err != nil || env.Work == nil {
+			t.Fatalf("meta %s = %s", path, body)
+		}
+		return env.Work.ID
+	}
+
+	// The no-identifier book: its match's rail, and the next work read by its
+	// narrator, not the series numbering's first copy.
+	n := getNext(t, e.testEnv, e.url("next", "Saga/1 Yearsley"), e.adminTok)
+	if n.Source != nextCommunity || n.nextPath() != "Saga/2 Yearsley" || n.Work == nil || n.Work.ID != "two" {
+		t.Fatalf("next after the matched Alice = %s, want Yearsley's work two", n.raw)
+	}
+	// A rematched book: /meta and /next follow the match (work three), not
+	// the ASIN's work one.
+	if got := metaWork("Rematched"); got != "three" {
+		t.Fatalf("meta of a rematched book = %q, want the recorded work three", got)
+	}
+	if n := getNext(t, e.testEnv, e.url("next", "Rematched"), e.adminTok); n.Work == nil || n.Work.ID != "four" {
+		t.Fatalf("next after a rematched book = %s, want work four", n.raw)
+	}
+	// The ASIN's lookup failing: the recorded match answers, 200 not 502.
+	if got := metaWork("Outage"); got != "one" {
+		t.Fatalf("meta during an outage = %q, want the recorded work one", got)
+	}
+	// A book whose recorded match agrees with its ASIN keeps the ASIN's
+	// answer (and its recording); one with no match keeps its ASIN's.
+	anchorMatch(t, e.testEnv, e.lib.ID, "Saga/2 Klett", "two", "")
+	if got := metaWork("Saga/2 Klett"); got != "two" {
+		t.Fatalf("meta of an agreeing match = %q", got)
+	}
+}

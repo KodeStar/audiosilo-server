@@ -144,6 +144,12 @@ func (a *API) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		(!cur.Metadata.Enabled || !cur.Upcoming.Enabled) {
 		a.upcoming.Wake()
 	}
+	// Metadata back on, the job switched on or not: a light run resolves the
+	// works of the books indexed or retagged meanwhile (their other recordings
+	// and /next ride on them, server#412) rather than up to a day later.
+	if a.kickUpcoming != nil && next.Metadata.Enabled && !cur.Metadata.Enabled {
+		a.kickUpcoming()
+	}
 	// The unknown-ASIN report switched on (or metadata back on): run now unless
 	// it ran within the day.
 	if a.coverage != nil && next.Metadata.Enabled && next.Metadata.ReportUnknown &&

@@ -1001,6 +1001,7 @@
   "book.match.none": "Nel database della community non c'è nulla che corrisponda. Prova altre parole, o un ASIN o ISBN.",
   "book.match.notInDatabase": "Questo libro non è ancora nel database della community. Si riproduce comunque normalmente.",
   "book.match.notInDatabaseBooks": "Questi libri non sono ancora nel database della community. Si riproducono comunque normalmente.",
+  "book.match.weakOnly": "Nessuno corrisponde davvero, quindi il libro potrebbe non essere ancora nel database della community.",
   "book.match.addIt": "Aggiungilo",
   "book.match.addItAria": "Aggiungi {{title}} al database della community su meta.audiosilo.app (si apre in una nuova scheda)",
   "book.match.helpComplete": "<settings>Aiuta a completare il database della community</settings> gli invia gli ASIN dei tuoi libri che non conosce, perché possano essere aggiunti.",

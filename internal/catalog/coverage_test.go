@@ -151,6 +151,41 @@ func TestASINChecksMoveTheContentGenerationOnAChangeOnly(t *testing.T) {
 	step("now unknown", true, func() error {
 		return c.SaveASINChecks(ctx, []ASINCheck{{ASIN: "B0KNOWN001", Unknown: true}}, "2026-11-17T00:00:00.000Z")
 	})
+	step("found by a lookup", true, func() error { return c.ClearUnknownASIN(ctx, "b0known001 ") })
+	step("found again", false, func() error { return c.ClearUnknownASIN(ctx, "B0KNOWN001") })
+	step("never held", false, func() error { return c.ClearUnknownASIN(ctx, "B0NOTHELD1") })
 	step("forgotten", true, func() error { return c.DropUnknownASINs(ctx, []string{"B0KNOWN001"}) })
 	step("nothing to forget", false, func() error { return c.DropUnknownASINs(ctx, []string{"B0NOTHELD1"}) })
+}
+
+// TestClearUnknownASIN (server#392): a lookup finding an ASIN the report holds
+// as unknown clears it at once, its send forgotten as a recheck would; a known
+// ASIN, or one the report never held, is left as it was (no row made).
+func TestClearUnknownASIN(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	if err := c.SaveASINChecks(ctx, []ASINCheck{{ASIN: "B0UNKNOWN1", Unknown: true}, {ASIN: "B0KNOWN001"}}, "2026-11-01T00:00:00.000Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.MarkASINsSent(ctx, []string{"B0UNKNOWN1"}, "2026-11-01T00:00:01.000Z"); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []string{" b0unknown1", "B0KNOWN001", "B0NOTHELD1"} {
+		if err := c.ClearUnknownASIN(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := c.UnknownASINRows(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := rows["B0UNKNOWN1"]; r.Unknown || r.SentAt != "" || r.CheckedAt == "2026-11-01T00:00:00.000Z" {
+		t.Fatalf("found row = %+v, want known, unsent, checked now", r)
+	}
+	if r := rows["B0KNOWN001"]; r.Unknown || r.CheckedAt != "2026-11-01T00:00:00.000Z" {
+		t.Fatalf("known row = %+v, want untouched", r)
+	}
+	if _, ok := rows["B0NOTHELD1"]; ok || len(rows) != 2 {
+		t.Fatalf("rows = %+v, want no row made", rows)
+	}
 }

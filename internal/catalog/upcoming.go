@@ -443,7 +443,9 @@ func (c *Catalog) MarkUpcomingAnnounced(ctx context.Context, handled, announced 
 }
 
 // UpcomingOwnedWorks reports which of workIDs an indexed book of a books
-// library is: within scopes, or anywhere on the server with all.
+// library is: within scopes, or anywhere on the server with all. A book holds
+// the work the job resolved only while it still has the identifiers it was
+// resolved by (id_key, as workIDExpr reads it), so a retag holds no stale work.
 func (c *Catalog) UpcomingOwnedWorks(ctx context.Context, scopes []Scope, all bool, workIDs []string) (map[string]bool, error) {
 	out := map[string]bool{}
 	if len(workIDs) == 0 || (!all && len(scopes) == 0) {
@@ -453,7 +455,7 @@ func (c *Catalog) UpcomingOwnedWorks(ctx context.Context, scopes []Scope, all bo
 		q := `SELECT DISTINCT o.work_id FROM upcoming_owned o
 			JOIN books b ON b.library_id = o.library_id AND b.rel_path = o.path
 			JOIN libraries l ON l.id = o.library_id AND l.kind = 'books'
-		   WHERE o.work_id IN (` + placeholders(len(chunk)) + `)`
+		   WHERE o.work_id IN (` + placeholders(len(chunk)) + `) AND o.id_key = ` + idKeyExpr("b")
 		args := anyOf(chunk)
 		if !all {
 			frag, fargs := scopesFilterSQL("o.library_id", "o.path", scopes)

@@ -261,9 +261,9 @@ func TestMetaLocalOthers(t *testing.T) {
 // TestItemAndMetaAgree: the book page's other recordings (/item) and the
 // rail's (/meta, the entry the envelope is for) are the same books, neither
 // holding a copy of the book sharing its ASIN. A book matched in the console to
-// another work than its ASIN's is the one case they differ: /item follows the
-// match while /meta stays about the ASIN's work, and each rail entry lists only
-// recordings of its own work, so no book is on two entries.
+// another work than its ASIN's keeps them together: /item and /meta both follow
+// the match (server#412), and each rail entry lists only recordings of its own
+// work, so no book is on two entries.
 func TestItemAndMetaAgree(t *testing.T) {
 	t.Parallel()
 	e := recordingsEnv(t, true)
@@ -278,13 +278,13 @@ func TestItemAndMetaAgree(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
-	// rail checks /meta for Saga/2: about the ASIN's work and placed as want,
-	// each path on one entry only.
-	rail := func(token string, want map[string]railEntry) {
+	// rail checks /meta for Saga/2: about work and placed as want, each path
+	// on one entry only.
+	rail := func(token, work string, want map[string]railEntry) {
 		t.Helper()
 		entries, raw := railEntries(t, e, "Saga/2", token)
-		if !strings.Contains(raw, `"work":{"id":"two"`) {
-			t.Fatalf("/meta is no longer about the ASIN's work: %s", raw)
+		if !strings.Contains(raw, `"work":{"id":"`+work+`"`) {
+			t.Fatalf("/meta is not about work %s: %s", work, raw)
 		}
 		if !reflect.DeepEqual(entries, want) {
 			t.Fatalf("/meta entries = %+v, want %+v", entries, want)
@@ -301,25 +301,29 @@ func TestItemAndMetaAgree(t *testing.T) {
 	two := railEntry{local: "Saga/2", others: []string{"Saga/2 Abe", "Saga/2 Kemper"}}
 	adminRail := map[string]railEntry{"one": {local: "Saga/1"}, "two": two, "three": {local: "Saga/3"}, "four": {}}
 	item(e.adminTok, "two", two.others)
-	rail(e.adminTok, adminRail)
+	rail(e.adminTok, "two", adminRail)
 	// Denied: the member's grant (Saga/1, Saga/2, Saga/2 Abe) holds neither
 	// the copy, Saga/2 Kemper nor Saga/3.
 	memberTwo := railEntry{local: "Saga/2", others: []string{"Saga/2 Abe"}}
 	memberRail := map[string]railEntry{"one": {local: "Saga/1"}, "two": memberTwo, "three": {}, "four": {}}
 	item(e.memberTok, "two", memberTwo.others)
-	rail(e.memberTok, memberRail)
+	rail(e.memberTok, "two", memberRail)
 
 	// Matched in the console to "three": /item lists that work's recordings,
-	// while entry "two" keeps its own and Saga/3 stays on entry "three" alone.
+	// and /meta is about that work too, the book on entry "three" beside
+	// Saga/3, entry "two" left to the work's own recordings.
 	if err := e.cat.EditBook(ctx, e.lib.ID, "Saga/2", catalog.BookEdit{
 		Match: &catalog.MatchAnchor{WorkID: "three"}, Source: catalog.SourceCommunity,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	item(e.adminTok, "three", []string{"Saga/3"})
-	rail(e.adminTok, adminRail)
+	rail(e.adminTok, "three", map[string]railEntry{"one": {local: "Saga/1"},
+		"two":   {local: "Saga/2 copy", others: []string{"Saga/2 Abe", "Saga/2 Kemper"}},
+		"three": {local: "Saga/2", others: []string{"Saga/3"}}, "four": {}})
 	item(e.memberTok, "three", nil)
-	rail(e.memberTok, memberRail)
+	rail(e.memberTok, "three", map[string]railEntry{"one": {local: "Saga/1"},
+		"two": {local: "Saga/2 Abe"}, "three": {local: "Saga/2"}, "four": {}})
 }
 
 // TestOtherRecordingsOneEach (server#241): a recording held twice, Saga/2 Abe

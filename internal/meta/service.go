@@ -327,7 +327,17 @@ type Service struct {
 	// matchUnsupportedUntil (unix nanoseconds) is when works/match is next
 	// tried after metaserve answered it as an unknown route (Candidates).
 	matchUnsupportedUntil atomic.Int64
+	// asinFound is told each ASIN a lookup found (SetASINFound); nil for none.
+	asinFound func(ctx context.Context, asin string)
 }
+
+// SetASINFound has the Service tell found each ASIN an identifier lookup finds
+// a work for (Service.lookup: a player's /meta, the upcoming job's work ids, the
+// chapter check), so the unknown-ASIN report learns at once that the community
+// added one (server#392) rather than at its monthly recheck. found runs inside
+// the lookup and must be quick. Call it once, right after NewService and before
+// the Service is used.
+func (s *Service) SetASINFound(found func(ctx context.Context, asin string)) { s.asinFound = found }
 
 // NewService builds a Service for the given metaserve base URL. now may be nil
 // (defaults to time.Now); it is injectable so tests can drive cache TTLs.
@@ -519,6 +529,10 @@ func (s *Service) lookup(ctx context.Context, asin, isbn string) (*upstreamLooku
 		return nil, err
 	case l.Work == nil || l.Work.ID == "":
 		return nil, ErrNotFound
+	}
+	// The lookup asks by the ASIN alone when there is one (client.lookup).
+	if asin != "" && s.asinFound != nil {
+		s.asinFound(ctx, asin)
 	}
 	return l, nil
 }
@@ -797,26 +811,79 @@ func pickRecording(recs []upstreamRecording, recordingID string) *MetaRecording 
 }
 
 // librivoxOf is a recording's LibriVox block: nil unless it names a LibriVox
-// project, with each link dropped unless it is an absolute http(s) URL, so a
-// client can open it as it stands.
+// project, with each link dropped unless it is an absolute http(s) URL on
+// LibriVox's or the Internet Archive's own hosts (librivoxURL), so a client can
+// open it as it stands, under the label it gives it.
 func librivoxOf(rec *upstreamRecording) *MetaLibrivox {
 	if rec.LibrivoxID <= 0 {
 		return nil
 	}
 	return &MetaLibrivox{
 		ID:     rec.LibrivoxID,
-		URL:    absoluteHTTPURL(rec.Links.Librivox),
-		ZipURL: absoluteHTTPURL(rec.Links.Zip),
+		URL:    librivoxURL(rec.Links.Librivox),
+		ZipURL: librivoxURL(rec.Links.Zip),
 	}
 }
 
-// absoluteHTTPURL returns raw when it is an absolute http or https URL with a
-// host (httpURL), else "".
-func absoluteHTTPURL(raw string) string {
-	if httpURL(raw) == nil {
+// librivoxHosts are the hosts a LibriVox link may name, each or a subdomain of
+// it: the project's pages, and the archive its recordings are on (a zip is on a
+// numbered *.archive.org node).
+var librivoxHosts = []string{"librivox.org", "archive.org"}
+
+// librivoxURL is absoluteHTTPURL's answer when its host is one of librivoxHosts
+// or a subdomain of one, else "" (fe#291: a link labelled LibriVox goes there).
+// The host must be a plain one (plainHost): this reads it as url.Parse does, and
+// a client that opens the link may read anything else another way.
+func librivoxURL(raw string) string {
+	out, u := absoluteHTTP(raw)
+	if u == nil {
 		return ""
 	}
-	return raw
+	host := strings.TrimSuffix(u.Hostname(), ".")
+	if !plainHost(host) {
+		return ""
+	}
+	host = strings.ToLower(host)
+	for _, h := range librivoxHosts {
+		if host == h || strings.HasSuffix(host, "."+h) {
+			return out
+		}
+	}
+	return ""
+}
+
+// plainHost reports whether host is made of ASCII letters, digits, hyphens and
+// dots alone. Anything else is no host name an allow-list can trust: a letter
+// that only lower-cases to an ASCII one ("\u0130" to "i") is another domain to
+// a browser, and a full-width "/", "?", "#" or "@" ends the host early for a
+// client that folds it to its ASCII form.
+func plainHost(host string) bool {
+	for i := range len(host) {
+		c := host[i]
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return host != ""
+}
+
+// absoluteHTTPURL returns raw when it is an absolute http or https URL with a
+// host (httpURL) and no user name or password in it, its scheme lower-cased
+// ("HTTPS://" is "https://"), else "": a link a client opens as it stands.
+func absoluteHTTPURL(raw string) string {
+	out, _ := absoluteHTTP(raw)
+	return out
+}
+
+// absoluteHTTP is absoluteHTTPURL's answer and the URL it parsed (nil with "").
+func absoluteHTTP(raw string) (string, *url.URL) {
+	u := httpURL(raw)
+	if u == nil || u.User != nil {
+		return "", nil
+	}
+	// url.Parse lower-cases the scheme it reads off raw's start; the rest of
+	// raw is kept as written.
+	return u.Scheme + raw[len(u.Scheme):], u
 }
 
 // httpURL is raw parsed when it is an absolute http or https URL with a host,

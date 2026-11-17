@@ -1273,6 +1273,46 @@ describe('match with community metadata', () => {
     );
   });
 
+  it('offers Add it beside candidates that are all weak fits (server#392)', async () => {
+    // A common surname brings back other people's books (the live repro:
+    // "Corwin Haldane-Fitch" matched other Fitches at 34-37).
+    const weak = (id: string, score: number): MatchCandidate => ({
+      ...candidate,
+      work_id: id,
+      title: id,
+      score,
+    });
+    mockFetch(
+      matchRoutes(bookDetail(), {
+        'GET /admin/libraries/1/book/match': {
+          body: { candidates: [weak('a-fitch-book', 37), weak('another-fitch-book', 34)] },
+        },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      await within(dialog).findByText(
+        /None of these is a close match, so the book may not be in the community database yet\./,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole('link', { name: /^Add The Way of Kings to the community/ }),
+    ).toHaveAttribute('href', 'https://meta.audiosilo.app/add?q=B003P2WO5E');
+  });
+
+  it('offers no Add it beside a candidate that fits', async () => {
+    mockFetch(matchRoutes(bookDetail()));
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('The Way of Kings');
+    expect(within(dialog).queryByRole('link', { name: /to the community database/ })).toBeNull();
+  });
+
   it("says so when the community service isn't answering", async () => {
     mockFetch(
       matchRoutes(bookDetail(), {

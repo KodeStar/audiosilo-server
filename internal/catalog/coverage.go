@@ -25,19 +25,20 @@ import (
 // An Audiobookshelf import's hint (book_hints), which QueryFor sends ahead of
 // the tag's, is never one: of a book's hints the report sends its tag's only.
 func (c *Catalog) UnknownASINCandidates(ctx context.Context) ([]string, error) {
+	asin, tag, ttag := normASINSQL("b.asin"), normASINSQL("b.tag_asin"), normASINSQL("t.tag_asin")
 	rows, err := c.db.QueryContext(ctx, `
-		SELECT upper(trim(b.asin)) FROM books b WHERE `+inBookLibrary+` AND trim(b.asin) <> ''
+		SELECT `+asin+` FROM books b WHERE `+inBookLibrary+` AND `+asin+` <> ''
 		UNION
-		SELECT upper(trim(b.tag_asin)) FROM books b
-		 WHERE `+inBookLibrary+` AND trim(b.tag_asin) <> '' AND b.asin = '' AND b.isbn = ''
+		SELECT `+tag+` FROM books b
+		 WHERE `+inBookLibrary+` AND `+tag+` <> '' AND b.asin = '' AND b.isbn = ''
 		   AND NOT EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path AND o.field = ?1)
-		   AND upper(trim(b.tag_asin)) IN (SELECT upper(trim(t.tag_asin)) FROM books t
-		        WHERE t.`+bookLibraryIDs+` AND trim(t.tag_asin) <> ''
-		        GROUP BY upper(trim(t.tag_asin)) HAVING COUNT(*) = 1)
+		   AND `+tag+` IN (SELECT `+ttag+` FROM books t
+		        WHERE t.`+bookLibraryIDs+` AND `+ttag+` <> ''
+		        GROUP BY `+ttag+` HAVING COUNT(*) = 1)
 		EXCEPT
-		SELECT upper(trim(b.asin)) FROM books b JOIN book_overrides o
+		SELECT `+asin+` FROM books b JOIN book_overrides o
 		    ON o.library_id = b.library_id AND o.path = b.rel_path AND o.field = ?1 AND o.source = ?2
-		 WHERE `+inBookLibrary+` AND trim(b.asin) <> ''`, FieldASIN, SourceCommunity)
+		 WHERE `+inBookLibrary+` AND `+asin+` <> ''`, FieldASIN, SourceCommunity)
 	if err != nil {
 		return nil, err
 	}
@@ -128,6 +129,21 @@ func (c *Catalog) SaveASINChecks(ctx context.Context, checks []ASINCheck, at str
 		}
 		return nil
 	})
+}
+
+// ClearUnknownASIN records that a lookup found asin (normalized, as the report
+// stores it) known, when the report holds it as unknown: the book leaves Health's
+// unknown_asin list now (server#392), and the report sends it no more (a known
+// check, SaveASINChecks). Nothing is written for an ASIN the report doesn't hold
+// as unknown (the common case: a read first, so a lookup costs no write).
+func (c *Catalog) ClearUnknownASIN(ctx context.Context, asin string) error {
+	asin = match.NormalizeASIN(asin)
+	var held bool
+	err := c.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM unknown_asin_reports WHERE asin = ? AND unknown = 1)`, asin).Scan(&held)
+	if err != nil || !held {
+		return err
+	}
+	return c.SaveASINChecks(ctx, []ASINCheck{{ASIN: asin}}, FormatStamp(c.now()))
 }
 
 // MarkASINsSent records that the metadata service accepted asins at at.

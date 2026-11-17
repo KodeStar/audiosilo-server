@@ -1109,44 +1109,49 @@ func NormalizeASIN(s string) string { return strings.ToUpper(strings.TrimSpace(s
 // NormalizeISBN puts an ISBN in the form exact lookups hold: without the hyphens
 // and spaces it is usually printed with, upper-cased (a trailing check digit X).
 func NormalizeISBN(s string) string {
-	return strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(strings.TrimSpace(s)))
+	return strings.ToUpper(isbnSeparators.Replace(strings.TrimSpace(s)))
 }
+
+// isbnSeparators drops the hyphens and spaces NormalizeISBN removes (a Replacer
+// is safe for concurrent use, so one serves every call).
+var isbnSeparators = strings.NewReplacer("-", "", " ", "")
 
 // Recordings tells the recordings of a work apart by their identifiers,
 // compared normalized (NormalizeASIN, NormalizeISBN: a tag's case, spaces and
-// hyphens aside). Two books are copies of one recording when their ASINs are
-// equal; when either has no ASIN, when their ISBNs are equal. Two books with
-// different ASINs are never copies, whatever their ISBNs: an audiobook's ISBN
-// is often the print edition's, which every recording of the work shares. A
-// book with neither is never a copy. The zero value is ready to use.
+// hyphens aside). A book is a copy of a recording seen before when their ASINs
+// are equal; a book with no ASIN, when its ISBN is one the recording's copies
+// carried. A book with an ASIN is never taken in by its ISBN alone, so two books
+// with different ASINs are never copies, whatever their ISBNs (an audiobook's
+// ISBN is often the print edition's, which every recording of the work shares),
+// and which ASIN recording a book carrying only that print ISBN would join never
+// hangs on the order they come in (server#412): an ISBN-only book seen first
+// stays its own recording, one seen after an ASIN recording with its ISBN is a
+// copy of it. A book with neither is never a copy. The zero value is ready to
+// use.
 type Recordings struct {
 	seen []recording
 }
 
-// recording is one recording Recordings has seen: its ASIN ("" until a copy
-// carrying one is seen) and every ISBN its copies carried.
+// recording is one recording Recordings has seen: its ASIN ("" for one first
+// seen without) and every ISBN its copies carried.
 type recording struct {
 	asin  string
 	isbns []string
 }
 
 // Seen reports whether a book with asin and isbn is a copy of a recording seen
-// before, and records it either way: a copy adds its identifiers to its
-// recording, so a copy's other identifier marks the recording's copies too,
-// and a recording known by an ASIN never takes in a book with another.
+// before, and records it either way: a copy adds its ISBN to its recording, so
+// an ASIN copy's ISBN marks the recording's ISBN-only copies too.
 func (r *Recordings) Seen(asin, isbn string) bool {
 	asin, isbn = NormalizeASIN(asin), NormalizeISBN(isbn)
-	if asin == "" && isbn == "" {
-		return false
-	}
-	i := -1
-	if asin != "" {
+	var i int
+	switch {
+	case asin != "":
 		i = slices.IndexFunc(r.seen, func(g recording) bool { return g.asin == asin })
-	}
-	if i < 0 && isbn != "" {
-		i = slices.IndexFunc(r.seen, func(g recording) bool {
-			return (asin == "" || g.asin == "") && slices.Contains(g.isbns, isbn)
-		})
+	case isbn != "":
+		i = slices.IndexFunc(r.seen, func(g recording) bool { return slices.Contains(g.isbns, isbn) })
+	default:
+		return false
 	}
 	if i < 0 {
 		g := recording{asin: asin}
@@ -1157,9 +1162,6 @@ func (r *Recordings) Seen(asin, isbn string) bool {
 		return false
 	}
 	g := &r.seen[i]
-	if g.asin == "" {
-		g.asin = asin
-	}
 	if isbn != "" && !slices.Contains(g.isbns, isbn) {
 		g.isbns = append(g.isbns, isbn)
 	}

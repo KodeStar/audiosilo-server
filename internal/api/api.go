@@ -78,6 +78,9 @@ type API struct {
 	// upcoming is the upcoming releases job (Track U1), nil without a
 	// metadata service (StartUpcoming).
 	upcoming *upcoming.Runner
+	// kickUpcoming is upcoming.Kick (nil with it): a field so a test can see
+	// the kick a settings change makes.
+	kickUpcoming func()
 	// coverage is the daily report of unknown Audible ASINs (LibraForge C3),
 	// nil without a metadata service and on a demo server (StartCoverage).
 	coverage *coverage.Runner
@@ -220,6 +223,13 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		// config key of its own: it is read and written only through the
 		// service, which only runs while metadata.enabled is on.
 		metaSvc.SetStore(metaStore{cat: cat, log: log})
+		// An ASIN the unknown-ASIN report holds as unknown, found by a lookup:
+		// off Health's list now, not at the report's monthly recheck.
+		metaSvc.SetASINFound(func(ctx context.Context, asin string) {
+			if err := cat.ClearUnknownASIN(ctx, asin); err != nil && ctx.Err() == nil {
+				log.Warn("clearing a found ASIN from the unknown-ASIN report failed", "err", err, "asin", asin)
+			}
+		})
 	}
 	limits := cfg.RateLimit.Effective()
 	a := &API{
@@ -293,6 +303,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 			Announce: a.announceReleases,
 			Log:      log,
 		})
+		a.kickUpcoming = a.upcoming.Kick
 		cat.OnBookChange(a.upcoming.Kick)
 		// The unknown-ASIN report: opt-in, daily, never on a demo server (its
 		// books are the demo's, not anyone's library).
