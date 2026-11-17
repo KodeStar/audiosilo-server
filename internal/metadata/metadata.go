@@ -450,8 +450,21 @@ func HangMountForTests(dir string) (release func()) {
 // parallel (it swaps the mount lookup every read makes); it panics outside a
 // test binary.
 func HoldOpensForTests(dir string) (release func()) {
-	restore := ownMountForTests("HoldOpensForTests", "held-for-tests:", dir)
 	held := make(chan struct{})
+	restore := HoldOpensUntilForTests(dir, held)
+	return sync.OnceFunc(func() {
+		close(held)
+		restore()
+	})
+}
+
+// HoldOpensUntilForTests is HoldOpensForTests with the calls held until held
+// closes, and the mount lookup put back only by restore: a test that lets a
+// held call answer while it is under way (a disk spinning up) closes held then,
+// and restores once that call is done, so the lookup the call makes never
+// races the restore.
+func HoldOpensUntilForTests(dir string, held <-chan struct{}) (restore func()) {
+	restoreMount := ownMountForTests("HoldOpensUntilForTests", "held-for-tests:", dir)
 	hook := func(p string) {
 		if mounts.Within(p, dir) {
 			<-held
@@ -459,9 +472,8 @@ func HoldOpensForTests(dir string) (release func()) {
 	}
 	heldOpens.Store(&hook)
 	return sync.OnceFunc(func() {
-		close(held)
 		heldOpens.Store(nil)
-		restore()
+		restoreMount()
 	})
 }
 

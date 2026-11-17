@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -116,13 +117,20 @@ func TestStreamWaitsOutADiskSpinningUp(t *testing.T) {
 	}
 	const spinUp = 600 * time.Millisecond
 	e.api.fileWait, e.api.streamWait = 200*time.Millisecond, 10*time.Second
-	release := metadata.HoldOpensForTests(filepath.Join(root, "Book"))
-	t.Cleanup(release)
+	// The hold ends while the stream's open waits (spun), the mount lookup
+	// put back only once every request is done (restore), so the open's own
+	// lookup never races it.
+	spun := make(chan struct{})
+	var spinOnce sync.Once
+	spin := func() { spinOnce.Do(func() { close(spun) }) }
+	restore := metadata.HoldOpensUntilForTests(filepath.Join(root, "Book"), spun)
+	t.Cleanup(restore)
+	t.Cleanup(spin)
 
 	if resp, body := e.do(t, "GET", coverURL(lib.ID, "Book", ""), adminTok, ""); resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("the cover while the disk spins up = %d %s, want 503 after fileWait", resp.StatusCode, body)
 	}
-	time.AfterFunc(spinUp, release)
+	time.AfterFunc(spinUp, spin)
 	stream := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + "/stream?path=" + url.QueryEscape("Book/book.m4b")
 	if resp, body := e.do(t, "GET", stream, adminTok, ""); resp.StatusCode != http.StatusOK || body != "not really audio" {
 		t.Errorf("the stream while the disk spins up = %d %q, want it served once the disk answers", resp.StatusCode, body)
