@@ -112,9 +112,18 @@ func TestEnsurePodcastFetchUnavailableAndCooldown(t *testing.T) {
 			case "demo":
 				opt.NoNew = true
 			}
+			// The open request is answered either way; a demo stream watches it
+			// but never raises it to its own priority (server#219).
+			want := 100
+			if opt.NoNew {
+				want = 10
+			}
 			j, created, err := q.EnsurePodcastFetch(ctx, demandJob(q, 100), opt)
-			if err != nil || created || j.ID != first.ID || j.Priority != 100 {
-				t.Fatalf("existing %+v %v", j, err)
+			if err != nil || created || j.ID != first.ID || j.Priority != want {
+				t.Fatalf("existing %+v %v, want priority %d", j, err, want)
+			}
+			if stored, err := q.Job(ctx, first.ID); err != nil || stored.Priority != want {
+				t.Fatalf("stored %+v %v, want priority %d", stored, err, want)
 			}
 			if _, err = q.db.ExecContext(ctx, `DELETE FROM bridge_jobs`); err != nil {
 				t.Fatal(err)

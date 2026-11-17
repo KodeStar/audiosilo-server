@@ -3101,7 +3101,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `phase2c2/` copy (manifest hashes are tested).
   Migration 0054 binds feed status to `(library_id,show_path,show_id)`: late or unbound outcomes
   cannot change a replacement show's validators, failures, gone or secret flags. Subscribe repair
-  and poll params capture the expected identity. Fetch outcomes have a separate backoff summary
+  and poll params capture the expected identity; a poll naming an identity the show no longer has
+  (none when it has no row) is 409 `identity_changed` (`checkPodcastTarget`), so a stale request never
+  replaces the current show's open poll. Fetch outcomes have a separate backoff summary
   (30 minutes doubling to 24 hours, larger Retry-After capped at 24 hours); cancellation and
   identity replacement do not count as failures. Fold before pruning terminal fetch/retain history.
   Policies are durable `(library_id,show_path,show_id)` preferences, reset for a replacement,
@@ -3119,7 +3121,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   transaction deduplicates open work, promotes priority with MAX without changing attempts, checks
   cooldown and authorizes new work against the current online heartbeat/mapping. Priorities are
   100/20/10/-10 respectively; explicit Retry/admin bypass cooldown, while ordinary stream retries
-  expose the terminal failure. Existing work can be promoted offline or with an unwritable mapping.
+  expose the terminal failure. Existing work can be promoted offline or with an unwritable mapping,
+  never by a demo stream (`FetchOptions.NoNew`: it watches the open fetch at its priority).
   Each non-admin, including kids, may create at most five open fetch intents across libraries.
   The same writer transaction checks the creator's count before insertion; promotion preserves
   ownership and existing open work still wins at the cap. Admins and requester-free scheduled

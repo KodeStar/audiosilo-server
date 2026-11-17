@@ -644,7 +644,25 @@ func samePodcastIdentity(a, b json.RawMessage) bool {
 	_ = json.Unmarshal(b, &y)
 	return x.ShowID == y.ShowID && x.EpisodeID == y.EpisodeID
 }
+
+// checkPodcastTarget refuses podcast work naming an identity its show or
+// episode no longer has (ErrIdentityChanged), so a stale request never replaces
+// the current one's open job. A poll's show may have no row yet: its identity is
+// then none ("").
 func checkPodcastTarget(ctx context.Context, tx *sql.Tx, j NewJob) error {
+	if j.Kind == KindPodcastPoll {
+		var p PollParams
+		_ = json.Unmarshal(j.Params, &p)
+		var showID string
+		err := tx.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path=?`, j.LibraryID, j.Path).Scan(&showID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if showID != p.ShowID {
+			return ErrIdentityChanged
+		}
+		return nil
+	}
 	if j.Kind != KindPodcastFetch && j.Kind != KindPodcastRetain {
 		return nil
 	}

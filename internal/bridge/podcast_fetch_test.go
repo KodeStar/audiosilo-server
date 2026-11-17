@@ -128,3 +128,38 @@ func TestPodcastFetchRetainStrictAndHeld(t *testing.T) {
 		t.Fatalf("redaction/counters %s", raw)
 	}
 }
+
+// TestPodcastPollStaleIdentity: a poll naming a show identity the show no longer
+// has is refused without touching the open poll of the current one (server#219);
+// one naming the current identity still replaces an open poll of a replaced one.
+func TestPodcastPollStaleIdentity(t *testing.T) {
+	q := fetchQueue(t)
+	ctx := context.Background()
+	if err := q.SaveHeartbeat(ctx, q.token, Status{Version: "0.9.0", Kinds: []string{KindPodcastPoll}, Libraries: []LibraryStatus{{LibraryID: q.lib, MountPath: "/podcasts", Mapped: true, Writable: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	show := "Show"
+	current := json.RawMessage(`{"show_id":"0123456789abcdef"}`)
+	stale := json.RawMessage(`{"show_id":"1111111111111111"}`)
+	open, created, err := q.Enqueue(ctx, NewJob{Kind: KindPodcastPoll, LibraryID: &q.lib, Path: &show, Params: current})
+	if err != nil || !created {
+		t.Fatalf("poll: %+v %v", open, err)
+	}
+	if _, _, err := q.Enqueue(ctx, NewJob{Kind: KindPodcastPoll, LibraryID: &q.lib, Path: &show, Params: stale}); !errors.Is(err, ErrIdentityChanged) {
+		t.Fatalf("stale poll: %v, want ErrIdentityChanged", err)
+	}
+	if j, err := q.Job(ctx, open.ID); err != nil || j.CancelRequested || j.Ended() {
+		t.Fatalf("a stale poll cancelled the current show's: %+v %v", j, err)
+	}
+	// The show's identity changes: a poll naming the new one replaces the open one.
+	if _, err := q.db.ExecContext(ctx, `UPDATE podcast_shows SET show_id='1111111111111111' WHERE library_id=?`, q.lib); err != nil {
+		t.Fatal(err)
+	}
+	next, created, err := q.Enqueue(ctx, NewJob{Kind: KindPodcastPoll, LibraryID: &q.lib, Path: &show, Params: stale})
+	if err != nil || !created || next.ID == open.ID {
+		t.Fatalf("current poll: %+v %v", next, err)
+	}
+	if j, err := q.Job(ctx, open.ID); err != nil || !j.Ended() {
+		t.Fatalf("the replaced identity's poll stayed open: %+v %v", j, err)
+	}
+}

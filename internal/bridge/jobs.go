@@ -720,7 +720,9 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 						return err
 					}
 				}
-				if j.fetch == nil && !kinds[j.Kind].promotes {
+				// A demo stream (NoNew) watches the open fetch but never raises it:
+				// it may not ask for disk work, the household's queue included.
+				if j.fetch == nil && !kinds[j.Kind].promotes || j.fetch != nil && j.fetch.NoNew {
 					return nil
 				}
 				// Promotion only ever raises the priority; an unchanged row
