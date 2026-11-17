@@ -3,8 +3,11 @@ package library
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
+	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -70,16 +73,16 @@ func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata
 // (most of a no-change scan of a library holding a damaged file). A problem
 // with a file beside the audio (a metadata.json, an attachment, an ebook or a
 // cover a read gave up on: givenUp) has cleared once the file, or what stands
-// there now, answers a look (a bounded stat; gone counts too): the re-index
-// reads it again, and records it again should it still not answer.
+// there now, answers the kind of call that gave up (sideAnswers; gone counts
+// too): the re-index reads it again, and records it again should it still not
+// answer.
 func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig catalog.Signature, slots *readSlots) bool {
 	if !recheckable(sig) {
 		return false
 	}
 	abs := absOf(lib, sig.ScanErrorFile)
 	if !metadata.IsAudio(abs) {
-		_, err := metadata.StatBounded(ctx, abs, s.probeTimeout)
-		return err == nil || errors.Is(err, fs.ErrNotExist)
+		return sideAnswers(ctx, abs, s.probeTimeout)
 	}
 	probe := sig.ScanError == problemProbe
 	var at *fileState
@@ -102,6 +105,47 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 	// included) has not cleared: the full re-index would only keep the book.
 	return md.OpenErr == nil && !readCutShort(md) && (!probe || md.ProbeErr == nil)
 }
+
+// sideAnswers reports whether the file or folder at abs beside a book's audio,
+// whose look or read a scan gave up on (givenUp), answers the same kind of
+// bounded call now: a folder its listing (coverLook.find's), a cover image its
+// stat (coverLook.find and LookArt only look at one), any other file (a
+// metadata.json, an attachment, an ebook) a read of its first bytes. A stat
+// alone would not do for those: on NFS or FUSE it can answer from a cache
+// while reads still hang, and every scan would then read the whole book again
+// only to wait out the same read. Gone, or no longer a regular file or folder,
+// counts as answered: the re-index decides what it is.
+func sideAnswers(ctx context.Context, abs string, timeout time.Duration) bool {
+	info, err := metadata.StatBounded(ctx, abs, timeout)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return true
+	case err != nil:
+		return false
+	case info.IsDir():
+		_, err = metadata.ReadDirBounded(ctx, abs, timeout)
+	case imageExts[strings.ToLower(filepath.Ext(abs))]:
+		return true
+	case info.Mode().IsRegular():
+		_, err = metadata.Bounded(ctx, abs, timeout, func() (struct{}, error) {
+			f, _, err := metadata.OpenRegular(abs)
+			if err != nil {
+				return struct{}{}, err
+			}
+			defer f.Close()
+			if _, err := f.Read(make([]byte, sideProbeBytes)); err != nil && !errors.Is(err, io.EOF) {
+				return struct{}{}, err
+			}
+			return struct{}{}, nil
+		}, nil)
+	default:
+		return true
+	}
+	return err == nil || errors.Is(err, fs.ErrNotExist) || errors.Is(err, metadata.ErrNotRegular)
+}
+
+// sideProbeBytes is how much of a file beside the audio sideAnswers reads.
+const sideProbeBytes = 4 << 10
 
 // tagsUnreadDetail is the detail of a file that opened but wasn't read in
 // time, and readRefusedDetail of one not read at all, as too many earlier

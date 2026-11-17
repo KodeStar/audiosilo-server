@@ -374,3 +374,58 @@ func TestLengthTimeOutKeepsTheBookOnlyWhileItsFilesAreTheStoredOnes(t *testing.T
 		t.Errorf("once every read answers = %+v, want the three parts, no problem", got)
 	}
 }
+
+// A problem with a file beside the audio clears only once the kind of call
+// that gave up answers: a read of a metadata.json, an attachment or an ebook,
+// a listing of a folder, a stat of a cover image. A file whose stat answers
+// while it still can't be read (on NFS or FUSE a stat can answer from a cache
+// while reads hang) keeps its problem, so the scan does not read the whole
+// book again only to wait out the same read. Gone counts as cleared.
+func TestProblemClearedAsksTheKindOfCallThatGaveUp(t *testing.T) {
+	t.Parallel()
+	s := NewScanner(nil, "", slog.Default())
+	s.probeTimeout = 5 * time.Second
+	root := t.TempDir()
+	lib := catalog.Library{Root: root}
+	writeFile(t, root, "Book/metadata.json", []byte(`{"title":"T"}`))
+	writeFile(t, root, "Book/cover.jpg", []byte("img"))
+	writeFile(t, root, "Folder/01.mp3", []byte("x"))
+	cleared := func(rel string) bool {
+		t.Helper()
+		sig := catalog.Signature{ScanError: problemUnreadable, ScanErrorFile: rel}
+		return s.problemCleared(t.Context(), lib, sig, newReadSlots(1, time.Second))
+	}
+	for _, rel := range []string{"Book/metadata.json", "Book/cover.jpg", "Folder", "Book/gone.json"} {
+		if !cleared(rel) {
+			t.Errorf("%s answers its call: problem not cleared", rel)
+		}
+	}
+
+	chmod := func(rel string, mode os.FileMode) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		was, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(p, was.Mode().Perm()) })
+	}
+	chmod("Book/metadata.json", 0)
+	chmod("Book/cover.jpg", 0)
+	chmod("Folder", 0o300)
+	if _, err := os.ReadFile(filepath.Join(root, "Book", "metadata.json")); err == nil {
+		t.Skip("file permissions don't stop this user reading (root?)")
+	}
+	if cleared("Book/metadata.json") {
+		t.Error("a metadata.json whose stat answers but read doesn't: problem cleared, want it kept")
+	}
+	if cleared("Folder") {
+		t.Error("a folder whose stat answers but listing doesn't: problem cleared, want it kept")
+	}
+	if !cleared("Book/cover.jpg") {
+		t.Error("a cover image whose stat answers: problem kept, want it cleared (a stat is all its look makes)")
+	}
+}

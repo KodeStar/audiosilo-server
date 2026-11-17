@@ -1198,7 +1198,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `ErrNotAnswered` and `ErrReadRefused`; `HoldOpensForTests` holds them too): the files beside a
   book's audio (the ABS metadata.json read, the attachments' lstats and reads, the ebook check,
   `coverLook.find`'s stats and listing, `LookArt` (`ArtFile`'s `SafeJoin` and the stat) for the
-  cover version, `stampAddedAt`'s statx and lstat, `problemCleared`'s stat), the backfill's embedded cover read
+  cover version, `stampAddedAt`'s statx and lstat, `problemCleared`'s look), the backfill's embedded cover read
   (`media.EmbeddedCover`), `RefreshEbook`'s look, and in the API every cover (full, thumbnail, a
   show's: `serveArt`, `coverArt`, `readSidecar`) and a stream's open and stat (`media.ServeFile`; a regular file only, `metadata.OpenRegular`, so a FIFO is a 404 at once, never an open held and counted on its mount),
   each given up on after `API.fileWait` (10 s; a stream's open after `API.streamWait`, 45 s: past a
@@ -1208,7 +1208,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   none of its side files is looked at (each would wait out its time too); one given up on otherwise
   keeps the book as stored (`library.givenUp.keep`: `ReadCutShort`, never `LengthOnly`) with an
   `unreadable` problem on that file (over a lasting one), which `problemCleared` clears once the file
-  answers a bounded stat (gone counts too); a backfill's given-up read keeps what is stored and
+  answers the kind of bounded call that gave up (`sideAnswers`: a folder's listing, a cover image's
+  stat, any other file's read of its first bytes, as a stat can answer from a cache while reads hang;
+  gone counts too); a backfill's given-up read keeps what is stored and
   records nothing. A scan stopped while a read is still under way (held in a call nothing bounds)
   waits for it up to `stopGrace` (2 s), then leaves it to end on its own, its book's flight with
   it, counted in `Scanner.readsLeft` and logged, so the scan ends and the next runs (`writeNext`
