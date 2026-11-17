@@ -351,8 +351,10 @@ function LinkForm({
 }
 
 /**
- * Makes an ordinary account for a waiting sign-in, its username prefilled from
- * the sign-in. `onDone` as LinkDialog's.
+ * Makes an ordinary account for a waiting sign-in. The username starts empty:
+ * the server then makes one from the sign-in (cleaned, and numbered when
+ * taken), where the provider's raw username could be email-shaped or an
+ * account's already. `onDone` as LinkDialog's.
  */
 function CreateDialog({
   row,
@@ -379,7 +381,7 @@ function CreateDialog({
 
 function CreateForm({ row, onDone }: { row: OIDCPendingSignIn; onDone: () => void }) {
   const { t } = useTranslation();
-  const [username, setUsername] = useState(row.username);
+  const [username, setUsername] = useState('');
   const { busy, error, code, submit } = useRowSubmit(onDone);
   const id = useId();
   // A taken or missing username is the field's; any other refusal (the row

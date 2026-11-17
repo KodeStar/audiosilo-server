@@ -26,7 +26,7 @@ func setEmail(t *testing.T, s *Service, ctx context.Context, id int64, email str
 
 func signIn(t *testing.T, s *Service, ctx context.Context, c oidc.Claims, p oidc.Policy) OIDCResult {
 	t.Helper()
-	res, err := s.OIDCSignIn(ctx, c, p)
+	res, err := s.OIDCSignIn(ctx, c, p, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,9 +195,9 @@ func TestIdentityUsernameBase(t *testing.T) {
 }
 
 // TestOIDCRoleSync: admin_group promotes and demotes at each sign-in, never the
-// last enabled admin. An identity that has never carried a groups claim keeps
-// its role when the claim is absent; once it has (Keycloak's sequence: in the
-// group, then the claim left out for a person in no group), absent demotes.
+// last enabled admin. Only a groups list that is there changes the role: an
+// absent claim keeps it, whether the identity has carried one before or not
+// (the owner's policy, server#405).
 func TestOIDCRoleSync(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -218,19 +218,30 @@ func TestOIDCRoleSync(t *testing.T) {
 	if res.User.Role != RoleAdmin || res.Decision.NoGroups || !groupsSeen(t, s, ctx, "sub-1") {
 		t.Fatalf("in the group: %+v %+v", res.User, res.Role)
 	}
-	// Seen, now absent: out of every group.
+	// Allowed: seen, now absent (a renamed groups_claim, a dropped scope,
+	// Entra's overage): the role stays, and the result says it was seen.
 	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true), p)
+	if res.User.Role != RoleAdmin || res.Role != nil || !res.Decision.NoGroups || !res.GroupsSeen {
+		t.Fatalf("absent after seen: %+v %+v %+v", res.User, res.Role, res.Decision)
+	}
+	// Denied: a list that is there without the group demotes, an empty one
+	// included.
+	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true, "listeners"), p)
 	if res.User.Role != RoleUser || res.Role == nil || !res.Role.Changed() || res.Decision.NoGroups {
-		t.Fatalf("absent after seen: %+v %+v", res.User, res.Role)
+		t.Fatalf("a list without the group: %+v %+v", res.User, res.Role)
 	}
 	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true, "admins"), p)
 	if res.User.Role != RoleAdmin || !res.Role.Changed() {
 		t.Fatalf("promotion: %+v %+v", res.User, res.Role)
 	}
-	// An empty list is a claim: out of the group.
 	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true, []string{}...), p)
 	if res.User.Role != RoleUser || !res.Role.Changed() {
 		t.Fatalf("demotion: %+v %+v", res.User, res.Role)
+	}
+	// Absent again: a demoted person isn't promoted either.
+	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true), p)
+	if res.User.Role != RoleUser || res.Role != nil || !res.Decision.NoGroups {
+		t.Fatalf("absent after a demotion: %+v %+v", res.User, res.Role)
 	}
 	// The last enabled admin, signing in out of the group, stays an admin.
 	if err := s.UpdateUser(ctx, root.ID, UserChanges{Email: ptr("root@example.org")}); err != nil {
@@ -406,6 +417,41 @@ func TestPendingLinkCreateDismiss(t *testing.T) {
 	}
 }
 
+// TestPendingPartialRefreshKeepsClaims: a waiting row refreshed by a sign-in
+// whose userinfo couldn't be read (Claims.Partial) keeps the username, the
+// name and the groups those claims lack (allowed: they may be the person's
+// still), while a list the partial claims carry, and whole claims lacking
+// them, replace what the row showed (denied).
+func TestPendingPartialRefreshKeepsClaims(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	row := func() PendingSignIn {
+		t.Helper()
+		rows, err := s.ListPending(ctx)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("pending rows: %+v %v", rows, err)
+		}
+		return rows[0]
+	}
+	signIn(t, s, ctx, claimsFor("sub-p", "p@example.org", true, "listeners"), oidc.Policy{})
+	partial := oidc.Claims{Issuer: testIssuer, Subject: "sub-p", Email: "p@example.org", EmailVerified: true, Partial: true}
+	signIn(t, s, ctx, partial, oidc.Policy{})
+	if p := row(); p.Username != "Alice.Smith" || p.Name != "Alice Smith" || len(p.Groups) != 1 || p.Groups[0] != "listeners" || p.Attempts != 2 {
+		t.Fatalf("a partial refresh lost what the row showed: %+v", p)
+	}
+	partial.Groups = []string{}
+	signIn(t, s, ctx, partial, oidc.Policy{})
+	if p := row(); p.Username != "Alice.Smith" || len(p.Groups) != 0 {
+		t.Fatalf("a list the partial claims carried: %+v", p)
+	}
+	whole := partial
+	whole.Partial = false
+	signIn(t, s, ctx, whole, oidc.Policy{})
+	if p := row(); p.Username != "" || p.Name != "" || p.Attempts != 4 {
+		t.Fatalf("whole claims without a username or name: %+v", p)
+	}
+}
+
 // TestPendingIdentityLinkedMeanwhile: a row whose identity signed in (or was
 // linked) since is refused, not linked twice.
 func TestPendingIdentityLinkedMeanwhile(t *testing.T) {
@@ -431,7 +477,15 @@ func TestPendingCapAndPrune(t *testing.T) {
 	s, ctx, now := newTestServiceWithClock(t)
 	for i := range maxPendingSignIns + 3 {
 		*now = now.Add(time.Second)
-		pendingFor(t, s, ctx, claimsFor(fmt.Sprintf("sub-%d", i), "", false))
+		// Past the cap, each new row evicts the oldest (the callback tells
+		// the admin); none before it.
+		want := int64(0)
+		if i >= maxPendingSignIns {
+			want = 1
+		}
+		if res := signIn(t, s, ctx, claimsFor(fmt.Sprintf("sub-%d", i), "", false), oidc.Policy{}); res.PendingEvicted != want {
+			t.Fatalf("row %d evicted %d, want %d", i, res.PendingEvicted, want)
+		}
 	}
 	rows, _ := s.ListPending(ctx)
 	if len(rows) != maxPendingSignIns || rows[len(rows)-1].Subject != "sub-3" {
@@ -445,6 +499,7 @@ func TestPendingCapAndPrune(t *testing.T) {
 	if res.PendingID == 0 || pendingID(t, s, ctx, "sub-back") != res.PendingID {
 		t.Fatalf("the row just written was pruned: %+v", res)
 	}
+
 	*now = back.AddDate(0, 0, pendingDays+1)
 	if rows, _ := s.ListPending(ctx); len(rows) != 0 {
 		t.Fatalf("listed after 30 days: %d", len(rows))
@@ -480,7 +535,7 @@ func TestPendingGroupsCapped(t *testing.T) {
 }
 
 // TestUnlinkIdentity: unlinking works, except a password-less admin's last way
-// in (decision 5).
+// in (decision 5), and ends the account's sign-ins not yet finished.
 func TestUnlinkIdentity(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -504,8 +559,24 @@ func TestUnlinkIdentity(t *testing.T) {
 	if err := s.UpdateUser(ctx, sso.ID, UserChanges{Password: ptr("a-new-password")}); err != nil {
 		t.Fatal(err)
 	}
+	// A sign-in through it finishes while it is linked (allowed); one not yet
+	// finished when it is unlinked ends with it (denied).
+	done, err := s.IssueToken(ctx, sso.ID, KindOIDC, "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeOIDC(ctx, done); err != nil {
+		t.Fatal(err)
+	}
+	open, err := s.IssueToken(ctx, sso.ID, KindOIDC, "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got, err := s.UnlinkIdentity(ctx, sso.ID, ids[0].ID); err != nil || got.Subject != "sub-sso" {
 		t.Fatalf("unlink with a password: %+v %v", got, err)
+	}
+	if _, err := s.ConsumeOIDC(ctx, open); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("a sign-in survived its identity's unlink: %v", err)
 	}
 }
 
@@ -574,6 +645,20 @@ func TestIdentityWayInOnlyForTheRunningSSO(t *testing.T) {
 	// Single sign-on turned off: the identity is no way in, so unlinking it
 	// strands no one it hadn't.
 	active = ""
+	// Allowed: the console's save re-sending a password-less admin's role
+	// changes nothing, so it isn't refused for the way in single sign-on no
+	// longer gives (server#405).
+	if err := s.UpdateUser(ctx, plain.ID, UserChanges{Role: ptr(RoleAdmin), Email: ptr("plain@example.org")}); err != nil {
+		t.Fatalf("re-send an admin's role while single sign-on is off: %v", err)
+	}
+	if u, _ := s.GetUser(ctx, plain.ID); u.Email != "plain@example.org" || u.Role != RoleAdmin {
+		t.Fatalf("the save beside the role: %+v", u)
+	}
+	// Denied: a promotion is still checked.
+	plain2 := mustUser(t, s, ctx, "plain2", "", RoleUser)
+	if err := s.UpdateUser(ctx, plain2.ID, UserChanges{Role: ptr(RoleAdmin)}); !errors.Is(err, ErrAdminNeedsPassword) {
+		t.Fatalf("promote a password-less account while single sign-on is off: %v", err)
+	}
 	if _, err := s.UnlinkIdentity(ctx, plain.ID, ids[0].ID); err != nil {
 		t.Fatalf("unlink while single sign-on is off: %v", err)
 	}
@@ -610,7 +695,7 @@ func TestOIDCSignInContextCancel(t *testing.T) {
 	s, _ := newTestService(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := s.OIDCSignIn(ctx, claimsFor("sub", "", false), oidc.Policy{}); err == nil {
+	if _, err := s.OIDCSignIn(ctx, claimsFor("sub", "", false), oidc.Policy{}, time.Minute); err == nil {
 		t.Fatal("a cancelled sign-in succeeded")
 	}
 }
@@ -644,7 +729,7 @@ func TestConsumeOIDC(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
 	alice := mustUser(t, s, ctx, "alice", "", RoleUser)
-	sso, err := s.IssueOIDCToken(ctx, alice.ID, time.Minute)
+	sso, err := s.IssueToken(ctx, alice.ID, KindOIDC, "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -680,7 +765,7 @@ func TestConsumeOIDC(t *testing.T) {
 		t.Fatalf("a second finish: %v", err)
 	}
 	// A sign-out everywhere ends one in flight.
-	open, err := s.IssueOIDCToken(ctx, alice.ID, time.Minute)
+	open, err := s.IssueToken(ctx, alice.ID, KindOIDC, "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,12 +775,48 @@ func TestConsumeOIDC(t *testing.T) {
 	if _, err := s.ConsumeOIDC(ctx, open); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("a sign-in survived a sign-out everywhere: %v", err)
 	}
-	if _, err := s.PrunePairingTokens(ctx); err != nil {
+	if _, err := s.PruneSingleUseTokens(ctx); err != nil {
 		t.Fatal(err)
 	}
 	var left int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE kind = ?`, KindOIDC).Scan(&left); err != nil || left != 0 {
 		t.Fatalf("spent sign-in tokens kept: %d %v", left, err)
+	}
+}
+
+// TestOIDCSignInMintsToken: an outcome that signs in mints the finish token in
+// the sign-in's own transaction (server#405), so a sign-out everywhere after
+// the decision ends it; one that doesn't sign in mints none.
+func TestOIDCSignInMintsToken(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	res, err := s.OIDCSignIn(ctx, claimsFor("sub-a", "", false), oidc.Policy{AutoCreate: true}, time.Minute)
+	if err != nil || res.Decision.Outcome != oidc.Create || res.Token == "" {
+		t.Fatalf("create: %+v %v", res, err)
+	}
+	// Allowed: the token finishes the sign-in, once.
+	if u, err := s.ConsumeOIDC(ctx, res.Token); err != nil || u.ID != res.User.ID {
+		t.Fatalf("finish: %v %v", u, err)
+	}
+	// Denied: a sign-out everywhere once the sign-in decided ends its token.
+	res, err = s.OIDCSignIn(ctx, claimsFor("sub-a", "", false), oidc.Policy{}, time.Minute)
+	if err != nil || res.Decision.Outcome != oidc.SignIn || res.Token == "" {
+		t.Fatalf("sign in: %+v %v", res, err)
+	}
+	if _, err := s.SignOutEverywhere(ctx, res.User.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeOIDC(ctx, res.Token); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("a sign-in's token survived a sign-out everywhere: %v", err)
+	}
+	// Never a token that wouldn't expire.
+	if _, err := s.OIDCSignIn(ctx, claimsFor("sub-a", "", false), oidc.Policy{}, 0); err == nil {
+		t.Fatal("a sign-in with no token life went on")
+	}
+	// No token for a sign-in that waits.
+	if res, err := s.OIDCSignIn(ctx, claimsFor("sub-b", "", false), oidc.Policy{}, time.Minute); err != nil ||
+		res.Decision.Outcome != oidc.Pending || res.Token != "" {
+		t.Fatalf("pending: %+v %v", res, err)
 	}
 }
 
@@ -709,7 +830,7 @@ func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
 	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
 	for _, kind := range []string{MemberGrownup, MemberKid} {
 		u := mustUser(t, s, ctx, "joins-"+kind, "", RoleUser)
-		tok, err := s.IssueOIDCToken(ctx, u.ID, time.Minute)
+		tok, err := s.IssueToken(ctx, u.ID, KindOIDC, "", time.Minute)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -721,7 +842,7 @@ func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
 		}
 	}
 	stays := mustUser(t, s, ctx, "stays", "", RoleUser)
-	tok, err := s.IssueOIDCToken(ctx, stays.ID, time.Minute)
+	tok, err := s.IssueToken(ctx, stays.ID, KindOIDC, "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -737,7 +858,7 @@ func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
 	if err := s.UpdateUser(ctx, late.ID, UserChanges{Household: &HouseholdChange{Owner: adam.ID, Kind: MemberGrownup, Access: MemberAll}}); err != nil {
 		t.Fatal(err)
 	}
-	tok, err = s.IssueOIDCToken(ctx, late.ID, time.Minute)
+	tok, err = s.IssueToken(ctx, late.ID, KindOIDC, "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

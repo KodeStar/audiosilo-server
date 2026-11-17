@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Unlink } from 'lucide-react';
-import { api } from '@/api/client';
+import { api, ApiError } from '@/api/client';
 import { invalidatePeople, keys, useOIDCStatus } from '@/api/hooks';
 import type { AdminUser, OIDCIdentity } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
@@ -17,7 +17,9 @@ import { identityProvider } from './pending-model';
  * A person's linked single sign-ons (server#235), one card each: "Signed in
  * with <provider>", the email it carries, how and when it was linked, its last
  * sign-in, and Unlink. Unlinking a password-less admin's way into the console
- * is refused (409 admin_needs_password), said in the dialog.
+ * is refused (409 admin_needs_password), said in the dialog. A 404 (unlinked
+ * already, in another tab or by another admin) reads as done, and the person
+ * is read again.
  */
 export function IdentityCards({
   user,
@@ -88,7 +90,11 @@ function IdentityCard({
         description={t('user.identity.unlinkBody', { provider })}
         confirmLabel={t('user.identity.unlink')}
         onConfirm={async () => {
-          await api.unlinkIdentity(u.id, i.id);
+          try {
+            await api.unlinkIdentity(u.id, i.id);
+          } catch (err) {
+            if (!(err instanceof ApiError && err.status === 404)) throw err;
+          }
           invalidatePeople(qc);
           // The waiting sign-ins' Link offers this account again.
           void qc.invalidateQueries({ queryKey: keys.oidcPending });

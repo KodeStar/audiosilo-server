@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -88,6 +89,43 @@ type oidcFlow struct {
 	provider *oidc.Provider
 	sealer   *oidc.Sealer
 	replay   *oidc.Replay
+	// noGroupsWarned: the accounts whose sign-in without a groups claim (while
+	// admin_group is set) has been logged this run, a noGroupsKey each
+	// (auditSignIn).
+	noGroupsWarned sync.Map
+	// evictions: the waiting rows the list's cap dropped, for auditSignIn's
+	// warning.
+	evictions evictionTally
+}
+
+// evictionTally counts the waiting sign-ins dropped at the list's cap between
+// warnings: at the cap every new person's attempt drops one, so the warning
+// is logged at most once an hour, with the count since the last.
+type evictionTally struct {
+	mu       sync.Mutex
+	dropped  int64
+	loggedAt time.Time
+}
+
+// note counts n more rows dropped and returns how many to report now: all
+// since the last report when that was an hour or more ago (or never), else 0
+// (kept for the next).
+func (e *evictionTally) note(n int64, now time.Time) int64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.dropped += n
+	if !e.loggedAt.IsZero() && now.Sub(e.loggedAt) < time.Hour {
+		return 0
+	}
+	n, e.dropped, e.loggedAt = e.dropped, 0, now
+	return n
+}
+
+// noGroupsKey is an account and whether its identity had carried the groups
+// claim before: each of its two warnings is logged once a run.
+type noGroupsKey struct {
+	user int64
+	seen bool
 }
 
 // newOIDCFlow builds the flow for cfg, or nil when OIDC is off. A bad provider
@@ -105,14 +143,14 @@ func newOIDCFlow(cfg config.OIDCConfig, log *slog.Logger) *oidcFlow {
 		return f
 	}
 	f.sealer = sealer
-	if f.provider, f.problem = buildOIDCProvider(cfg); f.problem != "" {
+	if f.provider, f.problem = buildOIDCProvider(cfg, log); f.problem != "" {
 		log.Warn("oidc: sign-in is off", "problem", f.problem)
 	}
 	return f
 }
 
 // buildOIDCProvider makes cfg's provider, or says why it can't.
-func buildOIDCProvider(cfg config.OIDCConfig) (*oidc.Provider, string) {
+func buildOIDCProvider(cfg config.OIDCConfig, log *slog.Logger) (*oidc.Provider, string) {
 	// public_url is live (checked per request): any placeholder passes here.
 	if p := cfg.Problem("-"); p != "" {
 		return nil, p
@@ -127,8 +165,8 @@ func buildOIDCProvider(cfg config.OIDCConfig) (*oidc.Provider, string) {
 	}
 	p, err := oidc.New(oidc.Settings{
 		Issuer: cfg.Issuer, ClientID: strings.TrimSpace(cfg.ClientID), ClientSecret: secret,
-		Scopes: cfg.EffectiveScopes(), UsernameClaim: cfg.EffectiveUsernameClaim(), GroupsClaim: cfg.EffectiveGroupsClaim(),
-		HTTPClient: client,
+		UsernameClaim: cfg.EffectiveUsernameClaim(), GroupsClaim: cfg.EffectiveGroupsClaim(),
+		HTTPClient: client, Log: log,
 	})
 	if err != nil {
 		return nil, err.Error()
@@ -167,6 +205,13 @@ func (a *API) oidcBase() string { return strings.TrimRight(a.config().PublicURL,
 
 // oidcRedirectURI is the redirect URI the provider sends people back to.
 func (a *API) oidcRedirectURI() string { return a.oidcBase() + oidcCallbackPath }
+
+// oidcScopes are the scopes a sign-in asks for now: the provider's, read at
+// start, with groups among the defaults only while the live settings hold a
+// group policy (config.OIDCConfig.GroupPolicy).
+func (a *API) oidcScopes() []string {
+	return config.OIDCScopes(a.boot.Auth.OIDC.Scopes, a.config().Auth.OIDC.GroupPolicy())
+}
 
 // oidcResult sends the browser to the connect page's result panel. base is
 // public_url when set, else the request's own page (a relative redirect: off
@@ -229,9 +274,13 @@ func (a *API) oidcCookieValue(r *http.Request, name string) string {
 // another host than public_url's, or over plain HTTP for an https public_url,
 // it first sends the browser to this route on public_url (once: ?hop=1), so
 // the flow cookie is set where the provider returns. Then the cookie (sealed
-// state, nonce, PKCE verifier, return; ten minutes, HttpOnly, SameSite=Lax;
-// named and placed by oidcCookieName, Secure on an https public_url) and a
-// 302 to the provider's authorization URL.
+// state, nonce, PKCE verifier, the redirect URI, return; ten minutes,
+// HttpOnly, SameSite=Lax; named and placed by oidcCookieName, Secure on an
+// https public_url) and a 302 to the provider's authorization URL, asking for
+// oidcScopes. A provider discovered before is probed first (within the call
+// budget, so a slow one still signs people in; at most every 30 s, a failure
+// asked again after 5 s): one gone down lands on #oidc=unavailable rather
+// than the browser being sent to it.
 func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	// Never the request's own value from here on: the enum's constant.
 	var ret string
@@ -269,8 +318,8 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	}
 	// 32 random bytes each, base64url.
 	f := oidc.Flow{State: oauth2.GenerateVerifier(), Nonce: oauth2.GenerateVerifier(),
-		Verifier: oauth2.GenerateVerifier(), Return: ret}
-	authURL, err := a.oidc.provider.AuthURL(r.Context(), a.oidcRedirectURI(), f)
+		Verifier: oauth2.GenerateVerifier(), RedirectURI: a.oidcRedirectURI(), Return: ret}
+	authURL, err := a.oidc.provider.AuthURL(r.Context(), f, a.oidcScopes())
 	if err != nil {
 		a.log.Warn("oidc: start failed", "err", err)
 		a.oidcResult(w, r, oidcUnavailable)
@@ -352,7 +401,10 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail(oidcFailed, "flow return", nil)
 		return
 	}
-	claims, err := a.oidc.provider.Exchange(r.Context(), a.oidcRedirectURI(), q.Get("code"), f)
+	// The policy as it is now (live): read once, so the exchange asks userinfo
+	// for the groups the decision below reads.
+	pol := a.config().Auth.OIDC
+	claims, err := a.oidc.provider.Exchange(r.Context(), q.Get("code"), f, pol.GroupPolicy())
 	if errors.Is(err, oidc.ErrUnavailable) {
 		a.log.Warn("oidc: the provider is unavailable", "err", err)
 		a.oidcResult(w, r, oidcUnavailable)
@@ -371,11 +423,12 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// The groups trimmed as the console saves them (config.yaml and the
 	// environment aren't): a claim's group is, so " admins" would match no one
-	// and every sign-in would lose its admin role.
-	pol := a.config().Auth.OIDC
+	// and every sign-in would lose its admin role. The finish token is minted
+	// in the sign-in's own transaction: a sign-out everywhere can't land
+	// between the decision and the token and miss it.
 	res, err := a.auth.OIDCSignIn(r.Context(), claims, oidc.Policy{
 		AutoCreate: pol.AutoCreate, AllowedGroup: strings.TrimSpace(pol.AllowedGroup), AdminGroup: strings.TrimSpace(pol.AdminGroup),
-	})
+	}, oidcDoneTTL)
 	if err != nil {
 		a.log.Error("oidc: sign-in failed", "err", err)
 		a.oidcResult(w, r, oidcFailed)
@@ -386,7 +439,10 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	d := res.Decision
 	switch d.Outcome {
 	case oidc.Pending:
-		a.rt.Notify.OIDCPending(r.Context(), res.PendingID, a.oidc.name, claims.Name, claims.Username, d.Reason)
+		// Their next attempt asks userinfo for a claim it lacked this time: an
+		// email added at the provider since is what links it to their account.
+		a.oidc.provider.AskAgain(claims.Subject)
+		a.rt.Notify.OIDCPending(r.Context(), res.PendingID, ip, a.oidc.name, claims.Name, claims.Username, d.Reason)
 		if d.Reason == oidc.ReasonNotAllowed {
 			a.oidcResult(w, r, oidcNotAllowed)
 			return
@@ -394,26 +450,25 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		a.oidcResult(w, r, oidcPending)
 		return
 	case oidc.Refuse:
-		if d.Reason == oidc.ReasonDisabled {
+		switch d.Reason {
+		case oidc.ReasonDisabled:
 			a.oidcResult(w, r, oidcDisabled)
-			return
+		case oidc.ReasonIncomplete:
+			// A first sign-in userinfo couldn't complete: the provider's
+			// trouble, worth trying again, never a second account nor a
+			// waiting row for someone allowed_group may list.
+			a.oidcResult(w, r, oidcUnavailable)
+		default:
+			a.oidcResult(w, r, oidcNotAllowed)
 		}
-		a.oidcResult(w, r, oidcNotAllowed)
 		return
 	}
-	u := res.User
-	if u.Role == auth.RoleAdmin {
+	if res.User.Role == auth.RoleAdmin {
 		if err := a.auth.NoteAdminSignIn(r.Context()); err != nil {
 			a.log.Warn("noting the admin's first sign-in failed", "err", err)
 		}
 	}
-	token, err := a.auth.IssueOIDCToken(r.Context(), u.ID, oidcDoneTTL)
-	if err != nil {
-		a.log.Error("oidc: could not issue the sign-in's token", "err", err)
-		a.oidcResult(w, r, oidcFailed)
-		return
-	}
-	a.setOIDCCookie(w, oidcDoneCookie, token, int(oidcDoneTTL/time.Second))
+	a.setOIDCCookie(w, oidcDoneCookie, res.Token, int(oidcDoneTTL/time.Second))
 	noStore(w)
 	done := oidcDoneWeb
 	if f.Return == oidcReturnAdmin {
@@ -433,7 +488,10 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 // answer clears it. 401 code oidc_no_sign_in without the cookie (charging
 // nothing: no secret was tried), oidc_sign_in_expired for a token spent,
 // expired, unknown, of another kind, or its account's disabled or now a
-// member (charged to the address's oidcLimiter, the callback's). Not redeemLimiter: any page can make
+// member (charged to the address's oidcLimiter, the callback's), and while
+// single sign-on can't run now (turned off or misconfigured since the
+// callback: its token outlives a restart; nothing charged, the token left to
+// expire). Not redeemLimiter: any page can make
 // a visitor's browser fail ten exchanges or redeems (a simple POST), which
 // would lock that address out of finishing a sign-in the provider completed.
 // A page on another site can't make a browser send the cookie here
@@ -457,6 +515,10 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusUnauthorized, codeOIDCNoSignIn, "no single sign-on to finish in this browser")
 		return
 	}
+	if !a.oidcOn() {
+		writeErrorCode(w, http.StatusUnauthorized, codeOIDCSignInExpired, "single sign-on is off: sign in another way")
+		return
+	}
 	u, err := a.auth.ConsumeOIDC(r.Context(), token)
 	if err != nil {
 		a.oidcLimiter.Fail(ip)
@@ -478,16 +540,30 @@ func clip(s string, n int) string {
 // auditSignIn records what a sign-in changed, as the server's own act (no
 // admin made the request): a link by email, an account made, a role the
 // admin_group rule changed or would have (a refused demotion is logged too).
-// A sign-in with no groups claim while admin_group is set, through an
-// identity that has never carried one, is logged: its role was left alone.
+// A sign-in with no groups claim while admin_group is set is logged once per
+// account this run (its role was left alone; the identity's earlier claims
+// say whether the provider stopped sending it), and waiting sign-ins that
+// pushed the oldest out of the list are logged for the admin (at most once an
+// hour, with how many were dropped since: evictionTally).
 func (a *API) auditSignIn(r *http.Request, c oidc.Claims, res auth.OIDCResult) {
+	if n := res.PendingEvicted; n > 0 {
+		if n = a.oidc.evictions.note(n, time.Now()); n > 0 {
+			a.log.Warn("oidc: the waiting sign-ins are at their cap: the oldest were dropped", "dropped", n)
+		}
+	}
 	u := res.User
 	if u == nil {
 		return
 	}
 	if res.Decision.NoGroups {
-		a.log.Warn("oidc: admin_group is set but the provider sent no groups claim (never for this person): the role is unchanged",
-			"user", u.Username, "groups_claim", a.boot.Auth.OIDC.EffectiveGroupsClaim())
+		if _, warned := a.oidc.noGroupsWarned.LoadOrStore(noGroupsKey{u.ID, res.GroupsSeen}, true); !warned {
+			msg := "oidc: admin_group is set but the provider sent no groups claim (never for this person): the role is unchanged"
+			if res.GroupsSeen {
+				msg = "oidc: admin_group is set but the provider sent no groups claim this time (it did before): the role is unchanged; " +
+					"check groups_claim and the provider's groups mapper, or change the role by hand"
+			}
+			a.log.Warn(msg, "user", u.Username, "groups_claim", a.boot.Auth.OIDC.EffectiveGroupsClaim())
+		}
 	}
 	switch res.Decision.Outcome {
 	case oidc.Link:
@@ -524,14 +600,15 @@ type oidcStatus struct {
 	Discovery       *oidc.Status `json:"discovery,omitempty"`
 }
 
-// handleOIDCStatus reports the OIDC sign-in's config as running and the
-// provider's discovery, trying it when it is due (admin only). Never the
-// client secret: only whether one is set.
+// handleOIDCStatus reports the OIDC sign-in's config as running (the scopes a
+// sign-in asks for now) and the provider's discovery, trying it when it is due
+// and probing a provider discovered before (admin only). Never the client
+// secret: only whether one is set.
 func (a *API) handleOIDCStatus(w http.ResponseWriter, r *http.Request) {
 	cfg := a.boot.Auth.OIDC
 	st := oidcStatus{
 		Enabled: a.oidc != nil, Name: cfg.DisplayName(), Issuer: cfg.Issuer, ClientID: cfg.ClientID,
-		ClientSecretSet: cfg.SecretSet(), Scopes: cfg.EffectiveScopes(),
+		ClientSecretSet: cfg.SecretSet(), Scopes: a.oidcScopes(),
 		UsernameClaim: cfg.EffectiveUsernameClaim(), GroupsClaim: cfg.EffectiveGroupsClaim(),
 	}
 	if a.config().PublicURL != "" {

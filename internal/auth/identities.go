@@ -117,6 +117,18 @@ type OIDCResult struct {
 	// PendingID is the waiting row a Pending outcome recorded or refreshed
 	// (its id stays the same across the person's attempts), else 0.
 	PendingID int64
+	// PendingEvicted is how many of the oldest waiting rows a Pending outcome
+	// dropped to stay within maxPendingSignIns (the callback tells the admin).
+	PendingEvicted int64
+	// GroupsSeen: the linked identity had carried a groups claim before this
+	// sign-in (user_identities.groups_seen), so a sign-in without one is the
+	// provider leaving it out now (Decision.NoGroups says the role stayed).
+	GroupsSeen bool
+	// Token is the single-use token (KindOIDC, tokenTTL long) an outcome that
+	// signs in minted in the sign-in's own transaction, so a sign-out
+	// everywhere can't land between the decision and the token and miss it.
+	// "" otherwise.
+	Token string
 }
 
 // accountFacts reads an account's oidc.Account facts; ?1 is the issuer.
@@ -135,21 +147,28 @@ func scanAccount(row interface{ Scan(...any) error }, extra ...any) (oidc.Accoun
 // its email (any state: oidc.Decide sets the ineligible aside), oidc.Decide's
 // answer, then its write. SignIn stamps the identity's last sign-in and what it
 // says now, and marks it groups_seen when the sign-in carried the groups claim
-// (even an empty list: from then on an absent claim is no groups); Link adds
+// (even an empty list; read only for the callback's warning when a later
+// sign-in carries none, OIDCResult.GroupsSeen); Link adds
 // the identity (auto_email); Create makes an ordinary account (its username
 // from the claims, numbered on a clash; the email only when verified) and its
 // identity, both dropping the row the sign-in waited in; Pending records or
-// refreshes the waiting row (capped, pruned). An outcome that signs in applies the role rule: a
-// demotion that would leave no enabled admin is refused and reported, never
-// an error.
-func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) (OIDCResult, error) {
+// refreshes the waiting row (capped, pruned; one refreshed by partial claims
+// keeps the username, name and groups it lacks now). An outcome that signs in
+// applies the role rule: a demotion that would leave no enabled admin is
+// refused and reported, never an error. An outcome that signs in also mints the single-use token the
+// browser finishes with (KindOIDC, tokenTTL long, the only token ConsumeOIDC
+// takes), in the same transaction (OIDCResult.Token).
+func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy, tokenTTL time.Duration) (OIDCResult, error) {
+	if tokenTTL <= 0 { // issueToken's no-expiry: never for a token a browser carries
+		return OIDCResult{}, errors.New("auth: OIDCSignIn needs a token life")
+	}
 	var res OIDCResult
 	err := s.db.WithDurableTx(ctx, "OIDCSignIn", func(tx *sql.Tx) error {
 		res = OIDCResult{}
 		in := oidc.Input{Claims: c, Policy: p}
 		a, err := scanAccount(tx.QueryRowContext(ctx, `SELECT `+accountFacts+`, i.groups_seen
 			  FROM user_identities i JOIN users u ON u.id = i.user_id
-			 WHERE i.issuer = ?1 AND i.subject = ?2`, c.Issuer, c.Subject), &in.GroupsSeen)
+			 WHERE i.issuer = ?1 AND i.subject = ?2`, c.Issuer, c.Subject), &res.GroupsSeen)
 		switch {
 		case err == nil:
 			in.Linked = &a
@@ -166,9 +185,13 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 		id := d.Account
 		switch d.Outcome {
 		case oidc.SignIn:
-			if _, err := tx.ExecContext(ctx, `UPDATE user_identities SET last_sign_in_at = ?, email = ?, username = ?,
-				groups_seen = groups_seen OR ? WHERE issuer = ? AND subject = ?`,
-				now, c.Email, c.Username, c.Groups != nil, c.Issuer, c.Subject); err != nil {
+			// Partial claims (userinfo unreadable) keep the email and username
+			// stored for a claim they lack: it may be the person's still.
+			if _, err := tx.ExecContext(ctx, `UPDATE user_identities SET last_sign_in_at = ?1,
+				email    = CASE WHEN ?2 = '' AND ?4 THEN email ELSE ?2 END,
+				username = CASE WHEN ?3 = '' AND ?4 THEN username ELSE ?3 END,
+				groups_seen = groups_seen OR ?5 WHERE issuer = ?6 AND subject = ?7`,
+				now, c.Email, c.Username, c.Partial, c.Groups != nil, c.Issuer, c.Subject); err != nil {
 				return err
 			}
 		case oidc.Link:
@@ -189,7 +212,7 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 				return err
 			}
 		case oidc.Pending:
-			res.PendingID, err = upsertPending(ctx, tx, c, d.Reason, now, s.now())
+			res.PendingID, res.PendingEvicted, err = upsertPending(ctx, tx, c, d.Reason, now, s.now())
 			return err
 		default:
 			return nil
@@ -201,26 +224,22 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 			}
 			res.Role = &rs
 		}
-		res.User, err = getUser(ctx, tx, id)
+		if res.User, err = getUser(ctx, tx, id); err != nil {
+			return err
+		}
+		res.Token, err = s.issueToken(ctx, tx, id, KindOIDC, "", tokenTTL)
 		return err
 	})
 	return res, err
 }
 
-// IssueOIDCToken mints the single-use token a sign-in that signed in leaves
-// in the browser's cookie (KindOIDC, ttl long), the only token ConsumeOIDC
-// takes.
-func (s *Service) IssueOIDCToken(ctx context.Context, userID int64, ttl time.Duration) (string, error) {
-	return s.IssueToken(ctx, userID, KindOIDC, "", ttl)
-}
-
-// ConsumeOIDC trades a token IssueOIDCToken minted for its account, once
+// ConsumeOIDC trades a token OIDCSignIn minted (KindOIDC) for its account, once
 // (spendOnce: two racing finishes cannot both win). Any other token (a
 // pairing token, a session) is ErrInvalidToken and left as it was, as is a
 // spent or expired one, or one whose account is disabled or is now a
-// household member or a demo account (which single sign-on never signs in:
-// the callback's decision and its token are two writes, so an account can
-// join a household between them, after leaveOwners had no token to end).
+// household member or a demo account (which single sign-on never signs in;
+// leaveOwners ends the open token of an account joining a household, so this
+// is the second check, and the one for a demo account).
 func (s *Service) ConsumeOIDC(ctx context.Context, secret string) (*User, error) {
 	hash := hashSecret(secret)
 	u, _, err := s.lookupToken(ctx, hash, KindOIDC)
@@ -353,14 +372,16 @@ func syncRole(ctx context.Context, tx *sql.Tx, id int64, role, now string) (Role
 }
 
 // upsertPending records or refreshes c's waiting row with reason, returning its
-// id. Rows unseen for pendingDays go first, c's own among them: ListPending no
-// longer shows such a row, so the attempt records a new one (a new id, which
-// the callback tells the admins about) rather than bringing back one they were
-// told about long ago. Then the oldest past maxPendingSignIns go, never the
-// row just written (it is the newest, unless the clock stepped back past rows
-// stamped later: excluded by id all the same, so the id returned always names
-// a row).
-func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now string, at time.Time) (int64, error) {
+// id and how many rows the cap evicted. Rows unseen for pendingDays go first,
+// c's own among them: ListPending no longer shows such a row, so the attempt
+// records a new one (a new id, which the callback tells the admins about)
+// rather than bringing back one they were told about long ago. A row refreshed
+// by partial claims (userinfo unreadable) keeps the username, the name and the
+// groups those lack: they may be the person's still, as on a linked identity.
+// Then the oldest past maxPendingSignIns go, never the row just written (it is
+// the newest, unless the clock stepped back past rows stamped later: excluded
+// by id all the same, so the id returned always names a row).
+func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now string, at time.Time) (int64, int64, error) {
 	groups := c.Groups
 	if len(groups) > maxPendingGroups {
 		groups = groups[:maxPendingGroups]
@@ -370,26 +391,33 @@ func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now s
 	}
 	g, err := json.Marshal(groups)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	cutoff := at.AddDate(0, 0, -pendingDays).UTC().Format(time.RFC3339)
 	if _, err := tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE last_seen_at < ?`, cutoff); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	var id int64
 	if err := tx.QueryRowContext(ctx, `INSERT INTO oidc_pending(issuer, subject, email, email_verified, username, name, groups,
 		    reason, first_seen_at, last_seen_at, attempts)
 		VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, 1)
 		ON CONFLICT(issuer, subject) DO UPDATE SET email = excluded.email, email_verified = excluded.email_verified,
-		    username = excluded.username, name = excluded.name, groups = excluded.groups, reason = excluded.reason,
+		    username = CASE WHEN excluded.username = '' AND ?10 THEN username ELSE excluded.username END,
+		    name     = CASE WHEN excluded.name = '' AND ?10 THEN name ELSE excluded.name END,
+		    groups   = CASE WHEN ?11 THEN groups ELSE excluded.groups END, reason = excluded.reason,
 		    last_seen_at = excluded.last_seen_at, attempts = attempts + 1
 		RETURNING id`,
-		c.Issuer, c.Subject, c.Email, c.EmailVerified, c.Username, c.Name, string(g), reason, now).Scan(&id); err != nil {
-		return 0, err
+		c.Issuer, c.Subject, c.Email, c.EmailVerified, c.Username, c.Name, string(g), reason, now,
+		c.Partial, c.Partial && c.Groups == nil).Scan(&id); err != nil {
+		return 0, 0, err
 	}
-	_, err = tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE id <> ? AND id IN
+	res, err := tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE id <> ? AND id IN
 		(SELECT id FROM oidc_pending ORDER BY last_seen_at DESC, id DESC LIMIT -1 OFFSET ?)`, id, maxPendingSignIns)
-	return id, err
+	if err != nil {
+		return 0, 0, err
+	}
+	evicted, err := res.RowsAffected()
+	return id, evicted, err
 }
 
 const pendingColumns = `id, issuer, subject, email, email_verified, username, name, groups, reason, first_seen_at, last_seen_at, attempts`
@@ -588,6 +616,7 @@ func (s *Service) ListIdentities(ctx context.Context, userID int64) ([]Identity,
 // when it is a password-less admin's way in (decision 5): an identity from the
 // single sign-on that can run now (activeIssuer; an account has at most one
 // per issuer). One from another provider, or while it is off, is no way in.
+// The account's sign-ins not yet finished (KindOIDC tokens) end with it.
 func (s *Service) UnlinkIdentity(ctx context.Context, userID, identityID int64) (Identity, error) {
 	var out Identity
 	err := s.db.WithDurableTx(ctx, "UnlinkIdentity", func(tx *sql.Tx) error {
@@ -611,7 +640,13 @@ func (s *Service) UnlinkIdentity(ctx context.Context, userID, identityID int64) 
 				return ErrAdminNeedsPassword
 			}
 		}
-		_, err = tx.ExecContext(ctx, `DELETE FROM user_identities WHERE id = ?`, identityID)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM user_identities WHERE id = ?`, identityID); err != nil {
+			return err
+		}
+		// A sign-in through it the callback decided and the browser hasn't
+		// finished yet ends with it, as a sign-out everywhere ends one.
+		_, err = tx.ExecContext(ctx, `UPDATE tokens SET revoked = 1 WHERE user_id = ? AND kind = ? AND revoked = 0`,
+			userID, KindOIDC)
 		return err
 	})
 	return out, err

@@ -56,6 +56,8 @@ type Knobs struct {
 	UserinfoOnly bool
 	// UserinfoSubject replaces sub in userinfo when set.
 	UserinfoSubject string
+	// FailUserinfo answers userinfo 502.
+	FailUserinfo bool
 	// DiscoveryIssuer is what discovery says the issuer is ("" = the issuer).
 	DiscoveryIssuer string
 	// FailDiscovery answers discovery 500.
@@ -345,6 +347,10 @@ func (f *Provider) userinfo(w http.ResponseWriter, r *http.Request) {
 	f.mu.Unlock()
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if k.FailUserinfo {
+		http.Error(w, "down", http.StatusBadGateway)
 		return
 	}
 	claims := map[string]any{"sub": p.Subject}

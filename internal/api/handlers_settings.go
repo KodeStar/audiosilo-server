@@ -68,7 +68,8 @@ func (a *API) settingsEnvelope() map[string]any {
 	sections["household"]["max_members_max"] = config.MaxMaxMembers
 	// Whether a client secret is set, never the secret.
 	sections["signin"]["client_secret_set"] = saved.Auth.OIDC.SecretSet()
-	sections["signin"]["scopes_default"] = config.DefaultOIDCScopes
+	// The defaults as asked for now: groups only with a group policy.
+	sections["signin"]["scopes_default"] = config.OIDCScopes(nil, saved.Auth.OIDC.GroupPolicy())
 	sections["signin"]["username_claim_default"] = config.DefaultOIDCUsernameClaim
 	sections["signin"]["groups_claim_default"] = config.DefaultOIDCGroupsClaim
 	out := map[string]any{

@@ -48,6 +48,26 @@ func TestDecide(t *testing.T) {
 			Pending, ReasonNotAllowed, 0},
 		{"allowed group is exact", Input{Claims: verified, Policy: Policy{AutoCreate: true, AllowedGroup: "Listeners"}},
 			Pending, ReasonNotAllowed, 0},
+		// Userinfo unreadable (Partial): a first sign-in without an email is
+		// refused, never an account made; with one, or linked, it goes on.
+		{"partial, no email, auto_create on, refused", Input{Claims: Claims{Partial: true}, Policy: Policy{AutoCreate: true}},
+			Refuse, ReasonIncomplete, 0},
+		{"partial, no email, auto_create off, refused", Input{Claims: Claims{Partial: true}}, Refuse, ReasonIncomplete, 0},
+		{"partial with an email links", Input{Claims: Claims{Email: "a@example.org", EmailVerified: true, Partial: true},
+			Matches: []Account{user}}, Link, "", 7},
+		{"partial, linked, signs in", Input{Claims: Claims{Partial: true}, Linked: &Account{ID: 3}}, SignIn, "", 3},
+		// allowed_group with the groups left to a userinfo that couldn't be
+		// read: refused (denied: no waiting row saying the person isn't in the
+		// group), while a list the ID token carried still decides.
+		{"partial, no groups, allowed group, refused", Input{Claims: Claims{Email: "a@example.org", EmailVerified: true, Partial: true},
+			Policy: Policy{AutoCreate: true, AllowedGroup: "listeners"}}, Refuse, ReasonIncomplete, 0},
+		{"partial, a list outside the allowed group, pending", Input{Claims: Claims{Email: "a@example.org", EmailVerified: true,
+			Groups: []string{"staff"}, Partial: true}, Policy: Policy{AutoCreate: true, AllowedGroup: "listeners"}},
+			Pending, ReasonNotAllowed, 0},
+		{"partial, a list in the allowed group, creates", Input{Claims: Claims{Email: "a@example.org", EmailVerified: true,
+			Groups: []string{"listeners"}, Partial: true}, Policy: Policy{AutoCreate: true, AllowedGroup: "listeners"}}, Create, "", 0},
+		{"partial, no groups, no allowed group, creates", Input{Claims: Claims{Email: "a@example.org", EmailVerified: true, Partial: true},
+			Policy: Policy{AutoCreate: true}}, Create, "", 0},
 	}
 	pending := map[string]bool{}
 	for _, c := range cases {
@@ -101,8 +121,8 @@ func TestDecideRoleSync(t *testing.T) {
 }
 
 // TestDecideNoGroupsClaim: with admin_group set, a sign-in that carried no
-// groups claim at all leaves the role alone (NoGroups) while its identity has
-// never carried one, while an empty list is a claim and demotes.
+// readable groups claim leaves the role alone (NoGroups), an admin's and a
+// user's alike; only a list that is there changes it, an empty one included.
 func TestDecideNoGroupsClaim(t *testing.T) {
 	t.Parallel()
 	in := Input{Claims: Claims{}, Linked: &Account{ID: 3, Admin: true}, Policy: Policy{AdminGroup: "audiosilo-admins"}}
@@ -113,6 +133,20 @@ func TestDecideNoGroupsClaim(t *testing.T) {
 	if d := Decide(in); d.Role != RoleUser || d.NoGroups {
 		t.Fatalf("an empty groups claim: %+v", d)
 	}
+	in.Claims.Groups = []string{"listeners"}
+	if d := Decide(in); d.Role != RoleUser || d.NoGroups {
+		t.Fatalf("a list without the group: %+v", d)
+	}
+	in.Claims.Groups = []string{"audiosilo-admins"}
+	if d := Decide(in); d.Role != RoleAdmin || d.NoGroups {
+		t.Fatalf("in the group: %+v", d)
+	}
+	// A first sign-in (no identity yet) without the claim: no role either.
+	in = Input{Claims: Claims{Email: "a@example.org", EmailVerified: true}, Matches: []Account{{ID: 4}},
+		Policy: Policy{AdminGroup: "audiosilo-admins"}}
+	if d := Decide(in); d.Outcome != Link || d.Role != "" || !d.NoGroups {
+		t.Fatalf("a first sign-in: %+v", d)
+	}
 	// Without admin_group nothing is said of groups.
 	in.Claims.Groups, in.Policy.AdminGroup = nil, ""
 	if d := Decide(in); d.Role != "" || d.NoGroups {
@@ -120,26 +154,32 @@ func TestDecideNoGroupsClaim(t *testing.T) {
 	}
 }
 
-// TestDecideGroupsSeen: once a linked identity has carried a groups claim, a
-// sign-in without one is out of every group (Keycloak leaves the claim out for
-// a person in no group): an admin is demoted, nothing is logged as missing.
-// A sign-in in the group still promotes.
-func TestDecideGroupsSeen(t *testing.T) {
+// TestDecideUnreadableGroupsKeepRole: a claim that is absent, null, of another
+// shape or a list holding no string (Entra's overage leaves the claim out)
+// keeps an admin an admin (the owner's policy, server#405: a seen identity's
+// groups no longer demote on an absent claim), while a readable list without
+// the group demotes.
+func TestDecideUnreadableGroupsKeepRole(t *testing.T) {
 	t.Parallel()
-	in := Input{Linked: &Account{ID: 3, Admin: true}, GroupsSeen: true, Policy: Policy{AdminGroup: "audiosilo-admins"}}
-	if d := Decide(in); d.Outcome != SignIn || d.Role != RoleUser || d.NoGroups {
-		t.Fatalf("absent after seen: %+v", d)
+	pol := Policy{AdminGroup: "audiosilo-admins"}
+	for name, raw := range map[string]string{
+		"absent": "", "null": `null`, "an object": `{"name":"audiosilo-admins"}`, "a number": `7`,
+		"objects": `[{"name":"audiosilo-admins"}]`,
+	} {
+		set := claimSet{}
+		if raw != "" {
+			set["groups"] = json.RawMessage(raw)
+		}
+		var c Claims
+		c.fill(set, "preferred_username", "groups")
+		if d := Decide(Input{Claims: c, Linked: &Account{ID: 3, Admin: true}, Policy: pol}); d.Role != "" || !d.NoGroups {
+			t.Errorf("%s: %+v", name, d)
+		}
 	}
-	in.Claims.Groups = []string{"audiosilo-admins"}
-	if d := Decide(in); d.Role != RoleAdmin || d.NoGroups {
-		t.Fatalf("in the group: %+v", d)
-	}
-	// The flag is the linked identity's: a first sign-in (no identity yet)
-	// without the claim leaves the role alone.
-	in = Input{Claims: Claims{Email: "a@example.org", EmailVerified: true}, Matches: []Account{{ID: 4}},
-		Policy: Policy{AdminGroup: "audiosilo-admins"}}
-	if d := Decide(in); d.Outcome != Link || d.Role != "" || !d.NoGroups {
-		t.Fatalf("a first sign-in: %+v", d)
+	var c Claims
+	c.fill(claimSet{"groups": json.RawMessage(`["listeners"]`)}, "preferred_username", "groups")
+	if d := Decide(Input{Claims: c, Linked: &Account{ID: 3, Admin: true}, Policy: pol}); d.Role != RoleUser || d.NoGroups {
+		t.Fatalf("a readable list without the group: %+v", d)
 	}
 }
 

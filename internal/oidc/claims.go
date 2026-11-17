@@ -23,9 +23,17 @@ type Claims struct {
 	Username      string
 	Name          string
 	Groups        []string
+	// Partial: userinfo was asked for what the ID token lacked and couldn't
+	// answer (Exchange went on with the ID token's claims), so a claim absent
+	// here may be one the person has: Decide doesn't decide a first sign-in
+	// without an email on it (nor allowed_group without the groups), a sign-in
+	// keeps the identity's stored email and username it lacks, and a waiting
+	// row the username, name and groups it showed.
+	Partial bool
 }
 
-// Caps on what a sign-in carries. maxGroups only bounds the work: every group
+// Caps on what a sign-in carries, in bytes (a group's is config's
+// MaxOIDCGroup, a group setting's). maxGroups only bounds the work: every group
 // under it is matched against admin_group and allowed_group, so it is far above
 // what a directory sends (a waiting row keeps fewer: auth's maxPendingGroups).
 const (
@@ -160,11 +168,6 @@ func (c *Claims) fill(set claimSet, usernameClaim, groupsClaim string) {
 	if c.Groups == nil && set.has(groupsClaim) {
 		c.Groups = set.groups(groupsClaim)
 	}
-}
-
-// complete reports whether c has everything userinfo could add.
-func (c *Claims) complete() bool {
-	return c.Email != "" && c.Username != "" && c.Groups != nil
 }
 
 // InGroup reports whether the person is in group (exact, case counts).

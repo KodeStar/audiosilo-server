@@ -1031,11 +1031,11 @@ func consumePairing(s *Service, ctx context.Context, secret string) (*User, erro
 	return u, err
 }
 
-// TestPrunePairingTokens (R-33): the daily retention deletes the pairing tokens
+// TestPruneSingleUseTokens (R-33): the daily retention deletes the pairing tokens
 // that can never pair again (an exchanged unlinked one, one past its expiry, one
 // whose invite is used up or expired) and keeps the live ones, linked or not,
 // whose devices may still pair.
-func TestPrunePairingTokens(t *testing.T) {
+func TestPruneSingleUseTokens(t *testing.T) {
 	t.Parallel()
 	s, ctx, now := newTestServiceWithClock(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
@@ -1071,9 +1071,9 @@ func TestPrunePairingTokens(t *testing.T) {
 	}
 	prune := func(want int64) {
 		t.Helper()
-		n, err := s.PrunePairingTokens(ctx)
+		n, err := s.PruneSingleUseTokens(ctx)
 		if err != nil || n != want {
-			t.Fatalf("PrunePairingTokens = %d, %v, want %d", n, err, want)
+			t.Fatalf("PruneSingleUseTokens = %d, %v, want %d", n, err, want)
 		}
 	}
 	// Denied: the exchanged token and the used-up invite's go; the live ones stay (allowed).

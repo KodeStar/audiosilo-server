@@ -14,12 +14,44 @@ func TestOIDCDefaults(t *testing.T) {
 	if o.DisplayName() != DefaultOIDCName || o.EffectiveUsernameClaim() != "preferred_username" || o.EffectiveGroupsClaim() != "groups" {
 		t.Fatalf("defaults: %q %q %q", o.DisplayName(), o.EffectiveUsernameClaim(), o.EffectiveGroupsClaim())
 	}
-	if got := o.EffectiveScopes(); !reflect.DeepEqual(got, DefaultOIDCScopes) {
-		t.Fatalf("default scopes %v", got)
+	// No group policy: the defaults ask for no groups (server#406: Keycloak
+	// refuses a scope it has no client scope for, Google and Entra have none).
+	if got := OIDCScopes(o.Scopes, o.GroupPolicy()); !reflect.DeepEqual(got, []string{"openid", "profile", "email"}) {
+		t.Fatalf("default scopes without a group policy %v", got)
 	}
+	// admin_group, or allowed_group with auto_create on: the defaults whole.
+	for _, set := range []func(*OIDCConfig){
+		func(o *OIDCConfig) { o.AdminGroup = "admins" },
+		func(o *OIDCConfig) { o.AllowedGroup, o.AutoCreate = "family", true },
+	} {
+		g := o
+		set(&g)
+		if got := OIDCScopes(g.Scopes, g.GroupPolicy()); !reflect.DeepEqual(got, DefaultOIDCScopes) {
+			t.Fatalf("default scopes with a group policy %v", got)
+		}
+	}
+	// A blank group is no policy, nor allowed_group with auto_create off (it
+	// gates only an account a sign-in makes).
+	o.AdminGroup = "  "
+	if o.GroupPolicy() {
+		t.Fatal("a blank admin_group is a group policy")
+	}
+	o.AllowedGroup = "family"
+	if o.GroupPolicy() {
+		t.Fatal("allowed_group with auto_create off is a group policy")
+	}
+	if got := OIDCScopes(o.Scopes, o.GroupPolicy()); !reflect.DeepEqual(got, []string{"openid", "profile", "email"}) {
+		t.Fatalf("default scopes with allowed_group and auto_create off %v", got)
+	}
+	o.AllowedGroup = ""
 	o.Scopes = []string{"email", " openid ", "email", ""}
-	if got := o.EffectiveScopes(); !reflect.DeepEqual(got, []string{"openid", "email"}) {
+	if got := OIDCScopes(o.Scopes, o.GroupPolicy()); !reflect.DeepEqual(got, []string{"openid", "email"}) {
 		t.Fatalf("scopes %v: openid first, once", got)
+	}
+	// Configured scopes are asked as listed, groups too, policy or not.
+	o.Scopes = []string{"openid", "groups"}
+	if got := OIDCScopes(o.Scopes, o.GroupPolicy()); !reflect.DeepEqual(got, []string{"openid", "groups"}) {
+		t.Fatalf("configured scopes %v", got)
 	}
 }
 
@@ -140,6 +172,14 @@ func TestOIDCSettingsRows(t *testing.T) {
 	}
 	if _, err := c.WithSettings(patch(map[string]string{"signin.allowed_group": `"` + strings.Repeat("g", MaxOIDCGroup+1) + `"`}), ok); settingErr(t, err).Reason != ReasonInvalid {
 		t.Fatal("a too long group")
+	}
+	// Counted in bytes, as a sign-in's group is (server#406): 129 two-byte
+	// letters are refused, 128 taken.
+	if _, err := c.WithSettings(patch(map[string]string{"signin.allowed_group": `"` + strings.Repeat("é", MaxOIDCGroup/2+1) + `"`}), ok); settingErr(t, err).Reason != ReasonInvalid {
+		t.Fatal("a group over the bound in bytes")
+	}
+	if _, err := c.WithSettings(patch(map[string]string{"signin.allowed_group": `"` + strings.Repeat("é", MaxOIDCGroup/2) + `"`}), ok); err != nil {
+		t.Fatalf("a group at the bound in bytes: %v", err)
 	}
 	if err := next.Save(); err != nil {
 		t.Fatal(err)

@@ -59,7 +59,7 @@ func singleUse(kind string) bool { return kind == KindPairing || kind == KindOID
 
 // singleUseKindsSQL is singleUse's kinds as a SQL list, for the writes that end
 // or prune the open ones (endSessions, leaveOwners, clearKidCredentials,
-// PrunePairingTokens).
+// PruneSingleUseTokens).
 const singleUseKindsSQL = `('` + KindPairing + `', '` + KindOIDC + `')`
 
 // neverTouched reports whether a token of kind is never touched by resolve: it
@@ -1166,7 +1166,7 @@ const recoveryPairingTTL = 10 * time.Minute
 // invite's expiry and use cap govern them at exchange, which is what lets
 // ConsumePairing report "invite has expired" (or used up) rather than a generic
 // token error, until the daily retention deletes the token with its dead invite
-// (PrunePairingTokens): a QR scanned after that gets the generic error.
+// (PruneSingleUseTokens): a QR scanned after that gets the generic error.
 // Recovery-kind tokens get recoveryPairingTTL instead.
 func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (string, error) {
 	secret, hash, err := generateToken()
@@ -1183,7 +1183,9 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 	return secret, nil
 }
 
-// PrunePairingTokens deletes the pairing tokens that can never pair again:
+// PruneSingleUseTokens deletes the single-use tokens (singleUse: pairing and
+// single sign-on) that can never be used again. Pairing tokens that can never
+// pair again:
 // spent (an unlinked token is revoked by its exchange, every one by a sign-out
 // or its code's rotation), past their own expiry (minutes after the mint), or
 // linked to a code that is expired or used up (a rotation that revives the code
@@ -1192,7 +1194,7 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 // expiry are untouched. A single sign-on's token (KindOIDC) goes the same way,
 // spent or expired. Run by the daily retention beside PruneCastTokens. It
 // reports how many it deleted.
-func (s *Service) PrunePairingTokens(ctx context.Context) (int64, error) {
+func (s *Service) PruneSingleUseTokens(ctx context.Context) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM tokens
 	  WHERE kind IN `+singleUseKindsSQL+`
 	    AND (revoked = 1 OR expires_at < ?1
@@ -1701,7 +1703,11 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 			if role == RoleAdmin && member {
 				return ErrMemberNotAdmin // decision 3: "Make independent" comes first
 			}
-			if role == RoleAdmin && !hasPassword {
+			// Only a promotion needs the way in checked: an admin's role sent
+			// again (the console's save re-sends it) changes nothing, even for a
+			// password-less admin whose single sign-on is off now (a password
+			// cleared beside it was checked above).
+			if role == RoleAdmin && curRole != RoleAdmin && !hasPassword {
 				if err := wayIn(); err != nil {
 					return err
 				}

@@ -403,22 +403,30 @@ func TestOIDCAdminSignIn(t *testing.T) {
 	if strings.Join(actions, ",") != "user.role_sync,user.oidc_link" {
 		t.Fatalf("audit: %v", actions)
 	}
-	// Keycloak leaves the groups claim out for a person in no group: once her
-	// identity has carried the claim, an absent one (neither the ID token nor
-	// userinfo) is no groups, and she is an ordinary user at the next sign-in,
-	// with nothing logged as missing.
+	// Allowed (the owner's policy, server#405): once her identity has carried
+	// the claim, an absent one (neither the ID token nor userinfo: a renamed
+	// groups_claim, a dropped scope, Entra's overage) keeps her role, and the
+	// log says the provider stopped sending it, once.
 	logs := &syncBuffer{}
 	e.api.log = slog.New(slog.NewTextHandler(logs, nil))
 	p.Groups = nil
 	e.idp.SetPerson(p)
-	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleUser {
-		t.Fatalf("no groups claim after one: %d %v", status, out)
+	for range 2 {
+		if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleAdmin {
+			t.Fatalf("no groups claim after one: %d %v", status, out)
+		}
 	}
-	if strings.Contains(logs.String(), "sent no groups claim") {
-		t.Fatalf("a warning for a provider that sends groups: %s", logs.String())
+	if n := strings.Count(logs.String(), "sent no groups claim this time (it did before)"); n != 1 {
+		t.Fatalf("the warning logged %d times, want once: %s", n, logs.String())
 	}
 	if n := e.idp.Calls("userinfo"); n == 0 {
 		t.Fatal("userinfo wasn't asked for the missing claim")
+	}
+	// Denied: a list that is there without the group demotes.
+	p.Groups = []string{"listeners"}
+	e.idp.SetPerson(p)
+	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleUser {
+		t.Fatalf("a list without the group: %d %v", status, out)
 	}
 	// Back in the group, then out of it again as an empty list: the same.
 	p.Groups = []string{"audiosilo-admins"}
@@ -438,7 +446,7 @@ func TestOIDCAdminSignIn(t *testing.T) {
 
 // TestOIDCNoGroupsClaimNeverSent: with admin_group set, a provider that has
 // never sent the groups claim for a person (no scope or mapper for it) demotes
-// no one: her role is left alone at each sign-in, and the log says why.
+// no one: her role is left alone at each sign-in, and the log says why, once.
 func TestOIDCNoGroupsClaimNeverSent(t *testing.T) {
 	t.Parallel()
 	p := oidcAlice
@@ -461,6 +469,10 @@ func TestOIDCNoGroupsClaimNeverSent(t *testing.T) {
 	}
 	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleAdmin {
 		t.Fatalf("never sent: %d %v", status, out)
+	}
+	// Logged once a run, not at every sign-in (server#405).
+	if n := strings.Count(logs.String(), "sent no groups claim"); n != 1 {
+		t.Fatalf("the warning logged %d times, want once: %s", n, logs.String())
 	}
 }
 
@@ -510,7 +522,7 @@ func TestOIDCFinish(t *testing.T) {
 	}
 	// Denied: an expired one (issued 61 s ago, with its 60 s life).
 	past := auth.New(e.db, func() time.Time { return time.Now().Add(-oidcDoneTTL - time.Second) })
-	stale, err := past.IssueOIDCToken(context.Background(), alice.ID, oidcDoneTTL)
+	stale, err := past.IssueToken(context.Background(), alice.ID, auth.KindOIDC, "", oidcDoneTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -641,9 +653,12 @@ func TestOIDCFinishCookieName(t *testing.T) {
 		t.Fatalf("https, the __Host- cookie: %d %v", resp.StatusCode, out)
 	}
 
-	plain := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = "http://audiosilo.test" })
+	plain := newTestEnvWith(t, func(c *config.Config) {
+		c.PublicURL = "http://audiosilo.test"
+		c.Auth.OIDC = config.OIDCConfig{Enabled: true, Issuer: "https://idp.example", ClientID: "audiosilo"}
+	})
 	bob := plain.mustUser(t, "bob", "")
-	tok, err := plain.auth.IssueOIDCToken(context.Background(), bob.ID, oidcDoneTTL)
+	tok, err := plain.auth.IssueToken(context.Background(), bob.ID, auth.KindOIDC, "", oidcDoneTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,6 +672,35 @@ func TestOIDCFinishCookieName(t *testing.T) {
 	}
 	if c := resp.Cookies(); len(c) != 1 || c[0].Name != oidcDoneCookie || c[0].Path != oidcCookiePath || c[0].Secure {
 		t.Fatalf("http, the clearing cookie: %v", resp.Header.Values("Set-Cookie"))
+	}
+}
+
+// TestOIDCFinishRefusedWhileOff: a sign-in's token outlives a restart (60 s),
+// but finish refuses it once single sign-on can't run (turned off, or its
+// provider config broken since the callback): no session, nothing charged,
+// the token unspent. The allowed twin is TestOIDCFinish.
+func TestOIDCFinishRefusedWhileOff(t *testing.T) {
+	t.Parallel()
+	for name, o := range map[string]config.OIDCConfig{
+		"turned off":    {},
+		"misconfigured": {Enabled: true, Issuer: "https://idp.example"}, // no client_id
+	} {
+		e := newTestEnvWith(t, func(c *config.Config) {
+			c.PublicURL = oidcPublic
+			c.Auth.OIDC = o
+		})
+		alice := e.mustUser(t, "alice", "")
+		tok, err := e.auth.IssueToken(context.Background(), alice.ID, auth.KindOIDC, "", oidcDoneTTL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, out := e.finish(t, &http.Cookie{Name: hostDoneCookie, Value: tok}, "admin-web")
+		if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired || out["token"] != nil {
+			t.Fatalf("%s: %d %v", name, resp.StatusCode, out)
+		}
+		if u, err := e.auth.ConsumeOIDC(context.Background(), tok); err != nil || u.ID != alice.ID {
+			t.Fatalf("%s: the refused finish spent the token: %v", name, err)
+		}
 	}
 }
 
@@ -1061,6 +1105,75 @@ func TestOIDCAutoCreateAllowedGroup(t *testing.T) {
 	}
 }
 
+// TestOIDCWaitingSignInAsksUserinfoAgain: a person userinfo held no email for
+// is left waiting; once they have one at the provider, their next attempt
+// reads it (allowed: the wait ended what the provider remembered userinfo
+// lacked for them, oidc.Provider.AskAgain) and links to their account, where
+// the hour's recheck would have left them waiting without it.
+func TestOIDCWaitingSignInAsksUserinfoAgain(t *testing.T) {
+	t.Parallel()
+	bare := oidctest.Person{Subject: oidcCarol.Subject}
+	e := newOIDCEnv(t, bare, nil)
+	carol := e.mustUser(t, "carol-account", oidcCarol.Email)
+	e.idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true})
+	wantResult(t, e.signIn(t, oidcReturnWeb), oidcPending)
+	e.idp.SetPerson(oidcCarol)
+	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, oidcDoneWeb) {
+		t.Fatalf("the email added since wasn't read: %q", loc)
+	}
+	if ids, err := e.auth.ListIdentities(context.Background(), carol.ID); err != nil || len(ids) != 1 || ids[0].Email != oidcCarol.Email {
+		t.Fatalf("not linked by the email: %+v %v", ids, err)
+	}
+	if n := e.idp.Calls("userinfo"); n != 2 {
+		t.Fatalf("userinfo asked %d times, want 2", n)
+	}
+}
+
+// TestOIDCUserinfoDownMakesNoSecondAccount: with auto_create on and an ID token
+// that leaves the email to userinfo, a first sign-in while userinfo fails is
+// refused as unavailable (denied: it would make a second account for someone
+// whose email links an existing one); once userinfo answers, the same person
+// links to their account (allowed), and a later sign-in while it fails still
+// signs in, keeping the identity's stored email.
+func TestOIDCUserinfoDownMakesNoSecondAccount(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcCarol, func(o *config.OIDCConfig) { o.AutoCreate = true })
+	carol := e.mustUser(t, "carol-account", oidcCarol.Email)
+	accounts := func() int {
+		t.Helper()
+		users, err := e.auth.ListUsers(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(users)
+	}
+	before := accounts()
+	e.idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true, FailUserinfo: true})
+	wantResult(t, e.signIn(t, oidcReturnWeb), oidcUnavailable)
+	if ids, err := e.auth.ListIdentities(context.Background(), carol.ID); err != nil || len(ids) != 0 {
+		t.Fatalf("linked while userinfo failed: %v %v", ids, err)
+	}
+	if n := accounts(); n != before {
+		t.Fatalf("an account made while userinfo failed: %d, want %d", n, before)
+	}
+	e.idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true})
+	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, oidcDoneWeb) {
+		t.Fatalf("userinfo back: %q", loc)
+	}
+	ids, err := e.auth.ListIdentities(context.Background(), carol.ID)
+	if err != nil || len(ids) != 1 || ids[0].Email != oidcCarol.Email {
+		t.Fatalf("not linked by email: %+v %v", ids, err)
+	}
+	e.idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true, FailUserinfo: true})
+	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, oidcDoneWeb) {
+		t.Fatalf("a linked sign-in while userinfo fails: %q", loc)
+	}
+	if ids, err := e.auth.ListIdentities(context.Background(), carol.ID); err != nil || len(ids) != 1 ||
+		ids[0].Email != oidcCarol.Email || ids[0].Username != oidcCarol.PreferredUsername {
+		t.Fatalf("the stored email or username lost: %+v %v", ids, err)
+	}
+}
+
 // TestOIDCCallbackRateLimited: ten failed callbacks from an address lock it out
 // for a while; a good one before that resets the count. A callback with no
 // flow cookie (what another site's page can make a browser send) counts for
@@ -1213,7 +1326,105 @@ func TestOIDCReasonsWorded(t *testing.T) {
 // the timeout's bare 503.
 func TestOIDCBudgetFitsRequestTimeout(t *testing.T) {
 	t.Parallel()
-	if oidc.CallBudget+5*time.Second > requestTimeout {
-		t.Fatalf("oidc.CallBudget %v leaves too little of requestTimeout %v", oidc.CallBudget, requestTimeout)
+	if oidc.UseTime+5*time.Second > requestTimeout {
+		t.Fatalf("oidc.UseTime %v leaves too little of requestTimeout %v", oidc.UseTime, requestTimeout)
+	}
+}
+
+// TestOIDCScopesFollowGroupPolicy: with the default scopes, /start asks for
+// groups only while admin_group is set, or allowed_group with auto_create on
+// (server#406), as the
+// console saves them (live, no restart), and the status and the settings'
+// default say what is asked.
+func TestOIDCScopesFollowGroupPolicy(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	tok := e.session(t, e.adminID)
+	check := func(want string) {
+		t.Helper()
+		e.start(t, oidcReturnAdmin)
+		if got := e.idp.LastAuthorize().Get("scope"); got != want {
+			t.Fatalf("asked for %q, want %q", got, want)
+		}
+		list := `["` + strings.ReplaceAll(want, " ", `","`) + `"]`
+		_, body := e.do(t, "GET", "/api/v1/admin/oidc/status", tok, "")
+		if !strings.Contains(body, `"scopes":`+list) {
+			t.Fatalf("status scopes, want %q: %s", want, body)
+		}
+		_, body = e.do(t, "GET", "/api/v1/admin/settings", tok, "")
+		if !strings.Contains(body, `"scopes_default":`+list) {
+			t.Fatalf("settings' default scopes, want %q: %s", want, body)
+		}
+	}
+	save := func(patch string) {
+		t.Helper()
+		if resp, body := e.do(t, "PATCH", "/api/v1/admin/settings", tok, `{"signin":`+patch+`}`); resp.StatusCode != 200 {
+			t.Fatalf("save %s: %d %s", patch, resp.StatusCode, body)
+		}
+	}
+	check("openid profile email")
+	// allowed_group gates only an account a sign-in makes: with auto_create
+	// off it decides nothing, so groups aren't asked for (denied); on, they are.
+	save(`{"allowed_group":"family"}`)
+	check("openid profile email")
+	save(`{"auto_create":true}`)
+	check("openid profile email groups")
+	save(`{"allowed_group":"","auto_create":false,"admin_group":"admins"}`)
+	check("openid profile email groups")
+}
+
+// TestOIDCStartProviderGone: a provider discovered before and gone down since
+// is noticed at /start (the probe), which lands on the unavailable panel
+// rather than sending the browser to it; the status says so too. Back up, the
+// sign-in starts again.
+func TestOIDCStartProviderGone(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	now := time.Now()
+	p, err := oidc.New(oidc.Settings{Issuer: e.idp.Issuer, ClientID: "audiosilo", ClientSecret: oidcSecret,
+		UsernameClaim: "preferred_username", GroupsClaim: "groups", Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.api.oidc.provider = p
+	e.start(t, oidcReturnAdmin)
+	e.idp.SetKnobs(oidctest.Knobs{FailDiscovery: true})
+	now = now.Add(time.Minute)
+	resp := e.get(t, oidcStartPath+"?return=admin", oidcHost)
+	if loc := resp.Header.Get("Location"); loc != oidcPublic+"/connect#oidc="+oidcUnavailable {
+		t.Fatalf("a provider gone down: %d %q", resp.StatusCode, loc)
+	}
+	_, body := e.do(t, "GET", "/api/v1/admin/oidc/status", e.session(t, e.adminID), "")
+	if !strings.Contains(body, `"state":"error"`) {
+		t.Fatalf("status of a provider gone down: %s", body)
+	}
+	e.idp.SetKnobs(oidctest.Knobs{})
+	now = now.Add(time.Minute)
+	e.start(t, oidcReturnAdmin)
+}
+
+// TestEvictionTallyLogsOncePerHour: at the waiting list's cap every new
+// person's attempt drops a row, and the warning is not one line per attempt:
+// the first eviction is reported (allowed), those within the hour after it
+// are held back (denied) and reported together with the next one past it.
+func TestEvictionTallyLogsOncePerHour(t *testing.T) {
+	t.Parallel()
+	var e evictionTally
+	now := time.Unix(1_800_000_000, 0)
+	if n := e.note(1, now); n != 1 {
+		t.Fatalf("the first eviction reported %d, want 1", n)
+	}
+	for range 3 {
+		now = now.Add(time.Minute)
+		if n := e.note(1, now); n != 0 {
+			t.Fatalf("an eviction within the hour reported %d, want none", n)
+		}
+	}
+	now = now.Add(time.Hour)
+	if n := e.note(2, now); n != 5 {
+		t.Fatalf("past the hour reported %d, want the 5 dropped since the last line", n)
+	}
+	if n := e.note(1, now.Add(time.Second)); n != 0 {
+		t.Fatalf("right after a report: %d, want none", n)
 	}
 }

@@ -28,15 +28,10 @@ type Policy struct {
 // (issuer, subject) is linked to (nil when none), and, when none, the accounts
 // whose email equals the sign-in's (MatchEmail), whatever their state.
 type Input struct {
-	Claims Claims
-	Linked *Account
-	// GroupsSeen: the linked identity has signed in with a groups claim
-	// before, even an empty list (or was linked from a waiting row holding a
-	// group), so the provider sends one for this person and a sign-in without
-	// it means no groups. Always false with no Linked.
-	GroupsSeen bool
-	Matches    []Account
-	Policy     Policy
+	Claims  Claims
+	Linked  *Account
+	Matches []Account
+	Policy  Policy
 }
 
 // Outcome is what a sign-in does.
@@ -62,6 +57,7 @@ const (
 	ReasonAdminAccount    = "admin_account"    // it matches an admin, never linked by email (decision 4)
 	ReasonDisabled        = "disabled"         // Refuse: the linked account is disabled
 	ReasonMember          = "member"           // Refuse: the linked account has become a household member
+	ReasonIncomplete      = "incomplete"       // Refuse: a first sign-in lacking its email, or the groups allowed_group reads, userinfo unreadable (Claims.Partial)
 )
 
 // PendingReasons are the reasons Decide gives a Pending outcome: what a waiting
@@ -81,13 +77,14 @@ type Decision struct {
 	// Role is the role the account should have after this sign-in (the
 	// admin_group rule), "" for no change of role by the sign-in.
 	Role string
-	// NoGroups: admin_group is set but the sign-in carried no groups claim at
-	// all (neither the ID token nor userinfo; an empty list is a claim) and
-	// the identity has never carried one (Input.GroupsSeen), so the role is
-	// left as it is: a provider that never sends the claim (no scope or mapper
-	// for it) demotes no one. Once the identity has carried it, an absent
-	// claim is no groups (some providers, Keycloak among them, leave the claim
-	// out for a person in no group).
+	// NoGroups: admin_group is set but the sign-in carried no readable
+	// groups claim (neither the ID token nor userinfo; absent, null, of
+	// another shape, or a list holding no string: Entra's overage too), so the
+	// role is left as it is, whether or not the person's groups were seen
+	// before. Only a list that is there (an empty one included) changes it: a
+	// provider that stops sending the claim, a renamed groups_claim or a
+	// dropped scope demotes no one. A provider that leaves the claim out for a
+	// person in no group (Keycloak) then needs an admin to demote by hand.
 	NoGroups bool
 }
 
@@ -99,21 +96,25 @@ const (
 
 // Decide says what a sign-in does (decisions 1-4):
 //   - linked: sign in, unless the account is disabled or now a member;
+//   - not linked, no email and userinfo unreadable (Claims.Partial): refuse
+//     (incomplete), so the provider's blip makes no second account;
 //   - a verified email matching an admin: pending (never linked by email);
 //   - a verified email matching exactly one eligible account: link it;
 //   - a verified email matching others (several, or none eligible): pending;
 //   - an unverified email matching an account: pending;
 //   - otherwise, with auto_create on: create an account, if allowed_group (when
-//     set) lists the person, else pending not_allowed; with it off: pending.
+//     set) lists the person, else pending not_allowed (refuse, incomplete,
+//     when the groups are missing because userinfo was unreadable: nobody
+//     said the person isn't in the group); with it off: pending.
 //
 // Never on a username. Role is set for every outcome that signs in while
-// admin_group is set, unless the sign-in carried no groups claim and its
-// identity never has (NoGroups); allowed_group, read only for a sign-in with
-// no identity yet, counts an absent claim as no groups.
+// admin_group is set, unless the sign-in carried no readable groups claim
+// (NoGroups); allowed_group, read only for a sign-in with no identity yet,
+// counts an absent claim as no groups (unless Claims.Partial, above).
 func Decide(in Input) Decision {
 	d := decide(in)
 	if (d.Outcome == SignIn || d.Outcome == Link || d.Outcome == Create) && in.Policy.AdminGroup != "" {
-		if in.Claims.Groups == nil && !in.GroupsSeen {
+		if in.Claims.Groups == nil {
 			d.NoGroups = true
 			return d
 		}
@@ -136,6 +137,12 @@ func decide(in Input) Decision {
 		return Decision{Outcome: SignIn, Account: a.ID}
 	}
 	c := in.Claims
+	// A first sign-in links by its email or makes an account: with no email
+	// because userinfo couldn't be read, it would make a second account for
+	// someone the email links to an existing one (and bind the identity to it).
+	if c.Partial && c.Email == "" {
+		return Decision{Outcome: Refuse, Reason: ReasonIncomplete}
+	}
 	if c.Email != "" && len(in.Matches) > 0 {
 		if !c.EmailVerified {
 			return Decision{Outcome: Pending, Reason: ReasonUnverifiedEmail}
@@ -160,6 +167,12 @@ func decide(in Input) Decision {
 	}
 	if in.Policy.AutoCreate {
 		if g := in.Policy.AllowedGroup; g != "" && !c.InGroup(g) {
+			// No groups claim because userinfo couldn't be read: the person
+			// may be in the group, so not a waiting row telling the admins
+			// they aren't. The provider's trouble, worth trying again.
+			if c.Partial && c.Groups == nil {
+				return Decision{Outcome: Refuse, Reason: ReasonIncomplete}
+			}
 			return Decision{Outcome: Pending, Reason: ReasonNotAllowed}
 		}
 		return Decision{Outcome: Create}
