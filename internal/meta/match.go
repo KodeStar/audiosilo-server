@@ -86,8 +86,8 @@ type MatchQuery struct {
 	Narrators []string
 	// BestOnly says the caller reads the whole of the best candidate alone, and of
 	// the next only Score and IdentifierHit (a bulk run: matchrun's matchBook and
-	// Classify). So works/match is asked to inline the best's work and series facts
-	// (expand=work), and nothing else is read: every other candidate comes back a
+	// Classify). So works/match is asked to inline the best's work, lean, and series
+	// facts (expand=work,lean), and nothing else is read: every other candidate comes back a
 	// stub, its work id, cover, score and reasons. A metaserve that inlines nothing
 	// costs the fetches for the best, and a best that can't be read is an outage,
 	// never the next standing in (bestCandidates). The dialog lists every candidate
@@ -95,7 +95,8 @@ type MatchQuery struct {
 	BestOnly bool
 	// NoDetailsBelow, with BestOnly, is the score under which the caller drops a best
 	// candidate no identifier found (matchrun.ReviewFloor): a stub too, inlined
-	// details or none. 0 for no such score.
+	// details or none. Sent as expand_min (1-100), so metaserve does not read or
+	// send the details of a best the caller drops. 0 for no such score.
 	NoDetailsBelow int
 	// WorkID asks for that community work alone (works/{id}), whatever else the
 	// query says: a refresh of a book whose recorded match has no ASIN or ISBN
@@ -535,7 +536,9 @@ type matchHit struct {
 	score                  int
 	reasons                *MatchReasons
 	// work and facts are the work document and series facts works/match inlined
-	// (expand=work; only ever on its best result), nil when it inlined none.
+	// (expand=work,lean; only ever on its best result), nil when it inlined none.
+	// The work is lean, without its sidecars, so it is only ever read into this
+	// candidate: never put in the nsWork cache, the store or an enrichment.
 	work  *upstreamWorkDetail
 	facts map[string]*seriesFacts
 }
@@ -959,7 +962,15 @@ func matchParams(q MatchQuery, text, asin, isbn string) url.Values {
 	}
 	v.Set("limit", strconv.Itoa(q.limit()))
 	if q.BestOnly {
-		v.Set("expand", "work")
+		// lean leaves the work's CC BY-SA sidecars (characters, recaps, their
+		// summary and position scale) out of the inlined work: most of a long
+		// work's bytes, and nothing a candidate reads (toCandidate). An older
+		// metaserve ignores both lean and expand_min and inlines the whole work
+		// for any score, which reads the same.
+		v.Set("expand", "work,lean")
+		if q.NoDetailsBelow >= 1 && q.NoDetailsBelow <= 100 {
+			v.Set("expand_min", strconv.Itoa(q.NoDetailsBelow))
+		}
 	}
 	return v
 }

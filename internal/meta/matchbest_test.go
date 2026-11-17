@@ -77,9 +77,18 @@ func (m *bestMeta) service(t *testing.T) *Service {
 // A work in its own series and in a German translation of it, whose facts drop the
 // translation, and the same two series' records.
 const (
-	bestWork = `{"id":"colour","title":"The Colour of Magic","language":"en","authors":[{"id":"tp","name":"Terry Pratchett"}],
+	// bestWorkHead is the work document up to its sidecars, open at the end.
+	bestWorkHead = `{"id":"colour","title":"The Colour of Magic","language":"en","authors":[{"id":"tp","name":"Terry Pratchett"}],
 		"series":[{"id":"discworld","name":"Discworld","position":"1"},{"id":"scheibenwelt","name":"Scheibenwelt","position":"1"}],
-		"recordings":[{"id":"nigel","narrators":[{"id":"np","name":"Nigel Planer"}],"runtime_min":420,"asin":[{"region":"us","asin":"B0COLOUR01"}]}]}`
+		"recordings":[{"id":"nigel","narrators":[{"id":"np","name":"Nigel Planer"}],"runtime_min":420,"asin":[{"region":"us","asin":"B0COLOUR01"}]}]`
+	bestWork = bestWorkHead + `}`
+	// bestWorkWhole is bestWork as works/{id} and an older metaserve's expand=work
+	// serve it: with the CC BY-SA sidecars a lean expansion leaves out.
+	bestWorkWhole = bestWorkHead + `,
+		"characters":[{"id":"rincewind","name":"Rincewind","role":"protagonist","reveal":{"chapter":1},"description":"A wizard."}],
+		"recaps":[{"through":{"chapter":2},"scope":"book","text":"Rincewind meets Twoflower."}],
+		"recap_summary":{"in_short":"A tourist comes to Ankh-Morpork."},
+		"position_scale":{"length":4,"unit":"chapter"}}`
 	otherWork  = `{"id":"light","title":"The Light Fantastic","language":"en","authors":[{"id":"tp","name":"Terry Pratchett"}],"series":[],"recordings":[]}`
 	bestFacts  = `{"discworld":{"language":"en"},"scheibenwelt":{"language":"de","translation_of":["discworld"]}}`
 	bestReason = `"reasons":{"title":1,"author":"full"}`
@@ -123,8 +132,8 @@ func TestBestOnlyUsesWhatIsInlined(t *testing.T) {
 	if got := m.calls(); !reflect.DeepEqual(got, map[string]int{"match": 1}) {
 		t.Fatalf("requests = %v, want only the match", got)
 	}
-	if m.got.Get("expand") != "work" {
-		t.Fatalf("expand = %q, want work", m.got.Get("expand"))
+	if m.got.Get("expand") != "work,lean" || m.got.Get("expand_min") != "60" {
+		t.Fatalf("expand = %q, expand_min = %q, want work,lean and the review floor", m.got.Get("expand"), m.got.Get("expand_min"))
 	}
 	if len(cands) != 2 || cands[0].WorkID != "colour" || cands[0].DefaultRecordingID != "nigel" || cands[0].Score != 97 {
 		t.Fatalf("candidates = %+v", cands)
@@ -372,7 +381,10 @@ func TestBestOnlyAnswersAsTheFullPathDoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{"fetched": plain, "inlined": rich} {
+	// An older metaserve reads neither lean nor expand_min: it inlines the whole work,
+	// sidecars and all, which reads the same.
+	whole := matchBody(matchResult("light", 90, ""), `{"kind":"work","id":"colour","score":90,`+hit+`,`+inlined(bestWorkWhole, bestFacts)+`}`)
+	for name, body := range map[string]string{"fetched": plain, "inlined": rich, "inlined whole": whole} {
 		got, err := (&bestMeta{body: body, works: works, series: bestSeries}).service(t).Candidates(context.Background(), bestQuery)
 		if err != nil {
 			t.Fatal(err)
@@ -419,5 +431,64 @@ func TestBestOnlyLeavesTheSearchFallback(t *testing.T) {
 	}
 	if _, searches, _ := m.calls(); searches != 1 || len(cands) != 1 || cands[0].Title == "" {
 		t.Fatalf("searches %d, candidates %+v", searches, cands)
+	}
+}
+
+// A lean work inlined on a bulk match is read into its candidate and nowhere else,
+// neither the cache nor the persistent store: a later full read of the work (the
+// companion's works/{id}) is never served it, and fetches the whole document with
+// its sidecars.
+func TestBestOnlyLeanWorkIsNotCached(t *testing.T) {
+	m := &bestMeta{
+		body:   matchBody(matchResult("colour", 97, inlined(bestWork, bestFacts))),
+		works:  map[string]string{"colour": bestWorkWhole},
+		series: bestSeries,
+	}
+	s := m.service(t)
+	st := newMemStore()
+	s.SetStore(st)
+	ctx := context.Background()
+	if cands, err := s.Candidates(ctx, bestQuery); err != nil || len(cands) != 1 || cands[0].Title != "The Colour of Magic" {
+		t.Fatalf("candidates = %+v, %v", cands, err)
+	}
+	if _, hit, _ := cacheGet[MetaWork](s.cache, nsWork.key("colour")); hit {
+		t.Fatal("the lean work was cached as the work")
+	}
+	if _, stored := st.Load(ctx, nsWork.key("colour")); stored {
+		t.Fatal("the lean work was stored as the work")
+	}
+	work, err := s.Work(ctx, "colour")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(work.Characters) != 1 || len(work.Recaps) != 1 || work.RecapSummary == nil || work.PositionScale == nil {
+		t.Fatalf("Work = %+v, want the whole document with its sidecars", work)
+	}
+	if got := m.calls()["work:colour"]; got != 1 {
+		t.Fatalf("works/colour read %d times, want once for the full read", got)
+	}
+}
+
+// expand_min is the review floor when there is one in metaserve's range, and absent
+// otherwise (metaserve would ignore it anyway); the dialog sends neither parameter.
+func TestMatchParamsExpandMin(t *testing.T) {
+	for _, tc := range []struct {
+		best      bool
+		floor     int
+		expand    string
+		expandMin string
+	}{
+		{true, 60, "work,lean", "60"},
+		{true, 1, "work,lean", "1"},
+		{true, 100, "work,lean", "100"},
+		{true, 0, "work,lean", ""},
+		{true, -1, "work,lean", ""},
+		{true, 101, "work,lean", ""},
+		{false, 60, "", ""},
+	} {
+		v := matchParams(MatchQuery{Title: "x", BestOnly: tc.best, NoDetailsBelow: tc.floor}, "", "", "")
+		if v.Get("expand") != tc.expand || v.Get("expand_min") != tc.expandMin {
+			t.Errorf("BestOnly %v, floor %d: expand %q expand_min %q, want %q %q", tc.best, tc.floor, v.Get("expand"), v.Get("expand_min"), tc.expand, tc.expandMin)
+		}
 	}
 }
