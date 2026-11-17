@@ -121,14 +121,7 @@ func checkWireGolden(t *testing.T, c wireCase) {
 	}
 	file := filepath.Join(wireDir, c.name+".json")
 	if *updateWire {
-		var out bytes.Buffer
-		enc := json.NewEncoder(&out)
-		enc.SetEscapeHTML(false) // the routes' <placeholders> stay readable
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(got); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(file, out.Bytes(), 0o644); err != nil {
+		if err := os.WriteFile(file, wireGoldenBytes(t, got), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		return
@@ -141,16 +134,36 @@ func checkWireGolden(t *testing.T, c wireCase) {
 	if err := json.Unmarshal(raw, &want); err != nil {
 		t.Fatalf("%s: %v", file, err)
 	}
-	if want.Route != got.Route {
+	diff := shapeDiff(want.Shape, got.Shape)
+	switch {
+	case want.Route != got.Route:
 		t.Errorf("%s: route %q, the case says %q (-update)", file, want.Route, got.Route)
+	case len(diff) == 0 && !bytes.Equal(bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n")), wireGoldenBytes(t, got)):
+		// The player pins its copy by git blob id, so a hand edit that keeps the
+		// shape (key order, indent) must not wait for the next -update to show.
+		t.Errorf("%s holds the right shape, but not as -update writes it: run go test ./internal/api -run TestWireGolden -update", file)
 	}
-	if diff := shapeDiff(want.Shape, got.Shape); len(diff) > 0 {
+	if len(diff) > 0 {
 		t.Errorf("%s changed shape (%s):\n  %s\n"+
 			"A removed or retyped field breaks shipped clients (CROSS-REPO.md §15). If the change is intended,\n"+
 			"run go test ./internal/api -run TestWireGolden -update, then sync the player's copy\n"+
 			"(audiosilo-frontend: npm run wire:sync) and mirror it in src/api/types.ts.",
 			c.route, file, strings.Join(diff, "\n  "))
 	}
+}
+
+// wireGoldenBytes is a golden file's content, the one form of it: what -update
+// writes and what a committed file is held to.
+func wireGoldenBytes(t *testing.T, g wireGolden) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false) // the routes' <placeholders> stay readable
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(g); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
 }
 
 // shapeOf is v's shape (the grammar at the top of this file).
