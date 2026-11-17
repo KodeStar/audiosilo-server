@@ -46,7 +46,7 @@ src/features/     one folder per screen (overview, library/*, book, libraries, p
 src/i18n/         i18next setup + locales/<lang>.json (en is the base; i18n.test.ts keeps them in step)
 src/lib/          session, theme, toast, formatting - logic kept out of components so it's testable
 src/styles/       globals.css: the Shelf tokens and the few signature classes
-public/           theme-init.js (applies the theme before first paint; external because of the CSP)
+public/           theme-init.js (applies the theme before first paint and follows the OS; external because of the CSP)
 scripts/          check-csp.mjs (fails the build on inline script/style)
 ```
 
