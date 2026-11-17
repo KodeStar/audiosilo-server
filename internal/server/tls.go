@@ -1,12 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"io"
+	"log"
 	"math/big"
 	"net"
 	"os"
@@ -38,6 +41,29 @@ func tlsConfig(cfg *config.Config) (*tls.Config, error) {
 		}
 		return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
 	}
+}
+
+// noSNIRefusal is the reason autocert gives a TLS hello that names no host.
+const noSNIRefusal = "acme/autocert: missing server name"
+
+// autocertErrorLog is the http.Server's error log under autocert: the standard
+// logger, less the handshake error for a hello that names no host. The image's
+// healthcheck sends one every 30 seconds (launcher.Healthcheck), and so does
+// anything that scans the address; autocert refuses it before any order, and
+// the line says nothing an owner could fix.
+func autocertErrorLog() *log.Logger {
+	return log.New(quietNoSNI{log.Writer()}, log.Prefix(), log.Flags())
+}
+
+// quietNoSNI passes each log line to w but the no-SNI handshake error.
+type quietNoSNI struct{ w io.Writer }
+
+func (q quietNoSNI) Write(p []byte) (int, error) {
+	line := bytes.TrimRight(p, "\n")
+	if bytes.Contains(line, []byte("http: TLS handshake error from ")) && bytes.HasSuffix(line, []byte(": "+noSNIRefusal)) {
+		return len(p), nil
+	}
+	return q.w.Write(p)
 }
 
 // selfSignedPaths are where the self-signed pair lives: tls.cert_file/key_file,

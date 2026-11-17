@@ -1,11 +1,18 @@
 package server
 
 import (
+	"bytes"
 	"crypto/tls"
 	"errors"
+	"log"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
@@ -160,4 +167,70 @@ func leafDER(c tls.Certificate) ([]byte, error) {
 		return nil, errors.New("certificate has no leaf DER")
 	}
 	return c.Certificate[0], nil
+}
+
+// lockedBuffer is a bytes.Buffer the server's goroutines may write while the
+// test reads it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// A TLS hello naming no host (the healthcheck's under autocert) is refused
+// with an alert, and the line net/http logs for it is the one quietNoSNI
+// drops, while it keeps every other line.
+func TestAutocertNoSNILogDropped(t *testing.T) {
+	tlsCfg, err := tlsConfig(&config.Config{TLS: config.TLSConfig{
+		Mode: config.TLSAutocert, Hosts: []string{"books.example.com"}, CacheDir: t.TempDir(),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", tlsCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw lockedBuffer
+	srv := &http.Server{Handler: http.NotFoundHandler(), ErrorLog: log.New(&raw, "", log.LstdFlags), ReadHeaderTimeout: time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = tls.Client(conn, &tls.Config{InsecureSkipVerify: true}).Handshake() //nolint:gosec // a test hello
+	_ = conn.Close()
+	if err == nil || !strings.Contains(err.Error(), "remote error") {
+		t.Fatalf("handshake = %v, want a TLS alert", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(raw.String(), noSNIRefusal) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no %q logged; log: %q", noSNIRefusal, raw.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	var out bytes.Buffer
+	quiet := quietNoSNI{&out}
+	if _, err := quiet.Write([]byte(raw.String())); err != nil || out.Len() != 0 {
+		t.Errorf("quietNoSNI passed %q (%v), want it dropped", out.String(), err)
+	}
+	other := "2026/11/17 10:00:00 http: TLS handshake error from 127.0.0.1:5000: EOF\n"
+	if _, err := quiet.Write([]byte(other)); err != nil || out.String() != other {
+		t.Errorf("quietNoSNI wrote %q (%v), want %q", out.String(), err, other)
+	}
 }

@@ -3,43 +3,42 @@ package launcher
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/acme"
+	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
-func TestHealthURL(t *testing.T) {
+func TestHealthAddr(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		bind       string
-		mode       config.TLSMode
-		hosts      []string
-		want, name string
-	}{
-		{bind: "0.0.0.0:8080", mode: config.TLSOff, want: "http://127.0.0.1:8080/healthz"},
-		{bind: ":9000", mode: config.TLSOff, want: "http://127.0.0.1:9000/healthz"},
-		{bind: "[::]:8443", mode: config.TLSSelfSigned, want: "https://127.0.0.1:8443/healthz"},
-		{bind: "192.168.1.20:8080", mode: config.TLSSelfSigned, want: "https://192.168.1.20:8080/healthz"},
-		{bind: "[::1]:8080", mode: config.TLSOff, want: "http://[::1]:8080/healthz"},
-		{bind: "localhost:8080", mode: config.TLSOff, want: "http://localhost:8080/healthz"},
-		{bind: "0.0.0.0:443", mode: config.TLSAutocert, hosts: []string{"books.example.com", "b.example.com"},
-			want: "https://127.0.0.1:443/healthz", name: "books.example.com"},
+	for _, tc := range []struct{ bind, want string }{
+		{bind: "0.0.0.0:8080", want: "127.0.0.1:8080"},
+		{bind: ":9000", want: "127.0.0.1:9000"},
+		{bind: "[::]:8443", want: "127.0.0.1:8443"},
+		{bind: "192.168.1.20:8080", want: "192.168.1.20:8080"},
+		{bind: "[::1]:8080", want: "[::1]:8080"},
+		{bind: "localhost:8080", want: "localhost:8080"},
 	} {
 		cfg := config.Default(t.TempDir())
-		cfg.Bind, cfg.TLS.Mode, cfg.TLS.Hosts = tc.bind, tc.mode, tc.hosts
-		got, name, err := healthURL(cfg)
-		if err != nil || got != tc.want || name != tc.name {
-			t.Errorf("healthURL(%s, %s) = %q, %q, %v; want %q, %q", tc.bind, tc.mode, got, name, err, tc.want, tc.name)
+		cfg.Bind = tc.bind
+		if got, err := healthAddr(cfg); err != nil || got != tc.want {
+			t.Errorf("healthAddr(%s) = %q, %v; want %q", tc.bind, got, err, tc.want)
 		}
 	}
 }
@@ -50,6 +49,9 @@ func healthDataDir(t *testing.T, addr string, mode config.TLSMode) string {
 	dir := t.TempDir()
 	cfg := config.Default(dir)
 	cfg.Bind, cfg.TLS.Mode = addr, mode
+	if mode == config.TLSAutocert {
+		cfg.TLS.Hosts = []string{"books.example.com"}
+	}
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +108,81 @@ func TestHealthcheckUnhealthy(t *testing.T) {
 		"unreadable cfg": healthDataDir(t, "no-port", config.TLSOff),
 	} {
 		if err := Healthcheck(ctx, dir, &bytes.Buffer{}); err == nil {
+			t.Errorf("%s: Healthcheck = nil, want unhealthy", name)
+		}
+	}
+}
+
+// autocertServer is a TLS listener answering as the server does under
+// autocert, before any certificate is issued, and the server names of the
+// hellos it was sent.
+func autocertServer(t *testing.T) (addr string, names func() []string) {
+	t.Helper()
+	m := &autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist("books.example.com"),
+		Cache:      autocert.DirCache(t.TempDir()),
+		Client:     &acme.Client{DirectoryURL: "http://127.0.0.1:1/directory"}, // never Let's Encrypt
+	}
+	var mu sync.Mutex
+	var seen []string
+	tlsCfg := m.TLSConfig()
+	tlsCfg.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		mu.Lock()
+		seen = append(seen, hello.ServerName)
+		mu.Unlock()
+		return m.GetCertificate(hello)
+	}
+	// Not httptest's TLS server: it adds a certificate of its own, which Go
+	// serves to a hello naming no host, where autocert's has none.
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", tlsCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: healthz(http.StatusOK), ErrorLog: log.New(io.Discard, "", 0), ReadHeaderTimeout: time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return ln.Addr().String(), func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), seen...)
+	}
+}
+
+// Under autocert the check sends a hello naming no host, which autocert
+// refuses before any order: the refusal is healthy, and no hello the server
+// saw named a host (one would start an issuance).
+func TestHealthcheckAutocert(t *testing.T) {
+	addr, names := autocertServer(t)
+	var out bytes.Buffer
+	if err := Healthcheck(context.Background(), healthDataDir(t, addr, config.TLSAutocert), &out); err != nil {
+		t.Fatalf("Healthcheck = %v, want healthy", err)
+	}
+	if got := names(); len(got) != 1 || got[0] != "" {
+		t.Errorf("server names sent = %q, want one hello naming no host", got)
+	}
+	if !strings.HasPrefix(out.String(), "ok: ") {
+		t.Errorf("output %q, want ok", out.String())
+	}
+}
+
+// Under autocert: nothing listening, a plain HTTP server on the port, and a
+// listener that never answers the hello are unhealthy.
+func TestHealthcheckAutocertUnhealthy(t *testing.T) {
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = silent.Close() }) // accepts in the kernel, never reads
+	for name, addr := range map[string]string{
+		"not listening": freeAddr(t),
+		"plain http":    healthServer(t, false, healthz(http.StatusOK)),
+		"silent":        silent.Addr().String(),
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		err := Healthcheck(ctx, healthDataDir(t, addr, config.TLSAutocert), io.Discard)
+		cancel()
+		if err == nil {
 			t.Errorf("%s: Healthcheck = nil, want unhealthy", name)
 		}
 	}

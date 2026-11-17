@@ -3,6 +3,7 @@ package launcher
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -30,16 +31,24 @@ const healthcheckTimeout = 5 * time.Second
 // none there means no server is running from that folder (a --data that isn't
 // the server's), never the defaults guessed at.
 //
-// An unspecified bind host (0.0.0.0, ::, empty) is asked on 127.0.0.1. With TLS
-// on (selfsigned, autocert) it speaks https without checking the certificate:
-// it is the server asking itself, it sends nothing secret, and a self-signed
-// certificate must not make a live server look dead. Under autocert the hello
-// names tls.hosts' first host, since autocert answers no handshake without a
-// name it may serve; until that host's certificate is issued autocert refuses
-// the handshake (and tries the issuance again, at most once a minute), so the
-// check fails until Let's Encrypt can reach the server. A bind or TLS change
-// saved in the console takes effect at the next start, so until then this asks
-// the new address (the saved one) and fails: a restart applies it.
+// An unspecified bind host (0.0.0.0, ::, empty) is asked on 127.0.0.1. With
+// tls.mode selfsigned it speaks https without checking the certificate: it is
+// the server asking itself, it sends nothing secret, and a self-signed
+// certificate must not make a live server look dead.
+//
+// Under autocert it never asks /healthz: a handshake naming one of tls.hosts
+// starts an issuance whenever that host has no valid certificate, and every
+// failed one counts against Let's Encrypt's failed-validation limit, while the
+// check would read unhealthy for a state no restart fixes. Instead it connects
+// to the listener and sends a TLS hello naming no host, which autocert refuses
+// at once, before its cache or any order; the refusal (a TLS alert) or a
+// finished handshake is healthy, since the server accepted the connection and
+// answered the hello. That proves the server is up and serving, not that its
+// database answers.
+//
+// A bind or TLS change saved in the console takes effect at the next start, so
+// until then this asks the new address (the saved one) and fails: a restart
+// applies it.
 func Healthcheck(ctx context.Context, dataDir string, w io.Writer) error {
 	abs, err := filepath.Abs(dataDir)
 	if err != nil {
@@ -52,17 +61,34 @@ func Healthcheck(ctx context.Context, dataDir string, w io.Writer) error {
 	if firstRun {
 		return fmt.Errorf("no %s: no server has started from %s", config.Path(abs), abs)
 	}
-	target, serverName, err := healthURL(cfg)
+	addr, err := healthAddr(cfg)
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(ctx, healthcheckTimeout)
+	defer cancel()
+	if cfg.TLS.Mode == config.TLSAutocert {
+		if err := helloWithoutName(ctx, addr); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintln(w, "ok: TLS listener at", addr)
+		return nil
+	}
+	return getHealthz(ctx, addr, cfg.TLS.Mode != config.TLSOff, w)
+}
+
+// getHealthz asks http(s)://addr/healthz for a 200.
+func getHealthz(ctx context.Context, addr string, tlsOn bool, w io.Writer) error {
+	scheme := "http"
+	if tlsOn {
+		scheme = "https"
+	}
+	target := (&url.URL{Scheme: scheme, Host: addr, Path: "/healthz"}).String()
 	client := &http.Client{
-		Timeout: healthcheckTimeout,
 		Transport: &http.Transport{
 			Proxy: nil, // never through an HTTP(S)_PROXY the container sets: this is the server asking itself
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, //nolint:gosec // the server's own loopback probe; see the doc comment
-				ServerName:         serverName,
+				InsecureSkipVerify: true, //nolint:gosec // the server's own loopback probe; see Healthcheck
 			},
 			DisableKeepAlives: true,
 		},
@@ -86,25 +112,33 @@ func Healthcheck(ctx context.Context, dataDir string, w io.Writer) error {
 	return nil
 }
 
-// healthURL is the /healthz URL the server cfg describes listens on, with the
-// TLS server name to send (autocert's first host, else none).
-func healthURL(cfg *config.Config) (target, serverName string, err error) {
+// helloWithoutName connects to addr and sends a TLS hello with no server name
+// (see Healthcheck): nil when the handshake finishes or the server refuses it
+// with a TLS alert, an error when nothing listens, nothing answers or what
+// answers doesn't speak TLS.
+func helloWithoutName(ctx context.Context, addr string) error {
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("no answer from %s: %w", addr, err)
+	}
+	defer func() { _ = conn.Close() }()
+	// No ServerName, and tls.Client never takes one from the address: no SNI.
+	err = tls.Client(conn, &tls.Config{InsecureSkipVerify: true}).HandshakeContext(ctx) //nolint:gosec // nothing is sent past the hello
+	if alert := (*net.OpError)(nil); err == nil || errors.As(err, &alert) && alert.Op == "remote error" {
+		return nil
+	}
+	return fmt.Errorf("no TLS answer from %s: %w", addr, err)
+}
+
+// healthAddr is the host:port the server cfg describes listens on, an
+// unspecified host asked on 127.0.0.1.
+func healthAddr(cfg *config.Config) (string, error) {
 	host, port, err := net.SplitHostPort(cfg.Bind)
 	if err != nil {
-		return "", "", fmt.Errorf("invalid bind address %q: %w", cfg.Bind, err)
+		return "", fmt.Errorf("invalid bind address %q: %w", cfg.Bind, err)
 	}
 	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
 		host = "127.0.0.1"
 	}
-	scheme := "https"
-	switch cfg.TLS.Mode {
-	case config.TLSOff:
-		scheme = "http"
-	case config.TLSAutocert:
-		if len(cfg.TLS.Hosts) > 0 {
-			serverName = cfg.TLS.Hosts[0]
-		}
-	}
-	u := url.URL{Scheme: scheme, Host: net.JoinHostPort(host, port), Path: "/healthz"}
-	return u.String(), serverName, nil
+	return net.JoinHostPort(host, port), nil
 }
