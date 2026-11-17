@@ -287,6 +287,23 @@ describe('overview', () => {
     expect(within(server).queryByText(window.location.host)).toBeNull();
   });
 
+  it('shows one address when the public and home network ones are the same', async () => {
+    const url = 'http://192.168.1.20:8080';
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/settings': {
+          body: settingsWith({
+            general: { ...settingsWith().general, public_url: url, lan_url: url },
+          }),
+        },
+      }),
+    );
+    renderApp();
+    const server = await screen.findByRole('region', { name: 'Server' });
+    expect(await within(server).findAllByText(url)).toHaveLength(1);
+    expect(within(server).queryByText(/home network/)).toBeNull();
+  });
+
   it("falls back to the browser's host, saying so, when no address is set", async () => {
     mockFetch(signedInRoutes());
     renderApp();

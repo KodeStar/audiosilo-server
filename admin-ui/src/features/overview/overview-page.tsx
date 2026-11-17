@@ -516,7 +516,9 @@ function ServerAddress({ general }: { general: AdminSettings['general'] }) {
   const { t } = useTranslation();
   const addresses: { url: string; note?: string }[] = [];
   if (general.public_url) addresses.push({ url: general.public_url });
-  if (general.lan_url) addresses.push({ url: general.lan_url, note: t('home.server.addressHome') });
+  if (general.lan_url && general.lan_url !== general.public_url) {
+    addresses.push({ url: general.lan_url, note: t('home.server.addressHome') });
+  }
   if (addresses.length === 0) {
     return (
       <span className="flex flex-col">
