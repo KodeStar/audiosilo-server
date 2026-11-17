@@ -51,6 +51,9 @@ type wireCase struct {
 	name  string // the file's name, without .json
 	route string // the method, the route and the query used, recorded in the golden
 	body  func(t *testing.T) string
+	// empty names the array paths ("$.a[].b") empty by design. Any other empty
+	// array fails: it pins none of its elements' fields, so seed it instead.
+	empty []string
 }
 
 func TestWireGolden(t *testing.T) {
@@ -98,6 +101,11 @@ func checkWireGolden(t *testing.T, c wireCase) {
 		t.Fatalf("%s: not JSON: %v: %s", c.route, err, body)
 	}
 	got := wireGolden{Route: c.route, Shape: shapeOf(v)}
+	for _, p := range emptyArrays(got.Shape, "$") {
+		if !slices.Contains(c.empty, p) {
+			t.Errorf("%s: %s is empty, so the golden guards none of its fields: seed it, or list it in the case's empty", c.route, p)
+		}
+	}
 	file := filepath.Join(wireDir, c.name+".json")
 	if *updateWire {
 		var out bytes.Buffer
@@ -279,6 +287,29 @@ func flattenShape(s any, path string, into map[string]string) {
 	}
 }
 
+// emptyArrays lists the paths of the empty arrays in shape s, at path.
+func emptyArrays(s any, path string) []string {
+	var out []string
+	switch x := s.(type) {
+	case []any:
+		if len(x) == 0 {
+			return []string{path}
+		}
+		out = emptyArrays(x[0], path+"[]")
+	case map[string]any:
+		if alts, ok := x["$or"].([]any); ok && len(x) == 1 {
+			for _, alt := range alts {
+				out = append(out, emptyArrays(alt, path)...)
+			}
+			break
+		}
+		for _, k := range slices.Sorted(maps.Keys(x)) {
+			out = append(out, emptyArrays(x[k], path+"."+k)...)
+		}
+	}
+	return out
+}
+
 // TestShapeOf pins the shape grammar the player's parity test reads.
 func TestShapeOf(t *testing.T) {
 	t.Parallel()
@@ -291,6 +322,9 @@ func TestShapeOf(t *testing.T) {
 		`"f":[{"$or":["null","number",{"k":"number","l":"number"},"string"]}]}`
 	if string(got) != want {
 		t.Fatalf("shape\n got %s\nwant %s", got, want)
+	}
+	if e := emptyArrays(shapeOf(v), "$"); !slices.Equal(e, []string{"$.d"}) {
+		t.Fatalf("empty arrays = %q, want [$.d]", e)
 	}
 	// Allowed: an identical shape has no diff. Denied: a removal, a retype and
 	// an addition are each reported.

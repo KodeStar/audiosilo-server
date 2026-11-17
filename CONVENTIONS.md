@@ -40,7 +40,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   run `go test ./internal/api -run TestWireGolden -update`; the player keeps a copy (`src/api/__wire__/`,
   `npm run wire:sync`) its parity test checks against `types.ts`, so a wire change re-syncs it. A new
   envelope worth guarding is a `wireCases` entry; a value that only appears with data (an `omitempty` field)
-  needs a seed that sets it.
+  needs a seed that sets it, and an empty array fails unless its case names it in `empty`.
 - **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
   The executor sorts filenames and skips exact recorded names, allowing a missing lower-numbered
