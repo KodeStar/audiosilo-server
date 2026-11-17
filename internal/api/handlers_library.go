@@ -497,9 +497,8 @@ func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
 // scoped per-library to their share path rules.
 func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
-	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "search failed")
+	scopes, ok := a.callerScopes(w, r, "search failed")
+	if !ok {
 		return
 	}
 	write := a.cachedList(w, r, gen, cacheable, scopes)
@@ -508,7 +507,7 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	books, err := a.cat.Search(r.Context(), r.URL.Query().Get("q"), scopes, queryInt(r, "limit", 50))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "search failed")
+		a.writeCatalogError(w, err, "search failed", "search failed", "user", userFrom(r.Context()).ID, "scopes", len(scopes))
 		return
 	}
 	write(map[string]any{"books": books})

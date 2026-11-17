@@ -19,21 +19,16 @@ func (c *Catalog) Search(ctx context.Context, query string, scopes []Scope, limi
 		limit = 50
 	}
 
-	args := []any{match}
-	var scopeConds []string
-	for _, s := range scopes {
-		frag, fargs := pathFilterSQL("b.rel_path", s)
-		scopeConds = append(scopeConds, "(b.library_id = ? AND "+frag+")")
-		args = append(args, s.LibraryID)
-		args = append(args, fargs...)
-	}
+	// scopesFilterSQL, not an arm per scope here: past about a thousand scopes
+	// those arms pass SQLite's expression depth and the statement is refused.
+	filter, fargs := scopesFilterSQL("b.library_id", "b.rel_path", scopes)
 	// Over-fetch ranked rows so de-dup can still return up to `limit` distinct books.
-	args = append(args, dedupFetch(limit))
+	args := append(append([]any{match}, fargs...), dedupFetch(limit))
 
 	q := `SELECT ` + prefixCols("b.") + dedupCols + `
 		FROM books_fts f
 		JOIN books b ON b.id = f.rowid` + dedupJoins + `
-		WHERE l.kind='books' AND books_fts MATCH ? AND (` + strings.Join(scopeConds, " OR ") + `)
+		WHERE l.kind='books' AND books_fts MATCH ? AND ` + filter + `
 		ORDER BY rank LIMIT ?`
 	rows, err := c.db.QueryContext(ctx, q, args...)
 	if err != nil {
