@@ -38,7 +38,9 @@ setup wizard** instead of the auto-admin banner - see below). Commands: `version
 `reset-admin [username]` (a new admin password, printed once: lost first-run password; flags go
 before the command, `audiosilo --data /data reset-admin`; see First-run setup in CONVENTIONS.md),
 `healthcheck` (`launcher.Healthcheck`: GET `/healthz` on the bind address and TLS mode `config.yaml` +
-env give, exit 0 on 200, else 1; the Dockerfile's `HEALTHCHECK`, server#217).
+env give, exit 0 on 200, else 1; under autocert only a TLS hello naming no host, never one that
+could start an order; the Dockerfile's `HEALTHCHECK` via `docker-entrypoint.sh healthcheck`, which
+reads the start's recorded `--data`, server#217).
 
 **Native distribution** (GoReleaser → GitHub Releases on `v*` tags, see
 `.goreleaser.yml` + `.github/workflows/release.yml`, and the workspace

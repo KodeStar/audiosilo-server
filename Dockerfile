@@ -105,14 +105,16 @@ VOLUME /data
 EXPOSE 8080
 # Liveness: the server asks its own /healthz on the bind address and TLS mode
 # config.yaml and the AUDIOSILO_* environment give it (no curl needed;
-# server#217). It runs as the server does: Docker starts a check as root, past
-# the entrypoint, so as root it drops to PUID:PGID (su-exec, as the entrypoint
-# does) and reads config.yaml with the server's own access, which root may not
-# have (an NFS share with root_squash). This only marks the container
-# unhealthy: an orchestrator's liveness probe or an autoheal sidecar restarts it
-# (see the README). The start period covers a first start's or an upgrade's
-# migrations on a large library. Keep the --data in step with the CMD below.
-HEALTHCHECK --interval=30s --timeout=10s --start-period=2m --retries=3 \
-    CMD ["sh", "-c", "if [ \"$(id -u)\" = 0 ]; then exec su-exec \"${PUID:-1000}:${PGID:-1000}\" audiosilo --data /data healthcheck; fi; exec audiosilo --data /data healthcheck"]
+# server#217; under tls.mode autocert only that its TLS listener answers, see
+# launcher.Healthcheck). The entrypoint's healthcheck mode runs it on the data
+# folder the start resolved from the command's --data, as PUID:PGID: Docker
+# starts a check as root, past the entrypoint, and root may not read config.yaml
+# (an NFS share with root_squash). This only marks the container unhealthy: an
+# orchestrator's liveness probe or an autoheal sidecar restarts it (see the
+# README). The ten-minute start period covers a first start's or an upgrade's
+# migrations on a large library, which can take minutes: a restart mid-way
+# would only start them again.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10m --retries=3 \
+    CMD ["docker-entrypoint.sh", "healthcheck"]
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["audiosilo", "--data", "/data"]

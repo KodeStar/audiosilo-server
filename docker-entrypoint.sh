@@ -22,6 +22,12 @@
 # compose `user:`), we skip the chown/drop, run the same checks and exec as that
 # user, with AUDIOSILO_STARTED_AS_USER=1 so the server's own fix names `user:`
 # too, not PUID/PGID (internal/fsaccess).
+#
+# `docker-entrypoint.sh healthcheck` is the image's HEALTHCHECK: it runs
+# `audiosilo --data <folder> healthcheck` on the data folder the start resolved
+# from the command's --data (recorded in $DATA_RECORD, /data when there is no
+# record), as the server's user, so a container started with another --data is
+# checked on that folder.
 set -e
 
 say() { printf 'audiosilo: %s\n' "$*" >&2; }
@@ -258,8 +264,33 @@ reap_watchers() {
   return 0
 }
 
+# Where the start records the data folder it resolved, for the healthcheck: a
+# check runs apart from the start and never sees its command.
+DATA_RECORD=/tmp/audiosilo-data-dir
+
+# Records the data folder $1, made absolute, in $DATA_RECORD. A new file renamed
+# over the old record, so a link left at its name is replaced, never written
+# through. One that can't be written (a read-only /tmp) leaves the check on /data.
+record_data_dir() {
+  case "$1" in /*) d="$1" ;; *) d="$(pwd)" && d="${d%/}/$1" ;; esac
+  t=$(mktemp "$DATA_RECORD.XXXXXX" 2>/dev/null) || return 0
+  if printf '%s' "$d" >"$t" && chmod 644 "$t" && mv -f "$t" "$DATA_RECORD"; then return 0; fi
+  rm -f "$t"
+  return 0
+}
+
+if [ "$#" = 1 ] && [ "$1" = healthcheck ]; then
+  d=$(cat "$DATA_RECORD" 2>/dev/null || true)
+  [ -n "$d" ] || d=/data
+  # Docker starts a check as root, past this script: drop to the server's user,
+  # whose access to config.yaml root may not have (an NFS share with root_squash).
+  if [ "$(id -u)" = 0 ]; then exec su-exec "${PUID:-1000}:${PGID:-1000}" audiosilo --data "$d" healthcheck; fi
+  exec audiosilo --data "$d" healthcheck
+fi
+
 WAIT=5 # seconds a check of a mounted folder may take
 DATA=$(trim "$(data_dir "$@")")
+record_data_dir "$DATA"
 BACKUPS=$(trim "${AUDIOSILO_BACKUP_DIR:-}")
 if ! usable_path "$BACKUPS"; then BACKUPS=""; fi
 DATA_CHOWN_FAILED=""
