@@ -133,3 +133,31 @@ func TestDirListerBounded(t *testing.T) {
 		}
 	}
 }
+
+// The setup preview's root check runs within the same slots and time-out: a
+// root that doesn't answer is ErrDirsTimedOut, a relative one refused at once,
+// and a readable one comes back cleaned.
+func TestDirListerCheckRoot(t *testing.T) {
+	t.Parallel()
+	hang := make(chan struct{})
+	defer close(hang)
+	l := NewDirLister(ListDirs, 1, 50*time.Millisecond)
+	ctx := context.Background()
+	root := t.TempDir()
+	if got, err := l.CheckRoot(ctx, root+string(filepath.Separator)); err != nil || got != root {
+		t.Fatalf("a readable root: %q, %v, want %q", got, err, root)
+	}
+	if _, err := l.CheckRoot(ctx, filepath.Join(root, "missing")); !errors.Is(err, ErrRootUnreadable) {
+		t.Fatalf("a missing root: %v, want ErrRootUnreadable", err)
+	}
+	l.check = func(string) (string, error) {
+		<-hang
+		return "", ErrRootUnreadable
+	}
+	if _, err := l.CheckRoot(ctx, root); !errors.Is(err, ErrDirsTimedOut) {
+		t.Fatalf("a root that doesn't answer: %v, want ErrDirsTimedOut", err)
+	}
+	if _, err := l.CheckRoot(ctx, "relative"); !errors.Is(err, ErrNotAbsolute) {
+		t.Fatalf("a relative root with the one slot held: %v, want ErrNotAbsolute", err)
+	}
+}

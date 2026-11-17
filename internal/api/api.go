@@ -118,7 +118,8 @@ type API struct {
 	// Defaults to requestTimeout; a field so tests can shorten it.
 	timeoutDur time.Duration
 	// dirs is the folder picker's lister (library.ListDirs behind a deadline and
-	// a few slots); a field so tests can hand it a listing that hangs.
+	// a few slots), which the setup preview checks its root through too; a field
+	// so tests can hand it a listing that hangs.
 	dirs *library.DirLister
 	// mountHints is GET /admin/setup's mount hint reader, library.MountHints;
 	// a field so tests can see when it is read.

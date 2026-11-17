@@ -4242,7 +4242,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.ErrInvalidSetupStep`). **Preview** `POST /admin/setup/preview` `{root, ignore_patterns?}` ->
   `{root, counts: {audio_files, folder_books, file_books, capped}, same_root, samples: [{rel_path, tags,
   path, abs}], blanks: {tags, path}, suggested}`: checks the folder as the folder picker does
-  (`library.CheckRoot`: 400 `path_not_absolute`, 404 `folder_unreadable`; library create checks neither),
+  (`library.CheckRoot` behind the picker's `DirLister`, so a hung mount is 404 at its time-out: 400 `path_not_absolute`, 404 `folder_unreadable`; library create checks neither),
   the root as library create does (`catalog.CheckLibraryRoot`, the same `checkLibraryRoot` read outside
   the writer: 409 `root_overlaps`) and the ignore rules (400 `invalid_pattern`), and
   `same_root` names a library already at exactly the root (a warning; create allows it). It walks as a

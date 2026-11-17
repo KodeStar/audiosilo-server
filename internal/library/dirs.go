@@ -85,17 +85,20 @@ func ListDirs(dir string, limit int) (*DirListing, error) {
 	return out, nil
 }
 
-// ErrDirsTimedOut is a folder listing that didn't answer within its DirLister's
-// time-out, or found every slot held by listings that haven't returned.
+// ErrDirsTimedOut is a folder read (a listing, a root check) that didn't answer
+// within its DirLister's time-out, or found every slot held by reads that
+// haven't returned.
 var ErrDirsTimedOut = errors.New("folder listing timed out")
 
-// DirLister runs folder listings each on a goroutine of its own, waited for at
-// most its time-out: a readdir on a network share that stops answering can't be
-// interrupted (server#224). At most its slots run at once, a hung one keeping
-// its slot until it returns, so hung reads can't pile up: with every slot held a
-// listing waits for one only as long as its time-out.
+// DirLister runs the folder reads an admin's typed path asks for (the picker's
+// listings, the setup preview's root check) each on a goroutine of its own,
+// waited for at most its time-out: a readdir on a network share that stops
+// answering can't be interrupted (server#224). At most its slots run at once, a
+// hung one keeping its slot until it returns, so hung reads can't pile up: with
+// every slot held a read waits for one only as long as its time-out.
 type DirLister struct {
 	list    func(dir string, limit int) (*DirListing, error)
+	check   func(root string) (string, error)
 	slots   chan struct{}
 	timeout time.Duration
 }
@@ -103,7 +106,7 @@ type DirLister struct {
 // NewDirLister is a DirLister of list (ListDirs; a test's stand-in), slots at
 // once, each waited for at most timeout.
 func NewDirLister(list func(dir string, limit int) (*DirListing, error), slots int, timeout time.Duration) *DirLister {
-	return &DirLister{list: list, slots: make(chan struct{}, slots), timeout: timeout}
+	return &DirLister{list: list, check: CheckRoot, slots: make(chan struct{}, slots), timeout: timeout}
 }
 
 // List is list(dir, limit), or ErrDirsTimedOut once the time-out (or ctx) ends
@@ -112,28 +115,47 @@ func (l *DirLister) List(ctx context.Context, dir string, limit int) (*DirListin
 	if dir != "" && !filepath.IsAbs(dir) {
 		return nil, ErrNotAbsolute // refused at once, never waiting for a slot
 	}
+	return boundedRead(ctx, l, func() (*DirListing, error) { return l.list(dir, limit) })
+}
+
+// CheckRoot is CheckRoot(root) within the same slots and time-out as a
+// listing: it opens and reads the folder, which hangs on the same mounts.
+func (l *DirLister) CheckRoot(ctx context.Context, root string) (string, error) {
+	if !filepath.IsAbs(root) {
+		return "", ErrNotAbsolute // as List: never waiting for a slot
+	}
+	return boundedRead(ctx, l, func() (string, error) { return l.check(root) })
+}
+
+// readResult is what a boundedRead's goroutine hands its waiter.
+type readResult[T any] struct {
+	v   T
+	err error
+}
+
+// boundedRead is read() on a goroutine of its own holding one of l's slots, or
+// ErrDirsTimedOut once l's time-out (or ctx) ends first, the read left to
+// finish there.
+func boundedRead[T any](ctx context.Context, l *DirLister, read func() (T, error)) (T, error) {
+	var zero T
 	ctx, cancel := context.WithTimeout(ctx, l.timeout)
 	defer cancel()
 	select {
 	case l.slots <- struct{}{}:
 	case <-ctx.Done():
-		return nil, ErrDirsTimedOut
+		return zero, ErrDirsTimedOut
 	}
-	type result struct {
-		listing *DirListing
-		err     error
-	}
-	done := make(chan result, 1) // buffered: an abandoned listing still returns
+	done := make(chan readResult[T], 1) // buffered: an abandoned read still returns
 	go func() {
 		defer func() { <-l.slots }()
-		listing, err := l.list(dir, limit)
-		done <- result{listing, err}
+		v, err := read()
+		done <- readResult[T]{v: v, err: err}
 	}()
 	select {
 	case r := <-done:
-		return r.listing, r.err
+		return r.v, r.err
 	case <-ctx.Done():
-		return nil, ErrDirsTimedOut
+		return zero, ErrDirsTimedOut
 	}
 }
 

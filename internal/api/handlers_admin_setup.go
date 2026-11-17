@@ -118,7 +118,8 @@ type setupPreview struct {
 // handleSetupPreview is POST /admin/setup/preview {root, ignore_patterns?}: what
 // a books library at root would hold and a sample of its books named from the
 // tags and from the folders (library.Preview). It checks the folder as the
-// folder picker does (library.CheckRoot: 400 path_not_absolute, 404
+// folder picker does (library.CheckRoot behind the picker's DirLister, so a
+// mount that doesn't answer is 404 at its time-out: 400 path_not_absolute, 404
 // folder_unreadable; library create checks neither), the root against the other
 // libraries as library create does (catalog.CheckLibraryRoot: 409
 // root_overlaps) and the ignore rules as a library edit does (400
@@ -136,7 +137,7 @@ func (a *API) handleSetupPreview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "root is required")
 		return
 	}
-	root, err := library.CheckRoot(body.Root)
+	root, err := a.dirs.CheckRoot(r.Context(), body.Root)
 	if err != nil {
 		writeFolderError(w, err)
 		return

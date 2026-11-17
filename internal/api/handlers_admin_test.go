@@ -212,7 +212,8 @@ func TestAdminListDirs(t *testing.T) {
 
 // A folder whose listing doesn't answer (a hung network mount) is 404
 // folder_unreadable at the picker's time-out, not a request held for good
-// (server#224).
+// (server#224). The setup preview's root check waits behind the same lister:
+// with its one slot held by the hung listing, it is 404 at the time-out too.
 func TestAdminListDirsHungMount(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
@@ -226,6 +227,10 @@ func TestAdminListDirsHungMount(t *testing.T) {
 	resp, body := e.do(t, "GET", "/api/v1/admin/fs/dirs?path="+url.QueryEscape(t.TempDir()), adminTok, "")
 	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "folder_unreadable") {
 		t.Fatalf("hung listing = %d %s, want 404 folder_unreadable", resp.StatusCode, body)
+	}
+	resp, body = e.do(t, "POST", "/api/v1/admin/setup/preview", adminTok, rootBody(t.TempDir()))
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "folder_unreadable") {
+		t.Fatalf("setup preview with the lister's slot held = %d %s, want 404 folder_unreadable", resp.StatusCode, body)
 	}
 }
 
