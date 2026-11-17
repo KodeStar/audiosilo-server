@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strconv"
 	"sync"
@@ -526,7 +525,7 @@ func (a *API) serveArt(w http.ResponseWriter, r *http.Request, root string, src 
 // (metadata.GaveUp).
 func (a *API) readSidecar(ctx context.Context, abs string) ([]byte, error) {
 	return metadata.Bounded(ctx, abs, a.fileWait, func() ([]byte, error) {
-		f, err := os.Open(abs)
+		f, _, err := metadata.OpenRegular(abs)
 		if err != nil {
 			return nil, err
 		}

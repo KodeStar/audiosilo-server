@@ -143,36 +143,28 @@ func audioContentType(ext string) string {
 // stopped answering is given up on, never a handler held for good (the reads
 // that follow are the client's to wait for). That error (metadata.GaveUp) is
 // returned with nothing written, for the caller to answer; every other outcome
-// is answered here and returns nil.
+// is answered here and returns nil. Only a regular file is served
+// (metadata.OpenRegular): a FIFO named as audio is a 404 at once, never an open
+// waiting for a writer, given up on and counted on its mount for good. A 404
+// carries no Cache-Control a caller set for the file it expected.
 func ServeFile(w http.ResponseWriter, r *http.Request, absPath string, download bool, wait time.Duration) error {
 	type opened struct {
 		f    *os.File
 		info os.FileInfo
 	}
 	o, err := metadata.Bounded(r.Context(), absPath, wait, func() (opened, error) {
-		f, err := os.Open(absPath)
-		if err != nil {
-			return opened{}, err
-		}
-		info, err := f.Stat()
-		if err != nil {
-			_ = f.Close()
-			return opened{}, err
-		}
-		return opened{f, info}, nil
+		f, info, err := metadata.OpenRegular(absPath)
+		return opened{f, info}, err
 	}, func(o opened) { _ = o.f.Close() })
 	switch {
 	case metadata.GaveUp(err):
 		return err
 	case err != nil:
+		w.Header().Del("Cache-Control")
 		http.Error(w, "not found", http.StatusNotFound)
 		return nil
 	}
 	defer o.f.Close()
-	if o.info.IsDir() {
-		http.Error(w, "not found", http.StatusNotFound)
-		return nil
-	}
 	ServeOpened(w, r, o.f, download)
 	return nil
 }
@@ -431,14 +423,15 @@ func coverMIME(data []byte) (string, bool) {
 // error is a file that couldn't be opened or read right now: its open and tag
 // read are one metadata.Bounded call (ctx, at most timeout, the per-mount cap
 // of a scan's reads), so a share that stopped answering costs at most timeout
-// (metadata.GaveUp), never a caller held for good.
+// (metadata.GaveUp), never a caller held for good; a FIFO is turned away at
+// once (metadata.OpenRegular), never waited on for a writer.
 func EmbeddedCover(ctx context.Context, absPath string, timeout time.Duration) (data []byte, mime string, err error) {
 	type art struct {
 		data []byte
 		mime string
 	}
 	a, err := metadata.Bounded(ctx, absPath, timeout, func() (art, error) {
-		f, err := os.Open(absPath)
+		f, _, err := metadata.OpenRegular(absPath)
 		if err != nil {
 			return art{}, err
 		}
