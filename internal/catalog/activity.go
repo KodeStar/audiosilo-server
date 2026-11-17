@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -274,33 +275,53 @@ func (c *Catalog) listeningDays(ctx context.Context, label string, acc *listenAc
 
 // ActivityFor computes the Activity page for [from, to), labelled label. loc is
 // the server's zone, which days, hours and weekdays are counted in.
+//
+// The steps that read the library and progress (funnel, drop-offs, growth,
+// storage, coverage, inactive users) run one after another on a goroutine of
+// their own while this one collects the period's listening, the larger part
+// (server#225): two reader connections at most, the page in about the time of
+// the longer of the two. Each writes only its own fields of the answer.
 func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.Time, loc *time.Location) (*Activity, error) {
 	out := &Activity{Period: periodOf(label, from, to, loc)}
+	var stepsErr error
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for _, step := range []func(context.Context, *Activity, time.Time, time.Time) error{
+			c.activityFunnel, c.activityDropOffs, c.activityGrowth,
+			c.activityStorage, c.activityCoverage, c.activityInactive,
+		} {
+			if stepsErr = step(ctx, out, from, to); stepsErr != nil {
+				return
+			}
+		}
+	})
+	err := c.activityListening(ctx, out, from, to, loc)
+	wg.Wait()
+	if err = cmp.Or(err, stepsErr); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// activityListening is ActivityFor's listening: the period's, the totals of the
+// one before it, and the books finished in each.
+func (c *Catalog) activityListening(ctx context.Context, out *Activity, from, to time.Time, loc *time.Location) error {
 	cur := newListenAcc(from, to, loc, listenAll)
 	prev, err := c.listenPeriods(ctx, cur)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	finished, err := c.finishedIn(ctx, 0, from, to)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	prevFinished, err := c.finishedIn(ctx, 0, prev.from, prev.to)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	cur.result(out, finished)
 	out.Previous = prev.totals(prevFinished)
-	steps := []func(context.Context, *Activity, time.Time, time.Time) error{
-		c.activityFunnel, c.activityDropOffs, c.activityGrowth,
-		c.activityStorage, c.activityCoverage, c.activityInactive,
-	}
-	for _, step := range steps {
-		if err := step(ctx, out, from, to); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
+	return nil
 }
 
 // listenPeriods collects cur (a period's listening, in full) and returns the

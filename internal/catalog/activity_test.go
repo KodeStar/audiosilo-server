@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -363,5 +364,17 @@ func TestActivityBackfilledAndEstimated(t *testing.T) {
 	}
 	if sum != 1800 {
 		t.Fatalf("the calendar = %v s, want only the backfilled session's 1800", sum)
+	}
+}
+
+// TestActivityForFailsWhole (server#225): with the steps running beside the
+// listening, a failed read still fails the page rather than answer part of it.
+func TestActivityForFailsWhole(t *testing.T) {
+	t.Parallel()
+	f := newSessionFixture(t)
+	ctx, cancel := context.WithCancel(f.ctx)
+	cancel()
+	if a, err := f.c.ActivityFor(ctx, "7d", f.clock.AddDate(0, 0, -7), f.clock, time.UTC); err == nil || a != nil {
+		t.Fatalf("ActivityFor on a cancelled context = %v, %v; want an error and no page", a, err)
 	}
 }
