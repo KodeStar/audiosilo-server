@@ -245,6 +245,28 @@ describe('import: connect, map, review, apply', () => {
     expect(alert).not.toHaveTextContent(/Use its plain http:\/\/ address/);
   });
 
+  it('keeps a way back to the connect form when the people fail to load', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/users': { status: 403, body: { error: 'forbidden' } },
+        'POST /admin/imports/abs/users': {
+          body: {
+            version: '2.17.2',
+            users: [{ abs_id: 'u1', username: 'samantha', type: 'user', suggested_user_id: 2 }],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=import');
+    const user = userEvent.setup();
+    await connect(user);
+    expect(await screen.findByText("Couldn't load the people on this server")).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    expect(await screen.findByRole('textbox', { name: 'Audiobookshelf address' })).toHaveValue(
+      'https://abs.example.com',
+    );
+  });
+
   it('asks for the address and token before connecting', async () => {
     const calls = mockFetch(routes());
     renderApp('/server?topic=import');

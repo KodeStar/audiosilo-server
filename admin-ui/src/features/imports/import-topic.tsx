@@ -406,12 +406,19 @@ function MapStep({
 
   if (users.isError)
     return (
-      <div className="p-5">
+      <div className="flex flex-col gap-3 p-5">
         <QueryError
           title={t('imports.map.usersError')}
           error={users.error}
           onRetry={() => void users.refetch()}
         />
+        {/* The way back to the connect form: the setup step hides its own Back while mapping. */}
+        <div>
+          <Button type="button" variant="ghost" onClick={onBack}>
+            <ArrowLeft aria-hidden="true" />
+            {t('imports.map.back')}
+          </Button>
+        </div>
       </div>
     );
   if (!current)
