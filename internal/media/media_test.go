@@ -164,7 +164,9 @@ func TestTranscode(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	Transcode(rec, req, src, "ffmpeg", 0, nil)
+	if err := Transcode(rec, req, src, "ffmpeg", 0, time.Minute, nil); err != nil {
+		t.Fatalf("Transcode = %v", err)
+	}
 
 	res := rec.Result()
 	defer res.Body.Close()
@@ -395,7 +397,9 @@ func TestTranscodeHEAD(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	// No ffmpeg at this path: a run would fail with a 500.
-	Transcode(rec, httptest.NewRequest(http.MethodHead, "/", nil), src, filepath.Join(t.TempDir(), "no-ffmpeg"), 0, nil)
+	if err := Transcode(rec, httptest.NewRequest(http.MethodHead, "/", nil), src, filepath.Join(t.TempDir(), "no-ffmpeg"), 0, time.Minute, nil); err != nil {
+		t.Fatalf("Transcode = %v", err)
+	}
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "audio/mpeg" ||
 		rec.Header().Get("Accept-Ranges") != "none" || rec.Body.Len() != 0 {
 		t.Fatalf("HEAD = %d %v (%d bytes), want the transcode's headers and no run", rec.Code, rec.Header(), rec.Body.Len())

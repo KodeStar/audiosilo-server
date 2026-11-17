@@ -33,13 +33,14 @@ func lstatAdded(info os.FileInfo) int64 { return info.ModTime().Unix() }
 // addedFrom is a file's addedAt from one statx and discovery's lstat of it
 // (found: its mtime), not a second lstat. A file statx finds gone (or a link to
 // nothing) is left to addedAt's lstat (ok false), as before; any other statx
-// failure reads as no birth time, the mtime standing in.
+// failure, or a birth time that is none (birthKnown), reads as no birth time,
+// the mtime standing in.
 func addedFrom(absPath string, found int64) (string, bool) {
 	bt, ok, err := statxBirth(absPath)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return "", false
-	case ok && !bt.IsZero():
+	case ok && birthKnown(bt.Unix()):
 		return formatAdded(bt.Unix()), true
 	}
 	return formatAdded(found), true

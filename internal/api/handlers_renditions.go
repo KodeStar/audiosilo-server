@@ -9,6 +9,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // Watch renditions (Track W2, capability renditions): a small AAC copy of each
@@ -66,13 +67,17 @@ func writeRetry(w http.ResponseWriter, retry time.Duration, code, msg string) {
 // attachment named <stem>.m4a. A cold encode is waited for up to
 // renditionWait, then 503 rendition_pending while it goes on under the server's
 // context; never a live transcode (not rangeable, so a watch couldn't resume
-// it).
-func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel, kind string) {
+// it). Its looks at the file (the join, media.Source) given up on at the
+// stream's deadline are a 503 share_not_answering.
+func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel, kind string, deadline time.Time) {
 	if !a.renditionKindAllowed(w, lib, kind) {
 		return
 	}
-	abs, ok := audioFile(w, lib, rel)
+	abs, ok := audioFile(w, r, lib, rel, deadline)
 	if !ok {
+		return
+	}
+	if answered, _ := lookAtSource(w, r, abs, deadline); answered {
 		return
 	}
 	wait, cancel := context.WithTimeout(r.Context(), a.renditionWait)
@@ -132,7 +137,9 @@ func (a *API) handleRenditionStatus(w http.ResponseWriter, r *http.Request) {
 // renditionsOfBook is the two renditions routes: the book at ?path= scope-checked
 // as /item (403 outside the grant, 404 no book), the kind checked (the body's
 // for a prepare, else ?kind=), then each of its audio files, in play order,
-// queued (prepare: 202) or only read (200).
+// queued (prepare: 202) or only read (200). Each file's join and stat are
+// metadata.Bounded calls (fileWait): one given up on is a 503
+// share_not_answering for the whole answer.
 func (a *API) renditionsOfBook(w http.ResponseWriter, r *http.Request, prepare bool) {
 	lib, path, scope, code, msg := a.authorizedScope(r)
 	if code != 0 {
@@ -161,7 +168,15 @@ func (a *API) renditionsOfBook(w http.ResponseWriter, r *http.Request, prepare b
 	files := make([]renditionFile, 0, len(audio))
 	for _, f := range audio {
 		out := renditionFile{Path: f.RelPath, State: media.CacheFailed}
-		if abs, err := library.SafeJoin(lib.Root, f.RelPath); err == nil {
+		abs, err := library.SafeJoinBounded(r.Context(), lib.Root, f.RelPath, a.fileWait)
+		if err == nil {
+			_, err = media.Source(r.Context(), abs, a.fileWait)
+		}
+		if metadata.GaveUp(err) {
+			writeShareNotAnswering(w)
+			return
+		}
+		if abs != "" {
 			if prepare {
 				out.State, out.Bytes = a.renditions.Queue(a.baseCtx, a.ffmpeg, abs)
 			} else {

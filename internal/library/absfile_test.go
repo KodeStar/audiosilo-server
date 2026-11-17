@@ -2,7 +2,6 @@ package library
 
 import (
 	"context"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -231,17 +230,10 @@ func TestScannerRetriesUnreadableABSFile(t *testing.T) {
 	}
 }
 
-// failingInfo is a directory entry whose Info fails, as an lstat on a flaky
-// mount can.
-type failingInfo struct{ fs.DirEntry }
-
-func (failingInfo) Info() (fs.FileInfo, error) { return nil, fs.ErrPermission }
-
-// TestABSEntrySigInfoFails: a metadata.json whose entry can't be looked at
-// (Info fails) is looked at once more; gone since the listing it is none, and
-// still not to be looked at it is an error (its book keeps the stored reading:
-// ABSReading.Unread), never a signature of "" (no file).
-func TestABSEntrySigInfoFails(t *testing.T) {
+// TestABSSigAt: the walk's metadata.json signature is its lstat's; gone since
+// the listing it is none, and not to be looked at it is an error (its book keeps
+// the stored reading: ABSReading.Unread), never a signature of "" (no file).
+func TestABSSigAt(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	lib := catalog.Library{Name: "L", Root: root}
@@ -258,9 +250,8 @@ func TestABSEntrySigInfoFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := failingInfo{fs.FileInfoToDirEntry(info)}
-	if sig, err := absEntrySig(t.Context(), lib, rel, d, nil); err != nil || sig != metadata.ABSSignature(info) {
-		t.Errorf("Info failed, file there: %q, %v; want %q", sig, err, metadata.ABSSignature(info))
+	if sig, err := absSigAt(t.Context(), lib, dirOf(rel), nil, time.Minute); err != nil || sig != metadata.ABSSignature(info) {
+		t.Errorf("file there: %q, %v; want %q", sig, err, metadata.ABSSignature(info))
 	}
 
 	// The folder can be listed but not looked into: the lstat fails too.
@@ -271,7 +262,7 @@ func TestABSEntrySigInfoFails(t *testing.T) {
 	if _, err := os.Lstat(file); err == nil {
 		t.Skip("folder permissions don't stop this user (root?)")
 	}
-	if sig, err := absEntrySig(t.Context(), lib, rel, d, nil); err == nil {
+	if sig, err := absSigAt(t.Context(), lib, dirOf(rel), nil, time.Minute); err == nil {
 		t.Errorf("not to be looked at: %q, nil; want an error", sig)
 	}
 	if err := os.Chmod(dir, 0o755); err != nil {
@@ -281,7 +272,7 @@ func TestABSEntrySigInfoFails(t *testing.T) {
 	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
-	if sig, err := absEntrySig(t.Context(), lib, rel, d, nil); err != nil || sig != "" {
+	if sig, err := absSigAt(t.Context(), lib, dirOf(rel), nil, time.Minute); err != nil || sig != "" {
 		t.Errorf("gone since the listing: %q, %v; want none", sig, err)
 	}
 }

@@ -140,7 +140,7 @@ func TestStreamWaitsOutADiskSpinningUp(t *testing.T) {
 // A request still waiting for its book's read when the server stops (/item's
 // shared read, an admin's Re-read) is a 503 to try again (the read ended by the
 // stop), not a 500 "context canceled". Not parallel:
-// metadata.HoldOpensForTests swaps the mount lookup.
+// metadata.HoldReadsForTests swaps the mount lookup.
 func TestBookReadWaitingAtShutdownIs503(t *testing.T) {
 	for _, c := range []struct{ name, method, endpoint string }{
 		{"item", "GET", "/item"},
@@ -164,7 +164,7 @@ func TestBookReadWaitingAtShutdownIs503(t *testing.T) {
 			base, stop := context.WithCancel(context.Background())
 			defer stop()
 			e.api.SetBaseContext(base)
-			release := metadata.HoldOpensForTests(part) // the book's read waits on its part
+			release := metadata.HoldReadsForTests(part) // the book's read waits on its part (its lstat answers)
 			t.Cleanup(release)
 
 			type answer struct {
@@ -211,5 +211,131 @@ func TestItemWithAnEbookOnAHeldShareAnswers(t *testing.T) {
 	}
 	if eb == nil || eb.Path != ebookFile {
 		t.Errorf("ebook on a held share = %+v, want the stored one", eb)
+	}
+}
+
+// Every look a stream makes at its file on a share that stopped answering is
+// bounded (SRV-15c): the path's join (SafeJoin's Lstats, which ran before the
+// open's bound began, adding 71 s to one stream on a frozen share), and the
+// open, a transcode's stat, a remux's and a rendition's look at the source
+// (the renditions listing's too) each answer 503 share_not_answering with
+// Retry-After. The library's root is a link here, so the join (named under
+// the link) and the open (under the folder it leads to) are held apart. Not
+// parallel: metadata.HoldOpensForTests swaps the mount lookup.
+func TestStreamLooksOnAHeldShareAnswer(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	real, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "lib")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Main", Root: link})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(real, "Book"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"book.m4b", "book.mka"} {
+		if err := os.WriteFile(filepath.Join(real, "Book", name), []byte("not really audio"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := &catalog.Book{LibraryID: lib.ID, RelPath: "Book", IsFolder: true, Title: "Book", Format: "m4b",
+		Files: []catalog.BookFile{{RelPath: "Book/book.m4b", Seq: 1}}}
+	if _, err := e.cat.UpsertBook(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	e.api.ffmpeg = "ffmpeg" // never run: each look is given up on first
+	e.api.fileWait, e.api.streamWait = 200*time.Millisecond, 200*time.Millisecond
+	id := strconv.FormatInt(lib.ID, 10)
+	stream := func(rel, query string) string {
+		return "/api/v1/libraries/" + id + "/stream?path=" + url.QueryEscape(rel) + query
+	}
+	urls := []string{
+		stream("Book/book.m4b", ""),
+		stream("Book/book.m4b", "&transcode=1"),
+		stream("Book/book.mka", ""), // remuxed
+		stream("Book/book.m4b", "&rendition=watch"),
+		"/api/v1/libraries/" + id + "/renditions?path=Book&kind=watch",
+	}
+	check := func(held string) {
+		t.Helper()
+		for _, u := range urls {
+			start := time.Now()
+			resp, body := e.do(t, "GET", u, adminTok, "")
+			if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) || resp.Header.Get("Retry-After") != "30" {
+				t.Errorf("GET %s with %s held = %d %s, want 503 %s", u, held, resp.StatusCode, body, codeShareNotAnswering)
+			}
+			if took := time.Since(start); took > 5*time.Second {
+				t.Errorf("GET %s with %s held took %v, want it answered at the look's bound", u, held, took)
+			}
+		}
+	}
+
+	release := metadata.HoldOpensForTests(link) // the join's Lstats
+	t.Cleanup(release)
+	check("the join")
+	release()
+
+	release = metadata.HoldOpensForTests(filepath.Join(real, "Book")) // the open, the stats
+	t.Cleanup(release)
+	check("the file")
+	release()
+
+	if resp, body := e.do(t, "GET", stream("Book/book.m4b", ""), adminTok, ""); resp.StatusCode != http.StatusOK || body != "not really audio" {
+		t.Errorf("the stream once the share answers = %d %q, want it served", resp.StatusCode, body)
+	}
+}
+
+// An admin's Re-read of a book on a share that stopped answering is a 503
+// share_not_answering with Retry-After once a look is given up on (fileWait),
+// not the request timeout's generic 503 (SRV-15c): its folder's looks while it
+// is resolved, or a file beside its audio while it is read (the book kept as
+// stored, that file's problem recorded). Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
+func TestRereadOnAHeldShareAnswersShareNotAnswering(t *testing.T) {
+	for _, held := range []string{"Author/Book", "Author/Book/cover.jpg"} {
+		t.Run(held, func(t *testing.T) {
+			e := newTestEnv(t)
+			adminTok, _, _ := adminAndMember(t, e)
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, data := range map[string][]byte{"01.mp3": make([]byte, 1<<10), "cover.jpg": []byte("img")} {
+				p := filepath.Join(root, "Author", "Book", name)
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Held", Root: root})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.api.fileWait = 200 * time.Millisecond
+			release := metadata.HoldOpensForTests(filepath.Join(root, filepath.FromSlash(held)))
+			t.Cleanup(release)
+			u := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/book/rescan?path=" + url.QueryEscape("Author/Book")
+			start := time.Now()
+			resp, body := e.do(t, "POST", u, adminTok, "")
+			if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) || resp.Header.Get("Retry-After") != "30" {
+				t.Errorf("Re-read with %s held = %d %s, want 503 %s", held, resp.StatusCode, body, codeShareNotAnswering)
+			}
+			if took := time.Since(start); took > 5*time.Second {
+				t.Errorf("Re-read took %v, want it answered once a look is given up on", took)
+			}
+			release()
+			if resp, body := e.do(t, "POST", u, adminTok, ""); resp.StatusCode != http.StatusOK {
+				t.Errorf("Re-read once the share answers = %d %s, want the book", resp.StatusCode, body)
+			}
+		})
 	}
 }

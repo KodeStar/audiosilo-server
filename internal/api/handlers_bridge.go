@@ -639,7 +639,8 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 //     (re-reading the audio), and answer 200 {path} with the book's indexed path.
 //     With from, the book's path before a move the Bridge made: its durable state
 //     follows it as a scan's move detection would (Scanner.IndexMoved; a from that
-//     isn't that book moved is ignored).
+//     isn't that book moved is ignored, and one that can't be known now, on a
+//     share that stopped answering, is a 503 share_not_answering, nothing moved).
 //   - mode "attachments": read only the book's .audiosilo/ attachments, never its
 //     audio (Scanner.RefreshAttachments: a changed chapters.json re-resolves
 //     the book's chapters), and answer 200 {path, attachments: {characters,

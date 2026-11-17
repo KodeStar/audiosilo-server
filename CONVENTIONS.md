@@ -979,7 +979,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `IndexMoved` take the same per-book flight (`startFlight`): no two reads of one book run side by side, and an on-demand
   index asked for during a scan's read waits for the scan's write and loads it. An admin's Re-read
   (`rescanPath`) is `ReindexPath` instead: it waits for the read under way, then reads the book itself, as what that
-  read stored may be older than the change the admin wants picked up. The on-demand index takes a path only in its on-disk
+  read stored may be older than the change the admin wants picked up; one that kept the book as stored because a file
+  did not answer (a look given up on, or its audio's read cut short: `ReadCutShort` with an `unreadable` problem,
+  recorded) is a look given up on too, 503 `share_not_answering`. The on-demand index takes a path only in its on-disk
   spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a
   case-insensitive filesystem a case variant opens the same folder, and indexing it would add a
   duplicate book everyone sees, so it is a 404. `stream` serves an
@@ -1208,11 +1210,30 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`media.EmbeddedCover`), and in the API `/item`'s look at the book's ebook (`RefreshEbook`, given
   `API.fileWait` and answering with the stored ebook past it: the probe's time is the request's own),
   every cover (full, thumbnail, a
-  show's: `serveArt`, `coverArt`, `readSidecar`) and a stream's open and stat (`media.ServeFile`; a regular file only, `metadata.OpenRegular`, so a FIFO is a 404 at once, never an open held and counted on its mount),
-  each given up on after `API.fileWait` (10 s; a stream's open after `API.streamWait`, 45 s: past a
-  sleeping disk's spin-up, under AVPlayer's 60 s resource timeout, as a 503 is no retry for it) as a
-  503 `share_not_answering` with `Retry-After`.
-  The scan gives each the probe's time (`Scanner.probeTimeout`). With a book's audio read cut short
+  show's: `serveArt`, `coverArt`, `readSidecar`) and every look a stream makes at its file (SRV-15c: the
+  path's join, `library.SafeJoinBounded`; its open and stat, `media.ServeFile`, a regular file only,
+  `metadata.OpenRegular`, so a FIFO is a 404 at once, never an open held and counted on its mount; a
+  transcode's stat, `media.Transcode`; a remux's or rendition's look at its source, `media.Source`; a
+  podcast episode's checks and open, `library.OpenPodcast`), and the renditions listing's and `/item`'s
+  remux warm joins, each given up on after `API.fileWait` (10 s; a stream's looks together after
+  `API.streamWait`, 45 s from the request's start, `waitLeft`: past a sleeping disk's spin-up, under
+  AVPlayer's 60 s resource timeout, as a 503 is no retry for it) as a 503 `share_not_answering` with
+  `Retry-After` (`/item` answers the stored book instead, and once its warm's join went unanswered it looks at
+  neither the ebook nor the read-along, `warmRemux`'s answer: each would wait out its own `fileWait` on the same
+  share, three of them the request's whole time). A file cache's background run opens its source unbounded (once the request's look
+  answered); its own stats of the source (`Open`, `Status`, `Queue`, `RefusedFor`, a warm's first look) are
+  given a scan's look time (`media.sourceWait`), never none, so one on a share that stopped answering since never
+  holds its mount's slot for good. A stream that waited on a remux gives its next look (the live transcode's it
+  falls back to, or the stored file's open once the remux refused the file) at least `API.fileWait`
+  (`API.afterWait`), the remux's waits being no looks.
+  The scan gives each the probe's time (`Scanner.probeTimeout`); an on-demand read (`/item`'s index, an admin's
+  Re-read and the Bridge's rescan through `rescanAt`) gives each `API.fileWait` instead (SRV-15c:
+  `library.WithLookTimeout` on its context, `Scanner.lookTimeout`, kept by the read `leadIndex` goes on with), well
+  under the request timeout, so a share that stopped answering is its 503 `share_not_answering`, not the timeout's:
+  `resolveBook`'s looks (the join, the stat, `dirPresent`'s lstat and listings, the folder's listing and its audio
+  files' lstats, the walks of a disc set, a disc that wouldn't list among them, the metadata.json and `.audiosilo`
+  looks, a given-up one its answer), `bookOnDisk`'s and `renamedFolders`' looks, `RefreshAttachments`' join and
+  reads, `ebookOnDisk` and the files beside the audio; the audio's own read keeps the probe's time. With a book's audio read cut short
   none of its side files is looked at (each would wait out its time too); one given up on otherwise
   keeps the book as stored (`library.givenUp.keep`: `ReadCutShort`, never `LengthOnly`) with an
   `unreadable` problem on that file (over a lasting one), which `problemCleared` clears once the file
@@ -1224,11 +1245,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it, counted in `Scanner.readsLeft` and logged, so the scan ends and the next runs (`writeNext`
   waits on the scan's context too); no later read waits on that read's flight
   (`bookRead.left`, `errReadLeft`), and none waits on any other read of the book (a scan's
-  or an on-demand one, maybe stuck the same way) for more than `probeTimeout` while that read
+  or an on-demand one, maybe stuck the same way) for more than a look's time (`lookTimeout`) while that read
   has not returned (`waitFlight`; a scan's read that has returned is waited on until its batch
   write): a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
   rest; an on-demand read gives up as a look at a share that stopped answering (`metadata.GaveUp`,
-  503 `share_not_answering`). The walk's own listings and lstats are not bounded yet. A re-index
+  503 `share_not_answering`). The walk's own looks are bounded the same way (SRV-15c: `walkDir`'s root lstat and
+  listings, a `.audiosilo` folder's listing, a metadata.json's lstat, `statAudio`'s lstat of each audio file, the
+  probe's time each): a folder that won't list, or whose audio file's lstat is given up on or fails as a share
+  does (`shareFault`: any error but the file gone (ENOENT, ENOTDIR): EIO, ESTALE, ENOTCONN, a permission; `dropUnanswered`, with
+  every disc folder directly in it or in a folder above it, so neither a book joined from a disc set nor the discs' split
+  is built from the discs that answered, or from a set that is one only for want of the folder not looked at),
+  is skipped for that run, which is then partial (its books kept
+  as stored, never pruned nor rewritten without a part, their listening state never moved to a copy elsewhere:
+  `detectMoves` below) and records an `unreadable` path in the run's log; a
+  `.audiosilo` folder that won't list keeps its book's attachments as stored. So do the scan's tag-only suspect
+  check (`suspectFromTags`, `metadata.ExtractTags` under the scan's context and time) and its read-along ebook
+  hashing (`EbookDigestNow`'s look, and `EbookDigest`'s open and each of its reads, each a `metadata.Bounded` call,
+  so a large ebook on a slow share that answers is hashed whatever it takes; the hashing stops at the first given
+  up on; `/item` and `GET /readalong` give theirs `API.fileWait`). A re-index
   where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`), or whose
   length ran out of time even read alone (an ffprobe time-out, `ProbeTimedOut` without one:
   `library.readCutShort`; a part on a share that hung mid-read), or with a file that is no regular
@@ -1375,14 +1409,23 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rule-less share, so such a share is an ordinary one whose folders can be changed.
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
-  durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its
+  durable state old→new (`catalog.MoveDurableState`). After a partial discovery (a folder unreadable, or
+  given up on: a share that stopped answering) a book not found is not known gone, so each old path a new
+  book matches is looked at first (`bookOnDisk`, bounded, erring toward present; a look given up on, or one
+  failed as a share does that a retry may get past (`transientFault`: EIO, ESTALE, ENOTCONN, ETIMEDOUT,
+  EHOSTDOWN), is `diskUnknown`, never gone; a permission counts as present) and only one gone from disk
+  moves: a copy of a stuck book never takes its state. A folder book's fingerprint is its
   first file's; one indexed in byte order before #160 still matches by the file that order
   put first (`byteFirstFingerprint`, in `detectMoves` and `IndexMoved`). The on-demand index of a
   book not indexed yet (a renamed folder opened from Folders before a scan, server#209) looks too:
   `Scanner.movedFrom` takes an indexed book with its fingerprint that is gone from disk
   (`catalog.MoveCandidates`, `bookOnDisk`) as `IndexMoved`'s from (`indexBookFrom`, which `leadIndex`
   runs past its caller's cancel or deadline: once the state has moved it finishes the index and drops
-  the old row, so the state never sits on a path with no row). Re-tagging keeps state via
+  the old row, so the state never sits on a path with no row). When it can't tell (a candidate's look
+  `diskUnknown`, or a book not indexed yet whose fingerprint is unread for a reason a retry may get
+  past, `fingerprintUnknown`), `IndexPath` and `ReindexPath` index nothing and answer 503
+  `share_not_answering`, every joined waiter too (the flight's error): a book indexed without its state
+  would leave it on the old row for the next scan's prune. Re-tagging keeps state via
   the path key; moving keeps it via the fingerprint. The per-user path-keyed tables are listed
   ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
   a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new
@@ -2961,7 +3004,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   on-demand index); `POST /bridge/rescan {library_id, path, mode?, from?}` re-reads one path: mode
   `full` (or none) indexes it (`IndexPath`; with `from`, the book's path before a move the Bridge made,
   `Scanner.IndexMoved` carries its durable state when the old book is gone from disk and the
-  fingerprints match, else ignores it), mode `attachments` re-reads only the book's `.audiosilo/` files
+  fingerprints match, else ignores it; when that can't be known now (a look at the old path, or the new
+  book's fingerprint (`metadata.FingerprintErr`), given up on) it carries and indexes nothing and answers 503
+  `share_not_answering`, as it does when its read kept the new book as stored (`readOwn`)), mode `attachments` re-reads only the book's `.audiosilo/` files
   (`Scanner.RefreshAttachments`, answering `{path, attachments: {characters, recaps, description, chapters, bridge, readalong}}`); 404
   `not_indexable`. Console: `GET /admin/bridge` (pairing, online, heartbeat, kinds, features, each
   library with the Bridge's mapping, workers, `ui_url`), `GET`/`POST /admin/bridge/jobs`, `GET

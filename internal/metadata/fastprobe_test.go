@@ -188,11 +188,11 @@ func TestExtractWithoutFFprobe(t *testing.T) {
 	if unsure.Duration != 0 || unsure.Codec != "" {
 		t.Errorf("unsure file: duration %v codec %q, want none", unsure.Duration, unsure.Codec)
 	}
-	tags := ExtractTags(fixture("m4b-aac-chap.m4b"))
+	tags := ExtractTags(t.Context(), fixture("m4b-aac-chap.m4b"), ProbeTimeout)
 	if tags.OpenErr != nil || tags.Title != "The Spike Book (Unabridged)" || tags.Duration != 0 || tags.Codec != "" || len(tags.Chapters) != 0 {
 		t.Errorf("ExtractTags: %+v, want the tags alone", tags)
 	}
-	if ExtractTags(filepath.Join(t.TempDir(), "gone.mp3")).OpenErr == nil {
+	if ExtractTags(t.Context(), filepath.Join(t.TempDir(), "gone.mp3"), ProbeTimeout).OpenErr == nil {
 		t.Error("ExtractTags of a missing file: no OpenErr")
 	}
 }
@@ -292,7 +292,7 @@ func TestTagsUnreadWhenCutShort(t *testing.T) {
 	if !m.TagsUnread() || m.Title != "" {
 		t.Errorf("cut short: TagsUnread %t, title %q; want true and none", m.TagsUnread(), m.Title)
 	}
-	whole := ExtractTags(fixture("mp3-v23-chap.mp3"))
+	whole := ExtractTags(t.Context(), fixture("mp3-v23-chap.mp3"), ProbeTimeout)
 	if whole.TagsUnread() || whole.Title == "" || (*Metadata)(nil).TagsUnread() {
 		t.Errorf("a whole read (title %q), or none, reported its tags unread", whole.Title)
 	}
@@ -860,7 +860,7 @@ func TestAbandonedReadsAreCapped(t *testing.T) {
 		t.Errorf("logged the cap %d times, want once, naming the mount:\n%s", n, logged.String())
 	}
 	// Another mount reads as ever while that one is hung.
-	if m := ExtractTags(fixture("mp3-v23-chap.mp3")); m.TagsUnread() || m.Title == "" {
+	if m := ExtractTags(t.Context(), fixture("mp3-v23-chap.mp3"), ProbeTimeout); m.TagsUnread() || m.Title == "" {
 		t.Errorf("a file on another mount = %+v, want it read", m)
 	}
 	if n := stuckByMount.For(fixture("mp3-v23-chap.mp3")).n.Load(); n != 0 {

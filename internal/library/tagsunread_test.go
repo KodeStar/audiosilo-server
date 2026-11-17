@@ -89,7 +89,12 @@ func TestReindexWithAReadCutShortKeepsTheStoredBook(t *testing.T) {
 			}
 			fresh := "Some Folder/New Arrival"
 			silence(t, root, fresh+"/01.mp3", 1, "album=Tagged Title", "artist=Real Author")
-			s.probeTimeout = time.Nanosecond
+			// (Each file's read runs out of time, not the probe's time itself:
+			// that bounds the walk's looks too, SRV-15c. The read is the real
+			// one, ffprobe's or in process, so either's cut short is what is kept.)
+			s.readFile = func(ctx context.Context, p, ffprobe string, _ time.Duration) *metadata.Metadata {
+				return extractFile(ctx, p, ffprobe, time.Nanosecond)
+			}
 			res, err := s.Scan(ctx, *lib)
 			if err != nil {
 				t.Fatal(err)

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -32,18 +33,44 @@ var ErrNoReadalong = errors.New("library: no read-along map")
 // link), and the signature (catalog.EbookSig) of the very file it hashed, so the
 // digest is recorded with the file it is current for. It stops with ctx (a
 // request's deadline, a cancelled scan), even part way through a slow share.
-func EbookDigest(ctx context.Context, root, rel string, noLink bool) (sha, sig string, err error) {
-	f, info, err := OpenEbook(root, rel, noLink)
+// Its open and each of its reads is a metadata.Bounded call (ctx, at most wait
+// each; none when 0): on a share that stopped answering one is given up on
+// (metadata.GaveUp), while a whole large ebook on a slow share that still
+// answers is hashed for as long as ctx lives (a scan's: to the end).
+func EbookDigest(ctx context.Context, root, rel string, noLink bool, wait time.Duration) (sha, sig string, err error) {
+	at := filepath.Join(root, filepath.FromSlash(rel))
+	type opened struct {
+		f    *os.File
+		info fs.FileInfo
+	}
+	o, err := metadata.Bounded(ctx, at, wait, func() (opened, error) {
+		f, info, err := OpenEbook(root, rel, noLink)
+		return opened{f, info}, err
+	}, func(o opened) { _ = o.f.Close() })
 	if err != nil {
 		return "", "", err
 	}
-	defer func() { _ = f.Close() }()
+	// A read given up on may still return later, into its buffer: the hash
+	// stops there, and the file is closed once that read has returned.
+	defer func() { _ = o.f.Close() }()
 	h := sha256.New()
-	if _, err := io.Copy(h, ctxReader{ctx, f}); err != nil {
-		return "", "", err
+	buf := make([]byte, digestReadSize)
+	for {
+		n, err := metadata.Bounded(ctx, at, wait, func() (int, error) { return o.f.Read(buf) }, nil)
+		h.Write(buf[:n])
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", "", err
+		}
 	}
-	return hex.EncodeToString(h.Sum(nil)), catalog.EbookSig(path.Base(rel), info), nil
+	return hex.EncodeToString(h.Sum(nil)), catalog.EbookSig(path.Base(rel), o.info), nil
 }
+
+// digestReadSize is how much of an ebook EbookDigest reads at a time (each
+// read a metadata.Bounded call of its own).
+const digestReadSize = 1 << 20
 
 // EbookDigestNow is the sha256 of the ebook (ebookPath) of the book at
 // bookPath, idx its index row (catalog.BookReadalongAt): the stored digest
@@ -54,16 +81,22 @@ func EbookDigest(ctx context.Context, root, rel string, noLink bool) (sha, sig s
 // index still names that ebook and holds the digest idx read
 // (catalog.SetEbookDigest: a slow hash never overwrites a newer one recorded
 // meanwhile). A failure to record it is logged, never the answer's. ErrNoEbook
-// (or fs.ErrNotExist) when there is no such file now.
-func (s *Scanner) EbookDigestNow(ctx context.Context, lib catalog.Library, idx catalog.ReadalongIndexed, bookPath, ebookPath string, folder bool) (string, error) {
-	_, info, err := lookEbook(lib.Root, ebookPath, folder)
+// (or fs.ErrNotExist) when there is no such file now. The look is a
+// metadata.Bounded call (ctx, at most wait), and so are the hash's open and
+// each of its reads (EbookDigest): on a share that stopped answering one is
+// given up on (metadata.GaveUp).
+func (s *Scanner) EbookDigestNow(ctx context.Context, lib catalog.Library, idx catalog.ReadalongIndexed, bookPath, ebookPath string, folder bool, wait time.Duration) (string, error) {
+	info, err := metadata.Bounded(ctx, absOf(lib, ebookPath), wait, func() (fs.FileInfo, error) {
+		_, info, err := lookEbook(lib.Root, ebookPath, folder)
+		return info, err
+	}, nil)
 	if err != nil {
 		return "", err
 	}
 	if idx.HashedSig == catalog.EbookSig(path.Base(ebookPath), info) {
 		return idx.EbookSHA256, nil
 	}
-	sha, sig, err := EbookDigest(ctx, lib.Root, ebookPath, folder)
+	sha, sig, err := EbookDigest(ctx, lib.Root, ebookPath, folder, wait)
 	if err != nil {
 		return "", err
 	}
@@ -73,25 +106,14 @@ func (s *Scanner) EbookDigestNow(ctx context.Context, lib catalog.Library, idx c
 	return sha, nil
 }
 
-// ctxReader is r that fails with ctx's error once ctx is done.
-type ctxReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (c ctxReader) Read(p []byte) (int, error) {
-	if err := c.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return c.r.Read(p)
-}
-
 // hashReadalongEbooks hashes the ebooks of the library's books that have a
 // read-along map and no current digest (catalog.ReadalongEbooksDue; only the
 // book at bookPath when it isn't ""), recording each (EbookDigestNow: hashed
 // only when the file on disk isn't the one its stored digest is of). One that
 // can't be read now is logged and left for the next look (the scan, the
-// Bridge's rescan, or GET /readalong on demand). It stops with ctx.
+// Bridge's rescan, or GET /readalong on demand). It stops with ctx, and once
+// one is given up on (lookTimeout each: a share that stopped answering, where
+// the rest would each wait out their time too).
 func (s *Scanner) hashReadalongEbooks(ctx context.Context, lib catalog.Library, bookPath string) {
 	due, err := s.cat.ReadalongEbooksDue(ctx, lib.ID, bookPath)
 	if err != nil {
@@ -108,8 +130,11 @@ func (s *Scanner) hashReadalongEbooks(ctx context.Context, lib catalog.Library, 
 		// It records only over the digest read as due here, so one a request
 		// records while this hash runs stands.
 		idx := catalog.ReadalongIndexed{HashedSig: d.HashedSig}
-		if _, err := s.EbookDigestNow(ctx, lib, idx, d.BookPath, d.EbookPath, d.IsFolder); err != nil {
+		if _, err := s.EbookDigestNow(ctx, lib, idx, d.BookPath, d.EbookPath, d.IsFolder, s.lookTimeout(ctx)); err != nil {
 			s.log.Warn("hash ebook failed", "library", lib.Name, "path", d.EbookPath, "err", err)
+			if metadata.GaveUp(err) {
+				return
+			}
 		}
 	}
 }

@@ -93,7 +93,7 @@ func TestStampAddedAtFromDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	lib := catalog.Library{Root: root}
-	books, _, _, err := discoverAuto(context.Background(), lib, nil, nil, slog.New(slog.DiscardHandler), nil, nil, 4)
+	books, _, _, err := discoverAuto(context.Background(), lib, nil, nil, slog.New(slog.DiscardHandler), nil, nil, 4, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

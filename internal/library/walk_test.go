@@ -10,10 +10,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // walkTree builds a tree with folders several deep, hidden and lone folders, a
@@ -97,7 +98,7 @@ func TestWalkDirIsWalkDir(t *testing.T) {
 			descend func(string, fs.DirEntry) bool
 		}{{walkIO, nil}, {walkIO, hidden}, {2, hidden}, {1, nil}} {
 			var got []string
-			if err := walkDir(t.Context(), root, w.width, w.descend, record(root, &got, skip)); err != nil {
+			if err := walkDir(t.Context(), root, w.width, time.Minute, w.descend, record(root, &got, skip)); err != nil {
 				t.Fatal(err)
 			}
 			if !slices.Equal(got, want) {
@@ -109,7 +110,7 @@ func TestWalkDirIsWalkDir(t *testing.T) {
 	if unreadable {
 		for _, width := range []int{walkIO, 1} {
 			var calls []string
-			_ = walkDir(t.Context(), root, width, nil, record(root, &calls, skips["none"]))
+			_ = walkDir(t.Context(), root, width, time.Minute, nil, record(root, &calls, skips["none"]))
 			if !slices.Contains(calls, "F/locked true d--------- err=true") {
 				t.Errorf("width %d: the unreadable folder's error call is missing: %q", width, calls)
 			}
@@ -124,7 +125,7 @@ func TestWalkDirErrors(t *testing.T) {
 	root, _ := walkTree(t)
 	stop := errors.New("stop")
 	var calls []string
-	err := walkDir(t.Context(), root, walkIO, nil, record(root, &calls, func(rel string, _ fs.DirEntry) error {
+	err := walkDir(t.Context(), root, walkIO, time.Minute, nil, record(root, &calls, func(rel string, _ fs.DirEntry) error {
 		if rel == "A/Book 2" {
 			return stop
 		}
@@ -136,7 +137,7 @@ func TestWalkDirErrors(t *testing.T) {
 	missing := filepath.Join(root, "nope")
 	var want, got []string
 	wantErr := filepath.WalkDir(missing, record(root, &want, nil))
-	gotErr := walkDir(t.Context(), missing, walkIO, nil, record(root, &got, nil))
+	gotErr := walkDir(t.Context(), missing, walkIO, time.Minute, nil, record(root, &got, nil))
 	if !slices.Equal(got, want) || (gotErr == nil) != (wantErr == nil) {
 		t.Fatalf("missing root: %q %v, want %q %v", got, gotErr, want, wantErr)
 	}
@@ -151,7 +152,7 @@ func TestListAheadOnlyDescended(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ahead := listAhead(t.Context(), root, entries, walkIO, func(p string, _ fs.DirEntry) bool { return filepath.Base(p) != "C" })
+	ahead := walker{ctx: t.Context(), width: walkIO, descend: func(p string, _ fs.DirEntry) bool { return filepath.Base(p) != "C" }}.ahead(root, entries)
 	for i, e := range entries {
 		listed := ahead[i] != nil
 		want := e.IsDir() && e.Name() != "C"
@@ -159,10 +160,10 @@ func TestListAheadOnlyDescended(t *testing.T) {
 			t.Errorf("%s listed ahead = %v, want %v", e.Name(), listed, want)
 		}
 	}
-	if one := listAhead(t.Context(), filepath.Join(root, "B"), mustReadDir(t, filepath.Join(root, "B")), walkIO, nil); one != nil {
+	if one := (walker{ctx: t.Context(), width: walkIO}).ahead(filepath.Join(root, "B"), mustReadDir(t, filepath.Join(root, "B"))); one != nil {
 		t.Error("a lone folder was listed ahead")
 	}
-	if none := listAhead(t.Context(), root, entries, 1, nil); none != nil {
+	if none := (walker{ctx: t.Context(), width: 1}).ahead(root, entries); none != nil {
 		t.Error("folders were listed ahead at width 1")
 	}
 }
@@ -188,7 +189,7 @@ func TestStatAudioCountsFilesGone(t *testing.T) {
 	}
 	lib := catalog.Library{Name: "L", Root: root}
 	for _, width := range []int{walkIO, 1} {
-		dirs, _, partial, err := audioDirs(t.Context(), lib, root, "", ParseIgnore(nil), slog.New(slog.DiscardHandler), nil, nil, width)
+		dirs, _, partial, err := audioDirs(t.Context(), lib, root, "", ParseIgnore(nil), slog.New(slog.DiscardHandler), nil, nil, width, time.Minute)
 		if err != nil || partial || len(dirs) != 2 {
 			t.Fatalf("width %d: walk found %d folders, partial %v, err %v", width, len(dirs), partial, err)
 		}
@@ -196,7 +197,7 @@ func TestStatAudioCountsFilesGone(t *testing.T) {
 		if err := os.Rename(from, to); err != nil {
 			t.Fatal(err)
 		}
-		if gone, err := statAudio(t.Context(), dirs, width); gone != 2 || err != nil {
+		if gone, _, err := statAudio(t.Context(), dirs, width, time.Minute); gone != 2 || err != nil {
 			t.Errorf("width %d: %d files gone, %v, want 2", width, gone, err)
 		}
 		if info, err := dirs["Z Book"][0].de.Info(); err != nil || info.Size() != 3 {
@@ -211,58 +212,53 @@ func TestStatAudioCountsFilesGone(t *testing.T) {
 // slowEntry is an audio file's directory entry whose Info (its lstat) waits for
 // hold the first time it is asked, as one on a share that stopped answering,
 // and counts how often it is asked.
-type slowEntry struct {
-	fs.DirEntry
-	asked *atomic.Int32
-	first chan struct{} // closed when the first Info starts waiting
-	hold  chan struct{}
-}
-
-func (e slowEntry) Info() (fs.FileInfo, error) {
-	if e.asked.Add(1) == 1 {
-		close(e.first)
-		<-e.hold
-	}
-	return e.DirEntry.Info()
-}
-
 // statAudio whose context ends while it looks at the audio files (a setup
 // preview abandoned at its time, its waiter gone) looks at none of the rest
 // once the hung lstat returns, and answers ctx's error, so discovery stops
 // rather than building the books, which would lstat every file left one at a
 // time on the share that stopped answering, holding the preview's slot for its
-// mount all the while.
+// mount all the while. Not parallel: metadata.HoldOpensUntilForTests swaps the
+// mount lookup.
 func TestStatAudioStopsWhenItsContextEnds(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
-	writeFile(t, root, "Book/01.mp3", []byte("xyz"))
-	info, err := os.Lstat(filepath.Join(root, "Book", "01.mp3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var asked atomic.Int32
-	first, hold := make(chan struct{}), make(chan struct{})
 	audio := make([]audioFile, 50)
 	for i := range audio {
-		audio[i] = audioFile{abs: filepath.Join(root, "Book", fmt.Sprintf("%02d.mp3", i+1)), de: slowEntry{
-			DirEntry: fs.FileInfoToDirEntry(info), asked: &asked, first: first, hold: hold,
-		}}
+		name := fmt.Sprintf("Book/%02d.mp3", i+1)
+		writeFile(t, root, name, []byte("xyz"))
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		audio[i] = audioFile{abs: filepath.Join(root, filepath.FromSlash(name)), de: fs.FileInfoToDirEntry(info)}
 	}
+	held := make(chan struct{})
+	t.Cleanup(metadata.HoldOpensUntilForTests(filepath.Join(root, "Book"), held))
+	defer close(held)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		_, err := statAudio(ctx, map[string][]audioFile{"Book": audio}, 1)
+		_, _, err := statAudio(ctx, map[string][]audioFile{"Book": audio}, 1, time.Minute)
 		done <- err
 	}()
-	<-first
+	time.Sleep(100 * time.Millisecond) // the first lstat under way, held
 	cancel()
-	close(hold)
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Errorf("statAudio whose context ended: %v, want context.Canceled", err)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("statAudio whose context ended: %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("statAudio sat in a held lstat after its context ended")
 	}
 	// Only the one under way when it ended, though its pool may hand out another
 	// as it does.
-	if n := asked.Load(); n != 1 {
-		t.Errorf("%d of %d files looked at, want only the one under way when the context ended", n, len(audio))
+	looked := 0
+	for _, f := range audio {
+		if _, ok := f.de.(*statEntry); ok {
+			looked++
+		}
+	}
+	if looked > 1 {
+		t.Errorf("%d of %d files looked at, want only the one under way when the context ended", looked, len(audio))
 	}
 }

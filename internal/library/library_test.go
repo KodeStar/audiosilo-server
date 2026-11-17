@@ -1071,7 +1071,7 @@ func TestRenamedFolders(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got := renamedFolders(catalog.Library{Root: root}, tc.moved)
+			got := renamedFolders(t.Context(), catalog.Library{Root: root}, tc.moved, time.Minute)
 			if !maps.Equal(got, tc.want) {
 				t.Fatalf("renamedFolders = %v, want %v", got, tc.want)
 			}
@@ -1094,16 +1094,24 @@ func TestDirPresentSpelling(t *testing.T) {
 	listed := func(author, book string) map[string]map[string]bool {
 		return map[string]map[string]bool{".": {author: true}, "Author": {book: true}}
 	}
-	if !dirPresent(lib, "Author/Book", listed("Author", "Book")) {
+	present := func(rel string, listed map[string]map[string]bool) bool {
+		t.Helper()
+		ok, err := dirPresent(t.Context(), lib, rel, listed, time.Minute)
+		if err != nil {
+			t.Fatalf("dirPresent(%q) = %v", rel, err)
+		}
+		return ok
+	}
+	if !present("Author/Book", listed("Author", "Book")) {
 		t.Error("the on-disk spelling is not present")
 	}
-	if dirPresent(lib, "Author/Book", listed("Author", "BOOK")) {
+	if present("Author/Book", listed("Author", "BOOK")) {
 		t.Error("a folder listed as BOOK is present as Book")
 	}
-	if dirPresent(lib, "Author/Book", listed("author", "Book")) {
+	if present("Author/Book", listed("author", "Book")) {
 		t.Error("an author listed as author is present as Author")
 	}
-	if dirPresent(lib, "Author/Missing", listed("Author", "Missing")) {
+	if present("Author/Missing", listed("Author", "Missing")) {
 		t.Error("a path that is not on disk is present")
 	}
 }

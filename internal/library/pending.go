@@ -49,7 +49,7 @@ func MarkPendingBooks(ctx context.Context, lib catalog.Library, entries []Entry,
 		set, ok := sets[p]
 		if !ok {
 			limit := &walkCap{dirs: pendingWalkDirs, until: until}
-			dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, p), p, ignore, slog.New(slog.DiscardHandler), nil, limit, walkIO)
+			dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, p), p, ignore, slog.New(slog.DiscardHandler), nil, limit, walkIO, pendingTime)
 			set = err == nil && discSets(maps.Keys(dirs))[p]
 			sets[p] = set
 		}

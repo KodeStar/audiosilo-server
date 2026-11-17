@@ -5,6 +5,7 @@
 package library
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -54,6 +56,24 @@ func ContentJoin(root, relPath string) (string, error) {
 		return "", err
 	}
 	return SafeJoin(root, relPath)
+}
+
+// ContentJoinBounded is ContentJoin as a metadata.Bounded call (ctx, at most
+// timeout, on the joined path's mount), as SafeJoinBounded.
+func ContentJoinBounded(ctx context.Context, root, relPath string, timeout time.Duration) (string, error) {
+	if err := ContentPath(relPath); err != nil {
+		return "", err
+	}
+	return SafeJoinBounded(ctx, root, relPath, timeout)
+}
+
+// SafeJoinBounded is SafeJoin as one metadata.Bounded call (ctx, at most
+// timeout, counted on the joined path's mount): its Lstats of the names below
+// the root, on a share that stopped answering, are given up on
+// (metadata.GaveUp) rather than holding the caller for good.
+func SafeJoinBounded(ctx context.Context, root, relPath string, timeout time.Duration) (string, error) {
+	at := filepath.Join(root, filepath.FromSlash(relPath))
+	return metadata.Bounded(ctx, at, timeout, func() (string, error) { return SafeJoin(root, relPath) }, nil)
 }
 
 // Entry is one item in a directory listing. The Book* fields are populated by

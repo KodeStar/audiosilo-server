@@ -287,11 +287,12 @@ func suspectParts(parts []partFacts) int {
 // reading only tags (no ffprobe). Migration 0017 left unchecked only the folder
 // books whose parts are all at least an hour long, so the lengths are taken as
 // passing. ok is false when a part can't be read, or its tag read was cut short
-// (left for the next scan).
-func suspectFromTags(lib catalog.Library, b *catalog.Book) (n int, ok bool) {
+// (left for the next scan): each read is bounded by ctx and timeout, and one on
+// a share that stopped answering is cut short there, the rest not read.
+func suspectFromTags(ctx context.Context, lib catalog.Library, b *catalog.Book, timeout time.Duration) (n int, ok bool) {
 	parts := make([]partFacts, 0, len(b.Files))
 	for _, f := range b.Files {
-		md := metadata.ExtractTags(absOf(lib, f.RelPath))
+		md := metadata.ExtractTags(ctx, absOf(lib, f.RelPath), timeout)
 		if md.OpenErr != nil || md.TagsUnread() {
 			return 0, false
 		}

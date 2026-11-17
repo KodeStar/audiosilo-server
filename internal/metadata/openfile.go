@@ -67,9 +67,10 @@ const (
 	readReturned
 )
 
-// heldOpens is HoldOpensForTests's hook, called before each open; nil outside
-// a test.
-var heldOpens atomic.Pointer[func(path string)]
+// heldOpens is HoldOpensForTests's hook, called before each open and Bounded
+// call, look true for one that only looks at the path (StatBounded,
+// LstatBounded, ReadDirBounded); nil outside a test.
+var heldOpens atomic.Pointer[func(path string, look bool)]
 
 // OpenRegular is openRegular for the files a request or a scan opens outside
 // the audio reads (a stream, a cover): a FIFO named as one is turned away at
@@ -82,7 +83,7 @@ func OpenRegular(path string) (*os.File, os.FileInfo, error) { return openRegula
 // regular file.
 func openRegular(path string) (*os.File, os.FileInfo, error) {
 	if hook := heldOpens.Load(); hook != nil {
-		(*hook)(path)
+		(*hook)(path, false)
 	}
 	f, err := os.OpenFile(path, openFlags, 0)
 	if err != nil {
@@ -148,11 +149,23 @@ const fingerprintChunk = 64 << 10
 // are (openBlockFile): timeout and ctx. "" when it can't be read in that time,
 // or at all.
 func Fingerprint(ctx context.Context, path string, timeout time.Duration) string {
+	fp, _ := FingerprintErr(ctx, path, timeout)
+	return fp
+}
+
+// FingerprintErr is Fingerprint with why it is "": an error GaveUp reports
+// when its open or reads were given up on (refused, or not answered in time),
+// else the open's own (the file gone, no regular file) or a read's that came
+// back short (EIO).
+func FingerprintErr(ctx context.Context, path string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
 	defer cancel()
 	b, f, err := openBlockFile(ctx, path)
+	if errors.Is(err, errOpenAbandoned) {
+		return "", fmt.Errorf("%s: %w", path, ErrNotAnswered)
+	}
 	if err != nil {
-		return ""
+		return "", err
 	}
 	defer f.Close()
 	h := sha256.New()
@@ -167,7 +180,12 @@ func Fingerprint(ctx context.Context, path string, timeout time.Duration) string
 			h.Write(tail[:m])
 		}
 	}); why != "" {
-		return ""
+		return "", fmt.Errorf("%s: %s: %w", path, why, ErrNotAnswered)
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	if b.err != nil {
+		// A short read (EIO on a soft-mounted share, the file cut short as it
+		// was read): a hash of what came back is no fingerprint of the file.
+		return "", fmt.Errorf("%s: %w", path, b.err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

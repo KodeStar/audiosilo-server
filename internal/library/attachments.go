@@ -1,11 +1,11 @@
 package library
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -72,10 +72,12 @@ func knownAttachment(name string) bool {
 
 // listAttachments lists the .audiosilo folder at absDir once: its known regular
 // files (a link or anything else is never read). A folder that is gone lists
-// nothing; one that can't be listed right now (permissions, a flaky mount) is an
-// error, never "no attachments", so what is stored for it stays.
-func listAttachments(absDir string) (attachmentFiles, error) {
-	entries, err := os.ReadDir(absDir)
+// nothing; one that can't be listed right now (permissions, a flaky mount, a
+// share that stopped answering: the listing and each lstat are
+// metadata.Bounded calls, ctx and at most timeout) is an error, never "no
+// attachments", so what is stored for it stays.
+func listAttachments(ctx context.Context, absDir string, timeout time.Duration) (attachmentFiles, error) {
+	entries, err := metadata.ReadDirBounded(ctx, absDir, timeout)
 	if err != nil {
 		return nil, absentOK(err)
 	}
@@ -84,7 +86,10 @@ func listAttachments(absDir string) (attachmentFiles, error) {
 		if !e.Type().IsRegular() || !knownAttachment(e.Name()) {
 			continue
 		}
-		info, err := e.Info()
+		info, err := metadata.LstatBounded(ctx, filepath.Join(absDir, e.Name()), timeout) // e's Info, bounded
+		if metadata.Unanswered(ctx, err) {
+			return nil, cmp.Or(err, ctx.Err())
+		}
 		if err != nil {
 			continue
 		}
@@ -179,7 +184,7 @@ func (s *Scanner) readAttachments(ctx context.Context, lib catalog.Library, b *c
 		p := absOf(lib, rel)
 		// The read fills a copy: a read given up on may still end later.
 		cur := files
-		got, err := metadata.Bounded(ctx, p, s.probeTimeout, func() (metadata.AttachmentFiles, error) {
+		got, err := metadata.Bounded(ctx, p, s.lookTimeout(ctx), func() (metadata.AttachmentFiles, error) {
 			err := readAttachment(&cur, name, p)
 			return cur, err
 		}, nil)
@@ -245,9 +250,10 @@ type AttachmentsHeld struct {
 // (hashReadalongEbooks) when its digest isn't current. relPath is the book's path, or a path inside it (a
 // part, a disc folder). ErrNotIndexable when no indexed book is there; an error
 // (nothing recorded) when the folder couldn't be listed or a file couldn't be
-// read right now.
+// read right now, wrapping the look given up on (metadata.GaveUp: each is
+// given lookTimeout) when that is why.
 func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, relPath string) (*AttachmentsRefresh, error) {
-	if _, err := ContentJoin(lib.Root, relPath); err != nil {
+	if _, err := ContentJoinBounded(ctx, lib.Root, relPath, s.lookTimeout(ctx)); err != nil {
 		return nil, err
 	}
 	book, err := s.cat.GetBookByPath(ctx, lib.ID, relPath)
@@ -260,12 +266,16 @@ func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, r
 	if err != nil {
 		return nil, err
 	}
-	sig, err := attachmentsSigAt(ctx, lib, book, ParseIgnore(lib.IgnorePatterns), s.probeTimeout)
+	sig, err := attachmentsSigAt(ctx, lib, book, ParseIgnore(lib.IgnorePatterns), s.lookTimeout(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("the attachments of %q couldn't be listed: %w", book.RelPath, err)
 	}
-	files, read := s.readAttachments(ctx, lib, book, sig, nil)
+	var gaveUp givenUp // a read given up on is the caller's to hear (metadata.GaveUp)
+	files, read := s.readAttachments(ctx, lib, book, sig, &gaveUp)
 	if !read {
+		if gaveUp.err != nil {
+			return nil, fmt.Errorf("the attachments of %q couldn't be read: %w", book.RelPath, gaveUp.err)
+		}
 		return nil, fmt.Errorf("the attachments of %q couldn't be read", book.RelPath)
 	}
 	if err := s.cat.SetAttachments(ctx, lib.ID, map[string]catalog.AttachmentsReading{

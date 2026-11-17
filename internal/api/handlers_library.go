@@ -323,7 +323,9 @@ func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catal
 		if lib.Kind == catalog.KindPodcasts {
 			return nil, library.ErrNotIndexable
 		}
-		return a.indexPath(ctx, *lib, path, scope.Allows)
+		// Each look at the share given fileWait: one that stopped answering is
+		// a 503 share_not_answering, not this request's own time running out.
+		return a.indexPath(library.WithLookTimeout(ctx, a.fileWait), *lib, path, scope.Allows)
 	case err != nil:
 		return nil, err
 	case !scope.Allows(b.RelPath):
@@ -566,14 +568,20 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 			book.Episode.Fetch = &st
 		}
 	}
-	a.warmRemux(lib, book)
+	answering := a.warmRemux(r.Context(), lib, book)
 	dp := a.directPlayable(book)
 	book.DirectPlayable = &dp
 	// An EPUB replaced in place since the index read it: its size (and the
 	// row) follow it now, not at the next scan. On a share that stopped
 	// answering the look is given up on (fileWait) and the stored one answers.
-	a.scanner.RefreshEbook(r.Context(), *lib, book, a.fileWait)
-	book.Readalong = a.readalongOfBook(r.Context(), lib, book)
+	// Once the warm's look was given up on, neither this nor the read-along's
+	// is tried: each would wait out its own time on the same share and answer
+	// the same (the stored ebook, no read-along), three of them the request's
+	// whole time.
+	if answering {
+		a.scanner.RefreshEbook(r.Context(), *lib, book, a.fileWait)
+		book.Readalong = a.readalongOfBook(r.Context(), lib, book)
+	}
 	book.OtherRecordings = a.otherRecordings(r.Context(), lib, book)
 	writeJSON(w, http.StatusOK, book)
 }
@@ -613,7 +621,7 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a.warmRemux(lib, book)
+	a.warmRemux(r.Context(), lib, book)
 	// Emit [] rather than null for empty files/chapters so the envelope matches the
 	// hand-mirrored client types (which declare these as non-null arrays). book is
 	// a fresh per-request value, so normalizing in place is safe.
@@ -742,23 +750,32 @@ func (a *API) directPlayable(book *catalog.Book) bool {
 // (a cold remux of a long file takes seconds, past a player's stall timer). It
 // never blocks: media.FileCache.WarmAll runs them one at a time under the
 // server's context, skipping the cached and the known refusals. A podcast
-// library's episodes are not warmed: their stream never remuxes.
-func (a *API) warmRemux(lib *catalog.Library, book *catalog.Book) {
+// library's episodes are not warmed: their stream never remuxes. Each file's
+// join is a metadata.Bounded call (ctx, at most fileWait): on a share that
+// stopped answering none is warmed, and the request goes on. It reports false
+// when a join went unanswered (metadata.Unanswered): the book's share is not
+// answering, for a caller with more looks to make there (handleItem).
+func (a *API) warmRemux(ctx context.Context, lib *catalog.Library, book *catalog.Book) (answering bool) {
 	if !a.remuxOn() || lib.Kind == catalog.KindPodcasts {
-		return
+		return true
 	}
 	var paths []string
 	for _, f := range book.Files {
 		if !book.FileRemuxable(f) {
 			continue
 		}
-		if abs, err := library.SafeJoin(lib.Root, f.RelPath); err == nil {
+		abs, err := library.SafeJoinBounded(ctx, lib.Root, f.RelPath, a.fileWait)
+		if metadata.Unanswered(ctx, err) {
+			return false
+		}
+		if err == nil {
 			paths = append(paths, abs)
 		}
 	}
 	if len(paths) > 0 {
 		a.remux.WarmAll(a.baseCtx, a.ffmpeg, paths)
 	}
+	return true
 }
 
 // remuxColdWait is how long a stream request waits for a remux that isn't
@@ -790,55 +807,101 @@ const remuxDownloadWait = 45 * time.Second
 // direct_playable told the web player it needn't ask for that. ?rendition=watch
 // asks for the file's watch rendition instead (serveRendition), whatever else
 // the query says. The path is the actual audio file (a chapter's file_path).
+// Every look at the file on its way to the client (the path's join, its open, a
+// copy's or a transcode's look at it, a podcast episode's checks) is a
+// metadata.Bounded call under one bound, streamWait from the request's start:
+// a share that stopped answering is a 503 share_not_answering by then.
 func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
+	deadline := time.Now().Add(a.streamWait)
 	lib, rel, status, msg := a.authorizedPath(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
 	if q := r.URL.Query(); q.Has("rendition") {
-		a.serveRendition(w, r, lib, rel, q.Get("rendition"))
+		a.serveRendition(w, r, lib, rel, q.Get("rendition"), deadline)
 		return
 	}
 	if lib.Kind == catalog.KindPodcasts {
-		a.servePodcastStream(w, r, lib, rel)
+		a.servePodcastStream(w, r, lib, rel, deadline)
 		return
 	}
 
-	abs, ok := audioFile(w, lib, rel)
+	abs, ok := audioFile(w, r, lib, rel, deadline)
 	if !ok {
 		return
 	}
 
 	if r.URL.Query().Get("transcode") == "1" {
-		a.serveTranscode(w, r, lib.ID, rel, abs, "")
+		a.serveTranscode(w, r, lib.ID, rel, abs, "", deadline)
 		return
 	}
 	download := r.URL.Query().Get("download") == "1"
 	if a.remuxOn() && strings.EqualFold(filepath.Ext(rel), ".mka") && r.URL.Query().Get("original") != "1" {
-		if a.serveRemuxed(w, r, lib.ID, rel, abs, download) {
+		var served bool
+		if served, deadline = a.serveRemuxed(w, r, lib.ID, rel, abs, download, deadline); served {
 			return
 		}
 	}
-	if err := media.ServeFile(w, r, abs, download, a.streamWait); err != nil {
+	if err := media.ServeFile(w, r, abs, download, waitLeft(deadline)); err != nil {
 		writeShareNotAnswering(w)
 	}
 }
 
+// waitLeft is what is left of a stream's bound (deadline, handleStream) for its
+// next look, at least a nanosecond: a metadata.Bounded call given 0 would wait
+// with none.
+func waitLeft(deadline time.Time) time.Duration {
+	return max(time.Until(deadline), time.Nanosecond)
+}
+
+// afterWait is a stream's deadline once it has waited on something that was no
+// look at the file (a remux running): moved on to leave the next look at least
+// a look's time (fileWait), not a bound the wait may have used up, which would
+// answer 503 share_not_answering from a share that answers.
+func (a *API) afterWait(deadline time.Time) time.Time {
+	if d := time.Now().Add(a.fileWait); d.After(deadline) {
+		return d
+	}
+	return deadline
+}
+
+// lookAtSource is media.Source's look at abs, the copy a remux or rendition
+// makes from, bounded by the stream's deadline: answered when the request went
+// away or the look was given up on (a 503 share_not_answering written), else
+// the look's error (no regular file there).
+func lookAtSource(w http.ResponseWriter, r *http.Request, abs string, deadline time.Time) (answered bool, err error) {
+	_, err = media.Source(r.Context(), abs, waitLeft(deadline))
+	switch {
+	case r.Context().Err() != nil:
+		return true, err
+	case metadata.GaveUp(err):
+		writeShareNotAnswering(w)
+		return true, err
+	}
+	return false, err
+}
+
 // audioFile is the stream's guard on rel (scope-checked already): its absolute
-// path, or false having written 404 for a file that isn't recognized audio and
-// 400 for a path that escapes the root. The scope check bounds a stream to the
-// caller's grant, but the library root can also hold non-audio sidecar files
-// (.nfo, .jpg, a stray .env/backup); BrowseFS hides those from listings, and
-// cover art has its own endpoint, so serving them here would be an avenue to
-// exfiltrate arbitrary in-scope files by guessing paths.
-func audioFile(w http.ResponseWriter, lib *catalog.Library, rel string) (string, bool) {
+// path, or false having written 404 for a file that isn't recognized audio, 400
+// for a path that escapes the root, and 503 share_not_answering for a join
+// whose looks (SafeJoin's Lstats, one metadata.Bounded call up to deadline)
+// were given up on. The scope check bounds a stream to the caller's grant, but
+// the library root can also hold non-audio sidecar files (.nfo, .jpg, a stray
+// .env/backup); BrowseFS hides those from listings, and cover art has its own
+// endpoint, so serving them here would be an avenue to exfiltrate arbitrary
+// in-scope files by guessing paths.
+func audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, deadline time.Time) (string, bool) {
 	if !metadata.IsAudio(rel) {
 		writeError(w, http.StatusNotFound, "not an audio file")
 		return "", false
 	}
-	abs, err := library.SafeJoin(lib.Root, rel)
-	if err != nil {
+	abs, err := library.SafeJoinBounded(r.Context(), lib.Root, rel, waitLeft(deadline))
+	switch {
+	case metadata.GaveUp(err):
+		writeShareNotAnswering(w)
+		return "", false
+	case err != nil:
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return "", false
 	}
@@ -866,21 +929,26 @@ func serveCopy(w http.ResponseWriter, r *http.Request, f *os.File, etag, name st
 // serveTranscode answers with the live MP3 transcode of the library file abs
 // (rel in library lib) from ?t=, in one of the transcode slots; a non-empty
 // downloadName makes it an attachment of that name.
-func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, rel, abs, downloadName string) {
+func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, rel, abs, downloadName string, deadline time.Time) {
 	done, start, ok := a.beginTranscode(w, r, lib, rel)
 	if !ok {
 		return
 	}
 	defer done()
-	a.transcodeHeld(w, r, abs, downloadName, start)
+	a.transcodeHeld(w, r, abs, downloadName, start, deadline)
 }
 
-// transcodeHeld is serveTranscode once its slot is taken (the caller releases it).
-func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloadName string, start float64) {
+// transcodeHeld is serveTranscode once its slot is taken (the caller releases
+// it): its look at abs given up on at the stream's deadline is a 503
+// share_not_answering.
+func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloadName string, start float64, deadline time.Time) {
 	if downloadName != "" {
 		media.SetAttachment(w.Header(), downloadName)
 	}
-	media.Transcode(w, r, abs, a.ffmpeg, start, a.log)
+	if err := media.Transcode(w, r, abs, a.ffmpeg, start, waitLeft(deadline), a.log); err != nil {
+		w.Header().Del("Content-Disposition")
+		writeShareNotAnswering(w)
+	}
 }
 
 // serveRemuxed answers with abs's remuxed MP3 (media.NewRemuxer) with Range and
@@ -894,9 +962,15 @@ func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloa
 // request is a download (whose saved copy would otherwise be the lossy
 // transcode) or every transcode slot is busy (which would otherwise be a 503). It reports
 // false, having written nothing, when the stored file should be served instead
-// (ErrRefused: not MP3 inside, or no regular file there); true also when
-// the request went away while waiting.
-func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, download bool) bool {
+// (ErrRefused: not MP3 inside, or no regular file there), with the deadline
+// that file's open has (afterWait: the waits for a remux that then refused the
+// file were no looks at it); true also when
+// the request went away while waiting. Its look at abs (media.Source) given up
+// on at the stream's deadline is a 503 share_not_answering.
+func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, download bool, deadline time.Time) (served bool, left time.Time) {
+	if answered, err := lookAtSource(w, r, abs, deadline); answered || err != nil {
+		return answered, deadline // err: no regular file there, the stored file's answer (a 404)
+	}
 	wait, cancel := context.WithTimeout(r.Context(), a.remuxWait)
 	defer cancel()
 	f, etag, err := a.remux.Open(wait, a.baseCtx, a.ffmpeg, abs)
@@ -921,15 +995,20 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		}
 	}
 	if err != nil {
+		// The waits for the remux were no looks at the file (the share answered
+		// lookAtSource): the next look, the transcode's or the stored file's
+		// open, is given at least a look's time (a download whose remux ran
+		// long, or refused the file late).
+		deadline = a.afterWait(deadline)
 		switch {
 		case r.Context().Err() != nil:
-			return true
+			return true, deadline
 		case errors.Is(err, media.ErrRefused):
-			return false
+			return false, deadline
 		case a.baseCtx.Err() != nil:
 			// The server is stopping, and its remux with it: no new transcode now.
 			writeError(w, http.StatusServiceUnavailable, "the server is shutting down")
-			return true
+			return true, deadline
 		case running:
 			// Still remuxing (it goes on): this request is transcoded.
 		case !errors.Is(err, media.ErrUnavailable):
@@ -940,14 +1019,14 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 			downloadName = name
 		}
 		if held != nil {
-			a.transcodeHeld(w, r, abs, downloadName, a.noteTranscode(r, lib, rel))
-			return true
+			a.transcodeHeld(w, r, abs, downloadName, a.noteTranscode(r, lib, rel), deadline)
+			return true, deadline
 		}
-		a.serveTranscode(w, r, lib, rel, abs, downloadName)
-		return true
+		a.serveTranscode(w, r, lib, rel, abs, downloadName, deadline)
+		return true, deadline
 	}
 	serveCopy(w, r, f, etag, name, download)
-	return true
+	return true, deadline
 }
 
 // beginTranscode admits one ?transcode=1 request for the file at rel: 503 when

@@ -14,11 +14,11 @@ import (
 // and frees its mount's place, so the previews after it on that mount run
 // too, more than previewsPerMount of them; a preview on another mount reads
 // as ever. Not parallel:
-// metadata.HoldOpensForTests swaps the mount lookup.
+// metadata.HoldReadsForTests swaps the mount lookup.
 func TestPreviewHungFileIsBounded(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "Author/Book/01.mp3", make([]byte, 1<<10))
-	release := metadata.HoldOpensForTests(root)
+	release := metadata.HoldReadsForTests(root) // its listings answer
 	t.Cleanup(release)
 	s := NewScanner(nil, "", slog.Default())
 	lim := PreviewLimits{MaxTime: 100 * time.Millisecond}
