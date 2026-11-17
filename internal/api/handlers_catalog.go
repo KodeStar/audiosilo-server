@@ -193,18 +193,8 @@ func (a *API) aggregateLibrary(w http.ResponseWriter, r *http.Request) (int64, b
 		writeError(w, http.StatusBadRequest, "invalid library_id")
 		return 0, false
 	}
-	if libID == 0 {
-		return 0, true
-	}
-	switch _, err := a.cat.GetLibrary(r.Context(), libID); {
-	case errors.Is(err, catalog.ErrNotFound):
-		writeErrorCode(w, http.StatusNotFound, codeNotFound, "library not found")
-		return 0, false
-	case err != nil:
-		a.writeCatalogError(w, err, "admin aggregate library failed", "could not read the library", "library", libID)
-		return 0, false
-	}
-	return libID, true
+	_, ok = a.optionalLibraryName(w, r, libID, "could not read the library")
+	return libID, ok
 }
 
 // handleAdminPeople serves GET /admin/authors and /admin/narrators.

@@ -112,15 +112,15 @@ func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // optionalLibraryName is the name of library id for an audit target ("" for 0,
-// every library), answering 404 (or 500 with failed) itself when it can't (ok
-// false then).
+// every library), answering 404 not_found (or 500 with failed) itself when it
+// can't (ok false then).
 func (a *API) optionalLibraryName(w http.ResponseWriter, r *http.Request, id int64, failed string) (string, bool) {
 	if id == 0 {
 		return "", true
 	}
 	lib, err := a.cat.GetLibrary(r.Context(), id)
 	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "library not found")
+		writeErrorCode(w, http.StatusNotFound, codeNotFound, "library not found")
 		return "", false
 	}
 	if err != nil {
