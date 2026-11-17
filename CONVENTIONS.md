@@ -3674,7 +3674,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book. `?copies=separate` (else `merged`, the default; any other value a 400) makes one row per
   indexed book, no merging. The console's "Export with file paths and tags..." asks for
   `include=paths,tags,description&copies=separate` and says the file is then not for a public issue. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
-  `ListBooks`, never OFFSET; copies of the same book within the library collapse on
+  `ListBooks`, never OFFSET, all of it on one read snapshot, `store.DB.WithReadTx`, so a scan
+  writing meanwhile neither skips nor repeats a row; copies of the same book within the library collapse on
   `exposedDedupKey`, the kept entry taking each fact from whichever copy has it -
   `mergeExportBook`, since the copy that sorts first may be the untagged rip; the main
   series and its position are one fact, and a merged `series_list` is every series either

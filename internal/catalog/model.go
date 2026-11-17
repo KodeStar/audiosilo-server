@@ -309,6 +309,8 @@ type catalogDB interface {
 	// WithDurableTx is WithTx committed durably, for a transaction that takes
 	// access away.
 	WithDurableTx(context.Context, string, func(*sql.Tx) error) error
+	// WithReadTx runs its reads on one snapshot (store.DB.WithReadTx).
+	WithReadTx(context.Context, func(*sql.Tx) error) error
 	Ping(context.Context) error
 }
 
@@ -332,6 +334,8 @@ type Catalog struct {
 	podcastVisit      Ref
 	// libs is GetLibrary's rows while no content is written.
 	libs store.GenMap[int64, Library]
+	// exportPaged, tests only, runs after each page ExportLibraryBooks reads.
+	exportPaged func()
 }
 
 // OnBookChange adds f to the listeners that hear, after the fact and without
