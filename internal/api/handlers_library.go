@@ -525,9 +525,8 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 // fanning out to each library's /books and concatenating).
 func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
 	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
-	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load books")
+	scopes, ok := a.callerScopes(w, r, "could not load books")
+	if !ok {
 		return
 	}
 	write := a.cachedList(w, r, gen, cacheable, scopes)

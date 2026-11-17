@@ -796,7 +796,10 @@ func (a *API) handleAdminBridge(w http.ResponseWriter, r *http.Request) {
 	if h != nil {
 		out.Online = h.Online(time.Now())
 		out.HeartbeatAt = h.At.UTC().Format(time.RFC3339)
-		out.Version, out.Kinds, out.Features, out.Workers, out.UIURL = h.Version, h.Kinds, h.Features(), h.Workers, h.UIURL
+		// Appended, so a heartbeat that named none still answers [] (server#334).
+		out.Kinds, out.Features = append(out.Kinds, h.Kinds...), append(out.Features, h.Features()...)
+		out.Workers = append(out.Workers, h.Workers...)
+		out.Version, out.UIURL = h.Version, h.UIURL
 		out.Estimates, out.Setup = h.Estimates, h.Setup
 	}
 	for _, l := range libs {

@@ -21,9 +21,8 @@ import (
 // so durable state for a since-revoked share isn't read back.
 func (a *API) handleListProgress(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load progress")
+	scopes, ok := a.callerScopes(w, r, "could not load progress")
+	if !ok {
 		return
 	}
 	items, err := a.cat.ListProgress(r.Context(), u.ID, scopes)
@@ -297,9 +296,8 @@ func (a *API) handleAddHistory(w http.ResponseWriter, r *http.Request) {
 // catalog query, so a since-revoked share's favourites aren't read back.
 func (a *API) handleListFavourites(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load favourites")
+	scopes, ok := a.callerScopes(w, r, "could not load favourites")
+	if !ok {
 		return
 	}
 	items, err := a.cat.ListAllFavourites(r.Context(), u.ID, scopes)

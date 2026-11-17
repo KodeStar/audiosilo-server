@@ -694,6 +694,22 @@ func TestBridgeEmptyFeaturesAndGoneJob(t *testing.T) {
 	}
 }
 
+// A heartbeat that names no kinds and no workers (an older or idle Bridge)
+// answers both as [] on the console's status, never null (server#334).
+func TestBridgeStatusListsNeverNull(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	if resp, out := b.do(t, "PUT", "/api/v1/bridge/status", b.bridgeTok, `{"version":"0.1.0"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("heartbeat: %d %s", resp.StatusCode, out)
+	}
+	_, body := b.do(t, "GET", "/api/v1/admin/bridge", b.adminTok, "")
+	for _, want := range []string{`"kinds":[]`, `"features":[]`, `"workers":[]`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /admin/bridge = %s, want %s", body, want)
+		}
+	}
+}
+
 // GET /server answers on an API built without SetBridge (no Bridge, no flag).
 func TestServerInfoWithoutBridge(t *testing.T) {
 	t.Parallel()
