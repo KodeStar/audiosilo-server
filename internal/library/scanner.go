@@ -43,9 +43,11 @@ type Scanner struct {
 	// holding its slot until it returns.
 	previews *mounts.PerMount[chan struct{}]
 
-	// The on-demand indexes under way (IndexPathWithin), by book: a concurrent
-	// request for the same book waits on the one read rather than reading the
-	// book again (a book page asks for the item and its chapters at once).
+	// The reads of a book under way, by book: an on-demand index's
+	// (IndexPathWithin), IndexMoved's or a scan's. A concurrent request for the
+	// same book waits on the one read rather than reading the book again (a book
+	// page asks for the item and its chapters at once), and no two run side by
+	// side (indexShared, startFlight).
 	flightMu sync.Mutex
 	flights  map[bookKey]*indexFlight
 
@@ -518,6 +520,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// or the failure.
 	recordWrite := func(r *bookRead, err error) {
 		b := r.book
+		r.endFlight(s, err)
 		if err != nil {
 			s.log.Warn("index book failed", "library", lib.Name, "path", b.RelPath, "err", err)
 			res.Errors++
@@ -603,6 +606,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		flush()
 		for _, r := range pending {
 			<-r.done
+			r.endFlight(s, errReadDropped)
 		}
 		flushBackfills()
 		return res, err
@@ -766,10 +770,17 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// whose row has gone since the scan began is first seen now.
 			b.AddedAt = now()
 		}
-		r := &bookRead{book: b, existed: existed, done: make(chan struct{})}
+		r := &bookRead{book: b, existed: existed, done: make(chan struct{}), key: bookKey{lib.ID, b.RelPath}}
 		pending = append(pending, r)
 		go func() {
 			defer close(r.done)
+			// Not beside an on-demand read of the book (indexShared, IndexMoved),
+			// and one asked for while this read is under way waits for its write.
+			f, err := s.startFlight(ctx, r.key)
+			if err != nil {
+				return // the scan stopped: writeNext sees it
+			}
+			r.flight = f
 			s.enrich(ctx, lib, b, slots)
 		}()
 	}
@@ -1970,19 +1981,29 @@ type bookKey struct {
 	relPath   string
 }
 
-// indexFlight is one on-demand index of a book under way: done closes once it
-// has ended, with the indexed book's id or the error.
+// indexFlight is one read of a book under way, by an on-demand index
+// (indexShared, IndexMoved) or a scan (Scan's reads): done closes once it has
+// ended, err nil when the book is stored at its path.
 type indexFlight struct {
 	done chan struct{}
-	id   int64
 	err  error
 }
 
+// errReadDropped is a flight's outcome when a scan read the book but did not
+// write it (the scan stopped, or the write failed): its waiters read it
+// themselves.
+var errReadDropped = errors.New("library: the scan's read of this book was not written")
+
+// indexTimeout bounds a shared read once it has begun. It no longer stops with
+// the request that began it (see leadIndex).
+const indexTimeout = 10 * time.Minute
+
 // indexShared is indexBook of a resolved book, read once for every caller that
-// asks for it while a read is under way: the others wait for that read and load
-// the book it stored, each its own copy. A waiter whose own request ends stops
-// waiting; one whose leader's request ended (a context error) while its own goes
-// on reads the book itself.
+// asks for it while a read is under way (an on-demand index's, IndexMoved's or
+// a scan's): each waits for that read and loads the book it stored, its own
+// copy. A caller whose own request ends stops waiting, the one that began the
+// read too (the read goes on: leadIndex); one whose read was given up (a scan
+// stopped, a read past indexTimeout) reads the book itself.
 func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *catalog.Book) (*catalog.Book, error) {
 	key := bookKey{lib.ID, book.RelPath}
 	for {
@@ -1991,52 +2012,95 @@ func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *ca
 		if !waiting {
 			f = &indexFlight{done: make(chan struct{})}
 			s.flights[key] = f
+			go s.leadIndex(ctx, lib, book, key, f, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
 		}
 		s.flightMu.Unlock()
-		if !waiting {
-			return s.leadIndex(ctx, lib, book, key, f)
+		b, err := s.awaitFlight(ctx, lib.ID, key, f)
+		if !readGivenUp(err) || ctx.Err() != nil {
+			return b, err
+		}
+	}
+}
+
+// awaitFlight waits for flight f of key to end, then loads the book it stored;
+// ctx's error when ctx ends first, the flight's when it stored none.
+func (s *Scanner) awaitFlight(ctx context.Context, libraryID int64, key bookKey, f *indexFlight) (*catalog.Book, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-f.done:
+	}
+	if f.err != nil {
+		return nil, f.err
+	}
+	return s.cat.GetBookByPath(ctx, libraryID, key.relPath)
+}
+
+// readGivenUp reports whether a flight's error says its read was given up
+// rather than failed: a waiter then reads the book itself.
+func readGivenUp(err error) bool {
+	return errors.Is(err, errReadDropped) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// startFlight registers a flight for key once no read of the book is under way,
+// waiting for one that is (ctx's error when ctx ends first). The caller ends it
+// with endFlight. A scan and IndexMoved take a book this way: neither can join a
+// read made without them (a scan writes in its own batches, IndexMoved carries
+// its book's state first), but neither reads it beside one either.
+func (s *Scanner) startFlight(ctx context.Context, key bookKey) (*indexFlight, error) {
+	for {
+		s.flightMu.Lock()
+		f, busy := s.flights[key]
+		if !busy {
+			f = &indexFlight{done: make(chan struct{})}
+			s.flights[key] = f
+		}
+		s.flightMu.Unlock()
+		if !busy {
+			return f, nil
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-f.done:
 		}
-		switch {
-		case f.err == nil:
-			return s.cat.GetBook(ctx, f.id)
-		case errors.Is(f.err, context.Canceled) || errors.Is(f.err, context.DeadlineExceeded):
-			// The leader's request ended: read the book here, unless this request
-			// has ended too (the probes don't stop for a context).
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			continue
-		default:
-			return nil, f.err
-		}
 	}
 }
 
-// errIndexAborted is a shared read's outcome when its leader never returned (a
-// panic in indexBook): its waiters fail rather than load a book it never stored.
+// endFlight ends flight f of key with its outcome, for its waiters.
+func (s *Scanner) endFlight(key bookKey, f *indexFlight, err error) {
+	f.err = err
+	s.flightMu.Lock()
+	delete(s.flights, key)
+	s.flightMu.Unlock()
+	close(f.done)
+}
+
+// errIndexAborted is a shared read's outcome when it panicked: its waiters fail
+// rather than load a book it never stored.
 var errIndexAborted = errors.New("library: the shared index of this book did not finish")
 
-// leadIndex is the read of flight f's book (indexShared's leader): it records
-// the outcome on f, then ends the flight for its waiters.
-func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *catalog.Book, key bookKey, f *indexFlight) (*catalog.Book, error) {
-	f.err = errIndexAborted // until indexBook returns
+// leadIndex is the read of flight f's book, on a goroutine of its own: it
+// indexes the book after carrying the state of the book at from(ctx) to it
+// (indexBookFrom), then ends the flight with the outcome. It runs past the end
+// of the request that began it (up to indexTimeout): its probes never stopped
+// for it, and throwing the read away at its last write would leave the next
+// request to read the book again from scratch (server#211), or a moved book's
+// state on a path with no row.
+func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *catalog.Book, key bookKey, f *indexFlight, from func(context.Context) string) {
+	err := errIndexAborted // until indexBookFrom returns
 	defer func() {
-		s.flightMu.Lock()
-		delete(s.flights, key)
-		s.flightMu.Unlock()
-		close(f.done)
+		if p := recover(); p != nil {
+			s.log.Error("index book panicked", "library", lib.Name, "path", book.RelPath, "panic", p)
+		}
+		s.endFlight(key, f, err)
 	}()
-	indexed, err := s.indexBookFrom(ctx, lib, book, s.movedFrom(ctx, lib, book))
-	if err == nil {
-		f.id = indexed.ID
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), indexTimeout)
+	defer cancel()
+	_, err = s.indexBookFrom(ctx, lib, book, from(ctx))
+	if err != nil {
+		s.log.Warn("index book failed", "library", lib.Name, "path", book.RelPath, "err", err)
 	}
-	f.err = err
-	return indexed, err
 }
 
 // movedFrom is where a book IndexPath indexes for the first time was indexed
@@ -2208,28 +2272,21 @@ func (s *Scanner) IndexMoved(ctx context.Context, lib catalog.Library, relPath, 
 	if err != nil {
 		return nil, err
 	}
-	return s.indexBookFrom(ctx, lib, book, from)
+	key := bookKey{lib.ID, book.RelPath}
+	f, err := s.startFlight(ctx, key) // after a read of the book under way
+	if err != nil {
+		return nil, err
+	}
+	go s.leadIndex(ctx, lib, book, key, f, func(context.Context) string { return from })
+	return s.awaitFlight(ctx, lib.ID, key, f)
 }
-
-// movedIndexTimeout bounds indexBookFrom's index once the state has moved, which
-// no longer stops with its caller.
-const movedIndexTimeout = 10 * time.Minute
 
 // indexBookFrom indexes book (indexBook) after carrying the durable state of the
 // book indexed at from to it, when carryFrom finds it the same book moved (from
-// "": none), then drops the old book's row. Once the state has moved, the index
-// and the drop no longer stop with the caller (an on-demand index's request: a
-// cover the browser stopped loading, a request timeout, which would throw the
-// read away at its last write): the state would otherwise sit on a path with no
-// row while the gone book stays listed without it, until the book is opened
-// again or a scan comes.
+// "": none), then drops the old book's row. Its caller (leadIndex) runs it past
+// the end of the request that asked for it.
 func (s *Scanner) indexBookFrom(ctx context.Context, lib catalog.Library, book *catalog.Book, from string) (*catalog.Book, error) {
 	moved := from != "" && from != book.RelPath && s.carryFrom(ctx, lib, from, book)
-	if moved {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), movedIndexTimeout)
-		defer cancel()
-	}
 	indexed, err := s.indexBook(ctx, lib, book)
 	if err != nil {
 		return nil, err

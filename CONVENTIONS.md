@@ -955,7 +955,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   answered as the out-of-scope 403 `no access to this path`, nothing read or
   indexed for that caller). Concurrent on-demand indexes of one book (a book page's
   `item` and `chapters` at once) share one read (`Scanner.indexShared`, keyed by
-  library and book path), each request scope-checked before it joins. The on-demand index takes a path only in its on-disk
+  library and book path), each request scope-checked before it joins. The read runs on a goroutine of its own
+  (`leadIndex`, up to `indexTimeout`) and is stored even when every request waiting on it has ended, each at its own
+  deadline, so a cancelled request never throws its probes away (server#211). A scan's read of a book and the Bridge's
+  `IndexMoved` take the same per-book flight (`startFlight`): no two reads of one book run side by side, and an on-demand
+  index asked for during a scan's read waits for the scan's write and loads it. The on-demand index takes a path only in its on-disk
   spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a
   case-insensitive filesystem a case variant opens the same folder, and indexing it would add a
   duplicate book everyone sees, so it is a 404. `stream` serves an
@@ -1296,9 +1300,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   put first (`byteFirstFingerprint`, in `detectMoves` and `IndexMoved`). The on-demand index of a
   book not indexed yet (a renamed folder opened from Folders before a scan, server#209) looks too:
   `Scanner.movedFrom` takes an indexed book with its fingerprint that is gone from disk
-  (`catalog.MoveCandidates`, `bookOnDisk`) as `IndexMoved`'s from (`indexBookFrom`, which, once the
-  state has moved, finishes the index and drops the old row past its caller's cancel or deadline, so
-  the state never sits on a path with no row). Re-tagging keeps state via
+  (`catalog.MoveCandidates`, `bookOnDisk`) as `IndexMoved`'s from (`indexBookFrom`, which `leadIndex`
+  runs past its caller's cancel or deadline: once the state has moved it finishes the index and drops
+  the old row, so the state never sits on a path with no row). Re-tagging keeps state via
   the path key; moving keeps it via the fingerprint. The per-user path-keyed tables are listed
   ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
   a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new

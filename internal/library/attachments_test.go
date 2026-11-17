@@ -628,12 +628,11 @@ func TestIndexPathFollowsAMoveWhenCancelled(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 	}()
-	if _, err := NewScanner(cat, probe, slog.Default()).IndexPath(reqCtx, *lib, "New/Book"); err != nil {
-		t.Fatalf("IndexPath after its state moved: %v", err)
+	s := NewScanner(cat, probe, slog.Default())
+	if _, err := s.IndexPath(reqCtx, *lib, "New/Book"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("IndexPath cancelled mid-read: %v, want context.Canceled", err)
 	}
-	if reqCtx.Err() == nil {
-		t.Fatal("the request was never cancelled mid-read")
-	}
+	waitNoFlight(t, s, *lib, "New/Book") // the read goes on past the request
 	if got := bookPaths(t, cat, lib.ID); !slices.Equal(got, []string{"New/Book"}) {
 		t.Fatalf("books = %q, want the moved book only", got)
 	}

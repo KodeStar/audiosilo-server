@@ -142,6 +142,24 @@ type bookRead struct {
 	book    *catalog.Book
 	existed bool // indexed before this scan
 	done    chan struct{}
+	// The book's flight (Scanner.startFlight), held from before the read until
+	// the book is written or dropped; nil when the scan stopped first.
+	key    bookKey
+	flight *indexFlight
+}
+
+// endFlight ends the read's flight once its book is written (err nil) or not,
+// after the read is done; a book not written leaves its waiters to read it
+// themselves.
+func (r *bookRead) endFlight(s *Scanner, err error) {
+	if r.flight == nil {
+		return
+	}
+	if err != nil {
+		err = errReadDropped
+	}
+	s.endFlight(r.key, r.flight, err)
+	r.flight = nil
 }
 
 // finished reports whether the read is done, without waiting.
