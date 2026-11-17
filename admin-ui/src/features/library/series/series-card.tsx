@@ -333,9 +333,11 @@ function Shelf({
 function StateMark({ state }: { state: 'preorder' | 'new' }) {
   const Icon = state === 'preorder' ? CalendarClock : Sparkles;
   return (
+    // The spine's text runs top to bottom (vertical-rl), so the gap before the
+    // date is on the inline axis (me-1), not a physical right margin.
     <Icon
       data-testid={`spine-mark-${state}`}
-      className="mr-1 inline size-[1em] align-[-0.125em]"
+      className="me-1 inline size-[1em] align-[-0.125em]"
       aria-hidden="true"
     />
   );
