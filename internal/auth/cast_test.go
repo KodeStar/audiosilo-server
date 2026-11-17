@@ -234,8 +234,8 @@ func TestCastTokenIsNoDevice(t *testing.T) {
 	}
 }
 
-// A device keeps at most maxCastTokens: a mint past it drops its oldest, and
-// never another person's.
+// A device keeps at most maxCastTokens: a mint past it drops its least recently
+// used (here its oldest, as none is used), and never another person's.
 func TestCastTokenCap(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -268,6 +268,96 @@ func TestCastTokenCap(t *testing.T) {
 	}
 	if _, _, err := resolveCast(s, ctx, annTok, "Author/Book"); err != nil {
 		t.Fatalf("another person's token was dropped: %v", err)
+	}
+}
+
+// Past the cap the least recently used token goes, not the oldest minted: a
+// sender re-minting never ends the token its receiver is playing with.
+// Allowed: the first token minted, in use since, survives a mint at the cap.
+// Denied: the idle token minted after it is evicted and refused.
+func TestCastTokenCapEvictsLeastRecentlyUsed(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	sam, _, phone := castSender(t, s, ctx, "sam")
+	playing, _, err := s.IssueCastToken(ctx, sam.ID, phone, 3, "Author/Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(time.Minute)
+	var idle []string
+	for range maxCastTokens - 1 {
+		sec, _, err := s.IssueCastToken(ctx, sam.ID, phone, 3, "Author/Book")
+		if err != nil {
+			t.Fatal(err)
+		}
+		idle = append(idle, sec)
+	}
+	// The receiver keeps reading the book: its token's last_seen moves past
+	// every other token's mint.
+	*now = now.Add(10 * time.Minute)
+	if _, _, err := resolveCast(s, ctx, playing, "Author/Book/01.mp3"); err != nil {
+		t.Fatalf("the playing token = %v", err)
+	}
+	*now = now.Add(time.Minute)
+	newest, _, err := s.IssueCastToken(ctx, sam.ID, phone, 3, "Author/Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := resolveCast(s, ctx, playing, "Author/Book/02.mp3"); err != nil {
+		t.Fatalf("the token in use was evicted by a mint at the cap: %v", err)
+	}
+	if _, _, err := resolveCast(s, ctx, newest, "Author/Book"); err != nil {
+		t.Fatalf("the new token = %v", err)
+	}
+	if _, _, err := resolveCast(s, ctx, idle[0], "Author/Book"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("the least recently used token = %v, want ErrInvalidToken", err)
+	}
+	for i, sec := range idle[1:] {
+		if _, _, err := resolveCast(s, ctx, sec, "Author/Book"); err != nil {
+			t.Fatalf("idle token %d = %v", i+1, err)
+		}
+	}
+}
+
+// A mint never deletes the token it returns, whatever the clock says: after the
+// clock steps back, every other token's time is ahead of the new one's mint.
+// Allowed: the new cast and editor tokens resolve. Denied: one of the others
+// goes in their place, so each use still keeps its cap.
+func TestCastTokenMintSurvivesClockStepBack(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	sam, _, phone := castSender(t, s, ctx, "sam")
+	for range maxCastTokens {
+		if _, _, err := s.IssueCastToken(ctx, sam.ID, phone, 3, "Author/Book"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range maxEditorTokens {
+		if _, _, err := s.IssueEditorToken(ctx, sam.ID, phone, 3, "Author/Book"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	*now = now.Add(-time.Hour)
+	for _, c := range []struct {
+		name         string
+		issue        func(context.Context, int64, int64, int64, string) (string, string, error)
+		editor, keep int
+	}{
+		{"cast", s.IssueCastToken, 0, maxCastTokens},
+		{"editor", s.IssueEditorToken, 1, maxEditorTokens},
+	} {
+		sec, _, err := c.issue(ctx, sam.ID, phone, 3, "Author/Book")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := resolveCast(s, ctx, sec, "Author/Book"); err != nil {
+			t.Fatalf("the %s token just minted, after the clock stepped back = %v", c.name, err)
+		}
+		var n int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens t JOIN cast_grants g ON g.token_id = t.id
+			WHERE t.user_id = ? AND t.kind = 'cast' AND g.editor = ?`, sam.ID, c.editor).Scan(&n); err != nil || n != c.keep {
+			t.Fatalf("sam's %s tokens = %d, %v; want %d", c.name, n, err, c.keep)
+		}
 	}
 }
 
@@ -307,7 +397,8 @@ func TestCastTokenCapPerDevice(t *testing.T) {
 }
 
 // Over all of a person's devices at most maxCastTokensPerPerson stay: past it
-// the person's oldest go, whichever device minted them.
+// the person's least recently used go (here the oldest, as none is used),
+// whichever device minted them.
 func TestCastTokenCapPerPerson(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)

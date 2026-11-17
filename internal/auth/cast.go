@@ -26,7 +26,9 @@ import (
 //   - short-lived: castTokenTTL, and each device keeps at most maxCastTokens
 //     (counted by the sending token, cast_grants.parent_token_id, so a run of
 //     casts on one device never ends the cast another device is playing), with
-//     maxCastTokensPerPerson over all of a person's devices; the console's
+//     maxCastTokensPerPerson over all of a person's devices; past a cap the
+//     least recently used go (trimCastTokensSQL), so a sender re-minting drops
+//     an idle token before the one its receiver is reading; the console's
 //     chapter editor, whose <audio> streams a book the same way, mints an editor
 //     token (IssueEditorToken, cast_grants.editor): the same token with a shorter
 //     life and a cap of its own, so editing many books never drops a token a
@@ -45,10 +47,10 @@ const (
 	// sitting, not a durable credential.
 	castTokenTTL = 24 * time.Hour
 	// maxCastTokens is how many cast tokens one sending device (the token that
-	// mints them) keeps; a mint past it drops that device's oldest.
+	// mints them) keeps; a mint past it drops that device's least recently used.
 	maxCastTokens = 20
 	// maxCastTokensPerPerson bounds a person's cast tokens over all their
-	// devices; a mint past it drops the person's oldest.
+	// devices; a mint past it drops the person's least recently used.
 	maxCastTokensPerPerson = 100
 	// editorTokenTTL is how long an editor token works: a sitting at the
 	// console's chapter editor.
@@ -76,14 +78,22 @@ var (
 	useEditor = castUse{editor: 1, ttl: editorTokenTTL, keep: maxEditorTokens, perPerson: maxEditorTokens}
 )
 
-// trimCastTokensSQL deletes all but the newest ?3 of a person's (?1) cast
-// tokens of one use (?2, cast_grants.editor), among those one sending token
-// minted (?4) or, with ?4 = 0, all of them.
+// trimCastTokensSQL deletes all but the ?3 most recently used of a person's
+// (?1) cast tokens of one use (?2, cast_grants.editor), among those one sending
+// token minted (?4) or, with ?4 = 0, all of them. Recent use is the token's
+// last_seen, which every cover or stream request it authenticates bumps
+// (resolve, at most once a touchInterval), else its mint time (created_at; both
+// RFC3339 UTC in whole seconds, s.ts(), so they compare as text), the newer
+// mint first on a tie: a receiver playing a book keeps its token while a sender
+// re-mints, and a token minted and never used goes first. The token the mint
+// just made (?5) is kept whatever the times say: after the clock steps back,
+// the others' times are ahead of its mint, and the mint must never hand out a
+// token it has already deleted.
 const trimCastTokensSQL = `DELETE FROM tokens WHERE id IN
   (SELECT t.id FROM tokens t JOIN cast_grants g ON g.token_id = t.id
     WHERE t.kind = '` + KindCast + `' AND t.user_id = ?1 AND g.editor = ?2
       AND (?4 = 0 OR g.parent_token_id = ?4)
-    ORDER BY t.id DESC LIMIT -1 OFFSET ?3)`
+    ORDER BY t.id = ?5 DESC, COALESCE(t.last_seen, t.created_at) DESC, t.id DESC LIMIT -1 OFFSET ?3)`
 
 // millisUTC is the wire format of the times auth hands the player (a cast
 // token's expiry, a member's created_at, a feed token's created_at): UTC with
@@ -167,9 +177,10 @@ func (s *Service) PruneCastTokens(ctx context.Context) error {
 // ends it), and returns the secret (shown once) and its expiry (fixed-width
 // millisecond UTC). The caller has checked the person may see the book. In the
 // same transaction it deletes every dead cast token (pruneCastTokensSQL) and
-// keeps only the newest maxCastTokens the sending token minted, and the
-// person's newest maxCastTokensPerPerson (editor tokens apart): a device casting
-// many books never ends the cast another device is playing.
+// keeps only the maxCastTokens most recently used the sending token minted, and
+// the person's maxCastTokensPerPerson most recently used (editor tokens apart,
+// trimCastTokensSQL): a device casting many books never ends the cast another
+// device is playing.
 func (s *Service) IssueCastToken(ctx context.Context, userID, parentTokenID, libraryID int64, bookPath string) (secret, expiresAt string, err error) {
 	return s.issueCastToken(ctx, useCast, userID, parentTokenID, libraryID, bookPath)
 }
@@ -212,14 +223,15 @@ func (s *Service) issueCastToken(ctx context.Context, use castUse, userID, paren
 		}
 		// The caps, among the person's tokens of this use only (every cast
 		// token has a grant by now: the prune above deleted any without one):
-		// all but the newest use.keep of this sending token's go, then all but
-		// the person's newest use.perPerson (alone when it is no larger).
+		// all but the use.keep most recently used of this sending token's go,
+		// then all but the person's use.perPerson most recently used (alone
+		// when it is no larger), the token just minted (id) kept by both.
 		if use.keep < use.perPerson {
-			if _, err := tx.ExecContext(ctx, trimCastTokensSQL, userID, use.editor, use.keep, parentTokenID); err != nil {
+			if _, err := tx.ExecContext(ctx, trimCastTokensSQL, userID, use.editor, use.keep, parentTokenID, id); err != nil {
 				return err
 			}
 		}
-		_, err = tx.ExecContext(ctx, trimCastTokensSQL, userID, use.editor, use.perPerson, 0)
+		_, err = tx.ExecContext(ctx, trimCastTokensSQL, userID, use.editor, use.perPerson, 0, id)
 		return err
 	})
 	if err != nil {
