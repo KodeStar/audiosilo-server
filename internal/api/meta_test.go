@@ -738,8 +738,9 @@ func TestMetaLibrivoxRecording(t *testing.T) {
 // TestMetaRecordedMatch: a book its identifiers don't match (it has none, or
 // upstream doesn't know them) answers /meta from its recorded community match
 // (the console's), LibriVox block included; one with no match stays unmatched;
-// a book its ASIN matches ignores its recorded match; and the route's scope
-// check still comes first.
+// a recorded work upstream doesn't know leaves the ASIN's answer (one it knows
+// wins: TestWorkRuleFollowsRecordedMatch); and the route's scope check still
+// comes first.
 func TestMetaRecordedMatch(t *testing.T) {
 	t.Parallel()
 	lv := strings.Replace(martianWorkBody, `"id":"rec1",`,
@@ -809,12 +810,13 @@ func TestMetaRecordedMatch(t *testing.T) {
 			t.Fatalf("unmatched book's cover = %d %s, want 404", resp.StatusCode, body)
 		}
 	})
-	t.Run("matched ASIN ignores the recorded match", func(t *testing.T) {
+	t.Run("a recorded work upstream lacks keeps the ASIN's", func(t *testing.T) {
 		t.Parallel()
 		e := newMetaEnvMock(t, true, &mockMetaserve{})
 		libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
-		// The mock knows no "artemis" work: had the match been asked, the
-		// answer would be unmatched.
+		// The mock knows no "artemis" work: the match is asked (it names
+		// another work than the ASIN's, server#412) and its 404 leaves the
+		// ASIN's answer standing rather than unmatching the book.
 		anchor(t, e, libID, "Andy Weir/The Martian", "artemis", "")
 		if body := get(t, e, libID, "Andy Weir/The Martian"); !strings.Contains(body, `"matched":true,"work":{"id":"the-martian"`) {
 			t.Fatalf("meta = %s, want the ASIN's work", body)
@@ -847,3 +849,4 @@ func TestMetaRecordedMatch(t *testing.T) {
 		}
 	})
 }
+

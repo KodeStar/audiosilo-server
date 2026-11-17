@@ -19,8 +19,8 @@ const MaxOtherRecordings = 20
 // OtherRecordings returns the other books within scopes that are recordings of
 // book's community work (its WorkID, workIDExpr), list shape: books libraries
 // only, not book itself, and one book per recording (match.Recordings: a book
-// sharing a normalized ASIN with book, or with one before it, or an ISBN when
-// either has no ASIN, is the same recording again and left out; books with
+// sharing a normalized ASIN with book, or with one before it, or, with no ASIN
+// of its own, an ISBN, is the same recording again and left out; books with
 // different ASINs never are). The book's own library comes first, then
 // by title, then narrator, then path, and of a recording's copies the first in
 // that order is the one kept; at most MaxOtherRecordings. None when the book has

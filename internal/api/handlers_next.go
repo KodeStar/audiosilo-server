@@ -112,19 +112,22 @@ func (a *API) resolveNext(ctx context.Context, lib *catalog.Library, scope catal
 // localRails runs only when there is one. work.Local is set when its entry is
 // one of the caller's books, and placed is then that book's indexed metadata
 // (when found); a later rail's placed entry never answers instead. work is nil
-// when there is no community answer: metadata off, the book unmatched or without
+// when there is no community answer: metadata off, the book unmatched (by its
+// identifiers and its recorded match: bookEnrichment, /meta's work) or without
 // rails, the upstream failing, or no rail deciding. When the entry can't be
 // placed, work is it without `local`, as /meta degrades. Of the caller's several
 // recordings of the next work, `local` is the pick (meta's pickRank: book's
 // narrator first), so Next follows the same reader.
 func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.Book) (work *meta.MetaSeriesWork, placed *catalog.Book) {
-	if !a.metadataOn() || (book.ASIN == "" && book.ISBN == "") {
+	if !a.metadataOn() {
 		return nil, nil
 	}
-	env, err := a.meta.Enrich(ctx, book.ASIN, book.ISBN)
-	if err != nil {
-		if !errors.Is(err, meta.ErrNotFound) {
-			a.log.Warn("meta lookup for next book failed", "err", err, "library", libraryID, "path", book.RelPath)
+	// /meta's work rule: a book matched only in the console (no ASIN or ISBN,
+	// or another work than theirs) follows its recorded match.
+	env, err, matchErr := a.bookEnrichment(ctx, book)
+	if err != nil || matchErr != nil {
+		if matchErr != nil || !errors.Is(err, meta.ErrNotFound) {
+			a.log.Warn("meta lookup for next book failed", "err", errors.Join(err, matchErr), "library", libraryID, "path", book.RelPath)
 		}
 		return nil, nil
 	}
