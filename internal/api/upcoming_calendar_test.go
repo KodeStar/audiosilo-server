@@ -64,14 +64,15 @@ func expanseReader(t *testing.T, u *upcomingEnv) (id int64, tok string, shareID 
 }
 
 // holdCopy gives the admin a copy of workID (carrying asin) at path in a
-// second library, so their Upcoming list drops it.
-func holdCopy(t *testing.T, u *upcomingEnv, path, asin, workID string) {
+// second library, so their Upcoming list drops it, and returns that library's id.
+func holdCopy(t *testing.T, u *upcomingEnv, path, asin, workID string) int64 {
 	t.Helper()
 	other, err := u.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Other", Root: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	u.ownedCopy(t, other.ID, path, asin, workID)
+	return other.ID
 }
 
 // mintFeed POSTs /me/upcoming/calendar as tok, wanting 201, and returns the

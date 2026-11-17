@@ -202,14 +202,10 @@ func TestUpcomingOwnCopyElsewhere(t *testing.T) {
 	t.Parallel()
 	u := newUpcomingEnv(t)
 	ctx := context.Background()
-	other, err := u.cat.CreateLibrary(ctx, catalog.Library{Name: "Other", Root: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	u.ownedCopy(t, other.ID, "Loose/Caliban", "B0CALIBAN1", "e2")
+	other := holdCopy(t, u, "Loose/Caliban", "B0CALIBAN1", "e2")
 	// The same series held in the other library too: e3 is listed once.
-	u.book(t, other.ID, "Expanse/1", "The Expanse", 1)
-	u.series(t, other.ID, "The Expanse", "expanse", []catalog.MetaSeriesMember{
+	u.book(t, other, "Expanse/1", "The Expanse", 1)
+	u.series(t, other, "The Expanse", "expanse", []catalog.MetaSeriesMember{
 		{WorkID: "e2", Position: "2", ReleaseDate: "2012"}, {WorkID: "e3", Position: "3", ReleaseDate: "2026-10-01"},
 	},
 		[]catalog.UpcomingItem{{WorkID: "e3", Kind: catalog.UpcomingReleased, ReleaseDate: "2026-10-01", Position: "3"}})

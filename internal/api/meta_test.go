@@ -735,6 +735,17 @@ func TestMetaLibrivoxRecording(t *testing.T) {
 	})
 }
 
+// anchorMatch records path's community match as the console does: work, and
+// recording when not "".
+func anchorMatch(t *testing.T, e *testEnv, libID int64, path, work, recording string) {
+	t.Helper()
+	if err := e.cat.EditBook(context.Background(), libID, path, catalog.BookEdit{
+		Match: &catalog.MatchAnchor{WorkID: work, RecordingID: recording}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestMetaRecordedMatch: a book its identifiers don't match (it has none, or
 // upstream doesn't know them) answers /meta from its recorded community match
 // (the console's), LibriVox block included; one with no match stays unmatched;
@@ -748,14 +759,6 @@ func TestMetaRecordedMatch(t *testing.T) {
 	if lv == martianWorkBody {
 		t.Fatal("fixture replace did not apply")
 	}
-	anchor := func(t *testing.T, e *testEnv, libID int64, path, work, recording string) {
-		t.Helper()
-		if err := e.cat.EditBook(context.Background(), libID, path, catalog.BookEdit{
-			Match: &catalog.MatchAnchor{WorkID: work, RecordingID: recording}, Source: catalog.SourceCommunity,
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
 	get := func(t *testing.T, e *testEnv, libID int64, path string) string {
 		t.Helper()
 		return getGenerated(t, e, libID, path, "", adminSession(t, e)).raw
@@ -765,7 +768,7 @@ func TestMetaRecordedMatch(t *testing.T) {
 		t.Parallel()
 		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
 		libID := seedBook(t, e, "LibriVox/The Martian", "")
-		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		anchorMatch(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
 		body := get(t, e, libID, "LibriVox/The Martian")
 		for _, want := range []string{`"matched":true`, `"recording":{"id":"rec1"`, `"librivox":{"id":47,"url":"https://librivox.org/the-martian-by-andy-weir/"}`} {
 			if !strings.Contains(body, want) {
@@ -785,7 +788,7 @@ func TestMetaRecordedMatch(t *testing.T) {
 		t.Parallel()
 		e := newMetaEnvMock(t, true, &mockMetaserve{lookupCode: http.StatusNotFound, work: lv})
 		libID := seedBook(t, e, "LibriVox/The Martian", "B0UNKNOWN")
-		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		anchorMatch(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
 		if body := get(t, e, libID, "LibriVox/The Martian"); !strings.Contains(body, `"librivox":{"id":47`) {
 			t.Fatalf("meta = %s, want the recorded match", body)
 		}
@@ -801,7 +804,7 @@ func TestMetaRecordedMatch(t *testing.T) {
 		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID, RelPath: "LibriVox/Other", Title: "Other", Author: "LibriVox", AddedAt: "2020-01-01"}); err != nil {
 			t.Fatal(err)
 		}
-		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		anchorMatch(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
 		tok := adminSession(t, e)
 		if resp, body := e.do(t, "GET", metaCoverPath(libID, "LibriVox/The Martian", "https://c/1.jpg", ""), tok, ""); resp.StatusCode != http.StatusBadGateway || !strings.Contains(body, "cover_unavailable") {
 			t.Fatalf("matched book's cover = %d %s, want it handed out (502 cover_unavailable from the stubbed fetch)", resp.StatusCode, body)
@@ -817,7 +820,7 @@ func TestMetaRecordedMatch(t *testing.T) {
 		// The mock knows no "artemis" work: the match is asked (it names
 		// another work than the ASIN's, server#412) and its 404 leaves the
 		// ASIN's answer standing rather than unmatching the book.
-		anchor(t, e, libID, "Andy Weir/The Martian", "artemis", "")
+		anchorMatch(t, e, libID, "Andy Weir/The Martian", "artemis", "")
 		if body := get(t, e, libID, "Andy Weir/The Martian"); !strings.Contains(body, `"matched":true,"work":{"id":"the-martian"`) {
 			t.Fatalf("meta = %s, want the ASIN's work", body)
 		}
@@ -826,11 +829,11 @@ func TestMetaRecordedMatch(t *testing.T) {
 		t.Parallel()
 		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
 		libID := seedBook(t, e, "LibriVox/The Martian", "")
-		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		anchorMatch(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
 		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID, RelPath: "Other/Secret", Title: "Secret", Author: "Other", AddedAt: "2020-01-01"}); err != nil {
 			t.Fatal(err)
 		}
-		anchor(t, e, libID, "Other/Secret", "the-martian", "rec1")
+		anchorMatch(t, e, libID, "Other/Secret", "the-martian", "rec1")
 		kid, tok := newUserWithSession(t, e, "kid", false)
 		share, err := e.cat.CreateShare(context.Background(), catalog.Share{Name: "LibriVox only",
 			Paths: []catalog.PathRule{{LibraryID: libID, Path: "LibriVox"}}})

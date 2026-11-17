@@ -949,18 +949,10 @@ func TestWorkRuleFollowsRecordedMatch(t *testing.T) {
 		// Its ASIN's lookup fails; its recorded match is work one.
 		&catalog.Book{RelPath: "Outage", ASIN: "B0DOWN"},
 	)
-	anchor := func(path, work string) {
-		t.Helper()
-		if err := e.cat.EditBook(context.Background(), e.lib.ID, path, catalog.BookEdit{
-			Match: &catalog.MatchAnchor{WorkID: work}, Source: catalog.SourceCommunity,
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	anchor("Saga/1 Yearsley", "one")
-	anchor("Saga/2 Yearsley", "two")
-	anchor("Rematched", "three")
-	anchor("Outage", "one")
+	anchorMatch(t, e.testEnv, e.lib.ID, "Saga/1 Yearsley", "one", "")
+	anchorMatch(t, e.testEnv, e.lib.ID, "Saga/2 Yearsley", "two", "")
+	anchorMatch(t, e.testEnv, e.lib.ID, "Rematched", "three", "")
+	anchorMatch(t, e.testEnv, e.lib.ID, "Outage", "one", "")
 	metaWork := func(path string) string {
 		t.Helper()
 		resp, body := e.do(t, "GET", e.url("meta", path), e.adminTok, "")
@@ -998,7 +990,7 @@ func TestWorkRuleFollowsRecordedMatch(t *testing.T) {
 	}
 	// A book whose recorded match agrees with its ASIN keeps the ASIN's
 	// answer (and its recording); one with no match keeps its ASIN's.
-	anchor("Saga/2 Klett", "two")
+	anchorMatch(t, e.testEnv, e.lib.ID, "Saga/2 Klett", "two", "")
 	if got := metaWork("Saga/2 Klett"); got != "two" {
 		t.Fatalf("meta of an agreeing match = %q", got)
 	}
