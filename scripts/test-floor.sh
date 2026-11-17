@@ -9,13 +9,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Listed first, not read from a pipe: a go list that fails stops the script
+# here rather than passing for having listed nothing.
+untested=$(go list -f '{{if and (eq (len .TestGoFiles) 0) (eq (len .XTestGoFiles) 0)}}{{.ImportPath}} {{.Dir}}{{end}}' ./internal/... ./pkg/...)
+
 missing=0
 while read -r pkg dir; do
   [ -n "$pkg" ] || continue
   if grep -qsE '^// no-tests: [^[:space:]]' "$dir"/*.go; then continue; fi
   echo "test floor: $pkg has no tests (add a *_test.go, or a '// no-tests: <why>' line)" >&2
   missing=$((missing + 1))
-done < <(go list -f '{{if and (eq (len .TestGoFiles) 0) (eq (len .XTestGoFiles) 0)}}{{.ImportPath}} {{.Dir}}{{end}}' ./internal/... ./pkg/...)
+done <<<"$untested"
 
 if [ "$missing" -gt 0 ]; then
   echo "test floor: $missing package(s) without tests" >&2
