@@ -160,7 +160,7 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 			continue
 		}
 		if r.bookID == 0 {
-			c.nameFromHolding(ctx, &r.HouseListeningRow)
+			c.nameFromHolding(ctx, &r.HouseListeningRow, callerScopes)
 		}
 		if r.Title == "" {
 			r.Title = path.Base(r.Path) // not indexed (any more): the path names it
@@ -191,11 +191,13 @@ type houseRow struct {
 // discs were joined into one book shows that book's title and author, not
 // "CD1" (server#222). The chapter stays unread: the session's position is on
 // the disc's own timeline, not the joined book's. A failed lookup leaves the
-// path to name it, as for a book no longer indexed. Only the two columns are
-// read: the route is polled while a person shares.
-func (c *Catalog) nameFromHolding(ctx context.Context, r *HouseListeningRow) {
-	id, _, err := c.bookHolding(ctx, r.LibraryID, r.Path, false)
-	if err != nil {
+// path to name it, as for a book no longer indexed. So does a holding book the
+// caller's scopes don't grant (a share of the disc folder alone): its title
+// isn't theirs to read. Only the two columns are read: the route is polled
+// while a person shares.
+func (c *Catalog) nameFromHolding(ctx context.Context, r *HouseListeningRow, callerScopes []Scope) {
+	id, book, err := c.bookHolding(ctx, r.LibraryID, r.Path, false)
+	if err != nil || !ScopesAllow(callerScopes, Ref{LibraryID: r.LibraryID, Path: book}) {
 		return
 	}
 	var (
