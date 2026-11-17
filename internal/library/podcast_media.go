@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
@@ -73,11 +74,20 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 // is not the one read (os.SameFile: the Bridge replaces feed.json by a rename,
 // so a new copy is a new file), or its size or mtime moved; OpenPodcast's
 // other checks (the signature against the pin, the publish barrier, the audio
-// file's identity and size) still run on every open.
+// file's identity and size) still run on every open. A copy whose mtime is
+// within feedRacyWindow of its read is not remembered (git's racy-clean
+// rule): a rewrite in place, or onto a reused inode, inside the file system's
+// timestamp granularity could keep the size and mtime the memo checks.
 var podcastFeeds feedMemo
 
-// maxFeedMemo bounds the remembered copies: one per show streamed lately.
-const maxFeedMemo = 64
+const (
+	// maxFeedMemo bounds the remembered copies: one per show streamed lately.
+	maxFeedMemo = 64
+	// feedRacyWindow is how old a copy's mtime must be when it is read to be
+	// remembered: past the coarsest timestamps a library may sit on (FAT's
+	// two seconds; a second on some network shares).
+	feedRacyWindow = 2 * time.Second
+)
 
 // feedMemo is the copies remembered, by feed.json's path.
 type feedMemo struct {
@@ -112,8 +122,9 @@ func (c *feedCopy) holds(rel, showID, id string, fetch feed.Fetch) bool {
 	return false
 }
 
-// read is filename's copy (show's feed.json), remembered while the file is
-// the one read, at the size and mtime read; feed.ReadFile's error otherwise.
+// read is filename's copy (show's feed.json), remembered (once its mtime is
+// past feedRacyWindow) while the file is the one read, at the size and mtime
+// read; feed.ReadFile's error otherwise.
 // before is filename's Lstat, taken by the caller before the call.
 func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, error) {
 	m.mu.Lock()
@@ -132,11 +143,12 @@ func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, e
 			c.episodes[ep.Path] = append(c.episodes[ep.Path], feedEpisode{id: ep.ID, fetch: *ep.Fetch})
 		}
 	}
-	// Remembered only when the file read is the one stat'ed before: one
-	// replaced meanwhile may have been read in either version.
-	if after, err := os.Lstat(filename); err == nil && sameFeedFile(before, after) {
+	// Remembered only when the file read is the one stat'ed before (one
+	// replaced meanwhile may have been read in either version), and its mtime
+	// is past the racy window (one written since could keep it).
+	if after, err := os.Lstat(filename); err == nil && sameFeedFile(before, after) && time.Since(before.ModTime()) >= feedRacyWindow {
 		m.mu.Lock()
-		if m.feeds == nil || len(m.feeds) >= maxFeedMemo {
+		if _, held := m.feeds[filename]; m.feeds == nil || (!held && len(m.feeds) >= maxFeedMemo) {
 			m.feeds = map[string]*feedCopy{}
 		}
 		m.feeds[filename] = c

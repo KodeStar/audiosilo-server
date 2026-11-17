@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // BenchmarkOpenPodcast times opening a downloaded episode for one stream
@@ -44,6 +45,7 @@ func BenchmarkOpenPodcast(b *testing.B) {
 	if err := os.WriteFile(filepath.Join(dir, "feed.json"), big, 0o644); err != nil {
 		b.Fatal(err)
 	}
+	setFeedTime(b, filepath.Join(dir, "feed.json"), time.Now().Add(-time.Hour)) // past the racy window
 	if _, err := s.Scan(ctx, *lib); err != nil {
 		b.Fatal(err)
 	}

@@ -233,10 +233,11 @@ func TestPodcastFeedMemo(t *testing.T) {
 	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
 	ep := f.Episodes[0]
 	writePodcastFixture(t, filepath.Join(lib.Root, filepath.FromSlash(ep.Path)), "chap-v24-reverse.mp3")
+	filename := filepath.Join(dir, "feed.json")
+	setFeedTime(t, filename, time.Now().Add(-time.Hour)) // past the racy window
 	if _, err := s.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	filename := filepath.Join(dir, "feed.json")
 	for range 2 {
 		opened, _, err := OpenPodcast(ctx, cat, *lib, ep.Path)
 		if err != nil {
@@ -256,36 +257,83 @@ func TestPodcastFeedMemo(t *testing.T) {
 	}
 	// Another file, same size and mtime (so the pin's feed signature still
 	// matches), its episode's digest changed in one hex digit.
-	raw, err := os.ReadFile(filename)
-	if err != nil {
-		t.Fatal(err)
-	}
 	info, err := os.Stat(filename)
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := ep.Fetch.SHA256
-	last := "0"
-	if strings.HasSuffix(digest, "0") {
-		last = "1"
-	}
-	swapped := digest[:len(digest)-1] + last
-	changed := strings.Replace(string(raw), digest, swapped, 1)
-	if changed == string(raw) {
-		t.Fatal("the fixture's digest is not in its feed")
-	}
 	tmp := filename + ".tmp"
-	if err := os.WriteFile(tmp, []byte(changed), 0o644); err != nil {
+	if err := os.WriteFile(tmp, regeneratedFeed(t, filename, ep.Fetch.SHA256), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chtimes(tmp, info.ModTime(), info.ModTime()); err != nil {
-		t.Fatal(err)
-	}
+	setFeedTime(t, tmp, info.ModTime())
 	if err := os.Rename(tmp, filename); err != nil {
 		t.Fatal(err)
 	}
 	if opened, _, err := OpenPodcast(ctx, cat, *lib, ep.Path); err == nil {
 		opened.Close()
 		t.Fatal("served from the feed copy remembered for another file")
+	}
+}
+
+// TestPodcastFeedMemoRacy (server#180): a feed.json read within the racy
+// window of its mtime is not remembered, so the same file rewritten in place at
+// the same size and mtime (a timestamp too coarse to tell the writes apart),
+// its episode no longer naming the pinned generation, is read again and refused.
+func TestPodcastFeedMemoRacy(t *testing.T) {
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
+	ep := f.Episodes[0]
+	writePodcastFixture(t, filepath.Join(lib.Root, filepath.FromSlash(ep.Path)), "chap-v24-reverse.mp3")
+	filename := filepath.Join(dir, "feed.json")
+	mtime := time.Now().Add(time.Hour) // never past the window, however slow the run
+	setFeedTime(t, filename, mtime)
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	opened, _, err := OpenPodcast(ctx, cat, *lib, ep.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened.Close()
+	before, err := os.Lstat(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, regeneratedFeed(t, filename, ep.Fetch.SHA256), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setFeedTime(t, filename, mtime)
+	if after, err := os.Lstat(filename); err != nil || !os.SameFile(before, after) || feedSignature(after) != feedSignature(before) {
+		t.Fatalf("the rewrite was not in place at the same signature (%v)", err)
+	}
+	if opened, _, err := OpenPodcast(ctx, cat, *lib, ep.Path); err == nil {
+		opened.Close()
+		t.Fatal("served from a feed copy read within the racy window")
+	}
+}
+
+// regeneratedFeed is filename's feed.json with digest, an episode's fetch
+// digest, changed in its last hex digit: the same size, another generation.
+func regeneratedFeed(t *testing.T, filename, digest string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := "0"
+	if strings.HasSuffix(digest, "0") {
+		last = "1"
+	}
+	changed := strings.Replace(string(raw), digest, digest[:len(digest)-1]+last, 1)
+	if changed == string(raw) {
+		t.Fatal("the fixture's digest is not in its feed")
+	}
+	return []byte(changed)
+}
+
+// setFeedTime sets filename's access and modification times to at.
+func setFeedTime(t testing.TB, filename string, at time.Time) {
+	t.Helper()
+	if err := os.Chtimes(filename, at, at); err != nil {
+		t.Fatal(err)
 	}
 }
