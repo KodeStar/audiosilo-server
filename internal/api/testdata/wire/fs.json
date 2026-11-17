@@ -1,0 +1,22 @@
+{
+  "route": "GET /api/v1/libraries/{id}/fs?path=Will Wight",
+  "shape": {
+    "entries": [
+      {
+        "author": "string",
+        "duration": "number",
+        "is_audio": "boolean",
+        "is_book": "boolean",
+        "is_dir": "boolean",
+        "mod_time": "number",
+        "name": "string",
+        "path": "string",
+        "size": "number",
+        "title": "string"
+      }
+    ],
+    "offset": "number",
+    "path": "string",
+    "total": "number"
+  }
+}

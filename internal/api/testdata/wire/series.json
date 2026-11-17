@@ -1,0 +1,6 @@
+{
+  "route": "GET /api/v1/libraries/{id}/series",
+  "shape": {
+    "series": []
+  }
+}

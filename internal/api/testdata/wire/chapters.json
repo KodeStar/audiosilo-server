@@ -1,0 +1,31 @@
+{
+  "route": "GET /api/v1/libraries/{id}/chapters?path=<a two-file book>",
+  "shape": {
+    "chapters": [
+      {
+        "book_offset": "number",
+        "end": "number",
+        "file_index": "number",
+        "file_path": "string",
+        "index": "number",
+        "start": "number",
+        "title": "string"
+      }
+    ],
+    "codec": "string",
+    "direct_playable": "boolean",
+    "duration": "number",
+    "files": [
+      {
+        "duration": "number",
+        "format": "string",
+        "rel_path": "string",
+        "seq": "number",
+        "size": "number"
+      }
+    ],
+    "is_folder": "boolean",
+    "library_id": "number",
+    "path": "string"
+  }
+}

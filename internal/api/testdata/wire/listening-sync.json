@@ -1,0 +1,27 @@
+{
+  "route": "POST /api/v1/me/listening/sync",
+  "shape": {
+    "progress": [
+      {
+        "device_id": "string",
+        "device_name": "string",
+        "duration": "number",
+        "finished": "boolean",
+        "library_id": "number",
+        "path": "string",
+        "playback_speed": "number",
+        "position": "number",
+        "started_at": "string",
+        "updated_at": "string",
+        "version": "number"
+      }
+    ],
+    "results": [
+      {
+        "id": "string",
+        "status": "string"
+      }
+    ],
+    "server_time": "string"
+  }
+}

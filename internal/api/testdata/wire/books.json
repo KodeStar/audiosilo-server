@@ -1,0 +1,24 @@
+{
+  "route": "GET /api/v1/libraries/{id}/books",
+  "shape": {
+    "books": [
+      {
+        "added_at": "string",
+        "author": "string",
+        "codec": "string",
+        "cover_version": "string",
+        "duration": "number",
+        "format": "string",
+        "id": "number",
+        "is_folder": "boolean",
+        "library_id": "number",
+        "narrator": "string",
+        "rel_path": "string",
+        "series": "string",
+        "series_index": "number",
+        "size": "number",
+        "title": "string"
+      }
+    ]
+  }
+}

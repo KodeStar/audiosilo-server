@@ -1,0 +1,16 @@
+{
+  "route": "GET /api/v1/libraries/{id}/bookmarks?path=<a book>",
+  "shape": {
+    "bookmarks": [
+      {
+        "created_at": "string",
+        "id": "number",
+        "label": "string",
+        "library_id": "number",
+        "note": "string",
+        "path": "string",
+        "position": "number"
+      }
+    ]
+  }
+}

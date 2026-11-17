@@ -1,0 +1,15 @@
+{
+  "route": "GET /api/v1/me",
+  "shape": {
+    "disabled": "boolean",
+    "has_password": "boolean",
+    "has_recovery": "boolean",
+    "id": "number",
+    "is_demo": "boolean",
+    "last_seen_at": "string",
+    "managed_by": "null",
+    "member_kind": "null",
+    "role": "string",
+    "username": "string"
+  }
+}

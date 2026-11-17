@@ -1,0 +1,13 @@
+{
+  "route": "GET /api/v1/libraries/{id}/authors",
+  "shape": {
+    "authors": [
+      {
+        "books": "number",
+        "duration": "number",
+        "name": "string"
+      }
+    ],
+    "unknown": "number"
+  }
+}

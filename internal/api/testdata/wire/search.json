@@ -1,0 +1,6 @@
+{
+  "route": "GET /api/v1/search?q=cradle",
+  "shape": {
+    "books": []
+  }
+}
