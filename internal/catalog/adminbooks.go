@@ -849,7 +849,7 @@ type PeopleAggregate struct {
 }
 
 // The people fields an aggregate can be taken over; constant queries per field,
-// with one slot for the scope filter (aggregateScope).
+// with one slot for the library and scope filter (aggregateScope).
 const (
 	PeopleAuthors   = "author"
 	PeopleNarrators = "narrator"
@@ -857,21 +857,27 @@ const (
 
 var peopleQueries = map[string]string{
 	PeopleAuthors: `SELECT author, COUNT(*), COALESCE(SUM(duration), 0) FROM books
-		WHERE (? = 0 OR library_id = ?) AND %s GROUP BY author`,
+		WHERE %s GROUP BY author`,
 	PeopleNarrators: `SELECT narrator, COUNT(*), COALESCE(SUM(duration), 0) FROM books
-		WHERE (? = 0 OR library_id = ?) AND %s GROUP BY narrator`,
+		WHERE %s GROUP BY narrator`,
 }
 
-// aggregateScope is the WHERE fragment (over `books`) limiting an aggregate to a
-// caller's scope: nil is unrestricted (the admin console), else only the books of
-// the scope's library that it grants, so a scoped player never counts a book
-// outside the grant.
-func aggregateScope(scope *Scope) (string, []any) {
-	if scope == nil {
-		return bookLibraryIDs, nil
+// aggregateScope is the WHERE fragment (over `books`) limiting an aggregate to
+// one library (libraryID; 0 is every library, and then no condition is written,
+// so the query plan never carries an `? = 0 OR` the planner can't see past,
+// server#225) and a caller's scope: nil is unrestricted (the admin console), else
+// only the books of the scope's library that it grants, so a scoped player never
+// counts a book outside the grant.
+func aggregateScope(libraryID int64, scope *Scope) (string, []any) {
+	frag, args := bookLibraryIDs, []any(nil)
+	if libraryID != 0 {
+		frag, args = frag+` AND library_id = ?`, append(args, libraryID)
 	}
-	filter, args := scopesFilterSQL("library_id", "rel_path", []Scope{*scope})
-	return bookLibraryIDs + ` AND ` + filter, args
+	if scope != nil {
+		filter, fargs := scopesFilterSQL("library_id", "rel_path", []Scope{*scope})
+		frag, args = frag+` AND `+filter, append(args, fargs...)
+	}
+	return frag, args
 }
 
 // People aggregates the authors or narrators (field = PeopleAuthors/PeopleNarrators)
@@ -885,8 +891,8 @@ func (c *Catalog) People(ctx context.Context, field string, libraryID int64, sco
 	if !ok {
 		return nil, fmt.Errorf("unknown people field %q", field)
 	}
-	frag, fargs := aggregateScope(scope)
-	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(q, frag), append([]any{libraryID, libraryID}, fargs...)...)
+	frag, fargs := aggregateScope(libraryID, scope)
+	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(q, frag), fargs...)
 	if err != nil {
 		return nil, err
 	}
@@ -1024,17 +1030,16 @@ type SeriesCount struct {
 // A series is every spelling with one seriesKey, its counts merged and named by
 // seriesName; a series= filter on that name finds all its books (seriesFilter).
 func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope, memberships bool) ([]SeriesCount, error) {
-	frag, fargs := aggregateScope(scope)
+	frag, fargs := aggregateScope(libraryID, scope)
 	// Without memberships, only main series: the narrower query of the books
 	// that have one, with no list to read.
 	q := `SELECT series, author, series_index, series_index_end, '[]', duration, ` + matchedExpr + ` FROM books b
-		  WHERE series <> '' AND (? = 0 OR library_id = ?) AND %s`
+		  WHERE series <> '' AND %s`
 	if memberships {
 		q = `SELECT series, author, series_index, series_index_end, more_series, duration, ` + matchedExpr + ` FROM books b
-		  WHERE (series <> '' OR more_series <> '[]') AND (? = 0 OR library_id = ?) AND %s`
+		  WHERE (series <> '' OR more_series <> '[]') AND %s`
 	}
-	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(q, frag),
-		append([]any{libraryID, libraryID}, fargs...)...)
+	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(q, frag), fargs...)
 	if err != nil {
 		return nil, err
 	}

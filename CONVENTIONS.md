@@ -251,7 +251,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `API.startScan` queues the scan in the job queue (see "Job queue" below), which marks the
   library queued before the request returns so the first poll sees it; `GET /admin/invites` lists every account's invites (`auth.ListInvites`, never a
   code); `GET /admin/fs/dirs?path=` is the add-library folder picker (`library.ListDirs`:
-  absolute paths, folder names only, no dot-folders, 1,000-entry cap); `GET /admin/shares` adds
+  absolute paths, folder names only, no dot-folders, 1,000-entry cap; behind a `library.DirLister`,
+  4 listings at once and 5 s each, so a hung mount answers 404 `folder_unreadable`); `GET /admin/shares` adds
   `member_ids` (`catalog.ShareMembers`).
 - **Community metadata lookup (Phase 1.5, `internal/meta`)**: `GET
   /api/v1/libraries/{id}/meta?path=` (authed, scope-checked via `authorizedPath`

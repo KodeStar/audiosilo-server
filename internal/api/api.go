@@ -117,6 +117,9 @@ type API struct {
 	// timeoutDur bounds non-streaming requests (see the timeout middleware).
 	// Defaults to requestTimeout; a field so tests can shorten it.
 	timeoutDur time.Duration
+	// dirs is the folder picker's lister (library.ListDirs behind a deadline and
+	// a few slots); a field so tests can hand it a listing that hangs.
+	dirs *library.DirLister
 	// mountHints is GET /admin/setup's mount hint reader, library.MountHints;
 	// a field so tests can see when it is read.
 	mountHints func(exclude ...string) []string
@@ -244,6 +247,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		baseCtx:        context.Background(),
 		timeoutDur:     requestTimeout,
 		mountHints:     library.MountHints,
+		dirs:           library.NewDirLister(library.ListDirs, dirListSlots, dirListTimeout),
 		loginLimiter:   newLimiter(10, 15*time.Minute),
 		oidcLimiter:    newLimiter(10, 15*time.Minute),
 		redeemLimiter:  newLimiter(10, 15*time.Minute),

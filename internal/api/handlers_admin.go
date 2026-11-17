@@ -729,14 +729,20 @@ func (a *API) handleListInvites(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"invites": invites})
 }
 
-// maxDirListing caps one folder-picker listing.
-const maxDirListing = 1000
+// maxDirListing caps one folder-picker listing; dirListSlots and dirListTimeout
+// are the picker's library.DirLister: listings at once, and how long one is
+// waited for (a hung mount answers 404 folder_unreadable then).
+const (
+	maxDirListing  = 1000
+	dirListSlots   = 4
+	dirListTimeout = 5 * time.Second
+)
 
 // handleListDirs is the add-library folder picker: the subfolders of an absolute
 // server path (the filesystem root when ?path= is empty). Folder names only; see
 // library.ListDirs for the bounds.
 func (a *API) handleListDirs(w http.ResponseWriter, r *http.Request) {
-	listing, err := library.ListDirs(r.URL.Query().Get("path"), maxDirListing)
+	listing, err := a.dirs.List(r.Context(), r.URL.Query().Get("path"), maxDirListing)
 	if err != nil {
 		writeFolderError(w, err)
 		return
@@ -746,8 +752,9 @@ func (a *API) handleListDirs(w http.ResponseWriter, r *http.Request) {
 
 // writeFolderError answers a typed server folder the folder picker or the setup
 // preview refused: 400 path_not_absolute for a relative path, else 404
-// folder_unreadable (missing, not a folder, or not readable by the server: the
-// same answer, and the OS error, which can name the path, stays out of the body).
+// folder_unreadable (missing, not a folder, not readable by the server, or not
+// answering in time: the same answer, and the OS error, which can name the path,
+// stays out of the body).
 func writeFolderError(w http.ResponseWriter, err error) {
 	if errors.Is(err, library.ErrNotAbsolute) {
 		writeErrorCode(w, http.StatusBadRequest, codePathNotAbsolute, "path must be absolute")

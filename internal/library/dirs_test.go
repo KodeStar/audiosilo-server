@@ -1,11 +1,13 @@
 package library
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestListDirs(t *testing.T) {
@@ -82,5 +84,48 @@ func TestListDirsRoot(t *testing.T) {
 	}
 	if got.Parent != "" || !filepath.IsAbs(got.Path) {
 		t.Errorf("root listing = path %q parent %q, want an absolute root with no parent", got.Path, got.Parent)
+	}
+}
+
+// A listing that doesn't answer (a hung mount) is ErrDirsTimedOut at the
+// lister's time-out, and keeps its slot until it returns: with every slot held,
+// another listing times out too instead of starting a reader of its own. Once
+// the hung read returns its slot is free again. A clock only bounds the waits:
+// the hung listing never answers on its own.
+func TestDirListerBounded(t *testing.T) {
+	t.Parallel()
+	hang, started := make(chan struct{}), make(chan struct{}, 1)
+	var released bool
+	defer func() {
+		if !released {
+			close(hang)
+		}
+	}()
+	l := NewDirLister(func(dir string, _ int) (*DirListing, error) {
+		if dir == "/hung" {
+			started <- struct{}{}
+			<-hang
+		}
+		return &DirListing{Path: dir}, nil
+	}, 1, 50*time.Millisecond)
+	ctx := context.Background()
+	if _, err := l.List(ctx, "/hung", 0); !errors.Is(err, ErrDirsTimedOut) {
+		t.Fatalf("hung listing: %v, want ErrDirsTimedOut", err)
+	}
+	<-started
+	if _, err := l.List(ctx, "/fine", 0); !errors.Is(err, ErrDirsTimedOut) {
+		t.Fatalf("with the one slot held: %v, want ErrDirsTimedOut", err)
+	}
+	close(hang)
+	released = true
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, err := l.List(ctx, "/fine", 0)
+		if err == nil && got.Path == "/fine" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after the hung read returned: %v, want the listing", err)
+		}
 	}
 }

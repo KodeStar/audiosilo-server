@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
 // adminAndMember returns a session token for the env's admin and for a fresh
@@ -205,6 +207,25 @@ func TestAdminListDirs(t *testing.T) {
 	}
 	if code, _ := list("", dir); code != http.StatusUnauthorized {
 		t.Errorf("anonymous listing = %d, want 401", code)
+	}
+}
+
+// A folder whose listing doesn't answer (a hung network mount) is 404
+// folder_unreadable at the picker's time-out, not a request held for good
+// (server#224).
+func TestAdminListDirsHungMount(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	e.api.dirs = library.NewDirLister(func(string, int) (*library.DirListing, error) {
+		<-hang
+		return nil, errors.New("unreachable")
+	}, 1, 50*time.Millisecond)
+	resp, body := e.do(t, "GET", "/api/v1/admin/fs/dirs?path="+url.QueryEscape(t.TempDir()), adminTok, "")
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "folder_unreadable") {
+		t.Fatalf("hung listing = %d %s, want 404 folder_unreadable", resp.StatusCode, body)
 	}
 }
 
