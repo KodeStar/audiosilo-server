@@ -2912,7 +2912,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   lapsed lease requeued included); a job the Bridge holds (claimed, running or parked) carries on.
   `sidecars.contribute` (family `sidecars`; "Share with the community" after a local run: the Bridge files
   what its engine book holds): a book `path`, params strict `{work_id?, dimensions?}` (`dimensions` from
-  `characters`, `recaps`, each once, stored in that order; absent or empty = both); refused 409
+  `characters`, `recaps`, each once, stored in that order; absent or empty = both; no `work_id` takes the
+  book's recorded community match, `bridge.ContributeWork`, so the share files under the admin's match and
+  not the Bridge's own, bridge#25); refused 409
   `generate_open` while a `sidecars.generate` job is open for the book; a NEW generate job is refused 409
   `contribute_open` (`ErrContributeOpen`) while a contribute job is queued or working, and cancels a parked
   one ("replaced what it was sharing"); while `contributions` is off a queued (held) one gives way like a

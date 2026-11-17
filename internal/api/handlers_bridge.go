@@ -864,7 +864,8 @@ func (a *API) handleAdminBridgeUnpair(w http.ResponseWriter, r *http.Request) {
 // 409 code cannot_contribute unless the Bridge says it can; a meta.correct
 // job's changes must be the book's own edits (400 code not_edited,
 // checkCorrections). A path names an indexed book (404 otherwise) and the job
-// is about that book's own path.
+// is about that book's own path. A sidecars.contribute job whose params name
+// no work_id takes the book's recorded community match (bridge#25).
 func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Kind      string          `json:"kind"`
@@ -912,6 +913,18 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			nj.Params = params
+		}
+		if nj.Kind == bridge.KindContribute {
+			// Shared under the book's recorded community match when the
+			// request names no work: the admin's, not the Bridge's own.
+			match, err := a.cat.BookMatchAt(r.Context(), book.LibraryID, book.RelPath)
+			if err != nil {
+				a.writeBookError(w, err, "bridge queue failed", "could not load the book's match")
+				return
+			}
+			if match != nil {
+				nj.Params = bridge.ContributeWork(nj.Params, match.WorkID)
+			}
 		}
 		if nj.Kind == bridge.KindReadalong && book.Ebook == nil {
 			writeErrorCode(w, http.StatusConflict, "no_ebook", "this book has no ebook to align with its narration")

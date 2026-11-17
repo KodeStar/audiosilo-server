@@ -714,3 +714,22 @@ func TestModuleFor(t *testing.T) {
 		}
 	}
 }
+
+// ContributeWork fills a missing work_id and leaves everything else as sent:
+// params that name one, no work to give, and params contributeParams refuses
+// (Enqueue answers those; a fill must not make them pass).
+func TestContributeWork(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ raw, work, want string }{
+		{`{"dimensions":["recaps"]}`, "w", `{"work_id":"w","dimensions":["recaps"]}`},
+		{``, "w", `{"work_id":"w","dimensions":null}`},
+		{`{"work_id":"mine"}`, "w", `{"work_id":"mine"}`},
+		{`{}`, "", `{}`},
+		{`{"dimensions":["recaps"],"extra":1}`, "w", `{"dimensions":["recaps"],"extra":1}`},
+		{`{"work_id":`, "w", `{"work_id":`},
+	} {
+		if got := string(ContributeWork(json.RawMessage(c.raw), c.work)); got != c.want {
+			t.Errorf("ContributeWork(%s, %q) = %s, want %s", c.raw, c.work, got, c.want)
+		}
+	}
+}

@@ -56,6 +56,25 @@ func contributeParams(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(p)
 }
 
+// ContributeWork is sidecars.contribute's params raw with work_id set to
+// workID when they name none: the book's community match as this server
+// recorded it (an admin's, from the console), so the Bridge files under that
+// work rather than its own match of the book (bridge#25). Params that name a
+// work, a workID of "", or params contributeParams would refuse are returned
+// as they are (Enqueue refuses the last).
+func ContributeWork(raw json.RawMessage, workID string) json.RawMessage {
+	var p ContributeParams
+	if workID == "" || decodeStrict(raw, &p) != nil || p.WorkID != "" {
+		return raw
+	}
+	p.WorkID = workID
+	out, err := json.Marshal(p)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
 // SharedNothing reports whether j is a sidecars.contribute job that finished
 // having filed nothing: its result (the Bridge's) names no contribution
 // because the community already had each dimension it was asked for (covered).
