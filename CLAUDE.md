@@ -416,7 +416,7 @@ keep this index in step (one line per topic).
   - Community chapters (incl. Generated chapters, Bridge Phase 1d, and Edited chapters, server#240)
   - Podcasts (Bridge Phases 2c-1, 2c-2a, 2c-2b and 2c-3: discovery, OPML import/export)
   - Managed modules (Bridge Phase 2a, `internal/modules`, `api/modules.go`)
-  - Audible accounts (Bridge Phase 4a, module `audible`: `0063`, the Bridge's routes, `audible.poll` and its scheduler, the console's card and titles page, its Remove, `DELETE /admin/audible/accounts/{account}` outside the toggle)
+  - Audible accounts (Bridge Phase 4a, module `audible`: `0063`, the Bridge's routes, `audible.poll` and its scheduler, the console's card and titles page, its Remove, `GET` and `DELETE /admin/audible/accounts[/{account}]` outside the toggle)
   - Audible backups (Bridge Phase 4b, `audible.import`: `0064`, the policy and `policy_since`, preorders, the fold onto the title's match, the backup routes, the console's actions)
   - Audible unmatched titles (4b owner fixes, `0065`: `planned` and `contested` on the titles, the poll's `template`, the console's planned line and contested explanation)
   - Audible sync (Bridge Phase 4c, `audible.sync`, `0066`: the console's switch and Don't sync, the scheduler, FurthestOnly, `POST /bridge/audible/accounts/{account}/listening`, `GET /bridge/progress`)

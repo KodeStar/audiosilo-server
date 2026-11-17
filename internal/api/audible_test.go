@@ -129,7 +129,6 @@ func TestAudibleAdminRoutes(t *testing.T) {
 		t.Fatalf("put account: %d %s", code, out)
 	}
 	routes := []struct{ method, path string }{
-		{"GET", "/api/v1/admin/audible/accounts"},
 		{"GET", "/api/v1/admin/audible/titles"},
 		{"POST", "/api/v1/admin/audible/accounts/" + testAccount + "/poll"},
 	}
@@ -153,6 +152,32 @@ func TestAudibleAdminRoutes(t *testing.T) {
 			if resp, body := b.do(t, r.method, r.path, tok, ""); resp.StatusCode >= 300 {
 				t.Errorf("%s %s as the admin's %s: %d %s", r.method, r.path, name, resp.StatusCode, body)
 			}
+		}
+	}
+}
+
+// Security-critical: the accounts list is admin-only and refuses the bridge
+// token, but is not behind the toggle: with the module off, Settings > Modules
+// lists the accounts kept so an admin can remove them (server#294).
+func TestAudibleAdminAccountsWhileOff(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	if code, out := b.putAccount(t, testAccount, b.adminID, b.lib.ID); code != http.StatusOK {
+		t.Fatalf("put account: %d %s", code, out)
+	}
+	const path = "/api/v1/admin/audible/accounts"
+	for name, tok := range map[string]string{"session": b.adminTok, "api key": b.adminKey} {
+		resp, body := b.do(t, "GET", path, tok, "")
+		if resp.StatusCode != http.StatusOK || !strings.Contains(body, testAccount) {
+			t.Errorf("as the admin's %s while off: %d %s", name, resp.StatusCode, body)
+		}
+	}
+	if resp, _ := b.do(t, "GET", path, b.userTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("as a user: %d, want 403", resp.StatusCode)
+	}
+	for name, tok := range map[string]string{"none": "", "bridge": b.bridgeTok} {
+		if resp, _ := b.do(t, "GET", path, tok, ""); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("with %s: %d, want 401", name, resp.StatusCode)
 		}
 	}
 }
@@ -224,6 +249,14 @@ func TestAudibleAdminAccountDelete(t *testing.T) {
 	}
 	if n := count(`SELECT COUNT(*) FROM audit_events WHERE action = 'bridge.audible.remove' AND details LIKE ?`, "%"+testAccount+"%"); n != 1 {
 		t.Fatalf("audit rows = %d, want 1", n)
+	}
+	// The row names the account, not just its opaque id (server#294).
+	var target, details string
+	if err := b.db.QueryRowContext(ctx, `SELECT target, details FROM audit_events WHERE action = 'bridge.audible.remove'`).Scan(&target, &details); err != nil {
+		t.Fatal(err)
+	}
+	if target == "" || target == testAccount || !strings.Contains(details, `"name":"`+target+`"`) {
+		t.Fatalf("audit target %q details %s, want the account's name", target, details)
 	}
 	// Again (now unknown), and the API key: 204, nothing audited.
 	if resp, out := b.do(t, "DELETE", path, b.adminKey, ""); resp.StatusCode != http.StatusNoContent {

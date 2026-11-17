@@ -87,4 +87,8 @@ func TestReportUnknownNeverOnDemo(t *testing.T) {
 	if _, ok := env.Metadata["report_status"]; ok {
 		t.Fatalf("a demo server reports a status: %s", body)
 	}
+	// Nor the switch: the console shows no row for a job that is never built.
+	if _, ok := env.Metadata["report_unknown"]; ok {
+		t.Fatalf("a demo server offers the switch: %s", body)
+	}
 }

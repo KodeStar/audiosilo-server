@@ -752,8 +752,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   community-given ASIN (a hand match settles it); `/admin/issues` lists the kind only while `reportUnknownOn()`
   (off, the table is not kept current, and an empty card would read as all clear). **Wire**: GET /admin/settings
   `metadata.report_unknown` and read-only `metadata.report_status` = `{"state":"never|ok|not_offered|failed",
-  "last_run_at"?, "last_sent"}` (absent without the job: no service, or a demo server). The mounted Metadata
-  topic polls status every 30 s while metadata and reporting are on. Trigger by hand: switch it
+  "last_run_at"?, "last_sent"}` (both absent without the job: no service, or a demo server, so the console shows
+  no switch there, server#314). The mounted Metadata topic polls status every 30 s while metadata and reporting
+  are on, until the run after the switch was turned on has been recorded (server#335). Trigger by hand: switch it
   off and on in the console (runs when none ran within 23 h; an active 7-day quiet period still applies,
   measured from the last attempt, and toggling never resets it); to run again sooner, delete
   `server_state('unknown_asin_report')` and the `unknown_asin_reports` rows, then switch it off and on.
@@ -3248,17 +3249,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   same ASIN again a no-op; 404 `book_not_found` for no book of a books library there; 409 `asin_set` for
   another ASIN or an admin's ASIN override, a cleared one too; only a write moves the content generation,
   since the Bridge asks again for such a book after every poll).
-  **Admin routes** (`moduleRoutes`, 404 `module_off` while off): `GET /admin/audible/accounts` (with title
-  counts), `GET /admin/audible/titles` (`account`, `state`, `matched=1|0`, `q` over the title, each author
+  **Admin routes** (`moduleRoutes`, 404 `module_off` while off): `GET /admin/audible/titles` (`account`, `state`, `matched=1|0`, `q` over the title, each author
   as written (`json_each`, never the stored list's JSON) and an exact ASIN, keyset by title then account and
   asin, `after` cursor), `POST /admin/audible/accounts/{account}/poll` (Check now: 201 a new `audible.poll`
   job, 200 the open one, raised to a person's priority (the kind `promotes`), audited as `bridge.job`).
-  `DELETE /admin/audible/accounts/{account}` is admin only (`requireAdmin`, the bridge token refused) and
-  **not** behind the toggle: it removes an account the Bridge can no longer remove (unpaired, paired again, a
+  `GET /admin/audible/accounts` (with title counts) and `DELETE /admin/audible/accounts/{account}` are admin
+  only (`requireAdmin`, the bridge token refused) and **not** behind the toggle (server#294: Settings >
+  Modules lists the accounts kept while it is off, each with Remove): the DELETE removes an account the Bridge can no longer remove (unpaired, paired again, a
   DELETE that failed), which the scheduler would otherwise poll for good, so it must work after the module is
   turned off. It is the Bridge's delete (`DeleteAudibleAccount`: titles go, the open poll cancelled), 204
   known or not (404 `unknown_account` only for an id the Bridge could never have made), audited as
-  `bridge.audible.remove` when there was one. It signs nothing out of Amazon: that stays the Bridge's.
+  `bridge.audible.remove` when there was one, with the account's name (its label, else "person (STORE)") as
+  the target and in `details.name`. It signs nothing out of Amazon: that stays the Bridge's.
   **Polls**: `audible.poll` is an internal, quiet kind, params `{"account"}`, no library or path, deduped
   per account (`audibleAccountSuffix`), only the newest ended one kept, gated by
   `ModuleFor` (held while the module is off). `audible.RunScheduler` (the module's Start) ticks each minute:

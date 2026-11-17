@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/audible"
@@ -20,8 +22,8 @@ import (
 // titles each poll found, list the people an account may be mapped to and a
 // library's books for its matching, and backfill an ASIN it matched without
 // doubt. The console's routes (admin, behind the audible module's toggle,
-// mounted in api.go) show them read-only and ask for a poll now; removing an
-// account is admin only and outside the toggle.
+// mounted in api.go) show them read-only and ask for a poll now; listing and
+// removing accounts are admin only and outside the toggle.
 
 // maxAudibleTitlesBody bounds a titles call: 500 titles at their bounds,
 // each with a planned destination.
@@ -279,7 +281,9 @@ func (a *API) handleBridgeEnrichment(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAdminAudibleAccounts serves GET /admin/audible/accounts: every account
-// the Bridge mapped, with its titles counted.
+// the Bridge mapped, with its titles counted. Not behind the module's toggle,
+// like the DELETE: with the module off, Settings > Modules lists the accounts
+// kept so an admin can remove them (server#294).
 func (a *API) handleAdminAudibleAccounts(w http.ResponseWriter, r *http.Request) {
 	accounts, err := a.cat.AudibleAccounts(r.Context())
 	if err != nil {
@@ -356,10 +360,23 @@ func (a *API) handleAdminAudiblePoll(w http.ResponseWriter, r *http.Request) {
 // {account}: the console removes an account from this server (its titles go
 // with it, its open poll is cancelled), for one the Bridge can no longer
 // remove itself. It signs nothing out of Amazon: that is the Bridge's. 204,
-// known or not; audited when there was one.
+// known or not; audited, with the account's name, when there was one.
 func (a *API) handleAdminAudibleAccountDelete(w http.ResponseWriter, r *http.Request) {
 	id, ok := audibleAccountID(w, r)
 	if !ok {
+		return
+	}
+	// Read first, only for the audit row's name: the id alone says nothing to
+	// an admin reading the log (server#294).
+	var name string
+	switch acct, err := a.cat.AudibleAccount(r.Context(), id); {
+	case err == nil:
+		name = acct.Label
+		if name == "" {
+			name = fmt.Sprintf("%s (%s)", acct.User.DisplayName, strings.ToUpper(acct.Marketplace))
+		}
+	case !errors.Is(err, catalog.ErrUnknownAccount):
+		a.writeAudibleError(w, err, "delete audible account failed")
 		return
 	}
 	removed, err := a.cat.DeleteAudibleAccount(r.Context(), id)
@@ -368,7 +385,7 @@ func (a *API) handleAdminAudibleAccountDelete(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if removed {
-		a.audit(r, "bridge.audible.remove", "", map[string]any{"account": id})
+		a.audit(r, "bridge.audible.remove", name, map[string]any{"account": id, "name": name})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
