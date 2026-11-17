@@ -476,7 +476,7 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 	if o.Mode == catalog.MatchModeUnknownASIN {
 		// Found by the title, for a book with this ASIN: an apply writes only
 		// while it still has it (matchedSince).
-		item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, b.ASIN)
+		item.Proposal.FoundBy = identifierFoundBy(catalog.FieldASIN, b.ASIN)
 	}
 	return item, nil
 }
@@ -518,7 +518,7 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 	// The ASIN is all a repick changes, and only while the book still has the
 	// one looked up here (PlanRepick: a hand match since keeps its own).
 	item.Proposal.Values, item.Proposal.ASINRegion = map[string]string{catalog.FieldASIN: want}, region
-	item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, b.ASIN)
+	item.Proposal.FoundBy = identifierFoundBy(catalog.FieldASIN, b.ASIN)
 	return item, nil
 }
 
@@ -594,9 +594,9 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 			item.Proposal.FoundBy += ";" + fallbackIdentifiers(b.ASIN, b.ISBN)
 		}
 	} else {
-		item.Proposal.FoundBy = "isbn:" + catalog.CleanOverride(catalog.FieldISBN, q.ISBN)
+		item.Proposal.FoundBy = identifierFoundBy(catalog.FieldISBN, q.ISBN)
 		if q.ASIN != "" {
-			item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, q.ASIN)
+			item.Proposal.FoundBy = identifierFoundBy(catalog.FieldASIN, q.ASIN)
 		}
 	}
 	if hasIdentifier {

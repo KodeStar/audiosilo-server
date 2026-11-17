@@ -634,11 +634,17 @@ func workFoundBy(workID, recordingID string) string {
 	return "work:" + workID + "/" + recordingID
 }
 
+// identifierFoundBy is the FoundBy of a lookup by one identifier (FieldASIN or
+// FieldISBN): "asin:<cleaned ASIN>", the form stillFoundBy reads back.
+func identifierFoundBy(field, value string) string {
+	return field + ":" + catalog.CleanOverride(field, value)
+}
+
 // fallbackIdentifiers records both identifiers, including an absent one, whose
 // misses allowed a refresh to fall back to its recorded work. The suffix on
 // FoundBy survives review, apply and a restart without a separate state model.
 func fallbackIdentifiers(asin, isbn string) string {
-	return "asin:" + catalog.CleanOverride(catalog.FieldASIN, asin) + ";isbn:" + catalog.CleanOverride(catalog.FieldISBN, isbn)
+	return identifierFoundBy(catalog.FieldASIN, asin) + ";" + identifierFoundBy(catalog.FieldISBN, isbn)
 }
 
 // hasEditedIdentifier reports whether a book's ASIN or ISBN is an admin edit.
