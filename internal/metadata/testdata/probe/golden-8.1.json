@@ -224,8 +224,7 @@
         "tags": {
           "title": "Junk VBR"
         }
-      },
-      "fallback": "mp3: no Xing/VBRI header and not constant bitrate"
+      }
     },
     "craft-m4b-broken-header.m4b": {
       "ffprobe": {
@@ -710,8 +709,7 @@
       "ffprobe": {
         "duration": "5.079900",
         "codec": "mp3"
-      },
-      "fallback": "mp3: no Xing/VBRI header and not constant bitrate"
+      }
     },
     "lame-vbr.mp3": {
       "ffprobe": {
@@ -1327,8 +1325,7 @@
       "ffprobe": {
         "duration": "5.083632",
         "codec": "mp3"
-      },
-      "fallback": "mp3: no Xing/VBRI header and not constant bitrate"
+      }
     },
     "mp3-vbrnoxing-chap.mp3": {
       "ffprobe": {
@@ -1364,8 +1361,7 @@
             "title": "The End"
           }
         ]
-      },
-      "fallback": "mp3: no Xing/VBRI header and not constant bitrate"
+      }
     },
     "mp3-vbrnoxing-tags.mp3": {
       "ffprobe": {
@@ -1378,8 +1374,7 @@
           "genre": "Mystery",
           "title": "Plain Title"
         }
-      },
-      "fallback": "mp3: no Xing/VBRI header and not constant bitrate"
+      }
     },
     "mp4-mp3-bare.m4a": {
       "ffprobe": {

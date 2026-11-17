@@ -53,9 +53,11 @@ func (r *readSlots) size() int { return cap(r.ch) }
 // problem because others were read beside it. Only a time-out alone is the
 // file's problem. So is one whose in-process read ran out of time with no
 // ffprobe to fall back to (ProbeTimedOut): it would otherwise have no duration.
+// And one whose header-less VBR MP3 went uncounted (LengthUncounted): its
+// length would otherwise be ffprobe's estimate until a later scan.
 func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *metadata.Metadata {
 	md, shared := r.read(ctx, absPath, ffprobePath)
-	if !shared || !lengthTimedOut(md) {
+	if !shared || !(lengthTimedOut(md) || md.LengthUncounted()) {
 		return md
 	}
 	// One retry at a time, each waiting for the reads under way to finish.

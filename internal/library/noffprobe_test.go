@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -113,5 +114,41 @@ func TestReadSlotsRetryInProcessTimeoutAlone(t *testing.T) {
 	}
 	if md := lone.extract(context.Background(), path, ""); !md.ProbeTimedOut() || loneCalls.Load() != 1 {
 		t.Errorf("a lone time-out: %+v after %d reads, want it kept after one", md, loneCalls.Load())
+	}
+}
+
+// A header-less VBR MP3 whose frames went uncounted while another read ran
+// (metadata.Metadata.LengthUncounted: its count out of time) is read again
+// alone, as a time-out is, so contention is not stored as the book's length.
+func TestReadSlotsRetryUncountedAlone(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join("..", "metadata", "testdata", "probe", "lame-vbr-noxing.mp3")
+	slots := newReadSlots(2, 5*time.Second)
+	var calls atomic.Int32
+	var started sync.WaitGroup
+	started.Add(2)
+	slots.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		md := extractFile(ctx, p, ffprobe, timeout)
+		if calls.Add(1) <= 2 {
+			// The first two reads overlap, and their counts run out of time.
+			started.Done()
+			started.Wait()
+			return metadata.UncountedForTests(md)
+		}
+		return md
+	}
+	var wg sync.WaitGroup
+	mds := make([]*metadata.Metadata, 2)
+	for i := range mds {
+		wg.Go(func() { mds[i] = slots.extract(context.Background(), path, "") })
+	}
+	wg.Wait()
+	for i, md := range mds {
+		if md == nil || md.LengthUncounted() {
+			t.Errorf("read %d = %+v: want it read again alone, counted", i, md)
+		}
+	}
+	if n := calls.Load(); n != 4 {
+		t.Errorf("%d reads, want 2 and a retry of each", n)
 	}
 }

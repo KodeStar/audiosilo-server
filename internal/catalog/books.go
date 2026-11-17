@@ -160,8 +160,8 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     released, released_checked, genres_checked, tag_asin, tag_isbn, tag_language, hints_checked,
 		     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
 		     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at,
-		     file_order, file_order_indexed_at, ebook_path, ebook_sig, ebook_size)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,1,?,?,'','',?,?,?,?,?,?,?,?,?,?)
+		     file_order, file_order_indexed_at, ebook_path, ebook_sig, ebook_size, duration_rev, duration_rev_indexed_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,1,?,?,'','',?,?,?,?,?,?,?,?,?,?,CASE WHEN ? THEN 0 ELSE `+durationRev+` END,?)
 		 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 		     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 		     series=excluded.series, series_index=excluded.series_index,
@@ -194,7 +194,8 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     -- keeps the stored reading.
 		     ebook_path=CASE WHEN ? THEN books.ebook_path ELSE excluded.ebook_path END,
 		     ebook_sig=CASE WHEN ? THEN books.ebook_sig ELSE excluded.ebook_sig END,
-		     ebook_size=CASE WHEN ? THEN books.ebook_size ELSE excluded.ebook_size END
+		     ebook_size=CASE WHEN ? THEN books.ebook_size ELSE excluded.ebook_size END,
+		     duration_rev=excluded.duration_rev, duration_rev_indexed_at=excluded.duration_rev_indexed_at
 		     -- added_at intentionally not updated: it records first-seen, so a
 		     -- re-index of an existing book keeps its original added date.
 		 RETURNING id`,
@@ -205,7 +206,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 		b.Released, b.TagASIN, b.TagISBN, b.TagLanguage, string(scannedChapters), chaptersHash(string(scannedChapters)),
 		absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
-		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.ABS.Unread, b.ABS.Unread, b.EbookFile.Unread,
+		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.LengthUncounted, indexedAt, b.ABS.Unread, b.ABS.Unread, b.EbookFile.Unread,
 		b.EbookFile.Unread, b.EbookFile.Unread).Scan(&id); err != nil {
 		return 0, err
 	}
@@ -440,6 +441,12 @@ type Signature struct {
 	// leave out: metadata.DeriveFromPath), one whose leaf is so named
 	// (metadata.PathLeafSeries).
 	NamesCheck bool
+	// DurationStale: a book holding an MP3 whose lengths were read before
+	// today's revision (durationRev: books.duration_rev), or since by an
+	// older server (durationStaleExpr), which the next scan
+	// indexes once more though its files are unchanged, so a VBR MP3 with no
+	// Xing or VBRI header has its frames counted (SRV-16).
+	DurationStale bool
 	// RevStamp: a book whose snapshot is its own and of revision 1 or 2 (so
 	// PathOK) that needs no read (not NamesCheck), which the next scan stamps
 	// with today's revision (StampScannedRev), so it is never tested again.
@@ -480,6 +487,26 @@ type Signature struct {
 	// recorded since stays.
 	IndexedAt string
 }
+
+// durationRev is the revision of the scan's reading of a book's lengths, as
+// SQL: every index writes it (books.duration_rev, 0082), with its indexed_at
+// (duration_rev_indexed_at). 1 counts the frames of a VBR MP3 with no Xing or
+// VBRI header (metadata's probe, SRV-16), where earlier servers stored a
+// bitrate's estimate; an index that left one uncounted (Book.LengthUncounted)
+// writes 0, no revision. A book read before it is DurationStale
+// (durationStaleExpr) and indexed once more.
+const durationRev = "1"
+
+// durationStaleExpr is Signature.DurationStale: a book whose lengths were
+// read before durationRev, or by another index than the row's own (an older
+// server run against this database re-indexed it, storing its estimate and
+// leaving the revision: duration_rev_indexed_at, as fileOrderExpr), and that
+// holds an MP3 (its own format, or a part's), the only files revision 1 reads
+// otherwise. A CASE, so the parts are looked at only for a row of an older
+// revision (AND evaluates both sides).
+const durationStaleExpr = `CASE WHEN duration_rev < ` + durationRev + ` OR duration_rev_indexed_at IS NOT indexed_at
+	THEN format = 'mp3' OR EXISTS (
+	SELECT 1 FROM book_files f WHERE f.book_id = books.id AND f.format = 'mp3') ELSE 0 END`
 
 // fileOrderExpr is books.file_order where it holds: recorded with the row's own
 // index (file_order_indexed_at, as abs_indexed_at is for abs_file), else NULL.
@@ -529,7 +556,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		        CASE WHEN is_folder AND `+fileOrderExpr+` IS NULL THEN
 		             (SELECT group_concat(f.rel_path, char(10) ORDER BY f.seq)
 		                FROM book_files f WHERE f.book_id = books.id) END, ebook_sig, indexed_at,
-		        `+snapshotNamesExpr+`
+		        `+snapshotNamesExpr+`, `+durationStaleExpr+`
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -547,7 +574,8 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 			&sig.CoverPath, &sig.CoverArt, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.HintsUnchecked, &sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
-			&stored, &format, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &narrator, &revOlder); err != nil {
+			&stored, &format, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &narrator, &revOlder,
+			&sig.DurationStale); err != nil {
 			return nil, err
 		}
 		if rev.String != scannedRev {

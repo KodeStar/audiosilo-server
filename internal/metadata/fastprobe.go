@@ -12,7 +12,8 @@ package metadata
 // as before). A reader meeting a shape it does not model exactly says why (unsure), and
 // the file goes to ffprobe as before: parity is the contract, and the fixture
 // corpus in testdata/probe checks it (probe_golden_test.go, and against a live
-// ffprobe, probe_live_test.go).
+// ffprobe, probe_live_test.go). Its one exception is the length of a VBR MP3
+// with no Xing or VBRI header: counted, never ffprobe's estimate (SRV-16).
 
 import (
 	"context"
@@ -151,11 +152,20 @@ func timedOutReason(reason string) bool {
 // it can't ("" when it answered), within the probe's bounds: timeout (capped at
 // maxProbeTime) and ctx, and maxProbeBytes. A bound passed, a reader's panic, a
 // read error and an answer with no duration are all reasons.
-func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Duration) (p *probeResult, reason string) {
-	ctx, cancel := context.WithTimeoutCause(ctx, min(timeout, maxProbeTime), errProbeDeadline)
+//
+// The one answer that is not ffprobe's is a VBR MP3's with no Xing or VBRI
+// header: ffprobe estimates its length from a bitrate (up to ~7% off, SRV-16),
+// so its frames are counted instead (mp3Uncounted.count, with bounds of its
+// own: the whole file is read), and the result is Counted. One whose count
+// may yet succeed (out of time, the caller's context ended, a read that
+// failed) is uncounted, as is an MP3 whose probe ran out of time before it
+// could tell: the scan reads it again. A count that gave up (frames of another
+// stream) or found no frames reads the same every time, so it is not.
+func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Duration) (p *probeResult, reason string, uncounted bool) {
+	pctx, cancel := context.WithTimeoutCause(ctx, min(timeout, maxProbeTime), errProbeDeadline)
 	defer cancel()
 	var err error
-	if why := b.bounded(ctx, func() {
+	if why := b.bounded(pctx, func() {
 		switch format {
 		case "mp3":
 			p, err = probeMP3(b)
@@ -171,8 +181,25 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 			err = unsure("format " + format)
 		}
 	}); why != "" {
-		return nil, why
+		return nil, why, format == "mp3" && (timedOutReason(why) || ctx.Err() != nil)
 	}
+	uc, headerless := errors.AsType[*mp3Uncounted](err)
+	if headerless && b.err == nil {
+		var why string
+		if p, why = uc.count(ctx, b, timeout); why != "" {
+			// The deadline's own words last, so a count out of time reads as
+			// the probe's (timedOutReason): with no ffprobe, read again alone.
+			err = unsure(uc.Error() + "; frame count: " + why)
+		} else {
+			err = nil
+		}
+	}
+	p, reason = probeAnswer(b, p, err)
+	return p, reason, headerless && reason != "" && (b.err != nil || timedOutReason(reason) || ctx.Err() != nil)
+}
+
+// probeAnswer is fastProbe's answer from a reader's: p, or why there is none.
+func probeAnswer(b *blockFile, p *probeResult, err error) (*probeResult, string) {
 	switch {
 	case b.err != nil:
 		return nil, "read: " + b.err.Error()
@@ -193,7 +220,13 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 // wasn't): a bound passed (probeLimit) or a panic, which it recovers, from
 // wherever fn was (dhowden's tag read included).
 func (b *blockFile) bounded(ctx context.Context, fn func()) (why string) {
-	b.arm(ctx, maxProbeBytes)
+	return b.boundedBy(ctx, maxProbeBytes, fn)
+}
+
+// boundedBy is bounded with budget bytes to read in place of maxProbeBytes
+// (an MP3's frame count reads the whole file).
+func (b *blockFile) boundedBy(ctx context.Context, budget int64, fn func()) (why string) {
+	b.arm(ctx, budget)
 	defer b.disarm()
 	defer func() {
 		if r := recover(); r != nil {
@@ -210,12 +243,13 @@ func (b *blockFile) bounded(ctx context.Context, fn func()) (why string) {
 
 // ExactDuration is the in-process probe's duration in seconds of the file r
 // holds (size bytes; format its extension's, "mp3", "m4a"), by FFmpeg 8.1's
-// rules (gapless MP3), and false when the probe is unsure of the file: a VBR
-// MP3 with no Xing or VBRI header (ffprobe only estimates its duration), a
-// shape it does not model, a read error or a bound passed. A duration it gives
-// is the container's own (a frame count, a track's length) or a constant
-// bitrate's (checked across the file), not a VBR guess, so one file can be held
-// to another's (a watch rendition to its source).
+// rules (gapless MP3), and false when the probe is unsure of the file: a shape
+// it does not model, a read error or a bound passed (a VBR MP3 with no Xing or
+// VBRI header whose frames can't all be counted in time among them). A
+// duration it gives is the container's own (a frame count, a track's length),
+// a constant bitrate's (checked across the file) or the frames counted, not a
+// VBR guess, so one file can be held to another's (a watch rendition to its
+// source).
 func ExactDuration(ctx context.Context, r io.ReaderAt, size int64, format string) (float64, bool) {
 	b := newBlockFile(r, size)
 	if f, ok := r.(interface{ Name() string }); ok {
@@ -224,7 +258,7 @@ func ExactDuration(ctx context.Context, r io.ReaderAt, size int64, format string
 		b.stuck = stuckByMount.For(f.Name())
 	}
 	b.ff = ff8
-	p, reason := fastProbe(ctx, b, strings.ToLower(format), maxProbeTime)
+	p, reason, _ := fastProbe(ctx, b, strings.ToLower(format), maxProbeTime)
 	if reason != "" {
 		return 0, false
 	}
@@ -326,7 +360,9 @@ func (b *blockFile) raw(p []byte, off int64) (int, error) {
 // its own goroutine, counted in its mount's stuckReads until it does (the file
 // stays open as long: its descriptor is closed only once the read returns).
 // Every caller's buffer is its own, made for this read on the stack the panic
-// unwinds (a block, bytesAt's, dhowden's), so nothing reads p after that.
+// unwinds (a block, bytesAt's, dhowden's) or dropped with it (a frame count's
+// window, kept from read to read: the panic ends the count), so nothing reads
+// p after that.
 func (b *blockFile) waitRead(p []byte, off int64) (int, error) {
 	type res struct {
 		n   int

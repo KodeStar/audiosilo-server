@@ -103,7 +103,24 @@ type Metadata struct {
 	// readRefused: the read was refused, the file not opened, as too many
 	// earlier reads hang (ReadRefused).
 	readRefused bool
+	// counted: a VBR MP3 with no Xing or VBRI header, read with the probe off,
+	// has its frames counted (readFile's count): its length in seconds, which
+	// replaces ffprobe's estimate. 0 for any other file.
+	counted float64
+	// uncounted: a VBR MP3 with no Xing or VBRI header whose frames a read
+	// given time may count, or an MP3 whose probe ran out of time before it
+	// could tell (LengthUncounted).
+	uncounted bool
 }
+
+// LengthUncounted reports whether the file is a VBR MP3 with no Xing or VBRI
+// header whose frames went uncounted for now (its count ran out of time, the
+// caller's context ended or a read failed), or an MP3 whose probe ran out of
+// time before it could tell, so its Duration may be ffprobe's estimate from a
+// bitrate, or none (SRV-16). A scan reads the book again
+// (catalog.Book.LengthUncounted). A count that gave up (frames of another
+// stream) or found no frames is not: it reads the same every time.
+func (m *Metadata) LengthUncounted() bool { return m != nil && m.uncounted }
 
 // ProbeTimedOut reports whether, with no ffprobe configured, the file's read
 // ran out of its time (the tag read's or the in-process probe's deadline) and
@@ -185,13 +202,17 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 // error as its ProbeErr. With ffprobePath "" (none configured, or none found)
 // the probe still runs, by noFFprobeRules (SCAN-SPIKE decision 2, server#269):
 // a file it is unsure of then has no duration, and no ProbeErr, as before.
+// A VBR MP3 with no Xing or VBRI header, whose length ffprobe only estimates,
+// has its frames counted (SRV-16): by the probe, or, when the probe is off, in
+// readFile's one read of the file, over ffprobe's estimate; a count cut short
+// leaves the estimate.
 func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.Duration) (*Metadata, error) {
 	m := &Metadata{Format: fileFormat(path)}
-	ff := ffNone
-	if !ffprobeForced(ffprobePath) {
+	ff, forced := ffNone, ffprobeForced(ffprobePath)
+	if !forced {
 		ff = probeRules(ctx, ffprobePath)
 	}
-	p, reason, err := readFile(ctx, m, path, ff, timeout)
+	p, reason, err := readFile(ctx, m, path, ff, ff == ffNone && !forced, timeout)
 	if err != nil {
 		m.OpenErr = err
 		return m, nil // ffprobe can't read what the server can't open
@@ -205,6 +226,11 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 	case ffprobePath != "":
 		// ffprobe for duration + chapters + richer container tags (best-effort).
 		if p, err := probe(ctx, path, ffprobePath, timeout); err == nil {
+			if m.counted > 0 {
+				// The probe is off for this ffprobe's release, but its estimate of a
+				// VBR MP3 with no Xing/VBRI header is no better: the frames counted.
+				p.Duration = m.counted
+			}
 			applyProbe(m, p)
 		} else {
 			m.ProbeErr = err
@@ -220,7 +246,7 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 // chapters. An OpenErr when it can't be opened.
 func ExtractTags(path string) *Metadata {
 	m := &Metadata{Format: fileFormat(path)}
-	if _, _, err := readFile(context.Background(), m, path, ffNone, ProbeTimeout); err != nil {
+	if _, _, err := readFile(context.Background(), m, path, ffNone, false, ProbeTimeout); err != nil {
 		m.OpenErr = err
 	}
 	return m
@@ -241,7 +267,10 @@ func fileFormat(path string) string {
 
 // readFile reads the tags of the file at path into m and, unless ff is ffNone,
 // the in-process probe's answer by ff's rules, or why it has none (reason:
-// unsure of the file, a bound passed; ffprobe reads it then). The open, the tag
+// unsure of the file, a bound passed; ffprobe reads it then). With ff ffNone
+// and count, an MP3 is probed by noFFprobeRules all the same, its answer kept
+// only when it is a header-less VBR file's frames counted (m.counted): the
+// count is the same by any release's rules. The open, the tag
 // read and the narrator walk are bounded as the probe is: timeout (the ffprobe
 // run's) and ctx, and the probe's byte budget, the open and every read from the
 // file waited for under them (openBlockFile, blockFile.raw), so a file on a
@@ -250,7 +279,7 @@ func fileFormat(path string) string {
 // answers), as does an open that did not answer. The file is closed when it
 // returns, before any ffprobe run. An error: it could not be opened, or is no
 // regular file.
-func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout time.Duration) (p *probeResult, reason string, err error) {
+func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, count bool, timeout time.Duration) (p *probeResult, reason string, err error) {
 	rctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
 	defer cancel()
 	b, f, err := openBlockFile(rctx, path)
@@ -299,10 +328,18 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout
 		m.Narrator, m.narratorExplicit = narrator, true
 	}
 	if ff == ffNone {
+		if count && m.Format == "mp3" {
+			b.ff = noFFprobeRules
+			p, why, uncounted := fastProbe(ctx, b, m.Format, timeout)
+			if why == "" && p.Counted {
+				m.counted = p.Duration
+			}
+			m.uncounted = uncounted
+		}
 		return nil, "", nil
 	}
 	b.ff = ff
-	p, reason = fastProbe(ctx, b, m.Format, timeout)
+	p, reason, m.uncounted = fastProbe(ctx, b, m.Format, timeout)
 	if reason != "" {
 		// Silent by design (ffprobe answers instead), but worth seeing when a
 		// scan is slower than expected: which files, and why (server#269).
@@ -373,6 +410,18 @@ func TimedOutForTests(path string) *Metadata {
 		panic("metadata.TimedOutForTests called outside a test binary")
 	}
 	return &Metadata{Format: fileFormat(path), timedOut: true}
+}
+
+// UncountedForTests marks m as LengthUncounted (a header-less VBR MP3 whose
+// count ran out of time) and returns it: for tests of what a scan does with
+// one, which a real read gives only on a file whose count outlasts its
+// deadline. It panics outside a test binary.
+func UncountedForTests(m *Metadata) *Metadata {
+	if !testing.Testing() {
+		panic("metadata.UncountedForTests called outside a test binary")
+	}
+	m.uncounted = true
+	return m
 }
 
 // HangMountForTests makes dir a mount of its own whose reads hang: the files

@@ -174,8 +174,14 @@ func TestExtractWithoutFFprobe(t *testing.T) {
 	if md.Title != "The Spike Book (Unabridged)" {
 		t.Errorf("title %q, want the tags' title", md.Title)
 	}
-	// A VBR MP3 with no Xing/VBRI header: ffprobe's estimate, which nothing gives here.
-	unsure, err := Extract(fixture("craft-junk-vbr.mp3"), "")
+	// A VBR MP3 with no Xing/VBRI header: its frames counted, with no ffprobe
+	// too (SRV-16).
+	counted, err := Extract(fixture("craft-junk-vbr.mp3"), "")
+	if err != nil || counted.ProbeErr != nil || ffTime(counted.Duration) != countedFixtures["craft-junk-vbr.mp3"] || counted.Codec != "mp3" {
+		t.Errorf("header-less VBR MP3: %v, duration %v codec %q, want its frames counted", err, counted.Duration, counted.Codec)
+	}
+	// A concatenated MP3: ffprobe's reading, which nothing gives here.
+	unsure, err := Extract(fixture("craft-concat.mp3"), "")
 	if err != nil || unsure.ProbeErr != nil || unsure.ProbeTimedOut() {
 		t.Fatal(err, unsure.ProbeErr, unsure.ProbeTimedOut())
 	}
@@ -280,7 +286,7 @@ func TestTagsUnreadWhenCutShort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	m := &Metadata{Format: "mp3"}
-	if _, _, err := readFile(ctx, m, fixture("mp3-v23-chap.mp3"), noFFprobeRules, ProbeTimeout); err != nil {
+	if _, _, err := readFile(ctx, m, fixture("mp3-v23-chap.mp3"), noFFprobeRules, false, ProbeTimeout); err != nil {
 		t.Fatal(err)
 	}
 	if !m.TagsUnread() || m.Title != "" {
@@ -304,12 +310,12 @@ func TestFastProbeReadFailureIsUnsure(t *testing.T) {
 	info, _ := f.Stat()
 	b := newBlockFile(f, info.Size())
 	b.ff = ff7
-	if _, reason := fastProbe(context.Background(), b, "mp3", maxProbeTime); reason != "" {
+	if _, reason, _ := fastProbe(context.Background(), b, "mp3", maxProbeTime); reason != "" {
 		t.Fatalf("the whole file: %s", reason)
 	}
 	b = newBlockFile(f, info.Size()*2)
 	b.ff = ff7
-	if p, reason := fastProbe(context.Background(), b, "mp3", maxProbeTime); p != nil || !strings.HasPrefix(reason, "read: ") {
+	if p, reason, _ := fastProbe(context.Background(), b, "mp3", maxProbeTime); p != nil || !strings.HasPrefix(reason, "read: ") {
 		t.Errorf("a file shorter than its size: %+v, %q, want a read failure", p, reason)
 	}
 }
@@ -688,7 +694,8 @@ func TestFastProbeLimits(t *testing.T) {
 	probeWith := func(ctx context.Context, r freeBoxes, timeout time.Duration) (*probeResult, string) {
 		b := newBlockFile(r, r.size)
 		b.ff = ff8
-		return fastProbe(ctx, b, "m4b", timeout)
+		p, reason, _ := fastProbe(ctx, b, "m4b", timeout)
+		return p, reason
 	}
 	// 2 GiB of 128 KiB boxes is 16384 headers, one 64 KiB block each: 1 GiB.
 	if p, reason := probeWith(context.Background(), freeBoxes{every: 128 << 10, size: 2 * gib}, time.Minute); p != nil || reason != "limit: probe read budget" {

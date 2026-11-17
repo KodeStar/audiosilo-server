@@ -215,6 +215,12 @@ type Book struct {
 	// added, gone, renamed or changed UpsertBook writes it whole, the part's
 	// problem with it, and clears ReadCutShort to say so.
 	LengthOnly bool `json:"-"`
+	// LengthUncounted: one of the book's files is a VBR MP3 with no Xing or
+	// VBRI header whose frames the scan could not count for now (a deadline, a
+	// read error: metadata.Metadata.LengthUncounted), its length ffprobe's
+	// estimate. UpsertBook then writes books.duration_rev 0, no
+	// revision, so the next scan reads the book again (SRV-16).
+	LengthUncounted bool `json:"-"`
 	// FoundAdded is when each of the book's audio files first appeared on disk
 	// as the scan's discovery read it (its lstat: the birth time where that
 	// carries one, else the mtime; Unix seconds), in Files' order, or the
