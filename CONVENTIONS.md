@@ -3603,11 +3603,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   asymmetric algorithms only, `SigningAlgs`; PKCE S256; nonce, `aud`, `azp` when several audiences,
   `iat` at most 5 minutes ahead; userinfo only when a claim is missing (`askUserinfo`: the groups
   claim only while a group policy needs it, every time then; the email or the username not again for
-  an hour once userinfo lacked it for that person, per subject, at most 1000 remembered), its `sub`
+  an hour once userinfo lacked it for that person, per subject, at most 1000 remembered, and forgotten
+  when their sign-in is left waiting, `AskAgain`: an email added at the provider since decides what the
+  next attempt links to), its `sub`
   must equal the ID token's, and a userinfo request that fails leaves the ID token's claims (a warning
   logged, `Claims.Partial`: a first sign-in without an email is then refused, `incomplete`, landing on
-  `#oidc=unavailable`, never an account made for someone the email would link; a linked one signs in,
-  keeping the identity's stored email and username); errors never carry a response body; every
+  `#oidc=unavailable`, never an account made for someone the email would link, and so is one
+  `allowed_group` would read the missing groups of, never a waiting row saying the person isn't in the
+  group; a linked one signs in, keeping the identity's stored email and username, and a waiting row
+  refreshed keeps its username, name and groups); errors never carry a response body; every
   call one use makes (discovery when due, the token request, the keys, userinfo) shares one deadline,
   `CallBudget` 20 s, started once the use is past any wait for another use's discovery (at most
   `discoveryWait` 5 s; `UseTime` 25 s together), so both stay under the API's 30 s `requestTimeout` and a slow provider ends

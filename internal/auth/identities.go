@@ -152,9 +152,10 @@ func scanAccount(row interface{ Scan(...any) error }, extra ...any) (oidc.Accoun
 // the identity (auto_email); Create makes an ordinary account (its username
 // from the claims, numbered on a clash; the email only when verified) and its
 // identity, both dropping the row the sign-in waited in; Pending records or
-// refreshes the waiting row (capped, pruned). An outcome that signs in applies the role rule: a
-// demotion that would leave no enabled admin is refused and reported, never
-// an error. An outcome that signs in also mints the single-use token the
+// refreshes the waiting row (capped, pruned; one refreshed by partial claims
+// keeps the username, name and groups it lacks now). An outcome that signs in
+// applies the role rule: a demotion that would leave no enabled admin is
+// refused and reported, never an error. An outcome that signs in also mints the single-use token the
 // browser finishes with (KindOIDC, tokenTTL long, the only token ConsumeOIDC
 // takes), in the same transaction (OIDCResult.Token).
 func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy, tokenTTL time.Duration) (OIDCResult, error) {
@@ -371,13 +372,15 @@ func syncRole(ctx context.Context, tx *sql.Tx, id int64, role, now string) (Role
 }
 
 // upsertPending records or refreshes c's waiting row with reason, returning its
-// id and how many rows the cap evicted. Rows unseen for pendingDays go first, c's own among them: ListPending no
-// longer shows such a row, so the attempt records a new one (a new id, which
-// the callback tells the admins about) rather than bringing back one they were
-// told about long ago. Then the oldest past maxPendingSignIns go, never the
-// row just written (it is the newest, unless the clock stepped back past rows
-// stamped later: excluded by id all the same, so the id returned always names
-// a row).
+// id and how many rows the cap evicted. Rows unseen for pendingDays go first,
+// c's own among them: ListPending no longer shows such a row, so the attempt
+// records a new one (a new id, which the callback tells the admins about)
+// rather than bringing back one they were told about long ago. A row refreshed
+// by partial claims (userinfo unreadable) keeps the username, the name and the
+// groups those lack: they may be the person's still, as on a linked identity.
+// Then the oldest past maxPendingSignIns go, never the row just written (it is
+// the newest, unless the clock stepped back past rows stamped later: excluded
+// by id all the same, so the id returned always names a row).
 func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now string, at time.Time) (int64, int64, error) {
 	groups := c.Groups
 	if len(groups) > maxPendingGroups {
@@ -399,10 +402,13 @@ func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now s
 		    reason, first_seen_at, last_seen_at, attempts)
 		VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, 1)
 		ON CONFLICT(issuer, subject) DO UPDATE SET email = excluded.email, email_verified = excluded.email_verified,
-		    username = excluded.username, name = excluded.name, groups = excluded.groups, reason = excluded.reason,
+		    username = CASE WHEN excluded.username = '' AND ?10 THEN username ELSE excluded.username END,
+		    name     = CASE WHEN excluded.name = '' AND ?10 THEN name ELSE excluded.name END,
+		    groups   = CASE WHEN ?11 THEN groups ELSE excluded.groups END, reason = excluded.reason,
 		    last_seen_at = excluded.last_seen_at, attempts = attempts + 1
 		RETURNING id`,
-		c.Issuer, c.Subject, c.Email, c.EmailVerified, c.Username, c.Name, string(g), reason, now).Scan(&id); err != nil {
+		c.Issuer, c.Subject, c.Email, c.EmailVerified, c.Username, c.Name, string(g), reason, now,
+		c.Partial, c.Partial && c.Groups == nil).Scan(&id); err != nil {
 		return 0, 0, err
 	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE id <> ? AND id IN

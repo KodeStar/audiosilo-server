@@ -26,8 +26,9 @@ type Claims struct {
 	// Partial: userinfo was asked for what the ID token lacked and couldn't
 	// answer (Exchange went on with the ID token's claims), so a claim absent
 	// here may be one the person has: Decide doesn't decide a first sign-in
-	// without an email on it, and a sign-in keeps the identity's stored email
-	// and username it lacks.
+	// without an email on it (nor allowed_group without the groups), a sign-in
+	// keeps the identity's stored email and username it lacks, and a waiting
+	// row the username, name and groups it showed.
 	Partial bool
 }
 

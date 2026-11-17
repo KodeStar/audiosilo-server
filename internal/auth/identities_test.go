@@ -417,6 +417,41 @@ func TestPendingLinkCreateDismiss(t *testing.T) {
 	}
 }
 
+// TestPendingPartialRefreshKeepsClaims: a waiting row refreshed by a sign-in
+// whose userinfo couldn't be read (Claims.Partial) keeps the username, the
+// name and the groups those claims lack (allowed: they may be the person's
+// still), while a list the partial claims carry, and whole claims lacking
+// them, replace what the row showed (denied).
+func TestPendingPartialRefreshKeepsClaims(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	row := func() PendingSignIn {
+		t.Helper()
+		rows, err := s.ListPending(ctx)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("pending rows: %+v %v", rows, err)
+		}
+		return rows[0]
+	}
+	signIn(t, s, ctx, claimsFor("sub-p", "p@example.org", true, "listeners"), oidc.Policy{})
+	partial := oidc.Claims{Issuer: testIssuer, Subject: "sub-p", Email: "p@example.org", EmailVerified: true, Partial: true}
+	signIn(t, s, ctx, partial, oidc.Policy{})
+	if p := row(); p.Username != "Alice.Smith" || p.Name != "Alice Smith" || len(p.Groups) != 1 || p.Groups[0] != "listeners" || p.Attempts != 2 {
+		t.Fatalf("a partial refresh lost what the row showed: %+v", p)
+	}
+	partial.Groups = []string{}
+	signIn(t, s, ctx, partial, oidc.Policy{})
+	if p := row(); p.Username != "Alice.Smith" || len(p.Groups) != 0 {
+		t.Fatalf("a list the partial claims carried: %+v", p)
+	}
+	whole := partial
+	whole.Partial = false
+	signIn(t, s, ctx, whole, oidc.Policy{})
+	if p := row(); p.Username != "" || p.Name != "" || p.Attempts != 4 {
+		t.Fatalf("whole claims without a username or name: %+v", p)
+	}
+}
+
 // TestPendingIdentityLinkedMeanwhile: a row whose identity signed in (or was
 // linked) since is refused, not linked twice.
 func TestPendingIdentityLinkedMeanwhile(t *testing.T) {
