@@ -345,6 +345,8 @@ describe('about', () => {
     renderApp('/server/about');
     expect(await screen.findByText('AudioSilo v1.16.0 is available')).toBeInTheDocument();
     expect(screen.getByText(/audiosilo-server:1\.16\.0/)).toBeInTheDocument();
+    // The LinuxServer.io image's install reads the same text (server#217).
+    expect(screen.getByText(/lscr\.io\/linuxserver\/audiosilo:latest/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Release notes/ })).toHaveAttribute(
       'href',
       'https://github.com/KodeStar/audiosilo-server/releases/tag/v1.16.0',

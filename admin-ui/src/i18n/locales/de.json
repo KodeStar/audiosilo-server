@@ -2175,7 +2175,7 @@
   "about.off.action": "Allgemeine Einstellungen",
   "about.available.title": "AudioSilo {{version}} ist verfügbar",
   "about.available.notes": "Versionshinweise",
-  "about.how.docker": "Lade das neue Image (ghcr.io/kodestar/audiosilo-server:{{version}} oder :latest) und erstelle den Container neu. Dein Datenordner bleibt, wie er ist.",
+  "about.how.docker": "Lade das neue Image (ghcr.io/kodestar/audiosilo-server:{{version}} oder :latest; beim LinuxServer.io-Image lscr.io/linuxserver/audiosilo:latest) und erstelle den Container neu. Dein Datenordner bleibt, wie er ist.",
   "about.how.binary": "Lade {{version}} für dein System von der Release-Seite herunter, ersetze das Programm und starte es mit demselben Datenordner erneut.",
   "about.how.source": "Das ist ein lokaler Build: Hole den Tag {{version}} und baue neu.",
   "about.failed.title": "Die Suche nach Updates ist fehlgeschlagen",
