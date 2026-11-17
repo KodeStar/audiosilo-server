@@ -33,7 +33,7 @@ DATA_RECORD=/tmp/audiosilo-data-dir
 
 if [ "$#" = 1 ] && [ "$1" = healthcheck ]; then
   d=""
-  read -r d 2>/dev/null <"$DATA_RECORD" || true # the record ends in no newline
+  IFS= read -r d 2>/dev/null <"$DATA_RECORD" || true # the record ends in no newline; IFS= keeps its spaces
   [ -n "$d" ] || d=/data
   # Docker starts a check as root, past this script: drop to the server's user,
   # whose access to config.yaml root may not have (an NFS share with root_squash).
@@ -49,7 +49,7 @@ say() { printf 'audiosilo: %s\n' "$*" >&2; }
 # through. One that can't be written (a read-only /tmp) leaves the check on /data.
 record_data_dir() {
   case "$1" in /*) d="$1" ;; *) d="$(pwd)" && d="${d%/}/$1" ;; esac
-  rm -f "$DATA_RECORD"
+  rm -f "$DATA_RECORD" 2>/dev/null || true # one left in place (a folder) fails the O_EXCL create below
   (set -C && printf '%s' "$d" >"$DATA_RECORD") 2>/dev/null || true
 }
 

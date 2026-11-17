@@ -265,5 +265,14 @@ out=$(docker run --rm -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" 
   cat /etc/victim; [ -L /tmp/audiosilo-data-dir ] || echo "record $(cat /tmp/audiosilo-data-dir)"' 2>&1 || true)
 expect "a link at the record is replaced" "$out" "^keep$" "^record /config$"
 
+# 15c. A record that can't be replaced (a folder at its name) never stops the
+#      start: the server still runs and the check falls back to /data.
+out=$(docker run --rm -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$RUN_ID" sh -c '
+  mkdir /tmp/audiosilo-data-dir &&
+    sh /usr/local/bin/docker-entrypoint.sh audiosilo --data /config 2>/dev/null &&
+    sh /usr/local/bin/docker-entrypoint.sh healthcheck' 2>&1 || true)
+expect "a folder at the record keeps the start" "$out" "^audiosilo --data /config as 1000:1000$" \
+  "^audiosilo --data /data healthcheck as 1000:1000$"
+
 [ "$FAILS" -eq 0 ] || { echo "$FAILS failed"; exit 1; }
 echo "all passed"

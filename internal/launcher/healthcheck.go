@@ -125,8 +125,8 @@ func helloWithoutName(ctx context.Context, addr string) error {
 	if err == nil {
 		return nil
 	}
-	var alert *net.OpError
-	if errors.As(err, &alert) && alert.Op == "remote error" {
+	var opErr *net.OpError // crypto/tls reports a received alert as a "remote error"
+	if errors.As(err, &opErr) && opErr.Op == "remote error" {
 		return nil
 	}
 	return fmt.Errorf("no TLS answer from %s: %w", addr, err)
