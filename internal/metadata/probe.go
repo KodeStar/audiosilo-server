@@ -102,6 +102,13 @@ var ffprobeKillGrace = 5 * time.Second
 // interrupt: an NFS share on macOS) is left to end on its own, counted on
 // path's mount as a read given up on (await), and answers as timed out.
 func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.Duration) (*ffprobeOutput, error) {
+	stuck := stuckByMount.For(path)
+	if stuck.saturated() {
+		// Reads from its mount hang already (a share that stopped answering):
+		// ffprobe would hang there too, one more process left behind, so it is
+		// not run, as readFile refuses an open there.
+		return nil, fmt.Errorf("%w: %w", ErrProbeTimeout, errReadRefused)
+	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffprobePath,
@@ -119,7 +126,7 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 	}
 	wait, stop := graceAfter(ctx, ffprobeKillGrace)
 	defer stop()
-	r, ok := await(wait, stuckByMount.For(path), func() ran {
+	r, ok := await(wait, stuck, func() ran {
 		out, err := cmd.Output()
 		return ran{out, err}
 	}, nil)

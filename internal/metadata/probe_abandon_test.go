@@ -47,3 +47,16 @@ func TestFFprobeThatWontEndIsLeft(t *testing.T) {
 	}
 	waitUncounted(t, stuck)
 }
+
+// With its mount's count of hung reads full, ffprobe is not run on a file
+// there (it would hang too, one more process left behind): it answers as timed
+// out at once. Not parallel: HangMountForTests swaps the mount lookup.
+func TestFFprobeNotRunOnSaturatedMount(t *testing.T) {
+	dir := t.TempDir()
+	release := HangMountForTests(dir)
+	t.Cleanup(release)
+	_, err := runFFprobe(context.Background(), filepath.Join(dir, "book.mp3"), "/no/such/ffprobe", time.Minute)
+	if !errors.Is(err, ErrProbeTimeout) || !errors.Is(err, errReadRefused) {
+		t.Errorf("err = %v, want it refused as a time-out, ffprobe not run", err)
+	}
+}
