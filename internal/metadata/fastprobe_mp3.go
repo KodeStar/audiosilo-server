@@ -4,8 +4,10 @@ package metadata
 // row, the extended header, unsynchronisation, compressed frames, CHAP), ID3v1
 // and the duration from a Xing/Info or VBRI header, else a constant bitrate's
 // estimate, as FFmpeg 7.1's id3v2.c, id3v1.c and mp3dec.c read them. A VBR file
-// with no header is ffprobe's: its estimate depends on the frames its decoder
-// happens to read (SCAN-SPIKE decision 1 keeps that value). FFmpeg 8 differs
+// with no header is not ffprobe's: its estimate from a bitrate can be ~7% off
+// the audio (SRV-16, which replaced SCAN-SPIKE decision 1), so its frames are
+// counted (mp3Uncounted.count), the one answer that departs from ffprobe's
+// (probeResult.Counted). FFmpeg 8 differs
 // from 7 here twice (ffRules): a Xing frame count's duration leaves out the
 // LAME header's encoder delay and padding, and decode_str reads an empty
 // UTF-16 string (no bytes, or a 0 where its BOM goes) as "" instead of failing.
@@ -13,11 +15,13 @@ package metadata
 import (
 	"bytes"
 	"compress/zlib"
+	"context"
 	"encoding/binary"
 	"io"
 	"math"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -846,7 +850,8 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 	default:
 		br, cbr := mp3ConstantBitrate(b, off, fh)
 		if !cbr {
-			return nil, unsure("mp3: no Xing/VBRI header and not constant bitrate")
+			// fastProbe counts its frames, under bounds of its own.
+			return nil, &mp3Uncounted{d: d, chaps: ex.chaps, off: off, first: binary.BigEndian.Uint32(first), fh: fh}
 		}
 		stDur := rescale(b.size-off, 8*14112000, int64(br))
 		durUS = tbToUS(stDur, 1, 14112000)
@@ -858,14 +863,183 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 		}
 	}
 
+	return result(durUS, "mp3", d, mp3Chapters(ex.chaps, durUS)), nil
+}
+
+// mp3Chapters is the ID3 CHAP frames as chapters of a file durUS long.
+func mp3Chapters(chaps []id3Chap, durUS int64) []Chapter {
 	var cl chapterList
-	for i, ch := range ex.chaps {
+	for i, ch := range chaps {
 		c := cl.add(int64(i), 1, 1000, int64(ch.start), int64(ch.end), true, ch.elementID)
 		if t, ok := ch.meta.get("title"); ok && c != nil {
 			c.title = t
 		}
 	}
-	return result(durUS, "mp3", d, cl.finish(durUS, 0, true)), nil
+	return cl.finish(durUS, 0, true)
+}
+
+// reasonUncounted is why a VBR MP3 with no Xing or VBRI header goes to ffprobe
+// when its frames can't be counted (mp3Uncounted.count's reason follows it).
+const reasonUncounted = "mp3: no Xing/VBRI header and not constant bitrate"
+
+// mp3Uncounted is probeMP3's answer for a VBR file with no Xing or VBRI
+// header: all but its duration, which no header states and a bitrate only
+// estimates, so fastProbe counts its frames (count) under bounds of its own,
+// outside the probe's: the whole file is read, a frame header at a time.
+type mp3Uncounted struct {
+	d     *avDict
+	chaps []id3Chap
+	off   int64     // the first frame (past the ID3v2 tags and any junk)
+	first uint32    // its header
+	fh    mpaHeader // decoded
+}
+
+func (u *mp3Uncounted) Error() string { return reasonUncounted }
+
+// countSlack is what a frame count may read past the file's size: the few
+// bytes each of its windows overlaps the last, and the trailing tag's checks.
+const countSlack = 4 << 20
+
+// count is the file's duration from its frames, every one counted from the
+// first to the trailing tags (mp3FrameCount), as the decoder outputs them:
+// their samples over the sample rate. Its bounds are timeout (ffprobe's, the
+// run it replaces) and ctx, and the file's size in bytes to read, every read
+// waited for only while they last (blockFile.raw), so a share that stops
+// answering costs no more than an ffprobe run would. why is set when it was
+// cut short (a bound, a read error) or found no frames.
+func (u *mp3Uncounted) count(ctx context.Context, b *blockFile, timeout time.Duration) (p *probeResult, why string) {
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errProbeDeadline)
+	defer cancel()
+	var frames int64
+	if why := b.boundedBy(ctx, b.size+countSlack, func() {
+		frames = mp3FrameCount(b, u.off, mp3AudioEnd(b, u.off), u.first)
+	}); why != "" {
+		return nil, why
+	}
+	if b.err != nil {
+		return nil, "read: " + b.err.Error()
+	}
+	if frames == 0 {
+		return nil, "no frames"
+	}
+	spf := int64(1152)
+	if u.fh.lsf == 1 {
+		spf = 576
+	}
+	durUS := rescale(frames*spf, 1000000, int64(u.fh.sampleRate))
+	p = result(durUS, "mp3", u.d, mp3Chapters(u.chaps, durUS))
+	p.Counted = true
+	return p, ""
+}
+
+// mp3AudioEnd is where an MP3's audio ends: before a trailing ID3v1 tag and
+// an APEv2 tag (its footer, and its header when it has one), so neither is
+// read as frames. off is the first frame: a tag claiming to reach before it is
+// no tag.
+func mp3AudioEnd(b *blockFile, off int64) int64 {
+	end := b.size
+	if t, ok := b.bytesAt(end-128, 3); ok && string(t) == "TAG" {
+		end -= 128
+	}
+	if f, ok := b.bytesAt(end-32, 32); ok && string(f[:8]) == "APETAGEX" {
+		n := int64(binary.LittleEndian.Uint32(f[12:16]))
+		if binary.LittleEndian.Uint32(f[20:24])&(1<<31) != 0 {
+			n += 32 // its header
+		}
+		if end-n >= off {
+			end -= n
+		}
+	}
+	return end
+}
+
+// mp3SyncMask is the part of a frame header every frame of one stream shares
+// in a count: the sync word, the MPEG version, the layer and the sample rate
+// (a frame counts its samples at the first one's rate).
+const mp3SyncMask = 0xFFFE0C00
+
+// mp3FrameSize is the size of the frame whose header is h, when it is a
+// layer III frame of the stream ref's header starts (mp3SyncMask), else 0.
+func mp3FrameSize(h, ref uint32) int64 {
+	if h&mp3SyncMask != ref&mp3SyncMask {
+		return 0
+	}
+	m, ok := decodeMPA(h)
+	if !ok || m.free || m.layer != 3 {
+		return 0
+	}
+	return int64(m.frameSize)
+}
+
+// mp3FrameCount counts the frames from off (the first, its header ref) to
+// end, a header at a time: each frame's size from its header leads to the
+// next. Where none is found (junk, a damaged frame) it looks on a byte at a
+// time for one whose next frame follows it too, as the decoder's parser
+// resyncs. A frame running past end is cut off, and the decoder drops it.
+func mp3FrameCount(b *blockFile, off, end int64, ref uint32) (frames int64) {
+	w := mp3Window{b: b, end: end}
+	for pos := off; pos+4 <= end; {
+		if fs := mp3FrameSize(w.u32(pos), ref); fs > 0 {
+			if pos+fs > end {
+				break
+			}
+			frames++
+			pos += fs
+			continue
+		}
+		// Lost sync: the next frame whose own next one is a frame, or the end.
+		for pos++; pos+4 <= end; pos++ {
+			b.tick()
+			w.ensure(pos, mp3MaxFrame+4)
+			fs := mp3FrameSize(w.u32(pos), ref)
+			if fs > 0 && (pos+fs == end || mp3FrameSize(w.u32(pos+fs), ref) > 0) {
+				break
+			}
+		}
+	}
+	return frames
+}
+
+// mp3MaxFrame bounds a layer III frame's size (320 kbit/s at 32 kHz, padded),
+// so a resync's look at the next frame stays in its window.
+const mp3MaxFrame = 1441
+
+// mp3Window is a frame count's view of the file: a window of up to
+// mp3WindowSize bytes read straight from the file (blockFile.raw: the armed
+// bounds spent, each read waited for only while they last), not through the
+// block cache, and moved forward as the count goes.
+type mp3Window struct {
+	b     *blockFile
+	end   int64
+	buf   []byte
+	mem   []byte
+	start int64
+}
+
+const mp3WindowSize = 1 << 20
+
+// ensure moves the window to start at pos unless [pos, pos+n) is in it (or
+// the part of it before end).
+func (w *mp3Window) ensure(pos int64, n int) {
+	stop := min(pos+int64(n), w.end)
+	if pos >= w.start && stop <= w.start+int64(len(w.buf)) {
+		return
+	}
+	if w.mem == nil {
+		w.mem = make([]byte, mp3WindowSize)
+	}
+	got, _ := w.b.raw(w.mem[:min(mp3WindowSize, max(w.end-pos, 0))], pos)
+	w.buf, w.start = w.mem[:got], pos
+}
+
+// u32 is the big-endian word at pos (0 past the window's reach: no header).
+func (w *mp3Window) u32(pos int64) uint32 {
+	w.ensure(pos, 4)
+	i := pos - w.start
+	if i < 0 || i+4 > int64(len(w.buf)) {
+		return 0
+	}
+	return binary.BigEndian.Uint32(w.buf[i:])
 }
 
 // mp3ConstantBitrate reports whether the stream at off looks constant-bitrate:

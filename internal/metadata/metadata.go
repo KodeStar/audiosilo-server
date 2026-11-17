@@ -185,6 +185,9 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 // error as its ProbeErr. With ffprobePath "" (none configured, or none found)
 // the probe still runs, by noFFprobeRules (SCAN-SPIKE decision 2, server#269):
 // a file it is unsure of then has no duration, and no ProbeErr, as before.
+// A VBR MP3 with no Xing or VBRI header, whose length ffprobe only estimates,
+// has its frames counted (SRV-16): by the probe, or after ffprobe when the
+// probe is off (countedMP3); a count cut short leaves ffprobe's estimate.
 func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.Duration) (*Metadata, error) {
 	m := &Metadata{Format: fileFormat(path)}
 	ff := ffNone
@@ -205,6 +208,13 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 	case ffprobePath != "":
 		// ffprobe for duration + chapters + richer container tags (best-effort).
 		if p, err := probe(ctx, path, ffprobePath, timeout); err == nil {
+			if ff == ffNone && m.Format == "mp3" && !ffprobeForced(ffprobePath) {
+				// The probe is off for this ffprobe's release, but its estimate of a
+				// VBR MP3 with no Xing/VBRI header is no better: the frames counted.
+				if d, ok := countedMP3(ctx, path, timeout); ok {
+					p.Duration = d
+				}
+			}
 			applyProbe(m, p)
 		} else {
 			m.ProbeErr = err
@@ -213,6 +223,29 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 		m.timedOut = timedOutReason(reason)
 	}
 	return m, nil
+}
+
+// countedMP3 is the length of the MP3 at path from its frames counted when it
+// is a VBR file with no Xing or VBRI header (the probe's Counted answer, by
+// noFFprobeRules: the count is the same by any release's), for an ffprobe whose
+// release the probe follows no rules for, whose estimate of such a file is
+// replaced as the probe's would be. false for any other file, and one that
+// can't be opened, read or counted in time (ffprobe's estimate stays). The
+// open is bounded as readFile's is, the count as the probe's.
+func countedMP3(ctx context.Context, path string, timeout time.Duration) (float64, bool) {
+	rctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
+	defer cancel()
+	b, f, err := openBlockFile(rctx, path)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+	b.ff = noFFprobeRules
+	p, reason := fastProbe(ctx, b, "mp3", timeout)
+	if reason != "" || !p.Counted {
+		return 0, false
+	}
+	return p.Duration, true
 }
 
 // ExtractTags reads only the tags of the file at path (and the iTunes

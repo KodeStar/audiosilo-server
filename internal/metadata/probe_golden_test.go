@@ -32,10 +32,25 @@ func fixtureFiles(t *testing.T, dir string) []string {
 	return names
 }
 
+// countedFixtures are the fixtures that are VBR MP3s with no Xing or VBRI
+// header, whose frames the probe counts (SRV-16) where ffprobe estimates their
+// length from a bitrate: the length ffmpeg decodes each to (its samples over
+// 44.1 kHz, `ffmpeg -i <f> -f s16le -ac 1 - | wc -c`).
+var countedFixtures = map[string]string{
+	"craft-junk-vbr.mp3":     "5.355102",
+	"lame-vbr-noxing.mp3":    "5.328980",
+	"mp3-vbrnoxing-bare.mp3": "5.328980",
+	"mp3-vbrnoxing-chap.mp3": "5.328980",
+	"mp3-vbrnoxing-tags.mp3": "5.328980",
+}
+
 // For every release the probe knows, its answer for each fixture is that
 // release's ffprobe's, recorded in golden-<release>.json, and it leaves to
 // ffprobe exactly the fixtures it did when the golden was written. No ffprobe
-// is needed: probe_live_test.go asks the installed one.
+// is needed: probe_live_test.go asks the installed one. A header-less VBR MP3
+// (countedFixtures) is ffprobe's but for its length: its frames counted, the
+// length it decodes to, never ffprobe's estimate.
+
 func TestProbeMatchesGoldens(t *testing.T) {
 	t.Parallel()
 	fixtures := fixtureFiles(t, probeFixtures)
@@ -90,10 +105,14 @@ func TestProbeMatchesGoldens(t *testing.T) {
 					for _, d := range want.FFprobe.Diff(got) {
 						t.Errorf("%s: %s", name, d)
 					}
+					if decoded, ok := countedFixtures[name]; got.Counted != ok || ok && got.Duration != decoded {
+						t.Errorf("%s: duration %s counted %t, want counted %t (decoded %s, ffprobe's estimate %s)",
+							name, got.Duration, got.Counted, ok, decoded, want.FFprobe.Duration)
+					}
 				}
 			}
-			// The shapes ffprobe keeps: VBR MP3s with no header, a concatenated one, a
-			// FLAC CUESHEET, an M4B with no moov, an MKA with no duration.
+			// The shapes ffprobe keeps: a concatenated MP3, a FLAC CUESHEET, M4Bs with
+			// no moov or a broken header, an MKA with no duration.
 			if fallbacks < 5 || fallbacks > len(fixtures)/5 {
 				t.Errorf("%d fixtures left to ffprobe, want the handful that need it", fallbacks)
 			}

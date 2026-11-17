@@ -12,11 +12,16 @@ import (
 // (probeTagKeys) by their lowercased names. The in-process probe's view of a
 // file it answers for must equal ffprobe's (cmd/probediff, and the golden and
 // live tests over testdata/probe).
+//
+// The one view that departs from ffprobe's is Counted: a VBR MP3 with no Xing
+// or VBRI header, whose duration the probe counts frame by frame where ffprobe
+// estimates it from a bitrate (SRV-16). Diff leaves its duration out.
 type ProbeView struct {
 	Duration string            `json:"duration"`
 	Codec    string            `json:"codec"`
 	Tags     map[string]string `json:"tags,omitempty"`
 	Chapters []ProbeChapter    `json:"chapters,omitempty"`
+	Counted  bool              `json:"counted,omitempty"`
 }
 
 // ProbeChapter is one chapter of a ProbeView.
@@ -97,7 +102,7 @@ func ProbeFFprobe(ctx context.Context, path, ffprobePath string) (*ProbeView, er
 
 // viewOf is a probe's answer (in-process or ffprobe's) as ffprobe prints it.
 func viewOf(p *probeResult) *ProbeView {
-	v := &ProbeView{Duration: ffTime(p.Duration), Codec: p.Codec, Tags: probedTags(p.Tags)}
+	v := &ProbeView{Duration: ffTime(p.Duration), Codec: p.Codec, Tags: probedTags(p.Tags), Counted: p.Counted}
 	for _, c := range p.Chapters {
 		v.Chapters = append(v.Chapters, ProbeChapter{Start: ffTime(c.Start), End: ffTime(c.End), Title: c.Title})
 	}
@@ -129,10 +134,11 @@ func probedTags(tags map[string]string) map[string]string {
 func ffTime(s float64) string { return strconv.FormatFloat(s, 'f', 6, 64) }
 
 // Diff lists where got differs from want, one line each (nil when they are
-// equal).
+// equal). A counted duration (got.Counted) is not ffprobe's by design, so it is
+// not compared: its tests check it against the decoded length.
 func (want *ProbeView) Diff(got *ProbeView) []string {
 	var out []string
-	if want.Duration != got.Duration {
+	if want.Duration != got.Duration && !got.Counted {
 		out = append(out, fmt.Sprintf("duration: want %s, got %s", want.Duration, got.Duration))
 	}
 	if want.Codec != got.Codec {

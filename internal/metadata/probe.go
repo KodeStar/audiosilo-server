@@ -67,6 +67,9 @@ type probeResult struct {
 	Codec    string
 	Tags     map[string]string
 	Chapters []Chapter
+	// Counted: Duration is an MP3's frames counted (a VBR file with no Xing
+	// or VBRI header, SRV-16), where ffprobe's is an estimate from a bitrate.
+	Counted bool
 }
 
 // probe runs ffprobe to obtain duration, the audio codec, chapters and container
