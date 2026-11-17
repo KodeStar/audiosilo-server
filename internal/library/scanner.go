@@ -2608,17 +2608,19 @@ func (s *Scanner) movedFrom(ctx context.Context, lib catalog.Library, book *cata
 		s.log.Warn("looking for a moved book failed", "library", lib.Name, "path", book.RelPath, "err", err)
 		return "", nil
 	}
+	// An indexed book has no move to find: its fingerprint is left to enrich,
+	// which reads it only once the tags have been read, so a Re-read on a share
+	// that stopped answering waits one probe's time, not two.
 	_, err := s.cat.GetBookByPath(ctx, lib.ID, book.RelPath)
-	indexed := err == nil
-	if err != nil && !errors.Is(err, catalog.ErrNotFound) {
+	if err == nil {
+		return "", nil
+	}
+	if !errors.Is(err, catalog.ErrNotFound) {
 		return failed(err)
 	}
 	var ferr error
 	if book.ContentHash == "" {
 		book.ContentHash, ferr = s.fingerprintErr(ctx, lib, book) // reused by enrich
-	}
-	if indexed {
-		return "", nil
 	}
 	if fingerprintUnknown(ferr) {
 		return unknown("its fingerprint couldn't be read")
