@@ -27,9 +27,11 @@ export function MemberChips({ user: u }: { user: AdminUser }) {
         </span>
       ) : null}
       {u.managed_by ? (
-        <Badge variant="outline">
+        // Shrinks and truncates: a long owner's name would push a phone-width
+        // card wider than the screen (a badge never wraps).
+        <Badge variant="outline" className="max-w-full min-w-0 shrink">
           <House aria-hidden="true" />
-          {t('people.badge.managedBy', { name: ownerName(u) })}
+          <span className="truncate">{t('people.badge.managedBy', { name: ownerName(u) })}</span>
         </Badge>
       ) : null}
       {u.member_kind ? <KindBadge kind={u.member_kind} /> : null}
