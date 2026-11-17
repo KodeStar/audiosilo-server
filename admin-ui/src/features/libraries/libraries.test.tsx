@@ -214,6 +214,41 @@ describe('libraries', () => {
     );
   });
 
+  it('asks before adding a books library inside another one (ADMIN-14)', async () => {
+    const calls = mockFetch(
+      routes({
+        'POST /admin/libraries': {
+          status: 201,
+          body: { id: 3, name: 'Pratchett', root: '/mnt/tank/fiction/Pratchett' },
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Add library' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add a library' });
+    await user.type(within(dialog).getByLabelText('Name'), 'Pratchett');
+    await user.type(within(dialog).getByLabelText('Folder'), '/mnt/tank/fiction/Pratchett');
+    await user.click(within(dialog).getByRole('button', { name: 'Add library and scan' }));
+    const confirm = await screen.findByRole('dialog', { name: 'This folder is inside Fiction' });
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+
+    // Cancel goes back to the form, nothing added.
+    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /inside Fiction/ })).not.toBeInTheDocument(),
+    );
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+
+    await user.click(within(dialog).getByRole('button', { name: 'Add library and scan' }));
+    const again = await screen.findByRole('dialog', { name: 'This folder is inside Fiction' });
+    await user.click(within(again).getByRole('button', { name: 'Add anyway' }));
+    expect(await screen.findByText('Added Pratchett')).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === 'POST' && c.path === '/admin/libraries')).toHaveLength(
+      1,
+    );
+  });
+
   it("says how to fix a folder the server can't use", async () => {
     mockFetch(
       routes({
