@@ -144,7 +144,7 @@ func CheckRoot(root string) (string, error) {
 // mounted in a subfolder): so the preview runs on a goroutine of its own,
 // waited for until its time (lim.MaxTime) and previewGrace more, then
 // ErrDirsTimedOut, the preview left to stop at its next look at its context.
-// At most previewsPerMount run at once per mount (mountSlots), a hung one
+// At most previewsPerMount run at once per mount (newMountSlots), a hung one
 // holding its slot until it returns, so hung previews can't pile up.
 func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim PreviewLimits) (*Preview, error) {
 	lines, err := NormalizeIgnore(ignore)
@@ -153,7 +153,7 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 	}
 	lim = lim.withDefaults()
 	start := time.Now()
-	return boundedRead(ctx, s.previews.of(root), lim.MaxTime+previewGrace, s.log, func(ctx context.Context) (*Preview, error) {
+	return boundedRead(ctx, s.previews.For(root), lim.MaxTime+previewGrace, s.log, func(ctx context.Context) (*Preview, error) {
 		return s.preview(ctx, root, lines, lim, start)
 	})
 }

@@ -25,6 +25,7 @@ import (
 
 	"github.com/dhowden/tag"
 
+	"github.com/kodestar/audiosilo-server/internal/mounts"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
@@ -249,7 +250,7 @@ func fileFormat(path string) string {
 // (ffprobe, killable, answers). The file is closed when it returns, before any
 // ffprobe run. An error: it could not be opened.
 func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout time.Duration) (p *probeResult, reason string, err error) {
-	stuck := stuckOn(path)
+	stuck := stuckByMount.For(path)
 	if stuck.saturated() {
 		// Enough reads from this file's mount hang already (a share that
 		// stopped answering): this one fails fast, the file not opened, its
@@ -368,21 +369,21 @@ func HangMountForTests(dir string) (release func()) {
 	if !testing.Testing() {
 		panic("metadata.HangMountForTests called outside a test binary")
 	}
-	was := mountOf
+	was := stuckByMount.Mount
 	key := "hung-for-tests:" + dir
-	mountOf = func(p string) string {
-		if p == dir || strings.HasPrefix(p, dir+string(filepath.Separator)) {
+	stuckByMount.Mount = func(p string) string {
+		if mounts.Within(p, dir) {
 			return key
 		}
 		return was(p)
 	}
-	hung := stuckOn(dir)
+	hung := stuckByMount.For(dir)
 	hung.n.Add(maxAbandonedReads)
 	return sync.OnceFunc(func() {
-		if hung.n.Add(-maxAbandonedReads) == 0 {
-			hung.logged.Store(false)
+		for range maxAbandonedReads {
+			hung.release()
 		}
-		mountOf = was
+		stuckByMount.Mount = was
 	})
 }
 

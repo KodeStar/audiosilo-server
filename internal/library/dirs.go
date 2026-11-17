@@ -11,7 +11,6 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/mounts"
@@ -102,13 +101,13 @@ var ErrDirsTimedOut = errors.New("folder listing timed out")
 // listings, the setup preview's root check) each on a goroutine of its own,
 // waited for at most its time-out: a readdir on a network share that stops
 // answering can't be interrupted (server#224). At most its slots run at once
-// on one mount (mountSlots), a hung one keeping its slot until it returns, so
+// on one mount (newMountSlots), a hung one keeping its slot until it returns, so
 // hung reads can't pile up: with every slot of a mount held a read there waits
 // for one only as long as its time-out, and the other mounts list as ever.
 type DirLister struct {
 	list    func(dir string, limit int) (*DirListing, error)
 	check   func(root string) (string, error)
-	slots   *mountSlots
+	slots   *mounts.PerMount[chan struct{}]
 	timeout time.Duration
 	log     *slog.Logger // nil: slog.Default(), read when it is needed
 }
@@ -125,8 +124,7 @@ func (l *DirLister) List(ctx context.Context, dir string, limit int) (*DirListin
 	if dir != "" && !filepath.IsAbs(dir) {
 		return nil, ErrNotAbsolute // refused at once, never waiting for a slot
 	}
-	slot := l.slots.of(cmp.Or(dir, filesystemRoot()))
-	return boundedRead(ctx, slot, l.timeout, l.log, func(context.Context) (*DirListing, error) { return l.list(dir, limit) })
+	return boundedRead(ctx, l.slots.For(cmp.Or(dir, filesystemRoot())), l.timeout, l.log, func(context.Context) (*DirListing, error) { return l.list(dir, limit) })
 }
 
 // CheckRoot is CheckRoot(root) within the same slots and time-out as a
@@ -135,34 +133,13 @@ func (l *DirLister) CheckRoot(ctx context.Context, root string) (string, error) 
 	if !filepath.IsAbs(root) {
 		return "", ErrNotAbsolute // as List: never waiting for a slot
 	}
-	return boundedRead(ctx, l.slots.of(root), l.timeout, l.log, func(context.Context) (string, error) { return l.check(root) })
+	return boundedRead(ctx, l.slots.For(root), l.timeout, l.log, func(context.Context) (string, error) { return l.check(root) })
 }
 
-// mountSlots bounds the reads under way per mount (mounts.Of): a slot channel
-// of n per mount point a read named, made when first asked for and kept (there
-// are only as many as the mount table has, or one when it can't be read).
-type mountSlots struct {
-	n     int
-	mount func(path string) string // mounts.Of; a test's stand-in
-	mu    sync.Mutex
-	byKey map[string]chan struct{}
-}
-
-func newMountSlots(n int) *mountSlots {
-	return &mountSlots{n: n, mount: mounts.Of, byKey: map[string]chan struct{}{}}
-}
-
-// of is the slots of the mount path is on.
-func (m *mountSlots) of(path string) chan struct{} {
-	key := m.mount(path)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ch, ok := m.byKey[key]
-	if !ok {
-		ch = make(chan struct{}, m.n)
-		m.byKey[key] = ch
-	}
-	return ch
+// newMountSlots is n slots per mount (mounts.Of), a mount's made when a read
+// there first asks for them.
+func newMountSlots(n int) *mounts.PerMount[chan struct{}] {
+	return mounts.NewPerMount(func(string) chan struct{} { return make(chan struct{}, n) })
 }
 
 // readResult is what a boundedRead's goroutine hands its waiter: the read's

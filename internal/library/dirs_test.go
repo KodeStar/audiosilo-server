@@ -112,7 +112,7 @@ func TestDirListerBounded(t *testing.T) {
 		}
 		return &DirListing{Path: dir}, nil
 	}, 1, 50*time.Millisecond)
-	l.slots.mount = func(string) string { return "/" } // both on one mount
+	l.slots.Mount = func(string) string { return "/" } // both on one mount
 	ctx := context.Background()
 	if _, err := l.List(ctx, "/hung", 0); !errors.Is(err, ErrDirsTimedOut) {
 		t.Fatalf("hung listing: %v, want ErrDirsTimedOut", err)
@@ -162,7 +162,7 @@ func TestDirListerHungMountLeavesOthers(t *testing.T) {
 		}
 		return root, nil
 	}
-	l.slots.mount = func(p string) string {
+	l.slots.Mount = func(p string) string {
 		for _, m := range []string{"/mnt/hung", "/mnt/other"} {
 			if p == m || strings.HasPrefix(p, m+"/") {
 				return m
@@ -263,7 +263,7 @@ func TestDirListerLogsAnAbandonedPanic(t *testing.T) {
 		t.Fatalf("a listing that doesn't answer: %v, want ErrDirsTimedOut", err)
 	}
 	close(release)
-	l.slots.of("/hung") <- struct{}{} // waits for the panicked listing to give its slot back
+	l.slots.For("/hung") <- struct{}{} // waits for the panicked listing to give its slot back
 	if got := logged.String(); !strings.Contains(got, "boom") || !strings.Contains(got, "level=ERROR") {
 		t.Fatalf("logged %q, want the listing's panic as an error", got)
 	}

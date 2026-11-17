@@ -378,26 +378,13 @@ type stuckReads struct {
 	logged atomic.Bool
 }
 
-// stuckByMount holds a *stuckReads per mount point a file was read from: one
-// entry per mount, never removed (there are only as many as the mount table
-// has, or one when it can't be read).
-var stuckByMount sync.Map
-
-// mountOf is the mount a file is on (mounts.Of; a test's stand-in).
-var mountOf = mounts.Of
-
-// stuckOn is the stuckReads of the mount path is on.
-func stuckOn(path string) *stuckReads {
-	key := mountOf(path)
-	if s, ok := stuckByMount.Load(key); ok {
-		return s.(*stuckReads)
-	}
-	s, _ := stuckByMount.LoadOrStore(key, &stuckReads{mount: key})
-	return s.(*stuckReads)
-}
+// stuckByMount is the stuckReads of each mount a file was read from (its
+// Mount a test's stand-in): one per mount, never removed.
+var stuckByMount = mounts.NewPerMount(func(mount string) *stuckReads { return &stuckReads{mount: mount} })
 
 // unknownMount counts the abandoned reads of a blockFile not read from a named
-// file (newBlockFile's default: ExactDuration's, a test's).
+// file (newBlockFile's default: ExactDuration's, a test's); nothing checks it
+// against the cap, as no read from a named file is refused by it.
 var unknownMount = &stuckReads{}
 
 // release uncounts an abandoned read that returned (or one that returned

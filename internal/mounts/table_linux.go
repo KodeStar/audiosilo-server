@@ -1,7 +1,6 @@
 package mounts
 
 import (
-	"bufio"
 	"os"
 )
 
@@ -14,12 +13,6 @@ func readTable() ([]string, error) {
 	}
 	defer f.Close()
 	var out []string
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
-		if point, _, ok := ParseLine(sc.Text()); ok {
-			out = append(out, point)
-		}
-	}
-	return out, sc.Err()
+	err = Scan(f, func(point, _ string) { out = append(out, point) })
+	return out, err
 }

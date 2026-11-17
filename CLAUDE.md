@@ -134,7 +134,7 @@ internal/mirrortest/  mirror-mode test support (tests only): the data releases p
 internal/diskspace/   a filesystem's size and free space per OS (statfs / GetDiskFreeSpaceEx): Health > System's roots and the mirror's disk guard
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
-internal/mounts/      the mount a path is on, from the mount table alone (Of; no filesystem call, so a hung share answers at once): the per-mount bounds on the scan's abandoned reads, the folder picker's slots and the setup preview (server#360); ParseLine reads a mountinfo line
+internal/mounts/      the mount a path is on, from the mount table alone (Of; no filesystem call, so a hung share answers at once; PerMount keeps a value per mount): the per-mount bounds on the scan's abandoned reads, the folder picker's slots and the setup preview (server#360); ParseLine and Scan read mountinfo
 internal/fsaccess/    a folder the server's user can't read or write, worded with the path, the user, the folder's owner and the fix (CheckWrite, CheckRead, Hint; see Folder permissions)
 internal/backup/      database backups: VACUUM INTO the backups folder on a schedule or on request, retention, restore applied at the next start
 internal/jsonfile/    the small JSON files beside the database (backup's restore marker/result, the mirror's state.json): Write is owner-only, temp file synced then renamed (all or nothing); Read[T] is nil without a file

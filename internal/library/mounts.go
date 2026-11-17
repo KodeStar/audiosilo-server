@@ -1,7 +1,6 @@
 package library
 
 import (
-	"bufio"
 	"io"
 	"os"
 	"path/filepath"
@@ -53,20 +52,17 @@ func MountHints(exclude ...string) []string {
 // excluded, sorted, without repeats, at most maxMountHints.
 func mountHints(r io.Reader, exclude []string, isDir func(string) bool) []string {
 	out := []string{}
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
-		point, fstype, ok := mounts.ParseLine(sc.Text())
-		if !ok || pseudoFS[fstype] || systemPath(point) || slices.Contains(out, point) {
-			continue
+	_ = mounts.Scan(r, func(point, fstype string) { // a table cut short offers what it read
+		if pseudoFS[fstype] || systemPath(point) || slices.Contains(out, point) {
+			return
 		}
 		if slices.ContainsFunc(exclude, func(e string) bool { return e != "" && filepath.Clean(e) == point }) {
-			continue
+			return
 		}
 		if isDir(point) {
 			out = append(out, point)
 		}
-	}
+	})
 	slices.Sort(out)
 	if len(out) > maxMountHints {
 		out = out[:maxMountHints]

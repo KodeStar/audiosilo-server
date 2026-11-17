@@ -24,6 +24,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/mounts"
 	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
@@ -43,7 +44,7 @@ type Scanner struct {
 	roots *rootProber // bounded, cached checks that a library root is reachable
 	// previews are the setup previews under way per mount (Preview), a hung one
 	// holding its slot until it returns.
-	previews *mountSlots
+	previews *mounts.PerMount[chan struct{}]
 
 	// The on-demand indexes under way (IndexPathWithin), by book: a concurrent
 	// request for the same book waits on the one read rather than reading the

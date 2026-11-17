@@ -252,7 +252,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   library queued before the request returns so the first poll sees it; `GET /admin/invites` lists every account's invites (`auth.ListInvites`, never a
   code); `GET /admin/fs/dirs?path=` is the add-library folder picker (`library.ListDirs`:
   absolute paths, folder names only, no dot-folders, 1,000-entry cap; behind a `library.DirLister`,
-  4 listings at once per mount (`mountSlots` keyed by `mounts.Of`) and 5 s each, so a hung mount
+  4 listings at once per mount (`mounts.PerMount` slots) and 5 s each, so a hung mount
   answers 404 `folder_unreadable` while the other mounts list); `GET /admin/shares` adds
   `member_ids` (`catalog.ShareMembers`).
 - **Community metadata lookup (Phase 1.5, `internal/meta`)**: `GET
@@ -1155,7 +1155,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   only until the deadline (`blockFile.waitRead`), so a pread on a share that stopped answering
   costs a goroutine (and the file open) until it returns, never a stuck reader (`os.Open`/`Stat`
   are not bounded); once `maxAbandonedReads` (16) such reads are outstanding on one mount
-  (`stuckReads` per `mounts.Of` key, `stuckOn`; reads already under way can take it past that) a new
+  (`stuckReads` per mount, `stuckByMount`, a `mounts.PerMount`; reads already under way can take it past that) a new
   read from a file there fails fast (`stuckReads.saturated`, `reasonSaturated`), the file
   not opened and no ffprobe run, its tags unread, logged once (with the mount) until they have all
   returned. Per mount (server#360): one hung share stops reads only from itself, every other
