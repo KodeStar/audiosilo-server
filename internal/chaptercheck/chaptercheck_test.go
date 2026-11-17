@@ -1,9 +1,11 @@
 package chaptercheck
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os/exec"
 	"path/filepath"
@@ -385,8 +387,9 @@ func TestStartReportsAFailedCheck(t *testing.T) {
 
 // TestRunWaitsForReady: the first pass after a start makes no lookup while the
 // metadata doesn't answer locally yet (mirror mode, its copy loading:
-// server#282), then checks once it does; and a copy that never loads holds the
-// checks only readyWait, not for good.
+// server#282), then checks once it does; a copy that never loads holds the
+// checks only readyWait, not for good; and with metadata off nothing is waited
+// for.
 func TestRunWaitsForReady(t *testing.T) {
 	e := newEnv(t)
 	e.book(t, "A/Book.m4b", "B000000001", 3600)
@@ -424,6 +427,20 @@ func TestRunWaitsForReady(t *testing.T) {
 	e.src.calls.Store(0)
 	never := New(e.cat, e.src, "", on, func() bool { return false }, nil)
 	never.readyWait, never.readyPoll = 50*time.Millisecond, time.Millisecond
-	defer run(never)()
+	stop = run(never)
 	waitFor("the check past readyWait", func() bool { return e.src.calls.Load() > 0 })
+	stop()
+
+	// Metadata off: no copy loads, so nothing is waited for (and nothing said
+	// about a copy that isn't ready) until the checks are on.
+	var logged bytes.Buffer
+	off := New(e.cat, e.src, "", func() bool { return false }, func() bool { return false },
+		slog.New(slog.NewTextHandler(&logged, nil)))
+	off.readyWait, off.readyPoll = 10*time.Millisecond, time.Millisecond
+	stop = run(off)
+	time.Sleep(100 * time.Millisecond)
+	stop()
+	if logged.Len() != 0 {
+		t.Errorf("metadata off: waited for the local copy anyway:\n%s", logged.String())
+	}
 }

@@ -55,10 +55,10 @@ const (
 	// boundaries left are placed by proportion alone (approximate) and the fit is
 	// still recorded, so a long book on a slow disk can't fail every check.
 	probeBudget = 4 * time.Minute
-	// readyWait bounds how long the first pass after a start waits for the
-	// metadata to answer locally (mirror mode: the local copy loaded). Past it
-	// the pass runs anyway, its lookups going to the service as a mirror that
-	// isn't ready sends them.
+	// readyWait bounds how long the first pass after a start (the first with
+	// metadata on) waits for the metadata to answer locally (mirror mode: the
+	// local copy loaded). Past it the pass runs anyway, its lookups going to
+	// the service as a mirror that isn't ready sends them.
 	readyWait = 10 * time.Minute
 	// readyPoll is how often that wait looks again.
 	readyPoll = 2 * time.Second
@@ -114,18 +114,26 @@ func New(cat *catalog.Catalog, src Source, ffmpeg string, enabled, ready func() 
 // Run checks the books due a check every interval, and on a Kick, until ctx ends.
 // The first pass waits for the metadata to answer locally (waitReady), so a
 // start in mirror mode sends no lookups to the service while its copy loads.
+// It is the first pass with metadata on: a copy isn't loaded while metadata is
+// off, so the wait starts when the checks do.
 func (r *Runner) Run(ctx context.Context) {
-	if !r.waitReady(ctx) {
-		return
-	}
-	// The first pass finds what the kicks sent during the wait were for.
-	select {
-	case <-r.kick:
-	default:
-	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	waited := false
 	for {
+		if !waited && r.enabled() {
+			if !r.waitReady(ctx) {
+				return
+			}
+			waited = true
+			// The first pass finds what the kicks sent during the wait were
+			// for, and the next tick is an interval after it.
+			select {
+			case <-r.kick:
+			default:
+			}
+			t.Reset(interval)
+		}
 		failing := false
 		if r.enabled() {
 			failing = r.pass(ctx)
