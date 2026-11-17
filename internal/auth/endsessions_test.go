@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -563,4 +564,71 @@ func TestMintFromAnEndedSessionRefused(t *testing.T) {
 		t.Errorf("a key from the member's own device: %v", err)
 	}
 	mustFeed(t, s, ctx, gus.ID, own)
+}
+
+// Security-critical (D5): signing a device out with its members ends a
+// member's calendar link made there, as it ends their sign-in and API key made
+// there (and as the owner's password change does). Denied: a link ended by the
+// device's sign-out alone, by another device's with its members, another
+// owner's member's link recorded on the device (bad data), and the owner's own.
+// A member whose sign-in there already ended loses the link without being
+// named: a link is no sign-in.
+func TestDeviceRevokeWithMembersEndsALinkMadeThere(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	owner := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	_, laptop := mustSession(t, s, ctx, owner.ID, "laptop")
+	_, tablet := mustSession(t, s, ctx, owner.ID, "tablet")
+	_, phone := mustSession(t, s, ctx, owner.ID, "phone")
+	member := func(of *User, name string) Member {
+		t.Helper()
+		return mustMember(t, s, ctx, of.ID, NewMember{Name: name, Kind: MemberGrownup, Access: MemberAll})
+	}
+	// A member's link minted from a sign-in on device on, with that sign-in's id.
+	linkOn := func(of *User, m Member, on int64) (string, int64) {
+		t.Helper()
+		tok, _, err := s.MemberSession(ctx, of.ID, m.ID, "here", on)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, cred, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return mustFeed(t, s, ctx, m.ID, cred.ID), cred.ID
+	}
+	gus, hal, ivy := member(owner, "Gus"), member(owner, "Hal"), member(owner, "Ivy")
+	gusLink, _ := linkOn(owner, gus, laptop)
+	halLink, _ := linkOn(owner, hal, phone)
+	ivyLink, ivyThere := linkOn(owner, ivy, laptop)
+	if err := s.RevokeOwnDevice(ctx, ivy.ID, ivyThere); err != nil {
+		t.Fatal(err)
+	}
+	kitLink, _ := linkOn(bob, member(bob, "Kit"), laptop)
+	ownLink := mustFeed(t, s, ctx, owner.ID, laptop)
+	live := func(what, link string, want bool) {
+		t.Helper()
+		_, _, err := s.ResolveRequest(ctx, link, Presence{}, KindFeed)
+		wantLive(t, what, want, err)
+	}
+
+	if _, err := s.RevokeOwnDeviceAndMembers(ctx, owner.ID, phone, false); err != nil {
+		t.Fatal(err)
+	}
+	live("a member's link after the device's sign-out without its members", halLink, true)
+	if _, err := s.RevokeOwnDeviceAndMembers(ctx, owner.ID, tablet, true); err != nil {
+		t.Fatal(err)
+	}
+	live("a member's link made on another device", gusLink, true)
+
+	gone, err := s.RevokeOwnDeviceAndMembers(ctx, owner.ID, laptop, true)
+	if err != nil || !slices.Equal(gone, []string{gus.Username}) {
+		t.Fatalf("revoke with members = %v, %v; want only the member signed in there", gone, err)
+	}
+	live("a member's link made on the device", gusLink, false)
+	live("the link of a member whose sign-in there had ended", ivyLink, false)
+	live("a member's link made on a device signed out without its members", halLink, true)
+	live("another owner's member's link", kitLink, true)
+	live("the owner's own link", ownLink, true)
 }

@@ -147,8 +147,11 @@ func (s *Service) RevokeOwnDevice(ctx context.Context, userID, id int64) error {
 // RevokeOwnDeviceAndMembers is RevokeOwnDevice that, with alsoMembers, also signs
 // out on that device the caller's household members whose sessions or API keys
 // were made on it (created_on_token_id), in the same transaction: only members
-// userID manages. It returns the usernames of the members it signed out, sorted
-// (none without alsoMembers), for the answer's count and the audit.
+// userID manages. A member's calendar feed link made there ends with them
+// (server#361, as the owner's password change ends it: endSessions). It returns
+// the usernames of the members it signed out, sorted (none without
+// alsoMembers; a link is no sign-in, so it adds no name), for the answer's
+// count and the audit.
 func (s *Service) RevokeOwnDeviceAndMembers(ctx context.Context, userID, id int64, alsoMembers bool) ([]string, error) {
 	if userID <= 0 {
 		return nil, ErrNotFound // 0 would mean "whoever owns it" to revokeDevice
@@ -173,7 +176,8 @@ func (s *Service) revokeDevice(ctx context.Context, op string, id, owner int64, 
 
 // revokeDeviceTx signs device id out inside tx: owner 0 revokes whoever owns the
 // token, any other owner only a token of theirs (and, with alsoMembers, their
-// members' tokens made on it, returning those members' usernames, sorted).
+// members' tokens made on it, returning those members' usernames, sorted, and
+// their members' calendar feed links made on it).
 func revokeDeviceTx(ctx context.Context, tx *sql.Tx, id, owner int64, alsoMembers bool) ([]string, error) {
 	res, err := tx.ExecContext(ctx,
 		`UPDATE tokens SET revoked = 1
@@ -216,6 +220,13 @@ func revokeDeviceTx(ctx context.Context, tx *sql.Tx, id, owner int64, alsoMember
 		members = append(members, name)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// A feed row is deleted, never revoked (feed.go).
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM tokens
+		  WHERE created_on_token_id = ?1 AND kind = '`+KindFeed+`'
+		    AND user_id IN (SELECT id FROM users WHERE managed_by = ?2)`, id, owner); err != nil {
 		return nil, err
 	}
 	slices.Sort(members)

@@ -49,9 +49,10 @@ type FeedStatus struct {
 // token id the request authenticated with), deleting any earlier one in the
 // same transaction, and returns the secret (shown once) with its creation time.
 // The row records the device the session was made on (madeOn: a member's
-// sign-in on their owner's device), so leaveOwners, and the owner's password
-// change or Sign out everywhere (endSessions), end a link made there as they
-// end that sign-in. A kid's is refused inside the write
+// sign-in on their owner's device), so leaveOwners, the owner's password
+// change or Sign out everywhere (endSessions) and the device revoke's
+// alsoMembers end a link made there as they end that sign-in. A kid's is
+// refused inside the write
 // (ErrKidAccount, refuseKid), so a request that passed the route's check just
 // before the switch to a kid committed still mints nothing, and so is one from
 // a session signed out since that check (ErrInvalidToken, madeOn: the earlier

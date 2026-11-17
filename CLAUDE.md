@@ -543,7 +543,8 @@ collision keeps the newer `updated_at`, whole). **My devices** are `GET
 /me/devices` (the caller's own live sessions and API keys, `auth.ListDevices(caller)` without
 `user_id`/`username`, `current` marks the request's token) and `DELETE /me/devices/{id}` (200
 `{"current": bool, "members_signed_out": int}`; `auth.RevokeOwnDeviceAndMembers`, with
-`?also_members=1` also signing out the caller's household members' sign-ins made on that device;
+`?also_members=1` also signing out the caller's household members' sign-ins made on that device,
+with the API keys and the calendar link they made from one;
 owner-scoped: anyone else's, unknown, revoked or
 pairing id is 404 and untouched; revoking the current device is allowed and its token is dead from
 the next request; an API-key caller may revoke).

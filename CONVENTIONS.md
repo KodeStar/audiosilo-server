@@ -2538,7 +2538,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   both ways because a kid has no row (no kid filter of their own). `/me` and the session envelope carry
   `managed_by` (`{id, username}`|null), `member_kind` and, for a member only, `display_name` (omitted otherwise); `/me/devices` rows carry `member_sign_ins`
   (always `[]` for a member, with no read) and `DELETE /me/devices/{id}?also_members=1` signs those out in the same transaction
-  (`{current, members_signed_out}`; each member signed out is audited `member.device_revoke`). The list's `reason` is `auth.MayAddMembers` (the one may-add ladder,
+  (`{current, members_signed_out}`; each member signed out is audited `member.device_revoke`), with the
+  API keys and the calendar feed link those members made from a sign-in there (D5: the link is deleted
+  and adds nothing to the count). The list's `reason` is `auth.MayAddMembers` (the one may-add ladder,
   which `CreateMember` runs too). Admin: user objects add `member_access`, `can_add_members`,
   `members_count`, `display_name` and, on `managed_by` only there, the owner's own `display_name`
   (`api.adminUser`/`adminOwner`; the player's `managed_by` never carries it, and `/me`'s

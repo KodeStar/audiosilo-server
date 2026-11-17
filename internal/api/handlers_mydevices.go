@@ -73,7 +73,8 @@ func (a *API) handleListMyDevices(w http.ResponseWriter, r *http.Request) {
 // unknown or signed-out one, is 404 and untouched. With ?also_members=1 (or
 // true) the caller's household members signed in on that device are signed out
 // there too, in the same transaction, each audited as member.device_revoke (the
-// caller as actor, the member as target, as on the member route). An API-key
+// caller as actor, the member as target, as on the member route), and the API
+// keys and calendar link they made from a sign-in there end with it. An API-key
 // caller may do it too (it only reduces access).
 func (a *API) handleRevokeMyDevice(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
