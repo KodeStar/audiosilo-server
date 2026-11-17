@@ -24,24 +24,32 @@ const healthcheckTimeout = 5 * time.Second
 // it (bind and tls.mode, read as the server reads them at start), answered 200.
 // It backs `audiosilo healthcheck`, the Docker image's HEALTHCHECK (server#217):
 // nil is healthy, an error says why not. It opens nothing in the data folder
-// but config.yaml, writes nothing and needs no shell or curl in the image.
+// but config.yaml, writes nothing and needs no curl in the image. A data folder
+// without a config.yaml is unhealthy: a server saves one before it listens, so
+// none there means no server is running from that folder (a --data that isn't
+// the server's), never the defaults guessed at.
 //
 // An unspecified bind host (0.0.0.0, ::, empty) is asked on 127.0.0.1. With TLS
 // on (selfsigned, autocert) it speaks https without checking the certificate:
-// it is the server asking itself, it sends nothing secret, and a self-signed or
-// not yet issued certificate must not make a live server look dead. Under
-// autocert the hello names tls.hosts' first host, since autocert answers no
-// handshake without a name it may serve. A bind or TLS change saved in the
-// console takes effect at the next start, so until then this asks the new
-// address (the saved one) and fails: a restart applies it.
+// it is the server asking itself, it sends nothing secret, and a self-signed
+// certificate must not make a live server look dead. Under autocert the hello
+// names tls.hosts' first host, since autocert answers no handshake without a
+// name it may serve; until that host's certificate is issued autocert refuses
+// the handshake (and tries the issuance again, at most once a minute), so the
+// check fails until Let's Encrypt can reach the server. A bind or TLS change
+// saved in the console takes effect at the next start, so until then this asks
+// the new address (the saved one) and fails: a restart applies it.
 func Healthcheck(ctx context.Context, dataDir string, w io.Writer) error {
 	abs, err := filepath.Abs(dataDir)
 	if err != nil {
 		return err
 	}
-	cfg, _, err := config.Load(abs)
+	cfg, firstRun, err := config.Load(abs)
 	if err != nil {
 		return fmt.Errorf("reading the config: %w", err)
+	}
+	if firstRun {
+		return fmt.Errorf("no %s: no server has started from %s", config.Path(abs), abs)
 	}
 	target, serverName, err := healthURL(cfg)
 	if err != nil {

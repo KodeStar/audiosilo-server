@@ -29,6 +29,7 @@ func TestCommand(t *testing.T) {
 		{args: []string{"version", "extra"}, code: 2, done: true, errOut: `"version" takes no arguments`},
 		{args: []string{"reset-admin", "a", "b"}, code: 2, done: true, errOut: "usage: audiosilo [--data <folder>] reset-admin [username]"},
 		{args: []string{"reset-admin", "--data", "/x"}, code: 2, done: true, errOut: "flags go before the command"},
+		{args: []string{"healthcheck", "--data", "/x"}, code: 2, done: true, errOut: "usage: audiosilo [--data <folder>] healthcheck"},
 	} {
 		var out, errOut bytes.Buffer
 		code, done := command(tc.args, t.TempDir(), &out, &errOut)

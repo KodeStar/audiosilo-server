@@ -111,6 +111,28 @@ func TestHealthcheckUnhealthy(t *testing.T) {
 	}
 }
 
+// The environment wins over config.yaml, as at the server's start: AUDIOSILO_BIND
+// and AUDIOSILO_TLS_MODE name the server that answers.
+func TestHealthcheckEnvironment(t *testing.T) {
+	dir := healthDataDir(t, freeAddr(t), config.TLSSelfSigned)
+	t.Setenv("AUDIOSILO_BIND", healthServer(t, false, healthz(http.StatusOK)))
+	t.Setenv("AUDIOSILO_TLS_MODE", string(config.TLSOff))
+	if err := Healthcheck(context.Background(), dir, io.Discard); err != nil {
+		t.Fatalf("Healthcheck = %v, want the environment's server asked", err)
+	}
+}
+
+// A data folder with no config.yaml is unhealthy even when the environment
+// names a server that answers: no server runs from that folder.
+func TestHealthcheckNoConfig(t *testing.T) {
+	t.Setenv("AUDIOSILO_BIND", healthServer(t, false, healthz(http.StatusOK)))
+	t.Setenv("AUDIOSILO_TLS_MODE", string(config.TLSOff))
+	err := Healthcheck(context.Background(), t.TempDir(), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), config.ConfigFileName) {
+		t.Fatalf("Healthcheck = %v, want no config.yaml", err)
+	}
+}
+
 // A real start answers the healthcheck, and setup.skip finishes the console's
 // first-run flow at start (server#184) while a start without it leaves the
 // flow to the console.

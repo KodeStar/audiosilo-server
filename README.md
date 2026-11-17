@@ -190,7 +190,8 @@ asks the server's own `/healthz` on the port and TLS mode from `config.yaml` and
 NFS hard mount that stopped answering) pair it with an orchestrator liveness probe or
 an autoheal sidecar such as `willfarrell/autoheal` (see the comment in
 `docker-compose.yml`). A bind or TLS change saved in the console counts from the next
-start, and the check asks the saved address, so restart after one.
+start, and the check asks the saved address, so restart after one. With `tls.mode:
+autocert` the check fails until Let's Encrypt has issued the certificate.
 
 ## Testing & CI
 
