@@ -996,6 +996,10 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// cover, date or genres; a new book is written with what there is. A folder
 	// book's other parts count too (buildMultiFileChapters).
 	b.ReadCutShort = readCutShort(md)
+	// Only a length out of time, with a part added, gone or changed since, is
+	// written whole after all (catalog.Book.LengthOnly); a folder book's parts
+	// say which it is (buildMultiFileChapters).
+	b.LengthOnly = b.ReadCutShort && !md.TagsUnread()
 	setNames(b, md)
 	if md != nil {
 		b.Released = md.Released
@@ -1221,9 +1225,12 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 	idx := 0
 	parts := make([]partFacts, 0, len(b.Files))
 	mds := s.readFiles(ctx, lib, b.Files, first, slots)
+	tagsUnread := false
 	for i := range b.Files {
 		f := &b.Files[i]
 		md := mds[i]
+		tagsUnread = tagsUnread || md.TagsUnread()
+		f.LengthUnread = lengthTimedOut(md)
 		if readCutShort(md) && !b.ReadCutShort {
 			// Its length and chapters unknown: see enrich. The book is kept as
 			// stored, and what brings the next scan back to it is the problem
@@ -1278,6 +1285,7 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 		cum += dur
 	}
 	b.Duration = cum
+	b.LengthOnly = b.ReadCutShort && !tagsUnread
 	n := suspectParts(parts)
 	b.SuspectParts = &n
 }

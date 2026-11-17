@@ -1176,7 +1176,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   earlier part's lasting problem, as the record is what `problemCleared` asks again), so the next scan reads it again (the stored
   mtime and size are the old ones, else `problemCleared`, which a read still cut short, its length
   out of time included, never clears); a new book read so is written with the
-  path's names. With no
+  path's names. Only a length out of time (`Book.LengthOnly`: every file's tags read, none cut short
+  or refused) can repeat on every scan (a damaged part), so it keeps the book only while its files
+  are the stored ones (`catalog.sameFiles`: the paths in order, and each size but the timed-out
+  parts' own, `BookFile.LengthUnread`); with a part added, gone, renamed or changed the book is
+  written whole with the part's problem (counted as updated), never held at a file list that is no
+  longer on disk. With no
   ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules
   (`noFFprobeRules`, decision 2, server#269): a file it is unsure of has no duration and no
   `ProbeErr`; a read out of time says so (`Metadata.ProbeTimedOut`) and the scan reads it again

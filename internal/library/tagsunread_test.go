@@ -266,3 +266,111 @@ func TestKeptBookRecordsThePartCutShortOverAnEarlierProblem(t *testing.T) {
 		t.Errorf("recorded %q on %q, %d updated; want the kept book's problem on the part cut short", problem, file, res.Updated)
 	}
 }
+
+// A length that runs out of time can do so on every scan (a damaged part), so
+// it keeps the stored book only while the book's files are the stored ones:
+// the part itself may have changed (its new length isn't known), but with a
+// part added, or another part changed, the book is written whole with the
+// part's problem, rather than held at a file list that is no longer on disk. A
+// read cut short before its tags (a share that stopped answering, which comes
+// back) keeps the stored book whatever its files.
+func TestLengthTimeOutKeepsTheBookOnlyWhileItsFilesAreTheStoredOnes(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	const book = "Author/Book"
+	part := func(name string, secs float64) {
+		t.Helper()
+		silence(t, root, book+"/"+name, secs, "album=Real Title", "artist=Real Author")
+	}
+	for _, name := range []string{"01.mp3", "02.mp3", "03.mp3"} {
+		part(name, 1)
+	}
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, "", slog.Default())
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	type stored struct {
+		files, chapters int
+		size02          int64
+		problem, file   string
+	}
+	read := func() (got stored) {
+		t.Helper()
+		if err := db.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM book_files f WHERE f.book_id = books.id),
+			(SELECT COUNT(*) FROM chapters c WHERE c.book_id = books.id),
+			(SELECT f.size FROM book_files f WHERE f.book_id = books.id AND f.rel_path = ?),
+			scan_error, scan_error_file FROM books WHERE rel_path = ?`, book+"/02.mp3", book).
+			Scan(&got.files, &got.chapters, &got.size02, &got.problem, &got.file); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first := read()
+	// What each scan below reads of the parts: 03's length out of time, or 02's
+	// read cut short.
+	timedOut, cutShort := book+"/03.mp3", ""
+	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		switch p := filepath.ToSlash(p); {
+		case cutShort != "" && strings.HasSuffix(p, cutShort):
+			return metadata.UnreadForTests(p, false)
+		case timedOut != "" && strings.HasSuffix(p, timedOut):
+			return metadata.TimedOutForTests(p)
+		}
+		return extractFile(ctx, p, ffprobe, timeout)
+	}
+	scan := func() *ScanResult {
+		t.Helper()
+		res, err := s.Scan(ctx, *lib)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	// The part that times out is the one that changed: the stored book is kept.
+	part("03.mp3", 2)
+	want := first
+	want.problem, want.file = problemUnreadable, timedOut
+	if res, got := scan(), read(); got != want || res.Updated != 0 {
+		t.Errorf("the timed-out part changed = %+v (%d updated), want the stored book kept, %+v", got, res.Updated, want)
+	}
+
+	// A part is added: written whole, the timed-out part's problem with it.
+	part("04.mp3", 1)
+	want.files, want.chapters = 4, 4
+	if res, got := scan(), read(); got != want || res.Updated != 1 {
+		t.Errorf("a part added = %+v (%d updated), want the book written whole, %+v", got, res.Updated, want)
+	}
+
+	// Another part changes: written whole again.
+	part("02.mp3", 2)
+	res, got := scan(), read()
+	if got.size02 == first.size02 || res.Updated != 1 {
+		t.Errorf("another part changed = %+v (%d updated), want its new size stored", got, res.Updated)
+	}
+	want.size02 = got.size02
+	if got != want {
+		t.Errorf("another part changed = %+v, want %+v", got, want)
+	}
+
+	// A part goes while another's read is cut short: kept, whatever its files.
+	if err := os.Remove(filepath.Join(root, filepath.FromSlash(book+"/04.mp3"))); err != nil {
+		t.Fatal(err)
+	}
+	timedOut, cutShort = "", book+"/02.mp3"
+	want.file = cutShort
+	if res, got := scan(), read(); got != want || res.Updated != 0 {
+		t.Errorf("a part gone, a read cut short = %+v (%d updated), want the stored book kept, %+v", got, res.Updated, want)
+	}
+
+	// Every read answers: the book is read as it is on disk.
+	s.readFile = nil
+	scan()
+	if got := read(); got.files != 3 || got.chapters != 3 || got.problem != "" {
+		t.Errorf("once every read answers = %+v, want the three parts, no problem", got)
+	}
+}

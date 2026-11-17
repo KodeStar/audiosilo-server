@@ -93,6 +93,18 @@ func (c *Catalog) UpsertBooks(ctx context.Context, books []*Book, budget time.Du
 func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, error) {
 	// A read cut short (Book.ReadCutShort) rewrites nothing of a book indexed
 	// before: only its read problem is recorded, so the next scan reads it again.
+	// One that is only a length out of time (Book.LengthOnly) keeps the book
+	// just while its files are the stored ones: the time-out can repeat on every
+	// scan, and the book would be held at a file list that is no longer on disk.
+	if b.ReadCutShort && b.LengthOnly {
+		same, err := sameFiles(ctx, tx, b)
+		if err != nil {
+			return 0, err
+		}
+		if !same {
+			b.ReadCutShort = false // written whole, below
+		}
+	}
 	if b.ReadCutShort {
 		if id, ok, err := recordReadProblem(ctx, tx, b); err != nil || ok {
 			return id, err
@@ -246,6 +258,33 @@ func recordReadProblem(ctx context.Context, tx *sql.Tx, b *Book) (id int64, ok b
 	}
 	b.ID = id
 	return id, true, nil
+}
+
+// sameFiles reports whether b's files are those of the stored row at its path:
+// the same paths in the same order, each of the same size but for the ones
+// whose length this read ran out of time for (BookFile.LengthUnread). A
+// single-file book has none either way; a book with no row yet differs unless
+// it is one.
+func sameFiles(ctx context.Context, tx *sql.Tx, b *Book) (bool, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT f.rel_path, f.size FROM book_files f JOIN books k ON k.id = f.book_id
+		  WHERE k.library_id = ? AND k.rel_path = ? ORDER BY f.seq, f.id`, b.LibraryID, b.RelPath)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	n, same := 0, true
+	for ; rows.Next(); n++ {
+		var relPath string
+		var size int64
+		if err := rows.Scan(&relPath, &size); err != nil {
+			return false, err
+		}
+		if n >= len(b.Files) || b.Files[n].RelPath != relPath || (!b.Files[n].LengthUnread && b.Files[n].Size != size) {
+			same = false
+		}
+	}
+	return same && n == len(b.Files), rows.Err()
 }
 
 // BooksByPaths returns the books in a library whose rel_path is in paths, keyed
