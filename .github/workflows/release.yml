@@ -125,16 +125,6 @@ jobs:
             done
           done
           # Boot amd64 as their image does: --data only, so the headless first run
-          # and the self-signed TLS default. Its one-time credentials banner (stdout)
-          # stays out of the log; ffmpeg/ffprobe are off so nothing downloads.
-          log="$RUNNER_TEMP/smoke/server.log"
-          AUDIOSILO_BIND=127.0.0.1:18080 AUDIOSILO_UPDATE_CHECK=false \
-            "$RUNNER_TEMP/smoke/linux_amd64/audiosilo" --data "$RUNNER_TEMP/smoke/data" --ffprobe "" --ffmpeg "" \
-            > /dev/null 2> "$log" &
-          server=$!
-          # Its log (stderr) goes to the step's output on the way out, pass or fail.
-          trap 'kill "$server" 2>/dev/null || true; cat "$log" >&2' EXIT
-          curl -kfsS --retry 30 --retry-delay 1 --retry-connrefused https://127.0.0.1:18080/healthz
-          curl -kfsSL https://127.0.0.1:18080/web/ | grep -i '<html' > /dev/null
-          # The start logs its engine.
-          grep -q 'database: sqlite.*engine=native' "$log"
+          # and the self-signed TLS default, serving /healthz and /web/ and logging
+          # engine=native (the same check ci.yml's snapshot job runs on every PR).
+          scripts/smoke-boot.sh "$RUNNER_TEMP/smoke/linux_amd64/audiosilo" "$RUNNER_TEMP/smoke"
