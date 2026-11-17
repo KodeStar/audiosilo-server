@@ -1,11 +1,15 @@
 import '@testing-library/jest-dom/vitest';
-import { afterEach } from 'vitest';
+import { afterEach, beforeAll } from 'vitest';
 import { cleanup, configure } from '@testing-library/react';
 import '@/i18n';
+import { preloadScreens } from './preload-screens';
 
-// Each screen is a lazy chunk; its first import, with every core running a test
-// file (vitest 5's default pool), can take longer than findBy's 1 s default.
+// Each screen is a lazy chunk. Loading them all before the file's tests keeps
+// that cold import out of every test's own time (preloadScreens); the hook's
+// budget is for the import alone, so a slow machine has room. findBy keeps 3 s
+// for a screen's own requests and renders under a full parallel run.
 configure({ asyncUtilTimeout: 3000 });
+beforeAll(preloadScreens, 60_000);
 
 // jsdom gaps the UI libraries touch: cmdk measures its list with ResizeObserver
 // and scrolls the active item into view; the theme code reads matchMedia; Base

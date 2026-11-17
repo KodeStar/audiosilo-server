@@ -1,5 +1,6 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { IMPORT_POLL_MS } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type { Import, ImportDetail, ImportSummary } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
@@ -82,6 +83,12 @@ async function connect(user: ReturnType<typeof userEvent.setup>) {
 
 describe('import: connect, map, review, apply', () => {
   it('walks the whole flow and never keeps the token', async () => {
+    // The list's poll runs on fake intervals, moved on below: the flow never
+    // waits out a real poll, so a busy machine doesn't push it past its time-out.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     let started = false;
     let applied = false;
     let listPolls = 0;
@@ -163,7 +170,10 @@ describe('import: connect, map, review, apply', () => {
     expect(await within(card).findByText(/Fetching samantha's history/)).toBeInTheDocument();
     // Nothing but the list is asked about while it is fetched.
     expect(calls.some((c) => c.path === '/admin/imports/7')).toBe(false);
-    expect(await within(card).findByText('45h', {}, { timeout: 4000 })).toBeInTheDocument();
+    for (let poll = 0; poll < 2 && !within(card).queryByText('45h'); poll++) {
+      await act(() => vi.advanceTimersByTimeAsync(IMPORT_POLL_MS));
+    }
+    expect(await within(card).findByText('45h')).toBeInTheDocument();
     expect(within(card).getByText('140')).toBeInTheDocument();
     expect(
       within(card).getByText('10 of 12 (8 by path, 1 by ASIN, 1 by title and author)'),
