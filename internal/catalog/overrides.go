@@ -817,7 +817,9 @@ type BookEdit struct {
 	// when it is matched by it alone (an unknown_asin run's book: its own ASIN
 	// the community doesn't know): the edit writes only while the book still
 	// has this ASIN and no ISBN (and, as for any zero MatchIf, no recorded
-	// match), else ErrMatchedSince. "" keeps the zero MatchIf's rule.
+	// match), and, when it sets the ASIN, while that ASIN is no admin's own
+	// edit (one typed in since, the same value), else ErrMatchedSince. ""
+	// keeps the zero MatchIf's rule.
 	MatchIfASIN string
 	Source      string
 	UserID      int64
@@ -994,7 +996,16 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 			// ISBN).
 			q, args := `SELECT `+matchedExpr+` FROM books b WHERE b.id = ?`, []any{bookID}
 			if edit.MatchIfASIN != "" {
-				q = `SELECT NOT (` + normASINSQL("b.asin") + ` = ? AND TRIM(b.isbn, ` + sqlSpace + `) = '') FROM books b WHERE b.id = ?`
+				// An edit replacing that ASIN also needs it to be no admin's
+				// own: a plan never sets an edited field, so one now was set
+				// since it read the book (the same value, typed in by hand).
+				adminASIN := ""
+				if _, ok := edit.Set[FieldASIN]; ok {
+					adminASIN = ` AND NOT EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id
+					    AND o.path = b.rel_path AND o.field = '` + FieldASIN + `' AND o.source = '` + SourceEdited + `')`
+				}
+				q = `SELECT NOT (` + normASINSQL("b.asin") + ` = ? AND TRIM(b.isbn, ` + sqlSpace + `) = ''` + adminASIN + `)
+				     FROM books b WHERE b.id = ?`
 				args = []any{match.NormalizeASIN(edit.MatchIfASIN), bookID}
 			}
 			var matched bool

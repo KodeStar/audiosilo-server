@@ -871,4 +871,33 @@ func TestAnchorWrittenOnlyIfStillItsASIN(t *testing.T) {
 	if err := edit("A/Plain", ""); !errors.Is(err, ErrMatchedSince) {
 		t.Fatalf("no MatchIfASIN: err = %v, want ErrMatchedSince", err)
 	}
+	// An admin typed the same ASIN in after the plan read the book: an edit
+	// replacing it is refused (the admin's ASIN is never replaced), one that
+	// leaves it records the match.
+	b := scannedBook(lib.ID, "A/Pinned")
+	b.ASIN = "B0NOPE0005"
+	if _, err := c.UpsertBook(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, "A/Pinned", BookEdit{Set: map[string]string{FieldASIN: "B0NOPE0005"}}); err != nil {
+		t.Fatal(err)
+	}
+	replace := BookEdit{
+		Set:   map[string]string{FieldASIN: "B0UK000001", FieldTitle: "Matched"},
+		Match: &MatchAnchor{WorkID: "the-work", How: MatchHowAuto}, MatchIf: &MatchAnchor{}, MatchIfASIN: "B0NOPE0005",
+		Source: SourceCommunity,
+	}
+	if err := c.EditBook(ctx, lib.ID, "A/Pinned", replace); !errors.Is(err, ErrMatchedSince) {
+		t.Fatalf("replacing an admin's ASIN: err = %v, want ErrMatchedSince", err)
+	}
+	if st, err := c.BookMatchState(ctx, lib.ID, "A/Pinned"); err != nil || st.Fields[FieldASIN].Value != "B0NOPE0005" ||
+		st.Fields[FieldASIN].Source != SourceEdited || st.Anchor.WorkID != "" {
+		t.Fatalf("admin's ASIN: %+v / %+v (%v), want kept and no match", st.Fields[FieldASIN], st.Anchor, err)
+	}
+	if err := edit("A/Pinned", "B0NOPE0005"); err != nil {
+		t.Fatalf("keeping an admin's ASIN: %v", err)
+	}
+	if a := anchorOf(t, c, ctx, lib.ID, "A/Pinned"); a.WorkID != "the-work" {
+		t.Fatalf("keeping an admin's ASIN: match %+v, want recorded", a)
+	}
 }

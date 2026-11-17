@@ -1787,8 +1787,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   audited `book.match_unknown_asin`) is a match over `UnknownASINBooks` (the `unknown_asin` predicate, less
   ignored) found by the title, the item's `found_by` the book's own ASIN: an apply writes only while the book
   still has that ASIN, no ISBN and no recorded match (`matchedSince`; in the edit's transaction
-  `BookEdit.MatchIfASIN`), records the match (so the book leaves the category) and writes the scope's fields
-  by `Plan`, which never replaces an admin's own ASIN (an `edited` field), whatever the scope. One run at a time (`matchrun.Runner`,
+  `BookEdit.MatchIfASIN`, which also refuses replacing an ASIN an admin typed in since, the same value),
+  records the match (so the book leaves the category) and writes the scope's fields by `Plan`, which never replaces an admin's own ASIN (an `edited` field), whatever the scope. One run at a time (`matchrun.Runner`,
   its own goroutine under `baseCtx`, NOT the scan job queue: it waits on the
   network, and `library` must not import `meta`); 6 workers (an apply 2), `maxFailStreak` (10) failures in a row
   stop it (`metadata_unavailable`; past the workers, as one moment's failure meets them all at once):
