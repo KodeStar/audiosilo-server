@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -179,7 +180,8 @@ func New(cat *catalog.Catalog, md Metadata, opt Options) *Runner {
 		opt.On = func() bool { return true }
 	}
 	return &Runner{cat: cat, meta: md, opt: opt, log: opt.Log,
-		kick: make(chan struct{}, 1), wake: make(chan struct{}, 1), settle: settleKicks, offCheck: time.Second}
+		kick: make(chan struct{}, 1), wake: make(chan struct{}, 1), settle: settleKicks, offCheck: time.Second,
+		pending: map[catalog.Ref]bool{}}
 }
 
 // Kick asks for a light run once the kicks settle: a scan or an edit may have
@@ -406,9 +408,6 @@ func (r *Runner) resolveOnly(ctx context.Context, full bool, now time.Time) erro
 	_, _, changed, err := r.resolveOwned(ctx, full, now)
 	for ref, c := range changed {
 		if c {
-			if r.pending == nil {
-				r.pending = map[catalog.Ref]bool{}
-			}
 			r.pending[ref] = true
 		}
 	}
@@ -458,15 +457,13 @@ func (r *Runner) run(ctx context.Context, full bool, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	for ref := range r.pending {
-		changed[ref] = true
-	}
+	maps.Copy(changed, r.pending)
 	locals := groupSeries(books)
 	failed, err := r.resolveSeries(ctx, locals, works, changed, now)
 	if err != nil {
 		return err
 	}
-	r.pending = nil // their series are looked at (a failed read is the run's, as for changed)
+	clear(r.pending) // their series are looked at (a failed read is the run's, as for changed)
 	n, err := r.fetchSeries(ctx, full, now)
 	if err != nil {
 		return err
