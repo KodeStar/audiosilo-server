@@ -2060,7 +2060,8 @@ func relPathOf(root, absDir string) string {
 }
 
 // addedAt is when a file first appeared on disk: its birth (creation) time
-// where the OS/filesystem records it, otherwise its mtime. Formatted as RFC3339
+// where the OS/filesystem records one (birthKnown: a share that keeps none can
+// answer 0), otherwise its mtime. Formatted as RFC3339
 // UTC to match the other timestamp columns and sort lexicographically.
 func addedAt(absPath string, info os.FileInfo) string {
 	found := lstatAdded(info)

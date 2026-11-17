@@ -9,9 +9,10 @@ import (
 
 // lstatAdded is addedAt's time read from an lstat already done, in Unix
 // seconds: the birth time Darwin's stat struct carries (no extra system call),
-// else the mtime.
+// else the mtime, as for a birth time that is none (birthKnown: 0 over an
+// rclone NFS share).
 func lstatAdded(info os.FileInfo) int64 {
-	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && birthKnown(st.Birthtimespec.Sec) {
 		return st.Birthtimespec.Sec
 	}
 	return info.ModTime().Unix()
