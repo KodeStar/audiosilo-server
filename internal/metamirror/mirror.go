@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -215,13 +216,24 @@ func New(dir string, opts Options) (*Mirror, error) {
 		m.log = slog.Default()
 	}
 	m.qlog = slog.NewLogLogger(m.log.Handler(), slog.LevelWarn)
-	m.handler = query.NewHandler(m.Current, query.HandlerOptions{Logger: m.qlog, SiteURL: opts.SiteURL})
+	m.handler = query.NewHandler(m.Current, query.HandlerOptions{
+		Logger: m.qlog, SiteURL: opts.SiteURL, MatchConcurrency: matchConcurrency(),
+	})
 	m.client = release.New(opts.Repo, "", append(slices.Clone(opts.Release), release.WithBaseSize(m.sizeBytes))...)
 
 	m.st = m.loadState()
 	m.first = m.now().Add(m.startAfter)
 	return m, nil
 }
+
+// matchConcurrency is how many works/match queries the copy runs at once: half
+// the cores the server may use (GOMAXPROCS: in a container its CPU limit), at
+// least one. The match is the copy's heaviest read and a bulk match run asks with
+// six workers (internal/matchrun), which unbounded took six cores of a home
+// server (server#307); the queries over it wait their turn, inside internal/meta's
+// local timeout, and the copy's other reads (a book page's lookups) don't queue
+// behind them.
+func matchConcurrency() int { return max(1, runtime.GOMAXPROCS(0)/2) }
 
 // freeBytes is the real disk guard reading.
 func freeBytes(path string) (uint64, error) {
