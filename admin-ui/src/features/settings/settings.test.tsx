@@ -103,7 +103,7 @@ describe('settings', () => {
     expect(screen.queryByRole('dialog', { name: 'Leave without saving?' })).not.toBeInTheDocument();
   });
 
-  it('polls an enabled report until its delayed result arrives and stops on leaving the topic', async () => {
+  it('polls an enabled report until its delayed result arrives, then stops', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const base = settingsWith();
     let report = settingsWith({
@@ -114,7 +114,7 @@ describe('settings', () => {
       },
     });
     const calls = mockFetch(routes({ 'GET /admin/settings': () => ({ body: report }) }));
-    const { router, unmount } = renderApp('/server?topic=metadata');
+    renderApp('/server?topic=metadata');
     expect(await screen.findByTestId('report-run')).toHaveTextContent('Not sent yet');
     report = settingsWith({
       metadata: {
@@ -131,6 +131,26 @@ describe('settings', () => {
     const settled = reads();
     await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS * 3));
     expect(reads()).toBe(settled);
+  });
+
+  it('stops polling a pending report on leaving the topic', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const base = settingsWith();
+    const pending = settingsWith({
+      metadata: {
+        ...base.metadata,
+        report_unknown: true,
+        report_status: { state: 'never', last_sent: 0 },
+      },
+    });
+    const calls = mockFetch(routes({ 'GET /admin/settings': { body: pending } }));
+    const { router, unmount } = renderApp('/server?topic=metadata');
+    await screen.findByTestId('report-run');
+    const reads = () => calls.filter((c) => c.path === '/admin/settings').length;
+    // Still polling while the topic is shown.
+    const before = reads();
+    await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS));
+    expect(reads()).toBeGreaterThan(before);
     await act(() =>
       router.navigate({ to: '/server/{-$section}', params: { section: undefined }, search: {} }),
     );
@@ -140,25 +160,6 @@ describe('settings', () => {
     unmount();
     await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS));
     expect(reads()).toBe(afterLeave);
-  });
-
-  it('never polls a report that has already run', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
-    const base = settingsWith();
-    const ran = settingsWith({
-      metadata: {
-        ...base.metadata,
-        report_unknown: true,
-        report_status: { state: 'ok', last_sent: 2, last_run_at: new Date().toISOString() },
-      },
-    });
-    const calls = mockFetch(routes({ 'GET /admin/settings': { body: ran } }));
-    renderApp('/server?topic=metadata');
-    await screen.findByTestId('report-run');
-    const reads = () => calls.filter((c) => c.path === '/admin/settings').length;
-    const before = reads();
-    await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS * 3));
-    expect(reads()).toBe(before);
   });
 
   it("watches a switch-on for its run, then stops once it's recorded", async () => {
@@ -604,13 +605,15 @@ describe('settings', () => {
 
   it('switches the upcoming releases check, and says how its last run went', async () => {
     const base = settingsWith();
+    // One instant for both: a run is a success only when the two are equal.
+    const ranAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
     const on = settingsWith({
       metadata: {
         ...base.metadata,
         upcoming: true,
         upcoming_status: {
-          last_run_at: new Date(Date.now() - 2 * 3_600_000).toISOString(),
-          last_success_at: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+          last_run_at: ranAt,
+          last_success_at: ranAt,
           series: 12,
           items: 5,
         },
