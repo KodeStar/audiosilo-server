@@ -168,10 +168,11 @@ function FolderExplorer({
     data: q.data,
     failed: q.isError,
   });
-  const listing = (p: string): ListingState | undefined => {
-    const [first, ...later] = byPath.get(p) ?? [];
-    return first && joinPages(state(first), later.map(state));
-  };
+  // Each folder's pages joined once per render: the tree, the detail and Show more all read them.
+  const listings = new Map(
+    [...byPath].map(([p, [first, ...later]]) => [p, joinPages(state(first), later.map(state))]),
+  );
+  const listing = (p: string): ListingState | undefined => listings.get(p);
   const root = byPath.get('')![0];
 
   // Show more: the next page after what has loaded, or the one that failed again.

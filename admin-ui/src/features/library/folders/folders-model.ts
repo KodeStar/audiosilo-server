@@ -41,16 +41,24 @@ export interface ListingState {
  */
 export function joinPages(first: ListingState, later: readonly ListingState[]): ListingState {
   if (!first.data) return first;
-  let data = first.data;
+  const loaded = [first.data];
+  let more: ListingState['more'];
   for (const page of later) {
-    if (!page.data) return { data, more: page.failed ? 'failed' : 'loading' };
-    data = {
-      ...data,
-      entries: [...data.entries, ...page.data.entries],
-      next_offset: page.data.next_offset,
-    };
+    if (!page.data) {
+      more = page.failed ? 'failed' : 'loading';
+      break;
+    }
+    loaded.push(page.data);
   }
-  return { data };
+  const data =
+    loaded.length === 1
+      ? first.data
+      : {
+          ...first.data,
+          entries: loaded.flatMap((p) => p.entries),
+          next_offset: loaded[loaded.length - 1].next_offset,
+        };
+  return more ? { data, more } : { data };
 }
 
 export type TreeRow =
