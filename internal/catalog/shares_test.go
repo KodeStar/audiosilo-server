@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1078,5 +1080,93 @@ func TestScopesFilterForms(t *testing.T) {
 	got, err := c.ListProgress(ctx, uid, many)
 	if err != nil || len(got) != 1 || got[0].Ref != (Ref{LibraryID: paths, Path: "Book/1.mp3"}) {
 		t.Fatalf("progress with %d scopes = %+v, %v; want the granted row only", len(many), got, err)
+	}
+}
+
+// Security-critical: the JSON form of scopesFilterSQL grants exactly the OR
+// form's rows, and both exactly what the Go gate (ScopesAllow) grants, over
+// random paths and rules from an alphabet that holds the cases the forms could
+// read apart: '/' (root "", leading, trailing and doubled slashes), the bytes
+// either side of it ('.', '0'), case, bytes that aren't UTF-8 and LIKE's
+// wildcards. Every trial has whole libraries, path rules and libraries with no
+// scope (denied) among them.
+func TestScopesFilterFormsAgree(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	r := rand.New(rand.NewPCG(1, 2))
+	alphabet := []string{"a", "b", "B", "/", "/", ".", "0", " ", "%", "_", "\xff", "\x85", "Ä"}
+	gen := func() string {
+		var s strings.Builder
+		for range r.IntN(6) {
+			s.WriteString(alphabet[r.IntN(len(alphabet))])
+		}
+		return s.String()
+	}
+	var libs []int64
+	for i := range 4 {
+		l, err := c.CreateLibrary(ctx, Library{Name: fmt.Sprint("L", i), Root: fmt.Sprint("/tmp/L", i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		libs = append(libs, l.ID)
+	}
+	var refs []Ref
+	seen := map[Ref]bool{}
+	for range 1200 {
+		ref := Ref{LibraryID: libs[r.IntN(len(libs))], Path: gen()}
+		if seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		refs = append(refs, ref)
+		if _, err := c.db.ExecContext(ctx, `INSERT INTO books (library_id, rel_path, title, indexed_at) VALUES (?, ?, '', 1)`, ref.LibraryID, ref.Path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := func(ref Ref) string { return fmt.Sprintf("%d:%X", ref.LibraryID, ref.Path) }
+	query := func(frag string, args []any) []string {
+		t.Helper()
+		got, err := queryRows(ctx, c.db, func(rs *sql.Rows, k *string) error { return rs.Scan(k) },
+			`SELECT library_id || ':' || hex(rel_path) FROM books WHERE `+frag+` ORDER BY 1`, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	granted := 0
+	for trial := range 300 {
+		var scopes []Scope
+		for _, lib := range libs {
+			switch r.IntN(8) {
+			case 0: // no scope: denied
+			case 1:
+				scopes = append(scopes, Scope{LibraryID: lib, AllowAll: true})
+			default:
+				var paths []string
+				for range 1 + r.IntN(4) {
+					if p := gen(); p != "" { // "" is AllowAll in every scope builder
+						paths = append(paths, p)
+					}
+				}
+				scopes = append(scopes, Scope{LibraryID: lib, Paths: paths})
+			}
+		}
+		var want []string
+		for _, ref := range refs {
+			if ScopesAllow(scopes, ref) {
+				want = append(want, key(ref))
+			}
+		}
+		slices.Sort(want)
+		orFrag, orArgs := scopesFilterSQL("library_id", "rel_path", scopes)
+		jsFrag, jsArgs := scopesJSONFilterSQL("library_id", "rel_path", scopes)
+		or, js := query(orFrag, orArgs), query(jsFrag, jsArgs)
+		if !slices.Equal(or, want) || !slices.Equal(js, want) {
+			t.Fatalf("trial %d, scopes %+v:\nor   %q\njson %q\nwant %q", trial, scopes, or, js, want)
+		}
+		granted += len(want)
+	}
+	if granted == 0 {
+		t.Fatal("no trial granted a row")
 	}
 }

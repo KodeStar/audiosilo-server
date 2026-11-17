@@ -268,7 +268,9 @@ func scopesJSONFilterSQL(libCol, pathCol string, scopes []Scope) (string, []any)
 	}
 	if len(keys) > 0 {
 		js, _ := json.Marshal(keys) // ASCII strings: it can't fail
-		ors = append(ors, "EXISTS("+ancestorsCTE(pathCol)+" SELECT 1 FROM anc WHERE "+libCol+" || ':' || hex(p) IN (SELECT value FROM json_each(?)))")
+		// hex(NULL) is '', the key of a "" rule: a NULL path is no path, as the
+		// OR form's comparisons read it.
+		ors = append(ors, "EXISTS("+ancestorsCTE(pathCol)+" SELECT 1 FROM anc WHERE p IS NOT NULL AND "+libCol+" || ':' || hex(p) IN (SELECT value FROM json_each(?)))")
 		args = append(args, string(js))
 	}
 	if len(ors) == 0 {
