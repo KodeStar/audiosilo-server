@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -83,32 +84,34 @@ func TestUserStateWritesLeaveTheContentGeneration(t *testing.T) {
 	// A new progress row is not content but moves the listener generation
 	// (Health's duplicates count listeners: server#263), an update of its
 	// fields moves neither, and one moving it to another key is content.
-	listeners := func(name string, wantMoved bool, f func() error) func() error {
+	listeners := func(wantMoved bool, f func() error) func() error {
 		return func() error {
 			before := db.ListenerGeneration()
-			err := f()
-			if after := db.ListenerGeneration(); (after != before) != wantMoved {
-				t.Errorf("%s: listener generation %d -> %d, want moved %v", name, before, after, wantMoved)
+			if err := f(); err != nil {
+				return err
 			}
-			return err
+			if moved := db.ListenerGeneration() != before; moved != wantMoved {
+				return fmt.Errorf("listener generation moved %v, want %v", moved, wantMoved)
+			}
+			return nil
 		}
 	}
-	still("progress insert", listeners("progress insert", true, exec(saveProgress, 1.0)))
-	still("progress update", listeners("progress update", false, exec(saveProgress, 2.0)))
+	still("progress insert", listeners(true, exec(saveProgress, 1.0)))
+	still("progress update", listeners(false, exec(saveProgress, 2.0)))
 	still("progress update in a tx", func() error {
 		return db.WithUserStateTx(ctx, "test", func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, saveProgress, 3.0)
 			return err
 		})
 	})
-	moved("progress re-key", listeners("progress re-key", false, exec(`UPDATE progress SET rel_path = 'Moved' WHERE user_id = 1`)))
+	moved("progress re-key", listeners(false, exec(`UPDATE progress SET rel_path = 'Moved' WHERE user_id = 1`)))
 	moved("progress re-key back", exec(`UPDATE progress SET rel_path = 'Book' WHERE user_id = 1`))
-	still("progress delete", listeners("progress delete", true, exec(`DELETE FROM progress WHERE rel_path = 'Book'`)))
-	still("progress insert again", listeners("progress insert again", true, exec(saveProgress, 1.5)))
-	still("progress insert rolled back", listeners("progress insert rolled back", true,
+	still("progress delete", listeners(true, exec(`DELETE FROM progress WHERE rel_path = 'Book'`)))
+	still("progress insert again", listeners(true, exec(saveProgress, 1.5)))
+	still("progress insert rolled back", listeners(true,
 		rollback(`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed, version, device_id, updated_at)
 			VALUES(1, 1, 'Other', 1, 100, 0, 1, 1, 0, 'now')`)))
-	moved("default progress insert", listeners("default progress insert", false, func() error {
+	moved("default progress insert", listeners(false, func() error {
 		_, err := db.ExecContext(ctx, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed, version, device_id, updated_at)
 			VALUES(1, 1, 'Third', 1, 100, 0, 1, 1, 0, 'now')`)
 		return err

@@ -246,7 +246,7 @@ func TestScopedListBooksLikeWildcards(t *testing.T) {
 	}
 }
 
-func seedUserNamed(t *testing.T, c *Catalog, ctx context.Context, name string) int64 {
+func seedUserNamed(t testing.TB, c *Catalog, ctx context.Context, name string) int64 {
 	t.Helper()
 	res, err := c.db.ExecContext(ctx,
 		`INSERT INTO users(username, password_hash, role, created_at, updated_at)

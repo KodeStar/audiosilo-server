@@ -25,17 +25,13 @@ func BenchmarkActivityYear(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-	exec := func(q string, args ...any) int64 {
-		res, err := c.db.ExecContext(ctx, q, args...)
-		if err != nil {
+	exec := func(q string, args ...any) {
+		if _, err := c.db.ExecContext(ctx, q, args...); err != nil {
 			b.Fatal(err)
 		}
-		id, _ := res.LastInsertId()
-		return id
 	}
 	for u := range 10 {
-		uid := exec(`INSERT INTO users(username, password_hash, role, created_at, updated_at) VALUES(?, 'x', 'user', 't', 't')`,
-			fmt.Sprintf("u%d", u))
+		uid := seedUserNamed(b, c, ctx, fmt.Sprintf("u%d", u))
 		for k := range 300 {
 			at := now.AddDate(0, 0, -k).Format(time.RFC3339)
 			exec(`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed, version, device_id, updated_at, started_at)

@@ -381,15 +381,8 @@ func (e *perfEnv) benchCachedRequests(b *testing.B, reqs [][2]string) {
 // generation moves, so the answer is built).
 func (e *perfEnv) benchRequests(b *testing.B, reqs [][2]string) {
 	ctx := context.Background()
+	e.benchCachedRequests(b, reqs)
 	for _, r := range reqs {
-		b.Run(r[0], func(b *testing.B) {
-			b.ReportAllocs()
-			for b.Loop() {
-				if rec := e.serve(r[1]); rec.Code != http.StatusOK {
-					b.Fatalf("%s: %d", r[1], rec.Code)
-				}
-			}
-		})
 		b.Run(r[0]+"/uncached", func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
