@@ -3130,7 +3130,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   cooldown and authorizes new work against the current online heartbeat/mapping. Priorities are
   100/20/10/-10 respectively; explicit Retry/admin bypass cooldown, while ordinary stream retries
   expose the terminal failure. Existing work can be promoted offline or with an unwritable mapping,
-  never by a demo stream (`FetchOptions.NoNew`: it watches the open fetch at its priority).
+  never by a demo stream (`FetchOptions.NoNew`: it watches the open fetch at its priority, and one of a
+  replaced identity it leaves open, answered as any demo refusal).
   Each non-admin, including kids, may create at most five open fetch intents across libraries.
   The same writer transaction checks the creator's count before insertion; promotion preserves
   ownership and existing open work still wins at the cap. Admins and requester-free scheduled

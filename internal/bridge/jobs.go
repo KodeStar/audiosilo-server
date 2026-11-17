@@ -760,6 +760,11 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			if err := checkPodcastTarget(ctx, tx, j); err != nil {
 				return err
 			}
+			if j.fetch != nil && j.fetch.NoNew {
+				// A demo stream changes nothing of the queue: it queues no fetch
+				// of its own, so it cancels none either, a running one included.
+				return ErrFetchDemo
+			}
 			if err := cancelOpenTx(ctx, tx, key, now, CancelReplacedRequest); err != nil {
 				return err
 			}
