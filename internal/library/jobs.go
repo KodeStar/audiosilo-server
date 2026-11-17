@@ -30,6 +30,12 @@ const (
 	TriggerChange   = "change"   // a library or folder setting changed
 )
 
+// unattended reports whether a trigger is one nobody asked for: a schedule or the
+// server's start.
+func unattended(trigger string) bool {
+	return trigger == TriggerSchedule || trigger == TriggerStartup
+}
+
 // scanTimeout caps a requested scan (see jobContext).
 const scanTimeout = time.Hour
 
@@ -114,7 +120,7 @@ func (s *Scanner) Enqueue(lib catalog.Library, trigger string, startedBy *int64)
 			return j.snapshot()
 		}
 	}
-	if r := q.running; r != nil && r.LibraryID == lib.ID && (trigger == TriggerSchedule || trigger == TriggerStartup) {
+	if r := q.running; r != nil && r.LibraryID == lib.ID && unattended(trigger) {
 		if trigger == TriggerSchedule {
 			// The running scan stands in for this slot, though it may have started
 			// before the slot was due.
@@ -272,7 +278,7 @@ func (s *Scanner) run(ctx, jctx context.Context, j *Job) {
 		}
 		return
 	}
-	if !catalog.KnownKind(lib.Kind) && (j.Trigger == TriggerSchedule || j.Trigger == TriggerStartup) {
+	if !catalog.KnownKind(lib.Kind) && unattended(j.Trigger) {
 		s.skipUnknownKind(lib)
 		return
 	}
