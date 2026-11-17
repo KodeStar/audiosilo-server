@@ -695,7 +695,8 @@ func TestBridgeEmptyFeaturesAndGoneJob(t *testing.T) {
 }
 
 // A heartbeat that names no kinds and no workers (an older or idle Bridge)
-// answers both as [] on the console's status, never null (server#334).
+// answers both as [] on the console's status, never null (server#334):
+// Status.Validate fills them before the heartbeat is kept.
 func TestBridgeStatusListsNeverNull(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
