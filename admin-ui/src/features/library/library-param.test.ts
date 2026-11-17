@@ -9,13 +9,13 @@ describe('bookLibraryOf', () => {
     expect(bookLibraryOf(undefined, all)).toBeUndefined();
   });
 
-  it("reads a podcast library's id as all libraries", () => {
+  it("reads a podcast library's id, or one no library has, as all libraries", () => {
     expect(bookLibraryOf(3, all)).toBeUndefined();
+    expect(bookLibraryOf(9, all)).toBeUndefined();
   });
 
-  it('keeps the id while the libraries load, or for one it does not know', () => {
+  it('keeps the id while the libraries load', () => {
     expect(bookLibraryOf(3, undefined)).toBe(3);
-    expect(bookLibraryOf(9, all)).toBe(9);
   });
 });
 
