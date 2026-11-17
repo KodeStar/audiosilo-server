@@ -101,6 +101,12 @@ func TestPartWhoseProbeTimesOutKeepsTheBookLength(t *testing.T) {
 		t.Fatal(err)
 	}
 	silence(t, root, book+"/02.mp3", 1, "album=Real Title", "artist=Real Author")
+	// Put back later than the first scan's copy (in the same second, its
+	// mtime and size would be the stored ones).
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(part2, later, later); err != nil {
+		t.Fatal(err)
+	}
 	s.probeTimeout = 10 * time.Second
 	if _, err := s.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)

@@ -1151,10 +1151,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   too (`readFile`): the ffprobe run's timeout and the caller's context, and the byte budget; a
   tag read out of time skips the probe (ffprobe, killable, answers; one that finished just before
   its deadline passed keeps its tags), one past the budget or panicking leaves dhowden's tags
-  unread and the probe still runs (a narrator walk past it keeps them). While armed every read from the file runs on its own goroutine and is waited for
-  only until the deadline (`blockFile.waitRead`), so a pread on a share that stopped answering
-  costs a goroutine (and the file open) until it returns, never a stuck reader (`os.Open`/`Stat`
-  are not bounded); once `maxAbandonedReads` (16) such reads are outstanding on one mount
+  unread and the probe still runs (a narrator walk past it keeps them). The open and its stat, and
+  while armed every read from the file, run on a goroutine of their own and are waited for only until
+  the deadline (`metadata.await`: `openBlockFile`, `blockFile.waitRead`), so an open or a pread on a share
+  that stopped answering costs a goroutine (and the file open) until it returns, never a stuck reader;
+  an open given up on is a tag read out of time. The file is opened `O_NONBLOCK` and must be a regular
+  file (a FIFO is turned away at once, `OpenErr` and `TagsUnread`, never waited for nor read as audio).
+  A scan's move fingerprint (`metadata.Fingerprint`, skipped after a read cut short) is bounded the same
+  way, and an ffprobe killed at its time-out that has not ended 5 s later (`ffprobeKillGrace`; stuck in an
+  NFS read on macOS) is left and counted as an abandoned read. Once `maxAbandonedReads` (16) such reads are outstanding on one mount
   (`stuckReads` per mount, `stuckByMount`, a `mounts.PerMount`; reads already under way can take it past that) a new
   read from a file there fails fast (`stuckReads.saturated`, `reasonSaturated`), the file
   not opened and no ffprobe run, its tags unread, logged once (with the mount) until they have all

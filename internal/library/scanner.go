@@ -2,11 +2,8 @@ package library
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"maps"
@@ -668,7 +665,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// failed open per scan instead of an ffprobe sweep forever, and is
 				// otherwise kept as any unchanged book is: the metadata files beside
 				// it (an ABS metadata.json, attachments, an ebook) are still read below.
-				b.ContentHash = fingerprintFile(absOf(lib, primaryPath(b)))
+				b.ContentHash = s.fingerprint(ctx, absOf(lib, primaryPath(b)))
 			}
 			if old.ContentHash != "" || b.ContentHash == "" {
 				// Rows indexed before migration 0016 have no cover flag; fill it with a
@@ -1038,8 +1035,8 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 
 	// Move-detection fingerprint (reused content_hash column); skip if already
 	// computed during move detection.
-	if b.ContentHash == "" {
-		b.ContentHash = fingerprintFile(abs)
+	if b.ContentHash == "" && !md.TagsUnread() {
+		b.ContentHash = s.fingerprint(ctx, abs)
 	}
 
 	// Normalize chapters so single-file and multi-file books look the same to a
@@ -2046,10 +2043,10 @@ func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *cata
 // is indexed already. carryFrom checks it as it checks IndexMoved's from.
 func (s *Scanner) movedFrom(ctx context.Context, lib catalog.Library, book *catalog.Book) string {
 	if book.ContentHash == "" {
-		book.ContentHash = fingerprintFile(absOf(lib, primaryPath(book))) // reused by enrich
+		book.ContentHash = s.fingerprint(ctx, absOf(lib, primaryPath(book))) // reused by enrich
 	}
 	candidates, err := s.cat.MoveCandidates(ctx, lib.ID, book.RelPath,
-		[]string{book.ContentHash, byteFirstFingerprint(lib, book)})
+		[]string{book.ContentHash, s.byteFirstFingerprint(ctx, lib, book)})
 	if err != nil {
 		s.log.Warn("looking for a moved book failed", "library", lib.Name, "path", book.RelPath, "err", err)
 		return ""
@@ -2264,10 +2261,10 @@ func (s *Scanner) carryFrom(ctx context.Context, lib catalog.Library, from strin
 		return ignored("the old book is still on disk")
 	}
 	if nb.ContentHash == "" {
-		nb.ContentHash = fingerprintFile(absOf(lib, primaryPath(nb))) // reused by enrich
+		nb.ContentHash = s.fingerprint(ctx, absOf(lib, primaryPath(nb))) // reused by enrich
 	}
 	if nb.ContentHash == "" || old.ContentHash == "" ||
-		(nb.ContentHash != old.ContentHash && byteFirstFingerprint(lib, nb) != old.ContentHash) {
+		(nb.ContentHash != old.ContentHash && s.byteFirstFingerprint(ctx, lib, nb) != old.ContentHash) {
 		return ignored("the fingerprints differ")
 	}
 	if reclassified(from, catalog.Signature{Size: old.Size, IsFolder: old.IsFolder}, nb) {
@@ -2360,34 +2357,11 @@ func ext(name string) string {
 	return strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
 }
 
-const fingerprintChunk = 64 * 1024 // bytes hashed from the head and tail
-
-// fingerprintFile returns a cheap content fingerprint - sha256 of
-// (size, first 64KB, last 64KB) - used only to detect "same content, new path"
-// moves. It is not a full hash (large files stay cheap) and intentionally not a
-// durable identity (that is the path). Returns "" on error.
-func fingerprintFile(absPath string) string {
-	f, err := os.Open(absPath)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || info.IsDir() {
-		return ""
-	}
-	h := sha256.New()
-	fmt.Fprintf(h, "%d:", info.Size())
-	head := make([]byte, fingerprintChunk)
-	n, _ := io.ReadFull(f, head)
-	h.Write(head[:n])
-	if info.Size() > int64(fingerprintChunk) {
-		tail := make([]byte, fingerprintChunk)
-		if m, err := f.ReadAt(tail, info.Size()-int64(fingerprintChunk)); err == nil || m > 0 {
-			h.Write(tail[:m])
-		}
-	}
-	return hex.EncodeToString(h.Sum(nil))
+// fingerprint is the file at absPath's move-detection fingerprint
+// (metadata.Fingerprint), its open and reads bounded as a scan's tag read's
+// are: "" when it can't be read in that time.
+func (s *Scanner) fingerprint(ctx context.Context, absPath string) string {
+	return metadata.Fingerprint(ctx, absPath, s.probeTimeout)
 }
 
 // detectMoves migrates durable user state (progress/bookmarks/notes/history)
@@ -2424,12 +2398,12 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 		}
 	}
 	for _, nb := range newBooks {
-		fp := fingerprintFile(absOf(lib, primaryPath(nb)))
+		fp := s.fingerprint(ctx, absOf(lib, primaryPath(nb)))
 		nb.ContentHash = fp // reused by enrich, avoiding a second read
 		if fp == "" {
 			continue
 		}
-		was := byteFirstFingerprint(lib, nb)
+		was := s.byteFirstFingerprint(ctx, lib, nb)
 		for oldPath, ofp := range oldFP {
 			if (ofp != fp && ofp != was) || reclassified(oldPath, sigs[oldPath], nb) {
 				continue
@@ -2450,7 +2424,7 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 // bytes in its first folder (a joined book's first disc). An index from before
 // stored that file's fingerprint, so a book moved before its first re-index is
 // still found by it. "" when it is the same file.
-func byteFirstFingerprint(lib catalog.Library, b *catalog.Book) string {
+func (s *Scanner) byteFirstFingerprint(ctx context.Context, lib catalog.Library, b *catalog.Book) string {
 	if !b.IsFolder || len(b.Files) < 2 {
 		return ""
 	}
@@ -2464,7 +2438,7 @@ func byteFirstFingerprint(lib catalog.Library, b *catalog.Book) string {
 	if byteFirst == first {
 		return ""
 	}
-	return fingerprintFile(absOf(lib, byteFirst))
+	return s.fingerprint(ctx, absOf(lib, byteFirst))
 }
 
 // carryMove migrates a moved book's durable state from oldPath to newPath

@@ -332,49 +332,35 @@ func (b *blockFile) waitRead(p []byte, off int64) (int, error) {
 		n   int
 		err error
 	}
-	done := make(chan res, 1)
-	stuck := b.stuck
-	var state atomic.Int32 // readRunning, readAbandoned or readReturned
-	go func() {
+	r, ok := await(b.ctx, b.stuck, func() res {
 		n, err := b.f.ReadAt(p, off)
-		if state.Swap(readReturned) == readAbandoned {
-			stuck.release()
-		}
-		done <- res{n, err}
-	}()
-	select {
-	case r := <-done:
-		return r.n, r.err
-	case <-b.ctx.Done():
-		// Counted before it is marked, so the goroutine's release always
-		// follows; a read that returned meanwhile was never abandoned.
-		stuck.n.Add(1)
-		if !state.CompareAndSwap(readRunning, readAbandoned) {
-			stuck.release()
-		}
+		return res{n, err}
+	}, nil)
+	if !ok {
 		panic(probeLimit("limit: " + context.Cause(b.ctx).Error()))
 	}
+	return r.n, r.err
 }
 
-// A waitRead's read: still running, abandoned by its waiter, or returned.
+// An await's call: still running, abandoned by its waiter, or returned.
 const (
 	readRunning int32 = iota
 	readAbandoned
 	readReturned
 )
 
-// maxAbandonedReads is how many reads waitRead may have given up on that have
-// not returned yet, on one mount (mounts.Of), before a new read from a file
+// maxAbandonedReads is how many reads await may have given up on (an open,
+// a pread, an ffprobe run) that have not returned yet, on one mount (mounts.Of), before a new read from a file
 // there is refused (reads already under way may still be given up on, so the
 // count can pass it by the reads running at once). Each holds a goroutine and
 // its file open, so a share that stays hung would otherwise leak a descriptor
 // per attempt (server#269): past it a read there fails fast, the file not
-// opened (readFile, reasonSaturated), until an abandoned read returns. Per
+// opened (openBlockFile, errReadRefused), until an abandoned read returns. Per
 // mount, so one hung share stops reads only from itself, never from every
 // library (server#360): the leak stays bounded by the cap times the mounts.
 const maxAbandonedReads = 16
 
-// stuckReads counts one mount's reads waitRead gave up on that have not
+// stuckReads counts one mount's reads await gave up on that have not
 // returned: one filesystem's, wherever it is mounted (mounts.Of's key), so a
 // share mounted anew starts at none and two bind mounts of one share count
 // together.

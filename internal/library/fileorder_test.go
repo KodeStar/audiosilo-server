@@ -13,6 +13,7 @@ import (
 	"github.com/kodestar/audiosilo-meta/pkg/scan"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -204,7 +205,7 @@ func TestMoveBeforeReindexAfterNaturalOrder(t *testing.T) {
 	for _, b := range []string{"A/Book", "B/Book"} {
 		// As an index from before natural order has it: the Intro's fingerprint.
 		if _, err := db.ExecContext(ctx, `UPDATE books SET content_hash = ? WHERE rel_path = ?`,
-			fingerprintFile(filepath.Join(root, filepath.FromSlash(b), "Intro.mp3")), b); err != nil {
+			metadata.Fingerprint(ctx, filepath.Join(root, filepath.FromSlash(b), "Intro.mp3"), time.Minute), b); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := cat.SaveProgress(ctx, uid, catalog.Progress{Ref: catalog.Ref{LibraryID: lib.ID, Path: b}, Position: 42}); err != nil {
