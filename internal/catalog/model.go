@@ -344,6 +344,9 @@ type Catalog struct {
 	podcastVisit      Ref
 	// libs is GetLibrary's rows while no content is written.
 	libs store.GenMap[int64, Library]
+	// dups is duplicateSets' groups while no content is written and no
+	// listener starts or drops a book (duplicatecache.go).
+	dups store.GenMap[dupKey, dupFound]
 	// exportPaged, tests only, runs after each page ExportLibraryBooks reads.
 	exportPaged func()
 }
@@ -438,7 +441,9 @@ func New(db *store.DB, now func() time.Time) *Catalog {
 	if now == nil {
 		now = time.Now
 	}
-	return &Catalog{db: db, now: now}
+	c := &Catalog{db: db, now: now}
+	c.dups.Max = maxDuplicateCaches
+	return c
 }
 
 // Ping verifies the underlying database is reachable for reads (backs GET /healthz).

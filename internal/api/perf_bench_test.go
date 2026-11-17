@@ -320,6 +320,62 @@ func BenchmarkPerfListening(b *testing.B) {
 	}
 }
 
+// BenchmarkPerfDuplicates times Health > Duplicates over AUDIOSILO_PERF_BOOKS
+// books with a copy of every tenth (an M4B beside an MP3 folder, say): the
+// first page, the next one, and the Health summary that counts the groups,
+// each with the content unchanged since the last request (server#270 item 3).
+//
+//	go test ./internal/api -run '^$' -bench BenchmarkPerfDuplicates -benchtime 2s
+func BenchmarkPerfDuplicates(b *testing.B) {
+	e := seedPerfLibrary(b, perfBooks())
+	ctx := context.Background()
+	for i, p := range e.books {
+		if i%10 != 0 {
+			continue
+		}
+		bk, err := e.cat.GetBookByPath(ctx, e.libID, p)
+		if err != nil {
+			b.Fatal(err)
+		}
+		cp := *bk
+		cp.ID, cp.RelPath, cp.IsFolder, cp.ContentHash = 0, p+" (copy).m4b", false, fmt.Sprintf("copy%d", i)
+		cp.Files = []catalog.BookFile{{RelPath: cp.RelPath, Duration: bk.Duration, Format: "m4b", Codec: "aac", Size: bk.Size}}
+		cp.Chapters = nil
+		if _, err := e.cat.UpsertBook(ctx, &cp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	page := "/api/v1/admin/issues/duplicates?limit=50"
+	var first struct {
+		Next  string `json:"next_cursor"`
+		Total int    `json:"total"`
+	}
+	e.getJSON(b, page, &first)
+	if first.Total == 0 || first.Next == "" {
+		b.Fatalf("seeded duplicates: %+v", first)
+	}
+	e.benchCachedRequests(b, [][2]string{
+		{"duplicates_page1", page},
+		{"duplicates_page2", page + "&cursor=" + url.QueryEscape(first.Next)},
+		{"admin_issues", "/api/v1/admin/issues"},
+	})
+}
+
+// benchCachedRequests runs a sub-benchmark per {name, path}, the request
+// repeated with nothing written in between.
+func (e *perfEnv) benchCachedRequests(b *testing.B, reqs [][2]string) {
+	for _, r := range reqs {
+		b.Run(r[0], func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if rec := e.serve(r[1]); rec.Code != http.StatusOK {
+					b.Fatalf("%s: %d", r[1], rec.Code)
+				}
+			}
+		})
+	}
+}
+
 // benchRequests runs a sub-benchmark per {name, path}, twice: repeated (as the
 // harness asks: answered from the list cache) and after a write each time (the
 // generation moves, so the answer is built).
