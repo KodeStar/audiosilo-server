@@ -42,7 +42,8 @@ func signInHint(ctx context.Context, cfg *config.Config, authSvc *auth.Service, 
 	if fsaccess.InContainer() {
 		container = "docker exec " + execUser(os.Getuid(), os.Getgid()) + "<container> "
 	}
-	writeSignInHint(w, baseURL(cfg), u.Username, resetAdminCommand(runtime.GOOS, cfg.DataDir, executable(), exec.LookPath), container)
+	command, shell := resetAdminCommand(runtime.GOOS, cfg.DataDir, executable(), exec.LookPath)
+	writeSignInHint(w, baseURL(cfg), u.Username, command, shell, container)
 }
 
 // execUser is docker exec's -u for a server running as uid:gid, so the
@@ -58,9 +59,10 @@ func execUser(uid, gid int) string {
 
 // writeSignInHint writes the hint: where to sign in and as whom, where the
 // password was printed, and the command that sets a new one (command, as run
-// where the server runs; container: "" outside a container, else the docker
-// exec prefix that runs it from the host).
-func writeSignInHint(w io.Writer, base, username, command, container string) {
+// where the server runs; shell: "" when any shell takes it as written, else
+// the one it is written for; container: "" outside a container, else the
+// docker exec prefix that runs it from the host).
+func writeSignInHint(w io.Writer, base, username, command, shell, container string) {
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
 	p("\n========================================================\n")
 	p(" AudioSilo: the admin account hasn't signed in yet\n")
@@ -71,7 +73,11 @@ func writeSignInHint(w io.Writer, base, username, command, container string) {
 	} else {
 		p(" when this server first started (the start of its log).\n")
 	}
-	p(" Lost it? Set a new one:\n")
+	if shell != "" {
+		p(" Lost it? Set a new one (in %s):\n", shell)
+	} else {
+		p(" Lost it? Set a new one:\n")
+	}
 	p("   %s%s\n", container, command)
 	p("========================================================\n")
 }
@@ -88,10 +94,12 @@ func executable() string {
 // resetAdminCommand is the reset-admin command line for this server on goos:
 // its own binary (by name when that name on PATH is this binary, else by its
 // path: the linuxserver image's /app/audiosilo/audiosilo is not on PATH) and its
-// data folder. On Windows a quoted binary path takes PowerShell's call operator
-// (& "C:\Program Files\..."): PowerShell reads a quoted first word as a string,
-// not a command.
-func resetAdminCommand(goos, dataDir, exe string, lookPath func(string) (string, error)) string {
+// data folder. On Windows a word that needs quoting is written for PowerShell
+// (quoteWord), and shell says so ("" otherwise: a line of plain words reads the
+// same in cmd.exe): single quotes, and a quoted binary path behind the call
+// operator (& 'C:\Program Files\...'), since PowerShell reads a quoted first
+// word as a string, not a command.
+func resetAdminCommand(goos, dataDir, exe string, lookPath func(string) (string, error)) (command, shell string) {
 	bin := "audiosilo"
 	if exe != "" {
 		bin = exe
@@ -99,11 +107,16 @@ func resetAdminCommand(goos, dataDir, exe string, lookPath func(string) (string,
 			bin = filepath.Base(exe)
 		}
 	}
-	cmd := quoteWord(goos, bin)
-	if goos == "windows" && strings.HasPrefix(cmd, `"`) {
-		cmd = "& " + cmd
+	cmd, data := quoteWord(goos, bin), quoteWord(goos, dataDir)
+	if goos == "windows" {
+		if cmd != bin {
+			cmd = "& " + cmd
+		}
+		if cmd != bin || data != dataDir {
+			shell = "PowerShell"
+		}
 	}
-	return cmd + " --data " + quoteWord(goos, dataDir) + " reset-admin"
+	return cmd + " --data " + data + " reset-admin", shell
 }
 
 func sameFile(a, b string) bool {
@@ -116,21 +129,37 @@ func sameFile(a, b string) bool {
 }
 
 // plainWord is a word a POSIX shell takes as it is; plainWindowsWord one
-// Windows' shells do (a path's backslashes are plain there).
+// PowerShell and cmd.exe both do (a path's backslashes are plain there; a
+// comma, an @ and a % are not: PowerShell reads "a,b" as two words and a
+// leading @ as a splat, cmd.exe expands %NAME%).
 var (
 	plainWord        = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
-	plainWindowsWord = regexp.MustCompile(`^[A-Za-z0-9_@+=:,./\\-]+$`)
+	plainWindowsWord = regexp.MustCompile(`^[A-Za-z0-9_+=:./\\-]+$`)
+)
+
+// powerShellQuotes doubles every character PowerShell ends a single-quoted
+// string at: the apostrophe and the four typographic single quotes it reads as
+// one (a folder named for someone's books can hold either).
+var powerShellQuotes = strings.NewReplacer(
+	"'", "''",
+	"\u2018", "\u2018\u2018",
+	"\u2019", "\u2019\u2019",
+	"\u201a", "\u201a\u201a",
+	"\u201b", "\u201b\u201b",
 )
 
 // quoteWord is s as one shell word on goos: as it is when plain, else in
-// single quotes for a POSIX shell, in double quotes on Windows (cmd.exe takes
-// a single quote as part of the word, and a path there holds no double quote).
+// single quotes, a POSIX shell's or, on Windows, PowerShell's (a quote inside
+// doubled). PowerShell's single quotes keep every character as it is, where
+// its double quotes, like cmd.exe's, would expand a $ or a % in a path; the
+// word is then PowerShell's alone (cmd.exe reads a single quote as part of the
+// word), which resetAdminCommand reports.
 func quoteWord(goos, s string) string {
 	if goos == "windows" {
 		if plainWindowsWord.MatchString(s) {
 			return s
 		}
-		return `"` + s + `"`
+		return "'" + powerShellQuotes.Replace(s) + "'"
 	}
 	if plainWord.MatchString(s) {
 		return s

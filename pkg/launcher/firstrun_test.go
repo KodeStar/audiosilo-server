@@ -98,7 +98,7 @@ func TestNoSignInHintWithoutAPrintedPassword(t *testing.T) {
 // command outside one.
 func TestWriteSignInHint(t *testing.T) {
 	var out bytes.Buffer
-	writeSignInHint(&out, "http://nas:8080", "admin", "audiosilo --data /data reset-admin", "docker exec -u 99:100 <container> ")
+	writeSignInHint(&out, "http://nas:8080", "admin", "audiosilo --data /data reset-admin", "", "docker exec -u 99:100 <container> ")
 	for _, want := range []string{
 		`Sign in at http://nas:8080/admin as "admin"`,
 		"the container's log",
@@ -109,9 +109,18 @@ func TestWriteSignInHint(t *testing.T) {
 		}
 	}
 	out.Reset()
-	writeSignInHint(&out, "https://books.example.com", "admin", "/opt/as/audiosilo --data /srv/as reset-admin", "")
-	if s := out.String(); strings.Contains(s, "docker") || !strings.Contains(s, "\n   /opt/as/audiosilo --data /srv/as reset-admin\n") {
+	writeSignInHint(&out, "https://books.example.com", "admin", "/opt/as/audiosilo --data /srv/as reset-admin", "", "")
+	if s := out.String(); strings.Contains(s, "docker") ||
+		!strings.Contains(s, " Lost it? Set a new one:\n   /opt/as/audiosilo --data /srv/as reset-admin\n") {
 		t.Errorf("hint outside a container:\n%s", s)
+	}
+	// A command written for one shell names it: cmd.exe takes neither
+	// PowerShell's & nor its single quotes.
+	out.Reset()
+	command := `& 'C:\Program Files\AudioSilo\audiosilo.exe' --data C:\AudioSilo reset-admin`
+	writeSignInHint(&out, "http://localhost:8080", "admin", command, "PowerShell", "")
+	if s := out.String(); !strings.Contains(s, " Lost it? Set a new one (in PowerShell):\n   "+command+"\n") {
+		t.Errorf("hint for a quoted Windows binary:\n%s", s)
 	}
 }
 
@@ -156,36 +165,58 @@ func TestResetAdminCommand(t *testing.T) {
 		{"unknown binary", "/data", "", onPath, "audiosilo --data /data reset-admin"},
 		{"a space", "/srv/audio silo", exe, onPath, "audiosilo --data '/srv/audio silo' reset-admin"},
 	} {
-		if got := resetAdminCommand("linux", tc.data, tc.exe, tc.look); got != tc.want {
-			t.Errorf("%s: resetAdminCommand = %q, want %q", tc.name, got, tc.want)
+		got, shell := resetAdminCommand("linux", tc.data, tc.exe, tc.look)
+		if got != tc.want || shell != "" {
+			t.Errorf("%s: resetAdminCommand = %q for %q, want %q for any shell", tc.name, got, shell, tc.want)
 		}
 	}
 }
 
-// On Windows a quoted binary path takes PowerShell's call operator, &: a quoted
-// first word is a string there, not a command. A plain one needs none.
+// On Windows a word that needs quoting is written for PowerShell, and the
+// command says so: single quotes, which keep a $ as it is, and the call
+// operator & before a quoted binary path (a quoted first word is a string
+// there, not a command). A line of plain words names no shell: cmd.exe reads
+// it the same.
 func TestResetAdminCommandOnWindows(t *testing.T) {
 	notOnPath := func(string) (string, error) { return "", errors.New("not found") }
-	for _, tc := range []struct{ exe, data, want string }{
+	for _, tc := range []struct{ exe, data, want, shell string }{
 		{`C:\Program Files\AudioSilo\audiosilo.exe`, `C:\Program Files\AudioSilo\data`,
-			`& "C:\Program Files\AudioSilo\audiosilo.exe" --data "C:\Program Files\AudioSilo\data" reset-admin`},
-		{`C:\AudioSilo\audiosilo.exe`, `C:\AudioSilo\data`, `C:\AudioSilo\audiosilo.exe --data C:\AudioSilo\data reset-admin`},
+			`& 'C:\Program Files\AudioSilo\audiosilo.exe' --data 'C:\Program Files\AudioSilo\data' reset-admin`, "PowerShell"},
+		{`C:\AudioSilo\audiosilo.exe`, `D:\$Books\data`,
+			`C:\AudioSilo\audiosilo.exe --data 'D:\$Books\data' reset-admin`, "PowerShell"},
+		{`C:\Users\O'Neil\audiosilo.exe`, `C:\AudioSilo\data`,
+			`& 'C:\Users\O''Neil\audiosilo.exe' --data C:\AudioSilo\data reset-admin`, "PowerShell"},
+		{`C:\AudioSilo\audiosilo.exe`, `C:\AudioSilo\data`, `C:\AudioSilo\audiosilo.exe --data C:\AudioSilo\data reset-admin`, ""},
 	} {
-		if got := resetAdminCommand("windows", tc.data, tc.exe, notOnPath); got != tc.want {
-			t.Errorf("resetAdminCommand(windows, %q) = %q, want %q", tc.exe, got, tc.want)
+		got, shell := resetAdminCommand("windows", tc.data, tc.exe, notOnPath)
+		if got != tc.want || shell != tc.shell {
+			t.Errorf("resetAdminCommand(windows, %q, %q) = %q for %q, want %q for %q", tc.exe, tc.data, got, shell, tc.want, tc.shell)
 		}
 	}
 }
 
-// On Windows a path's backslashes are plain and a word with a space takes
-// double quotes: cmd.exe reads a single quote as part of the word.
+// On Windows a path's backslashes are plain, and a word that isn't plain takes
+// PowerShell's single quotes, where nothing expands: a $ or a % stays as it is
+// (double quotes would expand the first in PowerShell, and cmd.exe the second),
+// and a single quote inside is doubled, the typographic ones PowerShell reads
+// as one included.
 func TestQuoteWord(t *testing.T) {
 	for _, tc := range []struct{ goos, in, want string }{
 		{"linux", "/data", "/data"},
 		{"linux", "/srv/audio silo", "'/srv/audio silo'"},
 		{"linux", "/srv/it's", `'/srv/it'\''s'`},
 		{"windows", `C:\AudioSilo\audiosilo.exe`, `C:\AudioSilo\audiosilo.exe`},
-		{"windows", `C:\Program Files\AudioSilo\data`, `"C:\Program Files\AudioSilo\data"`},
+		{"windows", `C:\Program Files\AudioSilo\data`, `'C:\Program Files\AudioSilo\data'`},
+		{"windows", `D:\$Recycle\data`, `'D:\$Recycle\data'`},
+		{"windows", `D:\100%\data`, `'D:\100%\data'`},
+		{"windows", "D:\\a`b", "'D:\\a`b'"},
+		{"windows", `D:\Tom & Co (old);x\data`, `'D:\Tom & Co (old);x\data'`},
+		{"windows", `D:\Kate's books`, `'D:\Kate''s books'`},
+		{"windows", "D:\\Kate\u2019s books", "'D:\\Kate\u2019\u2019s books'"},
+		{"windows", "D:\\\u2018a\u201ab\u201bc", "'D:\\\u2018\u2018a\u201a\u201ab\u201b\u201bc'"},
+		// PowerShell splits a bare word at a comma and reads a leading @ as a splat.
+		{"windows", `D:\Books,Audio\data`, `'D:\Books,Audio\data'`},
+		{"windows", `@data`, `'@data'`},
 	} {
 		if got := quoteWord(tc.goos, tc.in); got != tc.want {
 			t.Errorf("quoteWord(%s, %q) = %q, want %q", tc.goos, tc.in, got, tc.want)
@@ -645,6 +676,36 @@ func TestResetAdminRefusals(t *testing.T) {
 		}
 	})
 
+	t.Run("a folder that isn't there", func(t *testing.T) {
+		err := ResetAdmin(ctx, filepath.Join(t.TempDir(), "missing"), "", &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "no database at") {
+			t.Fatalf("err = %v, want no database", err)
+		}
+	})
+
+	// A folder this user can't reach (one above it closed to them: the
+	// service's own) is reported as that, never as the wrong folder, which
+	// would send the admin looking for another instead of running it as the
+	// server's user.
+	t.Run("a folder this user can't reach", func(t *testing.T) {
+		if runtime.GOOS == "windows" || os.Getuid() == 0 {
+			t.Skip("needs a folder mode that closes it to this user")
+		}
+		closed := filepath.Join(t.TempDir(), "service")
+		dir := filepath.Join(closed, "data")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(closed, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(closed, 0o700) }) //nolint:gosec // the test's own folder, reopened for its removal
+		err := ResetAdmin(ctx, dir, "", &bytes.Buffer{})
+		if !errors.Is(err, os.ErrPermission) || strings.Contains(err.Error(), "no database at") {
+			t.Fatalf("err = %v, want permission denied", err)
+		}
+	})
+
 	// A file that isn't an AudioSilo database is refused as it is, not
 	// migrated into one.
 	t.Run("an empty file", func(t *testing.T) {
@@ -676,36 +737,6 @@ func TestResetAdminRefusals(t *testing.T) {
 			err := ResetAdmin(ctx, dir, "", &out)
 			if err == nil || !strings.Contains(err.Error(), marker.want) || !strings.Contains(err.Error(), "start the server once") {
 				t.Fatalf("err = %v, want %q", err, marker.want)
-	t.Run("a folder that isn't there", func(t *testing.T) {
-		err := ResetAdmin(ctx, filepath.Join(t.TempDir(), "missing"), "", &bytes.Buffer{})
-		if err == nil || !strings.Contains(err.Error(), "no database at") {
-			t.Fatalf("err = %v, want no database", err)
-		}
-	})
-
-	// A folder this user can't reach (one above it closed to them: the
-	// service's own) is reported as that, never as the wrong folder, which
-	// would send the admin looking for another instead of running it as the
-	// server's user.
-	t.Run("a folder this user can't reach", func(t *testing.T) {
-		if runtime.GOOS == "windows" || os.Getuid() == 0 {
-			t.Skip("needs a folder mode that closes it to this user")
-		}
-		closed := filepath.Join(t.TempDir(), "service")
-		dir := filepath.Join(closed, "data")
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(closed, 0); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(closed, 0o700) }) //nolint:gosec // the test's own folder, reopened for its removal
-		err := ResetAdmin(ctx, dir, "", &bytes.Buffer{})
-		if !errors.Is(err, os.ErrPermission) || strings.Contains(err.Error(), "no database at") {
-			t.Fatalf("err = %v, want permission denied", err)
-		}
-	})
-
 			}
 			if out.Len() > 0 {
 				t.Errorf("printed %q on a refusal", out.String())

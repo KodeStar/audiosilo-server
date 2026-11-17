@@ -4141,7 +4141,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   never-expiring invite labelled `auth.InitialAdminCodeLabel`; the output says so when there was one; a
   failure refuses the reset with nothing changed), sets a random password through `auth.SetPassword`
   (the console's rule: every session, pairing code and remembered browser ends) and prints the password
-  once. On Windows a quoted binary path in the printed command takes PowerShell's `&`. The console's
+  once. On Windows a word of the printed command that isn't plain is written for PowerShell, and the hint
+  then says so, "(in PowerShell)": single quotes (nothing expands there: a `$` or a `%` in a path stays,
+  and a quote inside is doubled, the typographic ones PowerShell reads as one included), a quoted binary
+  path behind the call operator `&`, and a word with a comma or an `@` quoted too (PowerShell splits the
+  first and splats the second); a command of plain words names no shell (cmd.exe reads it the same). The console's
   account step says a new password ends the code too. A running server
   takes the new password at once; a session it already checked is answered from its token cache (which
   another process's write can't empty) until that server's next content write, or a minute after it last
