@@ -812,3 +812,63 @@ func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 		t.Fatalf("an ASIN by hand, none recorded = %+v, want no match written", a)
 	}
 }
+
+// TestAnchorWrittenOnlyIfStillItsASIN: a zero MatchIf beside MatchIfASIN (an
+// unknown_asin run's book, matched by its own ASIN alone) records a match while
+// the book still has that ASIN (compared as normalized) and no ISBN; an ASIN or
+// ISBN it gained since is kept, and nothing of the edit goes in (server#392).
+func TestAnchorWrittenOnlyIfStillItsASIN(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	books := map[string]string{"A/Same": "B0NOPE0001", "A/Other": "B0NOPE0002", "A/ISBN": "B0NOPE0003", "A/Plain": "B0NOPE0004"}
+	for p, asin := range books {
+		b := scannedBook(lib.ID, p)
+		b.ASIN = asin
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.EditBook(ctx, lib.ID, "A/Other", BookEdit{Set: map[string]string{FieldASIN: "B0BYHAND01"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, "A/ISBN", BookEdit{Set: map[string]string{FieldISBN: "9780553418026"}}); err != nil {
+		t.Fatal(err)
+	}
+	edit := func(p, asin string) error {
+		t.Helper()
+		return c.EditBook(ctx, lib.ID, p, BookEdit{
+			Set:   map[string]string{FieldTitle: "Matched"},
+			Match: &MatchAnchor{WorkID: "the-work", How: MatchHowAuto}, MatchIf: &MatchAnchor{}, MatchIfASIN: asin,
+			Source: SourceCommunity,
+		})
+	}
+	title := func(p string) string {
+		t.Helper()
+		st, err := c.BookMatchState(ctx, lib.ID, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Fields[FieldTitle].Value
+	}
+	// Allowed: still the ASIN read (another case of it is the same ASIN).
+	if err := edit("A/Same", " b0nope0001"); err != nil {
+		t.Fatal(err)
+	}
+	if a := anchorOf(t, c, ctx, lib.ID, "A/Same"); a.WorkID != "the-work" || title("A/Same") != "Matched" {
+		t.Fatalf("still its ASIN: match %+v, title %q, want both written", a, title("A/Same"))
+	}
+	// Denied: another ASIN set since, or an ISBN gained since.
+	for p, asin := range map[string]string{"A/Other": "B0NOPE0002", "A/ISBN": "B0NOPE0003"} {
+		if err := edit(p, asin); !errors.Is(err, ErrMatchedSince) {
+			t.Fatalf("%s: err = %v, want ErrMatchedSince", p, err)
+		}
+		if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "" || title(p) == "Matched" {
+			t.Fatalf("%s: match %+v, title %q, want nothing written", p, a, title(p))
+		}
+	}
+	// Without MatchIfASIN a zero MatchIf keeps its rule: a book with an ASIN is matched.
+	if err := edit("A/Plain", ""); !errors.Is(err, ErrMatchedSince) {
+		t.Fatalf("no MatchIfASIN: err = %v, want ErrMatchedSince", err)
+	}
+}

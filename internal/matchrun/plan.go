@@ -511,8 +511,8 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 			return Writes{}
 		}
 		return planRefresh(scope, st, p)
-	case catalog.MatchModeMatch:
-		if matchedSince(st, it) {
+	case catalog.MatchModeMatch, catalog.MatchModeUnknownASIN:
+		if matchedSince(mode, st, it) {
 			return Writes{}
 		}
 		if it.Detail == DetailCoverPending {
@@ -575,19 +575,32 @@ func planRefresh(scope string, st *catalog.MatchState, p catalog.MatchProposal) 
 	return w
 }
 
-// matchedSince reports whether a match run's book is matched now: an ASIN or
-// ISBN, or a recorded community match (catalog.MatchAnchor). The run took only
-// unmatched books (UnmatchedBooks), so one has been matched since: by hand (from
-// the review or the book page), by another admin or the Bridge's Audible
-// backfill, or by a rescan reading one from an Audiobookshelf metadata.json. The
+// newMatches reports whether a run in mode matches books that have no
+// community match yet, to record one: a match run's (unmatched books) and an
+// unknown_asin run's (books matched by an ASIN the community doesn't know).
+func newMatches(mode string) bool {
+	return mode == catalog.MatchModeMatch || mode == catalog.MatchModeUnknownASIN
+}
+
+// matchedSince reports whether a book a run in mode (newMatches) took is matched
+// now. A match run took only unmatched books (UnmatchedBooks): one with an ASIN
+// or ISBN, or a recorded community match (catalog.MatchAnchor), now has been
+// matched since: by hand (from the review or the book page), by another admin or
+// the Bridge's Audible backfill, or by a rescan reading one from an
+// Audiobookshelf metadata.json. An unknown_asin run took books with an ASIN of
+// their own the community didn't know (UnknownASINBooks, found by it: the item's
+// FoundBy): one with a recorded match, an ISBN, or another ASIN now has been. The
 // run's match never writes over it, whatever the scope. An item whose own apply a
 // stop cut short after its fields went in (DetailCoverPending) holds the run's
 // identifier and match: it is matched since only by a recorded match that isn't
 // the run's (matched again by hand, to another record).
-func matchedSince(st *catalog.MatchState, it *catalog.MatchRunItem) bool {
+func matchedSince(mode string, st *catalog.MatchState, it *catalog.MatchRunItem) bool {
 	if it.Detail == DetailCoverPending {
 		p := it.Proposal
 		return st.Anchor.WorkID != "" && (st.Anchor.WorkID != p.WorkID || st.Anchor.RecordingID != p.RecordingID)
+	}
+	if mode == catalog.MatchModeUnknownASIN {
+		return st.Anchor.WorkID != "" || st.Fields[catalog.FieldISBN].Value != "" || !stillFoundBy(st, it.Proposal.FoundBy)
 	}
 	return st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != "" || st.Anchor.WorkID != ""
 }

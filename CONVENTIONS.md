@@ -1781,7 +1781,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   own recording); never in a refresh or a repick, whose identifier is the book's own. **Bulk matching**
   (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
   `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
-  `POST /admin/match-runs/{id}/apply|cancel`. One run at a time (`matchrun.Runner`,
+  `POST /admin/match-runs/{id}/apply|cancel`. Mode `unknown_asin` (server#392, Health's unknown-ASIN card,
+  audited `book.match_unknown_asin`) is a match over `UnknownASINBooks` (the `unknown_asin` predicate, less
+  ignored) found by the title, the item's `found_by` the book's own ASIN: an apply writes only while the book
+  still has that ASIN, no ISBN and no recorded match (`matchedSince`; in the edit's transaction
+  `BookEdit.MatchIfASIN`), records the match (so the book leaves the category) and writes the scope's fields
+  by `Plan`, which never replaces an admin's own ASIN (an `edited` field), whatever the scope. One run at a time (`matchrun.Runner`,
   its own goroutine under `baseCtx`, NOT the scan job queue: it waits on the
   network, and `library` must not import `meta`); 6 workers (an apply 2), `maxFailStreak` (10) failures in a row
   stop it (`metadata_unavailable`; past the workers, as one moment's failure meets them all at once):
@@ -2268,8 +2273,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h; the console's fix is the Bridge's Detect
   chapters, see The Bridge), `unmatched` (no ASIN, ISBN or recorded community match: `NOT matchedExpr`; left
   out of the summary while metadata is off), `unknown_asin` (the book's own ASIN is one the unknown-ASIN report
-  found unknown: `unknownASINExpr`, see Unknown ASIN report; still matched by `matchedExpr`; left out of the
-  summary while the report is off), `transcode`, `suspect` (not a folder with a `book` override, the
+  found unknown: `unknownASINExpr`, see Unknown ASIN report; still matched by `matchedExpr`, so Match
+  automatically passes it by: the category's own card starts an `unknown_asin` match run (see Bulk matching);
+  left out of the summary while the report is off), `transcode`, `suspect` (not a folder with a `book` override, the
   category's own fix), `scan_error`, `series_spellings` (`catalog/seriesspellings.go`: another book of
   its library spells its main series another way, same `series_key`; listed per series by `GET
   /admin/issues/series-spellings[?library_id=&ignored=true]` -> `{groups: [{library_id, suggested,

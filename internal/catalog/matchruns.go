@@ -39,6 +39,13 @@ const (
 	// matched with neither by its recorded community match (MatchedBooks), to fill
 	// in the details the match didn't bring (an enrichment, an apply of ids only).
 	MatchModeRefresh = "refresh"
+	// MatchModeUnknownASIN matches by their title the books Health lists as
+	// unknown_asin (UnknownASINBooks): an ASIN of their own the community
+	// doesn't know and nothing else to find them by, so they count as matched
+	// and a match run passes them by. Applying records their community match
+	// with the scope's fields, and never replaces an ASIN an admin set
+	// (server#392).
+	MatchModeUnknownASIN = "unknown_asin"
 )
 
 // Match run statuses.
@@ -493,10 +500,24 @@ func (c *Catalog) LanguageCounts(ctx context.Context, libraryID int64) ([]Langua
 // (0 = every library), less the ones an admin ignored there, with the facts a
 // match reads.
 func (c *Catalog) UnmatchedBooks(ctx context.Context, libraryID int64) ([]Book, error) {
+	return c.issueBooks(ctx, libraryID, IssueUnmatched)
+}
+
+// UnknownASINBooks lists the books an unknown_asin run matches by their title:
+// Health's "ASIN not in the community database" (IssueUnknownASIN, the same
+// predicate) in one library (0 = every library), less the ones an admin ignored
+// there, with the facts a match reads.
+func (c *Catalog) UnknownASINBooks(ctx context.Context, libraryID int64) ([]Book, error) {
+	return c.issueBooks(ctx, libraryID, IssueUnknownASIN)
+}
+
+// issueBooks lists the books of one library (0 = every library) Health lists
+// under kind, less the ones an admin ignored for it, with the facts a match reads.
+func (c *Catalog) issueBooks(ctx context.Context, libraryID int64, kind string) ([]Book, error) {
 	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b`+matchSubjectJoin+`
-	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND `+issuePredicates[IssueUnmatched]+`
+	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND `+issuePredicates[kind]+`
 	       AND NOT `+ignoredExpr+`
-	     ORDER BY b.library_id, b.rel_path`, libraryID, IssueUnmatched)
+	     ORDER BY b.library_id, b.rel_path`, libraryID, kind)
 }
 
 // MatchedBooks lists the matched books in one library (0 = every library): an

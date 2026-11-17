@@ -813,8 +813,14 @@ type BookEdit struct {
 	// match), so a match made by hand meanwhile stays, and so do its values: an
 	// ASIN taken from the old match would outrank it (server#354).
 	MatchIf *MatchAnchor
-	Source  string
-	UserID  int64
+	// MatchIfASIN, beside a zero MatchIf, is the ASIN the book was read with
+	// when it is matched by it alone (an unknown_asin run's book: its own ASIN
+	// the community doesn't know): the edit writes only while the book still
+	// has this ASIN and no ISBN (and, as for any zero MatchIf, no recorded
+	// match), else ErrMatchedSince. "" keeps the zero MatchIf's rule.
+	MatchIfASIN string
+	Source      string
+	UserID      int64
 }
 
 // normalizeSource is where an edit or a custom cover came from, as stored:
@@ -984,9 +990,15 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		if edit.MatchIf != nil && edit.MatchIf.WorkID == "" {
 			// Read as unmatched: the anchor write below refuses a match recorded
 			// since, this an ASIN or ISBN the book gained since, which the
-			// edit's own would replace.
+			// edit's own would replace (for MatchIfASIN, another ASIN or an
+			// ISBN).
+			q, args := `SELECT `+matchedExpr+` FROM books b WHERE b.id = ?`, []any{bookID}
+			if edit.MatchIfASIN != "" {
+				q = `SELECT NOT (` + normASINSQL("b.asin") + ` = ? AND TRIM(b.isbn, ` + sqlSpace + `) = '') FROM books b WHERE b.id = ?`
+				args = []any{match.NormalizeASIN(edit.MatchIfASIN), bookID}
+			}
 			var matched bool
-			if err := tx.QueryRowContext(ctx, `SELECT `+matchedExpr+` FROM books b WHERE b.id = ?`, bookID).Scan(&matched); err != nil {
+			if err := tx.QueryRowContext(ctx, q, args...).Scan(&matched); err != nil {
 				return err
 			}
 			if matched {

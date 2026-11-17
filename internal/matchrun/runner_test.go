@@ -1475,3 +1475,82 @@ func TestMatchSendsTheLibraryLanguage(t *testing.T) {
 		t.Errorf("languages sent = %q, want de for the German library's untagged book, the tag's for a tagged one, none in a mixed library", sent)
 	}
 }
+
+// TestUnknownASINRun: an unknown_asin run matches by their title the books whose
+// own ASIN the community doesn't know (Health's unknown_asin), not the unmatched
+// ones nor one whose ASIN it knows; applying records each match and never
+// replaces an ASIN an admin set, and a book whose ASIN changed since the run is
+// left alone (server#392).
+func TestUnknownASINRun(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/Tagged", "Tagged", "B0NOPE0001", nil)
+	e.book(t, "A/Admin", "Admin", "", nil)
+	e.book(t, "A/Changed", "Changed", "B0NOPE0003", nil)
+	e.book(t, "A/Known", "Known", "B0KNOWN001", nil)
+	e.book(t, "A/Unmatched", "Unmatched", "", nil)
+	if err := e.cat.EditBook(ctx, e.lib, "A/Admin", catalog.BookEdit{Set: map[string]string{catalog.FieldASIN: "B0NOPE0002"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.SaveASINChecks(ctx, []catalog.ASINCheck{
+		{ASIN: "B0NOPE0001", Unknown: true}, {ASIN: "B0NOPE0002", Unknown: true},
+		{ASIN: "B0NOPE0003", Unknown: true}, {ASIN: "B0KNOWN001"},
+	}, "2026-11-01T00:00:00.000Z"); err != nil {
+		t.Fatal(err)
+	}
+	for _, title := range []string{"Tagged", "Admin", "Changed", "Known", "Unmatched"} {
+		e.matcher.byTitle[title] = []meta.MatchCandidate{cand("the-martian", 97, "")}
+	}
+
+	run := e.start(t, catalog.MatchModeUnknownASIN, "uk")
+	if run.Status != catalog.MatchReady || run.Mode != catalog.MatchModeUnknownASIN || run.Total != 3 || run.Counts.Auto != 3 {
+		t.Fatalf("run = %+v", run)
+	}
+	for _, q := range e.matcher.queries {
+		if q.Title == "Known" || q.Title == "Unmatched" {
+			t.Fatalf("an unknown_asin run asked for %q", q.Title)
+		}
+	}
+	// Changed by hand since the run: matched since, with nothing to write.
+	if err := e.cat.EditBook(ctx, e.lib, "A/Changed", catalog.BookEdit{Set: map[string]string{catalog.FieldASIN: "B0HAND0001"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range e.items(t, run, catalog.OutcomeAuto) {
+		if hand := it.Path == "A/Changed"; it.MatchedSince != hand {
+			t.Errorf("%s matched since = %v, want %v", it.Path, it.MatchedSince, hand)
+		}
+	}
+
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeOverwrite, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	got := map[string]string{}
+	for _, it := range e.items(t, run, catalog.OutcomeAuto) {
+		got[it.Path] = it.Applied + "/" + it.Detail
+	}
+	if got["A/Tagged"] != "applied/" || got["A/Admin"] != "applied/" || got["A/Changed"] != "skipped/matched_since" {
+		t.Fatalf("applied = %v", got)
+	}
+	for path, asin := range map[string]string{"A/Admin": "B0NOPE0002", "A/Tagged": "B0UK000001", "A/Changed": "B0HAND0001"} {
+		st, err := e.cat.BookMatchState(ctx, e.lib, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Fields[catalog.FieldASIN].Value != asin {
+			t.Errorf("%s asin = %+v, want %s", path, st.Fields[catalog.FieldASIN], asin)
+		}
+		if matched := st.Anchor.WorkID == "the-martian"; matched == (path == "A/Changed") {
+			t.Errorf("%s recorded match = %+v", path, st.Anchor)
+		}
+	}
+	// An admin's ASIN stays even under overwrite, and the book is matched now:
+	// its match is recorded, so Health lists it no more.
+	if st, _ := e.cat.BookMatchState(ctx, e.lib, "A/Admin"); st.Fields[catalog.FieldASIN].Source != catalog.SourceEdited ||
+		st.Fields[catalog.FieldTitle].Value != "The Martian" || st.Anchor.How != catalog.MatchHowAuto {
+		t.Fatalf("admin book = %+v / %+v", st.Fields, st.Anchor)
+	}
+	if run = e.start(t, catalog.MatchModeUnknownASIN, "uk"); run.Total != 0 {
+		t.Fatalf("next unknown_asin run total = %d, want none left", run.Total)
+	}
+}
