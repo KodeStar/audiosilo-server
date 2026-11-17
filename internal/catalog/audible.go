@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -335,9 +336,14 @@ func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAc
 // DeleteAudibleAccount forgets account id and its titles (the Bridge, or the
 // console, removed it), cancelling its open poll and backups. Forgetting an unknown
 // account is not an error: the Bridge forgets locally first and may call
-// again. removed says whether there was one.
-func (c *Catalog) DeleteAudibleAccount(ctx context.Context, id string) (removed bool, err error) {
+// again. It returns the account as it was, read in the same transaction (so an
+// audit row names what was removed), or nil when there was none.
+func (c *Catalog) DeleteAudibleAccount(ctx context.Context, id string) (removed *AudibleAccount, err error) {
 	err = c.db.WithTx(ctx, "DeleteAudibleAccount", func(tx *sql.Tx) error {
+		acct, err := scanAudibleAccount(tx.QueryRowContext(ctx, audibleAccountSelect+` WHERE a.account = ?`, id))
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 		if err := cancelAudibleJobs(ctx, tx, id, c.now()); err != nil {
 			return err
 		}
@@ -346,7 +352,9 @@ func (c *Catalog) DeleteAudibleAccount(ctx context.Context, id string) (removed 
 			return err
 		}
 		n, err := res.RowsAffected()
-		removed = n > 0
+		if n > 0 {
+			removed = cmp.Or(acct, &AudibleAccount{ID: id})
+		}
 		return err
 	})
 	return removed, err

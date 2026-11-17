@@ -366,26 +366,18 @@ func (a *API) handleAdminAudibleAccountDelete(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	// Read first, only for the audit row's name: the id alone says nothing to
-	// an admin reading the log (server#294).
-	var name string
-	switch acct, err := a.cat.AudibleAccount(r.Context(), id); {
-	case err == nil:
-		name = acct.Label
-		if name == "" {
-			name = fmt.Sprintf("%s (%s)", acct.User.DisplayName, strings.ToUpper(acct.Marketplace))
-		}
-	case !errors.Is(err, catalog.ErrUnknownAccount):
-		a.writeAudibleError(w, err, "delete audible account failed")
-		return
-	}
-	removed, err := a.cat.DeleteAudibleAccount(r.Context(), id)
+	acct, err := a.cat.DeleteAudibleAccount(r.Context(), id)
 	if err != nil {
 		a.writeAudibleError(w, err, "delete audible account failed")
 		return
 	}
-	if removed {
-		a.audit(r, "bridge.audible.remove", name, map[string]any{"account": id, "name": name})
+	if acct != nil {
+		// Named, not just by its opaque id, for an admin reading the log (server#294).
+		name := acct.Label
+		if name == "" {
+			name = fmt.Sprintf("%s (%s)", acct.User.DisplayName, strings.ToUpper(acct.Marketplace))
+		}
+		a.audit(r, "bridge.audible.remove", name, map[string]any{"account": id})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

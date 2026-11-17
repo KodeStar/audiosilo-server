@@ -255,8 +255,8 @@ func TestAudibleAdminAccountDelete(t *testing.T) {
 	if err := b.db.QueryRowContext(ctx, `SELECT target, details FROM audit_events WHERE action = 'bridge.audible.remove'`).Scan(&target, &details); err != nil {
 		t.Fatal(err)
 	}
-	if target == "" || target == testAccount || !strings.Contains(details, `"name":"`+target+`"`) {
-		t.Fatalf("audit target %q details %s, want the account's name", target, details)
+	if target == "" || target == testAccount || !strings.Contains(details, testAccount) {
+		t.Fatalf("audit target %q details %s, want the account's name and its id", target, details)
 	}
 	// Again (now unknown), and the API key: 204, nothing audited.
 	if resp, out := b.do(t, "DELETE", path, b.adminKey, ""); resp.StatusCode != http.StatusNoContent {

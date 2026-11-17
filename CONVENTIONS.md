@@ -3268,7 +3268,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   turned off. It is the Bridge's delete (`DeleteAudibleAccount`: titles go, the open poll cancelled), 204
   known or not (404 `unknown_account` only for an id the Bridge could never have made), audited as
   `bridge.audible.remove` when there was one, with the account's name (its label, else "person (STORE)") as
-  the target and in `details.name`. It signs nothing out of Amazon: that stays the Bridge's.
+  the target and its id in `details.account`. It signs nothing out of Amazon: that stays the Bridge's.
   **Polls**: `audible.poll` is an internal, quiet kind, params `{"account"}`, no library or path, deduped
   per account (`audibleAccountSuffix`), only the newest ended one kept, gated by
   `ModuleFor` (held while the module is off). `audible.RunScheduler` (the module's Start) ticks each minute:
