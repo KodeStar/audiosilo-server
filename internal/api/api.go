@@ -105,6 +105,12 @@ type API struct {
 	// the real one via SetBaseContext.
 	baseCtx context.Context
 
+	// resolving is the run of catalog.ResolveSources under way (resolveSources),
+	// closed when it ends; resolveAgain asks it to run once more.
+	resolveMu    sync.Mutex
+	resolving    chan struct{}
+	resolveAgain bool
+
 	// indexPath reads a path's book on demand (bookForPath's fallback):
 	// scanner.IndexPathWithin, a field so tests can count the re-reads.
 	indexPath func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool) (*catalog.Book, error)
@@ -373,6 +379,41 @@ func (a *API) SetBaseContext(ctx context.Context) {
 		// starts none.
 		a.discovery.Bind(ctx)
 	}
+}
+
+// StartSourceResolves goes on with the re-resolve of the libraries whose
+// metadata source changed before a stop cut it short (resolveSources).
+func (a *API) StartSourceResolves() { a.resolveSources() }
+
+// resolveSources runs catalog.ResolveSources on a goroutine of its own, one run
+// at a time on the server's lifetime (baseCtx), and returns a channel closed once
+// a run that began after this call has ended.
+func (a *API) resolveSources() <-chan struct{} {
+	a.resolveMu.Lock()
+	defer a.resolveMu.Unlock()
+	if a.resolving != nil {
+		a.resolveAgain = true // the change may have come after the run read what is due
+		return a.resolving
+	}
+	done := make(chan struct{})
+	a.resolving = done
+	go func() {
+		for {
+			if err := a.cat.ResolveSources(a.baseCtx); err != nil && a.baseCtx.Err() == nil {
+				a.log.Warn("re-resolving books for a new metadata source failed", "err", err)
+			}
+			a.resolveMu.Lock()
+			if !a.resolveAgain {
+				a.resolving = nil
+				a.resolveMu.Unlock()
+				close(done)
+				return
+			}
+			a.resolveAgain = false
+			a.resolveMu.Unlock()
+		}
+	}()
+	return done
 }
 
 // StartChapterChecks starts the background community chapter checks

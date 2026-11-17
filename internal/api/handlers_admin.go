@@ -901,6 +901,9 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "library.update", updated.Name, req.changes())
+	if req.MetadataSource != nil {
+		awaitResolve(r.Context(), a.resolveSources())
+	}
 	resp := struct {
 		*catalog.Library
 		Job *library.Job `json:"job,omitempty"`
@@ -910,6 +913,31 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		resp.Job = &job
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// resolveWait is how long a metadata source change waits for its books'
+// re-resolve, at most, before it answers.
+const resolveWait = 20 * time.Second
+
+// awaitResolve waits for done (the re-resolve a metadata source change began),
+// up to resolveWait and never closer than two seconds to the request's deadline:
+// a library small enough answers with its books re-resolved, a large one at once,
+// the rest going on in the background (server#213).
+func awaitResolve(ctx context.Context, done <-chan struct{}) {
+	wait := resolveWait
+	if deadline, ok := ctx.Deadline(); ok {
+		wait = min(wait, time.Until(deadline)-2*time.Second)
+	}
+	if wait <= 0 {
+		return
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
 }
 
 // configLibrary reports whether the config declares a library by this name

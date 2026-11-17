@@ -1610,8 +1610,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   over a tag's wherever it says anything and replaces the baseline's own reading even with
   nothing (a leaf named `Author; Series; Book NN[; Title]` says its series, position and title part, `LeafSeries`); the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it (never a `LeafSeries` leaf, whose parts the layout reads even when the title is the whole leaf, as an untagged book's is); the position goes with the series: the layout's own, else
   the scanned one only while the series it numbers stays). It is a resolve rule, not a scan one: the snapshot is unchanged,
-  and `UpdateLibrary` re-resolves the library's books (`refreshLibrary`) in the edit's own
-  transaction, no rescan (about 1 s per 5,000 books).
+  and `UpdateLibrary` marks the library's books due a re-resolve in the edit's own transaction
+  (`markResolve`: the `library_resolve_due` row of `server_state`, the library's id and the change's
+  generation), no rescan. `Catalog.ResolveSources` re-resolves them (`refreshEffective`) 200 books a
+  transaction, starting a library again when a later change overtook its run, and clears the mark
+  with the last batch, so a stop leaves it due for the next start (`API.StartSourceResolves`). The
+  PATCH runs it (`API.resolveSources`, one run at a time) and waits up to 20 s, never closer than 2 s
+  to its deadline (`awaitResolve`): a library small enough answers re-resolved (about 1 s per 5,000
+  books), a large one answers at once with the rest going on (server#213).
   `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
   NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
   with a tag read (`media.EmbeddedCover`, no ffprobe). A `scanned` snapshot carries `@rev` (`scannedRevKey`), the path baseline's revision: one

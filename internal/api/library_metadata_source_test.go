@@ -6,13 +6,14 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
 // A library's metadata source: validated with a code, admin-only, carried by the
-// admin list (not the player's), and a change re-resolves the books at once with no
-// rescan queued.
+// admin list (not the player's), and a change re-resolves the books before the
+// answer (a small library: awaitResolve) with no rescan queued.
 func TestLibraryMetadataSourceEndpoint(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
@@ -53,5 +54,27 @@ func TestLibraryMetadataSourceEndpoint(t *testing.T) {
 	}
 	if _, body := e.do(t, "GET", "/api/v1/libraries", adminTok, ""); strings.Contains(body, "metadata_source") {
 		t.Fatalf("the player's library list carries the source: %s", body)
+	}
+}
+
+// awaitResolve gives a metadata source change's re-resolve as long as the request
+// allows, less two seconds to answer in, and returns at once when it ends; a
+// re-resolve longer than that goes on after the answer (server#213).
+func TestAwaitResolveBounded(t *testing.T) {
+	t.Parallel()
+	never := make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second+200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	awaitResolve(ctx, never)
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("waited %v past the request's answer margin", took)
+	}
+	done := make(chan struct{})
+	close(done)
+	start = time.Now()
+	awaitResolve(context.Background(), done)
+	if took := time.Since(start); took > 100*time.Millisecond {
+		t.Fatalf("waited %v for a re-resolve that had ended", took)
 	}
 }

@@ -3,18 +3,75 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strconv"
 	"testing"
+	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
-// setMetadataSource switches a library's metadata source, failing the test on an
-// error.
+// setMetadataSource switches a library's metadata source and re-resolves its
+// books (ResolveSources), failing the test on an error.
 func setMetadataSource(t *testing.T, c *Catalog, ctx context.Context, libID int64, source string) {
 	t.Helper()
 	if _, stale, err := c.UpdateLibrary(ctx, libID, LibraryPatch{MetadataSource: &source}); err != nil {
 		t.Fatal(err)
 	} else if stale {
 		t.Fatal("a new metadata source asked for a rescan")
+	}
+	if err := c.ResolveSources(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestMetadataSourceResolvesInBatches: a new metadata source marks the library's
+// books due, in the edit's transaction, rather than re-resolving them there (a
+// large library takes longer than a request may, server#213); ResolveSources
+// re-resolves every book, a batch a transaction, and a stop before it does
+// leaves them due for the next start. The last change of several wins.
+func TestMetadataSourceResolvesInBatches(t *testing.T) {
+	t.Parallel()
+	db := storetest.Open(t)
+	c, ctx := New(db, time.Now), context.Background()
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Big", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = resolveBatch + 5
+	for i := range n {
+		p := fmt.Sprintf("Author/Series/%03d - Book", i+1)
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, IsFolder: true, Title: "Tagged " + strconv.Itoa(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	titles := func(c *Catalog) map[string]int {
+		t.Helper()
+		out := map[string]int{}
+		for i := range n {
+			out[mustBook(t, c, ctx, lib.ID, fmt.Sprintf("Author/Series/%03d - Book", i+1)).Title]++
+		}
+		return out
+	}
+	for _, source := range []string{MetadataFromPath, MetadataFromTags, MetadataFromPath} {
+		if _, _, err := c.UpdateLibrary(ctx, lib.ID, LibraryPatch{MetadataSource: &source}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := titles(c); got["Book"] != 0 {
+		t.Fatalf("the edit re-resolved books itself: %v", got)
+	}
+	// A restart: another catalog over the same database finds them due.
+	again := New(db, time.Now)
+	if err := again.ResolveSources(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := titles(again); got["Book"] != n {
+		t.Fatalf("titles after the re-resolve = %v, want the path's for all %d", got, n)
+	}
+	if due, err := getServerState[map[int64]int64](ctx, db, resolveKey); err != nil || len(due) != 0 {
+		t.Fatalf("still due: %v, %v", due, err)
 	}
 }
 
