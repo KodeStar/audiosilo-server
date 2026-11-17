@@ -625,7 +625,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a week); (5) classify; (6) announce. With metadata on and `upcoming.enabled` off, a run (scheduled or
   kicked) is step (1) alone (`Options.Resolve`, `resolveOnly`: no series, feed, items, announcement or
   status; server#241, a book's `work_id` rides on the player's lists). It makes no call while
-  `metadataOn()` is false, and a run in flight stops within a second when switched off (`whileOn`,
+  `metadataOn()` is false, and a run in flight stops within a second when switched off (`pool.WhileOn`,
   `errSwitchedOff`: a cancellation, no status recorded, no retry). In mirror mode every call goes to the
   local copy. A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
   path-keyed, no FK to `books`, cascaded with the library, written through the user-state path; no
@@ -717,7 +717,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   database doesn't know, so its lane can import them. **Setting** `metadata.report_unknown` (default false,
   live, `AUDIOSILO_METADATA_REPORT_UNKNOWN` locks it; console Settings > Metadata "Help complete the community
   database", disabled while metadata is off); the job runs only while `reportUnknownOn()` (metadata on AND the
-  switch, never demo) and a run in flight stops within a second when it goes off (`whileOn`, `errSwitchedOff`: no
+  switch, never demo) and a run in flight stops within a second when it goes off (`pool.WhileOn`, `errSwitchedOff`: no
   status). It is never built on a demo server (`cfg.Demo.Enabled` at start), so a demo makes no call. **Schedule**:
   the first run an hour after the start (or a day after the last run), then daily +-1 h; a run within 23 h of the
   last is skipped (`server_state('unknown_asin_report')`, so a restart never re-runs); `Wake` (PATCH switching it
@@ -752,8 +752,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   community-given ASIN (a hand match settles it); `/admin/issues` lists the kind only while `reportUnknownOn()`
   (off, the table is not kept current, and an empty card would read as all clear). **Wire**: GET /admin/settings
   `metadata.report_unknown` and read-only `metadata.report_status` = `{"state":"never|ok|not_offered|failed",
-  "last_run_at"?, "last_sent"}` (absent without the job: no service, or a demo server). The mounted Metadata
-  topic polls status every 30 s while metadata and reporting are on. Trigger by hand: switch it
+  "last_run_at"?, "last_sent"}` (both absent without the job: no service, or a demo server, so the console shows
+  no switch there, server#314). The mounted Metadata topic polls status every 30 s (`pollsReport`) only while metadata and
+  reporting are on and a run is near: one never ran, or a switch-on saved there in the last 10 minutes whose
+  run is not recorded yet; a settled status changes once a day and is not polled (server#335). A `failed` run
+  with `last_sent` > 0 says how many went in before it stopped. Trigger by hand: switch it
   off and on in the console (runs when none ran within 23 h; an active 7-day quiet period still applies,
   measured from the last attempt, and toggling never resets it); to run again sooner, delete
   `server_state('unknown_asin_report')` and the `unknown_asin_reports` rows, then switch it off and on.
@@ -1780,7 +1783,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   own recording); never in a refresh or a repick, whose identifier is the book's own. **Bulk matching**
   (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
   `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
-  `POST /admin/match-runs/{id}/apply|cancel`. One run at a time (`matchrun.Runner`,
+  `POST /admin/match-runs/{id}/apply|cancel`. Mode `unknown_asin` (server#392, Health's unknown-ASIN card,
+  audited `book.match_unknown_asin`) is a match over `UnknownASINBooks` (the `unknown_asin` predicate, less
+  ignored) found by the title, the item's `found_by` the book's own ASIN: an apply writes only while the book
+  still has that ASIN, no ISBN and no recorded match (`matchedSince`; in the edit's transaction
+  `BookEdit.MatchIfASIN`, which also refuses replacing an ASIN an admin typed in since, the same value), and
+  only while the report still holds that ASIN as unknown (`MatchState.ASINUnknown`, `asinKnownSince`, again in
+  `MatchIfASIN`'s check: once a lookup found it, the ASIN names the book's record, so the item is skipped
+  `asin_known` with nothing written, the ASIN kept even under overwrite; the review reads it `matched_since`).
+  Starting one needs the report on (`reportUnknownOn`, else 409 `report_off`: the table is only current while
+  it runs, and Health hides the kind then; the console's Start over on an earlier one is hidden too). It
+  records the match (so the book leaves the category) and writes the scope's fields by `Plan`, which never replaces an admin's own ASIN (an `edited` field), whatever the scope. One run at a time (`matchrun.Runner`,
   its own goroutine under `baseCtx`, NOT the scan job queue: it waits on the
   network, and `library` must not import `meta`); 6 workers (an apply 2), `maxFailStreak` (10) failures in a row
   stop it (`metadata_unavailable`; past the workers, as one moment's failure meets them all at once):
@@ -2267,8 +2280,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h; the console's fix is the Bridge's Detect
   chapters, see The Bridge), `unmatched` (no ASIN, ISBN or recorded community match: `NOT matchedExpr`; left
   out of the summary while metadata is off), `unknown_asin` (the book's own ASIN is one the unknown-ASIN report
-  found unknown: `unknownASINExpr`, see Unknown ASIN report; still matched by `matchedExpr`; left out of the
-  summary while the report is off), `transcode`, `suspect` (not a folder with a `book` override, the
+  found unknown: `unknownASINExpr`, see Unknown ASIN report; still matched by `matchedExpr`, so Match
+  automatically passes it by: the category's own card starts an `unknown_asin` match run (see Bulk matching);
+  left out of the summary while the report is off), `transcode`, `suspect` (not a folder with a `book` override, the
   category's own fix), `scan_error`, `series_spellings` (`catalog/seriesspellings.go`: another book of
   its library spells its main series another way, same `series_key`; listed per series by `GET
   /admin/issues/series-spellings[?library_id=&ignored=true]` -> `{groups: [{library_id, suggested,
@@ -3250,17 +3264,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   same ASIN again a no-op; 404 `book_not_found` for no book of a books library there; 409 `asin_set` for
   another ASIN or an admin's ASIN override, a cleared one too; only a write moves the content generation,
   since the Bridge asks again for such a book after every poll).
-  **Admin routes** (`moduleRoutes`, 404 `module_off` while off): `GET /admin/audible/accounts` (with title
-  counts), `GET /admin/audible/titles` (`account`, `state`, `matched=1|0`, `q` over the title, each author
+  **Admin routes** (`moduleRoutes`, 404 `module_off` while off): `GET /admin/audible/titles` (`account`, `state`, `matched=1|0`, `q` over the title, each author
   as written (`json_each`, never the stored list's JSON) and an exact ASIN, keyset by title then account and
   asin, `after` cursor), `POST /admin/audible/accounts/{account}/poll` (Check now: 201 a new `audible.poll`
   job, 200 the open one, raised to a person's priority (the kind `promotes`), audited as `bridge.job`).
-  `DELETE /admin/audible/accounts/{account}` is admin only (`requireAdmin`, the bridge token refused) and
-  **not** behind the toggle: it removes an account the Bridge can no longer remove (unpaired, paired again, a
+  `GET /admin/audible/accounts` (with title counts) and `DELETE /admin/audible/accounts/{account}` are admin
+  only (`requireAdmin`, the bridge token refused) and **not** behind the toggle (server#294: Settings >
+  Modules lists the accounts kept while it is off, each with Remove): the DELETE removes an account the Bridge can no longer remove (unpaired, paired again, a
   DELETE that failed), which the scheduler would otherwise poll for good, so it must work after the module is
   turned off. It is the Bridge's delete (`DeleteAudibleAccount`: titles go, the open poll cancelled), 204
   known or not (404 `unknown_account` only for an id the Bridge could never have made), audited as
-  `bridge.audible.remove` when there was one. It signs nothing out of Amazon: that stays the Bridge's.
+  `bridge.audible.remove` when there was one, with the account's name (its label, else "person (STORE)") as
+  the target and its id in `details.account`. It signs nothing out of Amazon: that stays the Bridge's.
   **Polls**: `audible.poll` is an internal, quiet kind, params `{"account"}`, no library or path, deduped
   per account (`audibleAccountSuffix`), only the newest ended one kept, gated by
   `ModuleFor` (held while the module is off). `audible.RunScheduler` (the module's Start) ticks each minute:
@@ -3270,10 +3285,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   waits its interval.
   **Console**: Settings > Bridge's Audible accounts card (`features/audible/audible-accounts-card.tsx`,
   read-only mapping, links to the Bridge's Accounts tab, Check now and Remove per account) while the module
-  is on, and Settings > Audible (`audible-topic.tsx`, a `MODULE_PAGES` page: the titles with account, state
-  and on-this-server filters, search, and Check now and Remove for the chosen or only account; Remove
-  (`remove-account-button.tsx`) confirms first, saying it removes the account from this server only and that
+  is on (with no Bridge paired too, `hideWhenEmpty`: accounts kept from an earlier one stay removable), and
+  Settings > Audible (`audible-topic.tsx`, a `MODULE_PAGES` page: the titles with account, state
+  and on-this-server filters, "Needs a look" among them (`lookList`, client-side over the pages read with
+  `matched=0`: not here, not `unavailable` or `gone`, and `plannedLine` warns; preorders first), search, and
+  Check now and Remove for the chosen or only account; Remove
+  (`remove-account-button.tsx`) confirms first, saying it removes the account from this server only, that its
+  unfinished checks, backups and syncs are cancelled, that a Bridge still mapping it fails its checks, and that
   the Bridge's Accounts page signs the device out of Amazon); the loaded titles refresh when an account's `last_poll_at` moves, `useTitlesAfterPolls`).
+  With the module off, Settings > Modules' Audible card lists the accounts kept (`kept-accounts.tsx`), each
+  with Remove, and the Bridge's Setup card says on the Audible step that the module is off, linking Modules
+  (server#294).
   Job-start actions use the existing Bridge status: unpaired shows a pairing link and disables them;
   unsupported kinds are disabled too. A paired offline Bridge can still queue a kind it offers, with
   guidance that the job waits for it to return. Account settings and removal remain available.
@@ -3370,7 +3392,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   change plans by the new one; a claimed poll runs as claimed. **Console**:
   `PlannedNote` (`audible-topic.tsx`, `plannedLine`; none on an `unavailable` or `gone` title, which can't be backed
   up): "Will go to {path}, beside N books of its series" and the like,
-  "(planned at the last check)", warning tone on `exists` or `error`, a note when the plan's template differs from
+  "(planned at the last check)", warning tone on `exists` or `error`, and on a plan that starts a new top
+  folder (`state` `new`: a new author folder with the automatic placement, a new folder with a template) or a
+  new series (`series_new`), where the Bridge most likely missed one the library has under another spelling
+  (server#372), a note when the plan's template differs from
   the account's now, and "Your destination is checked when the backup starts" instead while a `dest_path` is set;
   Destination...'s placeholder is the planned path, never its value (`plannedPlaceholder`). `ReasonNote`: `contested`
   explained with the other titles and the book linked (`bookRoute`), a plain sentence without data (this title isn't

@@ -7,7 +7,8 @@ import { QueryError } from '@/components/query-error';
 import { StatusText } from '@/components/status-text';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
-import { counted, formatNumber, formatRelative } from '@/lib/format';
+import { counted, formatNumber, formatRecent } from '@/lib/format';
+import { storeOf } from '@/lib/regions';
 import { cn } from '@/lib/utils';
 import { CardEmpty } from '@/features/settings/card-empty';
 import { bridgeTabLink } from '@/features/bridge/bridge-model';
@@ -30,16 +31,27 @@ import { useAudibleAccounts, useBackups, useCheckNow, type Backups } from './use
  * the Bridge can no longer remove (unpaired, paired again) off this server.
  * Phase 4b: the account's backup policy and template (Account settings) and Back
  * up everything; Phase 4c: whether its places sync (set there too).
+ * hideWhenEmpty leaves the card out while there are no accounts (Settings >
+ * Bridge with no Bridge paired: only accounts kept from an earlier one, so
+ * their Remove stays reachable, server#294), and then reads them once: with no
+ * Bridge nothing but Remove changes them.
  */
-export function AudibleAccountsCard({ uiUrl }: { uiUrl?: string }) {
+export function AudibleAccountsCard({
+  uiUrl,
+  hideWhenEmpty,
+}: {
+  uiUrl?: string;
+  hideWhenEmpty?: boolean;
+}) {
   const { t } = useTranslation();
-  const accounts = useAudibleAccounts();
+  const accounts = useAudibleAccounts({ poll: !hideWhenEmpty });
   const bridge = useAudibleBridge();
   const { checkNow, busy } = useCheckNow();
   const backups = useBackups();
   const accountsTab = bridgeTabLink(uiUrl, ACCOUNTS_TAB);
   const list = accounts.data?.accounts ?? [];
 
+  if (hideWhenEmpty && list.length === 0) return null;
   return (
     <Card aria-labelledby="audible-accounts-title">
       <CardHeader
@@ -146,7 +158,7 @@ function AccountRow({
               className="text-[12.5px] font-semibold"
             >
               {a.last_poll_at
-                ? t('audible.account.checked', { when: formatRelative(a.last_poll_at, lang) })
+                ? t('audible.account.checked', { when: formatRecent(a.last_poll_at, lang, t) })
                 : t('audible.account.notChecked')}
             </StatusText>
           )}
@@ -162,7 +174,7 @@ function AccountRow({
                 <span className="text-muted-foreground">{t('audible.account.pausedBody')}</span>
               ),
             ],
-            [t('audible.account.store'), a.marketplace.toUpperCase()],
+            [t('audible.account.store'), storeOf(a.marketplace)],
             [t('audible.account.policy'), t(`audible.policy.${a.policy}`)],
             [
               t('audible.account.template'),
@@ -227,7 +239,7 @@ function SyncState({ account: a, lang }: { account: AudibleAccount; lang: string
   return (
     <>
       {a.last_sync_at
-        ? t('audible.account.synced', { when: formatRelative(a.last_sync_at, lang) })
+        ? t('audible.account.synced', { when: formatRecent(a.last_sync_at, lang, t) })
         : t('audible.account.syncOn')}
     </>
   );

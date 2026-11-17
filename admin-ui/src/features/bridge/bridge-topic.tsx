@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import {
@@ -46,7 +45,7 @@ import {
   safeHttpUrl,
 } from './bridge-model';
 import { PairDialog } from './pair-dialog';
-import { BridgeSetupList } from './setup-list';
+import { BridgeSetupList, OpenModulesLink } from './setup-list';
 import {
   ACCOUNTS_TAB,
   agentCredentialSet,
@@ -67,6 +66,7 @@ import { VerifyDialog } from './verify-dialog';
 export function BridgeTopic() {
   const { t, i18n } = useTranslation();
   const bridge = useBridge();
+  const settings = useSettings();
   const status = bridge.data;
   const { shown, making, makeCode, closeCode } = usePairCode(status);
   // Each server library's name by id, for the job rows.
@@ -121,6 +121,11 @@ export function BridgeTopic() {
             when: formatRelative(status.pairing.expires_at, i18n.resolvedLanguage ?? 'en'),
           })}
         </Notice>
+      ) : null}
+      {/* Audible accounts kept from an earlier Bridge while none is paired, so
+          their Remove stays reachable (server#294). Hidden when none. */}
+      {!status.paired && settings.data?.modules?.audible ? (
+        <AudibleAccountsCard hideWhenEmpty />
       ) : null}
       {/* Jobs while no Bridge is paired: queued ones survive an unpair and wait for
           the next Bridge, so they stay visible (and cancellable). Hidden when none. */}
@@ -339,7 +344,8 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
   const agent = agentCredentialSet(setup);
   const accounts = bridgeTabLink(status.ui_url, ACCOUNTS_TAB);
   // Ready on the Bridge's side, but nothing is offered while the module is off (BRIDGE-07).
-  const moduleOff = useSettings().data?.modules.contributions === false;
+  const modules = useSettings().data?.modules;
+  const moduleOff = modules?.contributions === false;
   return (
     <Card aria-labelledby="bridge-setup-title">
       <CardHeader
@@ -365,7 +371,11 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
         }
       />
       <div className="flex flex-col gap-4 px-5 py-3">
-        <BridgeSetupList setup={setup} uiUrl={status.ui_url} />
+        <BridgeSetupList
+          setup={setup}
+          uiUrl={status.ui_url}
+          audibleOff={modules?.audible === false}
+        />
         <FactList
           rows={[
             [t('bridge.setup.github'), <GitHubAccount key="github" setup={setup} />],
@@ -389,14 +399,7 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
                         <StatusText tone="warn">
                           {t('bridge.setup.canContributeModuleOff')}
                         </StatusText>
-                        <Link
-                          to="/server/{-$section}"
-                          params={{ section: undefined }}
-                          search={{ topic: 'modules' }}
-                          className="text-[12.5px] font-semibold text-brand-ink hover:underline"
-                        >
-                          {t('bridge.setup.openModules')}
-                        </Link>
+                        <OpenModulesLink className="text-[12.5px]" />
                       </span>
                     ) : (
                       <StatusText key="contribute" tone={setup.can_contribute ? 'ok' : 'off'}>

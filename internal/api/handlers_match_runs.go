@@ -43,10 +43,15 @@ func (a *API) handleListMatchRuns(w http.ResponseWriter, r *http.Request) {
 // handleStartMatchRun serves POST /admin/match-runs {"library_id"?, "mode"?}: match
 // the unmatched books of a library (or all) in the background; mode "repick"
 // instead looks again at community-matched ASINs for the preferred marketplace's,
-// and mode "refresh" looks the books with an ASIN or ISBN up by it (a book matched
-// with neither by its recorded community match), to fill in their details.
+// mode "refresh" looks the books with an ASIN or ISBN up by it (a book matched
+// with neither by its recorded community match), to fill in their details, and
+// mode "unknown_asin" matches by their title the books whose own ASIN the
+// community doesn't know (Health's unknown_asin), never replacing an admin's ASIN.
 // 202 with the run; 409 match_run_busy while a run is working; 400 for an unknown
-// mode, and no_region for a repick with no preferred marketplace set.
+// mode, and no_region for a repick with no preferred marketplace set; 409
+// report_off for "unknown_asin" while the unknown-ASIN report is off (only its
+// lookups say which ASINs are unknown, so the run would read what an earlier
+// report left, or nothing, as all there is; Health hides the kind then too).
 func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
 		return
@@ -64,13 +69,18 @@ func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
 	case "":
 		req.Mode = catalog.MatchModeMatch
 	case catalog.MatchModeMatch, catalog.MatchModeRefresh:
+	case catalog.MatchModeUnknownASIN:
+		if !a.reportUnknownOn() {
+			writeErrorCode(w, http.StatusConflict, codeReportOff, "turn on Help complete the community database first: it finds the books whose ASIN the community doesn't know")
+			return
+		}
 	case catalog.MatchModeRepick:
 		if region == "" {
 			writeErrorCode(w, http.StatusBadRequest, codeNoRegion, "set a preferred Audible marketplace first")
 			return
 		}
 	default:
-		writeError(w, http.StatusBadRequest, `mode must be "match", "repick" or "refresh"`)
+		writeError(w, http.StatusBadRequest, `mode must be "match", "repick", "refresh" or "unknown_asin"`)
 		return
 	}
 	libName, ok := a.optionalLibraryName(w, r, req.LibraryID, "could not start the match run")
@@ -94,6 +104,8 @@ func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
 		action = "book.asin_repick"
 	case catalog.MatchModeRefresh:
 		action = "book.match_refresh"
+	case catalog.MatchModeUnknownASIN:
+		action = "book.match_unknown_asin"
 	}
 	a.audit(r, action, libName, map[string]any{"run": run.ID, "books": run.Total, "region": region})
 	writeJSON(w, http.StatusAccepted, run)

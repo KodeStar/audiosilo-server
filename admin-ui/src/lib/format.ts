@@ -191,6 +191,22 @@ export function formatRelative(iso: string, lang: string, now: number = Date.now
 }
 
 /**
+ * formatRelative for a moment just past that a sentence names ("Checked just
+ * now", "Last report just now: ..."): under a minute ago reads `common.justNow`
+ * rather than Intl's bare "now".
+ */
+export function formatRecent(
+  iso: string,
+  lang: string,
+  t: (key: string) => string,
+  now: number = Date.now(),
+): string {
+  const then = Date.parse(iso);
+  if (!Number.isNaN(then) && Math.abs(now - then) < 60_000) return t('common.justNow');
+  return formatRelative(iso, lang, now);
+}
+
+/**
  * A moment as a record ("Oct 10, 7:52 PM"): absolute, unlike recency. withYear
  * adds the year ("Oct 10, 2026, 7:52 PM") for a moment that may be long past.
  * timeZone is the zone to read it in (default: the browser's). "" if unparsable.

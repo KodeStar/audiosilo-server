@@ -61,6 +61,9 @@ const BY_CODE: Record<string, string> = {
   import_applied: 'errors.importApplied',
   // A match run is working (starting another, applying, clearing matches, unlinking a book).
   match_run_busy: 'errors.matchRunBusy',
+  // Finding matches by title for the unknown-ASIN books while the report that
+  // finds them is off (Health hides the action then; a stale page can still ask).
+  report_off: 'errors.reportOff',
   // Household members: assigning someone, making them an admin, deleting an owner.
   member_not_admin: 'errors.memberNotAdmin',
   owner_is_member: 'errors.ownerIsMember',

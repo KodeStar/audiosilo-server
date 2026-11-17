@@ -41,9 +41,9 @@ import (
 // meta.NarratedRuntimeOff when the book's narrator reads it (lengthFits; the
 // closest recording of a work can still be another edition: the unabridged book
 // of a work that holds only its dramatization).
-// An identifier hit (the ASIN or ISBN the query sent named the work: in a run
-// always a hint, an Audiobookshelf import's or a tag's, a book with its own
-// being no run's subject) needs no lead:
+// An identifier hit (the ASIN or ISBN the query sent named the work: in a run a
+// hint, an Audiobookshelf import's or a tag's, or an unknown_asin run's book's own
+// ASIN, which the community has learned since the report) needs no lead:
 // it is the book. A runner-up that is one too would be two works holding one
 // identifier, the admin's choice; metaserve names one work per request today, so
 // that is a guard, not a case a run meets. An identifier hit is the book only while
@@ -485,7 +485,8 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 // (healedTo; planRefresh), a fallback to the recorded match only while the
 // identifiers whose lookups missed are as they were and none is an admin edit
 // (splitFallback: one gained or changed since may name another record), and for
-// a match only while the book is still unmatched (matchedSince). An item a stop cut short
+// a match (or an unknown_asin run's) only while the book is still as the run took it
+// (matchedSince, asinKnownSince). An item a stop cut short
 // (DetailCoverPending) doesn't record its match again: that went in with its
 // fields, so a book without one now was unlinked since, and an unlink takes back
 // the fields and cover too (BookEdit.Match), so such an item writes nothing.
@@ -511,8 +512,8 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 			return Writes{}
 		}
 		return planRefresh(scope, st, p)
-	case catalog.MatchModeMatch:
-		if matchedSince(st, it) {
+	case catalog.MatchModeMatch, catalog.MatchModeUnknownASIN:
+		if matchedSince(mode, st, it) || asinKnownSince(mode, st, it) {
 			return Writes{}
 		}
 		if it.Detail == DetailCoverPending {
@@ -575,21 +576,47 @@ func planRefresh(scope string, st *catalog.MatchState, p catalog.MatchProposal) 
 	return w
 }
 
-// matchedSince reports whether a match run's book is matched now: an ASIN or
-// ISBN, or a recorded community match (catalog.MatchAnchor). The run took only
-// unmatched books (UnmatchedBooks), so one has been matched since: by hand (from
-// the review or the book page), by another admin or the Bridge's Audible
-// backfill, or by a rescan reading one from an Audiobookshelf metadata.json. The
+// newMatches reports whether a run in mode matches books that have no
+// community match yet, to record one: a match run's (unmatched books) and an
+// unknown_asin run's (books matched by an ASIN the community doesn't know).
+func newMatches(mode string) bool {
+	return mode == catalog.MatchModeMatch || mode == catalog.MatchModeUnknownASIN
+}
+
+// matchedSince reports whether a book a run in mode (newMatches) took is matched
+// now. A match run took only unmatched books (UnmatchedBooks): one with an ASIN
+// or ISBN, or a recorded community match (catalog.MatchAnchor), now has been
+// matched since: by hand (from the review or the book page), by another admin or
+// the Bridge's Audible backfill, or by a rescan reading one from an
+// Audiobookshelf metadata.json. An unknown_asin run took books with an ASIN of
+// their own the community didn't know (UnknownASINBooks, found by it: the item's
+// FoundBy): one with a recorded match, an ISBN, or another ASIN now has been. The
 // run's match never writes over it, whatever the scope. An item whose own apply a
 // stop cut short after its fields went in (DetailCoverPending) holds the run's
 // identifier and match: it is matched since only by a recorded match that isn't
 // the run's (matched again by hand, to another record).
-func matchedSince(st *catalog.MatchState, it *catalog.MatchRunItem) bool {
+func matchedSince(mode string, st *catalog.MatchState, it *catalog.MatchRunItem) bool {
 	if it.Detail == DetailCoverPending {
 		p := it.Proposal
 		return st.Anchor.WorkID != "" && (st.Anchor.WorkID != p.WorkID || st.Anchor.RecordingID != p.RecordingID)
 	}
+	if mode == catalog.MatchModeUnknownASIN {
+		return st.Anchor.WorkID != "" || st.Fields[catalog.FieldISBN].Value != "" || !stillFoundBy(st, it.Proposal.FoundBy)
+	}
 	return st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != "" || st.Anchor.WorkID != ""
+}
+
+// asinKnownSince reports whether the ASIN an unknown_asin run took a book with
+// is one the community knows now: the unknown-ASIN report no longer holds it as
+// unknown (catalog.MatchState.ASINUnknown; a lookup found it since, the
+// report's own recheck or anyone's /meta). The ASIN then names the book's
+// record by itself, so the run's match, found by the title while nothing knew
+// the ASIN, never goes in beside it (a recorded work outranks the ASIN in
+// /meta) and never replaces it, whatever the scope. Not for an item its own
+// apply was cut short on (DetailCoverPending): its match is recorded, so the
+// book has left the report's list by that.
+func asinKnownSince(mode string, st *catalog.MatchState, it *catalog.MatchRunItem) bool {
+	return mode == catalog.MatchModeUnknownASIN && it.Detail != DetailCoverPending && !st.ASINUnknown
 }
 
 // stillFoundBy reports whether the book still has the identifier a refresh or
@@ -621,11 +648,17 @@ func workFoundBy(workID, recordingID string) string {
 	return "work:" + workID + "/" + recordingID
 }
 
+// identifierFoundBy is the FoundBy of a lookup by one identifier (FieldASIN or
+// FieldISBN): "asin:<cleaned ASIN>", the form stillFoundBy reads back.
+func identifierFoundBy(field, value string) string {
+	return field + ":" + catalog.CleanOverride(field, value)
+}
+
 // fallbackIdentifiers records both identifiers, including an absent one, whose
 // misses allowed a refresh to fall back to its recorded work. The suffix on
 // FoundBy survives review, apply and a restart without a separate state model.
 func fallbackIdentifiers(asin, isbn string) string {
-	return "asin:" + catalog.CleanOverride(catalog.FieldASIN, asin) + ";isbn:" + catalog.CleanOverride(catalog.FieldISBN, isbn)
+	return identifierFoundBy(catalog.FieldASIN, asin) + ";" + identifierFoundBy(catalog.FieldISBN, isbn)
 }
 
 // hasEditedIdentifier reports whether a book's ASIN or ISBN is an admin edit.

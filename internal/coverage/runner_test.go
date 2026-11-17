@@ -253,7 +253,7 @@ func TestRunSwitchedOffMidRun(t *testing.T) {
 	e.md.onLookup = func(n int) {
 		if n == 3 {
 			e.on.Store(false)
-			time.Sleep(50 * time.Millisecond) // whileOn notices
+			time.Sleep(50 * time.Millisecond) // pool.WhileOn notices
 		}
 	}
 	if err := r.RunOnce(context.Background()); !errors.Is(err, errSwitchedOff) {

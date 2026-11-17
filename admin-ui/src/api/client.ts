@@ -533,7 +533,10 @@ export const api = {
 
   // Audible (Settings > Bridge's Audible accounts, Settings > Audible): read-only;
   // the accounts are signed in and mapped on the Bridge's own page.
-  /** 404 module_off while the audible module is off. */
+  /**
+   * Outside the audible module's toggle (Settings > Modules lists the accounts
+   * kept while it is off, server#294); an older server answers 404 module_off then.
+   */
   audibleAccounts: () => request<AudibleAccounts>('GET', '/admin/audible/accounts'),
   /** Titles by title, a page at a time (`after` is the previous page's next). */
   audibleTitles: (opts: AudibleTitleQuery = {}) =>

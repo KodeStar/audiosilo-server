@@ -42,7 +42,8 @@ func (a *API) metadataOff(w http.ResponseWriter) bool {
 //
 // Read-only facts ride along in their sections: metadata.available (the service
 // exists, so the switch can turn on), metadata.upcoming_status and
-// metadata.report_status (the two daily jobs' last runs, when the job exists),
+// metadata.report_status (the two daily jobs' last runs, when the job exists;
+// metadata.report_unknown, the report's switch, is left out without its job),
 // metadata.region_chosen (regionChosen), players.web_player (where /web is served
 // from: "embedded", "dir" or ""), demo.max_users_default (the cap while max_users
 // is null), household.max_members_default/_min/_max (the cap's default and
@@ -60,6 +61,11 @@ func (a *API) settingsEnvelope() map[string]any {
 	}
 	if st := a.reportStatus(context.Background()); st != nil {
 		sections["metadata"]["report_status"] = st
+	}
+	if a.coverage == nil {
+		// No report job on this server (a demo server, or no metadata service):
+		// no switch for the console to show (server#314).
+		delete(sections["metadata"], "report_unknown")
 	}
 	sections["players"]["web_player"] = a.playerSource
 	sections["demo"]["max_users_default"] = config.DefaultDemoMaxUsers

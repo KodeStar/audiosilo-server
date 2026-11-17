@@ -22,6 +22,9 @@ describe('errorMessage', () => {
     expect(errorMessage(new ApiError(409, 'no copy', 'not_mirror_mode'), t)).toMatch(
       /^This server isn't keeping a local copy/,
     );
+    expect(errorMessage(new ApiError(409, 'turn it on', 'report_off'), t)).toMatch(
+      /^Help complete the community database is off/,
+    );
   });
 
   it('words an Audible destination or template the server refuses (bridge#47)', () => {

@@ -15,13 +15,16 @@ export const TITLE_STATE_TONE: Record<AudibleTitleState, StatusTone> = {
   gone: 'off',
 };
 
-/** The titles page's "on this server" filter. */
-export type MatchedFilter = '' | 'matched' | 'missing';
+/**
+ * The titles page's "on this server" filter: here, not here, or "Needs a look"
+ * (server#372: titles not here whose planned backup warns, preorders first).
+ */
+export type MatchedFilter = '' | 'matched' | 'missing' | 'look';
 
-/** The titles query's `matched` for a filter. */
+/** The titles query's `matched` for a filter ("Needs a look" reads the titles not here). */
 export function matchedParam(f: MatchedFilter): 0 | 1 | undefined {
   if (f === 'matched') return 1;
-  if (f === 'missing') return 0;
+  if (f === 'missing' || f === 'look') return 0;
   return undefined;
 }
 
@@ -238,11 +241,42 @@ export function plannedLine(
     );
   if (p.kind === 'series_existing' && p.siblings > 0)
     return line('audible.planned.seriesExisting', { count: p.siblings });
-  if (p.kind === 'series_new') return line('audible.planned.seriesNew');
+  // A new top folder (with the automatic placement, the author's) or a new
+  // series is where the Bridge most likely missed the author or series the
+  // library already has under another spelling (server#372): a warning.
+  if (p.state === 'new')
+    return line(p.template ? 'audible.planned.newFolder' : 'audible.planned.newAuthor', {}, true);
+  if (p.kind === 'series_new') return line('audible.planned.seriesNew', {}, true);
+  // A state this console doesn't know (a newer Bridge) only names the path.
   if (p.state !== 'joins') return line('audible.planned.standalone');
   // With a template, joins only means the destination's top folder exists;
   // the default placement puts a standalone title in the author's folder.
   return line(p.template ? 'audible.planned.joinsFolder' : 'audible.planned.joinsAuthor');
+}
+
+/**
+ * Whether a title is one "Needs a look" lists: not on this server, one a backup
+ * can still come of (not unavailable or gone from the account), whose planned
+ * destination warns (plannedLine).
+ */
+export function needsLook(x: AudibleTitle, template: string | undefined): boolean {
+  if (x.match || x.state === 'unavailable' || x.state === 'gone') return false;
+  return plannedLine(x, template)?.warn ?? false;
+}
+
+/**
+ * "Needs a look"'s titles: those needsLook keeps, preorders first (a preorder
+ * backs up on release day without anyone looking), else in the list's order.
+ */
+export function lookList(
+  titles: readonly AudibleTitle[],
+  templates: ReadonlyMap<string, string>,
+): AudibleTitle[] {
+  const look = titles.filter((x) => needsLook(x, templates.get(x.account)));
+  return [
+    ...look.filter((x) => x.state === 'preorder'),
+    ...look.filter((x) => x.state !== 'preorder'),
+  ];
 }
 
 /** The reason the Bridge sends for a title it left unmatched because another claimed the same book. */

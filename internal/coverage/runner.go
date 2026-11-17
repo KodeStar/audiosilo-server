@@ -5,7 +5,7 @@
 // as {"asins": [...]} and nothing else, so the community can add them.
 //
 // A run:
-//  1. nothing at all while the switch or metadata is off (whileOn: a run in
+//  1. nothing at all while the switch or metadata is off (pool.WhileOn: a run in
 //     flight stops within a second), on a demo server (never built), within a
 //     day of the last run, or within the week after the service said it takes
 //     no reports (not_offered);
@@ -40,6 +40,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
 // Metadata is what the job asks the community metadata service
@@ -106,7 +107,7 @@ type Runner struct {
 	wake chan struct{}
 	// mu makes one run at a time.
 	mu sync.Mutex
-	// offCheck is how often a run looks at the switch (whileOn).
+	// offCheck is how often a run looks at the switch (pool.WhileOn).
 	offCheck time.Duration
 	// httpsLogged: the "needs an https URL" line is logged once a process.
 	httpsLogged bool
@@ -166,7 +167,7 @@ func (r *Runner) Run(ctx context.Context) {
 		case errors.Is(err, errSwitchedOff):
 			// looked at again once it is back on
 		default:
-			next = r.opt.Now().Add(interval + time.Duration(rand.Int64N(int64(2*jitter))) - jitter) //nolint:gosec // schedule jitter, not a secret
+			next = r.opt.Now().Add(pool.Jittered(interval, jitter))
 		}
 	}
 }
@@ -225,7 +226,7 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	if r.opt.Ready != nil && !r.opt.Ready() {
 		return errNotReady
 	}
-	rctx, stop := r.whileOn(ctx)
+	rctx, stop := pool.WhileOn(ctx, r.offCheck, r.opt.On, errSwitchedOff)
 	defer stop()
 	res, err := r.run(rctx, now)
 	if rctx.Err() != nil {
@@ -236,34 +237,6 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		r.log.Warn("unknown ASIN report: run failed", "err", err, "sent", res.LastSent)
 	}
 	return err
-}
-
-// whileOn is ctx, cancelled with errSwitchedOff once the report is switched
-// off (looked at every offCheck); stop releases it.
-func (r *Runner) whileOn(ctx context.Context) (rctx context.Context, stop func()) {
-	rctx, cancel := context.WithCancelCause(ctx)
-	done := make(chan struct{})
-	go func() {
-		t := time.NewTicker(r.offCheck)
-		defer t.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-rctx.Done():
-				return
-			case <-t.C:
-				if !r.opt.On() {
-					cancel(errSwitchedOff)
-					return
-				}
-			}
-		}
-	}()
-	return rctx, func() {
-		close(done)
-		cancel(nil)
-	}
 }
 
 // run is one run's work: the status to record, and the failure when its state

@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Circle, CircleCheck, CircleDashed } from 'lucide-react';
 import type { BridgeSetup } from '@/api/types';
@@ -11,6 +12,21 @@ import {
   setupState,
   type SetupState,
 } from './setup-model';
+
+/** Settings > Modules, beside a Bridge feature whose module is off. */
+export function OpenModulesLink({ className }: { className?: string }) {
+  const { t } = useTranslation();
+  return (
+    <Link
+      to="/server/{-$section}"
+      params={{ section: undefined }}
+      search={{ topic: 'modules' }}
+      className={cn('font-semibold text-brand-ink hover:underline', className)}
+    >
+      {t('bridge.setup.openModules')}
+    </Link>
+  );
+}
 
 const STATE_ICON: Record<SetupState, typeof Circle> = {
   done: CircleCheck,
@@ -31,15 +47,19 @@ const STATE_TONE: Record<SetupState, string> = {
  * the Bridge's page, `uiUrl`) a link to the tab that fixes a step still to do.
  * Settings > Bridge's Setup card shows it, and the first-run flow's "Add a
  * Bridge" step reuses it: it takes only the setup block and the page's address,
- * and fetches nothing itself.
+ * and fetches nothing itself. audibleOff (the caller read the module's toggle)
+ * adds to the Audible step that the module is off, with the way to Modules, as
+ * the Setup card's Contributing row does for its module (server#294).
  */
 export function BridgeSetupList({
   setup,
   uiUrl,
+  audibleOff,
   className,
 }: {
   setup: BridgeSetup;
   uiUrl?: string;
+  audibleOff?: boolean;
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -72,6 +92,12 @@ export function BridgeSetupList({
               ) : state !== 'done' && knownSetupItem(item.id) ? (
                 <span className="text-[12.5px] text-muted-foreground">
                   {t(`bridge.setup.hint.${item.id}`)}
+                </span>
+              ) : null}
+              {item.id === 'audible' && audibleOff ? (
+                <span className="inline-flex flex-wrap items-center gap-x-2 text-[12.5px] text-muted-foreground">
+                  {t('bridge.setup.audibleModuleOff')}
+                  <OpenModulesLink />
                 </span>
               ) : null}
             </div>

@@ -33,12 +33,18 @@ const TITLES_POLL_MS = 5000;
 
 const TITLES_PAGE = 50;
 
-/** The Audible accounts (shown only while the module is on: 404 module_off otherwise). */
-export function useAudibleAccounts() {
+/**
+ * The Audible accounts: read with the module on or off (the route is outside
+ * its toggle), so Settings > Modules lists those kept while it is off. Asked
+ * again every 30 seconds unless `poll` is false: with the module off or no
+ * Bridge paired nothing changes them but this console's Remove, which
+ * invalidates the list itself.
+ */
+export function useAudibleAccounts({ poll = true } = {}) {
   return useQuery({
     queryKey: keys.audibleAccounts,
     queryFn: api.audibleAccounts,
-    refetchInterval: ACCOUNTS_POLL_MS,
+    refetchInterval: poll ? ACCOUNTS_POLL_MS : false,
   });
 }
 
@@ -53,13 +59,17 @@ export function useAudibleTitles(f: {
   matched: MatchedFilter;
   q: string;
 }) {
+  // Keyed on what the server is asked, not the filter: "Not here" and "Needs a
+  // look" read the same titles (the second narrows them here), so they share
+  // the pages loaded.
+  const matched = matchedParam(f.matched);
   const pages = useInfiniteQuery({
-    queryKey: keys.audibleTitles(f.account, f.state, f.matched, f.q),
+    queryKey: keys.audibleTitles(f.account, f.state, String(matched ?? ''), f.q),
     queryFn: ({ pageParam }) =>
       api.audibleTitles({
         account: f.account || undefined,
         state: f.state || undefined,
-        matched: matchedParam(f.matched),
+        matched,
         q: f.q || undefined,
         after: pageParam,
         limit: TITLES_PAGE,

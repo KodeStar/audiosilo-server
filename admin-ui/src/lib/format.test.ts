@@ -10,6 +10,7 @@ import {
   formatLongDate,
   formatNumber,
   formatPercent,
+  formatRecent,
   formatRelative,
   formatVersion,
   hostOf,
@@ -36,6 +37,14 @@ describe('format', () => {
     expect(formatRelative('2026-10-03T11:59:40Z', 'en', now)).toBe('now');
     expect(formatRelative('2026-10-02T12:00:00Z', 'en', now)).toBe('yesterday');
     expect(formatRelative('not a date', 'en', now)).toBe('');
+  });
+
+  it('says just now for a moment under a minute past, else as formatRelative', () => {
+    const now = Date.parse('2026-10-03T12:00:00Z');
+    const t = (key: string) => `[${key}]`;
+    expect(formatRecent('2026-10-03T11:59:40Z', 'en', t, now)).toBe('[common.justNow]');
+    expect(formatRecent('2026-10-03T11:46:00Z', 'en', t, now)).toBe('14 min. ago');
+    expect(formatRecent('not a date', 'en', t, now)).toBe('');
   });
 
   it('formats a record time absolutely', () => {

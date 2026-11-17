@@ -754,7 +754,6 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/bridge/progress", a.requireBridge(a.handleBridgeProgress))
 	// The console's Audible routes: admin, 404 module_off while the module is off.
 	ar := moduleRoutes{a: a, mux: mux, id: bridge.ModuleAudible}
-	ar.Admin("GET /api/v1/admin/audible/accounts", http.HandlerFunc(a.handleAdminAudibleAccounts))
 	ar.Admin("GET /api/v1/admin/audible/titles", http.HandlerFunc(a.handleAdminAudibleTitles))
 	ar.Admin("POST /api/v1/admin/audible/accounts/{account}/poll", http.HandlerFunc(a.handleAdminAudiblePoll))
 	// Backups (Phase 4b): "Back up", "Back up everything", "Not this book" and a
@@ -763,9 +762,10 @@ func (a *API) Handler() http.Handler {
 	ar.Admin("POST /api/v1/admin/audible/accounts/{account}/backup-all", http.HandlerFunc(a.handleAdminAudibleBackupAll))
 	ar.Admin("PATCH /api/v1/admin/audible/titles/{account}/{asin}", http.HandlerFunc(a.handleAdminAudibleTitle))
 	ar.Admin("POST /api/v1/admin/audible/titles/{account}/{asin}/backup", http.HandlerFunc(a.handleAdminAudibleBackup))
-	// Removing an account is not behind the toggle: an account the Bridge can no
-	// longer remove (unpaired, re-paired, a failed DELETE) must be cleanable
-	// after the module is turned off.
+	// Listing and removing accounts are not behind the toggle: an account the
+	// Bridge can no longer remove (unpaired, re-paired, a failed DELETE) must be
+	// cleanable after the module is turned off (Settings > Modules lists them).
+	mux.Handle("GET /api/v1/admin/audible/accounts", a.requireAdmin(http.HandlerFunc(a.handleAdminAudibleAccounts)))
 	mux.Handle("DELETE /api/v1/admin/audible/accounts/{account}", a.requireAdmin(http.HandlerFunc(a.handleAdminAudibleAccountDelete)))
 
 	// Managed modules (modules.go): Settings > Modules' list, and each module's

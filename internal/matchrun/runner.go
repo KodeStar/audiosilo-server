@@ -98,6 +98,11 @@ const DetailCoverPending = "cover_pending"
 // the one the cover was planned for.
 const DetailCoverSuperseded = "cover_superseded"
 
+// DetailASINKnown is the detail of an unknown_asin run's item an apply skipped
+// because the community knows the book's ASIN now (asinKnownSince): the book is
+// matched by that ASIN, and the run's match by its title is not written.
+const DetailASINKnown = "asin_known"
+
 // ErrBusy is a start or apply asked while a run is working: one at a time. It is
 // catalog.ErrMatchRunBusy, the Unlink refusal, so one errors.Is matches both.
 var ErrBusy = catalog.ErrMatchRunBusy
@@ -147,8 +152,8 @@ func New(cat *catalog.Catalog, matcher Matcher, saveCover CoverSaver, enabled fu
 }
 
 // StartOptions is what a run matches: the books of one library (0 = every
-// library), in mode (catalog.MatchModeMatch, MatchModeRepick or
-// MatchModeRefresh), preferring region's ASINs, for the admin userID.
+// library), in mode (catalog.MatchModeMatch, MatchModeRepick, MatchModeRefresh
+// or MatchModeUnknownASIN), preferring region's ASINs, for the admin userID.
 type StartOptions struct {
 	LibraryID int64
 	Mode      string
@@ -169,7 +174,7 @@ func (r *Runner) Start(ctx, base context.Context, o StartOptions) (*catalog.Matc
 	r.settleBeforeStart(ctx)
 	var (
 		books     []catalog.Book
-		languages map[int64]string // a match's only (matchBook's mode switch)
+		languages map[int64]string // a match's and an unknown_asin run's only (newMatches)
 		err       error
 	)
 	switch o.Mode {
@@ -177,10 +182,13 @@ func (r *Runner) Start(ctx, base context.Context, o StartOptions) (*catalog.Matc
 		books, err = r.cat.CommunityASINBooks(ctx, o.LibraryID)
 	case catalog.MatchModeRefresh:
 		books, err = r.cat.MatchedBooks(ctx, o.LibraryID)
+	case catalog.MatchModeUnknownASIN:
+		books, err = r.cat.UnknownASINBooks(ctx, o.LibraryID)
 	default:
-		if books, err = r.cat.UnmatchedBooks(ctx, o.LibraryID); err == nil {
-			languages, err = r.libraryLanguages(ctx, books)
-		}
+		books, err = r.cat.UnmatchedBooks(ctx, o.LibraryID)
+	}
+	if err == nil && newMatches(o.Mode) {
+		languages, err = r.libraryLanguages(ctx, books)
 	}
 	if err != nil {
 		return nil, err
@@ -360,7 +368,7 @@ func (r *Runner) Wait() { r.wg.Wait() }
 
 // match matches each book, a few at a time, recording an item per book, then
 // settles the run. languages holds each library's language (libraryLanguages; a
-// match run's only).
+// match run's and an unknown_asin run's only).
 func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books []catalog.Book, languages map[int64]string) {
 	pacer := meta.NewPacer(maxRequestsPerSecond, r.log.With("run", runID))
 	r.mu.Lock()
@@ -435,7 +443,8 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 // its item (nil = nothing worth recording), and the community service's failure, if
 // that's what the item records. The recording proposed is DefaultRecording's, or the
 // one the length agrees with when that is another edition (meta.FitRecording: the
-// identifier a match sends is always a hint, an Audiobookshelf import's or a tag's).
+// identifier a match sends is a hint, an Audiobookshelf import's or a tag's, or for
+// an unknown_asin run the book's own ASIN, which the community didn't know).
 func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book, language string) (*catalog.MatchRunItem, error) {
 	item := &catalog.MatchRunItem{LibraryID: b.LibraryID, Path: b.RelPath, Proposal: catalog.MatchProposal{Values: map[string]string{}}}
 	switch o.Mode {
@@ -443,6 +452,12 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 		return r.repickBook(ctx, o.Region, b, item)
 	case catalog.MatchModeRefresh:
 		return r.refreshBook(ctx, o.Region, b, item)
+	case catalog.MatchModeUnknownASIN:
+		// Found by the title, for a book with this ASIN: an apply writes only
+		// while it still has it (matchedSince). Set last (the proposal is
+		// replaced below) and on every item, a failed lookup's too, which the
+		// review would otherwise read as matched since.
+		defer func() { item.Proposal.FoundBy = identifierFoundBy(catalog.FieldASIN, b.ASIN) }()
 	}
 	q := QueryFor(b, o.Region, language)
 	q.Limit, q.BestOnly, q.NoDetailsBelow = bulkCandidates, true, ReviewFloor
@@ -510,7 +525,7 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 	// The ASIN is all a repick changes, and only while the book still has the
 	// one looked up here (PlanRepick: a hand match since keeps its own).
 	item.Proposal.Values, item.Proposal.ASINRegion = map[string]string{catalog.FieldASIN: want}, region
-	item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, b.ASIN)
+	item.Proposal.FoundBy = identifierFoundBy(catalog.FieldASIN, b.ASIN)
 	return item, nil
 }
 
@@ -586,9 +601,9 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 			item.Proposal.FoundBy += ";" + fallbackIdentifiers(b.ASIN, b.ISBN)
 		}
 	} else {
-		item.Proposal.FoundBy = "isbn:" + catalog.CleanOverride(catalog.FieldISBN, q.ISBN)
+		item.Proposal.FoundBy = identifierFoundBy(catalog.FieldISBN, q.ISBN)
 		if q.ASIN != "" {
-			item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, q.ASIN)
+			item.Proposal.FoundBy = identifierFoundBy(catalog.FieldASIN, q.ASIN)
 		}
 	}
 	if hasIdentifier {
@@ -692,7 +707,7 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 		// is marked, so it counts as applied rather than coming back as nothing to
 		// change.
 		if ctx.Err() != nil && (applied == catalog.ItemFailed || detail == "cover_failed") {
-			if applied == catalog.ItemFailed || run.Mode != catalog.MatchModeMatch {
+			if applied == catalog.ItemFailed || !newMatches(run.Mode) {
 				return
 			}
 			// A match's fields went in, its cover didn't: still to apply, marked
@@ -733,8 +748,11 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 		}
 		return catalog.ItemFailed, "edit_failed"
 	}
-	if mode == catalog.MatchModeMatch && matchedSince(st, it) {
+	if newMatches(mode) && matchedSince(mode, st, it) {
 		return catalog.ItemSkipped, "matched_since"
+	}
+	if asinKnownSince(mode, st, it) {
+		return catalog.ItemSkipped, DetailASINKnown
 	}
 	w := planFor(mode, o.Scope, st, it)
 	if w.Empty() {
@@ -750,7 +768,7 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 		if w.Anchor != nil {
 			how := catalog.MatchHowAccepted
 			switch {
-			case mode != catalog.MatchModeMatch:
+			case !newMatches(mode):
 				// The book's own match, healed or its identifiers recorded
 				// (planRefresh, planFor's repick): kept how it was made.
 				how = st.Anchor.How
@@ -764,6 +782,12 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 			// (BookEdit.MatchIf).
 			was := st.Anchor
 			edit.MatchIf = &was
+			if mode == catalog.MatchModeUnknownASIN && was.WorkID == "" {
+				// Matched by its own ASIN alone: only while it still has it,
+				// and the community still doesn't know it (asinKnownSince,
+				// checked again in the edit's transaction).
+				edit.MatchIfASIN = st.Fields[catalog.FieldASIN].Value
+			}
 			m := *w.Anchor
 			m.How, m.RunID = how, run.ID
 			edit.Match = &m
@@ -867,8 +891,9 @@ type ItemView struct {
 	catalog.MatchRunItem
 	Book ItemBook `json:"book"`
 	Gone bool     `json:"gone,omitempty"`
-	// MatchedSince: a match run's book matched since the run (matchedSince),
-	// which an apply leaves alone; its changes are none.
+	// MatchedSince: a match or unknown_asin run's book matched since the run
+	// (matchedSince; an unknown_asin run's also once the community knows its
+	// ASIN, asinKnownSince), which an apply leaves alone; its changes are none.
 	MatchedSince bool              `json:"matched_since,omitempty"`
 	Changes      map[string]Change `json:"changes"`
 }
@@ -909,7 +934,8 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 			return nil, 0, err
 		default:
 			v.Book = ItemBook{Title: st.Title, Author: st.Author, Duration: st.Duration}
-			v.MatchedSince = run.Mode == catalog.MatchModeMatch && it.Applied == "" && matchedSince(st, &it)
+			v.MatchedSince = newMatches(run.Mode) && it.Applied == "" &&
+				(matchedSince(run.Mode, st, &it) || asinKnownSince(run.Mode, st, &it))
 			for _, scope := range scopes {
 				if slices.Contains(it.Unchanged, scope) {
 					// Recorded with none: an apply under it leaves the item out

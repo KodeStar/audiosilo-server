@@ -332,6 +332,35 @@ describe('bulk matching', () => {
     );
   });
 
+  it('starts the title run on the unknown-ASIN category, with no refresh or repick (server#392)', async () => {
+    const summary = issuesSummary();
+    summary.categories.push({ kind: 'unknown_asin', count: 3, ignored: 0, samples: [] });
+    const calls = mockFetch(
+      routes([], {
+        'GET /admin/issues': { body: summary },
+        'POST /admin/match-runs': { status: 202, body: run({ status: 'matching' }) },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unknown_asin');
+    const card = (await screen.findByRole('heading', { name: 'Match automatically' })).closest(
+      'section',
+    )!;
+    expect(
+      within(card).getByText(/An ASIN you set yourself is never replaced/),
+    ).toBeInTheDocument();
+    const start = await within(card).findByRole('button', { name: 'Find matches by title' });
+    expect(within(card).queryByRole('button', { name: 'Find matches' })).toBeNull();
+    expect(within(card).queryByRole('button', { name: 'Fill in matched books' })).toBeNull();
+    expect(within(card).queryByRole('button', { name: 'Use United Kingdom ASINs' })).toBeNull();
+    await user.click(start);
+    await waitFor(() =>
+      expect(
+        calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs')?.body,
+      ).toEqual({ mode: 'unknown_asin' }),
+    );
+  });
+
   it('starts a refresh over the matched books', async () => {
     const calls = mockFetch(
       routes([], { 'POST /admin/match-runs': { status: 202, body: run({ status: 'matching' }) } }),
@@ -1409,6 +1438,68 @@ describe('bulk matching', () => {
         calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs')?.body,
       ).toEqual({ library_id: 3, mode: 'match' }),
     );
+  });
+
+  it('offers no Start over on a title run while the unknown-ASIN report is off', async () => {
+    // Health lists the unknown-ASIN kind only while the report is on, and the
+    // server refuses the run without it (409 report_off).
+    const titleRun = run({ mode: 'unknown_asin' });
+    mockFetch(routes([titleRun]));
+    const off = renderApp('/health?issue=unmatched');
+    expect(await screen.findByRole('button', { name: /^Review/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start over' })).toBeNull();
+    off.unmount();
+
+    const summary = issuesSummary();
+    summary.categories.push(
+      { kind: 'unmatched', count: 4, ignored: 0, samples: [] },
+      { kind: 'unknown_asin', count: 2, ignored: 0, samples: [] },
+    );
+    const calls = mockFetch(
+      routes([titleRun], {
+        'GET /admin/issues': { body: summary },
+        'POST /admin/match-runs': { status: 202, body: run({ status: 'matching' }) },
+      }),
+    );
+    renderApp('/health?issue=unmatched');
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Start over' }));
+    await waitFor(() =>
+      expect(
+        calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs')?.body,
+      ).toEqual({ mode: 'unknown_asin' }),
+    );
+  });
+
+  it("says when a title run's book was left alone because the community knows its ASIN now", async () => {
+    const learned: MatchRunItem = {
+      ...confident,
+      applied: 'skipped',
+      detail: 'asin_known',
+      changes: {},
+    };
+    const applied = run({
+      mode: 'unknown_asin',
+      status: 'applied',
+      applied_at: '2026-10-07T10:06:00Z',
+    });
+    applied.counts = { ...applied.counts, pending: 0, review: 0, none: 1, skipped: 1 };
+    mockFetch(
+      routes([applied], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: { items: req.query.get('outcome') === 'auto' ? [learned] : [], next_after: 0 },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: "See the books it didn't find" }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /Confident/ }));
+    expect(
+      await within(dialog).findByText(/The community database knows this book's ASIN now/),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Skipped: nothing to change/)).toBeNull();
+    expect(within(dialog).queryByRole('checkbox')).toBeNull();
   });
 
   it('words a review item held for its length with both lengths (R-44)', async () => {

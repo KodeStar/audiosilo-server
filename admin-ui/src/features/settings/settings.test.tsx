@@ -103,7 +103,7 @@ describe('settings', () => {
     expect(screen.queryByRole('dialog', { name: 'Leave without saving?' })).not.toBeInTheDocument();
   });
 
-  it('polls an enabled report until its delayed result arrives and stops on leaving the topic', async () => {
+  it('polls an enabled report until its delayed result arrives, then stops', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const base = settingsWith();
     let report = settingsWith({
@@ -114,7 +114,7 @@ describe('settings', () => {
       },
     });
     const calls = mockFetch(routes({ 'GET /admin/settings': () => ({ body: report }) }));
-    const { router, unmount } = renderApp('/server?topic=metadata');
+    renderApp('/server?topic=metadata');
     expect(await screen.findByTestId('report-run')).toHaveTextContent('Not sent yet');
     report = settingsWith({
       metadata: {
@@ -127,6 +127,30 @@ describe('settings', () => {
       expect(screen.getByTestId('report-run')).toHaveTextContent('3 unknown ASINs sent'),
     );
     const reads = () => calls.filter((c) => c.path === '/admin/settings').length;
+    // Settled: the status changes once a day, so it isn't asked again (server#335).
+    const settled = reads();
+    await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS * 3));
+    expect(reads()).toBe(settled);
+  });
+
+  it('stops polling a pending report on leaving the topic', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const base = settingsWith();
+    const pending = settingsWith({
+      metadata: {
+        ...base.metadata,
+        report_unknown: true,
+        report_status: { state: 'never', last_sent: 0 },
+      },
+    });
+    const calls = mockFetch(routes({ 'GET /admin/settings': { body: pending } }));
+    const { router, unmount } = renderApp('/server?topic=metadata');
+    await screen.findByTestId('report-run');
+    const reads = () => calls.filter((c) => c.path === '/admin/settings').length;
+    // Still polling while the topic is shown.
+    const before = reads();
+    await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS));
+    expect(reads()).toBeGreaterThan(before);
     await act(() =>
       router.navigate({ to: '/server/{-$section}', params: { section: undefined }, search: {} }),
     );
@@ -136,6 +160,54 @@ describe('settings', () => {
     unmount();
     await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS));
     expect(reads()).toBe(afterLeave);
+  });
+
+  it("watches a switch-on for its run, then stops once it's recorded", async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const base = settingsWith();
+    const earlier = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    let current = settingsWith({
+      metadata: {
+        ...base.metadata,
+        report_unknown: false,
+        report_status: { state: 'ok', last_sent: 2, last_run_at: earlier },
+      },
+    });
+    const calls = mockFetch(
+      routes({
+        'GET /admin/settings': () => ({ body: current }),
+        'PATCH /admin/settings': () => {
+          current = settingsWith({
+            metadata: { ...current.metadata, report_unknown: true },
+          });
+          return { body: current };
+        },
+      }),
+    );
+    renderApp('/server?topic=metadata');
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole('switch', { name: 'Help complete the community database' }),
+    );
+    await screen.findByText('Reporting unknown ASINs is on');
+    const reads = () => calls.filter((c) => c.path === '/admin/settings').length;
+    const before = reads();
+    // The run hasn't been recorded yet: still asked.
+    await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS));
+    await waitFor(() => expect(reads()).toBe(before + 1));
+    current = settingsWith({
+      metadata: {
+        ...current.metadata,
+        report_status: { state: 'ok', last_sent: 5, last_run_at: new Date().toISOString() },
+      },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS));
+    await waitFor(() =>
+      expect(screen.getByTestId('report-run')).toHaveTextContent('5 unknown ASINs sent'),
+    );
+    const recorded = reads();
+    await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS * 3));
+    expect(reads()).toBe(recorded);
   });
 
   it('keeps a saved report toggle when an older status poll finishes afterwards', async () => {
@@ -533,13 +605,15 @@ describe('settings', () => {
 
   it('switches the upcoming releases check, and says how its last run went', async () => {
     const base = settingsWith();
+    // One instant for both: a run is a success only when the two are equal.
+    const ranAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
     const on = settingsWith({
       metadata: {
         ...base.metadata,
         upcoming: true,
         upcoming_status: {
-          last_run_at: new Date(Date.now() - 2 * 3_600_000).toISOString(),
-          last_success_at: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+          last_run_at: ranAt,
+          last_success_at: ranAt,
           series: 12,
           items: 5,
         },
@@ -660,6 +734,10 @@ describe('settings', () => {
       'Last tried 2 hr. ago: the metadata service doesn’t take reports (it needs an https address and a service that accepts them). It is tried again about a week after that attempt. Switching this off and on does not reset the wait.',
     ],
     [{ state: 'failed', last_sent: 0 }, "Last report failed 2 hr. ago; it's tried again tomorrow."],
+    [
+      { state: 'failed', last_sent: 4 },
+      'Last report 2 hr. ago stopped part way: 4 unknown ASINs were sent, and the rest are tried again tomorrow.',
+    ],
   ] as const)('says the report last ran %o', async (status, text) => {
     const base = settingsWith();
     mockFetch(

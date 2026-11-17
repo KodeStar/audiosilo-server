@@ -196,6 +196,50 @@ func TestMatchRunsRefresh(t *testing.T) {
 	}
 }
 
+// TestMatchRunsUnknownASIN: an unknown_asin run (Health's card) takes only the
+// books whose own ASIN the community doesn't know, and is audited as its own
+// action (server#392). While the unknown-ASIN report is off it is refused (409
+// report_off) and no run is recorded: what an earlier report left would read as
+// every such book. The other modes don't need the report.
+func TestMatchRunsUnknownASIN(t *testing.T) {
+	t.Parallel()
+	e, adminTok, memberTok, libID := newMatchRunEnv(t, "uk")
+	ctx := context.Background()
+	if err := e.cat.BackfillASIN(ctx, libID, "Someone/Obscure", "B0NOPE0001"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.SaveASINChecks(ctx, []catalog.ASINCheck{{ASIN: "B0NOPE0001", Unknown: true}}, "2026-11-01T00:00:00.000Z"); err != nil {
+		t.Fatal(err)
+	}
+	// Denied: the report is off (the default).
+	resp, body := e.do(t, "POST", "/api/v1/admin/match-runs", adminTok, `{"mode":"unknown_asin"}`)
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, `"code":"report_off"`) {
+		t.Fatalf("start with the report off = %d %s, want 409 report_off", resp.StatusCode, body)
+	}
+	if runs, err := e.cat.ListMatchRuns(ctx); err != nil || len(runs) != 0 {
+		t.Fatalf("runs after a refused start = %+v (%v), want none", runs, err)
+	}
+	if r, b := e.do(t, "PATCH", "/api/v1/admin/settings", adminTok, `{"metadata":{"report_unknown":true}}`); r.StatusCode != http.StatusOK {
+		t.Fatalf("turn the report on = %d %s", r.StatusCode, b)
+	}
+	// Denied still to a member, whatever the report says.
+	if r, b := e.do(t, "POST", "/api/v1/admin/match-runs", memberTok, `{"mode":"unknown_asin"}`); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("member start = %d %s, want 403", r.StatusCode, b)
+	}
+	// Allowed: the report is on.
+	resp, body = e.do(t, "POST", "/api/v1/admin/match-runs", adminTok, `{"mode":"unknown_asin"}`)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("start = %d %s", resp.StatusCode, body)
+	}
+	if run := decodeRun(t, body); run.Total != 1 || run.Mode != catalog.MatchModeUnknownASIN {
+		t.Fatalf("started = %+v", run)
+	}
+	e.api.matchRuns.Wait()
+	if _, body := e.do(t, "GET", "/api/v1/admin/audit", adminTok, ""); !strings.Contains(body, "book.match_unknown_asin") {
+		t.Errorf("audit = %s, want the run logged as one", body)
+	}
+}
+
 // An apply that excludes every automatic item (an older console's Done in an
 // empty refresh) finishes the run and changes no book.
 func TestMatchRunsFinishEmptyRefresh(t *testing.T) {

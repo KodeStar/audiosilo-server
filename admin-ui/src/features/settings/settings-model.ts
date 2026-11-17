@@ -204,3 +204,36 @@ export function signinLook(s: OIDCStatus): { key: string; tone: StatusTone } {
       return { key: 'settings.signin.state.pending', tone: 'warn' };
   }
 }
+
+/**
+ * A switch-on of the unknown-ASIN report the Metadata topic watches for its run
+ * (server#335): when it was saved, and the last run's time then.
+ */
+export interface ReportWatch {
+  at: number;
+  lastRun: string | undefined;
+}
+
+/** How long a switch-on is watched: its run starts at once unless one ran within the day. */
+export const REPORT_WATCH_MS = 10 * 60_000;
+
+/**
+ * Whether the Metadata topic asks again for the report's status: only while
+ * it is on and a run is near. One that never ran (its first run is due about
+ * an hour after the start, or at once once switched on), or a switch-on saved
+ * here (watch) less than REPORT_WATCH_MS ago with no run recorded since. A
+ * settled status changes once a day, so it isn't polled.
+ */
+export function pollsReport(
+  m: AdminSettings['metadata'],
+  watch: ReportWatch | null,
+  now: number,
+): boolean {
+  if (!m.enabled || !m.report_unknown) return false;
+  if ((m.report_status?.state ?? 'never') === 'never') return true;
+  return (
+    watch !== null &&
+    now - watch.at < REPORT_WATCH_MS &&
+    m.report_status?.last_run_at === watch.lastRun
+  );
+}

@@ -39,6 +39,13 @@ const (
 	// matched with neither by its recorded community match (MatchedBooks), to fill
 	// in the details the match didn't bring (an enrichment, an apply of ids only).
 	MatchModeRefresh = "refresh"
+	// MatchModeUnknownASIN matches by their title the books Health lists as
+	// unknown_asin (UnknownASINBooks): an ASIN of their own the community
+	// doesn't know and nothing else to find them by, so they count as matched
+	// and a match run passes them by. Applying records their community match
+	// with the scope's fields, and never replaces an ASIN an admin set
+	// (server#392).
+	MatchModeUnknownASIN = "unknown_asin"
 )
 
 // Match run statuses.
@@ -124,7 +131,10 @@ type MatchProposal struct {
 	// then "/<recording id>" when it names one ("" for a match run, and a repick
 	// recorded before 2.4.0). A fallback after identifier misses appends
 	// ";asin:<ASIN>;isbn:<ISBN>" (including empty values): applying it requires
-	// the same recorded match and both identifiers unchanged.
+	// the same recorded match and both identifiers unchanged. An unknown_asin
+	// run's is "asin:<ASIN>" on every item, the ASIN the book was taken with,
+	// however its record was found (by the title, or by that ASIN once the
+	// community knows it): applying it requires the book to still have it.
 	FoundBy string            `json:"found_by,omitempty"`
 	Values  map[string]string `json:"values"`
 }
@@ -493,10 +503,24 @@ func (c *Catalog) LanguageCounts(ctx context.Context, libraryID int64) ([]Langua
 // (0 = every library), less the ones an admin ignored there, with the facts a
 // match reads.
 func (c *Catalog) UnmatchedBooks(ctx context.Context, libraryID int64) ([]Book, error) {
+	return c.issueBooks(ctx, libraryID, IssueUnmatched)
+}
+
+// UnknownASINBooks lists the books an unknown_asin run matches by their title:
+// Health's "ASIN not in the community database" (IssueUnknownASIN, the same
+// predicate) in one library (0 = every library), less the ones an admin ignored
+// there, with the facts a match reads.
+func (c *Catalog) UnknownASINBooks(ctx context.Context, libraryID int64) ([]Book, error) {
+	return c.issueBooks(ctx, libraryID, IssueUnknownASIN)
+}
+
+// issueBooks lists the books of one library (0 = every library) Health lists
+// under kind, less the ones an admin ignored for it, with the facts a match reads.
+func (c *Catalog) issueBooks(ctx context.Context, libraryID int64, kind string) ([]Book, error) {
 	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b`+matchSubjectJoin+`
-	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND `+issuePredicates[IssueUnmatched]+`
+	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND `+issuePredicates[kind]+`
 	       AND NOT `+ignoredExpr+`
-	     ORDER BY b.library_id, b.rel_path`, libraryID, IssueUnmatched)
+	     ORDER BY b.library_id, b.rel_path`, libraryID, kind)
 }
 
 // MatchedBooks lists the matched books in one library (0 = every library): an
@@ -533,6 +557,10 @@ type MatchState struct {
 	// it has none. How is MatchHowAuto or MatchHowAccepted; the offered
 	// identifiers are those it offered when recorded (0070).
 	Anchor MatchAnchor
+	// ASINUnknown: the unknown-ASIN report holds the book's ASIN as one the
+	// community doesn't know (asinHeldUnknownExpr). False once a lookup finds
+	// it, and for a book with no ASIN.
+	ASINUnknown bool
 }
 
 // BookMatchState loads a book's MatchState (ErrNotFound when none is indexed at
@@ -545,12 +573,12 @@ func (c *Catalog) BookMatchState(ctx context.Context, libraryID int64, relPath s
 	err := c.db.QueryRowContext(ctx,
 		`SELECT b.id, b.title, b.author, b.duration, `+issuePredicates[IssueNoCover]+`,
 		        COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), COALESCE(bm.how, ''),
-		        COALESCE(bm.offered_asin, ''), COALESCE(bm.offered_isbn, '')
+		        COALESCE(bm.offered_asin, ''), COALESCE(bm.offered_isbn, ''), `+asinHeldUnknownExpr+`
 		   FROM books b`+bookMatchJoin+`
 		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, CleanRelPath(relPath)).
 		Scan(&id, &st.Title, &st.Author, &st.Duration, &st.CoverMissing,
 			&st.Anchor.WorkID, &st.Anchor.RecordingID, &st.Anchor.How,
-			&st.Anchor.OfferedASIN, &st.Anchor.OfferedISBN)
+			&st.Anchor.OfferedASIN, &st.Anchor.OfferedISBN, &st.ASINUnknown)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
