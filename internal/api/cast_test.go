@@ -503,6 +503,48 @@ func TestCastTokenRevocation(t *testing.T) {
 	ok(http.StatusUnauthorized, "deleted user")
 }
 
+// A sender at the cap that re-mints (the player does after a refused load or a
+// mid-book error) evicts its least recently used token, never the one a
+// receiver is streaming with. Allowed: the first token minted, streamed since,
+// still streams. Denied: the idle token minted after it is evicted, a 401 on
+// stream.
+func TestCastTokenCapKeepsTheTokenInUse(t *testing.T) {
+	t.Parallel()
+	c := newCastEnv(t)
+	ctx := context.Background()
+	stream := func(token string) int {
+		t.Helper()
+		return c.media(t, c.lib, "stream", cradlePart, token, "").StatusCode
+	}
+	playing := c.castToken(t, cradleBook)
+	var idle []string
+	for range 19 { // with playing, the sender's cap (auth's maxCastTokens)
+		idle = append(idle, c.castToken(t, cradleBook))
+	}
+	// Minted an hour ago (tokens stamp whole seconds, and the test runs inside
+	// one): the receiver's stream below is then the most recent use.
+	if _, err := c.db.ExecContext(ctx, `UPDATE tokens SET created_at = ? WHERE kind = 'cast'`,
+		time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	if got := stream(playing); got != http.StatusOK {
+		t.Fatalf("the playing token = %d, want 200", got)
+	}
+	newest := c.castToken(t, cradleBook)
+	if got := stream(playing); got != http.StatusOK {
+		t.Fatalf("the token in use after a mint at the cap = %d, want 200", got)
+	}
+	if got := stream(newest); got != http.StatusOK {
+		t.Fatalf("the new token = %d, want 200", got)
+	}
+	if got := stream(idle[0]); got != http.StatusUnauthorized {
+		t.Fatalf("the evicted idle token = %d, want 401", got)
+	}
+	if got := stream(idle[1]); got != http.StatusOK {
+		t.Fatalf("the next idle token = %d, want 200", got)
+	}
+}
+
 func TestCastCapability(t *testing.T) {
 	t.Parallel()
 	if !serverCapabilities(t, newTestEnv(t))["cast"] {

@@ -271,6 +271,54 @@ func TestCastTokenCap(t *testing.T) {
 	}
 }
 
+// Past the cap the least recently used token goes, not the oldest minted: a
+// sender re-minting never ends the token its receiver is playing with.
+// Allowed: the first token minted, in use since, survives a mint at the cap.
+// Denied: the idle token minted after it is evicted and refused.
+func TestCastTokenCapEvictsLeastRecentlyUsed(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	sam, _, phone := castSender(t, s, ctx, "sam")
+	playing, _, err := s.IssueCastToken(ctx, sam.ID, phone, 3, "Author/Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(time.Minute)
+	var idle []string
+	for range maxCastTokens - 1 {
+		sec, _, err := s.IssueCastToken(ctx, sam.ID, phone, 3, "Author/Book")
+		if err != nil {
+			t.Fatal(err)
+		}
+		idle = append(idle, sec)
+	}
+	// The receiver keeps reading the book: its token's last_seen moves past
+	// every other token's mint.
+	*now = now.Add(10 * time.Minute)
+	if _, _, err := resolveCast(s, ctx, playing, "Author/Book/01.mp3"); err != nil {
+		t.Fatalf("the playing token = %v", err)
+	}
+	*now = now.Add(time.Minute)
+	newest, _, err := s.IssueCastToken(ctx, sam.ID, phone, 3, "Author/Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := resolveCast(s, ctx, playing, "Author/Book/02.mp3"); err != nil {
+		t.Fatalf("the token in use was evicted by a mint at the cap: %v", err)
+	}
+	if _, _, err := resolveCast(s, ctx, newest, "Author/Book"); err != nil {
+		t.Fatalf("the new token = %v", err)
+	}
+	if _, _, err := resolveCast(s, ctx, idle[0], "Author/Book"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("the least recently used token = %v, want ErrInvalidToken", err)
+	}
+	for i, sec := range idle[1:] {
+		if _, _, err := resolveCast(s, ctx, sec, "Author/Book"); err != nil {
+			t.Fatalf("idle token %d = %v", i+1, err)
+		}
+	}
+}
+
 // The cap counts per sending device (server#216): a run of casts on one device
 // never ends the cast another device of the same person is playing. Allowed:
 // device A's one token outlives device B minting 25. Denied: B's own oldest,
