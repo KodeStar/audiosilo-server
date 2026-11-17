@@ -383,3 +383,29 @@ func TestDocumentCSPOncePerVersion(t *testing.T) {
 		t.Fatalf("CSP worked out %d times for two versions, want 2", calls)
 	}
 }
+
+// Gzip round-trips at each level it is used at, and answers nil when gzip
+// would not make the data smaller or the level isn't one gzip takes.
+func TestGzip(t *testing.T) {
+	t.Parallel()
+	data := bytes.Repeat([]byte(`{"title":"A Book","author":"An Author"},`), 100)
+	for _, level := range []int{gzip.BestSpeed, gzip.DefaultCompression} {
+		gz := Gzip(data, level)
+		if gz == nil || len(gz) >= len(data) {
+			t.Fatalf("level %d: %d bytes from %d", level, len(gz), len(data))
+		}
+		zr, err := gzip.NewReader(bytes.NewReader(gz))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := io.ReadAll(zr); err != nil || !bytes.Equal(got, data) {
+			t.Fatalf("level %d: round trip %v", level, err)
+		}
+	}
+	if gz := Gzip([]byte("<p>x</p>"), gzip.BestSpeed); gz != nil {
+		t.Errorf("a tiny input gzipped to %d bytes, want nil", len(gz))
+	}
+	if gz := Gzip(data, 42); gz != nil {
+		t.Error("an invalid level gzipped, want nil")
+	}
+}

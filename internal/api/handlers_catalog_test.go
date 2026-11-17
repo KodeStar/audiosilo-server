@@ -150,7 +150,7 @@ func TestAdminAggregatesAPI(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
-	seedCatalog(t, e)
+	libID, _ := seedCatalog(t, e)
 	_, body := e.do(t, "GET", "/api/v1/admin/authors", adminTok, "")
 	if !strings.Contains(body, `"authors":[{"name":"Andy Weir","books":1`) ||
 		!strings.Contains(body, `"merge_suggestions":[{"names":["Andy Weir","Weir, Andy"],"suggested":"Andy Weir","books":2,"other_books":1}]`) {
@@ -164,6 +164,16 @@ func TestAdminAggregatesAPI(t *testing.T) {
 	}
 	if resp, _ := e.do(t, "GET", "/api/v1/admin/authors?library_id=0", adminTok, ""); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("library_id=0 = %d, want 400", resp.StatusCode)
+	}
+	// An unknown library is 404, not an empty list as if it had no books; a
+	// known one answers (server#224).
+	for _, agg := range []string{"authors", "narrators", "series"} {
+		if resp, body := e.do(t, "GET", "/api/v1/admin/"+agg+"?library_id=99999", adminTok, ""); resp.StatusCode != http.StatusNotFound || !strings.Contains(body, `"not_found"`) {
+			t.Errorf("%s of an unknown library = %d %s, want 404 not_found", agg, resp.StatusCode, body)
+		}
+		if resp, body := e.do(t, "GET", "/api/v1/admin/"+agg+"?library_id="+strconv.FormatInt(libID, 10), adminTok, ""); resp.StatusCode != http.StatusOK {
+			t.Errorf("%s of the library = %d %s, want 200", agg, resp.StatusCode, body)
+		}
 	}
 }
 

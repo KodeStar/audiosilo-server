@@ -243,7 +243,7 @@ func (rep *fileRep) load(name string, content io.ReadSeeker) error {
 			return err
 		}
 		sum.Write(data)
-		rep.gz = Gzipped(data)
+		rep.gz = Gzip(data, gzip.DefaultCompression)
 	} else if _, err := io.Copy(sum, content); err != nil {
 		return err
 	}
@@ -255,16 +255,47 @@ func (rep *fileRep) load(name string, content io.ReadSeeker) error {
 	return nil
 }
 
-// Gzipped compresses data at the default level (a few percent larger than the
-// best, several times faster on the first request for a big bundle), or returns
-// nil when that doesn't make it smaller.
-func Gzipped(data []byte) []byte {
+// Gzip is the one gzip of a whole answer in memory (a file here, the api's
+// cached JSON lists and read-along maps): data compressed at level, or nil when
+// that doesn't make it smaller (or level is neither of GzipWriters'). A file
+// uses gzip.DefaultCompression (a few percent larger than the best, several
+// times faster on the first request for a big bundle); a JSON answer made per
+// request uses gzip.BestSpeed.
+func Gzip(data []byte, level int) []byte {
+	p := GzipWriters(level)
+	if p == nil {
+		return nil
+	}
+	zw := p.Get().(*gzip.Writer)
 	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(data); err != nil || zw.Close() != nil || buf.Len() >= len(data) {
+	buf.Grow(len(data) / 4)
+	zw.Reset(&buf)
+	_, werr := zw.Write(data)
+	cerr := zw.Close()
+	zw.Reset(nil) // let go of buf
+	p.Put(zw)
+	if werr != nil || cerr != nil || buf.Len() >= len(data) {
 		return nil
 	}
 	return buf.Bytes()
+}
+
+// GzipWriters is the process's pool of *gzip.Writer at level, gzip.BestSpeed or
+// gzip.DefaultCompression (nil for any other), shared by Gzip and the api's
+// streaming writer. Each compressor holds ~800 KB of state, which costs more to
+// allocate per answer than the compression.
+func GzipWriters(level int) *sync.Pool { return gzipPools[level] }
+
+var gzipPools = map[int]*sync.Pool{
+	gzip.BestSpeed:          gzipPool(gzip.BestSpeed),
+	gzip.DefaultCompression: gzipPool(gzip.DefaultCompression),
+}
+
+func gzipPool(level int) *sync.Pool {
+	return &sync.Pool{New: func() any {
+		zw, _ := gzip.NewWriterLevel(nil, level) // level is one of the two above: no error
+		return zw
+	}}
 }
 
 // serveGzip writes rep's gzip form. http.ServeContent can't: it leaves out

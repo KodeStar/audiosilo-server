@@ -1,11 +1,17 @@
 package library
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestListDirs(t *testing.T) {
@@ -82,5 +88,125 @@ func TestListDirsRoot(t *testing.T) {
 	}
 	if got.Parent != "" || !filepath.IsAbs(got.Path) {
 		t.Errorf("root listing = path %q parent %q, want an absolute root with no parent", got.Path, got.Parent)
+	}
+}
+
+// A listing that doesn't answer (a hung mount) is ErrDirsTimedOut at the
+// lister's time-out, and keeps its slot until it returns: with every slot held,
+// another listing times out too instead of starting a reader of its own. Once
+// the hung read returns its slot is free again. A clock only bounds the waits:
+// the hung listing never answers on its own.
+func TestDirListerBounded(t *testing.T) {
+	t.Parallel()
+	hang, started := make(chan struct{}), make(chan struct{}, 1)
+	var released bool
+	defer func() {
+		if !released {
+			close(hang)
+		}
+	}()
+	l := NewDirLister(func(dir string, _ int) (*DirListing, error) {
+		if dir == "/hung" {
+			started <- struct{}{}
+			<-hang
+		}
+		return &DirListing{Path: dir}, nil
+	}, 1, 50*time.Millisecond)
+	ctx := context.Background()
+	if _, err := l.List(ctx, "/hung", 0); !errors.Is(err, ErrDirsTimedOut) {
+		t.Fatalf("hung listing: %v, want ErrDirsTimedOut", err)
+	}
+	<-started
+	if _, err := l.List(ctx, "/fine", 0); !errors.Is(err, ErrDirsTimedOut) {
+		t.Fatalf("with the one slot held: %v, want ErrDirsTimedOut", err)
+	}
+	// A relative path is refused at once, slots held or not.
+	if _, err := l.List(ctx, "relative", 0); !errors.Is(err, ErrNotAbsolute) {
+		t.Fatalf("a relative path with the one slot held: %v, want ErrNotAbsolute", err)
+	}
+	close(hang)
+	released = true
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, err := l.List(ctx, "/fine", 0)
+		if err == nil && got.Path == "/fine" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after the hung read returned: %v, want the listing", err)
+		}
+	}
+}
+
+// The setup preview's root check runs within the same slots and time-out: a
+// root that doesn't answer is ErrDirsTimedOut, a relative one refused at once,
+// and a readable one comes back cleaned.
+func TestDirListerCheckRoot(t *testing.T) {
+	t.Parallel()
+	hang := make(chan struct{})
+	defer close(hang)
+	l := NewDirLister(ListDirs, 1, 50*time.Millisecond)
+	ctx := context.Background()
+	root := t.TempDir()
+	if got, err := l.CheckRoot(ctx, root+string(filepath.Separator)); err != nil || got != root {
+		t.Fatalf("a readable root: %q, %v, want %q", got, err, root)
+	}
+	if _, err := l.CheckRoot(ctx, filepath.Join(root, "missing")); !errors.Is(err, ErrRootUnreadable) {
+		t.Fatalf("a missing root: %v, want ErrRootUnreadable", err)
+	}
+	l.check = func(string) (string, error) {
+		<-hang
+		return "", ErrRootUnreadable
+	}
+	if _, err := l.CheckRoot(ctx, root); !errors.Is(err, ErrDirsTimedOut) {
+		t.Fatalf("a root that doesn't answer: %v, want ErrDirsTimedOut", err)
+	}
+	if _, err := l.CheckRoot(ctx, "relative"); !errors.Is(err, ErrNotAbsolute) {
+		t.Fatalf("a relative root with the one slot held: %v, want ErrNotAbsolute", err)
+	}
+}
+
+// A listing that panics panics its waiter, not the process (the read runs on a
+// goroutine of its own, which nothing would recover), and gives its slot back.
+func TestDirListerPanicReachesTheWaiter(t *testing.T) {
+	t.Parallel()
+	l := NewDirLister(func(dir string, _ int) (*DirListing, error) {
+		if dir == "/boom" {
+			panic("boom")
+		}
+		return &DirListing{Path: dir}, nil
+	}, 1, 10*time.Second)
+	ctx := context.Background()
+	func() {
+		defer func() {
+			if p := recover(); p == nil || !strings.Contains(fmt.Sprint(p), "boom") {
+				t.Errorf("recovered %v, want the listing's panic", p)
+			}
+		}()
+		_, _ = l.List(ctx, "/boom", 0)
+	}()
+	if got, err := l.List(ctx, "/fine", 0); err != nil || got.Path != "/fine" {
+		t.Fatalf("after a panicked listing: %v, want the listing (its slot given back)", err)
+	}
+}
+
+// A listing that panics after its waiter left with ErrDirsTimedOut has no
+// request to reach: it is logged, and its slot still comes back.
+func TestDirListerLogsAnAbandonedPanic(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	l := NewDirLister(func(string, int) (*DirListing, error) {
+		<-release
+		panic("boom")
+	}, 1, 20*time.Millisecond)
+	var logged bytes.Buffer
+	l.log = slog.New(slog.NewTextHandler(&logged, nil))
+	if _, err := l.List(context.Background(), "/hung", 0); !errors.Is(err, ErrDirsTimedOut) {
+		t.Fatalf("a listing that doesn't answer: %v, want ErrDirsTimedOut", err)
+	}
+	close(release)
+	l.slots <- struct{}{} // waits for the panicked listing to give its slot back
+	if got := logged.String(); !strings.Contains(got, "boom") || !strings.Contains(got, "level=ERROR") {
+		t.Fatalf("logged %q, want the listing's panic as an error", got)
 	}
 }

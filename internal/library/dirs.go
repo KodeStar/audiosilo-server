@@ -1,11 +1,16 @@
 package library
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
+	"time"
 )
 
 // The add-library folder picker (GET /admin/fs/dirs). An admin choosing a
@@ -16,7 +21,9 @@ import (
 //     folder and browse it, so this reveals nothing new to that role);
 //   - directory names only: never a file, size, owner or timestamp;
 //   - hidden (dot) folders are skipped, like the scanner and /fs skip them;
-//   - absolute paths only, cleaned, and at most `limit` entries per listing.
+//   - absolute paths only, cleaned, and at most `limit` entries per listing;
+//   - a listing behind a deadline and a few slots (DirLister), so a mount that
+//     stops answering can't hold the request, or pile up readers, for good.
 
 // DirEntry is one folder in a DirListing.
 type DirEntry struct {
@@ -79,6 +86,105 @@ func ListDirs(dir string, limit int) (*DirListing, error) {
 		out.Dirs = append(out.Dirs, DirEntry{Name: n.name, Path: filepath.Join(dir, n.name)})
 	}
 	return out, nil
+}
+
+// ErrDirsTimedOut is a folder read (a listing, a root check) that didn't answer
+// within its DirLister's time-out, or found every slot held by reads that
+// haven't returned.
+var ErrDirsTimedOut = errors.New("folder listing timed out")
+
+// DirLister runs the folder reads an admin's typed path asks for (the picker's
+// listings, the setup preview's root check) each on a goroutine of its own,
+// waited for at most its time-out: a readdir on a network share that stops
+// answering can't be interrupted (server#224). At most its slots run at once, a
+// hung one keeping its slot until it returns, so hung reads can't pile up: with
+// every slot held a read waits for one only as long as its time-out.
+type DirLister struct {
+	list    func(dir string, limit int) (*DirListing, error)
+	check   func(root string) (string, error)
+	slots   chan struct{}
+	timeout time.Duration
+	log     *slog.Logger // nil: slog.Default(), read when it is needed
+}
+
+// NewDirLister is a DirLister of list (ListDirs; a test's stand-in), slots at
+// once, each waited for at most timeout.
+func NewDirLister(list func(dir string, limit int) (*DirListing, error), slots int, timeout time.Duration) *DirLister {
+	return &DirLister{list: list, check: CheckRoot, slots: make(chan struct{}, slots), timeout: timeout}
+}
+
+// List is list(dir, limit), or ErrDirsTimedOut once the time-out (or ctx) ends
+// first, the listing left to finish on its own goroutine.
+func (l *DirLister) List(ctx context.Context, dir string, limit int) (*DirListing, error) {
+	if dir != "" && !filepath.IsAbs(dir) {
+		return nil, ErrNotAbsolute // refused at once, never waiting for a slot
+	}
+	return boundedRead(ctx, l, func() (*DirListing, error) { return l.list(dir, limit) })
+}
+
+// CheckRoot is CheckRoot(root) within the same slots and time-out as a
+// listing: it opens and reads the folder, which hangs on the same mounts.
+func (l *DirLister) CheckRoot(ctx context.Context, root string) (string, error) {
+	if !filepath.IsAbs(root) {
+		return "", ErrNotAbsolute // as List: never waiting for a slot
+	}
+	return boundedRead(ctx, l, func() (string, error) { return l.check(root) })
+}
+
+// readResult is what a boundedRead's goroutine hands its waiter: the read's
+// answer, or the panic that ended it.
+type readResult[T any] struct {
+	v        T
+	err      error
+	panicked any
+	stack    []byte
+}
+
+// boundedRead is read() on a goroutine of its own holding one of l's slots, or
+// ErrDirsTimedOut once l's time-out (or ctx) ends first, the read left to
+// finish there. A panic in the read is raised again on the waiter's goroutine
+// (the request's, where net/http recovers and logs it) rather than ending the
+// process; one in a read whose waiter has left has no request to reach, so it
+// is logged here.
+func boundedRead[T any](ctx context.Context, l *DirLister, read func() (T, error)) (T, error) {
+	var zero T
+	ctx, cancel := context.WithTimeout(ctx, l.timeout)
+	defer cancel()
+	select {
+	case l.slots <- struct{}{}:
+	case <-ctx.Done():
+		return zero, ErrDirsTimedOut
+	}
+	done := make(chan readResult[T], 1) // buffered: an abandoned read still returns
+	go func() {
+		defer func() { <-l.slots }()
+		defer func() {
+			p := recover()
+			if p == nil {
+				return
+			}
+			stack := debug.Stack()
+			if ctx.Err() != nil { // the waiter answered ErrDirsTimedOut already
+				log := l.log
+				if log == nil {
+					log = slog.Default()
+				}
+				log.Error("folder read panicked after its time-out", "panic", p, "stack", string(stack))
+			}
+			done <- readResult[T]{panicked: p, stack: stack}
+		}()
+		v, err := read()
+		done <- readResult[T]{v: v, err: err}
+	}()
+	select {
+	case r := <-done:
+		if r.panicked != nil {
+			panic(fmt.Sprintf("folder read panicked: %v\n%s", r.panicked, r.stack))
+		}
+		return r.v, r.err
+	case <-ctx.Done():
+		return zero, ErrDirsTimedOut
+	}
 }
 
 // filesystemRoot is "/" on Unix and the working directory's drive (C:\) on Windows.

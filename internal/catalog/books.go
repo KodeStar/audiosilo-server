@@ -302,7 +302,7 @@ type BookIdentifiers struct {
 // a ref naming no indexed book, or no library, is the zero value. One query per
 // library, selecting only the columns the answer holds.
 func (c *Catalog) BooksByRefs(ctx context.Context, refs []Ref) ([]BookIdentifiers, error) {
-	paths, byLib := groupRefs(refs)
+	paths, byLib := GroupRefs(refs)
 	found := make(map[Ref]BookIdentifiers, len(refs))
 	for libID, ps := range byLib {
 		if err := c.identifiersIn(ctx, libID, ps, found); err != nil {
@@ -340,9 +340,9 @@ func (c *Catalog) identifiersIn(ctx context.Context, libraryID int64, paths []st
 	return rows.Err()
 }
 
-// groupRefs cleans each ref's path (CleanRelPath), returning the cleaned paths in
+// GroupRefs cleans each ref's path (CleanRelPath), returning the cleaned paths in
 // ref order and the same paths grouped by library, for one query per library.
-func groupRefs(refs []Ref) (paths []string, byLib map[int64][]string) {
+func GroupRefs(refs []Ref) (paths []string, byLib map[int64][]string) {
 	paths = make([]string, len(refs))
 	byLib = map[int64][]string{}
 	for i, r := range refs {

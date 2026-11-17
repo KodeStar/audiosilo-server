@@ -88,7 +88,7 @@ func otherRecordingsQuery(scopes []Scope, book *Book) (string, []any) {
 // prefers after the narrator (meta's pickRank). Only refs in it are true.
 func (c *Catalog) InProgress(ctx context.Context, userID int64, refs []Ref) (map[Ref]bool, error) {
 	out := map[Ref]bool{}
-	_, byLib := groupRefs(refs)
+	_, byLib := GroupRefs(refs)
 	for lib, paths := range byLib {
 		for chunk := range slices.Chunk(paths, 500) {
 			started, err := queryRows(ctx, c.db, func(r *sql.Rows, p *string) error { return r.Scan(p) },

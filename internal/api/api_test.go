@@ -926,6 +926,21 @@ func TestListProgressScopeFiltered(t *testing.T) {
 	}
 }
 
+// A user with no progress yet gets "progress":[], never null (server#220), and
+// no favourites "favourites":[].
+func TestListProgressEmptyIsList(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	u, _ := e.auth.CreateUser(context.Background(), "fresh", "fresh-password", auth.RoleUser)
+	token, _ := e.auth.IssueToken(context.Background(), u.ID, auth.KindSession, "t", 0)
+	if resp, body := e.do(t, "GET", "/api/v1/me/progress", token, ""); resp.StatusCode != http.StatusOK || body != "{\"progress\":[]}\n" {
+		t.Fatalf("a new user's progress = %d %q, want {\"progress\":[]}", resp.StatusCode, body)
+	}
+	if resp, body := e.do(t, "GET", "/api/v1/me/favourites", token, ""); resp.StatusCode != http.StatusOK || body != "{\"favourites\":[]}\n" {
+		t.Fatalf("a new user's favourites = %d %q, want {\"favourites\":[]}", resp.StatusCode, body)
+	}
+}
+
 func TestStreamTranscode(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)

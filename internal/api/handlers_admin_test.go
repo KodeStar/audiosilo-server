@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
 // adminAndMember returns a session token for the env's admin and for a fresh
@@ -208,6 +210,30 @@ func TestAdminListDirs(t *testing.T) {
 	}
 }
 
+// A folder whose listing doesn't answer (a hung network mount) is 404
+// folder_unreadable at the picker's time-out, not a request held for good
+// (server#224). The setup preview's root check waits behind the same lister:
+// with its one slot held by the hung listing, it is 404 at the time-out too.
+func TestAdminListDirsHungMount(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	e.api.dirs = library.NewDirLister(func(string, int) (*library.DirListing, error) {
+		<-hang
+		return nil, errors.New("unreachable")
+	}, 1, 50*time.Millisecond)
+	resp, body := e.do(t, "GET", "/api/v1/admin/fs/dirs?path="+url.QueryEscape(t.TempDir()), adminTok, "")
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "folder_unreadable") {
+		t.Fatalf("hung listing = %d %s, want 404 folder_unreadable", resp.StatusCode, body)
+	}
+	resp, body = e.do(t, "POST", "/api/v1/admin/setup/preview", adminTok, rootBody(t.TempDir()))
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "folder_unreadable") {
+		t.Fatalf("setup preview with the lister's slot held = %d %s, want 404 folder_unreadable", resp.StatusCode, body)
+	}
+}
+
 // TestAdminSharesListMembers: the share list says who each share is granted to.
 func TestAdminSharesListMembers(t *testing.T) {
 	t.Parallel()
@@ -373,8 +399,9 @@ func TestWholeLibraryGrantsAreMarked(t *testing.T) {
 
 // TestLibraryGrantPathEditsRefused (server#254): a library grant's share
 // changes only by granting or revoking the library. Denied: a path add or
-// remove on it is 409 library_grant and leaves the whole-library rule. Allowed:
-// the same edits on an admin's own share are 204.
+// remove of its own rule on it is 409 library_grant and leaves the whole-library
+// rule. Allowed: removing a stray rule from it (server#361), and the same edits
+// on an admin's own share, are 204.
 func TestLibraryGrantPathEditsRefused(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
@@ -401,6 +428,16 @@ func TestLibraryGrantPathEditsRefused(t *testing.T) {
 	}
 	if got, _ := e.cat.GetShare(ctx, shares[0].ID); len(got.Paths) != 1 || got.Paths[0] != (catalog.PathRule{LibraryID: lib.ID}) {
 		t.Fatalf("the grant's rules = %+v, want the whole library only", got.Paths)
+	}
+	// A stray rule an older version let onto the grant goes; its own rule stays.
+	if err := e.cat.AddSharePath(ctx, shares[0].ID, catalog.PathRule{LibraryID: lib.ID, Path: "Author/Book"}); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := e.do(t, "DELETE", paths(shares[0].ID), adminTok, folder); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE of a stray rule on a grant = %d %s, want 204", resp.StatusCode, body)
+	}
+	if got, _ := e.cat.GetShare(ctx, shares[0].ID); len(got.Paths) != 1 || got.Paths[0] != (catalog.PathRule{LibraryID: lib.ID}) {
+		t.Fatalf("the grant's rules after its stray one went = %+v, want the whole library only", got.Paths)
 	}
 	for _, method := range []string{"POST", "DELETE"} {
 		if resp, body := e.do(t, method, paths(mine.ID), adminTok, folder); resp.StatusCode != http.StatusNoContent {

@@ -84,7 +84,7 @@ func (c *Catalog) ListAllFavourites(ctx context.Context, userID int64, scopes []
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Favourite
+	out := []Favourite{} // none is [], never null, as for progress
 	for rows.Next() {
 		var fav Favourite
 		if err := rows.Scan(&fav.LibraryID, &fav.Path, &fav.IsBook,

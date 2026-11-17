@@ -183,12 +183,25 @@ func normalizeInstant(v string) (string, bool) {
 	return t.UTC().Format(time.RFC3339), true
 }
 
+// aggregateLibrary reads an aggregate's optional ?library_id= (0: every
+// library), answering 400 for one that isn't an id and 404 not_found for a
+// library that doesn't exist, rather than an empty list as if it had no books
+// (server#224). ok is false once it has answered.
+func (a *API) aggregateLibrary(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	libID, ok := parseOptionalID(r.URL.Query().Get("library_id"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid library_id")
+		return 0, false
+	}
+	_, ok = a.optionalLibraryName(w, r, libID, "could not read the library")
+	return libID, ok
+}
+
 // handleAdminPeople serves GET /admin/authors and /admin/narrators.
 func (a *API) handleAdminPeople(field, key string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		libID, ok := parseOptionalID(r.URL.Query().Get("library_id"))
+		libID, ok := a.aggregateLibrary(w, r)
 		if !ok {
-			writeError(w, http.StatusBadRequest, "invalid library_id")
 			return
 		}
 		agg, err := a.cat.People(r.Context(), field, libID, nil)
@@ -204,9 +217,8 @@ func (a *API) handleAdminPeople(field, key string) http.HandlerFunc {
 
 // handleAdminSeries serves GET /admin/series.
 func (a *API) handleAdminSeries(w http.ResponseWriter, r *http.Request) {
-	libID, ok := parseOptionalID(r.URL.Query().Get("library_id"))
+	libID, ok := a.aggregateLibrary(w, r)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid library_id")
 		return
 	}
 	series, err := a.cat.Series(r.Context(), libID, nil, true)

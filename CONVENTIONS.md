@@ -251,7 +251,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `API.startScan` queues the scan in the job queue (see "Job queue" below), which marks the
   library queued before the request returns so the first poll sees it; `GET /admin/invites` lists every account's invites (`auth.ListInvites`, never a
   code); `GET /admin/fs/dirs?path=` is the add-library folder picker (`library.ListDirs`:
-  absolute paths, folder names only, no dot-folders, 1,000-entry cap); `GET /admin/shares` adds
+  absolute paths, folder names only, no dot-folders, 1,000-entry cap; behind a `library.DirLister`,
+  4 listings at once and 5 s each, so a hung mount answers 404 `folder_unreadable`); `GET /admin/shares` adds
   `member_ids` (`catalog.ShareMembers`).
 - **Community metadata lookup (Phase 1.5, `internal/meta`)**: `GET
   /api/v1/libraries/{id}/meta?path=` (authed, scope-checked via `authorizedPath`
@@ -467,7 +468,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   files, a half-written state and any copy but the current one, and forgets a copy that is missing,
   changed size or doesn't open. A copy newer than `MaxSchemaVersion` still opens and answers (flagged
   `schema_newer`); artifact schema changes must stay additive (CROSS-REPO §17). The launcher
-  (`pkg/launcher/metamirror.go`) builds it only in mirror mode with a metadata service (release
+  (`internal/launcher/metamirror.go`) builds it only in mirror mode with a metadata service (release
   client: `release.DefaultRepo`, `User-Agent: AudioSilo/<version>`; tests point it at a fake
   GitHub through the unexported `Options.metaReleases`), builds it right after `api.New` and hands
   it over with `API.SetMetaMirror` (which calls `meta.Service.SetMirror`) BEFORE the background
@@ -643,7 +644,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   makes an announcement once per work across series and across an item leaving and coming back (a copy
   added then removed); a work the server holds a copy of anywhere is marked without a word. The mark is
   written even when the run is being stopped (`context.WithoutCancel`). **`book_released`** is one event
-  per run (`api.announceReleases`: up to 5 titles as "Title (Series #position)", `upcoming.Release.Label`,
+  per run (`upcoming.Announce`: up to 5 titles as "Title (Series #position)", `upcoming.Release.Label`,
   the count of all, dedupe key a digest of the run's work ids). Config `upcoming.enabled` (live,
   `AUDIOSILO_UPCOMING_ENABLED`, console Settings > Metadata, setting id `metadata.upcoming`) and `upcoming.window_days` (1-365, default
   90, restart, `AUDIOSILO_UPCOMING_WINDOW_DAYS`; 0 or anything outside refuses to load). The route is 404
@@ -854,7 +855,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestCompressExclusions` row (GET and HEAD) proving it is answered identity. The answer is gzipped (BestSpeed) when it is `application/json`, at least
   1 KiB, has no Content-Encoding or ETag of its own and the client takes gzip; every JSON answer
   to a compressible request carries `Vary: Accept-Encoding`. The list cache stores each answer's
-  gzip beside it and sends that on a hit (`writeCachedJSON`), so a hit compresses nothing.
+  gzip beside it and sends that on a hit (`writeCachedJSON`), so a hit compresses nothing. A whole
+  answer gzipped in memory (the list cache's, a read-along map, a console file) is `spa.Gzip` at a
+  level (BestSpeed per request, the default for a file), nil when gzip saves nothing.
 - **List cache** (`api/listcache.go`, server#243): `GET /libraries/{id}/books` (a
   books library), `/books/recent`, `/search` and a books library's browse lists
   (`/libraries/{id}/authors`, `/narrators`, `/series`) keep their encoded answer
@@ -2348,7 +2351,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   save still succeeds), a span's is part of its batch's one transaction. `catalog.StreamMarks` (in memory) remembers `?transcode=1` streams per token for 10 min
   so the session is marked transcoded. Session times are fixed-width millisecond UTC strings
   (`sessionTime`) so they compare as text; hours are taken with `hourOf` (not `time.Date`, which
-  loops on a daylight-saving fall-back). Retention: `pkg/launcher.retention` runs
+  loops on a daylight-saving fall-back). Retention: `internal/launcher.retention` runs
   `PruneSessions` at startup and daily, rolling sessions older than the live
   `activity.session_days` setting (Settings > General `general.session_days`, env
   `AUDIOSILO_SESSION_DAYS`, 30-3650, default 400; `API.SessionRetention`, read at each run) into
@@ -2636,7 +2639,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `"editor": true` (console-only, additive; a player never sends it): `auth.IssueEditorToken` mints the same
   token with `cast_grants.editor = 1` (`0078`), a 4 h life (`editorTokenTTL`) and a cap of its own
   (`maxEditorTokens`, 5), each cap counting only its own use, so editing many books never drops a token a
-  receiver is playing with; it allows no more than a cast token, so any caller may ask. The daily retention (`pkg/launcher.retention`) runs the same prune
+  receiver is playing with; it allows no more than a cast token, so any caller may ask. The daily retention (`internal/launcher.retention`) runs the same prune
   (`auth.PruneCastTokens`), so a dead token's row (the receiver's `last_ip`) and grant (which book
   was cast) never outlive it by more than a day. **Validity** is `lookupToken`'s one check (unknown, revoked, expired,
   disabled user) plus, for kind `cast`, a grant and a live parent (`castGrantOf`, a second query run
@@ -3893,7 +3896,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   that ended 0-60 s before the span's start, 2 s overlap allowed, and within 5 s of its start, however many
   newer rows the book has; else a row; `idx_history_user_path_ended`).
   Rejected events are never stored. `listening_events` is pruned at 120 days (`PruneListeningEvents`, from
-  `pkg/launcher.retention`). The legacy PUT stays last-write-wins (finished included) and is logged as a `put`
+  `internal/launcher.retention`). The legacy PUT stays last-write-wins (finished included) and is logged as a `put`
   event (`SaveProgressFrom`), stores `device_name` and `finish_changed_at` (at its `updated_at`, never past
   the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too, so an
   older sync finish/unfinish can't undo it: `EditProgress` (own and admin PATCH) at now, on ANY explicit
@@ -4239,7 +4242,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.ErrInvalidSetupStep`). **Preview** `POST /admin/setup/preview` `{root, ignore_patterns?}` ->
   `{root, counts: {audio_files, folder_books, file_books, capped}, same_root, samples: [{rel_path, tags,
   path, abs}], blanks: {tags, path}, suggested}`: checks the folder as the folder picker does
-  (`library.CheckRoot`: 400 `path_not_absolute`, 404 `folder_unreadable`; library create checks neither),
+  (`library.CheckRoot` behind the picker's `DirLister`, so a hung mount is 404 at its time-out: 400 `path_not_absolute`, 404 `folder_unreadable`; library create checks neither),
   the root as library create does (`catalog.CheckLibraryRoot`, the same `checkLibraryRoot` read outside
   the writer: 409 `root_overlaps`) and the ignore rules (400 `invalid_pattern`), and
   `same_root` names a library already at exactly the root (a warning; create allows it). It walks as a

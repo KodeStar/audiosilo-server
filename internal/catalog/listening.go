@@ -330,7 +330,7 @@ func (c *Catalog) ListProgress(ctx context.Context, userID int64, scopes []Scope
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Progress
+	out := []Progress{} // a new user's list is [], never null
 	for rows.Next() {
 		var p Progress
 		if err := scanProgress(rows, &p); err != nil {

@@ -98,17 +98,13 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 	for i := range libs {
 		byID[libs[i].ID] = &libs[i]
 	}
-	// One lookup per library for the whole batch, before any file is touched.
-	paths := make([]string, len(req.Books))
-	byLib := map[int64][]string{}
-	for i, ref := range req.Books {
-		paths[i] = catalog.CleanRelPath(ref.Path)
-		if byID[ref.LibraryID] != nil {
-			byLib[ref.LibraryID] = append(byLib[ref.LibraryID], paths[i])
-		}
-	}
+	// One lookup per known library for the whole batch, before any file is touched.
+	paths, byLib := catalog.GroupRefs(req.Books)
 	sources := make(map[int64]map[string]catalog.CoverSource, len(byLib))
 	for libID, ps := range byLib {
+		if byID[libID] == nil {
+			continue // an unknown library: no art
+		}
 		if sources[libID], err = a.cat.CoverSources(ctx, libID, ps); err != nil {
 			a.writeCatalogError(w, err, "cover sources failed", "could not load covers")
 			return

@@ -1,13 +1,11 @@
 package api
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/kodestar/audiosilo-server/internal/web/spa"
 )
@@ -110,26 +108,9 @@ func compress(next http.Handler) http.Handler {
 	})
 }
 
-// gzipWriters keeps the compressors between requests (each holds ~800 KB of
-// state at BestSpeed; allocating one per answer would cost more than the
-// compression).
-var gzipWriters = sync.Pool{New: func() any {
-	zw, _ := gzip.NewWriterLevel(nil, gzipLevel)
-	return zw
-}}
-
-// gzipBytes is body gzipped at gzipLevel.
-func gzipBytes(body []byte) []byte {
-	var buf bytes.Buffer
-	buf.Grow(len(body) / 4)
-	zw := gzipWriters.Get().(*gzip.Writer)
-	zw.Reset(&buf)
-	_, _ = zw.Write(body)
-	_ = zw.Close()
-	zw.Reset(nil) // let go of buf
-	gzipWriters.Put(zw)
-	return buf.Bytes()
-}
+// gzipWriters keeps the streaming gzipWriter's compressors between requests,
+// the same pool spa.Gzip draws on for a whole answer in memory.
+var gzipWriters = spa.GzipWriters(gzipLevel)
 
 // gzipWriter holds back a JSON answer until it is known to be at least
 // gzipMinSize, then gzips it; anything else passes straight through. It

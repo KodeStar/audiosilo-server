@@ -14,7 +14,7 @@ import (
 )
 
 // book_released as the job and the API make it together: the runner here is
-// the server's own announcer (announceReleases) over a fake community service.
+// the server's own announcer (upcoming.Announce) over a fake community service.
 
 // announceMeta is the community service: one series, "The Expanse", whose
 // works e1..eN have the dates given; the library's book has ASIN A1 (e1).
@@ -92,9 +92,11 @@ func TestBookReleasedAnnouncedOncePerRun(t *testing.T) {
 	}
 	clock := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
 	r := upcoming.New(e.cat, announceMeta{rec}, upcoming.Options{
-		Now:      func() time.Time { return clock },
-		Window:   func() int { return 90 },
-		Announce: e.api.announceReleases,
+		Now:    func() time.Time { return clock },
+		Window: func() int { return 90 },
+		Announce: func(ctx context.Context, releases []upcoming.Release) {
+			upcoming.Announce(ctx, e.api.rt.Notify, releases)
+		},
 	})
 
 	if err := r.RunOnce(ctx, true); err != nil {
@@ -120,7 +122,7 @@ func TestBookReleasedAnnouncedOncePerRun(t *testing.T) {
 		"Book 6 (The Expanse #6)", "Book 7 (The Expanse #7)",
 	}
 	if titles := titlesOf(got[0]); !slices.Equal(titles, want) {
-		t.Fatalf("titles = %q, want the first %d: %q", titles, maxReleaseTitles, want)
+		t.Fatalf("titles = %q, want the first five: %q", titles, want)
 	}
 
 	clock = clock.Add(24 * time.Hour)
@@ -138,11 +140,11 @@ func TestAnnounceReleasesTitles(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
-	e.api.announceReleases(ctx, nil)
+	upcoming.Announce(ctx, e.api.rt.Notify, nil)
 	if got := releasedEvents(t, e); len(got) != 0 {
 		t.Fatalf("no release made an event: %+v", got)
 	}
-	e.api.announceReleases(ctx, []upcoming.Release{
+	upcoming.Announce(ctx, e.api.rt.Notify, []upcoming.Release{
 		{WorkID: "a", Title: "Alpha", Series: "Saga", Position: "2"},
 		{WorkID: "b", Title: "Beta", Series: "Saga"},
 		{WorkID: "c"},
@@ -155,7 +157,7 @@ func TestAnnounceReleasesTitles(t *testing.T) {
 		t.Fatalf("titles = %q", titles)
 	}
 	// The same releases again (a run repeated): the dedupe key holds it to one.
-	e.api.announceReleases(ctx, []upcoming.Release{{WorkID: "c"}, {WorkID: "b"}, {WorkID: "a"}})
+	upcoming.Announce(ctx, e.api.rt.Notify, []upcoming.Release{{WorkID: "c"}, {WorkID: "b"}, {WorkID: "a"}})
 	if got := releasedEvents(t, e); len(got) != 1 {
 		t.Fatalf("the same releases twice made %d events", len(got))
 	}

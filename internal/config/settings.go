@@ -80,7 +80,7 @@ var fields = []field{
 		ptr: func(c *Config) any { return &c.Metadata.BaseURL }, fix: fixBaseURL},
 	{key: "metadata.region", env: "AUDIOSILO_METADATA_REGION", setting: "metadata.region",
 		ptr: func(c *Config) any { return &c.Metadata.Region }, fix: fixRegion},
-	// The backend is chosen when the server starts (pkg/launcher builds the mirror),
+	// The backend is chosen when the server starts (internal/launcher builds the mirror),
 	// like base_url.
 	{key: "metadata.mode", env: "AUDIOSILO_METADATA_MODE", setting: "metadata.mode", restart: true,
 		ptr: func(c *Config) any { return &c.Metadata.Mode }, fix: fixMode},
@@ -232,6 +232,16 @@ func (c *Config) Clone() *Config {
 // it, or "" when it can.
 func (c *Config) lockedBy(f *field) string {
 	return c.fromEnv[f.key]
+}
+
+// envFor is the AUDIOSILO_* variable that set the field a validation error
+// (a *FieldError) names, or "" when the environment didn't set it.
+func (c *Config) envFor(err error) string {
+	var fe *FieldError
+	if !errors.As(err, &fe) {
+		return ""
+	}
+	return c.fromEnv[fe.Key]
 }
 
 // Settings is the console's view of the settings: section -> name -> value.
@@ -442,10 +452,9 @@ func (c *Config) WithSettings(patch map[string]map[string]json.RawMessage, check
 	// leans on the environment doesn't block unrelated changes.
 	if err := next.asSaved().Validate(); err != nil && len(changed) > 0 && c.asSaved().Validate() == nil {
 		id := changed[0].setting
-		var fe *FieldError
-		if errors.As(err, &fe) && c.fromEnv[fe.Key] != "" {
+		if env := c.envFor(err); env != "" {
 			err = fmt.Errorf("%w in config.yaml, where %s doesn't apply: set it there too, or set this the same way",
-				err, c.fromEnv[fe.Key])
+				err, env)
 		}
 		return nil, &SettingError{Setting: id, Reason: ReasonInvalid, Err: err}
 	}

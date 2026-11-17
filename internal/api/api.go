@@ -117,6 +117,10 @@ type API struct {
 	// timeoutDur bounds non-streaming requests (see the timeout middleware).
 	// Defaults to requestTimeout; a field so tests can shorten it.
 	timeoutDur time.Duration
+	// dirs is the folder picker's lister (library.ListDirs behind a deadline and
+	// a few slots), which the setup preview checks its root through too; a field
+	// so tests can hand it a listing that hangs.
+	dirs *library.DirLister
 	// mountHints is GET /admin/setup's mount hint reader, library.MountHints;
 	// a field so tests can see when it is read.
 	mountHints func(exclude ...string) []string
@@ -244,6 +248,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		baseCtx:        context.Background(),
 		timeoutDur:     requestTimeout,
 		mountHints:     library.MountHints,
+		dirs:           library.NewDirLister(library.ListDirs, dirListSlots, dirListTimeout),
 		loginLimiter:   newLimiter(10, 15*time.Minute),
 		oidcLimiter:    newLimiter(10, 15*time.Minute),
 		redeemLimiter:  newLimiter(10, 15*time.Minute),
@@ -300,10 +305,13 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 			On: a.upcomingOn,
 			// The books' work ids (step 1) whenever metadata is on: they ride on
 			// the player's lists (other recordings together, server#241).
-			Resolve:  a.metadataOn,
-			Window:   func() int { return a.config().Upcoming.Window() },
-			Announce: a.announceReleases,
-			Log:      log,
+			Resolve: a.metadataOn,
+			Window:  func() int { return a.config().Upcoming.Window() },
+			// The live notifications, read when a run announces.
+			Announce: func(ctx context.Context, releases []upcoming.Release) {
+				upcoming.Announce(ctx, a.rt.Notify, releases)
+			},
+			Log: log,
 		})
 		a.kickUpcoming = a.upcoming.Kick
 		cat.OnBookChange(a.upcoming.Kick)

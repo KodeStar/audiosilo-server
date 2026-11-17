@@ -985,9 +985,9 @@ func TestGrantWholeLibraryNeverTakesAnotherLibrarysRulelessGrant(t *testing.T) {
 }
 
 // server#254: a library grant's folders change only by granting or revoking the
-// library. Denied: adding or removing a path rule on a marked grant is
-// ErrLibraryGrant and changes nothing. Allowed: the same edits on an admin's own
-// share.
+// library. Denied: adding a path rule to a marked grant, or removing its own
+// rule, is ErrLibraryGrant and changes nothing. Allowed: removing a stray rule
+// from it, and the same edits on an admin's own share.
 func TestLibraryGrantRefusesPathEdits(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -1010,6 +1010,17 @@ func TestLibraryGrantRefusesPathEdits(t *testing.T) {
 	}
 	if after, _ := c.GetShare(ctx, grant); len(after.Paths) != 1 || after.Paths[0] != (PathRule{LibraryID: kids.ID}) {
 		t.Fatalf("the grant's rules = %+v; want the whole library only", after.Paths)
+	}
+	// Allowed: a stray rule an older version let an admin add to the grant goes,
+	// and the grant's own rule stays (server#361).
+	if err := c.AddSharePath(ctx, grant, folder); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RemoveSharePath(ctx, grant, folder); err != nil {
+		t.Fatalf("remove a stray rule from a grant = %v; want it removed", err)
+	}
+	if after, _ := c.GetShare(ctx, grant); len(after.Paths) != 1 || after.Paths[0] != (PathRule{LibraryID: kids.ID}) {
+		t.Fatalf("the grant's rules after the stray one went = %+v; want the whole library only", after.Paths)
 	}
 
 	mine, _ := c.CreateShare(ctx, Share{Name: "Mine"})

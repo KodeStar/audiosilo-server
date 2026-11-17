@@ -35,16 +35,19 @@ export function offersLibraryChoice(bookLibraries: readonly unknown[]): boolean 
 }
 
 /**
- * `?library=` as the Library screens take it: a podcast library's id (an old
- * link, or one typed) reads as all libraries, so the page doesn't sit on an
- * empty list. Until the libraries load, the id stands.
+ * `?library=` as the Library screens take it: a podcast library's id, or one no
+ * library has (an old link, one typed, a library deleted since), reads as all
+ * libraries, so the page doesn't sit on an empty list or on the 404 the
+ * aggregates answer for an unknown library. Until the libraries load, the id
+ * stands.
  */
 export function bookLibraryOf(
   id: number | undefined,
   libraries: readonly Pick<AdminLibrary, 'id' | 'kind'>[] | undefined,
 ): number | undefined {
-  const l = id === undefined ? undefined : libraries?.find((x) => x.id === id);
-  return l && !isBookLibrary(l) ? undefined : id;
+  if (id === undefined || !libraries) return id;
+  const l = libraries.find((x) => x.id === id);
+  return l && isBookLibrary(l) ? id : undefined;
 }
 
 /** The Library screens' search params, with `library` as bookLibraryOf takes it. */

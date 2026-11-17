@@ -163,6 +163,39 @@ func TestHouseListeningRules(t *testing.T) {
 	}
 }
 
+// A session saved on a disc folder of a book whose discs were joined since
+// ("Joined/Book/CD1") shows the joined book's title and author, not "CD1"; the
+// chapter stays unread, the position being the disc's (server#222).
+func TestHouseListeningDiscPathNamesTheBook(t *testing.T) {
+	t.Parallel()
+	f := newSessionFixture(t)
+	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: f.lib, RelPath: "Joined/Book", IsFolder: true,
+		Title: "The Joined Book", Author: "Jo Author", Duration: 7200,
+		Files: []BookFile{{RelPath: "Joined/Book/CD1/01.mp3"}, {RelPath: "Joined/Book/CD2/01.mp3", Seq: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	user := func(name string) int64 { return f.addUser(t, name, "2025-01-01T00:00:00Z", false) }
+	me, sam := user("me"), user("sam")
+	f.setShare(t, true, me, sam)
+	f.clock = f.clock.Add(time.Minute)
+	f.houseSession(t, sam, "Joined/Book/CD1", 30*time.Second, 100)
+	rows := f.house(t, me, []Scope{{LibraryID: f.lib, AllowAll: true}})
+	if len(rows) != 1 {
+		t.Fatalf("house = %+v, want sam's row", rows)
+	}
+	r := rows[0]
+	if r.Path != "Joined/Book/CD1" || r.Title != "The Joined Book" || r.Author == nil || *r.Author != "Jo Author" ||
+		r.Chapter != nil || r.ChapterIndex != nil {
+		t.Fatalf("disc-path row = %+v, want the joined book's title and author, no chapter", r)
+	}
+	// Denied: a caller granted the disc folder alone sees the row, but not the
+	// title of the book above their grant: the path names it.
+	rows = f.house(t, me, []Scope{{LibraryID: f.lib, Paths: []string{"Joined/Book/CD1"}}})
+	if len(rows) != 1 || rows[0].Title != "CD1" || rows[0].Author != nil {
+		t.Fatalf("disc-path row for a disc-only grant = %+v, want it named by its path alone", rows)
+	}
+}
+
 // The states follow the newest save's age: playing within 150 s (a background
 // player saves every 60 s, server#364), paused within SessionGap, else recent.
 func TestHouseState(t *testing.T) {
