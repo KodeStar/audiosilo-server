@@ -64,7 +64,7 @@ func (a *API) SetBridge(b *bridge.Service) {
 		if job.Kind == bridge.KindAudibleSync || job.Kind == bridge.KindAudiblePoll {
 			// The account's last sync, or Audible refusing it (a sync or a poll).
 			if err := a.cat.FoldAudibleSync(ctx, job); err != nil {
-				a.log.Warn("audible: recording a sync failed", "job", job.ID, "err", err)
+				a.log.Warn("audible: recording a sync or poll failed", "job", job.ID, "kind", job.Kind, "err", err)
 			}
 		}
 	}
