@@ -73,15 +73,11 @@ func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalo
 	if !a.renditionKindAllowed(w, lib, kind) {
 		return
 	}
-	abs, ok := a.audioFile(w, r, lib, rel, deadline)
+	abs, ok := audioFile(w, r, lib, rel, deadline)
 	if !ok {
 		return
 	}
-	switch _, err := media.Source(r.Context(), abs, waitLeft(deadline)); {
-	case r.Context().Err() != nil:
-		return
-	case metadata.GaveUp(err):
-		writeShareNotAnswering(w)
+	if answered, _ := lookAtSource(w, r, abs, deadline); answered {
 		return
 	}
 	wait, cancel := context.WithTimeout(r.Context(), a.renditionWait)

@@ -757,7 +757,7 @@ func (a *API) warmRemux(ctx context.Context, lib *catalog.Library, book *catalog
 			continue
 		}
 		abs, err := library.SafeJoinBounded(ctx, lib.Root, f.RelPath, a.fileWait)
-		if metadata.GaveUp(err) || ctx.Err() != nil {
+		if metadata.Unanswered(ctx, err) {
 			return
 		}
 		if err == nil {
@@ -818,7 +818,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	abs, ok := a.audioFile(w, r, lib, rel, deadline)
+	abs, ok := audioFile(w, r, lib, rel, deadline)
 	if !ok {
 		return
 	}
@@ -845,6 +845,22 @@ func waitLeft(deadline time.Time) time.Duration {
 	return max(time.Until(deadline), time.Nanosecond)
 }
 
+// lookAtSource is media.Source's look at abs, the copy a remux or rendition
+// makes from, bounded by the stream's deadline: answered when the request went
+// away or the look was given up on (a 503 share_not_answering written), else
+// the look's error (no regular file there).
+func lookAtSource(w http.ResponseWriter, r *http.Request, abs string, deadline time.Time) (answered bool, err error) {
+	_, err = media.Source(r.Context(), abs, waitLeft(deadline))
+	switch {
+	case r.Context().Err() != nil:
+		return true, err
+	case metadata.GaveUp(err):
+		writeShareNotAnswering(w)
+		return true, err
+	}
+	return false, err
+}
+
 // audioFile is the stream's guard on rel (scope-checked already): its absolute
 // path, or false having written 404 for a file that isn't recognized audio, 400
 // for a path that escapes the root, and 503 share_not_answering for a join
@@ -854,7 +870,7 @@ func waitLeft(deadline time.Time) time.Duration {
 // .env/backup); BrowseFS hides those from listings, and cover art has its own
 // endpoint, so serving them here would be an avenue to exfiltrate arbitrary
 // in-scope files by guessing paths.
-func (a *API) audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, deadline time.Time) (string, bool) {
+func audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, deadline time.Time) (string, bool) {
 	if !metadata.IsAudio(rel) {
 		writeError(w, http.StatusNotFound, "not an audio file")
 		return "", false
@@ -929,14 +945,8 @@ func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloa
 // the request went away while waiting. Its look at abs (media.Source) given up
 // on at the stream's deadline is a 503 share_not_answering.
 func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, download bool, deadline time.Time) bool {
-	switch _, err := media.Source(r.Context(), abs, waitLeft(deadline)); {
-	case r.Context().Err() != nil:
-		return true
-	case metadata.GaveUp(err):
-		writeShareNotAnswering(w)
-		return true
-	case err != nil:
-		return false // no regular file there: the stored file's answer, a 404
+	if answered, err := lookAtSource(w, r, abs, deadline); answered || err != nil {
+		return answered // err: no regular file there, the stored file's answer (a 404)
 	}
 	wait, cancel := context.WithTimeout(r.Context(), a.remuxWait)
 	defer cancel()
