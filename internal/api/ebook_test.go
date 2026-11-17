@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -321,19 +322,32 @@ func TestEbookUnreadableIs500(t *testing.T) {
 // The ebook's bytes outlive the request timeout, but its lookup doesn't: with the
 // one writer held (a stalled write), a book indexed on demand is answered at the
 // request timeout instead of waiting for as long as the writer is held.
+//
+// The requests are served in process, from this goroutine's side, so the short
+// time-out is set only after the warm-up (which indexes a book of its own and
+// may take longer than it on a busy machine, server#308) with no request
+// reading it meanwhile.
 func TestEbookLookupBounded(t *testing.T) {
 	t.Parallel()
 	e := newEbookEnv(t)
 	ctx := context.Background()
-	e.api.timeoutDur = 300 * time.Millisecond
-	// The caller's token was just used (its last-seen touch, a write, is skipped
-	// for a minute), and the book isn't indexed: the lookup indexes it on demand.
-	if resp, _ := e.do(t, "GET", e.at("item", looseBook), e.annTok, ""); resp.StatusCode != http.StatusOK {
-		t.Fatalf("warm up = %d", resp.StatusCode)
+	serve := func(path string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", path, nil)
+		r.Header.Set("Authorization", "Bearer "+e.annTok)
+		w := httptest.NewRecorder()
+		e.srv.Config.Handler.ServeHTTP(w, r)
+		return w
+	}
+	// The caller's token was just used from this address (its last-seen touch,
+	// a write, is skipped for a minute), and the book isn't indexed: the lookup
+	// indexes it on demand.
+	if w := serve(e.at("item", looseBook)); w.Code != http.StatusOK {
+		t.Fatalf("warm up = %d %s", w.Code, w.Body)
 	}
 	if err := e.cat.DeleteBookAt(ctx, e.lib.ID, ebookBook); err != nil {
 		t.Fatal(err)
 	}
+	e.api.timeoutDur = 300 * time.Millisecond
 	held, release := make(chan struct{}), make(chan struct{})
 	stalled := make(chan struct{})
 	go func() {
@@ -346,19 +360,15 @@ func TestEbookLookupBounded(t *testing.T) {
 	}()
 	<-held
 	t.Cleanup(func() { close(release); <-stalled })
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", e.srv.URL+e.at("ebook", ebookBook), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Authorization", "Bearer "+e.annTok)
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("GET ebook with the writer held: %v (want an answer at the request timeout)", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("GET ebook with the writer held = %d, want 503 like any timed-out lookup", resp.StatusCode)
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() { answered <- serve(e.at("ebook", ebookBook)) }()
+	select {
+	case w := <-answered:
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("GET ebook with the writer held = %d, want 503 like any timed-out lookup", w.Code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("GET ebook with the writer held: no answer (want one at the request timeout)")
 	}
 }
 
