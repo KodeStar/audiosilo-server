@@ -26,9 +26,10 @@ func TestCancelReasonsMatchConsole(t *testing.T) {
 	for _, m := range regexp.MustCompile(`'([^']*)'|"([^"]*)"`).FindAllSubmatch(block[1], -1) {
 		console = append(console, string(m[1])+string(m[2]))
 	}
-	server := cancelReasons()
+	// A sorted copy: cancelReasons' slice is shared with IsCancelReason, which
+	// the package's parallel tests read meanwhile.
+	server := slices.Sorted(slices.Values(cancelReasons()))
 	slices.Sort(console)
-	slices.Sort(server)
 	if !slices.Equal(console, server) {
 		t.Errorf("SERVER_CANCEL_REASONS has drifted from the server's cancel reasons:\nconsole:\n  %s\nserver:\n  %s",
 			strings.Join(console, "\n  "), strings.Join(server, "\n  "))
