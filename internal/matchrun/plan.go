@@ -221,18 +221,22 @@ func LibraryLanguageOf(ctx context.Context, cat *catalog.Catalog, libraryID int6
 // not know stays as it is: sent, it reads as unknown there, but its books still
 // count against LibraryLanguage's share, so a library half in it takes no language.
 func languageCode(l string) string {
-	if code := model.ReadLanguage(l); code != "" {
-		return code
-	}
-	if code, ok := languageSpellings[model.StripMarks(l)]; ok {
+	if code := model.ReadLanguage(l); code != "" || noLanguage[l] {
 		return code
 	}
 	return l
 }
 
-// languageSpellings is model.ReadLanguage's table, for the spellings it reads as no
-// language.
-var languageSpellings = model.LanguageSpellings()
+// noLanguage is the spellings model.ReadLanguage's table reads as no language.
+var noLanguage = func() map[string]bool {
+	out := map[string]bool{}
+	for spelling, code := range model.LanguageSpellings() {
+		if code == "" {
+			out[spelling] = true
+		}
+	}
+	return out
+}()
 
 var yearRE = regexp.MustCompile(`^\d{4}`)
 
