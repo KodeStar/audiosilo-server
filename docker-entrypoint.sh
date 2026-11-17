@@ -162,7 +162,8 @@ nested_mounts() {
 # (server#382): a backups share at /data/backups, another app's files. -xdev alone
 # misses those: a volume or a bind mount from the same host disk has the same
 # device number, so each mount point is pruned by name too (a glob, so its
-# pattern characters escaped).
+# pattern characters escaped). What already belongs to $RUN_AS is left alone, so
+# a start writes nothing to a data folder that is already right.
 chown_data() {
   set -- "$DATA" -xdev
   while IFS= read -r m; do
@@ -171,7 +172,7 @@ chown_data() {
   done <<EOF
 $(nested_mounts)
 EOF
-  find "$@" -exec chown -h "$RUN_AS" {} +
+  find "$@" \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown -h "$RUN_AS" {} +
 }
 
 # The folders mounted into the container that may hold books: not the system's
