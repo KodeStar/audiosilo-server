@@ -983,3 +983,100 @@ func dropGrantRule(c *Catalog, ctx context.Context, shareID int64, rule PathRule
 		shareID, rule.LibraryID, rule.Path)
 	return err
 }
+
+// The JSON form of scopesFilterSQL returns the OR form's rows: whole libraries,
+// path rules at the segment boundary (case, bytes below and above '/', a
+// sibling's prefix), paths that aren't UTF-8, and a scope that grants nothing.
+// Past jsonScopesAbove scopes it is the form scopesFilterSQL takes, so more
+// scopes than SQLite takes OR arms (its expression depth, about a thousand)
+// still answer, and a cross-library list (ListProgress) with them too.
+func TestScopesFilterForms(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	var libs []int64
+	for _, name := range []string{"Whole", "Paths", "Hidden", "Empty"} {
+		l, err := c.CreateLibrary(ctx, Library{Name: name, Root: "/tmp/" + name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		libs = append(libs, l.ID)
+	}
+	whole, paths, hidden, empty := libs[0], libs[1], libs[2], libs[3]
+	rows := map[int64][]string{
+		whole: {"A/1.mp3", "B"},
+		paths: {"Book", "Book 2", "Book/1.mp3", "Book/CD1/1.mp3", "Book0", "book/1.mp3", "Bookish", "Saga/One",
+			"Saga/One/x", "Saga/One 2", "Ä/b", "Odd\xff/1.mp3", "Odd\xfe/1.mp3", "Book\x85/1.mp3", "Saga/One\x92/x"},
+		hidden: {"Book", "Book/1.mp3"},
+		empty:  {"Book"},
+	}
+	for lib, ps := range rows {
+		for _, p := range ps {
+			if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib, RelPath: p, Title: p}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	scopes := []Scope{
+		{LibraryID: whole, AllowAll: true},
+		{LibraryID: paths, Paths: []string{"Book", "Saga/One", "Ä", "Odd\xff", "Nope"}},
+		{LibraryID: empty},
+	}
+	query := func(frag string, args []any) []string {
+		t.Helper()
+		got, err := queryRows(ctx, c.db, func(rs *sql.Rows, p *string) error { return rs.Scan(p) },
+			`SELECT library_id || ':' || rel_path FROM books WHERE `+frag+` ORDER BY library_id, rel_path`, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	want := []string{}
+	for _, p := range []string{"A/1.mp3", "B"} {
+		want = append(want, fmt.Sprintf("%d:%s", whole, p))
+	}
+	for _, p := range []string{"Book", "Book/1.mp3", "Book/CD1/1.mp3", "Odd\xff/1.mp3", "Saga/One", "Saga/One/x", "Ä/b"} {
+		want = append(want, fmt.Sprintf("%d:%s", paths, p))
+	}
+	orFrag, orArgs := scopesFilterSQL("library_id", "rel_path", scopes)
+	jsFrag, jsArgs := scopesJSONFilterSQL("library_id", "rel_path", scopes)
+	if len(jsArgs) != 2 {
+		t.Fatalf("json form = %d args, want 2", len(jsArgs))
+	}
+	if orRows, jsRows := query(orFrag, orArgs), query(jsFrag, jsArgs); !slices.Equal(orRows, want) || !slices.Equal(jsRows, want) {
+		t.Fatalf("or = %q\njson = %q\nwant %q", orRows, jsRows, want)
+	}
+	// Denied: no scope, or only scopes that grant nothing, reads nothing.
+	for _, none := range [][]Scope{nil, {{LibraryID: empty}}} {
+		if frag, args := scopesJSONFilterSQL("library_id", "rel_path", none); len(query(frag, args)) != 0 {
+			t.Errorf("scopes %v read rows", none)
+		}
+	}
+
+	// 1,200 scopes (libraries with no books beside the three): one statement
+	// that SQLite plans, the same rows.
+	many := slices.Clone(scopes)
+	for id := int64(10_000); len(many) < 1200; id++ {
+		if id%2 == 0 {
+			many = append(many, Scope{LibraryID: id, AllowAll: true})
+		} else {
+			many = append(many, Scope{LibraryID: id, Paths: []string{fmt.Sprintf("Filler/%d", id), "Book"}})
+		}
+	}
+	frag, args := scopesFilterSQL("library_id", "rel_path", many)
+	if len(args) != 2 {
+		t.Fatalf("%d scopes = %d args, want the JSON form's 2", len(many), len(args))
+	}
+	if got := query(frag, args); !slices.Equal(got, want) {
+		t.Fatalf("%d scopes = %q, want %q", len(many), got, want)
+	}
+	uid := seedUser(t, c, ctx)
+	for _, ref := range []Ref{{LibraryID: paths, Path: "Book/1.mp3"}, {LibraryID: hidden, Path: "Book/1.mp3"}} {
+		if _, err := c.SaveProgress(ctx, uid, Progress{Ref: ref, Position: 1, Duration: 10}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := c.ListProgress(ctx, uid, many)
+	if err != nil || len(got) != 1 || got[0].Ref != (Ref{LibraryID: paths, Path: "Book/1.mp3"}) {
+		t.Fatalf("progress with %d scopes = %+v, %v; want the granted row only", len(many), got, err)
+	}
+}
