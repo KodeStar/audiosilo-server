@@ -13,17 +13,6 @@ import (
 // to back up and builds each job's params (catalog/audible_import.go); these
 // queue the jobs and record each on its title.
 
-// Job priorities (bridge's bands): one title asked for in the console comes
-// first (a preorder's request too, once a poll queues it), then what a policy
-// queued after a poll (with the scheduled polls and the podcast scheduler's
-// fetches), then "Back up everything", so a bulk backup in the Bridge's one
-// download slot never holds back new episodes.
-const (
-	priorityBackup    = bridge.PriorityAsked
-	priorityPolicy    = bridge.PriorityScheduled
-	priorityBackupAll = bridge.PriorityBulk
-)
-
 // Queues is what queueing a backup needs: the titles and the job queue.
 type Queues struct {
 	Catalog *catalog.Catalog
@@ -53,7 +42,7 @@ func (q Queues) Backup(ctx context.Context, account, asin string, requestedBy in
 	if err != nil || pending {
 		return nil, false, pending, err
 	}
-	job, created, err = q.queue(ctx, *p, requestedBy, priorityBackup)
+	job, created, err = q.queue(ctx, *p, requestedBy, bridge.PriorityAsked)
 	return job, created, false, err
 }
 
@@ -70,7 +59,7 @@ func (q Queues) BackupAll(ctx context.Context, account string, requestedBy int64
 		if err := ctx.Err(); err != nil {
 			return queued, err
 		}
-		_, created, err := q.queue(ctx, p, requestedBy, priorityBackupAll)
+		_, created, err := q.queue(ctx, p, requestedBy, bridge.PriorityBulk)
 		if created {
 			queued++
 		}
@@ -100,9 +89,9 @@ func (q Queues) AfterPoll(ctx context.Context, account string) (queued int, err 
 		if err := ctx.Err(); err != nil {
 			return queued, err
 		}
-		priority := priorityPolicy
+		priority := bridge.PriorityScheduled
 		if p.Requested {
-			priority = priorityBackup
+			priority = bridge.PriorityAsked
 		}
 		_, created, err := q.queue(ctx, p.AudibleImportParams, 0, priority)
 		if created {
