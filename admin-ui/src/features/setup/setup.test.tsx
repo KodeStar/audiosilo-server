@@ -9,7 +9,7 @@ import type {
   SetupPatch,
   SetupState,
 } from '@/api/types';
-import { mockFetch, type MockRoute } from '@/test/fetch-mock';
+import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
 import {
   admin,
   idle,
@@ -126,6 +126,30 @@ describe('the first-run redirect', () => {
     await act(() => router.navigate({ to: '/' }));
     await screen.findAllByRole('navigation', { name: 'Primary' });
     await screen.findByRole('region', { name: 'Server' });
+    expect(router.state.location.pathname).toBe('/');
+  });
+
+  it('decides on the page it opened on, not the one showing when the state arrives (server#383)', async () => {
+    // The state is slow; the admin opened a deep link and went on to the
+    // Overview before it came.
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    const base = flowRoutes({}, { 'GET /admin/users': { body: { users: [] } } });
+    const read = base['GET /admin/setup'];
+    mockFetch({
+      ...base,
+      'GET /admin/setup': async (req) => {
+        await held;
+        return typeof read === 'function' ? read(req) : (read as MockReply);
+      },
+    });
+    const { router } = renderApp('/server?topic=import');
+    await screen.findByText('Bring listening history over from Audiobookshelf');
+    await act(() => router.navigate({ to: '/' }));
+    await screen.findByRole('region', { name: 'Server' });
+    release();
+    // Decided (the session is marked either way), and it stayed.
+    await waitFor(() => expect(sessionStorage.getItem('audiosilo.setup.redirected')).toBe('1'));
     expect(router.state.location.pathname).toBe('/');
   });
 

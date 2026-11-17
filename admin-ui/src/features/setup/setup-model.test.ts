@@ -231,21 +231,30 @@ describe('the Finish setting up card', () => {
 
 describe('redirectDecision', () => {
   it('sends an unfinished server to the flow from the Overview', () => {
-    expect(redirectDecision(state(), '/', false)).toBe('go');
-    expect(redirectDecision(state(), '', false)).toBe('go');
+    expect(redirectDecision(state(), '/', '/', false)).toBe('go');
+    expect(redirectDecision(state(), '', '', false)).toBe('go');
   });
 
   it('leaves a deep link, and the flow itself, where it is (server#365)', () => {
-    expect(redirectDecision(state(), '/server', false)).toBe('stay');
-    expect(redirectDecision(state(), '/library/libraries', false)).toBe('stay');
-    expect(redirectDecision(state(), '/setup', false)).toBe('stay');
+    expect(redirectDecision(state(), '/server', '/server', false)).toBe('stay');
+    expect(redirectDecision(state(), '/library/libraries', '/library/libraries', false)).toBe(
+      'stay',
+    );
+    expect(redirectDecision(state(), '/setup', '/setup', false)).toBe('stay');
+  });
+
+  it('decides on the page the session opened on, not the one showing (server#383)', () => {
+    // Opened on a deep link, moved on to the Overview before the state loaded.
+    expect(redirectDecision(state(), '/server', '/', false)).toBe('stay');
+    // Opened on the Overview, moved on before it loaded: left where they went.
+    expect(redirectDecision(state(), '/', '/library/libraries', false)).toBe('stay');
   });
 
   it('decides once a session, not once finished, not before the state loads', () => {
-    expect(redirectDecision(state(), '/', true)).toBe('none');
-    expect(redirectDecision(state(), '/server', true)).toBe('none');
-    expect(redirectDecision(state({ finished: true }), '/', false)).toBe('none');
-    expect(redirectDecision(undefined, '/', false)).toBe('none');
+    expect(redirectDecision(state(), '/', '/', true)).toBe('none');
+    expect(redirectDecision(state(), '/server', '/server', true)).toBe('none');
+    expect(redirectDecision(state({ finished: true }), '/', '/', false)).toBe('none');
+    expect(redirectDecision(undefined, '/', '/', false)).toBe('none');
   });
 });
 

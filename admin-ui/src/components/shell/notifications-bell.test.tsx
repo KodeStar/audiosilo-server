@@ -57,6 +57,30 @@ describe('notifications bell', () => {
     expect(await screen.findByRole('heading', { name: 'Events', level: 1 })).toBeInTheDocument();
   });
 
+  it('reads the feed again on opening, so what just happened shows (server#383)', async () => {
+    const failed: ServerEvent = {
+      id: 8,
+      at: '2026-10-04T10:00:00.000Z',
+      kind: 'backup_failed',
+      data: { trigger: 'manual', error: 'permission_denied' },
+    };
+    let reads = 0;
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/events': () => ({
+          body: { events: reads++ === 0 ? events : [failed, ...events], next_before: 0 },
+        }),
+      }),
+    );
+    renderApp('/');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Notifications, 2 new' }));
+    const popup = await screen.findByRole('dialog', { name: 'Notifications' });
+    expect(await within(popup).findByText('A backup failed')).toBeInTheDocument();
+    // Seen while open: no dot left behind.
+    expect(localStorage.getItem('audiosilo_events_seen')).toBe('8');
+  });
+
   it('says when nothing has happened', async () => {
     mockFetch(signedInRoutes());
     renderApp('/');

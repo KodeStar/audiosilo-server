@@ -358,13 +358,27 @@ export async function checkMetaMirror(qc: QueryClient): Promise<MetaMirrorStatus
   return mirror;
 }
 
-/** The backups, their state and any restore waiting; polled each second while one is made. */
+/**
+ * The backups, their state and any restore waiting; polled each second while one
+ * is made. When one seen running ends, the bell reads the feed again, so a
+ * failure shows there at once (the server records it before the run ends).
+ */
 export function useBackups() {
-  return useQuery({
+  const qc = useQueryClient();
+  const query = useQuery({
     queryKey: keys.backups,
     queryFn: api.backups,
     refetchInterval: (q) => (q.state.data?.status.running ? 1000 : false),
   });
+  const running = query.data?.status.running;
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && running === false) {
+      void qc.invalidateQueries({ queryKey: keys.events });
+    }
+    wasRunning.current = running === true;
+  }, [running, qc]);
+  return query;
 }
 
 /** The notification destinations, with the event and destination kinds the server knows. */
@@ -372,13 +386,16 @@ export function useNotifyTargets() {
   return useQuery({ queryKey: keys.notifyTargets, queryFn: api.notifyTargets });
 }
 
-/** The bell's feed: the newest events, checked each minute. */
-export function useServerEvents() {
+/**
+ * The bell's feed: the newest events, checked each minute, and every few seconds
+ * while the bell is open (server#383: a failure waited up to a minute there).
+ */
+export function useServerEvents(open = false) {
   return useQuery({
     queryKey: keys.events,
     queryFn: () => api.serverEvents({ limit: 20 }),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: open ? 5_000 : 60_000,
   });
 }
 

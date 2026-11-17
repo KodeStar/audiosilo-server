@@ -105,7 +105,7 @@ describe('backups', () => {
     // running, the next one finished.
     let polls = -1;
     const status = backupsEnv().status;
-    mockFetch(
+    const calls = mockFetch(
       routes({
         'POST /admin/backups': () => {
           polls = 0;
@@ -135,9 +135,14 @@ describe('backups', () => {
     );
     renderApp('/server?topic=backups');
     const user = userEvent.setup();
+    const feedReads = () => calls.filter((c) => c.path === '/admin/events').length;
     await user.click(await screen.findByRole('button', { name: 'Back up now' }));
+    const before = feedReads();
     expect(screen.getByRole('button', { name: 'Backing up...' })).toBeDisabled();
     expect(await screen.findByText('Backup made', {}, { timeout: 4000 })).toBeInTheDocument();
+    // The run's end reads the bell's feed again: a failure would be there now,
+    // not a minute later (server#383).
+    await waitFor(() => expect(feedReads()).toBeGreaterThan(before));
   });
 
   it('asks for the word before scheduling a restore, then offers to cancel it', async () => {
