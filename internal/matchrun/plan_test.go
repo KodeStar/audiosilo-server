@@ -819,6 +819,9 @@ func TestLibraryLanguage(t *testing.T) {
 		{"denied: a fifth another language", []catalog.LanguageCount{n("", "en", 80), n("", "de", 20)}, ""},
 		{"denied: too few say one", []catalog.LanguageCount{n("", "en", 19), n("", "", 3)}, ""},
 		{"denied: placeholders say nothing", []catalog.LanguageCount{n("", "und", 100), n("xxx", "", 100)}, ""},
+		{"a French library, accented or not", []catalog.LanguageCount{n("", "Français", 15), n("", "francais", 10)}, "fr"},
+		{"Norwegian's two written standards are one", []catalog.LanguageCount{n("", "nb", 15), n("no", "", 10)}, "no"},
+		{"denied: half in a language metaserve does not know", []catalog.LanguageCount{n("", "en", 50), n("", "kor", 50)}, ""},
 		{"multilingual says nothing", []catalog.LanguageCount{n("", "English", 85), n("", "Multilingual", 15)}, "en"},
 		{"denied: none", nil, ""},
 	} {

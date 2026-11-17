@@ -21,7 +21,6 @@ package matchrun
 import (
 	"cmp"
 	"context"
-	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -215,39 +214,25 @@ func LibraryLanguageOf(ctx context.Context, cat *catalog.Catalog, libraryID int6
 	return LibraryLanguage(counts), nil
 }
 
-// languageWords are the language names and ISO 639-2 codes a tag spells a language
-// with, beyond the English names (model.LanguageWords, model.LibrivoxLanguages), each
-// as its 639-1 code: the table metaserve reads them by (audiosilo-meta pkg/query
-// matchLanguageWords, unexported). Of its "no single language" spellings, und, mul,
-// zxx and mis never get here (meta.NormalizeLanguage reads them as none); "multilingual"
-// does, and maps to "" as there: it says no language.
-var languageWords = func() map[string]string {
-	m := model.LanguageWords()
-	maps.Copy(m, model.LibrivoxLanguages())
-	maps.Copy(m, map[string]string{
-		"eng": "en", "ger": "de", "deu": "de", "fre": "fr", "fra": "fr", "spa": "es", "ita": "it",
-		"jpn": "ja", "por": "pt", "dut": "nl", "nld": "nl", "pol": "pl", "rus": "ru", "chi": "zh",
-		"zho": "zh", "dan": "da", "swe": "sv", "fin": "fi", "nor": "no", "nob": "no", "nno": "no",
-		"nb": "no", "nn": "no", "tur": "tr", "cze": "cs", "ces": "cs", "hun": "hu",
-		"ara": "ar", "hin": "hi", "heb": "he", "gre": "el", "ell": "el", "mar": "mr", "rum": "ro",
-		"ron": "ro", "mal": "ml",
-		"deutsch": "de", "français": "fr", "francais": "fr", "español": "es", "espanol": "es",
-		"castellano": "es", "italiano": "it", "nederlands": "nl", "português": "pt", "polski": "pl",
-		"svenska": "sv", "dansk": "da", "norsk": "no", "suomi": "fi", "multilingual": "",
-		"portugues": "pt", //nolint:misspell // Portuguese without its accent, as a tag spells it
-	})
-	return m
-}()
-
-// languageCode is a language as bookLanguage reads it ("english", "eng", "de"), as its
-// 639-1 code when languageWords knows the spelling ("" for one saying no language),
-// else as it is.
+// languageCode is a language as bookLanguage reads it ("english", "eng", "de"), as
+// metaserve reads it (model.ReadLanguage: "English", "eng" and "en" are "en"), ""
+// for a spelling that says no language ("multilingual"; und, mul, zxx and mis never
+// get here, meta.NormalizeLanguage reads them as none). A language metaserve does
+// not know stays as it is: sent, it reads as unknown there, but its books still
+// count against LibraryLanguage's share, so a library half in it takes no language.
 func languageCode(l string) string {
-	if code, ok := languageWords[l]; ok {
+	if code := model.ReadLanguage(l); code != "" {
+		return code
+	}
+	if code, ok := languageSpellings[model.StripMarks(l)]; ok {
 		return code
 	}
 	return l
 }
+
+// languageSpellings is model.ReadLanguage's table, for the spellings it reads as no
+// language.
+var languageSpellings = model.LanguageSpellings()
 
 var yearRE = regexp.MustCompile(`^\d{4}`)
 
