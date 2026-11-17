@@ -162,8 +162,10 @@ export const keys = {
   /** Every Activity period and listening-days query (a prefix). */
   activityAll: ['admin', 'activity'] as const,
   activity: (range: string) => ['admin', 'activity', range] as const,
+  /** Every period of one person's listening days (a prefix; 0 is everyone). */
+  listeningDaysOf: (userId: number) => ['admin', 'activity', 'days', userId] as const,
   listeningDays: (range: string, userId: number) =>
-    ['admin', 'activity', 'days', range, userId] as const,
+    ['admin', 'activity', 'days', userId, range] as const,
   /** Live sessions and every session list (a prefix). */
   sessions: ['admin', 'sessions'] as const,
   liveSessions: ['admin', 'sessions', 'live'] as const,
@@ -197,15 +199,15 @@ export function invalidatePeople(qc: QueryClient) {
  */
 export function forgetUsers(qc: QueryClient, ids: readonly number[]) {
   for (const id of ids) {
-    for (const key of [keys.user(id), keys.userDevices(id), keys.importList(id)]) {
+    for (const key of [
+      keys.user(id),
+      keys.userDevices(id),
+      keys.importList(id),
+      keys.listeningDaysOf(id),
+    ]) {
       qc.removeQueries({ queryKey: key });
     }
   }
-  const gone = new Set<unknown>(ids);
-  qc.removeQueries({
-    queryKey: ['admin', 'activity', 'days'],
-    predicate: (q) => gone.has(q.queryKey[4]),
-  });
 }
 
 /** Refetches what a library change touches: the list, the overview, shares (labels). */
@@ -215,8 +217,10 @@ export function invalidateLibraries(qc: QueryClient) {
   }
 }
 
+const serverInfoQuery = { queryKey: keys.server, queryFn: api.serverInfo, staleTime: 5 * 60_000 };
+
 export function useServerInfo() {
-  return useQuery({ queryKey: keys.server, queryFn: api.serverInfo, staleTime: 5 * 60_000 });
+  return useQuery(serverInfoQuery);
 }
 
 /**
@@ -225,9 +229,7 @@ export function useServerInfo() {
  */
 export function useServerInfoLive() {
   return useQuery({
-    queryKey: keys.server,
-    queryFn: api.serverInfo,
-    staleTime: 5 * 60_000,
+    ...serverInfoQuery,
     refetchInterval: 5 * 60_000,
     refetchOnWindowFocus: 'always',
   });
