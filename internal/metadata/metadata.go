@@ -195,11 +195,11 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 // leaves the estimate.
 func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.Duration) (*Metadata, error) {
 	m := &Metadata{Format: fileFormat(path)}
-	ff := ffNone
-	if !ffprobeForced(ffprobePath) {
+	ff, forced := ffNone, ffprobeForced(ffprobePath)
+	if !forced {
 		ff = probeRules(ctx, ffprobePath)
 	}
-	p, reason, err := readFile(ctx, m, path, ff, ff == ffNone && !ffprobeForced(ffprobePath), timeout)
+	p, reason, err := readFile(ctx, m, path, ff, ff == ffNone && !forced, timeout)
 	if err != nil {
 		m.OpenErr = err
 		return m, nil // ffprobe can't read what the server can't open

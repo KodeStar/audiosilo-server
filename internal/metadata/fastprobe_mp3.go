@@ -918,7 +918,7 @@ func (u *mp3Uncounted) count(ctx context.Context, b *blockFile, timeout time.Dur
 	defer cancel()
 	var frames int64
 	whole := false
-	if why := b.boundedBy(ctx, b.size+countSlack, func() {
+	if why = b.boundedBy(ctx, b.size+countSlack, func() {
 		frames, whole = mp3FrameCount(b, u.off, mp3AudioEnd(b, u.off), u.first)
 	}); why != "" {
 		return nil, why
