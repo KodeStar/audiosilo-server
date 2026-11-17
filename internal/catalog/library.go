@@ -220,20 +220,18 @@ func (c *Catalog) ResolveSources(ctx context.Context) error {
 }
 
 // resolveLibrary re-resolves library lib's books (refreshEffective) for the
-// change of generation gen, then marks it done, unless a later change has come
-// meanwhile (ResolveSources then starts it again).
+// change of generation gen, then marks it done and tells the OnBookChange
+// listeners, unless a later change has come meanwhile (ResolveSources then
+// starts it again).
 func (c *Catalog) resolveLibrary(ctx context.Context, lib, gen int64) error {
-	current := func(tx *sql.Tx) (bool, error) {
-		due, err := getServerState[map[int64]int64](ctx, tx, resolveKey)
-		return due[lib] == gen, err
-	}
 	for after := int64(0); ; {
 		var ids []int64
+		done := false
 		err := c.db.WithTx(ctx, "ResolveSources", func(tx *sql.Tx) error {
-			if ok, err := current(tx); err != nil || !ok {
-				return err
+			due, err := getServerState[map[int64]int64](ctx, tx, resolveKey)
+			if err != nil || due[lib] != gen {
+				return err // overtaken: ids stays empty
 			}
-			var err error
 			ids, err = queryRows(ctx, tx, func(r *sql.Rows, id *int64) error { return r.Scan(id) },
 				`SELECT id FROM books WHERE library_id = ? AND id > ? ORDER BY id LIMIT ?`, lib, after, resolveBatch)
 			if err != nil {
@@ -246,12 +244,8 @@ func (c *Catalog) resolveLibrary(ctx context.Context, lib, gen int64) error {
 			}
 			if len(ids) < resolveBatch {
 				// The last batch: the library is done, in the same transaction.
-				due, err := getServerState[map[int64]int64](ctx, tx, resolveKey)
-				if err != nil {
-					return err
-				}
+				done = true
 				delete(due, lib)
-				ids = nil
 				return putServerState(ctx, tx, resolveKey, due, c.stamp())
 			}
 			return nil
@@ -259,9 +253,12 @@ func (c *Catalog) resolveLibrary(ctx context.Context, lib, gen int64) error {
 		if err != nil {
 			return err
 		}
-		c.changed()
+		if done {
+			c.changed()
+			return nil
+		}
 		if len(ids) == 0 {
-			return nil // done, or overtaken by a later change
+			return nil // overtaken by a later change
 		}
 		after = ids[len(ids)-1]
 	}
