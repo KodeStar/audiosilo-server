@@ -41,11 +41,15 @@ export interface RailEntry extends Span {
 
 /** What a rail says about a local series. */
 export interface SeriesStatus {
-  /** Numbered entries in the rail. */
+  /** The entries counted: those held, and those missing. */
   total: number;
   /** Rail entries the server holds, ascending. */
   have: RailEntry[];
-  /** Rail entries it doesn't, ascending. */
+  /**
+   * Rail entries it doesn't, ascending: whole-number positions (or ranges
+   * starting on one) only, as the upcoming job and the player count gaps, so a
+   * novella at 2.5 is never missing (server#279).
+   */
   missing: RailEntry[];
 }
 
@@ -356,16 +360,21 @@ export function placeBooks(
 /**
  * The rail against the books the server holds, placed by placeBooks: an entry is
  * held when a book on the rail holds it (a book at a range, every entry inside it).
+ * An entry at a fractional position that isn't held is neither (never a gap), so
+ * it is left out of the total too.
  */
 export function seriesStatus(rail: MetaSeries, placed: Placed[]): SeriesStatus {
   const held = placed.filter((p) => p.slot === 'rail');
   const entries = railEntries(rail);
   const isHeld = (e: RailEntry) => held.some((p) => holds(p, e));
-  return {
-    total: entries.length,
-    have: entries.filter(isHeld),
-    missing: entries.filter((e) => !isHeld(e)),
-  };
+  const have = entries.filter(isHeld);
+  const missing = entries.filter((e) => !isHeld(e) && wholePosition(e.position));
+  return { total: have.length + missing.length, have, missing };
+}
+
+/** Whether a position can be a gap: a whole number above 0 (upcoming's span.whole). */
+function wholePosition(position: number): boolean {
+  return position > 0 && samePosition(position, Math.round(position));
 }
 
 /** A place as it is written: "2", or "1-3" for a range. */

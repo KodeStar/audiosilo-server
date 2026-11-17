@@ -7,7 +7,7 @@ import { serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail, books, series } from '@/test/library-fixtures';
 import { seriesKey } from '@/lib/series-key';
 import { renderApp } from '@/test/render-app';
-import { formatReleaseDate } from './series-model';
+import { formatReleaseDate, spineFitsLabel, spineHeight } from './series-model';
 import { signedInRoutes } from '@/test/routes';
 
 const work = (position: string, title: string) => ({
@@ -211,6 +211,47 @@ describe('series', () => {
     expect(preorder.querySelector('.spine-date')).toHaveTextContent('Preorder · Mar 2099');
     // A plain date carries no state word.
     expect(old.querySelector('.spine-date')?.textContent).toBe('2017');
+  });
+
+  it('marks a preorder with an icon where the spine is too short for the word (server#279)', async () => {
+    // A phone's shelf, and a full date: the state's word doesn't fit beside it.
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(max-width: 720px)',
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+    const dated: BookMeta = {
+      ...wayOfKingsMeta,
+      series: wayOfKingsMeta.series!.map((r) =>
+        r.id !== 'stormlight'
+          ? r
+          : {
+              ...r,
+              works: r.works.map((w) =>
+                w.title === 'Wind and Truth' ? { ...w, release_date: '2099-12-24' } : w,
+              ),
+            },
+      ),
+    };
+    const date = formatReleaseDate('2099-12-24', 'en');
+    expect(spineFitsLabel(spineHeight(0, 'Wind and Truth'), `Preorder · ${date}`, true)).toBe(
+      false,
+    );
+    try {
+      mockFetch(routes({ 'GET /libraries/1/meta': { body: dated } }));
+      renderApp('/library/series');
+      const card = await screen.findByRole('region', { name: 'The Stormlight Archive' });
+      const preorder = await within(card).findByRole('img', {
+        name: `#5 Wind and Truth: preorder, out ${date}`,
+      });
+      const line = preorder.querySelector('.spine-date')!;
+      expect(line).toHaveTextContent(date);
+      expect(line).not.toHaveTextContent('Preorder');
+      expect(within(preorder).getByTestId('spine-mark-preorder')).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("shows no gaps when no community rail is the series (never another series')", async () => {
