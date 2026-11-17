@@ -174,7 +174,6 @@ func (s *Scanner) readAttachments(ctx context.Context, lib catalog.Library, b *c
 		return files, true
 	}
 	dir, prefix := attachmentsPlace(b)
-	read = true
 	for _, name := range metadata.AttachmentSigNames(sig) {
 		rel := path.Join(dir, metadata.AttachmentsDir, prefix+name)
 		p := absOf(lib, rel)
@@ -187,13 +186,15 @@ func (s *Scanner) readAttachments(ctx context.Context, lib catalog.Library, b *c
 		if err != nil {
 			s.log.Warn("unusable .audiosilo attachment", "library", lib.Name, "path", rel, "err", err)
 			gaveUp.note(rel, err)
-			read = read && errors.Is(err, metadata.ErrAttachmentInvalid)
+			if !errors.Is(err, metadata.ErrAttachmentInvalid) {
+				// Not read right now: nothing of the set is recorded, so the
+				// rest are not read (on a share that stopped answering each
+				// would wait out its time too).
+				return metadata.AttachmentFiles{}, false
+			}
 			continue
 		}
 		files = got
-	}
-	if !read {
-		return metadata.AttachmentFiles{}, false
 	}
 	return files, true
 }
