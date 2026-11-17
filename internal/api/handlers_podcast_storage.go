@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
@@ -195,10 +199,27 @@ func (a *API) writePodcastStorageError(w http.ResponseWriter, err error) {
 		a.writeCatalogError(w, err, "podcast storage failed", "Could not load podcast storage.")
 	}
 }
-func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string) {
+
+// servePodcastStream answers GET /stream for the episode at rel in podcast
+// library lib: its committed generation opened (library.OpenPodcast, its checks
+// and open one metadata.Bounded call up to the stream's deadline: given up on,
+// a 503 share_not_answering), else fetched on demand through the Bridge.
+func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, deadline time.Time) {
 	release := a.cat.MarkPodcastStream(catalog.Ref{LibraryID: lib.ID, Path: rel})
 	defer release()
-	f, pin, err := library.OpenPodcast(r.Context(), a.cat, *lib, rel)
+	type opened struct {
+		f   *os.File
+		pin *feed.Fetch
+	}
+	o, err := metadata.Bounded(r.Context(), filepath.Join(lib.Root, filepath.FromSlash(rel)), waitLeft(deadline), func() (opened, error) {
+		f, pin, err := library.OpenPodcast(r.Context(), a.cat, *lib, rel)
+		return opened{f, pin}, err
+	}, func(o opened) { _ = o.f.Close() })
+	f, pin := o.f, o.pin
+	if metadata.GaveUp(err) {
+		writeShareNotAnswering(w)
+		return
+	}
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 		return

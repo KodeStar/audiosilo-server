@@ -213,3 +213,81 @@ func TestItemWithAnEbookOnAHeldShareAnswers(t *testing.T) {
 		t.Errorf("ebook on a held share = %+v, want the stored one", eb)
 	}
 }
+
+// Every look a stream makes at its file on a share that stopped answering is
+// bounded (SRV-15c): the path's join (SafeJoin's Lstats, which ran before the
+// open's bound began, adding 71 s to one stream on a frozen share), and the
+// open, a transcode's stat, a remux's and a rendition's look at the source
+// (the renditions listing's too) each answer 503 share_not_answering with
+// Retry-After. The library's root is a link here, so the join (named under
+// the link) and the open (under the folder it leads to) are held apart. Not
+// parallel: metadata.HoldOpensForTests swaps the mount lookup.
+func TestStreamLooksOnAHeldShareAnswer(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	real, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "lib")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Main", Root: link})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(real, "Book"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"book.m4b", "book.mka"} {
+		if err := os.WriteFile(filepath.Join(real, "Book", name), []byte("not really audio"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := &catalog.Book{LibraryID: lib.ID, RelPath: "Book", IsFolder: true, Title: "Book", Format: "m4b",
+		Files: []catalog.BookFile{{RelPath: "Book/book.m4b", Seq: 1}}}
+	if _, err := e.cat.UpsertBook(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	e.api.ffmpeg = "ffmpeg" // never run: each look is given up on first
+	e.api.fileWait, e.api.streamWait = 200*time.Millisecond, 200*time.Millisecond
+	id := strconv.FormatInt(lib.ID, 10)
+	stream := func(rel, query string) string {
+		return "/api/v1/libraries/" + id + "/stream?path=" + url.QueryEscape(rel) + query
+	}
+	urls := []string{
+		stream("Book/book.m4b", ""),
+		stream("Book/book.m4b", "&transcode=1"),
+		stream("Book/book.mka", ""), // remuxed
+		stream("Book/book.m4b", "&rendition=watch"),
+		"/api/v1/libraries/" + id + "/renditions?path=Book&kind=watch",
+	}
+	check := func(held string) {
+		t.Helper()
+		for _, u := range urls {
+			start := time.Now()
+			resp, body := e.do(t, "GET", u, adminTok, "")
+			if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) || resp.Header.Get("Retry-After") != "30" {
+				t.Errorf("GET %s with %s held = %d %s, want 503 %s", u, held, resp.StatusCode, body, codeShareNotAnswering)
+			}
+			if took := time.Since(start); took > 5*time.Second {
+				t.Errorf("GET %s with %s held took %v, want it answered at the look's bound", u, held, took)
+			}
+		}
+	}
+
+	release := metadata.HoldOpensForTests(link) // the join's Lstats
+	t.Cleanup(release)
+	check("the join")
+	release()
+
+	release = metadata.HoldOpensForTests(filepath.Join(real, "Book")) // the open, the stats
+	t.Cleanup(release)
+	check("the file")
+	release()
+
+	if resp, body := e.do(t, "GET", stream("Book/book.m4b", ""), adminTok, ""); resp.StatusCode != http.StatusOK || body != "not really audio" {
+		t.Errorf("the stream once the share answers = %d %q, want it served", resp.StatusCode, body)
+	}
+}

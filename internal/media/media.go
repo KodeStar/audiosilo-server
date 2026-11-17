@@ -216,16 +216,24 @@ func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 // the file. It is the fallback for codecs browsers can't decode natively. The
 // output is not byte-seekable (no Range / Content-Length); a client seeks by
 // re-requesting with a new startSec. The ffmpeg process is bound to the request
-// context, so a client disconnect kills it. log may be nil.
-func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath string, startSec float64, log *slog.Logger) {
+// context, so a client disconnect kills it. log may be nil. Its look at the
+// file is a metadata.Bounded stat (the request's context, at most wait), as
+// ServeFile's open: one given up on (metadata.GaveUp) is returned with nothing
+// written, for the caller to answer; every other outcome is answered here and
+// returns nil.
+func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath string, startSec float64, wait time.Duration, log *slog.Logger) error {
 	if log == nil {
 		log = slog.Default()
 	}
-	if _, err := os.Stat(absPath); err != nil {
+	switch _, err := metadata.StatBounded(r.Context(), absPath, wait); {
+	case metadata.GaveUp(err):
+		return err
+	case err != nil:
 		http.Error(w, "not found", http.StatusNotFound)
-		return
+		return nil
 	}
 	transcodeInput(w, r, inputSpec{url: absPath}, ffmpegPath, startSec, log)
+	return nil
 }
 
 // TranscodeOpened transcodes an already verified descriptor (a podcast

@@ -13,11 +13,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
@@ -339,6 +341,39 @@ func TestPodcastStreamMarksCoverEveryMediaBranch(t *testing.T) {
 				t.Fatalf("stream mark leaked: %+v %v", check, err)
 			}
 		})
+	}
+}
+
+// An episode's open on a share that stopped answering (OpenPodcast's checks
+// and open, SRV-15c) is given up on at the stream's bound: a 503
+// share_not_answering with Retry-After, not a handler held for good; once the
+// share answers the episode streams. Not parallel: metadata.HoldOpensForTests
+// swaps the mount lookup.
+func TestPodcastStreamOnAHeldShareAnswers(t *testing.T) {
+	b, f := podcastStorageEnv(t)
+	b.api.streamWait = 200 * time.Millisecond
+	u := podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(f.Episodes[0].Path))
+	release := metadata.HoldOpensForTests(filepath.Join(b.lib.Root, "Fixture Show"))
+	t.Cleanup(release)
+	get := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", u, nil)
+		r.Header.Set("Authorization", "Bearer "+b.adminTok)
+		r.Header.Set(auth.ClientHeader, "AudioSilo/dev (web)") // a client that sees podcasts
+		b.api.Handler().ServeHTTP(w, r)
+		return w
+	}
+	start := time.Now()
+	if w := get(); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), codeShareNotAnswering) || w.Header().Get("Retry-After") != "30" {
+		t.Errorf("an episode on a held share = %d %s, want 503 %s", w.Code, w.Body, codeShareNotAnswering)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("the stream took %v, want it answered at the open's bound", took)
+	}
+	release()
+	b.api.streamWait = 10 * time.Second
+	if w := get(); w.Code != http.StatusOK || w.Body.Len() == 0 {
+		t.Errorf("the episode once the share answers = %d %s, want it streamed", w.Code, w.Body)
 	}
 }
 

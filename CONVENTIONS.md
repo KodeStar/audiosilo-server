@@ -1208,10 +1208,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`media.EmbeddedCover`), and in the API `/item`'s look at the book's ebook (`RefreshEbook`, given
   `API.fileWait` and answering with the stored ebook past it: the probe's time is the request's own),
   every cover (full, thumbnail, a
-  show's: `serveArt`, `coverArt`, `readSidecar`) and a stream's open and stat (`media.ServeFile`; a regular file only, `metadata.OpenRegular`, so a FIFO is a 404 at once, never an open held and counted on its mount),
-  each given up on after `API.fileWait` (10 s; a stream's open after `API.streamWait`, 45 s: past a
-  sleeping disk's spin-up, under AVPlayer's 60 s resource timeout, as a 503 is no retry for it) as a
-  503 `share_not_answering` with `Retry-After`.
+  show's: `serveArt`, `coverArt`, `readSidecar`) and every look a stream makes at its file (SRV-15c: the
+  path's join, `library.SafeJoinBounded`; its open and stat, `media.ServeFile`, a regular file only,
+  `metadata.OpenRegular`, so a FIFO is a 404 at once, never an open held and counted on its mount; a
+  transcode's stat, `media.Transcode`; a remux's or rendition's look at its source, `media.Source`; a
+  podcast episode's checks and open, `library.OpenPodcast`), and the renditions listing's and `/item`'s
+  remux warm joins, each given up on after `API.fileWait` (10 s; a stream's looks together after
+  `API.streamWait`, 45 s from the request's start, `waitLeft`: past a sleeping disk's spin-up, under
+  AVPlayer's 60 s resource timeout, as a 503 is no retry for it) as a 503 `share_not_answering` with
+  `Retry-After`. A file cache's background run opens its source unbounded (once the request's look
+  answered), and a warm looks first under the cache's run time.
   The scan gives each the probe's time (`Scanner.probeTimeout`). With a book's audio read cut short
   none of its side files is looked at (each would wait out its time too); one given up on otherwise
   keeps the book as stored (`library.givenUp.keep`: `ReadCutShort`, never `LengthOnly`) with an
