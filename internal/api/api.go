@@ -371,6 +371,10 @@ func (a *API) EnableSetup(token string) { a.setupToken = token }
 // derives from, so it's cancelled on shutdown. Call before Handler().
 func (a *API) SetBaseContext(ctx context.Context) {
 	a.baseCtx = ctx
+	if a.scanner != nil {
+		// The on-demand reads that outlive their requests end with the server.
+		a.scanner.SetBaseContext(ctx)
+	}
 	if a.prefetch != nil {
 		a.prefetch.Context = ctx
 	}

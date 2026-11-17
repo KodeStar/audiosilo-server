@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -50,6 +51,9 @@ type Scanner struct {
 	// side (indexShared, startFlight).
 	flightMu sync.Mutex
 	flights  map[bookKey]*indexFlight
+	// base, once set (SetBaseContext), ends the reads leadIndex runs past their
+	// requests with the server: none reads on or writes once it has stopped.
+	base atomic.Pointer[context.Context]
 
 	// OnRunFinished, when set before Start, hears how each scan job ended (the
 	// notifications). ctx outlives the server's, like the run's own record.
@@ -2012,8 +2016,8 @@ func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *ca
 			go s.leadIndex(ctx, lib, book, f, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
 		}
 		b, err := s.awaitFlight(ctx, f)
-		if !readGivenUp(err) || ctx.Err() != nil {
-			return b, err
+		if !readGivenUp(err) || ctx.Err() != nil || s.stopped() {
+			return b, err // a stopped server would end each new read at once
 		}
 	}
 }
@@ -2083,25 +2087,38 @@ func (s *Scanner) endFlight(f *indexFlight, err error) {
 // rather than load a book it never stored.
 var errIndexAborted = errors.New("library: the shared index of this book did not finish")
 
+// SetBaseContext binds the reads leadIndex runs past their requests to the
+// server's lifetime (the API's base context): they stop when it ends, rather
+// than read on and write to a store that is closing.
+func (s *Scanner) SetBaseContext(ctx context.Context) { s.base.Store(&ctx) }
+
+// stopped reports whether the server's base context (SetBaseContext) has ended.
+func (s *Scanner) stopped() bool {
+	b := s.base.Load()
+	return b != nil && (*b).Err() != nil
+}
+
 // leadIndex is the read of flight f's book, on a goroutine of its own: it
 // indexes the book after carrying the state of the book at from(ctx) to it
 // (indexBookFrom), then ends the flight with the outcome. It runs past the end
-// of the request that began it (up to indexTimeout): its probes never stopped
-// for it, and throwing the read away at its last write would leave the next
-// request to read the book again from scratch (server#211), or a moved book's
-// state on a path with no row.
+// of the request that began it (up to indexTimeout, and no longer than the
+// server: SetBaseContext): throwing the read away at its last write would leave
+// the next request to read the book again from scratch (server#211), or a
+// moved book's state on a path with no row.
 func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *catalog.Book, f *indexFlight, from func(context.Context) string) {
 	err := errIndexAborted // until indexBookFrom returns
 	defer func() {
 		if p := recover(); p != nil {
-			s.log.Error("index book panicked", "library", lib.Name, "path", book.RelPath, "panic", p)
+			s.log.Error("index book panicked", "library", lib.Name, "path", book.RelPath, "panic", p, "stack", string(debug.Stack()))
 		}
 		s.endFlight(f, err)
 	}()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), indexTimeout)
 	defer cancel()
-	_, err = s.indexBookFrom(ctx, lib, book, from(ctx))
-	if err != nil {
+	if base := s.base.Load(); base != nil {
+		defer context.AfterFunc(*base, cancel)()
+	}
+	if err = s.indexBookFrom(ctx, lib, book, from(ctx)); err != nil {
 		s.log.Warn("index book failed", "library", lib.Name, "path", book.RelPath, "err", err)
 	}
 }
@@ -2129,21 +2146,20 @@ func (s *Scanner) movedFrom(ctx context.Context, lib catalog.Library, book *cata
 	return ""
 }
 
-// indexBook reads a resolved book (resolveBook) and indexes it, returning the
-// book as stored.
-func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *catalog.Book) (*catalog.Book, error) {
+// indexBook reads a resolved book (resolveBook) and indexes it. ctx is
+// leadIndex's, which no request ends: the read stops only at indexTimeout or
+// with the server, and then nothing of it is written (UpsertBook fails on the
+// same ctx), rather than reading on to a write that can no longer happen.
+func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *catalog.Book) error {
 	// No walk found it, so look for its ebook here: only now it is indexed, as a
 	// book resolved for another reason (bookOnDisk, a shared read's waiters)
 	// never needs it.
 	book.EbookFile = ebookOnDisk(lib.Root, book.RelPath, book.IsFolder)
-	s.enrich(context.WithoutCancel(ctx), lib, book, newReadSlots(1, s.probeTimeout))
+	s.enrich(ctx, lib, book, newReadSlots(1, s.probeTimeout))
 	// UpsertBook layers any path-keyed enrichment and metadata overrides onto the
 	// scanned values in the same transaction.
-	id, err := s.cat.UpsertBook(ctx, book)
-	if err != nil {
-		return nil, err
-	}
-	return s.cat.GetBook(ctx, id)
+	_, err := s.cat.UpsertBook(ctx, book)
+	return err
 }
 
 // resolveBook is the book relPath resolves to on disk, worked out exactly as a
@@ -2287,11 +2303,10 @@ func (s *Scanner) IndexMoved(ctx context.Context, lib catalog.Library, relPath, 
 // book indexed at from to it, when carryFrom finds it the same book moved (from
 // "": none), then drops the old book's row. Its caller (leadIndex) runs it past
 // the end of the request that asked for it.
-func (s *Scanner) indexBookFrom(ctx context.Context, lib catalog.Library, book *catalog.Book, from string) (*catalog.Book, error) {
+func (s *Scanner) indexBookFrom(ctx context.Context, lib catalog.Library, book *catalog.Book, from string) error {
 	moved := from != "" && from != book.RelPath && s.carryFrom(ctx, lib, from, book)
-	indexed, err := s.indexBook(ctx, lib, book)
-	if err != nil {
-		return nil, err
+	if err := s.indexBook(ctx, lib, book); err != nil {
+		return err
 	}
 	if moved {
 		// The book's state is already at its new path; a row left here is pruned by
@@ -2300,7 +2315,7 @@ func (s *Scanner) indexBookFrom(ctx context.Context, lib catalog.Library, book *
 			s.log.Warn("drop the moved book's old row failed", "library", lib.Name, "path", from, "err", err)
 		}
 	}
-	return indexed, nil
+	return nil
 }
 
 // carryFrom carries the durable state of the indexed book at from to nb, the

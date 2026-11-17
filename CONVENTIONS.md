@@ -956,8 +956,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   indexed for that caller). Concurrent on-demand indexes of one book (a book page's
   `item` and `chapters` at once) share one read (`Scanner.indexShared`, keyed by
   library and book path), each request scope-checked before it joins. The read runs on a goroutine of its own
-  (`leadIndex`, up to `indexTimeout`) and is stored even when every request waiting on it has ended, each at its own
-  deadline, so a cancelled request never throws its probes away (server#211). A scan's read of a book and the Bridge's
+  (`leadIndex`, up to `indexTimeout`, its probes too) and is stored even when every request waiting on it has ended, each at its own
+  deadline, so a cancelled request never throws its probes away (server#211); it ends with the server
+  (`Scanner.SetBaseContext`, from the API's base context), writing nothing then. A scan's read of a book and the Bridge's
   `IndexMoved` take the same per-book flight (`startFlight`): no two reads of one book run side by side, and an on-demand
   index asked for during a scan's read waits for the scan's write and loads it. The on-demand index takes a path only in its on-disk
   spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a

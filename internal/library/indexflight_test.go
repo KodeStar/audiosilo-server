@@ -141,6 +141,98 @@ func TestIndexMovedSharesTheFlight(t *testing.T) {
 	}
 }
 
+// TestIndexPathAfterADroppedRead: an on-demand index waiting on a read that is
+// given up (a scan that stopped, or failed to write the book: errReadDropped)
+// reads the book itself, once, and gets it; one waiting on a read that failed
+// gets that failure.
+func TestIndexPathAfterADroppedRead(t *testing.T) {
+	t.Parallel()
+	s, lib, ctx, count := newSlowProbeEnv(t)
+	if _, err := s.IndexPath(ctx, lib, "A/Twin"); err != nil {
+		t.Fatal(err)
+	}
+	once := count()
+
+	// A scan's read of the book under way (Scan takes it so), then dropped.
+	f, err := s.startFlight(ctx, bookKey{lib.ID, "A/Book"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		b   *catalog.Book
+		err error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		b, err := s.IndexPath(ctx, lib, "A/Book")
+		got <- answer{b, err}
+	}()
+	time.Sleep(100 * time.Millisecond) // the on-demand index waits on the flight
+	if n := count(); n != once {
+		t.Fatalf("the on-demand index read beside the scan's read: %d probes, want %d", n, once)
+	}
+	s.endFlight(f, errReadDropped)
+	if a := <-got; a.err != nil || a.b == nil || a.b.RelPath != "A/Book" {
+		t.Fatalf("on-demand index after the dropped read: %+v, %v", a.b, a.err)
+	}
+	if n := count() - once; n != once {
+		t.Errorf("the book was probed %d times after the drop; one read probes %d", n, once)
+	}
+
+	// A read that failed is that failure for its waiters, not a read of their own.
+	failed := errors.New("write failed")
+	f, err = s.startFlight(ctx, bookKey{lib.ID, "A/Twin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		b, err := s.IndexPath(ctx, lib, "A/Twin")
+		got <- answer{b, err}
+	}()
+	time.Sleep(100 * time.Millisecond)
+	s.endFlight(f, failed)
+	if a := <-got; !errors.Is(a.err, failed) {
+		t.Fatalf("waiter on a failed read: %+v, %v, want the failure", a.b, a.err)
+	}
+}
+
+// TestIndexPathEndsWithTheServer: a read that outlives its request still ends
+// with the server (SetBaseContext): stopped, it writes nothing.
+func TestIndexPathEndsWithTheServer(t *testing.T) {
+	t.Parallel()
+	s, lib, ctx, count := newSlowProbeEnv(t)
+	base, stop := context.WithCancel(ctx)
+	s.SetBaseContext(base)
+	reqCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.IndexPath(reqCtx, lib, "A/Book")
+		done <- err
+	}()
+	waitFlight(t, s, lib, "A/Book", true)
+	for deadline := time.Now().Add(10 * time.Second); count() == 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the stand-in ffprobe never ran")
+		}
+	}
+	cancel() // the request goes; the read goes on
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("IndexPath: %v, want context.Canceled", err)
+	}
+	stop() // then the server stops
+	waitFlight(t, s, lib, "A/Book", false)
+	if _, err := s.cat.GetBookByPath(ctx, lib.ID, "A/Book"); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("a read the server stopped was written: %v", err)
+	}
+	// A request still live once the server has stopped gets the stop, rather
+	// than beginning read after read until it ends.
+	late, cancelLate := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelLate()
+	if _, err := s.IndexPath(late, lib, "A/Book"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("IndexPath after the stop: %v, want context.Canceled", err)
+	}
+}
+
 // TestScanSharesTheFlight: a scan and an on-demand index of the same book never
 // read it side by side (server#211). An on-demand index asked for while the scan
 // reads the book waits for the scan's write and loads it; a scan reaching a book
@@ -160,11 +252,13 @@ func TestScanSharesTheFlight(t *testing.T) {
 		if err != nil || b == nil || b.RelPath != "A/Book" {
 			t.Fatalf("on-demand index during the scan: %+v, %v", b, err)
 		}
-		before := count()
 		if err := <-scanned; err != nil {
 			t.Fatal(err)
 		}
 		// The scan reads both books; the on-demand index read nothing of its own.
+		// Counted once the scan has ended, as its read of A/Twin may still be
+		// starting probes when A/Book's write ends the on-demand wait.
+		before := count()
 		if _, err := s.IndexPath(ctx, lib, "A/Twin"); err != nil {
 			t.Fatal(err)
 		}
