@@ -681,13 +681,15 @@ describe('invites', () => {
     );
   });
 
-  it('revokes an invite after saying what happens to paired devices', async () => {
+  it('revokes an invite after saying what happens to the account and paired devices', async () => {
     const calls = mockFetch(routes({ 'DELETE /admin/authcodes/31': { status: 204 } }));
     renderApp('/people/invites');
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: "Revoke sam's invite" }));
     const dialog = await screen.findByRole('dialog', { name: "Revoke sam's invite?" });
-    expect(within(dialog).getByText(/Devices already paired stay signed in/)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/sam's account stays, and devices already paired stay signed in/),
+    ).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Revoke' }));
     await waitFor(() =>
       expect(calls.some((c) => c.method === 'DELETE' && c.path === '/admin/authcodes/31')).toBe(
