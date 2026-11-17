@@ -123,10 +123,6 @@ const isKidSQL = `(member_kind = 'kid' AND managed_by IS NOT NULL AND member_acc
 // first, so a caller who doesn't share costs no scope load; the query checks it
 // again itself, so the rule holds for any caller.
 func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScopes []Scope) ([]HouseListeningRow, error) {
-	type row struct {
-		HouseListeningRow
-		bookID int64
-	}
 	// Driven from household_sharing: the caller's own row (reciprocal), then each
 	// other sharer, their account, and their newest session with listening in it
 	// that started since they turned sharing on (h.updated_at) and was saved since
@@ -150,7 +146,7 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 	//
 	// The scope check is in Go, on each person's newest book only: one the caller
 	// can't see drops the person rather than letting an older one stand in.
-	rows, err := queryRows(ctx, c.db, func(rs *sql.Rows, r *row) error {
+	rows, err := queryRows(ctx, c.db, func(rs *sql.Rows, r *houseRow) error {
 		return rs.Scan(&r.UserID, &r.Username, &r.LibraryID, &r.Path, &r.Title, &r.Author,
 			&r.Position, &r.Duration, &r.UpdatedAt, &r.bookID)
 	}, houseListeningSQL, formatSessionTime(c.now().Add(-houseWindow)), callerID)
@@ -162,6 +158,9 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 	for _, r := range rows {
 		if !ScopesAllow(callerScopes, Ref{LibraryID: r.LibraryID, Path: r.Path}) {
 			continue
+		}
+		if r.bookID == 0 {
+			r.nameFromHolding(ctx, c)
 		}
 		if r.Title == "" {
 			r.Title = path.Base(r.Path) // not indexed (any more): the path names it
@@ -178,6 +177,30 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 		out = append(out, r.HouseListeningRow)
 	}
 	return out, nil
+}
+
+// houseRow is one HouseListening row as read, with its indexed book's id (0
+// when the session's path is no book of its own).
+type houseRow struct {
+	HouseListeningRow
+	bookID int64
+}
+
+// nameFromHolding names a row whose path is no indexed book by the book holding
+// it, if one does: a session saved on a disc folder ("Book/CD1") before the
+// discs were joined into one book shows that book's title and author, not
+// "CD1" (server#222). The chapter stays unread: the session's position is on
+// the disc's own timeline, not the joined book's. A failed lookup leaves the
+// path to name it, as for a book no longer indexed.
+func (r *houseRow) nameFromHolding(ctx context.Context, c *Catalog) {
+	b, err := c.GetBookHolding(ctx, r.LibraryID, r.Path)
+	if err != nil {
+		return
+	}
+	r.Title = b.Title
+	if b.Author != "" {
+		r.Author = &b.Author
+	}
 }
 
 // houseListeningSQL is HouseListening's query (?1 the window's start, ?2 the
