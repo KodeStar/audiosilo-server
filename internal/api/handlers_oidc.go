@@ -416,7 +416,7 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		// Their next attempt asks userinfo for a claim it lacked this time: an
 		// email added at the provider since is what links it to their account.
 		a.oidc.provider.AskAgain(claims.Subject)
-		a.rt.Notify.OIDCPending(r.Context(), res.PendingID, a.oidc.name, claims.Name, claims.Username, d.Reason)
+		a.rt.Notify.OIDCPending(r.Context(), res.PendingID, ip, a.oidc.name, claims.Name, claims.Username, d.Reason)
 		if d.Reason == oidc.ReasonNotAllowed {
 			a.oidcResult(w, r, oidcNotAllowed)
 			return

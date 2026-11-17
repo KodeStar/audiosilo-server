@@ -3444,9 +3444,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   name), `person` (the name, else the username, left out when it holds an "@": providers often make the
   email the username) and `reason` (a Pending reason the messages word, else none): never the email,
   subject, groups or a token. It links People, where the console lists the waiting sign-ins. At most
-  5 an hour (`oidcPendingPerHour`, server#408: a provider anyone can sign up at would raise one per
-  throwaway subject): a row over it is not announced then (the reaching logged once), and may be at
-  the person's next attempt.
+  5 an hour for the sign-ins from one address (`oidcPendingPerHour`, server#408: a provider anyone can
+  sign up at would raise one per throwaway subject; per address, the callback's `clientIP`, so one
+  noisy source can't use up the hour and hide a person waiting from elsewhere) and 30 in all
+  (`oidcPendingCeiling`): a row over either is not announced then (the reaching logged, at most once
+  an hour), and may be at the person's next attempt. The address only counts: it is never in the event.
   Private addresses are allowed (LAN webhooks are the common case); destinations are admin-only and the
   console never sees a response body. Endpoints (admin only): `GET`/`POST /admin/backups`,
   `GET`/`DELETE /admin/backups/{name}` (download streams, outside the request timeout),

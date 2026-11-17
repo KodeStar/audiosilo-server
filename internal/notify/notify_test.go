@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -994,10 +995,10 @@ func TestOIDCPending(t *testing.T) {
 	hook := newFakeDest(t)
 	addTarget(t, cat, TargetWebhook, hook.srv.URL, "", KindOIDCPending)
 
-	s.OIDCPending(ctx, 7, "Keycloak", "Bob Smith", "bob", "unverified_email")
-	s.OIDCPending(ctx, 7, "Keycloak", "Bob Smith", "bob", "unverified_email") // the same row again: said once
-	s.OIDCPending(ctx, 9, "Keycloak", "", "carol@example.org", "made_up")     // an email as the username
-	s.OIDCPending(ctx, 0, "Keycloak", "Dan", "dan", "no_match")               // no row: nothing
+	s.OIDCPending(ctx, 7, "10.0.0.1", "Keycloak", "Bob Smith", "bob", "unverified_email")
+	s.OIDCPending(ctx, 7, "10.0.0.1", "Keycloak", "Bob Smith", "bob", "unverified_email") // the same row again: said once
+	s.OIDCPending(ctx, 9, "10.0.0.1", "Keycloak", "", "carol@example.org", "made_up")     // an email as the username
+	s.OIDCPending(ctx, 0, "10.0.0.1", "Keycloak", "Dan", "dan", "no_match")               // no row: nothing
 	events, _, err := cat.ListServerEvents(ctx, 0, 10, KindOIDCPending)
 	if err != nil || len(events) != 2 {
 		t.Fatalf("events = %+v, %v; want one per row", events, err)
@@ -1041,7 +1042,7 @@ func TestOIDCPending(t *testing.T) {
 	}
 	// An "@" past the 100 kept is seen all the same: the name is left out
 	// whole, not cut to the address's local part.
-	s.OIDCPending(ctx, 11, "Keycloak", strings.Repeat("x", 99)+"carolsmith@example.org", "", "no_match")
+	s.OIDCPending(ctx, 11, "10.0.0.1", "Keycloak", strings.Repeat("x", 99)+"carolsmith@example.org", "", "no_match")
 	events, _, err = cat.ListServerEvents(ctx, 0, 1, KindOIDCPending)
 	if err != nil || len(events) != 1 || events[0].Data["person"] != nil {
 		t.Fatalf("a long name with an address: %+v, %v", events, err)
@@ -1049,9 +1050,12 @@ func TestOIDCPending(t *testing.T) {
 }
 
 // TestOIDCPendingCapped: a provider anyone can sign up at raises at most
-// oidcPendingPerHour waiting-sign-in notifications an hour (server#408): the
-// rest are not announced then (denied); a row already told isn't counted
-// again; past the hour they are announced again (allowed).
+// oidcPendingPerHour waiting-sign-in notifications an hour from one address
+// (server#408): the rest from it are not announced then (denied), while a
+// person waiting from another address still is (allowed: one noisy source
+// doesn't use up everyone's hour), up to oidcPendingCeiling in all (denied
+// past it). A row already told isn't counted again; past the hour a row left
+// out is told at the person's next attempt (allowed).
 func TestOIDCPendingCapped(t *testing.T) {
 	s, cat, ctx := newService(t)
 	now := time.Now()
@@ -1064,22 +1068,36 @@ func TestOIDCPendingCapped(t *testing.T) {
 		}
 		return len(events)
 	}
-	for id := range int64(oidcPendingPerHour + 3) {
-		s.OIDCPending(ctx, id+1, "Keycloak", "Throwaway", "", "no_match")
+	const noisy, home = "203.0.113.9", "198.51.100.7"
+	id := int64(0)
+	next := func() int64 { id++; return id }
+	for range oidcPendingPerHour + 3 {
+		s.OIDCPending(ctx, next(), noisy, "Keycloak", "Throwaway", "", "no_match")
 	}
+	leftOut := id
 	if n := count(); n != oidcPendingPerHour {
-		t.Fatalf("%d told within the hour, want %d", n, oidcPendingPerHour)
+		t.Fatalf("%d told from one address within the hour, want %d", n, oidcPendingPerHour)
+	}
+	// Another address in the same hour: told, the noisy one's cap isn't its.
+	s.OIDCPending(ctx, next(), home, "Keycloak", "Bob Smith", "", "no_match")
+	if n := count(); n != oidcPendingPerHour+1 {
+		t.Fatalf("%d told, want the person from another address told too", n)
+	}
+	// Many addresses: no more than the ceiling in all.
+	for i := range oidcPendingCeiling {
+		s.OIDCPending(ctx, next(), "192.0.2."+strconv.Itoa(i), "Keycloak", "Throwaway", "", "no_match")
+	}
+	if n := count(); n != oidcPendingCeiling {
+		t.Fatalf("%d told from every address within the hour, want the ceiling %d", n, oidcPendingCeiling)
 	}
 	// A row already told, again: not told twice, and it takes no place.
 	now = now.Add(time.Hour + time.Second)
-	s.OIDCPending(ctx, 1, "Keycloak", "Throwaway", "", "no_match")
-	s.OIDCPending(ctx, 100, "Keycloak", "Throwaway", "", "no_match")
-	if n := count(); n != oidcPendingPerHour+1 {
-		t.Fatalf("%d told after the hour, want %d", n, oidcPendingPerHour+1)
+	for range oidcPendingPerHour {
+		s.OIDCPending(ctx, 1, noisy, "Keycloak", "Throwaway", "", "no_match")
 	}
 	// One left out within the cap is told at the person's next attempt.
-	s.OIDCPending(ctx, oidcPendingPerHour+1, "Keycloak", "Throwaway", "", "no_match")
-	if n := count(); n != oidcPendingPerHour+2 {
-		t.Fatalf("%d told, want the one left out told now", n)
+	s.OIDCPending(ctx, leftOut, noisy, "Keycloak", "Throwaway", "", "no_match")
+	if n := count(); n != oidcPendingCeiling+1 {
+		t.Fatalf("%d told after the hour, want the one left out told now (%d)", n, oidcPendingCeiling+1)
 	}
 }
