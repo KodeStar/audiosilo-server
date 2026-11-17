@@ -422,8 +422,11 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   );
 }
 
-/** The server's folders, one level at a time, starting at `start` ("" = the filesystem root). */
-function ServerFolderPicker({
+/**
+ * The server's folders, one level at a time, starting at `start` ("" = the
+ * filesystem root). Also the setup flow's folder step's Browse.
+ */
+export function ServerFolderPicker({
   start,
   selected,
   onChoose,

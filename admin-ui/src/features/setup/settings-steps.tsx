@@ -189,16 +189,18 @@ export function MetadataStep(props: StepProps) {
 }
 
 /**
- * The reach step: how people reach the server. The address this browser uses, offered
- * as the public or the home address (pairing QR codes are built from them); a
- * reverse proxy whose address isn't trusted yet, offered for trusted_proxies;
- * and the HTTPS mode with what it means for phones (restart settings, marked).
+ * The reach step: how people reach the server. Its name, as the apps and
+ * invites show it (server#184); the address this browser uses, offered as the
+ * public or the home address (pairing QR codes are built from them); a reverse
+ * proxy whose address isn't trusted yet, offered for trusted_proxies; and the
+ * HTTPS mode with what it means for phones (restart settings, marked).
  */
 export function ReachStep({ env, settings, leave, back, last }: StepProps) {
   const { t } = useTranslation();
   const save = useSaveStepSettings();
   const g = settings.general;
   const n = settings.network;
+  const [name, setName] = useState(g.name);
   const [publicUrl, setPublicUrl] = useState(g.public_url);
   const [lanUrl, setLanUrl] = useState(g.lan_url);
   const [proxies, setProxies] = useState(n.trusted_proxies);
@@ -234,7 +236,7 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
     try {
       await save(
         mergePatches(
-          unlockedPatch(settings, 'general', { public_url: pub, lan_url: lan }),
+          unlockedPatch(settings, 'general', { name: name.trim(), public_url: pub, lan_url: lan }),
           unlockedPatch(settings, 'network', { trusted_proxies: proxies, tls_home_http: homeHttp }),
         ),
       );
@@ -287,6 +289,24 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
         </div>
 
         <div className="divide-y">
+          <SettingRow
+            title={t('settings.general.name')}
+            badges={<SettingBadges settings={settings} id="general.name" />}
+            htmlFor="setup-server-name"
+            description={t('settings.general.nameBody')}
+            descriptionId="setup-server-name-desc"
+          >
+            <Input
+              id="setup-server-name"
+              className="w-full sm:w-[320px]"
+              autoComplete="off"
+              placeholder="AudioSilo"
+              value={name}
+              disabled={!editable(settings, 'general.name')}
+              onChange={(e) => setName(e.target.value)}
+              aria-describedby="setup-server-name-desc"
+            />
+          </SettingRow>
           <SettingRow
             title={t('settings.general.public_url')}
             badges={<SettingBadges settings={settings} id="general.public_url" />}

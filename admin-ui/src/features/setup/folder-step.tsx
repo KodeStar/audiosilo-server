@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import { ServerFolderPicker } from '@/features/libraries/library-form-dialog';
 import { describedBy } from '@/lib/a11y';
 import { errorMessage } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
@@ -18,9 +19,10 @@ import { StepStop, previewQuery, type StepProps } from './step-actions';
 
 /**
  * The folder step: the books folder. A typed path (the server's mount points offered as
- * suggestions) checked by the preview: what it found, or why it can't be read,
- * in words that catch the Docker host-path mistake. The library is created
- * later, after its naming and region (decision 5); here it becomes the draft.
+ * suggestions, or picked from the server's folders with Browse, server#184)
+ * checked by the preview: what it found, or why it can't be read, in words that
+ * catch the Docker host-path mistake. The library is created later, after its
+ * naming and region (decision 5); here it becomes the draft.
  */
 export function FolderStep({
   env,
@@ -45,6 +47,7 @@ export function FolderStep({
   // The folder last checked: its preview shows while the field still says it.
   const [checked, setChecked] = useState(draft?.root ?? '');
   const [inputError, setInputError] = useState<string | null>(null);
+  const [browsing, setBrowsing] = useState(false);
   const typed = root.trim();
   const preview = useQuery({ ...previewQuery(checked), enabled: checked !== '' });
   const current = checked !== '' && checked === typed;
@@ -75,9 +78,10 @@ export function FolderStep({
     }
   };
 
-  const choose = (hint: string) => {
-    setRoot(hint);
-    void check(hint);
+  const choose = (folder: string) => {
+    setRoot(folder);
+    setBrowsing(false);
+    void check(folder);
   };
 
   const onContinue = async () => {
@@ -166,8 +170,24 @@ export function FolderStep({
               )}
               {t('setup.folder.check')}
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setBrowsing((b) => !b)}
+              aria-expanded={browsing}
+            >
+              <FolderOpen aria-hidden="true" />
+              {t('libraries.form.browse')}
+            </Button>
           </div>
         </Field>
+        {browsing ? (
+          <ServerFolderPicker
+            start={isAbsolutePath(typed) ? typed : ''}
+            selected={typed}
+            onChoose={choose}
+          />
+        ) : null}
 
         {env.mount_hints.length > 0 ? (
           <div className="flex flex-col gap-2">

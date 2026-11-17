@@ -201,11 +201,42 @@ describe('the folder step', () => {
     await user.click(screen.getByRole('button', { name: 'Check folder' }));
     expect(
       await screen.findByText(
-        /\/Users\/me\/Audiobooks isn't there, or the server can't read it\. In Docker/,
+        /\/Users\/me\/Audiobooks isn't there, isn't a folder, or the server can't read it\. In Docker/,
       ),
     ).toBeVisible();
     // Nothing to name until a folder is found (ADMIN-06).
     expect(screen.queryByLabelText('Library name')).not.toBeInTheDocument();
+  });
+
+  it("Browse picks a folder from the server's and checks it (server#184)", async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        {},
+        {
+          'GET /admin/fs/dirs': (req) =>
+            req.query.get('path') === '/mnt'
+              ? {
+                  body: {
+                    path: '/mnt',
+                    parent: '/',
+                    dirs: [{ name: 'books', path: '/mnt/books' }],
+                  },
+                }
+              : { body: { path: '/', dirs: [{ name: 'mnt', path: '/mnt' }] } },
+        },
+      ),
+    );
+    renderApp('/setup');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Browse' }));
+    await user.click(await screen.findByRole('button', { name: 'mnt' }));
+    await user.click(await screen.findByRole('button', { name: 'Choose books' }));
+    expect(screen.getByLabelText('Books folder')).toHaveValue('/mnt/books');
+    expect(await screen.findByText('Found 812 audio files')).toBeVisible();
+    // The picker closes once a folder is chosen.
+    expect(screen.queryByRole('button', { name: 'Choose books' })).toBeNull();
+    const post = calls.find((c) => c.path === '/admin/setup/preview');
+    expect(post?.body).toEqual({ root: '/mnt/books' });
   });
 
   it('refuses a relative path before asking the server', async () => {
@@ -525,6 +556,46 @@ describe('the reach step', () => {
     await screen.findByRole('heading', { name: 'Coming from Audiobookshelf?' });
     const patch = calls.find((c) => c.method === 'PATCH' && c.path === '/admin/settings');
     expect(patch?.body).toEqual({ general: { lan_url: 'http://192.168.1.20:8080' } });
+  });
+
+  it('saves the server name with the addresses (server#184)', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        {},
+        { 'PATCH /admin/settings': (req) => ({ body: settingsWith(req.body as object) }) },
+      ),
+    );
+    renderApp('/setup?step=reach');
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Server name'), '  Home library ');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Coming from Audiobookshelf?' });
+    const patch = calls.find((c) => c.method === 'PATCH' && c.path === '/admin/settings');
+    expect(patch?.body).toEqual({ general: { name: 'Home library' } });
+  });
+
+  it('shows a server name the environment sets, and leaves it out', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        {},
+        {
+          'GET /admin/settings': {
+            body: settingsWith({
+              general: { ...settingsWith().general, name: 'Attic' },
+              locked: { 'general.name': 'AUDIOSILO_NAME' },
+            }),
+          },
+        },
+      ),
+    );
+    renderApp('/setup?step=reach');
+    const name = await screen.findByLabelText('Server name');
+    expect(name).toBeDisabled();
+    expect(name).toHaveValue('Attic');
+    expect(screen.getByText('Set by AUDIOSILO_NAME')).toBeVisible();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Coming from Audiobookshelf?' });
+    expect(calls.some((c) => c.method === 'PATCH' && c.path === '/admin/settings')).toBe(false);
   });
 
   it('never offers a loopback address (localhost) as the home or public address', async () => {

@@ -3723,7 +3723,7 @@
   "setup.folder.lost": "Choisissez de nouveau le dossier",
   "setup.folder.lostBody": "Cette étape a été terminée dans un autre navigateur, et le dossier choisi là-bas n'est gardé que dans ce navigateur. Saisissez-le ici pour continuer : la bibliothèque est créée après les deux étapes suivantes.",
   "setup.folder.error.path_not_absolute": "Saisissez le chemin complet depuis la racine, comme /audiobooks ou C:\\Audiobooks.",
-  "setup.folder.error.folder_unreadable": "{{root}} n'existe pas, ou le serveur ne peut pas le lire. Dans Docker, saisissez le dossier dans le conteneur (la partie droite du volume), pas celui de votre ordinateur, et vérifiez que l'utilisateur du conteneur peut le lire.",
+  "setup.folder.error.folder_unreadable": "{{root}} n'existe pas, n'est pas un dossier, ou le serveur ne peut pas le lire. Dans Docker, saisissez le dossier dans le conteneur (la partie droite du volume), pas celui de votre ordinateur, et vérifiez que l'utilisateur du conteneur peut le lire.",
   "setup.folder.error.root_overlaps": "{{root}} chevauche le dossier d'une bibliothèque de podcasts. Choisissez un dossier qui n'est ni dedans ni autour.",
   "setup.folder.found_one": "{{formatted}} fichier audio trouvé",
   "setup.folder.found_other": "{{formatted}} fichiers audio trouvés",
