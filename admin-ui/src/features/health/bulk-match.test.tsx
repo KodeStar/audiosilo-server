@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { focusManager, onlineManager } from '@tanstack/react-query';
+import { MATCH_RUNS_IDLE_MS } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type { MatchRun, MatchRunItem } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
@@ -85,6 +86,8 @@ function routes(runs: MatchRun[], over: Record<string, MockRoute> = {}) {
   return signedInRoutes({
     'GET /admin/issues': { body: summary },
     'GET /admin/match-runs': { body: { runs, region: 'uk' } },
+    // A working run is asked for on its own (useMatchRuns).
+    'GET /admin/match-runs/5': () => ({ body: runs.find((r) => r.id === 5) }),
     'GET /admin/match-runs/5/items': (req) => ({
       body: {
         items: req.query.get('outcome') === 'review' ? [doubtful] : [confident],
@@ -611,6 +614,53 @@ describe('bulk matching', () => {
         calls.some((c) => c.method === 'POST' && c.path === '/admin/match-runs/5/cancel'),
       ).toBe(true),
     );
+  });
+
+  it('asks only for the working run each second, and for the list once it stops (server#214)', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      let polled = run({ status: 'matching', done: 2, total: 4 });
+      const calls = mockFetch(
+        routes([run({ status: 'matching', done: 1, total: 4 })], {
+          'GET /admin/match-runs/5': () => ({ body: polled }),
+        }),
+      );
+      const lists = () => calls.filter((c) => c.path === '/admin/match-runs').length;
+      renderApp('/health?issue=unmatched');
+      expect(await screen.findByText('Matching 1 of 4 books')).toBeInTheDocument();
+      expect(lists()).toBe(1);
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(await screen.findByText('Matching 2 of 4 books')).toBeInTheDocument();
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(lists()).toBe(1);
+      expect(calls.filter((c) => c.path === '/admin/match-runs/5').length).toBe(2);
+      // It stopped: the whole list again.
+      polled = run();
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      await waitFor(() => expect(lists()).toBe(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows a run started elsewhere on an idle card (server#307)', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      let runs = [run({ status: 'applied', applied_at: '2026-10-07T10:06:00Z' })];
+      mockFetch(
+        routes([], {
+          'GET /admin/match-runs': () => ({ body: { runs, region: 'uk' } }),
+          'GET /admin/match-runs/6': () => ({ body: runs[0] }),
+        }),
+      );
+      renderApp('/health?issue=unmatched');
+      expect(await screen.findByText(/^Last run applied/)).toBeInTheDocument();
+      runs = [run({ id: 6, status: 'matching', done: 1, total: 4 }), ...runs];
+      await act(() => vi.advanceTimersByTimeAsync(MATCH_RUNS_IDLE_MS));
+      expect(await screen.findByText('Matching 1 of 4 books')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reviews a ready run and applies the picks under the chosen scope', async () => {

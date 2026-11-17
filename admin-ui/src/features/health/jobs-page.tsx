@@ -6,6 +6,7 @@ import { CalendarClock, Check, ChevronDown, Play, RefreshCw, Square, X } from 'l
 import { api } from '@/api/client';
 import { keys, useJobs, useLibraries, useScanRun, useScanRuns } from '@/api/hooks';
 import type { Job, ScanRun, ScheduledScan } from '@/api/types';
+import { LibrarySelect } from '@/components/library-select';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
 import { Notice } from '@/components/notice';
@@ -19,7 +20,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { NativeSelect } from '@/components/ui/native-select';
 import { rescanAll, rescanLibrary } from '@/features/libraries/rescan';
 import { ScanProgressBar } from '@/features/libraries/library-card';
 import { scheduleLabel } from '@/features/libraries/scan-settings';
@@ -284,7 +284,6 @@ function SchedulesCard({ schedules }: { schedules: ScheduledScan[] | undefined }
 /** Every recorded scan, newest first, filterable by library; a row opens its log. */
 function History() {
   const { t } = useTranslation();
-  const libraries = useLibraries();
   const [libraryId, setLibraryId] = useState(0);
   const runs = useScanRuns(libraryId);
   const [open, setOpen] = useState<number | null>(null);
@@ -295,25 +294,15 @@ function History() {
         <h2 id="history-heading" className="h2">
           {t('jobs.history')}
         </h2>
-        <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
-          <span className="sr-only">{t('jobs.filterLibrary')}</span>
-          <NativeSelect
-            className="w-[220px]"
-            value={libraryId}
-            onChange={(e) => {
-              setOpen(null);
-              setLibraryId(Number(e.target.value));
-            }}
-            aria-label={t('jobs.filterLibrary')}
-          >
-            <option value={0}>{t('jobs.allLibraries')}</option>
-            {(libraries.data ?? []).map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name}
-              </option>
-            ))}
-          </NativeSelect>
-        </label>
+        <LibrarySelect
+          every
+          value={libraryId}
+          onChange={(id) => {
+            setOpen(null);
+            setLibraryId(id);
+          }}
+          label={t('jobs.filterLibrary')}
+        />
       </div>
       {runs.isError ? (
         <QueryError

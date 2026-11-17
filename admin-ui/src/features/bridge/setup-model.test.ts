@@ -12,6 +12,7 @@ import {
   setupItemLink,
   setupProgress,
   setupState,
+  waitsForWorker,
 } from './setup-model';
 import { bridgeTabLink } from './bridge-model';
 
@@ -113,15 +114,48 @@ describe('the setup checklist', () => {
   });
 });
 
+describe('a Bridge waiting for an ASR worker (BRIDGE-10)', () => {
+  const waiting = { ...item('asr', false), detail: 'waiting for an ASR worker' };
+  const worker = { name: 'mac', version: '1', platform: 'darwin', last_seen: '' };
+
+  it('waits with the ASR step waiting for a worker and none connected', () => {
+    expect(waitsForWorker(status({ setup: setup([waiting]) }))).toBe(true);
+  });
+
+  it('does not with a worker connected, local ASR, another ASR problem, or offline', () => {
+    expect(waitsForWorker(status({ setup: setup([waiting]), workers: [worker] }))).toBe(false);
+    expect(
+      waitsForWorker(status({ setup: setup([{ ...item('asr', true), detail: 'local' }]) })),
+    ).toBe(false);
+    const starting = { ...item('asr', false), detail: 'the engine is starting' };
+    expect(waitsForWorker(status({ setup: setup([starting]) }))).toBe(false);
+    expect(waitsForWorker(status({ online: false, setup: setup([waiting]) }))).toBe(false);
+    expect(waitsForWorker(status())).toBe(false);
+    expect(waitsForWorker(undefined)).toBe(false);
+  });
+});
+
 describe('what generating waits on', () => {
-  it("names the first required step it needs, in the checklist's order", () => {
+  it('names the agent first, then the first other step it needs (BRIDGE-09)', () => {
+    // No worker can stand in for the agent: it is the reason, whatever the order.
     const s = status({
       setup: setup([item('paired', true), item('asr', false), item('agent', false)]),
     });
-    expect(generateNeed(s, 1)).toBe('asr');
+    expect(generateNeed(s, 1)).toBe('agent');
     expect(
       generateNeed(status({ setup: setup([item('asr', true), item('agent', false)]) }), 1),
     ).toBe('agent');
+    expect(
+      generateNeed(
+        status({
+          setup: setup([item('libraries', false), item('asr', false), item('agent', true)]),
+        }),
+        2,
+      ),
+    ).toBe('libraries');
+    expect(
+      generateNeed(status({ setup: setup([item('asr', false), item('agent', true)]) }), 1),
+    ).toBe('asr');
   });
 
   it("counts the libraries step only when this library is the one it can't write to", () => {

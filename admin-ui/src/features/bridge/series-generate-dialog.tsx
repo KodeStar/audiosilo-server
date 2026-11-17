@@ -22,7 +22,7 @@ import {
   type BatchCheck,
   type Contribute,
 } from './generate-model';
-import { ContributeSwitch, NotWritableNotice } from './generate-parts';
+import { ClampedName, ContributeSwitch, NotWritableNotice } from './generate-parts';
 import {
   estimateQuery,
   GENERATE_SKIPS,
@@ -58,7 +58,7 @@ export function SeriesGenerateDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        title={t('bridge.series.title', { name: series })}
+        title={<ClampedName>{t('bridge.series.title', { name: series })}</ClampedName>}
         description={t('bridge.series.description')}
         icon={Sparkles}
         tone="community"

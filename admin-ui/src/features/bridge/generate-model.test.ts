@@ -59,6 +59,7 @@ import {
   titleCase,
   type BatchCheck,
   cancelledView,
+  oneStop,
 } from './generate-model';
 import { skipNotes } from './use-generate';
 
@@ -1189,10 +1190,10 @@ describe('cancelledView (BRIDGE-02)', () => {
     ...over,
   });
 
-  it("gives the server's own reason as it is", () => {
+  it("gives the server's own reason as a sentence (server#271)", () => {
     expect(
       cancelledView(cancelled({ error: 'the book moved onto another job of this kind' })),
-    ).toEqual({ byAdmin: false, reason: 'the book moved onto another job of this kind' });
+    ).toEqual({ byAdmin: false, reason: 'The book moved onto another job of this kind.' });
   });
 
   it("names an admin's cancel and the park, never the raw error", () => {
@@ -1217,7 +1218,9 @@ describe('cancelledView (BRIDGE-02)', () => {
       'the Audible account was removed',
       "the Audible account's library was deleted",
     ]) {
-      expect(cancelledView(cancelled({ error }))).toEqual({ byAdmin: false, reason: error });
+      const reason = cancelledView(cancelled({ error })).reason ?? '';
+      expect(reason.toLowerCase()).toBe(`${error.toLowerCase()}.`);
+      expect(reason[0]).toBe(error[0].toUpperCase());
     }
   });
 
@@ -1225,5 +1228,13 @@ describe('cancelledView (BRIDGE-02)', () => {
     expect(cancelledView(cancelled({ cancel_requested: false, error: 'raw' }))).toEqual({
       byAdmin: false,
     });
+  });
+});
+
+describe('oneStop (server#218)', () => {
+  it('drops the second of two closing full stops, and keeps an ellipsis', () => {
+    expect(oneStop('Tries again in 29 min..')).toBe('Tries again in 29 min.');
+    expect(oneStop('Riprova tra 29 min.')).toBe('Riprova tra 29 min.');
+    expect(oneStop('Wait...')).toBe('Wait...');
   });
 });

@@ -94,6 +94,18 @@ export function JobActions({
   );
 }
 
+/**
+ * A book's (or series') name in a dialog's heading, at most two lines, so a
+ * long title can't push the form down; the whole name on hover.
+ */
+export function ClampedName({ children }: { children: string }) {
+  return (
+    <span className="line-clamp-2" title={children}>
+      {children}
+    </span>
+  );
+}
+
 /** A link to Settings > Bridge, where the Bridge's mappings and setup are seen. */
 export function BridgeSettingsLink({
   className,

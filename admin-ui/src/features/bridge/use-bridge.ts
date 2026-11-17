@@ -61,18 +61,23 @@ const JOBS_PAGE = 30;
 
 /**
  * The Bridge's jobs, newest first, a page at a time (`fetchOlder` for older
- * ones), maybe in one state. Every loaded page is asked again, every 3 s while
+ * ones), maybe in one state and of one kind. Every loaded page is asked again, every 3 s while
  * any job on them is open, else every 30 s: an infinite query refetches its
  * pages one after another from fresh cursors, so a job still running on an
  * older page stays current (a requeued job keeps its old id, and claims take the
  * oldest queued first), and none is listed twice or skipped when new jobs push
  * the pages along.
  */
-export function useBridgeJobs(state: string) {
+export function useBridgeJobs(state: string, kind: string) {
   const pages = useInfiniteQuery({
-    queryKey: keys.bridgeJobs(state),
+    queryKey: keys.bridgeJobs(state, kind),
     queryFn: ({ pageParam }) =>
-      api.bridgeJobs({ state: state || undefined, before: pageParam, limit: JOBS_PAGE }),
+      api.bridgeJobs({
+        state: state || undefined,
+        kind: kind || undefined,
+        before: pageParam,
+        limit: JOBS_PAGE,
+      }),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (last) => last.next_before || undefined,
     placeholderData: keepPreviousData,

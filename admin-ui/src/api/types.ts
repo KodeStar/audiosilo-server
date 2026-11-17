@@ -2425,6 +2425,12 @@ export interface MatchRun {
   };
 }
 
+/** GET /admin/match-runs: the kept runs, newest first, and the marketplace a new run would use. */
+export interface MatchRunList {
+  runs: MatchRun[];
+  region: string;
+}
+
 /** catalog.ClearedMatches (DELETE /admin/community-matches): what a clear removed. */
 export interface ClearedMatches {
   /** Books that had a community value, cover or recorded match. */

@@ -36,6 +36,7 @@ import type {
   FolderMode,
   MatchOutcome,
   MatchRun,
+  MatchRunList,
   MetaMirrorStatus,
   PersonField,
   SetupEnvelope,
@@ -87,7 +88,7 @@ export const keys = {
   modules: ['admin', 'modules'] as const,
   /** Every loaded Bridge job list (a prefix: invalidate after queueing or cancelling). */
   bridgeJobLists: ['admin', 'bridge', 'jobs'] as const,
-  bridgeJobs: (state: string) => ['admin', 'bridge', 'jobs', state] as const,
+  bridgeJobs: (state: string, kind: string) => ['admin', 'bridge', 'jobs', state, kind] as const,
   /** One book's Bridge jobs (under bridgeJobLists, so queueing or cancelling refreshes it). */
   bookBridgeJobs: (libraryId: number, path: string) =>
     ['admin', 'bridge', 'jobs', 'book', libraryId, path] as const,
@@ -952,16 +953,33 @@ export function useJobs() {
 }
 
 /** Whether a bulk match run is still working. */
-export function matchRunActive(r: MatchRun | undefined) {
+export function matchRunActive(r: MatchRun | undefined): r is MatchRun {
   return r?.status === 'matching' || r?.status === 'applying';
 }
 
-/** Bulk match runs, newest first; polled each second while one works. */
+/** How often an idle Health page asks for the runs (a run started elsewhere, through the API, shows). */
+export const MATCH_RUNS_IDLE_MS = 15_000;
+
+/**
+ * Bulk match runs, newest first. While one works (the server runs one at a
+ * time) it alone is asked for each second (GET /admin/match-runs/{id}) and
+ * patched into the list; the whole list is read again once it stops (or is
+ * gone), and every 15 s while none works, so a run started through the API
+ * shows on an open card.
+ */
 export function useMatchRuns() {
+  const qc = useQueryClient();
   return useQuery({
     queryKey: keys.matchRuns,
-    queryFn: api.matchRuns,
-    refetchInterval: (q) => (q.state.data?.runs.some(matchRunActive) ? 1000 : false),
+    queryFn: async () => {
+      const list = qc.getQueryData<MatchRunList>(keys.matchRuns);
+      const working = list?.runs.find(matchRunActive);
+      if (!list || !working) return api.matchRuns();
+      const run = await api.matchRun(working.id).catch(() => undefined);
+      if (!matchRunActive(run)) return api.matchRuns();
+      return { ...list, runs: list.runs.map((r) => (r.id === run.id ? run : r)) };
+    },
+    refetchInterval: (q) => (q.state.data?.runs.some(matchRunActive) ? 1000 : MATCH_RUNS_IDLE_MS),
   });
 }
 

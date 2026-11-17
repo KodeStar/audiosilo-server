@@ -540,7 +540,7 @@ export function parkHint(
  * CancelReplacedRequest; internal/bridge/audible.go: an Audible poll's
  * CancelAudibleRemoved and CancelAudiblePaused, an Audible sync's
  * CancelAudibleSyncOff; also on a working job it asked
- * to stop, kept through the Bridge's reports): shown as they are. Any other
+ * to stop, kept through the Bridge's reports): shown as a sentence. Any other
  * error on a cancelled job is the park's or the Bridge's own text (a
  * supervisor's, say), never shown (BRIDGE-02).
  */
@@ -556,6 +556,20 @@ const SERVER_CANCEL_REASONS: readonly string[] = [
   'sync with Audible was turned off for the account',
 ];
 
+/**
+ * A sentence that ends in a value already ending in a full stop ("Tries again
+ * in 29 min." from "in 29 min."): the one stop, not two.
+ */
+export function oneStop(sentence: string): string {
+  return /[^.]\.\.$/.test(sentence) ? sentence.slice(0, -1) : sentence;
+}
+
+/** A lower-case phrase as a sentence: from a capital, with a closing full stop. */
+function asSentence(phrase: string): string {
+  const s = phrase.charAt(0).toUpperCase() + phrase.slice(1);
+  return /[.!?]$/.test(s) ? s : `${s}.`;
+}
+
 /** Whether a job's error is one of the server's own cancel reasons (SERVER_CANCEL_REASONS). */
 export function isServerCancelReason(error: string): boolean {
   return SERVER_CANCEL_REASONS.includes(error);
@@ -565,7 +579,7 @@ export function isServerCancelReason(error: string): boolean {
 export interface CancelledView {
   /** An admin asked (cancel_requested), not the server for a reason of its own. */
   byAdmin: boolean;
-  /** The server's own reason, when it cancelled the job itself. */
+  /** The server's own reason as a sentence, when it cancelled the job itself. */
   reason?: string;
   /** The park the job was waiting in, with the Bridge's plain hint (never the raw error). */
   park?: { code: string; hint?: string };
@@ -574,7 +588,7 @@ export interface CancelledView {
 export function cancelledView(
   job: Pick<BridgeJob, 'error' | 'cancel_requested' | 'progress'>,
 ): CancelledView {
-  if (isServerCancelReason(job.error)) return { byAdmin: false, reason: job.error };
+  if (isServerCancelReason(job.error)) return { byAdmin: false, reason: asSentence(job.error) };
   const park = generateProgress(job.progress).park;
   const hint = park ? parkHint(park.code, park.hint, '') : undefined;
   return {

@@ -54,6 +54,7 @@ import type {
   MatchCandidate,
   MatchOutcome,
   MatchRun,
+  MatchRunList,
   MatchRunItemPage,
   MatchRunMode,
   MatchScope,
@@ -464,6 +465,8 @@ export const api = {
   bridgeJobs: (
     opts: {
       state?: string;
+      /** One kind's jobs ("podcast.poll"). */
+      kind?: string;
       before?: number;
       limit?: number;
       /** One book's jobs (with `path`), or one library's. */
@@ -804,7 +807,7 @@ export const api = {
       `/admin/libraries/${libraryId}/book/match${bookQuery({ path, ...by })}`,
     ),
   /** Bulk matching: the kept runs, newest first, and the marketplace a new one prefers. */
-  matchRuns: () => request<{ runs: MatchRun[]; region: string }>('GET', '/admin/match-runs'),
+  matchRuns: () => request<MatchRunList>('GET', '/admin/match-runs'),
   /** Starts matching every unmatched book (of one library), or a repick, in the background. */
   startMatchRun: (opts: { library_id?: number; mode?: MatchRunMode }) =>
     request<MatchRun>('POST', '/admin/match-runs', opts),

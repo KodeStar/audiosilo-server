@@ -492,6 +492,49 @@ describe('generate characters and recaps', () => {
     expect(screen.queryByText(/chapters are being found/)).toBeNull();
   });
 
+  it('says in the Chapters card why a parked detection waits, with a link into the Bridge (BRIDGE-10)', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/bridge': {
+          body: {
+            paired: true,
+            online: true,
+            kinds: [],
+            features: [],
+            libraries: [],
+            workers: [],
+            ui_url: 'http://192.168.1.20:8090/',
+          },
+        },
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({
+                id: 44,
+                kind: 'chapters.detect',
+                params: {},
+                state: 'needs_attention',
+                progress: { stage: 'asr', park: { code: 'asr_worker_waiting' } },
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp(URL);
+    const card = (await screen.findByRole('heading', { name: 'Chapters' })).closest('section')!;
+    expect(
+      await within(card).findByText(
+        'Waiting for an ASR worker. The job carries on once one connects.',
+      ),
+    ).toBeInTheDocument();
+    expect(within(card).getByText('Chapter detection')).toBeInTheDocument();
+    expect(await within(card).findByRole('link', { name: /Open in the Bridge/ })).toHaveAttribute(
+      'href',
+      'http://192.168.1.20:8090/#/jobs/44',
+    );
+  });
+
   it('shows a parked job with its reason, hint, and a link into the Bridge', async () => {
     const status: Partial<BridgeStatus> = {
       paired: true,
@@ -560,6 +603,26 @@ describe('generate characters and recaps', () => {
     expect(screen.queryByText(/Tries again/)).toBeNull();
   });
 
+  it("ends a park's retry time with one full stop, not two (server#218)", async () => {
+    const soon = new Date(Date.now() + 29.2 * 60_000).toISOString();
+    mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({
+                state: 'needs_attention',
+                progress: { park: { code: 'agent_rate_limited', retry_at: soon } },
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp(URL);
+    expect((await screen.findAllByText('Tries again in 29 min.'))[0]).toBeInTheDocument();
+  });
+
   it('says what a finished job made', async () => {
     mockFetch(
       routes({
@@ -624,7 +687,7 @@ describe('the Bridge page', () => {
     renderApp('/server?topic=bridge');
     const jobs = await screen.findByRole('list', { name: 'Jobs' });
     expect(
-      within(jobs).getByText('the book moved onto another job of this kind'),
+      within(jobs).getByText('The book moved onto another job of this kind.'),
     ).toBeInTheDocument();
   });
 
@@ -758,12 +821,13 @@ describe('the Bridge page', () => {
       expect(row.textContent).not.toContain('Cancelled by an admin.');
       expect(row.textContent).not.toContain('supervisor:');
     }
-    expect(within(rows[0]).getByText(reason)).toBeInTheDocument();
+    const shown = 'A generate job for the book replaced it.';
+    expect(within(rows[0]).getByText(shown)).toBeInTheDocument();
     expect(within(rows[1]).getByText('Cancelled.')).toBeInTheDocument();
     expect(rows[1]).toHaveTextContent(
       'It was waiting for attention: The Bridge stopped the job for a person to look at.',
     );
-    expect(within(rows[2]).getByText(reason)).not.toHaveClass('text-destructive');
+    expect(within(rows[2]).getByText(shown)).not.toHaveClass('text-destructive');
   });
 
   it('words a chapter detection job: its stage, what it found, and why it stopped', async () => {

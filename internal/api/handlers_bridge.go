@@ -988,7 +988,7 @@ func (a *API) checkCorrections(w http.ResponseWriter, r *http.Request, book *cat
 }
 
 // handleAdminBridgeJobs serves GET /admin/bridge/jobs?library_id=&path=&state=
-// &before=&limit=: jobs newest first (limit <= 200, default 50), with
+// &kind=&before=&limit=: jobs newest first (limit <= 200, default 50), with
 // next_before for the next page.
 func (a *API) handleAdminBridgeJobs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()

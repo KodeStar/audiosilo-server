@@ -16,12 +16,14 @@ import { fetchReason, librivoxProject, librivoxTitle } from '@/features/librivox
 import { CardEmpty } from '@/features/settings/card-empty';
 import { cancelJob } from './bridge-actions';
 import {
+  BRIDGE_JOB_KINDS,
   BRIDGE_JOB_STATES,
   backupAsin,
   hasContent,
   jobActions,
   kindName,
   listedProgress,
+  podcastSubject,
   resultSummary,
   serverScheduled,
   stateLook,
@@ -31,7 +33,8 @@ import { CancelledStatus, GenerateStatus } from './generate-status';
 import { useBridgeJobs } from './use-bridge';
 
 /**
- * The Bridge's jobs, newest first, a page at a time, maybe in one state: what
+ * The Bridge's jobs, newest first, a page at a time, maybe in one state and of
+ * one kind: what
  * each is about, where it stands, who asked, and Cancel for an open one.
  * `hideWhenEmpty` (no Bridge paired) renders nothing until there is a job.
  * `uiUrl` (the Bridge's own page) links a parked generate job into it.
@@ -47,11 +50,13 @@ export function JobsCard({
 }) {
   const { t } = useTranslation();
   const [state, setState] = useState('');
-  const jobs = useBridgeJobs(state);
+  const [kind, setKind] = useState('');
+  const jobs = useBridgeJobs(state, kind);
   const rows = jobs.rows;
+  const filtered = state !== '' || kind !== '';
   // Unfiltered and empty (or not loaded yet): no card. A filter that matches
   // nothing keeps the card, so it can be cleared.
-  if (hideWhenEmpty && state === '' && !jobs.isError && rows.length === 0) return null;
+  if (hideWhenEmpty && !filtered && !jobs.isError && rows.length === 0) return null;
 
   return (
     <Card aria-labelledby="bridge-jobs-title">
@@ -60,19 +65,34 @@ export function JobsCard({
         title={t('bridge.jobs.title')}
         description={t('bridge.jobs.description')}
         action={
-          <NativeSelect
-            className="w-[190px]"
-            value={state}
-            onChange={(e) => setState(e.target.value)}
-            aria-label={t('bridge.jobs.filter')}
-          >
-            <option value="">{t('bridge.jobs.allStates')}</option>
-            {BRIDGE_JOB_STATES.map((s) => (
-              <option key={s} value={s}>
-                {t(`bridge.state.${s}`)}
-              </option>
-            ))}
-          </NativeSelect>
+          <div className="flex flex-wrap gap-2">
+            <NativeSelect
+              className="w-[190px]"
+              value={kind}
+              onChange={(e) => setKind(e.target.value)}
+              aria-label={t('bridge.jobs.filterKind')}
+            >
+              <option value="">{t('bridge.jobs.allKinds')}</option>
+              {BRIDGE_JOB_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {kindName(t, k)}
+                </option>
+              ))}
+            </NativeSelect>
+            <NativeSelect
+              className="w-[190px]"
+              value={state}
+              onChange={(e) => setState(e.target.value)}
+              aria-label={t('bridge.jobs.filter')}
+            >
+              <option value="">{t('bridge.jobs.allStates')}</option>
+              {BRIDGE_JOB_STATES.map((s) => (
+                <option key={s} value={s}>
+                  {t(`bridge.state.${s}`)}
+                </option>
+              ))}
+            </NativeSelect>
+          </div>
         }
       />
       {jobs.isError ? (
@@ -90,7 +110,7 @@ export function JobsCard({
       ) : rows.length === 0 ? (
         <CardEmpty
           icon={ListChecks}
-          title={state ? t('bridge.jobs.noneInState') : t('bridge.jobs.none')}
+          title={filtered ? t('bridge.jobs.noneInState') : t('bridge.jobs.none')}
           body={t('bridge.jobs.noneBody')}
         />
       ) : (
@@ -143,6 +163,7 @@ function JobRow({
   const progress: ReturnType<typeof listedProgress> = generate ? {} : listedProgress(job);
   const summary = generate ? null : resultSummary(job.result);
   const asin = backupAsin(job);
+  const show = podcastSubject(job);
   const project = librivoxProject(job);
   const projectTitle = librivoxTitle(job);
   // An Audible or LibriVox job's known failure code, worded (the Bridge's own text otherwise).
@@ -182,6 +203,9 @@ function JobRow({
               {kind}
             </b>
             <Badge variant={look.tone}>{t(look.key)}</Badge>
+            {job.priority > 0 ? (
+              <Badge variant="outline">{t('bridge.jobs.highPriority')}</Badge>
+            ) : null}
           </span>
           {library ? (
             <span className="text-[12.5px] [overflow-wrap:anywhere]">
@@ -205,6 +229,11 @@ function JobRow({
                 <>
                   {' · '}
                   <span className="font-mono text-[12px]">{asin}</span>
+                </>
+              ) : show ? (
+                <>
+                  {' · '}
+                  <span className="font-mono text-[12px]">{show}</span>
                 </>
               ) : project ? (
                 <>
