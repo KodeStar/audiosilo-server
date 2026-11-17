@@ -247,28 +247,32 @@ func shapeDiff(want, got any) []string {
 	return out
 }
 
-// flattenShape records each field path's kind ("string|null" for a $or).
+// flattenShape records each field path's kind ("null|object" for a $or). A $or's
+// object and array alternatives keep their children's paths, so a field turning
+// nullable is one retype, not its whole subtree removed and added again.
 func flattenShape(s any, path string, into map[string]string) {
-	switch shapeKind(s) {
-	case "object":
-		into[path] = "object"
-		for k, v := range s.(map[string]any) {
-			flattenShape(v, path+"."+k, into)
+	alts := []any{s}
+	kind := shapeKind(s)
+	if kind == "$or" {
+		alts = s.(map[string]any)["$or"].([]any)
+		kinds := make([]string, len(alts))
+		for i, alt := range alts {
+			kinds[i] = shapeKind(alt)
 		}
-	case "array":
-		into[path] = "array"
-		if a := s.([]any); len(a) > 0 {
-			flattenShape(a[0], path+"[]", into)
+		kind = strings.Join(kinds, "|")
+	}
+	into[path] = kind
+	for _, alt := range alts {
+		switch x := alt.(type) {
+		case map[string]any:
+			for k, v := range x {
+				flattenShape(v, path+"."+k, into)
+			}
+		case []any:
+			if len(x) > 0 {
+				flattenShape(x[0], path+"[]", into)
+			}
 		}
-	case "$or":
-		var kinds []string
-		for _, alt := range s.(map[string]any)["$or"].([]any) {
-			kinds = append(kinds, shapeKind(alt))
-			flattenShape(alt, path+"<"+shapeKind(alt)+">", into)
-		}
-		into[path] = strings.Join(kinds, "|")
-	default:
-		into[path] = shapeKind(s)
 	}
 }
 
@@ -297,7 +301,13 @@ func TestShapeOf(t *testing.T) {
 	if !slices.Equal(d, want2) {
 		t.Fatalf("diff = %q, want %q", d, want2)
 	}
-
+	// A field turning nullable is one retype, its children unchanged.
+	nullable := map[string]any{"a": "number", "b": []any{map[string]any{"$or": []any{"null", map[string]any{"c": "string"}}}}}
+	d = shapeDiff(base, nullable)
+	want3 := []string{"retyped $.b[]: object -> null|object"}
+	if !slices.Equal(d, want3) {
+		t.Fatalf("diff = %q, want %q", d, want3)
+	}
 }
 
 // wireCases builds the scenarios' envs and the cases reading them. The cases
