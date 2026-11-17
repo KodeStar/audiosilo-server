@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -237,6 +238,39 @@ func TestBridgeDetectRefusedForChosenChapters(t *testing.T) {
 	// Allowed: no choice.
 	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("detect with no choice: %d %s, want 201", resp.StatusCode, body)
+	}
+}
+
+// TestBridgeDetectRefusedForEditedChapters (server#410): an admin's edited
+// chapters stand over every other source, so a detect job for a book whose
+// edit applies is refused (409 chapters_edited); with the edit reverted, it is
+// queued.
+func TestBridgeDetectRefusedForEditedChapters(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beatDetect(t, true)
+	_, body := b.do(t, "GET", b.adminBook(mistbornBook), b.adminTok, "")
+	var page struct {
+		Basis json.RawMessage `json:"chapter_basis"`
+	}
+	decodeInto(t, body, &page)
+	editURL := strings.Replace(b.adminBook(mistbornBook), "/book?", "/book/chapters?", 1)
+	edit := `{"basis":` + string(page.Basis) + `,"chapters":[{"start":0,"title":"The whole book"}]}`
+	if resp, body := b.do(t, "PUT", editURL, b.adminTok, edit); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(body, `"chapter_source":"edited"`) {
+		t.Fatalf("edit: %d %s", resp.StatusCode, body)
+	}
+	// Denied: the edit applies.
+	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusConflict ||
+		!strings.Contains(body, `"code":"chapters_edited"`) {
+		t.Fatalf("detect on an edited book: %d %s, want 409 chapters_edited", resp.StatusCode, body)
+	}
+	if resp, body := b.do(t, "DELETE", editURL, b.adminTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("revert: %d %s", resp.StatusCode, body)
+	}
+	// Allowed: the edit reverted.
+	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("detect after the revert: %d %s, want 201", resp.StatusCode, body)
 	}
 }
 

@@ -2750,7 +2750,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a describe is refused 409 `detect_open` while a detect job is open, the other way round), and 409
   `chapters_chosen` (`ErrChaptersChosen`, checked by the api's queue handler from `catalog.ChapterChoice`)
   for a book whose chapter source an admin chose (files or community: a found list stands in only with no
-  choice, so it would never be used); a NEW `sidecars.generate` is refused 409 `detect_open` (`ErrDetectOpen`)
+  choice, so it would never be used), and 409 `chapters_edited` (`ErrChaptersEdited`) for a book whose edited
+  chapters apply (Edited chapters); a NEW `sidecars.generate` is refused 409 `detect_open` (`ErrDetectOpen`)
   only while a detect job is queued, claimed or running, since cancelling it would throw its transcription
   away and the generate run after it reuses it, while a PARKED one (`chapters_not_detected`, a person's
   decision) is cancelled by the new generate job in its transaction ("it finds the chapters itself"), as
@@ -2862,7 +2863,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   online Bridge with the `chapters` feature): `health/detect-chapters-dialog.tsx` confirms with the
   transcription time from the Bridge's status (`detectPlan`: its figure and library mappings, one request
   for any selection) and "no agent cost", and queues `chapters.detect` per book, passing over (named in the
-  toast by `skipNotes`) one refused `generate_open`, `describe_open` or `chapters_chosen` and one whose
+  toast by `skipNotes`) one refused `generate_open`, `describe_open`, `chapters_chosen` or `chapters_edited` and one whose
   answer is its own PARKED detect job (`queueInOrder` never counts a returned `needs_attention` job as
   queued: reason `parked`, "waiting for attention on the Bridge"); a row whose `chapter_choice` is set
   (admin rows carry it, additive), or whose `chapters_source` is `edited`, offers no Detect, says why (`rowFix`, `detectChosenNote`) and is left out
@@ -3999,7 +4000,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   by the pure `placeOnFiles` (each chapter in the file its start falls in, at the same place in it by the lengths the
   list was made on, to the next start or the file's end, its book offset on the files' lengths now; so another probe
   reading a file a little longer or shorter moves no chapter in its audio, and one at or past its file's end now
-  leaves the edit dormant; a start within 50 ms of a file's start is that file's first chapter; file starts are the
+  leaves the edit dormant; a start within 50 ms of a file's start is that file's first chapter, each file taking the
+  nearest start no file before it took (`snapToFiles`, so a file under 100 ms never takes its neighbour's); file starts are the
   sums of the files' lengths in whole milliseconds, `fileStartsMS`, as the console sums the basis); on other files it is dormant (the next source's
   chapters, never applied to other audio) and applies again when the files come back. `chapters_source = "edited"`
   (`ChaptersFromEdited`, never a choice), `chapters_fit` = `listFitKey(list, "", files)`. No chapter crosses a file:
@@ -4019,7 +4021,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`{state: applied|dormant, edited_by: username|null, edited_at}`, omitted with none) and `chapter_basis` (`{files:
   [{path, size, duration_ms}]}`, always); `chapter_source` and the player's `chapters_source` may be `"edited"` (an
   old app shows ordinary chapters). The editor's player streams the chosen row's file with an editor token
-  (`POST /cast/token` with `"editor": true`, Cast tokens above), never the session token.
+  (`POST /cast/token` with `"editor": true`, Cast tokens above), never the session token; the console offers no
+  Edit chapters in a podcast library (`ChaptersCard` reads the library's kind). A `chapters.detect` job for a book
+  whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, checked by the api's queue
+  handler from the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list
+  would sit under the edit, never used. A player meets it only for an edited book (an older one shows the code).
 - ffprobe is optional; code paths must degrade gracefully when it is absent (with it, most files
   are read in-process: see In-process probe)
   (path-derived metadata still works; codec is left unknown → `direct_playable`

@@ -479,6 +479,29 @@ describe('library health', () => {
       ).toHaveLength(2);
     });
 
+    it('passes over a book whose chapters were edited since the list was read (409 chapters_edited)', async () => {
+      mockFetch(
+        detectRoutes({
+          'POST /admin/bridge/jobs': (req) =>
+            (req.body as { path: string }).path === 'Mosse/Past Tense'
+              ? { status: 409, body: { error: 'chapters edited', code: 'chapters_edited' } }
+              : queuedJob((req.body as { path: string }).path),
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      await screen.findByRole('link', { name: 'The Black Gate' });
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      const bar = await screen.findByRole('toolbar');
+      await user.click(within(bar).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      expect(await screen.findByText('Finding the chapters of 1 book')).toBeInTheDocument();
+      expect(
+        screen.getByText('Their chapters were edited on the book page: Past Tense.'),
+      ).toBeInTheDocument();
+    });
+
     it('never counts a parked detect job that comes back as queued, and passes over a book being described', async () => {
       mockFetch(
         detectRoutes({

@@ -241,6 +241,7 @@ const SKIP_KEYS: Record<string, string> = {
   contribute_open: 'bridge.queue.skip.contributeOpen',
   readalong_open: 'bridge.queue.skip.readalongOpen',
   chapters_chosen: 'bridge.queue.skip.chaptersChosen',
+  chapters_edited: 'bridge.queue.skip.chaptersEdited',
 };
 
 /**

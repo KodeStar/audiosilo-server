@@ -130,16 +130,36 @@ func msSums(n int, length func(int) int64) []int64 {
 // snapToFiles moves the chapter start (starts, milliseconds) within
 // fileStartSnapMS of each file's start onto it, and reports whether every file
 // starts a chapter. fileStarts are the files' starts (fileStartsMS without the
-// end).
+// end). Each file takes the nearest start in reach that no file before it
+// took, so a file shorter than twice fileStartSnapMS never takes the chapter
+// of the file before or after it.
 func snapToFiles(starts, fileStarts []int64) bool {
+	taken := make([]bool, len(starts))
 	for _, fs := range fileStarts {
-		i := slices.IndexFunc(starts, func(s int64) bool { return s >= fs-fileStartSnapMS && s <= fs+fileStartSnapMS })
-		if i < 0 {
+		best := -1
+		for i, s := range starts {
+			d := s - fs
+			if taken[i] || d < -fileStartSnapMS || d > fileStartSnapMS {
+				continue
+			}
+			if best < 0 || abs64(d) < abs64(starts[best]-fs) {
+				best = i
+			}
+		}
+		if best < 0 {
 			return false
 		}
-		starts[i] = fs
+		starts[best], taken[best] = fs, true
 	}
 	return true
+}
+
+// abs64 is n's distance from 0.
+func abs64(n int64) int64 {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 // checkChapterEdit is an edit's chapters as its list stores them (titles
@@ -272,7 +292,7 @@ func editedChapters(raw string, files []BookFile, b *Book) []metadata.Chapter {
 // apply, false (dormant) leaving the rows to the caller. When the rows already
 // hold that fit, the list is not decoded again.
 func applyEdited(ctx context.Context, tx *sql.Tx, r *chapterRow, raw string) (bool, error) {
-	files, err := playFiles(ctx, tx, &r.book)
+	files, err := r.filesOf(ctx, tx)
 	if err != nil {
 		return false, err
 	}

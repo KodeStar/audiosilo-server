@@ -593,6 +593,12 @@ var ErrDescribeOpen = errors.New("a description job is open for the book")
 // chapters_chosen). The api checks it, as the catalog holds the choice.
 var ErrChaptersChosen = errors.New("an admin chose the book's chapter source")
 
+// ErrChaptersEdited is a chapters.detect job for a book whose chapters an
+// admin edited, while the edit applies (catalog.ChaptersFromEdited): an edit
+// stands over every other source, so a found list would sit dormant under it
+// (a 409 chapters_edited). The api checks it, as the catalog holds the edit.
+var ErrChaptersEdited = errors.New("an admin edited the book's chapters")
+
 // ErrCannotContribute is a job that files to the community (ModuleFor names
 // ModuleContributions: sidecars.contribute, meta.correct, a sidecars.generate
 // job with contribute "issue") for a Bridge whose last heartbeat doesn't say it

@@ -585,7 +585,7 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 // finished, a kind the Bridge doesn't run, a library it can't write to, a
 // contribution it can't make, an open job of another kind that refuses it
 // (generate_open, detect_open, describe_open, contribute_open, readalong_open), a detect for a book whose
-// chapter source an admin chose, else 500) and reports whether there was none.
+// chapter source an admin chose or whose chapters an admin edited, else 500) and reports whether there was none.
 func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool {
 	switch {
 	case err == nil:
@@ -623,6 +623,9 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 	case errors.Is(err, bridge.ErrChaptersChosen):
 		writeErrorCode(w, http.StatusConflict, "chapters_chosen",
 			"an admin chose this book's chapter source, so chapters found in the narration would never be used; set it back to automatic first")
+	case errors.Is(err, bridge.ErrChaptersEdited):
+		writeErrorCode(w, http.StatusConflict, "chapters_edited",
+			"an admin edited this book's chapters, so chapters found in the narration would never be used; revert the edit first")
 	default:
 		a.log.Warn(op, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not update the job")
@@ -857,7 +860,8 @@ func (a *API) handleAdminBridgeUnpair(w http.ResponseWriter, r *http.Request) {
 // refuses it (bridge.Enqueue: 409 code generate_open, detect_open,
 // describe_open, contribute_open or readalong_open), a chapters.detect job for
 // a book whose chapter source an admin chose (409 code chapters_chosen: the
-// list it finds would never be used), and a readalong.align job for a book the
+// list it finds would never be used) or whose edited chapters apply (409 code
+// chapters_edited: an edit stands over every other source), and a readalong.align job for a book the
 // index holds no ebook for (409 code no_ebook). A job that files to the community
 // (sidecars.contribute, meta.correct, sidecars.generate with contribute
 // "issue") is 404 code module_off while the contributions module is off, and
@@ -938,6 +942,12 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 			}
 			if choice != "" {
 				a.writeBridgeError(w, bridge.ErrChaptersChosen, "bridge queue failed")
+				return
+			}
+			// A dormant edit (other files) is no refusal: the book's
+			// chapters come from the next source, a found list among them.
+			if book.ChaptersSource == catalog.ChaptersFromEdited {
+				a.writeBridgeError(w, bridge.ErrChaptersEdited, "bridge queue failed")
 				return
 			}
 		}

@@ -106,6 +106,29 @@ func TestPlaceOnFiles(t *testing.T) {
 	}
 }
 
+// snapToFiles gives each file the nearest chapter start in reach that no
+// file before it took (server#410): a file under 100 ms (twice the reach)
+// never takes the chapter of the file beside it, and one with no chapter of
+// its own is no fit.
+func TestSnapToFilesShortFile(t *testing.T) {
+	t.Parallel()
+	fileStarts := []int64{0, 1000, 1040} // the second file is 40 ms long
+	starts := []int64{0, 1002, 1039}
+	if !snapToFiles(starts, fileStarts) || !slices.Equal(starts, []int64{0, 1000, 1040}) {
+		t.Fatalf("each file its own chapter = %v, want [0 1000 1040]", starts)
+	}
+	// The 40 ms file has no chapter: the one before it is no stand-in.
+	starts = []int64{0, 1000}
+	if snapToFiles(starts, fileStarts) {
+		t.Fatalf("a file with no chapter fitted: %v", starts)
+	}
+	// Nearest wins, not first: 990 is the second file's, 1035 the third's.
+	starts = []int64{0, 990, 1035}
+	if !snapToFiles(starts, []int64{0, 1000, 1030}) || !slices.Equal(starts, []int64{0, 1000, 1030}) {
+		t.Fatalf("nearest start = %v, want [0 1000 1030]", starts)
+	}
+}
+
 // checkChapterEdit refuses each rule's breach with its detail, and stores a
 // good edit's starts in milliseconds, file starts exact, titles trimmed.
 func TestCheckChapterEdit(t *testing.T) {
