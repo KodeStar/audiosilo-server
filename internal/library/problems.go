@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -117,31 +118,27 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 // only to wait out the same read. Gone, or no longer a regular file or folder,
 // counts as answered: the re-index decides what it is.
 func sideAnswers(ctx context.Context, abs string, timeout time.Duration) bool {
-	info, err := metadata.StatBounded(ctx, abs, timeout)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return true
-	case err != nil:
-		return false
-	case info.IsDir():
-		_, err = metadata.ReadDirBounded(ctx, abs, timeout)
-	case imageExts[strings.ToLower(filepath.Ext(abs))]:
-		return true
-	case info.Mode().IsRegular():
-		_, err = metadata.Bounded(ctx, abs, timeout, func() (struct{}, error) {
-			f, info, err := metadata.OpenRegular(abs)
-			if err != nil {
-				return struct{}{}, err
+	// One bounded call, the stat and the look it leads to: a share that
+	// stopped answering costs timeout once, and holds one of its mount's slots.
+	_, err := metadata.Bounded(ctx, abs, timeout, func() (struct{}, error) {
+		info, err := os.Stat(abs)
+		switch {
+		case err != nil:
+		case info.IsDir():
+			_, err = os.ReadDir(abs)
+		case imageExts[strings.ToLower(filepath.Ext(abs))], !info.Mode().IsRegular():
+		default:
+			var f *os.File
+			if f, info, err = metadata.OpenRegular(abs); err == nil {
+				_, err = f.ReadAt(make([]byte, sideProbeBytes), max(0, info.Size()-sideProbeBytes))
+				_ = f.Close()
+				if errors.Is(err, io.EOF) {
+					err = nil
+				}
 			}
-			defer f.Close()
-			if _, err := f.ReadAt(make([]byte, sideProbeBytes), max(0, info.Size()-sideProbeBytes)); err != nil && !errors.Is(err, io.EOF) {
-				return struct{}{}, err
-			}
-			return struct{}{}, nil
-		}, nil)
-	default:
-		return true
-	}
+		}
+		return struct{}{}, err
+	}, nil)
 	return err == nil || errors.Is(err, fs.ErrNotExist) || errors.Is(err, metadata.ErrNotRegular)
 }
 
