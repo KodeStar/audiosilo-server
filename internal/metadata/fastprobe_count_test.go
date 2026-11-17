@@ -66,7 +66,7 @@ func probeBytes(t *testing.T, ctx context.Context, data []byte, timeout time.Dur
 	r := &countingReader{r: bytes.NewReader(data)}
 	b := newBlockFile(r, int64(len(data)))
 	b.ff = ff8
-	p, reason := fastProbe(ctx, b, "mp3", timeout)
+	p, reason, _ := fastProbe(ctx, b, "mp3", timeout)
 	return p, reason, r.n.Load()
 }
 
@@ -229,14 +229,14 @@ func TestCountIsBounded(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), tc.ctx)
 			defer cancel()
 			start := time.Now()
-			p, reason := fastProbe(ctx, b, "mp3", tc.timeout)
+			p, reason, uncounted := fastProbe(ctx, b, "mp3", tc.timeout)
 			if p != nil || !strings.HasPrefix(reason, reasonUncounted+"; frame count: limit: ") {
 				t.Fatalf("reason %q, want the count cut short", reason)
 			}
 			if timedOutReason(reason) != tc.timedOut {
 				t.Errorf("reason %q: timed out %t, want %t", reason, !tc.timedOut, tc.timedOut)
 			}
-			if !b.uncounted {
+			if !uncounted {
 				t.Error("not marked uncounted: the scan would stamp the estimate as counted")
 			}
 			if took := time.Since(start); took > 5*time.Second {
@@ -276,22 +276,15 @@ func TestCountStopsAtAReadError(t *testing.T) {
 	f := &failWindows{r: bytes.NewReader(data), from: 3 << 20}
 	b := newBlockFile(f, int64(len(data)))
 	b.ff = ff8
-	p, reason := fastProbe(t.Context(), b, "mp3", maxProbeTime)
+	p, reason, uncounted := fastProbe(t.Context(), b, "mp3", maxProbeTime)
 	if p != nil || reason != "read: input/output error" {
 		t.Fatalf("answer %+v, reason %q; want the read error", p, reason)
 	}
 	if n := f.fails.Load(); n != 1 {
 		t.Errorf("%d reads failed, want the count ended at the first", n)
 	}
-	if !b.uncounted {
+	if !uncounted {
 		t.Error("not marked uncounted: the scan would stamp the estimate as counted")
-	}
-	// Read again whole, it is counted, and the mark goes.
-	b = newBlockFile(bytes.NewReader(data), int64(len(data)))
-	b.ff = ff8
-	b.uncounted = true
-	if p, reason := fastProbe(t.Context(), b, "mp3", maxProbeTime); reason != "" || !p.Counted || b.uncounted {
-		t.Errorf("read again: reason %q uncounted %t, want the frames counted", reason, b.uncounted)
 	}
 }
 
@@ -365,7 +358,7 @@ func BenchmarkCountFile(bm *testing.B) {
 	for bm.Loop() {
 		b := newBlockFile(f, info.Size())
 		b.ff = ff8
-		p, reason := fastProbe(bm.Context(), b, "mp3", ProbeTimeout)
+		p, reason, _ := fastProbe(bm.Context(), b, "mp3", ProbeTimeout)
 		if reason != "" || !p.Counted {
 			bm.Fatalf("%s: reason %q, counted %t; want a header-less VBR MP3 counted", path, reason, p != nil && p.Counted)
 		}

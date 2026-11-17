@@ -157,8 +157,8 @@ func timedOutReason(reason string) bool {
 // header: ffprobe estimates its length from a bitrate (up to ~7% off, SRV-16),
 // so its frames are counted instead (mp3Uncounted.count, with bounds of its
 // own: the whole file is read), and the result is Counted. One whose count
-// fails (a bound passed, a read error, given up) sets b.uncounted.
-func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Duration) (p *probeResult, reason string) {
+// fails (a bound passed, a read error, given up) is uncounted.
+func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Duration) (p *probeResult, reason string, uncounted bool) {
 	pctx, cancel := context.WithTimeoutCause(ctx, min(timeout, maxProbeTime), errProbeDeadline)
 	defer cancel()
 	var err error
@@ -178,7 +178,7 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 			err = unsure("format " + format)
 		}
 	}); why != "" {
-		return nil, why
+		return nil, why, false
 	}
 	uc, headerless := errors.AsType[*mp3Uncounted](err)
 	if headerless && b.err == nil {
@@ -192,8 +192,7 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 		}
 	}
 	p, reason = probeAnswer(b, p, err)
-	b.uncounted = headerless && reason != ""
-	return p, reason
+	return p, reason, headerless && reason != ""
 }
 
 // probeAnswer is fastProbe's answer from a reader's: p, or why there is none.
@@ -256,7 +255,7 @@ func ExactDuration(ctx context.Context, r io.ReaderAt, size int64, format string
 		b.stuck = stuckByMount.For(f.Name())
 	}
 	b.ff = ff8
-	p, reason := fastProbe(ctx, b, strings.ToLower(format), maxProbeTime)
+	p, reason, _ := fastProbe(ctx, b, strings.ToLower(format), maxProbeTime)
 	if reason != "" {
 		return 0, false
 	}
@@ -290,10 +289,6 @@ type blockFile struct {
 	ctx    context.Context // the probe's, its deadline included; nil when not armed
 	budget int64           // bytes the probe may still read from the file
 	ticks  uint32          // tick's calls, so ctx is looked at every 256th
-
-	// uncounted: fastProbe met a VBR MP3 with no Xing or VBRI header and could
-	// not count its frames (Metadata.LengthUncounted).
-	uncounted bool
 }
 
 func newBlockFile(f io.ReaderAt, size int64) *blockFile {

@@ -327,16 +327,16 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, count b
 	if ff == ffNone {
 		if count && m.Format == "mp3" {
 			b.ff = noFFprobeRules
-			if p, why := fastProbe(ctx, b, m.Format, timeout); why == "" && p.Counted {
+			p, why, uncounted := fastProbe(ctx, b, m.Format, timeout)
+			if why == "" && p.Counted {
 				m.counted = p.Duration
 			}
-			m.uncounted = b.uncounted
+			m.uncounted = uncounted
 		}
 		return nil, "", nil
 	}
 	b.ff = ff
-	p, reason = fastProbe(ctx, b, m.Format, timeout)
-	m.uncounted = b.uncounted
+	p, reason, m.uncounted = fastProbe(ctx, b, m.Format, timeout)
 	if reason != "" {
 		// Silent by design (ffprobe answers instead), but worth seeing when a
 		// scan is slower than expected: which files, and why (server#269).

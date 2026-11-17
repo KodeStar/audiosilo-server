@@ -310,12 +310,12 @@ func TestFastProbeReadFailureIsUnsure(t *testing.T) {
 	info, _ := f.Stat()
 	b := newBlockFile(f, info.Size())
 	b.ff = ff7
-	if _, reason := fastProbe(context.Background(), b, "mp3", maxProbeTime); reason != "" {
+	if _, reason, _ := fastProbe(context.Background(), b, "mp3", maxProbeTime); reason != "" {
 		t.Fatalf("the whole file: %s", reason)
 	}
 	b = newBlockFile(f, info.Size()*2)
 	b.ff = ff7
-	if p, reason := fastProbe(context.Background(), b, "mp3", maxProbeTime); p != nil || !strings.HasPrefix(reason, "read: ") {
+	if p, reason, _ := fastProbe(context.Background(), b, "mp3", maxProbeTime); p != nil || !strings.HasPrefix(reason, "read: ") {
 		t.Errorf("a file shorter than its size: %+v, %q, want a read failure", p, reason)
 	}
 }
@@ -694,7 +694,8 @@ func TestFastProbeLimits(t *testing.T) {
 	probeWith := func(ctx context.Context, r freeBoxes, timeout time.Duration) (*probeResult, string) {
 		b := newBlockFile(r, r.size)
 		b.ff = ff8
-		return fastProbe(ctx, b, "m4b", timeout)
+		p, reason, _ := fastProbe(ctx, b, "m4b", timeout)
+		return p, reason
 	}
 	// 2 GiB of 128 KiB boxes is 16384 headers, one 64 KiB block each: 1 GiB.
 	if p, reason := probeWith(context.Background(), freeBoxes{every: 128 << 10, size: 2 * gib}, time.Minute); p != nil || reason != "limit: probe read budget" {
