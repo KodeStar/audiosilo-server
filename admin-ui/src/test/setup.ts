@@ -1,15 +1,20 @@
 import '@testing-library/jest-dom/vitest';
-import { afterEach, beforeAll } from 'vitest';
+import { afterEach, beforeAll, expect } from 'vitest';
 import { cleanup, configure } from '@testing-library/react';
 import '@/i18n';
-import { preloadScreens } from './preload-screens';
 
-// Each screen is a lazy chunk. Loading them all before the file's tests keeps
-// that cold import out of every test's own time (preloadScreens); the hook's
-// budget is for the import alone, so a slow machine has room. findBy keeps 3 s
-// for a screen's own requests and renders under a full parallel run.
+// Each screen is a lazy chunk. Loading them all before a component test
+// file's tests keeps that cold import out of every test's own time
+// (preloadScreens); a plain .ts unit test renders no screen, so it skips the
+// console's module graph. The hook's budget is for the import alone, so a slow
+// machine has room. findBy keeps 3 s for a screen's own requests and renders
+// under a full parallel run.
 configure({ asyncUtilTimeout: 3000 });
-beforeAll(preloadScreens, 60_000);
+beforeAll(async () => {
+  if (!expect.getState().testPath?.endsWith('.tsx')) return;
+  const { preloadScreens } = await import('./preload-screens');
+  await preloadScreens();
+}, 60_000);
 
 // jsdom gaps the UI libraries touch: cmdk measures its list with ResizeObserver
 // and scrolls the active item into view; the theme code reads matchMedia; Base
