@@ -1199,7 +1199,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   cover version, `stampAddedAt`'s statx and lstat, `problemCleared`'s stat), the backfill's embedded cover read
   (`media.EmbeddedCover`), `RefreshEbook`'s look, and in the API every cover (full, thumbnail, a
   show's: `serveArt`, `coverArt`, `readSidecar`) and a stream's open and stat (`media.ServeFile`; a regular file only, `metadata.OpenRegular`, so a FIFO is a 404 at once, never an open held and counted on its mount),
-  each given up on after `API.fileWait` (10 s) as a 503 `share_not_answering` with `Retry-After`.
+  each given up on after `API.fileWait` (10 s; a stream's open after `API.streamWait`, 45 s: past a
+  sleeping disk's spin-up, under AVPlayer's 60 s resource timeout, as a 503 is no retry for it) as a
+  503 `share_not_answering` with `Retry-After`.
   The scan gives each the probe's time (`Scanner.probeTimeout`). With a book's audio read cut short
   none of its side files is looked at (each would wait out its time too); one given up on otherwise
   keeps the book as stored (`library.givenUp.keep`: `ReadCutShort`, never `LengthOnly`) with an

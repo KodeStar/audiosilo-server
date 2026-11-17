@@ -54,7 +54,7 @@ func TestCoverOnAHeldShareAnswersQuickly(t *testing.T) {
 	if err := e.cat.SetCover(context.Background(), lib.ID, "Custom", testImage(t, 1000, 500, true), e.adminID, catalog.SourceEdited); err != nil {
 		t.Fatal(err)
 	}
-	e.api.fileWait = 200 * time.Millisecond
+	e.api.fileWait, e.api.streamWait = 200*time.Millisecond, 200*time.Millisecond
 	release := metadata.HoldOpensForTests(filepath.Join(root, "Sidecar"))
 	t.Cleanup(release)
 
@@ -78,6 +78,54 @@ func TestCoverOnAHeldShareAnswersQuickly(t *testing.T) {
 		resp.Header.Get("Cache-Control") != coverCache || resp.Header.Get("Content-Type") != "image/jpeg" {
 		t.Errorf("the sidecar once the share answers = %d %s (%q, %q), want the image, cached a day",
 			resp.StatusCode, body, resp.Header.Get("Cache-Control"), resp.Header.Get("Content-Type"))
+	}
+}
+
+// A stream's open waits longer than a cover's look (streamWait, not fileWait):
+// a disk spinning up answers after a cover has given up, and the stream that
+// waited for it plays rather than answering a 503 the player won't retry. The
+// cover on the same held share is still a quick 503. Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
+func TestStreamWaitsOutADiskSpinningUp(t *testing.T) {
+	if !(fileWaitTimeout < streamOpenTimeout && streamOpenTimeout < 60*time.Second) {
+		t.Errorf("streamOpenTimeout %v, want it past fileWaitTimeout (%v) and under AVPlayer's 60 s", streamOpenTimeout, fileWaitTimeout)
+	}
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Main", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &catalog.Book{LibraryID: lib.ID, RelPath: "Book", IsFolder: true, Title: "Book", Format: "m4b", CoverPath: "Book/cover.jpg",
+		Files: []catalog.BookFile{{RelPath: "Book/book.m4b", Seq: 1}}}
+	if err := os.MkdirAll(filepath.Join(root, "Book"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Book", "book.m4b"), []byte("not really audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Book", "cover.jpg"), testImage(t, 100, 100, false), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cat.UpsertBook(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	const spinUp = 600 * time.Millisecond
+	e.api.fileWait, e.api.streamWait = 200*time.Millisecond, 10*time.Second
+	release := metadata.HoldOpensForTests(filepath.Join(root, "Book"))
+	t.Cleanup(release)
+
+	if resp, body := e.do(t, "GET", coverURL(lib.ID, "Book", ""), adminTok, ""); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("the cover while the disk spins up = %d %s, want 503 after fileWait", resp.StatusCode, body)
+	}
+	time.AfterFunc(spinUp, release)
+	stream := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + "/stream?path=" + url.QueryEscape("Book/book.m4b")
+	if resp, body := e.do(t, "GET", stream, adminTok, ""); resp.StatusCode != http.StatusOK || body != "not really audio" {
+		t.Errorf("the stream while the disk spins up = %d %q, want it served once the disk answers", resp.StatusCode, body)
 	}
 }
 

@@ -537,3 +537,12 @@ func (a *API) readSidecar(ctx context.Context, abs string) ([]byte, error) {
 // fileWaitTimeout is API.fileWait: long enough for a cold read from a slow
 // disk or share, well under the request timeout.
 const fileWaitTimeout = 10 * time.Second
+
+// streamOpenTimeout is API.streamWait, a stream's open. Longer than
+// fileWaitTimeout: a sleeping NAS or USB disk takes longer than that to spin
+// up, and a player waits for the audio it asked for where a cover can come
+// later. A 503 is no retry for AVPlayer, so play would fail where it used to
+// start late. Shorter than AVPlayer's resource timeout (about 60 s), so a
+// share that stopped answering is still a 503 the player hears, not a request
+// it gave up on itself.
+const streamOpenTimeout = 45 * time.Second

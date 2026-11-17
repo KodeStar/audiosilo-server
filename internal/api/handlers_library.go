@@ -819,7 +819,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := media.ServeFile(w, r, abs, download, a.fileWait); err != nil {
+	if err := media.ServeFile(w, r, abs, download, a.streamWait); err != nil {
 		writeShareNotAnswering(w)
 	}
 }
