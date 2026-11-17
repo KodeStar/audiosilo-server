@@ -116,6 +116,10 @@ func TestDirListerBounded(t *testing.T) {
 	if _, err := l.List(ctx, "/fine", 0); !errors.Is(err, ErrDirsTimedOut) {
 		t.Fatalf("with the one slot held: %v, want ErrDirsTimedOut", err)
 	}
+	// A relative path is refused at once, slots held or not.
+	if _, err := l.List(ctx, "relative", 0); !errors.Is(err, ErrNotAbsolute) {
+		t.Fatalf("a relative path with the one slot held: %v, want ErrNotAbsolute", err)
+	}
 	close(hang)
 	released = true
 	deadline := time.Now().Add(10 * time.Second)

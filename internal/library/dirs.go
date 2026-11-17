@@ -109,6 +109,9 @@ func NewDirLister(list func(dir string, limit int) (*DirListing, error), slots i
 // List is list(dir, limit), or ErrDirsTimedOut once the time-out (or ctx) ends
 // first, the listing left to finish on its own goroutine.
 func (l *DirLister) List(ctx context.Context, dir string, limit int) (*DirListing, error) {
+	if dir != "" && !filepath.IsAbs(dir) {
+		return nil, ErrNotAbsolute // refused at once, never waiting for a slot
+	}
 	ctx, cancel := context.WithTimeout(ctx, l.timeout)
 	defer cancel()
 	select {
