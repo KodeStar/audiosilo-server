@@ -1424,6 +1424,7 @@
   "health.bulkMatch.startFailed": "Zuordnung konnte nicht starten",
   "health.bulkMatch.stopFailed": "Konnte nicht angehalten werden",
   "health.bulkMatch.matching": "{{done}} von {{total}} Büchern zugeordnet",
+  "health.bulkMatch.waiting": "Der Community-Metadatendienst hat um eine Pause von ein paar Sekunden gebeten. Der Lauf geht von selbst weiter.",
   "health.bulkMatch.stoppedEarly": "Dieser Lauf wurde vorzeitig beendet: Der Community-Metadatendienst hat nicht geantwortet. {{done}} von {{total}} Büchern wurden geprüft; prüfe sie und starte dann einen neuen Lauf für den Rest.",
   "health.bulkMatch.applying": "{{done}} von {{total}} Treffern übernommen",
   "health.bulkMatch.progress": "Fortschritt der Zuordnung",

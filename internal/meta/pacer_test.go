@@ -212,6 +212,13 @@ func TestClientRunRetries503(t *testing.T) {
 	t.Parallel()
 	c, n, waits := answerThen(t, http.StatusServiceUnavailable, 2, "2")
 	p := quietPacer(1000)
+	clock := time.Unix(1000, 0) // moved by the client's waits, so they follow each other
+	p.now = func() time.Time { return clock }
+	c.sleep = func(_ context.Context, d time.Duration) error {
+		*waits = append(*waits, d)
+		clock = clock.Add(d)
+		return nil
+	}
 	got, err := c.lookup(WithPacer(context.Background(), p), "B00TEST", "")
 	if err != nil || got.RecordingID != "r1" {
 		t.Fatalf("lookup after two 503s = %+v %v, want the answer", got, err)
@@ -354,5 +361,35 @@ func TestClientKeepsConnectionsForEveryWorker(t *testing.T) {
 	round()
 	if got := conns.Load(); got != first {
 		t.Fatalf("second round opened %d more connections", got-first)
+	}
+}
+
+// The run's total is wall time: waits the workers sit out side by side count once
+// (server#307: six workers' 20 s read 2m0s), one after another add up, and the
+// end of the current wait is known while it runs.
+func TestPacerWaitsAreWallTime(t *testing.T) {
+	t.Parallel()
+	p := quietPacer(1000)
+	clock := time.Unix(1000, 0)
+	p.now = func() time.Time { return clock }
+	if !p.WaitingUntil().IsZero() {
+		t.Fatal("waiting before any wait")
+	}
+	for range 6 {
+		p.noteWait(nil, 20*time.Second)
+	}
+	if got := p.WaitingUntil(); !got.Equal(clock.Add(20 * time.Second)) {
+		t.Fatalf("waiting until %v, want %v", got, clock.Add(20*time.Second))
+	}
+	clock = clock.Add(10 * time.Second)
+	p.noteWait(nil, 20*time.Second) // overlaps the first 10 s
+	clock = clock.Add(20 * time.Second)
+	if !p.WaitingUntil().IsZero() {
+		t.Fatal("still waiting after the last wait ended")
+	}
+	clock = clock.Add(time.Minute)
+	p.noteWait(nil, 5*time.Second)
+	if count, total := p.Waits(); count != 8 || total != 35*time.Second {
+		t.Fatalf("waits = %d, %v; want 8, 35s", count, total)
 	}
 }

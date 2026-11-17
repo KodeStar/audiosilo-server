@@ -1424,6 +1424,7 @@
   "health.bulkMatch.startFailed": "Couldn't start matching",
   "health.bulkMatch.stopFailed": "Couldn't stop the run",
   "health.bulkMatch.matching": "Matching {{done}} of {{total}} books",
+  "health.bulkMatch.waiting": "The community metadata service asked for a pause of a few seconds. The run carries on by itself.",
   "health.bulkMatch.stoppedEarly": "This run stopped early: the community metadata service didn't answer. {{done}} of {{total}} books were checked; review them, then run again for the rest.",
   "health.bulkMatch.applying": "Applying {{done}} of {{total}} matches",
   "health.bulkMatch.progress": "Matching progress",

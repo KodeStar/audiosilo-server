@@ -45,6 +45,53 @@ func TestRecordMatchItemDeletedLibrary(t *testing.T) {
 	}
 }
 
+// TestRecordMatchItemKeepsTheContentGeneration: a run recording its books is
+// user state (server#307), so the list caches stay warm through it; starting
+// and finishing the run move the generation as before.
+func TestRecordMatchItemKeepsTheContentGeneration(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "One", Root: "/tmp/one"})
+	gen := func() uint64 {
+		t.Helper()
+		g, ok := c.ContentGeneration()
+		if !ok {
+			t.Fatal("the test store counts no content generation")
+		}
+		return g
+	}
+	before := gen()
+	run, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeMatch, Total: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gen() == before {
+		t.Fatal("starting a run left the content generation")
+	}
+	started := gen()
+	for i, item := range []*MatchRunItem{
+		{LibraryID: lib.ID, Path: "A/1", Outcome: OutcomeAuto, Score: 96},
+		{LibraryID: lib.ID, Path: "A/2", Outcome: OutcomeNone},
+		nil,
+	} {
+		if err := c.RecordMatchItem(ctx, run, item); err != nil {
+			t.Fatalf("item %d: %v", i, err)
+		}
+	}
+	if gen() != started {
+		t.Error("recording a run's books moved the content generation")
+	}
+	if r, err := c.GetMatchRun(ctx, run); err != nil || r.Done != 3 || r.Counts.Auto != 1 {
+		t.Fatalf("run = %+v %v", r, err)
+	}
+	if err := c.FinishMatching(ctx, run, MatchReady, ""); err != nil {
+		t.Fatal(err)
+	}
+	if gen() == started {
+		t.Error("finishing the run left the content generation")
+	}
+}
+
 // TestListMatchRunItemsBestFirst: a run's items page best match first (score
 // descending, a tie in the order they were recorded) across pages, so a review read
 // a page at a time sees one order; an outcome reads only its own items, and an

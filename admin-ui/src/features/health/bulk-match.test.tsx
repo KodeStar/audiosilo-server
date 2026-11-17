@@ -627,6 +627,23 @@ describe('bulk matching', () => {
     ).toBeInTheDocument();
   });
 
+  it('says when a working run waits as the community service asked (server#307)', async () => {
+    const waiting = run({
+      status: 'matching',
+      done: 1,
+      total: 4,
+      waiting_until: '2099-01-01T00:00:00Z',
+    });
+    mockFetch(routes([waiting], { 'GET /admin/match-runs/5': () => ({ body: waiting }) }));
+    renderApp('/health?issue=unmatched');
+    expect(await screen.findByText('Matching 1 of 4 books')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'The community metadata service asked for a pause of a few seconds. The run carries on by itself.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('shows a working run and stops it', async () => {
     const calls = mockFetch(
       routes([run({ status: 'matching', done: 1, total: 4 })], {
@@ -640,6 +657,7 @@ describe('bulk matching', () => {
       'aria-valuenow',
       '25',
     );
+    expect(screen.queryByText(/asked for a pause/)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Stop' }));
     await waitFor(() =>
       expect(

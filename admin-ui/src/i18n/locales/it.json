@@ -1518,6 +1518,7 @@
   "health.bulkMatch.startFailed": "Impossibile avviare l'associazione",
   "health.bulkMatch.stopFailed": "Impossibile fermare",
   "health.bulkMatch.matching": "Associati {{done}} libri su {{total}}",
+  "health.bulkMatch.waiting": "Il servizio di metadati della community ha chiesto una pausa di qualche secondo. La passata riprende da sola.",
   "health.bulkMatch.stoppedEarly": "Questa passata si è fermata in anticipo: il servizio di metadati della community non ha risposto. Sono stati controllati {{done}} libri su {{total}}; rivedili, poi avvia un'altra passata per il resto.",
   "health.bulkMatch.applying": "Applicate {{done}} corrispondenze su {{total}}",
   "health.bulkMatch.progress": "Avanzamento dell'associazione",

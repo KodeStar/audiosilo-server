@@ -121,6 +121,13 @@ var userStateTables = map[string]tableRule{
 	// a new state, result or error, or a job added or removed, moves the
 	// generation.
 	"bridge_jobs": {free: []string{"lease_until", "updated_at", "progress"}},
+	// A match run recording a book (catalog.RecordMatchItem): its item and the
+	// run's count, read only by the console's match-run routes (uncached), never
+	// by a content cache, so a run doesn't empty the list caches a book at a time
+	// (server#307). A run started, finished, applied or deleted (its other
+	// columns, its rows) moves the generation.
+	"match_runs":      {free: []string{"done"}},
+	"match_run_items": {rows: true},
 }
 
 // userStateRules is userStateTables with each column rule's watched columns,

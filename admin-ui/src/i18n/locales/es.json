@@ -1518,6 +1518,7 @@
   "health.bulkMatch.startFailed": "No se pudo empezar a asociar",
   "health.bulkMatch.stopFailed": "No se pudo detener",
   "health.bulkMatch.matching": "Asociando {{done}} de {{total}} libros",
+  "health.bulkMatch.waiting": "El servicio de metadatos de la comunidad pidió una pausa de unos segundos. La búsqueda continúa sola.",
   "health.bulkMatch.stoppedEarly": "Esta búsqueda se detuvo antes de tiempo: el servicio de metadatos de la comunidad no respondió. Se comprobaron {{done}} de {{total}} libros; revísalos y vuelve a buscar para el resto.",
   "health.bulkMatch.applying": "Aplicando {{done}} de {{total}} coincidencias",
   "health.bulkMatch.progress": "Progreso de la asociación",

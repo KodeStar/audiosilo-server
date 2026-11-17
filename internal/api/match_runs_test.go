@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
@@ -434,5 +435,60 @@ func TestClearCommunityMatchesNoService(t *testing.T) {
 	if resp, body := e.do(t, "DELETE", "/api/v1/admin/community-matches", adminTok, ""); resp.StatusCode != http.StatusOK ||
 		!strings.Contains(body, `"books":0`) {
 		t.Fatalf("clear = %d %s", resp.StatusCode, body)
+	}
+}
+
+// A run the community service asked to wait (a 429's Retry-After) says until
+// when, on the run and in the list, so the console can tell held progress from a
+// stuck run (server#307); a run that isn't waiting carries no such field.
+func TestMatchRunSaysItIsWaiting(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/works/match", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	e := newTestEnvWith(t, func(c *config.Config) {
+		c.Metadata.Enabled, c.Metadata.BaseURL = true, srv.URL
+	})
+	adminTok, _, _ := adminAndMember(t, e)
+	ctx := context.Background()
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := catalog.Book{LibraryID: lib.ID, RelPath: "A/Book", Title: "Book", Author: "A", IsFolder: true, AddedAt: "2020-01-01"}
+	if _, err := e.cat.UpsertBook(ctx, &b); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := e.do(t, "POST", "/api/v1/admin/match-runs", adminTok, "")
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("start = %d %s", resp.StatusCode, body)
+	}
+	run := decodeRun(t, body)
+	if run.WaitingUntil != "" {
+		t.Fatalf("a run just started is waiting until %q", run.WaitingUntil)
+	}
+	runURL := "/api/v1/admin/match-runs/" + strconv.FormatInt(run.ID, 10)
+	t.Cleanup(func() {
+		e.do(t, "POST", runURL+"/cancel", adminTok, "")
+		e.api.matchRuns.Wait()
+	})
+	deadline := time.Now().Add(10 * time.Second)
+	for run.WaitingUntil == "" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		_, body = e.do(t, "GET", runURL, adminTok, "")
+		run = decodeRun(t, body)
+	}
+	until, err := time.Parse(time.RFC3339, run.WaitingUntil)
+	if err != nil || !until.After(time.Now()) {
+		t.Fatalf("waiting_until = %q, want a time ahead", run.WaitingUntil)
+	}
+	_, body = e.do(t, "GET", "/api/v1/admin/match-runs", adminTok, "")
+	var list struct{ Runs []catalog.MatchRun }
+	if err := json.Unmarshal([]byte(body), &list); err != nil || len(list.Runs) != 1 || list.Runs[0].WaitingUntil != run.WaitingUntil {
+		t.Fatalf("list = %s, want the run waiting", body)
 	}
 }

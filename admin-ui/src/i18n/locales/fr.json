@@ -1518,6 +1518,7 @@
   "health.bulkMatch.startFailed": "Impossible de lancer l'association",
   "health.bulkMatch.stopFailed": "Impossible d'arrêter",
   "health.bulkMatch.matching": "Association de {{done}} livres sur {{total}}",
+  "health.bulkMatch.waiting": "Le service de métadonnées communautaires a demandé une pause de quelques secondes. La passe reprend d'elle-même.",
   "health.bulkMatch.stoppedEarly": "Cette passe s'est arrêtée plus tôt : le service de métadonnées communautaires n'a pas répondu. {{done}} livres sur {{total}} ont été vérifiés ; vérifiez-les, puis relancez une passe pour le reste.",
   "health.bulkMatch.applying": "Application de {{done}} correspondances sur {{total}}",
   "health.bulkMatch.progress": "Progression de l'association",

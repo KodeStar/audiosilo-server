@@ -10,7 +10,8 @@ import (
 )
 
 // Pacer keeps one bulk run's requests to the remote service evenly spaced, under a
-// rate, and counts what the service asked it to wait. It goes in the run's context
+// rate, and counts what the service asked it to wait: how many waits, and the wall
+// time they cover (the run's workers wait side by side, so their waits overlap). It goes in the run's context
 // (WithPacer) rather than on the Service, so only the run is paced: an admin's dialog
 // and a listener's lookup beside it are not, and don't spend its slots.
 //
@@ -26,7 +27,8 @@ type Pacer struct {
 	mu     sync.Mutex
 	next   time.Time // the next free slot
 	waits  int
-	waited time.Duration
+	waited time.Duration // the wall time the waits cover, overlaps counted once
+	until  time.Time     // when the latest wait asked for ends
 }
 
 // NewPacer returns a pacer of at most perSecond requests a second, logging each wait
@@ -68,10 +70,21 @@ func (p *Pacer) wait(ctx context.Context) error {
 }
 
 // noteWait records and logs a wait the answer err asked for, with the run's total.
+// The total is wall time: the part of this wait another worker's already covers
+// is not added again (six workers told to wait 20 s together waited 20 s, not 2
+// minutes; server#307).
 func (p *Pacer) noteWait(err error, wait time.Duration) {
 	p.mu.Lock()
 	p.waits++
-	p.waited += wait
+	now := p.now()
+	if end := now.Add(wait); end.After(p.until) {
+		from := now
+		if p.until.After(from) {
+			from = p.until
+		}
+		p.waited += end.Sub(from)
+		p.until = end
+	}
 	waits, waited := p.waits, p.waited
 	p.mu.Unlock()
 	status := 0
@@ -82,11 +95,23 @@ func (p *Pacer) noteWait(err error, wait time.Duration) {
 	p.log.Info("community metadata: waiting as the service asked", "status", status, "wait", wait, "waits", waits, "waited", waited)
 }
 
-// Waits is how many waits the service has asked for, and their total length.
+// Waits is how many waits the service has asked for, and the wall time they
+// cover.
 func (p *Pacer) Waits() (int, time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.waits, p.waited
+}
+
+// WaitingUntil is when the wait the service last asked for ends, while one is
+// running (zero otherwise): the run's progress holds until then.
+func (p *Pacer) WaitingUntil() time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.until.After(p.now()) {
+		return p.until
+	}
+	return time.Time{}
 }
 
 // pacedTransport spaces out the requests of a context with a Pacer. It is the remote

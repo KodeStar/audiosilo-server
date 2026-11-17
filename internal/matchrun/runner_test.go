@@ -334,6 +334,38 @@ func TestRunStopsWhenTheServiceIsDown(t *testing.T) {
 	}
 }
 
+// The book whose failure trips the stop keeps its error item, as every failure
+// before it does (server#307). The queries go one at a time, each once the books
+// before it are recorded (or the stop's is), so the failures it counts are all
+// recorded first.
+func TestTrippingBookHasAnItem(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	for i := range maxFailStreak + workers {
+		e.book(t, fmt.Sprintf("A/%02d", i), "Down", "", nil)
+	}
+	var (
+		turnMu sync.Mutex
+		turn   int
+	)
+	e.matcher.before = func(meta.MatchQuery) {
+		turnMu.Lock()
+		mine := turn
+		turn++
+		turnMu.Unlock()
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(2 * time.Millisecond) {
+			runs, err := e.cat.ListMatchRuns(ctx)
+			if err == nil && len(runs) > 0 && (runs[0].Done >= mine || runs[0].Counts.Error >= maxFailStreak) {
+				return
+			}
+		}
+	}
+	run := e.start(t, catalog.MatchModeMatch, "")
+	if run.Error != ErrCodeUnavailable || run.Counts.Error < maxFailStreak {
+		t.Fatalf("run = %+v, want stopped with %d error items", run, maxFailStreak)
+	}
+}
+
 // TestStoppedRunKeepsItsAnswers (server#306): a run the service's outage stops keeps
 // the books it already answered, ready to review and apply, the code saying it
 // stopped early; the books it never reached are still unmatched, so the next run

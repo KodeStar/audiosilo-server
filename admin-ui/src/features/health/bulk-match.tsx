@@ -286,6 +286,9 @@ function Working({ run, lang, onStop }: { run: MatchRun; lang: string; onStop: (
         </Button>
       </div>
       <ProgressBar fraction={runFraction(run)} label={t('health.bulkMatch.progress')} />
+      {run.waiting_until ? (
+        <p className="text-[12.5px] text-muted-foreground">{t('health.bulkMatch.waiting')}</p>
+      ) : null}
     </div>
   );
 }
