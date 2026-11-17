@@ -152,3 +152,38 @@ func TestReadSlotsRetryUncountedAlone(t *testing.T) {
 		t.Errorf("%d reads, want 2 and a retry of each", n)
 	}
 }
+
+// A read cut short by the scan's stop (an MP3's count uncounted for it) while
+// another read is stuck is dropped at once, not retried alone: the retry would
+// wait for the stuck read, and the stopped scan would leave this read too.
+func TestReadSlotsStoppedReadIsNotRetried(t *testing.T) {
+	t.Parallel()
+	slots := newReadSlots(2, 5*time.Second)
+	stuck, release := make(chan struct{}), make(chan struct{})
+	var first sync.WaitGroup
+	defer first.Wait()
+	defer close(release)
+	ctx, stop := context.WithCancel(t.Context())
+	var calls atomic.Int32
+	slots.readFile = func(context.Context, string, string, time.Duration) *metadata.Metadata {
+		if calls.Add(1) == 1 {
+			close(stuck)
+			<-release // a call stuck in the kernel ignores the stop
+			return nil
+		}
+		stop() // the scan stops while this read counts its frames
+		return metadata.UncountedForTests(&metadata.Metadata{})
+	}
+	first.Go(func() { slots.extract(ctx, "stuck.mp3", "") })
+	<-stuck
+	read := make(chan *metadata.Metadata, 1)
+	go func() { read <- slots.extract(ctx, "cut-short.mp3", "") }()
+	select {
+	case md := <-read:
+		if md != nil {
+			t.Errorf("the stopped read = %+v, want it dropped (nil)", md)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stopped read waited for the stuck one to retry alone")
+	}
+}

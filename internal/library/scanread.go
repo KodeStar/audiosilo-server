@@ -55,7 +55,8 @@ func extractFile(ctx context.Context, absPath, ffprobePath string, timeout time.
 func (r *readSlots) size() int { return cap(r.ch) }
 
 // extract is metadata.ExtractTimeout holding a slot while it reads; nil when
-// ctx ends while it waits for one (stopped: the scan drops the reading).
+// ctx ends before it is done (stopped: the scan drops the reading, which the
+// stop may have cut short).
 //
 // A read whose ffprobe ran out of time while others were reading is read again
 // on its own: files sharing a slow disk or a busy share can each take longer
@@ -67,6 +68,11 @@ func (r *readSlots) size() int { return cap(r.ch) }
 // length would otherwise be ffprobe's estimate until a later scan.
 func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *metadata.Metadata {
 	md, shared := r.read(ctx, absPath, ffprobePath)
+	if ctx.Err() != nil {
+		// Stopped (an MP3's count cut short is uncounted): dropped, never
+		// retried behind a read stuck on a share.
+		return nil
+	}
 	if !shared || !(lengthTimedOut(md) || md.LengthUncounted()) {
 		return md
 	}
@@ -74,7 +80,7 @@ func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *m
 	r.alone.Lock()
 	defer r.alone.Unlock()
 	if ctx.Err() != nil {
-		return md // stopped: dropped by the scan
+		return nil // stopped while it waited: dropped by the scan
 	}
 	return r.readFile(ctx, absPath, ffprobePath, r.timeout)
 }
