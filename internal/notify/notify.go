@@ -528,6 +528,7 @@ var bridgeKindWords = map[string]struct{ label, ready, readyText string }{
 	bridge.KindReadalong: {"Read-along", "Read-along made",
 		"It is saved with the book. Open the book in a compatible AudioSilo player to follow the text with the narration."},
 	bridge.KindLibrivoxFetch: {"Adding from LibriVox", "Added from LibriVox", "It is in the library now."},
+	bridge.KindAudibleImport: {"Audible backup", "Backed up from Audible", "It is in the library now."},
 	bridge.KindVerify:        {label: "Bridge check"},
 }
 
