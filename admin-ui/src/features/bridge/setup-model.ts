@@ -52,13 +52,14 @@ const WORKERS_TAB = 'workers';
  */
 const ASR_WAITING_DETAIL = 'waiting for an ASR worker';
 
+/** What stepNeedsWorker reads of a setup step. */
+type WorkerProbe = Pick<BridgeSetupItem, 'id' | 'detail' | 'needs_worker'>;
+
 /**
  * Whether a step waits for an ASR worker: its `needs_worker` flag (bridge#28),
  * else, from an older Bridge, the ASR step's detail text.
  */
-export function stepNeedsWorker(
-  item: Pick<BridgeSetupItem, 'id' | 'detail' | 'needs_worker'>,
-): boolean {
+function stepNeedsWorker(item: WorkerProbe): boolean {
   if (item.needs_worker) return true;
   return item.id === 'asr' && Boolean(item.detail?.includes(ASR_WAITING_DETAIL));
 }
@@ -68,10 +69,7 @@ export function stepNeedsWorker(
  * address. A step waiting for an ASR worker goes to Workers (stepNeedsWorker);
  * every other ASR state to Settings.
  */
-export function setupItemLink(
-  uiUrl: string | undefined,
-  item: Pick<BridgeSetupItem, 'id' | 'detail' | 'needs_worker'>,
-): string | undefined {
+export function setupItemLink(uiUrl: string | undefined, item: WorkerProbe): string | undefined {
   const tab = stepNeedsWorker(item) ? WORKERS_TAB : SETUP_TAB.get(item.id);
   return tab ? bridgeTabLink(uiUrl, tab) : undefined;
 }

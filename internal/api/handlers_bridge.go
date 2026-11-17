@@ -596,13 +596,14 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, bridge.ErrNotFound):
 		writeError(w, http.StatusNotFound, "job not found")
-	case errors.Is(err, bridge.ErrCancelledWhileHeld):
-		// Still not_held (an older Bridge drops the job as before); reason
-		// tells a newer one an admin's cancel ended it, not a lost lease.
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "the job is no longer held by this claim",
-			"code": "not_held", "reason": "cancelled"})
 	case errors.Is(err, bridge.ErrNotHeld):
-		writeErrorCode(w, http.StatusConflict, "not_held", "the job is no longer held by this claim")
+		body := map[string]string{"error": "the job is no longer held by this claim", "code": "not_held"}
+		if errors.Is(err, bridge.ErrCancelledWhileHeld) {
+			// Still not_held (an older Bridge drops the job as before); reason
+			// tells a newer one an admin's cancel ended it, not a lost lease.
+			body["reason"] = "cancelled"
+		}
+		writeJSON(w, http.StatusConflict, body)
 	case errors.Is(err, bridge.ErrFinished):
 		writeErrorCode(w, http.StatusConflict, "finished", "the job has already finished")
 	case errors.Is(err, bridge.ErrKindUnavailable):
