@@ -1339,7 +1339,11 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 	if err != nil && !errors.Is(err, errWalkCapped) {
 		return nil, nil, hadErrors, err
 	}
-	if gone := statAudio(ctx, dirs, width); gone > 0 {
+	gone, serr := statAudio(ctx, dirs, width)
+	if serr != nil {
+		return nil, nil, hadErrors, serr
+	}
+	if gone > 0 {
 		// Files listed by the walk but no longer there when looked at: the tree
 		// changed under it (a book folder renamed or moved once listed). Their
 		// books drop out of this walk, so it is partial, as with an unreadable
@@ -1531,9 +1535,13 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 // the books being built from them (statEntry). One at a time, a no-change scan
 // of a library on a network share or a FUSE pool (Unraid's /mnt/user) spends
 // most of its time waiting on these, one round trip each, the walk's own folder
-// reads being far fewer. A file not looked at by the time ctx ends is looked at
-// when asked, as before. gone is how many of the files were no longer there.
-func statAudio(ctx context.Context, dirs map[string][]audioFile, width int) (gone int) {
+// reads being far fewer. gone is how many of the files were no longer there.
+// Once ctx has ended it is ctx's error, the files not reached by then left
+// unread: their caller stops rather than building books from them, which would
+// look at each of those files one at a time, on a share that may have stopped
+// answering, long after its waiter has gone (a setup preview's, at its time,
+// with the preview's slot for the mount held meanwhile).
+func statAudio(ctx context.Context, dirs map[string][]audioFile, width int) (gone int, err error) {
 	var files []*audioFile
 	for _, audio := range dirs {
 		for i := range audio {
@@ -1548,7 +1556,7 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int) (gon
 		}
 		(*f).de = newStatEntry((*f).de, info, err)
 	})
-	return int(missing.Load())
+	return int(missing.Load()), ctx.Err()
 }
 
 // statEntry is a directory entry whose Info statAudio has read, keeping only
@@ -2140,7 +2148,9 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	}
 	var candidates []*catalog.Book
 	if root, ok := joinRoot(overrides, dirRel, isDiscSet); ok {
-		statAudio(ctx, discs, s.walkWidth()) // the joined book is built from all of them
+		if _, err := statAudio(ctx, discs, s.walkWidth()); err != nil { // the joined book is built from all of them
+			return nil, err
+		}
 		if b := joinedBook(lib, root, discs); b != nil {
 			candidates = []*catalog.Book{b}
 		}

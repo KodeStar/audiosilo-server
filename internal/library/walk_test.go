@@ -1,6 +1,7 @@
 package library
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -194,8 +196,8 @@ func TestStatAudioCountsFilesGone(t *testing.T) {
 		if err := os.Rename(from, to); err != nil {
 			t.Fatal(err)
 		}
-		if gone := statAudio(t.Context(), dirs, width); gone != 2 {
-			t.Errorf("width %d: %d files gone, want 2", width, gone)
+		if gone, err := statAudio(t.Context(), dirs, width); gone != 2 || err != nil {
+			t.Errorf("width %d: %d files gone, %v, want 2", width, gone, err)
 		}
 		if info, err := dirs["Z Book"][0].de.Info(); err != nil || info.Size() != 3 {
 			t.Errorf("width %d: the file still there = %v, %v", width, info, err)
@@ -203,5 +205,64 @@ func TestStatAudioCountsFilesGone(t *testing.T) {
 		if err := os.Rename(to, from); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// slowEntry is an audio file's directory entry whose Info (its lstat) waits for
+// hold the first time it is asked, as one on a share that stopped answering,
+// and counts how often it is asked.
+type slowEntry struct {
+	fs.DirEntry
+	asked *atomic.Int32
+	first chan struct{} // closed when the first Info starts waiting
+	hold  chan struct{}
+}
+
+func (e slowEntry) Info() (fs.FileInfo, error) {
+	if e.asked.Add(1) == 1 {
+		close(e.first)
+		<-e.hold
+	}
+	return e.DirEntry.Info()
+}
+
+// statAudio whose context ends while it looks at the audio files (a setup
+// preview abandoned at its time, its waiter gone) looks at none of the rest
+// once the hung lstat returns, and answers ctx's error, so discovery stops
+// rather than building the books, which would lstat every file left one at a
+// time on the share that stopped answering, holding the preview's slot for its
+// mount all the while.
+func TestStatAudioStopsWhenItsContextEnds(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFile(t, root, "Book/01.mp3", []byte("xyz"))
+	info, err := os.Lstat(filepath.Join(root, "Book", "01.mp3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asked atomic.Int32
+	first, hold := make(chan struct{}), make(chan struct{})
+	audio := make([]audioFile, 50)
+	for i := range audio {
+		audio[i] = audioFile{abs: filepath.Join(root, "Book", fmt.Sprintf("%02d.mp3", i+1)), de: slowEntry{
+			DirEntry: fs.FileInfoToDirEntry(info), asked: &asked, first: first, hold: hold,
+		}}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := statAudio(ctx, map[string][]audioFile{"Book": audio}, 1)
+		done <- err
+	}()
+	<-first
+	cancel()
+	close(hold)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Errorf("statAudio whose context ended: %v, want context.Canceled", err)
+	}
+	// The one under way when it ended, and perhaps a few handed out as it did
+	// (its pool may pick either), never the rest.
+	if n := asked.Load(); n > 10 {
+		t.Errorf("%d of %d files looked at, want only those under way when the context ended", n, len(audio))
 	}
 }
