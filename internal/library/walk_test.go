@@ -260,9 +260,9 @@ func TestStatAudioStopsWhenItsContextEnds(t *testing.T) {
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Errorf("statAudio whose context ended: %v, want context.Canceled", err)
 	}
-	// The one under way when it ended, and perhaps a few handed out as it did
-	// (its pool may pick either), never the rest.
-	if n := asked.Load(); n > 10 {
-		t.Errorf("%d of %d files looked at, want only those under way when the context ended", n, len(audio))
+	// Only the one under way when it ended, though its pool may hand out another
+	// as it does.
+	if n := asked.Load(); n != 1 {
+		t.Errorf("%d of %d files looked at, want only the one under way when the context ended", n, len(audio))
 	}
 }

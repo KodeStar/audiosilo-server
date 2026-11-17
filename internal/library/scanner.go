@@ -1550,6 +1550,11 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int) (gon
 	}
 	var missing atomic.Int64
 	pool.Each(ctx, min(width, len(files)), files, func() bool { return true }, func(f **audioFile) {
+		// The pool may still hand a file out as ctx ends (its select picks either):
+		// none is looked at once it has.
+		if ctx.Err() != nil {
+			return
+		}
 		info, err := (*f).de.Info()
 		if errors.Is(err, fs.ErrNotExist) {
 			missing.Add(1)
@@ -2148,7 +2153,8 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	}
 	var candidates []*catalog.Book
 	if root, ok := joinRoot(overrides, dirRel, isDiscSet); ok {
-		if _, err := statAudio(ctx, discs, s.walkWidth()); err != nil { // the joined book is built from all of them
+		// The joined book is built from all of them.
+		if _, err := statAudio(ctx, discs, s.walkWidth()); err != nil {
 			return nil, err
 		}
 		if b := joinedBook(lib, root, discs); b != nil {
