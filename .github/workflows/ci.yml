@@ -1,8 +1,10 @@
 # Gates every pull request and push to main on tests + coverage, race tests +
-# lint on the native SQLite engine the image ships, lint (govet included) and
-# the admin console's own gate (admin-ui: typecheck, lint, prettier, vitest).
-# The four jobs run side by side; the image build (image.yml) stays separate
-# and runs on tags (releases) and pushes to main (:edge).
+# lint on the native SQLite engine the image ships, lint (govet included, with
+# the per-package test floor and a dead-code report), the admin console's own
+# gate (admin-ui: typecheck, lint, prettier, vitest) and a snapshot of the
+# native release build booted as the release's smoke test boots it. The five
+# jobs run side by side; the image build (image.yml) stays separate and runs on
+# tags (releases) and pushes to main (:edge).
 name: ci
 
 on:
@@ -114,3 +116,64 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: latest
+
+      # Every package under internal/ and pkg/ has a test, or a `// no-tests:
+      # <why>` line saying why not (server#220).
+      - name: Test floor
+        run: scripts/test-floor.sh
+
+      # A report, not a gate (server#220): functions no non-test code reaches.
+      # Test helpers and test-only seams are expected here; read it for code a
+      # change left without a caller. Its list is in the run's summary.
+      - name: Dead code report (non-gating)
+        continue-on-error: true
+        run: |
+          go run golang.org/x/tools/cmd/deadcode@v0.52.0 ./... | tee deadcode.txt
+          {
+            echo '### deadcode (non-gating)'
+            echo '```'
+            cat deadcode.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The release's linux_amd64 build (.goreleaser.yml: the native SQLite engine,
+  # static, the web player and the console embedded) as a snapshot, booted as
+  # release.yml's smoke test boots the archive (scripts/smoke-boot.sh), so a build
+  # that breaks or doesn't start shows on the pull request, not at the tag
+  # (server#217). The other targets build at release time only. The before-hooks
+  # pull the public web image and build the console.
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the snapshot's version comes from the last tag
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: admin-ui/.nvmrc
+          cache: npm
+          cache-dependency-path: admin-ui/package-lock.json
+
+      - name: Check the GoReleaser config
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: '~> v2'
+          args: check
+
+      - name: Build a snapshot (linux amd64)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: '~> v2'
+          args: build --snapshot --clean --single-target --id audiosilo-linux --output dist/audiosilo-snapshot
+        env:
+          GOOS: linux
+          GOARCH: amd64
+
+      - name: Boot it
+        run: scripts/smoke-boot.sh dist/audiosilo-snapshot "$RUNNER_TEMP/smoke"
