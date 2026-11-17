@@ -1697,8 +1697,8 @@ type HouseholdChange struct {
 // open pairing codes and the recovery code a session could have made
 // (endSessions): whoever knew the old one is signed out wherever they used it.
 // What stays, and why, is endSessions'. A new password on the first-run admin
-// replaces the printed one and ends the auth code printed beside it
-// (notePasswordSet).
+// replaces the printed one and ends the auth code printed beside it, and so
+// does clearing it (notePasswordSet).
 func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error {
 	if c.Username != nil {
 		name, err := cleanUsername(*c.Username)
@@ -1876,8 +1876,8 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 				return err
 			}
 		}
-		if hash != "" {
-			if err := notePasswordSet(ctx, tx, id, curRole == RoleAdmin, s.ts()); err != nil {
+		if c.Password != nil {
+			if err := notePasswordSet(ctx, tx, id, hash != "" && curRole == RoleAdmin, s.ts()); err != nil {
 				return err
 			}
 		}

@@ -161,6 +161,57 @@ func TestNewPasswordEndsThePrintedCode(t *testing.T) {
 	}
 }
 
+// Clearing the first-run admin's password (one who signs in with single
+// sign-on now) ends the printed password and the code printed beside it as a
+// new one does: the log's password no longer works, so its code must not
+// either. No one holds a password by it, so the start's hint is not ended as a
+// sign-in ends it. Denied: the printed code pairs no more. Allowed: the admin's
+// other code, and a clear the server refuses (no other way in) ends nothing.
+func TestClearedPasswordEndsThePrintedCode(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	admin := mustUser(t, s, ctx, "admin", "first-password", RoleAdmin)
+	printed, err := s.CreateAuthCode(ctx, admin.ID, InitialAdminCodeLabel, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.CreateAuthCode(ctx, admin.ID, "my phone", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkFirstAdmin(ctx, admin.ID, printed); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPassword(ctx, admin.ID, "", 0); !errors.Is(err, ErrAdminNeedsPassword) {
+		t.Fatalf("clearing an admin's only way in = %v, want ErrAdminNeedsPassword", err)
+	}
+	if _, err := s.ResolveAuthCode(ctx, printed); err != nil {
+		t.Fatalf("a refused clear ended the printed code: %v", err)
+	}
+	if p, _ := s.PrintedPassword(ctx, admin.ID); !p {
+		t.Fatal("a refused clear ended the printed password")
+	}
+	s.SetSSOIssuer(func() string { return testIssuer })
+	if _, _, err := s.LinkPending(ctx, pendingFor(t, s, ctx, claimsFor("sub-admin", "", false)), admin.ID, admin.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPassword(ctx, admin.ID, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveAuthCode(ctx, printed); !errors.Is(err, ErrInvalidCode) {
+		t.Fatalf("the printed code after the password was cleared = %v, want ErrInvalidCode", err)
+	}
+	if p, _ := s.PrintedPassword(ctx, admin.ID); p {
+		t.Error("printed_password after the password was cleared")
+	}
+	if _, err := s.ResolveAuthCode(ctx, other); err != nil {
+		t.Errorf("the admin's other code went too: %v", err)
+	}
+	if fa, ok, err := s.readFirstAdmin(ctx); err != nil || !ok || fa.SignedIn {
+		t.Errorf("first-run row after a clear = %+v, %v, %v; want it not signed in", fa, ok, err)
+	}
+}
+
 // A first-run code the admin rotated was never printed: the row names the
 // printed one by id and stamp, which a rotation renews, so a new password
 // leaves the rotated code pairing.

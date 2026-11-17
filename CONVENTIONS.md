@@ -4123,7 +4123,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   write) writes it too, so the next start points at `reset-admin` for a password printed nowhere. Any admin's password sign-in
   (`NoteAdminSignIn`) or a password set on an admin account ends it. A password set on the first-run
   admin, whoever sets it (the account step's `POST /auth/password`, People's `PATCH /admin/users/{id}`,
-  another admin's included, `reset-admin`), also ends `printed_password` and deletes the auth code the
+  another admin's included, `reset-admin`), or cleared (an admin with single sign-on; that alone leaves
+  the hint), also ends `printed_password` and deletes the auth code the
   row names (D4, server#391: it sat in the same log; a row from before it named one, an upgraded
   install's, finds the code by its label and shape, as `reset-admin` does: `revokePrintedCode`):
   `auth.UpdateUser` notes it in its own transaction (`notePasswordSet`), so no handler does; each note

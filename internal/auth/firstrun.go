@@ -36,8 +36,8 @@ type firstAdmin struct {
 	// reset-admin): someone holds a working password.
 	SignedIn bool `json:"signed_in"`
 	// ChosePassword is set once UserID's password is replaced, by them,
-	// another admin or reset-admin, so the printed one is gone (the console's
-	// Your account step words itself by it).
+	// another admin or reset-admin, or cleared, so the printed one is gone
+	// (the console's Your account step words itself by it).
 	ChosePassword bool `json:"chose_password"`
 	// CodeID and CodeCreatedAt name the auth code printed beside the password
 	// (auth_codes.id and created_at). A rotation in the console keeps the row
@@ -101,21 +101,23 @@ func (s *Service) NoteAdminSignIn(ctx context.Context) error {
 	return s.noteFirstAdmin(ctx, func(fa *firstAdmin) { fa.SignedIn = true })
 }
 
-// notePasswordSet is UpdateUser's note of a password set on account id (admin:
-// an admin account once the change is made), inside its transaction tx: an
-// admin's ends the start's hint (signed in, as NoteAdminSignIn: the hint would
-// point at the first start's password while someone holds a working one), and
-// the first-run admin's, whoever set it (their own change in the Your account
-// step or People, another admin's, reset-admin), replaces the printed password
-// (printed_password false) and ends the auth code printed beside it in the same
-// log (revokePrintedCode). Writes only what changes.
-func notePasswordSet(ctx context.Context, tx *sql.Tx, id int64, admin bool, now string) error {
+// notePasswordSet is UpdateUser's note of a password set or cleared on account
+// id (holds: an admin account that holds a password once the change is made),
+// inside its transaction tx: an admin's new password ends the start's hint
+// (signed in, as NoteAdminSignIn: the hint would point at the first start's
+// password while someone holds a working one), and the first-run admin's,
+// whoever set it (their own change in the Your account step or People, another
+// admin's, reset-admin) or cleared it (an admin who signs in with single
+// sign-on), ends the printed password (printed_password false) and the auth
+// code printed beside it in the same log (revokePrintedCode). Writes only what
+// changes.
+func notePasswordSet(ctx context.Context, tx *sql.Tx, id int64, holds bool, now string) error {
 	fa, err := store.GetState[firstAdmin](ctx, tx, firstAdminKey)
 	if err != nil || fa.UserID == 0 {
 		return err
 	}
 	next := fa
-	next.SignedIn = next.SignedIn || admin
+	next.SignedIn = next.SignedIn || holds
 	if fa.UserID == id {
 		next.ChosePassword = true
 		if _, err := revokePrintedCode(ctx, tx, fa, id); err != nil {
