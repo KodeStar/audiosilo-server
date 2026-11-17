@@ -15,7 +15,10 @@ function routes(over: Record<string, MockRoute> = {}) {
 }
 
 beforeEach(() => setToken('stored'));
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 describe('libraries', () => {
   it.each([0, 1, 4])('counts %i podcast episodes', async (count) => {

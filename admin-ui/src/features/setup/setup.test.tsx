@@ -30,7 +30,10 @@ import { signedInRoutes } from '@/test/routes';
 // the metadata step, a locked setting, and Finish.
 
 beforeEach(() => setToken('stored'));
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 const names = (o: Partial<LibraryPreview['samples'][number]['tags']> = {}) => ({
   title: '',
