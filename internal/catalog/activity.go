@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"time"
@@ -284,12 +286,18 @@ func (c *Catalog) listeningDays(ctx context.Context, label string, acc *listenAc
 func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.Time, loc *time.Location) (*Activity, error) {
 	out := &Activity{Period: periodOf(label, from, to, loc)}
 	var stepsErr error
-	var stepsPanic any
+	var stepsPanic string
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		// A panic is this request's, as when the steps ran on its goroutine
-		// (net/http recovers it there): raised again below, not the server's end.
-		defer func() { stepsPanic = recover() }()
+		// (net/http recovers it there): raised again below, not the server's
+		// end, with this goroutine's stack (the request's would name only
+		// ActivityFor).
+		defer func() {
+			if p := recover(); p != nil {
+				stepsPanic = fmt.Sprintf("activity step panicked: %v\n%s", p, debug.Stack())
+			}
+		}()
 		for _, step := range []func(context.Context, *Activity, time.Time, time.Time) error{
 			c.activityFunnel, c.activityDropOffs, c.activityGrowth,
 			c.activityStorage, c.activityCoverage, c.activityInactive,
@@ -301,7 +309,7 @@ func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.T
 	})
 	err := c.activityListening(ctx, out, from, to, loc)
 	wg.Wait()
-	if stepsPanic != nil {
+	if stepsPanic != "" {
 		panic(stepsPanic)
 	}
 	if err = cmp.Or(err, stepsErr); err != nil {

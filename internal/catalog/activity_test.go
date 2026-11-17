@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -376,5 +377,23 @@ func TestActivityForFailsWhole(t *testing.T) {
 	cancel()
 	if a, err := f.c.ActivityFor(ctx, "7d", f.clock.AddDate(0, 0, -7), f.clock, time.UTC); err == nil || a != nil {
 		t.Fatalf("ActivityFor on a cancelled context = %v, %v; want an error and no page", a, err)
+	}
+}
+
+// TestActivityForRaisesAStepsPanic (server#225): a panic in a step, which runs
+// on a goroutine of its own, is raised on the caller's (the request's, where
+// net/http recovers it) with the step's stack, not left to end the process.
+func TestActivityForRaisesAStepsPanic(t *testing.T) {
+	t.Parallel()
+	f := newSessionFixture(t)
+	f.c.now = func() time.Time { panic("the clock broke") } // read by the drop-offs step
+	var raised any
+	func() {
+		defer func() { raised = recover() }()
+		_, _ = f.c.ActivityFor(f.ctx, "7d", f.clock.AddDate(0, 0, -7), f.clock, time.UTC)
+	}()
+	msg, _ := raised.(string)
+	if !strings.Contains(msg, "the clock broke") || !strings.Contains(msg, "activityDropOffs") {
+		t.Fatalf("ActivityFor with a panicking step raised %v; want its panic and its stack", raised)
 	}
 }
