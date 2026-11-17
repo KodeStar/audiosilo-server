@@ -153,6 +153,7 @@ func autocertServer(t *testing.T) (addr string, names func() []string) {
 // refuses before any order: the refusal is healthy, and no hello the server
 // saw named a host (one would start an issuance).
 func TestHealthcheckAutocert(t *testing.T) {
+	t.Parallel()
 	addr, names := autocertServer(t)
 	var out bytes.Buffer
 	if err := Healthcheck(context.Background(), healthDataDir(t, addr, config.TLSAutocert), &out); err != nil {
@@ -169,6 +170,7 @@ func TestHealthcheckAutocert(t *testing.T) {
 // Under autocert: nothing listening, a plain HTTP server on the port, and a
 // listener that never answers the hello are unhealthy.
 func TestHealthcheckAutocertUnhealthy(t *testing.T) {
+	t.Parallel()
 	silent, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

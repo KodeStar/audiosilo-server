@@ -46,6 +46,9 @@ func tlsConfig(cfg *config.Config) (*tls.Config, error) {
 // noSNIRefusal is the reason autocert gives a TLS hello that names no host.
 const noSNIRefusal = "acme/autocert: missing server name"
 
+// noSNILogEnd ends the line net/http logs for that refusal.
+var noSNILogEnd = []byte(": " + noSNIRefusal)
+
 // autocertErrorLog is the http.Server's error log under autocert: the standard
 // logger, less the handshake error for a hello that names no host. The image's
 // healthcheck sends one every 30 seconds (launcher.Healthcheck), and so does
@@ -60,7 +63,7 @@ type quietNoSNI struct{ w io.Writer }
 
 func (q quietNoSNI) Write(p []byte) (int, error) {
 	line := bytes.TrimRight(p, "\n")
-	if bytes.Contains(line, []byte("http: TLS handshake error from ")) && bytes.HasSuffix(line, []byte(": "+noSNIRefusal)) {
+	if bytes.HasSuffix(line, noSNILogEnd) && bytes.Contains(line, []byte("http: TLS handshake error from ")) {
 		return len(p), nil
 	}
 	return q.w.Write(p)

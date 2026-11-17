@@ -112,10 +112,8 @@ func getHealthz(ctx context.Context, addr string, tlsOn bool, w io.Writer) error
 	return nil
 }
 
-// helloWithoutName connects to addr and sends a TLS hello with no server name
-// (see Healthcheck): nil when the handshake finishes or the server refuses it
-// with a TLS alert, an error when nothing listens, nothing answers or what
-// answers doesn't speak TLS.
+// helloWithoutName sends addr a TLS hello naming no host (see Healthcheck):
+// nil on a finished handshake or a TLS alert.
 func helloWithoutName(ctx context.Context, addr string) error {
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 	if err != nil {
@@ -124,7 +122,11 @@ func helloWithoutName(ctx context.Context, addr string) error {
 	defer func() { _ = conn.Close() }()
 	// No ServerName, and tls.Client never takes one from the address: no SNI.
 	err = tls.Client(conn, &tls.Config{InsecureSkipVerify: true}).HandshakeContext(ctx) //nolint:gosec // nothing is sent past the hello
-	if alert := (*net.OpError)(nil); err == nil || errors.As(err, &alert) && alert.Op == "remote error" {
+	if err == nil {
+		return nil
+	}
+	var alert *net.OpError
+	if errors.As(err, &alert) && alert.Op == "remote error" {
 		return nil
 	}
 	return fmt.Errorf("no TLS answer from %s: %w", addr, err)
