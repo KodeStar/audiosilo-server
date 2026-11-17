@@ -1489,6 +1489,7 @@
   "health.reason.unreadable": "{{file}} n'a pas pu être lu : {{detail}}",
   "health.reason.empty_file": "{{file}} est vide (0 octet)",
   "health.reason.probe_failed": "{{file}} n'a pas pu être lu comme de l'audio. Il est peut-être endommagé ou ce n'est pas un fichier audio.",
+  "health.reason.probe_timeout": "La lecture de {{file}} comme audio a pris trop de temps. Le disque ou le lecteur réseau est peut-être lent ; la prochaine analyse réessaiera.",
   "health.reason.suspect_one": "{{files}} longues parties aux titres différents. Probablement {{count}} livre dans un dossier",
   "health.reason.suspect_other": "{{files}} longues parties aux titres différents. Probablement {{count}} livres dans un dossier",
   "health.reason.suspect_many": "{{files}} longues parties aux titres différents. Probablement {{count}} livres dans un dossier",

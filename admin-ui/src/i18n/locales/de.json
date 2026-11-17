@@ -1396,6 +1396,7 @@
   "health.reason.unreadable": "{{file}} konnte nicht gelesen werden: {{detail}}",
   "health.reason.empty_file": "{{file}} ist leer (0 Byte)",
   "health.reason.probe_failed": "{{file}} ließ sich nicht als Audio lesen. Die Datei ist vielleicht beschädigt oder keine Audiodatei.",
+  "health.reason.probe_timeout": "{{file}} brauchte zu lange, um als Audio gelesen zu werden. Die Festplatte oder das Netzlaufwerk ist vielleicht langsam; der nächste Scan versucht es erneut.",
   "health.reason.suspect_one": "{{files}} lange Teile mit unterschiedlichen Titeln. Wahrscheinlich {{count}} Buch in einem Ordner",
   "health.reason.suspect_other": "{{files}} lange Teile mit unterschiedlichen Titeln. Wahrscheinlich {{count}} Bücher in einem Ordner",
   "health.reason.split_discs": "{{folder}} wird als ein Buch pro CD-Ordner gelesen",

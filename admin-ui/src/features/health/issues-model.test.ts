@@ -114,6 +114,10 @@ it('reads a file that is not audio as one plain line, its prober message behind 
     key: 'health.reason.probe_failed',
     values: { file: '07.mp3', detail: '' },
   });
+  // An ffprobe time-out is no sign of a damaged file: its own line (server#360).
+  expect(
+    issueReason('scan_error', { ...probe, scan_error_detail: 'ffprobe timed out after 30s' }),
+  ).toEqual({ key: 'health.reason.probe_timeout', values: { file: '07.mp3', detail: '' } });
   // FFmpeg's context addresses go, for a row stored before the server dropped them.
   expect(issueDetail('scan_error', probe)).toBe(
     '[mp3] Failed to find two consecutive MPEG audio frames.\n[mov,mp4,m4a] moov atom not found',

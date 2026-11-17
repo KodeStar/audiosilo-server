@@ -1396,6 +1396,7 @@
   "health.reason.unreadable": "{{file}} couldn't be read: {{detail}}",
   "health.reason.empty_file": "{{file}} is empty (0 bytes)",
   "health.reason.probe_failed": "{{file}} couldn't be read as audio. It may be damaged or not an audio file.",
+  "health.reason.probe_timeout": "{{file}} took too long to read as audio. The disk or network share may be slow; the next scan tries it again.",
   "health.reason.suspect_one": "{{files}} long parts with different titles. Probably {{count}} book in one folder",
   "health.reason.suspect_other": "{{files}} long parts with different titles. Probably {{count}} books in one folder",
   "health.reason.split_discs": "{{folder}} reads as one book per disc folder",

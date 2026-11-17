@@ -137,6 +137,13 @@ const hours = (seconds: number) => Math.floor(seconds / 3600);
 const FF_ADDRESS = / @ 0x[0-9a-f]+\]/gi;
 
 /**
+ * ffprobe's time-out as the server words it (internal/metadata ErrProbeTimeout:
+ * "ffprobe timed out after 30s"): a probe_failed row whose file took too long
+ * to read, which says nothing of the file being damaged (server#360).
+ */
+const PROBE_TIMEOUT = /^ffprobe timed out\b/;
+
+/**
  * The raw message behind a row's plain line, for its Details toggle (server#272
  * ADMIN-10): a file that couldn't be read as audio, its prober's words without
  * FFmpeg's context addresses. Undefined when there is none to show.
@@ -156,9 +163,13 @@ export function issueReason(kind: IssueKind, b: AdminBook): Phrase {
       const file = b.scan_error_file ? relBaseName(b.scan_error_file) : '';
       const code = b.scan_error ?? 'unreadable';
       // A file that couldn't be read as audio is one plain line; its prober's
-      // message is behind Details (issueDetail).
+      // message is behind Details (issueDetail). One that took too long says so.
       const detail = code === 'probe_failed' ? '' : (b.scan_error_detail ?? '');
-      return { key: `health.reason.${code}`, values: { file, detail } };
+      const reason =
+        code === 'probe_failed' && PROBE_TIMEOUT.test(b.scan_error_detail ?? '')
+          ? 'probe_timeout'
+          : code;
+      return { key: `health.reason.${reason}`, values: { file, detail } };
     }
     case 'suspect':
       return {
