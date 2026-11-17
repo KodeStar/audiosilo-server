@@ -138,13 +138,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # A deadcode that can't run (not one that finds something: that exits 0)
+      # fails the step, so the job shows it instead of a green, empty report.
       - name: Dead code report (non-gating)
         run: |
+          set -o pipefail
           {
             echo '### deadcode (non-gating)'
             echo '```'
-            go run golang.org/x/tools/cmd/deadcode@v0.52.0 ./...
+            rc=0
+            go run golang.org/x/tools/cmd/deadcode@v0.52.0 ./... || rc=$?
             echo '```'
+            exit "$rc"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
   # The release's linux_amd64 build (.goreleaser.yml: the native SQLite engine,
