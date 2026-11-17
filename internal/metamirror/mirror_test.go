@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -789,10 +788,7 @@ func TestMirrorWake(t *testing.T) {
 // (server#307: a bulk run's six workers took six).
 func TestMatchConcurrency(t *testing.T) {
 	for _, c := range []struct{ procs, want int }{{1, 1}, {2, 1}, {8, 4}, {12, 6}} {
-		prev := runtime.GOMAXPROCS(c.procs)
-		got := matchConcurrency()
-		runtime.GOMAXPROCS(prev)
-		if got != c.want {
+		if got := matchConcurrency(c.procs); got != c.want {
 			t.Errorf("GOMAXPROCS %d: %d matches at once, want %d", c.procs, got, c.want)
 		}
 	}
