@@ -13,6 +13,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/mounts"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -128,7 +129,7 @@ func TestStopDuringAStuckRead(t *testing.T) {
 	s := NewScanner(cat, "", slog.Default())
 	started, unblock := make(chan struct{}), make(chan struct{})
 	s.readFile = func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
-		if within(held, absPath) {
+		if mounts.Within(absPath, held) {
 			close(started)
 			<-unblock // ignores ctx, as a call stuck in the kernel does
 		}
@@ -251,12 +252,6 @@ func waitNoReadsLeft(t *testing.T, s *Scanner) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-}
-
-// within reports whether p is root or below it.
-func within(root, p string) bool {
-	rel, err := filepath.Rel(root, p)
-	return err == nil && rel != ".." && !filepath.IsAbs(rel) && (len(rel) < 3 || rel[:3] != "../")
 }
 
 // stampAddedAt's look at each file (Linux's statx included, not only the
