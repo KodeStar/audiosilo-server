@@ -5,9 +5,11 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -105,9 +107,27 @@ type API struct {
 	// the real one via SetBaseContext.
 	baseCtx context.Context
 
+	// resolving is the run of catalog.ResolveSources under way (resolveSources),
+	// closed when it ends; resolveAgain asks it to run once more. resolveRetry
+	// is the next run of one that failed, waiting out resolveRetryAfter (doubled
+	// each time, resolveRetries times at most). resolveRun is
+	// catalog.ResolveSources; both are fields so tests can fail the run and
+	// shorten the wait.
+	resolveMu         sync.Mutex
+	resolving         chan struct{}
+	resolveAgain      bool
+	resolveRetry      *time.Timer
+	resolveRetryAfter time.Duration
+	resolveRun        func(context.Context) error
+
 	// indexPath reads a path's book on demand (bookForPath's fallback):
 	// scanner.IndexPathWithin, a field so tests can count the re-reads.
 	indexPath func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool) (*catalog.Book, error)
+
+	// podcastState reads a show's feed state for its Check now
+	// (catalog.PodcastState), a field so tests can replace the show's identity
+	// after it is read.
+	podcastState func(ctx context.Context, lib int64, show string) (catalog.PodcastFeedState, error)
 
 	// fetchCover fetches a community cover image (meta.Service.FetchCover, which
 	// connects to public addresses only), a field so tests can serve covers from
@@ -237,23 +257,26 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 	}
 	limits := cfg.RateLimit.Effective()
 	a := &API{
-		boot:           cfg,
-		auth:           authSvc,
-		cat:            cat,
-		scanner:        scanner,
-		indexPath:      scanner.IndexPathWithin,
-		ffmpeg:         ffmpeg,
-		meta:           metaSvc,
-		log:            log,
-		baseCtx:        context.Background(),
-		timeoutDur:     requestTimeout,
-		mountHints:     library.MountHints,
-		dirs:           library.NewDirLister(library.ListDirs, dirListSlots, dirListTimeout),
-		loginLimiter:   newLimiter(10, 15*time.Minute),
-		oidcLimiter:    newLimiter(10, 15*time.Minute),
-		redeemLimiter:  newLimiter(10, 15*time.Minute),
-		demoLimiter:    newLimiter(5, 15*time.Minute),  // ≤5 demo accounts per IP / 15 min
-		accountLimiter: newLimiter(10, 15*time.Minute), // ≤10 password/recovery mutations per IP / 15 min
+		boot:              cfg,
+		auth:              authSvc,
+		cat:               cat,
+		scanner:           scanner,
+		indexPath:         scanner.IndexPathWithin,
+		podcastState:      cat.PodcastState,
+		resolveRun:        cat.ResolveSources,
+		resolveRetryAfter: time.Minute,
+		ffmpeg:            ffmpeg,
+		meta:              metaSvc,
+		log:               log,
+		baseCtx:           context.Background(),
+		timeoutDur:        requestTimeout,
+		mountHints:        library.MountHints,
+		dirs:              library.NewDirLister(library.ListDirs, dirListSlots, dirListTimeout),
+		loginLimiter:      newLimiter(10, 15*time.Minute),
+		oidcLimiter:       newLimiter(10, 15*time.Minute),
+		redeemLimiter:     newLimiter(10, 15*time.Minute),
+		demoLimiter:       newLimiter(5, 15*time.Minute),  // ≤5 demo accounts per IP / 15 min
+		accountLimiter:    newLimiter(10, 15*time.Minute), // ≤10 password/recovery mutations per IP / 15 min
 		// Per IP, then per credential (config rate_limit.*).
 		ipLimiter:      newBucketLimiter(limits.Address),
 		tokenLimiter:   newBucketLimiter(limits.Token),
@@ -365,6 +388,10 @@ func (a *API) EnableSetup(token string) { a.setupToken = token }
 // derives from, so it's cancelled on shutdown. Call before Handler().
 func (a *API) SetBaseContext(ctx context.Context) {
 	a.baseCtx = ctx
+	if a.scanner != nil {
+		// The on-demand reads that outlive their requests end with the server.
+		a.scanner.SetBaseContext(ctx)
+	}
 	if a.prefetch != nil {
 		a.prefetch.Context = ctx
 	}
@@ -373,6 +400,82 @@ func (a *API) SetBaseContext(ctx context.Context) {
 		// starts none.
 		a.discovery.Bind(ctx)
 	}
+}
+
+// StartSourceResolves goes on with the re-resolve of the libraries whose
+// metadata source changed before a stop cut it short (resolveSources).
+func (a *API) StartSourceResolves() { a.resolveSources() }
+
+// resolveRetries is how many times in a row a failed re-resolve is run again
+// (after one minute, then two, up to 32: about an hour in all) before it is left
+// for the next metadata source change or start.
+const resolveRetries = 6
+
+// resolveSources runs catalog.ResolveSources on a goroutine of its own, one run
+// at a time on the server's lifetime (baseCtx), and returns a channel closed once
+// a run that began after this call has ended. A run that fails leaves its
+// libraries due (a locked database, a full disk), so it is run again by itself,
+// each time after twice as long and resolveRetries times at most: a library that
+// can never be re-resolved stops there.
+func (a *API) resolveSources() <-chan struct{} { return a.startResolve(0) }
+
+// startResolve is resolveSources for a run that follows `failed` failed ones in
+// a row.
+func (a *API) startResolve(failed int) <-chan struct{} {
+	a.resolveMu.Lock()
+	defer a.resolveMu.Unlock()
+	if a.resolving != nil {
+		a.resolveAgain = true // the change may have come after the run read what is due
+		return a.resolving
+	}
+	if a.resolveRetry != nil {
+		a.resolveRetry.Stop() // this run is that one
+		a.resolveRetry = nil
+	}
+	done := make(chan struct{})
+	a.resolving = done
+	go func() {
+		for {
+			err := a.resolveOnce()
+			if a.baseCtx.Err() != nil {
+				err = nil // stopped: what is left goes on at the next start
+			}
+			if err != nil {
+				a.log.Warn("re-resolving books for a new metadata source failed", "err", err)
+			}
+			a.resolveMu.Lock()
+			if a.resolveAgain {
+				a.resolveAgain, failed = false, 0
+				a.resolveMu.Unlock()
+				continue
+			}
+			a.resolving = nil
+			if err != nil && failed < resolveRetries {
+				a.resolveRetry = time.AfterFunc(a.resolveRetryAfter<<failed, func() {
+					if a.baseCtx.Err() == nil {
+						a.startResolve(failed + 1)
+					}
+				})
+			}
+			a.resolveMu.Unlock()
+			close(done)
+			return
+		}
+	}()
+	return done
+}
+
+// resolveOnce is one run of catalog.ResolveSources. A panic in it is that run's
+// failure: on this goroutine it would otherwise take the server down, and again
+// at every start while the library stays due.
+func (a *API) resolveOnce() (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			a.log.Error("re-resolving books for a new metadata source panicked", "panic", p, "stack", string(debug.Stack()))
+			err = fmt.Errorf("re-resolve panicked: %v", p)
+		}
+	}()
+	return a.resolveRun(a.baseCtx)
 }
 
 // StartChapterChecks starts the background community chapter checks

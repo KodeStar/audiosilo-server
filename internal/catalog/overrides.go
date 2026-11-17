@@ -327,6 +327,10 @@ func encodeScanned(fields bookFields, stamp string) (string, error) {
 	return string(raw), err
 }
 
+// errScannedUnreadable is parseScanned's error for a `scanned` value that
+// doesn't decode: the book's snapshot is damaged, not the database.
+var errScannedUnreadable = errors.New("catalog: the book's scanned fields don't decode")
+
 // parseScanned decodes a `scanned` value into its fields, its stamp and its path
 // baseline's revision (scannedRevKey, "" before revision 1).
 func parseScanned(raw string) (fields bookFields, stamp, rev string, err error) {
@@ -335,7 +339,7 @@ func parseScanned(raw string) (fields bookFields, stamp, rev string, err error) 
 		return out, "", "", nil
 	}
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, "", "", fmt.Errorf("decode scanned fields: %w", err)
+		return nil, "", "", fmt.Errorf("%w: %w", errScannedUnreadable, err)
 	}
 	stamp, rev = out[scannedStampKey], out[scannedRevKey]
 	delete(out, scannedStampKey)

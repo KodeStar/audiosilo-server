@@ -107,9 +107,8 @@ func (r *readSlots) read(ctx context.Context, absPath, ffprobePath string) (*met
 // readFiles reads a folder book's files, in their order: the first is first
 // (already read, as the book's primary file), the rest are read with slots, as
 // many at once as they allow. With room for one at a time they are read on the
-// caller's goroutine: an on-demand index reads on its request's, where net/http
-// recovers a reader's panic (leadIndex's errIndexAborted) rather than the server
-// going down with it.
+// caller's goroutine: an on-demand index reads on leadIndex's, which recovers a
+// reader's panic (errIndexAborted) rather than the server going down with it.
 func (s *Scanner) readFiles(ctx context.Context, lib catalog.Library, files []catalog.BookFile, first *metadata.Metadata, slots *readSlots) []*metadata.Metadata {
 	mds := make([]*metadata.Metadata, len(files))
 	if len(files) == 0 {
@@ -142,6 +141,23 @@ type bookRead struct {
 	book    *catalog.Book
 	existed bool // indexed before this scan
 	done    chan struct{}
+	// The book's flight (Scanner.startFlight), held from before the read until
+	// the book is written or dropped; nil when the scan stopped first.
+	flight *indexFlight
+}
+
+// endFlight ends the read's flight once its book is written (err nil) or not,
+// after the read is done; a book not written leaves its waiters to read it
+// themselves.
+func (r *bookRead) endFlight(s *Scanner, err error) {
+	if r.flight == nil {
+		return
+	}
+	if err != nil {
+		err = errReadDropped
+	}
+	s.endFlight(r.flight, err)
+	r.flight = nil
 }
 
 // finished reports whether the read is done, without waiting.

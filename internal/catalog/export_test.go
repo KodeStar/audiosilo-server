@@ -3,6 +3,7 @@ package catalog
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strconv"
@@ -600,6 +601,55 @@ func TestExportLibraryBooksPagesEveryBook(t *testing.T) {
 			t.Fatalf("duplicate book in export: %q", b.Title)
 		}
 		seen[b.Title] = true
+	}
+}
+
+// TestExportLibraryBooksOneSnapshot: a scan that writes while the export pages
+// the library (a book re-titled past the cursor, a book added) changes nothing
+// of the export: every page reads the index as the first did (server#224).
+func TestExportLibraryBooksOneSnapshot(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Big", Root: "/tmp/big"})
+	const n = exportPageSize + 25
+	for i := range n {
+		title := fmt.Sprintf("Book %04d", i)
+		if _, err := c.UpsertBook(ctx, &Book{
+			LibraryID: lib.ID, RelPath: title + ".m4b", Title: title, Author: "Author " + strconv.Itoa(i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pages := 0
+	c.exportPaged = func() {
+		pages++
+		if pages != 1 {
+			return
+		}
+		// After the first page: the last book is re-titled onto the first page,
+		// behind the cursor, and a new one lands on the next.
+		last := fmt.Sprintf("Book %04d", n-1)
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: last + ".m4b", Title: "Aardvark", Author: "Author " + strconv.Itoa(n-1)}); err != nil {
+			t.Error(err)
+		}
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "New.m4b", Title: "Book 9999", Author: "Someone"}); err != nil {
+			t.Error(err)
+		}
+	}
+	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", ExportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pages < 2 {
+		t.Fatalf("read %d pages, want at least two", pages)
+	}
+	if len(exp.Books) != n {
+		t.Fatalf("books = %d, want the %d there were when the export began", len(exp.Books), n)
+	}
+	for i, b := range exp.Books {
+		if want := fmt.Sprintf("Book %04d", i); b.Title != want {
+			t.Fatalf("book %d = %q, want %q", i, b.Title, want)
+		}
 	}
 }
 

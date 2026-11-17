@@ -3,6 +3,7 @@ package catalog
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"math"
 	"slices"
 	"strconv"
@@ -172,14 +173,30 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 		private:       opt.IncludePaths || opt.IncludeTags,
 	}
 
-	counts, err := c.chapterCounts(ctx, libraryID)
+	// One read snapshot for the whole export: the chapter counts and
+	// descriptions read first and every page after them see the index at one
+	// moment, so a scan that writes meanwhile can neither skip nor repeat a row
+	// (a book re-keyed past the cursor) nor pair a row with another moment's
+	// counts.
+	err = c.db.WithReadTx(ctx, func(tx *sql.Tx) error {
+		return c.onSnapshot(tx).exportBooks(ctx, out, libraryID, opt)
+	})
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// exportBooks reads the library's books into out, page by page.
+func (c *Catalog) exportBooks(ctx context.Context, out *LibraryExport, libraryID int64, opt ExportOptions) error {
+	counts, err := c.chapterCounts(ctx, libraryID)
+	if err != nil {
+		return err
 	}
 	var descriptions map[int64]string
 	if opt.IncludeDescription {
 		if descriptions, err = c.descriptions(ctx, libraryID); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
@@ -197,7 +214,10 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 			Cursor:    cursor,
 		})
 		if err != nil {
-			return nil, err
+			return err
+		}
+		if c.exportPaged != nil {
+			c.exportPaged()
 		}
 		for i := range page.Books {
 			b := &page.Books[i]
@@ -220,11 +240,10 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 		}
 		if page.NextCursor == "" || page.NextCursor == cursor {
 			// An unchanged cursor would loop forever; stop rather than spin.
-			break
+			return nil
 		}
 		cursor = page.NextCursor
 	}
-	return out, nil
 }
 
 // exportBook projects an indexed book onto the export shape. A multi-file book is

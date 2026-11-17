@@ -268,6 +268,22 @@ func (db *DB) Ping(ctx context.Context) error {
 	return db.reader.QueryRowContext(ctx, `SELECT 1`).Scan(&x)
 }
 
+// WithReadTx runs fn inside one read transaction on the reader pool: every read
+// in it sees one snapshot of the database (WAL), whatever commits meanwhile, so
+// a read made of several queries (a library export) reads them all at one
+// moment. It never takes the writer, except on a database with no reader pool
+// of its own (an in-memory one), where the two are one: there fn holds the one
+// connection, so a write through the store while it runs (from fn or anyone
+// else) waits for it to return.
+func (db *DB) WithReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	tx, err := db.reader.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // nothing to commit
+	return fn(tx)
+}
+
 // WithTx runs fn inside a writer transaction, committing on success and rolling
 // back on error (or panic). name labels the operation in the slow-transaction log.
 func (db *DB) WithTx(ctx context.Context, name string, fn func(*sql.Tx) error) error {

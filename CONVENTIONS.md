@@ -955,7 +955,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   answered as the out-of-scope 403 `no access to this path`, nothing read or
   indexed for that caller). Concurrent on-demand indexes of one book (a book page's
   `item` and `chapters` at once) share one read (`Scanner.indexShared`, keyed by
-  library and book path), each request scope-checked before it joins. The on-demand index takes a path only in its on-disk
+  library and book path), each request scope-checked before it joins. The read runs on a goroutine of its own
+  (`leadIndex`, up to `indexTimeout`, its probes too) and is stored even when every request waiting on it has ended, each at its own
+  deadline, so a cancelled request never throws its probes away (server#211); it ends with the server
+  (`Scanner.SetBaseContext`, from the API's base context), writing nothing then. A scan's read of a book and the Bridge's
+  `IndexMoved` take the same per-book flight (`startFlight`): no two reads of one book run side by side, and an on-demand
+  index asked for during a scan's read waits for the scan's write and loads it. An admin's Re-read
+  (`rescanPath`) is `ReindexPath` instead: it waits for the read under way, then reads the book itself, as what that
+  read stored may be older than the change the admin wants picked up. The on-demand index takes a path only in its on-disk
   spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a
   case-insensitive filesystem a case variant opens the same folder, and indexing it would add a
   duplicate book everyone sees, so it is a 404. `stream` serves an
@@ -1296,9 +1303,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   put first (`byteFirstFingerprint`, in `detectMoves` and `IndexMoved`). The on-demand index of a
   book not indexed yet (a renamed folder opened from Folders before a scan, server#209) looks too:
   `Scanner.movedFrom` takes an indexed book with its fingerprint that is gone from disk
-  (`catalog.MoveCandidates`, `bookOnDisk`) as `IndexMoved`'s from (`indexBookFrom`, which, once the
-  state has moved, finishes the index and drops the old row past its caller's cancel or deadline, so
-  the state never sits on a path with no row). Re-tagging keeps state via
+  (`catalog.MoveCandidates`, `bookOnDisk`) as `IndexMoved`'s from (`indexBookFrom`, which `leadIndex`
+  runs past its caller's cancel or deadline: once the state has moved it finishes the index and drops
+  the old row, so the state never sits on a path with no row). Re-tagging keeps state via
   the path key; moving keeps it via the fingerprint. The per-user path-keyed tables are listed
   ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
   a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new
@@ -1606,8 +1613,21 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   over a tag's wherever it says anything and replaces the baseline's own reading even with
   nothing (a leaf named `Author; Series; Book NN[; Title]` says its series, position and title part, `LeafSeries`); the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it (never a `LeafSeries` leaf, whose parts the layout reads even when the title is the whole leaf, as an untagged book's is); the position goes with the series: the layout's own, else
   the scanned one only while the series it numbers stays). It is a resolve rule, not a scan one: the snapshot is unchanged,
-  and `UpdateLibrary` re-resolves the library's books (`refreshLibrary`) in the edit's own
-  transaction, no rescan (about 1 s per 5,000 books).
+  and `UpdateLibrary` marks the library's books due a re-resolve in the edit's own transaction
+  (`markResolve`: the `library_resolve_due` row of `server_state`, the library's id and the change's
+  generation), no rescan. `Catalog.ResolveSources` re-resolves them (`refreshEffective`) 200 books a
+  transaction, starting a library again when a later change overtook its run, and clears the mark
+  with the last batch, so a stop leaves it due for the next start (`API.StartSourceResolves`); a
+  book whose `scanned` snapshot doesn't decode is passed over with an `unreadable` read problem on
+  its first file (`recordScannedUnreadable`, over any other problem recorded, which may never clear), so it neither holds its
+  library due nor restarts each retry, and the next scan reads it again (`problemCleared`); a
+  library that fails stays due and is reported without holding up the others in the pass, and the
+  run is made again by itself after 1 minute, then twice as long each time, `resolveRetries` (6) times at
+  most (about an hour: a passing fault heals, a library that can never resolve waits for the next change
+  or start). The
+  PATCH runs it (`API.resolveSources`, one run at a time) and waits up to 20 s, never closer than 2 s
+  to its deadline (`awaitResolve`): a library small enough answers re-resolved (about 1 s per 5,000
+  books), a large one answers at once with the rest going on (server#213).
   `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
   NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
   with a tag read (`media.EmbeddedCover`, no ffprobe). A `scanned` snapshot carries `@rev` (`scannedRevKey`), the path baseline's revision: one
@@ -3097,7 +3117,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `phase2c2/` copy (manifest hashes are tested).
   Migration 0054 binds feed status to `(library_id,show_path,show_id)`: late or unbound outcomes
   cannot change a replacement show's validators, failures, gone or secret flags. Subscribe repair
-  and poll params capture the expected identity. Fetch outcomes have a separate backoff summary
+  and poll params capture the expected identity; a poll naming an identity the show no longer has
+  (none when it has no row) is 409 `identity_changed` (`checkPodcastTarget`), so a stale request never
+  replaces the current show's open poll. Check now (`handlePodcastCheck`) looks once more on that refusal,
+  at the show as it is now (the caller's follow of the new identity included), so one tapped during a
+  re-subscribe is queued and only an identity replaced twice is the 409. Fetch outcomes have a separate backoff summary
   (30 minutes doubling to 24 hours, larger Retry-After capped at 24 hours); cancellation and
   identity replacement do not count as failures. Fold before pruning terminal fetch/retain history.
   Policies are durable `(library_id,show_path,show_id)` preferences, reset for a replacement,
@@ -3115,7 +3139,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   transaction deduplicates open work, promotes priority with MAX without changing attempts, checks
   cooldown and authorizes new work against the current online heartbeat/mapping. Priorities are
   100/20/10/-10 respectively; explicit Retry/admin bypass cooldown, while ordinary stream retries
-  expose the terminal failure. Existing work can be promoted offline or with an unwritable mapping.
+  expose the terminal failure. Existing work can be promoted offline or with an unwritable mapping,
+  never by a demo stream (`FetchOptions.NoNew`: it watches the open fetch at its priority, and one of a
+  replaced identity it leaves open, answered as any demo refusal).
   Each non-admin, including kids, may create at most five open fetch intents across libraries.
   The same writer transaction checks the creator's count before insertion; promotion preserves
   ownership and existing open work still wins at the cap. Admins and requester-free scheduled
@@ -3667,7 +3693,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book. `?copies=separate` (else `merged`, the default; any other value a 400) makes one row per
   indexed book, no merging. The console's "Export with file paths and tags..." asks for
   `include=paths,tags,description&copies=separate` and says the file is then not for a public issue. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
-  `ListBooks`, never OFFSET; copies of the same book within the library collapse on
+  `ListBooks`, never OFFSET, all of it on one read snapshot, `store.DB.WithReadTx`, so a scan
+  writing meanwhile neither skips nor repeats a row; copies of the same book within the library collapse on
   `exposedDedupKey`, the kept entry taking each fact from whichever copy has it -
   `mergeExportBook`, since the copy that sorts first may be the untagged rip; the main
   series and its position are one fact, and a merged `series_list` is every series either

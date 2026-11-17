@@ -222,13 +222,14 @@ func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 	a.writeBookDetail(w, r, lib, p)
 }
 
-// rescanPath indexes what is at p now (IndexPath), on a context detached from the
+// rescanPath indexes what is at p now (ReindexPath: a read of its own, never
+// one a scan or another request made earlier), on a context detached from the
 // request timeout so a slow re-read is still saved, and returns the book. A path
 // with no book (gone, or ignored) is a 404 with code not_indexable; it answers
 // the error itself and reports whether there was none.
 func (a *API) rescanPath(w http.ResponseWriter, lib *catalog.Library, p string) (*catalog.Book, bool) {
 	return rescanAt(a, w, lib, p, func(ctx context.Context) (*catalog.Book, error) {
-		return a.scanner.IndexPath(ctx, *lib, p)
+		return a.scanner.ReindexPath(ctx, *lib, p)
 	})
 }
 

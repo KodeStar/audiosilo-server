@@ -70,6 +70,43 @@ func TestEnsurePodcastFetchConcurrentPromotion(t *testing.T) {
 	default:
 	}
 }
+
+// TestEnsurePodcastFetchDemoCancelsNothing: a demo stream (NoNew) of an episode
+// whose identity was replaced is refused as a demo stream is, and the open fetch
+// of the replaced identity, running or queued, is not cancelled for it
+// (server#219): a household member's request for the current identity is what
+// replaces it.
+func TestEnsurePodcastFetchDemoCancelsNothing(t *testing.T) {
+	for _, running := range []bool{true, false} {
+		q := fetchQueue(t)
+		ctx := context.Background()
+		open, _, err := q.EnsurePodcastFetch(ctx, demandJob(q, 10), FetchOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if running {
+			held, err := q.ClaimFor(ctx, q.token, nil, 0)
+			if err != nil || held == nil {
+				t.Fatalf("claim: %+v %v", held, err)
+			}
+			state := StateRunning
+			if _, err = q.UpdateHeld(ctx, open.ID, Update{Attempt: held.Attempts, State: &state}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := q.db.ExecContext(ctx, `UPDATE podcast_episodes SET episode_id='1111111111111111' WHERE library_id=?`, q.lib); err != nil {
+			t.Fatal(err)
+		}
+		current := demandJob(q, 100)
+		current.Params = json.RawMessage(`{"show_id":"0123456789abcdef","episode_id":"1111111111111111"}`)
+		if j, created, err := q.EnsurePodcastFetch(ctx, current, FetchOptions{NoNew: true}); !errors.Is(err, ErrFetchDemo) || created {
+			t.Fatalf("running %v: demo stream: %+v %v, want ErrFetchDemo", running, j, err)
+		}
+		if j, err := q.Job(ctx, open.ID); err != nil || j.CancelRequested || j.Ended() {
+			t.Fatalf("running %v: a demo stream cancelled the open fetch: %+v %v", running, j, err)
+		}
+	}
+}
 func TestEnsurePodcastFetchPromotionWakes(t *testing.T) {
 	q := fetchQueue(t)
 	ctx := context.Background()
@@ -112,9 +149,18 @@ func TestEnsurePodcastFetchUnavailableAndCooldown(t *testing.T) {
 			case "demo":
 				opt.NoNew = true
 			}
+			// The open request is answered either way; a demo stream watches it
+			// but never raises it to its own priority (server#219).
+			want := 100
+			if opt.NoNew {
+				want = 10
+			}
 			j, created, err := q.EnsurePodcastFetch(ctx, demandJob(q, 100), opt)
-			if err != nil || created || j.ID != first.ID || j.Priority != 100 {
-				t.Fatalf("existing %+v %v", j, err)
+			if err != nil || created || j.ID != first.ID || j.Priority != want {
+				t.Fatalf("existing %+v %v, want priority %d", j, err, want)
+			}
+			if stored, err := q.Job(ctx, first.ID); err != nil || stored.Priority != want {
+				t.Fatalf("stored %+v %v, want priority %d", stored, err, want)
 			}
 			if _, err = q.db.ExecContext(ctx, `DELETE FROM bridge_jobs`); err != nil {
 				t.Fatal(err)

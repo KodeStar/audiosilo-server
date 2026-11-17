@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/png"
@@ -582,6 +583,68 @@ func TestPodcastCheckRequiresFollowAndThrottles(t *testing.T) {
 	// Retry-After: what is left of the minute, in whole seconds.
 	if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err != nil || secs < 1 || secs > 60 {
 		t.Fatalf("checked_recently Retry-After = %q, want 1-60", resp.Header.Get("Retry-After"))
+	}
+}
+
+// TestPodcastCheckDuringResubscribe: a Check now whose show is given a new
+// identity (a re-subscribe) between the handler's reads and the queue's check is
+// asked for again with the identity the show has now, and queued (server#219).
+// It is 409 identity_changed only when that identity is replaced too, and the
+// second look is a whole one: a caller who doesn't follow the new identity has
+// no show to check.
+func TestPodcastCheckDuringResubscribe(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		replaces int  // how many of the state reads the identity is replaced after
+		follows  bool // the follow moves to each new identity
+		status   int
+		code     string
+	}{
+		{"replaced once", 1, true, 202, ""},
+		{"replaced again", 2, true, 409, "identity_changed"},
+		{"new identity not followed", 1, false, 404, "show_not_found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, uid, f := podcastEnv(t, false)
+			ctx := context.Background()
+			if err := b.cat.FollowPodcast(ctx, uid, b.lib.ID, "Example Show", f.ShowID); err != nil {
+				t.Fatal(err)
+			}
+			reads := 0
+			b.api.podcastState = func(ctx context.Context, lib int64, show string) (catalog.PodcastFeedState, error) {
+				st, err := b.cat.PodcastState(ctx, lib, show)
+				if reads++; err != nil || reads > tc.replaces {
+					return st, err
+				}
+				next := fmt.Sprintf("%016x", reads)
+				if _, err := b.db.ExecContext(ctx, `UPDATE podcast_shows SET show_id=? WHERE library_id=? AND show_path=?`, next, lib, show); err != nil {
+					return st, err
+				}
+				if tc.follows {
+					err = b.cat.FollowPodcast(ctx, uid, lib, show, next)
+				}
+				return st, err
+			}
+			body := fmt.Sprintf(`{"library_id":%d,"path":"Example Show"}`, b.lib.ID)
+			resp, out := b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, body, podcastHeaders())
+			if resp.StatusCode != tc.status || tc.code != "" && !strings.Contains(out, `"code":"`+tc.code+`"`) {
+				t.Fatalf("check = %d %s, want %d %s", resp.StatusCode, out, tc.status, tc.code)
+			}
+			job, err := b.api.bridge.OpenJob(ctx, bridge.KindPodcastPoll, b.lib.ID, "Example Show")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.status != 202 {
+				if job != nil {
+					t.Fatalf("a refused check queued a poll: %+v", job)
+				}
+				return
+			}
+			var p bridge.PollParams
+			if job == nil || json.Unmarshal(job.Params, &p) != nil || p.ShowID != fmt.Sprintf("%016x", 1) {
+				t.Fatalf("queued poll = %+v, want one naming the show's new identity", job)
+			}
+		})
 	}
 }
 

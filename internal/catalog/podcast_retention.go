@@ -147,8 +147,15 @@ type RetentionCheck struct {
 // the listening facts. No HTTP or filesystem work occurs under this snapshot.
 // Every method stays on tx: the enclosing WithTx holds the one writer
 // connection, so a call that reached the store's pools would leave the
-// snapshot or, for a write, wait on that connection forever.
+// snapshot or, for a write, wait on that connection forever. A library export
+// reads through one too, on a read transaction (WithReadTx).
 type snapshotDB struct{ tx *sql.Tx }
+
+// onSnapshot is a catalog that reads and writes only through tx (snapshotDB),
+// with c's clock and test hooks.
+func (c *Catalog) onSnapshot(tx *sql.Tx) *Catalog {
+	return &Catalog{db: snapshotDB{tx: tx}, now: c.now, exportPaged: c.exportPaged}
+}
 
 func (s snapshotDB) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
 	return s.tx.QueryContext(ctx, q, args...)
@@ -174,6 +181,9 @@ func (s snapshotDB) ExecDurable(ctx context.Context, _ string, q string, args ..
 func (s snapshotDB) WithDurableTx(ctx context.Context, name string, fn func(*sql.Tx) error) error {
 	return s.WithTx(ctx, name, fn) // inside the caller's transaction, which commits it
 }
+func (s snapshotDB) WithReadTx(_ context.Context, fn func(*sql.Tx) error) error {
+	return fn(s.tx)
+}
 func (s snapshotDB) Ping(ctx context.Context) error {
 	var x int
 	return s.tx.QueryRowContext(ctx, `SELECT 1`).Scan(&x)
@@ -183,7 +193,7 @@ func (c *Catalog) PodcastRetentionCheck(ctx context.Context, lib int64, req Rete
 	out := RetentionCheck{LibraryID: lib, ShowPath: path.Dir(req.Path), RetentionRequest: req}
 	var finishedAt, deadline time.Time
 	err := c.db.WithTx(ctx, "PodcastRetentionCheck", func(tx *sql.Tx) error {
-		snapshot := &Catalog{db: snapshotDB{tx: tx}, now: c.now}
+		snapshot := c.onSnapshot(tx)
 		pin, err := snapshot.PodcastPin(ctx, lib, req.Path)
 		if err != nil {
 			return err

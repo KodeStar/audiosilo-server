@@ -284,6 +284,7 @@ func Run(ctx context.Context, opts Options) error {
 		stopBase()
 		a.WaitMediaCaches()
 	}()
+	a.StartSourceResolves()
 	a.StartChapterChecks(ctx)
 	a.StartModules(ctx)
 	// Before the database closes, and even when the server fails while ctx
