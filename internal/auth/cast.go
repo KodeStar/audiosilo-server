@@ -85,12 +85,15 @@ var (
 // (resolve, at most once a touchInterval), else its mint time (created_at; both
 // RFC3339 UTC in whole seconds, s.ts(), so they compare as text), the newer
 // mint first on a tie: a receiver playing a book keeps its token while a sender
-// re-mints, and a token minted and never used goes first.
+// re-mints, and a token minted and never used goes first. The token the mint
+// just made (?5) is kept whatever the times say: after the clock steps back,
+// the others' times are ahead of its mint, and the mint must never hand out a
+// token it has already deleted.
 const trimCastTokensSQL = `DELETE FROM tokens WHERE id IN
   (SELECT t.id FROM tokens t JOIN cast_grants g ON g.token_id = t.id
     WHERE t.kind = '` + KindCast + `' AND t.user_id = ?1 AND g.editor = ?2
       AND (?4 = 0 OR g.parent_token_id = ?4)
-    ORDER BY COALESCE(t.last_seen, t.created_at) DESC, t.id DESC LIMIT -1 OFFSET ?3)`
+    ORDER BY t.id = ?5 DESC, COALESCE(t.last_seen, t.created_at) DESC, t.id DESC LIMIT -1 OFFSET ?3)`
 
 // millisUTC is the wire format of the times auth hands the player (a cast
 // token's expiry, a member's created_at, a feed token's created_at): UTC with
@@ -222,13 +225,13 @@ func (s *Service) issueCastToken(ctx context.Context, use castUse, userID, paren
 		// token has a grant by now: the prune above deleted any without one):
 		// all but the use.keep most recently used of this sending token's go,
 		// then all but the person's use.perPerson most recently used (alone
-		// when it is no larger).
+		// when it is no larger), the token just minted (id) kept by both.
 		if use.keep < use.perPerson {
-			if _, err := tx.ExecContext(ctx, trimCastTokensSQL, userID, use.editor, use.keep, parentTokenID); err != nil {
+			if _, err := tx.ExecContext(ctx, trimCastTokensSQL, userID, use.editor, use.keep, parentTokenID, id); err != nil {
 				return err
 			}
 		}
-		_, err = tx.ExecContext(ctx, trimCastTokensSQL, userID, use.editor, use.perPerson, 0)
+		_, err = tx.ExecContext(ctx, trimCastTokensSQL, userID, use.editor, use.perPerson, 0, id)
 		return err
 	})
 	if err != nil {

@@ -2715,7 +2715,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   is playing (server#216), and the person's `maxCastTokensPerPerson` (100) most recently used over all their
   devices (`trimCastTokensSQL`: by `last_seen`, which each cover or stream request bumps at most once a
   `touchInterval`, else `created_at`, so a sender re-minting drops an idle token before the one its receiver
-  is reading). The console's chapter editor streams a book the same way and sends
+  is reading; the token just minted always stays, even after the clock steps back). The console's chapter editor streams a book the same way and sends
   `"editor": true` (console-only, additive; a player never sends it): `auth.IssueEditorToken` mints the same
   token with `cast_grants.editor = 1` (`0078`), a 4 h life (`editorTokenTTL`) and a cap of its own
   (`maxEditorTokens`, 5), each cap counting only its own use, so editing many books never drops a token a
