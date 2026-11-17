@@ -452,7 +452,13 @@ describe('a person', () => {
     await user.type(within(dialog).getByRole('textbox'), 'sam');
     await user.click(within(dialog).getByRole('button', { name: 'Delete account' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/people'));
-    expect(calls.some((c) => c.method === 'DELETE' && c.path === '/admin/users/2')).toBe(true);
+    const deleted = calls.findIndex((c) => c.method === 'DELETE' && c.path === '/admin/users/2');
+    expect(deleted).toBeGreaterThan(-1);
+    // The people list reads again; the deleted account is never asked for (ADMIN-09).
+    await waitFor(() =>
+      expect(calls.slice(deleted).some((c) => c.path === '/admin/users')).toBe(true),
+    );
+    expect(calls.slice(deleted + 1).some((c) => c.path.startsWith('/admin/users/2'))).toBe(false);
   });
 
   it('disables an account', async () => {

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
 import {
+  forgetUsers,
   invalidateDevices,
   invalidatePeople,
   keys,
@@ -717,13 +718,16 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
         onConfirm={async () => {
           const { keep, remove } = deleteChoice(members, keeping);
           await api.deleteUser(u.id, remove, keep);
-          invalidatePeople(qc);
           toast.add({
             title: t('user.danger.deleted', { name: u.username }),
             description: membersOutcome(remove.length, keep.length, t),
             type: 'success',
           });
-          void navigate({ to: '/people/{-$section}', params: { section: undefined } });
+          // Off their page first: refreshing it (or any page of theirs) now
+          // would only meet a 404.
+          await navigate({ to: '/people/{-$section}', params: { section: undefined } });
+          forgetUsers(qc, [u.id, ...remove]);
+          invalidatePeople(qc);
         }}
       >
         <DeleteMembers members={members} keeping={keeping} onChange={setKeeping} />

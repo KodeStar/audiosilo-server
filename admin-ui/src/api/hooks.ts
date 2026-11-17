@@ -186,6 +186,25 @@ export function invalidatePeople(qc: QueryClient) {
   }
 }
 
+/**
+ * Drops what the console holds for deleted people (their page and progress,
+ * devices, imports and listening days), so nothing asks the server for them
+ * again: each would only answer 404. Call it once their page is gone, with
+ * invalidatePeople for the lists they were on.
+ */
+export function forgetUsers(qc: QueryClient, ids: readonly number[]) {
+  for (const id of ids) {
+    for (const key of [keys.user(id), keys.userDevices(id), keys.importList(id)]) {
+      qc.removeQueries({ queryKey: key });
+    }
+  }
+  const gone = new Set<unknown>(ids);
+  qc.removeQueries({
+    queryKey: ['admin', 'activity', 'days'],
+    predicate: (q) => gone.has(q.queryKey[4]),
+  });
+}
+
 /** Refetches what a library change touches: the list, the overview, shares (labels). */
 export function invalidateLibraries(qc: QueryClient) {
   for (const key of [keys.libraries, keys.stats, keys.shares]) {
