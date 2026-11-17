@@ -346,12 +346,13 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	// Every keep_members value counts (?keep_members=3,7 and the repeated
 	// ?keep_members=3&keep_members=7 alike): reading only the first would delete
 	// the members a client asked to keep.
-	keep, ok := parseIDList(strings.Join(r.URL.Query()["keep_members"], ","))
+	query := r.URL.Query()
+	keep, ok := parseIDList(strings.Join(query["keep_members"], ","))
 	if !ok {
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidKeepMembers, "keep_members must be user ids separated by commas")
 		return
 	}
-	delParam, listed := r.URL.Query()["delete_members"]
+	delParam, listed := query["delete_members"]
 	del, ok := parseIDList(strings.Join(delParam, ","))
 	if !ok {
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidDelMembers, "delete_members must be user ids separated by commas")
