@@ -1993,9 +1993,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   proposal's when it names one, else the match's own) and a repick of a book with a recorded
   match (`planFor`: the anchor kept, its offered ASIN the one the repick writes);
   copied by a join, moved with the book. A refresh's or repick's anchor write keeps the
-  match's `how` and is conditional (`BookEdit.MatchIf`, the anchor the apply read: work,
-  recording and offered identifiers, checked in the edit's transaction; else the anchor is
-  left and the rest of the edit applies), so a match made by hand mid-apply stays. No backfill: '' (a match recorded before 0070, or an
+  match's `how`; every apply's anchor write is conditional (`BookEdit.MatchIf`, the anchor the
+  apply read: work, recording and offered identifiers, or for a match item an unmatched book,
+  none recorded and no ASIN or ISBN (`matchedExpr`, as `matchedSince` reads it); checked in
+  the edit's transaction; else nothing of the edit is written, `catalog.ErrMatchedSince`, and
+  the item is skipped as `matched_since`), so a match made by hand mid-apply stays with its
+  values (an ASIN from the old match would outrank it, server#354). An edit that records no
+  match (a refresh of details alone, a `cover_pending` item) carries no such condition. No backfill: '' (a match recorded before 0070, or an
   accept from an older console) fills as before.
   The anchor is only healed (`planRefresh`): a merged work's new slug is a change by itself (`match`),
   a book matched by its own identifier with no anchor never gets one. It fills or
@@ -2012,14 +2016,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   filters it in SQL, so an empty refresh's Done starts at `apply_total` 0, and a book that
   changed since so planning now would write something the review never showed is left
   alone; the review (`Runner.Items`) shows no change under that scope either, so its
-  `leftOut` count and the apply agree. One that had a change then but none now: `applyItem` answers the internal
-  `detailUnchanged` for an empty `planFor`, and the apply counts these up and drops them with
-  `catalog.DropApplyItems` (`apply_total - n`, never below `apply_done`), `dropBatch` (100) at
-  a time and the rest before the run settles, instead of marking each. Either way the item
-  stays `applied` '' as an exclusion leaves it (pending, not skipped), and `apply_done` ends
-  at `apply_total`. That includes one whose book no longer has what it was found by. An item
-  recorded before 0070 (`unchanged` '') is planned as before. A match or repick item with nothing to change is still `skipped` /
-  `nothing_to_change`. The review counts refresh rows with no changes under the selected
+  `leftOut` count and the apply agree; it stays `applied` '' as an exclusion leaves it. One
+  that had a change then but none now (the book took it since, or no longer has what it was
+  found by) is `skipped` / `nothing_to_change`, as a match or repick item with nothing to
+  change is (server#355), so the review says why; `apply_done` ends at `apply_total` either
+  way. An item recorded before 0070 (`unchanged` '') is planned as before. The review counts refresh rows with no changes under the selected
   scope (a healed recorded match counts as a change) as left out (`picksForScope`'s
   `leftOut`, `applyCount(run, picks, leftOut)`) and never sends them, reading all confident
   pages with a separate `useAllMatchRunItems` query (200 per page, no focus refetch)
@@ -2034,9 +2035,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `InterruptMatchRuns` (launcher, at
   start) settles runs a stopped server left: matching -> interrupted, applying ->
   ready (`catalog.SettleMatchRuns(ctx, 0)`, one transaction; a failure is a warning). A run
-  whose finishing write failed (`FinishMatching`, `FinishApply` only log it) or that the start's
-  settle missed is settled too (server#339): `Runner.settleLocked` at the top of `Start` and
-  `Apply` (so a stuck applying run is ready, and can be applied, again), `Runner.SettleOrphans`
+  whose finishing write failed (`FinishMatching`, `FinishApply` log it) settles itself at once,
+  every worker done (`Runner.settleOwn`, server#350). One whose own settle failed too, or that
+  the start's settle missed, is settled too (server#339): `Runner.settleLocked` at the top of
+  `Start` and `Apply` (so a stuck applying run is ready, and can be applied, again; a failure is
+  logged and never refuses the run, `settleBeforeStart`), `Runner.SettleOrphans`
   on an Unlink refused as busy, and Stop (`Runner.Cancel` on a run that isn't the active one:
   `catalog.SettleMatchRun`; `POST .../cancel` 204, audited `book.match_stop` with `"orphan":
   true`; 409 `match_run_not_running` only for a run not marked working). Safe only under the
@@ -2046,7 +2049,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   409 `match_run_busy` while a run works; works with metadata off) undoes the community matches so
   books can be matched from fresh: `catalog.ClearCommunityMatches` drops the `source=community`
   overrides and covers and the recorded matches (`book_matches`), rebuilds each book (`refreshEffective`, `refreshCoverArt`) and drops the
-  runs (a library's clear: its runs, and its items in runs over every library), one transaction;
+  runs (a library's clear: its runs, its items in runs over every library and such a run it
+  leaves with none, counted in `runs`), one transaction; `books` counts indexed books only;
   edits, uploads, tags and `book_enrichment` stay. Audited `book.match_run|asin_repick|match_refresh|match_apply|match_stop|match_clear`;
   `POST /admin/books/works` (`{books:[{library_id,path}]}`, <= 100, `catalog.BooksByRefs`) answers
   `{"works":[{library_id,path,work_id,failed}]}` in request order: each book's community work id

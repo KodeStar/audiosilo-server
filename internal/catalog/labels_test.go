@@ -19,6 +19,9 @@ func TestNormalizeLabels(t *testing.T) {
 		{"", ""},
 		{"[]", ""},
 		{`["  Sci-Fi  ", "Space   Opera", "sci-fi", "", "SPACE OPERA", "Tom & Jerry"]`, `["Sci-Fi","Space Opera","Tom & Jerry"]`},
+		// A label that shows nothing is a blank (server#349); a visible one keeps its joiner.
+		{"[\"\u200b\", \"\ufeff \u2800\", \"A\u200dB\"]", "[\"A\u200dB\"]"},
+		{"[\"\u3164\"]", ""},
 	} {
 		got, err := normalizeLabels(FieldTags, tc.in)
 		if err != nil || got != tc.want {
@@ -411,6 +414,47 @@ func TestBulkLabelEdit(t *testing.T) {
 		if err := c.EditBooks(ctx, refs, edit); !errors.Is(err, ErrInvalidOverride) {
 			t.Errorf("%s: err = %v, want an invalid override", name, err)
 		}
+	}
+}
+
+// TestBulkLabelAddThenRemoveLeavesTheBookUnedited (server#186): a bulk add of
+// a label then its removal lands the list back on the book's own, which reverts
+// the field rather than leaving an override (a lock) equal to it; a removal and
+// re-add in another order or case does too. A list that differs stays an edit.
+func TestBulkLabelAddThenRemoveLeavesTheBookUnedited(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "A", Title: "Book A", Genres: []string{"Fantasy", "Horror"}}); err != nil {
+		t.Fatal(err)
+	}
+	refs := []Ref{{LibraryID: lib.ID, Path: "A"}}
+	edit := func(e BookEdit) FieldValue {
+		t.Helper()
+		if err := c.EditBooks(ctx, refs, e); err != nil {
+			t.Fatal(err)
+		}
+		d, err := c.AdminBookDetail(ctx, lib.ID, "A")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.Fields[FieldGenres]
+	}
+	if fv := edit(BookEdit{Add: map[string][]string{FieldGenres: {"Comedy"}}}); !fv.Locked {
+		t.Fatalf("after the add = %+v, want an edit", fv)
+	}
+	if fv := edit(BookEdit{Remove: map[string][]string{FieldGenres: {"comedy"}}}); fv.Locked || fv.Source == SourceEdited {
+		t.Fatalf("after add then remove = %+v, want the field unedited", fv)
+	}
+	// Taken out and put back (another case): the same labels, unedited again.
+	edit(BookEdit{Remove: map[string][]string{FieldGenres: {"Fantasy"}}})
+	if fv := edit(BookEdit{Add: map[string][]string{FieldGenres: {"fantasy"}}}); fv.Locked ||
+		!sameLabels(ParseLabels(fv.Value), []string{"Fantasy", "Horror"}) {
+		t.Fatalf("after remove then add back = %+v, want the book's own list, unedited", fv)
+	}
+	// A list that differs from the book's own stays an edit.
+	if fv := edit(BookEdit{Remove: map[string][]string{FieldGenres: {"Horror"}}}); !fv.Locked {
+		t.Fatalf("after a real removal = %+v, want an edit", fv)
 	}
 }
 

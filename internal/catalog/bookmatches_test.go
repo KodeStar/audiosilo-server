@@ -709,9 +709,10 @@ func TestMatchedExprIsAnIndexSeek(t *testing.T) {
 
 // TestAnchorWrittenOnlyIfStillTheOne: an edit with MatchIf records its match only
 // while the book's recorded match is still MatchIf (work, recording and offered
-// identifiers), checked in the edit's transaction; else the match stays as it
-// is and the rest of the edit still applies. A zero MatchIf records one only
-// while the book has none.
+// identifiers), checked in the edit's transaction; else nothing of the edit is
+// written (an ASIN taken from the old match would outrank the new one,
+// server#354) and EditBook returns ErrMatchedSince. A zero MatchIf records one
+// only while the book has none, and no ASIN or ISBN either.
 func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -722,25 +723,40 @@ func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 	}
 	anchorBook(t, c, ctx, lib.ID, p, "the-work")
 	read := anchorOf(t, c, ctx, lib.ID, p)
-	edit := func(title string, was *MatchAnchor) {
+	edit := func(title string, was *MatchAnchor) error {
 		t.Helper()
-		if err := c.EditBook(ctx, lib.ID, p, BookEdit{
-			Set:     map[string]string{FieldTitle: title},
+		return c.EditBook(ctx, lib.ID, p, BookEdit{
+			Set:     map[string]string{FieldTitle: title, FieldASIN: "B0OLDMATCH"},
 			Match:   &MatchAnchor{WorkID: "the-work", RecordingID: "rec-1", OfferedASIN: "B0FILLED01", How: MatchHowAuto, RunID: 3},
 			MatchIf: was, Source: SourceCommunity,
-		}); err != nil {
+		})
+	}
+	field := func(name string) string {
+		t.Helper()
+		st, err := c.BookMatchState(ctx, lib.ID, p)
+		if err != nil {
 			t.Fatal(err)
+		}
+		return st.Fields[name].Value
+	}
+	stale := func(label string, was *MatchAnchor) {
+		t.Helper()
+		if err := edit("Stale "+label, was); !errors.Is(err, ErrMatchedSince) {
+			t.Fatalf("%s: err = %v, want ErrMatchedSince", label, err)
 		}
 	}
 	// Matched by hand to another work since the plan read it: the match stays,
-	// the fields go in.
+	// and nothing else of the edit goes in (no title, no old ASIN).
 	anchorBook(t, c, ctx, lib.ID, p, "hand-work")
-	edit("Fields", &read)
+	stale("hand", &read)
 	if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "hand-work" || a.How != MatchHowAccepted {
 		t.Fatalf("a hand match since = %+v, want it kept", a)
 	}
-	if st, _ := c.BookMatchState(ctx, lib.ID, p); st.Fields[FieldTitle].Value != "Fields" {
-		t.Fatalf("title = %+v, want the rest of the edit applied", st.Fields[FieldTitle])
+	if got := field(FieldTitle); got == "Stale hand" {
+		t.Fatalf("title = %q, want the edit rolled back", got)
+	}
+	if got := field(FieldASIN); got == "B0OLDMATCH" {
+		t.Fatalf("asin = %q, want the old match's ASIN not written", got)
 	}
 	// The same work but other offered identifiers (accepted again by hand): kept.
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{
@@ -748,54 +764,51 @@ func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	edit("Again", &read)
+	stale("re-accept", &read)
 	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "B0HAND0001" || a.How != MatchHowAccepted {
 		t.Fatalf("a re-accept since = %+v, want it kept", a)
 	}
-	// Still the one read: written.
+	// Still the one read: written, with the rest of the edit.
 	read = anchorOf(t, c, ctx, lib.ID, p)
-	edit("Written", &read)
+	if err := edit("Written", &read); err != nil {
+		t.Fatal(err)
+	}
 	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "B0FILLED01" || a.How != MatchHowAuto {
 		t.Fatalf("still the one read = %+v, want it written", a)
 	}
+	if got := field(FieldTitle); got != "Written" {
+		t.Fatalf("title = %q, want the edit applied", got)
+	}
 	// A zero MatchIf (none read): never over a match the book has now.
-	edit("None", &MatchAnchor{})
+	stale("none", &MatchAnchor{})
 	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "B0FILLED01" {
 		t.Fatalf("none read, one there = %+v, want it kept", a)
+	}
+	if got := field(FieldTitle); got != "Written" {
+		t.Fatalf("title = %q, want the stale edit rolled back", got)
 	}
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Match: &MatchAnchor{}}); err != nil { // Unlink
 		t.Fatal(err)
 	}
-	edit("Fresh", &MatchAnchor{})
+	if err := edit("Fresh", &MatchAnchor{}); err != nil {
+		t.Fatal(err)
+	}
 	if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "the-work" || a.OfferedASIN != "B0FILLED01" {
 		t.Fatalf("none read, none there = %+v, want it written", a)
 	}
-}
-
-// TestDropApplyItems: an apply's total drops by n at once, never below what it
-// has done; n <= 0 writes nothing.
-func TestDropApplyItems(t *testing.T) {
-	t.Parallel()
-	c, ctx := newTestCatalog(t)
-	id, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeRefresh, Total: 10})
-	if err != nil {
+	// A zero MatchIf is an unmatched book: an ASIN set by hand since, with no
+	// match recorded, is kept too, and no match goes in beside it.
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Match: &MatchAnchor{}}); err != nil { // Unlink
 		t.Fatal(err)
 	}
-	if err := c.FinishMatching(ctx, id, MatchReady, ""); err != nil {
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{FieldASIN: "B0BYHAND01"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.BeginApply(ctx, id, "fill", 10); err != nil {
-		t.Fatal(err)
+	stale("an ASIN by hand", &MatchAnchor{})
+	if got := field(FieldASIN); got != "B0BYHAND01" {
+		t.Fatalf("asin = %q, want the one set by hand kept", got)
 	}
-	if _, err := c.db.ExecContext(ctx, `UPDATE match_runs SET apply_done = 4 WHERE id = ?`, id); err != nil {
-		t.Fatal(err)
-	}
-	for _, step := range []struct{ n, want int }{{0, 10}, {3, 7}, {5, 4}} {
-		if err := c.DropApplyItems(ctx, id, step.n); err != nil {
-			t.Fatal(err)
-		}
-		if r, err := c.GetMatchRun(ctx, id); err != nil || r.ApplyTotal != step.want || r.ApplyDone != 4 {
-			t.Fatalf("drop %d: run %+v %v, want total %d", step.n, r, err, step.want)
-		}
+	if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "" {
+		t.Fatalf("an ASIN by hand, none recorded = %+v, want no match written", a)
 	}
 }

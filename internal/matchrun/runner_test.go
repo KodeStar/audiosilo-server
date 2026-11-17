@@ -469,6 +469,81 @@ func TestServerStopLeavesTheRun(t *testing.T) {
 	}
 }
 
+// refuseStatus makes every write of status to a match run fail (a trigger), as
+// a finishing write or a settle fails on a database in trouble; the returned
+// func lifts it.
+func (e *env) refuseStatus(t *testing.T, status string) func() {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := e.db.ExecContext(ctx, `CREATE TRIGGER refuse_status BEFORE UPDATE OF status ON match_runs
+		WHEN NEW.status = '`+status+`' BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if _, err := e.db.ExecContext(ctx, `DROP TRIGGER refuse_status`); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestRunSettlesItselfWhenItsFinishFails: a run whose finishing write fails
+// (FinishMatching, FinishApply) settles itself once its workers are done,
+// rather than staying marked working, refusing every Unlink of its library
+// until the next start (server#350).
+func TestRunSettlesItselfWhenItsFinishFails(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/One", "One", "", nil)
+	e.matcher.byTitle["One"] = []meta.MatchCandidate{cand("the-martian", 97, "")}
+
+	lift := e.refuseStatus(t, catalog.MatchReady)
+	run := e.start(t, catalog.MatchModeMatch, "")
+	lift()
+	if run.Status != catalog.MatchInterrupted {
+		t.Fatalf("match whose finish failed = %s, want interrupted, not left matching", run.Status)
+	}
+
+	run = e.start(t, catalog.MatchModeMatch, "")
+	if run.Status != catalog.MatchReady {
+		t.Fatalf("run = %+v", run)
+	}
+	lift = e.refuseStatus(t, catalog.MatchApplied)
+	e.applyAndWait(t, run, ScopeFill)
+	lift()
+	if got, _ := e.cat.GetMatchRun(ctx, run.ID); got.Status != catalog.MatchReady {
+		t.Fatalf("apply whose finish failed = %s, want ready again, not left applying", got.Status)
+	}
+}
+
+// TestStartGoesOnWhenTheSettleFails: the settle before a Start or an Apply is
+// housekeeping: when it fails the run still starts (server#350).
+func TestStartGoesOnWhenTheSettleFails(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/One", "One", "", nil)
+	e.matcher.byTitle["One"] = []meta.MatchCandidate{cand("the-martian", 97, "")}
+	// A run a stopped server left matching, which the settle can't move now.
+	if _, err := e.cat.StartMatchRun(ctx, catalog.MatchRun{Mode: catalog.MatchModeMatch, Total: 1}); err != nil {
+		t.Fatal(err)
+	}
+	defer e.refuseStatus(t, catalog.MatchInterrupted)()
+	run, err := e.runner.Start(ctx, ctx, StartOptions{Mode: catalog.MatchModeMatch})
+	if err != nil {
+		t.Fatalf("start with a failing settle = %v, want started", err)
+	}
+	e.runner.Wait()
+	if got, _ := e.cat.GetMatchRun(ctx, run.ID); got.Status != catalog.MatchReady {
+		t.Fatalf("run = %s, want ready", got.Status)
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill}); err != nil {
+		t.Fatalf("apply with a failing settle = %v, want started", err)
+	}
+	e.runner.Wait()
+	if got, _ := e.cat.GetMatchRun(ctx, run.ID); got.Status != catalog.MatchApplied {
+		t.Fatalf("run = %s, want applied", got.Status)
+	}
+}
+
 func TestRepick(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()

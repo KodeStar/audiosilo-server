@@ -72,10 +72,14 @@ func uniqueLabels(in []string) []string {
 // refuses a label over maxLabelLen, one with a control character and a list
 // over maxLabels, naming field; lenient (what a file says) leaves such a label
 // out and keeps the first maxLabels, so one odd value never costs a book the
-// rest. Nil for none.
+// rest. A label that shows nothing (blankIfInvisible) is a blank, left out
+// either way (server#349). Nil for none.
 func cleanLabels(field string, in []string, strict bool) ([]string, error) {
 	var out []string
 	for _, name := range uniqueLabels(in) {
+		if blankIfInvisible(name) == "" {
+			continue
+		}
 		if err := checkText(field, name, maxLabelLen); err != nil {
 			if strict {
 				return nil, invalid(field, "a label must be at most 64 characters, with no control characters")
@@ -186,17 +190,25 @@ func normalizeLabelEdits(e BookEdit) (add, remove map[string][]string, err error
 // labelSets is what an edit's Add and Remove make of one book's lists: the new
 // value of each list field it changes (the book's effective list, books.genres /
 // tags, with the labels added and taken out), leaving out a list it leaves as it
-// was, so adding a tag a book already has edits nothing on it.
-func labelSets(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (map[string]string, error) {
+// was, so adding a tag a book already has edits nothing on it. A list that ends
+// up holding the labels the book has under its override (the files' or an
+// Audiobookshelf file's, any order or case) is reverted instead, so a bulk add
+// then remove of a label leaves the book unedited, never locked to its own
+// value (server#186).
+func labelSets(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (set map[string]string, revert []string, err error) {
 	if len(edit.Add) == 0 && len(edit.Remove) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var genres, tags string
-	if err := tx.QueryRowContext(ctx, `SELECT genres, tags FROM books WHERE id = ?`, bookID).Scan(&genres, &tags); err != nil {
-		return nil, err
+	var overridden bool // a label field has an override, the only kind a list can revert
+	if err := tx.QueryRowContext(ctx, `SELECT b.genres, b.tags, EXISTS (SELECT 1 FROM book_overrides o
+	     WHERE o.library_id = b.library_id AND o.path = b.rel_path AND o.field IN (?, ?))
+	     FROM books b WHERE b.id = ?`, FieldGenres, FieldTags, bookID).Scan(&genres, &tags, &overridden); err != nil {
+		return nil, nil, err
 	}
 	cur := map[string]string{FieldGenres: genres, FieldTags: tags}
-	out := map[string]string{}
+	var under map[string]FieldValue // the layers below any override, read once and only when needed
+	set = map[string]string{}
 	for _, field := range labelFields {
 		add, remove := edit.Add[field], edit.Remove[field]
 		if len(add) == 0 && len(remove) == 0 {
@@ -204,13 +216,35 @@ func labelSets(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (ma
 		}
 		v, err := mergeLabels(field, cur[field], add, remove)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if v != cur[field] {
-			out[field] = v
+		if v == cur[field] {
+			continue
 		}
+		if !overridden {
+			set[field] = v
+			continue
+		}
+		if under == nil {
+			layers, err := loadLayers(ctx, tx, bookID)
+			if err != nil {
+				return nil, nil, err
+			}
+			under = layers.resolve()
+		}
+		if fv := under[field]; fv.Locked && sameLabels(ParseLabels(v), ParseLabels(fv.Scanned)) {
+			revert = append(revert, field)
+			continue
+		}
+		set[field] = v
 	}
-	return out, nil
+	return set, revert, nil
+}
+
+// sameLabels reports whether a and b hold the same labels (labelKey: any case),
+// in any order.
+func sameLabels(a, b []string) bool {
+	return len(a) == len(b) && !slices.ContainsFunc(a, func(l string) bool { return !hasLabel(b, l) })
 }
 
 // writeLabels writes book_labels for a book: each label of its label fields

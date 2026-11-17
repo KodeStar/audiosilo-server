@@ -72,11 +72,11 @@ func TestMatchAcceptOfferedIdentifiers(t *testing.T) {
 	}
 }
 
-// TestRefreshApplyLeavesOutUnchanged (server#332): a refresh apply with no
-// exclusions leaves out an item with nothing to change under the scope: the
-// run ends applied, its total counting only the books changed, the item still
-// pending and not skipped.
-func TestRefreshApplyLeavesOutUnchanged(t *testing.T) {
+// TestRefreshApplySkipsUnchangedSince (server#355): a refresh apply with no
+// exclusions takes an item that had a change when the run recorded it but has
+// none now, and skips it as nothing_to_change: the run ends applied at its
+// total, the item saying why rather than left pending.
+func TestRefreshApplySkipsUnchangedSince(t *testing.T) {
 	t.Parallel()
 	e, tok, _, libID := newMatchRunEnv(t, "uk")
 	ctx := context.Background()
@@ -102,8 +102,11 @@ func TestRefreshApplyLeavesOutUnchanged(t *testing.T) {
 	}
 	e.api.matchRuns.Wait()
 	_, body = e.do(t, "GET", runURL, tok, "")
-	if got := decodeRun(t, body); got.Status != catalog.MatchApplied || got.ApplyTotal != 0 || got.ApplyDone != 0 ||
-		got.Counts.Skipped != 0 || got.Counts.Applied != 0 || got.Counts.Pending != 1 {
-		t.Fatalf("run = %+v, want applied with the unchanged item left out", got)
+	if got := decodeRun(t, body); got.Status != catalog.MatchApplied || got.ApplyTotal != 1 || got.ApplyDone != 1 ||
+		got.Counts.Skipped != 1 || got.Counts.Applied != 0 || got.Counts.Pending != 0 {
+		t.Fatalf("run = %+v, want applied with the unchanged item skipped", got)
+	}
+	if _, body = e.do(t, "GET", runURL+"/items", tok, ""); !strings.Contains(body, `"detail":"nothing_to_change"`) {
+		t.Fatalf("items = %s, want the item skipped as nothing_to_change", body)
 	}
 }

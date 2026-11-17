@@ -105,9 +105,10 @@ var (
 	publishedRE = regexp.MustCompile(`^\d{4}(-\d{2}(-\d{2})?)?$`)
 )
 
-// normalizeOverride validates value for field and returns its stored form.
+// normalizeOverride validates value for field and returns its stored form; a
+// value that shows nothing (blankIfInvisible) is empty.
 func normalizeOverride(field, value string) (string, error) {
-	v := strings.TrimSpace(value)
+	v := blankIfInvisible(strings.TrimSpace(value))
 	switch field {
 	case FieldTitle, FieldAuthor, FieldNarrator, FieldSeries:
 		if err := checkText(field, v, maxShortField); err != nil {
@@ -177,6 +178,17 @@ func normalizeOverride(field, value string) (string, error) {
 	default:
 		return "", invalid(field, "not an editable field")
 	}
+}
+
+// blankIfInvisible is v, or "" when v shows nothing (only invisible characters:
+// U+200B, U+FEFF, U+3164, ...), so a title made of them is no title (server#349).
+// A visible value is kept whole, an emoji's trailing variation selector and an
+// inner joiner included.
+func blankIfInvisible(v string) string {
+	if strings.TrimFunc(v, invisible) == "" {
+		return ""
+	}
+	return v
 }
 
 func checkText(field, v string, limit int) error {
@@ -807,10 +819,14 @@ type BookEdit struct {
 	Match *MatchAnchor
 	// MatchIf, beside a Match naming a work, writes it only while the book's
 	// recorded match is still this one (its work, recording and offered
-	// identifiers; a zero MatchIf: none recorded), checked in the edit's
-	// transaction; else the match is left as it is and the rest of the edit
-	// applies. A run's bookkeeping of a match it read (a refresh's heal or new
-	// identifier, a repick's ASIN), so a match made by hand meanwhile stays.
+	// identifiers), checked in the edit's transaction; else nothing of the edit
+	// is written and EditBook returns ErrMatchedSince. A zero MatchIf is an
+	// unmatched book, as a match run takes one (matchedExpr): none recorded and
+	// no ASIN or ISBN either, so one set by hand meanwhile (an edit, a rescan,
+	// the Audible backfill) stays too. A run's bookkeeping of a match it read (a
+	// refresh's heal or new identifier, a repick's ASIN, a match item's new
+	// match), so a match made by hand meanwhile stays, and so do its values: an
+	// ASIN taken from the old match would outrank it (server#354).
 	MatchIf *MatchAnchor
 	Source  string
 	UserID  int64
@@ -853,7 +869,7 @@ func (e BookEdit) normalize() (BookEdit, error) {
 	}
 	chSet := make(map[int]string, len(e.ChapterSet))
 	for idx, title := range e.ChapterSet {
-		t := strings.TrimSpace(title)
+		t := blankIfInvisible(strings.TrimSpace(title))
 		if t == "" {
 			return e, invalid("chapters", "a chapter title cannot be empty (revert it instead)")
 		}
@@ -888,7 +904,8 @@ func (e BookEdit) normalize() (BookEdit, error) {
 // for a revert) and the books row, its chapters and its FTS row are rebuilt, all in
 // one transaction. ErrNotFound when no book is indexed at the path.
 // An Unlink returns ErrMatchRunBusy while a match run that covers the book's
-// library (or every library) is applying.
+// library (or every library) is applying; an edit whose MatchIf no longer holds
+// returns ErrMatchedSince, having written nothing.
 func (c *Catalog) EditBook(ctx context.Context, libraryID int64, path string, edit BookEdit) error {
 	edit, err := edit.normalize()
 	if err != nil {
@@ -979,6 +996,18 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 			return err
 		}
 	default:
+		if edit.MatchIf != nil && edit.MatchIf.WorkID == "" {
+			// Read as unmatched: the anchor write below refuses a match recorded
+			// since, this an ASIN or ISBN the book gained since, which the
+			// edit's own would replace.
+			var matched bool
+			if err := tx.QueryRowContext(ctx, `SELECT `+matchedExpr+` FROM books b WHERE b.id = ?`, bookID).Scan(&matched); err != nil {
+				return err
+			}
+			if matched {
+				return ErrMatchedSince
+			}
+		}
 		if err := writeAnchor(ctx, tx, at, edit.Match, edit.MatchIf, editor, now); err != nil {
 			return err
 		}
@@ -988,20 +1017,20 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	if err != nil {
 		return err
 	}
-	labels, err := labelSets(ctx, tx, bookID, edit)
+	labelSet, labelRevert, err := labelSets(ctx, tx, bookID, edit)
 	if err != nil {
 		return err
 	}
 	// This book's own copies: EditBooks shares the edit across books. The swap
 	// and the label changes write only fields the edit leaves alone, each either
 	// set or reverted, so no field is both.
-	if len(swapSet) > 0 || len(labels) > 0 {
+	if len(swapSet) > 0 || len(labelSet) > 0 {
 		set = maps.Clone(edit.Set)
 		maps.Copy(set, swapSet)
-		maps.Copy(set, labels)
+		maps.Copy(set, labelSet)
 	}
-	if len(swapRevert) > 0 {
-		revert = slices.Concat(edit.Revert, swapRevert)
+	if len(swapRevert) > 0 || len(labelRevert) > 0 {
+		revert = slices.Concat(edit.Revert, swapRevert, labelRevert)
 	}
 	if len(set) == 0 && len(revert) == 0 && edit.ChapterSource == "" && len(edit.ChapterSet) == 0 && len(edit.ChapterRevert) == 0 {
 		return nil // nothing else for this book (a bulk add of a tag it already has, an anchor alone): its row stays as it is

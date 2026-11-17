@@ -48,7 +48,8 @@ const (
 )
 
 // DetailIdentifierUnknown is a refresh item's detail when the community doesn't
-// know any of the book's identifiers and it has no recorded work to fall back to.
+// know any of the book's identifiers and it has no recorded work to fall back to,
+// or the recorded work it fell back to has nothing to change (server#342).
 const DetailIdentifierUnknown = "identifier_unknown"
 
 // DetailWorkUnknown is a refresh item's detail when the community no longer knows
@@ -94,17 +95,6 @@ const DetailCoverPending = "cover_pending"
 // fields went in, else skipped. Final, never cover_pending: the book is no longer
 // the one the cover was planned for.
 const DetailCoverSuperseded = "cover_superseded"
-
-// detailUnchanged is applyItem's answer for a refresh item with nothing to
-// change under the scope now, though it had when recorded (one with nothing
-// then is never read: catalog.MatchItemsToApply): the apply leaves it out, as
-// an exclusion does (catalog.DropApplyItems, dropBatch at a time), rather than
-// marking it skipped, so the console sends no exclusion for it (server#332).
-// Internal: never stored.
-const detailUnchanged = "unchanged"
-
-// dropBatch is how many such items an apply drops from its total in one write.
-const dropBatch = 100
 
 // ErrBusy is a start or apply asked while a run is working: one at a time. It is
 // catalog.ErrMatchRunBusy, the Unlink refusal, so one errors.Is matches both.
@@ -166,16 +156,14 @@ type StartOptions struct {
 // Start records a run and starts matching in the background, under base (the
 // server's lifetime), returning the run as it starts. ErrBusy while another run
 // is working. A run left marked working with nothing behind it is settled first
-// (settleLocked).
+// (settleBeforeStart).
 func (r *Runner) Start(ctx, base context.Context, o StartOptions) (*catalog.MatchRun, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active != 0 {
 		return nil, ErrBusy
 	}
-	if _, err := r.settleLocked(ctx); err != nil {
-		return nil, err
-	}
+	r.settleBeforeStart(ctx)
 	var (
 		books     []catalog.Book
 		languages map[int64]string // a match's only (matchBook's mode switch)
@@ -246,9 +234,9 @@ func (r *Runner) end() {
 }
 
 // settleLocked settles the runs still marked working that no worker is behind
-// (catalog.SettleMatchRuns): a run whose finishing write failed (FinishMatching,
-// FinishApply only log that, and end clears r.active anyway) or one a stopped
-// server left whose settle at startup failed. Such a row would refuse every
+// (catalog.SettleMatchRuns): a run whose finishing write and its own settle
+// both failed (settleOwn; end clears r.active anyway) or one a stopped server
+// left whose settle at startup failed. Such a row would refuse every
 // Unlink of its library, and a stuck applying one could never be applied again.
 // It returns how many it settled. r.mu held, and safe only because of that
 // lock: Start and Apply hold it across StartMatchRun / BeginApply and begin, so
@@ -261,6 +249,25 @@ func (r *Runner) settleLocked(ctx context.Context) (int, error) {
 		r.log.Warn("match run: settled runs left marked working", "runs", n)
 	}
 	return n, err
+}
+
+// settleBeforeStart is settleLocked before a Start or an Apply: housekeeping,
+// so a failure is logged and never refuses the run (server#350); the rows it
+// left are tried again at the next start, Stop or Unlink. r.mu held.
+func (r *Runner) settleBeforeStart(ctx context.Context) {
+	if _, err := r.settleLocked(ctx); err != nil && ctx.Err() == nil {
+		r.log.Warn("match run: settle runs left marked working failed", "err", err)
+	}
+}
+
+// settleOwn settles run id once its finishing write (FinishMatching,
+// FinishApply) failed, every worker of it done: left marked working it would
+// refuse every Unlink of its library until the next start (server#350), with
+// the Unlink's own settle (SettleOrphans) only a backstop.
+func (r *Runner) settleOwn(ctx context.Context, id int64) {
+	if _, err := r.cat.SettleMatchRun(context.WithoutCancel(ctx), id); err != nil {
+		r.log.Error("settle match run failed", "run", id, "err", err)
+	}
 }
 
 // SettleOrphans settles the runs left marked working with nothing behind them
@@ -397,6 +404,7 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 	}
 	if err := r.cat.FinishMatching(context.WithoutCancel(ctx), runID, status, stopCode); err != nil {
 		r.log.Error("finish match run failed", "run", runID, "err", err)
+		r.settleOwn(ctx, runID)
 	}
 }
 
@@ -579,6 +587,15 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 		}
 	}
 	if len(item.Unchanged) == len(scopes) {
+		if byWork && hasIdentifier {
+			// Up to date by its recorded match, but the community doesn't know
+			// the book's own identifier (a mistyped ASIN, say): said, as it
+			// would be with no match to fall back on, with nothing to apply
+			// (server#342).
+			item.Outcome, item.Detail, item.Score = catalog.OutcomeNone, DetailIdentifierUnknown, 0
+			item.Proposal, item.Unchanged = catalog.MatchProposal{Values: map[string]string{}}, nil
+			return item, nil
+		}
 		return nil, nil
 	}
 	return item, nil
@@ -598,17 +615,15 @@ type ApplyOptions struct {
 // Apply starts applying a ready run in the background, under base, returning the
 // run as it starts. ErrBusy while a run is working; catalog.ErrRunNotReady when
 // this one isn't ready; ErrScope for a scope its mode doesn't take. A run left
-// marked working with nothing behind it is settled first (settleLocked), so a
-// stuck applying run is ready, and can be applied, again.
+// marked working with nothing behind it is settled first (settleBeforeStart), so
+// a stuck applying run is ready, and can be applied, again.
 func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (*catalog.MatchRun, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active != 0 {
 		return nil, ErrBusy
 	}
-	if _, err := r.settleLocked(ctx); err != nil {
-		return nil, err
-	}
+	r.settleBeforeStart(ctx)
 	run, err := r.cat.GetMatchRun(ctx, runID)
 	if err != nil {
 		return nil, err
@@ -626,9 +641,8 @@ func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (
 	if err := r.cat.BeginApply(ctx, runID, o.Scope, len(items)); err != nil {
 		return nil, err
 	}
-	// Read before the apply starts: a refresh's apply_total shrinks as it leaves
-	// out items with nothing to change now (DropApplyItems), so the run returned
-	// (and the audit's "books") is every item it takes, never a racy part of it.
+	// Read before the apply starts, so the run returned (and the audit's
+	// "books") is every item it takes, never a racy part of it.
 	started, err := r.cat.GetMatchRun(ctx, runID)
 	work := r.begin(base, runID)
 	r.wg.Go(func() {
@@ -648,27 +662,8 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 		off = off || !r.enabled()
 		return !off
 	}
-	// Items left out as unchanged now are counted up and dropped from the total
-	// a batch at a time (and the rest before the run settles), never a write
-	// each: the total only ever runs ahead of what is left, so apply_done stays
-	// within it and reaches it.
-	var dropped atomic.Int64
-	drop := func(n int64) {
-		if n == 0 {
-			return
-		}
-		if err := r.cat.DropApplyItems(context.WithoutCancel(ctx), run.ID, int(n)); err != nil {
-			r.log.Error("drop match items failed", "run", run.ID, "items", n, "err", err)
-		}
-	}
 	pool.Each(ctx, applyWorkers, items, enabled, func(it *catalog.MatchRunItem) {
 		applied, detail := r.applyItem(ctx, run, it, o)
-		if detail == detailUnchanged {
-			if dropped.Add(1)%dropBatch == 0 {
-				drop(dropBatch)
-			}
-			return
-		}
 		// Stopped mid-item: what the stop may have cut short (a failure, a cover
 		// not taken) stays to apply, so the next apply takes it again; what went in
 		// is marked, so it counts as applied rather than coming back as nothing to
@@ -686,7 +681,6 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 			r.log.Error("mark match item failed", "run", run.ID, "item", it.ID, "err", err)
 		}
 	})
-	drop(dropped.Load() % dropBatch) // the workers are done: the rest
 	if ctx.Err() != nil && !r.stoppedByAdmin() {
 		return // the server is stopping: the next start puts it back to ready (InterruptMatchRuns, settleLocked)
 	}
@@ -695,12 +689,12 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 	}
 	if err := r.cat.FinishApply(context.WithoutCancel(ctx), run.ID, ctx.Err() != nil || off); err != nil {
 		r.log.Error("finish match apply failed", "run", run.ID, "err", err)
+		r.settleOwn(ctx, run.ID)
 	}
 }
 
 // applyItem writes one item's plan to its book: applied, skipped (nothing to
-// change, or no book there now) or failed, with a code saying why; a refresh
-// item with nothing to change is none of them (detailUnchanged). A community
+// change, or no book there now) or failed, with a code saying why. A community
 // match it records (Writes.Anchor) goes in with the fields, in one transaction:
 // made "auto" for a confident item, "accepted" for a review item the admin
 // included, and a refresh's heal keeps how the book was matched.
@@ -721,9 +715,10 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 	}
 	w := planFor(mode, o.Scope, st, it)
 	if w.Empty() {
-		if mode == catalog.MatchModeRefresh {
-			return "", detailUnchanged
-		}
+		// A refresh item too: it had a change when the run recorded it (one with
+		// none is never read: MatchItemsToApply), so the review showed one, and
+		// the book took it since, or no longer has what it was found by
+		// (server#355).
 		return catalog.ItemSkipped, "nothing_to_change"
 	}
 	edits := len(w.Set) > 0 || len(w.Revert) > 0 || w.Anchor != nil
@@ -734,15 +729,18 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 			switch {
 			case mode != catalog.MatchModeMatch:
 				// The book's own match, healed or its identifiers recorded
-				// (planRefresh, planFor's repick): kept how it was made, and
-				// only while it is still the one read here, so a match made by
-				// hand meanwhile stays (BookEdit.MatchIf).
+				// (planRefresh, planFor's repick): kept how it was made.
 				how = st.Anchor.How
-				was := st.Anchor
-				edit.MatchIf = &was
 			case it.Outcome == catalog.OutcomeAuto:
 				how = catalog.MatchHowAuto
 			}
+			// Only while the book's match is still the one read here (for a
+			// match item none, and no ASIN or ISBN either: matchedSince, checked
+			// again in the edit's transaction): a match made by hand meanwhile
+			// stays with its values, and the whole edit is skipped
+			// (BookEdit.MatchIf).
+			was := st.Anchor
+			edit.MatchIf = &was
 			m := *w.Anchor
 			m.How, m.RunID = how, run.ID
 			edit.Match = &m
@@ -753,6 +751,9 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 		if err := r.cat.EditBook(ctx, it.LibraryID, it.Path, edit); err != nil {
 			if errors.Is(err, catalog.ErrNotFound) {
 				return catalog.ItemSkipped, "book_gone"
+			}
+			if errors.Is(err, catalog.ErrMatchedSince) {
+				return catalog.ItemSkipped, "matched_since"
 			}
 			if ctx.Err() == nil {
 				r.log.Warn("match apply edit failed", "library", it.LibraryID, "path", it.Path, "err", err)

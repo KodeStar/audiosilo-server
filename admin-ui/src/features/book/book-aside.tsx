@@ -206,6 +206,35 @@ function CommunityCard({
     toast.add({ title: t('book.community.unlinked'), type: 'success' });
   };
 
+  // Shown whenever a match is recorded, metadata on or off: an Unlink works
+  // either way, and is the way out of a match left behind (server#350).
+  const unlinkButton = work ? (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => setConfirmUnlink(true)}
+      disabled={matchBlocked}
+    >
+      <Unlink aria-hidden="true" />
+      {t('book.community.unlink')}
+    </Button>
+  ) : null;
+  // Outside any matched branch: the unlink's answer turns the card unmatched
+  // while the dialog is still closing.
+  const unlinkDialog = (
+    <ConfirmDialog
+      open={confirmUnlink}
+      onOpenChange={setConfirmUnlink}
+      icon={Unlink}
+      title={t('book.community.unlinkTitle')}
+      description={t(
+        keepsIdentifier ? 'book.community.unlinkBodyKeeps' : 'book.community.unlinkBody',
+      )}
+      confirmLabel={t('book.community.unlink')}
+      onConfirm={unlink}
+    />
+  );
+
   if (server.data && !server.data.capabilities.metadata) {
     return (
       <Card className="flex flex-col gap-2 border-dashed p-5" aria-labelledby="community-title">
@@ -222,6 +251,8 @@ function CommunityCard({
             {t('book.community.offLink')}
           </Link>
         </p>
+        {unlinkButton ? <div>{unlinkButton}</div> : null}
+        {unlinkDialog}
       </Card>
     );
   }
@@ -284,17 +315,7 @@ function CommunityCard({
             <Button variant="outline" size="sm" onClick={onMatch} disabled={matchBlocked}>
               {t('book.community.compare')}
             </Button>
-            {work ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConfirmUnlink(true)}
-                disabled={matchBlocked}
-              >
-                <Unlink aria-hidden="true" />
-                {t('book.community.unlink')}
-              </Button>
-            ) : null}
+            {unlinkButton}
           </div>
         </>
       ) : (
@@ -308,19 +329,7 @@ function CommunityCard({
           </div>
         </>
       )}
-      {/* Outside the matched branch: the unlink's answer turns the card unmatched
-          while the dialog is still closing. */}
-      <ConfirmDialog
-        open={confirmUnlink}
-        onOpenChange={setConfirmUnlink}
-        icon={Unlink}
-        title={t('book.community.unlinkTitle')}
-        description={t(
-          keepsIdentifier ? 'book.community.unlinkBodyKeeps' : 'book.community.unlinkBody',
-        )}
-        confirmLabel={t('book.community.unlink')}
-        onConfirm={unlink}
-      />
+      {unlinkDialog}
       {matched ? <CorrectionsSection detail={detail} blocked={matchBlocked} /> : null}
       <GenerateSection book={detail.book} />
       <ShareSection book={detail.book} />

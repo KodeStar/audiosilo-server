@@ -153,8 +153,9 @@ export function leaveOut(picks: Picks, item: MatchRunItem): Picks {
  * itself. Every loaded item without a checkbox under this mode and scope (gone,
  * matched since the run) is excluded, so the apply's count doesn't promise it,
  * except a refresh's confident item with nothing to write under the scope: the
- * server leaves that one out of the apply (server#332), so it is only counted
- * (`leftOut`), never sent, and a huge refresh's request stays small. An admin's
+ * server leaves that one out of the apply (server#332), or skips it as
+ * nothing_to_change when the run recorded a change for it (server#355), so it is
+ * only counted (`leftOut`), never sent, and a huge refresh's request stays small. An admin's
  * own exclusion of one stays excluded (counted once). Derived, never stored, so
  * changing scope restores the admin's own picks.
  */

@@ -171,8 +171,9 @@ func checkChapterEdit(chapters []EditedChapter, files []BookFile) ([]metadata.Ch
 		if starts[i] = msOf(ch.Start); starts[i] >= end {
 			return refuse(ChapterEditOutOfRange)
 		}
+		// One that shows nothing is no title, as for a rename (server#349).
 		title, ok := metadata.ListChapterTitle(ch.Title)
-		if !ok {
+		if !ok || blankIfInvisible(title) == "" {
 			return refuse(ChapterEditTitle)
 		}
 		entries[i].Title = title

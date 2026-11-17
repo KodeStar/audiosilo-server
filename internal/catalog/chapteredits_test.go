@@ -126,6 +126,7 @@ func TestCheckChapterEdit(t *testing.T) {
 		"at the end":        {[]EditedChapter{{0, "A"}, {1800, "C"}, {3600, "D"}}, ChapterEditOutOfRange},
 		"rounds to the end": {[]EditedChapter{{0, "A"}, {1800, "C"}, {3599.9996, "D"}}, ChapterEditOutOfRange},
 		"empty title":       {[]EditedChapter{{0, "  "}, {1800, "C"}}, ChapterEditTitle},
+		"invisible title":   {[]EditedChapter{{0, "\u200b\u2800"}, {1800, "C"}}, ChapterEditTitle},
 		"long title":        {[]EditedChapter{{0, "A"}, {1800, title201}}, ChapterEditTitle},
 		"control character": {[]EditedChapter{{0, "A\tB"}, {1800, "C"}}, ChapterEditTitle},
 		"no file start":     {[]EditedChapter{{0, "A"}, {1700, "B"}}, ChapterEditFileStart},

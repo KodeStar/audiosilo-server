@@ -109,11 +109,11 @@ func TestRefreshApplyWritesOnlyWhatTheReviewShowed(t *testing.T) {
 	}
 }
 
-// TestRefreshApplyDropsItemsUnchangedSince (server#332): items that had a
+// TestRefreshApplySkipsItemsUnchangedSince (server#355): items that had a
 // change under the scope when recorded but have none now (the books took it
-// since) are left out as the apply passes them, dropped from its total in
-// batches, and the apply still ends at its total.
-func TestRefreshApplyDropsItemsUnchangedSince(t *testing.T) {
+// since) are skipped as nothing_to_change, never left pending with no word of
+// why, and the apply ends at its total.
+func TestRefreshApplySkipsItemsUnchangedSince(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
@@ -138,9 +138,14 @@ func TestRefreshApplyDropsItemsUnchangedSince(t *testing.T) {
 	if started.ApplyTotal != n+changed {
 		t.Fatalf("started = %+v, want every item taken", started)
 	}
-	if ended.Status != catalog.MatchApplied || ended.ApplyTotal != changed || ended.ApplyDone != changed ||
-		ended.Counts.Applied != changed || ended.Counts.Pending != n || ended.Counts.Skipped != 0 {
-		t.Fatalf("run after apply = %+v, want %d of %d applied, %d left pending", ended, changed, changed, n)
+	if ended.Status != catalog.MatchApplied || ended.ApplyTotal != n+changed || ended.ApplyDone != n+changed ||
+		ended.Counts.Applied != changed || ended.Counts.Pending != 0 || ended.Counts.Skipped != n {
+		t.Fatalf("run after apply = %+v, want %d applied, %d skipped", ended, changed, n)
+	}
+	for _, it := range e.items(t, run, "") {
+		if it.Applied == catalog.ItemSkipped && it.Detail != "nothing_to_change" {
+			t.Fatalf("skipped item = %+v, want nothing_to_change", it.MatchRunItem)
+		}
 	}
 }
 
@@ -195,7 +200,9 @@ func TestRepickRecordsTheNewASINAsOffered(t *testing.T) {
 
 // TestRefreshHealLeavesAHandMatchMadeMeanwhile: a refresh's identifier fill
 // records its match only while the book's match is still the one the apply
-// read: one made by hand between the read and the write stays.
+// read: one made by hand between the read and the write stays, and so does the
+// rest of the book: the old match's ASIN would outrank the hand match
+// (server#354). The item is skipped as matched_since.
 func TestRefreshHealLeavesAHandMatchMadeMeanwhile(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
@@ -222,5 +229,84 @@ func TestRefreshHealLeavesAHandMatchMadeMeanwhile(t *testing.T) {
 	e.applyAndWait(t, run, ScopeFill)
 	if a := e.anchorOf(t, path); a.WorkID != "hand-work" || a.RecordingID != "hand-rec" {
 		t.Fatalf("anchor = %+v, want the hand match kept", a)
+	}
+	if a := e.field(t, path, catalog.FieldASIN); a.Value != "" {
+		t.Fatalf("asin = %+v, want the old match's ASIN left out", a)
+	}
+	if it := e.items(t, run, "")[0]; it.Applied != catalog.ItemSkipped || it.Detail != "matched_since" {
+		t.Fatalf("item = %+v, want skipped matched_since", it.MatchRunItem)
+	}
+}
+
+// TestMatchApplyLeavesAHandMatchMadeMeanwhile: a match item records its match
+// only while the book still has none, checked in the edit's transaction: one
+// made by hand after the apply read the book stays with its values, and the
+// item is skipped as matched_since.
+func TestMatchApplyLeavesAHandMatchMadeMeanwhile(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	const path = "A/One"
+	e.book(t, path, "One", "", nil)
+	e.matcher.byTitle["One"] = []meta.MatchCandidate{cand("the-martian", 97, "")}
+	run := e.start(t, catalog.MatchModeMatch, "")
+	if run.Counts.Auto != 1 {
+		t.Fatalf("run = %+v", run)
+	}
+	e.runner.beforeEdit = func(*catalog.MatchRunItem) {
+		if err := e.cat.EditBook(ctx, e.lib, path, catalog.BookEdit{
+			Set:   map[string]string{catalog.FieldTitle: "Hand Title"},
+			Match: &catalog.MatchAnchor{WorkID: "hand-work", RecordingID: "hand-rec"}, Source: catalog.SourceCommunity,
+		}); err != nil {
+			t.Error(err)
+		}
+	}
+	e.applyAndWait(t, run, ScopeOverwrite)
+	if a := e.anchorOf(t, path); a.WorkID != "hand-work" || a.How != catalog.MatchHowAccepted {
+		t.Fatalf("anchor = %+v, want the hand match kept", a)
+	}
+	if f := e.field(t, path, catalog.FieldTitle); f.Value != "Hand Title" {
+		t.Fatalf("title = %+v, want the hand match's", f)
+	}
+	if f := e.field(t, path, catalog.FieldASIN); f.Value != "" {
+		t.Fatalf("asin = %+v, want the run's left out", f)
+	}
+	if it := e.items(t, run, catalog.OutcomeAuto)[0]; it.Applied != catalog.ItemSkipped || it.Detail != "matched_since" {
+		t.Fatalf("item = %+v, want skipped matched_since", it.MatchRunItem)
+	}
+}
+
+// TestMatchApplyLeavesAnIdentifierSetMeanwhile: a match item is for an
+// unmatched book, checked in the edit's transaction as the apply's read checks
+// it (matchedSince): an ASIN set by hand after that read, with no match
+// recorded, stays, the run records no match beside it, and the item is skipped
+// as matched_since.
+func TestMatchApplyLeavesAnIdentifierSetMeanwhile(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	const path = "A/One"
+	e.book(t, path, "One", "", nil)
+	e.matcher.byTitle["One"] = []meta.MatchCandidate{cand("the-martian", 97, "")}
+	run := e.start(t, catalog.MatchModeMatch, "")
+	if run.Counts.Auto != 1 {
+		t.Fatalf("run = %+v", run)
+	}
+	e.runner.beforeEdit = func(*catalog.MatchRunItem) {
+		if err := e.cat.EditBook(ctx, e.lib, path, catalog.BookEdit{
+			Set: map[string]string{catalog.FieldASIN: "B0BYHAND01"},
+		}); err != nil {
+			t.Error(err)
+		}
+	}
+	e.applyAndWait(t, run, ScopeOverwrite)
+	if f := e.field(t, path, catalog.FieldASIN); f.Value != "B0BYHAND01" || f.Source != catalog.SourceEdited {
+		t.Fatalf("asin = %+v, want the one set by hand", f)
+	}
+	if a := e.anchorOf(t, path); a.WorkID != "" {
+		t.Fatalf("anchor = %+v, want none recorded", a)
+	}
+	if it := e.items(t, run, catalog.OutcomeAuto)[0]; it.Applied != catalog.ItemSkipped || it.Detail != "matched_since" {
+		t.Fatalf("item = %+v, want skipped matched_since", it.MatchRunItem)
 	}
 }

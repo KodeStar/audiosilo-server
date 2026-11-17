@@ -72,14 +72,14 @@ func startRun(t *testing.T, e *testEnv, admin string, libID int64) int64 {
 	return decodeRun(t, body).ID
 }
 
-// A run whose FinishMatching failed is left matching with nothing behind it:
-// an Unlink isn't refused for it, Stop settles it (interrupted) and a Start
-// settles any other.
+// A run whose FinishMatching and its own settle (server#350) both failed is
+// left matching with nothing behind it: an Unlink isn't refused for it, Stop
+// settles it (interrupted) and a Start settles any other.
 func TestStuckMatchingRunIsReleased(t *testing.T) {
 	t.Parallel()
 	e, admin, _, libID := newMatchRunEnv(t, "us")
 	stuck := func() int64 {
-		drop := failRunStatus(t, e, catalog.MatchReady, catalog.MatchCancelled, catalog.MatchFailed)
+		drop := failRunStatus(t, e, catalog.MatchReady, catalog.MatchCancelled, catalog.MatchFailed, catalog.MatchInterrupted)
 		id := startRun(t, e, admin, libID)
 		drop()
 		if s := runStatus(t, e, id); s != catalog.MatchMatching {

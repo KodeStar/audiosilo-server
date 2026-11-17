@@ -250,23 +250,6 @@ func (c *Catalog) MarkMatchItem(ctx context.Context, runID, itemID int64, applie
 	})
 }
 
-// DropApplyItems leaves n items out of a working apply: its total counts n
-// fewer (never below what it has done), and the items are not marked (still
-// pending, as an exclusion leaves them). A refresh's items that had a change
-// under the scope when recorded but have none now (server#332), counted up and
-// dropped in batches, so the apply ends at its total without the console
-// excluding each such item.
-func (c *Catalog) DropApplyItems(ctx context.Context, runID int64, n int) error {
-	if n <= 0 {
-		return nil
-	}
-	return c.db.WithTx(ctx, "DropApplyItems", func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			`UPDATE match_runs SET apply_total = max(apply_total - ?, apply_done) WHERE id = ?`, n, runID)
-		return err
-	})
-}
-
 // FinishApply ends an apply: applied, or (cancelled) back to ready, its applied
 // items marked, so the rest can be applied later.
 func (c *Catalog) FinishApply(ctx context.Context, runID int64, cancelled bool) error {
@@ -599,7 +582,7 @@ func CleanOverride(field, value string) string {
 
 // ClearedMatches is what ClearCommunityMatches removed.
 type ClearedMatches struct {
-	Books  int `json:"books"`  // books that had a community value, cover or recorded match
+	Books  int `json:"books"`  // indexed books that had a community value, cover or recorded match
 	Covers int `json:"covers"` // community covers
 	Runs   int `json:"runs"`   // match runs, with their reviews
 }
@@ -609,7 +592,7 @@ type ClearedMatches struct {
 // covers and recorded matches (book_matches) go (an admin's own edits and
 // uploads, the tags and an enrichment stay), each book's effective metadata and cover art are rebuilt, and
 // the match runs go with their reviews (a run over every library loses only this
-// library's books). One transaction. The caller makes sure no match run is
+// library's books, and goes too once it has none left). One transaction. The caller makes sure no match run is
 // working meanwhile (matchrun.Runner.Clear).
 func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*ClearedMatches, error) {
 	var out ClearedMatches
@@ -621,17 +604,24 @@ func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*
 
 		// The runs: every one (their items cascade), or this library's and its
 		// books' items in the runs over every library.
-		res, err := tx.ExecContext(ctx, `DELETE FROM match_runs WHERE ?1 = 0 OR library_id = ?1`, libraryID)
-		if err != nil {
+		deleteRuns := func(query string) error {
+			res, err := tx.ExecContext(ctx, query, libraryID)
+			if err != nil {
+				return err
+			}
+			n, err := res.RowsAffected()
+			out.Runs += int(n)
 			return err
 		}
-		n, err := res.RowsAffected()
-		if err != nil {
+		if err := deleteRuns(`DELETE FROM match_runs WHERE ?1 = 0 OR library_id = ?1`); err != nil || libraryID == 0 {
 			return err
 		}
-		out.Runs = int(n)
-		if libraryID == 0 {
-			return nil
+		// A run over every library that held only this library's books is left
+		// with nothing: it goes too, as this library's own runs do (server#214).
+		if err := deleteRuns(`DELETE FROM match_runs WHERE library_id IS NULL
+		     AND EXISTS (SELECT 1 FROM match_run_items i WHERE i.run_id = match_runs.id AND i.library_id = ?1)
+		     AND NOT EXISTS (SELECT 1 FROM match_run_items i WHERE i.run_id = match_runs.id AND i.library_id != ?1)`); err != nil {
+			return err
 		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM match_run_items WHERE library_id = ?
 		     AND run_id IN (SELECT id FROM match_runs WHERE library_id IS NULL)`, libraryID)
@@ -666,8 +656,8 @@ func oneBook(ref Ref) clearPick {
 // clearCommunity removes the community overrides, covers and recorded matches
 // (book_matches) of the books pick names, keeping an admin's own edits and
 // uploads, and rebuilds each such indexed book's effective metadata and cover
-// art, in tx. It returns how many books had any and how many community covers
-// went: ClearCommunityMatches for a library, an unlink (BookEdit.Match with no
+// art, in tx. It returns how many indexed books had any and how many community
+// covers went: ClearCommunityMatches for a library, an unlink (BookEdit.Match with no
 // work) for one book.
 func clearCommunity(ctx context.Context, tx *sql.Tx, pick clearPick) (books, covers int, err error) {
 	where, args := pick.where, pick.args
@@ -689,31 +679,41 @@ func clearCommunity(ctx context.Context, tx *sql.Tx, pick clearPick) (books, cov
 	if err != nil {
 		return 0, 0, err
 	}
-	touched := map[Ref]bool{}
-	for _, ref := range fields {
-		if touched[ref] {
-			continue // one row per field
+	// Each path's book id, 0 when no book is indexed there now: only indexed
+	// books are counted (a leftover row of a gone path is cleared, not a book,
+	// server#214) and rebuilt.
+	ids := map[Ref]int64{}
+	for _, ref := range slices.Concat(fields, coverRefs, anchors) {
+		if _, seen := ids[ref]; seen {
+			continue // one row per field, and a path in more than one table
 		}
-		touched[ref] = true
 		id, err := bookIDByPath(ctx, tx, ref.LibraryID, ref.Path)
 		if errors.Is(err, ErrNotFound) {
-			continue // not indexed now: nothing to rebuild
+			id, err = 0, nil
 		}
 		if err != nil {
 			return 0, 0, err
 		}
-		if err := refreshEffective(ctx, tx, id); err != nil {
+		ids[ref] = id
+		if id != 0 {
+			books++
+		}
+	}
+	rebuilt := map[Ref]bool{}
+	for _, ref := range fields {
+		if ids[ref] == 0 || rebuilt[ref] {
+			continue
+		}
+		rebuilt[ref] = true
+		if err := refreshEffective(ctx, tx, ids[ref]); err != nil {
 			return 0, 0, err
 		}
 	}
 	for _, ref := range coverRefs {
-		touched[ref] = true
 		if err := refreshCoverArt(ctx, tx, ref.LibraryID, ref.Path); err != nil {
 			return 0, 0, err
 		}
 	}
-	for _, ref := range anchors {
-		touched[ref] = true // the row is all there is: nothing to rebuild
-	}
-	return len(touched), len(coverRefs), nil
+	// A recorded match's row is all there is: nothing to rebuild.
+	return books, len(coverRefs), nil
 }
