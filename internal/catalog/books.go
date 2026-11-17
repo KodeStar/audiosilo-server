@@ -115,7 +115,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 	if err != nil {
 		return 0, err
 	}
-	absSig, absReadAt, absFile, err := absColumns(b, indexedAt)
+	absSig, absReadAt, absFile, absKeep, err := absColumns(b, indexedAt)
 	if err != nil {
 		return 0, err
 	}
@@ -169,7 +169,11 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     -- list back over them when it should.
 		     scanned_chapters=excluded.scanned_chapters, chapters_hash=excluded.chapters_hash,
 		     chapters_source='', chapters_fit='',
-		     abs_sig=excluded.abs_sig, abs_indexed_at=excluded.abs_indexed_at, abs_file=excluded.abs_file,
+		     -- An ABS file that could not be read right now (ABSReading.Unread)
+		     -- keeps the stored reading, unchecked.
+		     abs_sig=CASE WHEN ? THEN books.abs_sig ELSE excluded.abs_sig END,
+		     abs_indexed_at=excluded.abs_indexed_at,
+		     abs_file=CASE WHEN ? THEN books.abs_file ELSE excluded.abs_file END,
 		     attachments_sig=CASE WHEN excluded.attachments_indexed_at IS NULL THEN books.attachments_sig
 		                          ELSE excluded.attachments_sig END,
 		     attachments_indexed_at=excluded.attachments_indexed_at,
@@ -189,8 +193,8 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 		b.Released, b.TagASIN, b.TagISBN, b.TagLanguage, string(scannedChapters), chaptersHash(string(scannedChapters)),
 		absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
-		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.EbookFile.Unread, b.EbookFile.Unread,
-		b.EbookFile.Unread).Scan(&id); err != nil {
+		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), absKeep, absKeep, b.EbookFile.Unread,
+		b.EbookFile.Unread, b.EbookFile.Unread).Scan(&id); err != nil {
 		return 0, err
 	}
 	b.ID = id

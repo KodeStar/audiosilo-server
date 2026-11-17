@@ -717,7 +717,8 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// A file new, changed or gone since the last read, or one not read for
 				// this index (none to read leaves an unread row as it is: nothing to add).
 				// One that can't be read right now keeps the row's reading for the next scan.
-				if b.IsFolder && (old.ABSSig != b.ABS.Sig || (old.ABSUnchecked && b.ABS.Sig != "")) {
+				// One that couldn't be looked at right now keeps what is stored.
+				if b.IsFolder && !b.ABS.Unread && (old.ABSSig != b.ABS.Sig || (old.ABSUnchecked && b.ABS.Sig != "")) {
 					if f, read := s.readABS(lib, b.RelPath, b.ABS.Sig); read {
 						absBackfill[b.RelPath] = catalog.ABSReading{Sig: b.ABS.Sig, File: f}
 					}
@@ -993,10 +994,12 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 		b.Codec = md.Codec
 	}
 
-	if b.IsFolder {
+	// The ABS file: one that couldn't be looked at or read right now keeps what
+	// is stored (ABSReading.Unread), for the next scan to read again.
+	if b.IsFolder && !b.ABS.Unread {
 		var read bool
 		if b.ABS.File, read = s.readABS(lib, b.RelPath, b.ABS.Sig); !read {
-			b.ABS.Sig = "" // recorded as none for now, so the next scan reads it again
+			b.ABS = catalog.ABSReading{Unread: true}
 		}
 	}
 	// The attachments: one that couldn't be read right now (or whose folder
@@ -1351,7 +1354,7 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 	books = booksOf(lib, dirs, overrides)
 	for _, b := range books {
 		if b.IsFolder {
-			b.ABS.Sig = side.abs[b.RelPath]
+			b.ABS = catalog.ABSReading{Sig: side.abs[b.RelPath], Unread: side.absUnread[b.RelPath]}
 		}
 	}
 	attachmentsOfWalk(books, side)
@@ -1435,7 +1438,7 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 // looked at (statAudio: the callers building books from them do that).
 func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap, width int) (dirs map[string][]audioFile, side sidecarFiles, hadErrors bool, err error) {
 	dirs = map[string][]audioFile{}
-	side = sidecarFiles{abs: map[string]string{}, attachments: map[string]attachmentFiles{}, unlisted: map[string]bool{},
+	side = sidecarFiles{abs: map[string]string{}, absUnread: map[string]bool{}, attachments: map[string]attachmentFiles{}, unlisted: map[string]bool{},
 		epubs: map[string][]fs.DirEntry{}}
 	// Hidden folders (.Trash-1000, Syncthing .stversions, .git, and .audiosilo,
 	// listed on its own below) and ignored ones are never gone into, so their
@@ -1499,8 +1502,14 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			return nil
 		}
 		if isABSEntry(d, rel, ignore) {
-			if info, ierr := d.Info(); ierr == nil {
-				side.abs[dirOf(rel)] = metadata.ABSSignature(info)
+			if sig, serr := absEntrySig(lib, rel, d, ignore); serr != nil {
+				// Not to be looked at right now (a flaky mount): its book keeps the
+				// stored reading (ABSReading.Unread) rather than losing its ABS
+				// values until the next scan.
+				side.absUnread[dirOf(rel)] = true
+				log.Warn("could not look at an Audiobookshelf metadata.json", "library", lib.Name, "path", absOf(lib, rel), "err", serr)
+			} else {
+				side.abs[dirOf(rel)] = sig
 			}
 			return nil
 		}
@@ -1581,13 +1590,15 @@ func (e *statEntry) Sys() any           { return nil }
 // sidecarFiles are the metadata files the discovery walk found beside the audio,
 // each by the library-relative folder holding it: abs is the signature
 // (metadata.ABSSignature) of each folder's Audiobookshelf metadata.json (a
-// regular file, not ignored), attachments each .audiosilo folder's known files
+// regular file, not ignored), absUnread the folders whose metadata.json couldn't
+// be looked at right now, attachments each .audiosilo folder's known files
 // (listAttachments), and unlisted the folders whose .audiosilo couldn't be
 // listed right now. epubs are each folder's .epub entries (isEpubEntry: links
 // and ignored files included, as BookEbook's rule reads a folder), which
 // ebooksOfWalk turns into each book's ebook candidate.
 type sidecarFiles struct {
 	abs         map[string]string
+	absUnread   map[string]bool
 	attachments map[string]attachmentFiles
 	unlisted    map[string]bool
 	epubs       map[string][]fs.DirEntry
@@ -1601,15 +1612,34 @@ func isABSEntry(de fs.DirEntry, rel string, ignore *Ignore) bool {
 		(ignore.Empty() || !ignore.Match(rel, false))
 }
 
+// absEntrySig is the signature of the Audiobookshelf metadata.json the walk
+// found as d (isABSEntry) at library-relative rel: from its lstat, looked at once
+// more when that fails (absSigAt; "" when it has gone since the listing). err is
+// a file that couldn't be looked at right now.
+func absEntrySig(lib catalog.Library, rel string, d fs.DirEntry, ignore *Ignore) (string, error) {
+	if info, err := d.Info(); err == nil {
+		return metadata.ABSSignature(info), nil
+	}
+	return absSigAt(lib, dirOf(rel), ignore)
+}
+
 // absSigAt is the signature of the Audiobookshelf metadata.json the scan reads
 // (isABSEntry) in the folder at library-relative rel, "" for none: what the walk
-// records for a folder (audioDirs), for a book indexed without one (IndexPath).
-func absSigAt(lib catalog.Library, rel string, ignore *Ignore) string {
+// records for a folder whose entry it couldn't look at (audioDirs), for a book
+// indexed without one (IndexPath). err is a file that couldn't be looked at
+// right now (not one that isn't there).
+func absSigAt(lib catalog.Library, rel string, ignore *Ignore) (string, error) {
 	info, err := os.Lstat(filepath.Join(absOf(lib, rel), metadata.ABSFileName))
-	if err != nil || !isABSEntry(fs.FileInfoToDirEntry(info), path.Join(rel, metadata.ABSFileName), ignore) {
-		return ""
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
 	}
-	return metadata.ABSSignature(info)
+	if err != nil {
+		return "", err
+	}
+	if !isABSEntry(fs.FileInfoToDirEntry(info), path.Join(rel, metadata.ABSFileName), ignore) {
+		return "", nil
+	}
+	return metadata.ABSSignature(info), nil
 }
 
 // readABS reads the Audiobookshelf metadata.json in the folder at
@@ -2137,7 +2167,12 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 
 	// No walk found it, so look for its metadata.json and attachments here.
 	if book.IsFolder {
-		book.ABS.Sig = absSigAt(lib, book.RelPath, ignore)
+		if sig, aerr := absSigAt(lib, book.RelPath, ignore); aerr != nil {
+			s.log.Warn("could not look at the book's Audiobookshelf metadata.json", "library", lib.Name, "path", book.RelPath, "err", aerr)
+			book.ABS.Unread = true // what is stored stays
+		} else {
+			book.ABS.Sig = sig
+		}
 	}
 	if sig, aerr := attachmentsSigAt(lib, book, ignore); aerr != nil {
 		s.log.Warn("could not list the book's .audiosilo folder", "library", lib.Name, "path", book.RelPath, "err", aerr)

@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -211,16 +213,75 @@ func TestScannerRetriesUnreadableABSFile(t *testing.T) {
 		t.Errorf("readable again: asin %q, want the new reading", got)
 	}
 
-	// Unreadable at a re-index: recorded as none for now, read at the next scan.
+	// Unreadable at a re-index: the last reading stays, read again at the next scan.
+	writeABS(`{"asin":"B0THIRD001"}`, time.Now().Add(time.Minute))
 	setReadable(false)
 	if _, err := scanner.IndexPath(ctx, *lib, p); err != nil {
 		t.Fatal(err)
+	}
+	if got := asin(); got != "B0SECOND01" {
+		t.Errorf("unreadable at a re-index: asin %q, want the last reading kept", got)
 	}
 	setReadable(true)
 	if _, err := scanner.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	if got := asin(); got != "B0SECOND01" {
+	if got := asin(); got != "B0THIRD001" {
 		t.Errorf("after a re-index that couldn't read it: asin %q, want it read again", got)
+	}
+}
+
+// failingInfo is a directory entry whose Info fails, as an lstat on a flaky
+// mount can.
+type failingInfo struct{ fs.DirEntry }
+
+func (failingInfo) Info() (fs.FileInfo, error) { return nil, fs.ErrPermission }
+
+// TestABSEntrySigInfoFails: a metadata.json whose entry can't be looked at
+// (Info fails) is looked at once more; gone since the listing it is none, and
+// still not to be looked at it is an error (its book keeps the stored reading:
+// ABSReading.Unread), never a signature of "" (no file).
+func TestABSEntrySigInfoFails(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	lib := catalog.Library{Name: "L", Root: root}
+	const rel = "Author/Book/metadata.json"
+	dir := filepath.Join(root, "Author", "Book")
+	file := filepath.Join(dir, "metadata.json")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := failingInfo{fs.FileInfoToDirEntry(info)}
+	if sig, err := absEntrySig(lib, rel, d, nil); err != nil || sig != metadata.ABSSignature(info) {
+		t.Errorf("Info failed, file there: %q, %v; want %q", sig, err, metadata.ABSSignature(info))
+	}
+
+	// The folder can be listed but not looked into: the lstat fails too.
+	if err := os.Chmod(dir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if _, err := os.Lstat(file); err == nil {
+		t.Skip("folder permissions don't stop this user (root?)")
+	}
+	if sig, err := absEntrySig(lib, rel, d, nil); err == nil {
+		t.Errorf("not to be looked at: %q, nil; want an error", sig)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if sig, err := absEntrySig(lib, rel, d, nil); err != nil || sig != "" {
+		t.Errorf("gone since the listing: %q, %v; want none", sig, err)
 	}
 }
