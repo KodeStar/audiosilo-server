@@ -227,6 +227,7 @@ func TestPodcastFolding(t *testing.T) {
 		t.Fatal("fold sweep undid unfollow")
 	}
 	job.Kind = bridge.KindPodcastPoll
+	job.RequestedBy = nil // the scheduler's polls: a follower's Check now backs nothing off
 	job.Params = json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`)
 	show := "Example Show"
 	job.Path = &show

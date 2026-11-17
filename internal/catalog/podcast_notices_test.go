@@ -345,8 +345,41 @@ func TestPodcastFeedNotices(t *testing.T) {
 		return log.take()
 	}
 	quiet(fold(bridge.StateFailed, "http_500"), "a scheduled failure")
+	// Nor does it back the scheduled polls off: they would come a day apart,
+	// and the notice with them. Its Retry-After still holds them off, never
+	// brings them forward.
+	backoff := func() (failures int, next string) {
+		t.Helper()
+		if err := c.db.QueryRowContext(ctx, `SELECT failures,next_poll_at FROM podcast_feed_state WHERE library_id=? AND show_path=?`, lib.ID, "Example Show").Scan(&failures, &next); err != nil {
+			t.Fatal(err)
+		}
+		return failures, next
+	}
+	failures, due := backoff()
 	for i := range 5 {
 		quiet(checkNow(bridge.StateFailed, "http_500"), fmt.Sprintf("Check now failure %d", i+1))
+	}
+	if f, at := backoff(); f != failures || at != due {
+		t.Fatalf("Check now failures moved the scheduled polls: %d failures, next %s, want %d, %s", f, at, failures, due)
+	}
+	retryAfter := func(seconds int) {
+		t.Helper()
+		next++
+		j := pollJob(lib.ID, next, bridge.StateFailed, "http_429")
+		j.RequestedBy = &bridge.Requester{ID: 7, Username: "follower"}
+		j.Result = json.RawMessage(fmt.Sprintf(`{"code":"http_429","retry_after_seconds":%d}`, seconds))
+		if err := c.FoldPodcastJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+		quiet(log.take(), "a Check now told to retry later")
+	}
+	retryAfter(60)
+	if f, at := backoff(); f != failures || at != due {
+		t.Fatalf("a short Retry-After brought the scheduled poll forward: %d failures, next %s, want %d, %s", f, at, failures, due)
+	}
+	retryAfter(7200)
+	if f, at := backoff(); f != failures || at <= due {
+		t.Fatalf("a Retry-After past the scheduled poll: %d failures, next %s, want %d and later than %s", f, at, failures, due)
 	}
 	quiet(fold(bridge.StateFailed, "http_503"), "a second scheduled failure")
 	failing(fold(bridge.StateFailed, "http_404"), "http_404", 3)

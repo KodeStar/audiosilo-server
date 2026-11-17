@@ -3483,7 +3483,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   once the two shares add up to one (`feedRun.due`: two answers and two timeouts, say);
   `feed_secret_missing` is announced at once without counting; another failure (`bridge_lost`, an
   unwritable library) neither counts nor resets; a follower's Check now (a poll with a requester) counts
-  nothing toward the run, server#403, though its `gone` is still announced at once; a successful poll resets the run and, after an
+  nothing toward the run and leaves the scheduled polls' backoff as it was (`uncountedCheck`; a later
+  Retry-After still holds them off), server#403, though its `gone` is still announced at once; a successful poll resets the run and, after an
   announcement, raises recovered once; a job for a replaced show changes nothing). Their
   data are the library and its id, `show_id`, `show` (the title, else its folder), `show_path`, `count`
   and `titles`, or `code` (one the messages word, `http_310` the Bridge's redirect loop among them, or an

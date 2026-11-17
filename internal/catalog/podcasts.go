@@ -829,7 +829,8 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		}
 		var failures int
 		var run feedRun
-		err = tx.QueryRowContext(ctx, `SELECT failures,feed_failures,feed_network_failures,failing_announced FROM podcast_feed_state WHERE library_id=? AND show_path=? AND show_id=?`, *j.LibraryID, show, expected).Scan(&failures, &run.failures, &run.network, &run.announced)
+		var due sql.NullString // the next scheduled poll, as stored
+		err = tx.QueryRowContext(ctx, `SELECT failures,feed_failures,feed_network_failures,failing_announced,next_poll_at FROM podcast_feed_state WHERE library_id=? AND show_path=? AND show_id=?`, *j.LibraryID, show, expected).Scan(&failures, &run.failures, &run.network, &run.announced, &due)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -865,11 +866,23 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 				seconds = min(max(*result.RetryAfterSeconds, 60), 86400)
 			}
 			seconds = min(seconds, 86400)
-			var next any = now.Add(time.Duration(seconds) * time.Second).Format(time.RFC3339)
+			at := now.Add(time.Duration(seconds) * time.Second).Format(time.RFC3339)
+			backoff := failures + 1
+			// A Check now the run doesn't count leaves the scheduled polls as
+			// they were too: backing them off would space the polls that do
+			// count a day apart, and the failing notice with them. A
+			// Retry-After still holds them off.
+			if j.Kind == bridge.KindPodcastPoll && uncountedCheck(result.Code, j.RequestedBy == nil) && due.Valid {
+				backoff = failures
+				if result.RetryAfterSeconds == nil || due.String > at {
+					at = due.String
+				}
+			}
+			var next any = at
 			if result.Code == "gone" {
 				next = nil
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,last_checked_at,last_status,error_code,error,secret_missing,failures,next_poll_at,feed_failures,feed_network_failures,failing_announced) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET last_checked_at=excluded.last_checked_at,last_status=excluded.last_status,error_code=excluded.error_code,error=excluded.error,secret_missing=MAX(podcast_feed_state.secret_missing,excluded.secret_missing),failures=excluded.failures,next_poll_at=excluded.next_poll_at,feed_failures=excluded.feed_failures,feed_network_failures=excluded.feed_network_failures,failing_announced=excluded.failing_announced`, *j.LibraryID, show, expected, stamp, result.Status, result.Code, result.Message, result.Code == "feed_secret_missing", failures+1, next, run.failures, run.network, run.announced)
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,last_checked_at,last_status,error_code,error,secret_missing,failures,next_poll_at,feed_failures,feed_network_failures,failing_announced) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET last_checked_at=excluded.last_checked_at,last_status=excluded.last_status,error_code=excluded.error_code,error=excluded.error,secret_missing=MAX(podcast_feed_state.secret_missing,excluded.secret_missing),failures=excluded.failures,next_poll_at=excluded.next_poll_at,feed_failures=excluded.feed_failures,feed_network_failures=excluded.feed_network_failures,failing_announced=excluded.failing_announced`, *j.LibraryID, show, expected, stamp, result.Status, result.Code, result.Message, result.Code == "feed_secret_missing", backoff, next, run.failures, run.network, run.announced)
 		}
 		if err != nil {
 			return err

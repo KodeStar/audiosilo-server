@@ -116,7 +116,7 @@ func (r feedRun) next(state, code string, scheduled bool) (feedRun, string) {
 		}
 		r.announced = true
 		return r, PodcastFeedFailing
-	case bridge.FeedFailure(code) && !scheduled && code != "gone":
+	case uncountedCheck(code, scheduled):
 		return r, ""
 	case bridge.FeedFailure(code):
 		r.failures++
@@ -130,4 +130,12 @@ func (r feedRun) next(state, code string, scheduled bool) (feedRun, string) {
 		return r, PodcastFeedFailing
 	}
 	return r, ""
+}
+
+// uncountedCheck reports whether a failed poll with code is a follower's Check
+// now (not scheduled) of a feed failing by its own fault: the run doesn't count
+// it, and it leaves the scheduled polls' backoff alone (FoldPodcastJob). `gone`
+// always counts: polling stops on it.
+func uncountedCheck(code string, scheduled bool) bool {
+	return bridge.FeedFailure(code) && !scheduled && code != "gone"
 }
