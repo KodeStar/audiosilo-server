@@ -315,6 +315,52 @@ func TestAudibleDeletePersonCancelsTheirJobs(t *testing.T) {
 	}
 }
 
+// An owner deleting their grown-up member (DELETE /me/household/members/{id})
+// cancels the open jobs of the Audible accounts the member's deletion took
+// with it, as an admin deleting a person does. Denied: the owner's own
+// account's backup stays open.
+func TestAudibleDeleteMemberCancelsTheirJobs(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t, title("B000000001", "One", "available", 0, ""))
+	ctx := context.Background()
+	member, _ := newUserWithSession(t, b.testEnv, "grown", false)
+	if _, err := b.db.ExecContext(ctx, `UPDATE users SET managed_by=?, member_kind='grownup', member_access='all' WHERE id=?`,
+		b.adminID, member); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := b.putAccount(t, "acct0002", member, b.lib.ID); code != http.StatusOK {
+		t.Fatalf("put: %d %s", code, out)
+	}
+	backup := func(account string) int64 {
+		t.Helper()
+		if code, out := b.putTitles(t, account, "p1", true, title("B000000001", "One", "available", 0, "")); code != http.StatusOK {
+			t.Fatalf("titles %s: %d %s", account, code, out)
+		}
+		resp, out := b.do(t, "POST", "/api/v1/admin/audible/titles/"+account+"/B000000001/backup", b.adminTok, "")
+		var queued struct {
+			JobID int64 `json:"job_id"`
+		}
+		decodeInto(t, out, &queued)
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("backup %s: %d %s", account, resp.StatusCode, out)
+		}
+		return queued.JobID
+	}
+	members, owners := backup("acct0002"), backup(testAccount)
+	if resp, out := b.do(t, "DELETE", fmt.Sprintf("/api/v1/me/household/members/%d", member), b.adminTok, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete the member: %d %s", resp.StatusCode, out)
+	}
+	for id, want := range map[int64]string{members: bridge.StateCancelled, owners: bridge.StateQueued} {
+		j, err := b.api.bridge.Job(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j.State != want {
+			t.Errorf("job %d: %s, want %s", id, j.State, want)
+		}
+	}
+}
+
 // claim takes the next job of kind as the Bridge and starts it.
 func (b *bridgeEnv) claim(t *testing.T, kind string) bridge.Job {
 	t.Helper()

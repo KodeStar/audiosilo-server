@@ -3210,8 +3210,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `bridge/audible.go`, `api/handlers_audible.go`)**: the Bridge signs in to Audible and holds every credential; the
   server only keeps what it reports. `0063`: `audible_accounts` (`account` = the Bridge's id
   `^[a-z0-9]{8,32}$`, label, marketplace = one of `config.Regions`, `user_id` -> users CASCADE (deleting a
-  person then cancels the gone accounts' open poll, backups and sync, `catalog.CancelOrphanAudibleJobs`,
-  bridge#46), `library_id` ->
+  person, or an owner their member, then cancels the gone accounts' open poll, backups and sync,
+  `catalog.CancelOrphanAudibleJobs`, bridge#46), `library_id` ->
   libraries SET NULL, policy `all`|`series`|`manual`, sync, `poll_hours` default 6, `last_poll_at`,
   `last_queued_at`) and `audible_titles` (account CASCADE + asin; title, authors/series JSON, release_date,
   runtime_s, state `available`|`preorder`|`unavailable`|`gone`, reason, the match `match_library_id` /

@@ -455,7 +455,9 @@ func (a *API) handleUpdateMember(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDeleteMember answers DELETE /me/household/members/{id}: 204, the
-// account and all its state deleted (the schema's cascade).
+// account and all its state deleted (the schema's cascade). A grown-up
+// member's Audible accounts go too, and those accounts' open jobs are
+// cancelled, as handleDeleteUser does.
 func (a *API) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
 	id, ok := memberID(w, r)
 	if !ok {
@@ -469,6 +471,11 @@ func (a *API) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.writeMemberError(w, err, "delete member failed", "could not delete the member", "member", id)
 		return
+	}
+	// The member is deleted whatever this says; a failure leaves the jobs to
+	// fail at the Bridge (unknown_account), as on handleDeleteUser.
+	if _, err := a.cat.CancelOrphanAudibleJobs(context.WithoutCancel(r.Context())); err != nil {
+		a.log.Warn("cancel a deleted member's audible jobs failed", "member", id, "err", err)
 	}
 	a.audit(r, "member.delete", m.Username, map[string]any{"member": m.Username})
 	w.WriteHeader(http.StatusNoContent)
