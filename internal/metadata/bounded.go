@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,7 +39,11 @@ func GaveUp(err error) bool {
 // did not answer in time (left to finish, drop, when not nil, handed what it
 // then returns without an error: a file to close); ctx's error when ctx ended
 // first (fn not made when it had ended already, else left and counted as
-// above). A panic in fn is its error, never the server's.
+// above). fn is made once it has one of its mount's slots (stuckReads.calls),
+// held until it returns: with every slot held, a call waits for one within
+// the same time, and is given up on unmade when none frees, so calls on a
+// mount never pass the cap together. A panic in fn is its error, never the
+// server's.
 func Bounded[T any](ctx context.Context, path string, timeout time.Duration, fn func() (T, error), drop func(T)) (T, error) {
 	var zero T
 	if err := ctx.Err(); err != nil {
@@ -54,11 +59,30 @@ func Bounded[T any](ctx context.Context, path string, timeout time.Duration, fn 
 		wctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+	notAnswered := func() (T, error) {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
+		return zero, fmt.Errorf("%s: %w", path, ErrNotAnswered)
+	}
+	select {
+	case stuck.calls <- struct{}{}:
+	case <-wctx.Done():
+		return notAnswered()
+	}
+	// The slot is freed once: by fn's goroutine when fn returns, or here when
+	// the call was given up on before fn began (or await never ran it).
+	var began atomic.Int32 // callWaiting, callBegun or callDropped
+	free := func() { <-stuck.calls }
 	type result struct {
 		v   T
 		err error
 	}
 	r, ok := await(wctx, stuck, func() (r result) {
+		if !began.CompareAndSwap(callWaiting, callBegun) {
+			return result{err: errNotMade}
+		}
+		defer free()
 		defer func() {
 			if p := recover(); p != nil {
 				r = result{err: fmt.Errorf("%s: panic: %v", path, p)}
@@ -75,13 +99,24 @@ func Bounded[T any](ctx context.Context, path string, timeout time.Duration, fn 
 		}
 	})
 	if !ok {
-		if err := ctx.Err(); err != nil {
-			return zero, err
+		if began.CompareAndSwap(callWaiting, callDropped) {
+			free()
 		}
-		return zero, fmt.Errorf("%s: %w", path, ErrNotAnswered)
+		return notAnswered()
 	}
 	return r.v, r.err
 }
+
+// A Bounded call's fn: not begun yet, begun (it frees its slot when it
+// returns), or given up on before it began (never made).
+const (
+	callWaiting int32 = iota
+	callBegun
+	callDropped
+)
+
+// errNotMade is the result of a Bounded call given up on before its fn began.
+var errNotMade = errors.New("not made")
 
 // StatBounded is os.Stat of path as a Bounded call.
 func StatBounded(ctx context.Context, path string, timeout time.Duration) (fs.FileInfo, error) {

@@ -87,3 +87,48 @@ func TestBoundedContextAndPanic(t *testing.T) {
 		t.Errorf("a call that panicked = %v, want its panic as the error", err)
 	}
 }
+
+// A burst of Bounded calls on a share that just stopped answering (a page of
+// covers at once) makes no more of them than the mount's cap, rather than
+// every one, each counted when given up on: the rest wait for a slot within
+// their time and are given up on unmade. Once the share answers, every slot
+// is free again and calls there are made as ever. Not parallel:
+// HoldOpensForTests swaps the mount lookup.
+func TestBoundedBurstKeepsToTheCap(t *testing.T) {
+	dir := t.TempDir()
+	release := HoldOpensForTests(dir)
+	t.Cleanup(release)
+	hung := stuckByMount.For(dir)
+	const burst = 3 * maxAbandonedReads
+	var made atomic.Int32
+	errs := make(chan error, burst)
+	start := time.Now()
+	for range burst {
+		go func() {
+			_, err := Bounded(t.Context(), dir, 100*time.Millisecond, func() (int, error) { made.Add(1); return 0, nil }, nil)
+			errs <- err
+		}()
+	}
+	for range burst {
+		if err := <-errs; !GaveUp(err) {
+			t.Errorf("a call in the burst = %v, want it given up on", err)
+		}
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("the burst took %v, want each call given up on at its time", d)
+	}
+	if n := hung.n.Load(); n > maxAbandonedReads {
+		t.Errorf("abandoned calls on the held mount = %d, want at most the cap (%d)", n, maxAbandonedReads)
+	}
+	release()
+	waitUncounted(t, hung)
+	if n := made.Load(); n > maxAbandonedReads {
+		t.Errorf("calls made in the burst = %d, want at most the cap (%d)", n, maxAbandonedReads)
+	}
+	if len(hung.calls) != 0 {
+		t.Errorf("slots held once the share answers = %d, want none", len(hung.calls))
+	}
+	if _, err := StatBounded(t.Context(), dir, time.Minute); err != nil {
+		t.Errorf("a stat once the share answers = %v, want it made", err)
+	}
+}

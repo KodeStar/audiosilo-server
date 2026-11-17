@@ -380,8 +380,9 @@ func (b *blockFile) waitRead(p []byte, off int64) (int, error) {
 
 // maxAbandonedReads is how many reads await may have given up on (an open,
 // a pread, an ffprobe run) that have not returned yet, on one mount (mounts.Of), before a new read from a file
-// there is refused (reads already under way may still be given up on, so the
-// count can pass it by the reads running at once). Each holds a goroutine and
+// there is refused (audio reads already under way may still be given up on, so
+// the count can pass it by the reads running at once; Bounded calls can't:
+// stuckReads.calls). Each holds a goroutine and
 // its file open, so a share that stays hung would otherwise leak a descriptor
 // per attempt (server#269): past it a read there fails fast, the file not
 // opened (openBlockFile, errReadRefused), until an abandoned read returns. Per
@@ -396,13 +397,21 @@ const maxAbandonedReads = 16
 type stuckReads struct {
 	mount string // its mount point, as the first file read from it found it (the log's)
 	n     atomic.Int32
+	// calls holds a slot per Bounded call on the mount from before it is made
+	// until it returns, given up on or not: at most maxAbandonedReads at once,
+	// so a burst of calls on a share that just stopped answering (a page of
+	// covers) can't all be made and pass the cap together before the first is
+	// given up on. Per mount, so a hung share's calls hold only its own slots.
+	calls chan struct{}
 	// logged: the cap's hit was logged since n was last 0.
 	logged atomic.Bool
 }
 
 // stuckByMount is the stuckReads of each mount a file was read from (its
 // Mount a test's stand-in): one per mount, never removed.
-var stuckByMount = mounts.NewPerMount(func(point string) *stuckReads { return &stuckReads{mount: point} })
+var stuckByMount = mounts.NewPerMount(func(point string) *stuckReads {
+	return &stuckReads{mount: point, calls: make(chan struct{}, maxAbandonedReads)}
+})
 
 // unknownMount counts the abandoned reads of a blockFile not read from a named
 // file (newBlockFile's default: ExactDuration's of a reader with no Name, a

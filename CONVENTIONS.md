@@ -1191,7 +1191,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   two bind mounts of one share have one cap. Every other look at a library file a scan, an on-demand
   index or a request makes on a share that may stop answering goes through the same bound
   (`metadata.Bounded`, SRV-15b: the call on a goroutine of its own, waited for while its context lives
-  and at most a timeout, counted on the path's mount when given up on, refused at once at the cap;
+  and at most a timeout, counted on the path's mount when given up on, refused at once at the cap,
+  made only with one of its mount's `maxAbandonedReads` slots held until it returns, so a burst on a
+  share that just stopped answering (a page of covers) makes no more calls than the cap;
   `StatBounded`, `LstatBounded`, `ReadDirBounded`; `metadata.GaveUp` names its two errors,
   `ErrNotAnswered` and `ErrReadRefused`; `HoldOpensForTests` holds them too): the files beside a
   book's audio (the ABS metadata.json read, the attachments' lstats and reads, the ebook check,
