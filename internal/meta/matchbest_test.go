@@ -77,14 +77,14 @@ func (m *bestMeta) service(t *testing.T) *Service {
 // A work in its own series and in a German translation of it, whose facts drop the
 // translation, and the same two series' records.
 const (
-	bestWork = `{"id":"colour","title":"The Colour of Magic","language":"en","authors":[{"id":"tp","name":"Terry Pratchett"}],
+	// bestWorkHead is the work document up to its sidecars, open at the end.
+	bestWorkHead = `{"id":"colour","title":"The Colour of Magic","language":"en","authors":[{"id":"tp","name":"Terry Pratchett"}],
 		"series":[{"id":"discworld","name":"Discworld","position":"1"},{"id":"scheibenwelt","name":"Scheibenwelt","position":"1"}],
-		"recordings":[{"id":"nigel","narrators":[{"id":"np","name":"Nigel Planer"}],"runtime_min":420,"asin":[{"region":"us","asin":"B0COLOUR01"}]}]}`
+		"recordings":[{"id":"nigel","narrators":[{"id":"np","name":"Nigel Planer"}],"runtime_min":420,"asin":[{"region":"us","asin":"B0COLOUR01"}]}]`
+	bestWork = bestWorkHead + `}`
 	// bestWorkWhole is bestWork as works/{id} and an older metaserve's expand=work
 	// serve it: with the CC BY-SA sidecars a lean expansion leaves out.
-	bestWorkWhole = `{"id":"colour","title":"The Colour of Magic","language":"en","authors":[{"id":"tp","name":"Terry Pratchett"}],
-		"series":[{"id":"discworld","name":"Discworld","position":"1"},{"id":"scheibenwelt","name":"Scheibenwelt","position":"1"}],
-		"recordings":[{"id":"nigel","narrators":[{"id":"np","name":"Nigel Planer"}],"runtime_min":420,"asin":[{"region":"us","asin":"B0COLOUR01"}]}],
+	bestWorkWhole = bestWorkHead + `,
 		"characters":[{"id":"rincewind","name":"Rincewind","role":"protagonist","reveal":{"chapter":1},"description":"A wizard."}],
 		"recaps":[{"through":{"chapter":2},"scope":"book","text":"Rincewind meets Twoflower."}],
 		"recap_summary":{"in_short":"A tourist comes to Ankh-Morpork."},

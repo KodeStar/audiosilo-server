@@ -967,21 +967,13 @@ func matchParams(q MatchQuery, text, asin, isbn string) url.Values {
 		// work's bytes, and nothing a candidate reads (toCandidate). An older
 		// metaserve ignores both lean and expand_min and inlines the whole work
 		// for any score, which reads the same.
-		v.Set("expand", matchExpandWork+","+matchExpandLean)
+		v.Set("expand", "work,lean")
 		if q.NoDetailsBelow >= 1 && q.NoDetailsBelow <= 100 {
 			v.Set("expand_min", strconv.Itoa(q.NoDetailsBelow))
 		}
 	}
 	return v
 }
-
-// The works/match expand values a bulk match sends (MatchQuery.BestOnly). A work
-// inlined under matchExpandLean is partial: it is read into a candidate and never
-// cached or served as the work (Service.Work, the enrichments fetch their own).
-const (
-	matchExpandWork = "work"
-	matchExpandLean = "lean"
-)
 
 // hasMatchFacts reports whether a works/match request names anything metaserve
 // can match on; one with none (only a runtime, a position, the limit) it

@@ -524,7 +524,7 @@ func TestMirrorLeanMatchKeepsFullReadsWhole(t *testing.T) {
 	}
 	lean := matchParams(q, "", "", "")
 	whole := matchParams(q, "", "", "")
-	whole.Set("expand", matchExpandWork)
+	whole.Set("expand", "work")
 	leanBody, wholeBody := answer(lean), answer(whole)
 	if !strings.Contains(wholeBody, `"characters"`) || strings.Contains(leanBody, `"characters"`) || !strings.Contains(leanBody, `"work":`) {
 		t.Fatalf("lean answer must inline the work without its sidecars:\nlean %s\nwhole %s", leanBody, wholeBody)
