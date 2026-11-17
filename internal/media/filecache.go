@@ -655,11 +655,18 @@ func refused(err error, out string) bool {
 }
 
 // readFailed reports whether a run's error (its stderr included, runFFmpeg)
-// names an I/O error: the system's strerror for EIO, as ffmpeg prints it, or
-// ffmpeg's own wording where it has none.
+// has a line that ends in an I/O error, as ffmpeg reports one ("fd:: ...",
+// "Error during demuxing: ..."): the system's strerror for EIO, or ffmpeg's own
+// wording where it has none. Only a line's end counts, so a tag or title that
+// merely holds the words (quoted in a warning about it) is no read error.
 func readFailed(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "Input/output error") || strings.Contains(msg, "I/O error")
+	for line := range strings.Lines(err.Error()) {
+		line = strings.TrimSpace(line)
+		if strings.HasSuffix(line, ": Input/output error") || strings.HasSuffix(line, ": I/O error") {
+			return true
+		}
+	}
+	return false
 }
 
 // syncFile flushes path's bytes to disk before the rename that names it, so a
