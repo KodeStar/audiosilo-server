@@ -25,7 +25,12 @@ export function KeptAudibleAccounts() {
           <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5">
             <span className="min-w-0 font-[550] [overflow-wrap:anywhere]">
               {accountName(t, a)}
-              <span className="ml-2 font-normal text-muted-foreground">{a.user.display_name}</span>
+              {/* An account with no label is already named for its person. */}
+              {a.label ? (
+                <span className="ml-2 font-normal text-muted-foreground">
+                  {a.user.display_name}
+                </span>
+              ) : null}
             </span>
             <RemoveAccountButton account={a} />
           </li>
