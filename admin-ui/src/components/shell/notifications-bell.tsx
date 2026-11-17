@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Popover } from '@base-ui/react/popover';
@@ -19,23 +19,30 @@ const SHOWN = 8;
  */
 export function NotificationsBell() {
   const { t } = useTranslation();
-  const events = useServerEvents();
+  const [open, setOpen] = useState(false);
+  // Read again on opening and every few seconds while open: an event that
+  // happens while it is open shows there (server#383).
+  const events = useServerEvents(open);
   const list = events.data?.events ?? [];
   const [seen, setSeen] = useState(readSeen);
   // What was new when the bell opened stays marked while it is open.
   const [openedAt, setOpenedAt] = useState(seen);
-  const [open, setOpen] = useState(false);
   const unread = unreadCount(list, seen);
+  const newest = list[0]?.id ?? 0;
+
+  // While open, what arrives is seen (marked new in the list, no dot after).
+  useEffect(() => {
+    if (open && newest > seen) {
+      writeSeen(newest);
+      setSeen(newest);
+    }
+  }, [open, newest, seen]);
 
   const onOpenChange = (o: boolean) => {
     setOpen(o);
     if (o) {
       setOpenedAt(seen);
-      const newest = list[0]?.id ?? 0;
-      if (newest > seen) {
-        writeSeen(newest);
-        setSeen(newest);
-      }
+      void events.refetch();
     }
   };
 

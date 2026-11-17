@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useSetup } from '@/api/hooks';
 import { redirectDecision } from './setup-model';
@@ -36,18 +36,21 @@ function markRedirected() {
  * Sends an admin to the first-run flow while the server hasn't finished it,
  * once per browser session and only from the Overview (FIRST-RUN-PLAN.md
  * decision 1, server#365): after that, "Finish later" or any link out of the
- * flow stays where it goes. Mounted once, for a signed-in admin.
+ * flow stays where it goes. The page the console opened on decides, not the one
+ * showing when the state arrives (server#383). Mounted once, for a signed-in
+ * admin.
  */
 export function useSetupRedirect() {
   const state = useSetup().data?.state;
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const [openedOn] = useState(pathname);
   const navigate = useNavigate();
   useEffect(() => {
-    const decision = redirectDecision(state, pathname, redirectedThisSession());
+    const decision = redirectDecision(state, openedOn, pathname, redirectedThisSession());
     if (decision === 'none') return;
     // Either way the session is marked, so moving on to the Overview from a deep
     // link, or leaving the flow with "Finish later", never pulls the admin back.
     markRedirected();
     if (decision === 'go') void navigate({ to: '/setup', replace: true });
-  }, [state, pathname, navigate]);
+  }, [state, openedOn, pathname, navigate]);
 }

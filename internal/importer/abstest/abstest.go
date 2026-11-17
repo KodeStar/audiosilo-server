@@ -5,6 +5,8 @@
 // and every route also under the /audiobookshelf prefix. Only tests import it.
 package abstest
 
+// no-tests: test support, exercised by internal/importer's tests.
+
 import (
 	"embed"
 	"encoding/json"

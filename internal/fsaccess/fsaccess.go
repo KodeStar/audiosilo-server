@@ -13,9 +13,15 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 )
 
-// Test seams: who the server runs as, who owns a path, whether it runs in a
+// EnvStartedAsUser is set to "1" by the Docker entrypoint when the container was
+// started as a user of its own (docker --user, compose user:) rather than as root
+// dropping to PUID:PGID, so the fix names that setting, not PUID and PGID.
+const EnvStartedAsUser = "AUDIOSILO_STARTED_AS_USER"
+
+// Test seams: who the server runs as, who owns a path and whether it runs in a
 // container.
 var (
 	running = func() (uid, gid int) { return os.Getuid(), os.Getgid() }
@@ -36,7 +42,8 @@ func exists(p string) bool {
 
 // Error is a folder (or a file in one) the server can't read or write. Its
 // message names the path, the user the server runs as, the folder's owner and
-// the fix when the system refused permission.
+// the fix when the system refused permission, or says to mount it read and
+// write when it is on a read-only mount.
 type Error struct {
 	Path  string // the folder or file refused
 	Write bool   // writing was refused (else reading)
@@ -51,7 +58,10 @@ func (e *Error) Error() string {
 		verb = "write to"
 	}
 	msg := fmt.Sprintf("the server can't %s %s: %s", verb, e.Path, Cause(e.Err))
-	if errors.Is(e.Err, fs.ErrPermission) {
+	switch {
+	case isReadOnly(e.Err):
+		msg += ". " + readOnlyHint
+	case errors.Is(e.Err, fs.ErrPermission):
 		msg += ". " + Hint(e.Path, e.Write)
 	}
 	return msg
@@ -85,8 +95,16 @@ func Wrap(path string, write bool, err error) error {
 	return &Error{Path: path, Write: write, Err: err}
 }
 
-// IsPermission reports whether err is the system refusing permission.
-func IsPermission(err error) bool { return errors.Is(err, fs.ErrPermission) }
+// IsPermission reports whether err is the system refusing the server: permission
+// denied, or a write to a read-only mount (docker's :ro), which no owner or mode
+// can fix but is the same "the folder refuses the server" to the console.
+func IsPermission(err error) bool { return errors.Is(err, fs.ErrPermission) || isReadOnly(err) }
+
+// isReadOnly reports whether err is a write refused by a read-only mount.
+func isReadOnly(err error) bool { return errors.Is(err, syscall.EROFS) }
+
+// readOnlyHint is the fix for a folder on a read-only mount.
+const readOnlyHint = "It is on a read-only mount: mount it read and write (in Docker, without :ro)."
 
 // User is who the server runs as, "uid:gid" ("" where the system has no such
 // ids: Windows).
@@ -100,7 +118,8 @@ func User() string {
 
 // Hint is the fix for a folder (or file) at path the server isn't allowed to
 // read or write: who the server runs as, who owns it, and, in a container, PUID
-// and PGID set to the owner. The path itself is the caller's to name (Error
+// and PGID set to the owner (or, in one started with --user, the owner as that
+// user, as the entrypoint says). The path itself is the caller's to name (Error
 // does).
 func Hint(path string, write bool) string {
 	access := "read"
@@ -132,10 +151,18 @@ func Hint(path string, write bool) string {
 	case known && ouid == 0:
 		// Never advise running the server as root.
 		fmt.Fprintf(&b, "%s, for example by making %s its owner on the host.", giveFirst, user)
-	case InContainer() && known:
-		fmt.Fprintf(&b, "Set PUID=%d and PGID=%d (the %s's owner) on the container, or %s.", ouid, ogid, noun, give)
 	case InContainer():
-		fmt.Fprintf(&b, "Set PUID and PGID on the container to the %s's owner, or %s.", noun, give)
+		asUser := os.Getenv(EnvStartedAsUser) == "1"
+		switch {
+		case asUser && known:
+			fmt.Fprintf(&b, "Run the container as the %s's owner (user: \"%d:%d\"), or %s.", noun, ouid, ogid, give)
+		case asUser:
+			fmt.Fprintf(&b, "Run the container as the %s's owner (user: in compose, --user with docker run), or %s.", noun, give)
+		case known:
+			fmt.Fprintf(&b, "Set PUID=%d and PGID=%d (the %s's owner) on the container, or %s.", ouid, ogid, noun, give)
+		default:
+			fmt.Fprintf(&b, "Set PUID and PGID on the container to the %s's owner, or %s.", noun, give)
+		}
 	default:
 		fmt.Fprintf(&b, "Run the server as the %s's owner, or %s.", noun, give)
 	}

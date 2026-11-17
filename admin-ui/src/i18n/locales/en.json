@@ -2177,7 +2177,7 @@
   "about.off.action": "General settings",
   "about.available.title": "AudioSilo {{version}} is available",
   "about.available.notes": "Release notes",
-  "about.how.docker": "Pull the new image (ghcr.io/kodestar/audiosilo-server:{{version}}, or :latest) and recreate the container. Your data folder stays as it is.",
+  "about.how.docker": "Pull the new image (ghcr.io/kodestar/audiosilo-server:{{version}}, or :latest; on the LinuxServer.io image, lscr.io/linuxserver/audiosilo:latest) and recreate the container. Your data folder stays as it is.",
   "about.how.binary": "Download {{version}} for your system from the release page and replace the program, then start it again with the same data folder.",
   "about.how.source": "This is a local build: pull the {{version}} tag and build again.",
   "about.failed.title": "Couldn't check for updates",

@@ -71,7 +71,7 @@ type TLSConfig struct {
 	// plain HTTP clients are sent to https. On by default.
 	HomeHTTP bool     `yaml:"home_http"`
 	Hosts    []string `yaml:"hosts"`     // autocert: hostnames to obtain certs for
-	CacheDir string   `yaml:"cache_dir"` // autocert: cert cache (default <data>/certs)
+	CacheDir string   `yaml:"cache_dir"` // autocert: cert cache (default <data>/certs, never written to config.yaml)
 	CertFile string   `yaml:"cert_file"` // selfsigned/manual: optional persisted cert
 	KeyFile  string   `yaml:"key_file"`  // selfsigned/manual: optional persisted key
 }
@@ -513,7 +513,7 @@ func Default(dataDir string) *Config {
 		DataDir:        dataDir,
 		Bind:           "0.0.0.0:8080",
 		PublicURL:      "",
-		TLS:            TLSConfig{Mode: TLSSelfSigned, HomeHTTP: true, CacheDir: filepath.Join(dataDir, "certs")},
+		TLS:            TLSConfig{Mode: TLSSelfSigned, HomeHTTP: true}, // cache_dir: Load fills in the default
 		TrustedProxies: nil,
 		CORSOrigins:    nil,
 		MaxUploadBytes: 2 << 30, // 2 GiB
@@ -527,6 +527,11 @@ func Default(dataDir string) *Config {
 		Upcoming:       UpcomingConfig{Enabled: true, WindowDays: DefaultUpcomingWindowDays},
 	}
 }
+
+// defaultCacheDir is the certificate cache when tls.cache_dir is empty: inside the
+// data folder wherever it is, so a data folder moved (Docker's /data to the
+// LinuxServer.io image's /config) takes its certificates with it (server#217).
+func defaultCacheDir(dataDir string) string { return filepath.Join(dataDir, "certs") }
 
 // Path returns the on-disk path of the config file for a data directory.
 func Path(dataDir string) string { return filepath.Join(dataDir, ConfigFileName) }
@@ -556,7 +561,7 @@ func Load(dataDir string) (cfg *Config, firstRun bool, err error) {
 	cfg.Podcasts.Discovery.IndexKey = os.Getenv(EnvPodcastIndexKey)
 	cfg.Podcasts.Discovery.IndexSecret = os.Getenv(EnvPodcastIndexSecret)
 	if cfg.TLS.CacheDir == "" {
-		cfg.TLS.CacheDir = filepath.Join(dataDir, "certs")
+		cfg.TLS.CacheDir = defaultCacheDir(dataDir)
 	}
 	if err = cfg.Validate(); err != nil {
 		return nil, firstRun, err
@@ -580,14 +585,17 @@ func (c *Config) Save() error {
 }
 
 // asSaved is c as Save writes it to config.yaml: the file's own values for the
-// keys the environment sets.
+// keys the environment sets, and no tls.cache_dir when it is the default (an
+// absolute path written there would outlive a move of the data folder).
 func (c *Config) asSaved() *Config {
-	if c.file == nil {
-		return c
-	}
 	on := c.Clone()
-	for key := range c.fromEnv {
-		copyField(on, c.file, key)
+	if c.file != nil {
+		for key := range c.fromEnv {
+			copyField(on, c.file, key)
+		}
+	}
+	if on.TLS.CacheDir == defaultCacheDir(c.DataDir) {
+		on.TLS.CacheDir = ""
 	}
 	return on
 }

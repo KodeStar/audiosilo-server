@@ -3522,18 +3522,33 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   refuses, or can't be looked at (`backup.Service.CheckFolder`, off the start path); a backup checks
   its folder before `VACUUM INTO`, and wraps a refusal at any later step (the chmod, the rename),
   so a refused one is `permission_denied` with `Result.Detail` (not on the wire) carried into the
-  `backup_failed` event's `detail` and the notification's text; a scan stops on a library root it can stat
-  but not list (`CheckRead`: unavailable, not an empty library scanned OK). The Docker entrypoint words
-  the same as root (after `chown -R` of `/data`, and of `AUDIOSILO_BACKUP_DIR` when absolute and not `/`
-  only the folder and its `audiosilo-*.db` / `.audiosilo-*` files: a backups share may hold other apps'
-  files, so regular files only and `chown -h`, never what a link there points at) and under `--user`
-  (where its fix names compose's `user:`, while the server's own hint still says PUID/PGID): a write
-  check of the data and backups folders (a `mktemp` file, never a name known ahead) and a read check of
-  every other mount (MountHints' rule) as the server's user, warning and carrying on. `usable_path` is
-  what keeps a chown off the container's root however it is spelled (`//`, `/.`, a `..` in the path, a
-  link to it). Every check, `stat` and step on the backups folder is bounded by `timeout 5`, as a dead
-  hard mount can block for minutes (not the data folder's `chown -R`, which a large folder may need
-  longer for); a check cut off is said not to have answered, with no owner advice. BusyBox's `timeout`
+  `backup_failed` event's `detail` and the notification's text, announced before the run shows as over
+  (the console reads the bell's feed again when the Backups page sees a new outcome, a run that ended
+  or one refused before the answer to "Back up now", and every 5 s while the bell is open); a backups
+  folder the server can't list answers `GET /admin/backups` 500 `permission_denied` with that sentence
+  as its message, which the Backups page shows (server#383), and so do a delete the folder refuses and
+  a download or restore of a backup the server can't read (`Open`, `Delete` and `RequestRestore` wrap
+  as `List` does). A read-only mount (`EROFS`, docker's `:ro`) counts as refused (`IsPermission`, so
+  `permission_denied`) but its fix is `readOnlyHint` ("mount it read and write"), never owner advice.
+  A container started with `--user`
+  (the entrypoint exports `AUDIOSILO_STARTED_AS_USER=1`; the image's `PUID` is in every container's
+  environment, so it can't tell) gets `user: "<owner>"`, not PUID/PGID. A scan stops on a library root
+  it can stat but not list (`CheckRead`: unavailable, not an empty library scanned OK). The Docker
+  entrypoint words the same as root (after the chown of `/data`: `find -xdev ... -exec chown -h`, each
+  mount point inside it pruned by name from mountinfo, since a volume or bind mount from the same disk
+  shares the device number `-xdev` reads (server#382), unless it is a regular file: a file mounted there
+  (`/data/config.yaml`) is chowned as before, a socket or device node (`/data/docker.sock`) never is
+  (`-path P ! -type f -prune`); and of `AUDIOSILO_BACKUP_DIR` when absolute and
+  not `/` only the folder and its `audiosilo-*.db` / `.audiosilo-*` files: a backups share may hold
+  other apps' files, so regular files only and `chown -h`, never what a link there points at) and
+  under `--user` (where its fix names compose's `user:`): a write check of the data and backups
+  folders (a `mktemp` file, never a name known ahead; a folder on a read-only mount, by mountinfo's
+  options of the mount holding it or of its filesystem, says so instead of naming owners) and a read
+  check of every other mount (MountHints' rule) as the server's user, warning and carrying on.
+  `usable_path` is what keeps a chown off the container's root however it is spelled (`//`, `/.`, a `..` in the path, a link to it).
+  Every check, `stat` and step on the backups folder is bounded by `timeout 5`, as a dead hard mount can
+  block for minutes (not the data folder's chown, which a large folder may need longer for); a check
+  cut off is said not to have answered, with no owner advice. BusyBox's `timeout`
   leaves a watcher behind each command: `reap_watchers` ends them before the hand-over, or each would
   stay a zombie under the server. `scripts/test-entrypoint.sh` (Docker) is its test, not run in CI.
 - **Support card** (`catalog/support.go`, `api/handlers_support.go`, console `features/overview/support-card.tsx`):

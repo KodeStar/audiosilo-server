@@ -357,14 +357,16 @@ func (s *Service) make(ctx context.Context, trigger string) (Backup, error) {
 			s.prune()
 		}
 	}
+	// A backup stopped because the server is stopping didn't fail: don't announce
+	// it. Announced before the run is marked over, so a console that sees it end
+	// finds the event in the feed (the bell reads it again then).
+	if err != nil && ctx.Err() == nil && s.OnFailure != nil {
+		s.OnFailure(res)
+	}
 	s.mu.Lock()
 	s.running = false
 	s.last = &res
 	s.mu.Unlock()
-	// A backup stopped because the server is stopping didn't fail: don't announce it.
-	if err != nil && ctx.Err() == nil && s.OnFailure != nil {
-		s.OnFailure(res)
-	}
 	return b, err
 }
 
@@ -425,7 +427,7 @@ func (s *Service) CheckFolder() error {
 // reason is a backup failure in a few plain words for the console.
 func reason(err error) string {
 	switch {
-	case errors.Is(err, os.ErrPermission):
+	case fsaccess.IsPermission(err): // a read-only mount (docker's :ro) too
 		return "permission_denied"
 	case strings.Contains(err.Error(), "disk is full") || strings.Contains(err.Error(), "no space left"):
 		return "disk_full"
@@ -538,20 +540,26 @@ func describe(name string, fi os.FileInfo) Backup {
 	return b
 }
 
-// path is a backup's file, after checking the name; ErrNotFound when there is none.
+// path is a backup's file, after checking the name; ErrNotFound when there is
+// none, an *fsaccess.Error when the server may not look in the folder.
 func (s *Service) path(name string) (string, os.FileInfo, error) {
 	if !validName(name) {
 		return "", nil, ErrNotFound
 	}
 	p := filepath.Join(s.dir, name)
 	fi, err := os.Lstat(p)
+	if fsaccess.IsPermission(err) {
+		return "", nil, fsaccess.Wrap(s.dir, false, err)
+	}
 	if err != nil || !fi.Mode().IsRegular() {
 		return "", nil, ErrNotFound
 	}
 	return p, fi, nil
 }
 
-// Open opens a backup for download; the caller closes it.
+// Open opens a backup for download; the caller closes it. A file the server may
+// not read is an *fsaccess.Error naming it, the server's user and the fix, as
+// List's is for the folder.
 func (s *Service) Open(name string) (*os.File, Backup, error) {
 	p, fi, err := s.path(name)
 	if err != nil {
@@ -559,12 +567,14 @@ func (s *Service) Open(name string) (*os.File, Backup, error) {
 	}
 	f, err := os.Open(p)
 	if err != nil {
-		return nil, Backup{}, err
+		return nil, Backup{}, fsaccess.Wrap(p, false, err)
 	}
 	return f, describe(name, fi), nil
 }
 
-// Delete removes a backup. A restore waiting for it is cancelled.
+// Delete removes a backup. A restore waiting for it is cancelled. A folder that
+// refuses the removal (its owner or mode, a read-only mount) is an
+// *fsaccess.Error naming the folder, the server's user and the fix.
 func (s *Service) Delete(name string) error {
 	p, _, err := s.path(name)
 	if err != nil {
@@ -576,7 +586,7 @@ func (s *Service) Delete(name string) error {
 		}
 	}
 	if err := os.Remove(p); err != nil {
-		return err
+		return fsaccess.Wrap(s.dir, true, err)
 	}
 	// It may have been the newest scheduled one: the scheduler lists again.
 	s.mu.Lock()
@@ -616,6 +626,14 @@ func (s *Service) RequestRestore(ctx context.Context, name, by string) (PendingR
 	if err != nil {
 		return PendingRestore{}, err
 	}
+	// A file the server may not read says so (the file, the server's user, the
+	// fix), not that it is damaged, which is all SQLite's own failure to open it
+	// would come to.
+	f, err := os.Open(p)
+	if err != nil {
+		return PendingRestore{}, fsaccess.Wrap(p, false, err)
+	}
+	_ = f.Close() // read-only
 	// The quick look (schema, readable) fits a request; the full check reads every
 	// page, so it waits for the start, which reports a damaged backup once and
 	// leaves the database as it is.

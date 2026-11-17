@@ -5,6 +5,8 @@
 // refuses it.
 package oidctest
 
+// no-tests: test support, exercised by internal/oidc's and internal/api's tests.
+
 import (
 	"crypto/rand"
 	"crypto/rsa"

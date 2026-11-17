@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -67,6 +68,61 @@ func TestLoadSaveRoundTrip(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("config perms = %v, want 0600", perm)
+	}
+}
+
+// The certificate cache follows the data folder: a first run writes no absolute
+// tls.cache_dir into config.yaml, so a data folder moved elsewhere (Docker's /data
+// to the LinuxServer.io image's /config) caches under its new path; one an admin
+// set elsewhere is kept (server#217).
+func TestCacheDirFollowsTheDataFolder(t *testing.T) {
+	if got := Default("/data").TLS.CacheDir; got != "" {
+		t.Fatalf("Default cache_dir = %q, want empty", got)
+	}
+	dir := t.TempDir()
+	cfg, _, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(dir, "certs"); cfg.TLS.CacheDir != want {
+		t.Fatalf("loaded cache_dir = %q, want %q", cfg.TLS.CacheDir, want)
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), dir) {
+		t.Fatalf("config.yaml names the data folder:\n%s", raw)
+	}
+	moved := filepath.Join(t.TempDir(), "config")
+	if err := os.MkdirAll(moved, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(moved), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := Load(moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(moved, "certs"); got.TLS.CacheDir != want {
+		t.Fatalf("moved data folder's cache_dir = %q, want %q", got.TLS.CacheDir, want)
+	}
+
+	// One set elsewhere is the admin's: written as it is.
+	got.TLS.CacheDir = "/srv/certs"
+	if err := got.Save(); err != nil {
+		t.Fatal(err)
+	}
+	again, _, err := Load(moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.TLS.CacheDir != "/srv/certs" {
+		t.Fatalf("set cache_dir = %q, want /srv/certs", again.TLS.CacheDir)
 	}
 }
 

@@ -70,6 +70,11 @@ Publish the web image first (step 1) so the embedded player matches. The full
 distribution strategy (and the deferred desktop installers/tray) lives in the
 workspace [DISTRIBUTION.md](../DISTRIBUTION.md).
 
+CI's `snapshot` job (ci.yml) runs `goreleaser check` and builds the linux_amd64
+target of every pull request (`--snapshot --single-target`, before-hooks included)
+and boots it with `scripts/smoke-boot.sh`, the boot check of the release's smoke
+test below, so a build that breaks or doesn't start shows before a tag.
+
 Validate the GoReleaser config locally without releasing:
 
 ```sh
@@ -98,9 +103,10 @@ contract:
 
 - **Publishing the draft is the trigger**, so publish only once the tag's
   `release.yml` run is green: its smoke test (below) runs after the draft is
-  uploaded. Drafts and prereleases are invisible to `releases/latest`, but
-  GoReleaser does not mark a `-rc` tag as a prerelease itself - tick *Set as a
-  pre-release* when publishing one.
+  uploaded. Drafts and prereleases are invisible to `releases/latest`, and a tag
+  with a pre-release suffix (`v2.8.0-rc.1`) is drafted as a pre-release
+  (`release.prerelease: auto` in `.goreleaser.yml`): keep *Set as a pre-release*
+  ticked when publishing one.
 - **Archive names and layout.** Their Dockerfile downloads
   `releases/download/v<version>/audiosilo_<version>_linux_{amd64,arm64}.tar.gz`
   (`<version>` is the tag without its `v`) and takes the `audiosilo` binary from the
@@ -121,7 +127,8 @@ a draft: both archives' exact names and layout, each Linux binary's tags
 linking (no ELF interpreter), each Linux binary running (arm64 under qemu) and
 reporting the release's version, the macOS and Windows binaries' `CGO_ENABLED=0`, and
 an amd64 boot run the way the image runs it (`--data` only, self-signed TLS) serving
-`/healthz` and `/web/` and logging `engine=native`.
+`/healthz` and `/web/` and logging `engine=native` (`scripts/smoke-boot.sh`, which
+CI's `snapshot` job also runs on every pull request).
 
 ## 3 - end-to-end smoke test
 
@@ -132,6 +139,12 @@ an amd64 boot run the way the image runs it (`--data` only, self-signed TLS) ser
 4. **Native:** run the app from audiosilo-frontend (`expo start` / a dev build),
    scan the QR or open the invite to pair. For tap-to-open-app from the OS, set
    `app_links` (and serve over HTTPS on the claimed domain).
+
+## 4 - the blog
+
+Once the release is published, run `/blog release server v<version>` from the
+workspace (see "Cut a release" in the workspace `CLAUDE.md`): the release post,
+the drafted feature posts that shipped, and the posts the release changes.
 
 ## Testing main before a release (`:edge`)
 

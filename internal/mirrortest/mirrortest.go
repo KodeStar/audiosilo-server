@@ -5,6 +5,8 @@
 // counts what it is asked, and a poll for a condition. Tests only.
 package mirrortest
 
+// no-tests: test support, exercised by the mirror's, meta's, api's and launcher's tests.
+
 import (
 	"context"
 	"database/sql"

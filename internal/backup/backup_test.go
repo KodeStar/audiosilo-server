@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -208,15 +210,41 @@ func TestCreateBusyAndFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	var heard *Result
-	blocked.OnFailure = func(r Result) { heard = &r }
+	runningWhenHeard := false
+	blocked.OnFailure = func(r Result) { heard = &r; runningWhenHeard = blocked.Status().Running }
 	if _, err := blocked.Create(context.Background(), KindScheduled); err == nil {
 		t.Fatal("backup into a file succeeded")
 	}
 	if heard == nil || heard.OK || heard.Error == "" || heard.Trigger != KindScheduled {
 		t.Fatalf("failure heard = %+v", heard)
 	}
+	// Heard while the run still shows: a console polling the run finds the
+	// event once it ends (server#383).
+	if !runningWhenHeard {
+		t.Fatal("the failure was announced after the run ended")
+	}
 	if st := blocked.Status(); st.Last == nil || st.Last.OK {
 		t.Fatalf("status = %+v", st)
+	}
+}
+
+// A read-only mount (docker's :ro) refuses a backup as permission_denied, as a
+// folder's owner or mode does, not the generic failed (server#383).
+func TestReasonReadOnlyMount(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{&fs.PathError{Op: "open", Path: "/backups/.x", Err: syscall.EROFS}, "permission_denied"},
+		{fsaccess.Wrap("/backups", true, &fs.PathError{Op: "open", Path: "/backups/.x", Err: syscall.EROFS}), "permission_denied"},
+		{&fs.PathError{Op: "open", Path: "/backups/.x", Err: fs.ErrPermission}, "permission_denied"},
+		{errors.New("database or disk is full"), "disk_full"},
+		{errors.New("boom"), "failed"},
+	} {
+		if got := reason(c.err); got != c.want {
+			t.Errorf("reason(%v) = %q, want %q", c.err, got, c.want)
+		}
 	}
 }
 

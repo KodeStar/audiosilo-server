@@ -358,13 +358,30 @@ export async function checkMetaMirror(qc: QueryClient): Promise<MetaMirrorStatus
   return mirror;
 }
 
-/** The backups, their state and any restore waiting; polled each second while one is made. */
+/**
+ * The backups, their state and any restore waiting; polled each second while one
+ * is made. When a new outcome shows (a run ended, or one refused at once was
+ * over before the answer that started it), the bell reads the feed again, so a
+ * failure shows there at once (the server records it before the run ends).
+ */
 export function useBackups() {
-  return useQuery({
+  const qc = useQueryClient();
+  const query = useQuery({
     queryKey: keys.backups,
     queryFn: api.backups,
     refetchInterval: (q) => (q.state.data?.status.running ? 1000 : false),
   });
+  // When the newest attempt ended ('' for none yet); undefined until loaded.
+  const lastAt = query.data ? (query.data.status.last?.at ?? '') : undefined;
+  const seenLastAt = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (lastAt === undefined) return;
+    if (seenLastAt.current !== undefined && seenLastAt.current !== lastAt) {
+      void qc.invalidateQueries({ queryKey: keys.events });
+    }
+    seenLastAt.current = lastAt;
+  }, [lastAt, qc]);
+  return query;
 }
 
 /** The notification destinations, with the event and destination kinds the server knows. */
@@ -372,13 +389,16 @@ export function useNotifyTargets() {
   return useQuery({ queryKey: keys.notifyTargets, queryFn: api.notifyTargets });
 }
 
-/** The bell's feed: the newest events, checked each minute. */
-export function useServerEvents() {
+/**
+ * The bell's feed: the newest events, checked each minute, and every few seconds
+ * while the bell is open (server#383: a failure waited up to a minute there).
+ */
+export function useServerEvents(open = false) {
   return useQuery({
     queryKey: keys.events,
     queryFn: () => api.serverEvents({ limit: 20 }),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: open ? 5_000 : 60_000,
   });
 }
 

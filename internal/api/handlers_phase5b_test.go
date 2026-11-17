@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -187,6 +188,80 @@ func TestBackupLifecycle(t *testing.T) {
 	if strings.Join(actions, ",") != want {
 		t.Fatalf("audit = %v, want %s", actions, want)
 	}
+}
+
+// A backups folder the server may not list answers with the folder, the
+// server's user and the fix, not "could not list the backups" (server#383); a
+// listable one answers the list. Every backups route answers permission_denied.
+func TestBackupListUnreadableFolder(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes don't refuse this user")
+	}
+	e := newTestEnv(t)
+	adminTok, _ := opsTokens(t, e)
+	dir := e.backups.Status().Dir
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := e.do(t, "GET", "/api/v1/admin/backups", adminTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("listable folder = %d %s", resp.StatusCode, body)
+	}
+	if err := os.Chmod(dir, 0o300); err != nil { // writable, not listable
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	resp, body := e.do(t, "GET", "/api/v1/admin/backups", adminTok, "")
+	var got struct{ Error, Code string }
+	_ = json.Unmarshal([]byte(body), &got)
+	want := "the server can't read " + dir + ": permission denied. The server runs as user "
+	if resp.StatusCode != http.StatusInternalServerError || got.Code != "permission_denied" || !strings.HasPrefix(got.Error, want) {
+		t.Fatalf("unlistable folder = %d %s, want 500 permission_denied starting %q", resp.StatusCode, body, want)
+	}
+
+	// The other backups routes say the same: a backup in a folder the server may
+	// not write to can't be deleted, and the answer says why.
+	name := "audiosilo-junk.db"
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil { // listable, not writable
+		t.Fatal(err)
+	}
+	refused := func(what, method, path, want string) {
+		t.Helper()
+		resp, body := e.do(t, method, path, adminTok, "")
+		var got struct{ Error, Code string }
+		_ = json.Unmarshal([]byte(body), &got)
+		if resp.StatusCode != http.StatusInternalServerError || got.Code != "permission_denied" || !strings.HasPrefix(got.Error, want) {
+			t.Fatalf("%s = %d %s, want 500 permission_denied starting %q", what, resp.StatusCode, body, want)
+		}
+	}
+	refused("delete in an unwritable folder", "DELETE", "/api/v1/admin/backups/"+name,
+		"the server can't write to "+dir+": permission denied. The server runs as user ")
+
+	// A folder the server may not look in is not "no such backup".
+	if err := os.Chmod(dir, 0o600); err != nil { // listable, not searchable
+		t.Fatal(err)
+	}
+	refused("delete in an unsearchable folder", "DELETE", "/api/v1/admin/backups/"+name,
+		"the server can't read "+dir+": permission denied. The server runs as user ")
+
+	// A backup the server may not read can't be downloaded or restored, and is
+	// not called damaged.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, name)
+	if err := os.Chmod(file, 0); err != nil {
+		t.Fatal(err)
+	}
+	want = "the server can't read " + file + ": permission denied. The server runs as user "
+	refused("download of an unreadable backup", "GET", "/api/v1/admin/backups/"+name, want)
+	refused("restore of an unreadable backup", "POST", "/api/v1/admin/backups/"+name+"/restore", want)
 }
 
 func TestBackupSettings(t *testing.T) {

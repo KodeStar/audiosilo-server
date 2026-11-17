@@ -2325,7 +2325,7 @@
   "about.off.action": "Ajustes generales",
   "about.available.title": "AudioSilo {{version}} está disponible",
   "about.available.notes": "Notas de la versión",
-  "about.how.docker": "Descarga la imagen nueva (ghcr.io/kodestar/audiosilo-server:{{version}} o :latest) y vuelve a crear el contenedor. Tu carpeta de datos se queda como está.",
+  "about.how.docker": "Descarga la imagen nueva (ghcr.io/kodestar/audiosilo-server:{{version}} o :latest; con la imagen de LinuxServer.io, lscr.io/linuxserver/audiosilo:latest) y vuelve a crear el contenedor. Tu carpeta de datos se queda como está.",
   "about.how.binary": "Descarga {{version}} para tu sistema desde la página de la versión, reemplaza el programa y arráncalo de nuevo con la misma carpeta de datos.",
   "about.how.source": "Esta es una versión compilada localmente: obtén la etiqueta {{version}} y compila de nuevo.",
   "about.failed.title": "No se pudo buscar actualizaciones",
