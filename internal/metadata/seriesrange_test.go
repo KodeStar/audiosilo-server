@@ -40,6 +40,9 @@ func TestParseSeriesPosition(t *testing.T) {
 	for in, want := range map[string][3]float64{
 		"3": {3, 0, 1}, " 3 ": {0, 0, 0}, "2.5": {2.5, 0, 1}, "1-3": {1, 3, 1}, " 1 - 3 ": {1, 3, 1},
 		"": {0, 0, 0}, "one": {0, 0, 0}, "3-1": {0, 0, 0},
+		// ParseFloat reads these; a series position never is one (server#213).
+		"inf": {0, 0, 0}, "-Inf": {0, 0, 0}, "nan": {0, 0, 0}, "NaN": {0, 0, 0}, "infinity": {0, 0, 0},
+		"1e400": {0, 0, 0}, "-1": {0, 0, 0}, "100001": {0, 0, 0}, "100000": {100000, 0, 1}, "0": {0, 0, 1},
 	} {
 		start, end, ok := ParseSeriesPosition(in)
 		if start != want[0] || end != want[1] || ok != (want[2] == 1) {
@@ -54,9 +57,11 @@ func TestApplyProbeSeriesPartRange(t *testing.T) {
 	if m.SeriesIndex != 1 || m.SeriesIndexEnd != 3 {
 		t.Errorf("series-part 1-3 = %v-%v, want 1-3", m.SeriesIndex, m.SeriesIndexEnd)
 	}
-	m = &Metadata{}
-	applyProbe(m, &probeResult{Tags: map[string]string{"series": "Omnibus", "series-part": "one"}})
-	if m.SeriesIndex != 0 || m.SeriesIndexEnd != 0 {
-		t.Errorf("series-part one = %v-%v, want none", m.SeriesIndex, m.SeriesIndexEnd)
+	for _, part := range []string{"one", "nan", "inf", "-infinity", "1e400"} {
+		m = &Metadata{}
+		applyProbe(m, &probeResult{Tags: map[string]string{"series": "Omnibus", "series-part": part}})
+		if m.SeriesIndex != 0 || m.SeriesIndexEnd != 0 {
+			t.Errorf("series-part %s = %v-%v, want none", part, m.SeriesIndex, m.SeriesIndexEnd)
+		}
 	}
 }

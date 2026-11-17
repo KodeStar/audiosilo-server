@@ -49,12 +49,17 @@ func ValidSeriesRange(start, end float64) bool {
 	return start > 0 && end > start && end <= MaxSeriesPosition && end-start <= MaxSeriesSpan
 }
 
-// ParseSeriesPosition reads a series position: a number (ParseFloat's, end 0, as
-// a series-part tag and a stored series_index were always read: no spaces) or a
-// range (ParseSeriesRange: its start and end). ok is false for anything else.
+// ParseSeriesPosition reads a series position: a number from 0 to
+// MaxSeriesPosition (ParseFloat's, end 0, as a series-part tag and a stored
+// series_index were always read: no spaces) or a range (ParseSeriesRange: its
+// start and end). ok is false for anything else, NaN and the infinities included:
+// ParseFloat reads "nan" and "inf", and a NaN series index fails the book's insert.
 func ParseSeriesPosition(s string) (start, end float64, ok bool) {
 	if v, err := strconv.ParseFloat(s, 64); err == nil {
-		return v, 0, true
+		if v >= 0 && v <= MaxSeriesPosition { // false for NaN; the infinities are out of range
+			return v, 0, true
+		}
+		return 0, 0, false
 	}
 	return ParseSeriesRange(s)
 }
