@@ -1037,8 +1037,9 @@ func setNames(b *catalog.Book, md *metadata.Metadata) {
 // and its ctx, which ends the ffprobe runs at a Stop: the scan then drops
 // the reading rather than writing it.
 func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Book, slots *readSlots) {
+	look := s.lookTimeout(ctx)
 	if b.AddedAt == "" {
-		stampAddedAt(ctx, lib, b, s.probeTimeout)
+		stampAddedAt(ctx, lib, b, look)
 	}
 	primary := primaryPath(b)
 	abs := absOf(lib, primary)
@@ -1121,7 +1122,7 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// next scan looks again at one that changed.
 	ebook, read := catalog.EbookReading{}, false
 	if sideReads() {
-		ebook, read = checkEbook(ctx, lib.Root, b.EbookFile, s.probeTimeout, &gaveUp)
+		ebook, read = checkEbook(ctx, lib.Root, b.EbookFile, look, &gaveUp)
 	}
 	if read {
 		b.EbookFile = ebook
@@ -1154,29 +1155,29 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// to embedded art from the primary file. A folder book's art lives INSIDE the
 	// book folder; a loose single-file book's art sits in the same directory.
 	if sideReads() {
-		look := coverLook{ctx: ctx, root: lib.Root, timeout: s.probeTimeout, gaveUp: &gaveUp}
+		cover := coverLook{ctx: ctx, root: lib.Root, timeout: look, gaveUp: &gaveUp}
 		bookAbs := absOf(lib, b.RelPath)
 		if b.IsFolder {
-			b.CoverPath = look.find(bookAbs, true)
+			b.CoverPath = cover.find(bookAbs, true)
 			// A multi-CD book's art often sits in the parent (e.g. ".../Book/CD1" with
 			// the cover in ".../Book"); fall back there for disc-part subfolders.
 			if b.CoverPath == "" && metadata.IsDiscFolder(filepath.Base(bookAbs)) {
-				b.CoverPath = look.find(filepath.Dir(bookAbs), true)
+				b.CoverPath = cover.find(filepath.Dir(bookAbs), true)
 			}
 			// A folder joined from its disc folders: its own art first (above), then the
 			// first disc's.
 			if first := dirOf(primary); b.CoverPath == "" && first != b.RelPath {
-				b.CoverPath = look.find(absOf(lib, first), true)
+				b.CoverPath = cover.find(absOf(lib, first), true)
 			}
 		} else {
-			b.CoverPath = look.find(filepath.Dir(bookAbs), false)
+			b.CoverPath = cover.find(filepath.Dir(bookAbs), false)
 		}
 	}
 	// Embedded art; UpsertBook adds a sibling cover (CoverPath) to the flag itself.
 	hasCover := md != nil && md.HasCover
 	b.HasCover = &hasCover
 	if sideReads() {
-		b.ArtVersion = artVersion(ctx, lib.Root, b.ArtFiles(), s.probeTimeout, &gaveUp)
+		b.ArtVersion = artVersion(ctx, lib.Root, b.ArtFiles(), look, &gaveUp)
 	}
 	gaveUp.keep(b)
 }
@@ -1846,7 +1847,7 @@ func (s *Scanner) readABS(ctx context.Context, lib catalog.Library, rel, sig str
 	}
 	file := path.Join(rel, metadata.ABSFileName)
 	abs := absOf(lib, file)
-	f, err := metadata.Bounded(ctx, abs, s.probeTimeout, func() (*metadata.ABSFile, error) { return metadata.ReadABSFile(abs) }, nil)
+	f, err := metadata.Bounded(ctx, abs, s.lookTimeout(ctx), func() (*metadata.ABSFile, error) { return metadata.ReadABSFile(abs) }, nil)
 	if err != nil {
 		s.log.Warn("unreadable Audiobookshelf metadata.json", "library", lib.Name, "path", file, "err", err)
 		gaveUp.note(file, err)
@@ -1909,11 +1910,16 @@ type audioFile struct {
 }
 
 // audioEntries returns the non-hidden, non-ignored audio files directly inside
-// absDir, as a book has them (folderAudio).
-func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
-	entries, err := os.ReadDir(absDir)
+// absDir, as a book has them (folderAudio): none when it won't list. The
+// listing is a metadata.Bounded call (ctx, at most timeout): err is one given
+// up on (metadata.GaveUp) or ctx's.
+func audioEntries(ctx context.Context, root, absDir string, ignore *Ignore, timeout time.Duration) ([]audioFile, error) {
+	entries, err := metadata.ReadDirBounded(ctx, absDir, timeout)
+	if metadata.GaveUp(err) || ctx.Err() != nil {
+		return nil, err
+	}
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	var audio []audioFile
 	for _, de := range entries {
@@ -1922,7 +1928,7 @@ func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
 			audio = append(audio, audioFile{abs: abs, de: de})
 		}
 	}
-	return folderAudio(audio)
+	return folderAudio(audio), nil
 }
 
 // folderAudio is one folder's audio files as a book has them: in play order
@@ -2169,12 +2175,24 @@ func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relP
 // now (an admin's Re-read): it waits for a read of the book under way, a scan's
 // included, then reads the book itself rather than loading what that read
 // stored, which may be older than the change the caller wants picked up.
+//
+// A read that kept the book as stored because a file did not answer (a look
+// given up on, or the audio's read cut short: catalog.Book.ReadCutShort with an
+// unreadable problem, recorded) is a look given up on too
+// (metadata.ErrNotAnswered): the caller asked for the book as it is now, and
+// the share holding it is not answering.
 func (s *Scanner) ReindexPath(ctx context.Context, lib catalog.Library, relPath string) (*catalog.Book, error) {
 	book, err := s.resolveBook(ctx, lib, relPath, nil)
 	if err != nil {
 		return nil, err
 	}
-	return s.readOwn(ctx, lib, book, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
+	b, err := s.readOwn(ctx, lib, book, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
+	// book is the read's (leadIndex's), done with once readOwn has loaded
+	// what it stored.
+	if err == nil && book.ReadCutShort && book.ScanError == problemUnreadable {
+		return nil, fmt.Errorf("library: reading %q: %w", book.ScanErrorFile, metadata.ErrNotAnswered)
+	}
+	return b, err
 }
 
 // readOwn reads book itself (leadIndex, the state at from carried first) once
@@ -2239,6 +2257,30 @@ var errReadDropped = errors.New("library: the scan's read of this book was not w
 // indexTimeout bounds a shared read once it has begun. It no longer stops with
 // the request that began it (see leadIndex).
 const indexTimeout = 10 * time.Minute
+
+// lookTimeoutKey carries an on-demand read's look time (WithLookTimeout).
+type lookTimeoutKey struct{}
+
+// WithLookTimeout gives the on-demand reads under ctx (IndexPath and its kin,
+// ReindexPath, IndexMoved, RefreshAttachments) d for each look at a library
+// file (metadata.Bounded: resolveBook's, the files beside the audio, the wait
+// on another read of the book) in place of the scan's probe time, which is a
+// whole request's: a request on a share that stopped answering then hears it
+// (metadata.GaveUp, the API's 503 share_not_answering) before its own time
+// runs out. The audio's own read keeps the probe's time. It rides on ctx so
+// the read leadIndex goes on with past the request keeps it.
+func WithLookTimeout(ctx context.Context, d time.Duration) context.Context {
+	return context.WithValue(ctx, lookTimeoutKey{}, d)
+}
+
+// lookTimeout is the time each look at a library file gets under ctx: its
+// WithLookTimeout when shorter, else the probe's.
+func (s *Scanner) lookTimeout(ctx context.Context) time.Duration {
+	if d, ok := ctx.Value(lookTimeoutKey{}).(time.Duration); ok && d > 0 && d < s.probeTimeout {
+		return d
+	}
+	return s.probeTimeout
+}
 
 // indexShared is indexBook of a resolved book, read once for every caller that
 // asks for it while a read is under way (an on-demand index's, IndexMoved's or
@@ -2326,7 +2368,7 @@ func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
 	if f.scan != nil && f.scan.left.Load() {
 		return errReadLeft
 	}
-	wait := time.NewTimer(s.probeTimeout)
+	wait := time.NewTimer(s.lookTimeout(ctx))
 	defer wait.Stop()
 	expired := wait.C
 	for {
@@ -2438,12 +2480,18 @@ func (s *Scanner) movedFrom(ctx context.Context, lib catalog.Library, book *cata
 func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *catalog.Book) error {
 	// No walk found it, so look for its ebook here: only now it is indexed, as a
 	// book resolved for another reason (bookOnDisk, a shared read's waiters)
-	// never needs it.
-	book.EbookFile = ebookOnDisk(lib.Root, book.RelPath, book.IsFolder)
+	// never needs it. Its looks are one metadata.Bounded call: given up on, what
+	// is stored for it stays (Unread), as for a folder that won't list.
+	ebook, err := metadata.Bounded(ctx, absOf(lib, sidecarDir(book.RelPath, book.IsFolder)), s.lookTimeout(ctx),
+		func() (catalog.EbookReading, error) { return ebookOnDisk(lib.Root, book.RelPath, book.IsFolder), nil }, nil)
+	if err != nil {
+		ebook = catalog.EbookReading{Unread: true}
+	}
+	book.EbookFile = ebook
 	s.enrich(ctx, lib, book, s.readSlots(1))
 	// UpsertBook layers any path-keyed enrichment and metadata overrides onto the
 	// scanned values in the same transaction.
-	_, err := s.cat.UpsertBook(ctx, book)
+	_, err = s.cat.UpsertBook(ctx, book)
 	return err
 }
 
@@ -2461,11 +2509,20 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	// resolved path here would yield a "../"-laden rel_path whenever any component
 	// of lib.Root is a symlink (e.g. macOS /tmp -> /private/tmp, or a NAS /data ->
 	// /mnt/...).
-	if _, err := ContentJoin(lib.Root, relPath); err != nil {
+	//
+	// Every look here at the library's files is a metadata.Bounded call given
+	// the on-demand read's time (lookTimeout): on a share that stopped
+	// answering the first given up on is the answer (metadata.GaveUp: the
+	// API's 503 share_not_answering), the rest not tried.
+	look := s.lookTimeout(ctx)
+	if _, err := ContentJoinBounded(ctx, lib.Root, relPath, look); err != nil {
 		return nil, err
 	}
 	abs := absOf(lib, relPath)
-	info, err := os.Stat(abs)
+	info, err := metadata.StatBounded(ctx, abs, look)
+	if metadata.GaveUp(err) || ctx.Err() != nil {
+		return nil, err
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, err)
 	}
@@ -2474,8 +2531,14 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	// names a book by the folder listings' spelling: indexing the variant would
 	// add a duplicate everyone sees, which the next scan removes (CONNECT-04).
 	rel := relPathOf(lib.Root, abs)
-	if rel != "" && !dirPresent(lib, rel, map[string]map[string]bool{}) {
-		return nil, fmt.Errorf("%w: %q is not spelled as on disk", ErrNotIndexable, relPath)
+	if rel != "" {
+		present, err := dirPresent(ctx, lib, rel, map[string]map[string]bool{}, look)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			return nil, fmt.Errorf("%w: %q is not spelled as on disk", ErrNotIndexable, relPath)
+		}
 	}
 
 	// What the ignore rules keep out of a scan isn't in the library on demand either.
@@ -2495,7 +2558,10 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	if !info.IsDir() {
 		dirRel = dirOf(dirRel)
 	}
-	own := audioEntries(lib.Root, absOf(lib, dirRel), ignore)
+	own, err := audioEntries(ctx, lib.Root, absOf(lib, dirRel), ignore, look)
+	if err != nil {
+		return nil, err
+	}
 	// Whether a folder with a `book` override is a disc set turns on its whole
 	// subtree, walked only then; the walk is the joined book's too.
 	var discs map[string][]audioFile
@@ -2544,16 +2610,22 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 		return nil, err
 	}
 
-	// No walk found it, so look for its metadata.json and attachments here.
+	// No walk found it, so look for its metadata.json and attachments here. One
+	// that can't be looked at keeps what is stored, but one given up on is the
+	// answer, as every look above.
 	if book.IsFolder {
-		if sig, aerr := absSigAt(ctx, lib, book.RelPath, ignore, s.probeTimeout); aerr != nil {
+		if sig, aerr := absSigAt(ctx, lib, book.RelPath, ignore, look); metadata.GaveUp(aerr) || ctx.Err() != nil {
+			return nil, cmp.Or(aerr, ctx.Err())
+		} else if aerr != nil {
 			s.log.Warn("could not look at the book's Audiobookshelf metadata.json", "library", lib.Name, "path", book.RelPath, "err", aerr)
 			book.ABS.Unread = true // what is stored stays
 		} else {
 			book.ABS.Sig = sig
 		}
 	}
-	if sig, aerr := attachmentsSigAt(ctx, lib, book, ignore, s.probeTimeout); aerr != nil {
+	if sig, aerr := attachmentsSigAt(ctx, lib, book, ignore, look); metadata.GaveUp(aerr) || ctx.Err() != nil {
+		return nil, cmp.Or(aerr, ctx.Err())
+	} else if aerr != nil {
 		s.log.Warn("could not list the book's .audiosilo folder", "library", lib.Name, "path", book.RelPath, "err", aerr)
 		book.Attachments = catalog.AttachmentsReading{Unread: true} // what is stored stays
 	} else {
@@ -2809,7 +2881,7 @@ func (s *Scanner) carryMove(ctx context.Context, lib catalog.Library, oldPath, n
 // author, a series) has no book of its own to move, so a favourite on it follows
 // the folder its books went to. rl may be nil.
 func (s *Scanner) carryFolderFavourites(ctx context.Context, lib catalog.Library, moved map[string]string, rl *runLog) {
-	for from, to := range renamedFolders(lib, moved) {
+	for from, to := range renamedFolders(ctx, lib, moved, s.probeTimeout) {
 		if err := s.cat.MoveFolderFavourites(ctx, lib.ID, from, to); err != nil {
 			s.log.Warn("move folder favourites failed", "library", lib.Name, "from", from, "to", to, "err", err)
 			rl.add("error", "error", func(e *catalog.RunEvent) { e.Path, e.To, e.Detail = from, to, err.Error() })
@@ -2823,8 +2895,9 @@ func (s *Scanner) carryFolderFavourites(ctx context.Context, lib catalog.Library
 // ("Series A/Book" -> "Series B/Book" pairs "Series A" with "Series B"; a book
 // renamed as it went still left its folder for the new one). A pair counts only
 // when every move agrees on where the folder went and the old folder is gone from
-// disk (a book moved out of a folder that is still there says nothing about it).
-func renamedFolders(lib catalog.Library, moved map[string]string) map[string]string {
+// disk (a book moved out of a folder that is still there says nothing about it),
+// looked at under ctx and timeout (dirPresent: one that can't be is present).
+func renamedFolders(ctx context.Context, lib catalog.Library, moved map[string]string, timeout time.Duration) map[string]string {
 	out := map[string]string{} // "" = the moves disagree
 	for o, n := range moved {
 		for {
@@ -2844,7 +2917,7 @@ func renamedFolders(lib catalog.Library, moved map[string]string) map[string]str
 	}
 	listed := map[string]map[string]bool{} // each folder's entry names, read once
 	for from, to := range out {
-		if to == "" || dirPresent(lib, from, listed) {
+		if present, _ := dirPresent(ctx, lib, from, listed, timeout); to == "" || present {
 			delete(out, from)
 		}
 	}
@@ -2856,18 +2929,26 @@ func renamedFolders(lib catalog.Library, moved map[string]string) map[string]str
 // only in case ("WIth" -> "With"), or of any folder under one so renamed, so when
 // the path still answers, each name along it must be in its parent's listing
 // (listed caches the listings). It errs toward present: a folder it can't check
-// keeps its favourites.
-func dirPresent(lib catalog.Library, rel string, listed map[string]map[string]bool) bool {
-	if _, err := os.Lstat(absOf(lib, rel)); err != nil {
-		return !errors.Is(err, fs.ErrNotExist)
+// keeps its favourites. Its lstat and listings are metadata.Bounded calls (ctx,
+// at most timeout each): err is one given up on (metadata.GaveUp) or ctx's, the
+// answer then present.
+func dirPresent(ctx context.Context, lib catalog.Library, rel string, listed map[string]map[string]bool, timeout time.Duration) (bool, error) {
+	if _, err := metadata.LstatBounded(ctx, absOf(lib, rel), timeout); err != nil {
+		if metadata.GaveUp(err) || ctx.Err() != nil {
+			return true, err
+		}
+		return !errors.Is(err, fs.ErrNotExist), nil
 	}
 	for dir := rel; dir != "."; dir = path.Dir(dir) {
 		parent := path.Dir(dir)
 		names, ok := listed[parent]
 		if !ok {
-			entries, err := os.ReadDir(absOf(lib, parent))
+			entries, err := metadata.ReadDirBounded(ctx, absOf(lib, parent), timeout)
+			if metadata.GaveUp(err) || ctx.Err() != nil {
+				return true, err
+			}
 			if err != nil {
-				return true
+				return true, nil
 			}
 			names = make(map[string]bool, len(entries))
 			for _, e := range entries {
@@ -2876,10 +2957,10 @@ func dirPresent(lib catalog.Library, rel string, listed map[string]map[string]bo
 			listed[parent] = names
 		}
 		if !names[path.Base(dir)] {
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
 // reclassified reports whether a vanished path and a new path with the same

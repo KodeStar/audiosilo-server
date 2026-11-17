@@ -179,7 +179,7 @@ func (s *Scanner) readAttachments(ctx context.Context, lib catalog.Library, b *c
 		p := absOf(lib, rel)
 		// The read fills a copy: a read given up on may still end later.
 		cur := files
-		got, err := metadata.Bounded(ctx, p, s.probeTimeout, func() (metadata.AttachmentFiles, error) {
+		got, err := metadata.Bounded(ctx, p, s.lookTimeout(ctx), func() (metadata.AttachmentFiles, error) {
 			err := readAttachment(&cur, name, p)
 			return cur, err
 		}, nil)
@@ -260,7 +260,7 @@ func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, r
 	if err != nil {
 		return nil, err
 	}
-	sig, err := attachmentsSigAt(ctx, lib, book, ParseIgnore(lib.IgnorePatterns), s.probeTimeout)
+	sig, err := attachmentsSigAt(ctx, lib, book, ParseIgnore(lib.IgnorePatterns), s.lookTimeout(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("the attachments of %q couldn't be listed: %w", book.RelPath, err)
 	}

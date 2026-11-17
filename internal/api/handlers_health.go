@@ -236,12 +236,14 @@ func (a *API) rescanPath(w http.ResponseWriter, lib *catalog.Library, p string) 
 }
 
 // rescanAt runs read, a re-read of what is at p in lib, as rescanPath does: on a
-// context detached from the request timeout, a path with no book a 404 with code
-// not_indexable, a read the server's stop ended a 503 stopping, anything else
-// the catalog error's answer. It answers the error
-// itself and reports whether there was none.
+// context detached from the request timeout, each look at a library file given
+// fileWait (library.WithLookTimeout, well under the request timeout, so a share
+// that stopped answering is a 503 share_not_answering with Retry-After, not the
+// timeout's), a path with no book a 404 with code not_indexable, a read the
+// server's stop ended a 503 stopping, anything else the catalog error's answer.
+// It answers the error itself and reports whether there was none.
 func rescanAt[T any](a *API, w http.ResponseWriter, lib *catalog.Library, p string, read func(context.Context) (T, error)) (T, bool) {
-	ctx, cancel := context.WithTimeout(a.baseCtx, rescanBookTimeout)
+	ctx, cancel := context.WithTimeout(library.WithLookTimeout(a.baseCtx, a.fileWait), rescanBookTimeout)
 	defer cancel()
 	out, err := read(ctx)
 	if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, library.ErrOutsideRoot) {

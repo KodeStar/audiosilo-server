@@ -323,7 +323,9 @@ func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catal
 		if lib.Kind == catalog.KindPodcasts {
 			return nil, library.ErrNotIndexable
 		}
-		return a.indexPath(ctx, *lib, path, scope.Allows)
+		// Each look at the share given fileWait: one that stopped answering is
+		// a 503 share_not_answering, not this request's own time running out.
+		return a.indexPath(library.WithLookTimeout(ctx, a.fileWait), *lib, path, scope.Allows)
 	case err != nil:
 		return nil, err
 	case !scope.Allows(b.RelPath):

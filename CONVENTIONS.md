@@ -979,7 +979,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `IndexMoved` take the same per-book flight (`startFlight`): no two reads of one book run side by side, and an on-demand
   index asked for during a scan's read waits for the scan's write and loads it. An admin's Re-read
   (`rescanPath`) is `ReindexPath` instead: it waits for the read under way, then reads the book itself, as what that
-  read stored may be older than the change the admin wants picked up. The on-demand index takes a path only in its on-disk
+  read stored may be older than the change the admin wants picked up; one that kept the book as stored because a file
+  did not answer (a look given up on, or its audio's read cut short: `ReadCutShort` with an `unreadable` problem,
+  recorded) is a look given up on too, 503 `share_not_answering`. The on-demand index takes a path only in its on-disk
   spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a
   case-insensitive filesystem a case variant opens the same folder, and indexing it would add a
   duplicate book everyone sees, so it is a 404. `stream` serves an
@@ -1218,7 +1220,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   AVPlayer's 60 s resource timeout, as a 503 is no retry for it) as a 503 `share_not_answering` with
   `Retry-After`. A file cache's background run opens its source unbounded (once the request's look
   answered), and a warm looks first under the cache's run time.
-  The scan gives each the probe's time (`Scanner.probeTimeout`). With a book's audio read cut short
+  The scan gives each the probe's time (`Scanner.probeTimeout`); an on-demand read (`/item`'s index, an admin's
+  Re-read and the Bridge's rescan through `rescanAt`) gives each `API.fileWait` instead (SRV-15c:
+  `library.WithLookTimeout` on its context, `Scanner.lookTimeout`, kept by the read `leadIndex` goes on with), well
+  under the request timeout, so a share that stopped answering is its 503 `share_not_answering`, not the timeout's:
+  `resolveBook`'s looks (the join, the stat, `dirPresent`'s lstat and listings, the folder's listing, the walks of a
+  disc set, the metadata.json and `.audiosilo` looks, a given-up one its answer), `ebookOnDisk` and the files beside
+  the audio; the audio's own read keeps the probe's time. With a book's audio read cut short
   none of its side files is looked at (each would wait out its time too); one given up on otherwise
   keeps the book as stored (`library.givenUp.keep`: `ReadCutShort`, never `LengthOnly`) with an
   `unreadable` problem on that file (over a lasting one), which `problemCleared` clears once the file
@@ -1230,7 +1238,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it, counted in `Scanner.readsLeft` and logged, so the scan ends and the next runs (`writeNext`
   waits on the scan's context too); no later read waits on that read's flight
   (`bookRead.left`, `errReadLeft`), and none waits on any other read of the book (a scan's
-  or an on-demand one, maybe stuck the same way) for more than `probeTimeout` while that read
+  or an on-demand one, maybe stuck the same way) for more than a look's time (`lookTimeout`) while that read
   has not returned (`waitFlight`; a scan's read that has returned is waited on until its batch
   write): a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
   rest; an on-demand read gives up as a look at a share that stopped answering (`metadata.GaveUp`,

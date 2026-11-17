@@ -291,3 +291,51 @@ func TestStreamLooksOnAHeldShareAnswer(t *testing.T) {
 		t.Errorf("the stream once the share answers = %d %q, want it served", resp.StatusCode, body)
 	}
 }
+
+// An admin's Re-read of a book on a share that stopped answering is a 503
+// share_not_answering with Retry-After once a look is given up on (fileWait),
+// not the request timeout's generic 503 (SRV-15c): its folder's looks while it
+// is resolved, or a file beside its audio while it is read (the book kept as
+// stored, that file's problem recorded). Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
+func TestRereadOnAHeldShareAnswersShareNotAnswering(t *testing.T) {
+	for _, held := range []string{"Author/Book", "Author/Book/cover.jpg"} {
+		t.Run(held, func(t *testing.T) {
+			e := newTestEnv(t)
+			adminTok, _, _ := adminAndMember(t, e)
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, data := range map[string][]byte{"01.mp3": make([]byte, 1<<10), "cover.jpg": []byte("img")} {
+				p := filepath.Join(root, "Author", "Book", name)
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Held", Root: root})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.api.fileWait = 200 * time.Millisecond
+			release := metadata.HoldOpensForTests(filepath.Join(root, filepath.FromSlash(held)))
+			t.Cleanup(release)
+			u := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/book/rescan?path=" + url.QueryEscape("Author/Book")
+			start := time.Now()
+			resp, body := e.do(t, "POST", u, adminTok, "")
+			if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) || resp.Header.Get("Retry-After") != "30" {
+				t.Errorf("Re-read with %s held = %d %s, want 503 %s", held, resp.StatusCode, body, codeShareNotAnswering)
+			}
+			if took := time.Since(start); took > 5*time.Second {
+				t.Errorf("Re-read took %v, want it answered once a look is given up on", took)
+			}
+			release()
+			if resp, body := e.do(t, "POST", u, adminTok, ""); resp.StatusCode != http.StatusOK {
+				t.Errorf("Re-read once the share answers = %d %s, want the book", resp.StatusCode, body)
+			}
+		})
+	}
+}

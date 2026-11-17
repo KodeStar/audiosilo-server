@@ -979,7 +979,11 @@ func TestWalkReadsWhatAudioEntriesReads(t *testing.T) {
 		if got := names(dirs[dir]); !slices.Equal(got, files) {
 			t.Errorf("walk %q = %q, want %q", dir, got, files)
 		}
-		if got := names(audioEntries(root, absOf(lib, dir), ignore)); !slices.Equal(got, files) {
+		audio, err := audioEntries(t.Context(), root, absOf(lib, dir), ignore, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := names(audio); !slices.Equal(got, files) {
 			t.Errorf("audioEntries %q = %q, want %q", dir, got, files)
 		}
 	}
