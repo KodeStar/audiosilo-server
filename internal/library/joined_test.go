@@ -814,7 +814,7 @@ func namedUser(t *testing.T, db *store.DB, name string) int64 {
 func TestDiscSets(t *testing.T) {
 	t.Parallel()
 	folders := []string{
-		// A disc set: disc names as isDiscFolder reads them.
+		// A disc set: disc names as metadata.IsDiscFolder reads them.
 		"Cowell/Dragonese/CD 1", "Cowell/Dragonese/CD 2", "Cowell/Dragonese/cd-10",
 		// Not: the folder holds audio itself beside its discs.
 		"Mixed/Book", "Mixed/Book/Disc1", "Mixed/Book/Disc2",

@@ -60,7 +60,7 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 		return nil, nil, status, err
 	}
 	raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
-	job, _, err := d.Bridge.EnsurePodcastFetch(budget, bridge.NewJob{LibraryID: &lib.ID, Path: &rel, Params: raw, Priority: 100, RequestedBy: by}, bridge.FetchOptions{NoNew: noNew})
+	job, _, err := d.Bridge.EnsurePodcastFetch(budget, bridge.NewJob{LibraryID: &lib.ID, Path: &rel, Params: raw, Priority: bridge.PriorityPlaying, RequestedBy: by}, bridge.FetchOptions{NoNew: noNew})
 	if job != nil {
 		status.State = "queued"
 		status.RequestID = &job.ID

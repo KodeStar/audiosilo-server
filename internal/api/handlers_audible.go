@@ -335,7 +335,7 @@ func (a *API) handleAdminAudiblePoll(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusConflict, "account_paused", "the account's library was deleted; map it again on the Bridge")
 		return
 	}
-	nj := bridge.AudiblePoll(id, acct.Template, 0)
+	nj := bridge.AudiblePoll(id, acct.Template, bridge.PriorityAsked)
 	nj.RequestedBy = userFrom(r.Context()).ID
 	job, created, err := a.bridge.Enqueue(r.Context(), nj)
 	if !a.writeBridgeError(w, err, "audible poll failed") {

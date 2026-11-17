@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -982,4 +984,189 @@ func dropGrantRule(c *Catalog, ctx context.Context, shareID int64, rule PathRule
 	_, err := c.db.ExecContext(ctx, `DELETE FROM share_paths WHERE share_id = ? AND library_id = ? AND path = ?`,
 		shareID, rule.LibraryID, rule.Path)
 	return err
+}
+
+// The JSON form of scopesFilterSQL returns the OR form's rows: whole libraries,
+// path rules at the segment boundary (case, bytes below and above '/', a
+// sibling's prefix), paths that aren't UTF-8, and a scope that grants nothing.
+// Past jsonScopesAbove scopes it is the form scopesFilterSQL takes, so more
+// scopes than SQLite takes OR arms (its expression depth, about a thousand)
+// still answer, and a cross-library list (ListProgress) with them too.
+func TestScopesFilterForms(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	var libs []int64
+	for _, name := range []string{"Whole", "Paths", "Hidden", "Empty"} {
+		l, err := c.CreateLibrary(ctx, Library{Name: name, Root: "/tmp/" + name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		libs = append(libs, l.ID)
+	}
+	whole, paths, hidden, empty := libs[0], libs[1], libs[2], libs[3]
+	rows := map[int64][]string{
+		whole: {"A/1.mp3", "B"},
+		paths: {"Book", "Book 2", "Book/1.mp3", "Book/CD1/1.mp3", "Book0", "book/1.mp3", "Bookish", "Saga/One",
+			"Saga/One/x", "Saga/One 2", "Ä/b", "Odd\xff/1.mp3", "Odd\xfe/1.mp3", "Book\x85/1.mp3", "Saga/One\x92/x"},
+		hidden: {"Book", "Book/1.mp3"},
+		empty:  {"Book"},
+	}
+	for lib, ps := range rows {
+		for _, p := range ps {
+			if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib, RelPath: p, Title: p}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	scopes := []Scope{
+		{LibraryID: whole, AllowAll: true},
+		{LibraryID: paths, Paths: []string{"Book", "Saga/One", "Ä", "Odd\xff", "Nope"}},
+		{LibraryID: empty},
+	}
+	query := func(frag string, args []any) []string {
+		t.Helper()
+		got, err := queryRows(ctx, c.db, func(rs *sql.Rows, p *string) error { return rs.Scan(p) },
+			`SELECT library_id || ':' || rel_path FROM books WHERE `+frag+` ORDER BY library_id, rel_path`, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	want := []string{}
+	for _, p := range []string{"A/1.mp3", "B"} {
+		want = append(want, fmt.Sprintf("%d:%s", whole, p))
+	}
+	for _, p := range []string{"Book", "Book/1.mp3", "Book/CD1/1.mp3", "Odd\xff/1.mp3", "Saga/One", "Saga/One/x", "Ä/b"} {
+		want = append(want, fmt.Sprintf("%d:%s", paths, p))
+	}
+	orFrag, orArgs := scopesFilterSQL("library_id", "rel_path", scopes)
+	jsFrag, jsArgs := scopesJSONFilterSQL("library_id", "rel_path", scopes)
+	if len(jsArgs) != 2 {
+		t.Fatalf("json form = %d args, want 2", len(jsArgs))
+	}
+	if orRows, jsRows := query(orFrag, orArgs), query(jsFrag, jsArgs); !slices.Equal(orRows, want) || !slices.Equal(jsRows, want) {
+		t.Fatalf("or = %q\njson = %q\nwant %q", orRows, jsRows, want)
+	}
+	// Denied: no scope, or only scopes that grant nothing, reads nothing.
+	for _, none := range [][]Scope{nil, {{LibraryID: empty}}} {
+		if frag, args := scopesJSONFilterSQL("library_id", "rel_path", none); len(query(frag, args)) != 0 {
+			t.Errorf("scopes %v read rows", none)
+		}
+	}
+
+	// 1,200 scopes (libraries with no books beside the three): one statement
+	// that SQLite plans, the same rows.
+	many := slices.Clone(scopes)
+	for id := int64(10_000); len(many) < 1200; id++ {
+		if id%2 == 0 {
+			many = append(many, Scope{LibraryID: id, AllowAll: true})
+		} else {
+			many = append(many, Scope{LibraryID: id, Paths: []string{fmt.Sprintf("Filler/%d", id), "Book"}})
+		}
+	}
+	frag, args := scopesFilterSQL("library_id", "rel_path", many)
+	if len(args) != 2 {
+		t.Fatalf("%d scopes = %d args, want the JSON form's 2", len(many), len(args))
+	}
+	if got := query(frag, args); !slices.Equal(got, want) {
+		t.Fatalf("%d scopes = %q, want %q", len(many), got, want)
+	}
+	uid := seedUser(t, c, ctx)
+	for _, ref := range []Ref{{LibraryID: paths, Path: "Book/1.mp3"}, {LibraryID: hidden, Path: "Book/1.mp3"}} {
+		if _, err := c.SaveProgress(ctx, uid, Progress{Ref: ref, Position: 1, Duration: 10}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := c.ListProgress(ctx, uid, many)
+	if err != nil || len(got) != 1 || got[0].Ref != (Ref{LibraryID: paths, Path: "Book/1.mp3"}) {
+		t.Fatalf("progress with %d scopes = %+v, %v; want the granted row only", len(many), got, err)
+	}
+}
+
+// Security-critical: the JSON form of scopesFilterSQL grants exactly the OR
+// form's rows, and both exactly what the Go gate (ScopesAllow) grants, over
+// random paths and rules from an alphabet that holds the cases the forms could
+// read apart: '/' (root "", leading, trailing and doubled slashes), the bytes
+// either side of it ('.', '0'), case, bytes that aren't UTF-8 and LIKE's
+// wildcards. Every trial has whole libraries, path rules and libraries with no
+// scope (denied) among them.
+func TestScopesFilterFormsAgree(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	r := rand.New(rand.NewPCG(1, 2))
+	alphabet := []string{"a", "b", "B", "/", "/", ".", "0", " ", "%", "_", "\xff", "\x85", "Ä"}
+	gen := func() string {
+		var s strings.Builder
+		for range r.IntN(6) {
+			s.WriteString(alphabet[r.IntN(len(alphabet))])
+		}
+		return s.String()
+	}
+	var libs []int64
+	for i := range 4 {
+		l, err := c.CreateLibrary(ctx, Library{Name: fmt.Sprint("L", i), Root: fmt.Sprint("/tmp/L", i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		libs = append(libs, l.ID)
+	}
+	var refs []Ref
+	seen := map[Ref]bool{}
+	for range 1200 {
+		ref := Ref{LibraryID: libs[r.IntN(len(libs))], Path: gen()}
+		if seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		refs = append(refs, ref)
+		if _, err := c.db.ExecContext(ctx, `INSERT INTO books (library_id, rel_path, title, indexed_at) VALUES (?, ?, '', 1)`, ref.LibraryID, ref.Path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := func(ref Ref) string { return fmt.Sprintf("%d:%X", ref.LibraryID, ref.Path) }
+	query := func(frag string, args []any) []string {
+		t.Helper()
+		got, err := queryRows(ctx, c.db, func(rs *sql.Rows, k *string) error { return rs.Scan(k) },
+			`SELECT library_id || ':' || hex(rel_path) FROM books WHERE `+frag+` ORDER BY 1`, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	granted := 0
+	for trial := range 300 {
+		var scopes []Scope
+		for _, lib := range libs {
+			switch r.IntN(8) {
+			case 0: // no scope: denied
+			case 1:
+				scopes = append(scopes, Scope{LibraryID: lib, AllowAll: true})
+			default:
+				var paths []string
+				for range 1 + r.IntN(4) {
+					if p := gen(); p != "" { // "" is AllowAll in every scope builder
+						paths = append(paths, p)
+					}
+				}
+				scopes = append(scopes, Scope{LibraryID: lib, Paths: paths})
+			}
+		}
+		var want []string
+		for _, ref := range refs {
+			if ScopesAllow(scopes, ref) {
+				want = append(want, key(ref))
+			}
+		}
+		slices.Sort(want)
+		orFrag, orArgs := scopesFilterSQL("library_id", "rel_path", scopes)
+		jsFrag, jsArgs := scopesJSONFilterSQL("library_id", "rel_path", scopes)
+		or, js := query(orFrag, orArgs), query(jsFrag, jsArgs)
+		if !slices.Equal(or, want) || !slices.Equal(js, want) {
+			t.Fatalf("trial %d, scopes %+v:\nor   %q\njson %q\nwant %q", trial, scopes, or, js, want)
+		}
+		granted += len(want)
+	}
+	if granted == 0 {
+		t.Fatal("no trial granted a row")
+	}
 }

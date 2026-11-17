@@ -93,9 +93,9 @@ func TestAudibleSyncQueued(t *testing.T) {
 	}
 }
 
-// AudibleSyncCode reads audible_refused from a failed sync's result code or
+// AudibleRefusalCode reads audible_refused from a failed sync's result code or
 // its error's prefix; nothing from a done or cancelled one, or another error.
-func TestAudibleSyncCode(t *testing.T) {
+func TestAudibleRefusalCode(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		job  Job
@@ -112,7 +112,7 @@ func TestAudibleSyncCode(t *testing.T) {
 		{Job{State: StateCancelled, Error: "audible_refused: x"}, ""},
 		{Job{State: StateDone, Result: json.RawMessage(`{"code":"audible_refused"}`)}, ""},
 	} {
-		if got := AudibleSyncCode(c.job); got != c.want {
+		if got := AudibleRefusalCode(c.job); got != c.want {
 			t.Errorf("%+v = %q, want %q", c.job, got, c.want)
 		}
 	}

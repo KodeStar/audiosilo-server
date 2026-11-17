@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-meta/pkg/model"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // Phase 2b's community jobs (BRIDGE-PLAN.md "Community contributions"): the
@@ -54,6 +56,22 @@ func contributeParams(raw json.RawMessage) (json.RawMessage, error) {
 		return len(p.Dimensions) > 0 && !slices.Contains(p.Dimensions, d)
 	})
 	return json.Marshal(p)
+}
+
+// ContributeWork is sidecars.contribute's params raw with work_id set to
+// workID when they name none: the book's community match as this server
+// recorded it (an admin's, from the console), so the Bridge files under that
+// work rather than its own match of the book (bridge#25). Params that name a
+// work, a workID of "", or params contributeParams would refuse are returned
+// as they are (Enqueue refuses the last).
+func ContributeWork(raw json.RawMessage, workID string) json.RawMessage {
+	var p ContributeParams
+	if workID == "" || decodeStrict(raw, &p) != nil || p.WorkID != "" {
+		return raw
+	}
+	p.WorkID = workID
+	out, _ := json.Marshal(p) // strings only: it can't fail
+	return out
 }
 
 // SharedNothing reports whether j is a sidecars.contribute job that finished
@@ -125,7 +143,8 @@ type Correction struct {
 // characters for the recording's other identifiers and the region; 1 to
 // MaxCorrections changes, each of a CorrectionFields field (once each), its
 // values trimmed, single-line and at most 500 characters, the corrected one set
-// and different from the current one as the community reads it (asRead);
+// and different from the current one as the community reads it (asRead), a
+// published one a real date (metadata.ValidDate);
 // evidence required (none when it reads as nothing), at most 2000 characters
 // (line breaks kept) both as written and as the community's issue carries it
 // (issueLength). Neither a value nor the evidence holds a control character
@@ -191,6 +210,11 @@ func parseCorrect(raw json.RawMessage) (CorrectParams, error) {
 		// "Tom &amp; Jerry".
 		if corrected := asRead(c.Corrected); corrected == "" || corrected == c.Current {
 			return p, invalid("%s: the corrected value must be set and differ from the current one", c.Field)
+		}
+		// The Bridge files a published date as the community's release_date,
+		// which takes a real date only.
+		if c.Field == "published" && !metadata.ValidDate(c.Corrected) {
+			return p, invalid("published: the corrected value must be YYYY, YYYY-MM or YYYY-MM-DD")
 		}
 	}
 	p.Evidence = strings.TrimSpace(strings.ReplaceAll(p.Evidence, "\r\n", "\n"))

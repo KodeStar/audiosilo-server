@@ -599,20 +599,6 @@ func TestChooseTitle(t *testing.T) {
 	}
 }
 
-func TestIsDiscFolder(t *testing.T) {
-	t.Parallel()
-	for _, s := range []string{"CD1", "CD 1", "cd01", "Disc 2", "disk3", "CD"} {
-		if !isDiscFolder(s) {
-			t.Errorf("isDiscFolder(%q) = false, want true", s)
-		}
-	}
-	for _, s := range []string{"The Big Book", "CD Projekt", "Disco Inferno", "Author Name"} {
-		if isDiscFolder(s) {
-			t.Errorf("isDiscFolder(%q) = true, want false", s)
-		}
-	}
-}
-
 // TestScannerFolderIsOneBook is the regression guard for the "every chapter
 // counted as a book" bug: a folder of audio is ONE book regardless of how its
 // files are named (distinct chapter titles included), single-file book folders

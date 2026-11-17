@@ -114,6 +114,7 @@ type Service struct {
 
 	mu       sync.Mutex
 	gen      uint64
+	parent   context.Context // Bind's: every root derives from it
 	root     context.Context
 	cancel   context.CancelFunc
 	results  *lru[*Search]
@@ -191,8 +192,22 @@ func newService(opts Options, origin netip.AddrPort) *Service {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errRedirect },
 	}
 	s.artClient = &http.Client{Transport: artTransport, CheckRedirect: checkArtRedirect}
+	s.parent = context.Background()
 	s.resetLocked()
 	return s
+}
+
+// Bind ties every fetch to parent, the server's life (the API's base context):
+// once parent ends, the fetches in flight end as Reset ends them (their
+// requests answer module_off) and no search starts (server#219). Without it they
+// derive from context.Background and only Reset ends them. Call it before
+// serving.
+func (s *Service) Bind(parent context.Context) {
+	s.mu.Lock()
+	s.parent = parent
+	s.resetLocked()
+	s.mu.Unlock()
+	context.AfterFunc(parent, s.Reset)
 }
 
 var errRedirect = errors.New("discovery: redirect refused")
@@ -221,10 +236,8 @@ func checkArtRedirect(req *http.Request, via []*http.Request) error {
 	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 		return errRedirect
 	}
-	for _, prev := range via {
-		if prev.URL.Scheme == "https" && req.URL.Scheme != "https" {
-			return errRedirect
-		}
+	if netguard.Downgrade(req, via) {
+		return errRedirect
 	}
 	return nil
 }
@@ -250,7 +263,7 @@ func (s *Service) resetLocked() {
 		s.cancel()
 	}
 	s.gen++
-	s.root, s.cancel = context.WithCancel(context.Background())
+	s.root, s.cancel = context.WithCancel(s.parent)
 	now := s.opts.Now
 	s.results = newLRU[*Search](maxResultEntries, maxResultBytes, resultTTL, now)
 	s.failures = newLRU[*Error](maxResultEntries, 0, failureTTL, now)
@@ -336,6 +349,9 @@ func (s *Service) leaveLocked(m map[string]*flight, key string, f *flight) {
 // startSearchLocked admits a miss: the provider's cooldown, a fetch slot, then
 // the provider's bucket, and starts the shared fetch.
 func (s *Service) startSearchLocked(key string, q Query) (*flight, *Error) {
+	if s.root.Err() != nil {
+		return nil, ErrModuleOff // the server is stopping (Bind)
+	}
 	now := s.opts.Now()
 	if until, ok := s.cooldown[q.Provider]; ok && now.Before(until) {
 		// Whole seconds rounded up: a retry at Retry-After is never still cooling.
@@ -362,7 +378,9 @@ func (s *Service) startSearchLocked(key string, q Query) (*flight, *Error) {
 		if s.flights[key] == f {
 			delete(s.flights, key)
 		}
-		live := gen == s.gen && s.opts.Enabled()
+		// The root ended without a Reset yet: the server's life ended (Bind)
+		// and its Reset, on a goroutine of its own, hasn't taken the lock.
+		live := gen == s.gen && s.root.Err() == nil && s.opts.Enabled()
 		switch {
 		case !live:
 			res, e = nil, ErrModuleOff

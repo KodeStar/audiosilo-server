@@ -4,16 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -379,7 +382,39 @@ func TestOPMLImportRefusals(t *testing.T) {
 			if openSubscribes(t, b) != 0 {
 				t.Fatal("a refused upload had effects")
 			}
+			// server#219: a damaged document gives its token back, so the next
+			// upload straight after is read (the same answer, not 429); an
+			// over-limit one keeps the charge.
+			if tc.status == 400 || tc.status == 413 {
+				h := podcastHeaders()
+				h["Content-Type"] = tc.ctype
+				resp, body := b.doHeaders(t, "POST", fmt.Sprintf("/api/v1/podcasts/opml/import?library_id=%d", b.lib.ID), b.userTok, tc.body, h)
+				if tc.status == 400 {
+					wantErr(t, resp, body, 400, "invalid_opml")
+				} else {
+					wantErr(t, resp, body, 429, "opml_rate_limited")
+				}
+			}
 		})
+	}
+	// An upload whose body read failed (a dropped or stalled body) keeps the
+	// charge, so a body that never arrives can't hold a read for free: the
+	// next upload straight after meets 429.
+	b.api.opml = newOPMLTransfers()
+	req := httptest.NewRequest("POST", fmt.Sprintf("/api/v1/podcasts/opml/import?library_id=%d", b.lib.ID), iotest.ErrReader(errors.New("connection reset")))
+	req.Header.Set("Authorization", "Bearer "+b.userTok)
+	req.Header.Set("Content-Type", "text/xml")
+	for k, v := range podcastHeaders() {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	b.srv.Config.Handler.ServeHTTP(rec, req)
+	wantErr(t, rec.Result(), rec.Body.String(), 400, "invalid_opml")
+	{
+		h := podcastHeaders()
+		h["Content-Type"] = "text/xml"
+		resp, body := b.doHeaders(t, "POST", fmt.Sprintf("/api/v1/podcasts/opml/import?library_id=%d", b.lib.ID), b.userTok, valid, h)
+		wantErr(t, resp, body, 429, "opml_rate_limited")
 	}
 	h := podcastHeaders()
 	h["Content-Type"] = "text/xml"

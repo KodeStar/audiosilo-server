@@ -1012,6 +1012,34 @@ describe('audible sync', () => {
     expect(within(card).getByText('On, paused with the account')).toBeInTheDocument();
   });
 
+  it('warns on a refused account instead of showing it checked (bridge#40)', async () => {
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/accounts': {
+          body: {
+            accounts: [
+              account({ id: 'acct0001', label: 'Fine' }),
+              account({
+                id: 'acct0002',
+                label: 'Refused',
+                sync: false,
+                refused_at: new Date().toISOString(),
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const heading = await screen.findByRole('heading', { name: 'Audible accounts' });
+    const card = heading.closest('section') as HTMLElement;
+    const fine = (await within(card).findByText('Fine')).closest('li') as HTMLElement;
+    const refused = within(card).getByText('Refused').closest('li') as HTMLElement;
+    expect(within(fine).getByText(/^Checked /)).toBeInTheDocument();
+    expect(within(refused).getByText('Refused: sign in again on the Bridge')).toBeInTheDocument();
+    expect(within(refused).queryByText(/^Checked /)).toBeNull();
+  });
+
   it("marks a title Don't sync, shows it, and undoes it", async () => {
     const calls = mockFetch(
       routes(true, {

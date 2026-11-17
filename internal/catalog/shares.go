@@ -171,21 +171,28 @@ func pathsJSONFilterSQL(col string, paths []string) (string, []any) {
 	if err != nil || len(list) == 0 {
 		return pathsORFilterSQL(col, paths)
 	}
-	// The row's path is split on its bytes (a BLOB): on TEXT, instr and substr
-	// count a stray continuation byte (a path that isn't UTF-8) differently, so
-	// "Wait for it\x85/1.mp3" got the false ancestor "Wait for it".
-	b := "CAST(" + col + " AS BLOB)"
-	frag := "EXISTS(WITH RECURSIVE anc(p, rest) AS (" +
-		"SELECT " + col + ", NULL UNION ALL " +
-		"SELECT substr(" + b + ", 1, instr(" + b + ", X'2F') - 1), substr(" + b + ", instr(" + b + ", X'2F') + 1) WHERE instr(" + b + ", X'2F') > 0 UNION ALL " +
-		"SELECT p || '/' || substr(rest, 1, instr(rest, X'2F') - 1), substr(rest, instr(rest, X'2F') + 1) FROM anc WHERE instr(rest, X'2F') > 0) " +
-		"SELECT 1 FROM anc WHERE CAST(p AS TEXT) IN (SELECT value FROM json_each(?)))"
+	frag := "EXISTS(" + ancestorsCTE(col) + " SELECT 1 FROM anc WHERE CAST(p AS TEXT) IN (SELECT value FROM json_each(?)))"
 	args := []any{string(js)}
 	if len(odd) > 0 {
 		oddFrag, oddArgs := pathsORFilterSQL(col, odd)
 		frag, args = "("+frag+" OR "+oddFrag+")", append(args, oddArgs...)
 	}
 	return frag, args
+}
+
+// ancestorsCTE is the recursive CTE anc(p, rest) whose p is col's own path and
+// each of its prefixes ending just before a '/' (its ancestors), the shape the
+// JSON filters (pathsJSONFilterSQL, scopesJSONFilterSQL) look each up by. The
+// row's path is split on its bytes (a BLOB): on TEXT, instr and substr count a
+// stray continuation byte (a path that isn't UTF-8) differently, so
+// "Wait for it\x85/1.mp3" got the false ancestor "Wait for it". So an
+// ancestor's p is a BLOB; the row's own is col as stored.
+func ancestorsCTE(col string) string {
+	b := "CAST(" + col + " AS BLOB)"
+	return "WITH RECURSIVE anc(p, rest) AS (" +
+		"SELECT " + col + ", NULL UNION ALL " +
+		"SELECT substr(" + b + ", 1, instr(" + b + ", X'2F') - 1), substr(" + b + ", instr(" + b + ", X'2F') + 1) WHERE instr(" + b + ", X'2F') > 0 UNION ALL " +
+		"SELECT p || '/' || substr(rest, 1, instr(rest, X'2F') - 1), substr(rest, instr(rest, X'2F') + 1) FROM anc WHERE instr(rest, X'2F') > 0)"
 }
 
 // escapeLike escapes the SQLite LIKE wildcards ('%', '_') and the backslash
@@ -197,15 +204,27 @@ func escapeLike(s string) string {
 
 var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
+// jsonScopesAbove is how many scopes scopesFilterSQL ORs before it binds them
+// as two JSON lists instead (scopesJSONFilterSQL): an arm per scope passes
+// SQLite's expression depth (1000) at about a thousand scopes, and each arm's
+// paths count toward its parameter limit. Up to it, the OR form lets the
+// planner use the (library_id, rel_path) indexes per scope.
+const jsonScopesAbove = 64
+
 // scopesFilterSQL builds a WHERE fragment (plus args) restricting rows to the
 // caller's per-library scopes: libCol must equal a scope's library and pathCol
 // must be granted by that scope (via pathFilterSQL). Returns ("0", nil) when the
 // caller has no scopes (no access). Used to scope the cross-library listing
 // endpoints (progress/history) at the query layer, so LIMIT applies to accessible
-// rows and access control stays out of the transport layer.
+// rows and access control stays out of the transport layer. Above
+// jsonScopesAbove scopes it is the JSON form (scopesJSONFilterSQL), which
+// returns the same rows.
 func scopesFilterSQL(libCol, pathCol string, scopes []Scope) (string, []any) {
 	if len(scopes) == 0 {
 		return "0", nil
+	}
+	if len(scopes) > jsonScopesAbove {
+		return scopesJSONFilterSQL(libCol, pathCol, scopes)
 	}
 	var ors []string
 	var args []any
@@ -214,6 +233,48 @@ func scopesFilterSQL(libCol, pathCol string, scopes []Scope) (string, []any) {
 		ors = append(ors, "("+libCol+" = ? AND "+frag+")")
 		args = append(args, s.LibraryID)
 		args = append(args, fargs...)
+	}
+	return "(" + strings.Join(ors, " OR ") + ")", args
+}
+
+// scopesJSONFilterSQL is scopesFilterSQL's form for many scopes, at most two
+// parameters whatever their number: the whole libraries as one JSON list of
+// ids, and every path rule as one JSON list of "<library>:<path in hex>" keys,
+// which a row passes when its own path, or one of its ancestors (ancestorsCTE),
+// is a key of its library: exactly the OR form's exact-match and byte-range
+// arms (relpath.Within). Each list is an uncorrelated IN, built once per
+// statement as an index, so a row costs its depth, not the number of scopes.
+// The path is keyed by its bytes in hex, so a path that isn't valid UTF-8 rides
+// in the list as exactly itself (encoding/json would replace its bad bytes).
+// A scope with neither (no access) adds nothing.
+func scopesJSONFilterSQL(libCol, pathCol string, scopes []Scope) (string, []any) {
+	var whole []int64
+	var keys []string
+	for _, s := range scopes {
+		if s.AllowAll {
+			whole = append(whole, s.LibraryID)
+			continue
+		}
+		for _, p := range s.Paths {
+			keys = append(keys, fmt.Sprintf("%d:%X", s.LibraryID, p)) // hex(p) is upper case too
+		}
+	}
+	var ors []string
+	var args []any
+	if len(whole) > 0 {
+		js, _ := json.Marshal(whole) // ids: it can't fail
+		ors = append(ors, libCol+" IN (SELECT value FROM json_each(?))")
+		args = append(args, string(js))
+	}
+	if len(keys) > 0 {
+		js, _ := json.Marshal(keys) // ASCII strings: it can't fail
+		// hex(NULL) is '', the key of a "" rule: a NULL path is no path, as the
+		// OR form's comparisons read it.
+		ors = append(ors, "EXISTS("+ancestorsCTE(pathCol)+" SELECT 1 FROM anc WHERE p IS NOT NULL AND "+libCol+" || ':' || hex(p) IN (SELECT value FROM json_each(?)))")
+		args = append(args, string(js))
+	}
+	if len(ors) == 0 {
+		return "0", nil
 	}
 	return "(" + strings.Join(ors, " OR ") + ")", args
 }

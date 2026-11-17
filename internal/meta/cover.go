@@ -37,11 +37,16 @@ const (
 	maxConcurrentCoverFetches = 4
 )
 
+// errCoverDowngrade is a cover fetch that a redirect would take from https down
+// to plain http.
+var errCoverDowngrade = errors.New("meta: cover redirect from https to http")
+
 // newCoverClient is the HTTP client covers are fetched with. Every connection it
 // makes, a redirect's included, is checked after the name is resolved
 // (netguard's dialer Control, netguard.ErrBlockedAddress), so a public name
-// can't lead it into the server's own network. It uses no proxy: through one,
-// the check would see only the proxy's address.
+// can't lead it into the server's own network, and a redirect never goes from
+// https down to http (errCoverDowngrade). It uses no proxy: through one, the
+// check would see only the proxy's address.
 func newCoverClient(allowed func(netip.AddrPort) bool) *http.Client {
 	dialer := netguard.Dialer(allowed, 5*time.Second)
 	return &http.Client{
@@ -61,6 +66,10 @@ func newCoverClient(allowed func(netip.AddrPort) bool) *http.Client {
 			}
 			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 				return ErrCoverURL
+			}
+			// Never from https down to http (server#219).
+			if netguard.Downgrade(req, via) {
+				return errCoverDowngrade
 			}
 			return nil
 		},

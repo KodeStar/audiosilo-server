@@ -94,3 +94,33 @@ func TestDialerChecksTheDialledAddress(t *testing.T) {
 		t.Fatalf("private dial = %v", err)
 	}
 }
+
+func TestDowngrade(t *testing.T) {
+	t.Parallel()
+	req := func(u string) *http.Request {
+		r, err := http.NewRequest(http.MethodGet, u, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	for _, c := range []struct {
+		to   string
+		via  []string
+		want bool
+	}{
+		{"http://a/x", []string{"https://a/"}, true},
+		{"http://a/x", []string{"http://a/", "https://b/"}, true},
+		{"https://a/x", []string{"https://a/"}, false},
+		{"http://a/x", []string{"http://a/"}, false},
+		{"https://a/x", []string{"http://a/"}, false},
+	} {
+		var via []*http.Request
+		for _, v := range c.via {
+			via = append(via, req(v))
+		}
+		if got := Downgrade(req(c.to), via); got != c.want {
+			t.Errorf("Downgrade(%s via %v) = %v, want %v", c.to, c.via, got, c.want)
+		}
+	}
+}

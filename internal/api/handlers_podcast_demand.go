@@ -128,7 +128,7 @@ func (a *API) handlePodcastFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodPost && !ready {
 		raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
-		_, _, err = a.bridge.EnsurePodcastFetch(r.Context(), bridge.NewJob{LibraryID: &lib.ID, Path: &rel, Params: raw, Priority: 100, RequestedBy: userFrom(r.Context()).ID}, bridge.FetchOptions{Retry: true})
+		_, _, err = a.bridge.EnsurePodcastFetch(r.Context(), bridge.NewJob{LibraryID: &lib.ID, Path: &rel, Params: raw, Priority: bridge.PriorityPlaying, RequestedBy: userFrom(r.Context()).ID}, bridge.FetchOptions{Retry: true})
 		if !a.podcastQueueError(w, err) {
 			return
 		}

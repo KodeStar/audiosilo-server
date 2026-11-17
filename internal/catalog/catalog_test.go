@@ -208,6 +208,46 @@ func TestSearchFTS(t *testing.T) {
 	}
 }
 
+// Security-critical: a search by someone with more scopes than SQLite takes OR
+// arms (about a thousand) still runs, and returns the granted hits and never a
+// book outside them: a path rule's sibling, or a library with no scope.
+func TestSearchManyScopes(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib := func(name string) int64 {
+		l, err := c.CreateLibrary(ctx, Library{Name: name, Root: "/tmp/" + name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l.ID
+	}
+	whole, paths, denied := lib("Whole"), lib("Paths"), lib("Denied")
+	for _, b := range []struct {
+		lib int64
+		rel string
+	}{{whole, "a/1"}, {paths, "shared/2"}, {paths, "shared0/3"}, {paths, "hidden/4"}, {denied, "shared/5"}} {
+		upsert(t, c, &Book{LibraryID: b.lib, RelPath: b.rel, Title: "Cradle " + b.rel, Author: "Will Wight"})
+	}
+	few := []Scope{{LibraryID: whole, AllowAll: true}, {LibraryID: paths, Paths: []string{"shared"}}}
+	many := slices.Clone(few)
+	for id := int64(10_000); len(many) < 1200; id++ { // libraries with no books
+		if id%2 == 0 {
+			many = append(many, Scope{LibraryID: id, AllowAll: true})
+		} else {
+			many = append(many, Scope{LibraryID: id, Paths: []string{"shared"}})
+		}
+	}
+	for _, scopes := range [][]Scope{few, many} {
+		got, err := c.Search(ctx, "cradle", scopes, 50)
+		if err != nil {
+			t.Fatalf("%d scopes: %v", len(scopes), err)
+		}
+		rels := relPaths(got)
+		slices.Sort(rels)
+		wantPaths(t, fmt.Sprintf("search with %d scopes", len(scopes)), rels, "a/1", "shared/2")
+	}
+}
+
 func TestRecentBooksCrossLibrary(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)

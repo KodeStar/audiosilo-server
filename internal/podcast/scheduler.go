@@ -87,7 +87,7 @@ func queuePoll(ctx context.Context, d modules.Deps, r catalog.Ref) error {
 	if err != nil {
 		return err
 	}
-	_, _, err = d.Bridge.Enqueue(ctx, bridge.NewJob{Kind: bridge.KindPodcastPoll, LibraryID: &r.LibraryID, Path: &r.Path, Params: st.PollParams(), Priority: -10})
+	_, _, err = d.Bridge.Enqueue(ctx, bridge.NewJob{Kind: bridge.KindPodcastPoll, LibraryID: &r.LibraryID, Path: &r.Path, Params: st.PollParams(), Priority: bridge.PriorityScheduled})
 	if errors.Is(err, bridge.ErrLibraryNotWritable) {
 		err = d.Catalog.PodcastNotWritable(ctx, r)
 	}
@@ -123,7 +123,7 @@ func scheduleEpisodes(ctx context.Context, d modules.Deps, h *bridge.Heartbeat) 
 			added := 0
 			for _, ep := range candidates {
 				raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: show.ShowID, EpisodeID: ep.EpisodeID})
-				_, created, err := d.Bridge.EnsurePodcastFetch(ctx, bridge.NewJob{LibraryID: &show.LibraryID, Path: &ep.Path, Params: raw, Priority: -10}, bridge.FetchOptions{})
+				_, created, err := d.Bridge.EnsurePodcastFetch(ctx, bridge.NewJob{LibraryID: &show.LibraryID, Path: &ep.Path, Params: raw, Priority: bridge.PriorityScheduled}, bridge.FetchOptions{})
 				if errors.Is(err, bridge.ErrFetchCooldown) {
 					// A failure not folded yet: its backoff holds it, not a fault.
 					continue
@@ -143,7 +143,7 @@ func scheduleEpisodes(ctx context.Context, d modules.Deps, h *bridge.Heartbeat) 
 		}
 		if h.Offers(bridge.KindPodcastRetain) && show.Present && show.RetainDue && retains < 10 {
 			raw, _ := json.Marshal(bridge.RetainParams{ShowID: show.ShowID})
-			_, created, err := d.Bridge.Enqueue(ctx, bridge.NewJob{Kind: bridge.KindPodcastRetain, LibraryID: &show.LibraryID, Path: &show.Path, Params: raw, Priority: -20})
+			_, created, err := d.Bridge.Enqueue(ctx, bridge.NewJob{Kind: bridge.KindPodcastRetain, LibraryID: &show.LibraryID, Path: &show.Path, Params: raw, Priority: bridge.PriorityBulk})
 			if err != nil {
 				errs = append(errs, err)
 			} else if created {

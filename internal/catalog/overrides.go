@@ -8,11 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -99,10 +97,6 @@ const (
 	maxChapterTitle = 500
 )
 
-var (
-	publishedRE = regexp.MustCompile(`^\d{4}(-\d{2}(-\d{2})?)?$`)
-)
-
 // normalizeOverride validates value for field and returns its stored form; a
 // value that shows nothing (blankIfInvisible) is empty.
 func normalizeOverride(field, value string) (string, error) {
@@ -157,7 +151,7 @@ func normalizeOverride(field, value string) (string, error) {
 		if v == "" {
 			return "", nil
 		}
-		if !publishedRE.MatchString(v) || !validDatePrefix(v) {
+		if !metadata.ValidDate(v) {
 			return "", invalid(field, "must be YYYY, YYYY-MM or YYYY-MM-DD")
 		}
 		return v, nil
@@ -197,13 +191,6 @@ func checkText(field, v string, limit int) error {
 		return invalid(field, "contains control characters")
 	}
 	return nil
-}
-
-// validDatePrefix reports whether a YYYY[-MM[-DD]] string names a real date.
-func validDatePrefix(v string) bool {
-	layout := map[int]string{4: "2006", 7: "2006-01", 10: "2006-01-02"}[len(v)]
-	_, err := time.Parse(layout, v)
-	return err == nil
 }
 
 // bookFields is the overridable slice of a book, keyed by field name, with every

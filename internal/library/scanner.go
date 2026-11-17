@@ -1055,7 +1055,7 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 		b.CoverPath = findCover(lib.Root, bookAbs, true)
 		// A multi-CD book's art often sits in the parent (e.g. ".../Book/CD1" with
 		// the cover in ".../Book"); fall back there for disc-part subfolders.
-		if b.CoverPath == "" && isDiscFolder(filepath.Base(bookAbs)) {
+		if b.CoverPath == "" && metadata.IsDiscFolder(filepath.Base(bookAbs)) {
 			b.CoverPath = findCover(lib.Root, filepath.Dir(bookAbs), true)
 		}
 		// A folder joined from its disc folders: its own art first (above), then the
@@ -1131,32 +1131,6 @@ func chooseTitle(embedded, pathDerived string) string {
 		return embedded
 	}
 	return pathDerived
-}
-
-// isDiscFolder reports whether a folder name is a disc/part subfolder like "CD1",
-// "CD 2" or "Disc 3" - used to look one level up for a multi-CD book's cover.
-func isDiscFolder(name string) bool {
-	n := strings.NewReplacer(" ", "", "-", "", ".", "", "_", "").Replace(strings.ToLower(strings.TrimSpace(name)))
-	for _, p := range []string{"cd", "disc", "disk"} {
-		if !strings.HasPrefix(n, p) {
-			continue
-		}
-		rest := n[len(p):]
-		if rest == "" {
-			return true
-		}
-		allDigits := true
-		for _, r := range rest {
-			if r < '0' || r > '9' {
-				allDigits = false
-				break
-			}
-		}
-		if allDigits {
-			return true
-		}
-	}
-	return false
 }
 
 // imageExts are image types accepted as a fallback cover when no conventionally
@@ -2134,7 +2108,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 			if len(own) > 0 {
 				return false
 			}
-		} else if len(own) == 0 || !isDiscFolder(path.Base(dirRel)) {
+		} else if len(own) == 0 || !metadata.IsDiscFolder(path.Base(dirRel)) {
 			return false
 		}
 		dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, p), p, ignore, s.log, nil, nil, s.walkWidth())
@@ -2304,7 +2278,7 @@ func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel strin
 // name. A disc set with a `book` override would have made the joined book instead.
 func (s *Scanner) splitParentOf(ctx context.Context, lib catalog.Library, b *catalog.Book, ignore *Ignore) (string, error) {
 	parent := dirOf(b.RelPath)
-	if !b.IsFolder || parent == "" || !isDiscFolder(path.Base(b.RelPath)) {
+	if !b.IsFolder || parent == "" || !metadata.IsDiscFolder(path.Base(b.RelPath)) {
 		return "", nil
 	}
 	dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, parent), parent, ignore, s.log, nil, nil, s.walkWidth())
@@ -2565,5 +2539,5 @@ func reclassified(oldPath string, old catalog.Signature, nb *catalog.Book) bool 
 	// `book` override (which stays on the old path), it reads again as one book per
 	// disc, and its first disc is not the joined book moved (the joined timeline's
 	// positions and finish don't fit one disc).
-	return old.IsFolder && nb.IsFolder && isDiscFolder(path.Base(nb.RelPath)) && old.Size > nb.Size
+	return old.IsFolder && nb.IsFolder && metadata.IsDiscFolder(path.Base(nb.RelPath)) && old.Size > nb.Size
 }

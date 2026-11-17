@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
@@ -47,9 +48,14 @@ func seesPodcasts(ctx context.Context) bool {
 }
 
 // handleListLibraries lists libraries the caller can reach (via any share, or
-// for a household member through their owner: the member rule).
+// for a household member through their owner: the member rule). A podcasts
+// library is listed only while the podcasts module is on (server#179): turned
+// off, the player shows none, as an old client never sees one; what's in it
+// waits for the module to come back.
 func (a *API) handleListLibraries(w http.ResponseWriter, r *http.Request) {
-	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(r.Context()))
+	who := callerOf(r.Context())
+	who.Podcasts = who.Podcasts && a.moduleOn(bridge.ModulePodcasts)
+	libs, err := a.cat.CallerLibraries(r.Context(), who)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list libraries")
 		return
@@ -491,9 +497,8 @@ func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
 // scoped per-library to their share path rules.
 func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
-	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "search failed")
+	scopes, ok := a.callerScopes(w, r, "search failed")
+	if !ok {
 		return
 	}
 	write := a.cachedList(w, r, gen, cacheable, scopes)
@@ -502,7 +507,13 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	books, err := a.cat.Search(r.Context(), r.URL.Query().Get("q"), scopes, queryInt(r, "limit", 50))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "search failed")
+		// The player aborts a type-ahead search on the next keystroke: a
+		// request that gave up is no failure, so no log line.
+		if errors.Is(r.Context().Err(), context.Canceled) {
+			writeError(w, http.StatusInternalServerError, "search failed")
+			return
+		}
+		a.writeCatalogError(w, err, "search failed", "search failed", "user", userFrom(r.Context()).ID, "scopes", len(scopes))
 		return
 	}
 	write(map[string]any{"books": books})

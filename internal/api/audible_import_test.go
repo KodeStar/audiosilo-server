@@ -223,6 +223,157 @@ func TestAudibleBackupFlow(t *testing.T) {
 	}
 }
 
+// A destination in a new disc folder of an indexed book ("Author/Book/CD 3"),
+// or of a folder with a `book` override ("Saga", one disc indexed on its own
+// until a second makes the disc set it joins), is refused when it is set (400
+// invalid_dest_path): the scan would join it into that book, and the backup's
+// fold refuse it only after the download (bridge#46). Allowed: a folder of its
+// own beside the book, a disc folder under a folder that is no book, beside a
+// disc with no override (discs stay books of their own), and a file named like
+// a disc beside them.
+func TestAudibleDestPathRefusesDiscFolderOfABook(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t, title("B000000001", "One", "available", 0, ""))
+	patch := func(dest string) (int, string) {
+		t.Helper()
+		resp, out := b.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001", b.adminTok, fmt.Sprintf(`{"dest_path":%q}`, dest))
+		return resp.StatusCode, out
+	}
+	// One disc on its own is its own book: a second beside it makes a disc set,
+	// which only a `book` override on the folder joins.
+	for _, rel := range []string{"Lone/Saga/CD 1", "Solo/Saga/CD 1"} {
+		if _, err := b.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: b.lib.ID, RelPath: rel, Title: "Saga", IsFolder: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.cat.SetFolderOverride(context.Background(), b.lib.ID, "Lone/Saga", catalog.OverrideBook); err != nil {
+		t.Fatal(err)
+	}
+	for _, dest := range []string{mistbornBook + "/CD 3", mistbornBook + "/Disc2/One.m4b", cradleBook + "/cd1", "Lone/Saga/CD 2", "Lone/Saga/CD 1/One.m4b"} {
+		if code, out := patch(dest); code != http.StatusBadRequest || codeOf(out) != "invalid_dest_path" {
+			t.Errorf("dest %q: %d %s, want 400 invalid_dest_path", dest, code, out)
+		}
+		if x := b.audibleTitle(t, "B000000001"); x.DestPath != "" {
+			t.Fatalf("a refused destination was stored: %q", x.DestPath)
+		}
+	}
+	for _, dest := range []string{"Brandon Sanderson/Mistborn 2", "Brandon Sanderson/New/CD 1", "Brandon Sanderson/CD 3.m4b", "Lone/CD 1", "Solo/Saga/CD 2", ""} {
+		if code, out := patch(dest); code != http.StatusOK {
+			t.Errorf("dest %q: %d %s, want 200", dest, code, out)
+		}
+	}
+}
+
+// Deleting a person cancels the open jobs of the Audible accounts the
+// deletion took with them (bridge#46): a queued backup and a backup the Bridge
+// is running (asked to stop), with the account's reason. Denied: another
+// person's backup stays open, and so does the job of an account the deletion
+// didn't touch.
+func TestAudibleDeletePersonCancelsTheirJobs(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t, title("B000000001", "One", "available", 0, ""))
+	ctx := context.Background()
+	alex, _ := newUserWithSession(t, b.testEnv, "alex", false)
+	blair, _ := newUserWithSession(t, b.testEnv, "blair", false)
+	backup := func(account string) int64 {
+		t.Helper()
+		if code, out := b.putTitles(t, account, "p1", true, title("B000000001", "One", "available", 0, "")); code != http.StatusOK {
+			t.Fatalf("titles %s: %d %s", account, code, out)
+		}
+		resp, out := b.do(t, "POST", "/api/v1/admin/audible/titles/"+account+"/B000000001/backup", b.adminTok, "")
+		var queued struct {
+			JobID int64 `json:"job_id"`
+		}
+		decodeInto(t, out, &queued)
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("backup %s: %d %s", account, resp.StatusCode, out)
+		}
+		return queued.JobID
+	}
+	for account, user := range map[string]int64{"acct0002": alex, "acct0003": alex, "acct0004": blair} {
+		if code, out := b.putAccount(t, account, user, b.lib.ID); code != http.StatusOK {
+			t.Fatalf("put %s: %d %s", account, code, out)
+		}
+	}
+	running := backup("acct0002")
+	if j := b.claim(t, bridge.KindAudibleImport); j.ID != running {
+		t.Fatalf("claimed %d, want %d", j.ID, running)
+	}
+	queued, others, admins := backup("acct0003"), backup("acct0004"), backup(testAccount)
+	if resp, out := b.do(t, "DELETE", fmt.Sprintf("/api/v1/admin/users/%d", alex), b.adminTok, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete alex: %d %s", resp.StatusCode, out)
+	}
+	job := func(id int64) *bridge.Job {
+		t.Helper()
+		j, err := b.api.bridge.Job(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+	if j := job(queued); j.State != bridge.StateCancelled || j.Error != bridge.CancelAudibleRemoved {
+		t.Errorf("alex's queued backup: %s %q, want cancelled with the account's reason", j.State, j.Error)
+	}
+	if j := job(running); j.State != bridge.StateClaimed || !j.CancelRequested || j.Error != bridge.CancelAudibleRemoved {
+		t.Errorf("alex's running backup: %s cancel %t %q, want asked to stop", j.State, j.CancelRequested, j.Error)
+	}
+	for name, id := range map[string]int64{"blair's": others, "the admin's": admins} {
+		if j := job(id); j.State != bridge.StateQueued || j.CancelRequested {
+			t.Errorf("%s backup: %s cancel %t, want queued", name, j.State, j.CancelRequested)
+		}
+	}
+	// Again: nothing left to cancel.
+	if n, err := b.cat.CancelOrphanAudibleJobs(ctx); n != 0 || err != nil {
+		t.Fatalf("a second sweep found %d accounts, %v", n, err)
+	}
+}
+
+// An owner deleting their grown-up member (DELETE /me/household/members/{id})
+// cancels the open jobs of the Audible accounts the member's deletion took
+// with it, as an admin deleting a person does. Denied: the owner's own
+// account's backup stays open.
+func TestAudibleDeleteMemberCancelsTheirJobs(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t, title("B000000001", "One", "available", 0, ""))
+	ctx := context.Background()
+	member, _ := newUserWithSession(t, b.testEnv, "grown", false)
+	if _, err := b.db.ExecContext(ctx, `UPDATE users SET managed_by=?, member_kind='grownup', member_access='all' WHERE id=?`,
+		b.adminID, member); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := b.putAccount(t, "acct0002", member, b.lib.ID); code != http.StatusOK {
+		t.Fatalf("put: %d %s", code, out)
+	}
+	backup := func(account string) int64 {
+		t.Helper()
+		if code, out := b.putTitles(t, account, "p1", true, title("B000000001", "One", "available", 0, "")); code != http.StatusOK {
+			t.Fatalf("titles %s: %d %s", account, code, out)
+		}
+		resp, out := b.do(t, "POST", "/api/v1/admin/audible/titles/"+account+"/B000000001/backup", b.adminTok, "")
+		var queued struct {
+			JobID int64 `json:"job_id"`
+		}
+		decodeInto(t, out, &queued)
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("backup %s: %d %s", account, resp.StatusCode, out)
+		}
+		return queued.JobID
+	}
+	members, owners := backup("acct0002"), backup(testAccount)
+	if resp, out := b.do(t, "DELETE", fmt.Sprintf("/api/v1/me/household/members/%d", member), b.adminTok, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete the member: %d %s", resp.StatusCode, out)
+	}
+	for id, want := range map[int64]string{members: bridge.StateCancelled, owners: bridge.StateQueued} {
+		j, err := b.api.bridge.Job(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j.State != want {
+			t.Errorf("job %d: %s, want %s", id, j.State, want)
+		}
+	}
+}
+
 // claim takes the next job of kind as the Bridge and starts it.
 func (b *bridgeEnv) claim(t *testing.T, kind string) bridge.Job {
 	t.Helper()

@@ -239,6 +239,50 @@ func TestBridgeContributeJob(t *testing.T) {
 	}
 }
 
+// A share of a book the console matched files under that match: a contribute
+// job whose params name no work_id takes the book's recorded community work
+// (bridge#25), so the Bridge never files under its own match of the book.
+// Allowed: an explicit work_id wins. Denied: a book with no recorded match
+// gets none, the Bridge's own match as before.
+func TestBridgeContributeTakesTheRecordedMatch(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	ctx := context.Background()
+	all := []string{bridge.KindVerify, bridge.KindSidecars, bridge.KindContribute}
+	setModule(t, b.testEnv, b.adminTok, true)
+	b.beatKinds(t, `,"setup":`+setupBlock(true), all...)
+	if err := b.cat.EditBook(ctx, b.lib.ID, mistbornBook, catalog.BookEdit{
+		Match: &catalog.MatchAnchor{WorkID: "the-final-empire"}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	queue := func(path, params string) string {
+		t.Helper()
+		resp, body := b.queueKind(t, bridge.KindContribute, path, params)
+		var job bridge.Job
+		decodeInto(t, body, &job)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("queue %s %s: %d %s", path, params, resp.StatusCode, body)
+		}
+		if _, err := b.api.bridge.Cancel(ctx, job.ID); err != nil {
+			t.Fatal(err)
+		}
+		return string(job.Params)
+	}
+	if got := queue(mistbornBook, `{"dimensions":["recaps"]}`); got != `{"work_id":"the-final-empire","dimensions":["recaps"]}` {
+		t.Errorf("matched book, no work_id: params %s", got)
+	}
+	if got := queue(mistbornBook, `{}`); got != `{"work_id":"the-final-empire","dimensions":["characters","recaps"]}` {
+		t.Errorf("matched book, empty params: params %s", got)
+	}
+	if got := queue(mistbornBook, `{"work_id":"chosen"}`); got != `{"work_id":"chosen","dimensions":["characters","recaps"]}` {
+		t.Errorf("an explicit work_id: params %s", got)
+	}
+	if got := queue(cradleBook, `{}`); got != `{"dimensions":["characters","recaps"]}` {
+		t.Errorf("unmatched book: params %s", got)
+	}
+}
+
 // A queued contribute job held while the contributions module is off gives
 // way: the estimate's open_job no longer names it, and a generate job is
 // queued (201) and cancels it; with the module on it refuses (409

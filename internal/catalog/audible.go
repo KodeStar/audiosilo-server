@@ -338,13 +338,7 @@ func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAc
 // again. removed says whether there was one.
 func (c *Catalog) DeleteAudibleAccount(ctx context.Context, id string) (removed bool, err error) {
 	err = c.db.WithTx(ctx, "DeleteAudibleAccount", func(tx *sql.Tx) error {
-		if err := bridge.CancelAudiblePolls(ctx, tx, id, bridge.CancelAudibleRemoved, c.now()); err != nil {
-			return err
-		}
-		if err := bridge.CancelAudibleImports(ctx, tx, id, bridge.CancelAudibleRemoved, c.now()); err != nil {
-			return err
-		}
-		if err := bridge.CancelAudibleSyncs(ctx, tx, id, bridge.CancelAudibleRemoved, c.now()); err != nil {
+		if err := cancelAudibleJobs(ctx, tx, id, c.now()); err != nil {
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM audible_accounts WHERE account = ?`, id)
@@ -356,6 +350,46 @@ func (c *Catalog) DeleteAudibleAccount(ctx context.Context, id string) (removed 
 		return err
 	})
 	return removed, err
+}
+
+// cancelAudibleJobs cancels account's open poll, backups and sync inside tx
+// (bridge.CancelAudibleRemoved): the account is gone, or going.
+func cancelAudibleJobs(ctx context.Context, tx *sql.Tx, account string, now time.Time) error {
+	if err := bridge.CancelAudiblePolls(ctx, tx, account, bridge.CancelAudibleRemoved, now); err != nil {
+		return err
+	}
+	if err := bridge.CancelAudibleImports(ctx, tx, account, bridge.CancelAudibleRemoved, now); err != nil {
+		return err
+	}
+	return bridge.CancelAudibleSyncs(ctx, tx, account, bridge.CancelAudibleRemoved, now)
+}
+
+// CancelOrphanAudibleJobs cancels the open Audible jobs (poll, backups, sync)
+// of every account that is no longer there: deleting a person drops their
+// accounts by the schema's cascade (auth.DeleteUser, which can't reach the job
+// queue), and their jobs would otherwise stay open, a backup downloading for
+// nobody. It returns how many accounts it found with a job not yet asked to
+// stop; none is no change, so it is safe to call again.
+func (c *Catalog) CancelOrphanAudibleJobs(ctx context.Context) (int, error) {
+	var gone []string
+	err := c.db.WithTx(ctx, "CancelOrphanAudibleJobs", func(tx *sql.Tx) error {
+		var err error
+		gone, err = queryRows(ctx, tx, func(rows *sql.Rows, account *string) error { return rows.Scan(account) },
+			`SELECT DISTINCT json_extract(params, '$.account') FROM bridge_jobs
+			  WHERE kind IN (?, ?, ?) AND state IN `+bridge.OpenStatesSQL+` AND cancel_requested = 0
+			    AND json_extract(params, '$.account') NOT IN (SELECT account FROM audible_accounts)`,
+			bridge.KindAudiblePoll, bridge.KindAudibleImport, bridge.KindAudibleSync)
+		if err != nil {
+			return err
+		}
+		for _, account := range gone {
+			if err := cancelAudibleJobs(ctx, tx, account, c.now()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return len(gone), err
 }
 
 // AudibleAccount returns account id, ErrUnknownAccount when there is none.

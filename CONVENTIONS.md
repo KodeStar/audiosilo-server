@@ -1298,7 +1298,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   drives it. `GET /fs` annotates each entry's effective `override`.
   **Joined books (`library/joined.go`)**: `book` joins only a **disc set** (`discSets`): a
   folder below the root with no audio of its own whose every folder holding audio beneath
-  it is a disc folder (`isDiscFolder`: cd/disc/disk + number) **directly** in it, at least
+  it is a disc folder (`metadata.IsDiscFolder`: cd/disc/disk + number) **directly** in it, at least
   two (`minDiscs`; one disc already reads as one book). A CD rip (`Book/CD1`, `Book/CD2`,
   ...) becomes ONE book of its discs' audio (hidden/ignore rules applied), with no books for
   the discs. Any other folder keeps `book`'s old meaning (its own files; without any, a
@@ -2912,7 +2912,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   lapsed lease requeued included); a job the Bridge holds (claimed, running or parked) carries on.
   `sidecars.contribute` (family `sidecars`; "Share with the community" after a local run: the Bridge files
   what its engine book holds): a book `path`, params strict `{work_id?, dimensions?}` (`dimensions` from
-  `characters`, `recaps`, each once, stored in that order; absent or empty = both); refused 409
+  `characters`, `recaps`, each once, stored in that order; absent or empty = both; no `work_id` takes the
+  book's recorded community match, `bridge.ContributeWork`, so the share files under the admin's match and
+  not the Bridge's own, bridge#25); refused 409
   `generate_open` while a `sidecars.generate` job is open for the book; a NEW generate job is refused 409
   `contribute_open` (`ErrContributeOpen`) while a contribute job is queued or working, and cancels a parked
   one ("replaced what it was sharing"); while `contributions` is off a queued (held) one gives way like a
@@ -2935,7 +2937,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   trailing `&#32;` is refused too; its issueform's `formValue`: an HTML character reference ending in
   `;` is the character it names, a whitespace one a space, so `&#x202E;` is refused as U+202E is); a
   `corrected` that so read and trimmed (`asRead`) is empty or `current` (the record's value as it
-  spells it) changes nothing; evidence left as `_No response_`, the form's blank, or reading as nothing
+  spells it) changes nothing; a corrected `published` must be a real date, `YYYY`, `YYYY-MM` or
+  `YYYY-MM-DD` (`metadata.ValidDate`, the edit's own rule; the Bridge files it as `release_date`);
+  evidence left as `_No response_`, the form's blank, or reading as nothing
   is none), the values stored as sent: what the Bridge or the community would refuse when filing is a
   400 now). Its params cap is its own, 128 KiB (`kindSpec.maxParams`, every other kind 16 KiB as sent): a batch at every bound
   sent by an ASCII-only encoder (each character outside the BMP two `\u` escapes) is about 120 KB, and
@@ -3002,7 +3006,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   The catalog applies this gate before admin shortcuts, on single and multiple library scopes
   and library lists. The console's views of another person (user detail, a progress edit) take
   that person's access under the viewing request's gate. Background callers and cast tokens keep
-  it false. Private shows then narrow
+  it false. `GET /libraries` also lists no podcasts library while the podcasts module is off
+  (`handleListLibraries`, server#179); the other routes keep the client gate alone. Private shows then narrow
   every player's scope, including admins, to shows they follow. A follow records the feed.json
   `show_id`, so a different show reusing the same path requires fresh proof. A granted library
   with no visible shows still serves empty lists; content paths remain denied. Knowing a feed URL proves access
@@ -3148,7 +3153,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   queued nor counted (`FollowURL.SkipRecentFailure`, `bridge.RecentSubscribeFailure`); a failure that
   isn't the feed's (`notFeedFailures`: an expired private request, a lost lease, the library or the
   Bridge's storage) never counts, and the single follow always retries. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
-  `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1; a busy import is answered before its body is read (`Slots.Busy`) and refunds its token, so the retry runs). The export (`catalog.PodcastExport`: current
+  `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1; a busy import is answered before its body is read (`Slots.Busy`) and refunds its token, so the retry runs; so does a 400 `invalid_opml`, server#219, but not a 413 or an upload whose read failed). The export (`catalog.PodcastExport`: current
   scopes and private narrowing, follows matching the show id, <= 10,000 rows else 413
   `opml_export_limit`; `podcast.BuildExport`; `opml.Render`, <= 4 MiB) never writes a private show,
   dedupes public URLs (lowest library then path) and counts omissions in `X-OPML-*` headers. For an
@@ -3204,7 +3209,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **Audible accounts (BRIDGE-PLAN.md Phase 4a, module `audible`, `catalog/audible.go`, `internal/audible`,
   `bridge/audible.go`, `api/handlers_audible.go`)**: the Bridge signs in to Audible and holds every credential; the
   server only keeps what it reports. `0063`: `audible_accounts` (`account` = the Bridge's id
-  `^[a-z0-9]{8,32}$`, label, marketplace = one of `config.Regions`, `user_id` -> users CASCADE, `library_id` ->
+  `^[a-z0-9]{8,32}$`, label, marketplace = one of `config.Regions`, `user_id` -> users CASCADE (deleting a
+  person, or an owner their member, then cancels the gone accounts' open poll, backups and sync,
+  `catalog.CancelOrphanAudibleJobs`, bridge#46), `library_id` ->
   libraries SET NULL, policy `all`|`series`|`manual`, sync, `poll_hours` default 6, `last_poll_at`,
   `last_queued_at`) and `audible_titles` (account CASCADE + asin; title, authors/series JSON, release_date,
   runtime_s, state `available`|`preorder`|`unavailable`|`gone`, reason, the match `match_library_id` /
@@ -3277,7 +3284,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   gated by `ModuleFor`; params `{account, asin, library_id, dest_path, template}` (strict here, read leniently
   by the Bridge; `dest_path` is the title's library-relative file path, or a folder for it when the last
   segment has no audio extension (a template's too), or `''`, `CheckAudibleDestPath`; library and template
-  are the account's at queue time), the row's `library_id` set, deduped per `|account|asin`. Priorities: a console Back up 0
+  are the account's at queue time), the row's `library_id` set, deduped per `|account|asin`. Priorities (`bridge`'s bands, `priority.go`): a console Back up 0
   (a preorder's pending request too, when a poll queues it, with no requester), a policy -10 with no
   requester (as the podcast scheduler's fetches), Back up everything -20 (below new episodes: a bulk backup
   in the Bridge's one download slot never holds them back). `SetAudibleImport` records the job on the title
@@ -3315,7 +3322,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`{queued}`: `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, the
   latest import not a `done` one whose book is still indexed (a refused fold, `ErrImportNotOwn`, isn't
   queued again; a done one whose book left the library is), a failed or cancelled one again; a console Back up of one contested or done title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
-  `invalid_dest_path`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
+  `invalid_dest_path`, also for a disc folder ("CD 3") directly inside an indexed book or a folder with a
+  `book` override, which the scan would join into it: `checkDestOwnFolder`, `metadata.IsDiscFolder`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
   `invalid_policy` / `invalid_template`), audited: a queued Back up `bridge.job` (kind `audible.import`; also
   when recording it on the title failed), a pending one `bridge.audible.backup`, then `bridge.audible.backup_all`
   / `title` / `account` (the audit guard reads `moduleRoutes.Admin` routes too). The
@@ -3474,10 +3482,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Bridge's internet is down) need six (`catalog.NetworkFailingAfter`), and a mixed run is announced
   once the two shares add up to one (`feedRun.due`: two answers and two timeouts, say);
   `feed_secret_missing` is announced at once without counting; another failure (`bridge_lost`, an
-  unwritable library) neither counts nor resets; a successful poll resets the run and, after an
+  unwritable library) neither counts nor resets; a follower's Check now (a poll with a requester) counts
+  nothing toward the run and leaves the scheduled polls' backoff as it was (`uncountedCheck`; a later
+  Retry-After still holds them off), server#403, though its `gone` is still announced at once; a successful poll resets the run and, after an
   announcement, raises recovered once; a job for a replaced show changes nothing). Their
   data are the library and its id, `show_id`, `show` (the title, else its folder), `show_path`, `count`
-  and `titles`, or `code` (one the messages word or an `http_NNN` status, else `failed`) and `failures`
+  and `titles`, or `code` (one the messages word, `http_310` the Bridge's redirect loop among them, or an
+  `http_NNN` status, else `failed`) and `failures`
   (0 for a lost secret): never the error's text, the feed URL or its host. A private show is hidden from
   admins who don't follow it, so its notices carry `private: true` instead of `show`, `show_path` and
   the episode titles (`PodcastNotice.Private`): "A private podcast has 2 new episodes", "A private
@@ -4029,8 +4040,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rule bar the 15 min, an online Bridge offering the kind; a title change queues even an empty title list, so the
   Bridge drops a left-out title now; a sync the Bridge already runs keeps its titles). Ended (`OnEnded`, `FoldAudibleSync`): a sync that read Audible's places sets
   `last_sync_at` (`bridge.AudibleSynced`: done, its result neither `waiting` nor `sync_off`, the Bridge's result
-  fields, hand-mirrored); failed with code `audible_refused` (result `code`, or an `audible_refused:` error prefix,
-  `AudibleSyncCode`; `audible_sign_in`, `bridge.SyncAudibleSignIn`, the Bridge's transient sign-in refusal, never an
+  fields, hand-mirrored); a sync or a poll (bridge#40: the console's accounts card then asks for a sign-in on
+  the Bridge instead of showing it checked) failed with code `audible_refused` (result `code`, or an `audible_refused:` error prefix,
+  `AudibleRefusalCode`; `audible_sign_in`, `bridge.SyncAudibleSignIn`, the Bridge's transient sign-in refusal, never an
   import's, is an ordinary failure) sets `refused_at`, cleared by any account PUT of the Bridge's (a fresh sign-in, an edit) or a
   complete poll (`PutAudibleTitles` final: Audible answered the account), both stamping `refusal_ended_at` (`0071`):
   a refused sync claimed in an earlier second than that (`refusalEndedSince`; `claimed_at` is whole seconds, so one

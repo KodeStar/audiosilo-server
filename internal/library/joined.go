@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // Joined books. A book ripped from CDs often sits in disc folders
@@ -22,7 +23,7 @@ import (
 // carries the disc books' state onto the joined book (carryJoinedState).
 //
 // Only a disc set joins (discSets): a folder with no audio of its own whose every
-// folder holding audio beneath it is a disc folder (isDiscFolder: "CD1", "Disc 2")
+// folder holding audio beneath it is a disc folder (metadata.IsDiscFolder: "CD1", "Disc 2")
 // directly in it, at least two. Any other folder keeps what `book` meant before
 // joining existed (its own files are the book; without any, it reads as nothing),
 // so an override set back then, when the detection dialog offered `book` on any
@@ -48,7 +49,7 @@ func discSets(folders iter.Seq[string]) map[string]bool {
 	other := map[string]bool{} // folders holding audio, or audio deeper down, that isn't a disc of theirs
 	for f := range folders {
 		parent := dirOf(f)
-		disc := isDiscFolder(path.Base(f))
+		disc := metadata.IsDiscFolder(path.Base(f))
 		for a := f; a != ""; a = dirOf(a) {
 			if a == parent && disc {
 				discs[a]++
@@ -165,7 +166,7 @@ func (s *Scanner) splitFrom(ctx context.Context, lib catalog.Library, books []*c
 			disc = dirOf(b.RelPath)
 		}
 		root := dirOf(disc)
-		if root == "" || !isDiscFolder(path.Base(disc)) || found[root] || !sigs[root].IsFolder {
+		if root == "" || !metadata.IsDiscFolder(path.Base(disc)) || found[root] || !sigs[root].IsFolder {
 			continue
 		}
 		if _, moved := moves[root]; moved {

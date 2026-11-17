@@ -361,11 +361,9 @@ func (a *API) SetBaseContext(ctx context.Context) {
 		a.prefetch.Context = ctx
 	}
 	if a.discovery != nil {
-		// Shutdown ends the directory and artwork fetches in flight.
-		go func() {
-			<-ctx.Done()
-			a.discovery.Reset()
-		}()
+		// Shutdown ends the directory and artwork fetches in flight, and
+		// starts none.
+		a.discovery.Bind(ctx)
 	}
 }
 

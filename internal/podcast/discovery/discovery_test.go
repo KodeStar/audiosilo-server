@@ -656,6 +656,45 @@ func TestCancellationAndReset(t *testing.T) {
 	}
 }
 
+// Bound to the server's life (Bind, server#219): its end ends a fetch in
+// flight (module_off, nothing published) and starts no search after, without
+// a Reset of its own (artwork needs a search's registry, which the end
+// empties).
+func TestBindEndsWithTheServer(t *testing.T) {
+	f := newFake(t)
+	c := &clock{t: time.Unix(1700000000, 0)}
+	s := newTestService(t, f, c, nil)
+	life, stop := context.WithCancel(context.Background())
+	s.Bind(life)
+	f.setRoute(func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/itunes/search" {
+			return false
+		}
+		<-r.Context().Done()
+		return true
+	})
+	done := make(chan *Error)
+	go func() { _, e := s.Search(context.Background(), "1", query(t, "q=stopping")); done <- e }()
+	waitFor(t, func() bool { return f.count("/itunes/search") == 1 })
+	stop()
+	select {
+	case e := <-done:
+		if e != ErrModuleOff {
+			t.Fatalf("in flight at the end = %v, want module_off", e)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server's end did not end the fetch")
+	}
+	f.setRoute(nil)
+	c.Add(time.Minute)
+	if _, e := s.Search(context.Background(), "2", query(t, "q=fixture")); e != ErrModuleOff {
+		t.Fatalf("after the end = %v, want module_off", e)
+	}
+	if n := f.count("/itunes/search"); n != 1 {
+		t.Fatalf("a search after the end reached the provider (%d requests)", n)
+	}
+}
+
 // The per-user map holds 4,096 active buckets: a new user past that is busy,
 // never evicting an active budget.
 func TestUserMapFull(t *testing.T) {

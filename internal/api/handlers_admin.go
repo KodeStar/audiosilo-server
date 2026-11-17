@@ -334,6 +334,7 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 // only those members go and every other is kept, so a member added after the
 // console read the list is never deleted unseen (server#222; an id that isn't
 // one of theirs, or one keep_members names, is 400 invalid_delete_members).
+// Their Audible accounts go too, and those accounts' open jobs are cancelled.
 // Two guards: an admin cannot delete their
 // own account (disable it instead - prevents self-lockout and fat-finger loss),
 // and auth.DeleteUser refuses the last enabled admin (ErrLastAdmin → 409).
@@ -376,6 +377,13 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.writeUserError(w, err, "could not delete user")
 		return
+	}
+	// Their Audible accounts went with them (and their deleted members'): end
+	// those accounts' open jobs too (bridge#46). The person is deleted
+	// whatever this says; a failure leaves the jobs to fail at the Bridge
+	// (unknown_account). Committed, it runs even if the console hung up.
+	if _, err := a.cat.CancelOrphanAudibleJobs(context.WithoutCancel(r.Context())); err != nil {
+		a.log.Warn("cancel a deleted person's audible jobs failed", "user", id, "err", err)
 	}
 	// The household facts only for someone who had members (no "0 deleted,
 	// none kept" on every other deletion).

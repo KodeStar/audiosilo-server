@@ -189,7 +189,7 @@ func (p *Prefetcher) reconsider(who catalog.Caller, initial bool) {
 			return
 		}
 		raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
-		_, _, err = p.Bridge.EnsurePodcastFetch(ctx, bridge.NewJob{LibraryID: &next.LibraryID, Path: &next.Path, Params: raw, Priority: 10, RequestedBy: who.ID}, bridge.FetchOptions{})
+		_, _, err = p.Bridge.EnsurePodcastFetch(ctx, bridge.NewJob{LibraryID: &next.LibraryID, Path: &next.Path, Params: raw, Priority: bridge.PriorityListener, RequestedBy: who.ID}, bridge.FetchOptions{})
 		chosen = err == nil
 	}()
 }

@@ -97,8 +97,11 @@ func (r feedRun) due() bool {
 // recovered; the feed's own failure counts, announced once the run is due or,
 // for `gone`, at once; a lost private-feed secret is announced at once without
 // counting; any other failure (the Bridge's, the library's) leaves the run as
-// it was.
-func (r feedRun) next(state, code string) (feedRun, string) {
+// it was. Only a scheduled poll's failure counts (scheduled): a follower's
+// Check now, once a minute, would otherwise announce a feed failing in three
+// minutes (server#403); its `gone` and lost secret are still announced at once,
+// since polling stops on them.
+func (r feedRun) next(state, code string, scheduled bool) (feedRun, string) {
 	switch {
 	case state == bridge.StateDone:
 		if r.announced {
@@ -113,6 +116,8 @@ func (r feedRun) next(state, code string) (feedRun, string) {
 		}
 		r.announced = true
 		return r, PodcastFeedFailing
+	case uncountedCheck(code, scheduled):
+		return r, ""
 	case bridge.FeedFailure(code):
 		r.failures++
 		if bridge.NetworkFailure(code) {
@@ -125,4 +130,12 @@ func (r feedRun) next(state, code string) (feedRun, string) {
 		return r, PodcastFeedFailing
 	}
 	return r, ""
+}
+
+// uncountedCheck reports whether a failed poll with code is a follower's Check
+// now (not scheduled) of a feed failing by its own fault: the run doesn't count
+// it, and it leaves the scheduled polls' backoff alone (FoldPodcastJob). `gone`
+// always counts: polling stops on it.
+func uncountedCheck(code string, scheduled bool) bool {
+	return bridge.FeedFailure(code) && !scheduled && code != "gone"
 }
