@@ -613,7 +613,9 @@ func (s *Service) MemberPairing(ctx context.Context, owner, id int64, ttl time.D
 // MemberDevices lists owner's member id's live sessions and API keys, as the
 // owner sees them: a grown-up's without their addresses (LastIP "", server#190),
 // a kid's with them. The member and their devices are read in one snapshot, so
-// a switch to grown-up never leaves the addresses of a later read showing.
+// a switch to grown-up never leaves the addresses of a later read showing; a
+// switch to kid forgets the addresses recorded before it (clearKidCredentials),
+// so it never shows a grown-up's either.
 func (s *Service) MemberDevices(ctx context.Context, owner, id int64) ([]Device, error) {
 	var devices []Device
 	err := s.db.WithReadTx(ctx, func(tx *sql.Tx) error {
@@ -760,11 +762,15 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 // owner (managed_by, already the new owner when the admin assigns), both ways: a
 // kid is shared with only by their owner and shares with nobody else (catalog's
 // kidOnlyToOwnerSQL, ShareTargets), so a sharer is never left with a kid in the
-// list they are shown that the server would refuse back.
+// list they are shown that the server would refuse back. The devices that stay
+// signed in forget their last address: it was recorded while the person was a
+// grown-up or independent, which their owner never sees (MemberDevices,
+// server#190); the next request records a kid's again.
 func clearKidCredentials(ctx context.Context, tx *sql.Tx, id int64, now string) error {
 	for _, q := range []string{
 		`UPDATE users SET password_hash = '' WHERE id = ?1`,
 		`UPDATE tokens SET revoked = 1 WHERE user_id = ?1 AND (kind = '` + KindAPI + `' OR kind IN ` + singleUseKindsSQL + `) AND revoked = 0`,
+		`UPDATE tokens SET last_ip = '' WHERE user_id = ?1 AND last_ip <> ''`,
 		deleteFeedTokensSQL,
 		`DELETE FROM auth_codes WHERE user_id = ?1 AND kind = '` + CodeRecovery + `'`,
 		`DELETE FROM household_sharing WHERE user_id = ?1`,

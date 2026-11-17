@@ -686,14 +686,20 @@ func TestMemberDevicesHideAGrownupsAddress(t *testing.T) {
 	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
 	evie := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll})
 	gwen := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Gwen", Kind: MemberGrownup, Access: MemberAll})
+	tokens := map[int64]string{}
+	request := func(id int64, ip string) {
+		t.Helper()
+		if _, _, err := s.ResolveRequest(ctx, tokens[id], Presence{IP: ip}, KindSession); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, m := range []Member{evie, gwen} {
 		tok, err := s.IssueToken(ctx, m.ID, KindSession, "tablet", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := s.ResolveRequest(ctx, tok, Presence{IP: "192.0.2.9"}, KindSession); err != nil {
-			t.Fatal(err)
-		}
+		tokens[m.ID] = tok
+		request(m.ID, "192.0.2.9")
 	}
 	lastIP := func(id int64) string {
 		t.Helper()
@@ -719,5 +725,18 @@ func TestMemberDevicesHideAGrownupsAddress(t *testing.T) {
 	// The member's own list still shows them their addresses.
 	if d, err := s.ListDevices(ctx, gwen.ID); err != nil || len(d) != 1 || d[0].LastIP != "192.0.2.9" {
 		t.Errorf("the grown-up's own devices = %+v, %v", d, err)
+	}
+	// Switching the grown-up to a kid never reveals the address recorded while
+	// they were a grown-up; the kid's next request records one the owner sees.
+	kid := MemberKid
+	if _, _, err := s.UpdateMember(ctx, adam.ID, gwen.ID, MemberUpdate{Kind: &kid}); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastIP(gwen.ID); got != "" {
+		t.Errorf("grown-up's address after the switch to kid = %q, want it forgotten", got)
+	}
+	request(gwen.ID, "192.0.2.10")
+	if got := lastIP(gwen.ID); got != "192.0.2.10" {
+		t.Errorf("the kid's new address = %q, want it shown", got)
 	}
 }

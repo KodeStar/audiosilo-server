@@ -965,6 +965,43 @@ func TestMembers_SignInsReachTheFeed(t *testing.T) {
 	}
 }
 
+// GET {id}/devices (server#190): the owner sees a kid's device addresses
+// (allowed) but never a grown-up member's (denied); the grown-up's own device
+// list still shows them theirs.
+func TestMembers_DeviceAddresses(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	evie, evieTok := m.kid(t, m.adamTok, "Evie")
+	ellis, ellisTok := m.grownup(t, m.adamTok, "Ellis", "all")
+	for _, tok := range []string{evieTok, ellisTok} {
+		if s := m.status(t, "GET", "/api/v1/me", tok, ""); s != http.StatusOK {
+			t.Fatalf("member request = %d", s)
+		}
+	}
+	addresses := func(id int64) []string {
+		t.Helper()
+		resp, b := m.do(t, "GET", memberURL(id, "devices"), m.adamTok, "")
+		var got []myDevice
+		if err := json.Unmarshal([]byte(b), &got); err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("devices of %d = %d %s", id, resp.StatusCode, b)
+		}
+		out := []string{}
+		for _, d := range got {
+			out = append(out, d.LastIP)
+		}
+		return out
+	}
+	if got := addresses(evie.ID); len(got) != 1 || got[0] == "" {
+		t.Errorf("kid's addresses = %q, want one shown", got)
+	}
+	if got := addresses(ellis.ID); len(got) != 1 || got[0] != "" {
+		t.Errorf("grown-up's addresses = %q, want one hidden", got)
+	}
+	if own, _ := myDevicesOf(t, m.testEnv, ellisTok); len(own) != 1 || own[0].LastIP == "" {
+		t.Errorf("the grown-up's own devices = %+v, want their address", own)
+	}
+}
+
 // Visibility: adam sees evie in his share targets and can share with her; ellis
 // appears like any account. Bob doesn't see evie and can't share with her by id;
 // evie never appears in household listening and can't read it.

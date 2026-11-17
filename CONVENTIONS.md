@@ -2684,7 +2684,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `POST {id}/session` (201 envelope), `POST {id}/pair` (unlinked, single use, 10 min; both 409
   `member_disabled` for a member the admin disabled, whose tokens would never work), `GET
   {id}/devices` (a bare `[MyDevice]`; a grown-up's `last_ip` is `""`, a kid's shown: `auth.MemberDevices`
-  reads the member after the devices, server#190), `DELETE {id}/devices/{device_id}`, `PATCH {id} {name?, kind?,
+  reads the member and the devices in one snapshot, and a switch to kid forgets the addresses recorded before
+  it, server#190), `DELETE {id}/devices/{device_id}`, `PATCH {id} {name?, kind?,
   access?, collection_ids?}` (`{}` 400), `DELETE {id}`. Only adding checks the switches (the server's
   `household.members_enabled`, the person's `can_add_members`) and the cap (`household.max_members`,
   1-50, default 6); the other routes keep working on existing members. `collection_ids` is the full set

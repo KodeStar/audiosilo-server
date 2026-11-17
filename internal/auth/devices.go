@@ -90,10 +90,13 @@ func (s *Service) ListDevices(ctx context.Context, userID int64) ([]Device, erro
 	return s.listDevices(ctx, s.db, userID)
 }
 
-// listDevices is ListDevices read through q (a read transaction's snapshot).
-func (s *Service) listDevices(ctx context.Context, q interface {
+// rowsQuerier is satisfied by *store.DB (its reader) and *sql.Tx.
+type rowsQuerier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-}, userID int64) ([]Device, error) {
+}
+
+// listDevices is ListDevices read through q (a read transaction's snapshot).
+func (s *Service) listDevices(ctx context.Context, q rowsQuerier, userID int64) ([]Device, error) {
 	rows, err := q.QueryContext(ctx,
 		`SELECT t.id, t.user_id, u.username, t.kind, t.device_name, t.client_app, t.client_version,
 		        t.client_platform, t.created_at, t.last_seen, t.last_ip, t.expires_at
