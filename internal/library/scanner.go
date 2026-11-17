@@ -2559,7 +2559,7 @@ func (s *Scanner) stopped() bool {
 // the next request to read the book again from scratch (server#211), or a
 // moved book's state on a path with no row.
 func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *catalog.Book, f *indexFlight, from func(context.Context) (string, error)) {
-	err := errIndexAborted // until indexBookFrom returns
+	err := errIndexAborted // until from and indexBookFrom return
 	defer func() {
 		if p := recover(); p != nil {
 			s.log.Error("index book panicked", "library", lib.Name, "path", book.RelPath, "panic", p, "stack", string(debug.Stack()))
@@ -2576,6 +2576,12 @@ func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *cata
 	var old string
 	if old, err = from(ctx); err == nil {
 		err = s.indexBookFrom(ctx, lib, book, old)
+	} else if ctx.Err() != nil {
+		// from's look ended with the read (the server's stop, indexTimeout), not
+		// a share's answer: a read given up (readGivenUp), as indexBook's is, so
+		// a waiter hears ErrStopping or reads again rather than a 503
+		// share_not_answering.
+		err = fmt.Errorf("%w: %w", ctx.Err(), err)
 	}
 	if err != nil && !s.stopped() {
 		s.log.Warn("index book failed", "library", lib.Name, "path", book.RelPath, "err", err)
