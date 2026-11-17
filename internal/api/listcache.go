@@ -58,7 +58,7 @@ type listCache struct {
 type listEntry struct {
 	key  [sha256.Size]byte
 	body []byte
-	gz   []byte // body gzipped (gzipBytes), nil below gzipMinSize
+	gz   []byte // body gzipped (spa.Gzip), nil below gzipMinSize or when gzip saves nothing
 }
 
 func newListCache() *listCache {
