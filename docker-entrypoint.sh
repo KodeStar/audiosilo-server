@@ -167,15 +167,17 @@ nested_mounts() {
 # points at (chown -h) and never a folder mounted inside it or anything under one
 # (server#382): a backups share at /data/backups, another app's files. -xdev alone
 # misses those: a volume or a bind mount from the same host disk has the same
-# device number, so each folder mount point is pruned by name too (a glob, so its
-# pattern characters escaped). A file mounted there (a config.yaml) is no folder
-# and is chowned, as it always was. What already belongs to $RUN_AS is left
-# alone, so a start writes nothing to a data folder that is already right.
+# device number, so each mount point is pruned by name too (a glob, so its
+# pattern characters escaped) unless it is a regular file: a file mounted there
+# (a config.yaml) is chowned, as it always was, while a socket or device node
+# mounted there (a docker.sock) is never chowned on the host. What already
+# belongs to $RUN_AS is left alone, so a start writes nothing to a data folder
+# that is already right.
 chown_data() {
   set -- "$DATA" -xdev
   while IFS= read -r m; do
     [ -n "$m" ] || continue
-    set -- "$@" -path "$(printf '%s' "$m" | sed 's/[][*?\\]/\\&/g')" -type d -prune -o
+    set -- "$@" -path "$(printf '%s' "$m" | sed 's/[][*?\\]/\\&/g')" ! -type f -prune -o
   done <<EOF
 $(nested_mounts)
 EOF

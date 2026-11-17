@@ -1,7 +1,7 @@
 #!/bin/sh
 # Exercises docker-entrypoint.sh on the image's base (Alpine with su-exec), as
 # root and as a --user, against folders the server's user can and can't use
-# (server#368), with folders and a file mounted inside the data folder (server#382) and
+# (server#368), with folders, a file and device nodes mounted inside the data folder (server#382) and
 # read-only mounts (server#383). Needs Docker and network access for `apk add su-exec`. Run from
 # the repository root:
 #
@@ -215,6 +215,21 @@ out=$(docker run --rm --privileged -v "$EP:/usr/local/bin/docker-entrypoint.sh:r
 expect "file mounted in the data folder is chowned" "$out" \
   "^listen: :8080$" "ran as 1000:1000" "^/data/config.yaml 1000:1000 600$" \
   "^/data/backups 1026:100 " "^/data/backups/theirs.db 1026:100 " "!WARNING"
+
+# 14. A device node or a pipe mounted inside the data folder (a docker.sock, a
+#     /dev/null) is no regular file: it keeps its owner, so a start never chowns
+#     a host socket or device, while case 13's file is still chowned and its
+#     folder still keeps its owner.
+DEVM=$(vol devm 0:0 755)
+out=$(docker run --rm --privileged -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" -v "$DEVM:/data" "$RUN_ID" sh -c '
+  mkdir -p /src /data/backups && touch /data/config.yaml /data/null /data/pipe && mount -t tmpfs tmpfs /src &&
+    mkdir /src/backups && touch /src/config.yaml && mknod /src/null c 1 3 && mkfifo /src/pipe &&
+    chown -R 1026:100 /src && mount --bind /src/config.yaml /data/config.yaml &&
+    mount --bind /src/backups /data/backups && mount --bind /src/null /data/null && mount --bind /src/pipe /data/pipe &&
+    sh /usr/local/bin/docker-entrypoint.sh sh -c "stat -c \"%n %u:%g %F\" /data/config.yaml /data/backups /data/null /data/pipe" --data /data' 2>&1 || true)
+expect "device and pipe mounted in the data folder keep their owner" "$out" \
+  "^/data/config.yaml 1000:1000 regular" "^/data/backups 1026:100 directory$" \
+  "^/data/null 1026:100 character special" "^/data/pipe 1026:100 fifo" "!WARNING"
 
 [ "$FAILS" -eq 0 ] || { echo "$FAILS failed"; exit 1; }
 echo "all passed"
