@@ -133,10 +133,9 @@ func (c *Catalog) SaveASINChecks(ctx context.Context, checks []ASINCheck, at str
 
 // ClearUnknownASIN records that a lookup found asin (normalized, as the report
 // stores it) known, when the report holds it as unknown: the book leaves Health's
-// unknown_asin list now (server#392), and the report sends it no more. The row's
-// sent_at goes, as SaveASINChecks forgets it for a known ASIN. Nothing is written
-// for an ASIN the report doesn't hold as unknown (the common case: a read
-// first, so a lookup costs no write).
+// unknown_asin list now (server#392), and the report sends it no more (a known
+// check, SaveASINChecks). Nothing is written for an ASIN the report doesn't hold
+// as unknown (the common case: a read first, so a lookup costs no write).
 func (c *Catalog) ClearUnknownASIN(ctx context.Context, asin string) error {
 	asin = match.NormalizeASIN(asin)
 	var held bool
@@ -144,11 +143,7 @@ func (c *Catalog) ClearUnknownASIN(ctx context.Context, asin string) error {
 	if err != nil || !held {
 		return err
 	}
-	return c.db.WithUserStateTx(ctx, "ClearUnknownASIN", func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE unknown_asin_reports SET unknown = 0, checked_at = ?, sent_at = NULL
-			WHERE asin = ? AND unknown = 1`, FormatStamp(c.now()), asin)
-		return err
-	})
+	return c.SaveASINChecks(ctx, []ASINCheck{{ASIN: asin}}, FormatStamp(c.now()))
 }
 
 // MarkASINsSent records that the metadata service accepted asins at at.

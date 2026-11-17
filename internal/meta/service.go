@@ -833,11 +833,11 @@ var librivoxHosts = []string{"librivox.org", "archive.org"}
 // librivoxURL is absoluteHTTPURL's answer when its host is one of librivoxHosts
 // or a subdomain of one, else "" (fe#291: a link labelled LibriVox goes there).
 func librivoxURL(raw string) string {
-	out := absoluteHTTPURL(raw)
-	if out == "" {
+	out, u := absoluteHTTP(raw)
+	if u == nil {
 		return ""
 	}
-	host := strings.ToLower(strings.TrimSuffix(httpURL(out).Hostname(), "."))
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
 	for _, h := range librivoxHosts {
 		if host == h || strings.HasSuffix(host, "."+h) {
 			return out
@@ -850,13 +850,19 @@ func librivoxURL(raw string) string {
 // host (httpURL) and no user name or password in it, its scheme lower-cased
 // ("HTTPS://" is "https://"), else "": a link a client opens as it stands.
 func absoluteHTTPURL(raw string) string {
+	out, _ := absoluteHTTP(raw)
+	return out
+}
+
+// absoluteHTTP is absoluteHTTPURL's answer and the URL it parsed (nil with "").
+func absoluteHTTP(raw string) (string, *url.URL) {
 	u := httpURL(raw)
 	if u == nil || u.User != nil {
-		return ""
+		return "", nil
 	}
 	// url.Parse lower-cases the scheme it reads off raw's start; the rest of
 	// raw is kept as written.
-	return u.Scheme + raw[len(u.Scheme):]
+	return u.Scheme + raw[len(u.Scheme):], u
 }
 
 // httpURL is raw parsed when it is an absolute http or https URL with a host,
