@@ -102,21 +102,33 @@ explain() {
   esac
 }
 
+# The container's mounts, one a line: "fstype options point", the point last so
+# a read -r keeps its spaces, and decoded (mountinfo escapes a space as \040).
+mounts() {
+  [ -r /proc/self/mountinfo ] || return 0
+  awk '{ for (i = 7; i <= NF; i++) if ($i == "-") { print $(i + 1), $6, $5; break } }' /proc/self/mountinfo |
+    while read -r fstype opts point; do
+      case "$point" in *\\*) point=$(printf '%b' "$point") ;; esac
+      printf '%s %s %s\n' "$fstype" "$opts" "$point"
+    done
+  return 0
+}
+
 # Whether folder $1 is on a read-only mount (docker's :ro): the options of the
 # mount holding it, the longest mount point it is in (the last one mounted there).
 read_only() {
-  [ -r /proc/self/mountinfo ] || return 1
-  best="" best_opts=""
-  while read -r _ _ _ _ point opts _; do
-    point=$(printf '%b' "$point") # mountinfo escapes a space as \040
-    case "$1/" in
-      "${point%/}"/*)
-        if [ "${#point}" -ge "${#best}" ]; then best="$point" best_opts="$opts"; fi
-        ;;
-    esac
-  done </proc/self/mountinfo
-  case "$best_opts," in ro,*) return 0 ;; esac
-  return 1
+  mounts | {
+    best="" best_opts=""
+    while read -r _ opts point; do
+      case "$1/" in
+        "${point%/}"/*)
+          if [ "${#point}" -ge "${#best}" ]; then best="$point" best_opts="$opts"; fi
+          ;;
+      esac
+    done
+    case "$best_opts," in ro,*) exit 0 ;; esac
+    exit 1
+  }
 }
 
 # Whether $1 is a folder, asked within $WAIT.
@@ -139,9 +151,7 @@ can_read() {
 
 # The folders mounted inside the data folder, one a line.
 nested_mounts() {
-  [ -r /proc/self/mountinfo ] || return 0
-  awk '{ print $5 }' /proc/self/mountinfo | while read -r point; do
-    point=$(printf '%b' "$point")
+  mounts | while read -r _ _ point; do
     case "$point" in "$DATA"/*) printf '%s\n' "$point" ;; esac
   done
   return 0
@@ -168,22 +178,19 @@ EOF
 # (the rule of the server's setup hints, library.MountHints), not a pseudo
 # filesystem, not the data or backups folder.
 library_mounts() {
-  [ -r /proc/self/mountinfo ] || return 0
-  awk '{ for (i = 6; i <= NF; i++) if ($i == "-") { print $(i + 1), $5; break } }' /proc/self/mountinfo |
-    while read -r fstype point; do
-      case "$fstype" in
-        proc | sysfs | devtmpfs | devpts | tmpfs | ramfs | cgroup | cgroup2 | mqueue | securityfs | debugfs | \
-          tracefs | pstore | bpf | fusectl | configfs | hugetlbfs | autofs | binfmt_misc | nsfs | rpc_pipefs | \
-          efivarfs | selinuxfs | squashfs | overlay) continue ;;
-      esac
-      point=$(printf '%b' "$point") # mountinfo escapes a space as \040
-      case "$point" in
-        / | /proc | /sys | /tmp | /dev | /run | /boot | /snap | /proc/* | /sys/* | /dev/* | /run/* | /etc/* | /boot/* | /snap/*) continue ;;
-        "$DATA" | "$DATA"/*) continue ;;
-      esac
-      if [ -n "$BACKUPS" ] && [ "$point" = "$BACKUPS" ]; then continue; fi
-      printf '%s\n' "$point"
-    done
+  mounts | while read -r fstype _ point; do
+    case "$fstype" in
+      proc | sysfs | devtmpfs | devpts | tmpfs | ramfs | cgroup | cgroup2 | mqueue | securityfs | debugfs | \
+        tracefs | pstore | bpf | fusectl | configfs | hugetlbfs | autofs | binfmt_misc | nsfs | rpc_pipefs | \
+        efivarfs | selinuxfs | squashfs | overlay) continue ;;
+    esac
+    case "$point" in
+      / | /proc | /sys | /tmp | /dev | /run | /boot | /snap | /proc/* | /sys/* | /dev/* | /run/* | /etc/* | /boot/* | /snap/*) continue ;;
+      "$DATA" | "$DATA"/*) continue ;;
+    esac
+    if [ -n "$BACKUPS" ] && [ "$point" = "$BACKUPS" ]; then continue; fi
+    printf '%s\n' "$point"
+  done
   return 0
 }
 
