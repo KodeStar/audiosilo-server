@@ -41,9 +41,9 @@ import (
 // meta.NarratedRuntimeOff when the book's narrator reads it (lengthFits; the
 // closest recording of a work can still be another edition: the unabridged book
 // of a work that holds only its dramatization).
-// An identifier hit (the ASIN or ISBN the query sent named the work: in a run
-// always a hint, an Audiobookshelf import's or a tag's, a book with its own
-// being no run's subject) needs no lead:
+// An identifier hit (the ASIN or ISBN the query sent named the work: in a run a
+// hint, an Audiobookshelf import's or a tag's, or an unknown_asin run's book's own
+// ASIN, which the community has learned since the report) needs no lead:
 // it is the book. A runner-up that is one too would be two works holding one
 // identifier, the admin's choice; metaserve names one work per request today, so
 // that is a guard, not a case a run meets. An identifier hit is the book only while
@@ -485,7 +485,8 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 // (healedTo; planRefresh), a fallback to the recorded match only while the
 // identifiers whose lookups missed are as they were and none is an admin edit
 // (splitFallback: one gained or changed since may name another record), and for
-// a match only while the book is still unmatched (matchedSince). An item a stop cut short
+// a match (or an unknown_asin run's) only while the book is still as the run took it
+// (matchedSince). An item a stop cut short
 // (DetailCoverPending) doesn't record its match again: that went in with its
 // fields, so a book without one now was unlinked since, and an unlink takes back
 // the fields and cover too (BookEdit.Match), so such an item writes nothing.

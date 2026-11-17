@@ -438,7 +438,8 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 // its item (nil = nothing worth recording), and the community service's failure, if
 // that's what the item records. The recording proposed is DefaultRecording's, or the
 // one the length agrees with when that is another edition (meta.FitRecording: the
-// identifier a match sends is always a hint, an Audiobookshelf import's or a tag's).
+// identifier a match sends is a hint, an Audiobookshelf import's or a tag's, or for
+// an unknown_asin run the book's own ASIN, which the community didn't know).
 func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book, language string) (*catalog.MatchRunItem, error) {
 	item := &catalog.MatchRunItem{LibraryID: b.LibraryID, Path: b.RelPath, Proposal: catalog.MatchProposal{Values: map[string]string{}}}
 	switch o.Mode {
@@ -446,6 +447,12 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 		return r.repickBook(ctx, o.Region, b, item)
 	case catalog.MatchModeRefresh:
 		return r.refreshBook(ctx, o.Region, b, item)
+	case catalog.MatchModeUnknownASIN:
+		// Found by the title, for a book with this ASIN: an apply writes only
+		// while it still has it (matchedSince). Set last (the proposal is
+		// replaced below) and on every item, a failed lookup's too, which the
+		// review would otherwise read as matched since.
+		defer func() { item.Proposal.FoundBy = identifierFoundBy(catalog.FieldASIN, b.ASIN) }()
 	}
 	q := QueryFor(b, o.Region, language)
 	q.Limit, q.BestOnly, q.NoDetailsBelow = bulkCandidates, true, ReviewFloor
@@ -472,11 +479,6 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 	case item.Outcome == catalog.OutcomeNone && len(cands) > 0:
 		// A weak fit is no proposal: the review offers nothing to apply.
 		item.Detail, item.Proposal = DetailWeakMatch, catalog.MatchProposal{Values: map[string]string{}}
-	}
-	if o.Mode == catalog.MatchModeUnknownASIN {
-		// Found by the title, for a book with this ASIN: an apply writes only
-		// while it still has it (matchedSince).
-		item.Proposal.FoundBy = identifierFoundBy(catalog.FieldASIN, b.ASIN)
 	}
 	return item, nil
 }

@@ -1554,3 +1554,19 @@ func TestUnknownASINRun(t *testing.T) {
 		t.Fatalf("next unknown_asin run total = %d, want none left", run.Total)
 	}
 }
+
+// TestUnknownASINRunFailedLookup: an unknown_asin run's book whose lookup failed
+// is recorded as the failure, never as matched since (its item carries the ASIN
+// it was taken with too).
+func TestUnknownASINRunFailedLookup(t *testing.T) {
+	e := newEnv(t)
+	e.book(t, "A/Down", "Down", "B0NOPE0009", nil)
+	if err := e.cat.SaveASINChecks(context.Background(), []catalog.ASINCheck{{ASIN: "B0NOPE0009", Unknown: true}}, "2026-11-01T00:00:00.000Z"); err != nil {
+		t.Fatal(err)
+	}
+	run := e.start(t, catalog.MatchModeUnknownASIN, "uk")
+	items := e.items(t, run, catalog.OutcomeError)
+	if len(items) != 1 || items[0].MatchedSince || items[0].Proposal.FoundBy != "asin:B0NOPE0009" {
+		t.Fatalf("failed lookup items = %+v, want one, not matched since", items)
+	}
+}
