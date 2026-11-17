@@ -4,7 +4,8 @@
 # container starts as root only to chown /data (and AUDIOSILO_BACKUP_DIR's folder
 # and the backups in it, when it is set) and drop privileges; the server itself
 # never runs as root. The chown of /data stops at a folder mounted inside it (a
-# backups share at /data/backups keeps its owner, server#382). On NAS setups set
+# backups share at /data/backups keeps its owner, server#382); a file mounted
+# inside it (a config.yaml) is chowned. On NAS setups set
 # PUID/PGID to the owner of your appdata (Unraid: PUID=99 PGID=100; Synology:
 # often 1026:100; or run `id` for your user).
 #
@@ -154,17 +155,26 @@ can_read() {
   as_user timeout "$WAIT" find "$1" -mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>&1
 }
 
-# The folders mounted inside the data folder, one a line.
+# The folders mounted inside the data folder, one a line. A file mounted there
+# (a config.yaml bind-mounted at /data/config.yaml) is not one: the chown takes it
+# as it always has. A mount point that doesn't answer counts as a folder.
 nested_mounts() {
   mounts | while read -r _ _ point; do
-    case "$point" in "$DATA"/*) printf '%s\n' "$point" ;; esac
+    case "$point" in
+      "$DATA"/*)
+        rc=0
+        is_dir "$point" || rc=$?
+        if [ "$rc" -ne 1 ]; then printf '%s\n' "$point"; fi
+        ;;
+    esac
   done
   return 0
 }
 
-# Changes the owner of the data folder and everything in it, never what a link
-# points at (chown -h) and never a folder mounted inside it or anything under one
-# (server#382): a backups share at /data/backups, another app's files. -xdev alone
+# Changes the owner of the data folder and everything in it (a file mounted
+# inside it too), never what a link points at (chown -h) and never a folder
+# mounted inside it or anything under one (server#382): a backups share at
+# /data/backups, another app's files. -xdev alone
 # misses those: a volume or a bind mount from the same host disk has the same
 # device number, so each mount point is pruned by name too (a glob, so its
 # pattern characters escaped). What already belongs to $RUN_AS is left alone, so

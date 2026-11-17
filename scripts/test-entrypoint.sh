@@ -1,7 +1,7 @@
 #!/bin/sh
 # Exercises docker-entrypoint.sh on the image's base (Alpine with su-exec), as
 # root and as a --user, against folders the server's user can and can't use
-# (server#368), with folders mounted inside the data folder (server#382) and
+# (server#368), with folders and a file mounted inside the data folder (server#382) and
 # read-only mounts (server#383). Needs Docker and network access for `apk add su-exec`. Run from
 # the repository root:
 #
@@ -199,6 +199,23 @@ owners=$(docker run --rm -v "$DATA:/data" -v "$NEST:/data/backups" -v "$ODD:/dat
 expect "nested mount keeps its owner" "$owners" \
   "^/data/audiosilo.db 1000:1000$" "^/data/backups 1026:100$" "^/data/backups/theirs.db 1026:100$" \
   "^/data/odd \[1\]\* 1026:100$" "^/data/odd \[1\]\*/x 1026:100$"
+
+# 13. A file mounted inside the data folder (-v ./config.yaml:/data/config.yaml,
+#     root's and 600 on the host) is chowned as it always was, so the server can
+#     read it, while a folder mounted beside it keeps its owner. Both come from
+#     another filesystem, so -xdev is crossed too.
+FILEM=$(vol filem 0:0 755)
+docker run --rm -v "$FILEM:/v" "$RUN_ID" sh -c 'echo "listen: :8080" >/v/config.yaml && chmod 600 /v/config.yaml'
+out=$(docker run --rm --privileged -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" -v "$FILEM:/data" "$RUN_ID" sh -c '
+  mkdir -p /src /data/backups && mount -t tmpfs tmpfs /src && mkdir /src/backups &&
+    printf "listen: :8080\n" >/src/config.yaml && chmod 600 /src/config.yaml && touch /src/backups/theirs.db &&
+    chown -R 1026:100 /src/backups && mount --bind /src/config.yaml /data/config.yaml &&
+    mount --bind /src/backups /data/backups &&
+    sh /usr/local/bin/docker-entrypoint.sh sh -c "cat /data/config.yaml && echo \"ran as \$(id -u):\$(id -g)\" &&
+      stat -c \"%n %u:%g %a\" /data/config.yaml /data/backups /data/backups/theirs.db" --data /data' 2>&1 || true)
+expect "file mounted in the data folder is chowned" "$out" \
+  "^listen: :8080$" "ran as 1000:1000" "^/data/config.yaml 1000:1000 600$" \
+  "^/data/backups 1026:100 " "^/data/backups/theirs.db 1026:100 " "!WARNING"
 
 [ "$FAILS" -eq 0 ] || { echo "$FAILS failed"; exit 1; }
 echo "all passed"

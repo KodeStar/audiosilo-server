@@ -3507,8 +3507,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   environment, so it can't tell) gets `user: "<owner>"`, not PUID/PGID. A scan stops on a library root
   it can stat but not list (`CheckRead`: unavailable, not an empty library scanned OK). The Docker
   entrypoint words the same as root (after the chown of `/data`: `find -xdev ... -exec chown -h`, each
-  mount point inside it pruned by name from mountinfo, since a volume or bind mount from the same disk
-  shares the device number `-xdev` reads (server#382); and of `AUDIOSILO_BACKUP_DIR` when absolute and
+  folder mount point inside it pruned by name from mountinfo, since a volume or bind mount from the same disk
+  shares the device number `-xdev` reads (server#382), while a file mounted there (`/data/config.yaml`)
+  is chowned as before (one that doesn't answer `test -d` counts as a folder); and of `AUDIOSILO_BACKUP_DIR` when absolute and
   not `/` only the folder and its `audiosilo-*.db` / `.audiosilo-*` files: a backups share may hold
   other apps' files, so regular files only and `chown -h`, never what a link there points at) and
   under `--user` (where its fix names compose's `user:`): a write check of the data and backups
