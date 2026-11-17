@@ -110,7 +110,8 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 // whose look or read a scan gave up on (givenUp), answers the same kind of
 // bounded call now: a folder its listing (coverLook.find's), a cover image its
 // stat (coverLook.find and LookArt only look at one), any other file (a
-// metadata.json, an attachment, an ebook) a read of its first bytes. A stat
+// metadata.json, an attachment, an ebook) a read of its last bytes (all of a
+// small file, an EPUB's zip directory, where checkEbook reads). A stat
 // alone would not do for those: on NFS or FUSE it can answer from a cache
 // while reads still hang, and every scan would then read the whole book again
 // only to wait out the same read. Gone, or no longer a regular file or folder,
@@ -128,12 +129,12 @@ func sideAnswers(ctx context.Context, abs string, timeout time.Duration) bool {
 		return true
 	case info.Mode().IsRegular():
 		_, err = metadata.Bounded(ctx, abs, timeout, func() (struct{}, error) {
-			f, _, err := metadata.OpenRegular(abs)
+			f, info, err := metadata.OpenRegular(abs)
 			if err != nil {
 				return struct{}{}, err
 			}
 			defer f.Close()
-			if _, err := f.Read(make([]byte, sideProbeBytes)); err != nil && !errors.Is(err, io.EOF) {
+			if _, err := f.ReadAt(make([]byte, sideProbeBytes), max(0, info.Size()-sideProbeBytes)); err != nil && !errors.Is(err, io.EOF) {
 				return struct{}{}, err
 			}
 			return struct{}{}, nil

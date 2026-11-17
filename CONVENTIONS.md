@@ -1209,7 +1209,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   keeps the book as stored (`library.givenUp.keep`: `ReadCutShort`, never `LengthOnly`) with an
   `unreadable` problem on that file (over a lasting one), which `problemCleared` clears once the file
   answers the kind of bounded call that gave up (`sideAnswers`: a folder's listing, a cover image's
-  stat, any other file's read of its first bytes, as a stat can answer from a cache while reads hang;
+  stat, any other file's read of its last bytes, as a stat can answer from a cache while reads hang;
   gone counts too); a backfill's given-up read keeps what is stored and
   records nothing. A scan stopped while a read is still under way (held in a call nothing bounds)
   waits for it up to `stopGrace` (2 s), then leaves it to end on its own, its book's flight with
