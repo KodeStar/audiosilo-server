@@ -191,19 +191,15 @@ func TestExtractWithoutFFprobe(t *testing.T) {
 	}
 }
 
-// slowFile is a file whose reads take delay each, or never return while
-// hang is open (a share that stopped answering).
+// slowFile is a file whose reads never return while hang is open (a share
+// that stopped answering).
 type slowFile struct {
-	r     io.ReaderAt
-	delay time.Duration
-	hang  chan struct{}
+	r    io.ReaderAt
+	hang chan struct{}
 }
 
 func (f slowFile) ReadAt(p []byte, off int64) (int, error) {
-	if f.hang != nil {
-		<-f.hang
-	}
-	time.Sleep(f.delay)
+	<-f.hang
 	return f.r.ReadAt(p, off)
 }
 
@@ -249,16 +245,21 @@ func TestTimedOutReason(t *testing.T) {
 	}
 }
 
-// The tag read runs under the read's deadline too: a file whose reads are too
-// slow for it gives no tags (readFile then runs no probe), and, with no
-// ffprobe to ask, a ProbeTimedOut reading (server#269 items 4 and 6).
+// The tag read runs under the read's deadline too: a file whose reads don't
+// answer in time gives no tags (readFile then runs no probe), and, with no
+// ffprobe to ask, a ProbeTimedOut reading (server#269 items 4 and 6). The read
+// hangs until the test ends, so only the deadline can end it, however slowly
+// the machine runs: a read that is merely slow can land first on a busy one
+// (server#308).
 func TestTagReadIsBounded(t *testing.T) {
 	t.Parallel()
 	src, err := os.ReadFile(fixture("mp3-v23-chap.mp3"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := newBlockFile(slowFile{r: bytes.NewReader(src), delay: 200 * time.Millisecond}, int64(len(src)))
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	b := newBlockFile(slowFile{r: bytes.NewReader(src), hang: hang}, int64(len(src)))
 	rctx, cancel := context.WithTimeoutCause(context.Background(), 40*time.Millisecond, errReadDeadline)
 	defer cancel()
 	var md tag.Metadata

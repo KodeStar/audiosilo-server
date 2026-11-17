@@ -24,6 +24,7 @@ type lookupMock struct {
 	hold    bool
 	release chan struct{}
 	started chan struct{} // closed on the first lookup when hold is set
+	left    chan struct{} // when set, sent to as a held lookup ends with its client gone
 	once    sync.Once
 }
 
@@ -36,6 +37,9 @@ func (m *lookupMock) server(t *testing.T) *httptest.Server {
 			m.once.Do(func() { close(m.started) })
 			select {
 			case <-r.Context().Done():
+				if m.left != nil {
+					m.left <- struct{}{}
+				}
 				return
 			case <-m.release:
 			}
@@ -228,9 +232,14 @@ func TestWorkIDsFailedPerBook(t *testing.T) {
 // TestWorkIDsCallerCancelNotCached: a failure caused by the caller going away
 // (the console left the page) is not the upstream's fault and must not poison
 // the book's lookup for the error TTL.
+//
+// The held lookup is released only once the server has seen its client go:
+// released any sooner, its answer could still reach the cancelled flight on a
+// busy machine (the transport not yet past the cancel), which would cache the
+// work id and save the second call its lookup (server#308).
 func TestWorkIDsCallerCancelNotCached(t *testing.T) {
 	m := &lookupMock{works: map[string]string{"B0ONE": "book-one"}, hold: true,
-		release: make(chan struct{}), started: make(chan struct{})}
+		release: make(chan struct{}), started: make(chan struct{}), left: make(chan struct{}, 1)}
 	svc := NewService(m.server(t).URL, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -243,6 +252,7 @@ func TestWorkIDsCallerCancelNotCached(t *testing.T) {
 		t.Fatalf("cancelled = %+v, want unresolved and failed", ws)
 	}
 
+	<-m.left
 	close(m.release)
 	if ws := svc.WorkIDs(context.Background(), []BookIDs{{ASIN: "B0ONE"}}); ws[0] != (WorkID{ID: "book-one"}) {
 		t.Fatalf("after a cancelled attempt = %+v, want book-one (nothing cached)", ws)

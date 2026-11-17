@@ -502,20 +502,23 @@ func TestProblemCheckTakesTheScansTimeout(t *testing.T) {
 }
 
 // A file whose ffprobe times out with nothing read beside it is not read again,
-// however many slots the scan has: the time-out is already the file's own.
+// however many slots the scan has: the time-out is already the file's own. The
+// stand-in for the read times out at once, every time, so nothing turns on how
+// fast a busy machine starts ffprobe (server#308).
 func TestScanSkipsRetryOfLoneTimeout(t *testing.T) {
 	t.Parallel()
-	runs := filepath.Join(t.TempDir(), "runs")
-	probe := stubProbe(t, fmt.Sprintf("echo run >> %q; exec sleep 10", runs))
-	// Time for the stand-in to start and say so on a busy machine: the run hangs anyway.
-	s, lib, db := timeoutScanner(t, smallLibrary(t, 1, 1), probe, 4, 3*time.Second)
+	s, lib, db := timeoutScanner(t, smallLibrary(t, 1, 1), stubProbe(t, "exit 1"), 4, 5*time.Second)
+	var reads atomic.Int32
+	s.readFile = func(_ context.Context, _, _ string, timeout time.Duration) *metadata.Metadata {
+		reads.Add(1)
+		return &metadata.Metadata{ProbeErr: fmt.Errorf("%w after %s", metadata.ErrProbeTimeout, timeout)}
+	}
 	res, err := s.Scan(context.Background(), *lib)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _ := os.ReadFile(runs)
-	if n := strings.Count(string(got), "run"); n != 1 {
-		t.Fatalf("ffprobe ran %d times for a lone file, want 1", n)
+	if n := reads.Load(); n != 1 {
+		t.Fatalf("the file was read %d times alone, want 1", n)
 	}
 	var problem string
 	if err := db.QueryRowContext(context.Background(), `SELECT scan_error FROM books`).Scan(&problem); err != nil {
