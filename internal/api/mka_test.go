@@ -20,6 +20,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // mkaFixture writes a 4-second Matroska audio file of MP3 with two chapters
@@ -591,6 +592,35 @@ func TestMatroskaColdRemuxWaitBounded(t *testing.T) {
 				t.Fatalf("download past the wait = %q, want book.mp3", got)
 			}
 		})
+	}
+}
+
+// /item of a remuxable book on a share that stopped answering gives up once
+// (SRV-15c): the warm's join given up on (fileWait), the looks at its ebook,
+// which would each wait out their own time on the same share (three of them
+// the request's whole time, its generic 503), are not tried, and the stored
+// book answers. Not parallel: metadata.HoldOpensForTests swaps the mount
+// lookup.
+func TestItemOfARemuxableBookOnAHeldShareGivesUpOnce(t *testing.T) {
+	m := newMKAEnv(t)
+	m.api.ffmpeg = "ffmpeg"
+	if err := os.WriteFile(filepath.Join(m.lib.Root, filepath.FromSlash(mkaBook), "book.epub"), testEpub(t, false), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.api.scanner.Scan(context.Background(), *m.lib); err != nil {
+		t.Fatal(err)
+	}
+	m.api.fileWait = time.Second // a second look given up on would be seen through a loaded run's delays
+	release := metadata.HoldOpensForTests(filepath.Join(m.lib.Root, filepath.FromSlash(mkaBook)))
+	t.Cleanup(release)
+	start := time.Now()
+	resp, body := m.do(t, "GET", m.url("item", mkaBook), m.token, "")
+	took := time.Since(start)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"ebook"`) {
+		t.Fatalf("item on a held share = %d %s, want the stored book with its ebook", resp.StatusCode, body)
+	}
+	if took >= 2*m.api.fileWait-100*time.Millisecond {
+		t.Errorf("item on a held share took %v, want one look given up on (%v)", took, m.api.fileWait)
 	}
 }
 

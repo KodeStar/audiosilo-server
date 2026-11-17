@@ -1218,7 +1218,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   remux warm joins, each given up on after `API.fileWait` (10 s; a stream's looks together after
   `API.streamWait`, 45 s from the request's start, `waitLeft`: past a sleeping disk's spin-up, under
   AVPlayer's 60 s resource timeout, as a 503 is no retry for it) as a 503 `share_not_answering` with
-  `Retry-After`. A file cache's background run opens its source unbounded (once the request's look
+  `Retry-After` (`/item` answers the stored book instead, and once its warm's join went unanswered it looks at
+  neither the ebook nor the read-along, `warmRemux`'s answer: each would wait out its own `fileWait` on the same
+  share, three of them the request's whole time). A file cache's background run opens its source unbounded (once the request's look
   answered); its own stats of the source (`Open`, `Status`, `Queue`, `RefusedFor`, a warm's first look) are
   given a scan's look time (`media.sourceWait`), never none, so one on a share that stopped answering since never
   holds its mount's slot for good. A stream that waited on a remux gives its next look (the live transcode's it

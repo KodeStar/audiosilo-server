@@ -568,14 +568,20 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 			book.Episode.Fetch = &st
 		}
 	}
-	a.warmRemux(r.Context(), lib, book)
+	answering := a.warmRemux(r.Context(), lib, book)
 	dp := a.directPlayable(book)
 	book.DirectPlayable = &dp
 	// An EPUB replaced in place since the index read it: its size (and the
 	// row) follow it now, not at the next scan. On a share that stopped
 	// answering the look is given up on (fileWait) and the stored one answers.
-	a.scanner.RefreshEbook(r.Context(), *lib, book, a.fileWait)
-	book.Readalong = a.readalongOfBook(r.Context(), lib, book)
+	// Once the warm's look was given up on, neither this nor the read-along's
+	// is tried: each would wait out its own time on the same share and answer
+	// the same (the stored ebook, no read-along), three of them the request's
+	// whole time.
+	if answering {
+		a.scanner.RefreshEbook(r.Context(), *lib, book, a.fileWait)
+		book.Readalong = a.readalongOfBook(r.Context(), lib, book)
+	}
 	book.OtherRecordings = a.otherRecordings(r.Context(), lib, book)
 	writeJSON(w, http.StatusOK, book)
 }
@@ -746,10 +752,12 @@ func (a *API) directPlayable(book *catalog.Book) bool {
 // server's context, skipping the cached and the known refusals. A podcast
 // library's episodes are not warmed: their stream never remuxes. Each file's
 // join is a metadata.Bounded call (ctx, at most fileWait): on a share that
-// stopped answering none is warmed, and the request goes on.
-func (a *API) warmRemux(ctx context.Context, lib *catalog.Library, book *catalog.Book) {
+// stopped answering none is warmed, and the request goes on. It reports false
+// when a join went unanswered (metadata.Unanswered): the book's share is not
+// answering, for a caller with more looks to make there (handleItem).
+func (a *API) warmRemux(ctx context.Context, lib *catalog.Library, book *catalog.Book) (answering bool) {
 	if !a.remuxOn() || lib.Kind == catalog.KindPodcasts {
-		return
+		return true
 	}
 	var paths []string
 	for _, f := range book.Files {
@@ -758,7 +766,7 @@ func (a *API) warmRemux(ctx context.Context, lib *catalog.Library, book *catalog
 		}
 		abs, err := library.SafeJoinBounded(ctx, lib.Root, f.RelPath, a.fileWait)
 		if metadata.Unanswered(ctx, err) {
-			return
+			return false
 		}
 		if err == nil {
 			paths = append(paths, abs)
@@ -767,6 +775,7 @@ func (a *API) warmRemux(ctx context.Context, lib *catalog.Library, book *catalog
 	if len(paths) > 0 {
 		a.remux.WarmAll(a.baseCtx, a.ffmpeg, paths)
 	}
+	return true
 }
 
 // remuxColdWait is how long a stream request waits for a remux that isn't
