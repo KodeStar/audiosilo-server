@@ -834,10 +834,11 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			return err
 		}
 		// Only a poll's outcome moves the run: a subscribe tells nothing of a
-		// feed already followed.
+		// feed already followed. A poll a follower asked for (Check now) has
+		// a requester; the scheduler's has none.
 		if j.Kind == bridge.KindPodcastPoll {
 			var news string
-			if run, news = run.next(j.State, result.Code); news != "" {
+			if run, news = run.next(j.State, result.Code, j.RequestedBy == nil); news != "" {
 				notice = &PodcastNotice{Kind: news, Library: library, LibraryID: *j.LibraryID, ShowPath: show, ShowID: expected, Show: title, Private: private}
 				if news == PodcastFeedFailing {
 					notice.Code = result.Code

@@ -309,6 +309,8 @@ describe('Bridge job events', () => {
       key: 'events.podcast_feed_failing.http',
       values: { status: '503' },
     });
+    // server#403: the Bridge's redirect loop is worded as one, not "HTTP 310".
+    expect(failing('http_310').body).toEqual({ key: 'events.podcast_feed_failing.code.http_310' });
     expect(failing('failed').body).toEqual({ key: 'events.podcast_feed_failing.failed' });
     expect(failing('http_5000').body).toEqual({ key: 'events.podcast_feed_failing.failed' });
     expect(failing('http_999').body).toEqual({ key: 'events.podcast_feed_failing.failed' });

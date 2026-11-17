@@ -2446,6 +2446,7 @@
   "events.podcast_feed_failing.code.too_large": "Le flux dépasse la taille acceptée par la Bridge.",
   "events.podcast_feed_failing.code.blocked_address": "L'adresse du flux fait partie de celles que la Bridge ne contacte pas.",
   "events.podcast_feed_failing.code.invalid_feed_url": "L'adresse du flux n'est pas valide.",
+  "events.podcast_feed_failing.code.http_310": "L'adresse du flux redirige trop de fois.",
   "events.podcast_feed_failing.http": "Le flux a répondu HTTP {{status}}.",
   "events.podcast_feed_failing.failed": "La Bridge n'a pas pu vérifier le flux.",
   "events.podcast_feed_recovered.title": "Flux de podcast de retour : {{show}}",

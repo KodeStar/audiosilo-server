@@ -311,6 +311,7 @@ const FEED_CODES = new Set([
   'too_large',
   'blocked_address',
   'invalid_feed_url',
+  'http_310', // the Bridge's redirect loop, not an HTTP status
 ]);
 
 /** Why a podcast feed is failing: its code as a sentence, an HTTP status as such, else generically. */

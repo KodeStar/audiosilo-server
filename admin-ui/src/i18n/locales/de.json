@@ -2284,6 +2284,7 @@
   "events.podcast_feed_failing.code.too_large": "Der Feed ist größer, als die Bridge annimmt.",
   "events.podcast_feed_failing.code.blocked_address": "Die Adresse des Feeds ist eine, die die Bridge nicht kontaktiert.",
   "events.podcast_feed_failing.code.invalid_feed_url": "Die Adresse des Feeds ist ungültig.",
+  "events.podcast_feed_failing.code.http_310": "Die Adresse des Feeds leitet zu oft weiter.",
   "events.podcast_feed_failing.http": "Der Feed hat mit HTTP {{status}} geantwortet.",
   "events.podcast_feed_failing.failed": "Die Bridge konnte den Feed nicht prüfen.",
   "events.podcast_feed_recovered.title": "Podcast-Feed geht wieder: {{show}}",

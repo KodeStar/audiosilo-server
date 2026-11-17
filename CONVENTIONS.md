@@ -3482,10 +3482,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Bridge's internet is down) need six (`catalog.NetworkFailingAfter`), and a mixed run is announced
   once the two shares add up to one (`feedRun.due`: two answers and two timeouts, say);
   `feed_secret_missing` is announced at once without counting; another failure (`bridge_lost`, an
-  unwritable library) neither counts nor resets; a successful poll resets the run and, after an
+  unwritable library) neither counts nor resets; a follower's Check now (a poll with a requester) counts
+  nothing toward the run, server#403, though its `gone` is still announced at once; a successful poll resets the run and, after an
   announcement, raises recovered once; a job for a replaced show changes nothing). Their
   data are the library and its id, `show_id`, `show` (the title, else its folder), `show_path`, `count`
-  and `titles`, or `code` (one the messages word or an `http_NNN` status, else `failed`) and `failures`
+  and `titles`, or `code` (one the messages word, `http_310` the Bridge's redirect loop among them, or an
+  `http_NNN` status, else `failed`) and `failures`
   (0 for a lost secret): never the error's text, the feed URL or its host. A private show is hidden from
   admins who don't follow it, so its notices carry `private: true` instead of `show`, `show_path` and
   the episode titles (`PodcastNotice.Private`): "A private podcast has 2 new episodes", "A private

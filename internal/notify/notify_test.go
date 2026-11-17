@@ -810,6 +810,7 @@ func TestPodcastNoticeWording(t *testing.T) {
 	}{
 		{"timeout", 3, "The feed didn't answer in time. 3 checks in a row failed."},
 		{"http_503", 4, "The feed answered HTTP 503. 4 checks in a row failed."},
+		{"http_310", 3, "The feed's address redirects too many times. 3 checks in a row failed."},
 		{"gone", 1, "The feed's address says it is gone, so the Bridge stopped checking it. Follow the show again by its new address."},
 		{"feed_secret_missing", 0, "The Bridge no longer has this private feed's address. Follow the show again by its address to restore it."},
 		{"http_5xx", 3, "The Bridge couldn't check the feed. 3 checks in a row failed."},

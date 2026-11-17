@@ -598,6 +598,7 @@ var feedCodeText = map[string]string{ //nolint:gosec // G101: sentences keyed by
 	"too_large":           "The feed is larger than the Bridge accepts.",
 	"blocked_address":     "The feed's address is one the Bridge won't contact.",
 	"invalid_feed_url":    "The feed's address isn't valid.",
+	"http_310":            "The feed's address redirects too many times.", // the Bridge's redirect loop, not a status
 }
 
 // feedFailingText is a failing feed's message: its code worded (an HTTP status

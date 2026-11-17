@@ -327,6 +327,31 @@ func TestPodcastFeedNotices(t *testing.T) {
 	// (were the timeout read back as an answer, they would be).
 	quiet(fold(bridge.StateFailed, "http_500"), "two answers, one timeout")
 	failing(fold(bridge.StateFailed, "timeout"), "timeout", 4)
+	recovered(fold(bridge.StateDone, ""))
+
+	// A follower's Check now (a poll with a requester) is not counted toward
+	// the run (server#403): five in a row announce nothing and leave it as
+	// it was, so the scheduled polls still take three. Its gone is still
+	// announced at once (polling stops on it), and its success still says
+	// the feed is back.
+	checkNow := func(state, code string) []PodcastNotice {
+		t.Helper()
+		next++
+		j := pollJob(lib.ID, next, state, code)
+		j.RequestedBy = &bridge.Requester{ID: 7, Username: "follower"}
+		if err := c.FoldPodcastJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+		return log.take()
+	}
+	quiet(fold(bridge.StateFailed, "http_500"), "a scheduled failure")
+	for i := range 5 {
+		quiet(checkNow(bridge.StateFailed, "http_500"), fmt.Sprintf("Check now failure %d", i+1))
+	}
+	quiet(fold(bridge.StateFailed, "http_503"), "a second scheduled failure")
+	failing(fold(bridge.StateFailed, "http_404"), "http_404", 3)
+	recovered(checkNow(bridge.StateDone, ""))
+	failing(checkNow(bridge.StateFailed, "gone"), "gone", 1)
 }
 
 // A run is due once its shares add up to one whole: a third of the way per
