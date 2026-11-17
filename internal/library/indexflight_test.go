@@ -163,11 +163,23 @@ func TestIndexPathAfterADroppedRead(t *testing.T) {
 		err error
 	}
 	got := make(chan answer, 1)
-	go func() {
-		b, err := s.IndexPath(ctx, lib, "A/Book")
-		got <- answer{b, err}
-	}()
-	time.Sleep(100 * time.Millisecond) // the on-demand index waits on the flight
+	// Each book is resolved first (IndexPath's own first step), so the index
+	// joins the flight as its goroutine starts rather than after a listing of
+	// the disk: ending the flight before it has joined would leave it to lead a
+	// read of its own.
+	index := func(rel string) {
+		t.Helper()
+		book, err := s.resolveBook(ctx, lib, rel, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			b, err := s.indexShared(ctx, lib, book)
+			got <- answer{b, err}
+		}()
+		time.Sleep(100 * time.Millisecond) // the on-demand index waits on the flight
+	}
+	index("A/Book")
 	if n := count(); n != once {
 		t.Fatalf("the on-demand index read beside the scan's read: %d probes, want %d", n, once)
 	}
@@ -185,11 +197,7 @@ func TestIndexPathAfterADroppedRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() {
-		b, err := s.IndexPath(ctx, lib, "A/Twin")
-		got <- answer{b, err}
-	}()
-	time.Sleep(100 * time.Millisecond)
+	index("A/Twin")
 	s.endFlight(f, failed)
 	if a := <-got; !errors.Is(a.err, failed) {
 		t.Fatalf("waiter on a failed read: %+v, %v, want the failure", a.b, a.err)
