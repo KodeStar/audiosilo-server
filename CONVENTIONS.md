@@ -1940,9 +1940,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   sidecars (characters, recaps, `recap_summary`, `position_scale`) out, so that work is partial: it
   is read into the candidate only, never the `w:` cache, the store or an enrichment. `expand_min`
   skips the work of a best under the floor (an identifier hit scores 100). An older metaserve
-  ignores both and inlines the whole work, which reads the same. It reads the whole of `cands[0]` and of `cands[1]` only `Score` and
-  `IdentifierHit()` (`Classify`), so every other candidate is a stub. `work` absent on the best (an
-  older metaserve, its budget spent) is the fetch path for the best alone, and nothing for a weak
+  ignores both and inlines the whole work, which reads the same. A run reads the whole of `cands[0]`
+  and of `cands[1]` only `Score` and `IdentifierHit()` (`Classify`), so every other candidate is a
+  stub. `work` absent on the best (an older metaserve, its budget spent, a best under `expand_min`)
+  is the fetch path for the best alone, and nothing for a weak
   best no identifier found; a best that is gone (404) gives way to the next, but one that can't be read
   for any other reason is an outage at once (server#306), unlike `Candidates`: the next standing in
   would be the only candidate `Classify` sees, so a weaker work could apply unasked, or a stub answer
