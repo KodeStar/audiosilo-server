@@ -250,9 +250,10 @@ type AttachmentsHeld struct {
 // (hashReadalongEbooks) when its digest isn't current. relPath is the book's path, or a path inside it (a
 // part, a disc folder). ErrNotIndexable when no indexed book is there; an error
 // (nothing recorded) when the folder couldn't be listed or a file couldn't be
-// read right now.
+// read right now, wrapping the look given up on (metadata.GaveUp: each is
+// given lookTimeout) when that is why.
 func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, relPath string) (*AttachmentsRefresh, error) {
-	if _, err := ContentJoin(lib.Root, relPath); err != nil {
+	if _, err := ContentJoinBounded(ctx, lib.Root, relPath, s.lookTimeout(ctx)); err != nil {
 		return nil, err
 	}
 	book, err := s.cat.GetBookByPath(ctx, lib.ID, relPath)
@@ -269,8 +270,12 @@ func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, r
 	if err != nil {
 		return nil, fmt.Errorf("the attachments of %q couldn't be listed: %w", book.RelPath, err)
 	}
-	files, read := s.readAttachments(ctx, lib, book, sig, nil)
+	var gaveUp givenUp // a read given up on is the caller's to hear (metadata.GaveUp)
+	files, read := s.readAttachments(ctx, lib, book, sig, &gaveUp)
 	if !read {
+		if gaveUp.err != nil {
+			return nil, fmt.Errorf("the attachments of %q couldn't be read: %w", book.RelPath, gaveUp.err)
+		}
 		return nil, fmt.Errorf("the attachments of %q couldn't be read", book.RelPath)
 	}
 	if err := s.cat.SetAttachments(ctx, lib.ID, map[string]catalog.AttachmentsReading{

@@ -174,6 +174,63 @@ func TestAJoinedBookWithADiscThatDoesNotAnswerIsKept(t *testing.T) {
 	}
 }
 
+// The Bridge's attachments rescan (RefreshAttachments) on a share that stopped
+// answering gives up at the on-demand look's time (WithLookTimeout), its error
+// the look given up on (metadata.GaveUp: the API's 503 share_not_answering),
+// whether the join, the listing or an attachment's read is what hangs; the
+// stored attachments stay. Not parallel: metadata.HoldOpensForTests swaps the
+// mount lookup.
+func TestRefreshAttachmentsOnAHeldShareGivesUp(t *testing.T) {
+	for _, c := range []struct {
+		name, held string
+		reads      bool // only the reads hang (HoldReadsForTests)
+	}{
+		{"the folder", "A/Book", false},
+		{"an attachment's read", "A/Book/.audiosilo/characters.json", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := t.Context()
+			db := storetest.Open(t)
+			cat := catalog.New(db, time.Now)
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, root, "A/Book/01.mp3", make([]byte, 1<<10))
+			writeFile(t, root, "A/Book/.audiosilo/characters.json", []byte(testCharacters))
+			lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+			s := NewScanner(cat, "", slog.Default())
+			s.probeTimeout = time.Minute // the look's time, not the probe's, ends it
+			if res := scanWithin(t, s, *lib, 20*time.Second); res.Added != 1 {
+				t.Fatalf("added %d, want the book", res.Added)
+			}
+			writeFile(t, root, "A/Book/.audiosilo/recaps.json", []byte(testRecaps)) // a change to read
+
+			hold := metadata.HoldOpensForTests
+			if c.reads {
+				hold = metadata.HoldReadsForTests
+			}
+			release := hold(filepath.Join(root, filepath.FromSlash(c.held)))
+			t.Cleanup(release)
+			start := time.Now()
+			if _, err := s.RefreshAttachments(WithLookTimeout(ctx, 100*time.Millisecond), *lib, "A/Book"); !metadata.GaveUp(err) {
+				t.Errorf("refresh with %s held = %v, want a look given up on", c.held, err)
+			}
+			if took := time.Since(start); took > 10*time.Second {
+				t.Errorf("refresh took %v, want it given up on at the look's time", took)
+			}
+			if a := attachmentsAt(t, cat, lib.ID, "A/Book"); a == nil || a.Characters == nil || a.Recaps != nil {
+				t.Errorf("stored after the refresh gave up = %+v, want the first scan's", a)
+			}
+
+			release()
+			if got, err := s.RefreshAttachments(WithLookTimeout(ctx, 10*time.Second), *lib, "A/Book"); err != nil || !got.Attachments.Recaps {
+				t.Errorf("refresh once the share answers = %+v, %v; want the recaps read", got, err)
+			}
+		})
+	}
+}
+
 // A move's old path on a share that stopped answering (IndexMoved's
 // bookOnDisk) is given up on at the look's time and counts as still on disk:
 // the move isn't carried, and the new path is indexed as a book of its own.
