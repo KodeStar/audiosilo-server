@@ -25,7 +25,8 @@ import { CATEGORY_LOOK, attentionTotal, isBookKind, pickCategory } from './issue
  * Health > Issues (STYLEGUIDE.md "Health triage"): libraries whose folder is
  * offline (a safety stop, not a failure), one card per kind of issue with its
  * count and a few covers, and the open category's queue with Ignore and a fix.
- * The category and the ignored view live in the URL (?issue=, ?ignored=1).
+ * The category, the ignored view and duplicates across libraries live in the
+ * URL (?issue=, ?ignored=1, ?across=1).
  */
 export function IssuesPage() {
   const { t, i18n } = useTranslation();
@@ -33,17 +34,31 @@ export function IssuesPage() {
   const qc = useQueryClient();
   const summary = useIssues();
   const libraries = useLibraries();
-  const search = useSearch({ strict: false }) as { issue?: IssueKind; ignored?: true };
+  const search = useSearch({ strict: false }) as {
+    issue?: IssueKind;
+    ignored?: true;
+    across?: true;
+  };
   const navigate = useNavigate();
+  // Duplicates in other libraries too, when asked (#165): kept across a change
+  // of category or of the ignored view, so its ignored groups can be reached
+  // when the count (within each library) has none, and a reload keeps it.
+  const across = !!search.across;
   const go = (next: { issue?: IssueKind; ignored?: true }) =>
-    void navigate({ to: '.', search: next, replace: true });
+    void navigate({
+      to: '.',
+      search: across ? { ...next, across: true } : next,
+      replace: true,
+    });
+  const setAcross = (on: boolean) =>
+    void navigate({
+      to: '.',
+      search: { issue: search.issue, ignored: search.ignored, across: on || undefined },
+      replace: true,
+    });
   // Without ?issue= the page opens the first category needing attention and keeps
   // it open: clearing it shows "All clear" rather than jumping to the next one.
   const [opened, setOpened] = useState<IssueKind>();
-  // Duplicates in other libraries too, when asked (#165): kept here so the
-  // ignored view keeps it, and so its ignored groups can be reached when the
-  // count (within each library) has none.
-  const [across, setAcross] = useState(false);
   const firstKind = summary.data
     ? pickCategory(summary.data.categories, undefined)?.kind
     : undefined;

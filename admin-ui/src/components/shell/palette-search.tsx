@@ -56,14 +56,22 @@ export function usePaletteSearch(
     go('/library/{-$section}', { section: undefined }, filter);
 
   // The server matched these on fields the palette can't see: shown as they come.
-  const books = (settled === q ? (booksQuery.data?.books ?? []) : []).map<PaletteEntry>((b) => ({
+  const found = settled === q ? (booksQuery.data?.books ?? []) : [];
+  const bookLine = (b: (typeof found)[number]) =>
+    [b.author, seriesLabel(b.series, b.series_index, lang, t, b.series_index_end), b.library_name]
+      .filter(Boolean)
+      .join(' · ');
+  // Copies that would read alike (two of a book in one library) name their
+  // folder too, so the rows can be told apart (ADMIN-13.4).
+  const alike = new Map<string, number>();
+  for (const b of found) {
+    const k = `${b.title}\0${bookLine(b)}`;
+    alike.set(k, (alike.get(k) ?? 0) + 1);
+  }
+  const books = found.map<PaletteEntry>((b) => ({
     id: `book:${refKey(b)}`,
     title: b.title,
-    subtitle: [
-      b.author,
-      seriesLabel(b.series, b.series_index, lang, t, b.series_index_end),
-      b.library_name,
-    ]
+    subtitle: [bookLine(b), (alike.get(`${b.title}\0${bookLine(b)}`) ?? 0) > 1 ? b.path : '']
       .filter(Boolean)
       .join(' · '),
     visual: (

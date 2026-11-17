@@ -866,6 +866,22 @@ describe('library health', () => {
     expect(within(card).getByText(across.books[0].library_name)).toBeInTheDocument();
   });
 
+  it('keeps "Include other libraries" in the URL, so a reload keeps it (ADMIN-11)', async () => {
+    const calls = mockFetch(routes({ 'GET /admin/issues/duplicates': { body: { groups: [] } } }));
+    renderApp('/health?issue=duplicate&across=1');
+    const toggle = await screen.findByRole('switch', { name: 'Include other libraries' });
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(
+      calls
+        .filter((c) => c.path === '/admin/issues/duplicates')
+        .at(-1)
+        ?.query.get('across'),
+    ).toBe('1');
+    await userEvent.setup().click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    expect(window.location.search).not.toContain('across');
+  });
+
   it('reaches the groups ignored across libraries, which the count (within each) leaves out', async () => {
     const across: DuplicateGroup = {
       reason: 'same_files',
