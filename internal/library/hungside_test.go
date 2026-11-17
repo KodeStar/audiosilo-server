@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -127,15 +126,7 @@ func TestStopDuringAStuckRead(t *testing.T) {
 	libA, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Held", Root: held})
 	libB, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Healthy", Root: healthy})
 	s := NewScanner(cat, "", slog.Default())
-	started, unblock := make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	s.readFile = func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
-		if mounts.Within(absPath, held) {
-			once.Do(func() { close(started) })
-			<-unblock // ignores ctx, as a call stuck in the kernel does
-		}
-		return extractFile(ctx, absPath, ffprobePath, timeout)
-	}
+	started, release := holdRead(t, s, func(absPath string) bool { return mounts.Within(absPath, held) })
 
 	scanCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -151,7 +142,6 @@ func TestStopDuringAStuckRead(t *testing.T) {
 			t.Errorf("stopped scan = %v, want context.Canceled", err)
 		}
 	case <-time.After(stopGrace + 10*time.Second):
-		close(unblock)
 		t.Fatal("the stopped scan waited on its stuck read")
 	}
 	if n := s.readsLeft.Load(); n != 1 {
@@ -161,7 +151,7 @@ func TestStopDuringAStuckRead(t *testing.T) {
 		t.Errorf("the healthy library's scan added %d, want its book", res.Added)
 	}
 
-	close(unblock)
+	release()
 	waitNoReadsLeft(t, s)
 	if _, err := s.IndexPath(ctx, *libA, "Author/Book"); err != nil {
 		t.Errorf("index the book once its read returned: %v", err)
@@ -182,17 +172,6 @@ func TestALaterScanSkipsABookWhoseReadWasLeft(t *testing.T) {
 	writeFile(t, root, "Author/Other/01.mp3", make([]byte, 1<<10))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
 	s := NewScanner(cat, "", slog.Default())
-	held := filepath.Join(root, "Author", "Book", "01.mp3")
-	var hold atomic.Bool
-	started, unblock := make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	s.readFile = func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
-		if hold.Load() && absPath == held {
-			once.Do(func() { close(started) })
-			<-unblock // ignores ctx, as a call stuck in the kernel does
-		}
-		return extractFile(ctx, absPath, ffprobePath, timeout)
-	}
 	if res := scanWithin(t, s, *lib, 20*time.Second); res.Added != 2 {
 		t.Fatalf("first scan added %d, want both books", res.Added)
 	}
@@ -209,7 +188,7 @@ func TestALaterScanSkipsABookWhoseReadWasLeft(t *testing.T) {
 	// leaves the read under way.
 	writeFile(t, root, "Author/Book/01.mp3", make([]byte, 2<<10))
 	writeFile(t, root, "Author/New/01.mp3", make([]byte, 1<<10))
-	hold.Store(true)
+	started, release := holdRead(t, s, isFile(filepath.Join(root, "Author", "Book", "01.mp3")))
 	scanCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() {
@@ -234,28 +213,35 @@ func TestALaterScanSkipsABookWhoseReadWasLeft(t *testing.T) {
 		t.Errorf("the book after it: size %d, problem %q; want it read", size, problem)
 	}
 
-	close(unblock)
+	release()
 	waitNoReadsLeft(t, s)
-	hold.Store(false)
 	scanWithin(t, s, *lib, 20*time.Second)
 	if size, problem, _ := row("Author/Book"); size != 2<<10 || problem != "" {
 		t.Errorf("the book once its read returned: size %d, problem %q; want it read again", size, problem)
 	}
 }
 
-// holdRead makes s's reads of the file at held hang, ignoring their context as a
-// call stuck in the kernel does, until unblock: started closes once one is held.
-func holdRead(s *Scanner, held string) (started, unblock chan struct{}) {
-	started, unblock = make(chan struct{}), make(chan struct{})
+// holdRead makes s's reads of the files held matches hang, ignoring their
+// context as a call stuck in the kernel does, until release (at the test's end
+// at the latest): started closes once one is held.
+func holdRead(t *testing.T, s *Scanner, held func(absPath string) bool) (started chan struct{}, release func()) {
+	started, unblock := make(chan struct{}), make(chan struct{})
+	release = sync.OnceFunc(func() { close(unblock) })
+	t.Cleanup(release)
 	var once sync.Once
 	s.readFile = func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
-		if absPath == held {
+		if held(absPath) {
 			once.Do(func() { close(started) })
 			<-unblock
 		}
 		return extractFile(ctx, absPath, ffprobePath, timeout)
 	}
-	return started, unblock
+	return started, release
+}
+
+// isFile matches the one file at path.
+func isFile(path string) func(string) bool {
+	return func(absPath string) bool { return absPath == path }
 }
 
 // A scan does not wait for good on a book an on-demand read is stuck reading
@@ -273,14 +259,7 @@ func TestAScanSkipsABookAStuckOnDemandReadHolds(t *testing.T) {
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
 	s := NewScanner(cat, "", slog.Default())
 	s.probeTimeout = 200 * time.Millisecond
-	started, unblock := holdRead(s, filepath.Join(root, "Author", "Book", "01.mp3"))
-	defer func() {
-		select {
-		case <-unblock:
-		default:
-			close(unblock)
-		}
-	}()
+	started, release := holdRead(t, s, isFile(filepath.Join(root, "Author", "Book", "01.mp3")))
 
 	read := make(chan error, 1)
 	go func() {
@@ -305,7 +284,7 @@ func TestAScanSkipsABookAStuckOnDemandReadHolds(t *testing.T) {
 		t.Errorf("the book after it: problem %q, want it read", p)
 	}
 
-	close(unblock)
+	release()
 	if err := <-read; err != nil {
 		t.Errorf("the on-demand read once it returned: %v", err)
 	}
@@ -329,7 +308,7 @@ func TestAnOnDemandReadGivesUpOnAStuckScanRead(t *testing.T) {
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
 	s := NewScanner(cat, "", slog.Default())
 	s.probeTimeout = 200 * time.Millisecond
-	started, unblock := holdRead(s, filepath.Join(root, "Author", "Book", "01.mp3"))
+	started, release := holdRead(t, s, isFile(filepath.Join(root, "Author", "Book", "01.mp3")))
 
 	scanned := make(chan error, 1)
 	go func() {
@@ -351,7 +330,7 @@ func TestAnOnDemandReadGivesUpOnAStuckScanRead(t *testing.T) {
 		}
 	}
 
-	close(unblock)
+	release()
 	select {
 	case err := <-scanned:
 		if err != nil {

@@ -2186,7 +2186,7 @@ func (s *Scanner) readOwn(ctx context.Context, lib catalog.Library, book *catalo
 		return nil, err
 	}
 	go s.leadIndex(ctx, lib, book, f, from)
-	return s.awaitFlight(ctx, f)
+	return s.awaitFlight(ctx, f, false)
 }
 
 // tagRead is an unchanged book whose primary file a scan reads for its
@@ -2250,10 +2250,8 @@ func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *ca
 		f, lead := s.claimFlight(bookKey{lib.ID, book.RelPath}, nil)
 		if lead {
 			go s.leadIndex(ctx, lib, book, f, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
-		} else if err := s.waitFlight(ctx, f); err != nil {
-			return nil, err
 		}
-		b, err := s.awaitFlight(ctx, f)
+		b, err := s.awaitFlight(ctx, f, !lead)
 		if !readGivenUp(err) || ctx.Err() != nil {
 			return b, err
 		}
@@ -2270,8 +2268,14 @@ func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *ca
 var ErrStopping = errors.New("library: the server is stopping")
 
 // awaitFlight waits for flight f to end, then loads the book it stored; ctx's
-// error when ctx ends first, the flight's when it stored none.
-func (s *Scanner) awaitFlight(ctx context.Context, f *indexFlight) (*catalog.Book, error) {
+// error when ctx ends first, the flight's when it stored none. A caller that
+// joined another's read (joined) waits on it only as waitFlight does.
+func (s *Scanner) awaitFlight(ctx context.Context, f *indexFlight, joined bool) (*catalog.Book, error) {
+	if joined {
+		if err := s.waitFlight(ctx, f); err != nil {
+			return nil, err
+		}
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
