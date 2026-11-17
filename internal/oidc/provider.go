@@ -472,16 +472,17 @@ var (
 const issuedAtLeeway = 5 * time.Minute
 
 // Exchange trades a callback's code for the person's claims: the token request
-// with the flow's redirect URI and PKCE verifier, then the ID token's checks (signature by an
-// allowed algorithm from the provider's keys, iss, aud holding the client id,
-// azp when present or when there are several audiences, exp, iat no more than
-// five minutes ahead, the flow's nonce), then userinfo for what the ID token
-// lacks (askUserinfo; its sub must be the ID token's). The groups claim is
-// asked of userinfo only when needGroups (a group policy is set: nothing else
-// reads it). A userinfo request that fails leaves the ID token's claims, a
-// warning logged and Claims.Partial set: a claim it can't add is absent, which
-// never signs anyone in as more (and Decide doesn't decide a first sign-in on
-// an email it lacks for that). Every call shares one deadline, the call budget.
+// with the flow's redirect URI and PKCE verifier, then the ID token's checks
+// (signature by an allowed algorithm from the provider's keys, iss, aud holding
+// the client id, azp when present or when there are several audiences, exp,
+// iat no more than five minutes ahead, the flow's nonce), then userinfo for
+// what the ID token lacks (askUserinfo; its sub must be the ID token's). The
+// groups claim is asked of userinfo only when needGroups (a group policy is
+// set: nothing else reads it). A userinfo request that fails leaves the ID
+// token's claims, a warning logged and Claims.Partial set: a claim it can't
+// add is absent, which never signs anyone in as more (and Decide doesn't
+// decide a first sign-in on an email, or allowed_group on groups, it lacks for
+// that). Every call shares one deadline, the call budget.
 func (p *Provider) Exchange(ctx context.Context, code string, f Flow, needGroups bool) (Claims, error) {
 	ctx, cancel, prov, verifier, err := p.begin(ctx)
 	defer cancel()

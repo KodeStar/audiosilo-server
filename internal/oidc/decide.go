@@ -57,7 +57,7 @@ const (
 	ReasonAdminAccount    = "admin_account"    // it matches an admin, never linked by email (decision 4)
 	ReasonDisabled        = "disabled"         // Refuse: the linked account is disabled
 	ReasonMember          = "member"           // Refuse: the linked account has become a household member
-	ReasonIncomplete      = "incomplete"       // Refuse: a first sign-in without an email, userinfo unreadable (Claims.Partial)
+	ReasonIncomplete      = "incomplete"       // Refuse: a first sign-in lacking its email, or the groups allowed_group reads, userinfo unreadable (Claims.Partial)
 )
 
 // PendingReasons are the reasons Decide gives a Pending outcome: what a waiting
@@ -103,12 +103,14 @@ const (
 //   - a verified email matching others (several, or none eligible): pending;
 //   - an unverified email matching an account: pending;
 //   - otherwise, with auto_create on: create an account, if allowed_group (when
-//     set) lists the person, else pending not_allowed; with it off: pending.
+//     set) lists the person, else pending not_allowed (refuse, incomplete,
+//     when the groups are missing because userinfo was unreadable: nobody
+//     said the person isn't in the group); with it off: pending.
 //
 // Never on a username. Role is set for every outcome that signs in while
 // admin_group is set, unless the sign-in carried no readable groups claim
 // (NoGroups); allowed_group, read only for a sign-in with no identity yet,
-// counts an absent claim as no groups.
+// counts an absent claim as no groups (unless Claims.Partial, above).
 func Decide(in Input) Decision {
 	d := decide(in)
 	if (d.Outcome == SignIn || d.Outcome == Link || d.Outcome == Create) && in.Policy.AdminGroup != "" {
@@ -165,6 +167,12 @@ func decide(in Input) Decision {
 	}
 	if in.Policy.AutoCreate {
 		if g := in.Policy.AllowedGroup; g != "" && !c.InGroup(g) {
+			// No groups claim because userinfo couldn't be read: the person
+			// may be in the group, so not a waiting row telling the admins
+			// they aren't. The provider's trouble, worth trying again.
+			if c.Partial && c.Groups == nil {
+				return Decision{Outcome: Refuse, Reason: ReasonIncomplete}
+			}
 			return Decision{Outcome: Pending, Reason: ReasonNotAllowed}
 		}
 		return Decision{Outcome: Create}

@@ -56,6 +56,18 @@ func TestDecide(t *testing.T) {
 		{"partial with an email links", Input{Claims: Claims{Email: "a@example.org", EmailVerified: true, Partial: true},
 			Matches: []Account{user}}, Link, "", 7},
 		{"partial, linked, signs in", Input{Claims: Claims{Partial: true}, Linked: &Account{ID: 3}}, SignIn, "", 3},
+		// allowed_group with the groups left to a userinfo that couldn't be
+		// read: refused (denied: no waiting row saying the person isn't in the
+		// group), while a list the ID token carried still decides.
+		{"partial, no groups, allowed group, refused", Input{Claims: Claims{Email: "a@example.org", EmailVerified: true, Partial: true},
+			Policy: Policy{AutoCreate: true, AllowedGroup: "listeners"}}, Refuse, ReasonIncomplete, 0},
+		{"partial, a list outside the allowed group, pending", Input{Claims: Claims{Email: "a@example.org", EmailVerified: true,
+			Groups: []string{"staff"}, Partial: true}, Policy: Policy{AutoCreate: true, AllowedGroup: "listeners"}},
+			Pending, ReasonNotAllowed, 0},
+		{"partial, a list in the allowed group, creates", Input{Claims: Claims{Email: "a@example.org", EmailVerified: true,
+			Groups: []string{"listeners"}, Partial: true}, Policy: Policy{AutoCreate: true, AllowedGroup: "listeners"}}, Create, "", 0},
+		{"partial, no groups, no allowed group, creates", Input{Claims: Claims{Email: "a@example.org", EmailVerified: true, Partial: true},
+			Policy: Policy{AutoCreate: true}}, Create, "", 0},
 	}
 	pending := map[string]bool{}
 	for _, c := range cases {

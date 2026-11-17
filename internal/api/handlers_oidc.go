@@ -426,7 +426,8 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 			a.oidcResult(w, r, oidcDisabled)
 		case oidc.ReasonIncomplete:
 			// A first sign-in userinfo couldn't complete: the provider's
-			// trouble, worth trying again, never a second account.
+			// trouble, worth trying again, never a second account nor a
+			// waiting row for someone allowed_group may list.
 			a.oidcResult(w, r, oidcUnavailable)
 		default:
 			a.oidcResult(w, r, oidcNotAllowed)
