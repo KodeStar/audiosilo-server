@@ -496,9 +496,10 @@ const durationRev = "1"
 
 // durationStaleExpr is Signature.DurationStale: a book whose lengths were
 // read before durationRev and that holds an MP3 (its own format, or a part's),
-// the only files revision 1 reads otherwise.
-const durationStaleExpr = `(duration_rev < ` + durationRev + ` AND (format = 'mp3' OR EXISTS (
-	SELECT 1 FROM book_files f WHERE f.book_id = books.id AND f.format = 'mp3')))`
+// the only files revision 1 reads otherwise. A CASE, so the parts are looked at
+// only for a row of an older revision (AND evaluates both sides).
+const durationStaleExpr = `CASE WHEN duration_rev < ` + durationRev + ` THEN format = 'mp3' OR EXISTS (
+	SELECT 1 FROM book_files f WHERE f.book_id = books.id AND f.format = 'mp3') ELSE 0 END`
 
 // fileOrderExpr is books.file_order where it holds: recorded with the row's own
 // index (file_order_indexed_at, as abs_indexed_at is for abs_file), else NULL.
