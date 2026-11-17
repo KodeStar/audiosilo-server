@@ -1357,7 +1357,7 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 	books = booksOf(lib, dirs, overrides)
 	for _, b := range books {
 		if b.IsFolder {
-			b.ABS = catalog.ABSReading{Sig: side.abs[b.RelPath], Unread: side.absUnread[b.RelPath]}
+			b.ABS = side.abs[b.RelPath]
 		}
 	}
 	attachmentsOfWalk(books, side)
@@ -1441,7 +1441,7 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 // looked at (statAudio: the callers building books from them do that).
 func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap, width int) (dirs map[string][]audioFile, side sidecarFiles, hadErrors bool, err error) {
 	dirs = map[string][]audioFile{}
-	side = sidecarFiles{abs: map[string]string{}, absUnread: map[string]bool{}, attachments: map[string]attachmentFiles{}, unlisted: map[string]bool{},
+	side = sidecarFiles{abs: map[string]catalog.ABSReading{}, attachments: map[string]attachmentFiles{}, unlisted: map[string]bool{},
 		epubs: map[string][]fs.DirEntry{}}
 	// Hidden folders (.Trash-1000, Syncthing .stversions, .git, and .audiosilo,
 	// listed on its own below) and ignored ones are never gone into, so their
@@ -1509,10 +1509,10 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 				// Not to be looked at right now (a flaky mount): its book keeps the
 				// stored reading (ABSReading.Unread) rather than losing its ABS
 				// values until the next scan.
-				side.absUnread[dirOf(rel)] = true
+				side.abs[dirOf(rel)] = catalog.ABSReading{Unread: true}
 				log.Warn("could not look at an Audiobookshelf metadata.json", "library", lib.Name, "path", absOf(lib, rel), "err", serr)
 			} else {
-				side.abs[dirOf(rel)] = sig
+				side.abs[dirOf(rel)] = catalog.ABSReading{Sig: sig}
 			}
 			return nil
 		}
@@ -1591,17 +1591,16 @@ func (e *statEntry) ModTime() time.Time { return e.modTime }
 func (e *statEntry) Sys() any           { return nil }
 
 // sidecarFiles are the metadata files the discovery walk found beside the audio,
-// each by the library-relative folder holding it: abs is the signature
-// (metadata.ABSSignature) of each folder's Audiobookshelf metadata.json (a
-// regular file, not ignored), absUnread the folders whose metadata.json couldn't
-// be looked at right now, attachments each .audiosilo folder's known files
+// each by the library-relative folder holding it: abs is the reading of each
+// folder's Audiobookshelf metadata.json (a regular file, not ignored): its
+// signature (metadata.ABSSignature), or Unread when it couldn't be looked at
+// right now. attachments each .audiosilo folder's known files
 // (listAttachments), and unlisted the folders whose .audiosilo couldn't be
 // listed right now. epubs are each folder's .epub entries (isEpubEntry: links
 // and ignored files included, as BookEbook's rule reads a folder), which
 // ebooksOfWalk turns into each book's ebook candidate.
 type sidecarFiles struct {
-	abs         map[string]string
-	absUnread   map[string]bool
+	abs         map[string]catalog.ABSReading
 	attachments map[string]attachmentFiles
 	unlisted    map[string]bool
 	epubs       map[string][]fs.DirEntry

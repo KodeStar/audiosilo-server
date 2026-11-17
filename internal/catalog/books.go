@@ -115,7 +115,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 	if err != nil {
 		return 0, err
 	}
-	absSig, absReadAt, absFile, absKeep, err := absColumns(b, indexedAt)
+	absSig, absReadAt, absFile, err := absColumns(b, indexedAt)
 	if err != nil {
 		return 0, err
 	}
@@ -193,7 +193,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 		b.Released, b.TagASIN, b.TagISBN, b.TagLanguage, string(scannedChapters), chaptersHash(string(scannedChapters)),
 		absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
-		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), absKeep, absKeep, b.EbookFile.Unread,
+		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.ABS.Unread, b.ABS.Unread, b.EbookFile.Unread,
 		b.EbookFile.Unread, b.EbookFile.Unread).Scan(&id); err != nil {
 		return 0, err
 	}

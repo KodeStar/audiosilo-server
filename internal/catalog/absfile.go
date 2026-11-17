@@ -94,18 +94,15 @@ func parseABSFile(raw string) bookFields {
 
 // absColumns is what UpsertBook writes to books.abs_sig, abs_indexed_at and
 // abs_file for b: its ABS reading for a folder book; nothing, and nothing to read,
-// for a file book (ABS keeps a metadata.json only in a book's own folder). keep
-// is an Unread reading: UpsertBook keeps the stored signature and file, with no
-// indexed_at (unchecked).
-func absColumns(b *Book, indexedAt string) (sig string, readAt any, file string, keep bool, err error) {
-	if !b.IsFolder {
-		return "", nil, "", false, nil
-	}
-	if b.ABS.Unread {
-		return "", nil, "", true, nil
+// for a file book (ABS keeps a metadata.json only in a book's own folder). An
+// Unread reading has no indexed_at (unchecked): UpsertBook keeps the stored
+// signature and file.
+func absColumns(b *Book, indexedAt string) (sig string, readAt any, file string, err error) {
+	if !b.IsFolder || b.ABS.Unread {
+		return "", nil, "", nil
 	}
 	file, err = encodeABSFields(absFields(b.ABS.File))
-	return b.ABS.Sig, indexedAt, file, false, err
+	return b.ABS.Sig, indexedAt, file, err
 }
 
 // absUncheckedExpr is a books row's Signature.ABSUnchecked: a folder book whose
