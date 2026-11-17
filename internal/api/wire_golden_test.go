@@ -51,8 +51,10 @@ type wireCase struct {
 	name  string // the file's name, without .json
 	route string // the method, the route and the query used, recorded in the golden
 	body  func(t *testing.T) string
-	// empty names the array paths ("$.a[].b") empty by design. Any other empty
-	// array fails: it pins none of its elements' fields, so seed it instead.
+	// empty names the paths ("$.a[].b") empty by design: an empty array or
+	// object, a null. Any other fails: it pins nothing of the value a real answer
+	// carries there, so seed it instead. A path named here that holds a value
+	// fails too, so a seed added later takes its entry with it.
 	empty []string
 }
 
@@ -106,9 +108,15 @@ func checkWireGolden(t *testing.T, c wireCase) {
 		t.Fatalf("%s: not JSON: %v: %s", c.route, err, body)
 	}
 	got := wireGolden{Route: c.route, Shape: shapeOf(v)}
-	for _, p := range emptyArrays(got.Shape, "$") {
+	unpinned := unpinnedPaths(got.Shape, "$")
+	for _, p := range unpinned {
 		if !slices.Contains(c.empty, p) {
-			t.Errorf("%s: %s is empty, so the golden guards none of its fields: seed it, or list it in the case's empty", c.route, p)
+			t.Errorf("%s: %s is empty or null, so the golden guards nothing of its value: seed it, or list it in the case's empty", c.route, p)
+		}
+	}
+	for _, p := range c.empty {
+		if !slices.Contains(unpinned, p) {
+			t.Errorf("%s: the case's empty lists %s, which is not empty or null: remove it", c.route, p)
 		}
 	}
 	file := filepath.Join(wireDir, c.name+".json")
@@ -292,24 +300,36 @@ func flattenShape(s any, path string, into map[string]string) {
 	}
 }
 
-// emptyArrays lists the paths of the empty arrays in shape s, at path.
-func emptyArrays(s any, path string) []string {
+// unpinnedPaths lists the paths in shape s, at path, whose shape pins nothing
+// of the value a real answer carries there: an empty array, an empty object and
+// a null. A null beside another kind in a $or is not one: the other kind is
+// pinned, and the null says the element may be missing.
+func unpinnedPaths(s any, path string) []string {
 	var out []string
 	switch x := s.(type) {
+	case string:
+		if x == "null" {
+			return []string{path}
+		}
 	case []any:
 		if len(x) == 0 {
 			return []string{path}
 		}
-		out = emptyArrays(x[0], path+"[]")
+		out = unpinnedPaths(x[0], path+"[]")
 	case map[string]any:
-		if alts, ok := x["$or"].([]any); ok && len(x) == 1 {
-			for _, alt := range alts {
-				out = append(out, emptyArrays(alt, path)...)
+		if len(x) == 0 {
+			return []string{path}
+		}
+		if shapeKind(x) == "$or" {
+			for _, alt := range x["$or"].([]any) {
+				if alt != "null" {
+					out = append(out, unpinnedPaths(alt, path)...)
+				}
 			}
 			break
 		}
 		for _, k := range slices.Sorted(maps.Keys(x)) {
-			out = append(out, emptyArrays(x[k], path+"."+k)...)
+			out = append(out, unpinnedPaths(x[k], path+"."+k)...)
 		}
 	}
 	return out
@@ -319,17 +339,19 @@ func emptyArrays(s any, path string) []string {
 func TestShapeOf(t *testing.T) {
 	t.Parallel()
 	var v any
-	if err := json.Unmarshal([]byte(`{"a":1,"b":"x","c":null,"d":[],"e":[{"x":1},{"y":true}],"f":[1,null,"s",{"k":1},{"l":2}]}`), &v); err != nil {
+	if err := json.Unmarshal([]byte(`{"a":1,"b":"x","c":null,"d":[],"e":[{"x":1},{"y":true}],"f":[1,null,"s",{"k":1},{"l":2,"m":[]}],"g":{}}`), &v); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := json.Marshal(shapeOf(v))
 	want := `{"a":"number","b":"string","c":"null","d":[],"e":[{"x":"number","y":"boolean"}],` +
-		`"f":[{"$or":["null","number",{"k":"number","l":"number"},"string"]}]}`
+		`"f":[{"$or":["null","number",{"k":"number","l":"number","m":[]},"string"]}],"g":{}}`
 	if string(got) != want {
 		t.Fatalf("shape\n got %s\nwant %s", got, want)
 	}
-	if e := emptyArrays(shapeOf(v), "$"); !slices.Equal(e, []string{"$.d"}) {
-		t.Fatalf("empty arrays = %q, want [$.d]", e)
+	// An empty array, an empty object and a null alone pin nothing; the null
+	// among f's elements does not count, the empty array inside one does.
+	if e, want := unpinnedPaths(shapeOf(v), "$"), []string{"$.c", "$.d", "$.f[].m", "$.g"}; !slices.Equal(e, want) {
+		t.Fatalf("unpinned paths = %q, want %q", e, want)
 	}
 	// Allowed: an identical shape has no diff. Denied: a removal, a retype and
 	// an addition are each reported.
