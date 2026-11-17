@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,5 +78,54 @@ func TestAwaitResolveBounded(t *testing.T) {
 	awaitResolve(context.Background(), done)
 	if took := time.Since(start); took > 100*time.Millisecond {
 		t.Fatalf("waited %v for a re-resolve that had ended", took)
+	}
+}
+
+// resolveIdle waits until no re-resolve is running or waiting to be run again.
+func resolveIdle(t *testing.T, a *API) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(time.Millisecond) {
+		a.resolveMu.Lock()
+		idle := a.resolving == nil && a.resolveRetry == nil
+		a.resolveMu.Unlock()
+		if idle {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the re-resolve never came to rest")
+		}
+	}
+}
+
+// TestResolveSourcesRetried: a re-resolve that fails leaves its library due, so
+// it is run again by itself until one run succeeds; one that can never succeed
+// is run again resolveRetries times and then left alone (server#213).
+func TestResolveSourcesRetried(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		fails int // the runs that fail before one succeeds
+		want  int32
+	}{
+		{"a passing fault", 2, 3},
+		{"a library that never resolves", 1 << 30, 1 + resolveRetries},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newTestEnv(t)
+			var runs atomic.Int32
+			e.api.resolveRetryAfter = time.Millisecond
+			e.api.resolveRun = func(context.Context) error {
+				if int(runs.Add(1)) > tc.fails {
+					return nil
+				}
+				return errors.New("database is locked")
+			}
+			<-e.api.resolveSources() // the PATCH's own wait ends with the first run
+			resolveIdle(t, e.api)
+			if got := runs.Load(); got != tc.want {
+				t.Fatalf("the re-resolve ran %d times, want %d", got, tc.want)
+			}
+		})
 	}
 }

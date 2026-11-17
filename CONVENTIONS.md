@@ -1616,7 +1616,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   generation), no rescan. `Catalog.ResolveSources` re-resolves them (`refreshEffective`) 200 books a
   transaction, starting a library again when a later change overtook its run, and clears the mark
   with the last batch, so a stop leaves it due for the next start (`API.StartSourceResolves`); a
-  library that fails stays due and is reported without holding up the others in the pass. The
+  library that fails stays due and is reported without holding up the others in the pass, and the
+  run is made again by itself after 1 minute, then twice as long each time, `resolveRetries` (6) times at
+  most (about an hour: a passing fault heals, a library that can never resolve waits for the next change
+  or start). The
   PATCH runs it (`API.resolveSources`, one run at a time) and waits up to 20 s, never closer than 2 s
   to its deadline (`awaitResolve`): a library small enough answers re-resolved (about 1 s per 5,000
   books), a large one answers at once with the rest going on (server#213).
