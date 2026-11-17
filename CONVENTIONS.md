@@ -1200,7 +1200,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book's audio (the ABS metadata.json read, the attachments' lstats and reads, the ebook check,
   `coverLook.find`'s stats and listing, `LookArt` (`ArtFile`'s `SafeJoin` and the stat) for the
   cover version, `stampAddedAt`'s statx and lstat, `problemCleared`'s look), the backfill's embedded cover read
-  (`media.EmbeddedCover`), `RefreshEbook`'s look, and in the API every cover (full, thumbnail, a
+  (`media.EmbeddedCover`), and in the API `/item`'s look at the book's ebook (`RefreshEbook`, given
+  `API.fileWait` and answering with the stored ebook past it: the probe's time is the request's own),
+  every cover (full, thumbnail, a
   show's: `serveArt`, `coverArt`, `readSidecar`) and a stream's open and stat (`media.ServeFile`; a regular file only, `metadata.OpenRegular`, so a FIFO is a 404 at once, never an open held and counted on its mount),
   each given up on after `API.fileWait` (10 s; a stream's open after `API.streamWait`, 45 s: past a
   sleeping disk's spin-up, under AVPlayer's 60 s resource timeout, as a 503 is no retry for it) as a

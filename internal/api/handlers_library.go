@@ -570,8 +570,9 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	dp := a.directPlayable(book)
 	book.DirectPlayable = &dp
 	// An EPUB replaced in place since the index read it: its size (and the
-	// row) follow it now, not at the next scan.
-	a.scanner.RefreshEbook(r.Context(), *lib, book)
+	// row) follow it now, not at the next scan. On a share that stopped
+	// answering the look is given up on (fileWait) and the stored one answers.
+	a.scanner.RefreshEbook(r.Context(), *lib, book, a.fileWait)
 	book.Readalong = a.readalongOfBook(r.Context(), lib, book)
 	book.OtherRecordings = a.otherRecordings(r.Context(), lib, book)
 	writeJSON(w, http.StatusOK, book)

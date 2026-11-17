@@ -203,10 +203,11 @@ type API struct {
 	coverReads chan struct{}
 	thumbSem   chan struct{}
 	// fileWait is how long a request waits for a look at a library file (a
-	// cover's stat and read) before answering 503, and streamWait for a
-	// stream's open: each is a metadata.Bounded call, so one on a share that
-	// stopped answering never holds its handler (fileWaitTimeout,
-	// streamOpenTimeout; fields so tests can shorten them).
+	// cover's stat and read) before answering 503, or with what is stored
+	// (/item's look at the book's ebook), and streamWait for a stream's open:
+	// each is a metadata.Bounded call, so one on a share that stopped
+	// answering never holds its handler (fileWaitTimeout, streamOpenTimeout;
+	// fields so tests can shorten them).
 	fileWait   time.Duration
 	streamWait time.Duration
 	// communityReads bounds the community covers being fetched or waiting to be

@@ -193,3 +193,23 @@ func TestBookReadWaitingAtShutdownIs503(t *testing.T) {
 		})
 	}
 }
+
+// /item of a book whose ebook sits on a share that stopped answering answers
+// with the stored book once the look at the ebook is given up on (fileWait),
+// rather than waiting out the scan's probe time, which is the request's own
+// (a 503 "request timed out" for every book with an ebook). Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
+func TestItemWithAnEbookOnAHeldShareAnswers(t *testing.T) {
+	e := newEbookEnv(t)
+	e.api.fileWait = 200 * time.Millisecond
+	release := metadata.HoldOpensForTests(filepath.Join(e.root, filepath.FromSlash(ebookFile)))
+	t.Cleanup(release)
+	start := time.Now()
+	eb, _ := e.itemEbook(t, ebookBook)
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("/item took %v, want it answered once the ebook's look is given up on", took)
+	}
+	if eb == nil || eb.Path != ebookFile {
+		t.Errorf("ebook on a held share = %+v, want the stored one", eb)
+	}
+}
