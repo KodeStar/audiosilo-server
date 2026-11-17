@@ -21,15 +21,14 @@ import (
 // dropping to PUID:PGID, so the fix names that setting, not PUID and PGID.
 const EnvStartedAsUser = "AUDIOSILO_STARTED_AS_USER"
 
-// Test seams: who the server runs as, who owns a path, whether it runs in a
-// container and whether that container was started with --user.
+// Test seams: who the server runs as, who owns a path and whether it runs in a
+// container.
 var (
 	running = func() (uid, gid int) { return os.Getuid(), os.Getgid() }
 	ownerOf = owner
 	inCtr   = sync.OnceValue(func() bool {
 		return exists("/.dockerenv") || exists("/run/.containerenv")
 	})
-	asUser = func() bool { return os.Getenv(EnvStartedAsUser) == "1" }
 )
 
 // InContainer reports whether the server runs in a container (Docker, Podman),
@@ -60,8 +59,8 @@ func (e *Error) Error() string {
 	}
 	msg := fmt.Sprintf("the server can't %s %s: %s", verb, e.Path, Cause(e.Err))
 	switch {
-	case IsReadOnly(e.Err):
-		msg += ". " + ReadOnlyHint
+	case isReadOnly(e.Err):
+		msg += ". " + readOnlyHint
 	case errors.Is(e.Err, fs.ErrPermission):
 		msg += ". " + Hint(e.Path, e.Write)
 	}
@@ -99,13 +98,13 @@ func Wrap(path string, write bool, err error) error {
 // IsPermission reports whether err is the system refusing the server: permission
 // denied, or a write to a read-only mount (docker's :ro), which no owner or mode
 // can fix but is the same "the folder refuses the server" to the console.
-func IsPermission(err error) bool { return errors.Is(err, fs.ErrPermission) || IsReadOnly(err) }
+func IsPermission(err error) bool { return errors.Is(err, fs.ErrPermission) || isReadOnly(err) }
 
-// IsReadOnly reports whether err is a write refused by a read-only mount.
-func IsReadOnly(err error) bool { return errors.Is(err, syscall.EROFS) }
+// isReadOnly reports whether err is a write refused by a read-only mount.
+func isReadOnly(err error) bool { return errors.Is(err, syscall.EROFS) }
 
-// ReadOnlyHint is the fix for a folder on a read-only mount.
-const ReadOnlyHint = "It is on a read-only mount: mount it read and write (in Docker, without :ro)."
+// readOnlyHint is the fix for a folder on a read-only mount.
+const readOnlyHint = "It is on a read-only mount: mount it read and write (in Docker, without :ro)."
 
 // User is who the server runs as, "uid:gid" ("" where the system has no such
 // ids: Windows).
@@ -152,14 +151,18 @@ func Hint(path string, write bool) string {
 	case known && ouid == 0:
 		// Never advise running the server as root.
 		fmt.Fprintf(&b, "%s, for example by making %s its owner on the host.", giveFirst, user)
-	case InContainer() && asUser() && known:
-		fmt.Fprintf(&b, "Run the container as the %s's owner (user: \"%d:%d\"), or %s.", noun, ouid, ogid, give)
-	case InContainer() && asUser():
-		fmt.Fprintf(&b, "Run the container as the %s's owner (user: in compose, --user with docker run), or %s.", noun, give)
-	case InContainer() && known:
-		fmt.Fprintf(&b, "Set PUID=%d and PGID=%d (the %s's owner) on the container, or %s.", ouid, ogid, noun, give)
 	case InContainer():
-		fmt.Fprintf(&b, "Set PUID and PGID on the container to the %s's owner, or %s.", noun, give)
+		asUser := os.Getenv(EnvStartedAsUser) == "1"
+		switch {
+		case asUser && known:
+			fmt.Fprintf(&b, "Run the container as the %s's owner (user: \"%d:%d\"), or %s.", noun, ouid, ogid, give)
+		case asUser:
+			fmt.Fprintf(&b, "Run the container as the %s's owner (user: in compose, --user with docker run), or %s.", noun, give)
+		case known:
+			fmt.Fprintf(&b, "Set PUID=%d and PGID=%d (the %s's owner) on the container, or %s.", ouid, ogid, noun, give)
+		default:
+			fmt.Fprintf(&b, "Set PUID and PGID on the container to the %s's owner, or %s.", noun, give)
+		}
 	default:
 		fmt.Fprintf(&b, "Run the server as the %s's owner, or %s.", noun, give)
 	}

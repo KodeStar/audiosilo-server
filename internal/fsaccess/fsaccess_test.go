@@ -15,12 +15,12 @@ import (
 // container or not, one started as root dropping to PUID:PGID.
 func as(t *testing.T, uid, gid, ouid, ogid int, known, container bool) {
 	t.Helper()
-	r, o, c, u := running, ownerOf, inCtr, asUser
-	t.Cleanup(func() { running, ownerOf, inCtr, asUser = r, o, c, u })
+	r, o, c := running, ownerOf, inCtr
+	t.Cleanup(func() { running, ownerOf, inCtr = r, o, c })
 	running = func() (int, int) { return uid, gid }
 	ownerOf = func(string) (int, int, bool) { return ouid, ogid, known }
 	inCtr = func() bool { return container }
-	asUser = func() bool { return false }
+	t.Setenv(EnvStartedAsUser, "")
 }
 
 func TestHint(t *testing.T) {
@@ -59,7 +59,6 @@ func TestHint(t *testing.T) {
 func TestHintStartedAsUser(t *testing.T) {
 	as(t, 1000, 1000, 1026, 100, true, true)
 	t.Setenv(EnvStartedAsUser, "1")
-	asUser = func() bool { return os.Getenv(EnvStartedAsUser) == "1" }
 	want := `The server runs as user 1000:1000 and the folder belongs to 1026:100. Run the container as the folder's owner (user: "1026:100"), or give user 1000:1000 read and write access to the folder.`
 	if got := Hint("/data", true); got != want {
 		t.Fatalf("Hint =\n%s\nwant\n%s", got, want)
@@ -91,10 +90,10 @@ func TestReadOnlyMount(t *testing.T) {
 	if err.Error() != want {
 		t.Fatalf("got\n%s\nwant\n%s", err, want)
 	}
-	if !IsPermission(err) || !IsReadOnly(err) {
+	if !IsPermission(err) || !isReadOnly(err) {
 		t.Fatal("a read-only mount is not a refusal")
 	}
-	if IsReadOnly(Wrap("/backups", true, &fs.PathError{Op: "open", Path: "/backups/.x", Err: fs.ErrPermission})) {
+	if isReadOnly(Wrap("/backups", true, &fs.PathError{Op: "open", Path: "/backups/.x", Err: fs.ErrPermission})) {
 		t.Fatal("permission denied taken for a read-only mount")
 	}
 }
