@@ -1996,8 +1996,10 @@ func foundAdded(info fs.FileInfo) int64 {
 // mtime standing in where the filesystem has none. A book built without it
 // (a test's) lstats each file. A book none of whose files can be looked at now
 // (gone since discovery) is stamped now, as first seen; on Darwin, which looks
-// at none of them again, only a book discovery couldn't stat. Each lstat is
-// bounded by ctx and timeout (metadata.LstatBounded).
+// at none of them again, only a book discovery couldn't stat. Each file's
+// look (Linux's statx, the lstat) is one metadata.Bounded call under ctx and
+// timeout; once one is given up on (a share that stopped answering) the rest
+// are not looked at, each would wait out its time too.
 func stampAddedAt(ctx context.Context, lib catalog.Library, b *catalog.Book, timeout time.Duration) {
 	var paths []string
 	if b.IsFolder {
@@ -2010,16 +2012,27 @@ func stampAddedAt(ctx context.Context, lib catalog.Library, b *catalog.Book, tim
 	var added string // RFC3339 UTC sorts lexicographically, so min string = earliest
 	for i, rel := range paths {
 		abs := absOf(lib, rel)
-		a, ok := "", false
-		if len(b.FoundAdded) == len(paths) {
-			a, ok = addedFrom(abs, b.FoundAdded[i])
+		found, haveFound := int64(0), len(b.FoundAdded) == len(paths)
+		if haveFound {
+			found = b.FoundAdded[i]
 		}
-		if !ok {
-			info, err := metadata.LstatBounded(ctx, abs, timeout)
-			if err != nil {
-				continue
+		a, err := metadata.Bounded(ctx, abs, timeout, func() (string, error) {
+			if haveFound {
+				if a, ok := addedFrom(abs, found); ok {
+					return a, nil
+				}
 			}
-			a = addedAt(abs, info)
+			info, err := os.Lstat(abs)
+			if err != nil {
+				return "", err
+			}
+			return addedAt(abs, info), nil
+		}, nil)
+		if metadata.GaveUp(err) || ctx.Err() != nil {
+			break
+		}
+		if err != nil {
+			continue
 		}
 		if added == "" || a < added {
 			added = a
