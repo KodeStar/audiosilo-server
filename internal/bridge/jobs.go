@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -1681,13 +1682,14 @@ func IsCancelReason(text string) bool {
 
 // cancelReasons is every reason IsCancelReason knows, the list the console's
 // copy (SERVER_CANCEL_REASONS) is checked against (TestCancelReasonsMatchConsole).
-func cancelReasons() []string {
+// The kinds are fixed at init, so it is built once.
+var cancelReasons = sync.OnceValue(func() []string {
 	out := []string{CancelMoved, CancelReplacedRequest, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff}
 	for _, spec := range kinds {
 		out = slices.AppendSeq(out, maps.Values(spec.cancelsOpen))
 	}
 	return out
-}
+})
 
 // cancelOpenTx cancels the open job with dedupe key key, inside tx, as Cancel
 // does: at once when it is queued or parked, else by asking the Bridge
