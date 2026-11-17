@@ -90,9 +90,10 @@ var issuePredicates = map[string]string{
 // an ASIN that isn't the community's own (a match gave it: book_overrides of
 // source community), so matching it by hand settles it. The table is filled
 // only while the report runs, so the Health summary lists the kind only then
-// (api.handleIssues).
-const unknownASINExpr = `(trim(b.asin) <> '' AND trim(b.isbn) = ''
-	AND EXISTS(SELECT 1 FROM unknown_asin_reports u WHERE u.asin = upper(trim(b.asin)) AND u.unknown = 1)
+// (api.handleIssues). The ASIN is compared as match.NormalizeASIN (normASINSQL)
+// keys the table.
+var unknownASINExpr = `(` + normASINSQL("b.asin") + ` <> '' AND TRIM(b.isbn, ` + sqlSpace + `) = ''
+	AND EXISTS(SELECT 1 FROM unknown_asin_reports u WHERE u.asin = ` + normASINSQL("b.asin") + ` AND u.unknown = 1)
 	AND NOT EXISTS(SELECT 1 FROM book_matches m WHERE m.library_id = b.library_id AND m.path = b.rel_path)
 	AND NOT EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path
 		AND o.field = '` + FieldASIN + `' AND o.source = '` + SourceCommunity + `'))`

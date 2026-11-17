@@ -850,3 +850,31 @@ func TestMetaRecordedMatch(t *testing.T) {
 	})
 }
 
+// TestMetaClearsUnknownASIN (server#392): a /meta lookup that finds an ASIN the
+// unknown-ASIN report holds as unknown takes it off the report (and Health's
+// unknown_asin list) at once; one that finds nothing leaves it.
+func TestMetaClearsUnknownASIN(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		lookupCode int
+		unknown    bool
+	}{"found": {0, false}, "still unknown": {http.StatusNotFound, true}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newMetaEnvMock(t, true, &mockMetaserve{lookupCode: tc.lookupCode})
+			libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
+			ctx := context.Background()
+			if err := e.cat.SaveASINChecks(ctx, []catalog.ASINCheck{{ASIN: "B00FLIJJSY", Unknown: true}}, "2026-11-01T00:00:00.000Z"); err != nil {
+				t.Fatal(err)
+			}
+			getGenerated(t, e, libID, "Andy Weir/The Martian", "", adminSession(t, e))
+			rows, err := e.cat.UnknownASINRows(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := rows["B00FLIJJSY"].Unknown; got != tc.unknown {
+				t.Fatalf("unknown after /meta = %v, want %v", got, tc.unknown)
+			}
+		})
+	}
+}

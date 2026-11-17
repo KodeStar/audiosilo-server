@@ -327,7 +327,17 @@ type Service struct {
 	// matchUnsupportedUntil (unix nanoseconds) is when works/match is next
 	// tried after metaserve answered it as an unknown route (Candidates).
 	matchUnsupportedUntil atomic.Int64
+	// asinFound is told each ASIN a lookup found (SetASINFound); nil for none.
+	asinFound func(ctx context.Context, asin string)
 }
+
+// SetASINFound has the Service tell found each ASIN an identifier lookup finds
+// a work for (Service.lookup: a player's /meta, the upcoming job's work ids, the
+// chapter check), so the unknown-ASIN report learns at once that the community
+// added one (server#392) rather than at its monthly recheck. found runs inside
+// the lookup and must be quick. Call it once, right after NewService and before
+// the Service is used.
+func (s *Service) SetASINFound(found func(ctx context.Context, asin string)) { s.asinFound = found }
 
 // NewService builds a Service for the given metaserve base URL. now may be nil
 // (defaults to time.Now); it is injectable so tests can drive cache TTLs.
@@ -519,6 +529,10 @@ func (s *Service) lookup(ctx context.Context, asin, isbn string) (*upstreamLooku
 		return nil, err
 	case l.Work == nil || l.Work.ID == "":
 		return nil, ErrNotFound
+	}
+	// The lookup asks by the ASIN alone when there is one (client.lookup).
+	if asin != "" && s.asinFound != nil {
+		s.asinFound(ctx, asin)
 	}
 	return l, nil
 }
