@@ -225,7 +225,22 @@ export function lengthComparison(
   return { kind: diff > 0 ? 'longer' : 'shorter', seconds: Math.abs(diff) };
 }
 
+/**
+ * A score under it is a weak fit, almost always another book: the server's
+ * matchrun.ReviewFloor, under which a bulk match records nothing.
+ */
+export const WEAK_SCORE = 60;
+
 /** The score badge's variant. */
 export function scoreTone(score: number): 'success' | 'warning' | 'outline' {
-  return score >= 90 ? 'success' : score >= 60 ? 'warning' : 'outline';
+  return score >= 90 ? 'success' : score >= WEAK_SCORE ? 'warning' : 'outline';
+}
+
+/**
+ * Whether every candidate is a weak fit (WEAK_SCORE), so Add it is offered
+ * beside them (server#392): a search also sends the folder's author, whose
+ * surname alone can bring back other people's books.
+ */
+export function onlyWeak(candidates: readonly Pick<MatchCandidate, 'score'>[]): boolean {
+  return candidates.length > 0 && candidates.every((c) => c.score < WEAK_SCORE);
 }

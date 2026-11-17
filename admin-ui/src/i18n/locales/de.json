@@ -955,6 +955,7 @@
   "book.match.none": "In der Community-Datenbank passt nichts. Versuche andere Wörter oder eine ASIN oder ISBN.",
   "book.match.notInDatabase": "Dieses Buch ist noch nicht in der Community-Datenbank. Es lässt sich trotzdem ganz normal abspielen.",
   "book.match.notInDatabaseBooks": "Diese Bücher sind noch nicht in der Community-Datenbank. Sie lassen sich trotzdem ganz normal abspielen.",
+  "book.match.weakOnly": "Keiner davon passt gut, das Buch ist also vielleicht noch nicht in der Community-Datenbank.",
   "book.match.addIt": "Hinzufügen",
   "book.match.addItAria": "{{title}} auf meta.audiosilo.app zur Community-Datenbank hinzufügen (öffnet in einem neuen Tab)",
   "book.match.helpComplete": "<settings>Die Community-Datenbank vervollständigen</settings> sendet ihr die ASINs deiner Bücher, die sie nicht kennt, damit sie ergänzt werden können.",

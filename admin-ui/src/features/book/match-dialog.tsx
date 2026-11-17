@@ -43,7 +43,7 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { addBookUrl } from '@/lib/meta-site';
 import { regionTag } from '@/lib/regions';
-import { NotInDatabase } from './add-to-community';
+import { AddItLink, NotInDatabase } from './add-to-community';
 import { shownValue } from './book-model';
 import {
   acceptRequest,
@@ -54,6 +54,7 @@ import {
   defaultRecording,
   defaultTicks,
   lengthComparison,
+  onlyWeak,
   parseMatchQuery,
   scoreTone,
   type CompareRow,
@@ -433,7 +434,7 @@ function Candidates({
   candidates: MatchCandidate[];
   picked: MatchCandidate | undefined;
   bookSeconds: number;
-  /** Add it on the community site, for when nothing matches (server#370). */
+  /** Add it on the community site, for when nothing matches (server#370), or nothing well (server#392). */
   addUrl: string;
   bookTitle: string;
   recordingOf: (c: MatchCandidate) => MatchRecording | undefined;
@@ -482,63 +483,70 @@ function Candidates({
     );
   }
   return (
-    <RadioGroup
-      value={picked?.work_id ?? null}
-      onValueChange={(v) => onPick(v as string)}
-      aria-label={t('book.match.candidates')}
-      className="flex flex-col gap-2"
-    >
-      {candidates.map((c) => {
-        const rec = recordingOf(c);
-        const length = lengthComparison(rec?.runtime_min, bookSeconds);
-        const authors = candidateAuthors(c);
-        return (
-          <Radio.Root
-            key={c.work_id}
-            value={c.work_id}
-            className="group flex w-full cursor-pointer items-center gap-3 rounded-[12px] border bg-card px-3.5 py-3 text-left transition-colors duration-(--dur-1) outline-none hover:border-border-strong data-checked:border-brand data-checked:bg-[color-mix(in_oklab,var(--brand)_6%,var(--card))]"
-          >
-            <span className="grid size-[18px] shrink-0 place-items-center rounded-full border-[1.5px] border-border-strong group-data-checked:border-brand">
-              <Radio.Indicator className="size-2.5 rounded-full bg-brand" />
-            </span>
-            <span className="w-14 shrink-0">
-              <CommunityCover url={communityCover(c, rec)} title={c.title} author={authors} />
-            </span>
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <b className="font-semibold [overflow-wrap:anywhere]">
-                {c.title}
-                {c.subtitle ? (
-                  <span className="font-medium text-muted-foreground"> · {c.subtitle}</span>
-                ) : null}
-              </b>
-              <span className="text-[12.5px] text-muted-foreground">
-                {[authors, recordingLine(rec, t, lang)].filter(Boolean).join(' · ')}
+    <>
+      <RadioGroup
+        value={picked?.work_id ?? null}
+        onValueChange={(v) => onPick(v as string)}
+        aria-label={t('book.match.candidates')}
+        className="flex flex-col gap-2"
+      >
+        {candidates.map((c) => {
+          const rec = recordingOf(c);
+          const length = lengthComparison(rec?.runtime_min, bookSeconds);
+          const authors = candidateAuthors(c);
+          return (
+            <Radio.Root
+              key={c.work_id}
+              value={c.work_id}
+              className="group flex w-full cursor-pointer items-center gap-3 rounded-[12px] border bg-card px-3.5 py-3 text-left transition-colors duration-(--dur-1) outline-none hover:border-border-strong data-checked:border-brand data-checked:bg-[color-mix(in_oklab,var(--brand)_6%,var(--card))]"
+            >
+              <span className="grid size-[18px] shrink-0 place-items-center rounded-full border-[1.5px] border-border-strong group-data-checked:border-brand">
+                <Radio.Indicator className="size-2.5 rounded-full bg-brand" />
               </span>
-              {rec?.asins?.[0] || rec?.isbns?.[0] ? (
-                <span className="font-mono text-[12px] text-subtle-foreground">
-                  {rec.asins?.[0] || rec.isbns?.[0]}
-                  {rec.asins?.[0] && rec.asin_region ? ` · ${regionTag(rec.asin_region)}` : ''}
+              <span className="w-14 shrink-0">
+                <CommunityCover url={communityCover(c, rec)} title={c.title} author={authors} />
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <b className="font-semibold [overflow-wrap:anywhere]">
+                  {c.title}
+                  {c.subtitle ? (
+                    <span className="font-medium text-muted-foreground"> · {c.subtitle}</span>
+                  ) : null}
+                </b>
+                <span className="text-[12.5px] text-muted-foreground">
+                  {[authors, recordingLine(rec, t, lang)].filter(Boolean).join(' · ')}
                 </span>
-              ) : null}
-            </span>
-            <span className="flex shrink-0 flex-col items-end gap-1 text-right">
-              <Badge variant={scoreTone(c.score)}>
-                {t('book.match.score', { score: Math.round(c.score) })}
-              </Badge>
-              {length ? (
-                <span className="text-[11.5px] text-subtle-foreground">
-                  {length.kind === 'match'
-                    ? t('book.match.lengthMatches')
-                    : t(`book.match.${length.kind}`, {
-                        length: formatDuration(length.seconds, lang),
-                      })}
-                </span>
-              ) : null}
-            </span>
-          </Radio.Root>
-        );
-      })}
-    </RadioGroup>
+                {rec?.asins?.[0] || rec?.isbns?.[0] ? (
+                  <span className="font-mono text-[12px] text-subtle-foreground">
+                    {rec.asins?.[0] || rec.isbns?.[0]}
+                    {rec.asins?.[0] && rec.asin_region ? ` · ${regionTag(rec.asin_region)}` : ''}
+                  </span>
+                ) : null}
+              </span>
+              <span className="flex shrink-0 flex-col items-end gap-1 text-right">
+                <Badge variant={scoreTone(c.score)}>
+                  {t('book.match.score', { score: Math.round(c.score) })}
+                </Badge>
+                {length ? (
+                  <span className="text-[11.5px] text-subtle-foreground">
+                    {length.kind === 'match'
+                      ? t('book.match.lengthMatches')
+                      : t(`book.match.${length.kind}`, {
+                          length: formatDuration(length.seconds, lang),
+                        })}
+                  </span>
+                ) : null}
+              </span>
+            </Radio.Root>
+          );
+        })}
+      </RadioGroup>
+      {onlyWeak(candidates) ? (
+        <p className="text-[13px] text-muted-foreground">
+          {t('book.match.weakOnly')} <AddItLink href={addUrl} title={bookTitle} />
+        </p>
+      ) : null}
+    </>
   );
 }
 

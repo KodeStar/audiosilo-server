@@ -955,6 +955,7 @@
   "book.match.none": "Nothing in the community database matches. Try other words, or an ASIN or ISBN.",
   "book.match.notInDatabase": "This book is not in the community database yet. It still plays as normal.",
   "book.match.notInDatabaseBooks": "These books are not in the community database yet. They still play as normal.",
+  "book.match.weakOnly": "None of these is a close match, so the book may not be in the community database yet.",
   "book.match.addIt": "Add it",
   "book.match.addItAria": "Add {{title}} to the community database at meta.audiosilo.app (opens in a new tab)",
   "book.match.helpComplete": "<settings>Help complete the community database</settings> sends it the ASINs of your books it doesn't know, so they can be added.",

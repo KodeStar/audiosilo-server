@@ -57,8 +57,18 @@ export async function copyWithToast(text: string, what: string): Promise<void> {
   else toast.add({ title: t('common.copyFailed'), description: text, type: 'warning', timeout: 0 });
 }
 
-/** A share sheet shareOrCopy opened is still open (its promise unsettled). */
-let sharing = false;
+/**
+ * The share sheet shareOrCopy opened, while it is open (its promise unsettled):
+ * when it was opened, undefined for none.
+ */
+let sharing: { since: number } | undefined;
+
+/**
+ * How long an unsettled share counts as a sheet still open: a browser whose
+ * share promise never settles (server#392) would otherwise ignore every later
+ * press until the page reloads.
+ */
+export const SHARE_OPEN_MS = 60_000;
 
 /**
  * Hands a message to the device's share sheet (the Web Share API: a phone's
@@ -67,22 +77,25 @@ let sharing = false;
  * context). Closing the share sheet is no failure; a share the browser refuses
  * falls back to the copy. A press while a share sheet is still open is ignored
  * (server#386): the browser refuses a second share then (InvalidStateError),
- * which would otherwise copy underneath the open sheet.
+ * which would otherwise copy underneath the open sheet. One opened over
+ * SHARE_OPEN_MS ago no longer counts as open.
  */
 export async function shareOrCopy(
   data: { title: string; text: string; url: string },
   what: string,
 ): Promise<void> {
   if (typeof navigator.share === 'function' && (!navigator.canShare || navigator.canShare(data))) {
-    if (sharing) return;
-    sharing = true;
+    if (sharing && Date.now() - sharing.since < SHARE_OPEN_MS) return;
+    const mine = { since: Date.now() };
+    sharing = mine;
     try {
       await navigator.share(data);
       return;
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
     } finally {
-      sharing = false;
+      // A stuck share settling late leaves a newer one's mark alone.
+      if (sharing === mine) sharing = undefined;
     }
   }
   await copyWithToast(`${data.text}\n${data.url}`, what);

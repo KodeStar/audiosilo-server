@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubExecCommand, stubShare, unstubExecCommand } from '@/test/clipboard';
-import { copyText, copyWithToast, shareOrCopy } from './clipboard';
+import { SHARE_OPEN_MS, copyText, copyWithToast, shareOrCopy } from './clipboard';
 import { toast } from './toast';
 
 describe('copyWithToast', () => {
@@ -122,6 +122,29 @@ describe('shareOrCopy', () => {
     expect(share).toHaveBeenCalledTimes(2);
     close();
     await again;
+  });
+
+  it('stops counting a share that never settles as open (server#392)', async () => {
+    stubExecCommand(() => true);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const share = vi.fn(() => new Promise<void>(() => {})); // never settles
+    stubShare(share);
+    void shareOrCopy(data, 'Invite message');
+    now.mockReturnValue(1_000_000 + SHARE_OPEN_MS - 1);
+    void shareOrCopy(data, 'Invite message');
+    expect(share).toHaveBeenCalledTimes(1);
+    now.mockReturnValue(1_000_000 + SHARE_OPEN_MS);
+    let close = () => {};
+    share.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          close = resolve;
+        }),
+    );
+    const late = shareOrCopy(data, 'Invite message');
+    expect(share).toHaveBeenCalledTimes(2);
+    close();
+    await late;
   });
 
   it('copies the text and the link when there is no share sheet, or it refuses', async () => {
