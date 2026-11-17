@@ -1,7 +1,6 @@
 package library
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -179,9 +178,11 @@ func (s *Scanner) readAttachments(ctx context.Context, lib catalog.Library, b *c
 	for _, name := range metadata.AttachmentSigNames(sig) {
 		rel := path.Join(dir, metadata.AttachmentsDir, prefix+name)
 		p := absOf(lib, rel)
-		one, err := metadata.Bounded(ctx, p, s.probeTimeout, func() (one metadata.AttachmentFiles, err error) {
-			err = readAttachment(&one, name, p)
-			return one, err
+		// The read fills a copy: a read given up on may still end later.
+		cur := files
+		got, err := metadata.Bounded(ctx, p, s.probeTimeout, func() (metadata.AttachmentFiles, error) {
+			err := readAttachment(&cur, name, p)
+			return cur, err
 		}, nil)
 		if err != nil {
 			s.log.Warn("unusable .audiosilo attachment", "library", lib.Name, "path", rel, "err", err)
@@ -189,13 +190,7 @@ func (s *Scanner) readAttachments(ctx context.Context, lib catalog.Library, b *c
 			read = read && errors.Is(err, metadata.ErrAttachmentInvalid)
 			continue
 		}
-		// readAttachment set one file's field: the only one not nil.
-		files.Characters = cmp.Or(one.Characters, files.Characters)
-		files.Recaps = cmp.Or(one.Recaps, files.Recaps)
-		files.Description = cmp.Or(one.Description, files.Description)
-		files.Chapters = cmp.Or(one.Chapters, files.Chapters)
-		files.Provenance = cmp.Or(one.Provenance, files.Provenance)
-		files.Readalong = cmp.Or(one.Readalong, files.Readalong)
+		files = got
 	}
 	if !read {
 		return metadata.AttachmentFiles{}, false
