@@ -110,6 +110,9 @@ export const keys = {
   /** Every listing of one library's folders (a prefix: a scan changes them). */
   browseLibrary: (libraryId: number) => ['fs', libraryId] as const,
   browse: (libraryId: number, path: string) => ['fs', libraryId, path] as const,
+  /** A later page of a folder's listing, from `offset` (under `browse`, so its refetches reach it). */
+  browsePage: (libraryId: number, path: string, offset: number) =>
+    ['fs', libraryId, path, offset] as const,
   dirs: (path: string) => ['admin', 'dirs', path] as const,
   users: ['admin', 'users'] as const,
   user: (id: number) => ['admin', 'user', id] as const,

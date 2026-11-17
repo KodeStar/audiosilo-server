@@ -52,6 +52,40 @@ beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('folders', () => {
+  it('shows a big folder 500 entries at a time, with Show more', async () => {
+    // 620 folders at the root: two pages of the server's 500.
+    const all = Array.from({ length: 620 }, (_, i) => dir(`F${String(i).padStart(3, '0')}`));
+    const calls = mockFetch(
+      routes({
+        'GET /libraries/1/fs': (req) => {
+          const offset = Number(req.query.get('offset') ?? 0);
+          const end = Math.min(offset + Number(req.query.get('limit')), all.length);
+          return {
+            body: {
+              path: '',
+              entries: all.slice(offset, end),
+              total: all.length,
+              offset,
+              ...(end < all.length ? { next_offset: end } : {}),
+            },
+          };
+        },
+      }),
+    );
+    renderApp('/library/folders');
+    const tree = await screen.findByRole('tree', { name: 'Folders in Fiction' });
+    expect(within(tree).getAllByRole('treeitem')).toHaveLength(500);
+    expect(within(tree).getByText('500 of 620 items listed')).toBeInTheDocument();
+
+    await userEvent.setup().click(within(tree).getByRole('button', { name: 'Show more' }));
+    expect(await within(tree).findByRole('treeitem', { name: 'F619' })).toBeInTheDocument();
+    expect(within(tree).getAllByRole('treeitem')).toHaveLength(620);
+    expect(within(tree).queryByRole('button', { name: 'Show more' })).toBeNull();
+    expect(
+      calls.filter((c) => c.path === '/libraries/1/fs').map((c) => c.query.get('offset')),
+    ).toEqual([null, '500']);
+  });
+
   it('loads the tree lazily and opens a folder', async () => {
     const calls = mockFetch(routes());
     const { router } = renderApp('/library/folders');

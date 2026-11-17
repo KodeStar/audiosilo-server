@@ -4,7 +4,7 @@ import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, FileAudio, FolderOpen, FolderX, RefreshCw } from 'lucide-react';
 import { invalidateLibraryBooks, keys, rescanBook, setFolderMode, useBrowse } from '@/api/hooks';
-import type { AdminLibrary, FsEntry } from '@/api/types';
+import type { AdminLibrary, FsEntry, FsListing } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { Notice } from '@/components/notice';
 import { QueryError } from '@/components/query-error';
@@ -23,13 +23,22 @@ import { audioFilesOf, entryIn, foldersIn, joinChoices } from './folders-model';
  * The selected folder: what it is, how AudioSilo reads it (each choice saved
  * at once, then the library rescans) and the audio files it holds. Its own
  * entry (override, whether it is a book) comes from its parent's listing, its
- * files from its own; the tree has usually loaded both already.
+ * files from its own; the tree has usually loaded both already, and gives the
+ * parent's with the pages Show more added (`parentListing`).
  */
-export function FolderDetail({ library, path }: { library: AdminLibrary; path: string }) {
+export function FolderDetail({
+  library,
+  path,
+  parentListing,
+}: {
+  library: AdminLibrary;
+  path: string;
+  parentListing?: FsListing;
+}) {
   const { t } = useTranslation();
   const parent = useBrowse(library.id, relParent(path));
   const own = useBrowse(library.id, path);
-  const entry = entryIn(parent.data, path);
+  const entry = entryIn(parentListing ?? parent.data, path);
   const name = entry?.name ?? relBaseName(path);
 
   if (parent.data && !entry) {

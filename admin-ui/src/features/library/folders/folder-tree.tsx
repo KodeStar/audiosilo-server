@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronRight, Folder, FolderOpen, RotateCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { treeKeyAction, type TreeRow } from './folders-model';
 
@@ -22,6 +23,7 @@ export function FolderTree({
   onSelect,
   onToggle,
   onRetry,
+  onMore,
 }: {
   label: string;
   rows: TreeRow[];
@@ -30,8 +32,11 @@ export function FolderTree({
   onToggle: (path: string, open: boolean) => void;
   /** Reloads the listing of `parent` after it failed. */
   onRetry: (parent: string) => void;
+  /** Loads the next page of `parent`'s listing (or the one that failed, again). */
+  onMore: (parent: string) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
   const items = useRef(new Map<string, HTMLLIElement>());
   const [focused, setFocused] = useState<string>();
   const has = (p?: string) =>
@@ -92,7 +97,31 @@ export function FolderTree({
                   </Button>
                 </>
               ) : (
-                <span>{t('folders.tree.more')}</span>
+                <>
+                  <span role={row.state === 'failed' ? 'alert' : undefined}>
+                    {row.state === 'failed'
+                      ? t('folders.tree.moreError')
+                      : t('folders.tree.listed', {
+                          shown: formatNumber(row.shown, lang),
+                          total: formatNumber(row.total, lang),
+                        })}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={row.state === 'loading'}
+                    onClick={() => onMore(row.parent)}
+                  >
+                    {row.state === 'failed' ? (
+                      <>
+                        <RotateCw aria-hidden="true" />
+                        {t('common.tryAgain')}
+                      </>
+                    ) : (
+                      t('folders.tree.showMore')
+                    )}
+                  </Button>
+                </>
               )}
             </li>
           );

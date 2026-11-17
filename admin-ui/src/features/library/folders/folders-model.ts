@@ -29,6 +29,28 @@ export function visibleListings(expanded: ReadonlySet<string>): string[] {
 export interface ListingState {
   data?: FsListing;
   failed?: boolean;
+  /** The next page Show more asked for: still loading, or failed. */
+  more?: 'loading' | 'failed';
+}
+
+/**
+ * A folder's listing as far as its pages have loaded, in order: the first
+ * page's, then each later page's entries after it, with the last loaded
+ * page's `next_offset`. A later page still loading or failed stops the join
+ * there and says so in `more`.
+ */
+export function joinPages(first: ListingState, later: readonly ListingState[]): ListingState {
+  if (!first.data) return first;
+  let data = first.data;
+  for (const page of later) {
+    if (!page.data) return { data, more: page.failed ? 'failed' : 'loading' };
+    data = {
+      ...data,
+      entries: [...data.entries, ...page.data.entries],
+      next_offset: page.data.next_offset,
+    };
+  }
+  return { data };
 }
 
 export type TreeRow =
@@ -43,8 +65,18 @@ export type TreeRow =
       /** False once its listing is known to hold no folders. */
       expandable: boolean;
     }
-  /** A placeholder under `parent` while its listing loads, fails, or was cut short. */
-  | { kind: 'loading' | 'error' | 'more'; parent: string; level: number };
+  /** A placeholder under `parent` while its listing loads, or once it failed. */
+  | { kind: 'loading'; parent: string; level: number }
+  | { kind: 'error'; parent: string; level: number }
+  /** Show more under `parent`, whose listing has entries past the pages loaded. */
+  | {
+      kind: 'more';
+      parent: string;
+      level: number;
+      shown: number;
+      total: number;
+      state?: ListingState['more'];
+    };
 
 /** A listing's folders (audio files are not tree rows). */
 export const foldersIn = (listing: FsListing) => listing.entries.filter((e) => e.is_dir);
@@ -81,7 +113,10 @@ export function treeRows(
       });
       if (open && expandable) walk(entry.path, level + 1);
     });
-    if (state.data.next_offset) rows.push({ kind: 'more', parent, level });
+    if (state.data.next_offset) {
+      const { entries, total } = state.data;
+      rows.push({ kind: 'more', parent, level, shown: entries.length, total, state: state.more });
+    }
   };
   walk('', 1);
   return rows;
@@ -171,12 +206,15 @@ export function joinChoices(
 
 /**
  * Whether the folder detection dialog offers "Always one book" for a folder, from
- * its entry alone: a book (its own audio, or joined), one split into separate books
- * (its own audio), a disc set to join, or what it is set to already. A folder of
- * books (an author's, a series') isn't one: the server would read it the same.
+ * its entry alone: a book (its own audio, or joined), one the scanner would read
+ * as a book once it runs (`pending_book`, before the first scan), one split into
+ * separate books (its own audio), a disc set to join, or what it is set to
+ * already. A folder of books (an author's, a series') isn't one: the server would
+ * read it the same.
  */
-export const offersBook = (e: Pick<FsEntry, 'override' | 'is_book' | 'split_discs'>) =>
-  !!e.is_book || !!e.split_discs || !!e.override;
+export const offersBook = (
+  e: Pick<FsEntry, 'override' | 'is_book' | 'pending_book' | 'split_discs'>,
+) => !!e.is_book || !!e.pending_book || !!e.split_discs || !!e.override;
 
 /**
  * Whether the folder detection dialog offers "Separate books" for a folder: not on
