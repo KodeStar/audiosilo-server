@@ -96,11 +96,12 @@ export function JobActions({
 
 /**
  * A book's (or series') name in a dialog's heading, at most two lines, so a
- * long title can't push the form down; the whole name on hover.
+ * long title can't push the form down (a path with no spaces still breaks); the
+ * whole name on hover.
  */
 export function ClampedName({ children }: { children: string }) {
   return (
-    <span className="line-clamp-2" title={children}>
+    <span className="line-clamp-2 [overflow-wrap:anywhere]" title={children}>
       {children}
     </span>
   );

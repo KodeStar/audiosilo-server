@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils';
 import { queueJob } from '@/features/bridge/bridge-actions';
 import { isOpen } from '@/features/bridge/bridge-model';
 import { generateJobsKnown, KIND_CORRECT } from '@/features/bridge/generate-model';
-import { JobActions, JobSection } from '@/features/bridge/generate-parts';
+import { ClampedName, JobActions, JobSection } from '@/features/bridge/generate-parts';
 import { GenerateStatus } from '@/features/bridge/generate-status';
 import { useBookGenerateJob, useBridgeLink } from '@/features/bridge/use-generate';
 import { shownValue } from './book-model';
@@ -116,11 +116,7 @@ export function CorrectionsDialog({
         title={t('book.corrections.dialog')}
         // Two lines at most, so a long title never squeezes the review on a
         // phone; the whole of it stays in the text (read out) and on hover.
-        description={
-          <span className="line-clamp-2 [overflow-wrap:anywhere]" title={name}>
-            {name}
-          </span>
-        }
+        description={<ClampedName>{name}</ClampedName>}
         icon={FilePenLine}
         tone="community"
         size="lg"

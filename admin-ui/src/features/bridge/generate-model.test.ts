@@ -1212,15 +1212,16 @@ describe('cancelledView (BRIDGE-02)', () => {
   });
 
   it("names the server's reason for a working job it stopped, not an admin", () => {
-    for (const error of [
-      'a generate job for the book replaced it; make the read-along again after',
-      'a newer request replaced it',
-      'the Audible account was removed',
-      "the Audible account's library was deleted",
+    for (const [error, reason] of [
+      [
+        'a generate job for the book replaced it; make the read-along again after',
+        'A generate job for the book replaced it; make the read-along again after.',
+      ],
+      ['a newer request replaced it', 'A newer request replaced it.'],
+      ['the Audible account was removed', 'The Audible account was removed.'],
+      ["the Audible account's library was deleted", "The Audible account's library was deleted."],
     ]) {
-      const reason = cancelledView(cancelled({ error })).reason ?? '';
-      expect(reason.toLowerCase()).toBe(`${error.toLowerCase()}.`);
-      expect(reason[0]).toBe(error[0].toUpperCase());
+      expect(cancelledView(cancelled({ error })).reason).toBe(reason);
     }
   });
 

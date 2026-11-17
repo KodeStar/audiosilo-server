@@ -24,12 +24,15 @@ export const BRIDGE_JOB_STATES = [
   'cancelled',
 ] as const satisfies readonly BridgeJobState[];
 
+/** Phase 0's proof job: the Bridge checks a library (or a book) through its mapping. */
+export const KIND_VERIFY = 'bridge.verify';
+
 /**
  * Every job kind the jobs list can be narrowed to, in the order the filter
  * lists them (internal/bridge's kinds; each has a `bridge.kind.<kind>` name).
  */
 export const BRIDGE_JOB_KINDS = [
-  'bridge.verify',
+  KIND_VERIFY,
   'sidecars.generate',
   'sidecars.describe',
   'chapters.detect',
@@ -45,9 +48,6 @@ export const BRIDGE_JOB_KINDS = [
   'audible.sync',
   'librivox.fetch',
 ] as const;
-
-/** Phase 0's proof job: the Bridge checks a library (or a book) through its mapping. */
-export const KIND_VERIFY = 'bridge.verify';
 
 /** The longest hold bridge.verify takes (bridge.verifyParams). */
 export const MAX_HOLD_SECONDS = 600;
