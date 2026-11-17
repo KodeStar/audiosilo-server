@@ -3686,6 +3686,7 @@
   "audible.account.pausedBody": "Die Bibliothek wurde gelöscht: wähle auf der Bridge eine andere",
   "audible.account.checked": "Geprüft {{when}}",
   "audible.account.notChecked": "Noch nicht geprüft",
+  "audible.account.refused": "Abgelehnt: Melde dich in der Bridge erneut an",
   "audible.account.person": "Für",
   "audible.account.library": "Bibliothek",
   "audible.account.store": "Shop",

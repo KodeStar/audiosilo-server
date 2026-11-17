@@ -61,8 +61,8 @@ func (a *API) SetBridge(b *bridge.Service) {
 				a.log.Warn("librivox: recording a fetched book failed", "job", job.ID, "err", err)
 			}
 		}
-		if job.Kind == bridge.KindAudibleSync {
-			// The account's last sync, or Audible refusing it.
+		if job.Kind == bridge.KindAudibleSync || job.Kind == bridge.KindAudiblePoll {
+			// The account's last sync, or Audible refusing it (a sync or a poll).
 			if err := a.cat.FoldAudibleSync(ctx, job); err != nil {
 				a.log.Warn("audible: recording a sync failed", "job", job.ID, "err", err)
 			}

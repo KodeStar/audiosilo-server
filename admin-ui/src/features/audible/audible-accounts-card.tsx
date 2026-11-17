@@ -134,6 +134,11 @@ function AccountRow({
             <StatusText tone="warn" colored className="text-[12.5px] font-semibold">
               {t('audible.account.paused')}
             </StatusText>
+          ) : a.refused_at ? (
+            // Audible refused the account (a poll or a sync, bridge#40): not "Checked".
+            <StatusText tone="warn" colored className="text-[12.5px] font-semibold">
+              {t('audible.account.refused')}
+            </StatusText>
           ) : (
             <StatusText
               tone={a.last_poll_at ? 'ok' : 'off'}

@@ -632,7 +632,7 @@ func TestAudibleSyncScheduler(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, job := range syncs() {
-		if acc, _ := bridge.AudibleSyncOf(job); acc == "acct0002" {
+		if acc, _ := bridge.AudibleAccountOf(job); acc == "acct0002" {
 			t.Fatalf("a sync with nothing to sync: %+v", job)
 		}
 	}

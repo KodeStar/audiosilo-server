@@ -454,17 +454,18 @@ const KindAudibleSync = "audible.sync"
 // audible.sync.
 const AudibleSyncEvery = 15 * time.Minute
 
-// The audible.sync failure code the server reads (AudibleSyncCode): Audible
-// refused the account (the Bridge's "Sign in again" state), so no sync is
-// queued until the Bridge maps the account again.
+// The audible.sync and audible.poll failure code the server reads
+// (AudibleRefusalCode): Audible refused the account (the Bridge's "Sign in
+// again" state), so no sync is queued until the Bridge maps the account again
+// or polls it whole.
 const SyncAudibleRefused = ImportAudibleRefused
 
 // SyncAudibleSignIn: Audible refused the account's sign-in for now
 // (transient: the Bridge tries again), not the device (audible_refused). An
-// audible.sync failing with it is an ordinary failure: the account is not
-// marked refused. An import never names it (its refused sign-in is
-// audible_refused, server#303), so the console words it for no backup; a
-// poll's failure may name it, and the server folds no poll's code.
+// audible.sync or audible.poll failing with it is an ordinary failure: the
+// account is not marked refused. An import never names it (its refused
+// sign-in is audible_refused, server#303), so the console words it for no
+// backup.
 const SyncAudibleSignIn = "audible_sign_in"
 
 // AudibleSyncTitle is one title an audible.sync reads: its ASIN, the book on
@@ -540,16 +541,20 @@ func AudibleSync(account string, titles []AudibleSyncTitle, priority int) (job N
 	return NewJob{Kind: KindAudibleSync, Params: raw, Priority: priority}, len(titles) - len(keep)
 }
 
-// AudibleSyncOf reads an audible.sync's account.
-func AudibleSyncOf(j Job) (account string, err error) {
-	var p AudibleSyncParams
+// AudibleAccountOf reads an audible.sync's or audible.poll's account (both
+// params name it as "account").
+func AudibleAccountOf(j Job) (account string, err error) {
+	var p struct {
+		Account string `json:"account"`
+	}
 	err = json.Unmarshal(j.Params, &p)
 	return p.Account, err
 }
 
-// AudibleSyncCode is the code an ended audible.sync failed with, "" for none:
-// the result's "code", else an error starting with SyncAudibleRefused.
-func AudibleSyncCode(j Job) string {
+// AudibleRefusalCode is the code an ended audible.sync or audible.poll failed
+// with, "" for none: the result's "code", else an error starting with
+// SyncAudibleRefused.
+func AudibleRefusalCode(j Job) string {
 	if j.State != StateFailed {
 		return ""
 	}

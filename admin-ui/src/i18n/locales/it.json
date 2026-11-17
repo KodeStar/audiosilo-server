@@ -3887,6 +3887,7 @@
   "audible.account.pausedBody": "La sua libreria è stata eliminata: scegline un'altra sulla Bridge",
   "audible.account.checked": "Controllato {{when}}",
   "audible.account.notChecked": "Non ancora controllato",
+  "audible.account.refused": "Rifiutato: accedi di nuovo nel Bridge",
   "audible.account.person": "Per",
   "audible.account.library": "Libreria",
   "audible.account.store": "Negozio",

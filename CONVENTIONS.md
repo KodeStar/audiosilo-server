@@ -4032,8 +4032,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rule bar the 15 min, an online Bridge offering the kind; a title change queues even an empty title list, so the
   Bridge drops a left-out title now; a sync the Bridge already runs keeps its titles). Ended (`OnEnded`, `FoldAudibleSync`): a sync that read Audible's places sets
   `last_sync_at` (`bridge.AudibleSynced`: done, its result neither `waiting` nor `sync_off`, the Bridge's result
-  fields, hand-mirrored); failed with code `audible_refused` (result `code`, or an `audible_refused:` error prefix,
-  `AudibleSyncCode`; `audible_sign_in`, `bridge.SyncAudibleSignIn`, the Bridge's transient sign-in refusal, never an
+  fields, hand-mirrored); a sync or a poll (bridge#40: the console's accounts card then asks for a sign-in on
+  the Bridge instead of showing it checked) failed with code `audible_refused` (result `code`, or an `audible_refused:` error prefix,
+  `AudibleRefusalCode`; `audible_sign_in`, `bridge.SyncAudibleSignIn`, the Bridge's transient sign-in refusal, never an
   import's, is an ordinary failure) sets `refused_at`, cleared by any account PUT of the Bridge's (a fresh sign-in, an edit) or a
   complete poll (`PutAudibleTitles` final: Audible answered the account), both stamping `refusal_ended_at` (`0071`):
   a refused sync claimed in an earlier second than that (`refusalEndedSince`; `claimed_at` is whole seconds, so one

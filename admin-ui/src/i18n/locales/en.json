@@ -3686,6 +3686,7 @@
   "audible.account.pausedBody": "Its library was deleted: choose another on the Bridge",
   "audible.account.checked": "Checked {{when}}",
   "audible.account.notChecked": "Not checked yet",
+  "audible.account.refused": "Refused: sign in again on the Bridge",
   "audible.account.person": "For",
   "audible.account.library": "Library",
   "audible.account.store": "Store",
