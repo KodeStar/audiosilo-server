@@ -986,6 +986,13 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		case !errors.Is(err, media.ErrUnavailable):
 			a.log.Warn("remux failed: transcoding Matroska instead", "path", abs, "err", err)
 		}
+		// The waits for the remux were no looks at the file (the share answered
+		// lookAtSource): the transcode's look is given at least a look's time,
+		// not a stream's bound those waits may have used up (a 503
+		// share_not_answering for a download whose remux ran long).
+		if d := time.Now().Add(a.fileWait); d.After(deadline) {
+			deadline = d
+		}
 		downloadName := ""
 		if download {
 			downloadName = name
