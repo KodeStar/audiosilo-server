@@ -3616,8 +3616,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `CallBudget` 20 s, started once the use is past any wait for another use's discovery (at most
   `discoveryWait` 5 s; `UseTime` 25 s together), so both stay under the API's 30 s `requestTimeout` and a slow provider ends
   on the result panel, not a bare 503; a provider discovered before is probed (its discovery
-  document, 3 s, at most every 30 s: `probe`) at `/start` and for the status, so one gone down lands
-  on `#oidc=unavailable` and the status says `error`; the scopes are each `/start`'s, `oidcScopes`:
+  document, within the use's `CallBudget` as discovery itself, so a slow provider keeps signing people
+  in; an answer stands 30 s, a failure only 5 s from when it came: `probe`) at `/start` and for the
+  status, so one gone down lands on `#oidc=unavailable` and the status says `error`; the scopes are each `/start`'s, `oidcScopes`:
   `auth.oidc.scopes` as listed, else the defaults with `groups` only while `admin_group` is set or
   `allowed_group` is with `auto_create` on, `GroupPolicy`, server#406), the flow cookie (`Sealer`: AES-GCM under a key made at
   start, so a restart ends flows in flight; `Flow{state, nonce, verifier, redirect_uri, return,

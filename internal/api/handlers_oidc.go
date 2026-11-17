@@ -251,9 +251,10 @@ func (a *API) oidcCookieValue(r *http.Request, name string) string {
 // state, nonce, PKCE verifier, the redirect URI, return; ten minutes,
 // HttpOnly, SameSite=Lax; named and placed by oidcCookieName, Secure on an
 // https public_url) and a 302 to the provider's authorization URL, asking for
-// oidcScopes. A provider discovered before is probed first (a short timeout,
-// at most every 30 s): one gone down lands on #oidc=unavailable rather than
-// the browser being sent to it.
+// oidcScopes. A provider discovered before is probed first (within the call
+// budget, so a slow one still signs people in; at most every 30 s, a failure
+// asked again after 5 s): one gone down lands on #oidc=unavailable rather
+// than the browser being sent to it.
 func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	// Never the request's own value from here on: the enum's constant.
 	var ret string

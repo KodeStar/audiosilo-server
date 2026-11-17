@@ -69,12 +69,16 @@ const discoveryWait = 5 * time.Second
 const UseTime = discoveryWait + CallBudget
 
 // The provider probe: once discovered, a provider is asked for its discovery
-// document again (probeTimeout) before a sign-in is sent there or the console
-// shows its state, at most every probeEvery, so a provider gone down is shown
-// as unavailable rather than as the connection error the browser would meet.
+// document again before a sign-in is sent there or the console shows its
+// state, so a provider gone down is shown as unavailable rather than as the
+// connection error the browser would meet. The probe has what discovery has,
+// the use's budget: a provider too slow for a shorter wait was discovered all
+// the same, and its sign-ins work. An answer stands for probeEvery, a failure
+// only for probeRetry (from when it came), so one bad answer doesn't refuse
+// the sign-ins of the half minute after it.
 const (
-	probeTimeout = 3 * time.Second
-	probeEvery   = 30 * time.Second
+	probeEvery = 30 * time.Second
+	probeRetry = 5 * time.Second
 )
 
 // userinfoRecheck is how long a claim userinfo didn't hold for a person (the
@@ -235,6 +239,16 @@ func (p *Provider) budget(ctx context.Context) (context.Context, context.CancelF
 	return context.WithTimeout(ctx, p.s.Budget)
 }
 
+// detached is ctx with its deadline (the use's budget) but not its
+// cancellation: for a call whose answer is everyone's, not only the caller's.
+func (p *Provider) detached(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(p.s.Budget)
+	}
+	return context.WithDeadline(context.WithoutCancel(ctx), deadline)
+}
+
 // outOfTime is err, or ErrUnavailable when the use's budget ran out (or its
 // caller left): a provider too slow to answer refused nothing, so the sign-in
 // ends as unavailable and charges the address no failure.
@@ -301,11 +315,7 @@ func (p *Provider) discover(ctx context.Context, now time.Time) (*gooidc.Provide
 	// Not the caller's cancellation: a browser that leaves mid-discovery would
 	// otherwise count as the provider failing and start a backoff for everyone.
 	// Its deadline still holds: the budget the rest of the use shares.
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		deadline = time.Now().Add(p.s.Budget)
-	}
-	dctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	dctx, cancel := p.detached(ctx)
 	defer cancel()
 	prov, err := gooidc.NewProvider(gooidc.ClientContext(dctx, p.client), p.s.Issuer)
 	p.mu.Lock()
@@ -332,22 +342,26 @@ func (p *Provider) discover(ctx context.Context, now time.Time) (*gooidc.Provide
 	return p.provider, p.verifier, nil
 }
 
-// probe asks a discovered provider for its discovery document again
-// (probeTimeout), unless it was asked within probeEvery (that answer stands):
-// ErrUnavailable when it can't be reached or doesn't answer 200. Discovery
-// itself is fixed for the process; the probe only says whether the provider
-// is there now. Not the caller's cancellation: its answer is everyone's.
+// probe asks a discovered provider for its discovery document again, within
+// the use's budget (ctx's deadline), unless the last answer still stands
+// (probeEvery, or probeRetry for a failure): ErrUnavailable when it can't be
+// reached or doesn't answer 200. Discovery itself is fixed for the process;
+// the probe only says whether the provider is there now. Not the caller's
+// cancellation: its answer is everyone's.
 func (p *Provider) probe(ctx context.Context) error {
 	p.probeMu.Lock()
 	defer p.probeMu.Unlock()
-	now := p.s.Now()
 	p.mu.Lock()
 	at, last := p.probedAt, p.probeErr
 	p.mu.Unlock()
-	if !at.IsZero() && !now.Before(at) && now.Sub(at) < probeEvery {
+	stands := probeEvery
+	if last != "" {
+		stands = probeRetry
+	}
+	if age := p.s.Now().Sub(at); !at.IsZero() && age >= 0 && age < stands {
 		return probeResult(last)
 	}
-	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), probeTimeout)
+	pctx, cancel := p.detached(ctx)
 	defer cancel()
 	msg := ""
 	req, err := http.NewRequestWithContext(pctx, http.MethodGet,
@@ -366,8 +380,10 @@ func (p *Provider) probe(ctx context.Context) error {
 	if err != nil {
 		msg = "the provider can't be reached: " + capped(withoutBody(err.Error()), 300)
 	}
+	// Stamped when the answer came, not when it was asked: a failure that took
+	// the whole budget to learn still stands for those waiting behind it.
 	p.mu.Lock()
-	p.probedAt, p.probeErr = now, msg
+	p.probedAt, p.probeErr = p.s.Now(), msg
 	p.mu.Unlock()
 	return probeResult(msg)
 }
