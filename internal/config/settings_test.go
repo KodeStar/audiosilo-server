@@ -568,6 +568,43 @@ func TestScanConcurrency(t *testing.T) {
 	}
 }
 
+// setup.skip (server#184): off unless set, from config.yaml or
+// AUDIOSILO_SETUP_SKIP (which wins), read at start and no console setting; the
+// environment's value is never written to config.yaml.
+func TestSetupSkip(t *testing.T) {
+	c := Default(t.TempDir())
+	if c.Setup.Skip {
+		t.Fatal("the flow must not be skipped by default")
+	}
+	if _, ok := c.Settings()["setup"]; ok {
+		t.Fatal("setup.skip is a console setting")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir), []byte("setup:\n  skip: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, _, err := Load(dir); err != nil || !c.Setup.Skip {
+		t.Fatalf("from config.yaml = %+v, %v", c.Setup, err)
+	}
+	t.Setenv("AUDIOSILO_SETUP_SKIP", "false")
+	if c, _, err := Load(dir); err != nil || c.Setup.Skip {
+		t.Fatalf("the environment's false = %+v, %v", c.Setup, err)
+	}
+
+	dir = t.TempDir()
+	t.Setenv("AUDIOSILO_SETUP_SKIP", "true")
+	c, _, err := Load(dir)
+	if err != nil || !c.Setup.Skip {
+		t.Fatalf("from the environment = %+v, %v", c.Setup, err)
+	}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(Path(dir)); err != nil || strings.Contains(string(raw), "setup") {
+		t.Fatalf("config.yaml holds the environment's setup.skip: %s, %v", raw, err)
+	}
+}
+
 // metadata.report_unknown (LibraForge C3): off by default, a live console
 // setting in the metadata section, from config.yaml or locked by
 // AUDIOSILO_METADATA_REPORT_UNKNOWN, never written to config.yaml from the
