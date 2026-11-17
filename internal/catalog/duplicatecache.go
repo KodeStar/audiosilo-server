@@ -10,20 +10,20 @@ import "context"
 // not run it once a page (server#270). The groups are a function of the
 // database alone, read from the books, their files, the issue ignores and the
 // progress rows (each copy's listeners rank it), so they are kept under the
-// content generation and keyed on the listener generation too (a new or removed
-// progress row moves only that one: store.DB.ListenerGeneration), each read
-// before the detection reads anything.
+// sum of the content and listener generations (a new or removed progress row
+// moves only the second: store.DB.ListenerGeneration). Both only go up, so the
+// sum moves whenever either does, and each is read before the detection reads
+// anything.
 
 // maxDuplicateCaches bounds the cache: one entry per library asked for, across
 // or not, and the summary's.
 const maxDuplicateCaches = 16
 
 // dupKey is what one detection was asked: a library (0 = all), across
-// libraries or not, at a listener generation.
+// libraries or not.
 type dupKey struct {
 	libraryID int64
 	across    bool
-	listeners uint64
 }
 
 // dupFound is one detection's groups and the rows their members index: only
@@ -38,8 +38,8 @@ type dupFound struct {
 // filters a clone of sets).
 func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64, across bool) ([]dupRow, []dupSet, error) {
 	gen, cacheable := c.ContentGeneration() // before the read (store.GenMap)
-	listeners, _ := c.ListenerGeneration()
-	key := dupKey{libraryID: libraryID, across: across, listeners: listeners}
+	gen += c.ListenerGeneration()
+	key := dupKey{libraryID: libraryID, across: across}
 	if cacheable {
 		if f, ok := c.dups.Get(gen, key); ok {
 			return f.rows, f.sets, nil

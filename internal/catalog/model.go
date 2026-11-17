@@ -425,15 +425,14 @@ func (c *Catalog) ContentGeneration() (uint64, bool) {
 }
 
 // ListenerGeneration is the database's listener generation
-// (store.DB.ListenerGeneration: who listens to which book) and whether there is
-// one, as ContentGeneration. An answer that reads which progress rows exist
-// keys on both.
-func (c *Catalog) ListenerGeneration() (uint64, bool) {
-	g, ok := c.db.(interface{ ListenerGeneration() uint64 })
-	if !ok {
-		return 0, false
+// (store.DB.ListenerGeneration: who listens to which book), 0 when there is
+// none (ContentGeneration says whether an answer may be cached). An answer that
+// reads which progress rows exist keys on both.
+func (c *Catalog) ListenerGeneration() uint64 {
+	if g, ok := c.db.(interface{ ListenerGeneration() uint64 }); ok {
+		return g.ListenerGeneration()
 	}
-	return g.ListenerGeneration(), true
+	return 0
 }
 
 // New returns a Catalog. now may be nil to use time.Now.

@@ -52,7 +52,7 @@ type offlineLibrary struct {
 // only renews its times is not (store's userStateTables).
 func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
 	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
-	listeners, _ := a.cat.ListenerGeneration()
+	listeners := a.cat.ListenerGeneration()
 	kinds := slices.DeleteFunc(slices.Clone(catalog.IssueKinds), func(k string) bool {
 		return (k == catalog.IssueUnmatched && !a.metadataOn()) ||
 			(k == catalog.IssueUnknownASIN && !a.reportUnknownOn())
