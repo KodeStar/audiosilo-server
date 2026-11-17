@@ -1,7 +1,8 @@
 #!/bin/sh
 # Exercises docker-entrypoint.sh on the image's base (Alpine with su-exec), as
 # root and as a --user, against folders the server's user can and can't use
-# (server#368). Needs Docker and network access for `apk add su-exec`. Run from
+# (server#368), with folders mounted inside the data folder (server#382) and
+# read-only mounts (server#383). Needs Docker and network access for `apk add su-exec`. Run from
 # the repository root:
 #
 #   scripts/test-entrypoint.sh
@@ -51,25 +52,30 @@ expect() {
   echo "ok   $name"
 }
 
-# run DOCKER-ARGS...: the entrypoint printing the user the command runs as.
+# run DOCKER-ARGS...: the entrypoint printing the user the command runs as and
+# whether it was told the container was started with --user.
 run() {
   docker run --rm -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" "$@" "$RUN_ID" \
-    sh /usr/local/bin/docker-entrypoint.sh sh -c 'echo "ran as $(id -u):$(id -g)"' --data /data 2>&1 || true
+    sh /usr/local/bin/docker-entrypoint.sh \
+    sh -c 'echo "ran as $(id -u):$(id -g) started_as_user=${AUDIOSILO_STARTED_AS_USER:-no}"' --data /data 2>&1 || true
 }
+
+# A chown refused as on a NAS share with ACLs: root without CAP_CHOWN.
+NOCHOWN=--cap-drop=CHOWN
 
 # 1. A fresh data volume: chowned, no warning, the server's user runs.
 DATA=$(vol fresh 0:0 755)
 out=$(run -v "$DATA:/data")
-expect "fresh data folder" "$out" "ran as 1000:1000" "!WARNING"
+expect "fresh data folder" "$out" "ran as 1000:1000 started_as_user=no" "!WARNING"
 
 # 2. PUID/PGID picked by the owner (Synology's 1026:100): no warning.
 out=$(run -e PUID=1026 -e PGID=100 -v "$DATA:/data")
 expect "PUID/PGID" "$out" "ran as 1026:100" "!WARNING"
 
-# 3. A data folder whose chown is refused (read-only here, an ACL share on a NAS),
-#    owned by another user: the folder, both users, the failed chown, the fix.
+# 3. A data folder whose chown is refused (an ACL share on a NAS), owned by
+#    another user: the folder, both users, the failed chown, the fix.
 NAS=$(vol nas 1026:100 700)
-out=$(run -v "$NAS:/data:ro")
+out=$(run "$NOCHOWN" -v "$NAS:/data")
 expect "data folder of another owner" "$out" \
   "WARNING: the server can't write to /data: it runs as user 1000:1000 and the folder belongs to 1026:100\." \
   "Changing its owner to 1000:1000 failed" \
@@ -78,7 +84,7 @@ expect "data folder of another owner" "$out" \
 
 # 4. A root-owned folder never gets PUID=0 advice.
 ROOT=$(vol root 0:0 755)
-out=$(run -v "$ROOT:/data:ro")
+out=$(run "$NOCHOWN" -v "$ROOT:/data")
 expect "root-owned data folder" "$out" "belongs to 0:0" "making 1000:1000 its owner" "!PUID=0"
 
 # 5. AUDIOSILO_BACKUP_DIR: chowned with the data folder, so backups can be made.
@@ -110,12 +116,23 @@ expect "backups chown follows no link" "$owners" \
 
 # 5d. A trailing slash names the same folder: chowned, and not read again as a
 #     folder of books.
-out=$(run -e AUDIOSILO_BACKUP_DIR=/backups/ -v "$DATA:/data" -v "$NAS:/backups:ro")
+out=$(run "$NOCHOWN" -e AUDIOSILO_BACKUP_DIR=/backups/ -v "$DATA:/data" -v "$NAS:/backups")
 expect "backups folder with a trailing slash" "$out" "WARNING: the server can't write to /backups:" "!shows as offline"
 
 # 6. A backups folder that refuses the chown is named the same way.
-out=$(run -e AUDIOSILO_BACKUP_DIR=/backups -v "$DATA:/data" -v "$NAS:/backups:ro")
+out=$(run "$NOCHOWN" -e AUDIOSILO_BACKUP_DIR=/backups -v "$DATA:/data" -v "$NAS:/backups")
 expect "unwritable backups folder" "$out" "WARNING: the server can't write to /backups" "PUID=1026 and PGID=100"
+
+# 6b. A read-only (:ro) mount: no owner can write to it, so no owner advice and
+#     no failed chown, as the data folder, the backups folder and under --user.
+out=$(run -v "$DATA:/data:ro")
+expect "read-only data folder" "$out" \
+  "WARNING: the server can't write to /data: it is mounted read-only\." "Fix: mount it read and write \(without :ro\)\." \
+  "!belongs to" "!Changing its owner" "!PUID"
+out=$(run -e AUDIOSILO_BACKUP_DIR=/backups -v "$DATA:/data" -v "$BK:/backups:ro")
+expect "read-only backups folder" "$out" "WARNING: the server can't write to /backups: it is mounted read-only\." "!belongs to"
+out=$(run --user 1000:1000 -v "$DATA:/data:ro")
+expect "read-only data folder under --user" "$out" "/data: it is mounted read-only" "!user: \""
 
 # 7. An audiobooks folder the server's user can't read (a library there is offline).
 out=$(run -v "$DATA:/data" -v "$NAS:/audiobooks:ro")
@@ -128,7 +145,7 @@ expect "readable audiobooks" "$out" "!WARNING"
 
 # 8. Started with --user: no chown, the same checks, the fix names user: not PUID.
 out=$(run --user 1000:1000 -v "$NAS:/data")
-expect "--user" "$out" "ran as 1000:1000" \
+expect "--user" "$out" "ran as 1000:1000 started_as_user=1" \
   "run the container as the folder's owner \(user: \"1026:100\"\)" "!PUID"
 
 # 9. A folder the server's user owns but may not write to (its mode refuses it)
@@ -158,6 +175,22 @@ for u in "" "--user 1000:1000"; do
     sh /usr/local/bin/docker-entrypoint.sh sh -c "$leftover" --data /data 2>&1 || true)
   expect "no watcher left ${u:-as root}" "$out" "^looked$" "!LEFTOVER"
 done
+
+# 12. A folder mounted inside the data folder (a backups share at /data/backups,
+#     another app's files) keeps its owner and its files theirs; the data
+#     folder's own files are chowned. Volumes share the host disk's device number,
+#     so this is the mount point pruned by name (-xdev alone would cross it), a
+#     name with a space and a glob character too.
+NEST=$(vol nest 1026:100 755)
+ODD=$(vol odd 1026:100 755)
+docker run --rm -v "$DATA:/v" "$RUN_ID" sh -c 'touch /v/audiosilo.db && chown 0:0 /v/audiosilo.db'
+docker run --rm -v "$NEST:/v" -v "$ODD:/w" "$RUN_ID" sh -c 'touch /v/theirs.db /w/x && chown 1026:100 /v/theirs.db /w/x'
+run -v "$DATA:/data" -v "$NEST:/data/backups" -v "$ODD:/data/odd [1]*" >/dev/null
+owners=$(docker run --rm -v "$DATA:/data" -v "$NEST:/data/backups" -v "$ODD:/data/odd [1]*" "$RUN_ID" sh -c \
+  'stat -c "%n %u:%g" /data/audiosilo.db /data/backups /data/backups/theirs.db "/data/odd [1]*" "/data/odd [1]*/x"')
+expect "nested mount keeps its owner" "$owners" \
+  "^/data/audiosilo.db 1000:1000$" "^/data/backups 1026:100$" "^/data/backups/theirs.db 1026:100$" \
+  "^/data/odd \[1\]\* 1026:100$" "^/data/odd \[1\]\*/x 1026:100$"
 
 [ "$FAILS" -eq 0 ] || { echo "$FAILS failed"; exit 1; }
 echo "all passed"

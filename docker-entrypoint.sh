@@ -3,8 +3,10 @@
 # no matter how the host-mounted volume is owned - the usual NAS pain point. The
 # container starts as root only to chown /data (and AUDIOSILO_BACKUP_DIR's folder
 # and the backups in it, when it is set) and drop privileges; the server itself
-# never runs as root. On NAS setups set PUID/PGID to the owner of your appdata
-# (Unraid: PUID=99 PGID=100; Synology: often 1026:100; or run `id` for your user).
+# never runs as root. The chown of /data stops at a folder mounted inside it (a
+# backups share at /data/backups keeps its owner, server#382). On NAS setups set
+# PUID/PGID to the owner of your appdata (Unraid: PUID=99 PGID=100; Synology:
+# often 1026:100; or run `id` for your user).
 #
 # A chown can fail without saying so (a NAS share with ACLs, a read-only mount), so
 # the entrypoint then checks, as the user the server runs as, that the data folder
@@ -17,7 +19,8 @@
 #
 # If the container is started with an explicit non-root user (docker `--user` /
 # compose `user:`), we skip the chown/drop, run the same checks and exec as that
-# user.
+# user, with AUDIOSILO_STARTED_AS_USER=1 so the server's own fix names `user:`
+# too, not PUID/PGID (internal/fsaccess).
 set -e
 
 say() { printf 'audiosilo: %s\n' "$*" >&2; }
@@ -62,6 +65,12 @@ usable_path() {
 # $3 is set when this entrypoint failed to change the folder's owner.
 explain() {
   dir="$1" access="$2" chowned="$3"
+  if [ "$access" != "read" ] && read_only "$dir"; then
+    # No owner or chown advice: no owner can write to a read-only mount.
+    say "WARNING: the server can't write to $dir: it is mounted read-only."
+    say "  Fix: mount it read and write (without :ro)."
+    return 0
+  fi
   owner=$(timeout "$WAIT" stat -c '%u:%g' "$dir" 2>/dev/null || true)
   if [ "$access" = "read" ]; then verb="read"; else verb="write to"; fi
   if [ -n "$owner" ]; then
@@ -93,6 +102,23 @@ explain() {
   esac
 }
 
+# Whether folder $1 is on a read-only mount (docker's :ro): the options of the
+# mount holding it, the longest mount point it is in (the last one mounted there).
+read_only() {
+  [ -r /proc/self/mountinfo ] || return 1
+  best="" best_opts=""
+  while read -r _ _ _ _ point opts _; do
+    point=$(printf '%b' "$point") # mountinfo escapes a space as \040
+    case "$1/" in
+      "${point%/}"/*)
+        if [ "${#point}" -ge "${#best}" ]; then best="$point" best_opts="$opts"; fi
+        ;;
+    esac
+  done </proc/self/mountinfo
+  case "$best_opts," in ro,*) return 0 ;; esac
+  return 1
+}
+
 # Whether $1 is a folder, asked within $WAIT.
 is_dir() { timeout "$WAIT" test -d "$1"; }
 
@@ -109,6 +135,33 @@ can_write() {
 # unreadable rather than holding the start.
 can_read() {
   as_user timeout "$WAIT" find "$1" -mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>&1
+}
+
+# The folders mounted inside the data folder, one a line.
+nested_mounts() {
+  [ -r /proc/self/mountinfo ] || return 0
+  awk '{ print $5 }' /proc/self/mountinfo | while read -r point; do
+    point=$(printf '%b' "$point")
+    case "$point" in "$DATA"/*) printf '%s\n' "$point" ;; esac
+  done
+  return 0
+}
+
+# Changes the owner of the data folder and everything in it, never what a link
+# points at (chown -h) and never a folder mounted inside it or anything under one
+# (server#382): a backups share at /data/backups, another app's files. -xdev alone
+# misses those: a volume or a bind mount from the same host disk has the same
+# device number, so each mount point is pruned by name too (a glob, so its
+# pattern characters escaped).
+chown_data() {
+  set -- "$DATA" -xdev
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    set -- "$@" -path "$(printf '%s' "$m" | sed 's/[][*?\\]/\\&/g')" -prune -o
+  done <<EOF
+$(nested_mounts)
+EOF
+  find "$@" -exec chown -h "$RUN_AS" {} +
 }
 
 # The folders mounted into the container that may hold books: not the system's
@@ -202,7 +255,7 @@ if [ "$(id -u)" = "0" ]; then
   AS_ROOT=1
   as_user() { su-exec "$RUN_AS" "$@"; }
   if usable_path "$DATA"; then
-    chown -R "$RUN_AS" "$DATA" 2>/dev/null || DATA_CHOWN_FAILED=1
+    chown_data 2>/dev/null || DATA_CHOWN_FAILED=1
   fi
   if [ -n "$BACKUPS" ]; then
     # The folder and AudioSilo's own backup files in it, never the rest (it may be
@@ -222,6 +275,7 @@ fi
 RUN_AS="$(id -u):$(id -g)"
 AS_ROOT=""
 as_user() { "$@"; }
+export AUDIOSILO_STARTED_AS_USER=1
 check_folders
 reap_watchers
 exec "$@"

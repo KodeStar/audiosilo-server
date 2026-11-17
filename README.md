@@ -172,11 +172,13 @@ set `AUDIOSILO_PUBLIC_URL` (used to build QR/invite links) and, optionally,
 `AUDIOSILO_LAN_URL` (the server's home-network address, e.g. `http://192.168.1.20:8080`,
 which the apps switch to when they can reach it). Set **`PUID`/`PGID`** to
 the user that should own `/data` (Unraid: `99`/`100`; generic Linux: your `id -u`/
-`id -g`; Synology: often `1026`/`100`) - the entrypoint chowns the data dir (and
-`AUDIOSILO_BACKUP_DIR` when set) and runs the server as that user, so it works
-regardless of how the mounted volume is owned. Where a chown is refused (a NAS share
-with ACLs) the container log names each folder the server's user can't write (data,
-backups) or read (the audiobooks), the user, the folder's owner and the fix. Update -
+`id -g`; Synology: often `1026`/`100`) - the entrypoint chowns the data dir (not a
+folder mounted inside it, which keeps its owner) and `AUDIOSILO_BACKUP_DIR` when set,
+and runs the server as that user, so it works regardless of how the mounted volume is
+owned. Where a chown is refused (a NAS share with ACLs) the container log names each
+folder the server's user can't write (data, backups) or read (the audiobooks), the
+user, the folder's owner and the fix (`user:` instead of PUID/PGID when the container
+runs with `--user`; "mounted read-only" for a `:ro` data or backups mount). Update -
 server or the bundled player - is always a new image:
 `docker compose pull && docker compose up -d`.
 
@@ -189,6 +191,7 @@ go build ./...                 # compiles everything
 go vet ./...                   # static checks
 go test -race ./...            # unit + integration tests (in-memory SQLite + testdata fixtures)
 golangci-lint run              # linting (v2; config in .golangci.yml)
+scripts/test-floor.sh          # every internal/ and pkg/ package has a test (or a `// no-tests:` reason)
 ```
 
 Tests use in-memory SQLite and the fixtures under [`testdata/`](testdata/) (tiny
@@ -203,9 +206,10 @@ it they `t.Skip` and the suite still passes. Install `ffmpeg` to run them
 [official installer](https://golangci-lint.run/welcome/install/)).
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs tests + coverage,
-race tests + lint on the native SQLite engine, and lint on every pull request and
-push to `main`, and **gates merges** (a pinned static ffmpeg is put on PATH in CI
-so the gated tests run). The image build
+race tests + lint on the native SQLite engine, lint with the test floor (and a
+non-gating dead-code report), the admin console's checks and a booted snapshot of
+the native release build on every pull request and push to `main`, and **gates
+merges** (a pinned static ffmpeg is put on PATH in CI so the gated tests run). The image build
 ([`image.yml`](.github/workflows/image.yml)) stays separate: it publishes a
 release on `v*` tags and an unreleased `:edge` image on pushes to `main`.
 

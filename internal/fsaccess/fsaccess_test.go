@@ -7,18 +7,20 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
 // as runs the test as uid:gid, a folder owned by ouid:ogid (known), inside a
-// container or not.
+// container or not, one started as root dropping to PUID:PGID.
 func as(t *testing.T, uid, gid, ouid, ogid int, known, container bool) {
 	t.Helper()
-	r, o, c := running, ownerOf, inCtr
-	t.Cleanup(func() { running, ownerOf, inCtr = r, o, c })
+	r, o, c, u := running, ownerOf, inCtr, asUser
+	t.Cleanup(func() { running, ownerOf, inCtr, asUser = r, o, c, u })
 	running = func() (int, int) { return uid, gid }
 	ownerOf = func(string) (int, int, bool) { return ouid, ogid, known }
 	inCtr = func() bool { return container }
+	asUser = func() bool { return false }
 }
 
 func TestHint(t *testing.T) {
@@ -49,6 +51,51 @@ func TestHint(t *testing.T) {
 				t.Fatalf("Hint =\n%s\nwant\n%s", got, c.want)
 			}
 		})
+	}
+}
+
+// A container started with --user (the entrypoint says so in the environment)
+// is fixed by that setting: PUID and PGID do nothing there (server#383).
+func TestHintStartedAsUser(t *testing.T) {
+	as(t, 1000, 1000, 1026, 100, true, true)
+	t.Setenv(EnvStartedAsUser, "1")
+	asUser = func() bool { return os.Getenv(EnvStartedAsUser) == "1" }
+	want := `The server runs as user 1000:1000 and the folder belongs to 1026:100. Run the container as the folder's owner (user: "1026:100"), or give user 1000:1000 read and write access to the folder.`
+	if got := Hint("/data", true); got != want {
+		t.Fatalf("Hint =\n%s\nwant\n%s", got, want)
+	}
+	ownerOf = func(string) (int, int, bool) { return 0, 0, false }
+	want = "The server runs as user 1000:1000. Run the container as the folder's owner (user: in compose, --user with docker run), or give user 1000:1000 read access to the folder."
+	if got := Hint("/data", false); got != want {
+		t.Fatalf("Hint =\n%s\nwant\n%s", got, want)
+	}
+	// Never PUID=0 advice, nor user: "0:0", for a root-owned folder.
+	ownerOf = func(string) (int, int, bool) { return 0, 0, true }
+	if got := Hint("/data", true); strings.Contains(got, "user: ") || strings.Contains(got, "PUID") {
+		t.Fatalf("root-owned folder: %s", got)
+	}
+	// Without the entrypoint's word (root dropping to PUID, or the lsio image), PUID it stays.
+	t.Setenv(EnvStartedAsUser, "")
+	ownerOf = func(string) (int, int, bool) { return 1026, 100, true }
+	if got := Hint("/data", true); !strings.Contains(got, "Set PUID=1026 and PGID=100") {
+		t.Fatalf("root-started container: %s", got)
+	}
+}
+
+// A read-only mount (docker's :ro) refuses every owner: it counts as refused (a
+// backup's permission_denied), with the mount fix, not owner advice (server#383).
+func TestReadOnlyMount(t *testing.T) {
+	as(t, 1000, 1000, 1000, 1000, true, true)
+	err := Wrap("/backups", true, &fs.PathError{Op: "open", Path: "/backups/.x", Err: syscall.EROFS})
+	want := "the server can't write to /backups: read-only file system. It is on a read-only mount: mount it read and write (in Docker, without :ro)."
+	if err.Error() != want {
+		t.Fatalf("got\n%s\nwant\n%s", err, want)
+	}
+	if !IsPermission(err) || !IsReadOnly(err) {
+		t.Fatal("a read-only mount is not a refusal")
+	}
+	if IsReadOnly(Wrap("/backups", true, &fs.PathError{Op: "open", Path: "/backups/.x", Err: fs.ErrPermission})) {
+		t.Fatal("permission denied taken for a read-only mount")
 	}
 }
 
