@@ -126,7 +126,7 @@ func (c *Catalog) SkipSetup(ctx context.Context) (skipped bool, err error) {
 		skipped = true
 		return putServerState(ctx, tx, setupKey, st, c.stamp())
 	})
-	return skipped, err
+	return skipped && err == nil, err
 }
 
 // fillUnmarkedSteps gives every step in steps without an outcome the one
