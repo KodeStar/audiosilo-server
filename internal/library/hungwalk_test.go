@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -389,13 +390,13 @@ func TestIndexMovedWithTheOldPathHeldGivesUp(t *testing.T) {
 	release := metadata.HoldOpensForTests(filepath.Join(m.root, "Old"))
 	t.Cleanup(release)
 	start := time.Now()
-	m.wantUnknown(t, WithLookTimeout(m.ctx, 100*time.Millisecond))
+	m.wantUnknown(t, WithLookTimeout(m.ctx, 100*time.Millisecond), m.indexMoved)
 	if took := time.Since(start); took > 10*time.Second {
 		t.Errorf("IndexMoved took %v, want the old path given up on at the look's time", took)
 	}
 
 	release()
-	m.wantCarried(t)
+	m.wantCarried(t, m.indexMoved)
 }
 
 // movedBook is a library whose one book, scanned at Old/Book with a
@@ -437,13 +438,31 @@ func newMovedBook(t *testing.T) *movedBook {
 
 func (m *movedBook) ref(p string) catalog.Ref { return catalog.Ref{LibraryID: m.lib.ID, Path: p} }
 
-// wantUnknown checks IndexMoved under ctx is a look given up on that carries
-// and indexes nothing: the old book keeps its row and progress, and the new
-// path stays new for the retry or a scan.
-func (m *movedBook) wantUnknown(t *testing.T, ctx context.Context) {
+// indexCall is an on-demand index of the moved book's new path, New/Book.
+type indexCall func(ctx context.Context) (*catalog.Book, error)
+
+// indexMoved is the Bridge's IndexMoved from Old/Book; indexPath and
+// reindexPath index New/Book with no from, finding the move themselves
+// (movedFrom).
+func (m *movedBook) indexMoved(ctx context.Context) (*catalog.Book, error) {
+	return m.s.IndexMoved(ctx, *m.lib, "New/Book", "Old/Book")
+}
+
+func (m *movedBook) indexPath(ctx context.Context) (*catalog.Book, error) {
+	return m.s.IndexPath(ctx, *m.lib, "New/Book")
+}
+
+func (m *movedBook) reindexPath(ctx context.Context) (*catalog.Book, error) {
+	return m.s.ReindexPath(ctx, *m.lib, "New/Book")
+}
+
+// wantUnknown checks index under ctx is a look given up on that carries and
+// indexes nothing: the old book keeps its row and progress, and the new path
+// stays new for the retry or a scan.
+func (m *movedBook) wantUnknown(t *testing.T, ctx context.Context, index indexCall) {
 	t.Helper()
-	if b, err := m.s.IndexMoved(ctx, *m.lib, "New/Book", "Old/Book"); !metadata.GaveUp(err) {
-		t.Fatalf("IndexMoved with the move unknown = %+v, %v; want a look given up on", b, err)
+	if b, err := index(ctx); !metadata.GaveUp(err) {
+		t.Fatalf("an index with the move unknown = %+v, %v; want a look given up on", b, err)
 	}
 	if _, err := m.cat.GetBookByPath(m.ctx, m.lib.ID, "Old/Book"); err != nil {
 		t.Errorf("the old book, not known moved, = %v; want it kept", err)
@@ -456,11 +475,11 @@ func (m *movedBook) wantUnknown(t *testing.T, ctx context.Context) {
 	}
 }
 
-// wantCarried checks IndexMoved, once the share answers, carries the move.
-func (m *movedBook) wantCarried(t *testing.T) {
+// wantCarried checks index, once the share answers, carries the move.
+func (m *movedBook) wantCarried(t *testing.T, index indexCall) {
 	t.Helper()
-	if b, err := m.s.IndexMoved(WithLookTimeout(m.ctx, 10*time.Second), *m.lib, "New/Book", "Old/Book"); err != nil || b.RelPath != "New/Book" {
-		t.Fatalf("IndexMoved once the share answers = %+v, %v", b, err)
+	if b, err := index(WithLookTimeout(m.ctx, 10*time.Second)); err != nil || b.RelPath != "New/Book" {
+		t.Fatalf("an index once the share answers = %+v, %v", b, err)
 	}
 	if _, err := m.cat.GetBookByPath(m.ctx, m.lib.ID, "Old/Book"); err == nil {
 		t.Error("the old book once known moved was kept, want the move carried")
@@ -480,11 +499,79 @@ func TestIndexMovedWithTheNewBookUnreadGivesUp(t *testing.T) {
 	m.s.probeTimeout = 200 * time.Millisecond // the fingerprint's time
 	release := metadata.HoldReadsForTests(filepath.Join(m.root, "New", "Book", "01.mp3"))
 	t.Cleanup(release)
-	m.wantUnknown(t, WithLookTimeout(m.ctx, 10*time.Second))
+	m.wantUnknown(t, WithLookTimeout(m.ctx, 10*time.Second), m.indexMoved)
 
 	release()
 	m.s.probeTimeout = time.Minute
-	m.wantCarried(t)
+	m.wantCarried(t, m.indexMoved)
+}
+
+// IndexPath and ReindexPath find a move themselves (movedFrom), and one they
+// can't tell now (the old path's look given up on, or the new book's
+// fingerprint unread) carries and indexes nothing, a look given up on (the
+// API's 503 share_not_answering), rather than index the new book without its
+// state, which the next scan's prune of the old row would strand. Once the
+// share answers, the next call carries it. Not parallel:
+// metadata.HoldOpensForTests and HoldReadsForTests swap the mount lookup.
+func TestIndexPathWithAMoveUnknownGivesUp(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		index func(*movedBook) indexCall
+	}{
+		{"IndexPath", func(m *movedBook) indexCall { return m.indexPath }},
+		{"ReindexPath", func(m *movedBook) indexCall { return m.reindexPath }},
+	} {
+		t.Run(c.name+"/old path held", func(t *testing.T) {
+			m := newMovedBook(t)
+			m.s.probeTimeout = time.Minute
+			release := metadata.HoldOpensForTests(filepath.Join(m.root, "Old"))
+			t.Cleanup(release)
+			m.wantUnknown(t, WithLookTimeout(m.ctx, 100*time.Millisecond), c.index(m))
+			release()
+			m.wantCarried(t, c.index(m))
+		})
+		t.Run(c.name+"/new book unread", func(t *testing.T) {
+			m := newMovedBook(t)
+			m.s.probeTimeout = 200 * time.Millisecond // the fingerprint's time
+			release := metadata.HoldReadsForTests(filepath.Join(m.root, "New", "Book", "01.mp3"))
+			t.Cleanup(release)
+			m.wantUnknown(t, WithLookTimeout(m.ctx, 10*time.Second), c.index(m))
+			release()
+			m.s.probeTimeout = time.Minute
+			m.wantCarried(t, c.index(m))
+		})
+	}
+}
+
+// A request that joins IndexPath's read of a book whose move can't be told
+// gets that read's answer, the same look given up on: neither a book indexed
+// without its state nor a wait past the read. Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
+func TestIndexPathJoinedWithAMoveUnknownGivesUp(t *testing.T) {
+	m := newMovedBook(t)
+	m.s.probeTimeout = time.Minute
+	release := metadata.HoldOpensForTests(filepath.Join(m.root, "Old"))
+	t.Cleanup(release)
+
+	lead := make(chan error, 1)
+	go func() {
+		_, err := m.indexPath(WithLookTimeout(m.ctx, time.Second))
+		lead <- err
+	}()
+	waitFlight(t, m.s, *m.lib, "New/Book", true)
+	// The joined request's own look time outlasts the leader's, so the answer
+	// it gets is the leader's read's, not its own wait given up on.
+	b, err := m.indexPath(WithLookTimeout(m.ctx, 30*time.Second))
+	if !metadata.GaveUp(err) || errors.Is(err, errReadLeft) {
+		t.Errorf("the joined request = %+v, %v; want the read's look given up on", b, err)
+	}
+	if err := <-lead; !metadata.GaveUp(err) {
+		t.Errorf("the leading request = %v, want a look given up on", err)
+	}
+	m.wantUnknown(t, WithLookTimeout(m.ctx, 100*time.Millisecond), m.indexPath)
+
+	release()
+	m.wantCarried(t, m.indexPath)
 }
 
 // A book in a folder the walk gave up on is not known gone (SRV-15c): a copy

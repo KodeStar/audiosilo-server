@@ -1421,7 +1421,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `Scanner.movedFrom` takes an indexed book with its fingerprint that is gone from disk
   (`catalog.MoveCandidates`, `bookOnDisk`) as `IndexMoved`'s from (`indexBookFrom`, which `leadIndex`
   runs past its caller's cancel or deadline: once the state has moved it finishes the index and drops
-  the old row, so the state never sits on a path with no row). Re-tagging keeps state via
+  the old row, so the state never sits on a path with no row). When it can't tell (a candidate's look
+  `diskUnknown`, or the new book's fingerprint unread for a reason a retry may get past,
+  `fingerprintUnknown`), `IndexPath` and `ReindexPath` index nothing and answer 503
+  `share_not_answering`, every joined waiter too (the flight's error): a book indexed without its state
+  would leave it on the old row for the next scan's prune. Re-tagging keeps state via
   the path key; moving keeps it via the fingerprint. The per-user path-keyed tables are listed
   ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
   a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new
