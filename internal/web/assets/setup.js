@@ -9,9 +9,6 @@ function setupToken() {
   return h.get("token") || "";
 }
 
-// The server's minimum (auth.MinPasswordLen); the field's minlength says the same.
-const MIN_PASSWORD = 8;
-
 function showError(msg) {
   const m = $("setup-msg");
   m.textContent = msg;
@@ -30,10 +27,6 @@ function sentence(msg) {
 $("setup-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("setup-msg").classList.remove("show");
-  if ($("password").value.length < MIN_PASSWORD) {
-    showError(`Choose a password of at least ${MIN_PASSWORD} characters.`);
-    return;
-  }
   const btn = $("setup-submit");
   btn.disabled = true;
   try {

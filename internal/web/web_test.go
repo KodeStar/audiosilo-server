@@ -298,16 +298,10 @@ func TestSetupPageAssets(t *testing.T) {
 			t.Errorf("setup.html has an inline <script> that breaks the strict CSP: %.40q", m[2])
 		}
 	}
-	// The password's minimum is checked before sending (server#271 ADMIN-13.1),
-	// at the server's own.
-	js, err := Asset("setup.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	minAttr := fmt.Sprintf(`minlength="%d"`, auth.MinPasswordLen)
-	minJS := fmt.Sprintf("const MIN_PASSWORD = %d;", auth.MinPasswordLen)
-	if !strings.Contains(html, minAttr) || !strings.Contains(string(js), minJS) {
-		t.Errorf("the setup page must check the password's minimum before sending (%s, %s)", minAttr, minJS)
+	// The browser checks the password's minimum before sending (server#271
+	// ADMIN-13.1), at the server's own.
+	if minAttr := fmt.Sprintf(`minlength="%d"`, auth.MinPasswordLen); !strings.Contains(html, minAttr) {
+		t.Errorf("the setup page's password field must carry %s", minAttr)
 	}
 }
 
