@@ -953,7 +953,7 @@ export function useJobs() {
 }
 
 /** Whether a bulk match run is still working. */
-export function matchRunActive(r: MatchRun | undefined): r is MatchRun {
+export function matchRunActive(r: MatchRun | undefined): boolean {
   return r?.status === 'matching' || r?.status === 'applying';
 }
 
@@ -976,7 +976,7 @@ export function useMatchRuns() {
       const working = list?.runs.find(matchRunActive);
       if (!list || !working) return api.matchRuns();
       const run = await api.matchRun(working.id).catch(() => undefined);
-      if (!matchRunActive(run)) return api.matchRuns();
+      if (!run || !matchRunActive(run)) return api.matchRuns();
       return { ...list, runs: list.runs.map((r) => (r.id === run.id ? run : r)) };
     },
     refetchInterval: (q) => (q.state.data?.runs.some(matchRunActive) ? 1000 : MATCH_RUNS_IDLE_MS),
