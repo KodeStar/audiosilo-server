@@ -9,7 +9,7 @@ import (
 )
 
 // The first-run admin (server#369): a headless start with no admin makes one,
-// "admin" with a random password printed once (pkg/launcher ensureAdmin). A
+// "admin" with a random password printed once (internal/launcher ensureAdmin). A
 // recreated container loses that log, so until an admin first signs in with a
 // password the server says so again on every start, with the reset-admin
 // command. The state is one server_state row written only by MarkFirstAdmin, at
@@ -19,7 +19,7 @@ import (
 // facts and which auth code was printed beside the password.
 
 // InitialAdminCodeLabel labels the auth code the first start prints beside the
-// admin's password (pkg/launcher ensureAdmin): unlimited uses, no expiry. The
+// admin's password (internal/launcher ensureAdmin): unlimited uses, no expiry. The
 // row records which code that is (firstAdmin.CodeID); RevokeInitialAdminCode
 // finds it by the label only on an install whose row doesn't.
 const InitialAdminCodeLabel = "initial admin code"

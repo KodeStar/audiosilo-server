@@ -56,7 +56,7 @@ type client struct {
 // newClient builds a client for the given metaserve base URL. baseURL is
 // expected already trimmed of a trailing slash (NewService does the trim). Its
 // connections are its own: on http.DefaultTransport, anything in the process
-// calling CloseIdleConnections (every httptest.Server's Close; pkg/launcher runs
+// calling CloseIdleConnections (every httptest.Server's Close; internal/launcher runs
 // inside other programs) can fail a request whose answer has just arrived, which
 // net/http doesn't retry and a lookup would report as an outage.
 func newClient(baseURL string) *client {

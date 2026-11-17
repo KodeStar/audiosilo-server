@@ -4,7 +4,7 @@
 // On first run it generates an admin account and an auth code, printing both to
 // stdout exactly once; `audiosilo --data <folder> reset-admin [username]` sets
 // a new admin password when that one is lost. Configuration lives in <data>/config.yaml. The actual run
-// loop lives in pkg/launcher.
+// loop lives in internal/launcher.
 package main
 
 import (
@@ -19,7 +19,7 @@ import (
 	"syscall"
 
 	"github.com/kodestar/audiosilo-server/internal/api"
-	"github.com/kodestar/audiosilo-server/pkg/launcher"
+	"github.com/kodestar/audiosilo-server/internal/launcher"
 )
 
 func main() {

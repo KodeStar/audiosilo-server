@@ -80,7 +80,7 @@ var fields = []field{
 		ptr: func(c *Config) any { return &c.Metadata.BaseURL }, fix: fixBaseURL},
 	{key: "metadata.region", env: "AUDIOSILO_METADATA_REGION", setting: "metadata.region",
 		ptr: func(c *Config) any { return &c.Metadata.Region }, fix: fixRegion},
-	// The backend is chosen when the server starts (pkg/launcher builds the mirror),
+	// The backend is chosen when the server starts (internal/launcher builds the mirror),
 	// like base_url.
 	{key: "metadata.mode", env: "AUDIOSILO_METADATA_MODE", setting: "metadata.mode", restart: true,
 		ptr: func(c *Config) any { return &c.Metadata.Mode }, fix: fixMode},

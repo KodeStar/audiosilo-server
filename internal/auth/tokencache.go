@@ -11,7 +11,7 @@ const maxCachedTokens = 4096
 // maxCachedTokenAge is how long a cached row is answered from before the token
 // is read again. The content generation moves for every write through this
 // process's handle, but not for another process's on the same file: reset-admin
-// beside a running server (pkg/launcher ResetAdmin) ends an admin's sessions
+// beside a running server (internal/launcher ResetAdmin) ends an admin's sessions
 // with a write this server's generation never sees. Reading a row this old
 // again bounds how long such a write goes unseen, at one more read a minute for
 // a token in use (the minute its touch already keeps, touchInterval).
