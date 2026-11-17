@@ -50,6 +50,12 @@ func ValidSeriesRange(start, end float64) bool {
 	return start > 0 && end > start && end <= MaxSeriesPosition && end-start <= MaxSeriesSpan
 }
 
+// ValidSeriesPosition reports whether v is a single series position a book may
+// hold: 0 <= v <= MaxSeriesPosition. (NaN fails these comparisons too.)
+func ValidSeriesPosition(v float64) bool {
+	return v >= 0 && v <= MaxSeriesPosition
+}
+
 // ParseSeriesPosition reads a series position: a finite number (ParseFloat's,
 // end 0, as a series-part tag and a stored series_index were always read: no
 // spaces) or a range (ParseSeriesRange: its start and end). ok is false for
@@ -68,11 +74,11 @@ func ParseSeriesPosition(s string) (start, end float64, ok bool) {
 }
 
 // seriesPartTag reads a series-part tag's position (ParseSeriesPosition) as a
-// book's: a single one from 0 to MaxSeriesPosition, as an edit of the field
-// takes it; ok is false for anything else.
+// book's: a single one ValidSeriesPosition, as an edit of the field takes it;
+// ok is false for anything else.
 func seriesPartTag(s string) (start, end float64, ok bool) {
 	start, end, ok = ParseSeriesPosition(s)
-	if !ok || (end == 0 && (start < 0 || start > MaxSeriesPosition)) {
+	if !ok || (end == 0 && !ValidSeriesPosition(start)) {
 		return 0, 0, false
 	}
 	return start, end, true

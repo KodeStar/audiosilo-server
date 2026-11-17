@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // TestMoreSeries: a book's other series are an override field like any other -
@@ -373,7 +375,7 @@ func TestSeriesSwap(t *testing.T) {
 	// and a bulk edit holding such a book changes none.
 	long := strings.Repeat("x", maxShortField+1)
 	add("long", long, 8, `[{"name":"City Watch","position":1}]`)
-	add("far", disc, maxSeriesIndex+1, `[{"name":"City Watch","position":1}]`)
+	add("far", disc, metadata.MaxSeriesPosition+1, `[{"name":"City Watch","position":1}]`)
 	add("fine", disc, 8, `[{"name":"City Watch","position":1}]`)
 	for _, path := range []string{"long", "far"} {
 		err := c.EditBook(ctx, lib.ID, path, BookEdit{Set: setSeries(watch)})

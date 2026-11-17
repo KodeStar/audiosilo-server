@@ -77,7 +77,7 @@ func normalizeMoreSeries(v string) (string, error) {
 			continue
 		}
 		seen[seriesKey(s.Name)] = true
-		if s.Position < 0 || s.Position > maxSeriesIndex {
+		if !metadata.ValidSeriesPosition(s.Position) {
 			return "", invalid(FieldMoreSeries, "a position must be a number from 0 to 100000")
 		}
 		if s.PositionEnd != 0 && !metadata.ValidSeriesRange(s.Position, s.PositionEnd) {
