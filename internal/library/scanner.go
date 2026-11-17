@@ -1985,7 +1985,7 @@ type audioFile struct {
 func audioEntries(ctx context.Context, root, absDir string, ignore *Ignore, timeout time.Duration) ([]audioFile, error) {
 	entries, err := metadata.ReadDirBounded(ctx, absDir, timeout)
 	if metadata.Unanswered(ctx, err) {
-		return nil, err
+		return nil, cmp.Or(err, ctx.Err()) // never "no audio" for a listing ctx ended on
 	}
 	if err != nil {
 		return nil, nil
@@ -2591,7 +2591,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	abs := absOf(lib, relPath)
 	info, err := metadata.StatBounded(ctx, abs, look)
 	if metadata.Unanswered(ctx, err) {
-		return nil, err
+		return nil, cmp.Or(err, ctx.Err()) // ctx may have ended as the stat answered
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, err)
@@ -3069,7 +3069,7 @@ func dirPresent(ctx context.Context, lib catalog.Library, rel string, listed map
 		if !ok {
 			entries, err := metadata.ReadDirBounded(ctx, absOf(lib, parent), timeout)
 			if metadata.Unanswered(ctx, err) {
-				return true, err
+				return true, cmp.Or(err, ctx.Err())
 			}
 			if err != nil {
 				return true, nil
