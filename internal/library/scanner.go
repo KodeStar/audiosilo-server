@@ -1606,17 +1606,19 @@ func ebooksOfWalk(lib catalog.Library, books []*catalog.Book, epubs map[string][
 
 // dropUnanswered drops from dirs (audioDirs') the folders a look was given up on
 // in (unanswered: statAudio's, and the walk's folders that wouldn't list), and
-// every disc folder beside one of them: the disc set they may make (discSets)
-// can't be known, so neither can a book joined from it (joinRoot: built from
-// the discs that answered it would lose the others' parts, or with one disc
-// left be no set at all) nor the discs' split (markSplitDiscs).
+// every disc folder directly in one of them or in a folder above one: the disc
+// set they may make (discSets, which turns on all the audio in and beneath the
+// folder) can't be known, so neither can a book joined from it (joinRoot: built
+// from the discs that answered it would lose the others' parts, with one disc
+// left be no set at all, or be a set only for want of the folder not looked
+// at, its own audio's among them) nor the discs' split (markSplitDiscs).
 func dropUnanswered(dirs map[string][]audioFile, unanswered map[string]error) {
 	if len(unanswered) == 0 {
 		return
 	}
 	parents := map[string]bool{}
 	for dir := range unanswered {
-		if p := dirOf(dir); p != "" {
+		for p := dir; p != ""; p = dirOf(p) {
 			parents[p] = true
 		}
 	}

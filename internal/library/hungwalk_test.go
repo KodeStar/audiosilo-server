@@ -3,6 +3,7 @@ package library
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -327,6 +328,41 @@ func TestAPartialScanMovesNoStateFromAFolderThatDoesNotAnswer(t *testing.T) {
 				}
 			}
 			release()
+		})
+	}
+}
+
+// dropUnanswered drops a folder a look was given up on in, and the disc
+// folders of it and of every folder above it: whether those make a disc set
+// turns on all the audio in and beneath the folder, the folder not looked at
+// included. Without the folder's own audio (Own) or the audio deeper down
+// (Book/Extras/Deep), the discs left would read as a set that is none.
+func TestDropUnansweredDropsTheDiscsAboveIt(t *testing.T) {
+	t.Parallel()
+	all := []string{"Book/CD1", "Book/CD2", "Book/Extras/Deep", "Else/CD1", "Else/CD2", "Own", "Own/CD1", "Own/CD2"}
+	for _, c := range []struct {
+		name, unanswered string
+		dropped          []string
+	}{
+		{"a disc", "Book/CD1", []string{"Book/CD1", "Book/CD2"}},
+		{"a folder beside the discs", "Book/Extras", []string{"Book/CD1", "Book/CD2"}},
+		{"a folder deeper down", "Book/Extras/Deep", []string{"Book/CD1", "Book/CD2", "Book/Extras/Deep"}},
+		{"another book", "Else/CD2", []string{"Else/CD1", "Else/CD2"}},
+		{"the folder holding the discs, with audio of its own", "Own", []string{"Own", "Own/CD1", "Own/CD2"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dirs := map[string][]audioFile{}
+			for _, d := range all {
+				dirs[d] = []audioFile{{}}
+			}
+			dropUnanswered(dirs, map[string]error{c.unanswered: metadata.ErrNotAnswered})
+			want := slices.DeleteFunc(slices.Clone(all), func(d string) bool { return slices.Contains(c.dropped, d) })
+			if got := slices.Sorted(maps.Keys(dirs)); !slices.Equal(got, want) {
+				t.Errorf("left %v, want %v", got, want)
+			}
+			if sets := discSets(maps.Keys(dirs)); sets["Own"] || sets["Book"] {
+				t.Errorf("disc sets left = %v, want neither Own (audio of its own) nor Book (audio deeper down)", sets)
+			}
 		})
 	}
 }

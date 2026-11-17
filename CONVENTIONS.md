@@ -1249,8 +1249,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   503 `share_not_answering`). The walk's own looks are bounded the same way (SRV-15c: `walkDir`'s root lstat and
   listings, a `.audiosilo` folder's listing, a metadata.json's lstat, `statAudio`'s lstat of each audio file, the
   probe's time each): a folder that won't list, or whose audio file's lstat is given up on (`dropUnanswered`, with
-  every disc folder beside it, so neither a book joined from a disc set nor the discs' split is built from the
-  discs that answered), is skipped for that run, which is then partial (its books kept
+  every disc folder directly in it or in a folder above it, so neither a book joined from a disc set nor the discs' split
+  is built from the discs that answered, or from a set that is one only for want of the folder not looked at),
+  is skipped for that run, which is then partial (its books kept
   as stored, never pruned nor rewritten without a part, their listening state never moved to a copy elsewhere:
   `detectMoves` below) and records an `unreadable` path in the run's log; a
   `.audiosilo` folder that won't list keeps its book's attachments as stored. So do the scan's tag-only suspect
