@@ -455,15 +455,28 @@ func (s *Service) insertToken(ctx context.Context, ex sqlExecer, userID int64, h
 // madeOn is the device userID's token session was made on (its
 // created_on_token_id: a household member's sign-in on their owner's device),
 // for a credential minted from it to record; NULL for any other session, an
-// unknown one or another person's.
+// unknown one or another person's. A session signed out since the request
+// authenticated with it is ErrInvalidToken, read inside the mint's own
+// transaction as IssueSession reads the password: an owner's password change or
+// Sign out everywhere that committed in between (endSessions) has already
+// passed over the credential this would make, which would outlive the sign-in
+// it was made from.
 func madeOn(ctx context.Context, tx *sql.Tx, userID, session int64) (sql.NullInt64, error) {
-	var on sql.NullInt64
-	err := tx.QueryRowContext(ctx, `SELECT created_on_token_id FROM tokens WHERE id = ? AND user_id = ?`,
-		session, userID).Scan(&on)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = nil
+	var (
+		on      sql.NullInt64
+		revoked bool
+	)
+	err := tx.QueryRowContext(ctx, `SELECT created_on_token_id, revoked FROM tokens WHERE id = ? AND user_id = ?`,
+		session, userID).Scan(&on, &revoked)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return on, nil
+	case err != nil:
+		return on, err
+	case revoked:
+		return on, ErrInvalidToken
 	}
-	return on, err
+	return on, nil
 }
 
 // insertTokenOn is insertToken recording createdOn, the owner's token a household
@@ -742,7 +755,8 @@ func scanAPIToken(row interface{ Scan(...any) error }) (APIToken, error) {
 // the owner's password change and Sign out everywhere end a member's key made
 // there as they end that sign-in (endSessions, server#361), and so do the
 // device revoke's alsoMembers and leaveOwners. A kid's is refused inside the
-// write (ErrKidAccount, refuseKid).
+// write (ErrKidAccount, refuseKid), and so is one from a session signed out
+// since the request's check (ErrInvalidToken, madeOn).
 func (s *Service) IssueAPIToken(ctx context.Context, userID, session int64, label string) (string, APIToken, error) {
 	secret, hash, err := generateToken()
 	if err != nil {

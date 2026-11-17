@@ -14,6 +14,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
 // mintAPIKey POSTs /auth/tokens with sessionTok and returns the new key's id and
@@ -343,5 +344,51 @@ func TestAPIKeyListDoesNotSpendAccountBudget(t *testing.T) {
 	}
 	if resp, b := e.do(t, "GET", "/api/v1/auth/tokens", tok, ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("list while the mutations are locked out = %d %s, want 200", resp.StatusCode, b)
+	}
+}
+
+// A key minted from a session that was signed out after the route's check is
+// refused in the mint's own write (auth.madeOn): 401, as the middleware answers
+// an ended session, and no key is made. The sign-out here is another process's
+// write, which the token cache doesn't see (as reset-admin's), so the route
+// still passes the session. Allowed: the same mint while it is signed in.
+func TestAPIKeyMintFromAnEndedSessionIs401(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newTestEnv(t)
+	_, memberTok := opsTokens(t, e)
+	e.mintAPIKey(t, memberTok, "while signed in")
+	// Checked again after that write, so the token cache holds the session.
+	for range 3 {
+		if resp, b := e.do(t, "GET", "/api/v1/me", memberTok, ""); resp.StatusCode != http.StatusOK {
+			t.Fatalf("me = %d %s", resp.StatusCode, b)
+		}
+	}
+	var (
+		seq        int
+		name, file string
+	)
+	if err := e.db.QueryRowContext(ctx, `PRAGMA database_list`).Scan(&seq, &name, &file); err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.Open(ctx, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = other.Close() })
+	if _, err := other.ExecContext(ctx,
+		`UPDATE tokens SET revoked = 1 WHERE kind = ? AND user_id = (SELECT id FROM users WHERE username = 'member')`,
+		auth.KindSession); err != nil {
+		t.Fatal(err)
+	}
+	resp, b := e.do(t, "POST", "/api/v1/auth/tokens", memberTok, `{"label":"after the sign-out"}`)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("mint from an ended session = %d %s, want 401", resp.StatusCode, b)
+	}
+	var keys int
+	if err := e.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tokens WHERE kind = ? AND user_id = (SELECT id FROM users WHERE username = 'member')`,
+		auth.KindAPI).Scan(&keys); err != nil || keys != 1 {
+		t.Fatalf("the member's keys = %d, %v; want only the one made while signed in", keys, err)
 	}
 }

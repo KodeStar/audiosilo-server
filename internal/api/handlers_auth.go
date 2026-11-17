@@ -540,6 +540,19 @@ func denyAPIKey(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+// writeSessionEnded answers 401, as the auth middleware does, for a credential
+// mint that auth refused inside its own write because the request's session was
+// signed out after the middleware checked it (auth.ErrInvalidToken from
+// auth.madeOn: a password change or Sign out everywhere committed in between),
+// and reports whether it did.
+func writeSessionEnded(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, auth.ErrInvalidToken) {
+		return false
+	}
+	writeError(w, http.StatusUnauthorized, "invalid or expired token")
+	return true
+}
+
 // gateSelfService applies the guards shared by the self-service account
 // endpoints: the per-IP account rate limit and the demo-account refusal. On
 // success it returns the caller's freshly loaded account; otherwise it has
@@ -617,7 +630,7 @@ func (a *API) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret, meta, err := a.auth.IssueAPIToken(r.Context(), full.ID, credentialFrom(r.Context()).ID, label)
-	if writeKidRefusal(w, err) {
+	if writeKidRefusal(w, err) || writeSessionEnded(w, err) {
 		return
 	}
 	if err != nil {

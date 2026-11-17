@@ -53,8 +53,9 @@ type FeedStatus struct {
 // change or Sign out everywhere (endSessions), end a link made there as they
 // end that sign-in. A kid's is refused inside the write
 // (ErrKidAccount, refuseKid), so a request that passed the route's check just
-// before the switch to a kid committed still mints nothing; a demo account is
-// refused by the route.
+// before the switch to a kid committed still mints nothing, and so is one from
+// a session signed out since that check (ErrInvalidToken, madeOn: the earlier
+// link stays); a demo account is refused by the route.
 func (s *Service) IssueFeedToken(ctx context.Context, userID, session int64) (secret, createdAt string, err error) {
 	secret, hash, err := generateToken()
 	if err != nil {

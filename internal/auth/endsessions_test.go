@@ -520,3 +520,47 @@ func TestSignOutEverywhereEndsMembersKeysAndLinks(t *testing.T) {
 		t.Errorf("an edit without a password ended a member's link: %v", err)
 	}
 }
+
+// Security-critical (D5): a member's request that passed the route's check just
+// before the owner's Sign out everywhere committed mints nothing from the
+// sign-in that ended (madeOn, inside the mint's own write): a key or link made
+// then would be made after the pass that ends them, and outlive it. Denied: a
+// key and a link from the ended sign-in. Allowed: the link the refused mint
+// would have replaced keeps working, and both mint from the member's own
+// device, still signed in.
+func TestMintFromAnEndedSessionRefused(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	owner := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	_, laptop := mustSession(t, s, ctx, owner.ID, "laptop")
+	gus := mustMember(t, s, ctx, owner.ID, NewMember{Name: "Gus", Kind: MemberGrownup, Access: MemberAll})
+	tok, _, err := s.MemberSession(ctx, owner.ID, gus.ID, "here", laptop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, onLaptop, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, own := mustSession(t, s, ctx, gus.ID, "own phone")
+	link := mustFeed(t, s, ctx, gus.ID, own)
+	if _, err := s.SignOutEverywhere(ctx, owner.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.IssueAPIToken(ctx, gus.ID, onLaptop.ID, "dash"); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("a key from the ended sign-in = %v, want ErrInvalidToken", err)
+	}
+	if _, _, err := s.IssueFeedToken(ctx, gus.ID, onLaptop.ID); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("a link from the ended sign-in = %v, want ErrInvalidToken", err)
+	}
+	if keys, err := s.ListAPITokens(ctx, gus.ID); err != nil || len(keys) != 0 {
+		t.Errorf("keys after the refused mint = %+v, %v; want none", keys, err)
+	}
+	if _, _, err := s.ResolveRequest(ctx, link, Presence{}, KindFeed); err != nil {
+		t.Errorf("the refused mint ended the link it would have replaced: %v", err)
+	}
+	if _, _, err := s.IssueAPIToken(ctx, gus.ID, own, "dash"); err != nil {
+		t.Errorf("a key from the member's own device: %v", err)
+	}
+	mustFeed(t, s, ctx, gus.ID, own)
+}

@@ -78,7 +78,7 @@ func (a *API) handleMintUpcomingCalendar(w http.ResponseWriter, r *http.Request)
 	}
 	u := userFrom(r.Context())
 	secret, created, err := a.auth.IssueFeedToken(r.Context(), u.ID, credentialFrom(r.Context()).ID)
-	if writeKidRefusal(w, err) {
+	if writeKidRefusal(w, err) || writeSessionEnded(w, err) {
 		return
 	}
 	if err != nil {

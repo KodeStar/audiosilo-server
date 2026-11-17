@@ -158,8 +158,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   session made on any of the person's devices but the kept one (`created_on_token_id`, the device
   revoke's `also_members` rule, a device signed out earlier included), with the API keys and the
   calendar feed link the member made from such a session (D5, server#361: `IssueAPIToken` and
-  `IssueFeedToken` record the session's device, `auth.madeOn`; a key made before v2.7.0 recorded none
-  and stays), and every member's open pairing code; a member's own paired device stays, with what was
+  `IssueFeedToken` record the session's device, `auth.madeOn`, which refuses a mint from a session signed
+  out since the request's check, `ErrInvalidToken`, a 401: the pass has already run; a key made before
+  v2.7.0 recorded none and stays), and every member's open pairing code; a member's own paired device stays, with what was
   made on it, and `signed_out` counts the person's sessions only. The person's own API keys stay (listed
   and revoked on their own: the device lists, `/auth/tokens`), and so
   do their calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`; the console has no
