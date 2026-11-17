@@ -139,6 +139,31 @@ func TestDirListerBounded(t *testing.T) {
 	}
 }
 
+// A read that gives up when its context ends (a preview's walk) answers with
+// that context's error: ErrDirsTimedOut whether the waiter left first or took
+// that answer as its time ran out, never the context's own error (a 500 to the
+// console, not the 404 of a folder that didn't answer). Any other error a read
+// gives stands.
+func TestBoundedReadThatEndsWithItsContextTimesOut(t *testing.T) {
+	t.Parallel()
+	slots := make(chan struct{}, 1)
+	for range 20 { // either order of the read's answer and the waiter's wake
+		_, err := boundedRead(context.Background(), slots, 5*time.Millisecond, nil, func(ctx context.Context) (int, error) {
+			<-ctx.Done()
+			return 0, ctx.Err()
+		})
+		if !errors.Is(err, ErrDirsTimedOut) {
+			t.Fatalf("a read ended by its context: %v, want ErrDirsTimedOut", err)
+		}
+	}
+	own := errors.New("the read's own")
+	if _, err := boundedRead(context.Background(), slots, time.Minute, nil, func(context.Context) (int, error) {
+		return 0, own
+	}); !errors.Is(err, own) {
+		t.Errorf("a read's own error: %v, want it handed back", err)
+	}
+}
+
 // One hung mount holds only its own slots (server#360's rule for the picker):
 // with every slot of /mnt/hung held by listings that don't answer, a listing
 // or root check anywhere on it is ErrDirsTimedOut at the time-out, while

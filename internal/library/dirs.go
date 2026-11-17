@@ -158,7 +158,8 @@ type readResult[T any] struct {
 // boundedRead is read on a goroutine of its own holding one of slots, or
 // ErrDirsTimedOut once timeout (or ctx) ends first, the read left to finish
 // there. read is handed the context the waiter waits under, so a read that
-// looks at it stops soon after the waiter has left. A panic in the read is
+// looks at it stops soon after the waiter has left (its answer then, that
+// context's error, is ErrDirsTimedOut too). A panic in the read is
 // raised again on the waiter's goroutine (the request's, where net/http
 // recovers and logs it) rather than ending the process; one in a read whose
 // waiter has left has no request to reach, so it is logged here (log, or
@@ -204,6 +205,11 @@ func boundedRead[T any](ctx context.Context, slots chan struct{}, timeout time.D
 	}
 	if r.panicked != nil {
 		panic(fmt.Sprintf("folder read panicked: %v\n%s", r.panicked, r.stack))
+	}
+	if cerr := ctx.Err(); cerr != nil && errors.Is(r.err, cerr) {
+		// The read gave up at the same end of ctx the waiter would have (a
+		// preview's walk): no answer, whichever of the two was first.
+		return zero, ErrDirsTimedOut
 	}
 	return r.v, r.err
 }
