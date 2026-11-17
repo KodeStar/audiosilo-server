@@ -530,6 +530,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			})
 		}
 		switch {
+		case r.existed && b.TagsUnread:
+			// Kept whole: UpsertBook recorded only its read problem (counted
+			// above), nothing of the book was updated.
 		case r.existed:
 			res.Updated++
 		case !movedTo[b.RelPath] && !joinsIndexed(b, sigs) && split[b.RelPath] == "":
