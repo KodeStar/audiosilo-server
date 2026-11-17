@@ -175,9 +175,11 @@ function FolderExplorer({
   const listing = (p: string): ListingState | undefined => listings.get(p);
   const root = byPath.get('')![0];
 
-  // Show more: the next page after what has loaded, or the one that failed again.
+  // Show more: the next page after what has loaded, or the one that failed again
+  // (as joinPages reads it: a page that kept its entries through a failed
+  // refresh is still listed, and isn't the one to ask for).
   const showMore = (p: string) => {
-    const failed = byPath.get(p)?.find((q) => q.isError);
+    const failed = byPath.get(p)?.find((q) => q.isError && !q.data);
     if (failed) return void failed.refetch();
     const next = listing(p)?.data?.next_offset;
     if (next) setPages((prev) => new Map(prev).set(p, [...(prev.get(p) ?? []), next]));

@@ -86,6 +86,45 @@ describe('folders', () => {
     ).toEqual([null, '500']);
   });
 
+  it('Show more asks for the next page after a refresh of the first one failed', async () => {
+    // Big/ holds 620 folders. Its first page stays listed through a failed
+    // refresh, so Show more still means the page after it.
+    const all = Array.from({ length: 620 }, (_, i) => dir(`Big/F${String(i).padStart(3, '0')}`));
+    let down = false;
+    mockFetch(
+      routes({
+        'GET /libraries/1/fs': (req) => {
+          if (!req.query.get('path')) {
+            return { body: { path: '', entries: [dir('Big')], total: 1, offset: 0 } };
+          }
+          const offset = Number(req.query.get('offset') ?? 0);
+          if (down && !offset) return { status: 500, body: { error: 'down' } };
+          const end = Math.min(offset + Number(req.query.get('limit')), all.length);
+          return {
+            body: {
+              path: 'Big',
+              entries: all.slice(offset, end),
+              total: all.length,
+              offset,
+              ...(end < all.length ? { next_offset: end } : {}),
+            },
+          };
+        },
+      }),
+    );
+    const { queryClient } = renderApp('/library/folders');
+    const tree = await screen.findByRole('tree', { name: 'Folders in Fiction' });
+    const user = userEvent.setup();
+    await user.click(within(tree).getByRole('treeitem', { name: 'Big' }));
+    await within(tree).findByText('500 of 620 items listed');
+
+    down = true;
+    await act(() => queryClient.refetchQueries({ queryKey: keys.browse(1, 'Big'), exact: true }));
+    expect(queryClient.getQueryState(keys.browse(1, 'Big'))?.status).toBe('error');
+    await user.click(within(tree).getByRole('button', { name: 'Show more' }));
+    expect(await within(tree).findByRole('treeitem', { name: 'F619' })).toBeInTheDocument();
+  });
+
   it('loads the tree lazily and opens a folder', async () => {
     const calls = mockFetch(routes());
     const { router } = renderApp('/library/folders');
