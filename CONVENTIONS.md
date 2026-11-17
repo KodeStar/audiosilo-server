@@ -969,7 +969,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   library and book path), each request scope-checked before it joins. The read runs on a goroutine of its own
   (`leadIndex`, up to `indexTimeout`, its probes too) and is stored even when every request waiting on it has ended, each at its own
   deadline, so a cancelled request never throws its probes away (server#211); it ends with the server
-  (`Scanner.SetBaseContext`, from the API's base context), writing nothing then. A scan's read of a book and the Bridge's
+  (`Scanner.SetBaseContext`, from the API's base context), writing nothing then, and a request still
+  waiting on it answers 503 `stopping` with `Retry-After` (`library.ErrStopping`, `indexShared`; an admin's Re-read and the Bridge's rescan too, `rescanAt`), not a 500. A scan's read of a book and the Bridge's
   `IndexMoved` take the same per-book flight (`startFlight`): no two reads of one book run side by side, and an on-demand
   index asked for during a scan's read waits for the scan's write and loads it. An admin's Re-read
   (`rescanPath`) is `ReindexPath` instead: it waits for the read under way, then reads the book itself, as what that

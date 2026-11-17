@@ -137,47 +137,59 @@ func TestStreamWaitsOutADiskSpinningUp(t *testing.T) {
 	}
 }
 
-// An /item request still waiting for its book's read when the server stops is
-// a 503 to try again (the read ended by the stop), not a 500 "context
-// canceled". Not parallel: metadata.HoldOpensForTests swaps the mount lookup.
-func TestItemWaitingAtShutdownIs503(t *testing.T) {
-	e := newTestEnv(t)
-	adminTok, _, _ := adminAndMember(t, e)
-	root := t.TempDir()
-	part := filepath.Join(root, "Author", "Book", "01.mp3")
-	if err := os.MkdirAll(filepath.Dir(part), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(part, make([]byte, 1<<10), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Held", Root: root})
-	if err != nil {
-		t.Fatal(err)
-	}
-	base, stop := context.WithCancel(context.Background())
-	defer stop()
-	e.api.SetBaseContext(base)
-	release := metadata.HoldOpensForTests(part) // the book's read waits on its part
-	t.Cleanup(release)
+// A request still waiting for its book's read when the server stops (/item's
+// shared read, an admin's Re-read) is a 503 to try again (the read ended by the
+// stop), not a 500 "context canceled". Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
+func TestBookReadWaitingAtShutdownIs503(t *testing.T) {
+	for _, c := range []struct{ name, method, endpoint string }{
+		{"item", "GET", "/item"},
+		{"re-read", "POST", "/book/rescan"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			adminTok, _, _ := adminAndMember(t, e)
+			root := t.TempDir()
+			part := filepath.Join(root, "Author", "Book", "01.mp3")
+			if err := os.MkdirAll(filepath.Dir(part), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(part, make([]byte, 1<<10), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Held", Root: root})
+			if err != nil {
+				t.Fatal(err)
+			}
+			base, stop := context.WithCancel(context.Background())
+			defer stop()
+			e.api.SetBaseContext(base)
+			release := metadata.HoldOpensForTests(part) // the book's read waits on its part
+			t.Cleanup(release)
 
-	type answer struct {
-		status int
-		body   string
-	}
-	done := make(chan answer, 1)
-	go func() {
-		resp, body := e.do(t, "GET", "/api/v1/libraries/"+strconv.FormatInt(lib.ID, 10)+"/item?path="+url.QueryEscape("Author/Book"), adminTok, "")
-		done <- answer{resp.StatusCode, body}
-	}()
-	time.Sleep(300 * time.Millisecond) // the read is under way, held
-	stop()
-	select {
-	case a := <-done:
-		if a.status != http.StatusServiceUnavailable || !strings.Contains(a.body, codeStopping) {
-			t.Errorf("/item waiting at shutdown = %d %s, want 503 %s", a.status, a.body, codeStopping)
-		}
-	case <-time.After(20 * time.Second):
-		t.Fatal("/item still waiting after the stop")
+			type answer struct {
+				status int
+				body   string
+			}
+			done := make(chan answer, 1)
+			go func() {
+				u := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + c.endpoint + "?path=" + url.QueryEscape("Author/Book")
+				if c.method == "POST" {
+					u = "/api/v1/admin" + strings.TrimPrefix(u, "/api/v1")
+				}
+				resp, body := e.do(t, c.method, u, adminTok, "")
+				done <- answer{resp.StatusCode, body}
+			}()
+			time.Sleep(300 * time.Millisecond) // the read is under way, held
+			stop()
+			select {
+			case a := <-done:
+				if a.status != http.StatusServiceUnavailable || !strings.Contains(a.body, codeStopping) {
+					t.Errorf("%s waiting at shutdown = %d %s, want 503 %s", c.endpoint, a.status, a.body, codeStopping)
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatalf("%s still waiting after the stop", c.endpoint)
+			}
+		})
 	}
 }
