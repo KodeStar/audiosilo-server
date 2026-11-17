@@ -461,7 +461,7 @@
   "user.account.roleSelf": "Non puoi cambiare il tuo ruolo. Può farlo un altro amministratore.",
   "user.account.roleOwnerTitle": "Cambiare il ruolo di {{name}}?",
   "user.account.roleOwnerAdmin": "I membri della famiglia di {{name}} ricevono l'accesso da {{name}}. Come amministratore, {{name}} vede tutte le librerie, quindi anche un membro che condivide tutto le vedrà tutte.",
-  "user.account.roleOwnerListener": "I membri della famiglia di {{name}} ricevono l'accesso da {{name}}. Come ascoltatore, {{name}} vede solo ciò che gli viene dato, quindi i suoi membri perdono ogni libreria e ogni libro delle raccolte condivise che {{name}} non raggiunge più.",
+  "user.account.roleOwnerListener": "I membri della famiglia di {{name}} ricevono l'accesso da {{name}}. Come ascoltatore, {{name}} vede solo ciò a cui gli è stato dato accesso, quindi i suoi membri perdono ogni libreria e ogni libro delle raccolte condivise a cui {{name}} non ha più accesso.",
   "user.account.roleOwnerConfirm": "Cambia ruolo",
   "user.account.failed": "Impossibile modificare l'account",
   "dangerZone.title": "Zona pericolosa",
