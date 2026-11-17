@@ -42,11 +42,21 @@ func TestDatabaseMmap(t *testing.T) {
 			t.Fatalf("from the environment %q = %+v, %v", m, c.Database, err)
 		}
 	}
+	// A bad value names the variable that set it (server#271); one from
+	// config.yaml doesn't.
 	for _, bad := range []string{"yes", "1", "fuse"} {
 		t.Setenv("AUDIOSILO_DB_MMAP", bad)
 		var fe *FieldError
-		if _, _, err := Load(dir); !errors.As(err, &fe) || fe.Key != "database.mmap" {
-			t.Fatalf("mmap %q loaded: %v", bad, err)
+		if _, _, err := Load(dir); !errors.As(err, &fe) || fe.Key != "database.mmap" || !strings.Contains(err.Error(), "set by AUDIOSILO_DB_MMAP") {
+			t.Fatalf("mmap %q loaded: %v, want a database.mmap error naming AUDIOSILO_DB_MMAP", bad, err)
 		}
+	}
+	t.Setenv("AUDIOSILO_DB_MMAP", "")
+	if err := os.WriteFile(Path(dir), []byte("database:\n  mmap: fuse\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var fe *FieldError
+	if _, _, err := Load(dir); !errors.As(err, &fe) || fe.Key != "database.mmap" || strings.Contains(err.Error(), "AUDIOSILO_") {
+		t.Fatalf("a bad config.yaml mmap: %v, want a database.mmap error naming no variable", err)
 	}
 }

@@ -564,6 +564,12 @@ func Load(dataDir string) (cfg *Config, firstRun bool, err error) {
 		cfg.TLS.CacheDir = defaultCacheDir(dataDir)
 	}
 	if err = cfg.Validate(); err != nil {
+		// A bad value the environment set says which variable, since config.yaml
+		// may not hold that key at all (server#271 ADMIN-13.6).
+		var fe *FieldError
+		if errors.As(err, &fe) && cfg.fromEnv[fe.Key] != "" {
+			err = fmt.Errorf("%w (set by %s)", err, cfg.fromEnv[fe.Key])
+		}
 		return nil, firstRun, err
 	}
 	return cfg, firstRun, nil
