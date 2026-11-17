@@ -34,7 +34,7 @@ export function bulkPhase(run: MatchRun | undefined): BulkPhase {
  * the books it didn't find and their best scores (server#307): a run that
  * matched and found books it couldn't match, weak matches among them.
  */
-export function seesNotFound(run: MatchRun | undefined): run is MatchRun {
+export function seesNotFound(run: MatchRun | undefined): boolean {
   return (
     !!run &&
     bulkPhase(run) === 'idle' &&
@@ -44,13 +44,23 @@ export function seesNotFound(run: MatchRun | undefined): run is MatchRun {
 }
 
 /**
- * The tab the review opens on: the confident books while any wait (a repick's
- * are all confident), else the ones to review, else (a run seen for what it
- * didn't find) those.
+ * The tab the review opens on: a run seen for what it didn't find (seesNotFound)
+ * opens on those, whatever else it holds (an applied run keeps the confident
+ * books left out and the ones never put in); else the confident books while any
+ * wait (a repick's are all confident), else the ones to review.
  */
 export function firstReviewTab(run: MatchRun): MatchOutcome {
-  if (run.counts.pending || run.mode === 'repick') return 'auto';
-  return run.counts.review || !run.counts.none ? 'review' : 'none';
+  if (seesNotFound(run)) return 'none';
+  return run.counts.pending || run.mode === 'repick' ? 'auto' : 'review';
+}
+
+/**
+ * Whether the review can apply anything: only a ready run takes an apply
+ * (catalog.BeginApply), so an applied one seen for what it didn't find is to
+ * read, with no picks and no Apply.
+ */
+export function canApply(run: MatchRun): boolean {
+  return run.status === 'ready';
 }
 
 /**

@@ -72,6 +72,7 @@ import {
   answeredCount,
   applyRequest,
   bulkPhase,
+  canApply,
   changeParts,
   firstReviewTab,
   heldLengths,
@@ -380,9 +381,12 @@ function ReviewDialog({
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const repick = run.mode === 'repick';
+  // An applied run (seen for what it didn't find) takes no apply: the review is
+  // to read, with no scope, no checkboxes and no Apply.
+  const readOnly = !canApply(run);
   // Every automatic refresh pick must be checked for changes, including pages
   // the admin has not opened. Other modes keep manual pagination.
-  const readAllAuto = open && run.mode === 'refresh' && run.counts.pending > 0;
+  const readAllAuto = open && !readOnly && run.mode === 'refresh' && run.counts.pending > 0;
   const autoItems = useAllMatchRunItems(run.id, 'auto', readAllAuto);
   const autoRows = useMemo(
     () => autoItems.data?.pages.flatMap((page) => page.items ?? []) ?? [],
@@ -555,16 +559,18 @@ function ReviewDialog({
             <DialogBody className="flex flex-col gap-4">
               {repick ? null : (
                 <>
-                  <RadioCards
-                    label={t('health.bulkMatch.scope.label')}
-                    value={scope}
-                    onValueChange={setScope}
-                    options={scopes.map((s) => ({
-                      value: s,
-                      title: t(`health.bulkMatch.scope.${s}`),
-                      description: t(`health.bulkMatch.scope.${s}Body`),
-                    }))}
-                  />
+                  {readOnly ? null : (
+                    <RadioCards
+                      label={t('health.bulkMatch.scope.label')}
+                      value={scope}
+                      onValueChange={setScope}
+                      options={scopes.map((s) => ({
+                        value: s,
+                        title: t(`health.bulkMatch.scope.${s}`),
+                        description: t(`health.bulkMatch.scope.${s}Body`),
+                      }))}
+                    />
+                  )}
                   <SegmentedControl
                     label={t('health.bulkMatch.outcomes')}
                     value={tab}
@@ -596,6 +602,7 @@ function ReviewDialog({
                 run={run}
                 outcome={tab}
                 scope={applyScope}
+                readOnly={readOnly}
                 picks={picks}
                 onPick={setPicks}
                 matchedByHand={matchedByHand}
@@ -604,16 +611,24 @@ function ReviewDialog({
               />
             </DialogBody>
             <DialogFooter>
-              <DialogClose render={<Button type="button" variant="ghost" />}>
-                {t('common.cancel')}
-              </DialogClose>
-              <Button
-                onClick={() => void apply()}
-                disabled={busy || !autoReady || (count === 0 && !finishEmpty)}
-              >
-                {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-                {finishEmpty ? t('common.done') : t('health.bulkMatch.apply', counted(count, lang))}
-              </Button>
+              {readOnly ? (
+                <DialogClose render={<Button type="button" />}>{t('common.done')}</DialogClose>
+              ) : (
+                <>
+                  <DialogClose render={<Button type="button" variant="ghost" />}>
+                    {t('common.cancel')}
+                  </DialogClose>
+                  <Button
+                    onClick={() => void apply()}
+                    disabled={busy || !autoReady || (count === 0 && !finishEmpty)}
+                  >
+                    {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+                    {finishEmpty
+                      ? t('common.done')
+                      : t('health.bulkMatch.apply', counted(count, lang))}
+                  </Button>
+                </>
+              )}
             </DialogFooter>
             {byHand ? (
               <MatchDialog
@@ -664,6 +679,7 @@ function ItemList({
   run,
   outcome,
   scope,
+  readOnly,
   picks,
   onPick,
   matchedByHand,
@@ -673,6 +689,8 @@ function ItemList({
   run: MatchRun;
   outcome: MatchOutcome;
   scope: MatchScope;
+  /** The run takes no apply (an applied one): no row has a checkbox. */
+  readOnly: boolean;
   picks: Picks;
   onPick: (change: (picks: Picks) => Picks) => void;
   /** Ids matched by hand from the review, which a range leaves as they are. */
@@ -739,8 +757,8 @@ function ItemList({
             item={item}
             root={roots[item.library_id]}
             scope={scope}
-            chosen={isChosen(item, picks, run.mode, scope)}
-            mode={run.mode}
+            pickable={!readOnly && isPickable(item, run.mode, scope)}
+            chosen={!readOnly && isChosen(item, picks, run.mode, scope)}
             onToggle={(shift) => toggle(item, shift)}
             onMatchByHand={() => onMatchByHand(item)}
           />
@@ -769,7 +787,7 @@ function ItemRow({
   item,
   root,
   scope,
-  mode,
+  pickable,
   chosen,
   onToggle,
   onMatchByHand,
@@ -778,7 +796,8 @@ function ItemRow({
   /** The library's folder: the book's whole path is the path's tooltip. */
   root: string | undefined;
   scope: MatchScope;
-  mode: MatchRunMode;
+  /** Whether the row has a checkbox (isPickable, and a run that takes an apply). */
+  pickable: boolean;
   chosen: boolean;
   onToggle: (shift: boolean) => void;
   onMatchByHand: () => void;
@@ -847,7 +866,7 @@ function ItemRow({
       onMouseDown={keepShiftClickFromSelectingText(true)}
     >
       <span className="grid size-5 shrink-0 place-items-center pt-0.5">
-        {isPickable(item, mode, scope) ? (
+        {pickable ? (
           <Checkbox
             checked={chosen}
             onCheckedChange={(_, d) => onToggle(shiftHeld(d.event))}

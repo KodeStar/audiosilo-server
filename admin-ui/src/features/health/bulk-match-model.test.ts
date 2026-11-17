@@ -8,6 +8,7 @@ import {
   hasCloseScore,
   applyRequest,
   bulkPhase,
+  canApply,
   changeParts,
   firstReviewTab,
   heldLengths,
@@ -92,6 +93,13 @@ describe('a run seen for what it found (server#307, server#352)', () => {
     expect(seesNotFound(weak)).toBe(true);
     expect(firstReviewTab(weak)).toBe('none');
     expect(seesNotFound(run({ status: 'applied' }, { pending: 0, review: 0 }))).toBe(true);
+    // An applied run keeps the books left out of its apply, and still opens on
+    // the ones it didn't find; it takes no second apply.
+    const applied = run({ status: 'applied' });
+    expect(seesNotFound(applied)).toBe(true);
+    expect(firstReviewTab(applied)).toBe('none');
+    expect(canApply(applied)).toBe(false);
+    expect(canApply(weak)).toBe(true);
     // A run still to review opens as before, and offers no second way in.
     expect(seesNotFound(run())).toBe(false);
     expect(firstReviewTab(run())).toBe('auto');

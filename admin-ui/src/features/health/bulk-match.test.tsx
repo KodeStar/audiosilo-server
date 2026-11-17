@@ -627,6 +627,52 @@ describe('bulk matching', () => {
     ).toBeInTheDocument();
   });
 
+  it("reads an applied run's books it didn't find, with nothing to pick or apply", async () => {
+    const weak: MatchRunItem = {
+      ...confident,
+      id: 13,
+      path: 'Someone/Garbage',
+      outcome: 'none',
+      score: 42,
+      detail: 'weak_match',
+      book: { title: 'Garbage', author: 'Someone' },
+      changes: {},
+    };
+    // One confident book applied; the one to review was never put in.
+    const applied = run({ status: 'applied', applied_at: '2026-10-07T10:06:00Z' });
+    applied.counts = { ...applied.counts, pending: 0, applied: 1, none: 1 };
+    const calls = mockFetch(
+      routes([applied], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items:
+              req.query.get('outcome') === 'none'
+                ? [weak]
+                : req.query.get('outcome') === 'review'
+                  ? [doubtful]
+                  : [{ ...confident, applied: 'applied' }],
+            next_after: 0,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: "See the books it didn't find" }));
+    const dialog = await screen.findByRole('dialog');
+    // It opens on the books it didn't find, though others are left to review.
+    expect(await within(dialog).findByText(/Only weak community matches/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: /To review/ }));
+    expect(await within(dialog).findByRole('list', { name: 'To review' })).toBeInTheDocument();
+    // The server takes no second apply of an applied run: nothing offers one.
+    expect(within(dialog).queryByRole('checkbox')).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: /^Apply/ })).toBeNull();
+    expect(within(dialog).queryByRole('radiogroup')).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(calls.some((c) => c.path === '/admin/match-runs/5/apply')).toBe(false);
+  });
+
   it('says when a working run waits as the community service asked (server#307)', async () => {
     const waiting = run({
       status: 'matching',
