@@ -3637,7 +3637,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   any admin match waits, `admin_account`); else `auto_create` makes an ordinary account (for
   `allowed_group`'s members when set; the email kept only when verified), and anything else is a **pending
   sign-in** (`oidc_pending`, one row per issuer+subject, its attempts counted, pruned after 30 days,
-  at most 500, the cap's evictions logged by the callback (`OIDCResult.PendingEvicted`), dropped when a
+  at most 500, the cap's evictions logged by the callback (`OIDCResult.PendingEvicted`; at most one line an hour, with the count since the last, `evictionTally`), dropped when a
   later sign-in links it or makes its account; ids AUTOINCREMENT, so a
   dismissed row's id never names another person to a console list read before). `admin_group` (trimmed, like
   `allowed_group`, whatever set it), when set, syncs the role at every sign-in that signs in (in: admin,

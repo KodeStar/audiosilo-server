@@ -93,6 +93,32 @@ type oidcFlow struct {
 	// admin_group is set) has been logged this run, a noGroupsKey each
 	// (auditSignIn).
 	noGroupsWarned sync.Map
+	// evictions: the waiting rows the list's cap dropped, for auditSignIn's
+	// warning.
+	evictions evictionTally
+}
+
+// evictionTally counts the waiting sign-ins dropped at the list's cap between
+// warnings: at the cap every new person's attempt drops one, so the warning
+// is logged at most once an hour, with the count since the last.
+type evictionTally struct {
+	mu       sync.Mutex
+	dropped  int64
+	loggedAt time.Time
+}
+
+// note counts n more rows dropped and returns how many to report now: all
+// since the last report when that was an hour or more ago (or never), else 0
+// (kept for the next).
+func (e *evictionTally) note(n int64, now time.Time) int64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.dropped += n
+	if !e.loggedAt.IsZero() && now.Sub(e.loggedAt) < time.Hour {
+		return 0
+	}
+	n, e.dropped, e.loggedAt = e.dropped, 0, now
+	return n
 }
 
 // noGroupsKey is an account and whether its identity had carried the groups
@@ -516,11 +542,14 @@ func clip(s string, n int) string {
 // admin_group rule changed or would have (a refused demotion is logged too).
 // A sign-in with no groups claim while admin_group is set is logged once per
 // account this run (its role was left alone; the identity's earlier claims
-// say whether the provider stopped sending it), and a waiting sign-in that
-// pushed the oldest out of the list is logged for the admin.
+// say whether the provider stopped sending it), and waiting sign-ins that
+// pushed the oldest out of the list are logged for the admin (at most once an
+// hour, with how many were dropped since: evictionTally).
 func (a *API) auditSignIn(r *http.Request, c oidc.Claims, res auth.OIDCResult) {
 	if n := res.PendingEvicted; n > 0 {
-		a.log.Warn("oidc: the waiting sign-ins are at their cap: the oldest were dropped", "dropped", n)
+		if n = a.oidc.evictions.note(n, time.Now()); n > 0 {
+			a.log.Warn("oidc: the waiting sign-ins are at their cap: the oldest were dropped", "dropped", n)
+		}
 	}
 	u := res.User
 	if u == nil {

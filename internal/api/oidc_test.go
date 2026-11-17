@@ -1402,3 +1402,29 @@ func TestOIDCStartProviderGone(t *testing.T) {
 	now = now.Add(time.Minute)
 	e.start(t, oidcReturnAdmin)
 }
+
+// TestEvictionTallyLogsOncePerHour: at the waiting list's cap every new
+// person's attempt drops a row, and the warning is not one line per attempt:
+// the first eviction is reported (allowed), those within the hour after it
+// are held back (denied) and reported together with the next one past it.
+func TestEvictionTallyLogsOncePerHour(t *testing.T) {
+	t.Parallel()
+	var e evictionTally
+	now := time.Unix(1_800_000_000, 0)
+	if n := e.note(1, now); n != 1 {
+		t.Fatalf("the first eviction reported %d, want 1", n)
+	}
+	for range 3 {
+		now = now.Add(time.Minute)
+		if n := e.note(1, now); n != 0 {
+			t.Fatalf("an eviction within the hour reported %d, want none", n)
+		}
+	}
+	now = now.Add(time.Hour)
+	if n := e.note(2, now); n != 5 {
+		t.Fatalf("past the hour reported %d, want the 5 dropped since the last line", n)
+	}
+	if n := e.note(1, now.Add(time.Second)); n != 0 {
+		t.Fatalf("right after a report: %d, want none", n)
+	}
+}
