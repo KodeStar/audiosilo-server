@@ -4025,7 +4025,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Edit chapters in a podcast library (`ChaptersCard` reads the library's kind). A `chapters.detect` job for a book
   whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, checked by the api's queue
   handler from the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list
-  would sit under the edit, never used. A player meets it only for an edited book (an older one shows the code).
+  would sit under the edit, never used. Only the console queues detect jobs (the player never does): Health's Detect
+  dialog passes such a book over (`skipNotes`) and `errors.ts` words the code.
 - ffprobe is optional; code paths must degrade gracefully when it is absent (with it, most files
   are read in-process: see In-process probe)
   (path-derived metadata still works; codec is left unknown → `direct_playable`
