@@ -39,7 +39,12 @@ func TestHeldSideReadsLetTheScanFinish(t *testing.T) {
 			ctx := t.Context()
 			db := storetest.Open(t)
 			cat := catalog.New(db, time.Now)
-			root := t.TempDir()
+			// The root the scan walks (macOS's temp folder is under a link,
+			// /var to /private/var): held there, the walk's own looks are too.
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
 			writeFile(t, root, book+"/01.mp3", make([]byte, 1<<10))
 			writeFile(t, root, c.file, c.data(t))
 			lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
@@ -55,9 +60,10 @@ func TestHeldSideReadsLetTheScanFinish(t *testing.T) {
 			}
 
 			hold := metadata.HoldOpensForTests
-			if c.name == "metadata.json" {
+			if c.name == "metadata.json" || c.name == "attachment" {
 				// Its lstat answers (the walk's, from a share's cached
-				// attributes) while its read hangs.
+				// attributes) while its read hangs. (A .audiosilo folder
+				// whose listing hangs is TestAScanSkipsAFolderThatDoesNotAnswer's.)
 				hold = metadata.HoldReadsForTests
 			}
 			release := hold(filepath.Join(root, filepath.FromSlash(c.file)))
@@ -87,7 +93,10 @@ func TestHeldBackfillReadLetsTheScanFinish(t *testing.T) {
 	ctx := t.Context()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir()) // the root the scan walks
+	if err != nil {
+		t.Fatal(err)
+	}
 	const book = "Author/Book"
 	writeFile(t, root, book+"/01.mp3", make([]byte, 1<<10))
 	writeFile(t, root, book+"/metadata.json", []byte(`{"title":"ABS Title"}`))
