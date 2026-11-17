@@ -610,12 +610,25 @@ func (s *Service) MemberPairing(ctx context.Context, owner, id int64, ttl time.D
 	return m, token, nil
 }
 
-// MemberDevices lists owner's member id's live sessions and API keys.
+// MemberDevices lists owner's member id's live sessions and API keys, as the
+// owner sees them: a grown-up's without their addresses (LastIP "", server#190),
+// a kid's with them. The member is read after the devices, so a switch to
+// grown-up committed before that read always hides them.
 func (s *Service) MemberDevices(ctx context.Context, owner, id int64) ([]Device, error) {
-	if _, err := s.Member(ctx, owner, id); err != nil {
+	devices, err := s.ListDevices(ctx, id)
+	if err != nil {
 		return nil, err
 	}
-	return s.ListDevices(ctx, id)
+	m, err := s.Member(ctx, owner, id)
+	if err != nil {
+		return nil, err
+	}
+	if m.Kind != MemberKid {
+		for i := range devices {
+			devices[i].LastIP = ""
+		}
+	}
+	return devices, nil
 }
 
 // RevokeMemberDevice signs one of owner's member id's devices out, in one

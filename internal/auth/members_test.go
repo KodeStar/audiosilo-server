@@ -677,3 +677,47 @@ func TestMemberNameAllowsScriptsAndEmoji(t *testing.T) {
 		}
 	}
 }
+
+// An owner sees a kid's device addresses but never a grown-up member's
+// (server#190); switching the kid to a grown-up hides them at the next read.
+func TestMemberDevicesHideAGrownupsAddress(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	evie := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll})
+	gwen := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Gwen", Kind: MemberGrownup, Access: MemberAll})
+	for _, m := range []Member{evie, gwen} {
+		tok, err := s.IssueToken(ctx, m.ID, KindSession, "tablet", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.ResolveRequest(ctx, tok, Presence{IP: "192.0.2.9"}, KindSession); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lastIP := func(id int64) string {
+		t.Helper()
+		d, err := s.MemberDevices(ctx, adam.ID, id)
+		if err != nil || len(d) != 1 {
+			t.Fatalf("devices of %d = %v, %v", id, d, err)
+		}
+		return d[0].LastIP
+	}
+	if got := lastIP(evie.ID); got != "192.0.2.9" {
+		t.Errorf("kid's address = %q, want it shown", got)
+	}
+	if got := lastIP(gwen.ID); got != "" {
+		t.Errorf("grown-up's address = %q, want it hidden", got)
+	}
+	grownup := MemberGrownup
+	if _, _, err := s.UpdateMember(ctx, adam.ID, evie.ID, MemberUpdate{Kind: &grownup}); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastIP(evie.ID); got != "" {
+		t.Errorf("address after the switch to grown-up = %q, want it hidden", got)
+	}
+	// The member's own list still shows them their addresses.
+	if d, err := s.ListDevices(ctx, gwen.ID); err != nil || len(d) != 1 || d[0].LastIP != "192.0.2.9" {
+		t.Errorf("the grown-up's own devices = %+v, %v", d, err)
+	}
+}

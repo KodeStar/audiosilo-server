@@ -942,6 +942,35 @@ func TestMembers_SignIns(t *testing.T) {
 	}
 }
 
+// A member signed in on the owner's device, at creation or later, is a new
+// device in the admin's feed like any sign-in (server#190); adding a member
+// without signing them in, and a refused member sign-in, report nothing.
+func TestMembers_SignInsReachTheFeed(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	devices, _ := myDevicesOf(t, m.testEnv, m.adamTok)
+	evie, _ := m.kid(t, m.adamTok, "Evie")
+	ellis, _ := m.grownup(t, m.adamTok, "Ellis", "all")
+	if s := m.status(t, "POST", memberURL(ellis.ID, "session"), m.bobTok, ""); s != http.StatusNotFound {
+		t.Fatalf("bob's sign-in of adam's member = %d", s)
+	}
+	_, b := m.do(t, "GET", "/api/v1/admin/events?kind=new_device&limit=50", m.adminTok, "")
+	var feed struct {
+		Events []catalog.ServerEvent `json:"events"`
+	}
+	if err := json.Unmarshal([]byte(b), &feed); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, ev := range feed.Events {
+		got = append(got, fmt.Sprint(ev.Data["user"], "@", ev.Data["device"]))
+	}
+	want := []string{ellis.Username + "@" + devices[0].Name, evie.Username + "@" + devices[0].Name}
+	if !slices.Equal(got, want) {
+		t.Fatalf("new devices = %v, want %v", got, want)
+	}
+}
+
 // Visibility: adam sees evie in his share targets and can share with her; ellis
 // appears like any account. Bob doesn't see evie and can't share with her by id;
 // evie never appears in household listening and can't read it.

@@ -2683,13 +2683,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   username derived from the name, then `-<owner>`, then `-2`, `-3`, ... with no cap) -> `201 {member, session?}`,
   `POST {id}/session` (201 envelope), `POST {id}/pair` (unlinked, single use, 10 min; both 409
   `member_disabled` for a member the admin disabled, whose tokens would never work), `GET
-  {id}/devices` (a bare `[MyDevice]`), `DELETE {id}/devices/{device_id}`, `PATCH {id} {name?, kind?,
+  {id}/devices` (a bare `[MyDevice]`; a grown-up's `last_ip` is `""`, a kid's shown: `auth.MemberDevices`
+  reads the member after the devices, server#190), `DELETE {id}/devices/{device_id}`, `PATCH {id} {name?, kind?,
   access?, collection_ids?}` (`{}` 400), `DELETE {id}`. Only adding checks the switches (the server's
   `household.members_enabled`, the person's `can_add_members`) and the cap (`household.max_members`,
   1-50, default 6); the other routes keep working on existing members. `collection_ids` is the full set
   of the caller's own collections shared with the member (`catalog.SetMemberCollections`, run inside
-  `auth`'s transaction through `auth.ShareFunc`). A session made here records `created_on_token_id`
-  and copies the caller's device name. **Kids**: 403 `kid_account` on `POST /auth/password|tokens|pair|
+  `auth`'s transaction through `auth.ShareFunc`). A session made here records `created_on_token_id`,
+  copies the caller's device name and is reported as a `new_device` event, as any sign-in (server#190). **Kids**: 403 `kid_account` on `POST /auth/password|tokens|pair|
   recovery`, `PUT /me/household`, `PUT /me/collections/{id}/shares` and every `/me/upcoming` route (the
   list, the calendar link, the calendar feed, the Upcoming cover), from one route wrapper
   (`api.notKid` in `api.go`, before the handler; wrap any new route a kid can't use), and the writes
