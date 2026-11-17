@@ -1,11 +1,15 @@
 package library
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -159,5 +163,50 @@ func TestDirListerCheckRoot(t *testing.T) {
 	}
 	if _, err := l.CheckRoot(ctx, "relative"); !errors.Is(err, ErrNotAbsolute) {
 		t.Fatalf("a relative root with the one slot held: %v, want ErrNotAbsolute", err)
+	}
+}
+
+// A listing that panics panics its waiter, not the process (the read runs on a
+// goroutine of its own, which nothing would recover), and gives its slot back.
+func TestDirListerPanicReachesTheWaiter(t *testing.T) {
+	t.Parallel()
+	l := NewDirLister(func(dir string, _ int) (*DirListing, error) {
+		if dir == "/boom" {
+			panic("boom")
+		}
+		return &DirListing{Path: dir}, nil
+	}, 1, 10*time.Second)
+	ctx := context.Background()
+	func() {
+		defer func() {
+			if p := recover(); p == nil || !strings.Contains(fmt.Sprint(p), "boom") {
+				t.Errorf("recovered %v, want the listing's panic", p)
+			}
+		}()
+		_, _ = l.List(ctx, "/boom", 0)
+	}()
+	if got, err := l.List(ctx, "/fine", 0); err != nil || got.Path != "/fine" {
+		t.Fatalf("after a panicked listing: %v, want the listing (its slot given back)", err)
+	}
+}
+
+// A listing that panics after its waiter left with ErrDirsTimedOut has no
+// request to reach: it is logged, and its slot still comes back.
+func TestDirListerLogsAnAbandonedPanic(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	l := NewDirLister(func(string, int) (*DirListing, error) {
+		<-release
+		panic("boom")
+	}, 1, 20*time.Millisecond)
+	var logged bytes.Buffer
+	l.log = slog.New(slog.NewTextHandler(&logged, nil))
+	if _, err := l.List(context.Background(), "/hung", 0); !errors.Is(err, ErrDirsTimedOut) {
+		t.Fatalf("a listing that doesn't answer: %v, want ErrDirsTimedOut", err)
+	}
+	close(release)
+	l.slots <- struct{}{} // waits for the panicked listing to give its slot back
+	if got := logged.String(); !strings.Contains(got, "boom") || !strings.Contains(got, "level=ERROR") {
+		t.Fatalf("logged %q, want the listing's panic as an error", got)
 	}
 }

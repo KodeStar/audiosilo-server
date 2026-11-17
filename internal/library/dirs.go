@@ -3,8 +3,11 @@ package library
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -101,6 +104,7 @@ type DirLister struct {
 	check   func(root string) (string, error)
 	slots   chan struct{}
 	timeout time.Duration
+	log     *slog.Logger // nil: slog.Default(), read when it is needed
 }
 
 // NewDirLister is a DirLister of list (ListDirs; a test's stand-in), slots at
@@ -127,15 +131,21 @@ func (l *DirLister) CheckRoot(ctx context.Context, root string) (string, error) 
 	return boundedRead(ctx, l, func() (string, error) { return l.check(root) })
 }
 
-// readResult is what a boundedRead's goroutine hands its waiter.
+// readResult is what a boundedRead's goroutine hands its waiter: the read's
+// answer, or the panic that ended it.
 type readResult[T any] struct {
-	v   T
-	err error
+	v        T
+	err      error
+	panicked any
+	stack    []byte
 }
 
 // boundedRead is read() on a goroutine of its own holding one of l's slots, or
 // ErrDirsTimedOut once l's time-out (or ctx) ends first, the read left to
-// finish there.
+// finish there. A panic in the read is raised again on the waiter's goroutine
+// (the request's, where net/http recovers and logs it) rather than ending the
+// process; one in a read whose waiter has left has no request to reach, so it
+// is logged here.
 func boundedRead[T any](ctx context.Context, l *DirLister, read func() (T, error)) (T, error) {
 	var zero T
 	ctx, cancel := context.WithTimeout(ctx, l.timeout)
@@ -148,11 +158,29 @@ func boundedRead[T any](ctx context.Context, l *DirLister, read func() (T, error
 	done := make(chan readResult[T], 1) // buffered: an abandoned read still returns
 	go func() {
 		defer func() { <-l.slots }()
+		defer func() {
+			p := recover()
+			if p == nil {
+				return
+			}
+			stack := debug.Stack()
+			if ctx.Err() != nil { // the waiter answered ErrDirsTimedOut already
+				log := l.log
+				if log == nil {
+					log = slog.Default()
+				}
+				log.Error("folder read panicked after its time-out", "panic", p, "stack", string(stack))
+			}
+			done <- readResult[T]{panicked: p, stack: stack}
+		}()
 		v, err := read()
 		done <- readResult[T]{v: v, err: err}
 	}()
 	select {
 	case r := <-done:
+		if r.panicked != nil {
+			panic(fmt.Sprintf("folder read panicked: %v\n%s", r.panicked, r.stack))
+		}
 		return r.v, r.err
 	case <-ctx.Done():
 		return zero, ErrDirsTimedOut
