@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -372,12 +373,14 @@ func (a *API) handleAdminAudibleAccountDelete(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if acct != nil {
-		// Named, not just by its opaque id, for an admin reading the log (server#294).
+		// Named, not just by its opaque id, for an admin reading the log
+		// (server#294): its label, else "person (STORE)", else (an account
+		// read without its person) the id.
 		name := acct.Label
-		if name == "" {
+		if name == "" && acct.User.DisplayName != "" {
 			name = fmt.Sprintf("%s (%s)", acct.User.DisplayName, strings.ToUpper(acct.Marketplace))
 		}
-		a.audit(r, "bridge.audible.remove", name, map[string]any{"account": id})
+		a.audit(r, "bridge.audible.remove", cmp.Or(name, id), map[string]any{"account": id})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

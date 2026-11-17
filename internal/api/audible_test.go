@@ -172,13 +172,33 @@ func TestAudibleAdminAccountsWhileOff(t *testing.T) {
 			t.Errorf("as the admin's %s while off: %d %s", name, resp.StatusCode, body)
 		}
 	}
-	if resp, _ := b.do(t, "GET", path, b.userTok, ""); resp.StatusCode != http.StatusForbidden {
-		t.Errorf("as a user: %d, want 403", resp.StatusCode)
+	// Denied: anyone but an admin, by session or API key: a user, a household
+	// member, a demo account.
+	ctx := context.Background()
+	alexID, _ := newUserWithSession(t, b.testEnv, "alex", false)
+	userKey, err := b.auth.IssueToken(ctx, alexID, auth.KindAPI, "key", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberID, memberTok := newUserWithSession(t, b.testEnv, "grown", false)
+	if _, err := b.db.ExecContext(ctx, `UPDATE users SET managed_by = ?, member_kind = 'grownup', member_access = 'all' WHERE id = ?`,
+		b.adminID, memberID); err != nil {
+		t.Fatal(err)
+	}
+	_, demoTok := newUserWithSession(t, b.testEnv, "visitor", true)
+	for name, tok := range map[string]string{"user": b.userTok, "user api key": userKey, "member": memberTok, "demo": demoTok} {
+		if resp, _ := b.do(t, "GET", path, tok, ""); resp.StatusCode != http.StatusForbidden {
+			t.Errorf("as a %s: %d, want 403", name, resp.StatusCode)
+		}
 	}
 	for name, tok := range map[string]string{"none": "", "bridge": b.bridgeTok} {
 		if resp, _ := b.do(t, "GET", path, tok, ""); resp.StatusCode != http.StatusUnauthorized {
 			t.Errorf("with %s: %d, want 401", name, resp.StatusCode)
 		}
+	}
+	// Header only: the admin's session as ?token= is refused.
+	if resp, _ := b.do(t, "GET", path+"?token="+url.QueryEscape(b.adminTok), "", ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("the admin's session as ?token=: %d, want 401", resp.StatusCode)
 	}
 }
 
