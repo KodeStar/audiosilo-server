@@ -63,20 +63,15 @@ func expanseReader(t *testing.T, u *upcomingEnv) (id int64, tok string, shareID 
 	return id, tok, share.ID
 }
 
-// holdCopy gives the admin a copy of workID (identified by idKey) at path in a
+// holdCopy gives the admin a copy of workID (carrying asin) at path in a
 // second library, so their Upcoming list drops it.
-func holdCopy(t *testing.T, u *upcomingEnv, path, idKey, workID string) {
+func holdCopy(t *testing.T, u *upcomingEnv, path, asin, workID string) {
 	t.Helper()
-	ctx := context.Background()
-	other, err := u.cat.CreateLibrary(ctx, catalog.Library{Name: "Other", Root: t.TempDir()})
+	other, err := u.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Other", Root: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	u.book(t, other.ID, path, "", 0)
-	if err := u.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{{Ref: catalog.Ref{LibraryID: other.ID, Path: path},
-		IDKey: idKey, WorkID: workID, CheckedAt: "2026-10-20T04:00:00.000Z"}}, nil); err != nil {
-		t.Fatal(err)
-	}
+	u.ownedCopy(t, other.ID, path, asin, workID)
 }
 
 // mintFeed POSTs /me/upcoming/calendar as tok, wanting 201, and returns the
@@ -236,7 +231,7 @@ func TestUpcomingFeedScoped(t *testing.T) {
 	}
 
 	// The admin gets a copy of e4 in another library: dropped from their feed only.
-	holdCopy(t, u, "Loose/Cibola", "a:B4", "e4")
+	holdCopy(t, u, "Loose/Cibola", "B0CIBOLA01", "e4")
 	if _, body := u.do(t, "GET", feedURL(adminFeed), "", ""); strings.Contains(body, "UID:e4@") {
 		t.Fatalf("a work the owner holds must be dropped:\n%s", body)
 	}
@@ -635,7 +630,7 @@ func TestUpcomingCover(t *testing.T) {
 		t.Error("a refused cover was fetched")
 	}
 	// Held: a copy of e3 elsewhere drops it from the admin's list, and its cover.
-	holdCopy(t, u, "Loose/Abaddon", "a:B3", "e3")
+	holdCopy(t, u, "Loose/Abaddon", "B0ABADDON1", "e3")
 	if r, _ := u.do(t, "GET", cover("e3", ""), admin, ""); r.StatusCode != http.StatusNotFound {
 		t.Errorf("a held work's cover = %d, want 404", r.StatusCode)
 	}

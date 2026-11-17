@@ -78,6 +78,9 @@ type API struct {
 	// upcoming is the upcoming releases job (Track U1), nil without a
 	// metadata service (StartUpcoming).
 	upcoming *upcoming.Runner
+	// kickUpcoming is upcoming.Kick (nil with it): a field so a test can see
+	// the kick a settings change makes.
+	kickUpcoming func()
 	// coverage is the daily report of unknown Audible ASINs (LibraForge C3),
 	// nil without a metadata service and on a demo server (StartCoverage).
 	coverage *coverage.Runner
@@ -293,6 +296,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 			Announce: a.announceReleases,
 			Log:      log,
 		})
+		a.kickUpcoming = a.upcoming.Kick
 		cat.OnBookChange(a.upcoming.Kick)
 		// The unknown-ASIN report: opt-in, daily, never on a demo server (its
 		// books are the demo's, not anyone's library).

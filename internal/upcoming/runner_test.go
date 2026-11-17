@@ -399,8 +399,10 @@ func TestRunnerFailureKeepsResults(t *testing.T) {
 	if rs.Failures != 1 {
 		t.Fatalf("failures = %d", rs.Failures)
 	}
-	// The retry is in an hour.
-	if next := f.r.after(context.Background(), errors.New("x")); next.Sub(f.clock) != retryDelay {
+	// The retry is in an hour, whatever the switch says once the run is over:
+	// the run was of the whole job.
+	f.off.Store(true)
+	if next := f.r.after(context.Background(), true, errors.New("x")); next.Sub(f.clock) != retryDelay {
 		t.Fatalf("retry after %v", next.Sub(f.clock))
 	}
 }
@@ -905,7 +907,7 @@ func TestRunnerSwitchedOffMidRun(t *testing.T) {
 	if st, _ := f.cat.UpcomingRunState(context.Background()); st != st0 {
 		t.Fatalf("a stopped run records nothing: %+v, was %+v", st, st0)
 	}
-	if next := f.r.after(context.Background(), err); next.Sub(f.clock) < interval-jitter {
+	if next := f.r.after(context.Background(), true, err); next.Sub(f.clock) < interval-jitter {
 		t.Fatalf("a stopped run is no failure to retry: next in %v", next.Sub(f.clock))
 	}
 	// Off, a run makes no call at all.
@@ -1064,7 +1066,7 @@ func TestRunnerResolveOnlyWhileOff(t *testing.T) {
 	}
 	// A failed resolve-only run counts no failure, so it is not retried within
 	// the hour (that would be every hour, for ever): the next is a day on.
-	if next := f.r.after(context.Background(), errors.New("upstream 500")); next.Sub(f.clock) < interval-jitter {
+	if next := f.r.after(context.Background(), false, errors.New("upstream 500")); next.Sub(f.clock) < interval-jitter {
 		t.Fatalf("a failed resolve-only run is next after %v", next.Sub(f.clock))
 	}
 
@@ -1167,9 +1169,11 @@ func TestRunnerKickResolvesWhileOff(t *testing.T) {
 	f.r.opt.Resolve = resolve.Load
 	f.off.Store(true)
 	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	steps := stepSignal(f)
 	runSchedule(t, f)
+	<-steps // the schedule's start
 	f.r.Kick()
-	time.Sleep(150 * time.Millisecond)
+	<-steps // the kick handled
 	if n := len(f.md.lookups()); n != 0 {
 		t.Fatalf("a kick with metadata off made %d lookups", n)
 	}
@@ -1181,5 +1185,88 @@ func TestRunnerKickResolvesWhileOff(t *testing.T) {
 	})
 	if f.md.feedCount() != 0 {
 		t.Fatal("a resolve-only run asks no watch feed")
+	}
+}
+
+// stepSignal sets f's runner to signal each step of its schedule (Runner.stepped)
+// on the channel it returns; a step nobody waits for is dropped, never blocking
+// the schedule. Set before runSchedule.
+func stepSignal(f *fixture) <-chan struct{} {
+	ch := make(chan struct{}, 1)
+	f.r.stepped = func() {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	return ch
+}
+
+// A scheduled run cut short by the switch going off (server#412) leaves the
+// schedule where it was, due, rather than a day on: switched back on, it runs.
+func TestRunnerSwitchedOffRunStaysDue(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.clock = time.Now()
+	f.r.offCheck = 5 * time.Millisecond
+	f.expanse("2011", "2012")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	entered := make(chan struct{})
+	var once sync.Once
+	f.md.seriesHook = func(ctx context.Context, _ string) error {
+		once.Do(func() {
+			f.off.Store(true)
+			close(entered)
+		})
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	steps := stepSignal(f)
+	runSchedule(t, f)
+	<-steps    // the schedule's start
+	f.r.Wake() // no success yet: due now
+	<-entered
+	<-steps // the woken step
+	<-steps // the run's step, over
+	st, _ := f.cat.UpcomingRunState(context.Background())
+	if next, ok := parseStamp(st.NextRunAt); !ok || next.Sub(f.clock) > time.Hour {
+		t.Fatalf("a run switched off moved the schedule on: %+v", st)
+	}
+	if st.LastRunAt != "" {
+		t.Fatalf("a stopped run records nothing: %+v", st)
+	}
+}
+
+// A book's work changed by a step-1-alone run (the job off, metadata on) still
+// has its series looked at again by the next full run (server#412), not only by
+// the monthly refresh.
+func TestRunnerResolveOnlyKeepsChanged(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	var resolve atomic.Bool
+	resolve.Store(true)
+	f.r.opt.Resolve = resolve.Load
+	f.expanse("2011", "2012")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	// The book is retagged with an ASIN of another work, filed in a community
+	// series also named The Expanse, while the job is off.
+	f.md.workRefs["x1"] = []meta.SeriesRef{{ID: "expanse-v2", Name: "The Expanse"}}
+	f.md.series["expanse-v2"] = &meta.SeriesRecord{ID: "expanse-v2", Name: "The Expanse",
+		Members: []meta.SeriesMember{{WorkID: "x1", Position: "1", Title: "X1"}}}
+	f.book(t, f.lib, "The Expanse", 1, "A9", "x1")
+	f.off.Store(true)
+	if err := f.r.RunOnce(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	f.off.Store(false)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.cat.UpcomingSeriesAll(context.Background())
+	if err != nil || len(rows) != 1 || rows[0].SeriesID != "expanse-v2" {
+		t.Fatalf("series after the change = %+v, %v, want expanse-v2", rows, err)
 	}
 }
