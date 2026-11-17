@@ -25,10 +25,6 @@ const tick = time.Minute
 // maxPerTick bounds the polls one pass queues.
 const maxPerTick = 20
 
-// schedulerPriority is a scheduled poll's job priority: under anything a
-// person asked for.
-const schedulerPriority = -10
-
 // RunScheduler is the module's Start: a pass at once, then every minute, until
 // ctx ends (the module turned off, or the server stopping).
 func RunScheduler(ctx context.Context, d modules.Deps) {
@@ -85,7 +81,7 @@ func queuePolls(ctx context.Context, d modules.Deps, now time.Time) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if _, _, err := d.Bridge.Enqueue(ctx, bridge.AudiblePoll(poll.Account, poll.Template, schedulerPriority)); err != nil {
+		if _, _, err := d.Bridge.Enqueue(ctx, bridge.AudiblePoll(poll.Account, poll.Template, bridge.PriorityScheduled)); err != nil {
 			errs = append(errs, fmt.Errorf("poll audible account %s: %w", poll.Account, err))
 			continue
 		}
@@ -127,7 +123,7 @@ func (q Queues) queueSync(ctx context.Context, log *slog.Logger, account string,
 		return fmt.Errorf("sync audible account %s: %w", account, err)
 	}
 	if len(titles) > 0 || empty {
-		job, dropped := bridge.AudibleSync(account, titles, schedulerPriority)
+		job, dropped := bridge.AudibleSync(account, titles, bridge.PriorityScheduled)
 		if dropped > 0 && log != nil {
 			log.Warn("audible: an account's sync leaves out titles past the params' bound", "account", account,
 				"dropped", dropped)

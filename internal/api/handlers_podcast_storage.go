@@ -136,7 +136,7 @@ func (a *API) handleAdminPodcastFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
-	job, created, err := a.bridge.EnsurePodcastFetch(r.Context(), bridge.NewJob{LibraryID: &lib.ID, Path: &req.Path, Params: raw, Priority: 20, RequestedBy: userFrom(r.Context()).ID}, bridge.FetchOptions{Retry: true})
+	job, created, err := a.bridge.EnsurePodcastFetch(r.Context(), bridge.NewJob{LibraryID: &lib.ID, Path: &req.Path, Params: raw, Priority: bridge.PriorityDownload, RequestedBy: userFrom(r.Context()).ID}, bridge.FetchOptions{Retry: true})
 	if !a.podcastQueueError(w, err) {
 		return
 	}

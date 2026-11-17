@@ -229,7 +229,7 @@ func (s *Service) Subscribe(ctx context.Context, r SubscribeRequest) (*Job, bool
 	}
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
-	j, created, err := s.Enqueue(ctx, NewJob{Kind: KindPodcastSubscribe, LibraryID: &lib, Params: raw, RequestedBy: user, Priority: 10, feedRedacted: feed.RedactURL(norm), adoptOnly: r.AdoptOnly})
+	j, created, err := s.Enqueue(ctx, NewJob{Kind: KindPodcastSubscribe, LibraryID: &lib, Params: raw, RequestedBy: user, Priority: PriorityListener, feedRedacted: feed.RedactURL(norm), adoptOnly: r.AdoptOnly})
 	if err == nil && private {
 		if s.beforeSecretHeld != nil {
 			s.beforeSecretHeld(j)

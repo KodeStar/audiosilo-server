@@ -13,15 +13,15 @@ import (
 // to back up and builds each job's params (catalog/audible_import.go); these
 // queue the jobs and record each on its title.
 
-// Job priorities: one title asked for in the console comes first (a
-// preorder's request too, once a poll queues it), then what a policy queued
-// after a poll (with the scheduled polls and the podcast scheduler's fetches),
-// then "Back up everything", so a bulk backup in the Bridge's one download
-// slot never holds back new episodes.
+// Job priorities (bridge's bands): one title asked for in the console comes
+// first (a preorder's request too, once a poll queues it), then what a policy
+// queued after a poll (with the scheduled polls and the podcast scheduler's
+// fetches), then "Back up everything", so a bulk backup in the Bridge's one
+// download slot never holds back new episodes.
 const (
-	priorityBackup    = 0
-	priorityPolicy    = schedulerPriority
-	priorityBackupAll = -20
+	priorityBackup    = bridge.PriorityAsked
+	priorityPolicy    = bridge.PriorityScheduled
+	priorityBackupAll = bridge.PriorityBulk
 )
 
 // Queues is what queueing a backup needs: the titles and the job queue.
