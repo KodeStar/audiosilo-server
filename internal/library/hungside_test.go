@@ -160,13 +160,7 @@ func TestStopDuringAStuckRead(t *testing.T) {
 	}
 
 	close(unblock)
-	deadline := time.Now().Add(10 * time.Second)
-	for s.readsLeft.Load() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the left read never ended its flight")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	waitNoReadsLeft(t, s)
 	if _, err := s.IndexPath(ctx, *libA, "Author/Book"); err != nil {
 		t.Errorf("index the book once its read returned: %v", err)
 	}
@@ -239,17 +233,23 @@ func TestALaterScanSkipsABookWhoseReadWasLeft(t *testing.T) {
 	}
 
 	close(unblock)
+	waitNoReadsLeft(t, s)
+	hold.Store(false)
+	scanWithin(t, s, *lib, 20*time.Second)
+	if size, problem, _ := row("Author/Book"); size != 2<<10 || problem != "" {
+		t.Errorf("the book once its read returned: size %d, problem %q; want it read again", size, problem)
+	}
+}
+
+// waitNoReadsLeft waits for the reads stopped scans left under way to end.
+func waitNoReadsLeft(t *testing.T, s *Scanner) {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for s.readsLeft.Load() != 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("the left read never ended its flight")
 		}
 		time.Sleep(time.Millisecond)
-	}
-	hold.Store(false)
-	scanWithin(t, s, *lib, 20*time.Second)
-	if size, problem, _ := row("Author/Book"); size != 2<<10 || problem != "" {
-		t.Errorf("the book once its read returned: size %d, problem %q; want it read again", size, problem)
 	}
 }
 

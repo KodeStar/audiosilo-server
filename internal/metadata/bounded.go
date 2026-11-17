@@ -70,17 +70,18 @@ func Bounded[T any](ctx context.Context, path string, timeout time.Duration, fn 
 	case <-wctx.Done():
 		return notAnswered()
 	}
-	// The slot is freed once: by fn's goroutine when fn returns, or here when
-	// the call was given up on before fn began (or await never ran it).
-	var began atomic.Int32 // callWaiting, callBegun or callDropped
+	// The slot is freed once, by whichever claims it first: fn's goroutine as
+	// fn begins (freeing it when fn returns), or the give-up below when fn had
+	// not begun (or await never ran it), and fn is then never made.
+	var claimed atomic.Bool
 	free := func() { <-stuck.calls }
 	type result struct {
 		v   T
 		err error
 	}
 	r, ok := await(wctx, stuck, func() (r result) {
-		if !began.CompareAndSwap(callWaiting, callBegun) {
-			return result{err: errNotMade}
+		if !claimed.CompareAndSwap(false, true) {
+			return result{err: ErrNotAnswered}
 		}
 		defer free()
 		defer func() {
@@ -99,24 +100,13 @@ func Bounded[T any](ctx context.Context, path string, timeout time.Duration, fn 
 		}
 	})
 	if !ok {
-		if began.CompareAndSwap(callWaiting, callDropped) {
+		if claimed.CompareAndSwap(false, true) {
 			free()
 		}
 		return notAnswered()
 	}
 	return r.v, r.err
 }
-
-// A Bounded call's fn: not begun yet, begun (it frees its slot when it
-// returns), or given up on before it began (never made).
-const (
-	callWaiting int32 = iota
-	callBegun
-	callDropped
-)
-
-// errNotMade is the result of a Bounded call given up on before its fn began.
-var errNotMade = errors.New("not made")
 
 // StatBounded is os.Stat of path as a Bounded call.
 func StatBounded(ctx context.Context, path string, timeout time.Duration) (fs.FileInfo, error) {

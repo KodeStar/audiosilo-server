@@ -1198,12 +1198,11 @@ func (s *Scanner) keepLeft(ctx context.Context, lib catalog.Library, b *catalog.
 	}
 	b.Attachments = catalog.AttachmentsReading{Unread: true}
 	b.EbookFile = catalog.EbookReading{Unread: true}
-	file := primaryPath(b)
+	held := givenUp{file: primaryPath(b), err: metadata.ErrNotAnswered}
 	if old.ScanError == problemUnreadable && old.ScanErrorFile != "" {
-		file = old.ScanErrorFile
+		held.file = old.ScanErrorFile
 	}
-	b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = problemUnreadable, file, tagsUnreadDetail
-	b.ReadCutShort, b.LengthOnly = true, false
+	held.keep(b)
 }
 
 // ArtFile is the file a book's own art (no custom cover) is read from, the one
