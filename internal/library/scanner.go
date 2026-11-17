@@ -949,6 +949,12 @@ type runLog struct {
 	dropped  int
 }
 
+// unreadable records a warning that the library-relative path couldn't be
+// read (err's cause), the run's "unreadable" event; on a nil log it does nothing.
+func (l *runLog) unreadable(rel string, err error) {
+	l.add("warn", "unreadable", func(e *catalog.RunEvent) { e.Path, e.Detail = rel, fsaccess.Cause(err) })
+}
+
 // add records an event (fill sets its facts), or counts it once the log, or its
 // share for problems, is full; on a nil log it does nothing. The cap leaves room
 // for the truncation note and the closing event.
@@ -1335,7 +1341,7 @@ func (l coverLook) find(dir string, anyImage bool) string {
 		if err == nil {
 			return relOf(p)
 		}
-		if metadata.GaveUp(err) || l.ctx.Err() != nil {
+		if metadata.Unanswered(l.ctx, err) {
 			l.gaveUp.note(relOf(p), err)
 			return ""
 		}
@@ -1535,9 +1541,7 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 		dropUnanswered(dirs, unanswered, overrides)
 		for dir, uerr := range unanswered {
 			log.Warn("skipping a folder whose files didn't answer during discovery", "library", lib.Name, "path", absOf(lib, dir), "err", uerr)
-			if rl != nil {
-				rl.add("warn", "unreadable", func(e *catalog.RunEvent) { e.Path, e.Detail = dir, fsaccess.Cause(uerr) })
-			}
+			rl.unreadable(dir, uerr)
 		}
 	}
 	if gone > 0 {
@@ -1686,11 +1690,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			hadErrors = true
 			log.Warn("skipping unreadable path during discovery",
 				"library", lib.Name, "path", absOf(lib, rel), "err", walkErr)
-			if rl != nil {
-				rl.add("warn", "unreadable", func(e *catalog.RunEvent) {
-					e.Path, e.Detail = rel, fsaccess.Cause(walkErr)
-				})
-			}
+			rl.unreadable(rel, walkErr)
 			return nil
 		}
 		if d.IsDir() {
@@ -1704,11 +1704,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 					// discovery isn't partial: the prune is not at stake.
 					side.unlisted[dirOf(rel)] = true
 					log.Warn("could not list a .audiosilo folder", "library", lib.Name, "path", absOf(lib, rel), "err", lerr)
-					if rl != nil {
-						rl.add("warn", "unreadable", func(e *catalog.RunEvent) {
-							e.Path, e.Detail = rel, fsaccess.Cause(lerr)
-						})
-					}
+					rl.unreadable(rel, lerr)
 				case len(files) > 0:
 					side.attachments[dirOf(rel)] = files
 				}
@@ -1723,14 +1719,14 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			return nil
 		}
 		if isABSEntry(d, rel, ignore) {
-			if sig, serr := absEntrySig(ctx, lib, rel, d, ignore, timeout); serr != nil {
+			if sig, serr := absSigAt(ctx, lib, dirOf(rel), ignore, timeout); serr != nil {
 				// Not to be looked at right now (a flaky mount): its book keeps the
 				// stored reading (ABSReading.Unread) rather than losing its ABS
 				// values until the next scan.
 				side.abs[dirOf(rel)] = catalog.ABSReading{Unread: true}
 				log.Warn("could not look at an Audiobookshelf metadata.json", "library", lib.Name, "path", absOf(lib, rel), "err", serr)
-				if rl != nil && metadata.GaveUp(serr) {
-					rl.add("warn", "unreadable", func(e *catalog.RunEvent) { e.Path, e.Detail = rel, fsaccess.Cause(serr) })
+				if metadata.GaveUp(serr) {
+					rl.unreadable(rel, serr)
 				}
 			} else {
 				side.abs[dirOf(rel)] = catalog.ABSReading{Sig: sig}
@@ -1859,22 +1855,6 @@ func isABSEntry(de fs.DirEntry, rel string, ignore *Ignore) bool {
 		(ignore.Empty() || !ignore.Match(rel, false))
 }
 
-// absEntrySig is the signature of the Audiobookshelf metadata.json the walk
-// found as d (isABSEntry) at library-relative rel: from its lstat, looked at once
-// more when that fails (absSigAt; "" when it has gone since the listing), each a
-// metadata.Bounded call (ctx, at most timeout). err is a file that couldn't be
-// looked at right now, one given up on included (not looked at again).
-func absEntrySig(ctx context.Context, lib catalog.Library, rel string, d fs.DirEntry, ignore *Ignore, timeout time.Duration) (string, error) {
-	info, err := metadata.LstatBounded(ctx, absOf(lib, rel), timeout) // d's Info, bounded
-	switch {
-	case err == nil:
-		return metadata.ABSSignature(info), nil
-	case metadata.GaveUp(err) || ctx.Err() != nil:
-		return "", err
-	}
-	return absSigAt(ctx, lib, dirOf(rel), ignore, timeout)
-}
-
 // absSigAt is the signature of the Audiobookshelf metadata.json the scan reads
 // (isABSEntry) in the folder at library-relative rel, "" for none: what the walk
 // records for a folder whose entry it couldn't look at (audioDirs), for a book
@@ -1979,7 +1959,7 @@ type audioFile struct {
 // up on (metadata.GaveUp) or ctx's.
 func audioEntries(ctx context.Context, root, absDir string, ignore *Ignore, timeout time.Duration) ([]audioFile, error) {
 	entries, err := metadata.ReadDirBounded(ctx, absDir, timeout)
-	if metadata.GaveUp(err) || ctx.Err() != nil {
+	if metadata.Unanswered(ctx, err) {
 		return nil, err
 	}
 	if err != nil {
@@ -2131,7 +2111,7 @@ func stampAddedAt(ctx context.Context, lib catalog.Library, b *catalog.Book, tim
 			}
 			return addedAt(abs, info), nil
 		}, nil)
-		if metadata.GaveUp(err) || ctx.Err() != nil {
+		if metadata.Unanswered(ctx, err) {
 			if haveFound {
 				// The walk's time of this file and the rest (no system call):
 				// added_at is never written again, and now would hold a book
@@ -2585,7 +2565,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	}
 	abs := absOf(lib, relPath)
 	info, err := metadata.StatBounded(ctx, abs, look)
-	if metadata.GaveUp(err) || ctx.Err() != nil {
+	if metadata.Unanswered(ctx, err) {
 		return nil, err
 	}
 	if err != nil {
@@ -2685,7 +2665,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	// that can't be looked at keeps what is stored, but one given up on is the
 	// answer, as every look above.
 	if book.IsFolder {
-		if sig, aerr := absSigAt(ctx, lib, book.RelPath, ignore, look); metadata.GaveUp(aerr) || ctx.Err() != nil {
+		if sig, aerr := absSigAt(ctx, lib, book.RelPath, ignore, look); metadata.Unanswered(ctx, aerr) {
 			return nil, cmp.Or(aerr, ctx.Err())
 		} else if aerr != nil {
 			s.log.Warn("could not look at the book's Audiobookshelf metadata.json", "library", lib.Name, "path", book.RelPath, "err", aerr)
@@ -2694,7 +2674,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 			book.ABS.Sig = sig
 		}
 	}
-	if sig, aerr := attachmentsSigAt(ctx, lib, book, ignore, look); metadata.GaveUp(aerr) || ctx.Err() != nil {
+	if sig, aerr := attachmentsSigAt(ctx, lib, book, ignore, look); metadata.Unanswered(ctx, aerr) {
 		return nil, cmp.Or(aerr, ctx.Err())
 	} else if aerr != nil {
 		s.log.Warn("could not list the book's .audiosilo folder", "library", lib.Name, "path", book.RelPath, "err", aerr)
@@ -3005,7 +2985,7 @@ func renamedFolders(ctx context.Context, lib catalog.Library, moved map[string]s
 // answer then present.
 func dirPresent(ctx context.Context, lib catalog.Library, rel string, listed map[string]map[string]bool, timeout time.Duration) (bool, error) {
 	if _, err := metadata.LstatBounded(ctx, absOf(lib, rel), timeout); err != nil {
-		if metadata.GaveUp(err) || ctx.Err() != nil {
+		if metadata.Unanswered(ctx, err) {
 			return true, err
 		}
 		return !errors.Is(err, fs.ErrNotExist), nil
@@ -3015,7 +2995,7 @@ func dirPresent(ctx context.Context, lib catalog.Library, rel string, listed map
 		names, ok := listed[parent]
 		if !ok {
 			entries, err := metadata.ReadDirBounded(ctx, absOf(lib, parent), timeout)
-			if metadata.GaveUp(err) || ctx.Err() != nil {
+			if metadata.Unanswered(ctx, err) {
 				return true, err
 			}
 			if err != nil {

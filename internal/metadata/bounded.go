@@ -29,6 +29,13 @@ func GaveUp(err error) bool {
 	return errors.Is(err, ErrReadRefused) || errors.Is(err, ErrNotAnswered)
 }
 
+// Unanswered reports whether a look whose error is err went unanswered: given
+// up on (GaveUp), or ctx ended (whatever err says), so its caller stops and keeps
+// what it knows rather than read the look's answer.
+func Unanswered(ctx context.Context, err error) bool {
+	return GaveUp(err) || ctx.Err() != nil
+}
+
 // Bounded runs fn, a call on the file or folder at path that a share which
 // stopped answering would hold for good (a stat, a listing, an open and its
 // reads), under the bounds of a scan's audio reads (openBlockFile): on a

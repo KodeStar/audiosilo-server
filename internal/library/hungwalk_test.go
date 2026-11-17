@@ -29,7 +29,7 @@ func TestAScanSkipsAFolderThatDoesNotAnswer(t *testing.T) {
 		{"listing", "Author/Stuck", "Author/Stuck", true},
 		{"audio lstat", "Author/Stuck/01.mp3", "Author/Stuck", true},
 		{"attachments", "Author/Stuck/.audiosilo", "Author/Stuck/.audiosilo", false},
-		{"metadata.json", "Author/Stuck/metadata.json", "", false},
+		{"metadata.json", "Author/Stuck/metadata.json", "Author/Stuck/metadata.json", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctx := t.Context()
@@ -59,7 +59,7 @@ func TestAScanSkipsAFolderThatDoesNotAnswer(t *testing.T) {
 					c.held, res.Partial, res.Removed, res.Updated, c.partial)
 			}
 			logged := slices.ContainsFunc(res.Log, func(e catalog.RunEvent) bool { return e.Kind == "unreadable" && e.Path == c.logged })
-			if c.logged != "" && !logged {
+			if !logged {
 				t.Errorf("scan with %s held logged %+v, want %q unreadable", c.held, res.Log, c.logged)
 			}
 			if b, err := cat.GetBookByPath(ctx, lib.ID, "Author/Stuck"); err != nil || len(b.Files) != 1 {

@@ -87,7 +87,7 @@ func listAttachments(ctx context.Context, absDir string, timeout time.Duration) 
 			continue
 		}
 		info, err := metadata.LstatBounded(ctx, filepath.Join(absDir, e.Name()), timeout) // e's Info, bounded
-		if metadata.GaveUp(err) || ctx.Err() != nil {
+		if metadata.Unanswered(ctx, err) {
 			return nil, cmp.Or(err, ctx.Err())
 		}
 		if err != nil {
