@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -204,17 +205,26 @@ func (c *Catalog) markResolve(ctx context.Context, tx *sql.Tx, id int64) error {
 // library whose metadata source changed (markResolve), a batch of books a
 // transaction, and returns once none is due. A library switched again while it
 // runs is started again; one gone meanwhile has no books left. What is due is
-// in the database, so a run a stop cut short goes on at the next start.
+// in the database, so a run a stop cut short goes on at the next start. A
+// library that fails is left due and the others still run: the pass returns
+// its errors rather than starting again (it would fail the same way).
 func (c *Catalog) ResolveSources(ctx context.Context) error {
 	for {
 		due, err := getServerState[map[int64]int64](ctx, c.db, resolveKey)
 		if err != nil || len(due) == 0 {
 			return err
 		}
+		var errs []error
 		for lib, gen := range due {
 			if err := c.resolveLibrary(ctx, lib, gen); err != nil {
-				return err
+				if ctx.Err() != nil {
+					return err
+				}
+				errs = append(errs, fmt.Errorf("library %d: %w", lib, err))
 			}
+		}
+		if len(errs) > 0 {
+			return errors.Join(errs...)
 		}
 	}
 }

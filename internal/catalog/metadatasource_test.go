@@ -75,6 +75,89 @@ func TestMetadataSourceResolvesInBatches(t *testing.T) {
 	}
 }
 
+// TestResolveSourcesOvertaken: a run for a change a later one has overtaken
+// writes nothing and leaves the library due, so the next pass re-resolves it
+// for the later change.
+func TestResolveSourcesOvertaken(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	const p = "Author/Series/01 - Book"
+	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, IsFolder: true, Title: "Tagged"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{MetadataFromPath, MetadataFromTags, MetadataFromPath} {
+		if _, _, err := c.UpdateLibrary(ctx, lib.ID, LibraryPatch{MetadataSource: &source}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	due, err := getServerState[map[int64]int64](ctx, c.db, resolveKey)
+	if err != nil || due[lib.ID] != 3 {
+		t.Fatalf("due = %v, %v, want generation 3", due, err)
+	}
+	if err := c.resolveLibrary(ctx, lib.ID, 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustBook(t, c, ctx, lib.ID, p).Title; got != "Tagged" {
+		t.Fatalf("an overtaken run re-resolved the book: %q", got)
+	}
+	if due, err := getServerState[map[int64]int64](ctx, c.db, resolveKey); err != nil || due[lib.ID] != 3 {
+		t.Fatalf("an overtaken run changed the mark: %v, %v", due, err)
+	}
+	if err := c.ResolveSources(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustBook(t, c, ctx, lib.ID, p).Title; got != "Book" {
+		t.Fatalf("after the pass the title = %q, want the path's", got)
+	}
+}
+
+// TestResolveSourcesFailingLibrary: a library whose books can't be re-resolved
+// stays due and is reported, while the other libraries due in the same pass are
+// still re-resolved and cleared.
+func TestResolveSourcesFailingLibrary(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	const p = "Author/Series/01 - Book"
+	var libs [2]*Library
+	for i := range libs {
+		lib, err := c.CreateLibrary(ctx, Library{Name: "L" + strconv.Itoa(i), Root: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, IsFolder: true, Title: "Tagged"}); err != nil {
+			t.Fatal(err)
+		}
+		libs[i] = lib
+	}
+	bad, good := libs[0], libs[1]
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET scanned = '{broken' WHERE library_id = ?`, bad.ID); err != nil {
+		t.Fatal(err)
+	}
+	source := MetadataFromPath
+	for _, lib := range libs {
+		if _, _, err := c.UpdateLibrary(ctx, lib.ID, LibraryPatch{MetadataSource: &source}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.ResolveSources(ctx); err == nil {
+		t.Fatal("a library that can't be re-resolved reported nothing")
+	}
+	if got := mustBook(t, c, ctx, good.ID, p).Title; got != "Book" {
+		t.Fatalf("the other library's book = %q, want the path's title", got)
+	}
+	due, err := getServerState[map[int64]int64](ctx, c.db, resolveKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := due[bad.ID]; !ok || len(due) != 1 {
+		t.Fatalf("due = %v, want the failing library alone", due)
+	}
+}
+
 // fieldValues is a book's resolved values and sources, for comparing.
 func fieldValues(t *testing.T, c *Catalog, ctx context.Context, libID int64, path string) map[string][2]string {
 	t.Helper()
