@@ -27,9 +27,11 @@ func TestCancelReasonsMatchConsole(t *testing.T) {
 		console = append(console, string(m[1])+string(m[2]))
 	}
 	// A sorted copy: cancelReasons' slice is shared with IsCancelReason, which
-	// the package's parallel tests read meanwhile.
-	server := slices.Sorted(slices.Values(cancelReasons()))
+	// the package's parallel tests read meanwhile. Each reason once: two kinds
+	// may word a cancel the same way.
+	server := slices.Compact(slices.Sorted(slices.Values(cancelReasons())))
 	slices.Sort(console)
+	console = slices.Compact(console)
 	if !slices.Equal(console, server) {
 		t.Errorf("SERVER_CANCEL_REASONS has drifted from the server's cancel reasons:\nconsole:\n  %s\nserver:\n  %s",
 			strings.Join(console, "\n  "), strings.Join(server, "\n  "))
