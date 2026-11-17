@@ -4219,4 +4219,6 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   region was ever set here, in config.yaml or by the environment (`server_state`
   `metadata_region_chosen`, written by any settings save carrying `metadata.region`, "No preference"
   included); the metadata step preselects the browser's nearest store (`lib/nearest-region.ts`: languages,
-  then time zone) and Settings offers it (`RegionSuggestion`).
+  then time zone; a language placing the US store gives way to a zone placing another, server#391) and
+  Settings offers it (`RegionSuggestion`). With nothing to place a store the step preselects none and
+  saves no region the admin didn't touch, so the server stays "never chosen".

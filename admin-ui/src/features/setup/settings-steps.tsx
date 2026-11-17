@@ -70,7 +70,9 @@ function useCreateDraftLibrary({ draft, setDraft, onCreated }: StepProps) {
  * created, so its first scan and first matches use them; Skip keeps the
  * settings as they are and still creates it. A marketplace never chosen starts
  * at the one nearest the admin (server#192), and Continue saves it even when
- * it is the saved value, so it counts as chosen.
+ * it is the saved value, so it counts as chosen; with nothing to place one
+ * (nearestRegion null) the field keeps the saved value and only an edit saves
+ * it (server#391).
  */
 export function MetadataStep(props: StepProps) {
   const { settings, leave, back, last, draft } = props;
@@ -91,7 +93,9 @@ export function MetadataStep(props: StepProps) {
     // marketplace only while the switch shows it.
     const draft = m.available ? { enabled, mode } : { mode };
     let patch = unlockedPatch(settings, 'metadata', enabled ? { ...draft, region } : draft);
-    if (enabled && offered) patch = { ...patch, metadata: { ...patch?.metadata, region } };
+    if (enabled && offered && suggested) {
+      patch = { ...patch, metadata: { ...patch?.metadata, region } };
+    }
     await save(patch);
     await create();
     await leave('done');

@@ -6,7 +6,7 @@ import {
 } from './nearest-region';
 
 // server#192: the marketplace preselected on a server whose region was never
-// chosen, from the browser's languages, then its time zone, then the US store.
+// chosen, from the browser's languages, then its time zone, else none.
 
 describe('regionFromLanguage', () => {
   it.each([
@@ -70,9 +70,19 @@ describe('nearestRegion', () => {
     expect(nearestRegion([], 'Australia/Melbourne')).toBe('au');
   });
 
-  it('falls back to the US store when nothing places one', () => {
-    expect(nearestRegion(['nl-NL'], 'Europe/Amsterdam')).toBe('us');
-    expect(nearestRegion([], undefined)).toBe('us');
+  it('lets a time zone placing another store beat a US language (server#391)', () => {
+    expect(nearestRegion(['en-US', 'en'], 'Europe/Berlin')).toBe('de');
+    expect(nearestRegion(['en-US'], 'Australia/Sydney')).toBe('au');
+    // A US language with a zone that places nothing, or a US one, stays US.
+    expect(nearestRegion(['en-US'], 'America/New_York')).toBe('us');
+    expect(nearestRegion(['en-US'], 'Europe/Amsterdam')).toBe('us');
+    // Another store's language still beats the zone.
+    expect(nearestRegion(['en-GB'], 'Europe/Berlin')).toBe('uk');
+  });
+
+  it('places none when nothing places one, rather than guessing the US store', () => {
+    expect(nearestRegion(['nl-NL'], 'Europe/Amsterdam')).toBeNull();
+    expect(nearestRegion([], undefined)).toBeNull();
   });
 });
 

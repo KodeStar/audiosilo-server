@@ -1125,6 +1125,32 @@ describe('the account step (server#369)', () => {
     ]);
   });
 
+  it('a name refused after the password changed says so, and Skip records the step done (server#391)', async () => {
+    const calls = mockFetch(
+      accountRoutes(true, {
+        'PATCH /admin/users/1': {
+          status: 409,
+          body: { error: 'username already taken', code: 'username_taken' },
+        },
+      }),
+    );
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Your account' });
+    const user = userEvent.setup();
+    await user.clear(screen.getByLabelText('Username'));
+    await user.type(screen.getByLabelText('Username'), 'sam');
+    await user.type(screen.getByLabelText('New password'), 'a-new-password');
+    await user.type(screen.getByLabelText('New password again'), 'a-new-password');
+    await user.type(screen.getByLabelText('Current password'), 'from-the-log');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByText(/Someone already has that name/)).toBeVisible();
+    expect(screen.getByText('Your new password is saved')).toBeVisible();
+    expect(screen.queryByText('Your password came from the server log')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Keep chris' }));
+    expect(await screen.findByRole('heading', { name: 'Where are your books?' })).toBeVisible();
+    expect(puts(calls)).toEqual([{ steps: { account: 'done' } }]);
+  });
+
   it('a name someone has shows under the field, and nothing else is sent', async () => {
     const calls = mockFetch(
       accountRoutes(false, {
@@ -1314,9 +1340,9 @@ describe('the marketplace nearest the admin (server#192)', () => {
   });
 
   it('saves the preselection even when it is the US store, so it counts as chosen', async () => {
-    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['nl-NL']);
+    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['en-US']);
     vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
-      timeZone: 'Europe/Amsterdam',
+      timeZone: 'America/Chicago',
     } as Intl.ResolvedDateTimeFormatOptions);
     const calls = mockFetch(metadataRoutes({ region_chosen: false }));
     renderApp('/setup?step=metadata');
@@ -1324,6 +1350,30 @@ describe('the marketplace nearest the admin (server#192)', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
     await screen.findByRole('heading', { name: 'How will people reach the server?' });
     expect(patches(calls)).toEqual([{ metadata: { region: 'us' } }]);
+  });
+
+  it('preselects by the time zone over an en-US browser (server#391)', async () => {
+    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['en-US', 'en']);
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      timeZone: 'Europe/Paris',
+    } as Intl.ResolvedDateTimeFormatOptions);
+    mockFetch(metadataRoutes({ region_chosen: false }));
+    renderApp('/setup?step=metadata');
+    expect(await screen.findByLabelText('Audible marketplace')).toHaveValue('fr');
+  });
+
+  it('with nothing to place a store, keeps no preference and saves nothing as chosen (server#391)', async () => {
+    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['nl-NL']);
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      timeZone: 'Europe/Amsterdam',
+    } as Intl.ResolvedDateTimeFormatOptions);
+    const calls = mockFetch(metadataRoutes({ region_chosen: false }));
+    renderApp('/setup?step=metadata');
+    expect(await screen.findByLabelText('Audible marketplace')).toHaveValue('');
+    expect(screen.queryByText(/Picked from your browser's language and time zone/)).toBeNull();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'How will people reach the server?' });
+    expect(patches(calls)).toEqual([]);
   });
 
   it.each([
