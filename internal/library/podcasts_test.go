@@ -389,20 +389,37 @@ func TestScanJobSkipsAnUnknownLibraryKind(t *testing.T) {
 		}
 	}
 
-	// An admin's Scan that joins a startup job still waiting (a rollback's
-	// restart queues every library) runs and fails like its own would.
-	s.Enqueue(*lib, TriggerStartup, nil)
-	s.Enqueue(*lib, TriggerManual, nil)
-	s.mu.Lock()
-	queued := s.jobs.queued
-	s.jobs.queued = nil
-	s.mu.Unlock()
-	if len(queued) != 1 {
-		t.Fatalf("%d jobs queued, want the one", len(queued))
-	}
-	n := len(reports)
-	s.run(ctx, ctx, queued[0])
-	if len(reports) != n+1 || reports[n].Status != catalog.RunFailed {
-		t.Errorf("joined startup job: reports %+v, want one failed run", reports[n:])
+	// An admin's Scan or a setting change that joins a scheduled or startup job
+	// still waiting (a rollback's restart queues every library) runs and fails
+	// like its own would; a schedule or a restart joining one stays skipped.
+	for _, c := range []struct{ first, then string }{
+		{TriggerStartup, TriggerManual},
+		{TriggerSchedule, TriggerChange},
+		{TriggerStartup, TriggerSchedule},
+	} {
+		s.Enqueue(*lib, c.first, nil)
+		s.Enqueue(*lib, c.then, nil)
+		s.mu.Lock()
+		queued := s.jobs.queued
+		s.jobs.queued = nil
+		s.mu.Unlock()
+		if len(queued) != 1 {
+			t.Fatalf("%s then %s: %d jobs queued, want the one", c.first, c.then, len(queued))
+		}
+		n := len(reports)
+		s.run(ctx, ctx, queued[0])
+		if unattended(c.then) {
+			if len(reports) != n {
+				t.Errorf("%s then %s: reports %+v, want none", c.first, c.then, reports[n:])
+			}
+			continue
+		}
+		if len(reports) != n+1 {
+			t.Fatalf("%s then %s: %d reports, want one more", c.first, c.then, len(reports)-n)
+		}
+		if r := reports[n]; r.Status != catalog.RunFailed || r.RunID == 0 ||
+			!strings.Contains(r.Detail, ErrUnknownKind.Error()) {
+			t.Errorf("%s then %s: report %+v, want a recorded failed run naming the unknown kind", c.first, c.then, r)
+		}
 	}
 }
