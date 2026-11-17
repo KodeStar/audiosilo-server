@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, CircleCheck, LoaderCircle, Lock } from 'lucide-react';
-import { scanActive } from '@/api/hooks';
 import type { AdminLibrary, AdminSettings } from '@/api/types';
 import { ProgressBar } from '@/components/progress-bar';
 import { Button } from '@/components/ui/button';
 import { toastError } from '@/lib/errors';
+import { scanActive } from '@/lib/library-scan';
 import { formatNumber, progressFraction } from '@/lib/format';
 import { lockLabel, lockOf, type SettingId } from '@/features/settings/settings-model';
 import { StepStop } from './step-actions';

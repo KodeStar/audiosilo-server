@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -23,7 +24,7 @@ import { PairDialog } from '@/features/bridge/pair-dialog';
 import { BridgeSetupList } from '@/features/bridge/setup-list';
 import { useBridge, usePairCode } from '@/features/bridge/use-bridge';
 import { playerConnectUrl } from '@/features/book/book-model';
-import { ImportFlow } from '@/features/imports/import-topic';
+import { ImportFlow, type Blocked } from '@/features/imports/import-topic';
 import { useCurrentUser } from '@/lib/session';
 import { usePlayerTab } from '@/lib/use-player-tab';
 import { cn } from '@/lib/utils';
@@ -34,15 +35,24 @@ import type { StepProps } from './step-actions';
 /**
  * The abs step: coming from Audiobookshelf. The listening import itself, inline
  * (Settings > Import's ImportFlow), and that ABS metadata.json files are read.
- * While a library's first scan runs, Connect waits for it (the import matches
- * against the books the scan finds); once scanned, or once an import is
+ * The import matches against the books AudioSilo has, so with no books library
+ * yet it says the folder step comes first, and while a library's first scan
+ * runs Connect, Start and Apply wait for it (server#396, decision D6: here
+ * only, Settings > Import never waits); once scanned, or once an import is
  * applied, it offers Match automatically (never started without the admin).
  * Continue records the step done whatever was imported (someone who never used
- * Audiobookshelf has nothing left to do here), Skip skipped.
+ * Audiobookshelf has nothing left to do here), Skip skipped. While accounts are
+ * mapped the map card's Back is the only one.
  */
 export function AbsStep({ libraries, leave, back, last }: StepProps) {
   const { t } = useTranslation();
+  const [mapping, setMapping] = useState(false);
   const scanning = booksScanning(libraries);
+  const blocked: Blocked | undefined = !hasBookLibrary(libraries)
+    ? { reason: t('setup.abs.noLibrary'), waiting: false }
+    : scanning
+      ? { reason: t('setup.abs.waitScan'), waiting: true }
+      : undefined;
   return (
     <>
       <div className="flex flex-col gap-4">
@@ -51,14 +61,10 @@ export function AbsStep({ libraries, leave, back, last }: StepProps) {
           <li>{t('setup.abs.import')}</li>
           <li>{t('setup.abs.metadata')}</li>
         </ul>
-        <ImportFlow
-          embedded
-          blocked={scanning ? t('setup.abs.waitScan') : undefined}
-          offerMatch={!scanning && hasBookLibrary(libraries)}
-        />
+        <ImportFlow embedded blocked={blocked} offerMatch={!scanning} onMapping={setMapping} />
       </div>
       <StepFooter
-        back={back}
+        back={mapping ? null : back}
         onSkip={() => leave('skipped')}
         onContinue={() => leave('done')}
         last={last}

@@ -223,6 +223,28 @@ describe('import: connect, map, review, apply', () => {
     expect(screen.getByLabelText(field)).toHaveAttribute('aria-invalid', 'true');
   });
 
+  it('words an untrusted certificate behind a typed http address as a redirect (server#396)', async () => {
+    mockFetch(
+      routes({
+        'POST /admin/imports/abs/users': {
+          status: 502,
+          body: { error: 'nope', code: 'abs_certificate' },
+        },
+      }),
+    );
+    renderApp('/server?topic=import');
+    const user = userEvent.setup();
+    await user.type(
+      await screen.findByRole('textbox', { name: 'Audiobookshelf address' }),
+      'http://abs.lan',
+    );
+    await user.type(screen.getByLabelText('API token'), TOKEN);
+    await user.click(screen.getByRole('button', { name: 'Connect' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/This http:\/\/ address sends the server on to/);
+    expect(alert).not.toHaveTextContent(/Use its plain http:\/\/ address/);
+  });
+
   it('asks for the address and token before connecting', async () => {
     const calls = mockFetch(routes());
     renderApp('/server?topic=import');
@@ -340,6 +362,36 @@ describe('import: review', () => {
     await waitFor(() =>
       expect(screen.queryByRole('region', { name: 'samantha → sam' })).not.toBeInTheDocument(),
     );
+  });
+
+  it('discards a review with its unmatched list open without asking for the deleted import again (server#396)', async () => {
+    let gone = false;
+    const calls = mockFetch(
+      routes({
+        'GET /admin/imports': () => ({ body: { imports: gone ? [] : [imp()] } }),
+        'GET /admin/imports/7': () =>
+          gone ? { status: 404, body: { error: 'not found' } } : { body: detail() },
+        'DELETE /admin/imports/7': () => {
+          gone = true;
+          return { status: 204 };
+        },
+      }),
+    );
+    renderApp('/server?topic=import');
+    const card = await screen.findByRole('region', { name: 'samantha → sam' });
+    const user = userEvent.setup();
+    await user.click(await within(card).findByText('2 books not matched'));
+    expect(await within(card).findByText('The Long Way to a Small, Angry Planet')).toBeVisible();
+    const detailReads = () =>
+      calls.filter((c) => c.method === 'GET' && c.path === '/admin/imports/7').length;
+    const before = detailReads();
+    await user.click(within(card).getByRole('button', { name: 'Discard' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'samantha → sam' })).not.toBeInTheDocument(),
+    );
+    // Give a stray refetch the chance to go out.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(detailReads()).toBe(before);
   });
 
   it('changes the cutoff and shows the recount', async () => {

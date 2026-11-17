@@ -53,6 +53,7 @@ import {
   importEmpty,
   importIdentifiers,
   initialMap,
+  isPlainHttp,
   mappingBody,
   mappingProblem,
   matchTiers,
@@ -98,23 +99,30 @@ export function ImportFlow({
   embedded = false,
   blocked,
   offerMatch = false,
+  onMapping,
 }: {
   /**
    * Hosted in a flow that has its own steps and must stay open (setup): no
    * "Step n of 3" counter, and the match offer opens Health in a new tab.
    */
   embedded?: boolean;
-  /** Why Connect is off for now (the setup flow: the first scan is still running). */
-  blocked?: string;
+  /**
+   * Why the import waits for now (the setup flow: no books library yet, or its
+   * first scan still running, server#396): Connect, Start and Apply are off,
+   * the fields stay editable.
+   */
+  blocked?: Blocked;
   /** Offer Match automatically even without an applied import (the setup flow, once scanned). */
   offerMatch?: boolean;
+  /** Told when the account mapping opens and closes (the setup step shows one Back meanwhile). */
+  onMapping?: (mapping: boolean) => void;
 }) {
   const { t } = useTranslation();
   const imports = useImports();
   const applied = hasApplied(imports.data ?? []);
   return (
     <>
-      <ConnectCard embedded={embedded} blocked={blocked} />
+      <ConnectCard embedded={embedded} blocked={blocked} onMapping={onMapping} />
       {imports.isError ? (
         <QueryError
           title={t('imports.error')}
@@ -124,11 +132,35 @@ export function ImportFlow({
       ) : !imports.data ? (
         <div className="skel h-[160px] rounded-xl" role="status" aria-label={t('common.loading')} />
       ) : (
-        <ImportLists list={imports.data} matchOffer={applied} newTab={embedded} />
+        <ImportLists list={imports.data} matchOffer={applied} newTab={embedded} blocked={blocked} />
       )}
       {/* Not while the list loads: an applied import's offer belongs in the history card. */}
       {offerMatch && !applied && !imports.isPending ? <UnmatchedPrompt newTab={embedded} /> : null}
     </>
+  );
+}
+
+/** Why the import waits: the sentence, and whether it is a wait that ends by itself (a scan). */
+export interface Blocked {
+  reason: string;
+  waiting: boolean;
+}
+
+/** The blocked reason beside the button it holds (its aria-describedby target). */
+function BlockedNote({ id, blocked }: { id: string; blocked: Blocked }) {
+  return (
+    <span
+      id={id}
+      role="status"
+      className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground"
+    >
+      {blocked.waiting ? (
+        <LoaderCircle className="size-4 shrink-0 animate-spin" aria-hidden="true" />
+      ) : (
+        <Info className="size-4 shrink-0" aria-hidden="true" />
+      )}
+      {blocked.reason}
+    </span>
   );
 }
 
@@ -140,9 +172,21 @@ interface Connection {
 }
 
 /** Steps 1 and 2: connect, then map accounts to people and start. */
-function ConnectCard({ embedded, blocked }: { embedded: boolean; blocked?: string }) {
+function ConnectCard({
+  embedded,
+  blocked,
+  onMapping,
+}: {
+  embedded: boolean;
+  blocked?: Blocked;
+  onMapping?: (mapping: boolean) => void;
+}) {
   const { t } = useTranslation();
-  const [conn, setConn] = useState<Connection | null>(null);
+  const [conn, setConnState] = useState<Connection | null>(null);
+  const setConn = (c: Connection | null) => {
+    setConnState(c);
+    onMapping?.(c !== null);
+  };
   // The address (never the token) comes back when going back a step.
   const [lastUrl, setLastUrl] = useState('');
   return (
@@ -166,6 +210,7 @@ function ConnectCard({ embedded, blocked }: { embedded: boolean; blocked?: strin
       {conn ? (
         <MapStep
           conn={conn}
+          blocked={blocked}
           onBack={() => {
             setLastUrl(conn.url);
             setConn(null);
@@ -205,7 +250,7 @@ function ConnectForm({
 }: {
   initialUrl: string;
   /** Why Connect is off for now; the fields stay editable. */
-  blocked?: string;
+  blocked?: Blocked;
   onConnected: (c: Connection) => void;
 }) {
   const { t } = useTranslation();
@@ -231,7 +276,10 @@ function ConnectForm({
       const message =
         err instanceof ApiError && err.code === 'invalid_import'
           ? t('imports.connect.tokenInvalid')
-          : errorMessage(err, t);
+          : err instanceof ApiError && err.code === 'abs_certificate' && isPlainHttp(url)
+            ? // The http address the hint would suggest is the one typed: it redirects (server#396).
+              t('imports.connect.certificateRedirect')
+            : errorMessage(err, t);
       setErrors({ [field ?? 'form']: message });
       setBusy(false);
     }
@@ -280,16 +328,7 @@ function ConnectForm({
       <p className="text-[12.5px] text-muted-foreground">{t('imports.connect.tokenSafe')}</p>
       <FormError>{errors.form}</FormError>
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
-        {blocked ? (
-          <span
-            id="abs-connect-blocked"
-            role="status"
-            className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground"
-          >
-            <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-            {blocked}
-          </span>
-        ) : null}
+        {blocked ? <BlockedNote id="abs-connect-blocked" blocked={blocked} /> : null}
         <Button
           type="submit"
           disabled={busy || !!blocked}
@@ -309,10 +348,13 @@ function ConnectForm({
 
 function MapStep({
   conn,
+  blocked,
   onBack,
   onStarted,
 }: {
   conn: Connection;
+  /** Why Start is off for now (a scan began after Connect). */
+  blocked?: Blocked;
   onBack: () => void;
   onStarted: () => void;
 }) {
@@ -339,7 +381,7 @@ function MapStep({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setTried(true);
-    if (busy || !current || problem || cutoff === undefined) return;
+    if (busy || blocked || !current || problem || cutoff === undefined) return;
     setBusy(true);
     setError(undefined);
     try {
@@ -385,14 +427,14 @@ function MapStep({
         <p className="px-5 py-6 text-center text-muted-foreground">{t('imports.map.noUsers')}</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[440px] text-[13px]">
+          <table className="w-full text-[13px]">
             <caption className="sr-only">{t('imports.map.title')}</caption>
             <thead>
               <tr className="text-left text-[12px] text-muted-foreground">
-                <th scope="col" className="px-5 py-2.5 font-semibold">
+                <th scope="col" className="px-3 py-2.5 font-semibold sm:px-5">
                   {t('imports.map.absColumn')}
                 </th>
-                <th scope="col" className="px-5 py-2.5 font-semibold">
+                <th scope="col" className="px-3 py-2.5 font-semibold sm:px-5">
                   {t('imports.map.userColumn')}
                 </th>
               </tr>
@@ -404,16 +446,16 @@ function MapStep({
                 const id = `abs-map-${u.abs_id}`;
                 return (
                   <tr key={u.abs_id}>
-                    <th scope="row" className="px-5 py-3 text-left font-normal">
+                    <th scope="row" className="px-3 py-3 text-left font-normal sm:px-5">
                       <span className="flex flex-wrap items-center gap-2">
                         <b className="font-semibold [overflow-wrap:anywhere]">{u.username}</b>
                         {u.type ? <Badge variant="outline">{u.type}</Badge> : null}
                       </span>
                     </th>
-                    <td className="px-5 py-3">
+                    <td className="w-[55%] px-3 py-3 sm:px-5">
                       <NativeSelect
                         id={id}
-                        className="max-w-[280px]"
+                        className="w-full max-w-[280px]"
                         aria-label={t('imports.map.selectAria', { name: u.username })}
                         aria-invalid={clash ? true : undefined}
                         aria-describedby={clash ? `${id}-error` : undefined}
@@ -467,10 +509,17 @@ function MapStep({
             <ArrowLeft aria-hidden="true" />
             {t('imports.map.back')}
           </Button>
-          <Button type="submit" disabled={busy || conn.users.length === 0}>
-            {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-            {t('imports.map.start', counted(mapped, lang))}
-          </Button>
+          <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+            {blocked ? <BlockedNote id="abs-start-blocked" blocked={blocked} /> : null}
+            <Button
+              type="submit"
+              disabled={busy || !!blocked || conn.users.length === 0}
+              aria-describedby={blocked ? 'abs-start-blocked' : undefined}
+            >
+              {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+              {t('imports.map.start', counted(mapped, lang))}
+            </Button>
+          </div>
         </div>
       </div>
     </form>
@@ -535,10 +584,13 @@ function ImportLists({
   list,
   matchOffer,
   newTab,
+  blocked,
 }: {
   list: Import[];
   matchOffer: boolean;
   newTab: boolean;
+  /** Why Apply is off for now. */
+  blocked?: Blocked;
 }) {
   const { t } = useTranslation();
   const { open, done } = splitImports(list);
@@ -550,7 +602,7 @@ function ImportLists({
             {t('imports.review.heading')}
           </h3>
           {open.map((imp) => (
-            <ReviewCard key={imp.id} imp={imp} all={list} />
+            <ReviewCard key={imp.id} imp={imp} all={list} blocked={blocked} />
           ))}
         </section>
       ) : null}
@@ -579,7 +631,7 @@ function ImportLists({
  * status and summary come from the list (polled while any import is busy); the
  * unmatched books are asked for once it is in review.
  */
-function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
+function ReviewCard({ imp, all, blocked }: { imp: Import; all: Import[]; blocked?: Blocked }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
@@ -624,7 +676,7 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
           className="m-5"
           title={imp.error || t('imports.review.failed')}
         >
-          {t(failureHintKey(imp.error_code))}
+          {t(failureHintKey(imp.error_code, imp.source_url))}
         </Notice>
       ) : imp.summary ? (
         <SummaryView
@@ -638,6 +690,9 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
       {imp.status === 'review' && imp.summary ? <CutoffEditor imp={imp} /> : null}
       {imp.status !== 'fetching' ? (
         <div className="flex flex-wrap items-center justify-end gap-2 border-t px-5 py-3.5">
+          {blocked && imp.status === 'review' ? (
+            <BlockedNote id={`import-${imp.id}-blocked`} blocked={blocked} />
+          ) : null}
           <Button
             variant="ghost"
             disabled={discarding || importBusy(imp)}
@@ -648,7 +703,14 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
           {imp.status !== 'failed' ? (
             <Button
               disabled={
-                imp.status !== 'review' || !imp.summary || importEmpty(imp.summary) || keepsApplied
+                imp.status !== 'review' ||
+                !imp.summary ||
+                importEmpty(imp.summary) ||
+                keepsApplied ||
+                !!blocked
+              }
+              aria-describedby={
+                blocked && imp.status === 'review' ? `import-${imp.id}-blocked` : undefined
               }
               onClick={() => setApplying(true)}
             >

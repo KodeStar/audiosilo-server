@@ -19,7 +19,13 @@ export function useDiscardImport() {
     setPending(true);
     try {
       await api.deleteImport(imp.id);
-      qc.removeQueries({ queryKey: keys.importDetail(imp.id) });
+      // Out of the lists at once, so its card (and the unmatched list it may
+      // have open) unmounts and its detail query is left unobserved for the
+      // cache to drop. Removing that query while the card still showed it made
+      // the card fetch the deleted import again, a 404 (server#396).
+      qc.setQueriesData<Import[]>({ queryKey: keys.importLists }, (old) =>
+        old?.filter((o) => o.id !== imp.id),
+      );
       toast.add({ title: t('imports.discarded', { user: imp.username }), type: 'success' });
     } catch (err) {
       toastError(t('imports.discardFailed'), err);

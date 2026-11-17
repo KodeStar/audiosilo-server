@@ -12,6 +12,7 @@ import {
 } from '@tanstack/react-query';
 import { refKey, refOf } from '@/lib/book-route';
 import { isBookLibrary } from '@/lib/library-kind';
+import { scanActive } from '@/lib/library-scan';
 import { compact } from '@/lib/utils';
 import {
   api,
@@ -595,11 +596,6 @@ export function useLibraries() {
 export function useBookLibraries(): AdminLibrary[] | undefined {
   const data = useLibraries().data;
   return useMemo(() => data?.filter(isBookLibrary), [data]);
-}
-
-/** Whether a library's scan runs or waits in the job queue. */
-export function scanActive(l: AdminLibrary) {
-  return l.scan.running || !!l.scan.queued;
 }
 
 /** The libraries whose folder can't be read right now. */

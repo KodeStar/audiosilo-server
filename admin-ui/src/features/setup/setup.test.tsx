@@ -1203,6 +1203,8 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
   const appliedImport = importRow({ status: 'applied', applied_at: '2026-11-14T10:05:00Z' });
 
   it('holds Connect while the first scan runs, then offers Match automatically', async () => {
+    // The libraries poll each second while a scan runs: the clock is the test's.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     let scanning = true;
     const calls = mockFetch(
       flowRoutes(
@@ -1238,13 +1240,18 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
     await user.type(within(connect).getByLabelText('API token'), 'abs-token');
     await user.keyboard('{Enter}');
     expect(calls.some((c) => c.path === '/admin/imports/abs/users')).toBe(false);
-    expect(screen.queryByRole('link', { name: 'Match automatically' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: 'Match automatically (opens in a new tab)' }),
+    ).not.toBeInTheDocument();
 
     // The scan ends: Connect works, and the offer opens Health in a new tab.
     scanning = false;
-    await waitFor(() => expect(button).toBeEnabled(), { timeout: 3000 });
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    await waitFor(() => expect(button).toBeEnabled());
     expect(within(connect).queryByText(/Wait for the scan to finish/)).not.toBeInTheDocument();
-    const offer = await screen.findByRole('link', { name: 'Match automatically' });
+    const offer = await screen.findByRole('link', {
+      name: 'Match automatically (opens in a new tab)',
+    });
     expect(offer).toHaveAttribute('href', '/admin/health?issue=unmatched');
     expect(offer).toHaveAttribute('target', '_blank');
     expect(screen.getByText('3 books not matched')).toBeVisible();
@@ -1256,6 +1263,97 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
     await waitFor(() =>
       expect(calls.some((c) => c.path === '/admin/imports/abs/users')).toBe(true),
     );
+  });
+
+  it('says the folder step comes first while there is no books library (server#396)', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'skipped', naming: 'skipped' } },
+        { 'GET /admin/users': { body: { users: [] } } },
+      ),
+    );
+    renderApp('/setup?step=abs');
+    const connect = await screen.findByRole('region', { name: 'Connect to Audiobookshelf' });
+    expect(
+      within(connect).getByText(/Add your books folder first \(Where are your books\?\)/, {
+        selector: '[role="status"]',
+      }),
+    ).toBeVisible();
+    expect(within(connect).getByRole('button', { name: 'Connect' })).toBeDisabled();
+    const user = userEvent.setup();
+    await user.type(
+      within(connect).getByRole('textbox', { name: 'Audiobookshelf address' }),
+      'http://192.168.1.20:13378',
+    );
+    await user.type(within(connect).getByLabelText('API token'), 'abs-token');
+    await user.keyboard('{Enter}');
+    expect(calls.some((c) => c.path === '/admin/imports/abs/users')).toBe(false);
+  });
+
+  it('holds Start and Apply while a scan runs, with one Back while mapping (server#396)', async () => {
+    let scanning = false;
+    const review = importRow({
+      status: 'review',
+      summary: {
+        items: 2,
+        matched: { path: 2, asin: 0, isbn: 0, title: 0 },
+        unmatched: 0,
+        sessions: 5,
+        skipped_after_cutoff: 0,
+        listened: 3600,
+        estimated: 0,
+        progress: 1,
+        finished: 0,
+        bookmarks: 0,
+        first_listen: '2026-01-01T00:00:00Z',
+        last_listen: '2026-02-01T00:00:00Z',
+      },
+    });
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done', naming: 'done' } },
+        {
+          'GET /admin/libraries': () => ({
+            body: {
+              libraries: libraries([
+                { scan: scanning ? { ...idle, running: true, total: 40, done: 12 } : idle },
+              ]),
+            },
+          }),
+          'GET /admin/imports': { body: { imports: [review] } },
+          'GET /admin/users': { body: { users: [admin] } },
+          'POST /admin/imports/abs/users': {
+            body: {
+              users: [{ abs_id: 'u1', username: 'chris', type: 'root', suggested_user_id: 1 }],
+            },
+          },
+        },
+      ),
+    );
+    const { queryClient } = renderApp('/setup?step=abs');
+    const connect = await screen.findByRole('region', { name: 'Connect to Audiobookshelf' });
+    const user = userEvent.setup();
+    await user.type(
+      within(connect).getByRole('textbox', { name: 'Audiobookshelf address' }),
+      'http://192.168.1.20:13378',
+    );
+    await user.type(within(connect).getByLabelText('API token'), 'abs-token');
+    expect(screen.getAllByRole('button', { name: 'Back' })).toHaveLength(1);
+    await user.click(within(connect).getByRole('button', { name: 'Connect' }));
+    // Mapping: the map card's Back only, the step's waits until it closes.
+    await screen.findByRole('combobox', { name: 'AudioSilo person for chris' });
+    expect(screen.getAllByRole('button', { name: 'Back' })).toHaveLength(1);
+
+    // A scan starts (a rescan, a library added in another tab): Start and Apply wait.
+    scanning = true;
+    await act(() => queryClient.invalidateQueries({ queryKey: ['admin', 'libraries'] }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Fetch history for/ })).toBeDisabled(),
+    );
+    const card = screen.getByRole('region', { name: 'samantha → sam' });
+    expect(within(card).getByRole('button', { name: 'Apply for sam' })).toBeDisabled();
+    expect(within(card).getByText(/Wait for the scan to finish/)).toBeVisible();
+    expect(calls.some((c) => c.method === 'POST' && c.path === '/admin/imports/abs')).toBe(false);
   });
 
   it('offers Match automatically once an import is applied, and Continue still ends the step', async () => {
@@ -1273,12 +1371,13 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
     renderApp('/setup?step=abs');
     const history = await screen.findByRole('region', { name: 'Past imports' });
     expect(await within(history).findByText('3 books not matched')).toBeVisible();
-    expect(within(history).getByRole('link', { name: 'Match automatically' })).toHaveAttribute(
-      'target',
-      '_blank',
-    );
+    expect(
+      within(history).getByRole('link', { name: 'Match automatically (opens in a new tab)' }),
+    ).toHaveAttribute('target', '_blank');
     // One offer, not a second one under the import.
-    expect(screen.getAllByRole('link', { name: 'Match automatically' })).toHaveLength(1);
+    expect(
+      screen.getAllByRole('link', { name: 'Match automatically (opens in a new tab)' }),
+    ).toHaveLength(1);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(puts(calls)).toEqual([{ steps: { abs: 'done' } }]));
   });
@@ -1306,12 +1405,22 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
     await screen.findByRole('region', { name: 'Connect to Audiobookshelf' });
     // The count is here before the imports: no offer yet, it would move when they arrive.
     await expect(
-      screen.findByRole('link', { name: 'Match automatically' }, { timeout: 250 }),
+      screen.findByRole(
+        'link',
+        { name: 'Match automatically (opens in a new tab)' },
+        { timeout: 250 },
+      ),
     ).rejects.toThrow();
     answer();
     const history = await screen.findByRole('region', { name: 'Past imports' });
-    expect(await within(history).findByRole('link', { name: 'Match automatically' })).toBeVisible();
-    expect(screen.getAllByRole('link', { name: 'Match automatically' })).toHaveLength(1);
+    expect(
+      await within(history).findByRole('link', {
+        name: 'Match automatically (opens in a new tab)',
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getAllByRole('link', { name: 'Match automatically (opens in a new tab)' }),
+    ).toHaveLength(1);
   });
 });
 

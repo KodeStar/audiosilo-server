@@ -1,5 +1,4 @@
 import { ApiError } from '@/api/client';
-import { scanActive } from '@/api/hooks';
 import {
   METADATA_SOURCES,
   MIN_PASSWORD,
@@ -20,6 +19,7 @@ import {
 } from '@/api/types';
 import { lockOf, sectionPatch, type SettingId } from '@/features/settings/settings-model';
 import { isBookLibrary } from '@/lib/library-kind';
+import { scanActive } from '@/lib/library-scan';
 import { absoluteBaseName } from '@/lib/paths';
 
 // The first-run flow (FIRST-RUN-PLAN.md Phase F1): which step comes next, where
