@@ -136,14 +136,14 @@ func msSums(n int, length func(int) int64) []int64 {
 func snapToFiles(starts, fileStarts []int64) bool {
 	taken := make([]bool, len(starts))
 	for _, fs := range fileStarts {
-		best := -1
+		best, bestD := -1, int64(0)
 		for i, s := range starts {
-			d := s - fs
-			if taken[i] || d < -fileStartSnapMS || d > fileStartSnapMS {
+			d := abs64(s - fs)
+			if taken[i] || d > fileStartSnapMS {
 				continue
 			}
-			if best < 0 || abs64(d) < abs64(starts[best]-fs) {
-				best = i
+			if best < 0 || d < bestD {
+				best, bestD = i, d
 			}
 		}
 		if best < 0 {
