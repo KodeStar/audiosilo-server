@@ -434,9 +434,10 @@ func TestBestOnlyLeavesTheSearchFallback(t *testing.T) {
 	}
 }
 
-// A lean work inlined on a bulk match is read into its candidate and nowhere else: a
-// later full read of the work (the companion's works/{id}) is never served it, and
-// fetches the whole document with its sidecars.
+// A lean work inlined on a bulk match is read into its candidate and nowhere else,
+// neither the cache nor the persistent store: a later full read of the work (the
+// companion's works/{id}) is never served it, and fetches the whole document with
+// its sidecars.
 func TestBestOnlyLeanWorkIsNotCached(t *testing.T) {
 	m := &bestMeta{
 		body:   matchBody(matchResult("colour", 97, inlined(bestWork, bestFacts))),
@@ -444,12 +445,17 @@ func TestBestOnlyLeanWorkIsNotCached(t *testing.T) {
 		series: bestSeries,
 	}
 	s := m.service(t)
+	st := newMemStore()
+	s.SetStore(st)
 	ctx := context.Background()
 	if cands, err := s.Candidates(ctx, bestQuery); err != nil || len(cands) != 1 || cands[0].Title != "The Colour of Magic" {
 		t.Fatalf("candidates = %+v, %v", cands, err)
 	}
 	if _, hit, _ := cacheGet[MetaWork](s.cache, nsWork.key("colour")); hit {
 		t.Fatal("the lean work was cached as the work")
+	}
+	if _, stored := st.Load(ctx, nsWork.key("colour")); stored {
+		t.Fatal("the lean work was stored as the work")
 	}
 	work, err := s.Work(ctx, "colour")
 	if err != nil {
@@ -473,7 +479,10 @@ func TestMatchParamsExpandMin(t *testing.T) {
 		expandMin string
 	}{
 		{true, 60, "work,lean", "60"},
+		{true, 1, "work,lean", "1"},
+		{true, 100, "work,lean", "100"},
 		{true, 0, "work,lean", ""},
+		{true, -1, "work,lean", ""},
 		{true, 101, "work,lean", ""},
 		{false, 60, "", ""},
 	} {
