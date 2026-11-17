@@ -132,10 +132,17 @@ func msSums(n int, length func(int) int64) []int64 {
 // starts a chapter. fileStarts are the files' starts (fileStartsMS without the
 // end). Each file takes the nearest start in reach that no file before it
 // took, so a file shorter than twice fileStartSnapMS never takes the chapter
-// of the file before or after it.
+// of the file before or after it. A file of no length (one the scan read no
+// length for) starts where the next one does, and the one chapter there starts
+// both, as the console's editor has it.
 func snapToFiles(starts, fileStarts []int64) bool {
 	taken := make([]bool, len(starts))
-	for _, fs := range fileStarts {
+	var prev int64
+	for k, fs := range fileStarts {
+		if k > 0 && fs == prev {
+			continue
+		}
+		prev = fs
 		best, bestD := -1, int64(0)
 		for i, s := range starts {
 			d := max(s-fs, fs-s)

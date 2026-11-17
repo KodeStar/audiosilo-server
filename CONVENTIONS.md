@@ -4001,7 +4001,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   list was made on, to the next start or the file's end, its book offset on the files' lengths now; so another probe
   reading a file a little longer or shorter moves no chapter in its audio, and one at or past its file's end now
   leaves the edit dormant; a start within 50 ms of a file's start is that file's first chapter, each file taking the
-  nearest start no file before it took (`snapToFiles`, so a file under 100 ms never takes its neighbour's); file starts are the
+  nearest start no file before it took (`snapToFiles`, so a file under 100 ms never takes its neighbour's; a file
+  of no length shares the next file's, as in the console's editor); file starts are the
   sums of the files' lengths in whole milliseconds, `fileStartsMS`, as the console sums the basis); on other files it is dormant (the next source's
   chapters, never applied to other audio) and applies again when the files come back. `chapters_source = "edited"`
   (`ChaptersFromEdited`, never a choice), `chapters_fit` = `listFitKey(list, "", files)`. No chapter crosses a file:

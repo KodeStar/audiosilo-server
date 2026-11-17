@@ -127,6 +127,23 @@ func TestSnapToFilesShortFile(t *testing.T) {
 	if !snapToFiles(starts, []int64{0, 1000, 1030}) || !slices.Equal(starts, []int64{0, 1000, 1030}) {
 		t.Fatalf("nearest start = %v, want [0 1000 1030]", starts)
 	}
+	// A file of no length (one the scan read no length for) starts where the
+	// next file does: the one chapter there starts both, as in the console's
+	// editor (validateDraft), and it is placed in the file with the audio.
+	starts = []int64{0, 1003}
+	if !snapToFiles(starts, []int64{0, 1000, 1000}) || !slices.Equal(starts, []int64{0, 1000}) {
+		t.Fatalf("a file of no length = %v, want [0 1000]", starts)
+	}
+	files := []BookFile{{RelPath: "A/1.mp3", Duration: 1000}, {RelPath: "A/2.mp3"}, {RelPath: "A/3.mp3", Duration: 500}}
+	entries, err := checkChapterEdit([]EditedChapter{{0, "A"}, {1000, "B"}}, files)
+	if err != nil {
+		t.Fatalf("an edit over a file of no length: %v", err)
+	}
+	want := []metadata.Chapter{{Index: 0, Title: "A", FilePath: "A/1.mp3", End: 1000},
+		{Index: 1, Title: "B", FileIndex: 2, FilePath: "A/3.mp3", End: 500, BookOffset: 1000}}
+	if got := placeOnFiles(entries, files, lengthsOf(files)); !slices.Equal(got, want) {
+		t.Fatalf("placed over a file of no length = %+v\nwant %+v", got, want)
+	}
 }
 
 // checkChapterEdit refuses each rule's breach with its detail, and stores a
