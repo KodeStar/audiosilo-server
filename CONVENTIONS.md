@@ -625,7 +625,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a week); (5) classify; (6) announce. With metadata on and `upcoming.enabled` off, a run (scheduled or
   kicked) is step (1) alone (`Options.Resolve`, `resolveOnly`: no series, feed, items, announcement or
   status; server#241, a book's `work_id` rides on the player's lists). It makes no call while
-  `metadataOn()` is false, and a run in flight stops within a second when switched off (`whileOn`,
+  `metadataOn()` is false, and a run in flight stops within a second when switched off (`pool.WhileOn`,
   `errSwitchedOff`: a cancellation, no status recorded, no retry). In mirror mode every call goes to the
   local copy. A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
   path-keyed, no FK to `books`, cascaded with the library, written through the user-state path; no
@@ -717,7 +717,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   database doesn't know, so its lane can import them. **Setting** `metadata.report_unknown` (default false,
   live, `AUDIOSILO_METADATA_REPORT_UNKNOWN` locks it; console Settings > Metadata "Help complete the community
   database", disabled while metadata is off); the job runs only while `reportUnknownOn()` (metadata on AND the
-  switch, never demo) and a run in flight stops within a second when it goes off (`whileOn`, `errSwitchedOff`: no
+  switch, never demo) and a run in flight stops within a second when it goes off (`pool.WhileOn`, `errSwitchedOff`: no
   status). It is never built on a demo server (`cfg.Demo.Enabled` at start), so a demo makes no call. **Schedule**:
   the first run an hour after the start (or a day after the last run), then daily +-1 h; a run within 23 h of the
   last is skipped (`server_state('unknown_asin_report')`, so a restart never re-runs); `Wake` (PATCH switching it

@@ -1,6 +1,8 @@
 // Package pool runs work over a list a few items at a time: the background jobs
 // that wait on the shared community service (bulk matching, community chapter
-// checks) bound what they ask of it with it.
+// checks) bound what they ask of it with it. The daily jobs (the unknown-ASIN
+// report, upcoming releases) share its schedule helpers too: WhileOn and
+// Jittered.
 package pool
 
 import (

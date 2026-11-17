@@ -23,8 +23,8 @@
 // A failure keeps what earlier runs stored (a series is replaced only by a
 // read that worked), and a failed run is tried again in an hour, three times.
 // Metadata off makes no call at all: a run in flight stops within a second
-// (whileOn), as if cancelled. With metadata on and the job switched off, a run
-// is step 1 alone (Options.Resolve): every book's work id rides on the player's
+// (pool.WhileOn), as if cancelled. With metadata on and the job switched off, a
+// run is step 1 alone (Options.Resolve): every book's work id rides on the player's
 // lists (catalog.workIDExpr, other recordings together, server#241).
 package upcoming
 
@@ -35,7 +35,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"math/rand/v2"
 	"slices"
 	"strings"
 	"sync"
@@ -151,7 +150,7 @@ type Runner struct {
 	// mu makes one run at a time (the schedule's, a kick's, a test's).
 	mu sync.Mutex
 	// settle is how long kicks must be quiet before a kick's run; offCheck
-	// how often a run looks at the switch (whileOn).
+	// how often a run looks at the switch (pool.WhileOn).
 	settle   time.Duration
 	offCheck time.Duration
 	// pending is the books whose work a step-1-alone run (resolveOnly) found
@@ -310,7 +309,7 @@ func (r *Runner) after(ctx context.Context, whole bool, err error) time.Time {
 			return now.Add(retryDelay)
 		}
 	}
-	return now.Add(interval + time.Duration(rand.Int64N(int64(2*jitter))) - jitter) //nolint:gosec // schedule jitter, not a secret
+	return now.Add(pool.Jittered(interval, jitter))
 }
 
 func (r *Runner) saveNext(ctx context.Context, next time.Time) {
@@ -383,7 +382,7 @@ func (r *Runner) runOnce(ctx context.Context, full bool) (whole bool, err error)
 		on, step = r.resolveOn, r.resolveOnly
 	}
 	now := r.opt.Now()
-	rctx, stop := r.whileOn(ctx, on)
+	rctx, stop := pool.WhileOn(ctx, r.offCheck, on, errSwitchedOff)
 	defer stop()
 	err = step(rctx, full, now)
 	if rctx.Err() != nil {
@@ -421,34 +420,6 @@ func (r *Runner) resolveOwned(ctx context.Context, full bool, now time.Time) (bo
 	}
 	works, changed, err = r.resolveWorks(ctx, books, full, now)
 	return books, works, changed, err
-}
-
-// whileOn is ctx, cancelled with errSwitchedOff once on reports false (looked
-// at every offCheck); stop releases it.
-func (r *Runner) whileOn(ctx context.Context, on func() bool) (rctx context.Context, stop func()) {
-	rctx, cancel := context.WithCancelCause(ctx)
-	done := make(chan struct{})
-	go func() {
-		t := time.NewTicker(r.offCheck)
-		defer t.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-rctx.Done():
-				return
-			case <-t.C:
-				if !on() {
-					cancel(errSwitchedOff)
-					return
-				}
-			}
-		}
-	}()
-	return rctx, func() {
-		close(done)
-		cancel(nil)
-	}
 }
 
 // run is a run of the whole job (r.mu held).
