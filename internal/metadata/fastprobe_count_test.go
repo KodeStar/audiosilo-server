@@ -71,7 +71,8 @@ func probeBytes(t *testing.T, ctx context.Context, data []byte, timeout time.Dur
 
 // A VBR MP3 with no Xing/VBRI header has its frames counted (SRV-16): every
 // one, past junk in the middle, to the trailing ID3v1 and APEv2 tags (a frame
-// in the APE tag is not audio), a last frame cut off by the end dropped.
+// in the APE tag is not audio), a last frame cut off by the end counted, as
+// ffmpeg decodes it (one with only its header left included).
 func TestCountsHeaderlessVBRFrames(t *testing.T) {
 	t.Parallel()
 	const n = 3000 // ~78 s, a little over 1 MiB: the count's window moves
@@ -105,7 +106,8 @@ func TestCountsHeaderlessVBRFrames(t *testing.T) {
 		{"id3v1", append(append([]byte{}, stream...), id3v1...), n},
 		{"ape and id3v1", append(append(append([]byte{}, stream...), ape...), id3v1...), n},
 		{"junk in the middle", append(append(append([]byte{}, stream[:len(stream)/2]...), junk...), stream[len(stream)/2:]...), n},
-		{"last frame cut off", stream[:len(stream)-100], n - 1},
+		{"last frame cut off", stream[:len(stream)-100], n},
+		{"only the last header left", stream[:len(stream)-len(mp3Frame(13))+4], n},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

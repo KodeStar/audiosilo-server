@@ -77,9 +77,9 @@ var errShortCopy = fmt.Errorf("%w: the rendition is shorter than its source", er
 // written an MP4 with no track when it read no audio at all: an M4B whose index
 // sits at its end, read through pipe:0 by an ffmpeg without the fd protocol,
 // which can't seek back to the samples), errShortCopy when it is short of the
-// source's exact duration (metadata.ExactDuration; a source whose duration is
-// only an estimate, a VBR MP3 with no header, isn't held to it, nor is a copy
-// the probe can't measure).
+// source's exact duration (metadata.ExactDuration, a VBR MP3 with no header
+// its frames counted; a source the probe is unsure of, or can't count in time,
+// isn't held to it, nor is a copy the probe can't measure).
 func renditionCheck(ctx context.Context, src *os.File, size int64, out string) error {
 	f, err := os.Open(out)
 	if err != nil {

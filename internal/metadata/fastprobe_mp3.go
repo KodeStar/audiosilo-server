@@ -975,14 +975,13 @@ func mp3FrameSize(h, ref uint32) int64 {
 // end, a header at a time: each frame's size from its header leads to the
 // next. Where none is found (junk, a damaged frame) it looks on a byte at a
 // time for one whose next frame follows it too, as the decoder's parser
-// resyncs. A frame running past end is cut off, and the decoder drops it.
+// resyncs. A last frame running past end is cut off, and still counted: the
+// parser hands the decoder what there is of it, and the decoder outputs a
+// whole frame's samples (ffmpeg decodes one with only its header left).
 func mp3FrameCount(b *blockFile, off, end int64, ref uint32) (frames int64) {
-	w := mp3Window{b: b, end: end, buf: make([]byte, 0, mp3WindowSize)}
+	w := mp3Window{b: b, end: end, buf: make([]byte, 0, min(mp3WindowSize, max(end-off, 0)))}
 	for pos := off; pos+4 <= end; {
 		if fs := mp3FrameSize(w.u32(pos), ref); fs > 0 {
-			if pos+fs > end {
-				break
-			}
 			frames++
 			pos += fs
 			continue
@@ -1011,7 +1010,7 @@ const mp3MaxFrame = 1441
 type mp3Window struct {
 	b     *blockFile
 	end   int64
-	buf   []byte // the window, in a buffer of mp3WindowSize
+	buf   []byte // the window, in a buffer of up to mp3WindowSize (the audio's size, if smaller)
 	start int64
 }
 
