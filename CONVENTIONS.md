@@ -1791,7 +1791,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   only while the report still holds that ASIN as unknown (`MatchState.ASINUnknown`, `asinKnownSince`, again in
   `MatchIfASIN`'s check: once a lookup found it, the ASIN names the book's record, so the item is skipped
   `asin_known` with nothing written, the ASIN kept even under overwrite; the review reads it `matched_since`).
-  It records the match (so the book leaves the category) and writes the scope's fields by `Plan`, which never replaces an admin's own ASIN (an `edited` field), whatever the scope. One run at a time (`matchrun.Runner`,
+  Starting one needs the report on (`reportUnknownOn`, else 409 `report_off`: the table is only current while
+  it runs, and Health hides the kind then; the console's Start over on an earlier one is hidden too). It
+  records the match (so the book leaves the category) and writes the scope's fields by `Plan`, which never replaces an admin's own ASIN (an `edited` field), whatever the scope. One run at a time (`matchrun.Runner`,
   its own goroutine under `baseCtx`, NOT the scan job queue: it waits on the
   network, and `library` must not import `meta`); 6 workers (an apply 2), `maxFailStreak` (10) failures in a row
   stop it (`metadata_unavailable`; past the workers, as one moment's failure meets them all at once):

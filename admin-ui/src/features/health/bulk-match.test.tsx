@@ -1440,6 +1440,36 @@ describe('bulk matching', () => {
     );
   });
 
+  it('offers no Start over on a title run while the unknown-ASIN report is off', async () => {
+    // Health lists the unknown-ASIN kind only while the report is on, and the
+    // server refuses the run without it (409 report_off).
+    const titleRun = run({ mode: 'unknown_asin' });
+    mockFetch(routes([titleRun]));
+    const off = renderApp('/health?issue=unmatched');
+    expect(await screen.findByRole('button', { name: /^Review/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start over' })).toBeNull();
+    off.unmount();
+
+    const summary = issuesSummary();
+    summary.categories.push(
+      { kind: 'unmatched', count: 4, ignored: 0, samples: [] },
+      { kind: 'unknown_asin', count: 2, ignored: 0, samples: [] },
+    );
+    const calls = mockFetch(
+      routes([titleRun], {
+        'GET /admin/issues': { body: summary },
+        'POST /admin/match-runs': { status: 202, body: run({ status: 'matching' }) },
+      }),
+    );
+    renderApp('/health?issue=unmatched');
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Start over' }));
+    await waitFor(() =>
+      expect(
+        calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs')?.body,
+      ).toEqual({ mode: 'unknown_asin' }),
+    );
+  });
+
   it("says when a title run's book was left alone because the community knows its ASIN now", async () => {
     const learned: MatchRunItem = {
       ...confident,

@@ -3022,6 +3022,7 @@
   "errors.importNotApplied": "Questa importazione non è applicata, quindi non c'è nulla da annullare.",
   "errors.importApplied": "Questa importazione è applicata: annullala prima di eliminarla.",
   "errors.matchRunBusy": "È in corso una passata di associazione. Aspetta che finisca, o fermala, poi riprova.",
+  "errors.reportOff": "«Aiuta a completare il database della community» è disattivato, ed è l'unico a trovare i libri il cui ASIN la community non conosce. Attivalo prima nelle impostazioni del server.",
   "errors.detectOpen": "I capitoli del libro sono ancora in ricerca. Riprova quando ha finito.",
   "errors.describeOpen": "Per questo libro si sta ancora scrivendo una descrizione. Rileva i suoi capitoli quando ha finito.",
   "errors.chaptersChosen": "Per questo libro è stata scelta una fonte dei capitoli, quindi i capitoli trovati nella narrazione non verrebbero mai usati. Riportala prima su automatico nella pagina del libro.",

@@ -104,7 +104,18 @@ import {
  * unknown-ASIN category (`issue`), the card starts the one run that matches those
  * books by their title, never replacing an ASIN an admin set (server#392).
  */
-export function BulkMatch({ issue = 'unmatched' }: { issue?: 'unmatched' | 'unknown_asin' }) {
+export function BulkMatch({
+  issue = 'unmatched',
+  reportOn = true,
+}: {
+  issue?: 'unmatched' | 'unknown_asin';
+  /**
+   * Whether the unknown-ASIN report is on (Health lists its category only then).
+   * While it is off the server refuses an unknown_asin run (409 report_off), so
+   * an earlier one offers no Start over.
+   */
+  reportOn?: boolean;
+}) {
   const unknown = issue === 'unknown_asin';
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -200,13 +211,15 @@ export function BulkMatch({ issue = 'unmatched' }: { issue?: 'unmatched' | 'unkn
           ) : null}
           <Summary run={run} lang={lang} />
           <div className="ml-auto flex flex-wrap gap-2">
-            <Button
-              variant="ghost"
-              disabled={busy}
-              onClick={() => void start(run.mode, run.library_id ?? 0)}
-            >
-              {t('health.bulkMatch.startOver')}
-            </Button>
+            {run.mode === 'unknown_asin' && !reportOn ? null : (
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => void start(run.mode, run.library_id ?? 0)}
+              >
+                {t('health.bulkMatch.startOver')}
+              </Button>
+            )}
             <Button variant="brand" onClick={() => setReviewing(true)}>
               {t('health.bulkMatch.review')}
               <ArrowRight aria-hidden="true" />

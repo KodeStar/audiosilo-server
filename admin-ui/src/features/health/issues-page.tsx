@@ -162,7 +162,10 @@ export function IssuesPage() {
             ) : null}
           </div>
           {(cat.kind === 'unmatched' || cat.kind === 'unknown_asin') && !ignored ? (
-            <BulkMatch issue={cat.kind} />
+            <BulkMatch
+              issue={cat.kind}
+              reportOn={data?.categories.some((c) => c.kind === 'unknown_asin')}
+            />
           ) : null}
           {isBookKind(cat.kind) ? (
             <IssueBooks key={`${cat.kind}:${ignored}`} kind={cat.kind} ignored={ignored} />

@@ -2850,6 +2850,7 @@
   "errors.importNotApplied": "Dieser Import ist nicht übernommen, es gibt also nichts rückgängig zu machen.",
   "errors.importApplied": "Dieser Import ist übernommen: Mach ihn rückgängig, bevor du ihn löschst.",
   "errors.matchRunBusy": "Ein Zuordnungslauf arbeitet gerade. Warte, bis er fertig ist, oder halte ihn an und versuche es dann erneut.",
+  "errors.reportOff": "„Die Community-Datenbank vervollständigen“ ist ausgeschaltet, und nur das findet die Bücher, deren ASIN die Community nicht kennt. Schalte es zuerst in den Servereinstellungen ein.",
   "errors.detectOpen": "Die Kapitel des Buchs werden noch gesucht. Versuche es erneut, sobald das fertig ist.",
   "errors.describeOpen": "Für dieses Buch wird noch eine Beschreibung geschrieben. Suche seine Kapitel, sobald das fertig ist.",
   "errors.chaptersChosen": "Für dieses Buch wurde eine Kapitelquelle gewählt, daher würden in der Erzählung gefundene Kapitel nie verwendet. Stelle sie zuerst auf der Buchseite wieder auf automatisch.",

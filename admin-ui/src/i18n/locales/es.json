@@ -3022,6 +3022,7 @@
   "errors.importNotApplied": "Esta importación no está aplicada, así que no hay nada que deshacer.",
   "errors.importApplied": "Esta importación está aplicada: deshazla antes de eliminarla.",
   "errors.matchRunBusy": "Hay una búsqueda de coincidencias en marcha. Espera a que termine, o detenla, y vuelve a intentarlo.",
+  "errors.reportOff": "«Ayudar a completar la base de datos de la comunidad» está desactivado, y solo eso encuentra los libros cuyo ASIN la comunidad no conoce. Actívalo primero en los ajustes del servidor.",
   "errors.detectOpen": "Todavía se están buscando los capítulos del libro. Vuelve a intentarlo cuando termine.",
   "errors.describeOpen": "Todavía se está escribiendo una descripción para este libro. Detecta sus capítulos cuando termine.",
   "errors.chaptersChosen": "Se eligió una fuente de capítulos para este libro, así que los capítulos encontrados en la narración nunca se usarían. Vuelve a ponerla en automático en la página del libro primero.",

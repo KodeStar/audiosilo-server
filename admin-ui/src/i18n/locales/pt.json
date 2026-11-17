@@ -3022,6 +3022,7 @@
   "errors.importNotApplied": "Esta importação não está aplicada, por isso não há nada para anular.",
   "errors.importApplied": "Esta importação está aplicada: anule-a antes de a eliminar.",
   "errors.matchRunBusy": "Está a decorrer uma procura de correspondências. Aguarde que termine, ou pare-a, e tente de novo.",
+  "errors.reportOff": "«Ajudar a completar a base de dados da comunidade» está desligado, e só isso encontra os livros cujo ASIN a comunidade não conhece. Ligue-o primeiro nas definições do servidor.",
   "errors.detectOpen": "Os capítulos do livro ainda estão a ser procurados. Tente de novo quando terminar.",
   "errors.describeOpen": "Ainda está a ser escrita uma descrição para este livro. Detete os seus capítulos quando terminar.",
   "errors.chaptersChosen": "Foi escolhida uma fonte de capítulos para este livro, por isso os capítulos encontrados na narração nunca seriam usados. Volte a pô-la em automático na página do livro primeiro.",

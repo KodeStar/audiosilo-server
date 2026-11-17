@@ -48,7 +48,10 @@ func (a *API) handleListMatchRuns(w http.ResponseWriter, r *http.Request) {
 // mode "unknown_asin" matches by their title the books whose own ASIN the
 // community doesn't know (Health's unknown_asin), never replacing an admin's ASIN.
 // 202 with the run; 409 match_run_busy while a run is working; 400 for an unknown
-// mode, and no_region for a repick with no preferred marketplace set.
+// mode, and no_region for a repick with no preferred marketplace set; 409
+// report_off for "unknown_asin" while the unknown-ASIN report is off (only its
+// lookups say which ASINs are unknown, so the run would read what an earlier
+// report left, or nothing, as all there is; Health hides the kind then too).
 func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
 		return
@@ -65,7 +68,12 @@ func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
 	switch req.Mode {
 	case "":
 		req.Mode = catalog.MatchModeMatch
-	case catalog.MatchModeMatch, catalog.MatchModeRefresh, catalog.MatchModeUnknownASIN:
+	case catalog.MatchModeMatch, catalog.MatchModeRefresh:
+	case catalog.MatchModeUnknownASIN:
+		if !a.reportUnknownOn() {
+			writeErrorCode(w, http.StatusConflict, codeReportOff, "turn on Help complete the community database first: it finds the books whose ASIN the community doesn't know")
+			return
+		}
 	case catalog.MatchModeRepick:
 		if region == "" {
 			writeErrorCode(w, http.StatusBadRequest, codeNoRegion, "set a preferred Audible marketplace first")

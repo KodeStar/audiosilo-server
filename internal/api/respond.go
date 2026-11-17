@@ -134,6 +134,7 @@ const (
 	codeCollectionsFull          = "collections_full"
 	codeNoRegion                 = "no_region"
 	codeMatchRunBusy             = "match_run_busy"
+	codeReportOff                = "report_off" // an unknown_asin match run while the unknown-ASIN report is off
 	codeMatchRunNotReady         = "match_run_not_ready"
 	codeMatchRunNotRunning       = "match_run_not_running"
 	// Listening imports (handlers_import.go); the ABS failures carry importer.Code*.

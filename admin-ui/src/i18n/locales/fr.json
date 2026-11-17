@@ -3022,6 +3022,7 @@
   "errors.importNotApplied": "Cette importation n'est pas appliquée, il n'y a donc rien à annuler.",
   "errors.importApplied": "Cette importation est appliquée : annulez-la avant de la supprimer.",
   "errors.matchRunBusy": "Une passe d'association est en cours. Attendez qu'elle se termine, ou arrêtez-la, puis réessayez.",
+  "errors.reportOff": "« Aider à compléter la base de données communautaire » est désactivé, et c'est lui seul qui repère les livres dont la communauté ne connaît pas l'ASIN. Activez-le d'abord dans les réglages du serveur.",
   "errors.detectOpen": "Les chapitres du livre sont encore en cours de recherche. Réessayez une fois que c’est fini.",
   "errors.describeOpen": "Une description est encore en cours de rédaction pour ce livre. Détectez ses chapitres une fois que c’est fini.",
   "errors.chaptersChosen": "Une source de chapitres a été choisie pour ce livre : les chapitres trouvés dans la narration ne seraient jamais utilisés. Repassez-la d’abord en automatique sur la page du livre.",

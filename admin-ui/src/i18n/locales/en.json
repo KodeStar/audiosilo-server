@@ -2850,6 +2850,7 @@
   "errors.importNotApplied": "This import isn't applied, so there's nothing to undo.",
   "errors.importApplied": "This import is applied: undo it before deleting it.",
   "errors.matchRunBusy": "A match run is working. Wait for it to finish, or stop it, then try again.",
+  "errors.reportOff": "Help complete the community database is off, and only it finds the books whose ASIN the community doesn't know. Turn it on in Server settings first.",
   "errors.detectOpen": "The book’s chapters are still being found. Try again once that has finished.",
   "errors.describeOpen": "A description is still being written for this book. Detect its chapters once that has finished.",
   "errors.chaptersChosen": "A chapter source was chosen for this book, so chapters found in the narration would never be used. Set it back to automatic on the book page first.",
