@@ -177,8 +177,7 @@ func (s *Service) PruneCastTokens(ctx context.Context) error {
 // keeps only the maxCastTokens most recently used the sending token minted, and
 // the person's maxCastTokensPerPerson most recently used (editor tokens apart,
 // trimCastTokensSQL): a device casting many books never ends the cast another
-// device is playing, and a re-mint drops an idle token before one a receiver is
-// reading.
+// device is playing.
 func (s *Service) IssueCastToken(ctx context.Context, userID, parentTokenID, libraryID int64, bookPath string) (secret, expiresAt string, err error) {
 	return s.issueCastToken(ctx, useCast, userID, parentTokenID, libraryID, bookPath)
 }
