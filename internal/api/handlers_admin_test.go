@@ -399,8 +399,9 @@ func TestWholeLibraryGrantsAreMarked(t *testing.T) {
 
 // TestLibraryGrantPathEditsRefused (server#254): a library grant's share
 // changes only by granting or revoking the library. Denied: a path add or
-// remove on it is 409 library_grant and leaves the whole-library rule. Allowed:
-// the same edits on an admin's own share are 204.
+// remove of its own rule on it is 409 library_grant and leaves the whole-library
+// rule. Allowed: removing a stray rule from it (server#361), and the same edits
+// on an admin's own share, are 204.
 func TestLibraryGrantPathEditsRefused(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
@@ -427,6 +428,16 @@ func TestLibraryGrantPathEditsRefused(t *testing.T) {
 	}
 	if got, _ := e.cat.GetShare(ctx, shares[0].ID); len(got.Paths) != 1 || got.Paths[0] != (catalog.PathRule{LibraryID: lib.ID}) {
 		t.Fatalf("the grant's rules = %+v, want the whole library only", got.Paths)
+	}
+	// A stray rule an older version let onto the grant goes; its own rule stays.
+	if err := e.cat.AddSharePath(ctx, shares[0].ID, catalog.PathRule{LibraryID: lib.ID, Path: "Author/Book"}); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := e.do(t, "DELETE", paths(shares[0].ID), adminTok, folder); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE of a stray rule on a grant = %d %s, want 204", resp.StatusCode, body)
+	}
+	if got, _ := e.cat.GetShare(ctx, shares[0].ID); len(got.Paths) != 1 || got.Paths[0] != (catalog.PathRule{LibraryID: lib.ID}) {
+		t.Fatalf("the grant's rules after its stray one went = %+v, want the whole library only", got.Paths)
 	}
 	for _, method := range []string{"POST", "DELETE"} {
 		if resp, body := e.do(t, method, paths(mine.ID), adminTok, folder); resp.StatusCode != http.StatusNoContent {
