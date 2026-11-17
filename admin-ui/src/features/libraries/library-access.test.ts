@@ -69,6 +69,7 @@ describe('bookRootOverlap', () => {
     });
     expect(bookRootOverlap('/mnt/books/', libs)).toEqual({ name: 'Fiction', how: 'holds' });
     expect(bookRootOverlap('/', libs)).toEqual({ name: 'Fiction', how: 'holds' });
+    expect(bookRootOverlap('/mnt//books/fiction', libs)).toEqual({ name: 'Fiction', how: 'same' });
   });
 
   it('leaves out a sibling, a longer name, podcast libraries and the library being edited', () => {
@@ -86,6 +87,8 @@ describe('bookRootOverlap', () => {
       how: 'inside',
     });
     expect(bookRootOverlap('D:\\', win)).toEqual({ name: 'Books', how: 'holds' });
+    // Typed with forward slashes: the server stores it with its own.
+    expect(bookRootOverlap('D:/Audio/Books/Kids', win)).toEqual({ name: 'Books', how: 'inside' });
     expect(bookRootOverlap('D:\\Audio\\Books2', win)).toBeUndefined();
   });
 });
