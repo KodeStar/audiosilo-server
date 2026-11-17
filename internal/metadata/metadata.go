@@ -103,6 +103,10 @@ type Metadata struct {
 	// readRefused: the read was refused, the file not opened, as too many
 	// earlier reads hang (ReadRefused).
 	readRefused bool
+	// counted: a VBR MP3 with no Xing or VBRI header, read with the probe off,
+	// has its frames counted (readFile's count): its length in seconds, which
+	// replaces ffprobe's estimate. 0 for any other file.
+	counted float64
 }
 
 // ProbeTimedOut reports whether, with no ffprobe configured, the file's read
@@ -186,15 +190,16 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 // the probe still runs, by noFFprobeRules (SCAN-SPIKE decision 2, server#269):
 // a file it is unsure of then has no duration, and no ProbeErr, as before.
 // A VBR MP3 with no Xing or VBRI header, whose length ffprobe only estimates,
-// has its frames counted (SRV-16): by the probe, or after ffprobe when the
-// probe is off (countedMP3); a count cut short leaves ffprobe's estimate.
+// has its frames counted (SRV-16): by the probe, or, when the probe is off, in
+// readFile's one read of the file, over ffprobe's estimate; a count cut short
+// leaves the estimate.
 func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.Duration) (*Metadata, error) {
 	m := &Metadata{Format: fileFormat(path)}
 	ff := ffNone
 	if !ffprobeForced(ffprobePath) {
 		ff = probeRules(ctx, ffprobePath)
 	}
-	p, reason, err := readFile(ctx, m, path, ff, timeout)
+	p, reason, err := readFile(ctx, m, path, ff, ff == ffNone && !ffprobeForced(ffprobePath), timeout)
 	if err != nil {
 		m.OpenErr = err
 		return m, nil // ffprobe can't read what the server can't open
@@ -208,12 +213,10 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 	case ffprobePath != "":
 		// ffprobe for duration + chapters + richer container tags (best-effort).
 		if p, err := probe(ctx, path, ffprobePath, timeout); err == nil {
-			if ff == ffNone && m.Format == "mp3" && !ffprobeForced(ffprobePath) {
+			if m.counted > 0 {
 				// The probe is off for this ffprobe's release, but its estimate of a
 				// VBR MP3 with no Xing/VBRI header is no better: the frames counted.
-				if d, ok := countedMP3(ctx, path, timeout); ok {
-					p.Duration = d
-				}
+				p.Duration = m.counted
 			}
 			applyProbe(m, p)
 		} else {
@@ -225,35 +228,12 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 	return m, nil
 }
 
-// countedMP3 is the length of the MP3 at path from its frames counted when it
-// is a VBR file with no Xing or VBRI header (the probe's Counted answer, by
-// noFFprobeRules: the count is the same by any release's), for an ffprobe whose
-// release the probe follows no rules for, whose estimate of such a file is
-// replaced as the probe's would be. false for any other file, and one that
-// can't be opened, read or counted in time (ffprobe's estimate stays). The
-// open is bounded as readFile's is, the count as the probe's.
-func countedMP3(ctx context.Context, path string, timeout time.Duration) (float64, bool) {
-	rctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
-	defer cancel()
-	b, f, err := openBlockFile(rctx, path)
-	if err != nil {
-		return 0, false
-	}
-	defer f.Close()
-	b.ff = noFFprobeRules
-	p, reason := fastProbe(ctx, b, "mp3", timeout)
-	if reason != "" || !p.Counted {
-		return 0, false
-	}
-	return p.Duration, true
-}
-
 // ExtractTags reads only the tags of the file at path (and the iTunes
 // narrator): no probe, in-process or ffprobe, so no duration, codec or
 // chapters. An OpenErr when it can't be opened.
 func ExtractTags(path string) *Metadata {
 	m := &Metadata{Format: fileFormat(path)}
-	if _, _, err := readFile(context.Background(), m, path, ffNone, ProbeTimeout); err != nil {
+	if _, _, err := readFile(context.Background(), m, path, ffNone, false, ProbeTimeout); err != nil {
 		m.OpenErr = err
 	}
 	return m
@@ -274,7 +254,10 @@ func fileFormat(path string) string {
 
 // readFile reads the tags of the file at path into m and, unless ff is ffNone,
 // the in-process probe's answer by ff's rules, or why it has none (reason:
-// unsure of the file, a bound passed; ffprobe reads it then). The open, the tag
+// unsure of the file, a bound passed; ffprobe reads it then). With ff ffNone
+// and count, an MP3 is probed by noFFprobeRules all the same, its answer kept
+// only when it is a header-less VBR file's frames counted (m.counted): the
+// count is the same by any release's rules. The open, the tag
 // read and the narrator walk are bounded as the probe is: timeout (the ffprobe
 // run's) and ctx, and the probe's byte budget, the open and every read from the
 // file waited for under them (openBlockFile, blockFile.raw), so a file on a
@@ -283,7 +266,7 @@ func fileFormat(path string) string {
 // answers), as does an open that did not answer. The file is closed when it
 // returns, before any ffprobe run. An error: it could not be opened, or is no
 // regular file.
-func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout time.Duration) (p *probeResult, reason string, err error) {
+func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, count bool, timeout time.Duration) (p *probeResult, reason string, err error) {
 	rctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
 	defer cancel()
 	b, f, err := openBlockFile(rctx, path)
@@ -332,6 +315,12 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout
 		m.Narrator, m.narratorExplicit = narrator, true
 	}
 	if ff == ffNone {
+		if count && m.Format == "mp3" {
+			b.ff = noFFprobeRules
+			if p, why := fastProbe(ctx, b, m.Format, timeout); why == "" && p.Counted {
+				m.counted = p.Duration
+			}
+		}
 		return nil, "", nil
 	}
 	b.ff = ff

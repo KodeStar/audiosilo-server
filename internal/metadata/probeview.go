@@ -83,7 +83,7 @@ func probeView(path string, ff ffRules) (*ProbeView, string, error) {
 	if ff == ffNone {
 		return nil, "no rules for this ffprobe's release", nil
 	}
-	p, reason, err := readFile(context.Background(), &Metadata{Format: fileFormat(path)}, path, ff, ProbeTimeout)
+	p, reason, err := readFile(context.Background(), &Metadata{Format: fileFormat(path)}, path, ff, false, ProbeTimeout)
 	if err != nil || reason != "" {
 		return nil, reason, err
 	}

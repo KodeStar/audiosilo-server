@@ -177,7 +177,7 @@ func TestExtractWithoutFFprobe(t *testing.T) {
 	// A VBR MP3 with no Xing/VBRI header: its frames counted, with no ffprobe
 	// too (SRV-16).
 	counted, err := Extract(fixture("craft-junk-vbr.mp3"), "")
-	if err != nil || counted.ProbeErr != nil || counted.Duration != 5.355102 || counted.Codec != "mp3" {
+	if err != nil || counted.ProbeErr != nil || ffTime(counted.Duration) != countedFixtures["craft-junk-vbr.mp3"] || counted.Codec != "mp3" {
 		t.Errorf("header-less VBR MP3: %v, duration %v codec %q, want its frames counted", err, counted.Duration, counted.Codec)
 	}
 	// A concatenated MP3: ffprobe's reading, which nothing gives here.
@@ -286,7 +286,7 @@ func TestTagsUnreadWhenCutShort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	m := &Metadata{Format: "mp3"}
-	if _, _, err := readFile(ctx, m, fixture("mp3-v23-chap.mp3"), noFFprobeRules, ProbeTimeout); err != nil {
+	if _, _, err := readFile(ctx, m, fixture("mp3-v23-chap.mp3"), noFFprobeRules, false, ProbeTimeout); err != nil {
 		t.Fatal(err)
 	}
 	if !m.TagsUnread() || m.Title != "" {
