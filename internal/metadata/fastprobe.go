@@ -218,6 +218,11 @@ func (b *blockFile) bounded(ctx context.Context, fn func()) (why string) {
 // to another's (a watch rendition to its source).
 func ExactDuration(ctx context.Context, r io.ReaderAt, size int64, format string) (float64, bool) {
 	b := newBlockFile(r, size)
+	if f, ok := r.(interface{ Name() string }); ok {
+		// A named file's reads given up on count on its mount (a rendition's
+		// source on a share that stopped answering), as a scan's do.
+		b.stuck = stuckByMount.For(f.Name())
+	}
 	b.ff = ff8
 	p, reason := fastProbe(ctx, b, strings.ToLower(format), maxProbeTime)
 	if reason != "" {
@@ -383,8 +388,9 @@ type stuckReads struct {
 var stuckByMount = mounts.NewPerMount(func(mount string) *stuckReads { return &stuckReads{mount: mount} })
 
 // unknownMount counts the abandoned reads of a blockFile not read from a named
-// file (newBlockFile's default: ExactDuration's, a test's); nothing checks it
-// against the cap, as no read from a named file is refused by it.
+// file (newBlockFile's default: ExactDuration's of a reader with no Name, a
+// test's); nothing checks it against the cap, as no read from a named file is
+// refused by it.
 var unknownMount = &stuckReads{}
 
 // release uncounts an abandoned read that returned (or one that returned
