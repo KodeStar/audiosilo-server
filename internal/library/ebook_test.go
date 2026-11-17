@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/text/unicode/norm"
 )
@@ -284,11 +285,11 @@ func TestBookEbookUnicodeForms(t *testing.T) {
 		}
 	}
 	onDemand := func(rel string) string {
-		r, _ := checkEbook(root, ebookOnDisk(root, rel, false))
+		r, _ := checkEbook(t.Context(), root, ebookOnDisk(root, rel, false), time.Minute, nil)
 		return r.Path
 	}
 	scanned := func(rel string) string {
-		r, _ := checkEbook(root, ebookCandidate(root, rel, false, epubs))
+		r, _ := checkEbook(t.Context(), root, ebookCandidate(root, rel, false, epubs), time.Minute, nil)
 		return r.Path
 	}
 	opens := func(name string) bool {

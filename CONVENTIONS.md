@@ -1187,7 +1187,27 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   unreadable at the first read, the volume root: one key, as the old process-wide cap). A mount's key is
   the filesystem it is of (`Mount.Device`: mountinfo's `major:minor`, macOS's fsid), not its mount
   point: a share unmounted lazily and mounted again at the same path starts with nothing stuck, and
-  two bind mounts of one share have one cap. A re-index
+  two bind mounts of one share have one cap. Every other look at a library file a scan, an on-demand
+  index or a request makes on a share that may stop answering goes through the same bound
+  (`metadata.Bounded`, SRV-15b: the call on a goroutine of its own, waited for while its context lives
+  and at most a timeout, counted on the path's mount when given up on, refused at once at the cap;
+  `StatBounded`, `LstatBounded`, `ReadDirBounded`; `metadata.GaveUp` names its two errors,
+  `ErrNotAnswered` and `ErrReadRefused`; `HoldOpensForTests` holds them too): the files beside a
+  book's audio (the ABS metadata.json read, the attachments' lstats and reads, the ebook check,
+  `findCover`'s stats and listing, `LookArt` (`ArtFile`'s `SafeJoin` and the stat) for the
+  cover version, `stampAddedAt`'s lstat, `problemCleared`'s stat), the backfill's embedded cover read
+  (`media.EmbeddedCover`), `RefreshEbook`'s look, and in the API every cover (full, thumbnail, a
+  show's: `serveArt`, `coverArt`, `readSidecar`) and a stream's open and stat (`media.ServeFile`),
+  each given up on after `API.fileWait` (10 s) as a 503 `share_not_answering` with `Retry-After`.
+  The scan gives each the probe's time (`Scanner.probeTimeout`). With a book's audio read cut short
+  none of its side files is looked at (each would wait out its time too); one given up on otherwise
+  keeps the book as stored (`library.givenUp.keep`: `ReadCutShort`, never `LengthOnly`) with an
+  `unreadable` problem on that file (over a lasting one), which `problemCleared` clears once the file
+  answers a bounded stat (gone counts too); a backfill's given-up read keeps what is stored and
+  records nothing. A scan stopped while a read is still under way (held in a call nothing bounds)
+  waits for it up to `stopGrace` (2 s), then leaves it to end on its own, its book's flight with
+  it, counted in `Scanner.readsLeft` and logged, so the scan ends and the next runs (`writeNext`
+  waits on the scan's context too). The walk's own listings and lstats are not bounded yet. A re-index
   where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`), or whose
   length ran out of time even read alone (an ffprobe time-out, `ProbeTimedOut` without one:
   `library.readCutShort`; a part on a share that hung mid-read, the FIFO repro of server#360),
@@ -1552,7 +1572,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   row without it). `metadata.ReadABSFile` reads a regular file only, never through a link (one
   swapped in after the walk included: `os.SameFile` on the opened file). A file that can't be used
   (not JSON, too large, not a regular file: `metadata.ErrABSFileInvalid`) keeps its signature (read
-  again once it changes); one that can't be looked at or read right now (a flaky mount) is
+  again once it changes); one that can't be looked at or read right now (a flaky mount, a share that
+  stopped answering: its lstat and read are `metadata.Bounded` calls, see In-process probe) is
   left as it was by the backfill and by a re-index (`ABSReading.Unread`: `UpsertBook` keeps the stored
   `abs_sig` and `abs_file` with no `abs_indexed_at`, so the book keeps its ABS values and the next scan
   reads it again; server#213); both log a warning. Known gap: a position read from an ABS title (`titlePosition`) shows as `tag`.

@@ -138,19 +138,42 @@ func audioContentType(ext string) string {
 
 // ServeFile streams absPath to the client with Range support. When download is
 // true a Content-Disposition attachment header is set so browsers save the file.
-func ServeFile(w http.ResponseWriter, r *http.Request, absPath string, download bool) {
-	f, err := os.Open(absPath)
-	if err != nil {
+// Its open and stat are one metadata.Bounded call (the request's context, at
+// most wait, the per-mount cap of a scan's reads): a file on a share that
+// stopped answering is a 503 with Retry-After once that is given up on, never a
+// handler held for good (the reads that follow are the client's to wait for).
+func ServeFile(w http.ResponseWriter, r *http.Request, absPath string, download bool, wait time.Duration) {
+	type opened struct {
+		f    *os.File
+		info os.FileInfo
+	}
+	o, err := metadata.Bounded(r.Context(), absPath, wait, func() (opened, error) {
+		f, err := os.Open(absPath)
+		if err != nil {
+			return opened{}, err
+		}
+		info, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return opened{}, err
+		}
+		return opened{f, info}, nil
+	}, func(o opened) { _ = o.f.Close() })
+	switch {
+	case metadata.GaveUp(err):
+		w.Header().Set("Retry-After", "30")
+		http.Error(w, "the drive or share holding this file is not answering", http.StatusServiceUnavailable)
+		return
+	case err != nil:
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || info.IsDir() {
+	defer o.f.Close()
+	if o.info.IsDir() {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	ServeOpened(w, r, f, download)
+	ServeOpened(w, r, o.f, download)
 }
 
 // ServeOpened serves an already verified descriptor without reopening its path.
@@ -401,24 +424,37 @@ func coverMIME(data []byte) (string, bool) {
 	return mime, coverImageTypes[mime]
 }
 
-// EmbeddedCover returns embedded cover art from absPath, if present, with its
-// sniffed image type (see coverMIME); art that isn't an image is no art.
-func EmbeddedCover(absPath string) (data []byte, mime string, ok bool) {
-	f, err := os.Open(absPath)
-	if err != nil {
-		return nil, "", false
+// EmbeddedCover returns embedded cover art from absPath with its sniffed image
+// type (see coverMIME): nil data and no error when the file holds none (art
+// that isn't an image is no art, and so is a file whose tags don't read). An
+// error is a file that couldn't be opened or read right now: its open and tag
+// read are one metadata.Bounded call (ctx, at most timeout, the per-mount cap
+// of a scan's reads), so a share that stopped answering costs at most timeout
+// (metadata.GaveUp), never a caller held for good.
+func EmbeddedCover(ctx context.Context, absPath string, timeout time.Duration) (data []byte, mime string, err error) {
+	type art struct {
+		data []byte
+		mime string
 	}
-	defer f.Close()
-	md, err := metadata.ReadTags(f)
-	if err != nil {
-		return nil, "", false
-	}
-	pic := md.Picture()
-	if pic == nil || len(pic.Data) == 0 {
-		return nil, "", false
-	}
-	if mime, ok = coverMIME(pic.Data); !ok {
-		return nil, "", false
-	}
-	return pic.Data, mime, true
+	a, err := metadata.Bounded(ctx, absPath, timeout, func() (art, error) {
+		f, err := os.Open(absPath)
+		if err != nil {
+			return art{}, err
+		}
+		defer f.Close()
+		md, err := metadata.ReadTags(f)
+		if err != nil {
+			return art{}, nil
+		}
+		pic := md.Picture()
+		if pic == nil || len(pic.Data) == 0 {
+			return art{}, nil
+		}
+		mime, ok := coverMIME(pic.Data)
+		if !ok {
+			return art{}, nil
+		}
+		return art{pic.Data, mime}, nil
+	}, nil)
+	return a.data, a.mime, err
 }

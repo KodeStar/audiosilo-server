@@ -36,7 +36,7 @@ func TestOpenEbookFIFO(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("OpenEbook waited on a FIFO")
 	}
-	if r, ok := checkEbook(root, ebookNamed(root, "", "Book.epub")); !ok || r.Path != "" || r.Sig == "" {
+	if r, ok := checkEbook(t.Context(), root, ebookNamed(root, "", "Book.epub"), time.Minute, nil); !ok || r.Path != "" || r.Sig == "" {
 		t.Fatalf("checkEbook of a FIFO = %+v, %v; want none, recorded by its signature", r, ok)
 	}
 }
@@ -74,7 +74,7 @@ func TestEbookOnDiskFolderUnreadable(t *testing.T) {
 		if !r.Unread {
 			t.Errorf("%s: ebookOnDisk = %+v, want Unread", c.name, r)
 		}
-		if _, ok := checkEbook(root, r); ok {
+		if _, ok := checkEbook(t.Context(), root, r, time.Minute, nil); ok {
 			t.Errorf("%s: checkEbook ok, want it kept for the next look", c.name)
 		}
 	}

@@ -3,7 +3,7 @@ package library
 import (
 	"context"
 	"errors"
-	"os"
+	"io/fs"
 	"strings"
 	"unicode"
 
@@ -67,18 +67,26 @@ func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata
 // scan ends at its next check), and not even that when this server has seen
 // ffprobe reject the file's data with the file as it is now (noteRejected): the
 // same ffprobe rejects the same bytes again, and each run is a process start
-// (most of a no-change scan of a library holding a damaged file).
+// (most of a no-change scan of a library holding a damaged file). A problem
+// with a file beside the audio (a metadata.json, an attachment, an ebook or a
+// cover a read gave up on: givenUp) has cleared once the file, or what stands
+// there now, answers a look (a bounded stat; gone counts too): the re-index
+// reads it again, and records it again should it still not answer.
 func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig catalog.Signature, slots *readSlots) bool {
 	if !recheckable(sig) {
 		return false
 	}
 	abs := absOf(lib, sig.ScanErrorFile)
+	if !metadata.IsAudio(abs) {
+		_, err := metadata.StatBounded(ctx, abs, s.probeTimeout)
+		return err == nil || errors.Is(err, fs.ErrNotExist)
+	}
 	probe := sig.ScanError == problemProbe
 	var at *fileState
 	if probe {
 		// The file's own state, before the read: a book's is a folder's newest
 		// part and total size, which a part put back as it was leaves unchanged.
-		if info, err := os.Stat(abs); err == nil {
+		if info, err := metadata.StatBounded(ctx, abs, s.probeTimeout); err == nil {
 			at = &fileState{mtime: info.ModTime().Unix(), size: info.Size()}
 			if s.wasRejected(abs, *at) {
 				return false

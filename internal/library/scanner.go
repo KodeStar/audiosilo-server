@@ -1,6 +1,7 @@
 package library
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -61,8 +62,14 @@ type Scanner struct {
 
 	// concurrency is how many audio files a scan reads at once (SetConcurrency).
 	concurrency int
-	// probeTimeout is each ffprobe run's (metadata.ProbeTimeout; tests shorten it).
+	// probeTimeout is each ffprobe run's, and each bounded look at a file beside
+	// the audio (metadata.Bounded: a cover, an ebook, a metadata.json, an
+	// attachment) a scan or an on-demand index makes (metadata.ProbeTimeout;
+	// tests shorten it).
 	probeTimeout time.Duration
+	// readsLeft is how many book reads stopped scans left under way (stopped),
+	// not ended yet.
+	readsLeft atomic.Int64
 	// batched, when set (tests), hears each book a scan takes into its write
 	// batch, with the batch's length then.
 	batched func(n int)
@@ -579,13 +586,18 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	}
 	// writeNext takes the oldest book read into the batch, once its read is done
 	// (writing the batch first rather than waiting with it); ctx's error when the
-	// scan was stopped by then (the read may have been cut short).
+	// scan was stopped by then, or is while it waits (the read may have been cut
+	// short, or be held in a call on a share that stopped answering: stopped
+	// leaves it).
 	writeNext := func() error {
 		r := pending[0]
 		if !r.finished() {
 			flush()
 		}
-		<-r.done
+		select {
+		case <-r.done:
+		case <-ctx.Done():
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -603,14 +615,41 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		return nil
 	}
 	// stopped ends the scan at a Stop (or its time limit): the batch is written,
-	// the reads under way are waited for and dropped (one cut short by the stop
-	// would record a false read problem), nothing more is written, and the
-	// backfills read so far are kept.
+	// the reads under way are dropped (one cut short by the stop would record a
+	// false read problem), nothing more is written, and the backfills read so far
+	// are kept. A read ends at the stop (its looks at the files are bounded by
+	// ctx), so it is waited for up to stopGrace; one still under way then (held
+	// in a call a share that stopped answering never returns from) is left to
+	// end on its own, its book's flight with it, and counted
+	// (Scanner.readsLeft), so the scan ends and the next one runs.
 	stopped := func(err error) (*ScanResult, error) {
 		flush()
+		grace := time.NewTimer(stopGrace)
+		defer grace.Stop()
+		left := 0
 		for _, r := range pending {
-			<-r.done
-			r.endFlight(s, errReadDropped)
+			if left == 0 {
+				select {
+				case <-r.done:
+					r.endFlight(s, errReadDropped)
+					continue
+				case <-grace.C:
+				}
+			} else if r.finished() {
+				r.endFlight(s, errReadDropped)
+				continue
+			}
+			left++
+			s.readsLeft.Add(1)
+			go func() {
+				<-r.done
+				r.endFlight(s, errReadDropped)
+				s.readsLeft.Add(-1)
+			}()
+		}
+		if left > 0 {
+			s.log.Warn("scan stopped with reads still under way, left to end on their own",
+				"library", lib.Name, "reads", left, "left_by_all_scans", s.readsLeft.Load())
 		}
 		flushBackfills()
 		return res, err
@@ -680,14 +719,17 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			if old.ContentHash != "" || b.ContentHash == "" {
 				// Rows indexed before migration 0016 have no cover flag; fill it with a
 				// tag read (no ffprobe) rather than re-indexing the book.
-				// A file that can't be opened right now (a flaky mount) is left unknown
-				// for the next scan rather than recorded as having no cover; one whose
-				// bounded fingerprint just failed is not opened again unbounded (a
-				// share that stopped answering, a FIFO).
+				// A file that can't be opened or read right now (a flaky mount, a share
+				// that stopped answering: the read is bounded) is left unknown for the
+				// next scan rather than recorded as having no cover; one whose bounded
+				// fingerprint just failed is not read again (a share that stopped
+				// answering, a FIFO).
 				primary := absOf(lib, primaryPath(b))
 				fingerprintFailed := old.ContentHash == "" && b.ContentHash == ""
-				if old.HasCover == nil && !fingerprintFailed && readable(primary) {
-					_, _, coverBackfill[b.RelPath] = media.EmbeddedCover(primary)
+				if old.HasCover == nil && !fingerprintFailed {
+					if art, _, err := media.EmbeddedCover(ctx, primary, s.probeTimeout); err == nil {
+						coverBackfill[b.RelPath] = art != nil
+					}
 				}
 				// A sidecar image replaced in place changes no audio: its own
 				// version moves the book's cover_version (never back to one it had
@@ -737,7 +779,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// One that can't be looked at or read right now keeps the row's reading
 				// for the next scan.
 				if b.IsFolder && !b.ABS.Unread && (old.ABSSig != b.ABS.Sig || (old.ABSUnchecked && b.ABS.Sig != "")) {
-					if f, read := s.readABS(lib, b.RelPath, b.ABS.Sig); read {
+					if f, read := s.readABS(ctx, lib, b.RelPath, b.ABS.Sig, nil); read {
 						absBackfill[b.RelPath] = catalog.ABSReading{Sig: b.ABS.Sig, File: f}
 					}
 				}
@@ -745,7 +787,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// sit beside it). A folder that couldn't be listed keeps what is stored.
 				if !b.Attachments.Unread &&
 					(old.AttachmentsSig != b.Attachments.Sig || (old.AttachmentsUnchecked && b.Attachments.Sig != "")) {
-					if files, read := s.readAttachments(lib, b, b.Attachments.Sig); read {
+					if files, read := s.readAttachments(ctx, lib, b, b.Attachments.Sig, nil); read {
 						// Recorded only over the state read when the scan began: a
 						// refresh by the Bridge since then is newer than this read.
 						attachBackfill[b.RelPath] = catalog.AttachmentsReading{Sig: b.Attachments.Sig, Files: files,
@@ -756,7 +798,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// checked and recorded; one that can't be read right now keeps what is
 				// stored, for the next scan.
 				if old.EbookSig != b.EbookFile.Sig {
-					if r, ok := checkEbook(lib.Root, b.EbookFile); ok {
+					if r, ok := checkEbook(ctx, lib.Root, b.EbookFile, s.probeTimeout, nil); ok {
 						// Recorded only over the row as this scan read it: an index of
 						// the book since (on demand) recorded a newer reading.
 						r.Was = &catalog.EbookState{Sig: old.EbookSig, IndexedAt: old.IndexedAt}
@@ -801,7 +843,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	if err := s.cat.SetHasCover(ctx, lib.ID, coverBackfill); err != nil {
 		s.log.Warn("record cover flags failed", "library", lib.Name, "err", err)
 	}
-	if err := s.cat.SetArtVersions(ctx, lib.ID, artChanges(ctx, lib.Root, artChecks, s.walkWidth())); err != nil {
+	if err := s.cat.SetArtVersions(ctx, lib.ID, artChanges(ctx, lib.Root, artChecks, s.walkWidth(), s.probeTimeout)); err != nil {
 		s.log.Warn("record cover art versions failed", "library", lib.Name, "err", err)
 	}
 	if err := s.cat.SetSuspectParts(ctx, lib.ID, suspectBackfill); err != nil {
@@ -880,6 +922,10 @@ const (
 	writeBatch    = 64
 	writeBatchAge = 250 * time.Millisecond
 )
+
+// stopGrace is how long a stopped scan waits for its reads under way to end
+// before it leaves them (stopped).
+const stopGrace = 2 * time.Second
 
 // maxRunEvents bounds one scan's log; past it, events are counted, not kept.
 const maxRunEvents = 300
@@ -986,7 +1032,7 @@ func setNames(b *catalog.Book, md *metadata.Metadata) {
 // the reading rather than writing it.
 func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Book, slots *readSlots) {
 	if b.AddedAt == "" {
-		stampAddedAt(lib, b)
+		stampAddedAt(ctx, lib, b, s.probeTimeout)
 	}
 	primary := primaryPath(b)
 	abs := absOf(lib, primary)
@@ -1028,11 +1074,23 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 		b.Codec = md.Codec
 	}
 
+	// The files beside the audio are looked at and read under the bounds of its
+	// read (metadata.Bounded): one given up on (a share that stopped answering)
+	// keeps the book as stored with that file's problem (givenUp.keep). With the
+	// audio's own read cut short, or once one is given up on, no more is tried:
+	// on a share that stopped answering each would only wait out its time too,
+	// and the book is kept as stored anyway (a new one written with what there
+	// is, the rest read as none for now).
+	var gaveUp givenUp
+	sideReads := func() bool { return !md.TagsUnread() && gaveUp.err == nil }
 	// The ABS file: one that couldn't be looked at or read right now keeps what
 	// is stored (ABSReading.Unread), for the next scan to read again.
 	if b.IsFolder && !b.ABS.Unread {
-		var read bool
-		if b.ABS.File, read = s.readABS(lib, b.RelPath, b.ABS.Sig); !read {
+		read := false
+		if sideReads() {
+			b.ABS.File, read = s.readABS(ctx, lib, b.RelPath, b.ABS.Sig, &gaveUp)
+		}
+		if !read {
 			b.ABS = catalog.ABSReading{Unread: true}
 		}
 	}
@@ -1040,7 +1098,11 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// couldn't be listed) keeps what is stored, for the next scan to read again
 	// (UpsertBook and AttachmentsReading.Unread), never a part of the set.
 	if !b.Attachments.Unread {
-		if files, read := s.readAttachments(lib, b, b.Attachments.Sig); read {
+		files, read := metadata.AttachmentFiles{}, false
+		if sideReads() {
+			files, read = s.readAttachments(ctx, lib, b, b.Attachments.Sig, &gaveUp)
+		}
+		if read {
 			b.Attachments.Files = files
 		} else {
 			b.Attachments = catalog.AttachmentsReading{Unread: true}
@@ -1051,8 +1113,12 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// (Unread; a new row gets none), as a scan that finds the book unchanged
 	// does, so a re-index on a flaky mount never takes a recorded ebook away; the
 	// next scan looks again at one that changed.
-	if r, ok := checkEbook(lib.Root, b.EbookFile); ok {
-		b.EbookFile = r
+	ebook, read := catalog.EbookReading{}, false
+	if sideReads() {
+		ebook, read = checkEbook(ctx, lib.Root, b.EbookFile, s.probeTimeout, &gaveUp)
+	}
+	if read {
+		b.EbookFile = ebook
 	} else {
 		b.EbookFile = catalog.EbookReading{Unread: true}
 	}
@@ -1081,26 +1147,32 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// Sibling cover art takes precedence; otherwise the cover handler falls back
 	// to embedded art from the primary file. A folder book's art lives INSIDE the
 	// book folder; a loose single-file book's art sits in the same directory.
-	bookAbs := absOf(lib, b.RelPath)
-	if b.IsFolder {
-		b.CoverPath = findCover(lib.Root, bookAbs, true)
-		// A multi-CD book's art often sits in the parent (e.g. ".../Book/CD1" with
-		// the cover in ".../Book"); fall back there for disc-part subfolders.
-		if b.CoverPath == "" && metadata.IsDiscFolder(filepath.Base(bookAbs)) {
-			b.CoverPath = findCover(lib.Root, filepath.Dir(bookAbs), true)
+	if sideReads() {
+		look := coverLook{ctx: ctx, root: lib.Root, timeout: s.probeTimeout, gaveUp: &gaveUp}
+		bookAbs := absOf(lib, b.RelPath)
+		if b.IsFolder {
+			b.CoverPath = look.find(bookAbs, true)
+			// A multi-CD book's art often sits in the parent (e.g. ".../Book/CD1" with
+			// the cover in ".../Book"); fall back there for disc-part subfolders.
+			if b.CoverPath == "" && metadata.IsDiscFolder(filepath.Base(bookAbs)) {
+				b.CoverPath = look.find(filepath.Dir(bookAbs), true)
+			}
+			// A folder joined from its disc folders: its own art first (above), then the
+			// first disc's.
+			if first := dirOf(primary); b.CoverPath == "" && first != b.RelPath {
+				b.CoverPath = look.find(absOf(lib, first), true)
+			}
+		} else {
+			b.CoverPath = look.find(filepath.Dir(bookAbs), false)
 		}
-		// A folder joined from its disc folders: its own art first (above), then the
-		// first disc's.
-		if first := dirOf(primary); b.CoverPath == "" && first != b.RelPath {
-			b.CoverPath = findCover(lib.Root, absOf(lib, first), true)
-		}
-	} else {
-		b.CoverPath = findCover(lib.Root, filepath.Dir(bookAbs), false)
 	}
 	// Embedded art; UpsertBook adds a sibling cover (CoverPath) to the flag itself.
 	hasCover := md != nil && md.HasCover
 	b.HasCover = &hasCover
-	b.ArtVersion = artVersion(lib.Root, b.ArtFiles())
+	if sideReads() {
+		b.ArtVersion = artVersion(ctx, lib.Root, b.ArtFiles(), s.probeTimeout, &gaveUp)
+	}
+	gaveUp.keep(b)
 }
 
 // ArtFile is the file a book's own art (no custom cover) is read from, the one
@@ -1119,18 +1191,58 @@ func ArtFile(root string, src catalog.CoverSource) (kind, abs string, ok bool) {
 	return "", "", false
 }
 
+// Art is a book's own art file (ArtFile) as LookArt found it: its kind
+// (catalog.ArtSidecar or catalog.ArtEmbedded), its absolute path and its stat.
+type Art struct {
+	Kind, Abs string
+	Info      fs.FileInfo
+}
+
+// Version is the art's version as the cover handler names it
+// (catalog.FileArtVersion); "" when it is no regular file.
+func (a Art) Version() string {
+	if a.Info == nil || !a.Info.Mode().IsRegular() {
+		return ""
+	}
+	return catalog.FileArtVersion(a.Kind, a.Info.Size(), a.Info.ModTime())
+}
+
+// LookArt is ArtFile with the file's stat, the two (SafeJoin's lstats and the
+// stat) one metadata.Bounded call under ctx, given up on after timeout, so art
+// on a share that stopped answering costs a scan or a cover request at most
+// that (metadata.GaveUp). ok is false when no file inside root is named; err is
+// the stat's (fs.ErrNotExist: gone) or a look given up on.
+func LookArt(ctx context.Context, root string, src catalog.CoverSource, timeout time.Duration) (art Art, ok bool, err error) {
+	type found struct {
+		art Art
+		ok  bool
+	}
+	at := filepath.Join(root, filepath.FromSlash(cmp.Or(src.CoverPath, src.AudioPath)))
+	f, err := metadata.Bounded(ctx, at, timeout, func() (found, error) {
+		kind, abs, ok := ArtFile(root, src)
+		if !ok {
+			return found{}, nil
+		}
+		info, err := os.Stat(abs)
+		return found{Art{Kind: kind, Abs: abs, Info: info}, true}, err
+	}, nil)
+	if err != nil && !f.ok {
+		// Given up on, ctx's end or a panic: no answer, not "no art".
+		return Art{}, true, err
+	}
+	return f.art, f.ok, err
+}
+
 // artVersion is the version of src's art file (ArtFile) as the cover handler
-// names it (catalog.FileArtVersion). "" when that file can't be read now.
-func artVersion(root string, src catalog.CoverSource) string {
-	kind, abs, ok := ArtFile(root, src)
-	if !ok {
+// names it (Art.Version). "" when that file can't be read now, its look given
+// up on after timeout included (LookArt; noted in gaveUp).
+func artVersion(ctx context.Context, root string, src catalog.CoverSource, timeout time.Duration, gaveUp *givenUp) string {
+	art, ok, err := LookArt(ctx, root, src, timeout)
+	gaveUp.note(cmp.Or(src.CoverPath, src.AudioPath), err)
+	if !ok || err != nil {
 		return ""
 	}
-	fi, err := os.Stat(abs)
-	if err != nil || !fi.Mode().IsRegular() {
-		return ""
-	}
-	return catalog.FileArtVersion(kind, fi.Size(), fi.ModTime())
+	return art.Version()
 }
 
 // artCheck is an unchanged book whose sidecar image may have been replaced in
@@ -1141,10 +1253,11 @@ type artCheck struct {
 }
 
 // artChanges reads the art version of each check's sidecar image, width at a
-// time, and returns those that moved, by book path.
-func artChanges(ctx context.Context, root string, checks []artCheck, width int) map[string]catalog.ArtChange {
+// time, each look given up on after timeout, and returns those that moved, by
+// book path.
+func artChanges(ctx context.Context, root string, checks []artCheck, width int, timeout time.Duration) map[string]catalog.ArtChange {
 	pool.Each(ctx, min(width, len(checks)), checks, func() bool { return true }, func(c *artCheck) {
-		c.now = artVersion(root, catalog.CoverSource{CoverPath: c.cover})
+		c.now = artVersion(ctx, root, catalog.CoverSource{CoverPath: c.cover}, timeout, nil)
 	})
 	out := map[string]catalog.ArtChange{}
 	for _, c := range checks {
@@ -1168,25 +1281,49 @@ func chooseTitle(embedded, pathDerived string) string {
 // named file is present.
 var imageExts = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true, ".gif": true}
 
-// findCover returns a library-relative path to a book's cover image in dir: a
+// coverLook is how enrich looks for a book's cover image (find): each stat and
+// listing a metadata.Bounded call under ctx, given up on after timeout and
+// noted in gaveUp, in a library at root.
+type coverLook struct {
+	ctx     context.Context
+	root    string
+	timeout time.Duration
+	gaveUp  *givenUp
+}
+
+// find returns a library-relative path to a book's cover image in dir: a
 // conventionally-named file (cover.jpg, folder.png, …) if present, else - only
 // when anyImage is set (a book's own folder, where a stray image is almost
 // certainly its cover) - the first image file alphabetically. A hidden file is
 // never a cover (isHidden: macOS writes an AppleDouble "._Book - Cover.jpg"
 // beside each image on a share, a resource fork, not an image, and it sorts
-// first). Returns "" if none, so the cover handler falls back to embedded art.
-func findCover(root, dir string, anyImage bool) string {
+// first). Returns "" if none, so the cover handler falls back to embedded art,
+// and "" too, with no more looks, once one was given up on.
+func (l coverLook) find(dir string, anyImage bool) string {
+	if l.gaveUp != nil && l.gaveUp.err != nil {
+		return ""
+	}
+	relOf := func(p string) string {
+		rel, _ := filepath.Rel(l.root, p)
+		return filepath.ToSlash(rel)
+	}
 	for _, name := range coverNames {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			rel, _ := filepath.Rel(root, filepath.Join(dir, name))
-			return filepath.ToSlash(rel)
+		p := filepath.Join(dir, name)
+		_, err := metadata.StatBounded(l.ctx, p, l.timeout)
+		if err == nil {
+			return relOf(p)
+		}
+		if metadata.GaveUp(err) || l.ctx.Err() != nil {
+			l.gaveUp.note(relOf(p), err)
+			return ""
 		}
 	}
 	if !anyImage {
 		return ""
 	}
-	entries, err := os.ReadDir(dir) // sorted by name
+	entries, err := metadata.ReadDirBounded(l.ctx, dir, l.timeout) // sorted by name
 	if err != nil {
+		l.gaveUp.note(relOf(dir), err)
 		return ""
 	}
 	var firstImage, coverish string
@@ -1211,8 +1348,7 @@ func findCover(root, dir string, anyImage bool) string {
 	if pick == "" {
 		return ""
 	}
-	rel, _ := filepath.Rel(root, filepath.Join(dir, pick))
-	return filepath.ToSlash(rel)
+	return relOf(filepath.Join(dir, pick))
 }
 
 // singleFileChapters takes embedded chapters from a single-file book and marks
@@ -1524,7 +1660,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			return nil
 		}
 		if isABSEntry(d, rel, ignore) {
-			if sig, serr := absEntrySig(lib, rel, d, ignore); serr != nil {
+			if sig, serr := absEntrySig(ctx, lib, rel, d, ignore); serr != nil {
 				// Not to be looked at right now (a flaky mount): its book keeps the
 				// stored reading (ABSReading.Unread) rather than losing its ABS
 				// values until the next scan.
@@ -1644,22 +1780,23 @@ func isABSEntry(de fs.DirEntry, rel string, ignore *Ignore) bool {
 
 // absEntrySig is the signature of the Audiobookshelf metadata.json the walk
 // found as d (isABSEntry) at library-relative rel: from its lstat, looked at once
-// more when that fails (absSigAt; "" when it has gone since the listing). err is
-// a file that couldn't be looked at right now.
-func absEntrySig(lib catalog.Library, rel string, d fs.DirEntry, ignore *Ignore) (string, error) {
+// more when that fails (absSigAt, bounded by ctx and the probe's time; "" when it
+// has gone since the listing). err is a file that couldn't be looked at right now.
+func absEntrySig(ctx context.Context, lib catalog.Library, rel string, d fs.DirEntry, ignore *Ignore) (string, error) {
 	if info, err := d.Info(); err == nil {
 		return metadata.ABSSignature(info), nil
 	}
-	return absSigAt(lib, dirOf(rel), ignore)
+	return absSigAt(ctx, lib, dirOf(rel), ignore, metadata.ProbeTimeout)
 }
 
 // absSigAt is the signature of the Audiobookshelf metadata.json the scan reads
 // (isABSEntry) in the folder at library-relative rel, "" for none: what the walk
 // records for a folder whose entry it couldn't look at (audioDirs), for a book
 // indexed without one (IndexPath). err is a file that couldn't be looked at
-// right now (not one that isn't there).
-func absSigAt(lib catalog.Library, rel string, ignore *Ignore) (string, error) {
-	info, err := os.Lstat(filepath.Join(absOf(lib, rel), metadata.ABSFileName))
+// right now (not one that isn't there), its lstat given up on after timeout
+// included (metadata.LstatBounded).
+func absSigAt(ctx context.Context, lib catalog.Library, rel string, ignore *Ignore, timeout time.Duration) (string, error) {
+	info, err := metadata.LstatBounded(ctx, filepath.Join(absOf(lib, rel), metadata.ABSFileName), timeout)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil
 	}
@@ -1677,16 +1814,21 @@ func absSigAt(lib catalog.Library, rel string, ignore *Ignore) (string, error) {
 // The file is nil when there is none or it can't be used (not JSON, too large:
 // metadata.ErrABSFileInvalid, logged), and that reading is recorded with its
 // signature, so it isn't read again until it changes. read is false when it
-// couldn't be read right now (gone since the walk, a flaky mount; logged): the
-// caller records nothing for it, so the next scan reads it again rather than
-// taking the book's ASIN and the rest away until ABS next rewrites the file.
-func (s *Scanner) readABS(lib catalog.Library, rel, sig string) (f *metadata.ABSFile, read bool) {
+// couldn't be read right now (gone since the walk, a flaky mount, a share that
+// stopped answering: the read is a metadata.Bounded call, given up on after the
+// probe's time and noted in gaveUp; logged): the caller records nothing for it,
+// so the next scan reads it again rather than taking the book's ASIN and the
+// rest away until ABS next rewrites the file.
+func (s *Scanner) readABS(ctx context.Context, lib catalog.Library, rel, sig string, gaveUp *givenUp) (f *metadata.ABSFile, read bool) {
 	if sig == "" {
 		return nil, true
 	}
-	f, err := metadata.ReadABSFile(filepath.Join(absOf(lib, rel), metadata.ABSFileName))
+	file := path.Join(rel, metadata.ABSFileName)
+	abs := absOf(lib, file)
+	f, err := metadata.Bounded(ctx, abs, s.probeTimeout, func() (*metadata.ABSFile, error) { return metadata.ReadABSFile(abs) }, nil)
 	if err != nil {
-		s.log.Warn("unreadable Audiobookshelf metadata.json", "library", lib.Name, "path", path.Join(rel, metadata.ABSFileName), "err", err)
+		s.log.Warn("unreadable Audiobookshelf metadata.json", "library", lib.Name, "path", file, "err", err)
+		gaveUp.note(file, err)
 		return nil, errors.Is(err, metadata.ErrABSFileInvalid)
 	}
 	return f, true
@@ -1863,8 +2005,9 @@ func foundAdded(info fs.FileInfo) int64 {
 // mtime standing in where the filesystem has none. A book built without it
 // (a test's) lstats each file. A book none of whose files can be looked at now
 // (gone since discovery) is stamped now, as first seen; on Darwin, which looks
-// at none of them again, only a book discovery couldn't stat.
-func stampAddedAt(lib catalog.Library, b *catalog.Book) {
+// at none of them again, only a book discovery couldn't stat. Each lstat is
+// bounded by ctx and timeout (metadata.LstatBounded).
+func stampAddedAt(ctx context.Context, lib catalog.Library, b *catalog.Book, timeout time.Duration) {
 	var paths []string
 	if b.IsFolder {
 		for _, f := range b.Files {
@@ -1881,7 +2024,7 @@ func stampAddedAt(lib catalog.Library, b *catalog.Book) {
 			a, ok = addedFrom(abs, b.FoundAdded[i])
 		}
 		if !ok {
-			info, err := os.Lstat(abs)
+			info, err := metadata.LstatBounded(ctx, abs, timeout)
 			if err != nil {
 				continue
 			}
@@ -2047,11 +2190,20 @@ func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *ca
 			go s.leadIndex(ctx, lib, book, f, func(ctx context.Context) string { return s.movedFrom(ctx, lib, book) })
 		}
 		b, err := s.awaitFlight(ctx, f)
-		if !readGivenUp(err) || ctx.Err() != nil || s.stopped() {
-			return b, err // a stopped server would end each new read at once
+		if !readGivenUp(err) || ctx.Err() != nil {
+			return b, err
+		}
+		if s.stopped() {
+			// A stopped server would end each new read at once: the waiter
+			// learns why (an API answers 503, not a failure).
+			return nil, fmt.Errorf("%w: %w", ErrStopping, err)
 		}
 	}
 }
+
+// ErrStopping is an on-demand read's error when the server's stop
+// (SetBaseContext) ended it while its caller still waited.
+var ErrStopping = errors.New("library: the server is stopping")
 
 // awaitFlight waits for flight f to end, then loads the book it stored; ctx's
 // error when ctx ends first, the flight's when it stored none.
@@ -2294,14 +2446,14 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 
 	// No walk found it, so look for its metadata.json and attachments here.
 	if book.IsFolder {
-		if sig, aerr := absSigAt(lib, book.RelPath, ignore); aerr != nil {
+		if sig, aerr := absSigAt(ctx, lib, book.RelPath, ignore, s.probeTimeout); aerr != nil {
 			s.log.Warn("could not look at the book's Audiobookshelf metadata.json", "library", lib.Name, "path", book.RelPath, "err", aerr)
 			book.ABS.Unread = true // what is stored stays
 		} else {
 			book.ABS.Sig = sig
 		}
 	}
-	if sig, aerr := attachmentsSigAt(lib, book, ignore); aerr != nil {
+	if sig, aerr := attachmentsSigAt(ctx, lib, book, ignore, s.probeTimeout); aerr != nil {
 		s.log.Warn("could not list the book's .audiosilo folder", "library", lib.Name, "path", book.RelPath, "err", aerr)
 		book.Attachments = catalog.AttachmentsReading{Unread: true} // what is stored stays
 	} else {
@@ -2447,16 +2599,6 @@ func pickBook(candidates []*catalog.Book, want string) *catalog.Book {
 		}
 	}
 	return nil
-}
-
-// readable reports whether the file at absPath can be opened for reading.
-func readable(absPath string) bool {
-	f, err := os.Open(absPath)
-	if err != nil {
-		return false
-	}
-	f.Close()
-	return true
 }
 
 func ext(name string) string {

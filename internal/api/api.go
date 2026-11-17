@@ -202,6 +202,11 @@ type API struct {
 	thumbs     *media.ThumbCache
 	coverReads chan struct{}
 	thumbSem   chan struct{}
+	// fileWait is how long a request waits for a look at a library file (a
+	// cover's stat and read, a stream's open) before answering 503: each is a
+	// metadata.Bounded call, so one on a share that stopped answering never
+	// holds its handler (fileWaitTimeout; a field so tests can shorten it).
+	fileWait time.Duration
 	// communityReads bounds the community covers being fetched or waiting to be
 	// decoded for thumbnails, across requests (handlers_community_covers.go), as
 	// coverReads does the library's own art.
@@ -288,6 +293,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		favouriteWait:  favouriteIndexWait,
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
 		coverReads:     make(chan struct{}, maxCoverReads),
+		fileWait:       fileWaitTimeout,
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
 		communityReads: make(chan struct{}, maxCommunityCoverReads),
 		streams:        catalog.NewStreamMarks(),

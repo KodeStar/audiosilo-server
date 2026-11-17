@@ -14,6 +14,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/notify"
 )
 
@@ -107,6 +108,8 @@ const (
 	codeModuleOff                = "module_off"   // a managed module's route while the module is off (modules.go)
 	codeUnsupportedImage         = "unsupported_image"
 	codeCoverUnavailable         = "cover_unavailable"
+	codeShareNotAnswering        = "share_not_answering" // 503: a cover's or stream's file on a drive or share that stopped answering (metadata.GaveUp)
+	codeStopping                 = "stopping"            // 503: a read the server's stop ended (library.ErrStopping)
 	codeTooLarge                 = "too_large"
 	codeInvalidSchedule          = "invalid_schedule"
 	codeInvalidPattern           = "invalid_pattern"
@@ -279,6 +282,13 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		errors.Is(err, catalog.ErrNoteBodyTooLong), errors.Is(err, catalog.ErrInvalidPosition),
 		errors.Is(err, catalog.ErrNothingToChange):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, library.ErrStopping):
+		// A read of the book the server's stop ended (the request was still
+		// waiting for it): try again once the server is back.
+		w.Header().Set("Retry-After", "10")
+		writeErrorCode(w, http.StatusServiceUnavailable, codeStopping, "the server is stopping; try again shortly")
+	case metadata.GaveUp(err):
+		writeShareNotAnswering(w)
 	case errors.Is(err, context.DeadlineExceeded):
 		// A bounded lookup that ran out of time (a stalled writer) is the
 		// timeout middleware's 503, also on the one route it doesn't wrap that

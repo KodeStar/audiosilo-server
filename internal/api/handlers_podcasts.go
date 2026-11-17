@@ -495,10 +495,5 @@ func (a *API) servePodcastCover(w http.ResponseWriter, r *http.Request, lib *cat
 		conditional{etag: thumbETag("podcast", size, catalog.CoverVersion(art.version)), cacheControl: coverCache}.serve(w, r, "image/jpeg", jpg)
 		return
 	}
-	abs, err := library.SafeJoin(lib.Root, show.CoverPath)
-	if err != nil {
-		writeError(w, 404, "no cover")
-		return
-	}
-	serveSidecarCover(w, r, abs)
+	a.serveArt(w, r, lib.Root, catalog.CoverSource{CoverPath: show.CoverPath})
 }

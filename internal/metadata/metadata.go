@@ -443,9 +443,10 @@ func HangMountForTests(dir string) (release func()) {
 }
 
 // HoldOpensForTests makes dir a mount of its own (its count of hung reads at
-// none) whose opens don't answer: every open under it waits until release
-// (once, however often it is called), as an open on a share that stopped
-// answering does, while every other path opens as ever. For a test that isn't
+// none) whose opens don't answer: every open under it, and every Bounded call
+// on a path under it, waits until release (once, however often it is called),
+// as one on a share that stopped answering does, while every other path opens
+// as ever. dir may name one file, to hold only the calls on it. For a test that isn't
 // parallel (it swaps the mount lookup every read makes); it panics outside a
 // test binary.
 func HoldOpensForTests(dir string) (release func()) {
