@@ -24,7 +24,7 @@ export function isAbsolutePath(p: string): boolean {
 }
 
 /** The separator a server path uses: "\\" for a Windows path, "/" otherwise. */
-const separatorOf = (path: string) => (/^[A-Za-z]:/.test(path) ? '\\' : '/');
+export const separatorOf = (path: string) => (/^[A-Za-z]:/.test(path) ? '\\' : '/');
 
 /** The last segment of a library-relative path ("A/B" → "B"). */
 export const relBaseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);

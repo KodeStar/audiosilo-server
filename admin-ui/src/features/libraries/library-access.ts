@@ -1,4 +1,5 @@
 import type { AdminLibrary, AdminModule, AdminUser, SetupEnvelope } from '@/api/types';
+import { separatorOf } from '@/lib/paths';
 
 /**
  * Who "Give everyone access" grants a new library to: every enabled account
@@ -59,7 +60,7 @@ export function bookRootOverlap(
 ): RootOverlap | undefined {
   const root = trimSeparators(folder);
   if (!root) return undefined;
-  const sep = /^[A-Za-z]:/.test(root) ? '\\' : '/';
+  const sep = separatorOf(root);
   const under = (a: string, b: string) => a.startsWith(b.endsWith(sep) ? b : b + sep);
   for (const l of libraries) {
     if (l.id === editingId || l.kind !== 'books') continue;
