@@ -445,6 +445,36 @@ func TestUserinfoNotAskedForANeverSentClaim(t *testing.T) {
 	}
 }
 
+// TestAskAgainForgetsAUserinfoLack: within the recheck a claim userinfo lacked
+// for a person is not read even once they have it (denied), until AskAgain
+// (a sign-in left waiting) has their next sign-in ask userinfo again
+// (allowed).
+func TestAskAgainForgetsAUserinfoLack(t *testing.T) {
+	t.Parallel()
+	bare := oidctest.Person{Subject: alice.Subject}
+	idp := oidctest.New(t, "audiosilo", "s3cret", bare)
+	idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true})
+	p := newProvider(t, idp, "s3cret")
+	exchange := func() oidc.Claims {
+		t.Helper()
+		f := flow()
+		c, err := p.Exchange(context.Background(), signIn(t, p, f), f, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	exchange()
+	idp.SetPerson(alice)
+	if c := exchange(); c.Email != "" || idp.Calls("userinfo") != 1 {
+		t.Fatalf("within the recheck: %+v (userinfo asked %d times)", c, idp.Calls("userinfo"))
+	}
+	p.AskAgain(alice.Subject)
+	if c := exchange(); c.Email != alice.Email || !c.EmailVerified || idp.Calls("userinfo") != 2 {
+		t.Fatalf("after AskAgain: %+v (userinfo asked %d times)", c, idp.Calls("userinfo"))
+	}
+}
+
 // TestProbeSeesTheProviderGone: once discovered, a provider that stops
 // answering is seen at the next sign-in's start (after the probe's interval)
 // and in the status, rather than the browser being sent to it; once it is

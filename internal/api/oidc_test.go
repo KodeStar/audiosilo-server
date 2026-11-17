@@ -1105,6 +1105,30 @@ func TestOIDCAutoCreateAllowedGroup(t *testing.T) {
 	}
 }
 
+// TestOIDCWaitingSignInAsksUserinfoAgain: a person userinfo held no email for
+// is left waiting; once they have one at the provider, their next attempt
+// reads it (allowed: the wait ended what the provider remembered userinfo
+// lacked for them, oidc.Provider.AskAgain) and links to their account, where
+// the hour's recheck would have left them waiting without it.
+func TestOIDCWaitingSignInAsksUserinfoAgain(t *testing.T) {
+	t.Parallel()
+	bare := oidctest.Person{Subject: oidcCarol.Subject}
+	e := newOIDCEnv(t, bare, nil)
+	carol := e.mustUser(t, "carol-account", oidcCarol.Email)
+	e.idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true})
+	wantResult(t, e.signIn(t, oidcReturnWeb), oidcPending)
+	e.idp.SetPerson(oidcCarol)
+	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, oidcDoneWeb) {
+		t.Fatalf("the email added since wasn't read: %q", loc)
+	}
+	if ids, err := e.auth.ListIdentities(context.Background(), carol.ID); err != nil || len(ids) != 1 || ids[0].Email != oidcCarol.Email {
+		t.Fatalf("not linked by the email: %+v %v", ids, err)
+	}
+	if n := e.idp.Calls("userinfo"); n != 2 {
+		t.Fatalf("userinfo asked %d times, want 2", n)
+	}
+}
+
 // TestOIDCUserinfoDownMakesNoSecondAccount: with auto_create on and an ID token
 // that leaves the email to userinfo, a first sign-in while userinfo fails is
 // refused as unavailable (denied: it would make a second account for someone

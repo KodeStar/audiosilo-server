@@ -80,7 +80,9 @@ const (
 // userinfoRecheck is how long a claim userinfo didn't hold for a person (the
 // email, the username) is not asked of it again for that person when the ID
 // token lacks only that. Per person: one account without an email says nothing
-// of the next, whose email may decide which account a first sign-in links to.
+// of the next, whose email may decide which account a first sign-in links to;
+// and only while their sign-ins sign in (AskAgain: the email of a person left
+// waiting decides the same at their next attempt).
 // maxUserinfoLacks bounds the people remembered; past it a person is asked
 // every time.
 const (
@@ -548,7 +550,8 @@ func (p *Provider) Exchange(ctx context.Context, code string, f Flow, needGroups
 // role or an account may hang on it); the email or the username unless
 // userinfo lacked that claim for this person within userinfoRecheck
 // (noteUserinfo), so a claim the provider never sends them doesn't cost a
-// request at each of their sign-ins.
+// request at each of their sign-ins (AskAgain ends that for a person whose
+// sign-in was left waiting).
 func (p *Provider) askUserinfo(c Claims, needGroups bool) bool {
 	if needGroups && c.Groups == nil {
 		return true
@@ -596,6 +599,17 @@ func (p *Provider) noteUserinfo(before, after Claims) {
 		}
 	}
 	p.lacks[after.Subject] = l
+}
+
+// AskAgain forgets what userinfo lacked for subject, so their next sign-in
+// asks it again. For a sign-in that signed no one in (left waiting): the
+// person may come back within userinfoRecheck with the claim it lacked (an
+// email added at the provider), which decides what that sign-in links to or
+// whether it makes a second account.
+func (p *Provider) AskAgain(subject string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.lacks, subject)
 }
 
 // exchangeError words a failed token or userinfo request, or a refused ID
