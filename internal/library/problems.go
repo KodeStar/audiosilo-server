@@ -25,7 +25,8 @@ const (
 
 // noteProblem records the first read problem found among a book's files: file is
 // the library-relative path of the file just read, size its size, md what reading
-// it gave.
+// it gave. (The first part whose read was cut short goes over an earlier part's
+// problem: buildMultiFileChapters.)
 func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata) {
 	if b.ScanError != "" {
 		return
@@ -42,6 +43,11 @@ func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata
 		// Opened but not read in time (a share that stopped answering): the same
 		// problem with ffprobe or without (ffprobe may still have read its
 		// length), so the next scan looks again (problemCleared).
+		b.ScanError, b.ScanErrorDetail = problemUnreadable, tagsUnreadDetail
+	case md.ProbeTimedOut():
+		// With no ffprobe, its length's in-process read ran out of time even
+		// alone (readCutShort): the stored book is kept, so it needs a problem
+		// that says why, and that the next scan looks at again.
 		b.ScanError, b.ScanErrorDetail = problemUnreadable, tagsUnreadDetail
 	case md != nil && md.ProbeErr != nil:
 		b.ScanError, b.ScanErrorDetail = problemProbe, md.ProbeErr.Error()
@@ -84,15 +90,18 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 		return false
 	}
 	s.noteRejected(abs, at, md)
-	return md.OpenErr == nil && !md.TagsUnread() && (!probe || md.ProbeErr == nil)
+	// A read cut short again (readCutShort: its length still out of time
+	// included) has not cleared: the full re-index would only keep the book.
+	return md.OpenErr == nil && !readCutShort(md) && (!probe || md.ProbeErr == nil)
 }
 
 // tagsUnreadDetail is the detail of a file that opened but wasn't read in
 // time, and readRefusedDetail of one not read at all, as too many earlier
-// reads, on any library, are stuck (Health: "<file> couldn't be read: <detail>").
+// reads from its drive or share (its mount, on any library) are stuck (Health:
+// "<file> couldn't be read: <detail>").
 const (
 	tagsUnreadDetail  = "reading it timed out"
-	readRefusedDetail = "too many earlier reads are stuck (on this or another library), so it wasn't tried"
+	readRefusedDetail = "too many earlier reads from the same drive or share are stuck, so it wasn't tried"
 )
 
 // fileState is a file's mtime (Unix seconds) and size: with its absolute path,

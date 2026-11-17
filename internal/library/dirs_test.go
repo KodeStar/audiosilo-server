@@ -92,10 +92,10 @@ func TestListDirsRoot(t *testing.T) {
 }
 
 // A listing that doesn't answer (a hung mount) is ErrDirsTimedOut at the
-// lister's time-out, and keeps its slot until it returns: with every slot held,
-// another listing times out too instead of starting a reader of its own. Once
-// the hung read returns its slot is free again. A clock only bounds the waits:
-// the hung listing never answers on its own.
+// lister's time-out, and keeps its slot until it returns: with every slot of
+// its mount held, another listing there times out too instead of starting a
+// reader of its own. Once the hung read returns its slot is free again. A clock
+// only bounds the waits: the hung listing never answers on its own.
 func TestDirListerBounded(t *testing.T) {
 	t.Parallel()
 	hang, started := make(chan struct{}), make(chan struct{}, 1)
@@ -112,6 +112,7 @@ func TestDirListerBounded(t *testing.T) {
 		}
 		return &DirListing{Path: dir}, nil
 	}, 1, 50*time.Millisecond)
+	l.slots.Mount = func(string) (string, string) { return "/", "/" } // both on one mount
 	ctx := context.Background()
 	if _, err := l.List(ctx, "/hung", 0); !errors.Is(err, ErrDirsTimedOut) {
 		t.Fatalf("hung listing: %v, want ErrDirsTimedOut", err)
@@ -135,6 +136,88 @@ func TestDirListerBounded(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("after the hung read returned: %v, want the listing", err)
 		}
+	}
+}
+
+// A read that gives up when its context ends (a preview's walk) answers with
+// that context's error: ErrDirsTimedOut whether the waiter left first or took
+// that answer as its time ran out, never the context's own error (a 500 to the
+// console, not the 404 of a folder that didn't answer). Any other error a read
+// gives stands.
+func TestBoundedReadThatEndsWithItsContextTimesOut(t *testing.T) {
+	t.Parallel()
+	slots := make(chan struct{}, 1)
+	for range 20 { // either order of the read's answer and the waiter's wake
+		_, err := boundedRead(context.Background(), slots, 5*time.Millisecond, nil, func(ctx context.Context) (int, error) {
+			<-ctx.Done()
+			return 0, ctx.Err()
+		})
+		if !errors.Is(err, ErrDirsTimedOut) {
+			t.Fatalf("a read ended by its context: %v, want ErrDirsTimedOut", err)
+		}
+	}
+	own := errors.New("the read's own")
+	if _, err := boundedRead(context.Background(), slots, time.Minute, nil, func(context.Context) (int, error) {
+		return 0, own
+	}); !errors.Is(err, own) {
+		t.Errorf("a read's own error: %v, want it handed back", err)
+	}
+}
+
+// One hung mount holds only its own slots (server#360's rule for the picker):
+// with every slot of /mnt/hung held by listings that don't answer, a listing
+// or root check anywhere on it is ErrDirsTimedOut at the time-out, while
+// another mount, and the filesystem root above both, list and check at once.
+func TestDirListerHungMountLeavesOthers(t *testing.T) {
+	t.Parallel()
+	hang := make(chan struct{})
+	defer close(hang)
+	const slots = 2
+	started := make(chan struct{}, slots)
+	l := NewDirLister(func(dir string, _ int) (*DirListing, error) {
+		if strings.HasPrefix(dir, "/mnt/hung") {
+			started <- struct{}{}
+			<-hang
+		}
+		return &DirListing{Path: dir}, nil
+	}, slots, 50*time.Millisecond)
+	l.check = func(root string) (string, error) {
+		if strings.HasPrefix(root, "/mnt/hung") {
+			<-hang
+		}
+		return root, nil
+	}
+	l.slots.Mount = func(p string) (string, string) {
+		for _, m := range []string{"/mnt/hung", "/mnt/other"} {
+			if p == m || strings.HasPrefix(p, m+"/") {
+				return m, m
+			}
+		}
+		return "/", "/"
+	}
+	ctx := context.Background()
+	for range slots { // every slot of the hung mount held
+		if _, err := l.List(ctx, "/mnt/hung/Books", 0); !errors.Is(err, ErrDirsTimedOut) {
+			t.Fatalf("hung listing: %v, want ErrDirsTimedOut", err)
+		}
+		<-started
+	}
+	if _, err := l.List(ctx, "/mnt/hung", 0); !errors.Is(err, ErrDirsTimedOut) {
+		t.Errorf("the hung mount with its slots held: %v, want ErrDirsTimedOut", err)
+	}
+	if _, err := l.CheckRoot(ctx, "/mnt/hung/Other"); !errors.Is(err, ErrDirsTimedOut) {
+		t.Errorf("a root check on the hung mount: %v, want ErrDirsTimedOut", err)
+	}
+	for _, dir := range []string{"/mnt/other/Books", "/mnt", ""} {
+		if got, err := l.List(ctx, dir, 0); err != nil || got.Path != dir {
+			t.Errorf("listing %q beside the hung mount: %v, %v, want it listed", dir, got, err)
+		}
+	}
+	if got, err := l.CheckRoot(ctx, "/mnt/other/Books"); err != nil || got != "/mnt/other/Books" {
+		t.Errorf("a root check on another mount: %q, %v, want it checked", got, err)
+	}
+	if n := len(started); n != 0 {
+		t.Errorf("%d more hung reads started, want none past the slots", n)
 	}
 }
 
@@ -205,7 +288,7 @@ func TestDirListerLogsAnAbandonedPanic(t *testing.T) {
 		t.Fatalf("a listing that doesn't answer: %v, want ErrDirsTimedOut", err)
 	}
 	close(release)
-	l.slots <- struct{}{} // waits for the panicked listing to give its slot back
+	l.slots.For("/hung") <- struct{}{} // waits for the panicked listing to give its slot back
 	if got := logged.String(); !strings.Contains(got, "boom") || !strings.Contains(got, "level=ERROR") {
 		t.Fatalf("logged %q, want the listing's panic as an error", got)
 	}

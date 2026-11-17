@@ -55,7 +55,7 @@ func (r *readSlots) size() int { return cap(r.ch) }
 // ffprobe to fall back to (ProbeTimedOut): it would otherwise have no duration.
 func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *metadata.Metadata {
 	md, shared := r.read(ctx, absPath, ffprobePath)
-	if md == nil || !shared || !(errors.Is(md.ProbeErr, metadata.ErrProbeTimeout) || md.ProbeTimedOut()) {
+	if !shared || !lengthTimedOut(md) {
 		return md
 	}
 	// One retry at a time, each waiting for the reads under way to finish.
@@ -65,6 +65,22 @@ func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *m
 		return md // stopped: dropped by the scan
 	}
 	return r.readFile(ctx, absPath, ffprobePath, r.timeout)
+}
+
+// lengthTimedOut reports whether md's length read ran out of time: its ffprobe
+// run (metadata.ErrProbeTimeout) or, with no ffprobe, the in-process read
+// (ProbeTimedOut).
+func lengthTimedOut(md *metadata.Metadata) bool {
+	return md != nil && (errors.Is(md.ProbeErr, metadata.ErrProbeTimeout) || md.ProbeTimedOut())
+}
+
+// readCutShort reports whether md's read leaves the file unknown, or its
+// length: cut short or refused (TagsUnread), or its length's read out of time
+// even alone (lengthTimedOut: a part on a share that stopped answering mid-read,
+// a FIFO; server#360). A book with such a file is kept as stored
+// (catalog.Book.ReadCutShort), never rewritten without that file's length.
+func readCutShort(md *metadata.Metadata) bool {
+	return md.TagsUnread() || lengthTimedOut(md)
 }
 
 // read is metadata.ExtractTimeout holding a slot, and whether another read ran

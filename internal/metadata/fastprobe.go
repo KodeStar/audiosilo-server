@@ -30,6 +30,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/kodestar/audiosilo-server/internal/mounts"
 )
 
 // ffRules is the FFmpeg release whose answers the in-process probe gives: the
@@ -216,6 +218,11 @@ func (b *blockFile) bounded(ctx context.Context, fn func()) (why string) {
 // to another's (a watch rendition to its source).
 func ExactDuration(ctx context.Context, r io.ReaderAt, size int64, format string) (float64, bool) {
 	b := newBlockFile(r, size)
+	if f, ok := r.(interface{ Name() string }); ok {
+		// A named file's reads given up on count on its mount (a rendition's
+		// source on a share that stopped answering), as a scan's do.
+		b.stuck = stuckByMount.For(f.Name())
+	}
 	b.ff = ff8
 	p, reason := fastProbe(ctx, b, strings.ToLower(format), maxProbeTime)
 	if reason != "" {
@@ -247,13 +254,14 @@ type blockFile struct {
 	err    error
 	ff     ffRules // the rules the probe reads it by
 
+	stuck  *stuckReads     // the file's mount's reads given up on (waitRead)
 	ctx    context.Context // the probe's, its deadline included; nil when not armed
 	budget int64           // bytes the probe may still read from the file
 	ticks  uint32          // tick's calls, so ctx is looked at every 256th
 }
 
 func newBlockFile(f io.ReaderAt, size int64) *blockFile {
-	return &blockFile{f: f, size: size, blocks: map[int64][]byte{}}
+	return &blockFile{f: f, size: size, blocks: map[int64][]byte{}, stuck: unknownMount}
 }
 
 // arm starts the probe's bounds: ctx (its deadline the probe's) and budget
@@ -315,79 +323,76 @@ func (b *blockFile) raw(p []byte, off int64) (int, error) {
 // b's ctx ends: a pread on a network share that stops answering (NFS hard
 // mounts, SMB) can't be interrupted, and would hold a scan's reader for good.
 // Past ctx it panics with a probeLimit, leaving the read to finish (or not) on
-// its own goroutine, counted in abandonedReads until it does (the file stays
-// open as long: its descriptor is closed only once the read returns). Every
-// caller's buffer is its own, made for this read on the stack the panic
+// its own goroutine, counted in its mount's stuckReads until it does (the file
+// stays open as long: its descriptor is closed only once the read returns).
+// Every caller's buffer is its own, made for this read on the stack the panic
 // unwinds (a block, bytesAt's, dhowden's), so nothing reads p after that.
 func (b *blockFile) waitRead(p []byte, off int64) (int, error) {
 	type res struct {
 		n   int
 		err error
 	}
-	done := make(chan res, 1)
-	var state atomic.Int32 // readRunning, readAbandoned or readReturned
-	go func() {
+	r, ok := await(b.ctx, b.stuck, func() res {
 		n, err := b.f.ReadAt(p, off)
-		if state.Swap(readReturned) == readAbandoned {
-			releaseAbandonedRead()
-		}
-		done <- res{n, err}
-	}()
-	select {
-	case r := <-done:
-		return r.n, r.err
-	case <-b.ctx.Done():
-		// Counted before it is marked, so the goroutine's release always
-		// follows; a read that returned meanwhile was never abandoned.
-		abandonedReads.Add(1)
-		if !state.CompareAndSwap(readRunning, readAbandoned) {
-			releaseAbandonedRead()
-		}
+		return res{n, err}
+	}, nil)
+	if !ok {
 		panic(probeLimit("limit: " + context.Cause(b.ctx).Error()))
 	}
+	return r.n, r.err
 }
 
-// A waitRead's read: still running, abandoned by its waiter, or returned.
-const (
-	readRunning int32 = iota
-	readAbandoned
-	readReturned
-)
-
-// maxAbandonedReads is how many reads waitRead may have given up on that have
-// not returned yet, process-wide, before a new one is refused (reads already
-// under way may still be given up on, so the count can pass it by the reads
-// running at once). Each holds a goroutine and its file open, so
-// a share that stays hung would otherwise leak a descriptor per attempt
-// (server#269): past it a read fails fast, the file not opened (readFile,
-// errReadsSaturated), until an abandoned read returns.
+// maxAbandonedReads is how many reads await may have given up on (an open,
+// a pread, an ffprobe run) that have not returned yet, on one mount (mounts.Of), before a new read from a file
+// there is refused (reads already under way may still be given up on, so the
+// count can pass it by the reads running at once). Each holds a goroutine and
+// its file open, so a share that stays hung would otherwise leak a descriptor
+// per attempt (server#269): past it a read there fails fast, the file not
+// opened (openBlockFile, errReadRefused), until an abandoned read returns. Per
+// mount, so one hung share stops reads only from itself, never from every
+// library (server#360): the leak stays bounded by the cap times the mounts.
 const maxAbandonedReads = 16
 
-// abandonedReads counts the reads waitRead gave up on that have not returned.
-var abandonedReads atomic.Int32
+// stuckReads counts one mount's reads await gave up on that have not
+// returned: one filesystem's, wherever it is mounted (mounts.Of's key), so a
+// share mounted anew starts at none and two bind mounts of one share count
+// together.
+type stuckReads struct {
+	mount string // its mount point, as the first file read from it found it (the log's)
+	n     atomic.Int32
+	// logged: the cap's hit was logged since n was last 0.
+	logged atomic.Bool
+}
 
-// saturationLogged: the cap's hit was logged since abandonedReads was last 0.
-var saturationLogged atomic.Bool
+// stuckByMount is the stuckReads of each mount a file was read from (its
+// Mount a test's stand-in): one per mount, never removed.
+var stuckByMount = mounts.NewPerMount(func(point string) *stuckReads { return &stuckReads{mount: point} })
 
-// releaseAbandonedRead uncounts an abandoned read that returned (or one that
-// returned before it was marked); back at none, the next hit of the cap is
-// logged again.
-func releaseAbandonedRead() {
-	if abandonedReads.Add(-1) == 0 {
-		saturationLogged.Store(false)
+// unknownMount counts the abandoned reads of a blockFile not read from a named
+// file (newBlockFile's default: ExactDuration's of a reader with no Name, a
+// test's); nothing checks it against the cap, as no read from a named file is
+// refused by it.
+var unknownMount = &stuckReads{}
+
+// release uncounts an abandoned read that returned (or one that returned
+// before it was marked); back at none, the next hit of the cap is logged
+// again.
+func (s *stuckReads) release() {
+	if s.n.Add(-1) == 0 {
+		s.logged.Store(false)
 	}
 }
 
-// readsSaturated reports whether maxAbandonedReads reads are abandoned and
-// still running, so a new read would most likely hang too; the first time
-// since none were, it says so in the log.
-func readsSaturated() bool {
-	if abandonedReads.Load() < maxAbandonedReads {
+// saturated reports whether maxAbandonedReads reads from s's mount are
+// abandoned and still running, so a new read there would most likely hang
+// too; the first time since none were, it says so in the log.
+func (s *stuckReads) saturated() bool {
+	if s.n.Load() < maxAbandonedReads {
 		return false
 	}
-	if saturationLogged.CompareAndSwap(false, true) {
-		probeLogger().Warn("audio files: reads stopped answering; skipping reads until they return",
-			"abandoned_reads", abandonedReads.Load())
+	if s.logged.CompareAndSwap(false, true) {
+		probeLogger().Warn("audio files: reads stopped answering; skipping reads from this mount until they return",
+			"mount", s.mount, "abandoned_reads", s.n.Load())
 	}
 	return true
 }

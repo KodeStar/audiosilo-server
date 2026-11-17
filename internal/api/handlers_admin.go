@@ -731,8 +731,8 @@ func (a *API) handleListInvites(w http.ResponseWriter, r *http.Request) {
 
 // maxDirListing caps one folder-picker listing; dirListSlots and dirListTimeout
 // are the picker's library.DirLister (the setup preview's root check runs
-// behind it too): reads at once, and how long one is waited for (a hung mount
-// answers 404 folder_unreadable then).
+// behind it too): reads at once per mount, and how long one is waited for (a
+// hung mount answers 404 folder_unreadable then, the others listing as ever).
 const (
 	maxDirListing  = 1000
 	dirListSlots   = 4

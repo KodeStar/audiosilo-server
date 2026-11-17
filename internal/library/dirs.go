@@ -7,10 +7,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/mounts"
 )
 
 // The add-library folder picker (GET /admin/fs/dirs). An admin choosing a
@@ -22,8 +25,9 @@ import (
 //   - directory names only: never a file, size, owner or timestamp;
 //   - hidden (dot) folders are skipped, like the scanner and /fs skip them;
 //   - absolute paths only, cleaned, and at most `limit` entries per listing;
-//   - a listing behind a deadline and a few slots (DirLister), so a mount that
-//     stops answering can't hold the request, or pile up readers, for good.
+//   - a listing behind a deadline and a few slots per mount (DirLister), so a
+//     mount that stops answering can't hold the request, or pile up readers,
+//     for good, nor stop the other mounts from listing.
 
 // DirEntry is one folder in a DirListing.
 type DirEntry struct {
@@ -88,29 +92,30 @@ func ListDirs(dir string, limit int) (*DirListing, error) {
 	return out, nil
 }
 
-// ErrDirsTimedOut is a folder read (a listing, a root check) that didn't answer
-// within its DirLister's time-out, or found every slot held by reads that
-// haven't returned.
+// ErrDirsTimedOut is a folder read (a listing, a root check, a setup preview)
+// that didn't answer within its time-out, or found every slot of its mount held
+// by reads that haven't returned.
 var ErrDirsTimedOut = errors.New("folder listing timed out")
 
 // DirLister runs the folder reads an admin's typed path asks for (the picker's
 // listings, the setup preview's root check) each on a goroutine of its own,
 // waited for at most its time-out: a readdir on a network share that stops
-// answering can't be interrupted (server#224). At most its slots run at once, a
-// hung one keeping its slot until it returns, so hung reads can't pile up: with
-// every slot held a read waits for one only as long as its time-out.
+// answering can't be interrupted (server#224). At most its slots run at once
+// on one mount (newMountSlots), a hung one keeping its slot until it returns, so
+// hung reads can't pile up: with every slot of a mount held a read there waits
+// for one only as long as its time-out, and the other mounts list as ever.
 type DirLister struct {
 	list    func(dir string, limit int) (*DirListing, error)
 	check   func(root string) (string, error)
-	slots   chan struct{}
+	slots   *mounts.PerMount[chan struct{}]
 	timeout time.Duration
 	log     *slog.Logger // nil: slog.Default(), read when it is needed
 }
 
 // NewDirLister is a DirLister of list (ListDirs; a test's stand-in), slots at
-// once, each waited for at most timeout.
+// once per mount, each waited for at most timeout.
 func NewDirLister(list func(dir string, limit int) (*DirListing, error), slots int, timeout time.Duration) *DirLister {
-	return &DirLister{list: list, check: CheckRoot, slots: make(chan struct{}, slots), timeout: timeout}
+	return &DirLister{list: list, check: CheckRoot, slots: newMountSlots(slots), timeout: timeout}
 }
 
 // List is list(dir, limit), or ErrDirsTimedOut once the time-out (or ctx) ends
@@ -119,7 +124,11 @@ func (l *DirLister) List(ctx context.Context, dir string, limit int) (*DirListin
 	if dir != "" && !filepath.IsAbs(dir) {
 		return nil, ErrNotAbsolute // refused at once, never waiting for a slot
 	}
-	return boundedRead(ctx, l, func() (*DirListing, error) { return l.list(dir, limit) })
+	mount := dir
+	if mount == "" { // the roots' listing: asked only then, never for a typed path
+		mount = filesystemRoot()
+	}
+	return boundedRead(ctx, l.slots.For(mount), l.timeout, l.log, func(context.Context) (*DirListing, error) { return l.list(dir, limit) })
 }
 
 // CheckRoot is CheckRoot(root) within the same slots and time-out as a
@@ -128,7 +137,14 @@ func (l *DirLister) CheckRoot(ctx context.Context, root string) (string, error) 
 	if !filepath.IsAbs(root) {
 		return "", ErrNotAbsolute // as List: never waiting for a slot
 	}
-	return boundedRead(ctx, l, func() (string, error) { return l.check(root) })
+	return boundedRead(ctx, l.slots.For(root), l.timeout, l.log, func(context.Context) (string, error) { return l.check(root) })
+}
+
+// newMountSlots is n slots per mount (mounts.Of: per filesystem mounted, so a
+// share mounted anew has its own and two bind mounts of one share them), a
+// mount's made when a read there first asks for them.
+func newMountSlots(n int) *mounts.PerMount[chan struct{}] {
+	return mounts.NewPerMount(func(string) chan struct{} { return make(chan struct{}, n) })
 }
 
 // readResult is what a boundedRead's goroutine hands its waiter: the read's
@@ -140,24 +156,27 @@ type readResult[T any] struct {
 	stack    []byte
 }
 
-// boundedRead is read() on a goroutine of its own holding one of l's slots, or
-// ErrDirsTimedOut once l's time-out (or ctx) ends first, the read left to
-// finish there. A panic in the read is raised again on the waiter's goroutine
-// (the request's, where net/http recovers and logs it) rather than ending the
-// process; one in a read whose waiter has left has no request to reach, so it
-// is logged here.
-func boundedRead[T any](ctx context.Context, l *DirLister, read func() (T, error)) (T, error) {
+// boundedRead is read on a goroutine of its own holding one of slots, or
+// ErrDirsTimedOut once timeout (or ctx) ends first, the read left to finish
+// there. read is handed the context the waiter waits under, so a read that
+// looks at it stops soon after the waiter has left (its answer then, that
+// context's error, is ErrDirsTimedOut too). A panic in the read is
+// raised again on the waiter's goroutine (the request's, where net/http
+// recovers and logs it) rather than ending the process; one in a read whose
+// waiter has left has no request to reach, so it is logged here (log, or
+// slog.Default() when nil).
+func boundedRead[T any](ctx context.Context, slots chan struct{}, timeout time.Duration, log *slog.Logger, read func(context.Context) (T, error)) (T, error) {
 	var zero T
-	ctx, cancel := context.WithTimeout(ctx, l.timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	select {
-	case l.slots <- struct{}{}:
+	case slots <- struct{}{}:
 	case <-ctx.Done():
 		return zero, ErrDirsTimedOut
 	}
 	done := make(chan readResult[T], 1) // buffered: an abandoned read still returns
 	go func() {
-		defer func() { <-l.slots }()
+		defer func() { <-slots }()
 		defer func() {
 			p := recover()
 			if p == nil {
@@ -165,7 +184,6 @@ func boundedRead[T any](ctx context.Context, l *DirLister, read func() (T, error
 			}
 			stack := debug.Stack()
 			if ctx.Err() != nil { // the waiter answered ErrDirsTimedOut already
-				log := l.log
 				if log == nil {
 					log = slog.Default()
 				}
@@ -173,22 +191,37 @@ func boundedRead[T any](ctx context.Context, l *DirLister, read func() (T, error
 			}
 			done <- readResult[T]{panicked: p, stack: stack}
 		}()
-		v, err := read()
+		v, err := read(ctx)
 		done <- readResult[T]{v: v, err: err}
 	}()
+	var r readResult[T]
 	select {
-	case r := <-done:
-		if r.panicked != nil {
-			panic(fmt.Sprintf("folder read panicked: %v\n%s", r.panicked, r.stack))
-		}
-		return r.v, r.err
+	case r = <-done:
 	case <-ctx.Done():
+		select {
+		case r = <-done: // it answered as its time ran out: the answer stands
+		default:
+			return zero, ErrDirsTimedOut
+		}
+	}
+	if r.panicked != nil {
+		panic(fmt.Sprintf("folder read panicked: %v\n%s", r.panicked, r.stack))
+	}
+	if cerr := ctx.Err(); cerr != nil && errors.Is(r.err, cerr) {
+		// The read gave up at the same end of ctx the waiter would have (a
+		// preview's walk): no answer, whichever of the two was first.
 		return zero, ErrDirsTimedOut
 	}
+	return r.v, r.err
 }
 
 // filesystemRoot is "/" on Unix and the working directory's drive (C:\) on Windows.
+// Only Windows asks for the working directory: off it, Getwd's stats of "." and
+// $PWD (which can hang on a share) would only ever give "/".
 func filesystemRoot() string {
+	if runtime.GOOS != "windows" {
+		return string(filepath.Separator)
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		return string(filepath.Separator)

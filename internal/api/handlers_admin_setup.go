@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -120,10 +121,12 @@ type setupPreview struct {
 // tags and from the folders (library.Preview). It checks the folder as the
 // folder picker does (library.CheckRoot behind the picker's DirLister, so a
 // mount that doesn't answer is 404 at its time-out: 400 path_not_absolute, 404
-// folder_unreadable; library create checks neither), the root against the other
-// libraries as library create does (catalog.CheckLibraryRoot: 409
-// root_overlaps) and the ignore rules as a library edit does (400
-// invalid_pattern). Reads only; never a file's contents.
+// folder_unreadable; library create checks neither; a walk or sample read that
+// doesn't answer by the preview's time, a mount under the root hung, is 404
+// folder_unreadable too), the root against the other libraries as library
+// create does (catalog.CheckLibraryRoot: 409 root_overlaps) and the ignore
+// rules as a library edit does (400 invalid_pattern). Reads only; never a
+// file's contents.
 func (a *API) handleSetupPreview(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Root           string   `json:"root"`
@@ -148,6 +151,10 @@ func (a *API) handleSetupPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := a.scanner.Preview(r.Context(), root, body.IgnorePatterns, library.PreviewLimits{})
+	if errors.Is(err, library.ErrDirsTimedOut) {
+		writeFolderError(w, err) // a mount under the root stopped answering mid-walk
+		return
+	}
 	if err != nil {
 		a.writeCatalogError(w, err, "setup: preview", "could not read the folder")
 		return

@@ -1,14 +1,14 @@
 package library
 
 import (
-	"bufio"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
+
+	"github.com/kodestar/audiosilo-server/internal/mounts"
 )
 
 // The setup flow's folder hints: the folders mounted into the server's
@@ -52,59 +52,23 @@ func MountHints(exclude ...string) []string {
 // excluded, sorted, without repeats, at most maxMountHints.
 func mountHints(r io.Reader, exclude []string, isDir func(string) bool) []string {
 	out := []string{}
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
-		point, fstype, ok := parseMountLine(sc.Text())
-		if !ok || pseudoFS[fstype] || systemPath(point) || slices.Contains(out, point) {
-			continue
+	_ = mounts.Scan(r, func(m mounts.Mount) { // a table cut short offers what it read
+		point := m.Point
+		if pseudoFS[m.FSType] || systemPath(point) || slices.Contains(out, point) {
+			return
 		}
 		if slices.ContainsFunc(exclude, func(e string) bool { return e != "" && filepath.Clean(e) == point }) {
-			continue
+			return
 		}
 		if isDir(point) {
 			out = append(out, point)
 		}
-	}
+	})
 	slices.Sort(out)
 	if len(out) > maxMountHints {
 		out = out[:maxMountHints]
 	}
 	return out
-}
-
-// parseMountLine reads one mountinfo line (proc(5)): the mount point is the fifth
-// field, octal-escaped, and the filesystem type the first field after the " - "
-// separator.
-func parseMountLine(line string) (point, fstype string, ok bool) {
-	before, after, found := strings.Cut(line, " - ")
-	if !found {
-		return "", "", false
-	}
-	fields, tail := strings.Fields(before), strings.Fields(after)
-	if len(fields) < 5 || len(tail) < 1 {
-		return "", "", false
-	}
-	return filepath.Clean(unescapeMount(fields[4])), tail[0], true
-}
-
-// unescapeMount undoes mountinfo's octal escapes ("\040" is a space).
-func unescapeMount(s string) string {
-	if !strings.Contains(s, `\`) {
-		return s
-	}
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+4 <= len(s) {
-			if v, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
-				b.WriteByte(byte(v))
-				i += 3
-				continue
-			}
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
 }
 
 // systemPath reports whether a mount point belongs to the system rather than to

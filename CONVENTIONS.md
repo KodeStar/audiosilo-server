@@ -252,7 +252,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   library queued before the request returns so the first poll sees it; `GET /admin/invites` lists every account's invites (`auth.ListInvites`, never a
   code); `GET /admin/fs/dirs?path=` is the add-library folder picker (`library.ListDirs`:
   absolute paths, folder names only, no dot-folders, 1,000-entry cap; behind a `library.DirLister`,
-  4 listings at once and 5 s each, so a hung mount answers 404 `folder_unreadable`); `GET /admin/shares` adds
+  4 listings at once per mount (`mounts.PerMount` slots) and 5 s each, so a hung mount
+  answers 404 `folder_unreadable` while the other mounts list); `GET /admin/shares` adds
   `member_ids` (`catalog.ShareMembers`).
 - **Community metadata lookup (Phase 1.5, `internal/meta`)**: `GET
   /api/v1/libraries/{id}/meta?path=` (authed, scope-checked via `authorizedPath`
@@ -1150,19 +1151,42 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   too (`readFile`): the ffprobe run's timeout and the caller's context, and the byte budget; a
   tag read out of time skips the probe (ffprobe, killable, answers; one that finished just before
   its deadline passed keeps its tags), one past the budget or panicking leaves dhowden's tags
-  unread and the probe still runs (a narrator walk past it keeps them). While armed every read from the file runs on its own goroutine and is waited for
-  only until the deadline (`blockFile.waitRead`), so a pread on a share that stopped answering
-  costs a goroutine (and the file open) until it returns, never a stuck reader (`os.Open`/`Stat`
-  are not bounded); once `maxAbandonedReads` (16) such reads are outstanding process-wide
-  (`abandonedReads`; reads already under way can take it past that) a new read fails fast (`readsSaturated`, `reasonSaturated`), the file
-  not opened and no ffprobe run, its tags unread, logged once until they have all returned. A re-index
-  where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`;
-  `Book.TagsUnread`) rewrites nothing of the stored book (`catalog.recordReadProblem`: names,
+  unread and the probe still runs (a narrator walk past it keeps them). The open and its stat, and
+  while armed every read from the file, run on a goroutine of their own and are waited for only until
+  the deadline (`metadata.await`: `openBlockFile`, `blockFile.waitRead`), so an open or a pread on a share
+  that stopped answering costs a goroutine (and the file open) until it returns, never a stuck reader;
+  an open given up on is a tag read out of time. The file is opened `O_NONBLOCK` and must be a regular
+  file (a FIFO is turned away at once, `OpenErr` and `TagsUnread`, never waited for nor read as audio).
+  A scan's move fingerprint (`metadata.Fingerprint`, skipped after a read cut short) is bounded the same
+  way, and an ffprobe killed at its time-out that has not ended 5 s later (`ffprobeKillGrace`; stuck in an
+  NFS read on macOS) is left and counted as an abandoned read. Once `maxAbandonedReads` (16) such reads are outstanding on one mount
+  (`stuckReads` per mount, `stuckByMount`, a `mounts.PerMount`; reads already under way can take it past that) a new
+  read from a file there fails fast (`stuckReads.saturated`, `reasonSaturated`), the file
+  not opened and no ffprobe run, its tags unread, logged once (with the mount) until they have all
+  returned. Per mount (server#360): one hung share stops reads only from itself, every other
+  library's mount reads as ever; `internal/mounts` names a path's mount from the mount table alone
+  (`/proc/self/mountinfo`, macOS `getfsstat` `MNT_NOWAIT`, re-read every 10 s on a goroutine of its own, only the first read the caller's, a re-read that fails keeping the last table; elsewhere, or
+  unreadable at the first read, the volume root: one key, as the old process-wide cap). A mount's key is
+  the filesystem it is of (`Mount.Device`: mountinfo's `major:minor`, macOS's fsid), not its mount
+  point: a share unmounted lazily and mounted again at the same path starts with nothing stuck, and
+  two bind mounts of one share have one cap. A re-index
+  where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`), or whose
+  length ran out of time even read alone (an ffprobe time-out, `ProbeTimedOut` without one:
+  `library.readCutShort`; a part on a share that hung mid-read, the FIFO repro of server#360),
+  sets `Book.ReadCutShort`, and rewrites nothing of the stored book (`catalog.recordReadProblem`: names,
   length, codec, chapters, cover flag, mtime and size stay as the last full read left them) but
-  its read problem, `unreadable` ("reading it timed out", or for a refused read "too many earlier reads
-  are stuck", on this library or another, with ffprobe or without), so the next scan reads it again (the stored
-  mtime and size are the old ones, else `problemCleared`); a new book read so is written with the
-  path's names. With no
+  its read problem, `unreadable` ("reading it timed out", a `ProbeTimedOut` too, or for a refused read "too many earlier reads
+  from the same drive or share are stuck", with ffprobe or without; `probe_failed` for an ffprobe
+  time-out: `noteProblem` records one for every `readCutShort`, a folder book's first part cut short going over an
+  earlier part's lasting problem, as the record is what `problemCleared` asks again), so the next scan reads it again (the stored
+  mtime and size are the old ones, else `problemCleared`, which a read still cut short, its length
+  out of time included, never clears); a new book read so is written with the
+  path's names. Only a length out of time (`Book.LengthOnly`: every file's tags read, none cut short
+  or refused) can repeat on every scan (a damaged part), so it keeps the book only while its files
+  are the stored ones (`catalog.sameFiles`: the paths in order, and each size but the timed-out
+  parts' own, `BookFile.LengthUnread`); with a part added, gone, renamed or changed the book is
+  written whole with the part's problem (counted as updated), never held at a file list that is no
+  longer on disk. With no
   ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules
   (`noFFprobeRules`, decision 2, server#269): a file it is unsure of has no duration and no
   `ProbeErr`; a read out of time says so (`Metadata.ProbeTimedOut`) and the scan reads it again
@@ -4242,7 +4266,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.ErrInvalidSetupStep`). **Preview** `POST /admin/setup/preview` `{root, ignore_patterns?}` ->
   `{root, counts: {audio_files, folder_books, file_books, capped}, same_root, samples: [{rel_path, tags,
   path, abs}], blanks: {tags, path}, suggested}`: checks the folder as the folder picker does
-  (`library.CheckRoot` behind the picker's `DirLister`, so a hung mount is 404 at its time-out: 400 `path_not_absolute`, 404 `folder_unreadable`; library create checks neither),
+  (`library.CheckRoot` behind the picker's `DirLister`, so a hung mount is 404 at its time-out: 400 `path_not_absolute`, 404 `folder_unreadable`; library create checks neither;
+  the walk and sample reads run on a goroutine of their own, waited for until the preview's time and
+  2 s more (`previewGrace`), then 404 `folder_unreadable` (`ErrDirsTimedOut`: a mount under the root
+  that hung), at most 2 previews per mount (`previewsPerMount`), a hung one holding its slot),
   the root as library create does (`catalog.CheckLibraryRoot`, the same `checkLibraryRoot` read outside
   the writer: 409 `root_overlaps`) and the ignore rules (400 `invalid_pattern`), and
   `same_root` names a library already at exactly the root (a warning; create allows it). It walks as a

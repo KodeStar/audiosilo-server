@@ -138,6 +138,14 @@ func CheckRoot(root string) (string, error) {
 // against the other libraries' roots too) with ignore, a library's ignore rules
 // (ErrInvalidIgnore for a bad one), within lim. It writes nothing and returns
 // names and counts only, never a file's contents.
+//
+// The walk and the sample reads open, list and stat folders and files, which
+// can't be interrupted on a mount that stops answering under the root (a share
+// mounted in a subfolder): so the preview runs on a goroutine of its own,
+// waited for until its time (lim.MaxTime) and previewGrace more, then
+// ErrDirsTimedOut, the preview left to stop at its next look at its context.
+// At most previewsPerMount run at once per mount (newMountSlots), a hung one
+// holding its slot until it returns, so hung previews can't pile up.
 func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim PreviewLimits) (*Preview, error) {
 	lines, err := NormalizeIgnore(ignore)
 	if err != nil {
@@ -145,6 +153,22 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 	}
 	lim = lim.withDefaults()
 	start := time.Now()
+	return boundedRead(ctx, s.previews.For(root), lim.MaxTime+previewGrace, s.log, func(ctx context.Context) (*Preview, error) {
+		return s.preview(ctx, root, lines, lim, start)
+	})
+}
+
+// previewsPerMount is how many setup previews run at once on one mount, and
+// previewGrace how long past its time a preview is waited for: a sample read
+// running at the time is ended then and its preview answered.
+const (
+	previewsPerMount = 2
+	previewGrace     = 2 * time.Second
+)
+
+// preview is Preview's reading, with the ignore lines normalized and its time
+// counted from start.
+func (s *Scanner) preview(ctx context.Context, root string, lines []string, lim PreviewLimits, start time.Time) (*Preview, error) {
 	lib := catalog.Library{Name: "(setup preview)", Root: root, Kind: catalog.KindBooks}
 	walk := &walkCap{dirs: lim.MaxDirs, until: start.Add(min(lim.MaxWalk, lim.MaxTime))}
 	books, _, _, err := discoverAuto(ctx, lib, nil, ParseIgnore(lines), s.log, nil, walk, s.walkWidth())

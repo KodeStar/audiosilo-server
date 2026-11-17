@@ -2,11 +2,8 @@ package library
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"maps"
@@ -24,6 +21,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/mounts"
 	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
@@ -41,6 +39,9 @@ type Scanner struct {
 	jobs     jobQueue               // guarded by mu
 
 	roots *rootProber // bounded, cached checks that a library root is reachable
+	// previews are the setup previews under way per mount (Preview), a hung one
+	// holding its slot until it returns.
+	previews *mounts.PerMount[chan struct{}]
 
 	// The on-demand indexes under way (IndexPathWithin), by book: a concurrent
 	// request for the same book waits on the one read rather than reading the
@@ -174,6 +175,7 @@ func NewScanner(cat *catalog.Catalog, ffprobePath string, log *slog.Logger) *Sca
 		flights:     map[bookKey]*indexFlight{},
 		jobs:        newJobQueue(),
 		roots:       newRootProber(),
+		previews:    newMountSlots(previewsPerMount),
 
 		probeTimeout: metadata.ProbeTimeout,
 	}
@@ -530,7 +532,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			})
 		}
 		switch {
-		case r.existed && b.TagsUnread:
+		case r.existed && b.ReadCutShort:
 			// Kept whole: UpsertBook recorded only its read problem (counted
 			// above), nothing of the book was updated.
 		case r.existed:
@@ -663,15 +665,18 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// failed open per scan instead of an ffprobe sweep forever, and is
 				// otherwise kept as any unchanged book is: the metadata files beside
 				// it (an ABS metadata.json, attachments, an ebook) are still read below.
-				b.ContentHash = fingerprintFile(absOf(lib, primaryPath(b)))
+				b.ContentHash = s.fingerprint(ctx, absOf(lib, primaryPath(b)))
 			}
 			if old.ContentHash != "" || b.ContentHash == "" {
 				// Rows indexed before migration 0016 have no cover flag; fill it with a
 				// tag read (no ffprobe) rather than re-indexing the book.
 				// A file that can't be opened right now (a flaky mount) is left unknown
-				// for the next scan rather than recorded as having no cover.
+				// for the next scan rather than recorded as having no cover; one whose
+				// bounded fingerprint just failed is not opened again unbounded (a
+				// share that stopped answering, a FIFO).
 				primary := absOf(lib, primaryPath(b))
-				if old.HasCover == nil && readable(primary) {
+				fingerprintFailed := old.ContentHash == "" && b.ContentHash == ""
+				if old.HasCover == nil && !fingerprintFailed && readable(primary) {
 					_, _, coverBackfill[b.RelPath] = media.EmbeddedCover(primary)
 				}
 				// A sidecar image replaced in place changes no audio: its own
@@ -984,12 +989,17 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 		at = &fileState{mtime: b.MTime, size: b.Size}
 	}
 	s.noteRejected(abs, at, md)
-	// A read cut short or refused (a share that stopped answering) knows nothing
-	// of the file: UpsertBook then rewrites nothing of a stored book but its
-	// read problem, rather than path-only names and no length, codec, chapters,
+	// A read cut short or refused (a share that stopped answering), or one whose
+	// length ran out of time (readCutShort), knows nothing of the file, or not
+	// its length: UpsertBook then rewrites nothing of a stored book but its read
+	// problem, rather than path-only names and no length, codec, chapters,
 	// cover, date or genres; a new book is written with what there is. A folder
 	// book's other parts count too (buildMultiFileChapters).
-	b.TagsUnread = md.TagsUnread()
+	b.ReadCutShort = readCutShort(md)
+	// Only a length out of time, with a part added, gone or changed since, is
+	// written whole after all (catalog.Book.LengthOnly); a folder book's parts
+	// say which it is (buildMultiFileChapters).
+	b.LengthOnly = b.ReadCutShort && !md.TagsUnread()
 	setNames(b, md)
 	if md != nil {
 		b.Released = md.Released
@@ -1028,8 +1038,8 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 
 	// Move-detection fingerprint (reused content_hash column); skip if already
 	// computed during move detection.
-	if b.ContentHash == "" {
-		b.ContentHash = fingerprintFile(abs)
+	if b.ContentHash == "" && !md.TagsUnread() {
+		b.ContentHash = s.fingerprint(ctx, abs)
 	}
 
 	// Normalize chapters so single-file and multi-file books look the same to a
@@ -1215,13 +1225,21 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 	idx := 0
 	parts := make([]partFacts, 0, len(b.Files))
 	mds := s.readFiles(ctx, lib, b.Files, first, slots)
+	tagsUnread := false
 	for i := range b.Files {
 		f := &b.Files[i]
 		md := mds[i]
-		noteProblem(b, f.RelPath, f.Size, md)
-		if md.TagsUnread() {
-			b.TagsUnread = true // its length and chapters unknown: see enrich
+		tagsUnread = tagsUnread || md.TagsUnread()
+		f.LengthUnread = lengthTimedOut(md)
+		if readCutShort(md) && !b.ReadCutShort {
+			// Its length and chapters unknown: see enrich. The book is kept as
+			// stored, and what brings the next scan back to it is the problem
+			// recorded (problemCleared), so this part's goes over an earlier
+			// part's lasting one, which would never clear.
+			b.ReadCutShort = true
+			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = "", "", ""
 		}
+		noteProblem(b, f.RelPath, f.Size, md)
 		if i > 0 { // the first is enrich's reading, noted there
 			s.noteRejected(absOf(lib, f.RelPath), nil, md)
 		}
@@ -1267,6 +1285,7 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 		cum += dur
 	}
 	b.Duration = cum
+	b.LengthOnly = b.ReadCutShort && !tagsUnread
 	n := suspectParts(parts)
 	b.SuspectParts = &n
 }
@@ -1320,7 +1339,11 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 	if err != nil && !errors.Is(err, errWalkCapped) {
 		return nil, nil, hadErrors, err
 	}
-	if gone := statAudio(ctx, dirs, width); gone > 0 {
+	gone, serr := statAudio(ctx, dirs, width)
+	if serr != nil {
+		return nil, nil, hadErrors, serr
+	}
+	if gone > 0 {
 		// Files listed by the walk but no longer there when looked at: the tree
 		// changed under it (a book folder renamed or moved once listed). Their
 		// books drop out of this walk, so it is partial, as with an unreadable
@@ -1512,9 +1535,13 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 // the books being built from them (statEntry). One at a time, a no-change scan
 // of a library on a network share or a FUSE pool (Unraid's /mnt/user) spends
 // most of its time waiting on these, one round trip each, the walk's own folder
-// reads being far fewer. A file not looked at by the time ctx ends is looked at
-// when asked, as before. gone is how many of the files were no longer there.
-func statAudio(ctx context.Context, dirs map[string][]audioFile, width int) (gone int) {
+// reads being far fewer. gone is how many of the files were no longer there.
+// Once ctx has ended it is ctx's error, the files not reached by then left
+// unread: their caller stops rather than building books from them, which would
+// look at each of those files one at a time, on a share that may have stopped
+// answering, long after its waiter has gone (a setup preview's, at its time,
+// with the preview's slot for the mount held meanwhile).
+func statAudio(ctx context.Context, dirs map[string][]audioFile, width int) (gone int, err error) {
 	var files []*audioFile
 	for _, audio := range dirs {
 		for i := range audio {
@@ -1523,13 +1550,18 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int) (gon
 	}
 	var missing atomic.Int64
 	pool.Each(ctx, min(width, len(files)), files, func() bool { return true }, func(f **audioFile) {
+		// The pool may still hand a file out as ctx ends (its select picks either):
+		// none is looked at once it has.
+		if ctx.Err() != nil {
+			return
+		}
 		info, err := (*f).de.Info()
 		if errors.Is(err, fs.ErrNotExist) {
 			missing.Add(1)
 		}
 		(*f).de = newStatEntry((*f).de, info, err)
 	})
-	return int(missing.Load())
+	return int(missing.Load()), ctx.Err()
 }
 
 // statEntry is a directory entry whose Info statAudio has read, keeping only
@@ -2014,10 +2046,10 @@ func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *cata
 // is indexed already. carryFrom checks it as it checks IndexMoved's from.
 func (s *Scanner) movedFrom(ctx context.Context, lib catalog.Library, book *catalog.Book) string {
 	if book.ContentHash == "" {
-		book.ContentHash = fingerprintFile(absOf(lib, primaryPath(book))) // reused by enrich
+		book.ContentHash = s.fingerprint(ctx, absOf(lib, primaryPath(book))) // reused by enrich
 	}
 	candidates, err := s.cat.MoveCandidates(ctx, lib.ID, book.RelPath,
-		[]string{book.ContentHash, byteFirstFingerprint(lib, book)})
+		[]string{book.ContentHash, s.byteFirstFingerprint(ctx, lib, book)})
 	if err != nil {
 		s.log.Warn("looking for a moved book failed", "library", lib.Name, "path", book.RelPath, "err", err)
 		return ""
@@ -2121,7 +2153,10 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	}
 	var candidates []*catalog.Book
 	if root, ok := joinRoot(overrides, dirRel, isDiscSet); ok {
-		statAudio(ctx, discs, s.walkWidth()) // the joined book is built from all of them
+		// The joined book is built from all of them.
+		if _, err := statAudio(ctx, discs, s.walkWidth()); err != nil {
+			return nil, err
+		}
 		if b := joinedBook(lib, root, discs); b != nil {
 			candidates = []*catalog.Book{b}
 		}
@@ -2229,10 +2264,10 @@ func (s *Scanner) carryFrom(ctx context.Context, lib catalog.Library, from strin
 		return ignored("the old book is still on disk")
 	}
 	if nb.ContentHash == "" {
-		nb.ContentHash = fingerprintFile(absOf(lib, primaryPath(nb))) // reused by enrich
+		nb.ContentHash = s.fingerprint(ctx, absOf(lib, primaryPath(nb))) // reused by enrich
 	}
 	if nb.ContentHash == "" || old.ContentHash == "" ||
-		(nb.ContentHash != old.ContentHash && byteFirstFingerprint(lib, nb) != old.ContentHash) {
+		(nb.ContentHash != old.ContentHash && s.byteFirstFingerprint(ctx, lib, nb) != old.ContentHash) {
 		return ignored("the fingerprints differ")
 	}
 	if reclassified(from, catalog.Signature{Size: old.Size, IsFolder: old.IsFolder}, nb) {
@@ -2325,34 +2360,11 @@ func ext(name string) string {
 	return strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
 }
 
-const fingerprintChunk = 64 * 1024 // bytes hashed from the head and tail
-
-// fingerprintFile returns a cheap content fingerprint - sha256 of
-// (size, first 64KB, last 64KB) - used only to detect "same content, new path"
-// moves. It is not a full hash (large files stay cheap) and intentionally not a
-// durable identity (that is the path). Returns "" on error.
-func fingerprintFile(absPath string) string {
-	f, err := os.Open(absPath)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || info.IsDir() {
-		return ""
-	}
-	h := sha256.New()
-	fmt.Fprintf(h, "%d:", info.Size())
-	head := make([]byte, fingerprintChunk)
-	n, _ := io.ReadFull(f, head)
-	h.Write(head[:n])
-	if info.Size() > int64(fingerprintChunk) {
-		tail := make([]byte, fingerprintChunk)
-		if m, err := f.ReadAt(tail, info.Size()-int64(fingerprintChunk)); err == nil || m > 0 {
-			h.Write(tail[:m])
-		}
-	}
-	return hex.EncodeToString(h.Sum(nil))
+// fingerprint is the file at absPath's move-detection fingerprint
+// (metadata.Fingerprint), its open and reads bounded as a scan's tag read's
+// are: "" when it can't be read in that time.
+func (s *Scanner) fingerprint(ctx context.Context, absPath string) string {
+	return metadata.Fingerprint(ctx, absPath, s.probeTimeout)
 }
 
 // detectMoves migrates durable user state (progress/bookmarks/notes/history)
@@ -2389,12 +2401,12 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 		}
 	}
 	for _, nb := range newBooks {
-		fp := fingerprintFile(absOf(lib, primaryPath(nb)))
+		fp := s.fingerprint(ctx, absOf(lib, primaryPath(nb)))
 		nb.ContentHash = fp // reused by enrich, avoiding a second read
 		if fp == "" {
 			continue
 		}
-		was := byteFirstFingerprint(lib, nb)
+		was := s.byteFirstFingerprint(ctx, lib, nb)
 		for oldPath, ofp := range oldFP {
 			if (ofp != fp && ofp != was) || reclassified(oldPath, sigs[oldPath], nb) {
 				continue
@@ -2415,7 +2427,7 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 // bytes in its first folder (a joined book's first disc). An index from before
 // stored that file's fingerprint, so a book moved before its first re-index is
 // still found by it. "" when it is the same file.
-func byteFirstFingerprint(lib catalog.Library, b *catalog.Book) string {
+func (s *Scanner) byteFirstFingerprint(ctx context.Context, lib catalog.Library, b *catalog.Book) string {
 	if !b.IsFolder || len(b.Files) < 2 {
 		return ""
 	}
@@ -2429,7 +2441,7 @@ func byteFirstFingerprint(lib catalog.Library, b *catalog.Book) string {
 	if byteFirst == first {
 		return ""
 	}
-	return fingerprintFile(absOf(lib, byteFirst))
+	return s.fingerprint(ctx, absOf(lib, byteFirst))
 }
 
 // carryMove migrates a moved book's durable state from oldPath to newPath

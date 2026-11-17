@@ -10,7 +10,6 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/dhowden/tag"
 
+	"github.com/kodestar/audiosilo-server/internal/mounts"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
@@ -119,8 +119,8 @@ func (m *Metadata) ProbeTimedOut() bool { return m != nil && m.timedOut }
 func (m *Metadata) TagsUnread() bool { return m != nil && m.tagsUnread }
 
 // ReadRefused reports whether the file was not read at all, not even opened,
-// because maxAbandonedReads earlier reads have not returned (a share that
-// stopped answering); TagsUnread holds too.
+// because maxAbandonedReads earlier reads from its mount have not returned (a
+// share that stopped answering); TagsUnread holds too.
 func (m *Metadata) ReadRefused() bool { return m != nil && m.readRefused }
 
 // AudioExtensions are the file extensions AudioSilo treats as audiobooks.
@@ -227,7 +227,8 @@ func ExtractTags(path string) *Metadata {
 }
 
 // reasonSaturated is readFile's reason when it read nothing because
-// maxAbandonedReads reads hang already (readsSaturated).
+// maxAbandonedReads reads from the file's mount hang already
+// (stuckReads.saturated).
 const reasonSaturated = "reads saturated: earlier reads have not returned"
 
 // errTagsUnread stands for dhowden's answer when its read was cut short.
@@ -240,36 +241,38 @@ func fileFormat(path string) string {
 
 // readFile reads the tags of the file at path into m and, unless ff is ffNone,
 // the in-process probe's answer by ff's rules, or why it has none (reason:
-// unsure of the file, a bound passed; ffprobe reads it then). The tag read and
-// the narrator walk are bounded as the probe is: timeout (the ffprobe run's) and
-// ctx, and the probe's byte budget, every read from the file waited for under
-// them (blockFile.raw), so a file on a share that stops answering costs at most
-// timeout. A tag read over a bound leaves the tags unread and the probe unrun
-// (ffprobe, killable, answers). The file is closed when it returns, before any
-// ffprobe run. An error: it could not be opened.
+// unsure of the file, a bound passed; ffprobe reads it then). The open, the tag
+// read and the narrator walk are bounded as the probe is: timeout (the ffprobe
+// run's) and ctx, and the probe's byte budget, the open and every read from the
+// file waited for under them (openBlockFile, blockFile.raw), so a file on a
+// share that stops answering costs at most timeout, and a FIFO none. A tag read
+// over a bound leaves the tags unread and the probe unrun (ffprobe, killable,
+// answers), as does an open that did not answer. The file is closed when it
+// returns, before any ffprobe run. An error: it could not be opened, or is no
+// regular file.
 func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout time.Duration) (p *probeResult, reason string, err error) {
-	if readsSaturated() {
-		// Enough reads hang already (a share that stopped answering): this one
-		// fails fast, the file not opened, its tags unread and no probe.
+	rctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
+	defer cancel()
+	b, f, err := openBlockFile(rctx, path)
+	switch {
+	case errors.Is(err, errReadRefused):
+		// Enough reads from this file's mount hang already (a share that
+		// stopped answering): this one fails fast, the file not opened, its
+		// tags unread and no probe. Files on other mounts read as ever.
 		m.tagsUnread, m.readRefused = true, true
 		return nil, reasonSaturated, nil
-	}
-	f, err := os.Open(path)
-	if err != nil {
+	case errors.Is(err, errOpenAbandoned):
+		// Its open did not answer in time: as a tag read out of time (below).
+		return nil, tagsCutShort(m, path, "limit: "+context.Cause(rctx).Error()), nil
+	case errors.Is(err, errNotRegular):
+		// A FIFO (or a device) is never read as audio: unreadable, and a
+		// stored book it is a part of is kept as it is (TagsUnread).
+		m.tagsUnread = true
+		return nil, "", err
+	case err != nil:
 		return nil, "", err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		// No size to read by: the tags as a plain read finds them, ffprobe the rest.
-		if md, terr := ReadTags(f); terr == nil {
-			applyTags(m, md)
-		}
-		return nil, "no size", nil
-	}
-	b := newBlockFile(f, info.Size())
-	rctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
-	defer cancel()
 	var md tag.Metadata
 	terr := errTagsUnread
 	narrator := ""
@@ -285,10 +288,7 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout
 		// caller's context ended mid-read: the probe would be cut short too, so
 		// ffprobe, killable, answers. A read that finished just before the
 		// deadline passed keeps its tags and goes on to the probe.
-		reason = "tags: " + why
-		m.tagsUnread = true
-		probeLogger().Debug("in-process read: out of time, ffprobe reads this file", "path", path, "reason", reason)
-		return nil, reason, nil
+		return nil, tagsCutShort(m, path, why), nil
 	}
 	// Past the byte budget, or a reader's panic: dhowden's tags are unread if it
 	// was cut short (a narrator walk's bound leaves them), the probe still runs.
@@ -309,6 +309,15 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout
 		probeLogger().Debug("in-process probe: ffprobe reads this file", "path", path, "reason", reason)
 	}
 	return p, reason, nil
+}
+
+// tagsCutShort marks m's tags unread, its tag read (or open) cut short by why,
+// and is readFile's reason for it.
+func tagsCutShort(m *Metadata, path, why string) (reason string) {
+	reason = "tags: " + why
+	m.tagsUnread = true
+	probeLogger().Debug("in-process read: out of time, ffprobe reads this file", "path", path, "reason", reason)
+	return reason
 }
 
 // probeLog is where the in-process probe's fallbacks are logged, at debug
@@ -344,13 +353,84 @@ func ForceFFprobeForTests(ffprobePath string) {
 
 // UnreadForTests is the reading of a file whose read was cut short (its tags
 // unread), or, with refused, not tried at all (ReadRefused): for tests of what
-// a scan does with one, which can't fill the process-wide count of hung reads
-// without stopping every other test's reads. It panics outside a test binary.
+// a scan does with one file, which can't fill its mount's count of hung reads
+// without stopping every other test's reads from that mount. It panics outside
+// a test binary.
 func UnreadForTests(path string, refused bool) *Metadata {
 	if !testing.Testing() {
 		panic("metadata.UnreadForTests called outside a test binary")
 	}
 	return &Metadata{Format: fileFormat(path), tagsUnread: true, readRefused: refused}
+}
+
+// TimedOutForTests is the reading of a file whose tags were read but whose
+// length's in-process read ran out of time with no ffprobe to ask
+// (ProbeTimedOut alone): for tests of what a scan does with one, which a real
+// read gives only on a file whose probe outlasts its deadline. It panics
+// outside a test binary.
+func TimedOutForTests(path string) *Metadata {
+	if !testing.Testing() {
+		panic("metadata.TimedOutForTests called outside a test binary")
+	}
+	return &Metadata{Format: fileFormat(path), timedOut: true}
+}
+
+// HangMountForTests makes dir a mount of its own whose reads hang: the files
+// under it are keyed by a mount of their own and that mount's count of hung
+// reads is at maxAbandonedReads, so every read there is refused (ReadRefused)
+// while every other path reads as ever. release undoes it (once, however
+// often it is called). For a test that isn't parallel (it swaps the mount
+// lookup every read makes); it panics outside a test binary.
+func HangMountForTests(dir string) (release func()) {
+	restore := ownMountForTests("HangMountForTests", "hung-for-tests:", dir)
+	hung := stuckByMount.For(dir)
+	hung.n.Add(maxAbandonedReads)
+	return sync.OnceFunc(func() {
+		for range maxAbandonedReads {
+			hung.release()
+		}
+		restore()
+	})
+}
+
+// HoldOpensForTests makes dir a mount of its own (its count of hung reads at
+// none) whose opens don't answer: every open under it waits until release
+// (once, however often it is called), as an open on a share that stopped
+// answering does, while every other path opens as ever. For a test that isn't
+// parallel (it swaps the mount lookup every read makes); it panics outside a
+// test binary.
+func HoldOpensForTests(dir string) (release func()) {
+	restore := ownMountForTests("HoldOpensForTests", "held-for-tests:", dir)
+	held := make(chan struct{})
+	hook := func(p string) {
+		if mounts.Within(p, dir) {
+			<-held
+		}
+	}
+	heldOpens.Store(&hook)
+	return sync.OnceFunc(func() {
+		close(held)
+		heldOpens.Store(nil)
+		restore()
+	})
+}
+
+// ownMountForTests keys the files under dir by a mount of their own (prefix
+// and dir) until restore; caller names the test hook for its panic outside a
+// test binary.
+func ownMountForTests(caller, prefix, dir string) (restore func()) {
+	if !testing.Testing() {
+		panic("metadata." + caller + " called outside a test binary")
+	}
+	was := stuckByMount.Mount
+	key := prefix + dir
+	stuckByMount.Mount = func(p string) (string, string) {
+		if mounts.Within(p, dir) {
+			return key, dir
+		}
+		return was(p)
+	}
+	return func() { stuckByMount.Mount = was }
 }
 
 // ffprobeForced reports whether ForceFFprobeForTests named ffprobePath.
