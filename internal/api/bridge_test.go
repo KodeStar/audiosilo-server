@@ -689,8 +689,39 @@ func TestBridgeEmptyFeaturesAndGoneJob(t *testing.T) {
 		}
 	}
 	resp, body := b.do(t, "PATCH", "/api/v1/bridge/jobs/999", b.bridgeTok, `{"attempt":1,"state":"failed"}`)
-	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, "not_held") {
-		t.Fatalf("report on a gone job: %d %s, want 409 not_held", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, "not_held") || strings.Contains(body, "reason") {
+		t.Fatalf("report on a gone job: %d %s, want 409 not_held with no reason", resp.StatusCode, body)
+	}
+}
+
+// A parked job an admin cancels ends at once; the Bridge's next report on it
+// is still 409 not_held (an older Bridge drops the job as before), with reason
+// "cancelled" so a newer one records it cancelled, not lost (bridge#35).
+func TestBridgeReportOnCancelledParkedJob(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beat(t, bridge.KindVerify)
+	job := b.queue(t, mistbornBook, `{}`)
+	if resp, body := b.do(t, "GET", "/api/v1/bridge/jobs/next", b.bridgeTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("claim: %d %s", resp.StatusCode, body)
+	}
+	path := fmt.Sprintf("/api/v1/bridge/jobs/%d", job.ID)
+	if resp, body := b.do(t, "PATCH", path, b.bridgeTok, `{"attempt":1,"state":"needs_attention","error":"waiting"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("park: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := b.do(t, "POST", fmt.Sprintf("/api/v1/admin/bridge/jobs/%d/cancel", job.ID), b.adminTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("cancel: %d %s", resp.StatusCode, body)
+	}
+	resp, body := b.do(t, "PATCH", path, b.bridgeTok, `{"attempt":1,"state":"running"}`)
+	var got struct{ Code, Reason string }
+	decodeInto(t, body, &got)
+	if resp.StatusCode != http.StatusConflict || got.Code != "not_held" || got.Reason != "cancelled" {
+		t.Fatalf("report after the cancel: %d %s, want 409 not_held reason cancelled", resp.StatusCode, body)
+	}
+	// Another claim's report on it carries no reason.
+	resp, body = b.do(t, "PATCH", path, b.bridgeTok, `{"attempt":2,"state":"running"}`)
+	if resp.StatusCode != http.StatusConflict || strings.Contains(body, "reason") {
+		t.Fatalf("another claim's report: %d %s, want 409 with no reason", resp.StatusCode, body)
 	}
 }
 

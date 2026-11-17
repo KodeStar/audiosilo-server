@@ -2746,6 +2746,8 @@ export interface BridgeSetupItem {
   detail?: string;
   /** The libraries the item is about (the libraries step). */
   library_ids?: number[];
+  /** The step waits for an ASR worker (fixed on the Bridge's Workers tab); absent from an older Bridge. */
+  needs_worker?: boolean;
 }
 
 /** The heartbeat's `setup` block (PUT /bridge/status, Phase 2b), as GET /admin/bridge passes it on. */

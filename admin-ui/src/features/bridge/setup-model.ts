@@ -47,22 +47,32 @@ const WORKERS_TAB = 'workers';
 
 /**
  * The ASR step's detail while the Bridge waits for an ASR worker (the Bridge's
- * setup.DetailASRWaiting): that step is fixed on Workers, not Settings.
+ * setup.DetailASRWaiting), read only from a Bridge older than its
+ * `needs_worker` flag.
  */
 const ASR_WAITING_DETAIL = 'waiting for an ASR worker';
 
 /**
+ * Whether a step waits for an ASR worker: its `needs_worker` flag (bridge#28),
+ * else, from an older Bridge, the ASR step's detail text.
+ */
+export function stepNeedsWorker(
+  item: Pick<BridgeSetupItem, 'id' | 'detail' | 'needs_worker'>,
+): boolean {
+  if (item.needs_worker) return true;
+  return item.id === 'asr' && Boolean(item.detail?.includes(ASR_WAITING_DETAIL));
+}
+
+/**
  * Where a step is fixed on the Bridge's page, when it has a tab and the page an
- * address. The ASR step waiting for a worker goes to Workers (keyed on the
- * Bridge's detail text, as its own page does); every other ASR state to Settings.
+ * address. A step waiting for an ASR worker goes to Workers (stepNeedsWorker);
+ * every other ASR state to Settings.
  */
 export function setupItemLink(
   uiUrl: string | undefined,
-  id: string,
-  detail?: string,
+  item: Pick<BridgeSetupItem, 'id' | 'detail' | 'needs_worker'>,
 ): string | undefined {
-  const tab =
-    id === 'asr' && detail?.includes(ASR_WAITING_DETAIL) ? WORKERS_TAB : SETUP_TAB.get(id);
+  const tab = stepNeedsWorker(item) ? WORKERS_TAB : SETUP_TAB.get(item.id);
   return tab ? bridgeTabLink(uiUrl, tab) : undefined;
 }
 
@@ -77,7 +87,7 @@ export function waitsForWorker(
 ): boolean {
   if (!status?.online || status.workers.length > 0) return false;
   const asr = status.setup?.items.find((item) => item.id === 'asr');
-  return Boolean(asr && !asr.done && asr.detail?.includes(ASR_WAITING_DETAIL));
+  return Boolean(asr && !asr.done && stepNeedsWorker(asr));
 }
 
 /** How a step reads: done, still needed, or optional and not done. */

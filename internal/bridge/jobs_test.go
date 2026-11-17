@@ -331,6 +331,47 @@ func TestUpdateHeld(t *testing.T) {
 	}
 }
 
+// A job cancelled while its claim held it (an admin's cancel of a parked job,
+// which ends it at once) answers that claim's next report with
+// ErrCancelledWhileHeld, still ErrNotHeld for an older Bridge (bridge#35). Any
+// other claim's report, and a report on a job that ended otherwise, is plain
+// ErrNotHeld.
+func TestUpdateHeldCancelledWhileHeld(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	job := q.verify(t, "A", 0)
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateNeedsAttention), Error: ptr("waiting")}); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := q.Cancel(ctx, job.ID); err != nil || j.State != StateCancelled {
+		t.Fatalf("cancel parked = %+v, %v", j, err)
+	}
+	_, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateRunning)})
+	if !errors.Is(err, ErrCancelledWhileHeld) || !errors.Is(err, ErrNotHeld) {
+		t.Fatalf("the holding claim's report: %v, want ErrCancelledWhileHeld (and ErrNotHeld)", err)
+	}
+	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 2, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) ||
+		errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("another claim's report: %v, want plain ErrNotHeld", err)
+	}
+
+	done := q.verify(t, "B", 0)
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.UpdateHeld(ctx, done.ID, Update{Attempt: 1, State: ptr(StateDone)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.UpdateHeld(ctx, done.ID, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) ||
+		errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("a report after done: %v, want plain ErrNotHeld", err)
+	}
+}
+
 func TestCancel(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)

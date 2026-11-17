@@ -45,7 +45,7 @@ func TestSetupIsLenientAndBounded(t *testing.T) {
 		{"id":"libraries","done":false,"required":true,"detail":"1 of 2\nwritable","library_ids":[3,3,-1,0,4]},
 		{"id":"Bad-Id","done":true},
 		{"id":"paired","done":false},
-		{"id":"telescope","done":false,"required":false}
+		{"id":"telescope","done":false,"required":false,"needs_worker":true}
 	],"can_contribute":true,"github_login":"octo-cat","unknown":{"x":1}}}`)
 	s := st.Setup
 	if s == nil || !s.CanContribute || s.GitHubLogin != "octo-cat" || len(s.Items) != 3 {
@@ -54,14 +54,19 @@ func TestSetupIsLenientAndBounded(t *testing.T) {
 	if lib := s.Items[1]; lib.ID != "libraries" || lib.Detail != "1 of 2 writable" || !slices.Equal(lib.LibraryIDs, []int64{3, 4}) {
 		t.Fatalf("libraries item = %+v", lib)
 	}
-	if s.Items[0].ID != "paired" || !s.Items[0].Done || s.Items[2].ID != "telescope" {
+	if s.Items[0].ID != "paired" || !s.Items[0].Done || s.Items[2].ID != "telescope" || !s.Items[2].NeedsWorker ||
+		s.Items[0].NeedsWorker {
 		t.Fatalf("items = %+v", s.Items)
+	}
+	if b, _ := json.Marshal(s.Items[0]); bytes.Contains(b, []byte("needs_worker")) {
+		t.Fatalf("needs_worker is sent while false: %s", b)
 	}
 
 	// Denied, never refused: a block of the wrong shape is dropped whole.
 	for name, block := range map[string]string{
 		"items not a list":      `{"items":{"id":"paired"}}`,
 		"can_contribute string": `{"can_contribute":"yes"}`,
+		"needs_worker string":   `{"items":[{"id":"asr","needs_worker":"yes"}]}`,
 		"not an object":         `[1,2]`,
 	} {
 		if st := decodeHeartbeat(t, `{"version":"1","setup":`+block+`}`); st.Setup != nil {

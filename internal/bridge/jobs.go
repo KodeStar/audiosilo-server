@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
@@ -1364,6 +1365,13 @@ type Update struct {
 // library). A 409 not_held, which tells the Bridge to drop it.
 var ErrNotHeld = errors.New("the job is not held by this claim")
 
+// ErrCancelledWhileHeld is ErrNotHeld for a job cancelled while this claim held
+// it (a parked job an admin cancelled, which ends at once, or a working one
+// whose lease ran out after the cancel was asked for): the 409 not_held then
+// carries reason "cancelled", so the Bridge records the job cancelled rather
+// than lost (bridge#35, BRIDGE-04). errors.Is reads it as ErrNotHeld too.
+var ErrCancelledWhileHeld = fmt.Errorf("%w: it was cancelled", ErrNotHeld)
+
 // heldStates are the states the Bridge holds a job in (it may report on it);
 // reportable are the states it may report.
 var (
@@ -1435,6 +1443,9 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 			return err
 		}
 		if !slices.Contains(heldStates, cur.State) || cur.Attempts != u.Attempt {
+			if cur.State == StateCancelled && cur.Attempts == u.Attempt {
+				return ErrCancelledWhileHeld
+			}
 			return ErrNotHeld
 		}
 		if IsPodcast(cur.Kind) {

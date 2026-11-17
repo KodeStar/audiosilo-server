@@ -131,9 +131,10 @@ func (s *audibleSyncEnv) patProgress(t *testing.T, path string) *catalog.Progres
 }
 
 type progressFeed struct {
-	Rows []catalog.AudibleProgressRow `json:"rows"`
-	Next string                       `json:"next"`
-	More bool                         `json:"more"`
+	Rows       []catalog.AudibleProgressRow `json:"rows"`
+	Next       string                       `json:"next"`
+	More       bool                         `json:"more"`
+	ServerTime string                       `json:"server_time"`
 }
 
 func (s *audibleSyncEnv) feed(t *testing.T, query string) progressFeed {
@@ -144,6 +145,11 @@ func (s *audibleSyncEnv) feed(t *testing.T, query string) progressFeed {
 	}
 	var f progressFeed
 	decodeInto(t, out, &f)
+	// Every page carries the server's clock, which the Bridge reads the rows'
+	// updated_at against (bridge#50).
+	if at, err := time.Parse(time.RFC3339, f.ServerTime); err != nil || time.Since(at).Abs() > time.Minute {
+		t.Fatalf("progress%s: server_time %q", query, f.ServerTime)
+	}
 	return f
 }
 
