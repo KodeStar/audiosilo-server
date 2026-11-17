@@ -66,10 +66,13 @@ type jobQueue struct {
 	// already running. The schedule counts from it as from a scan start, so the next
 	// tick doesn't queue the same slot again.
 	skipped map[int64]time.Time
+	// unknownKind are the libraries whose kind this server doesn't know that a
+	// job has come to (ErrUnknownKind), so each is said once, not at every scan.
+	unknownKind map[int64]bool
 }
 
 func newJobQueue() jobQueue {
-	return jobQueue{wake: make(chan struct{}, 1), skipped: map[int64]time.Time{}}
+	return jobQueue{wake: make(chan struct{}, 1), skipped: map[int64]time.Time{}, unknownKind: map[int64]bool{}}
 }
 
 // queuedFor reports whether a job for the library waits.
@@ -269,6 +272,10 @@ func (s *Scanner) run(ctx, jctx context.Context, j *Job) {
 		}
 		return
 	}
+	if !catalog.KnownKind(lib.Kind) {
+		s.skipUnknownKind(lib)
+		return
+	}
 	// The run is recorded even if the server stops mid-scan, so writes use a
 	// context that outlives ctx.
 	db := context.WithoutCancel(ctx)
@@ -298,6 +305,23 @@ func (s *Scanner) run(ctx, jctx context.Context, j *Job) {
 			r.Detail = closing.Detail
 		}
 		s.OnRunFinished(db, r)
+	}
+}
+
+// skipUnknownKind drops a job for a library of a kind this server doesn't know
+// (a newer AudioSilo's, left by a rollback: ErrUnknownKind): it is never
+// scanned, and a failed run and its "scan failed" alert at every scheduled scan
+// and restart would only repeat that. One log line per library instead, and the
+// schedule counts from now (skipped) so the next tick doesn't queue it again.
+func (s *Scanner) skipUnknownKind(lib *catalog.Library) {
+	s.mu.Lock()
+	said := s.jobs.unknownKind[lib.ID]
+	s.jobs.unknownKind[lib.ID] = true
+	s.jobs.skipped[lib.ID] = time.Now()
+	s.mu.Unlock()
+	if !said {
+		s.log.Warn("library left alone: this server doesn't know its kind (made by a newer AudioSilo?)",
+			"library", lib.Name, "kind", lib.Kind)
 	}
 }
 
