@@ -104,9 +104,13 @@ explain() {
 
 # The container's mounts, one a line: "fstype options point", the point last so
 # a read -r keeps its spaces, and decoded (mountinfo escapes a space as \040).
+# The options are the mount's, led by "ro" when only the filesystem under it is
+# read-only (one the host remounted read-only after errors keeps "rw" there).
 mounts() {
   [ -r /proc/self/mountinfo ] || return 0
-  awk '{ for (i = 7; i <= NF; i++) if ($i == "-") { print $(i + 1), $6, $5; break } }' /proc/self/mountinfo |
+  awk '{ for (i = 7; i <= NF; i++) if ($i == "-") {
+    o = $6; if ($(i + 3) ~ /^ro(,|$)/) o = "ro," o
+    print $(i + 1), o, $5; break } }' /proc/self/mountinfo |
     while read -r fstype opts point; do
       case "$point" in *\\*) point=$(printf '%b' "$point") ;; esac
       printf '%s %s %s\n' "$fstype" "$opts" "$point"
@@ -114,8 +118,9 @@ mounts() {
   return 0
 }
 
-# Whether folder $1 is on a read-only mount (docker's :ro): the options of the
-# mount holding it, the longest mount point it is in (the last one mounted there).
+# Whether folder $1 is on a read-only mount (docker's :ro, or a read-only
+# filesystem): the options of the mount holding it, the longest mount point it
+# is in (the last one mounted there).
 read_only() {
   mounts | {
     best="" best_opts=""

@@ -134,6 +134,14 @@ expect "read-only backups folder" "$out" "WARNING: the server can't write to /ba
 out=$(run --user 1000:1000 -v "$DATA:/data:ro")
 expect "read-only data folder under --user" "$out" "/data: it is mounted read-only" "!user: \""
 
+# 6c. A filesystem that is itself read-only under a mount that isn't (one the
+#     host remounted read-only after errors): the same words, no owner advice.
+out=$(docker run --rm --privileged -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" -v "$DATA:/data" "$RUN_ID" sh -c '
+  mkdir -p /src /backups && mount -t tmpfs tmpfs /src && mount --bind /src /backups && mount -o remount,ro /src &&
+    AUDIOSILO_BACKUP_DIR=/backups sh /usr/local/bin/docker-entrypoint.sh true --data /data' 2>&1 || true)
+expect "read-only filesystem under a read and write mount" "$out" \
+  "WARNING: the server can't write to /backups: it is mounted read-only\." "!belongs to"
+
 # 7. An audiobooks folder the server's user can't read (a library there is offline).
 out=$(run -v "$DATA:/data" -v "$NAS:/audiobooks:ro")
 expect "unreadable audiobooks" "$out" \

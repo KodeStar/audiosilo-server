@@ -3513,9 +3513,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   other apps' files, so regular files only and `chown -h`, never what a link there points at) and
   under `--user` (where its fix names compose's `user:`): a write check of the data and backups
   folders (a `mktemp` file, never a name known ahead; a folder on a read-only mount, by mountinfo's
-  options of the mount holding it, says so instead of naming owners) and a read check of every other
-  mount (MountHints' rule) as the server's user, warning and carrying on. `usable_path` is what keeps a
-  chown off the container's root however it is spelled (`//`, `/.`, a `..` in the path, a link to it).
+  options of the mount holding it or of its filesystem, says so instead of naming owners) and a read
+  check of every other mount (MountHints' rule) as the server's user, warning and carrying on.
+  `usable_path` is what keeps a chown off the container's root however it is spelled (`//`, `/.`, a `..` in the path, a link to it).
   Every check, `stat` and step on the backups folder is bounded by `timeout 5`, as a dead hard mount can
   block for minutes (not the data folder's chown, which a large folder may need longer for); a check
   cut off is said not to have answered, with no owner advice. BusyBox's `timeout`
