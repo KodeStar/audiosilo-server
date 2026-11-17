@@ -9,6 +9,7 @@ import { FactList } from '@/components/fact-list';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { FormError } from '@/components/ui/field';
 import {
+  ClampedName,
   ForBooks,
   lengthRow,
   NoEstimate,
@@ -16,6 +17,7 @@ import {
   OfflineNotice,
 } from '@/features/bridge/generate-parts';
 import { detectPlan, KIND_DETECT } from '@/features/bridge/generate-model';
+import { waitsForWorker } from '@/features/bridge/setup-model';
 import { queueInOrder, queueReport, requestTitle, skipNotes } from '@/features/bridge/use-generate';
 import { refKey } from '@/lib/book-route';
 import { counted, formatHours } from '@/lib/format';
@@ -26,8 +28,9 @@ import { toast } from '@/lib/toast';
  * Health's Detect chapters (Bridge Phase 1d): the confirmation before queueing
  * `chapters.detect` for one book or a selection. It says what happens (the
  * Bridge transcribes the audio and finds the chapters in the narration), that
- * no agent is used, the transcription time the Bridge's figures predict, and
- * what happens when no chapters are heard. It reads the Bridge's status (its
+ * no agent is used, the transcription time the Bridge's figures predict (and,
+ * when the Bridge waits for an ASR worker and none is connected, that the job
+ * waits for one first), and what happens when no chapters are heard. It reads the Bridge's status (its
  * figures and library mappings) rather than an estimate per book, so a large
  * selection costs one request. Nothing is queued while a book's library can't
  * be written to; a book is passed over, and named in the toast (skipNotes),
@@ -78,6 +81,7 @@ export function DetectChaptersDialog({
   const chosen = books ?? [];
   const plan = detectPlan(status.data, chosen);
   const offline = status.data ? !status.data.online : false;
+  const noWorker = waitsForWorker(status.data);
   const length = chosen.reduce((sum, b) => sum + Math.max(0, b.duration), 0);
 
   const close = (next: boolean) => {
@@ -130,9 +134,11 @@ export function DetectChaptersDialog({
       <DialogContent
         title={t('health.detect.title')}
         description={
-          chosen.length > 1
-            ? t('health.detect.books', counted(chosen.length, lang))
-            : chosen[0]?.title || chosen[0]?.path
+          chosen.length > 1 ? (
+            t('health.detect.books', counted(chosen.length, lang))
+          ) : (
+            <ClampedName>{chosen[0]?.title || chosen[0]?.path || ''}</ClampedName>
+          )
         }
         icon={AudioLines}
         tone="info"
@@ -160,6 +166,9 @@ export function DetectChaptersDialog({
                 [t('bridge.generate.cost'), t('health.detect.noAgent')],
               ]}
             />
+            {noWorker ? (
+              <p className="text-[12.5px] text-muted-foreground">{t('health.detect.noWorker')}</p>
+            ) : null}
             <p className="text-[12.5px] text-muted-foreground">{t('health.detect.notFound')}</p>
             <FormError>{error}</FormError>
           </DialogBody>

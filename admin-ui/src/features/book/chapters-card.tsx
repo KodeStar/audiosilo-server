@@ -12,7 +12,8 @@ import { ProvenanceMarker } from '@/components/provenance';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { detectJobsKnown, KIND_DETECT } from '@/features/bridge/generate-model';
-import { useBookGenerateJob } from '@/features/bridge/use-generate';
+import { GenerateStatus } from '@/features/bridge/generate-status';
+import { useBookGenerateJob, useBridgeLink } from '@/features/bridge/use-generate';
 import { toastError } from '@/lib/errors';
 import { formatClock, formatDateTime, formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
@@ -50,7 +51,16 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   const b = detail.book;
   // The book's chapter detection: when its job ends the book is fetched again
   // (useBookGenerateJob), so the chapters it found show here, metadata or not.
-  useBookGenerateJob(b.library_id, b.path, detectJobsKnown(useServerInfo().data), KIND_DETECT);
+  // A parked one says why here (waiting for an ASR worker, say: BRIDGE-10), as
+  // it no longer holds the Community card's Generate back.
+  const detect = useBookGenerateJob(
+    b.library_id,
+    b.path,
+    detectJobsKnown(useServerInfo().data),
+    KIND_DETECT,
+  ).job;
+  const parkedDetect = detect?.state === 'needs_attention' ? detect : undefined;
+  const bridgeLink = useBridgeLink(parkedDetect !== undefined);
   const chapters = detail.chapters ?? [];
   const files = detail.files ?? [];
   const [active, setActive] = useState<number | null>(null);
@@ -205,6 +215,12 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
               </span>
             </p>
             {revertButton}
+          </div>
+        ) : null}
+        {parkedDetect ? (
+          <div className="flex flex-col gap-1.5">
+            <p className="text-[13px] font-semibold">{t('book.chapters.detectJob')}</p>
+            <GenerateStatus job={parkedDetect} uiUrl={bridgeLink} />
           </div>
         ) : null}
         <CommunityChapters detail={detail} />

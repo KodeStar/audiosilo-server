@@ -66,6 +66,20 @@ export function setupItemLink(
   return tab ? bridgeTabLink(uiUrl, tab) : undefined;
 }
 
+/**
+ * Whether an online Bridge's transcription waits for an ASR worker and none is
+ * connected (BRIDGE-10): its ASR step is waiting for one (the fallback is wait,
+ * or it has no speech recognition of its own), so a job that transcribes parks
+ * until a worker connects rather than taking the time its figures predict.
+ */
+export function waitsForWorker(
+  status: Pick<BridgeStatus, 'online' | 'setup' | 'workers'> | undefined,
+): boolean {
+  if (!status?.online || status.workers.length > 0) return false;
+  const asr = status.setup?.items.find((item) => item.id === 'asr');
+  return Boolean(asr && !asr.done && asr.detail?.includes(ASR_WAITING_DETAIL));
+}
+
 /** How a step reads: done, still needed, or optional and not done. */
 export type SetupState = 'done' | 'todo' | 'optional';
 
@@ -114,10 +128,11 @@ export type GenerateNeed = 'asr' | 'agent' | 'libraries';
 
 /**
  * The first step still to do that generating for a book in this library
- * needs, in the checklist's order: speech recognition, the agent's credential,
- * or this library's mapping (the libraries step counts only when this library
- * is the one the Bridge can't write to yet). These count whether or not the
- * checklist marks them required: a Bridge where one is optional (the agent,
+ * needs: the agent's credential first (no worker can stand in for it, so it is
+ * the reason the player gives too, BRIDGE-09), then speech recognition or this
+ * library's mapping in the checklist's order (the libraries step counts only
+ * when this library is the one the Bridge can't write to yet). These count
+ * whether or not the checklist marks them required: a Bridge where one is optional (the agent,
  * bridge#36: it runs other jobs without one) still can't generate without it,
  * and the job would park. Undefined without an online Bridge's checklist, or
  * when nothing it needs is missing (budget and GitHub never stop a run here:
@@ -128,9 +143,10 @@ export function generateNeed(
   libraryId: number,
 ): GenerateNeed | undefined {
   if (!status?.online || !status.setup) return undefined;
+  if (status.setup.items.some((item) => item.id === 'agent' && !item.done)) return 'agent';
   for (const item of status.setup.items) {
     if (item.done) continue;
-    if (item.id === 'asr' || item.id === 'agent') return item.id;
+    if (item.id === 'asr') return item.id;
     if (item.id === 'libraries') {
       const mapping = status.libraries.find((l) => l.id === libraryId)?.mapping ?? null;
       if (mappingState(mapping) !== 'ready') return 'libraries';

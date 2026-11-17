@@ -10,7 +10,12 @@ import { QueryError } from '@/components/query-error';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { FormError } from '@/components/ui/field';
 import { KIND_READALONG } from '@/features/bridge/generate-model';
-import { NoEstimate, NotWritableNotice, OfflineNotice } from '@/features/bridge/generate-parts';
+import {
+  ClampedName,
+  NoEstimate,
+  NotWritableNotice,
+  OfflineNotice,
+} from '@/features/bridge/generate-parts';
 import {
   queueInOrder,
   queueReport,
@@ -65,7 +70,7 @@ export function ReadalongDialog({
     <Dialog open={open} onOpenChange={close}>
       <DialogContent
         title={remake ? t('book.readalong.dialogRemake') : t('book.readalong.dialog')}
-        description={book.title || book.path}
+        description={<ClampedName>{book.title || book.path}</ClampedName>}
         icon={BookOpenText}
         tone="info"
       >

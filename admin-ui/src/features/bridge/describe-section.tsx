@@ -16,7 +16,7 @@ import {
   generateJobsKnown,
   KIND_DESCRIBE,
 } from './generate-model';
-import { JobActions, JobSection, OfflineNotice } from './generate-parts';
+import { ClampedName, JobActions, JobSection, OfflineNotice } from './generate-parts';
 import { GenerateStatus } from './generate-status';
 import { useBookGenerateJob, useBridgeLink, useGenerateEstimate } from './use-generate';
 
@@ -174,7 +174,7 @@ function DescribeDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         title={t('bridge.describe.dialog')}
-        description={book.title || book.path}
+        description={<ClampedName>{book.title || book.path}</ClampedName>}
         icon={PenLine}
         tone="info"
       >

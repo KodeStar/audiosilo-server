@@ -100,6 +100,9 @@ type MatchRun struct {
 	AppliedAt     *string        `json:"applied_at"`
 	Error         string         `json:"error,omitempty"` // matchrun's ErrCode* (see there)
 	Counts        MatchRunCounts `json:"counts"`
+	// WaitingUntil (RFC 3339) is set by the api, never stored, on the working run
+	// while it waits as the community service asked (matchrun.Runner.WaitingUntil).
+	WaitingUntil string `json:"waiting_until,omitempty"`
 }
 
 // MatchProposal is what the best community candidate offers a book: the work and
@@ -174,9 +177,11 @@ func (c *Catalog) StartMatchRun(ctx context.Context, run MatchRun) (int64, error
 // a repick that found no better ASIN) and counts the book done. The item of a book
 // whose library was deleted since the run listed it is left out (the library's
 // items go with it), never failing the run; ErrNotFound when the run itself is
-// gone (its library was deleted).
+// gone (its library was deleted). A user-state write (store.userStateTables): no
+// content cache reads a run's items or its count, so a run recording a book a
+// moment leaves the list caches warm (server#307).
 func (c *Catalog) RecordMatchItem(ctx context.Context, runID int64, item *MatchRunItem) error {
-	return c.db.WithTx(ctx, "RecordMatchItem", func(tx *sql.Tx) error {
+	return c.db.WithUserStateTx(ctx, "RecordMatchItem", func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE match_runs SET done = done + 1 WHERE id = ?`, runID)
 		if err != nil {
 			return err
@@ -315,10 +320,12 @@ func (c *Catalog) settleMatchRuns(ctx context.Context, op string, id int64, only
 	return int(settled), nil
 }
 
-// matchRunCols reads a run with its counts, from one pass over its items that
-// idx_match_run_items_counts covers (the console polls the runs each second while
-// one works).
-const matchRunCols = `r.id, r.library_id, COALESCE(l.name, ''), r.mode, r.region, r.status, r.started_by,
+// matchRunSelect reads runs with their counts, from one pass over the items that
+// idx_match_run_items_counts covers; itemsWhere narrows that pass (GetMatchRun's
+// "WHERE run_id = ?", the console's poll each second while a run works, reads one
+// run's items, not every kept run's).
+func matchRunSelect(itemsWhere string) string {
+	return `SELECT r.id, r.library_id, COALESCE(l.name, ''), r.mode, r.region, r.status, r.started_by,
 	COALESCE(u.username, ''), r.started_at, r.finished_at, r.total, r.done, r.scope, r.apply_total,
 	r.apply_done, r.applied_at, r.error, COALESCE(n.auto, 0), COALESCE(n.pending, 0),
 	COALESCE(n.review, 0), COALESCE(n.none, 0), COALESCE(n.error, 0), COALESCE(n.applied, 0),
@@ -333,7 +340,8 @@ const matchRunCols = `r.id, r.library_id, COALESCE(l.name, ''), r.mode, r.region
 	                  SUM(applied = '` + ItemApplied + `') AS applied,
 	                  SUM(applied = '` + ItemSkipped + `') AS skipped,
 	                  SUM(applied = '` + ItemFailed + `') AS failed
-	             FROM match_run_items GROUP BY run_id) n ON n.run_id = r.id`
+	             FROM match_run_items ` + itemsWhere + ` GROUP BY run_id) n ON n.run_id = r.id`
+}
 
 func scanMatchRun(row interface{ Scan(...any) error }, r *MatchRun) error {
 	n := &r.Counts
@@ -347,13 +355,13 @@ func scanMatchRun(row interface{ Scan(...any) error }, r *MatchRun) error {
 func (c *Catalog) ListMatchRuns(ctx context.Context) ([]MatchRun, error) {
 	return queryRows(ctx, c.db, func(rows *sql.Rows, r *MatchRun) error {
 		return scanMatchRun(rows, r)
-	}, `SELECT `+matchRunCols+` ORDER BY r.id DESC LIMIT ?`, maxMatchRuns)
+	}, matchRunSelect("")+` ORDER BY r.id DESC LIMIT ?`, maxMatchRuns)
 }
 
 // GetMatchRun returns one run (ErrNotFound when there is none).
 func (c *Catalog) GetMatchRun(ctx context.Context, id int64) (*MatchRun, error) {
 	var r MatchRun
-	err := scanMatchRun(c.db.QueryRowContext(ctx, `SELECT `+matchRunCols+` WHERE r.id = ?`, id), &r)
+	err := scanMatchRun(c.db.QueryRowContext(ctx, matchRunSelect("WHERE run_id = ?")+` WHERE r.id = ?`, id, id), &r)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

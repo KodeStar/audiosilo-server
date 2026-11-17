@@ -69,9 +69,13 @@ import { cn } from '@/lib/utils';
 import {
   NO_PICKS,
   applyCount,
+  answeredCount,
   applyRequest,
   bulkPhase,
+  canApply,
   changeParts,
+  firstReviewTab,
+  heldLengths,
   isChosen,
   hasCloseScore,
   picksForScope,
@@ -79,6 +83,7 @@ import {
   leaveOut,
   runFraction,
   runProgress,
+  seesNotFound,
   stoppedEarly,
   togglePick,
   togglePickRange,
@@ -181,7 +186,7 @@ export function BulkMatch() {
           {stoppedEarly(run) ? (
             <p role="status" className="w-full text-[12.5px] text-warning">
               {t('health.bulkMatch.stoppedEarly', {
-                done: formatNumber(run.done, lang),
+                done: formatNumber(answeredCount(run), lang),
                 total: formatNumber(run.total, lang),
               })}
             </p>
@@ -204,6 +209,11 @@ export function BulkMatch() {
       ) : (
         <>
           {run ? <LastRun run={run} lang={lang} /> : null}
+          {seesNotFound(run) ? (
+            <Button variant="link" className="self-start" onClick={() => setReviewing(true)}>
+              {t('health.bulkMatch.seeNotFound')}
+            </Button>
+          ) : null}
           <div className="flex flex-wrap items-center gap-2">
             <LibrarySelect
               value={libraryId}
@@ -251,7 +261,7 @@ export function BulkMatch() {
         </>
       )}
 
-      {run && phase === 'ready' ? (
+      {run && (phase === 'ready' || seesNotFound(run)) ? (
         <ReviewDialog run={run} open={reviewing} onOpenChange={setReviewing} />
       ) : null}
     </section>
@@ -277,6 +287,9 @@ function Working({ run, lang, onStop }: { run: MatchRun; lang: string; onStop: (
         </Button>
       </div>
       <ProgressBar fraction={runFraction(run)} label={t('health.bulkMatch.progress')} />
+      {run.waiting_until ? (
+        <p className="text-[12.5px] text-muted-foreground">{t('health.bulkMatch.waiting')}</p>
+      ) : null}
     </div>
   );
 }
@@ -368,9 +381,12 @@ function ReviewDialog({
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const repick = run.mode === 'repick';
+  // An applied run (seen for what it didn't find) takes no apply: the review is
+  // to read, with no scope, no checkboxes and no Apply.
+  const readOnly = !canApply(run);
   // Every automatic refresh pick must be checked for changes, including pages
   // the admin has not opened. Other modes keep manual pagination.
-  const readAllAuto = open && run.mode === 'refresh' && run.counts.pending > 0;
+  const readAllAuto = open && !readOnly && run.mode === 'refresh' && run.counts.pending > 0;
   const autoItems = useAllMatchRunItems(run.id, 'auto', readAllAuto);
   const autoRows = useMemo(
     () => autoItems.data?.pages.flatMap((page) => page.items ?? []) ?? [],
@@ -392,7 +408,7 @@ function ReviewDialog({
   // A refresh takes fill or overwrite only (matchrun.ScopesFor): it keeps a book's
   // own ASIN or ISBN, and either fills in a store listing's from its recording.
   const scopes = run.mode === 'refresh' ? MATCH_SCOPES.filter((s) => s !== 'ids') : MATCH_SCOPES;
-  const firstTab: MatchOutcome = run.counts.pending || repick ? 'auto' : 'review';
+  const firstTab = firstReviewTab(run);
   const [tab, setTab] = useState<MatchOutcome>(firstTab);
   const [picks, setPicks] = useState<Picks>(NO_PICKS);
   const [loaded, setLoaded] = useState<ReadonlyMap<number, MatchRunItem>>(() => new Map());
@@ -543,16 +559,18 @@ function ReviewDialog({
             <DialogBody className="flex flex-col gap-4">
               {repick ? null : (
                 <>
-                  <RadioCards
-                    label={t('health.bulkMatch.scope.label')}
-                    value={scope}
-                    onValueChange={setScope}
-                    options={scopes.map((s) => ({
-                      value: s,
-                      title: t(`health.bulkMatch.scope.${s}`),
-                      description: t(`health.bulkMatch.scope.${s}Body`),
-                    }))}
-                  />
+                  {readOnly ? null : (
+                    <RadioCards
+                      label={t('health.bulkMatch.scope.label')}
+                      value={scope}
+                      onValueChange={setScope}
+                      options={scopes.map((s) => ({
+                        value: s,
+                        title: t(`health.bulkMatch.scope.${s}`),
+                        description: t(`health.bulkMatch.scope.${s}Body`),
+                      }))}
+                    />
+                  )}
                   <SegmentedControl
                     label={t('health.bulkMatch.outcomes')}
                     value={tab}
@@ -584,6 +602,7 @@ function ReviewDialog({
                 run={run}
                 outcome={tab}
                 scope={applyScope}
+                readOnly={readOnly}
                 picks={picks}
                 onPick={setPicks}
                 matchedByHand={matchedByHand}
@@ -592,16 +611,24 @@ function ReviewDialog({
               />
             </DialogBody>
             <DialogFooter>
-              <DialogClose render={<Button type="button" variant="ghost" />}>
-                {t('common.cancel')}
-              </DialogClose>
-              <Button
-                onClick={() => void apply()}
-                disabled={busy || !autoReady || (count === 0 && !finishEmpty)}
-              >
-                {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-                {finishEmpty ? t('common.done') : t('health.bulkMatch.apply', counted(count, lang))}
-              </Button>
+              {readOnly ? (
+                <DialogClose render={<Button type="button" />}>{t('common.done')}</DialogClose>
+              ) : (
+                <>
+                  <DialogClose render={<Button type="button" variant="ghost" />}>
+                    {t('common.cancel')}
+                  </DialogClose>
+                  <Button
+                    onClick={() => void apply()}
+                    disabled={busy || !autoReady || (count === 0 && !finishEmpty)}
+                  >
+                    {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+                    {finishEmpty
+                      ? t('common.done')
+                      : t('health.bulkMatch.apply', counted(count, lang))}
+                  </Button>
+                </>
+              )}
             </DialogFooter>
             {byHand ? (
               <MatchDialog
@@ -652,6 +679,7 @@ function ItemList({
   run,
   outcome,
   scope,
+  readOnly,
   picks,
   onPick,
   matchedByHand,
@@ -661,6 +689,8 @@ function ItemList({
   run: MatchRun;
   outcome: MatchOutcome;
   scope: MatchScope;
+  /** The run takes no apply (an applied one): no row has a checkbox. */
+  readOnly: boolean;
   picks: Picks;
   onPick: (change: (picks: Picks) => Picks) => void;
   /** Ids matched by hand from the review, which a range leaves as they are. */
@@ -727,8 +757,8 @@ function ItemList({
             item={item}
             root={roots[item.library_id]}
             scope={scope}
-            chosen={isChosen(item, picks, run.mode, scope)}
-            mode={run.mode}
+            pickable={!readOnly && isPickable(item, run.mode, scope)}
+            chosen={!readOnly && isChosen(item, picks, run.mode, scope)}
             onToggle={(shift) => toggle(item, shift)}
             onMatchByHand={() => onMatchByHand(item)}
           />
@@ -757,7 +787,7 @@ function ItemRow({
   item,
   root,
   scope,
-  mode,
+  pickable,
   chosen,
   onToggle,
   onMatchByHand,
@@ -766,7 +796,8 @@ function ItemRow({
   /** The library's folder: the book's whole path is the path's tooltip. */
   root: string | undefined;
   scope: MatchScope;
-  mode: MatchRunMode;
+  /** Whether the row has a checkbox (isPickable, and a run that takes an apply). */
+  pickable: boolean;
   chosen: boolean;
   onToggle: (shift: boolean) => void;
   onMatchByHand: () => void;
@@ -791,13 +822,15 @@ function ItemRow({
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
   // An item held for its length says both, the book's as it is now: none once
   // they read the same (the book's length changed since the run, server#355).
-  const lengths =
-    item.detail === 'length_differs' && p.runtime_min && item.book.duration
-      ? {
-          book: formatDuration(item.book.duration, lang),
-          recording: formatDuration(p.runtime_min * 60, lang),
-        }
-      : undefined;
+  // One held for its identifier says them too when they are that far apart (the
+  // run records one reason, server#352).
+  const held = heldLengths(item);
+  const lengths = held
+    ? {
+        book: formatDuration(held.book, lang),
+        recording: formatDuration(held.recording, lang),
+      }
+    : undefined;
   const heldForLength = lengths && lengths.book !== lengths.recording ? lengths : undefined;
   const seriesLine = (refs: SeriesRef[]) =>
     refs
@@ -833,7 +866,7 @@ function ItemRow({
       onMouseDown={keepShiftClickFromSelectingText(true)}
     >
       <span className="grid size-5 shrink-0 place-items-center pt-0.5">
-        {isPickable(item, mode, scope) ? (
+        {pickable ? (
           <Checkbox
             checked={chosen}
             onCheckedChange={(_, d) => onToggle(shiftHeld(d.event))}
@@ -898,14 +931,19 @@ function ItemRow({
             )}
           </span>
         )}
-        {candidate && heldForLength ? (
-          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
-            {t('health.bulkMatch.item.lengthDiffers', heldForLength)}
-          </span>
-        ) : null}
         {candidate && item.detail === 'identifier_disagrees' ? (
           <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
             {t('health.bulkMatch.item.identifierDisagrees')}
+          </span>
+        ) : null}
+        {candidate && heldForLength ? (
+          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
+            {t(
+              item.detail === 'identifier_disagrees'
+                ? 'health.bulkMatch.item.lengthToo'
+                : 'health.bulkMatch.item.lengthDiffers',
+              heldForLength,
+            )}
           </span>
         ) : null}
         {candidate && item.detail === 'dramatization_only' ? (

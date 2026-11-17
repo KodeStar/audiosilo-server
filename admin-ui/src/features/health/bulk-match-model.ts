@@ -1,4 +1,12 @@
-import type { MatchChange, MatchRun, MatchRunItem, MatchRunMode, MatchScope } from '@/api/types';
+import type {
+  MatchChange,
+  MatchOutcome,
+  MatchRun,
+  MatchRunItem,
+  MatchRunMode,
+  MatchScope,
+} from '@/api/types';
+import { runtimeOff } from '@/features/book/match-model';
 import { rangeOf } from '@/features/library/books/use-selection';
 
 // Bulk matching on Health > Not matched (STYLEGUIDE.md "Health triage"): what the
@@ -19,6 +27,74 @@ export function bulkPhase(run: MatchRun | undefined): BulkPhase {
     default:
       return 'idle';
   }
+}
+
+/**
+ * Whether the card offers the review of a run with nothing left to apply, to see
+ * the books it didn't find and their best scores (server#307): a run that
+ * matched and found books it couldn't match, weak matches among them.
+ */
+export function seesNotFound(run: MatchRun | undefined): boolean {
+  return (
+    !!run &&
+    bulkPhase(run) === 'idle' &&
+    (run.status === 'ready' || run.status === 'applied') &&
+    run.counts.none > 0
+  );
+}
+
+/**
+ * The tab the review opens on: a run seen for what it didn't find (seesNotFound)
+ * opens on those, whatever else it holds (an applied run keeps the confident
+ * books left out and the ones never put in); else the confident books while any
+ * wait (a repick's are all confident), else the ones to review.
+ */
+export function firstReviewTab(run: MatchRun): MatchOutcome {
+  if (seesNotFound(run)) return 'none';
+  return run.counts.pending || run.mode === 'repick' ? 'auto' : 'review';
+}
+
+/**
+ * Whether the review can apply anything: only a ready run takes an apply
+ * (catalog.BeginApply), so an applied one seen for what it didn't find is to
+ * read, with no picks and no Apply.
+ */
+export function canApply(run: MatchRun): boolean {
+  return run.status === 'ready';
+}
+
+/**
+ * How far a recording may be off the book's length before a match run holds it
+ * for review (meta.PlausibleRuntimeOff; a recording the book's narrator reads
+ * may be further off, which the console can't tell).
+ */
+const PLAUSIBLE_RUNTIME_OFF = 0.1;
+
+/**
+ * The book's length now and its proposed recording's, in seconds, for an item
+ * held for its length, and for one held for its identifier whose recording is
+ * that far off too (the run records only the first reason, server#352).
+ * Undefined when either is unknown, or the item is held for neither.
+ */
+export function heldLengths(
+  item: Pick<MatchRunItem, 'detail' | 'proposal' | 'book'>,
+): { book: number; recording: number } | undefined {
+  const book = item.book.duration ?? 0;
+  const off = runtimeOff(item.proposal.runtime_min, book);
+  if (off === undefined) return undefined;
+  const held =
+    item.detail === 'length_differs' ||
+    (item.detail === 'identifier_disagrees' && off > PLAUSIBLE_RUNTIME_OFF);
+  return held ? { book, recording: (item.proposal.runtime_min ?? 0) * 60 } : undefined;
+}
+
+/**
+ * The books a run answered: the ones it checked, less those the community
+ * service never answered for (error items), so a run stopped early says how
+ * many it really checked (server#352).
+ */
+export function answeredCount(run: MatchRun): number {
+  return Math.max(0, run.done - run.counts.error);
 }
 
 /**

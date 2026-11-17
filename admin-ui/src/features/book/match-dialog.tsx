@@ -58,6 +58,7 @@ import {
   parseMatchQuery,
   scoreTone,
   type CompareRow,
+  type LengthCompare,
 } from './match-model';
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 3)}...` : s);
@@ -210,6 +211,11 @@ function MatchBody({
   const recordsMatch =
     !!picked && !detail.fields.asin.value && !detail.fields.isbn.value && !isRecorded;
   const rows = picked ? compareRows(detail.fields, picked, rec) : [];
+  // The recorded match accepted again with nothing ticked records the ASIN and
+  // ISBN it offers (a match recorded before 2.7.0 holds none, server#355): worth
+  // a press when it offers one.
+  const recordsOffered =
+    isRecorded && rows.some((r) => (r.field === 'asin' || r.field === 'isbn') && !!r.theirs);
   const coverUrl = picked ? communityCover(picked, rec) : '';
   // defaultCoverTick never ticks a candidate without a cover.
   const taking = ticks.size + Number(coverTick);
@@ -394,7 +400,10 @@ function MatchBody({
         <DialogClose render={<Button type="button" variant="ghost" />}>
           {t('common.cancel')}
         </DialogClose>
-        <Button onClick={() => void accept()} disabled={busy || (taking === 0 && !recordsMatch)}>
+        <Button
+          onClick={() => void accept()}
+          disabled={busy || (taking === 0 && !recordsMatch && !recordsOffered)}
+        >
           {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
           {taking ? t('book.match.accept', { count: taking }) : t('book.match.acceptMatch')}
         </Button>
@@ -418,6 +427,17 @@ function recordingLine(
   ]
     .filter(Boolean)
     .join(' · ');
+}
+
+/** A recording's length against the files, in words: matches, close, or how much longer or shorter. */
+function lengthLabel(
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  lang: string,
+  length: NonNullable<LengthCompare>,
+): string {
+  if (length.kind === 'match') return t('book.match.lengthMatches');
+  const key = length.kind === 'close' ? 'book.match.lengthClose' : `book.match.${length.kind}`;
+  return t(key, { length: formatDuration(length.seconds, lang) });
 }
 
 function Candidates({
@@ -529,11 +549,7 @@ function Candidates({
                 </Badge>
                 {length ? (
                   <span className="text-[11.5px] text-subtle-foreground">
-                    {length.kind === 'match'
-                      ? t('book.match.lengthMatches')
-                      : t(`book.match.${length.kind}`, {
-                          length: formatDuration(length.seconds, lang),
-                        })}
+                    {lengthLabel(t, lang, length)}
                   </span>
                 ) : null}
               </span>
@@ -718,11 +734,7 @@ function CompareHeader({
           </span>
         ) : null}
         {length ? (
-          <span className="text-[12px] text-subtle-foreground">
-            {length.kind === 'match'
-              ? t('book.match.lengthMatches')
-              : t(`book.match.${length.kind}`, { length: formatDuration(length.seconds, lang) })}
-          </span>
+          <span className="text-[12px] text-subtle-foreground">{lengthLabel(t, lang, length)}</span>
         ) : null}
       </div>
       {c.web_url ? (

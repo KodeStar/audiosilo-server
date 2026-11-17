@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
@@ -32,6 +33,9 @@ func (a *API) handleListMatchRuns(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.writeCatalogError(w, err, "list match runs failed", "could not list match runs")
 		return
+	}
+	for i := range runs {
+		a.markWaiting(&runs[i])
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"runs": runs, "region": a.config().Metadata.PreferredRegion()})
 }
@@ -141,7 +145,20 @@ func (a *API) handleGetMatchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if run := a.matchRunFor(w, r); run != nil {
+		a.markWaiting(run)
 		writeJSON(w, http.StatusOK, run)
+	}
+}
+
+// markWaiting sets run's waiting_until while it is the working run and waits as
+// the community service asked: its progress holds meanwhile, and the console says
+// why (server#307).
+func (a *API) markWaiting(run *catalog.MatchRun) {
+	if run.Status != catalog.MatchMatching {
+		return
+	}
+	if until := a.matchRuns.WaitingUntil(run.ID); !until.IsZero() {
+		run.WaitingUntil = until.UTC().Format(time.RFC3339)
 	}
 }
 

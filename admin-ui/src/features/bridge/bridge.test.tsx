@@ -549,6 +549,47 @@ describe('bridge page', () => {
     expect(screen.getAllByText(/Asked by a deleted account/)).toHaveLength(1);
   });
 
+  it('narrows the jobs to a kind, names a follow by its show or feed host, marks high priority (server#186, server#224)', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({
+                id: 8,
+                kind: 'podcast.subscribe',
+                params: { feed_host: 'feeds.example.com', show_path: '' },
+                priority: 10,
+                state: 'queued',
+              }),
+              job({
+                id: 9,
+                kind: 'podcast.subscribe',
+                params: { feed_host: 'feeds.example.com', show_path: 'Hardcore History' },
+                state: 'done',
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/server?topic=bridge');
+    expect(await screen.findByText('feeds.example.com')).toBeInTheDocument();
+    expect(screen.getByText('Hardcore History')).toBeInTheDocument();
+    expect(screen.queryByText(/whole library/)).not.toBeInTheDocument();
+    expect(screen.getAllByText('High priority')).toHaveLength(1);
+
+    await user.selectOptions(screen.getByLabelText('Kind of job'), 'Following a show');
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => c.path === '/admin/bridge/jobs' && c.query.get('kind') === 'podcast.subscribe',
+        ),
+      ).toBe(true),
+    );
+  });
+
   it("words a failed Audible check's code, and keeps the Bridge's text for one it doesn't know", async () => {
     const failed = (id: number, code: string, error: string) =>
       job({

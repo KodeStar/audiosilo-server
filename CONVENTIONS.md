@@ -882,7 +882,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   not: Health ranks duplicate copies by how many people have progress on them) and, for
   `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
   `bridge_status` (`heartbeat_at`, `status`), `bridge_jobs` (`lease_until`, `updated_at`,
-  `progress`), `unknown_asin_reports` (`checked_at`, `sent_at`: Health's `unknown_asin` reads
+  `progress`), `match_runs` (`done`), `unknown_asin_reports` (`checked_at`, `sent_at`: Health's `unknown_asin` reads
   the rest) and `upcoming_owned` (`checked_at`: the list books' `work_id` reads the
   rest, server#241), which columns an UPDATE may change by value (the hook reads a row only up to
   the rule's last watched column, `watchedChanged`, so a freed column after them, the
@@ -897,7 +897,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the Bridge's Audible title lists (`PutAudibleTitles`: `audible_titles` rows and the account's `last_poll_at`, a
   complete poll's `refused_at` cleared and `refusal_ended_at` stamped), the scheduler's `MarkAudibleQueued` (`last_queued_at`) and
   `MarkAudibleSyncQueued` (`sync_queued_at`), an ended sync's `FoldAudibleSync` (`last_sync_at`, `refused_at`),
-  `PutMetaCache`, the upcoming releases job's tables
+  `PutMetaCache`, a match run recording a book (`RecordMatchItem`: a `match_run_items` row and the
+  run's `done`, read only by the uncached match-run routes; server#307), the upcoming releases job's tables
   (`upcoming_owned` while it only renews `checked_at`, `upcoming_series`, `meta_series`,
   `upcoming_items`, `upcoming_announced`: derived,
   read only by `/me/upcoming` and the job), the token touch in
@@ -1807,8 +1808,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `workSem` slot (`workSlot`): its Pacer and workers bound it, and a Retry-After it sits out must not hold up a
   listener's read or the dialog. Concurrent misses of one series share one read (`seriesFacts`). In a run a
   503 is waited out like a 429 (`getJSON`: Retry-After, `rateLimitRetries`, `maxRetryAfter`, not past
-  the deadline), each wait logged at INFO with the run's total; outside one a 503 is an outage at
-  once (the dialog's 502). `getJSONOnce` reads every answer to its end (`maxDrain`), and
+  the deadline), each wait logged at INFO with the run's total in wall time (the workers' overlapping
+  waits counted once, `Pacer.noteWait`); while one runs the working run's `GET /admin/match-runs[/{id}]`
+  carries `waiting_until` (`Runner.WaitingUntil`, never stored) and the console says the run is
+  pausing; outside one a 503 is an outage at once (the dialog's 502). The book whose failure trips
+  `maxFailStreak` keeps its `error` item (recorded before the stop). In mirror mode the copy runs at
+  most half the cores' worth of works/match at once (`metamirror.matchConcurrency`). `getJSONOnce` reads every answer to its end (`maxDrain`), and
   `maxIdleConnsPerHost` keeps connections for the workers over HTTP/1.1. A run only records (`match_run_items`: outcome auto/review/none/error,
   the best candidate's `catalog.MatchProposal`); apply writes community overrides
   via `EditBook` and the cover via `saveMatchCover` (the dialog's fetch + keep

@@ -5,7 +5,7 @@ import type { ScanRun } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { idle, jobsState } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
-import { signedInRoutes } from '@/test/routes';
+import { signedInRoutes, withPodcastLibrary } from '@/test/routes';
 
 // Health > Jobs: the live scan, the queue, schedules and history with logs.
 
@@ -133,6 +133,20 @@ describe('jobs', () => {
       await screen.findByText('Moved Dune to Dune/01 - Dune; progress followed'),
     ).toBeInTheDocument();
     expect(screen.getByText('Finished: 2,400 books on disk')).toBeInTheDocument();
+  });
+
+  it("filters the history by any library, a podcast library's scans too (server#214)", async () => {
+    const calls = mockFetch(routes(withPodcastLibrary()));
+    const user = userEvent.setup();
+    renderApp('/health/jobs');
+    const filter = await screen.findByRole('combobox', { name: 'Show scans of' });
+    await waitFor(() => expect(within(filter).getAllByRole('option')).toHaveLength(4));
+    await user.selectOptions(filter, '3');
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.path === '/admin/scan-runs' && c.query.get('library_id') === '3'),
+      ).toBe(true),
+    );
   });
 
   it('runs a scan from the menu', async () => {

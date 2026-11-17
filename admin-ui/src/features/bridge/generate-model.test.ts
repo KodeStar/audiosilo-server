@@ -59,6 +59,7 @@ import {
   titleCase,
   type BatchCheck,
   cancelledView,
+  oneStop,
 } from './generate-model';
 import { skipNotes } from './use-generate';
 
@@ -1189,10 +1190,10 @@ describe('cancelledView (BRIDGE-02)', () => {
     ...over,
   });
 
-  it("gives the server's own reason as it is", () => {
+  it("gives the server's own reason as a sentence (server#271)", () => {
     expect(
       cancelledView(cancelled({ error: 'the book moved onto another job of this kind' })),
-    ).toEqual({ byAdmin: false, reason: 'the book moved onto another job of this kind' });
+    ).toEqual({ byAdmin: false, reason: 'The book moved onto another job of this kind.' });
   });
 
   it("names an admin's cancel and the park, never the raw error", () => {
@@ -1211,13 +1212,16 @@ describe('cancelledView (BRIDGE-02)', () => {
   });
 
   it("names the server's reason for a working job it stopped, not an admin", () => {
-    for (const error of [
-      'a generate job for the book replaced it; make the read-along again after',
-      'a newer request replaced it',
-      'the Audible account was removed',
-      "the Audible account's library was deleted",
+    for (const [error, reason] of [
+      [
+        'a generate job for the book replaced it; make the read-along again after',
+        'A generate job for the book replaced it; make the read-along again after.',
+      ],
+      ['a newer request replaced it', 'A newer request replaced it.'],
+      ['the Audible account was removed', 'The Audible account was removed.'],
+      ["the Audible account's library was deleted", "The Audible account's library was deleted."],
     ]) {
-      expect(cancelledView(cancelled({ error }))).toEqual({ byAdmin: false, reason: error });
+      expect(cancelledView(cancelled({ error })).reason).toBe(reason);
     }
   });
 
@@ -1225,5 +1229,13 @@ describe('cancelledView (BRIDGE-02)', () => {
     expect(cancelledView(cancelled({ cancel_requested: false, error: 'raw' }))).toEqual({
       byAdmin: false,
     });
+  });
+});
+
+describe('oneStop (server#218)', () => {
+  it('drops the second of two closing full stops, and keeps an ellipsis', () => {
+    expect(oneStop('Tries again in 29 min..')).toBe('Tries again in 29 min.');
+    expect(oneStop('Riprova tra 29 min.')).toBe('Riprova tra 29 min.');
+    expect(oneStop('Wait...')).toBe('Wait...');
   });
 });

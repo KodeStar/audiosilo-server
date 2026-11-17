@@ -783,3 +783,13 @@ func TestMirrorWake(t *testing.T) {
 		t.Fatalf("a wake with no check due listed the releases (%d -> %d)", lists, got)
 	}
 }
+
+// The copy's matches take half the server's cores at most, and always one
+// (server#307: a bulk run's six workers took six).
+func TestMatchConcurrency(t *testing.T) {
+	for _, c := range []struct{ procs, want int }{{1, 1}, {2, 1}, {8, 4}, {12, 6}} {
+		if got := matchConcurrency(c.procs); got != c.want {
+			t.Errorf("GOMAXPROCS %d: %d matches at once, want %d", c.procs, got, c.want)
+		}
+	}
+}

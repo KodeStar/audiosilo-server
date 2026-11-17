@@ -1102,3 +1102,28 @@ func TestOIDCPendingCapped(t *testing.T) {
 		t.Fatalf("%d told after the hour, want the one left out told now (%d)", n, oidcPendingCeiling+1)
 	}
 }
+
+// An Audible backup is worded as one (bridge#47), named by the title it backed
+// up, rather than as a "Bridge job".
+func TestBridgeAudibleImportWording(t *testing.T) {
+	t.Parallel()
+	s, cat, ctx := newService(t)
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 1, Kind: bridge.KindAudibleImport, State: bridge.StateDone,
+		Library: "Fiction", LibraryID: 1, Path: "Weir/Project Hail Mary", Title: "Project Hail Mary"})
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 2, Kind: bridge.KindAudibleImport, State: bridge.StateFailed,
+		Library: "Fiction", LibraryID: 1, Title: "Artemis", Error: "disk full"})
+	done, _, err := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFinished)
+	if err != nil || len(done) != 1 {
+		t.Fatalf("finished events = %+v, %v", done, err)
+	}
+	if m := compose(done[0], s.server()); m.Title != "Backed up from Audible: Project Hail Mary" || m.Text != "It is in the library now." {
+		t.Errorf("finished = %+v", m)
+	}
+	failed, _, err := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
+	if err != nil || len(failed) != 1 {
+		t.Fatalf("failed events = %+v, %v", failed, err)
+	}
+	if m := compose(failed[0], s.server()); !strings.HasPrefix(m.Title, "Audible backup failed: Artemis") {
+		t.Errorf("failed = %+v", m)
+	}
+}

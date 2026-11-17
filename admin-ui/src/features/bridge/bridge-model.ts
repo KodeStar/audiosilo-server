@@ -27,6 +27,28 @@ export const BRIDGE_JOB_STATES = [
 /** Phase 0's proof job: the Bridge checks a library (or a book) through its mapping. */
 export const KIND_VERIFY = 'bridge.verify';
 
+/**
+ * Every job kind the jobs list can be narrowed to, in the order the filter
+ * lists them (internal/bridge's kinds; each has a `bridge.kind.<kind>` name).
+ */
+export const BRIDGE_JOB_KINDS = [
+  KIND_VERIFY,
+  'sidecars.generate',
+  'sidecars.describe',
+  'chapters.detect',
+  'readalong.align',
+  'sidecars.contribute',
+  'meta.correct',
+  'podcast.subscribe',
+  'podcast.poll',
+  'podcast.fetch',
+  'podcast.retain',
+  'audible.poll',
+  'audible.import',
+  'audible.sync',
+  'librivox.fetch',
+] as const;
+
 /** The longest hold bridge.verify takes (bridge.verifyParams). */
 export const MAX_HOLD_SECONDS = 600;
 
@@ -277,6 +299,18 @@ export function resultSummary(result: unknown): ResultSummary | null {
  */
 export function backupAsin(job: Pick<BridgeJob, 'kind' | 'params'>): string | undefined {
   return job.kind === 'audible.import' ? text(job.params?.asin) : undefined;
+}
+
+/**
+ * The show a podcast.subscribe is about, as its params name it (the job has a
+ * library but no path): the show it repairs, else the one its result placed,
+ * else the feed's host ("feeds.example.com"). Undefined for any other kind.
+ */
+export function podcastSubject(
+  job: Pick<BridgeJob, 'kind' | 'params' | 'result'>,
+): string | undefined {
+  if (job.kind !== 'podcast.subscribe') return undefined;
+  return text(job.params?.show_path) ?? text(job.result?.show_path) ?? text(job.params?.feed_host);
 }
 
 /** Whether an object carries anything (a job's result or progress is `{}` when empty). */

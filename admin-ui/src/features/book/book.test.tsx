@@ -1102,6 +1102,32 @@ describe('match with community metadata', () => {
     expect(within(compare).getByRole('button', { name: 'Match to this work' })).toBeDisabled();
   });
 
+  it('accepts the recorded match again with nothing ticked, to record the ASIN it offers (server#355)', async () => {
+    const detail = bookDetail();
+    detail.book = { ...detail.book, has_cover: true };
+    detail.community_match = { ...sameWorkMatch, how: 'auto', matched_at: '2026-11-01T00:00:00Z' };
+    const asin = detail.fields.asin.value;
+    const offering: MatchCandidate = {
+      ...sameWork,
+      recordings: [{ id: 'r1', narrators: [], asins: [asin], isbns: [] }],
+    };
+    const calls = mockFetch(
+      matchRoutes(detail, {
+        'GET /admin/libraries/1/book/match': { body: { candidates: [offering] } },
+      }),
+    );
+    const { user, compare } = await openCompare();
+    expect(fieldBox(compare)).toBeNull();
+    const accept = within(compare).getByRole('button', { name: 'Match to this work' });
+    expect(accept).toBeEnabled();
+    await user.click(accept);
+    await waitFor(() =>
+      expect(patches(calls).map((c) => c.body)).toEqual([
+        { set: {}, source: 'community', match: { ...sameWorkMatch, asin } },
+      ]),
+    );
+  });
+
   it('offers nothing to accept for a book with an ASIN when nothing is ticked', async () => {
     const detail = bookDetail();
     detail.book = { ...detail.book, has_cover: true };

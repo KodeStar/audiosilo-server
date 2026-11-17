@@ -300,7 +300,7 @@ describe('with the contributions module off', () => {
 });
 
 describe('why Generate is missing', () => {
-  it("names the agent credential the Bridge's checklist still needs, with a link to its settings", async () => {
+  it("names the agent the Bridge's checklist still needs, with a link to its settings", async () => {
     const s = status();
     s.setup!.items = s.setup!.items.map((i) => (i.id === 'agent' ? { ...i, done: false } : i));
     mockFetch(
@@ -318,7 +318,9 @@ describe('why Generate is missing', () => {
     );
     renderApp(URL);
     expect(
-      await screen.findByText(/Generating needs the Bridge's agent credential set first\./),
+      await screen.findByText(
+        /Generating needs the Bridge's AI agent\. Sign it in on the Bridge's page first\./,
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Generate characters and recaps' })).toBeNull();
     const card = screen.getByRole('heading', { name: 'Characters and recaps', level: 4 })

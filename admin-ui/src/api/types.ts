@@ -2412,6 +2412,12 @@ export interface MatchRun {
    * kept for review and the books it never reached left for the next run.
    */
   error?: string;
+  /**
+   * The working run only, while it waits as the community service asked (a 429's
+   * Retry-After): when it goes on. Its progress holds meanwhile. Absent from older
+   * servers.
+   */
+  waiting_until?: string;
   counts: {
     auto: number;
     /** Confident items not applied yet. */
@@ -2423,6 +2429,12 @@ export interface MatchRun {
     skipped: number;
     failed: number;
   };
+}
+
+/** GET /admin/match-runs: the kept runs, newest first, and the marketplace a new run would use. */
+export interface MatchRunList {
+  runs: MatchRun[];
+  region: string;
 }
 
 /** catalog.ClearedMatches (DELETE /admin/community-matches): what a clear removed. */

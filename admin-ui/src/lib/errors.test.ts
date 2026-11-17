@@ -24,6 +24,18 @@ describe('errorMessage', () => {
     );
   });
 
+  it('words an Audible destination or template the server refuses (bridge#47)', () => {
+    expect(
+      errorMessage(
+        new ApiError(400, 'invalid destination: no hidden folders', 'invalid_dest_path'),
+        t,
+      ),
+    ).toMatch(/^That isn't a place inside the library/);
+    expect(
+      errorMessage(new ApiError(400, 'invalid template: unknown {Foo}', 'invalid_template'), t),
+    ).toMatch(/^That template doesn't work/);
+  });
+
   it('words every household member refusal the server sends', () => {
     const codes = [
       'member_not_admin',

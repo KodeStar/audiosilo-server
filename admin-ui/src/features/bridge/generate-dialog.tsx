@@ -22,6 +22,7 @@ import {
   type Contribute,
 } from './generate-model';
 import {
+  ClampedName,
   ContributeSwitch,
   ForBooks,
   lengthRow,
@@ -67,7 +68,7 @@ export function GenerateDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         title={regenerate ? t('bridge.generate.dialogRegen') : t('bridge.generate.dialog')}
-        description={book.title || book.path}
+        description={<ClampedName>{book.title || book.path}</ClampedName>}
         icon={Sparkles}
         tone="community"
       >

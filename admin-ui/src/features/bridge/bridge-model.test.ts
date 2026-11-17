@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '@/api/client';
 import type { BridgeJobState } from '@/api/types';
+import en from '@/i18n/locales/en.json';
 import {
+  BRIDGE_JOB_KINDS,
   BRIDGE_JOB_STATES,
   backupAsin,
   bridgeCompose,
@@ -71,6 +73,15 @@ describe('job states', () => {
       key === 'bridge.kind.bridge.verify' ? 'Verify' : String(opts?.defaultValue);
     expect(kindName(t, 'bridge.verify')).toBe('Verify');
     expect(kindName(t, 'podcast.fetch')).toBe('podcast.fetch');
+  });
+});
+
+describe('job kinds', () => {
+  it('lists every kind the console names, so the filter offers each (server#186)', () => {
+    const named = Object.keys(en)
+      .filter((key) => key.startsWith('bridge.kind.'))
+      .map((key) => key.slice('bridge.kind.'.length));
+    expect([...BRIDGE_JOB_KINDS].sort()).toEqual(named.sort());
   });
 });
 

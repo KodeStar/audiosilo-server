@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
@@ -21,8 +22,9 @@ import (
 // only the first with its details (MatchQuery.BestOnly). maxRequestsPerSecond, not the
 // worker count, is what holds a run under the service's per-client limit (100 a second,
 // audiosilo-meta's DefaultRateLimit); the workers only fill the round trips. Mirror
-// mode shares the workers, where they are simply how many of the server's cores a run
-// takes, and no pacing (the local copy answers before the Pacer's transport).
+// mode shares the workers, where the copy's own cap on its matches (half the cores,
+// internal/metamirror) bounds the cores a run takes, and no pacing (the local copy
+// answers before the Pacer's transport).
 const (
 	workers              = 6
 	maxRequestsPerSecond = 60
@@ -129,7 +131,8 @@ type Runner struct {
 	mu        sync.Mutex
 	active    int64 // the working run's id, 0 when none
 	cancel    context.CancelFunc
-	cancelled bool // the admin stopped it (not the server shutting down)
+	cancelled bool        // the admin stopped it (not the server shutting down)
+	pacer     *meta.Pacer // the active run's, while it matches (WaitingUntil)
 	wg        sync.WaitGroup
 }
 
@@ -230,7 +233,19 @@ func (r *Runner) end() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cancel()
-	r.active, r.cancel, r.cancelled = 0, nil, false
+	r.active, r.cancel, r.cancelled, r.pacer = 0, nil, false, nil
+}
+
+// WaitingUntil is when run id goes on asking the community service, while it
+// waits as the service asked (a 429 or 503's Retry-After), zero otherwise: the
+// console's hint that the run's progress is held, not stuck (server#307).
+func (r *Runner) WaitingUntil(id int64) time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != id || r.pacer == nil {
+		return time.Time{}
+	}
+	return r.pacer.WaitingUntil()
 }
 
 // settleLocked settles the runs still marked working that no worker is behind
@@ -348,6 +363,9 @@ func (r *Runner) Wait() { r.wg.Wait() }
 // match run's only).
 func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books []catalog.Book, languages map[int64]string) {
 	pacer := meta.NewPacer(maxRequestsPerSecond, r.log.With("run", runID))
+	r.mu.Lock()
+	r.pacer = pacer
+	r.mu.Unlock()
 	work, halt := context.WithCancel(meta.WithPacer(ctx, pacer))
 	defer halt()
 	var (
@@ -370,17 +388,22 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 	}
 	pool.Each(work, workers, books, enabled, func(b *catalog.Book) {
 		item, err := r.matchBook(work, o, b, languages[b.LibraryID])
-		switch {
-		case work.Err() != nil:
-			return
-		case err == nil:
-			streak.Store(0)
-		case streak.Add(1) >= maxFailStreak:
-			stop(ErrCodeUnavailable, err)
+		if work.Err() != nil {
 			return
 		}
+		failed := false
+		if err == nil {
+			streak.Store(0)
+		} else {
+			failed = streak.Add(1) >= maxFailStreak
+		}
+		// The book that trips the stop keeps its error item too, recorded before
+		// the stop cancels work (server#307).
 		if err := r.cat.RecordMatchItem(work, runID, item); err != nil && work.Err() == nil {
 			stop(ErrCodeInternal, err)
+		}
+		if failed {
+			stop(ErrCodeUnavailable, err)
 		}
 	})
 	if waits, waited := pacer.Waits(); waits > 0 {

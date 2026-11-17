@@ -415,12 +415,41 @@ describe('library health', () => {
       const dialog = await screen.findByRole('dialog');
       expect(within(dialog).getByText('None: no agent is used')).toBeInTheDocument();
       expect(await within(dialog).findByText(/^About /)).toBeInTheDocument();
+      expect(within(dialog).queryByText(/No worker is connected/)).not.toBeInTheDocument();
       await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
       expect(await screen.findByText('Finding the chapters of 1 book')).toBeInTheDocument();
       const queued = calls.filter((c) => c.method === 'POST' && c.path === '/admin/bridge/jobs');
       expect(queued.map((c) => c.body)).toEqual([
         { kind: 'chapters.detect', library_id: 1, path: 'Mosse/The Black Gate', params: {} },
       ]);
+    });
+
+    it('says the job waits when the Bridge waits for an ASR worker and none is connected (BRIDGE-10)', async () => {
+      mockFetch(
+        detectRoutes({
+          'GET /admin/bridge': {
+            body: {
+              ...bridgeStatus,
+              setup: {
+                items: [
+                  { id: 'asr', done: false, required: true, detail: 'waiting for an ASR worker' },
+                ],
+                can_contribute: false,
+              },
+            },
+          },
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      const row = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      await user.click(within(row).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(
+        await within(dialog).findByText(
+          'No worker is connected: the job waits until one connects, then takes about the time above.',
+        ),
+      ).toBeInTheDocument();
     });
 
     it('queues a selection from the bar, passing over a book whose generate job finds them', async () => {

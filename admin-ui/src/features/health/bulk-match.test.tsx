@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { focusManager, onlineManager } from '@tanstack/react-query';
+import { MATCH_RUNS_IDLE_MS } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type { MatchRun, MatchRunItem } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
@@ -85,6 +86,8 @@ function routes(runs: MatchRun[], over: Record<string, MockRoute> = {}) {
   return signedInRoutes({
     'GET /admin/issues': { body: summary },
     'GET /admin/match-runs': { body: { runs, region: 'uk' } },
+    // A working run is asked for on its own (useMatchRuns).
+    'GET /admin/match-runs/5': () => ({ body: runs.find((r) => r.id === 5) }),
     'GET /admin/match-runs/5/items': (req) => ({
       body: {
         items: req.query.get('outcome') === 'review' ? [doubtful] : [confident],
@@ -467,7 +470,39 @@ describe('bulk matching', () => {
     await user.click(await within(dialog).findByRole('button', { name: /Not found/ }));
     expect(
       await within(dialog).findByText(
-        'Only weak community matches (the best scored 42 of 100): find it by hand from the book page',
+        'Only weak community matches (the best scored 42 of 100): match it by hand',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("opens a run with only weak matches on the books it didn't find (server#307)", async () => {
+    const weak: MatchRunItem = {
+      ...confident,
+      id: 13,
+      path: 'Someone/Garbage',
+      outcome: 'none',
+      score: 42,
+      detail: 'weak_match',
+      book: { title: 'Garbage', author: 'Someone' },
+      changes: {},
+    };
+    const onlyWeak = run();
+    onlyWeak.counts = { ...onlyWeak.counts, auto: 0, pending: 0, review: 0, none: 1 };
+    mockFetch(
+      routes([onlyWeak], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: { items: req.query.get('outcome') === 'none' ? [weak] : [], next_after: 0 },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    expect(await screen.findByText('The last run found nothing to apply.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: "See the books it didn't find" }));
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      await within(dialog).findByText(
+        'Only weak community matches (the best scored 42 of 100): match it by hand',
       ),
     ).toBeInTheDocument();
   });
@@ -592,6 +627,69 @@ describe('bulk matching', () => {
     ).toBeInTheDocument();
   });
 
+  it("reads an applied run's books it didn't find, with nothing to pick or apply", async () => {
+    const weak: MatchRunItem = {
+      ...confident,
+      id: 13,
+      path: 'Someone/Garbage',
+      outcome: 'none',
+      score: 42,
+      detail: 'weak_match',
+      book: { title: 'Garbage', author: 'Someone' },
+      changes: {},
+    };
+    // One confident book applied; the one to review was never put in.
+    const applied = run({ status: 'applied', applied_at: '2026-10-07T10:06:00Z' });
+    applied.counts = { ...applied.counts, pending: 0, applied: 1, none: 1 };
+    const calls = mockFetch(
+      routes([applied], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items:
+              req.query.get('outcome') === 'none'
+                ? [weak]
+                : req.query.get('outcome') === 'review'
+                  ? [doubtful]
+                  : [{ ...confident, applied: 'applied' }],
+            next_after: 0,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: "See the books it didn't find" }));
+    const dialog = await screen.findByRole('dialog');
+    // It opens on the books it didn't find, though others are left to review.
+    expect(await within(dialog).findByText(/Only weak community matches/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: /To review/ }));
+    expect(await within(dialog).findByRole('list', { name: 'To review' })).toBeInTheDocument();
+    // The server takes no second apply of an applied run: nothing offers one.
+    expect(within(dialog).queryByRole('checkbox')).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: /^Apply/ })).toBeNull();
+    expect(within(dialog).queryByRole('radiogroup')).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(calls.some((c) => c.path === '/admin/match-runs/5/apply')).toBe(false);
+  });
+
+  it('says when a working run waits as the community service asked (server#307)', async () => {
+    const waiting = run({
+      status: 'matching',
+      done: 1,
+      total: 4,
+      waiting_until: '2099-01-01T00:00:00Z',
+    });
+    mockFetch(routes([waiting], { 'GET /admin/match-runs/5': () => ({ body: waiting }) }));
+    renderApp('/health?issue=unmatched');
+    expect(await screen.findByText('Matching 1 of 4 books')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'The community metadata service asked for a pause of a few seconds. The run carries on by itself.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('shows a working run and stops it', async () => {
     const calls = mockFetch(
       routes([run({ status: 'matching', done: 1, total: 4 })], {
@@ -605,12 +703,60 @@ describe('bulk matching', () => {
       'aria-valuenow',
       '25',
     );
+    expect(screen.queryByText(/asked for a pause/)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Stop' }));
     await waitFor(() =>
       expect(
         calls.some((c) => c.method === 'POST' && c.path === '/admin/match-runs/5/cancel'),
       ).toBe(true),
     );
+  });
+
+  it('asks only for the working run each second, and for the list once it stops (server#214)', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      let polled = run({ status: 'matching', done: 2, total: 4 });
+      const calls = mockFetch(
+        routes([run({ status: 'matching', done: 1, total: 4 })], {
+          'GET /admin/match-runs/5': () => ({ body: polled }),
+        }),
+      );
+      const lists = () => calls.filter((c) => c.path === '/admin/match-runs').length;
+      renderApp('/health?issue=unmatched');
+      expect(await screen.findByText('Matching 1 of 4 books')).toBeInTheDocument();
+      expect(lists()).toBe(1);
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(await screen.findByText('Matching 2 of 4 books')).toBeInTheDocument();
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(lists()).toBe(1);
+      expect(calls.filter((c) => c.path === '/admin/match-runs/5').length).toBe(2);
+      // It stopped: the whole list again.
+      polled = run();
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      await waitFor(() => expect(lists()).toBe(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows a run started elsewhere on an idle card (server#307)', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      let runs = [run({ status: 'applied', applied_at: '2026-10-07T10:06:00Z' })];
+      mockFetch(
+        routes([], {
+          'GET /admin/match-runs': () => ({ body: { runs, region: 'uk' } }),
+          'GET /admin/match-runs/6': () => ({ body: runs[0] }),
+        }),
+      );
+      renderApp('/health?issue=unmatched');
+      expect(await screen.findByText(/^Last run applied/)).toBeInTheDocument();
+      runs = [run({ id: 6, status: 'matching', done: 1, total: 4 }), ...runs];
+      await act(() => vi.advanceTimersByTimeAsync(MATCH_RUNS_IDLE_MS));
+      expect(await screen.findByText('Matching 1 of 4 books')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reviews a ready run and applies the picks under the chosen scope', async () => {
@@ -1139,16 +1285,19 @@ describe('bulk matching', () => {
     expect(screen.queryByText(/Last run applied/)).not.toBeInTheDocument();
   });
 
-  it('says a run the service stopped early kept what it checked (server#306)', async () => {
+  it('says a run the service stopped early kept what it checked (server#306, server#352)', async () => {
+    const stopped = run({ error: 'metadata_unavailable', total: 120, done: 40 });
+    // The ten the service never answered for weren't checked.
+    stopped.counts = { ...stopped.counts, error: 10 };
     mockFetch(
-      routes([run({ error: 'metadata_unavailable', total: 120, done: 40 })], {
+      routes([stopped], {
         'GET /admin/match-runs/5/items': { body: { items: [confident], next_after: 0 } },
       }),
     );
     renderApp('/health?issue=unmatched');
     expect(
       await screen.findByText(
-        "This run stopped early: the community metadata service didn't answer. 40 of 120 books were checked; review them, then run again for the rest.",
+        "This run stopped early: the community metadata service didn't answer. 30 of 120 books were checked; review them, then run again for the rest.",
       ),
     ).toBeInTheDocument();
     // Its answers are there to review and apply.
@@ -1211,8 +1360,38 @@ describe('bulk matching', () => {
     expect(box).not.toBeChecked();
     expect(
       within(box.closest('li')!).getByText(
-        "Held for review: the ASIN or ISBN in its tags or from an Audiobookshelf import may name another book, as its title or series position doesn't agree",
+        "Held for review: the ASIN or ISBN from its tags or an Audiobookshelf import may belong to another book, as the title or series position doesn't match",
       ),
+    ).toBeInTheDocument();
+  });
+
+  it('gives the lengths of an item held for its identifier when they differ too (server#352)', async () => {
+    const both: MatchRunItem = {
+      ...doubtful,
+      score: 100,
+      runner_up: 0,
+      detail: 'identifier_disagrees',
+      proposal: { ...doubtful.proposal, runtime_min: 600 },
+      book: { ...doubtful.book, duration: 8 * 3600 },
+    };
+    mockFetch(
+      routes([run()], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items: req.query.get('outcome') === 'review' ? [both] : [confident],
+            next_after: 0,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: /To review/ }));
+    const box = await within(dialog).findByRole('checkbox', { name: 'Apply to Artemis' });
+    expect(
+      within(box.closest('li')!).getByText('The book is 8h long, this recording 10h'),
     ).toBeInTheDocument();
   });
 
