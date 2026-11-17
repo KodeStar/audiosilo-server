@@ -109,7 +109,7 @@ const (
 	codeModuleOff                = "module_off"   // a managed module's route while the module is off (modules.go)
 	codeUnsupportedImage         = "unsupported_image"
 	codeCoverUnavailable         = "cover_unavailable"
-	codeShareNotAnswering        = "share_not_answering" // 503: a cover's or stream's file on a drive or share that stopped answering (metadata.GaveUp)
+	codeShareNotAnswering        = "share_not_answering" // 503: a cover's or stream's file on a drive or share that stopped answering, or an on-demand read of a book another read of it holds past a look's time (metadata.GaveUp)
 	codeStopping                 = "stopping"            // 503: a read the server's stop ended (library.ErrStopping)
 	codeTooLarge                 = "too_large"
 	codeInvalidSchedule          = "invalid_schedule"
