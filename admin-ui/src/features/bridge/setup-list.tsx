@@ -13,6 +13,21 @@ import {
   type SetupState,
 } from './setup-model';
 
+/** Settings > Modules, beside a Bridge feature whose module is off. */
+export function OpenModulesLink({ className }: { className?: string }) {
+  const { t } = useTranslation();
+  return (
+    <Link
+      to="/server/{-$section}"
+      params={{ section: undefined }}
+      search={{ topic: 'modules' }}
+      className={cn('font-semibold text-brand-ink hover:underline', className)}
+    >
+      {t('bridge.setup.openModules')}
+    </Link>
+  );
+}
+
 const STATE_ICON: Record<SetupState, typeof Circle> = {
   done: CircleCheck,
   todo: Circle,
@@ -82,14 +97,7 @@ export function BridgeSetupList({
               {item.id === 'audible' && audibleOff ? (
                 <span className="inline-flex flex-wrap items-center gap-x-2 text-[12.5px] text-muted-foreground">
                   {t('bridge.setup.audibleModuleOff')}
-                  <Link
-                    to="/server/{-$section}"
-                    params={{ section: undefined }}
-                    search={{ topic: 'modules' }}
-                    className="font-semibold text-brand-ink hover:underline"
-                  >
-                    {t('bridge.setup.openModules')}
-                  </Link>
+                  <OpenModulesLink />
                 </span>
               ) : null}
             </div>

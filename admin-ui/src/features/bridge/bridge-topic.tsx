@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import {
@@ -46,7 +45,7 @@ import {
   safeHttpUrl,
 } from './bridge-model';
 import { PairDialog } from './pair-dialog';
-import { BridgeSetupList } from './setup-list';
+import { BridgeSetupList, OpenModulesLink } from './setup-list';
 import {
   ACCOUNTS_TAB,
   agentCredentialSet,
@@ -400,14 +399,7 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
                         <StatusText tone="warn">
                           {t('bridge.setup.canContributeModuleOff')}
                         </StatusText>
-                        <Link
-                          to="/server/{-$section}"
-                          params={{ section: undefined }}
-                          search={{ topic: 'modules' }}
-                          className="text-[12.5px] font-semibold text-brand-ink hover:underline"
-                        >
-                          {t('bridge.setup.openModules')}
-                        </Link>
+                        <OpenModulesLink className="text-[12.5px]" />
                       </span>
                     ) : (
                       <StatusText key="contribute" tone={setup.can_contribute ? 'ok' : 'off'}>

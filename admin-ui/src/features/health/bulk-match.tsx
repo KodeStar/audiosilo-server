@@ -236,15 +236,17 @@ export function BulkMatch({ issue = 'unmatched' }: { issue?: 'unmatched' | 'unkn
               {t(unknown ? 'health.bulkMatch.unknownStart' : 'health.bulkMatch.start')}
             </Button>
             {unknown ? null : (
-              <Button variant="outline" disabled={busy} onClick={() => void start('refresh')}>
-                {t('health.bulkMatch.refresh')}
-              </Button>
+              <>
+                <Button variant="outline" disabled={busy} onClick={() => void start('refresh')}>
+                  {t('health.bulkMatch.refresh')}
+                </Button>
+                {region ? (
+                  <Button variant="outline" disabled={busy} onClick={() => void start('repick')}>
+                    {t('health.bulkMatch.repick', { country: regionName(region, lang) })}
+                  </Button>
+                ) : null}
+              </>
             )}
-            {region && !unknown ? (
-              <Button variant="outline" disabled={busy} onClick={() => void start('repick')}>
-                {t('health.bulkMatch.repick', { country: regionName(region, lang) })}
-              </Button>
-            ) : null}
           </div>
           {unknown ? null : (
             <p className="text-[12.5px] text-subtle-foreground">
