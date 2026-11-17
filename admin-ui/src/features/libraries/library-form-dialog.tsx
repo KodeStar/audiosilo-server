@@ -200,7 +200,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       // scan for it (a new folder or new ignore rules). A library the config
       // declares sends neither name nor folder: they're shown, not edited (and
       // the name as the form trims it could read as a rename).
-      const saved: Library & { job?: Job } = library
+      const saved: Library & { job?: Job; resolving?: boolean } = library
         ? await api.updateLibrary(library.id, fromConfig ? settings : { ...settings, ...place })
         : await api.createLibrary({ ...settings, ...place });
       const rescans = !library || !!saved.job;
@@ -210,7 +210,8 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       const granted =
         !library && v.kind === 'podcasts' && v.everyone ? await grantEveryone(saved.id) : undefined;
       invalidateLibraries(qc);
-      if (library && v.source !== library.metadata_source) {
+      const sourceChanged = !!library && v.source !== library.metadata_source;
+      if (sourceChanged) {
         invalidateAfterSourceChange(qc, library.id);
       }
       if (rescans) noteScanStarted(qc, saved.id);
@@ -229,6 +230,8 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       }
       toast.add({
         title: t(library ? 'libraries.toast.saved' : 'libraries.toast.added', { name: v.name }),
+        // A new metadata source is taken without a rescan: at once in a small
+        // library, in the background in a large one (the PATCH's `resolving`).
         description: rescans
           ? t(
               library
@@ -237,7 +240,13 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
                   ? 'libraries.toast.podcastAddedBody'
                   : 'libraries.toast.addedBody',
             )
-          : undefined,
+          : sourceChanged
+            ? t(
+                saved.resolving
+                  ? 'libraries.toast.sourceBackgroundBody'
+                  : 'libraries.toast.sourceBody',
+              )
+            : undefined,
         type: 'success',
       });
       onDone();

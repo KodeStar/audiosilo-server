@@ -901,13 +901,18 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "library.update", updated.Name, req.changes())
+	resolving := false
 	if req.MetadataSource != nil {
-		awaitResolve(r.Context(), a.resolveSources())
+		resolving = !awaitResolve(r.Context(), a.resolveSources())
 	}
+	// Resolving: the books are still taking the new metadata source when this
+	// answers (a large library finishes in the background), so the console says
+	// so rather than "updated".
 	resp := struct {
 		*catalog.Library
-		Job *library.Job `json:"job,omitempty"`
-	}{Library: updated}
+		Job       *library.Job `json:"job,omitempty"`
+		Resolving bool         `json:"resolving,omitempty"`
+	}{Library: updated, Resolving: resolving}
 	if stale {
 		job := a.startScan(r, *updated, library.TriggerChange)
 		resp.Job = &job
@@ -922,21 +927,27 @@ const resolveWait = 20 * time.Second
 // awaitResolve waits for done (the re-resolve a metadata source change began),
 // up to resolveWait and never closer than two seconds to the request's deadline:
 // a library small enough answers with its books re-resolved, a large one at once,
-// the rest going on in the background (server#213).
-func awaitResolve(ctx context.Context, done <-chan struct{}) {
+// the rest going on in the background (server#213). It reports whether the
+// re-resolve ended.
+func awaitResolve(ctx context.Context, done <-chan struct{}) bool {
 	wait := resolveWait
 	if deadline, ok := ctx.Deadline(); ok {
 		wait = min(wait, time.Until(deadline)-2*time.Second)
 	}
-	if wait <= 0 {
-		return
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
+		case <-ctx.Done():
+		}
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
 	select {
 	case <-done:
-	case <-timer.C:
-	case <-ctx.Done():
+		return true
+	default:
+		return false
 	}
 }
 

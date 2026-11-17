@@ -99,8 +99,34 @@ describe('library scan settings', () => {
     );
     expect(await screen.findByText('Saved Fiction')).toBeInTheDocument();
     expect(screen.queryByText('AudioSilo is rescanning it now.')).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Its books now take their details from the new source.'),
+    ).toBeInTheDocument();
     const card = await screen.findByRole('listitem', { name: 'Fiction' });
     expect(await within(card).findByText('Details from folder names')).toBeInTheDocument();
+  });
+
+  it('says a large library takes a new source in the background', async () => {
+    mockFetch(
+      libraryRoutes({
+        'PATCH /admin/libraries/1': (req) => ({
+          body: { ...libraries()[0], ...(req.body as object), resolving: true },
+        }),
+      }),
+    );
+    renderApp('/library/libraries');
+    const { user, dialog } = await openEdit();
+    await user.selectOptions(within(dialog).getByLabelText('Book details come from'), 'path');
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByText('Saved Fiction')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Its books are switching to the new source in the background. In a large library this can take a while.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Its books now take their details from the new source.'),
+    ).not.toBeInTheDocument();
   });
 
   it('puts a refused pattern under the skip field', async () => {

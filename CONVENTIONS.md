@@ -1661,7 +1661,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or start). The
   PATCH runs it (`API.resolveSources`, one run at a time) and waits up to 20 s, never closer than 2 s
   to its deadline (`awaitResolve`): a library small enough answers re-resolved (about 1 s per 5,000
-  books), a large one answers at once with the rest going on (server#213).
+  books), a large one answers at once with the rest going on (server#213) and `"resolving": true` in
+  the answer (omitted otherwise), which the console's toast reports as finishing in the background.
   `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
   NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
   with a tag read (`media.EmbeddedCover`, no ffprobe). A `scanned` snapshot carries `@rev` (`scannedRevKey`), the path baseline's revision: one

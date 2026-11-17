@@ -42,8 +42,8 @@ func TestLibraryMetadataSourceEndpoint(t *testing.T) {
 	}
 
 	if resp, body := e.do(t, "PATCH", url, adminTok, `{"metadata_source":"path"}`); resp.StatusCode != 200 ||
-		strings.Contains(body, `"job"`) {
-		t.Fatalf("source PATCH = %d %s, want 200 and no job", resp.StatusCode, body)
+		strings.Contains(body, `"job"`) || strings.Contains(body, `"resolving"`) {
+		t.Fatalf("source PATCH = %d %s, want 200, no job, and its books resolved", resp.StatusCode, body)
 	}
 	if _, queued := e.api.scanner.Jobs(); len(queued) != 0 {
 		t.Fatalf("a metadata source change queued a scan: %+v", queued)
@@ -61,21 +61,26 @@ func TestLibraryMetadataSourceEndpoint(t *testing.T) {
 
 // awaitResolve gives a metadata source change's re-resolve as long as the request
 // allows, less two seconds to answer in, and returns at once when it ends; a
-// re-resolve longer than that goes on after the answer (server#213).
+// re-resolve longer than that goes on after the answer (server#213), which says
+// so (the PATCH's resolving).
 func TestAwaitResolveBounded(t *testing.T) {
 	t.Parallel()
 	never := make(chan struct{})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second+200*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	awaitResolve(ctx, never)
+	if awaitResolve(ctx, never) {
+		t.Fatal("a re-resolve still running reported ended")
+	}
 	if took := time.Since(start); took > time.Second {
 		t.Fatalf("waited %v past the request's answer margin", took)
 	}
 	done := make(chan struct{})
 	close(done)
 	start = time.Now()
-	awaitResolve(context.Background(), done)
+	if !awaitResolve(context.Background(), done) {
+		t.Fatal("a re-resolve that had ended reported running")
+	}
 	if took := time.Since(start); took > 100*time.Millisecond {
 		t.Fatalf("waited %v for a re-resolve that had ended", took)
 	}
