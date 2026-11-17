@@ -50,7 +50,6 @@ var countedFixtures = map[string]string{
 // is needed: probe_live_test.go asks the installed one. A header-less VBR MP3
 // (countedFixtures) is ffprobe's but for its length: its frames counted, the
 // length it decodes to, never ffprobe's estimate.
-
 func TestProbeMatchesGoldens(t *testing.T) {
 	t.Parallel()
 	fixtures := fixtureFiles(t, probeFixtures)

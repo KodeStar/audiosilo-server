@@ -616,6 +616,15 @@ type mpaHeader struct {
 	free                                                 bool
 }
 
+// samplesPerFrame is a layer III frame's samples: 1152, or 576 for MPEG 2 and
+// 2.5 (lsf).
+func (m mpaHeader) samplesPerFrame() int64 {
+	if m.lsf == 1 {
+		return 576
+	}
+	return 1152
+}
+
 var mpaBitrates = [2][3][15]int{
 	{{0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448},
 		{0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384},
@@ -745,10 +754,7 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 			if !c.free {
 				vbrSize = c.frameSize
 			}
-			spf = 1152
-			if c.lsf == 1 {
-				spf = 576
-			}
+			spf = c.samplesPerFrame()
 			sr = c.sampleRate
 			pos := base + 4
 			fsize := b.size - pos
@@ -851,7 +857,7 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 		br, cbr := mp3ConstantBitrate(b, off, fh)
 		if !cbr {
 			// fastProbe counts its frames, under bounds of its own.
-			return nil, &mp3Uncounted{d: d, chaps: ex.chaps, off: off, first: binary.BigEndian.Uint32(first), fh: fh}
+			return nil, &mp3Uncounted{d: d, chaps: ex.chaps, off: off, first: binary.BigEndian.Uint32(first)}
 		}
 		stDur := rescale(b.size-off, 8*14112000, int64(br))
 		durUS = tbToUS(stDur, 1, 14112000)
@@ -889,9 +895,8 @@ const reasonUncounted = "mp3: no Xing/VBRI header and not constant bitrate"
 type mp3Uncounted struct {
 	d     *avDict
 	chaps []id3Chap
-	off   int64     // the first frame (past the ID3v2 tags and any junk)
-	first uint32    // its header
-	fh    mpaHeader // decoded
+	off   int64  // the first frame (past the ID3v2 tags and any junk)
+	first uint32 // its header, a layer III frame's (decodeMPA)
 }
 
 func (u *mp3Uncounted) Error() string { return reasonUncounted }
@@ -916,17 +921,12 @@ func (u *mp3Uncounted) count(ctx context.Context, b *blockFile, timeout time.Dur
 	}); why != "" {
 		return nil, why
 	}
-	if b.err != nil {
-		return nil, "read: " + b.err.Error()
-	}
 	if frames == 0 {
+		// A read error (fastProbe reports b.err) or no frames at all.
 		return nil, "no frames"
 	}
-	spf := int64(1152)
-	if u.fh.lsf == 1 {
-		spf = 576
-	}
-	durUS := rescale(frames*spf, 1000000, int64(u.fh.sampleRate))
+	fh, _ := decodeMPA(u.first)
+	durUS := rescale(frames*fh.samplesPerFrame(), 1000000, int64(fh.sampleRate))
 	p = result(durUS, "mp3", u.d, mp3Chapters(u.chaps, durUS))
 	p.Counted = true
 	return p, ""
@@ -977,7 +977,7 @@ func mp3FrameSize(h, ref uint32) int64 {
 // time for one whose next frame follows it too, as the decoder's parser
 // resyncs. A frame running past end is cut off, and the decoder drops it.
 func mp3FrameCount(b *blockFile, off, end int64, ref uint32) (frames int64) {
-	w := mp3Window{b: b, end: end}
+	w := mp3Window{b: b, end: end, buf: make([]byte, 0, mp3WindowSize)}
 	for pos := off; pos+4 <= end; {
 		if fs := mp3FrameSize(w.u32(pos), ref); fs > 0 {
 			if pos+fs > end {
@@ -1011,8 +1011,7 @@ const mp3MaxFrame = 1441
 type mp3Window struct {
 	b     *blockFile
 	end   int64
-	buf   []byte
-	mem   []byte
+	buf   []byte // the window, in a buffer of mp3WindowSize
 	start int64
 }
 
@@ -1025,11 +1024,8 @@ func (w *mp3Window) ensure(pos int64, n int) {
 	if pos >= w.start && stop <= w.start+int64(len(w.buf)) {
 		return
 	}
-	if w.mem == nil {
-		w.mem = make([]byte, mp3WindowSize)
-	}
-	got, _ := w.b.raw(w.mem[:min(mp3WindowSize, max(w.end-pos, 0))], pos)
-	w.buf, w.start = w.mem[:got], pos
+	got, _ := w.b.raw(w.buf[:min(mp3WindowSize, max(w.end-pos, 0))], pos)
+	w.buf, w.start = w.buf[:got], pos
 }
 
 // u32 is the big-endian word at pos (0 past the window's reach: no header).

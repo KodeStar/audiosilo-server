@@ -267,25 +267,29 @@ func TestHeaderlessVBRReadsAsDecoded(t *testing.T) {
 	}
 }
 
-// TestCountLongFile times the count of a long header-less VBR MP3: set
-// AUDIOSILO_COUNT_FILE to one (a 10 h book, say) to see it.
-func TestCountLongFile(t *testing.T) {
+// BenchmarkCountFile times the count of a long header-less VBR MP3: set
+// AUDIOSILO_COUNT_FILE to one (a 10 h book, say) and run it with -bench.
+func BenchmarkCountFile(bm *testing.B) {
 	path := os.Getenv("AUDIOSILO_COUNT_FILE")
 	if path == "" {
-		t.Skip("AUDIOSILO_COUNT_FILE not set")
+		bm.Skip("AUDIOSILO_COUNT_FILE not set")
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		t.Fatal(err)
+		bm.Fatal(err)
 	}
 	defer f.Close()
-	info, _ := f.Stat()
-	start := time.Now()
-	b := newBlockFile(f, info.Size())
-	b.ff = ff8
-	p, reason := fastProbe(t.Context(), b, "mp3", ProbeTimeout)
-	if reason != "" {
-		t.Fatal(reason)
+	info, err := f.Stat()
+	if err != nil {
+		bm.Fatal(err)
 	}
-	t.Logf("%s: %.3f s counted %t in %v (%d MiB)", path, p.Duration, p.Counted, time.Since(start), info.Size()>>20)
+	bm.SetBytes(info.Size())
+	for bm.Loop() {
+		b := newBlockFile(f, info.Size())
+		b.ff = ff8
+		p, reason := fastProbe(bm.Context(), b, "mp3", ProbeTimeout)
+		if reason != "" || !p.Counted {
+			bm.Fatalf("%s: reason %q, counted %t; want a header-less VBR MP3 counted", path, reason, p != nil && p.Counted)
+		}
+	}
 }
