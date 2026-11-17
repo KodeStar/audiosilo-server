@@ -1043,9 +1043,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   not `transcode=1` or `rendition=`) serves, at the SAME URL, its lossless copy to MP3 (`media.NewRemuxer`, a `FileCache`: `-f matroska`
   forced, `-protocol_whitelist fd`, `-xerror` so a read error fails the run rather than leaving a short
   copy, `-c:a copy`, `+bitexact`, chapters as ID3 CHAP frames), as
-  `audio/mpeg` with Range and its own validators (a strong ETag `"remux-<key>"`, Last-Modified the
-  copy's mtime, never the source's: a 2.4.x client's If-Range / If-Modified-Since for the stored
-  Matroska gets the whole MP3, never a 304 or a spliced range), `download=1` named `<stem>.mp3`; `original=1`
+  `audio/mpeg` with Range and its own validator (a strong ETag `"remux-<key>"`, and no Last-Modified:
+  the copy's mtime is the cache's LRU clock, server#289; never the source's: a 2.4.x client's If-Range /
+  If-Modified-Since for the stored Matroska, or any date If-Range, gets the whole MP3, never a 304 or a
+  spliced range), `download=1` named `<stem>.mp3`; `original=1`
   serves the stored bytes. Old native builds stream it with no change (an old iOS build saves a
   download under `.mka`, which AVFoundation won't open offline). The cache is
   `<data>/cache/remux/<sha256(abs, size, mtime)>.mp3` (0700, made again if it went; `.part` synced then
@@ -1193,7 +1194,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   for anything but `watch`, and for a podcast library: the watch has no podcasts, and a watch client never
   sees one anyway, `auth.SeesPodcasts`), `renditionsOn` (404 `rendition_unavailable`: no ffmpeg or no data dir),
   audio and a regular file (404); then the copy, served with Range (`http.ServeContent`), `audio/mp4`, a strong
-  ETag `"rw1-<key>-<size>"` (If-Range resumes only the same encode), Last-Modified the copy's mtime,
+  ETag `"rw1-<key>-<size>"` (If-Range resumes only the same encode), no Last-Modified (`serveCopy`),
   `download=1` named `<stem>.m4a`. A cold encode is waited for up to `renditionWait` (45 s, the remux's
   download wait), then 503 `rendition_pending` with `Retry-After: 15` while it goes on under `baseCtx`; never a
   live transcode. 422 `rendition_failed` is a remembered refusal (ffmpeg's, or a short copy; for an hour), with

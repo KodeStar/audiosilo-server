@@ -839,18 +839,15 @@ func copyName(abs, ext string) string {
 }
 
 // serveCopy answers with a cached copy f (media.FileCache.Open) and closes it:
-// Range, the copy's strong etag, and its own mtime as Last-Modified (never the
-// source's, so a validator a client kept for the stored file never matches),
-// download an attachment named name.
+// Range and the copy's strong etag, download an attachment named name. No
+// Last-Modified: the copy's mtime is the cache's LRU clock (moved on a hit), so
+// a client resuming by date (If-Range) would get the whole file again; it
+// resumes by the etag, which a date validator kept for the stored file never
+// matches either.
 func serveCopy(w http.ResponseWriter, r *http.Request, f *os.File, etag, name string, download bool) {
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not read the cached copy")
-		return
-	}
 	w.Header().Set("ETag", etag)
-	media.ServeOpenedAs(w, r, f, name, info.ModTime(), download)
+	media.ServeOpenedAs(w, r, f, name, time.Time{}, download)
 }
 
 // serveTranscode answers with the live MP3 transcode of the library file abs

@@ -162,6 +162,10 @@ func TestRenditionStream(t *testing.T) {
 	if !strings.HasPrefix(etag, `"rw1-`) || !strings.HasSuffix(etag, "-"+strconv.Itoa(len(body))+`"`) {
 		t.Fatalf("etag = %s, want rw1-<key>-<size>", etag)
 	}
+	// No Last-Modified: the copy's mtime is the cache's LRU clock (server#289).
+	if lm := resp.Header.Get("Last-Modified"); lm != "" {
+		t.Fatalf("Last-Modified = %q, want none (resumed by the ETag)", lm)
+	}
 	if cd := resp.Header.Get("Content-Disposition"); cd != `attachment; filename="01 One.m4a"` {
 		t.Fatalf("Content-Disposition = %q", cd)
 	}
