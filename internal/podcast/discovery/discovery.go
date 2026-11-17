@@ -378,7 +378,9 @@ func (s *Service) startSearchLocked(key string, q Query) (*flight, *Error) {
 		if s.flights[key] == f {
 			delete(s.flights, key)
 		}
-		live := gen == s.gen && s.opts.Enabled()
+		// The root ended without a Reset yet: the server's life ended (Bind)
+		// and its Reset, on a goroutine of its own, hasn't taken the lock.
+		live := gen == s.gen && s.root.Err() == nil && s.opts.Enabled()
 		switch {
 		case !live:
 			res, e = nil, ErrModuleOff
