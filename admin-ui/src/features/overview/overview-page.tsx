@@ -150,7 +150,7 @@ export function OverviewPage() {
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             {split.live.map((l) => (
-              <LiveCard key={l.session.id} session={l.session} devices={l.devices} lang={lang} />
+              <LiveCard key={l.id} session={l.session} devices={l.devices} lang={lang} />
             ))}
           </div>
         )}

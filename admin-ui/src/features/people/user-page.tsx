@@ -579,8 +579,10 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
   const [keeping, setKeeping] = useState<Set<number>>(() => new Set());
   const [disabling, setDisabling] = useState(false);
   // A role change for a person with household members, waiting for the
-  // confirm that says what changes for them (server#222).
-  const [ownerRole, setOwnerRole] = useState<User['role'] | null>(null);
+  // confirm that says what changes for them (server#222). The role stays set
+  // while the dialog closes, so its words don't change on the way out.
+  const [ownerRole, setOwnerRole] = useState<User['role']>('user');
+  const [confirmingRole, setConfirmingRole] = useState(false);
   const member = Boolean(u.managed_by);
 
   const patch = async (change: Parameters<typeof api.updateUser>[1], done: string) => {
@@ -607,6 +609,7 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
     // library), so a change of the owner's role changes what they see too.
     if (members.length) {
       setOwnerRole(role);
+      setConfirmingRole(true);
       return;
     }
     applyRole(role);
@@ -708,10 +711,8 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
 
       <PasswordDialog open={promoting} onOpenChange={setPromoting} user={u} promote />
       <ConfirmDialog
-        open={ownerRole !== null}
-        onOpenChange={(open) => {
-          if (!open) setOwnerRole(null);
-        }}
+        open={confirmingRole}
+        onOpenChange={setConfirmingRole}
         icon={ShieldCheck}
         title={t('user.account.roleOwnerTitle', { name: u.username })}
         description={t(
@@ -719,9 +720,7 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
           { name: u.username },
         )}
         confirmLabel={t('user.account.roleOwnerConfirm')}
-        onConfirm={async () => {
-          if (ownerRole) applyRole(ownerRole);
-        }}
+        onConfirm={async () => applyRole(ownerRole)}
       />
       <ConfirmDialog
         open={disabling}

@@ -8,6 +8,8 @@ export const RECENT_LIMIT = 8;
 
 /** One person on one book right now: the newest of their live sessions on it, and on how many devices. */
 export interface LiveListening {
+  /** The person and book: a stable key while the newest session changes. */
+  id: string;
   session: ListeningSession;
   devices: number;
 }
@@ -36,15 +38,12 @@ function groupLive(live: readonly ListeningSession[]): LiveListening[] {
     const k = key(s);
     groups.set(k, [...(groups.get(k) ?? []), s]);
   }
-  const cards = [...groups.values()].map((group) => ({
-    session: group.reduce((a, b) => (Date.parse(b.last_at) > Date.parse(a.last_at) ? b : a)),
-    devices: new Set(group.map((s) => s.device_id)).size,
-  }));
-  const devices = new Map(cards.map((c) => [c.session, c.devices]));
-  return sortLive(cards.map((c) => c.session)).map((session) => ({
-    session,
-    devices: devices.get(session) ?? 1,
-  }));
+  const cards = new Map<ListeningSession, LiveListening>();
+  for (const [id, group] of groups) {
+    const session = group.reduce((a, b) => (Date.parse(b.last_at) > Date.parse(a.last_at) ? b : a));
+    cards.set(session, { id, session, devices: new Set(group.map((s) => s.device_id)).size });
+  }
+  return sortLive([...cards.keys()]).map((session) => cards.get(session)!);
 }
 
 /**
