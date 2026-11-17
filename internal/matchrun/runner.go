@@ -169,7 +169,7 @@ func (r *Runner) Start(ctx, base context.Context, o StartOptions) (*catalog.Matc
 	r.settleBeforeStart(ctx)
 	var (
 		books     []catalog.Book
-		languages map[int64]string // a match's only (matchBook's mode switch)
+		languages map[int64]string // a match's and an unknown_asin run's only (newMatches)
 		err       error
 	)
 	switch o.Mode {
@@ -363,7 +363,7 @@ func (r *Runner) Wait() { r.wg.Wait() }
 
 // match matches each book, a few at a time, recording an item per book, then
 // settles the run. languages holds each library's language (libraryLanguages; a
-// match run's only).
+// match run's and an unknown_asin run's only).
 func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books []catalog.Book, languages map[int64]string) {
 	pacer := meta.NewPacer(maxRequestsPerSecond, r.log.With("run", runID))
 	r.mu.Lock()

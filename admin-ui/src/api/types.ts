@@ -586,7 +586,10 @@ export interface AdminSettings {
     upcoming?: boolean;
     /** The check's last run (read-only; absent from an older server or without the service). */
     upcoming_status?: UpcomingStatus;
-    /** The opt-in daily report of unknown Audible ASINs (config metadata.report_unknown; absent from an older server). */
+    /**
+     * The opt-in daily report of unknown Audible ASINs (config metadata.report_unknown; absent from an
+     * older server, and without the report's job: no metadata service, or a demo server).
+     */
     report_unknown?: boolean;
     /** The report's last run (read-only; absent from an older server, without the service or on a demo server). */
     report_status?: ReportStatus;
@@ -2464,6 +2467,7 @@ export interface MatchProposal {
    * ("asin:…" / "isbn:…"), or for a store listing with neither, its recorded match
    * ("work:<work id>[/<recording id>]"). A refresh that fell back to the recorded
    * match after its identifiers found nothing appends ";asin:<ASIN>;isbn:<ISBN>".
+   * An unknown_asin run's is "asin:…" on every item: the ASIN the book was taken with.
    */
   found_by?: string;
   /** Each field the community has a value for, in stored form. */

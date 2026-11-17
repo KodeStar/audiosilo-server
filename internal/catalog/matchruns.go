@@ -131,7 +131,10 @@ type MatchProposal struct {
 	// then "/<recording id>" when it names one ("" for a match run, and a repick
 	// recorded before 2.4.0). A fallback after identifier misses appends
 	// ";asin:<ASIN>;isbn:<ISBN>" (including empty values): applying it requires
-	// the same recorded match and both identifiers unchanged.
+	// the same recorded match and both identifiers unchanged. An unknown_asin
+	// run's is "asin:<ASIN>" on every item, the ASIN the book was taken with,
+	// however its record was found (by the title, or by that ASIN once the
+	// community knows it): applying it requires the book to still have it.
 	FoundBy string            `json:"found_by,omitempty"`
 	Values  map[string]string `json:"values"`
 }
