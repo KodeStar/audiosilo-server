@@ -1479,14 +1479,16 @@ func TestMatchSendsTheLibraryLanguage(t *testing.T) {
 // TestUnknownASINRun: an unknown_asin run matches by their title the books whose
 // own ASIN the community doesn't know (Health's unknown_asin), not the unmatched
 // ones nor one whose ASIN it knows; applying records each match and never
-// replaces an ASIN an admin set, and a book whose ASIN changed since the run is
-// left alone (server#392).
+// replaces an ASIN an admin set, and a book whose ASIN changed since the run, or
+// whose ASIN the community learned since, is left alone, its ASIN kept even
+// under overwrite (server#392).
 func TestUnknownASINRun(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	e.book(t, "A/Tagged", "Tagged", "B0NOPE0001", nil)
 	e.book(t, "A/Admin", "Admin", "", nil)
 	e.book(t, "A/Changed", "Changed", "B0NOPE0003", nil)
+	e.book(t, "A/Learned", "Learned", "B0NOPE0004", nil)
 	e.book(t, "A/Known", "Known", "B0KNOWN001", nil)
 	e.book(t, "A/Unmatched", "Unmatched", "", nil)
 	if err := e.cat.EditBook(ctx, e.lib, "A/Admin", catalog.BookEdit{Set: map[string]string{catalog.FieldASIN: "B0NOPE0002"}}); err != nil {
@@ -1494,16 +1496,16 @@ func TestUnknownASINRun(t *testing.T) {
 	}
 	if err := e.cat.SaveASINChecks(ctx, []catalog.ASINCheck{
 		{ASIN: "B0NOPE0001", Unknown: true}, {ASIN: "B0NOPE0002", Unknown: true},
-		{ASIN: "B0NOPE0003", Unknown: true}, {ASIN: "B0KNOWN001"},
+		{ASIN: "B0NOPE0003", Unknown: true}, {ASIN: "B0NOPE0004", Unknown: true}, {ASIN: "B0KNOWN001"},
 	}, "2026-11-01T00:00:00.000Z"); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Tagged", "Admin", "Changed", "Known", "Unmatched"} {
+	for _, title := range []string{"Tagged", "Admin", "Changed", "Learned", "Known", "Unmatched"} {
 		e.matcher.byTitle[title] = []meta.MatchCandidate{cand("the-martian", 97, "")}
 	}
 
 	run := e.start(t, catalog.MatchModeUnknownASIN, "uk")
-	if run.Status != catalog.MatchReady || run.Mode != catalog.MatchModeUnknownASIN || run.Total != 3 || run.Counts.Auto != 3 {
+	if run.Status != catalog.MatchReady || run.Mode != catalog.MatchModeUnknownASIN || run.Total != 4 || run.Counts.Auto != 4 {
 		t.Fatalf("run = %+v", run)
 	}
 	for _, q := range e.matcher.queries {
@@ -1515,9 +1517,18 @@ func TestUnknownASINRun(t *testing.T) {
 	if err := e.cat.EditBook(ctx, e.lib, "A/Changed", catalog.BookEdit{Set: map[string]string{catalog.FieldASIN: "B0HAND0001"}}); err != nil {
 		t.Fatal(err)
 	}
+	// Known to the community since the run (a lookup found its ASIN): the ASIN
+	// names the book's record now, so the run's match by title is not for it.
+	if err := e.cat.ClearUnknownASIN(ctx, "B0NOPE0004"); err != nil {
+		t.Fatal(err)
+	}
 	for _, it := range e.items(t, run, catalog.OutcomeAuto) {
-		if hand := it.Path == "A/Changed"; it.MatchedSince != hand {
-			t.Errorf("%s matched since = %v, want %v", it.Path, it.MatchedSince, hand)
+		since := it.Path == "A/Changed" || it.Path == "A/Learned"
+		if it.MatchedSince != since {
+			t.Errorf("%s matched since = %v, want %v", it.Path, it.MatchedSince, since)
+		}
+		if c := it.Changes[ScopeOverwrite]; since != (len(c.Fields) == 0 && !c.Match) {
+			t.Errorf("%s overwrite changes = %+v, want none only once matched since", it.Path, c)
 		}
 	}
 
@@ -1529,10 +1540,11 @@ func TestUnknownASINRun(t *testing.T) {
 	for _, it := range e.items(t, run, catalog.OutcomeAuto) {
 		got[it.Path] = it.Applied + "/" + it.Detail
 	}
-	if got["A/Tagged"] != "applied/" || got["A/Admin"] != "applied/" || got["A/Changed"] != "skipped/matched_since" {
+	if got["A/Tagged"] != "applied/" || got["A/Admin"] != "applied/" || got["A/Changed"] != "skipped/matched_since" ||
+		got["A/Learned"] != "skipped/"+DetailASINKnown {
 		t.Fatalf("applied = %v", got)
 	}
-	for path, asin := range map[string]string{"A/Admin": "B0NOPE0002", "A/Tagged": "B0UK000001", "A/Changed": "B0HAND0001"} {
+	for path, asin := range map[string]string{"A/Admin": "B0NOPE0002", "A/Tagged": "B0UK000001", "A/Changed": "B0HAND0001", "A/Learned": "B0NOPE0004"} {
 		st, err := e.cat.BookMatchState(ctx, e.lib, path)
 		if err != nil {
 			t.Fatal(err)
@@ -1540,7 +1552,7 @@ func TestUnknownASINRun(t *testing.T) {
 		if st.Fields[catalog.FieldASIN].Value != asin {
 			t.Errorf("%s asin = %+v, want %s", path, st.Fields[catalog.FieldASIN], asin)
 		}
-		if matched := st.Anchor.WorkID == "the-martian"; matched == (path == "A/Changed") {
+		if matched := st.Anchor.WorkID == "the-martian"; matched == (path == "A/Changed" || path == "A/Learned") {
 			t.Errorf("%s recorded match = %+v", path, st.Anchor)
 		}
 	}

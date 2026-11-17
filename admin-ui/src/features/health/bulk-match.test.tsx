@@ -1440,6 +1440,38 @@ describe('bulk matching', () => {
     );
   });
 
+  it("says when a title run's book was left alone because the community knows its ASIN now", async () => {
+    const learned: MatchRunItem = {
+      ...confident,
+      applied: 'skipped',
+      detail: 'asin_known',
+      changes: {},
+    };
+    const applied = run({
+      mode: 'unknown_asin',
+      status: 'applied',
+      applied_at: '2026-10-07T10:06:00Z',
+    });
+    applied.counts = { ...applied.counts, pending: 0, review: 0, none: 1, skipped: 1 };
+    mockFetch(
+      routes([applied], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: { items: req.query.get('outcome') === 'auto' ? [learned] : [], next_after: 0 },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: "See the books it didn't find" }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /Confident/ }));
+    expect(
+      await within(dialog).findByText(/The community database knows this book's ASIN now/),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Skipped: nothing to change/)).toBeNull();
+    expect(within(dialog).queryByRole('checkbox')).toBeNull();
+  });
+
   it('words a review item held for its length with both lengths (R-44)', async () => {
     const shorter: MatchRunItem = {
       ...doubtful,

@@ -1597,6 +1597,7 @@
   "health.bulkMatch.item.error": "El servicio de la comunidad no respondió para este libro",
   "health.bulkMatch.item.gone": "Ya no está en la biblioteca",
   "health.bulkMatch.item.matchedSince": "Asociado después de esta búsqueda: aplicar lo deja como está",
+  "health.bulkMatch.item.asinKnown": "La base de datos de la comunidad ya conoce el ASIN de este libro, así que queda asociado por él: aplicar lo deja como está",
   "health.bulkMatch.matchByHand": "Asociar {{title}} a mano",
   "health.bulkMatch.matchByHandShort": "A mano",
   "health.bulkMatch.openBook": "Abrir la página de {{title}} en una pestaña nueva",

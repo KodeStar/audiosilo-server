@@ -93,10 +93,15 @@ var issuePredicates = map[string]string{
 // (api.handleIssues). The ASIN is compared as match.NormalizeASIN (normASINSQL)
 // keys the table.
 var unknownASINExpr = `(` + normASINSQL("b.asin") + ` <> '' AND TRIM(b.isbn, ` + sqlSpace + `) = ''
-	AND EXISTS(SELECT 1 FROM unknown_asin_reports u WHERE u.asin = ` + normASINSQL("b.asin") + ` AND u.unknown = 1)
+	AND ` + asinHeldUnknownExpr + `
 	AND NOT EXISTS(SELECT 1 FROM book_matches m WHERE m.library_id = b.library_id AND m.path = b.rel_path)
 	AND NOT EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path
 		AND o.field = '` + FieldASIN + `' AND o.source = '` + SourceCommunity + `'))`
+
+// asinHeldUnknownExpr is "the unknown-ASIN report holds b's ASIN as unknown":
+// its last lookup of it was a 404, and no lookup has found it since
+// (ClearUnknownASIN, the report's own recheck).
+var asinHeldUnknownExpr = `EXISTS(SELECT 1 FROM unknown_asin_reports u WHERE u.asin = ` + normASINSQL("b.asin") + ` AND u.unknown = 1)`
 
 // splitDiscExpr is "b is one disc of a book split across disc folders": a CD rip
 // ("Book/CD1", "Book/CD2", the tracks in each, none in "Book") reads as one book per

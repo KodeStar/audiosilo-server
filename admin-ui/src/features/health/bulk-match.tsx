@@ -823,9 +823,14 @@ function ItemRow({
   const title = item.book.title || item.path;
   const change = item.changes[scope];
   // What became of the book: applied, skipped or failed, or matched since the run
-  // (an apply leaves it alone, and says so).
+  // (an apply leaves it alone, and says so; an unknown_asin run's also says when
+  // that is because the community knows its ASIN now).
   const status =
-    item.matched_since || item.detail === 'matched_since' ? 'matchedSince' : item.applied;
+    item.detail === 'asin_known'
+      ? 'asinKnown'
+      : item.matched_since || item.detail === 'matched_since'
+        ? 'matchedSince'
+        : item.applied;
   const changed = changeParts(change).map((part) =>
     part.kind === 'cover'
       ? t('book.match.cover')
@@ -888,7 +893,7 @@ function ItemRow({
             aria-label={t('health.bulkMatch.pick', { title })}
             aria-describedby={pathLine}
           />
-        ) : status === 'applied' || status === 'matchedSince' ? (
+        ) : status === 'applied' || status === 'matchedSince' || status === 'asinKnown' ? (
           <Check
             className="size-4 text-success"
             aria-label={t(`health.bulkMatch.item.${status}`)}

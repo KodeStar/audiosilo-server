@@ -2500,7 +2500,7 @@ export interface MatchRunItem {
   proposal: MatchProposal;
   /** What applying did: '' (not yet) | applied | skipped | failed. */
   applied: '' | 'applied' | 'skipped' | 'failed';
-  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; work_unknown on a refresh's none item whose recorded work the community no longer has (the book keeps its match); dramatization_only (held for review); cover_pending while still to apply (a stop cut its cover short); cover_superseded when its cover was not written because the book changed while it was fetched (a cover uploaded, another match accepted, an Unlink: final, applied when its fields went in, else skipped); length_differs on a review item held because the recording is another length; identifier_disagrees on a review item found by its tag ASIN or ISBN whose title or series position doesn't agree (it may name another book); weak_match on a none item whose best candidate scored under the review floor (its `score` kept). */
+  /** Why: book_gone | nothing_to_change | matched_since | asin_known (an unknown_asin run's book whose ASIN the community knows now: skipped, its ASIN and details as they are) | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; work_unknown on a refresh's none item whose recorded work the community no longer has (the book keeps its match); dramatization_only (held for review); cover_pending while still to apply (a stop cut its cover short); cover_superseded when its cover was not written because the book changed while it was fetched (a cover uploaded, another match accepted, an Unlink: final, applied when its fields went in, else skipped); length_differs on a review item held because the recording is another length; identifier_disagrees on a review item found by its tag ASIN or ISBN whose title or series position doesn't agree (it may name another book); weak_match on a none item whose best candidate scored under the review floor (its `score` kept). */
   detail?: string;
   /** The book as it is now; duration in seconds (absent when unknown, or from an older server). */
   book: { title: string; author: string; duration?: number };
@@ -2508,8 +2508,9 @@ export interface MatchRunItem {
   gone?: boolean;
   /**
    * A match run's book matched since the run (it has an ASIN or ISBN, or a recorded
-   * community match, now: by hand, or elsewhere): an apply leaves it alone, and it
-   * has no changes.
+   * community match, now: by hand, or elsewhere), or an unknown_asin run's (a
+   * recorded match, an ISBN or another ASIN now, or its ASIN known to the community
+   * now): an apply leaves it alone, and it has no changes.
    */
   matched_since?: boolean;
   /**

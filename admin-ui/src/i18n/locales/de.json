@@ -1499,6 +1499,7 @@
   "health.bulkMatch.item.error": "Der Community-Dienst hat für dieses Buch nicht geantwortet",
   "health.bulkMatch.item.gone": "Nicht mehr in der Bibliothek",
   "health.bulkMatch.item.matchedSince": "Seit diesem Lauf zugeordnet: Das Übernehmen lässt es, wie es ist",
+  "health.bulkMatch.item.asinKnown": "Die Community-Datenbank kennt die ASIN dieses Buchs jetzt, es ist also darüber zugeordnet: Das Übernehmen lässt es, wie es ist",
   "health.bulkMatch.matchByHand": "{{title}} von Hand zuordnen",
   "health.bulkMatch.matchByHandShort": "Von Hand",
   "health.bulkMatch.openBook": "Buchseite von {{title}} in einem neuen Tab öffnen",

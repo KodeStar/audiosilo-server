@@ -557,6 +557,10 @@ type MatchState struct {
 	// it has none. How is MatchHowAuto or MatchHowAccepted; the offered
 	// identifiers are those it offered when recorded (0070).
 	Anchor MatchAnchor
+	// ASINUnknown: the unknown-ASIN report holds the book's ASIN as one the
+	// community doesn't know (asinHeldUnknownExpr). False once a lookup finds
+	// it, and for a book with no ASIN.
+	ASINUnknown bool
 }
 
 // BookMatchState loads a book's MatchState (ErrNotFound when none is indexed at
@@ -569,12 +573,12 @@ func (c *Catalog) BookMatchState(ctx context.Context, libraryID int64, relPath s
 	err := c.db.QueryRowContext(ctx,
 		`SELECT b.id, b.title, b.author, b.duration, `+issuePredicates[IssueNoCover]+`,
 		        COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), COALESCE(bm.how, ''),
-		        COALESCE(bm.offered_asin, ''), COALESCE(bm.offered_isbn, '')
+		        COALESCE(bm.offered_asin, ''), COALESCE(bm.offered_isbn, ''), `+asinHeldUnknownExpr+`
 		   FROM books b`+bookMatchJoin+`
 		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, CleanRelPath(relPath)).
 		Scan(&id, &st.Title, &st.Author, &st.Duration, &st.CoverMissing,
 			&st.Anchor.WorkID, &st.Anchor.RecordingID, &st.Anchor.How,
-			&st.Anchor.OfferedASIN, &st.Anchor.OfferedISBN)
+			&st.Anchor.OfferedASIN, &st.Anchor.OfferedISBN, &st.ASINUnknown)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

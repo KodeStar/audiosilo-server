@@ -486,7 +486,7 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 // identifiers whose lookups missed are as they were and none is an admin edit
 // (splitFallback: one gained or changed since may name another record), and for
 // a match (or an unknown_asin run's) only while the book is still as the run took it
-// (matchedSince). An item a stop cut short
+// (matchedSince, asinKnownSince). An item a stop cut short
 // (DetailCoverPending) doesn't record its match again: that went in with its
 // fields, so a book without one now was unlinked since, and an unlink takes back
 // the fields and cover too (BookEdit.Match), so such an item writes nothing.
@@ -513,7 +513,7 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 		}
 		return planRefresh(scope, st, p)
 	case catalog.MatchModeMatch, catalog.MatchModeUnknownASIN:
-		if matchedSince(mode, st, it) {
+		if matchedSince(mode, st, it) || asinKnownSince(mode, st, it) {
 			return Writes{}
 		}
 		if it.Detail == DetailCoverPending {
@@ -604,6 +604,19 @@ func matchedSince(mode string, st *catalog.MatchState, it *catalog.MatchRunItem)
 		return st.Anchor.WorkID != "" || st.Fields[catalog.FieldISBN].Value != "" || !stillFoundBy(st, it.Proposal.FoundBy)
 	}
 	return st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != "" || st.Anchor.WorkID != ""
+}
+
+// asinKnownSince reports whether the ASIN an unknown_asin run took a book with
+// is one the community knows now: the unknown-ASIN report no longer holds it as
+// unknown (catalog.MatchState.ASINUnknown; a lookup found it since, the
+// report's own recheck or anyone's /meta). The ASIN then names the book's
+// record by itself, so the run's match, found by the title while nothing knew
+// the ASIN, never goes in beside it (a recorded work outranks the ASIN in
+// /meta) and never replaces it, whatever the scope. Not for an item its own
+// apply was cut short on (DetailCoverPending): its match is recorded, so the
+// book has left the report's list by that.
+func asinKnownSince(mode string, st *catalog.MatchState, it *catalog.MatchRunItem) bool {
+	return mode == catalog.MatchModeUnknownASIN && it.Detail != DetailCoverPending && !st.ASINUnknown
 }
 
 // stillFoundBy reports whether the book still has the identifier a refresh or

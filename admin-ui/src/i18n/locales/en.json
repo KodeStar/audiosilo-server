@@ -1499,6 +1499,7 @@
   "health.bulkMatch.item.error": "The community service didn't answer for this book",
   "health.bulkMatch.item.gone": "No longer in the library",
   "health.bulkMatch.item.matchedSince": "Matched since this run: an apply leaves it as it is",
+  "health.bulkMatch.item.asinKnown": "The community database knows this book's ASIN now, so it is matched by it: an apply leaves it as it is",
   "health.bulkMatch.matchByHand": "Match {{title}} by hand",
   "health.bulkMatch.matchByHandShort": "Match by hand",
   "health.bulkMatch.openBook": "Open the book page for {{title}} in a new tab",

@@ -98,6 +98,11 @@ const DetailCoverPending = "cover_pending"
 // the one the cover was planned for.
 const DetailCoverSuperseded = "cover_superseded"
 
+// DetailASINKnown is the detail of an unknown_asin run's item an apply skipped
+// because the community knows the book's ASIN now (asinKnownSince): the book is
+// matched by that ASIN, and the run's match by its title is not written.
+const DetailASINKnown = "asin_known"
+
 // ErrBusy is a start or apply asked while a run is working: one at a time. It is
 // catalog.ErrMatchRunBusy, the Unlink refusal, so one errors.Is matches both.
 var ErrBusy = catalog.ErrMatchRunBusy
@@ -746,6 +751,9 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 	if newMatches(mode) && matchedSince(mode, st, it) {
 		return catalog.ItemSkipped, "matched_since"
 	}
+	if asinKnownSince(mode, st, it) {
+		return catalog.ItemSkipped, DetailASINKnown
+	}
 	w := planFor(mode, o.Scope, st, it)
 	if w.Empty() {
 		// A refresh item too: it had a change when the run recorded it (one with
@@ -775,7 +783,9 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 			was := st.Anchor
 			edit.MatchIf = &was
 			if mode == catalog.MatchModeUnknownASIN && was.WorkID == "" {
-				// Matched by its own ASIN alone: only while it still has it.
+				// Matched by its own ASIN alone: only while it still has it,
+				// and the community still doesn't know it (asinKnownSince,
+				// checked again in the edit's transaction).
 				edit.MatchIfASIN = st.Fields[catalog.FieldASIN].Value
 			}
 			m := *w.Anchor
@@ -881,8 +891,9 @@ type ItemView struct {
 	catalog.MatchRunItem
 	Book ItemBook `json:"book"`
 	Gone bool     `json:"gone,omitempty"`
-	// MatchedSince: a match run's book matched since the run (matchedSince),
-	// which an apply leaves alone; its changes are none.
+	// MatchedSince: a match or unknown_asin run's book matched since the run
+	// (matchedSince; an unknown_asin run's also once the community knows its
+	// ASIN, asinKnownSince), which an apply leaves alone; its changes are none.
 	MatchedSince bool              `json:"matched_since,omitempty"`
 	Changes      map[string]Change `json:"changes"`
 }
@@ -923,7 +934,8 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 			return nil, 0, err
 		default:
 			v.Book = ItemBook{Title: st.Title, Author: st.Author, Duration: st.Duration}
-			v.MatchedSince = newMatches(run.Mode) && it.Applied == "" && matchedSince(run.Mode, st, &it)
+			v.MatchedSince = newMatches(run.Mode) && it.Applied == "" &&
+				(matchedSince(run.Mode, st, &it) || asinKnownSince(run.Mode, st, &it))
 			for _, scope := range scopes {
 				if slices.Contains(it.Unchanged, scope) {
 					// Recorded with none: an apply under it leaves the item out
