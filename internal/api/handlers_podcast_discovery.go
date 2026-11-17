@@ -327,8 +327,12 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 	}
 	// A document that isn't OPML followed nothing: its token goes back, so the
 	// person can send the right file at once rather than meet 429 (server#219).
-	// An over-limit one keeps the charge, its read and parse the budget's.
-	a.opml.imports.Refund(quotaKey(r))
+	// An over-limit one keeps the charge, its read and parse the budget's, and
+	// so does an upload whose read failed (a dropped or stalled body: no
+	// document to fix, and refunded it would hold a read for free).
+	if errors.Is(err, opml.ErrInvalid) {
+		a.opml.imports.Refund(quotaKey(r))
+	}
 	writeNoStoreError(w, http.StatusBadRequest, "invalid_opml", "Invalid OPML document.", 0)
 }
 
