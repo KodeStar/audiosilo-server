@@ -22,6 +22,8 @@
 #   goreleaser check
 #   goreleaser build --snapshot --clean --skip=before --single-target
 # (a Linux target needs its C compiler: x86_64-linux-gnu-gcc / aarch64-linux-gnu-gcc).
+# CI's snapshot job builds the linux_amd64 target on every pull request and boots
+# it (scripts/smoke-boot.sh), as release.yml's smoke test does at the tag.
 version: 2
 
 project_name: audiosilo
@@ -128,6 +130,10 @@ release:
     owner: KodeStar
     name: audiosilo-server
   draft: true # let a human review the release notes/artifacts before publishing
+  # A tag with a pre-release suffix (v2.8.0-rc.1, -beta.2) is published as a
+  # pre-release, so GitHub's "latest" (the update check, the LinuxServer.io
+  # image's version watch) stays on the last stable release (server#217).
+  prerelease: auto
   footer: |
     ---
     Native builds embed the web player; ffmpeg/ffprobe are found locally or

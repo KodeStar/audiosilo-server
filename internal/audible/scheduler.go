@@ -5,6 +5,9 @@
 // accounts and titles are catalog's (catalog/audible.go).
 package audible
 
+// no-tests: exercised by internal/api's audible tests (SchedulerTick and the
+// imports run over the API's module deps, a Bridge and its jobs).
+
 import (
 	"context"
 	"errors"
