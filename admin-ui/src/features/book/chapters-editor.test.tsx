@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBookDetail, ChapterEditRequest } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
+import { libraries } from '@/test/fixtures';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -80,6 +81,16 @@ describe('the chapter editor', () => {
     expect(await screen.findByText('Chapters saved')).toBeInTheDocument();
     // Back to the card, the chapters marked as edited here.
     expect(await screen.findByText('Chapters edited on this server.')).toBeInTheDocument();
+  });
+
+  it('offers no Edit chapters on an episode in a podcast library', async () => {
+    const podcasts = libraries().map((l) => (l.id === 1 ? { ...l, kind: 'podcasts' as const } : l));
+    mockFetch(routes(bookDetail(), { 'GET /admin/libraries': { body: { libraries: podcasts } } }));
+    renderApp(URL);
+    expect(await screen.findByRole('heading', { name: 'Chapters' })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Edit chapters' })).not.toBeInTheDocument(),
+    );
   });
 
   it('says why a save was refused, rule by rule, and when the files changed', async () => {

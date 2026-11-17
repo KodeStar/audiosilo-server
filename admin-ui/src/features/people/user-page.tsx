@@ -578,6 +578,11 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
   // The members the delete keeps (unticked): none until one is unticked.
   const [keeping, setKeeping] = useState<Set<number>>(() => new Set());
   const [disabling, setDisabling] = useState(false);
+  // A role change for a person with household members, waiting for the
+  // confirm that says what changes for them (server#222). The role stays set
+  // while the dialog closes, so its words don't change on the way out.
+  const [ownerRole, setOwnerRole] = useState<User['role']>('user');
+  const [confirmingRole, setConfirmingRole] = useState(false);
   const member = Boolean(u.managed_by);
 
   const patch = async (change: Parameters<typeof api.updateUser>[1], done: string) => {
@@ -600,6 +605,19 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
 
   const setRole = (role: User['role']) => {
     if (role === u.role) return;
+    // Members take their access from their owner (an admin owner gives every
+    // library), so a change of the owner's role changes what they see too.
+    if (members.length) {
+      setOwnerRole(role);
+      setConfirmingRole(true);
+      return;
+    }
+    void applyRole(role);
+  };
+
+  // Resolves once the change is made (or has said why it wasn't), so the
+  // owner-role confirm stays busy until then.
+  const applyRole = async (role: User['role']) => {
     // An admin needs a way into the console (owner decision 5): a password, or
     // a single sign-on from the provider the server runs. With neither, ask for
     // a password in the same step; the server's answer stays the authority.
@@ -607,8 +625,8 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
       setPromoting(true);
       return;
     }
-    const done = role === 'admin' ? 'user.account.nowAdmin' : 'user.account.nowMember';
-    void patch({ role }, t(done, { name: u.username }));
+    const done = role === 'admin' ? 'user.account.nowAdmin' : 'user.account.nowListener';
+    await patch({ role }, t(done, { name: u.username }));
   };
 
   return (
@@ -694,6 +712,20 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
       </DangerZone>
 
       <PasswordDialog open={promoting} onOpenChange={setPromoting} user={u} promote />
+      <ConfirmDialog
+        open={confirmingRole}
+        onOpenChange={setConfirmingRole}
+        icon={ShieldCheck}
+        tone="info"
+        destructive={false}
+        title={t('user.account.roleOwnerTitle', { name: u.username })}
+        description={t(
+          ownerRole === 'admin' ? 'user.account.roleOwnerAdmin' : 'user.account.roleOwnerListener',
+          { name: u.username },
+        )}
+        confirmLabel={t('user.account.roleOwnerConfirm')}
+        onConfirm={() => applyRole(ownerRole)}
+      />
       <ConfirmDialog
         open={disabling}
         onOpenChange={setDisabling}

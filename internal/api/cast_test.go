@@ -243,6 +243,23 @@ func TestEditorTokenMintLeavesCastsAlone(t *testing.T) {
 	}
 }
 
+// A mint that fails says what it was for: a cast, or the chapter editor's
+// audio (server#410), not "could not start casting" for both.
+func TestMintFailureSaysWhatFor(t *testing.T) {
+	t.Parallel()
+	c := newCastEnv(t)
+	if _, err := c.db.ExecContext(context.Background(), `DROP TABLE cast_grants`); err != nil {
+		t.Fatal(err)
+	}
+	for editor, want := range map[bool]string{false: "could not start casting", true: "chapter editor"} {
+		body, _ := json.Marshal(map[string]any{"library_id": c.lib, "path": cradleBook, "editor": editor})
+		resp, b := c.do(t, "POST", "/api/v1/cast/token", c.samTok, string(body))
+		if resp.StatusCode != http.StatusInternalServerError || !strings.Contains(b, want) {
+			t.Errorf("mint (editor %v) with no grants table = %d %s, want 500 naming %q", editor, resp.StatusCode, b, want)
+		}
+	}
+}
+
 // Security-critical: a cast token reaches its own book's cover and stream as
 // ?token=, and nothing else.
 func TestCastTokenMediaAuth(t *testing.T) {

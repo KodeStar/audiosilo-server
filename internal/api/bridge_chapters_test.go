@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -237,6 +238,64 @@ func TestBridgeDetectRefusedForChosenChapters(t *testing.T) {
 	// Allowed: no choice.
 	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("detect with no choice: %d %s, want 201", resp.StatusCode, body)
+	}
+}
+
+// TestBridgeDetectRefusedForEditedChapters (server#410): an admin's edited
+// chapters stand over every other source, so a detect job for a book whose
+// edit applies is refused (409 chapters_edited); a dormant edit (made on other
+// files) refuses nothing, and with the edit reverted, it is queued.
+func TestBridgeDetectRefusedForEditedChapters(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beatDetect(t, true)
+	_, body := b.do(t, "GET", b.adminBook(mistbornBook), b.adminTok, "")
+	var page struct {
+		Basis json.RawMessage `json:"chapter_basis"`
+	}
+	decodeInto(t, body, &page)
+	editURL := strings.Replace(b.adminBook(mistbornBook), "/book?", "/book/chapters?", 1)
+	edit := `{"basis":` + string(page.Basis) + `,"chapters":[{"start":0,"title":"The whole book"}]}`
+	if resp, body := b.do(t, "PUT", editURL, b.adminTok, edit); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(body, `"chapter_source":"edited"`) {
+		t.Fatalf("edit: %d %s", resp.StatusCode, body)
+	}
+	// Denied: the edit applies.
+	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusConflict ||
+		!strings.Contains(body, `"code":"chapters_edited"`) {
+		t.Fatalf("detect on an edited book: %d %s, want 409 chapters_edited", resp.StatusCode, body)
+	}
+	// Allowed: a dormant edit. Its list names a file of another size now (as
+	// after the file was replaced), and a refresh of the book's chapters (any
+	// edit of the book) leaves it dormant: the next source's chapters stand in.
+	ctx := context.Background()
+	if _, err := b.db.ExecContext(ctx,
+		`UPDATE chapter_edits SET list = json_set(list, '$.files[0].size', json_extract(list, '$.files[0].size') + 1)
+		  WHERE library_id = ? AND path = ?`, b.lib.ID, mistbornBook); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := b.do(t, "PATCH", b.adminBook(mistbornBook), b.adminTok, `{"chapter_source":"auto"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh: %d %s", resp.StatusCode, body)
+	}
+	if _, body := b.do(t, "GET", b.adminBook(mistbornBook), b.adminTok, ""); !strings.Contains(body, `"chapter_edit":{"state":"dormant"`) ||
+		strings.Contains(body, `"chapter_source":"edited"`) {
+		t.Fatalf("not dormant: %s", body)
+	}
+	resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("detect with a dormant edit: %d %s, want 201", resp.StatusCode, body)
+	}
+	var job bridge.Job
+	decodeInto(t, body, &job)
+	if _, err := b.api.bridge.Cancel(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := b.do(t, "DELETE", editURL, b.adminTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("revert: %d %s", resp.StatusCode, body)
+	}
+	// Allowed: the edit reverted.
+	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("detect after the revert: %d %s, want 201", resp.StatusCode, body)
 	}
 }
 

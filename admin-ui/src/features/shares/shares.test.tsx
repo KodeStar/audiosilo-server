@@ -31,6 +31,17 @@ describe('shares', () => {
     expect(within(grant).queryByRole('button', { name: /Actions for/ })).not.toBeInTheDocument();
   });
 
+  it('lists a marked grant left with no whole-library rule with the named shares', async () => {
+    const ruleless = { ...fictionGrant, paths: [] };
+    mockFetch(routes({ 'GET /admin/shares': { body: { shares: [kidsShare, ruleless] } } }));
+    renderApp('/people/shares');
+    const nav = await screen.findByRole('navigation', { name: 'Shares' });
+    expect(
+      await within(nav).findByRole('button', { name: /^Library: Fiction/ }),
+    ).toBeInTheDocument();
+    expect(within(nav).queryByText('Whole libraries')).not.toBeInTheDocument();
+  });
+
   // Six listeners: more than a share's card has avatars for.
   const listeners = Array.from({ length: 6 }, (_, i) => ({
     ...sam,

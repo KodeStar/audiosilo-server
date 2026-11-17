@@ -106,6 +106,9 @@ const BY_CODE: Record<string, string> = {
   // Queueing chapters.detect for a book whose chapter source an admin chose: the
   // chapters found would never be used.
   chapters_chosen: 'errors.chaptersChosen',
+  // Queueing chapters.detect for a book whose edited chapters apply: an edit
+  // stands over every other source (server#410).
+  chapters_edited: 'errors.chaptersEdited',
   // Bridge Phase 2b: a contribution kind (or a generate job offered to the
   // community) while the contributions module is off; a share while one is
   // open for the book; a correction whose value isn't the book's edit any more.

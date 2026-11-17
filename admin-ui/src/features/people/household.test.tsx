@@ -155,6 +155,46 @@ describe("an owner's page", () => {
     ).toBeInTheDocument();
   });
 
+  it('says what a role change means for their members before it is made (server#222)', async () => {
+    const owner = { ...adam, has_password: true };
+    const calls = mockFetch(
+      routes({
+        'GET /admin/users/5': { body: detail(owner, { members: adamMembers }) },
+        'PATCH /admin/users/5': { body: { ...owner, role: 'admin' } },
+      }),
+    );
+    renderApp('/people/user/5?tab=account');
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText('Role'), 'admin');
+    const dialog = await screen.findByRole('dialog', { name: "Change adam's role?" });
+    expect(
+      within(dialog).getByText(/a member who shares everything will see every library too/),
+    ).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: 'Change role' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ role: 'admin' }),
+    );
+    expect(await screen.findByText('adam is now an admin')).toBeInTheDocument();
+  });
+
+  it('asks nothing when a role change has no members to tell about', async () => {
+    const withPassword = { ...sam, has_password: true };
+    const calls = mockFetch(
+      routes({
+        'GET /admin/users/2': { body: detail(withPassword) },
+        'PATCH /admin/users/2': { body: { ...withPassword, role: 'admin' } },
+      }),
+    );
+    renderApp('/people/user/2?tab=account');
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText('Role'), 'admin');
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ role: 'admin' }),
+    );
+    expect(screen.queryByRole('dialog', { name: "Change sam's role?" })).not.toBeInTheDocument();
+  });
+
   it("says so when they can't add members, and that existing members keep working", async () => {
     const off = { ...adam, can_add_members: false };
     mockFetch(routes({ 'GET /admin/users/5': { body: detail(off, { members: adamMembers }) } }));

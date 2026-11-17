@@ -202,6 +202,20 @@ describe('seriesStatus', () => {
     const owned = [1, 2, 3, 4, 5].map((i) => book(i, `B${i}`));
     expect(seriesStatus(stormlight, placeBooks(owned, stormlight)).missing).toEqual([]);
   });
+
+  it('never counts a fractional position as missing, as the upcoming job does (server#279)', () => {
+    const novellas = rail('Stormlight with novellas', [
+      ...stormlight.works.slice(0, 3),
+      work('2.2', 'Edgedancer'),
+      work('3.1', 'Dawnshard'),
+    ]);
+    const owned = [book(1, 'The Way of Kings'), book(3.1, 'Dawnshard')];
+    const st = seriesStatus(novellas, placeBooks(owned, novellas));
+    expect(st.missing.map((e) => e.position)).toEqual([2, 3]);
+    // A held novella counts; one not held is left out of the total.
+    expect(st.have.map((e) => e.position)).toEqual([1, 3.1]);
+    expect(st.total).toBe(4);
+  });
 });
 
 describe('placing books by title', () => {

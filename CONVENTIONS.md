@@ -1232,7 +1232,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`Book.AudioFiles`: a single-file book, which has no `book_files` rows, is its own file), the book resolved as
   `/item` does (a part path names its book; `requireAuth`, so no `?token=`). A download is not a
   listen: none of it marks a session or a transcode. A watch client is `audiosilo-watch/<ver> (watchos|wearos)`
-  in `X-AudioSilo-Client`, shown as a watch in the console. Tests: `media/rendition_test.go` (args, keys,
+  in `X-AudioSilo-Client`, shown as a watch in the console, named "AudioSilo" (`clientParts`, the platform saying which). Tests: `media/rendition_test.go` (args, keys,
   a real encode's codec, channels, rate, bit rate, duration and moov-first, Range/If-Range, queue and status,
   refusal, a trackless copy refused, the bound on Queue and Open, eviction per cache, the shared disk guard),
   `api/renditions_test.go` (capability, stream, 503 pending, 503 rendition_error, refusals, scope allowed and
@@ -1258,7 +1258,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   share again first: write transactions run one at a time, so first grants sent together share one.
   A marked grant's rules change only by granting or revoking the library: `POST`/`DELETE
   /admin/shares/{id}/paths` on one is 409 `library_grant` (`catalog.ErrLibraryGrant`, read inside the
-  edit's transaction; server#254), as the console never offers it.
+  edit's transaction; server#254), as the console never offers it. The mark stays only while the share
+  holds that library's `""` rule: `DeleteLibrary` clears it on a grant share it leaves (one that also
+  holds another library's folders), and `0081` cleared the marks older versions left on a narrowed or
+  rule-less share, so such a share is an ordinary one whose folders can be changed.
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its
@@ -2764,7 +2767,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a describe is refused 409 `detect_open` while a detect job is open, the other way round), and 409
   `chapters_chosen` (`ErrChaptersChosen`, checked by the api's queue handler from `catalog.ChapterChoice`)
   for a book whose chapter source an admin chose (files or community: a found list stands in only with no
-  choice, so it would never be used); a NEW `sidecars.generate` is refused 409 `detect_open` (`ErrDetectOpen`)
+  choice, so it would never be used), and 409 `chapters_edited` (`ErrChaptersEdited`) for a book whose edited
+  chapters apply (Edited chapters); a NEW `sidecars.generate` is refused 409 `detect_open` (`ErrDetectOpen`)
   only while a detect job is queued, claimed or running, since cancelling it would throw its transcription
   away and the generate run after it reuses it, while a PARKED one (`chapters_not_detected`, a person's
   decision) is cancelled by the new generate job in its transaction ("it finds the chapters itself"), as
@@ -2876,7 +2880,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   online Bridge with the `chapters` feature): `health/detect-chapters-dialog.tsx` confirms with the
   transcription time from the Bridge's status (`detectPlan`: its figure and library mappings, one request
   for any selection) and "no agent cost", and queues `chapters.detect` per book, passing over (named in the
-  toast by `skipNotes`) one refused `generate_open`, `describe_open` or `chapters_chosen` and one whose
+  toast by `skipNotes`) one refused `generate_open`, `describe_open`, `chapters_chosen` or `chapters_edited` and one whose
   answer is its own PARKED detect job (`queueInOrder` never counts a returned `needs_attention` job as
   queued: reason `parked`, "waiting for attention on the Bridge"); a row whose `chapter_choice` is set
   (admin rows carry it, additive), or whose `chapters_source` is `edited`, offers no Detect, says why (`rowFix`, `detectChosenNote`) and is left out
@@ -4024,7 +4028,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   by the pure `placeOnFiles` (each chapter in the file its start falls in, at the same place in it by the lengths the
   list was made on, to the next start or the file's end, its book offset on the files' lengths now; so another probe
   reading a file a little longer or shorter moves no chapter in its audio, and one at or past its file's end now
-  leaves the edit dormant; a start within 50 ms of a file's start is that file's first chapter; file starts are the
+  leaves the edit dormant; a start within 50 ms of a file's start is that file's first chapter, each file taking the
+  nearest start no file before it took (`snapToFiles`, so a file under 100 ms never takes its neighbour's; a file
+  of no length shares the next file's, as in the console's editor); file starts are the
   sums of the files' lengths in whole milliseconds, `fileStartsMS`, as the console sums the basis); on other files it is dormant (the next source's
   chapters, never applied to other audio) and applies again when the files come back. `chapters_source = "edited"`
   (`ChaptersFromEdited`, never a choice), `chapters_fit` = `listFitKey(list, "", files)`. No chapter crosses a file:
@@ -4044,7 +4050,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`{state: applied|dormant, edited_by: username|null, edited_at}`, omitted with none) and `chapter_basis` (`{files:
   [{path, size, duration_ms}]}`, always); `chapter_source` and the player's `chapters_source` may be `"edited"` (an
   old app shows ordinary chapters). The editor's player streams the chosen row's file with an editor token
-  (`POST /cast/token` with `"editor": true`, Cast tokens above), never the session token.
+  (`POST /cast/token` with `"editor": true`, Cast tokens above), never the session token; the console offers no
+  Edit chapters in a podcast library (`ChaptersCard` reads the library's kind). A `chapters.detect` job for a book
+  whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, checked by the api's queue
+  handler from the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list
+  would sit under the edit, never used. Only the console queues detect jobs (the player never does): Health's Detect
+  dialog passes such a book over (`skipNotes`) and `errors.ts` words the code.
 - ffprobe is optional; code paths must degrade gracefully when it is absent (with it, most files
   are read in-process: see In-process probe)
   (path-derived metadata still works; codec is left unknown → `direct_playable`

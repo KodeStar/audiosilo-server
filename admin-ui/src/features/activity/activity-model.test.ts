@@ -256,12 +256,14 @@ describe('versions and clients', () => {
     expect(clientKind({ app: 'audiosilo-watch', platform: 'watchos' })).toBe('watch');
     expect(clientKind({ app: 'audiosilo-watch', platform: 'wearos' })).toBe('watch');
     expect(clientParts({ app: 'audiosilo-watch', version: '0.1.0', platform: 'watchos' })).toEqual({
-      app: 'audiosilo-watch 0.1.0',
+      app: 'AudioSilo 0.1.0',
       platform: 'Apple Watch',
     });
-    expect(clientParts({ app: 'audiosilo-watch', version: '', platform: 'wearos' }).platform).toBe(
-      'Wear OS',
-    );
+    // The watch apps are AudioSilo too (fe#220): the platform says which.
+    expect(clientParts({ app: 'audiosilo-watch', version: '', platform: 'wearos' })).toEqual({
+      app: 'AudioSilo',
+      platform: 'Wear OS',
+    });
     expect(clientParts({ app: 'AudioSilo', version: '1.4.2', platform: 'android' })).toEqual({
       app: 'AudioSilo 1.4.2',
       platform: 'Android',

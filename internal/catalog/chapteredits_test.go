@@ -106,6 +106,46 @@ func TestPlaceOnFiles(t *testing.T) {
 	}
 }
 
+// snapToFiles gives each file the nearest chapter start in reach that no
+// file before it took (server#410): a file under 100 ms (twice the reach)
+// never takes the chapter of the file beside it, and one with no chapter of
+// its own is no fit.
+func TestSnapToFilesShortFile(t *testing.T) {
+	t.Parallel()
+	fileStarts := []int64{0, 1000, 1040} // the second file is 40 ms long
+	starts := []int64{0, 1002, 1039}
+	if !snapToFiles(starts, fileStarts) || !slices.Equal(starts, []int64{0, 1000, 1040}) {
+		t.Fatalf("each file its own chapter = %v, want [0 1000 1040]", starts)
+	}
+	// The 40 ms file has no chapter: the one before it is no stand-in.
+	starts = []int64{0, 1000}
+	if snapToFiles(starts, fileStarts) {
+		t.Fatalf("a file with no chapter fitted: %v", starts)
+	}
+	// Nearest wins, not first: 990 is the second file's, 1035 the third's.
+	starts = []int64{0, 990, 1035}
+	if !snapToFiles(starts, []int64{0, 1000, 1030}) || !slices.Equal(starts, []int64{0, 1000, 1030}) {
+		t.Fatalf("nearest start = %v, want [0 1000 1030]", starts)
+	}
+	// A file of no length (one the scan read no length for) starts where the
+	// next file does: the one chapter there starts both, as in the console's
+	// editor (validateDraft), and it is placed in the file with the audio.
+	starts = []int64{0, 1003}
+	if !snapToFiles(starts, []int64{0, 1000, 1000}) || !slices.Equal(starts, []int64{0, 1000}) {
+		t.Fatalf("a file of no length = %v, want [0 1000]", starts)
+	}
+	files := []BookFile{{RelPath: "A/1.mp3", Duration: 1000}, {RelPath: "A/2.mp3"}, {RelPath: "A/3.mp3", Duration: 500}}
+	entries, err := checkChapterEdit([]EditedChapter{{0, "A"}, {1000, "B"}}, files)
+	if err != nil {
+		t.Fatalf("an edit over a file of no length: %v", err)
+	}
+	want := []metadata.Chapter{{Index: 0, Title: "A", FilePath: "A/1.mp3", End: 1000},
+		{Index: 1, Title: "B", FileIndex: 2, FilePath: "A/3.mp3", End: 500, BookOffset: 1000}}
+	if got := placeOnFiles(entries, files, lengthsOf(files)); !slices.Equal(got, want) {
+		t.Fatalf("placed over a file of no length = %+v\nwant %+v", got, want)
+	}
+}
+
 // checkChapterEdit refuses each rule's breach with its detail, and stores a
 // good edit's starts in milliseconds, file starts exact, titles trimmed.
 func TestCheckChapterEdit(t *testing.T) {

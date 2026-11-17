@@ -214,7 +214,7 @@ export function InviteTable({
         onOpenChange={(o) => !o && setRevoking(undefined)}
         icon={MailX}
         title={t('invites.revokeTitle', { name: revoking?.username ?? '' })}
-        description={t('invites.revokeBody')}
+        description={t('invites.revokeBody', { name: revoking?.username ?? '' })}
         confirmLabel={t('invites.revoke')}
         onConfirm={async () => {
           if (!revoking) return;

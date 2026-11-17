@@ -60,8 +60,11 @@ export function SharesPage() {
   const [creating, setCreating] = useState(false);
 
   const all = shares.data ?? [];
-  const named = all.filter((s) => !isLibraryGrant(s));
-  const libraryGrants = all.filter(isLibraryGrant);
+  // Listed by what a share gives (server#230): a marked grant left with no
+  // whole-library rule gives the folders it holds, so it lists with the
+  // named shares (read-only still: ShareDetail's isGrant).
+  const named = all.filter((s) => wholeLibraryOf(s) === undefined);
+  const libraryGrants = all.filter((s) => wholeLibraryOf(s) !== undefined);
   const selected = all.find((s) => s.id === search.share) ?? named[0] ?? libraryGrants[0];
   const select = (id: number) => void navigate({ to: '.', search: { share: id }, replace: true });
 

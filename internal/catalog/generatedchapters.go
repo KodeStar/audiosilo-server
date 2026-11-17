@@ -38,7 +38,7 @@ func applyGenerated(ctx context.Context, tx *sql.Tx, r *chapterRow) (bool, error
 	if err := tx.QueryRowContext(ctx, `SELECT chapters FROM book_attachments WHERE book_id = ?`, r.book.ID).Scan(&raw); err != nil {
 		return false, err
 	}
-	files, err := playFiles(ctx, tx, &r.book)
+	files, err := r.filesOf(ctx, tx)
 	if err != nil {
 		return false, err
 	}

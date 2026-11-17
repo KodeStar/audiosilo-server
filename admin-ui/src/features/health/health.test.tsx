@@ -479,6 +479,29 @@ describe('library health', () => {
       ).toHaveLength(2);
     });
 
+    it('passes over a book whose chapters were edited since the list was read (409 chapters_edited)', async () => {
+      mockFetch(
+        detectRoutes({
+          'POST /admin/bridge/jobs': (req) =>
+            (req.body as { path: string }).path === 'Mosse/Past Tense'
+              ? { status: 409, body: { error: 'chapters edited', code: 'chapters_edited' } }
+              : queuedJob((req.body as { path: string }).path),
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      await screen.findByRole('link', { name: 'The Black Gate' });
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      const bar = await screen.findByRole('toolbar');
+      await user.click(within(bar).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      expect(await screen.findByText('Finding the chapters of 1 book')).toBeInTheDocument();
+      expect(
+        screen.getByText('Their chapters were edited on the book page: Past Tense.'),
+      ).toBeInTheDocument();
+    });
+
     it('never counts a parked detect job that comes back as queued, and passes over a book being described', async () => {
       mockFetch(
         detectRoutes({
@@ -841,6 +864,22 @@ describe('library health', () => {
     expect(within(card).getAllByText('Library')).toHaveLength(2);
     expect(within(card).getByText('Kids')).toBeInTheDocument();
     expect(within(card).getByText(across.books[0].library_name)).toBeInTheDocument();
+  });
+
+  it('keeps "Include other libraries" in the URL, so a reload keeps it (ADMIN-11)', async () => {
+    const calls = mockFetch(routes({ 'GET /admin/issues/duplicates': { body: { groups: [] } } }));
+    renderApp('/health?issue=duplicate&across=1');
+    const toggle = await screen.findByRole('switch', { name: 'Include other libraries' });
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(
+      calls
+        .filter((c) => c.path === '/admin/issues/duplicates')
+        .at(-1)
+        ?.query.get('across'),
+    ).toBe('1');
+    await userEvent.setup().click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    expect(window.location.search).not.toContain('across');
   });
 
   it('reaches the groups ignored across libraries, which the count (within each) leaves out', async () => {

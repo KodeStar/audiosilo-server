@@ -47,14 +47,15 @@ import { toast } from '@/lib/toast';
  * The refusals that pass a book over rather than stop the run: its generate job
  * is open (that run finds the chapters itself), its description job is (both
  * rewrite the Bridge's notes for the book), its read-along is being made (both
- * run over the same audio on the Bridge), or its chapter source was chosen
- * (the chapters found would never be used).
+ * run over the same audio on the Bridge), or its chapter source was chosen or
+ * its chapters edited (the chapters found would never be used).
  */
 const DETECT_SKIPS = [
   'generate_open',
   'describe_open',
   'readalong_open',
   'chapters_chosen',
+  'chapters_edited',
 ] as const;
 
 export function DetectChaptersDialog({

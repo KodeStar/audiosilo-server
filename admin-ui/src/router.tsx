@@ -45,9 +45,13 @@ export interface SectionSearch extends LibrarySearch {
   invite?: true;
   /** Shares: the selected share. */
   share?: number;
-  /** Health > Issues: the open category, and whether it lists the ignored books. */
+  /**
+   * Health > Issues: the open category, whether it lists the ignored books, and
+   * whether duplicates include other libraries (ADMIN-11).
+   */
   issue?: IssueKind;
   ignored?: true;
+  across?: true;
   /** Activity > Overview: the period (absent = 30 days). */
   range?: ActivityRange;
   /** Activity > Sessions: one person's, and with `library`, one book's (`path`). */
@@ -68,6 +72,7 @@ function validateSectionSearch(s: Record<string, unknown>): SectionSearch {
   if (Number.isInteger(share) && share > 0) out.share = share;
   if (ISSUE_KINDS.includes(s.issue as IssueKind)) out.issue = s.issue as IssueKind;
   if (flag(s.ignored)) out.ignored = true;
+  if (flag(s.across)) out.across = true;
   if (ACTIVITY_RANGES.includes(s.range as ActivityRange)) out.range = s.range as ActivityRange;
   const person = Number(s.person);
   if (Number.isInteger(person) && person > 0) out.person = person;

@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Trans, useTranslation } from 'react-i18next';
-import { Sparkles } from 'lucide-react';
+import { CalendarClock, Sparkles } from 'lucide-react';
 import { useBookMeta, useBookWorks } from '@/api/hooks';
 import type { AdminBook, SeriesCount } from '@/api/types';
 import { BooksLink } from '@/components/books-link';
@@ -10,10 +10,8 @@ import { ProvenanceMarker } from '@/components/provenance';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SeriesGenerateDialog } from '@/features/bridge/series-generate-dialog';
-import { useIsPhone } from '@/features/library/books/use-layout';
 import { bookRoute, refKey } from '@/lib/book-route';
 import { counted, formatNumber } from '@/lib/format';
-import { useMediaQuery } from '@/lib/use-media-query';
 import {
   formatPositions,
   formatReleaseDate,
@@ -33,6 +31,14 @@ import {
 } from './series-model';
 import { useInView } from '@/lib/use-in-view';
 
+/** The page's width, read once for every card (SeriesPage). */
+export interface ShelfLayout {
+  /** Wide enough for the fan of covers beside the spines (1024px and up). */
+  wide: boolean;
+  /** A phone's width: the shelf is shorter (spineFitsLabel). */
+  phone: boolean;
+}
+
 /**
  * One series: its name (a link to its books), author and what the server
  * holds, then the books as spines on a shelf (missing entries as dashed ghosts,
@@ -46,6 +52,7 @@ export function SeriesCard({
   complete,
   metadata,
   generate = false,
+  layout,
 }: {
   series: SeriesCount;
   /** The series' books loaded so far, in series order. */
@@ -56,6 +63,7 @@ export function SeriesCard({
   metadata: boolean;
   /** An online Bridge offers characters and recaps: Generate for the series. */
   generate?: boolean;
+  layout: ShelfLayout;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -154,7 +162,7 @@ export function SeriesCard({
       {books.length === 0 && !complete ? (
         <div className="skel h-[200px] rounded-lg" role="status" aria-label={t('common.loading')} />
       ) : (
-        <Shelf name={s.name} placed={placed} status={known} fmt={fmt} fan={seen} />
+        <Shelf name={s.name} placed={placed} status={known} fmt={fmt} fan={seen} layout={layout} />
       )}
     </section>
   );
@@ -182,6 +190,7 @@ function Shelf({
   status,
   fmt,
   fan,
+  layout: { wide, phone },
 }: {
   name: string;
   /**
@@ -194,14 +203,14 @@ function Shelf({
   fmt: (n: number) => string;
   /** The card has come into view: its fan of covers may load. */
   fan: boolean;
+  layout: ShelfLayout;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const navigate = useNavigate();
   const now = new Date();
-  // The fan only fits beside the spines on wide screens; elsewhere its covers aren't fetched.
-  const wide = useMediaQuery('(min-width: 1024px)');
-  const phone = useIsPhone();
+  // The fan only fits beside the spines on wide screens (layout.wide); elsewhere
+  // its covers aren't fetched.
   const spines = spineRow(placed, status?.missing ?? []);
   return (
     // Room above for the hover lift and below for the shelf's shadow, inside the scroller.
@@ -219,8 +228,8 @@ function Shelf({
               ? `${t(state === 'preorder' ? 'series.preorder' : 'series.newRelease')} · `
               : '';
             // The date runs in a line of its own beside the title; the state word
-            // leads it only where the whole line fits (else the date alone, its
-            // colour still saying which, the spine's label all of it).
+            // leads it only where the whole line fits (else a small mark does, the
+            // spine's label saying all of it).
             const showState = Boolean(stateWord) && spineFitsLabel(height, stateWord + date, phone);
             const label =
               state === 'preorder'
@@ -245,7 +254,12 @@ function Shelf({
                     <span className="spine-lines">
                       <span className="spine-title">{sp.entry.title}</span>
                       <span className="spine-date" data-state={state}>
-                        {showState ? stateWord : null}
+                        {showState ? (
+                          stateWord
+                        ) : state ? (
+                          // Too short for the word: a mark says it, not the colour alone.
+                          <StateMark state={state} />
+                        ) : null}
                         {date}
                       </span>
                     </span>
@@ -308,5 +322,23 @@ function Shelf({
         ) : null}
       </ul>
     </div>
+  );
+}
+
+/**
+ * A short gap spine's preorder or new-release mark, where the state's word
+ * doesn't fit (WCAG 1.4.1: the date's colour is not the only sign). The spine's
+ * label names the state in words.
+ */
+function StateMark({ state }: { state: 'preorder' | 'new' }) {
+  const Icon = state === 'preorder' ? CalendarClock : Sparkles;
+  return (
+    // The spine's text runs top to bottom (vertical-rl), so the gap before the
+    // date is on the inline axis (me-1), not a physical right margin.
+    <Icon
+      data-testid={`spine-mark-${state}`}
+      className="me-1 inline size-[1em] align-[-0.125em]"
+      aria-hidden="true"
+    />
   );
 }

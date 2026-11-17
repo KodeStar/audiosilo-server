@@ -523,7 +523,9 @@ length.
 
 Owned books as vertical spines (cover palette colour, bands, rotated title, index), missing entries as
 dashed ghost spines with their number and title from community series data; header says "You have 1, 2,
-4 of 5; missing 3, 5". Spines lift on hover and open the book.
+4 of 5; missing 3, 5". Only whole positions can be missing (a novella at 2.5 never is, as the upcoming
+job counts). A dated ghost names its state ("Preorder", "New") beside the date where it fits, else a small
+mark does, never the colour alone. Spines lift on hover and open the book.
 
 ### Avatar + progress ring _custom on shadcn Avatar_
 
@@ -543,8 +545,8 @@ unavailable), `warn`, `info`, `safe` (green shield: "Safety stop: nothing was de
 ### Invite card _custom_
 
 Deep ink card with pink/plum radial glows, three fanned covers from the share, server mark, a QR code,
-"Uncle Ray, your audiobooks are waiting." Below: read-only mono link + Copy, uses/expiry, "code rides in
-the link fragment, never in server logs".
+"Uncle Ray, your audiobooks are waiting." Below: read-only mono link + Copy, uses/expiry, "the code is
+never sent to the server with the link, so it stays out of its logs".
 
 ### Danger zone
 

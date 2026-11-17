@@ -95,6 +95,23 @@ describe('palette search', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/people/user/2'));
   });
 
+  it('names the folder of copies that would read alike (ADMIN-13.4)', async () => {
+    const copy = { ...books[0], path: `${books[0].path} (copy)` };
+    mockFetch(routes({ 'GET /admin/books': { body: { books: [books[0], copy, books[1]] } } }));
+    renderApp();
+    const user = userEvent.setup();
+    await user.type(await openPalette(), 'way of');
+    const group = await screen.findByRole('group', { name: 'Books' });
+    await waitFor(() => expect(within(group).getAllByRole('option')).toHaveLength(3));
+    const [first, second, other] = within(group)
+      .getAllByRole('option')
+      .map((o) => o.textContent ?? '');
+    expect(first).toContain(books[0].path);
+    expect(second).toContain(copy.path);
+    // A book with no twin keeps its line without a folder.
+    expect(other).not.toContain(books[1].path);
+  });
+
   it('searches nothing until two characters are typed, and offers the full book search', async () => {
     const calls = mockFetch(routes());
     const { router } = renderApp();

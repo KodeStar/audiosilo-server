@@ -51,14 +51,14 @@ func (a *API) handleMintCastToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
-	issue := a.auth.IssueCastToken
+	issue, failed := a.auth.IssueCastToken, "could not start casting"
 	if body.Editor {
-		issue = a.auth.IssueEditorToken
+		issue, failed = a.auth.IssueEditorToken, "could not open the book's audio for the chapter editor"
 	}
 	token, expires, err := issue(r.Context(), u.ID, credentialFrom(r.Context()).ID, lib.ID, book.RelPath)
 	if err != nil {
 		a.log.Warn("mint cast token failed", "user", u.ID, "editor", body.Editor, "err", err)
-		writeError(w, http.StatusInternalServerError, "could not start casting")
+		writeError(w, http.StatusInternalServerError, failed)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"token": token, "expires_at": expires})

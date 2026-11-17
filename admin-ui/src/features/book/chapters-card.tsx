@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { AudioLines, Info, ListRestart, Lock, Pencil, Undo2 } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidateIssues, settleBookEdit, useServerInfo } from '@/api/hooks';
+import { invalidateIssues, settleBookEdit, useLibraries, useServerInfo } from '@/api/hooks';
 import type { AdminBookDetail, AdminChapter, BookEditRequest, ChapterSource } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { InlineEdit } from '@/components/inline-edit';
@@ -16,6 +16,7 @@ import { GenerateStatus } from '@/features/bridge/generate-status';
 import { useBookGenerateJob, useBridgeLink } from '@/features/bridge/use-generate';
 import { toastError } from '@/lib/errors';
 import { formatClock, formatDateTime, formatDuration } from '@/lib/format';
+import { isBookLibrary } from '@/lib/library-kind';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
@@ -70,6 +71,10 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   const [reverting, setReverting] = useState(false);
   const edited = detail.chapter_source === 'edited';
   const chapterEdit = detail.chapter_edit;
+  // An episode's chapters are its feed's: the server refuses an edit in a
+  // podcast library (409 not_book_library), so none is offered there.
+  const library = useLibraries().data?.find((l) => l.id === b.library_id);
+  const podcast = library !== undefined && !isBookLibrary(library);
   // The chapter a ribbon click asked for: its row scrolls into view.
   const [jump, setJump] = useState<number | null>(null);
   const problem = chapterProblem(chapters, b.duration);
@@ -157,7 +162,7 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
         length: formatDuration(b.duration, lang),
       })}
       action={
-        !editing && files.length ? (
+        !editing && !podcast && files.length ? (
           <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
             <Pencil aria-hidden="true" />
             {t('book.chapters.edit.open')}

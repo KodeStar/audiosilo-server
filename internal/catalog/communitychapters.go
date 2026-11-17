@@ -283,12 +283,29 @@ func (c *Catalog) GetCommunityChapters(ctx context.Context, libraryID int64, pat
 // (id, library, rel_path, is_folder, size, duration: enough for playFiles), the
 // source and fit its chapter rows hold, its scanned chapters, whether a
 // chapters.json is stored for it, and whether its community chapter check was
-// made of the book as it is now (checkCurrent: its basis is the book's).
+// made of the book as it is now (checkCurrent: its basis is the book's). files
+// is the book's playFiles once read (filesOf), so a dormant edit and the
+// generated list after it read them once.
 type chapterRow struct {
 	book                   Book
 	current, fit, snapshot string
 	generated              bool
 	checkCurrent           bool
+	files                  []BookFile
+	filesRead              bool
+}
+
+// filesOf is the book's files in play order (playFiles), read on the first
+// call only.
+func (r *chapterRow) filesOf(ctx context.Context, tx *sql.Tx) ([]BookFile, error) {
+	if !r.filesRead {
+		files, err := playFiles(ctx, tx, &r.book)
+		if err != nil {
+			return nil, err
+		}
+		r.files, r.filesRead = files, true
+	}
+	return r.files, nil
 }
 
 // holds reports whether the book's chapter rows are already source's fit named
