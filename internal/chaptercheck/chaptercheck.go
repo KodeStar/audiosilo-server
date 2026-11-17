@@ -55,6 +55,13 @@ const (
 	// boundaries left are placed by proportion alone (approximate) and the fit is
 	// still recorded, so a long book on a slow disk can't fail every check.
 	probeBudget = 4 * time.Minute
+	// readyWait bounds how long the first pass after a start waits for the
+	// metadata to answer locally (mirror mode: the local copy loaded). Past it
+	// the pass runs anyway, its lookups going to the service as a mirror that
+	// isn't ready sends them.
+	readyWait = 10 * time.Minute
+	// readyPoll is how often that wait looks again.
+	readyPoll = 2 * time.Second
 )
 
 // Source is the community's chapter lists (meta.Service.RecordingChapters).
@@ -71,8 +78,13 @@ type Runner struct {
 	ffmpeg string
 	// enabled is the live metadata switch: nothing is checked while it is off.
 	enabled func() bool
-	log     *slog.Logger
-	now     func() time.Time
+	// ready reports whether lookups answer locally yet (mirror mode: the copy
+	// loaded); nil when there is nothing to wait for. Run's first pass waits
+	// for it, at most readyWait.
+	ready                func() bool
+	readyWait, readyPoll time.Duration
+	log                  *slog.Logger
+	now                  func() time.Time
 
 	kick chan struct{}
 	// settle is how long a kick waits before its pass, gathering the kicks behind
@@ -88,17 +100,24 @@ type Runner struct {
 // ErrBusy is a check of a book that is being checked already.
 var ErrBusy = errors.New("the book is being checked already")
 
-// New returns a Runner; Run starts its background pass.
-func New(cat *catalog.Catalog, src Source, ffmpeg string, enabled func() bool, log *slog.Logger) *Runner {
+// New returns a Runner; Run starts its background pass. ready (nil: none) is
+// whether lookups answer locally yet (Runner.ready).
+func New(cat *catalog.Catalog, src Source, ffmpeg string, enabled, ready func() bool, log *slog.Logger) *Runner {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Runner{cat: cat, src: src, ffmpeg: ffmpeg, enabled: enabled, log: log, now: time.Now,
-		kick: make(chan struct{}, 1), settle: settleKicks, busy: map[catalog.Ref]bool{}, failed: map[catalog.Ref]time.Time{}}
+	return &Runner{cat: cat, src: src, ffmpeg: ffmpeg, enabled: enabled, ready: ready, readyWait: readyWait,
+		readyPoll: readyPoll, log: log, now: time.Now, kick: make(chan struct{}, 1), settle: settleKicks,
+		busy: map[catalog.Ref]bool{}, failed: map[catalog.Ref]time.Time{}}
 }
 
 // Run checks the books due a check every interval, and on a Kick, until ctx ends.
+// The first pass waits for the metadata to answer locally (waitReady), so a
+// start in mirror mode sends no lookups to the service while its copy loads.
 func (r *Runner) Run(ctx context.Context) {
+	if !r.waitReady(ctx) {
+		return
+	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -124,6 +143,31 @@ func (r *Runner) Run(ctx context.Context) {
 			select {
 			case <-r.kick:
 			default:
+			}
+		}
+	}
+}
+
+// waitReady waits until r.ready reports true, at most r.readyWait; false when
+// ctx ended first.
+func (r *Runner) waitReady(ctx context.Context) bool {
+	if r.ready == nil || r.ready() {
+		return true
+	}
+	deadline := time.NewTimer(r.readyWait)
+	defer deadline.Stop()
+	poll := time.NewTicker(r.readyPoll)
+	defer poll.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			r.log.Info("community chapters: the local copy of the metadata is not ready; checking anyway", "waited", r.readyWait)
+			return true
+		case <-poll.C:
+			if r.ready() {
+				return true
 			}
 		}
 	}

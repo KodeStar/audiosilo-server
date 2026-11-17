@@ -86,7 +86,7 @@ func TestCheckFillsAChapterlessBook(t *testing.T) {
 	ctx := context.Background()
 	e.book(t, "A/Book.m4b", "B000000001", 3600)
 	e.src.byASIN["B000000001"] = chapters(4, 900)
-	r := New(e.cat, e.src, "", on, nil)
+	r := New(e.cat, e.src, "", on, nil, nil)
 
 	cc, err := r.Check(ctx, catalog.Ref{LibraryID: e.lib.ID, Path: "A/Book.m4b"})
 	if err != nil {
@@ -113,7 +113,7 @@ func TestCheckRecordsNoMatchAndAnotherEdition(t *testing.T) {
 	e.book(t, "A/Unknown.m4b", "B000000009", 3600)
 	e.book(t, "A/Abridged.m4b", "B000000002", 1800)
 	e.src.byASIN["B000000002"] = chapters(4, 900) // an hour against half of one
-	r := New(e.cat, e.src, "", on, nil)
+	r := New(e.cat, e.src, "", on, nil, nil)
 
 	r.pass(ctx)
 	got := map[string]string{}
@@ -143,7 +143,7 @@ func TestPassStopsWhenTheServiceFails(t *testing.T) {
 		e.book(t, fmt.Sprintf("A/%02d.m4b", i), fmt.Sprintf("B0000000%02d", i), 3600)
 	}
 	e.src.err = errors.New("upstream down")
-	r := New(e.cat, e.src, "", on, nil)
+	r := New(e.cat, e.src, "", on, nil, nil)
 	r.pass(ctx)
 	if n := e.src.calls.Load(); n < maxFailStreak || n > maxFailStreak+workers {
 		t.Fatalf("%d calls, want the pass to stop after %d failures", n, maxFailStreak)
@@ -154,7 +154,7 @@ func TestPassStopsWhenTheServiceFails(t *testing.T) {
 	}
 	// Off: the background checks nothing.
 	e.src.err, e.src.calls = nil, atomic.Int32{}
-	off := New(e.cat, e.src, "", func() bool { return false }, nil)
+	off := New(e.cat, e.src, "", func() bool { return false }, nil, nil)
 	run, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() { off.Run(run); close(done) }()
@@ -193,7 +193,7 @@ func TestCheckSnapsToPausesWithFFmpeg(t *testing.T) {
 	}
 	e.book(t, "A/Book.m4a", "B000000001", 117)
 	e.src.byASIN["B000000001"] = chapters(4, 30)
-	r := New(e.cat, e.src, "ffmpeg", on, nil)
+	r := New(e.cat, e.src, "ffmpeg", on, nil, nil)
 	cc, err := r.Check(ctx, catalog.Ref{LibraryID: e.lib.ID, Path: "A/Book.m4a"})
 	if err != nil {
 		t.Fatal(err)
@@ -216,7 +216,7 @@ func TestStartChecksInTheBackgroundOnce(t *testing.T) {
 	block := make(chan struct{})
 	src := &blockingSource{fakeSource: e.src, block: block}
 	e.src.byASIN["B000000001"] = chapters(4, 900)
-	r := New(e.cat, src, "", on, nil)
+	r := New(e.cat, src, "", on, nil, nil)
 	ref := catalog.Ref{LibraryID: e.lib.ID, Path: "A/Book.m4b"}
 	if !r.Start(context.Background(), ref) {
 		t.Fatal("Start refused an idle book")
@@ -254,7 +254,7 @@ func TestRecheckOfTheSameListOnlyRenews(t *testing.T) {
 	ctx := context.Background()
 	e.book(t, "A/Book.m4b", "B000000001", 3600)
 	e.src.byASIN["B000000001"] = chapters(4, 900)
-	r := New(e.cat, e.src, "", on, nil)
+	r := New(e.cat, e.src, "", on, nil, nil)
 	ref := catalog.Ref{LibraryID: e.lib.ID, Path: "A/Book.m4b"}
 	if _, err := r.Check(ctx, ref); err != nil {
 		t.Fatal(err)
@@ -293,7 +293,7 @@ func TestFailingBooksDontHoldUpTheRest(t *testing.T) {
 	}
 	e.book(t, "A/Good.m4b", "B000000099", 3600)
 	e.src.byASIN["B000000099"] = chapters(4, 900)
-	r := New(e.cat, e.src, "", on, nil)
+	r := New(e.cat, e.src, "", on, nil, nil)
 	if !r.pass(ctx) {
 		t.Fatal("a pass the service kept failing reported no failure")
 	}
@@ -320,7 +320,7 @@ func TestStartFitsAgain(t *testing.T) {
 	ctx := context.Background()
 	e.book(t, "A/Book.m4b", "B000000001", 3600)
 	e.src.byASIN["B000000001"] = chapters(4, 900)
-	r := New(e.cat, e.src, "", on, nil)
+	r := New(e.cat, e.src, "", on, nil, nil)
 	ref := catalog.Ref{LibraryID: e.lib.ID, Path: "A/Book.m4b"}
 	if _, err := r.Check(ctx, ref); err != nil {
 		t.Fatal(err)
@@ -349,7 +349,7 @@ func TestStartFitsAgain(t *testing.T) {
 func TestProberStaysInTheLibrary(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	r := New(e.cat, e.src, "/nonexistent/ffmpeg", on, nil)
+	r := New(e.cat, e.src, "/nonexistent/ffmpeg", on, nil, nil)
 	probe, err := r.prober(ctx, e.lib.ID)
 	if err != nil || probe == nil {
 		t.Fatalf("prober %v", err)
@@ -367,7 +367,7 @@ func TestStartReportsAFailedCheck(t *testing.T) {
 	e := newEnv(t)
 	e.book(t, "A/Book.m4b", "B000000001", 3600)
 	e.src.err = errors.New("upstream down")
-	r := New(e.cat, e.src, "", on, nil)
+	r := New(e.cat, e.src, "", on, nil, nil)
 	ref := catalog.Ref{LibraryID: e.lib.ID, Path: "A/Book.m4b"}
 	r.Start(context.Background(), ref)
 	r.wg.Wait()
@@ -381,4 +381,49 @@ func TestStartReportsAFailedCheck(t *testing.T) {
 	if r.Failed(ref) {
 		t.Fatal("a check that worked still reads as failed")
 	}
+}
+
+// TestRunWaitsForReady: the first pass after a start makes no lookup while the
+// metadata doesn't answer locally yet (mirror mode, its copy loading:
+// server#282), then checks once it does; and a copy that never loads holds the
+// checks only readyWait, not for good.
+func TestRunWaitsForReady(t *testing.T) {
+	e := newEnv(t)
+	e.book(t, "A/Book.m4b", "B000000001", 3600)
+	e.src.byASIN["B000000001"] = chapters(4, 900)
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+	run := func(r *Runner) (stop func()) {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { r.Run(ctx); close(done) }()
+		return func() { cancel(); <-done }
+	}
+
+	var ready atomic.Bool
+	r := New(e.cat, e.src, "", on, ready.Load, nil)
+	r.readyPoll = time.Millisecond
+	stop := run(r)
+	r.Kick()
+	time.Sleep(100 * time.Millisecond)
+	if n := e.src.calls.Load(); n != 0 {
+		t.Fatalf("%d lookups before the metadata answered locally, want none", n)
+	}
+	ready.Store(true)
+	waitFor("the check once ready", func() bool { return e.src.calls.Load() == 1 })
+	stop()
+
+	// Never ready: checked anyway once readyWait is up.
+	e.book(t, "A/Other.m4b", "B000000002", 3600)
+	e.src.calls.Store(0)
+	never := New(e.cat, e.src, "", on, func() bool { return false }, nil)
+	never.readyWait, never.readyPoll = 50*time.Millisecond, time.Millisecond
+	defer run(never)()
+	waitFor("the check past readyWait", func() bool { return e.src.calls.Load() > 0 })
 }

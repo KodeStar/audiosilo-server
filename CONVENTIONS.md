@@ -3840,7 +3840,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   asked for fits again). A pass the service keeps failing (5 in a row) waits for the
   next tick whatever kicks it, and a book a check failed for waits an hour, so it
   can't hold up the books behind it. A kick waits 5 s for the kicks behind it (a
-  scan kicks once per book), so a burst is one pass. The book page's
+  scan kicks once per book), so a burst is one pass. In mirror mode the first pass after a start
+  waits for the local copy (`mirrorReady`, at most 10 min, server#282), so a start sends no lookups to
+  the service while the copy loads. The book page's
   `community_check_failed` says the last check failed (the service, or the 4-minute
   pause budget of a 5-minute check: past it, the rest are left unsnapped).
   `refreshEffective` -> `applyChapterSource` (after an admin's edited list, Edited chapters below) puts the

@@ -278,7 +278,9 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 	if metaSvc != nil {
 		a.fetchCover = metaSvc.FetchCover
 		matcher = metaSvc
-		a.chapterChecks = chaptercheck.New(cat, metaSvc, ffmpeg, a.metadataOn, log)
+		// Its first pass waits for a mirror's local copy (server#282), so a
+		// start sends no lookups to the service while the copy loads.
+		a.chapterChecks = chaptercheck.New(cat, metaSvc, ffmpeg, a.metadataOn, a.mirrorReady, log)
 		// Every book indexed or edited (a scan, a match applied, an ASIN typed) may
 		// be due a chapter check now: wake the background pass.
 		cat.OnBookChange(a.chapterChecks.Kick)
