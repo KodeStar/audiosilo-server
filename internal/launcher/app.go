@@ -467,9 +467,9 @@ func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service,
 	return true, nil
 }
 
-// writeBanner writes the first-run credentials banner: the console (where the
-// "Set up your server" flow lives, unless setup.skip marked it finished) first,
-// then the connect page for a device.
+// writeBanner writes the first-run credentials banner: the console first (where
+// the "Set up your server" flow lives, named plainly under setup.skip, which
+// finishes the flow later in this start), then the connect page for a device.
 func writeBanner(w io.Writer, cfg *config.Config, password, code string) {
 	base := baseURL(cfg)
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
