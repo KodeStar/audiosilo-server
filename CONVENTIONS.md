@@ -1220,7 +1220,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ~7% off). The count reads the whole file in 1 MiB windows straight from it (`blockFile.raw`), bounded on
   its own as ffprobe's run would be (the ffprobe timeout and the caller's context, the file's size in bytes,
   each read waited for under them, `await`), never on the hot path (a file with a header, or CBR, is not
-  counted); cut short, the file goes to ffprobe (its estimate) as before, and with no ffprobe a count out of
+  counted); cut short (a read that fails ends it at once, never retried a byte on), the file goes to ffprobe (its estimate) as before, and with no ffprobe a count out of
   time is a `ProbeTimedOut`. The result is `probeResult.Counted` (`ProbeView.Counted`: `Diff` leaves its
   duration out; `countedFixtures` in the golden test holds each fixture's decoded length). With an ffprobe
   whose release has no rules, an MP3's estimate is replaced the same way after ffprobe answers (`readFile`'s

@@ -910,8 +910,9 @@ const countSlack = 4 << 20
 // their samples over the sample rate. Its bounds are timeout (ffprobe's, the
 // run it replaces) and ctx, and the file's size in bytes to read, every read
 // waited for only while they last (blockFile.raw), so a share that stops
-// answering costs no more than an ffprobe run would. why is set when it was
-// cut short (a bound, a read error) or found no frames.
+// answering costs no more than an ffprobe run would. why is set when a bound
+// cut it short, it gave up (frames lost) or it found no frames; a read that
+// failed ends it too, with what was counted by then: fastProbe reports b.err.
 func (u *mp3Uncounted) count(ctx context.Context, b *blockFile, timeout time.Duration) (p *probeResult, why string) {
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errProbeDeadline)
 	defer cancel()
@@ -987,17 +988,21 @@ func mp3FrameSize(h, ref uint32) int64 {
 // whole frame's samples (ffmpeg decodes one with only its header left). whole
 // is false, the count given up, once more than mp3MaxJunk of the audio was
 // skipped: frames of another stream (a sample rate that changes), not junk.
+// A read that fails (b.err) ends the count where it is: the bytes it did not
+// give read as no frame, and a resync over them would ask for the same read
+// again at every byte, until the byte budget or the deadline; fastProbe
+// reports the error, whatever was counted.
 func mp3FrameCount(b *blockFile, off, end int64, ref uint32) (frames int64, whole bool) {
 	w := mp3Window{b: b, end: end, buf: make([]byte, 0, min(mp3WindowSize, max(end-off, 0)))}
 	maxJunk, junk := (end-off)/mp3MaxJunk, int64(0)
-	for pos := off; pos+4 <= end; {
+	for pos := off; pos+4 <= end && b.err == nil; {
 		if fs := mp3FrameSize(w.u32(pos), ref); fs > 0 {
 			frames++
 			pos += fs
 			continue
 		}
 		// Lost sync: the next frame whose own next one is a frame, or the end.
-		for pos++; pos+4 <= end; pos++ {
+		for pos++; pos+4 <= end && b.err == nil; pos++ {
 			if junk++; junk > maxJunk {
 				return frames, false
 			}

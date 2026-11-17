@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"math"
 	"os"
@@ -239,6 +240,45 @@ func TestCountIsBounded(t *testing.T) {
 				t.Errorf("gave up after %v", took)
 			}
 		})
+	}
+}
+
+// failWindows is a file whose reads of more than a block fail from an offset
+// on (a frame count's windows: the probe's own reads, a block at a time,
+// answer), giving the bytes before it, and how many reads failed.
+type failWindows struct {
+	r     io.ReaderAt
+	from  int64
+	fails atomic.Int32
+}
+
+func (f *failWindows) ReadAt(p []byte, off int64) (int, error) {
+	if len(p) <= bfBlock || off+int64(len(p)) <= f.from {
+		return f.r.ReadAt(p, off)
+	}
+	f.fails.Add(1)
+	n := 0
+	if off < f.from {
+		n, _ = f.r.ReadAt(p[:f.from-off], off)
+	}
+	return n, errors.New("input/output error")
+}
+
+// A read that fails part way through a count ends it there, the error the
+// reason: the count does not go on to look for a frame a byte at a time in
+// what it could not read, asking for the failed read again each time.
+func TestCountStopsAtAReadError(t *testing.T) {
+	t.Parallel()
+	data := vbrFrames(20000) // ~8 MiB
+	f := &failWindows{r: bytes.NewReader(data), from: 3 << 20}
+	b := newBlockFile(f, int64(len(data)))
+	b.ff = ff8
+	p, reason := fastProbe(t.Context(), b, "mp3", maxProbeTime)
+	if p != nil || reason != "read: input/output error" {
+		t.Fatalf("answer %+v, reason %q; want the read error", p, reason)
+	}
+	if n := f.fails.Load(); n != 1 {
+		t.Errorf("%d reads failed, want the count ended at the first", n)
 	}
 }
 
