@@ -1441,7 +1441,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`media.TranscodeOpened`, server#181) is ffmpeg's stdin read seekably as `fd:` (input seek, and a
   non-faststart m4a demuxes) when the ffmpeg lists the fd input protocol (`inputFor`: probed once
   per ffmpeg path, `-protocols`, 5 s, asked again after a probe that couldn't run), else the old
-  `pipe:0` with an output seek. A HEAD gets the transcode's headers without an ffmpeg run. The scanner records each
+  `pipe:0` with an output seek. A HEAD gets the transcode's headers without an ffmpeg run. A transcode its
+  client has read nothing of for 10 minutes (`transcodeIdle`: each write gets a write deadline, `copyIdle`) is
+  ended with its ffmpeg, freeing its slot: a paused `<audio>` keeps its connection open while it reads nothing.
+  The web player asks for a transcode again after a 30 s pause (`TRANSCODE_STALE_PAUSE_MS`), the console's
+  chapter editor after 10 s. The scanner records each
   book's audio `codec` (ffprobe `codec_name`, `0008` migration); `item`/`chapters`
   expose `direct_playable` (`Book.PlaysInBrowsers`: `media.DirectPlayable` of the book's format and
   codec, and every file's container) so a client knows when to

@@ -216,7 +216,8 @@ func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 // the file. It is the fallback for codecs browsers can't decode natively. The
 // output is not byte-seekable (no Range / Content-Length); a client seeks by
 // re-requesting with a new startSec. The ffmpeg process is bound to the request
-// context, so a client disconnect kills it. log may be nil. Its look at the
+// context, so a client disconnect kills it, and so does a client that has read
+// nothing for transcodeIdle (a paused player's held stream). log may be nil. Its look at the
 // file is a metadata.Bounded stat (the request's context, at most wait), as
 // ServeFile's open: one given up on (metadata.GaveUp) is returned with nothing
 // written, for the caller to answer; every other outcome is answered here and
@@ -232,7 +233,7 @@ func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath strin
 		http.Error(w, "not found", http.StatusNotFound)
 		return nil
 	}
-	transcodeInput(w, r, inputSpec{url: absPath}, ffmpegPath, startSec, log)
+	transcodeInput(w, r, inputSpec{url: absPath}, ffmpegPath, startSec, transcodeIdle, log)
 	return nil
 }
 
@@ -249,7 +250,7 @@ func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegP
 	}
 	in := inputFor(ffmpegPath)
 	in.file = f
-	transcodeInput(w, r, in, ffmpegPath, startSec, log)
+	transcodeInput(w, r, in, ffmpegPath, startSec, transcodeIdle, log)
 }
 
 // inputSpec is how ffmpeg reads its input: a path (proto ""), or the
@@ -352,7 +353,18 @@ func transcodeArgs(in inputSpec, startSec float64) []string {
 	)
 }
 
-func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpegPath string, startSec float64, log *slog.Logger) {
+// transcodeIdle is how long a transcode waits for its client to read before
+// it ends the stream (copyIdle): a paused <audio> stops reading once its
+// buffer is full, yet keeps the connection, and with it one of the server's
+// few transcode slots and an ffmpeg, for as long as the page stays open. A
+// playing client reads every few seconds (a browser buffers a few minutes of
+// it at most), and the web player asks for a transcode again after a pause of
+// 30 s (TRANSCODE_STALE_PAUSE_MS), the console's chapter editor after 10 s.
+const transcodeIdle = 10 * time.Minute
+
+// transcodeInput runs ffmpeg over in from startSec and streams its MP3 to w,
+// ending it (and ffmpeg) when the client has read nothing for idle.
+func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpegPath string, startSec float64, idle time.Duration, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -362,8 +374,14 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 		writeTranscodeHeader(w)
 		return
 	}
+	// Ended with the request, and at once when the copy fails (copyIdle's
+	// deadline): net/http ends the request's context on a failed write too, but
+	// ffmpeg, blocked writing to a pipe nobody reads any more, must never be
+	// left for cmd.Wait to wait on.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 	logPath := in.url
-	cmd := exec.CommandContext(r.Context(), ffmpegPath, transcodeArgs(in, startSec)...)
+	cmd := exec.CommandContext(ctx, ffmpegPath, transcodeArgs(in, startSec)...)
 	if in.file != nil {
 		logPath = in.file.Name()
 		cmd.Stdin = in.file
@@ -380,14 +398,40 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 		return
 	}
 	writeTranscodeHeader(w) // before the body
-	if _, err := io.Copy(w, stdout); err != nil {
-		// Client disconnect / broken pipe is normal (seek, pause, navigate away).
+	if err := copyIdle(w, stdout, idle); err != nil {
+		// Client disconnect / broken pipe is normal (seek, pause, navigate away),
+		// and so is a client that stopped reading (copyIdle).
 		log.Debug("transcode copy ended", "path", logPath, "err", err)
+		cancel()
 	}
-	if err := cmd.Wait(); err != nil && r.Context().Err() == nil {
+	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
 		// Only a real ffmpeg failure (not a client cancel) is worth warning about.
 		log.Warn("ffmpeg transcode failed", "path", logPath, "err", err, "stderr", strings.TrimSpace(stderr.String()))
 	}
+}
+
+// copyIdle copies src to w as io.Copy does, each write given idle to reach
+// the client (a write deadline, moved on before every write): one the client
+// has not read in that time fails, ending the copy. A ResponseWriter with no
+// deadlines (a test's recorder) copies with none.
+func copyIdle(w http.ResponseWriter, src io.Reader, idle time.Duration) error {
+	rc := http.NewResponseController(w)
+	_, err := io.Copy(deadlineWriter{w: w, rc: rc, idle: idle}, src)
+	// The connection outlives the answer (keep-alive): its next one has no deadline.
+	_ = rc.SetWriteDeadline(time.Time{})
+	return err
+}
+
+// deadlineWriter is copyIdle's writer: each Write moves the write deadline on.
+type deadlineWriter struct {
+	w    io.Writer
+	rc   *http.ResponseController
+	idle time.Duration
+}
+
+func (d deadlineWriter) Write(p []byte) (int, error) {
+	_ = d.rc.SetWriteDeadline(time.Now().Add(d.idle)) // ErrNotSupported: no deadline
+	return d.w.Write(p)
 }
 
 // writeTranscodeHeader sends a transcode's status and headers: MP3, never
