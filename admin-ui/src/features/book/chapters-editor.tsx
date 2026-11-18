@@ -497,6 +497,15 @@ const TRANSCODE_TAIL_S = 1;
 const BUSY_TRIES = 3;
 
 /**
+ * How long a transcode asked for to play may go without starting before the
+ * server is asked whether it had a slot for it (busy). Safari asks for one
+ * stream two or three times, each its own ffmpeg: with one slot free, the
+ * first is answered and the next is a 503, and the <audio> waits on with no
+ * error to say so.
+ */
+const STALL_MS = 6000;
+
+/**
  * How often the book page is read again while the chosen file's remux is not
  * made yet (its warm GET starts the copy), to play that copy once it is.
  */
@@ -585,8 +594,12 @@ function Scrubber({
   const [waiting, setWaiting] = useState(false);
   const again = useRef<ReturnType<typeof setTimeout>>(undefined);
   const probe = useRef<AbortController>(undefined);
+  // A transcode asked for to play and not started yet: its wait (STALL_MS)
+  // before the look at whether the server was busy.
+  const stall = useRef<ReturnType<typeof setTimeout>>(undefined);
   const stopRetry = useCallback(() => {
     clearTimeout(again.current);
+    clearTimeout(stall.current);
     probe.current?.abort();
     setWaiting(false);
   }, []);
@@ -765,6 +778,7 @@ function Scrubber({
       clearTimeout(restream.current);
       clearTimeout(hold.current);
       clearTimeout(again.current);
+      clearTimeout(stall.current);
       probe.current?.abort();
     },
     [],
@@ -840,26 +854,26 @@ function Scrubber({
   // A transcode fails for want of a slot too (503, every one busy), which is
   // no fault of the token: it is asked for again after the server's
   // Retry-After, and plays then, since it was only asked for to play.
-  const onError = () => {
-    const a = audio.current;
-    if (!a) return;
-    broken.current = true;
-    setPlaying(false);
-    if (!transcoded || !src) {
-      remint(a);
-      return;
-    }
+  // `stalled` is the look of one that has not failed but not started either
+  // (Safari's: STALL_MS): only a busy answer acts on it, a failed one is let be.
+  const lookAtStream = (a: HTMLAudioElement, url: string, stalled: boolean) => {
     stopRetry();
     const look = new AbortController();
     probe.current = look;
-    void transcodeRetryAfter(src, look.signal).then((wait) => {
+    void transcodeRetryAfter(url, look.signal).then((wait) => {
       if (look.signal.aborted || audio.current !== a) return;
-      if (wait === undefined) {
+      if (stalled) {
+        if (!wait) return;
+        broken.current = true;
+        setPlaying(false);
+      } else if (wait === undefined) {
         remint(a);
         return;
       }
       if (++busy.current > BUSY_TRIES) {
         setFailed(true);
+        // A stalled stream may still hold a slot: paused, Safari lets it go.
+        if (stalled) a.pause();
         return;
       }
       setWaiting(true);
@@ -871,6 +885,29 @@ function Scrubber({
       }, wait * 1000);
     });
   };
+  const onError = () => {
+    const a = audio.current;
+    if (!a) return;
+    broken.current = true;
+    setPlaying(false);
+    if (!transcoded || !src) {
+      remint(a);
+      return;
+    }
+    lookAtStream(a, src, false);
+  };
+  // A transcode asked for to play that has not started after STALL_MS (and
+  // has not failed) is looked at as a failed one is. Read at the wait's end, as
+  // the row and its stream are then (stuck).
+  const stuck = useRef<() => void>(undefined);
+  useEffect(() => {
+    stuck.current = () => {
+      const a = audio.current;
+      if (!a || !transcoded || !src || a.paused) return;
+      if (a.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return;
+      lookAtStream(a, src, true);
+    };
+  });
   // A transcode paused after it has played lets go of its stream after a
   // while (PAUSED_HOLD_MS): asked for again from the playhead, not to play, it
   // loads nothing (preload none), and its connection and ffmpeg's slot are let
@@ -972,7 +1009,6 @@ function Scrubber({
           onLoadedMetadata={(e) => {
             setFailed(false);
             reminted.current = false;
-            busy.current = 0;
             // A transcode starts where the seek (or the row) asked; a seek made
             // since it was asked for waits for its own.
             if (transcoded) {
@@ -992,8 +1028,15 @@ function Scrubber({
             clearTimeout(hold.current);
             wanted.current = true;
             setPlaying(true);
+            if (!transcoded) return;
+            clearTimeout(stall.current);
+            stall.current = setTimeout(() => stuck.current?.(), STALL_MS);
           }}
+          // A busy stream's tries count until one plays: Safari's stalled one
+          // has loaded its metadata every time.
           onPlaying={() => {
+            clearTimeout(stall.current);
+            busy.current = 0;
             if (!previewing.current) return;
             previewing.current = false;
             clearTimeout(preview.current);
@@ -1001,6 +1044,7 @@ function Scrubber({
           }}
           // A failed load's pause (Chrome's) is no pause: it still means to play.
           onPause={(e) => {
+            clearTimeout(stall.current);
             if (!e.currentTarget.error) wanted.current = false;
             setPlaying(false);
             if (transcoded) pausedHold();

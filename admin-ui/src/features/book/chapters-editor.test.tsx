@@ -888,6 +888,62 @@ describe('the chapter editor', () => {
       await new Promise((r) => setTimeout(r, 50));
       expect(play).not.toHaveBeenCalled();
     });
+
+    // Safari asks for a stream more than once: with one slot free, a later ask
+    // is a 503 and the <audio> waits on, unpaused, with no error.
+    async function stall(stream: MockRoute) {
+      const got = await listen(stream);
+      Object.defineProperty(got.audio, 'paused', { value: false, configurable: true });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      fireEvent.play(got.audio);
+      return {
+        ...got,
+        // Past the stall's wait (counting nothing asked before its end), then
+        // real timers for the look and the retry.
+        wait: (before?: () => void) => {
+          act(() => vi.advanceTimersByTime(5900));
+          before?.();
+          act(() => vi.advanceTimersByTime(100));
+          vi.useRealTimers();
+        },
+      };
+    }
+    afterEach(() => vi.useRealTimers());
+
+    it('says the server is busy and asks again when a stream that started nothing was a 503', async () => {
+      const { audio, looks, mints, wait } = await stall({
+        ...busy,
+        headers: { 'Retry-After': '0.2' },
+      });
+      wait(() => expect(looks()).toHaveLength(0));
+      expect(
+        await screen.findByText('The server is busy. Trying again in a moment.'),
+      ).toBeInTheDocument();
+      expect(looks()).toHaveLength(1);
+      expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play.mock.contexts[0]).toBe(audio);
+      expect(mints()).toBe(1);
+    });
+
+    it('lets a stream be that has started, or that the server had a slot for', async () => {
+      const started = await stall(busy);
+      fireEvent.playing(started.audio);
+      started.wait();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(started.looks()).toHaveLength(0);
+    });
+
+    it('lets a slow stream be when the server has a slot for it', async () => {
+      const { looks, wait } = await stall({ status: 200, raw: '' });
+      wait();
+      await waitFor(() => expect(looks()).toHaveLength(1));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
+      expect(load).not.toHaveBeenCalled();
+      expect(play).not.toHaveBeenCalled();
+    });
   });
 
   it('plays the stored file when the server can’t transcode', async () => {
