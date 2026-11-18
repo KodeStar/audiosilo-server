@@ -616,16 +616,20 @@ func (s *Service) syncFillOK(account string) {
 //
 // A job the fill ended answers no job and no error (the claim goes on to the
 // job behind it, claimPriority), as a lost private request does: the server
-// settled it, so the Bridge has nothing to back off from.
+// settled it, so the Bridge has nothing to back off from. The read's error is
+// logged instead (Log), once, as the job ends.
 func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 	account, err := AudibleAccountOf(*j)
 	if err != nil {
+		s.Log.Warn("audible: a sync ended, its stored params unreadable", "job", j.ID, "err", err)
 		return nil, s.failUnsentClaim(ctx, j, syncParamsUnread)
 	}
 	params, err := s.ClaimAudibleSync(ctx, account)
 	if err != nil {
 		if ctx.Err() == nil && s.syncFillFailed(account, j.ID) > maxUnspentSyncFills {
 			if j.Attempts >= MaxAttempts {
+				s.Log.Warn("audible: a sync ended on its last attempt, its titles unread", "job", j.ID,
+					"account", account, "err", err)
 				return nil, s.failUnsentClaim(ctx, j, syncTitlesUnread)
 			}
 			return nil, fmt.Errorf("audible.sync %d: titles: %w", j.ID, err)

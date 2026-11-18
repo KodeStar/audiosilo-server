@@ -1,10 +1,12 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -192,6 +194,7 @@ func TestAudibleSyncClaimFailsSpentInTheEnd(t *testing.T) {
 	ctx := context.Background()
 	q.beat(t, KindVerify, KindAudibleSync)
 	failing := errors.New("disk I/O error")
+	logged := logTo(q)
 	q.ClaimAudibleSync = func(_ context.Context, account string) (json.RawMessage, error) {
 		if account == "acct0001" {
 			return nil, failing
@@ -234,6 +237,9 @@ func TestAudibleSyncClaimFailsSpentInTheEnd(t *testing.T) {
 		q.advance(Lease + time.Second)
 		failed("after a lapsed lease", StateClaimed, attempt)
 	}
+	if logged.Len() != 0 {
+		t.Fatalf("logged before the last attempt: %s", logged)
+	}
 	behind, _, err = q.Enqueue(ctx, AudibleSync("acct0002", -20))
 	if err != nil {
 		t.Fatal(err)
@@ -245,6 +251,12 @@ func TestAudibleSyncClaimFailsSpentInTheEnd(t *testing.T) {
 	if stored, err := q.Job(ctx, job.ID); err != nil || stored.State != StateFailed || stored.Attempts != MaxAttempts ||
 		stored.Error != syncTitlesUnread {
 		t.Fatalf("in the end = %+v, %v; want it failed, the titles named as the reason", stored, err)
+	}
+	// The claim answered no error, so the read's is logged, once.
+	if out := logged.String(); strings.Count(out, "\n") != 1 || !strings.Contains(out, "level=WARN") ||
+		!strings.Contains(out, fmt.Sprintf("job=%d", job.ID)) || !strings.Contains(out, "account=acct0001") ||
+		!strings.Contains(out, failing.Error()) {
+		t.Fatalf("logged = %q; want one warning naming the job, the account and the read's error", out)
 	}
 	if _, err := q.UpdateHeld(ctx, behind.ID, Update{Attempt: 1, State: ptr(StateDone)}); err != nil {
 		t.Fatal(err)
@@ -271,6 +283,13 @@ func TestAudibleSyncClaimFailsSpentInTheEnd(t *testing.T) {
 	}
 }
 
+// logTo points q's log at a buffer the test reads.
+func logTo(q *testQueue) *bytes.Buffer {
+	var buf bytes.Buffer
+	q.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	return &buf
+}
+
 // A claimed audible.sync whose stored params can't be read can never be
 // filled: neither put back unspent (every claim would take it again) nor left
 // for its lease to spend every attempt, it ends at its first claim with its
@@ -280,6 +299,7 @@ func TestAudibleSyncClaimUnreadableParamsFailed(t *testing.T) {
 	q := newTestQueue(t)
 	ctx := context.Background()
 	q.beat(t, KindVerify, KindAudibleSync)
+	logged := logTo(q)
 	q.ClaimAudibleSync = func(_ context.Context, account string) (json.RawMessage, error) {
 		raw, _, _ := AudibleSyncClaim(account, nil)
 		return raw, nil
@@ -301,6 +321,10 @@ func TestAudibleSyncClaimUnreadableParamsFailed(t *testing.T) {
 	if stored, err := q.Job(ctx, job.ID); err != nil || stored.State != StateFailed || stored.Attempts != 1 ||
 		stored.Error != syncParamsUnread {
 		t.Fatalf("after an unreadable fill = %+v, %v; want it failed at once, naming its params", stored, err)
+	}
+	if out := logged.String(); strings.Count(out, "\n") != 1 || !strings.Contains(out, "level=WARN") ||
+		!strings.Contains(out, fmt.Sprintf("job=%d", job.ID)) {
+		t.Fatalf("logged = %q; want one warning naming the job", out)
 	}
 }
 

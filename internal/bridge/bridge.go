@@ -9,6 +9,7 @@ package bridge
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -60,6 +61,10 @@ type Service struct {
 	// stores the account alone (server#303); with none wired a claim answers
 	// the params as queued.
 	ClaimAudibleSync func(ctx context.Context, account string) (json.RawMessage, error)
+	// Log, when set (at wiring, before the first request), hears what a claim
+	// settles without answering an error (fillAudibleSync ending a sync it
+	// can't fill); New leaves it discarding.
+	Log *slog.Logger
 	// syncFills counts, per Audible account, the claims in a row that failed
 	// to read its audible.sync's titles (fillAudibleSync), under syncFillMu.
 	syncFillMu sync.Mutex
@@ -89,7 +94,7 @@ func New(db *store.DB, now func() time.Time) *Service {
 		now = time.Now
 	}
 	return &Service{db: db, now: now, wake: newSignal(), ended: newSignal(), privateURLs: map[int64]string{},
-		syncFills: map[string]syncFill{}}
+		syncFills: map[string]syncFill{}, Log: slog.New(slog.DiscardHandler)}
 }
 
 // ts is now as the bridge tables store times: RFC3339 UTC, whole seconds, so

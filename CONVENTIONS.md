@@ -4609,7 +4609,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   could not read this account's titles." rather than the lapsed lease's Bridge one, and a sync whose stored params
   can't be read ends at its first claim, "The server could not read which Audible account this sync is for."; a
   claim that ended a sync so goes on to the job behind it (`claimPriority`: 200 that job, else 204 or its wait),
-  never a 500; the job as stored keeps `{account}`, as a private feed URL is injected at claim),
+  never a 500, and logs the read's error once at warn (`bridge.Service.Log`: job, account); the job as stored keeps `{account}`, as a private feed URL is injected at claim),
   internal, quiet, `ModuleFor` audible, deduped per account, `promotes`, only the newest ended kept
   (`pruneAudibleEnded`). A console change to which titles sync (`PATCH .../titles/...` `{rejected}` or `{no_sync}`)
   or turning sync on queues the account's sync at once (`audible.SyncNow`, `catalog.AudibleSyncQueueable`: the same
