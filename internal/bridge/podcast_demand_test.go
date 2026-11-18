@@ -428,6 +428,27 @@ func TestPodcastFetchErrorsKeepSafeCodes(t *testing.T) {
 	}
 }
 
+// The console's job list words a failed fetch with fetchMessages' sentences
+// (bridge.podcastCode.<code> in admin-ui's en.json): the two stay the same.
+func TestFetchMessagesMatchConsole(t *testing.T) {
+	raw, err := os.ReadFile("../../admin-ui/src/i18n/locales/en.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var en map[string]string
+	if err := json.Unmarshal(raw, &en); err != nil {
+		t.Fatal(err)
+	}
+	for code, message := range fetchMessages {
+		if code == "http_310" { // the console words it as redirect_loop
+			code = "redirect_loop"
+		}
+		if got := en["bridge.podcastCode."+code]; got != message {
+			t.Errorf("console's %s is %q, the server's %q", code, got, message)
+		}
+	}
+}
+
 // An index that calls the pin present while its file does not open shows the
 // open work (or, with none, absent plus the refusal), never "ready".
 func TestUnreadyFetchStatusIgnoresIndexedPin(t *testing.T) {
