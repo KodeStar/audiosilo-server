@@ -83,10 +83,14 @@ func (e *testEnv) get(t *testing.T, path, host string, cookies ...*http.Cookie) 
 }
 
 // The flow's cookies as a browser holds them for oidcPublic (https): a
-// flow's own cookie starts with hostFlowCookie (hostFlowCookieFor).
+// flow's own cookie starts with hostFlowCookie (hostFlowCookieFor), its
+// finished sign-in's with hostDoneCookie (+ the same key).
 const (
 	hostFlowCookie = hostCookiePrefix + oidcCookie
 	hostDoneCookie = hostCookiePrefix + oidcDoneCookie
+	// someFlow is a flow key no flow of the test's has, for a cookie planted
+	// or forged by name.
+	someFlow = "AAAAAAAAAAAAAAAA"
 )
 
 // hostFlowCookieFor is the name of the flow cookie for state, for oidcPublic.
@@ -100,16 +104,6 @@ func stateOf(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return u.Query().Get("state")
-}
-
-// respCookie is the cookie named name that resp sets (nil when none).
-func respCookie(resp *http.Response, name string) *http.Cookie {
-	for _, c := range resp.Cookies() {
-		if c.Name == name {
-			return c
-		}
-	}
-	return nil
 }
 
 // flowCookie is the flow cookie /start's resp sets: the one it doesn't delete.
@@ -185,7 +179,33 @@ func (e *oidcEnv) callbackDone(t *testing.T, path string, cookie *http.Cookie, h
 			t.Fatalf("callback touched another flow's cookie: %v", resp.Header.Values("Set-Cookie"))
 		}
 	}
-	return resp.Header.Get("Location"), respCookie(resp, hostDoneCookie)
+	return landed(t, resp, stateOf(t, path))
+}
+
+// landed is where a callback's resp sends the browser, without the flow's key
+// (checked to be state's, as the done cookie's name is), and the finished
+// sign-in's cookie it set (nil when none).
+func landed(t *testing.T, resp *http.Response, state string) (string, *http.Cookie) {
+	t.Helper()
+	loc := resp.Header.Get("Location")
+	var done *http.Cookie
+	for _, c := range resp.Cookies() {
+		if strings.HasPrefix(c.Name, hostDoneCookie) || strings.HasPrefix(c.Name, oidcDoneCookie) {
+			done = c
+		}
+	}
+	if done == nil {
+		if strings.Contains(loc, oidcFlowParam) {
+			t.Fatalf("a flow's key on a landing with no sign-in: %q", loc)
+		}
+		return loc, nil
+	}
+	key := flowKey(state)
+	page, found := strings.CutSuffix(loc, oidcFlowParam+key)
+	if !found || key == "" || !strings.HasSuffix(done.Name, oidcDoneCookie+key) {
+		t.Fatalf("landed on %q with %q, want the flow's key %q on both", loc, done.Name, key)
+	}
+	return page, done
 }
 
 // signIn runs a whole flow for ret: the callback's Location.
@@ -214,13 +234,27 @@ func wantResult(t *testing.T, loc, reason string) {
 // cookie (none when nil): the response and its decoded body.
 func (e *testEnv) finish(t *testing.T, done *http.Cookie, device string) (*http.Response, map[string]any) {
 	t.Helper()
-	headers := map[string]string{}
-	if done != nil {
-		headers["Cookie"] = done.Name + "=" + done.Value
-	}
 	body := ""
 	if device != "" {
 		body = `{"device_name":"` + device + `"}`
+	}
+	var cookies []*http.Cookie
+	if done != nil {
+		cookies = append(cookies, done)
+	}
+	return e.finishWith(t, body, cookies...)
+}
+
+// finishWith is the finish with body and every cookie the browser sends it.
+func (e *testEnv) finishWith(t *testing.T, body string, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+	t.Helper()
+	pairs := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		pairs = append(pairs, c.Name+"="+c.Value)
+	}
+	headers := map[string]string{}
+	if len(pairs) > 0 {
+		headers["Cookie"] = strings.Join(pairs, "; ")
 	}
 	resp, b := e.doHeaders(t, "POST", oidcFinishPath, "", body, headers)
 	var out map[string]any
@@ -366,8 +400,8 @@ func TestOIDCCookieSecureAnyCase(t *testing.T) {
 	// web player ask their origin's own /api/v1, never under the prefix.
 	e := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = "http://audiosilo.test/audiosilo/" })
 	rec := httptest.NewRecorder()
-	e.api.setOIDCCookie(rec, oidcDoneCookie, "v", 60)
-	if c := rec.Result().Cookies(); len(c) != 1 || c[0].Name != oidcDoneCookie || c[0].Path != oidcCookiePath {
+	e.api.setOIDCCookie(rec, oidcDoneCookie+someFlow, "v", 60)
+	if c := rec.Result().Cookies(); len(c) != 1 || c[0].Name != oidcDoneCookie+someFlow || c[0].Path != oidcCookiePath {
 		t.Errorf("the done cookie under a prefix: %+v", c)
 	}
 }
@@ -718,7 +752,7 @@ func TestOIDCFinishExpectedIntent(t *testing.T) {
 	// (oidcLimiter's ten), it still isn't locked afterwards.
 	untagged := trip(t, "return=web")
 	for range 9 {
-		finish(t, &http.Cookie{Name: hostDoneCookie, Value: "guess"}, ``)
+		finish(t, &http.Cookie{Name: hostDoneCookie + someFlow, Value: "guess"}, ``)
 	}
 	refused(t, "a refusal one failure short of the lock", untagged, `{"intent":"`+tag+`"}`)
 	// No cookie: there is no sign-in to mismatch (and no lock: a 401, no 429).
@@ -849,7 +883,7 @@ func TestOIDCFinish(t *testing.T) {
 		t.Fatalf("no cookie: %d %v", resp.StatusCode, out)
 	}
 	// Denied: a token that isn't a sign-in's.
-	resp, out = e.finish(t, &http.Cookie{Name: hostDoneCookie, Value: "forged"}, "admin-web")
+	resp, out = e.finish(t, &http.Cookie{Name: hostDoneCookie + someFlow, Value: "forged"}, "admin-web")
 	if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired {
 		t.Fatalf("a forged cookie: %d %v", resp.StatusCode, out)
 	}
@@ -859,7 +893,7 @@ func TestOIDCFinish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, out = e.finish(t, &http.Cookie{Name: hostDoneCookie, Value: stale}, "admin-web")
+	resp, out = e.finish(t, &http.Cookie{Name: hostDoneCookie + someFlow, Value: stale}, "admin-web")
 	if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired {
 		t.Fatalf("an expired token: %d %v", resp.StatusCode, out)
 	}
@@ -870,7 +904,7 @@ func TestOIDCFinish(t *testing.T) {
 		out["user"].(map[string]any)["username"] != "alice" || resp.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("finish: %d %v", resp.StatusCode, out)
 	}
-	if c := resp.Cookies(); len(c) != 1 || c[0].Name != hostDoneCookie || c[0].MaxAge >= 0 || c[0].Path != "/" {
+	if c := resp.Cookies(); len(c) != 1 || c[0].Name != done.Name || c[0].MaxAge >= 0 || c[0].Path != "/" {
 		t.Fatalf("finish left the cookie: %v", resp.Header.Values("Set-Cookie"))
 	}
 	if r, _ := e.do(t, "GET", "/api/v1/me", out["token"].(string), ""); r.StatusCode != 200 {
@@ -906,10 +940,14 @@ func TestOIDCFinishNotLockedByExchanges(t *testing.T) {
 	}
 }
 
-// clearsDone reports whether resp deleted the finished sign-in's cookie.
+// clearsDone reports whether resp deleted a finished sign-in's cookie.
 func clearsDone(resp *http.Response) bool {
-	c := respCookie(resp, hostDoneCookie)
-	return c != nil && c.MaxAge < 0
+	for _, c := range resp.Cookies() {
+		if strings.HasPrefix(c.Name, hostDoneCookie) && c.MaxAge < 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // TestOIDCFinishOnlySignInTokens: finish takes only the token a sign-in's
@@ -928,7 +966,7 @@ func TestOIDCFinishOnlySignInTokens(t *testing.T) {
 	}
 	// Denied: another kind's token; the cookie is cleared all the same.
 	for name, tok := range map[string]string{"an invite's QR": qr, "an own pairing": own, "a session": e.session(t, alice.ID)} {
-		resp, out := e.finish(t, &http.Cookie{Name: hostDoneCookie, Value: tok}, "admin-web")
+		resp, out := e.finish(t, &http.Cookie{Name: hostDoneCookie + someFlow, Value: tok}, "admin-web")
 		if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired || out["token"] != nil {
 			t.Fatalf("%s finished a sign-in: %d %v", name, resp.StatusCode, out)
 		}
@@ -978,7 +1016,7 @@ func TestOIDCFinishCookieName(t *testing.T) {
 	e := newOIDCEnv(t, oidcAlice, nil)
 	e.mustUser(t, "alice", "alice@example.org")
 	_, done := e.signInDone(t, oidcReturnAdmin)
-	resp, out := e.finish(t, &http.Cookie{Name: oidcDoneCookie, Value: done.Value}, "admin-web")
+	resp, out := e.finish(t, &http.Cookie{Name: strings.TrimPrefix(done.Name, hostCookiePrefix), Value: done.Value}, "admin-web")
 	if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCNoSignIn {
 		t.Fatalf("https, a bare-named cookie: %d %v", resp.StatusCode, out)
 	}
@@ -995,15 +1033,15 @@ func TestOIDCFinishCookieName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp, out := plain.finish(t, &http.Cookie{Name: hostDoneCookie, Value: tok}, "web"); resp.StatusCode != http.StatusUnauthorized ||
+	if resp, out := plain.finish(t, &http.Cookie{Name: hostDoneCookie + someFlow, Value: tok}, "web"); resp.StatusCode != http.StatusUnauthorized ||
 		out["code"] != codeOIDCNoSignIn {
 		t.Fatalf("http, a __Host- cookie: %d %v", resp.StatusCode, out)
 	}
-	resp, out = plain.finish(t, &http.Cookie{Name: oidcDoneCookie, Value: tok}, "web")
+	resp, out = plain.finish(t, &http.Cookie{Name: oidcDoneCookie + someFlow, Value: tok}, "web")
 	if resp.StatusCode != http.StatusOK || out["token"] == "" {
 		t.Fatalf("http, the bare cookie: %d %v", resp.StatusCode, out)
 	}
-	if c := resp.Cookies(); len(c) != 1 || c[0].Name != oidcDoneCookie || c[0].Path != oidcCookiePath || c[0].Secure {
+	if c := resp.Cookies(); len(c) != 1 || c[0].Name != oidcDoneCookie+someFlow || c[0].Path != oidcCookiePath || c[0].Secure {
 		t.Fatalf("http, the clearing cookie: %v", resp.Header.Values("Set-Cookie"))
 	}
 }
@@ -1027,7 +1065,7 @@ func TestOIDCFinishRefusedWhileOff(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp, out := e.finish(t, &http.Cookie{Name: hostDoneCookie, Value: tok}, "admin-web")
+		resp, out := e.finish(t, &http.Cookie{Name: hostDoneCookie + someFlow, Value: tok}, "admin-web")
 		if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired || out["token"] != nil {
 			t.Fatalf("%s: %d %v", name, resp.StatusCode, out)
 		}
@@ -1052,7 +1090,7 @@ func TestOIDCFinishKeepsCookieUntilTried(t *testing.T) {
 		t.Fatalf("a bad body: %d %v", resp.StatusCode, resp.Header.Values("Set-Cookie"))
 	}
 	for range 10 {
-		e.finish(t, &http.Cookie{Name: hostDoneCookie, Value: "guess"}, "admin-web")
+		e.finish(t, &http.Cookie{Name: hostDoneCookie + someFlow, Value: "guess"}, "admin-web")
 	}
 	resp, _ = e.finish(t, done, "admin-web")
 	if resp.StatusCode != http.StatusTooManyRequests || clearsDone(resp) {
@@ -1062,6 +1100,119 @@ func TestOIDCFinishKeepsCookieUntilTried(t *testing.T) {
 	resp, out := e.finish(t, done, "admin-web")
 	if resp.StatusCode != http.StatusOK || out["token"] == "" || !clearsDone(resp) {
 		t.Fatalf("finish once the limit lifts: %d %v", resp.StatusCode, out)
+	}
+}
+
+// TestOIDCFinishKeepsCookieOnStoreFailure: a finish whose token the store
+// can't spend, or whose session it can't write in the same transaction (a
+// 500), leaves the token unspent and keeps its cookie, so the
+// page's retry finishes the sign-in rather than sending the person through
+// the provider again; nothing is charged. Denied twin: a refused token clears
+// it (TestOIDCFinishOnlySignInTokens).
+func TestOIDCFinishKeepsCookieOnStoreFailure(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	_, done := e.signInDone(t, oidcReturnAdmin)
+	// Temporary triggers on the writer's one connection fail the spend, then
+	// the session minted in the spend's transaction (it rolls the spend back).
+	ctx := context.Background()
+	for name, trigger := range map[string]string{
+		"the spend": `CREATE TEMP TRIGGER fail_oidc_finish BEFORE UPDATE OF revoked ON main.tokens
+			WHEN OLD.kind = 'oidc' BEGIN SELECT RAISE(ABORT, 'disk says no'); END`,
+		"the session": `CREATE TEMP TRIGGER fail_oidc_finish BEFORE INSERT ON main.tokens
+			WHEN NEW.kind = 'session' BEGIN SELECT RAISE(ABORT, 'disk says no'); END`,
+	} {
+		if _, err := e.db.ExecContext(ctx, trigger); err != nil {
+			t.Fatal(err)
+		}
+		for range 10 { // more than oidcLimiter's ten: none of them is charged
+			resp, out := e.finish(t, done, "admin-web")
+			if resp.StatusCode != http.StatusInternalServerError || out["token"] != nil || clearsDone(resp) {
+				t.Fatalf("%s failing: %d %v %v", name, resp.StatusCode, out, resp.Header.Values("Set-Cookie"))
+			}
+		}
+		if _, err := e.db.ExecContext(ctx, `DROP TRIGGER temp.fail_oidc_finish`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp, out := e.finish(t, done, "admin-web")
+	if resp.StatusCode != http.StatusOK || out["token"] == "" || !clearsDone(resp) {
+		t.Fatalf("the retry: %d %v", resp.StatusCode, out)
+	}
+	if resp, _ := e.finish(t, done, "admin-web"); resp.StatusCode != http.StatusUnauthorized || !clearsDone(resp) {
+		t.Fatalf("a finish after the spend: %d", resp.StatusCode)
+	}
+}
+
+// TestOIDCLandsOnOriginUnderPrefix (server#406): with public_url under a
+// proxy's path prefix, a sign-in lands on its origin's own /admin/ (a deep
+// link too), /web/connect and /connect, the only place the console, the
+// player and the connect page route (their assets and routes are the
+// origin's), while the provider's redirect URI and the hop to /start keep the
+// prefix. Denied: none of it follows the request's Host.
+func TestOIDCLandsOnOriginUnderPrefix(t *testing.T) {
+	t.Parallel()
+	const prefix = "/audiosilo"
+	public := oidcPublic + prefix
+	e := newOIDCEnvAt(t, public+"/", oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	b := &pathBrowser{prefix: prefix}
+	land := func(t *testing.T, start string) string {
+		t.Helper()
+		callback := b.start(t, e, start)
+		resp := b.get(t, e, callback)
+		page, done := landed(t, resp, stateOf(t, callback))
+		if done == nil {
+			t.Fatalf("no sign-in: %q", page)
+		}
+		if fin, out := e.finishWith(t, `{"flow":"`+flowKey(stateOf(t, callback))+`"}`, b.sent(oidcFinishPath)...); fin.StatusCode != 200 || out["token"] == "" {
+			t.Fatalf("finish after landing on %q: %d %v", page, fin.StatusCode, out)
+		}
+		return page
+	}
+	deep := "/admin/people?tab=pending"
+	for start, want := range map[string]string{
+		oidcStartPath + "?return=admin":                               oidcPublic + oidcDoneAdmin,
+		oidcStartPath + "?return=admin&next=" + url.QueryEscape(deep): oidcPublic + deep + oidcDoneMarker,
+		oidcStartPath + "?return=web":                                 oidcPublic + oidcDoneWeb,
+		prefix + oidcStartPath + "?return=web&hop=1":                  oidcPublic + oidcDoneWeb,
+	} {
+		if got := land(t, start); got != want {
+			t.Fatalf("%s landed on %q, want %q", start, got, want)
+		}
+	}
+	// The result panel too: a callback naming no flow.
+	resp := b.get(t, e, prefix+oidcCallbackPath+"?code=x&state="+someFlow+someFlow)
+	if loc := resp.Header.Get("Location"); loc != oidcPublic+"/connect#oidc="+oidcExpired {
+		t.Fatalf("the result panel: %q", loc)
+	}
+	// Denied: another Host is sent to public_url's own /start, prefix kept,
+	// and a callback asked under it still lands on public_url's origin.
+	resp = e.get(t, oidcStartPath+"?return=web", "evil.example")
+	if loc := resp.Header.Get("Location"); loc != public+oidcStartPath+"?hop=1&return=web" {
+		t.Fatalf("the hop from another host: %q", loc)
+	}
+	resp = e.get(t, oidcCallbackPath+"?code=x&state="+someFlow+someFlow, "evil.example")
+	if loc := resp.Header.Get("Location"); loc != oidcPublic+"/connect#oidc="+oidcExpired {
+		t.Fatalf("a callback from another host: %q", loc)
+	}
+}
+
+// TestOIDCPageBase: the pages' base is public_url's origin, whatever its path.
+func TestOIDCPageBase(t *testing.T) {
+	t.Parallel()
+	for public, want := range map[string]string{
+		"":                                   "",
+		"https://audiosilo.test":             "https://audiosilo.test",
+		"https://audiosilo.test/":            "https://audiosilo.test",
+		"http://audiosilo.test:8080/a/b/":    "http://audiosilo.test:8080",
+		"https://audiosilo.test/my%20books/": "https://audiosilo.test",
+	} {
+		e := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = public })
+		if got := e.api.oidcPageBase(); got != want {
+			t.Errorf("public_url %q: %q, want %q", public, got, want)
+		}
 	}
 }
 
@@ -1840,12 +1991,38 @@ func (b *browser) start(t *testing.T, e *oidcEnv, query string) string {
 	return back.RequestURI()
 }
 
-// callback sends the browser back on path: where it lands.
-func (b *browser) callback(t *testing.T, e *oidcEnv, path string) string {
+// callback sends the browser back on path: where it lands (the flow's key
+// checked and cut off, landed) and its finished sign-in's cookie (nil when
+// none).
+func (b *browser) callback(t *testing.T, e *oidcEnv, path string) (string, *http.Cookie) {
 	t.Helper()
 	resp := e.get(t, path, oidcHost, b.cookies...)
 	b.apply(resp)
-	return resp.Header.Get("Location")
+	return landed(t, resp, stateOf(t, path))
+}
+
+// finish is the landing page's finish in the browser, naming flow (none when
+// ""), with every cookie it holds: the status and body.
+func (b *browser) finish(t *testing.T, e *oidcEnv, flow, device string) (*http.Response, map[string]any) {
+	t.Helper()
+	body := `{"device_name":"` + device + `"}`
+	if flow != "" {
+		body = `{"device_name":"` + device + `","flow":"` + flow + `"}`
+	}
+	resp, out := e.finishWith(t, body, b.cookies...)
+	b.apply(resp)
+	return resp, out
+}
+
+// doneCount counts the finished sign-ins' cookies the browser holds.
+func (b *browser) doneCount() int {
+	n := 0
+	for _, c := range b.cookies {
+		if strings.HasPrefix(c.Name, hostDoneCookie) {
+			n++
+		}
+	}
+	return n
 }
 
 // TestOIDCTwoTabs (server#406): a sign-in started in a second tab keeps the
@@ -1861,20 +2038,20 @@ func TestOIDCTwoTabs(t *testing.T) {
 	if b.flows() != 2 {
 		t.Fatalf("the second tab's start left %d flows", b.flows())
 	}
-	// The first tab comes back: the second's flow stays.
-	if loc := b.callback(t, e, first); loc != oidcPublic+oidcDoneAdmin {
+	// The first tab comes back and finishes: the second's flow stays.
+	if loc, _ := b.callback(t, e, first); loc != oidcPublic+oidcDoneAdmin {
 		t.Fatalf("the first tab landed on %q", loc)
 	}
-	if resp, out := e.finish(t, b.named(hostDoneCookie), "admin-web"); resp.StatusCode != 200 || out["token"] == "" {
+	if resp, out := b.finish(t, e, flowKey(stateOf(t, first)), "admin-web"); resp.StatusCode != 200 || out["token"] == "" {
 		t.Fatalf("the first tab's finish: %d %v", resp.StatusCode, out)
 	}
 	if b.flows() != 1 {
 		t.Fatalf("after the first tab: %d flows", b.flows())
 	}
-	if loc := b.callback(t, e, second); loc != oidcPublic+oidcDoneWeb {
+	if loc, _ := b.callback(t, e, second); loc != oidcPublic+oidcDoneWeb {
 		t.Fatalf("the second tab landed on %q", loc)
 	}
-	if resp, out := e.finish(t, b.named(hostDoneCookie), "web"); resp.StatusCode != 200 || out["token"] == "" {
+	if resp, out := b.finish(t, e, flowKey(stateOf(t, second)), "web"); resp.StatusCode != 200 || out["token"] == "" {
 		t.Fatalf("the second tab's finish: %d %v", resp.StatusCode, out)
 	}
 
@@ -1887,11 +2064,80 @@ func TestOIDCTwoTabs(t *testing.T) {
 	if many.flows() != oidcMaxFlows {
 		t.Fatalf("%d flows held, want %d", many.flows(), oidcMaxFlows)
 	}
-	wantResult(t, many.callback(t, e, paths[0]), oidcExpired)
+	loc, _ := many.callback(t, e, paths[0])
+	wantResult(t, loc, oidcExpired)
 	for _, p := range paths[1:] {
-		if loc := many.callback(t, e, p); loc != oidcPublic+oidcDoneAdmin {
+		if loc, _ := many.callback(t, e, p); loc != oidcPublic+oidcDoneAdmin {
 			t.Fatalf("a held flow landed on %q", loc)
 		}
+	}
+}
+
+// TestOIDCTwoTabsLandBeforeFinish (server#406): two tabs whose callbacks both
+// land before either page finishes each hold a done cookie of their own, and
+// each finish takes its own flow's sign-in (the one its landing named), in
+// either order, leaving the other's for its page. Denied: a flow this browser
+// holds no sign-in for, and a malformed one, finish nothing and leave every
+// cookie.
+func TestOIDCTwoTabsLandBeforeFinish(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	tag := strings.Repeat("ab12", 16)
+	var b browser
+	console := b.start(t, e, "return=admin")
+	player := b.start(t, e, "return=web&intent="+tag)
+	_, consoleDone := b.callback(t, e, console)
+	_, playerDone := b.callback(t, e, player)
+	if b.doneCount() != 2 || consoleDone == nil || playerDone == nil || consoleDone.Name == playerDone.Name {
+		t.Fatalf("two landings left %d done cookies: %v %v", b.doneCount(), consoleDone, playerDone)
+	}
+	// Denied: a flow with no sign-in here, and a malformed flow.
+	for name, c := range map[string]struct {
+		flow string
+		code int
+	}{"another flow": {someFlow, http.StatusUnauthorized}, "a malformed flow": {"short", http.StatusBadRequest}} {
+		resp, out := b.finish(t, e, c.flow, "web")
+		if resp.StatusCode != c.code || out["token"] != nil || clearsDone(resp) || b.doneCount() != 2 {
+			t.Fatalf("%s: %d %v, %d held", name, resp.StatusCode, out, b.doneCount())
+		}
+	}
+	// Allowed: the player's tab finishes first and gets its own trip's tag
+	// (the console's sign-in carries none), clearing only its cookie.
+	resp, out := b.finish(t, e, flowKey(stateOf(t, player)), "web")
+	if resp.StatusCode != http.StatusOK || out["token"] == "" || out["intent"] != tag {
+		t.Fatalf("the player's finish: %d %v", resp.StatusCode, out)
+	}
+	if b.named(playerDone.Name) != nil || b.named(consoleDone.Name) == nil {
+		t.Fatalf("the player's finish cleared the wrong cookie: %v", b.cookies)
+	}
+	// Allowed: the console's, after, still finds its own.
+	resp, out = b.finish(t, e, flowKey(stateOf(t, console)), "admin-web")
+	if resp.StatusCode != http.StatusOK || out["token"] == "" || out["intent"] != nil || b.doneCount() != 0 {
+		t.Fatalf("the console's finish: %d %v, %d held", resp.StatusCode, out, b.doneCount())
+	}
+}
+
+// TestOIDCFinishWithoutFlow: a page from before the flow's key (a cached
+// player or console) still finishes: with the tag it expects, the sign-in
+// that carries it; without, the first held. Each finish takes one sign-in.
+func TestOIDCFinishWithoutFlow(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	tag := strings.Repeat("cd34", 16)
+	var b browser
+	untagged := b.start(t, e, "return=web")
+	tagged := b.start(t, e, "return=web&intent="+tag)
+	b.callback(t, e, untagged)
+	b.callback(t, e, tagged)
+	resp, out := e.finishWith(t, `{"intent":"`+tag+`"}`, b.cookies...)
+	b.apply(resp)
+	if resp.StatusCode != http.StatusOK || out["intent"] != tag || b.doneCount() != 1 {
+		t.Fatalf("an expected tag with no flow: %d %v, %d held", resp.StatusCode, out, b.doneCount())
+	}
+	if resp, out := b.finish(t, e, "", "web"); resp.StatusCode != http.StatusOK || out["token"] == "" || out["intent"] != nil || b.doneCount() != 0 {
+		t.Fatalf("no flow, no tag: %d %v, %d held", resp.StatusCode, out, b.doneCount())
 	}
 }
 
@@ -1967,7 +2213,8 @@ func (b *pathBrowser) start(t *testing.T, e *oidcEnv, path string) string {
 func TestOIDCFlowsHeldUnderPrefix(t *testing.T) {
 	t.Parallel()
 	const prefix = "/audiosilo"
-	public := "http://" + oidcHost + prefix
+	origin := "http://" + oidcHost
+	public := origin + prefix
 	e := newOIDCEnvAt(t, public, oidcAlice, nil)
 	e.mustUser(t, "alice", "alice@example.org")
 	b := &pathBrowser{prefix: prefix}
@@ -1976,23 +2223,15 @@ func TestOIDCFlowsHeldUnderPrefix(t *testing.T) {
 	finish := func(t *testing.T, callback, want string) (*http.Response, map[string]any) {
 		t.Helper()
 		resp := b.get(t, e, callback)
-		if loc := resp.Header.Get("Location"); loc != public+oidcDoneWeb {
+		key := flowKey(stateOf(t, callback))
+		if loc := resp.Header.Get("Location"); loc != origin+oidcDoneWeb+oidcFlowParam+key {
 			t.Fatalf("landed on %q", loc)
 		}
-		headers := map[string]string{}
-		for _, c := range b.sent(oidcFinishPath) {
-			if c.Name == oidcDoneCookie {
-				headers["Cookie"] = c.Name + "=" + c.Value
-			}
-		}
-		body := `{"device_name":"web"}`
+		body := `{"device_name":"web","flow":"` + key + `"}`
 		if want != "" {
-			body = `{"device_name":"web","intent":"` + want + `"}`
+			body = `{"device_name":"web","flow":"` + key + `","intent":"` + want + `"}`
 		}
-		fin, raw := e.doHeaders(t, "POST", oidcFinishPath, "", body, headers)
-		var out map[string]any
-		_ = json.Unmarshal([]byte(raw), &out)
-		return fin, out
+		return e.finishWith(t, body, b.sent(oidcFinishPath)...)
 	}
 
 	// Denied: a trip abandoned at the provider, its start URL sent again from

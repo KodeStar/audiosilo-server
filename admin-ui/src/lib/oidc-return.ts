@@ -1,10 +1,11 @@
 // A single sign-on (Sign in with OpenID Connect, server#235) for the console
-// ends on /admin/#oidc=done, or on the console page it started from with the
-// same marker (oidcStartHref, server#406). The sign-in itself waits in an HttpOnly cookie the
-// server set on its own path, never in the address (a link carrying it would
-// sign whoever follows it in); the console trades it for a session at
-// POST /auth/oidc/finish. The marker leaves the address bar and the history
-// entry as soon as it is read.
+// ends on /admin/#oidc=done&flow=<key>, or on the console page it started from
+// with the same marker (oidcStartHref, server#406). The sign-in itself waits in
+// an HttpOnly cookie the server set on its own path, one per flow, never in the
+// address (a link carrying it would sign whoever follows it in); the console
+// trades it for a session at POST /auth/oidc/finish, naming the flow's key, so
+// two tabs that came back at once each finish their own. The marker leaves the
+// address bar and the history entry as soon as it is read.
 
 /** Where a single sign-on for the console starts (handlers_oidc.go handleOIDCStart). */
 export const OIDC_START = '/api/v1/auth/oidc/start?return=admin';
@@ -23,21 +24,33 @@ export function oidcStartHref(
   return `${OIDC_START}&next=${encodeURIComponent(next)}`;
 }
 
-/** Whether a location hash is a single sign-on's return ("#oidc=done"). */
-export function isOIDCReturn(hash: string): boolean {
-  return hash === '#oidc=done';
+/**
+ * A single sign-on's return: `flow` is the key of the flow it finished
+ * (handlers_oidc.go oidcFlowParam), absent from a server before it.
+ */
+export interface OIDCReturn {
+  flow?: string;
+}
+
+const RETURN_HASH = /^#oidc=done(?:&flow=([A-Za-z0-9_-]{16}))?$/;
+
+/** The single sign-on's return a location hash is ("#oidc=done", "&flow=<key>" after), or null. */
+export function parseOIDCReturn(hash: string): OIDCReturn | null {
+  const m = RETURN_HASH.exec(hash);
+  if (!m) return null;
+  return m[1] ? { flow: m[1] } : {};
 }
 
 /**
- * Reports whether the console was opened by a single sign-on's return and takes
- * the marker out of the address bar (replacing the history entry, so Back or a
- * reload doesn't finish again).
+ * The single sign-on's return the console was opened by (null when none), with
+ * the marker taken out of the address bar (replacing the history entry, so Back
+ * or a reload doesn't finish again).
  */
 export function takeOIDCReturn(
   loc: Pick<Location, 'hash' | 'pathname' | 'search'> = window.location,
   hist: Pick<History, 'replaceState' | 'state'> = window.history,
-): boolean {
-  const done = isOIDCReturn(loc.hash);
+): OIDCReturn | null {
+  const done = parseOIDCReturn(loc.hash);
   if (done) hist.replaceState(hist.state, '', loc.pathname + loc.search);
   return done;
 }

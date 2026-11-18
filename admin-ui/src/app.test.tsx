@@ -183,12 +183,12 @@ describe('single sign-on', () => {
       'POST /auth/oidc/finish': { body: { token: 'sso-session', user: admin, server_id: 'srv-1' } },
       'POST /auth/logout': { status: 204 },
     });
-    renderApp('/', { oidcDone: true });
+    renderApp('/', { oidcReturn: { flow: 'aZ09-_aZ09-_aZ09' } });
     expect(await screen.findByRole('heading', { level: 1, name: /chris\.$/ })).toBeInTheDocument();
     expect(getToken()).toBe('sso-session');
     const finishes = calls.filter((c) => c.path === '/auth/oidc/finish');
     expect(finishes).toHaveLength(1);
-    expect(finishes[0].body).toEqual({ device_name: 'admin-web' });
+    expect(finishes[0].body).toEqual({ device_name: 'admin-web', flow: 'aZ09-_aZ09-_aZ09' });
     expect(calls.some((c) => c.path === '/auth/exchange')).toBe(false);
     // The stored session was never checked: the new one replaced it, and it ended.
     expect(calls.some((c) => c.path === '/me')).toBe(false);
@@ -206,7 +206,7 @@ describe('single sign-on', () => {
       },
       'POST /auth/logout': { status: 204 },
     });
-    renderApp('/', { oidcDone: true });
+    renderApp('/', { oidcReturn: {} });
     expect(await screen.findByRole('alert')).toHaveTextContent('not an administrator');
     expect(calls.find((c) => c.path === '/auth/logout')?.headers.Authorization).toBe(
       'Bearer member-token',
@@ -221,7 +221,7 @@ describe('single sign-on', () => {
     const calls = mockFetch({
       'POST /auth/oidc/finish': { status: 401, body: { error: 'no sign-in', code } },
     });
-    renderApp('/', { oidcDone: true });
+    renderApp('/', { oidcReturn: {} });
     expect(await screen.findByRole('alert')).toHaveTextContent("Single sign-on didn't finish");
     expect(await screen.findByLabelText('Username')).toBeInTheDocument();
     expect(getToken()).toBeNull();
@@ -237,7 +237,7 @@ describe('single sign-on', () => {
         body: { error: 'no single sign-on', code: 'oidc_no_sign_in' },
       },
     });
-    renderApp('/', { oidcDone: true });
+    renderApp('/', { oidcReturn: {} });
     expect(await screen.findByRole('heading', { level: 1, name: /chris\.$/ })).toBeInTheDocument();
     expect(getToken()).toBe('stored');
     expect(calls.find((c) => c.path === '/me')?.headers.Authorization).toBe('Bearer stored');

@@ -4070,24 +4070,32 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and its flow's cookie then stays for its ten minutes: whose it was can't be told); a sign-in gets a **60 s
   single-use token of its own kind** (`auth.KindOIDC`, minted in `OIDCSignIn`'s transaction) that is **never in a URL**
   (a link carrying one would sign whoever follows it in as its owner: a login CSRF), only in the
-  done cookie (`__Host-audiosilo_oidc_done` or `audiosilo_oidc_done`, named and placed as the flow
-  cookie, but on plain http never under public_url's path: the console and the web player call the
-  finish on their origin's own `/api/v1`; Max-Age 60), and a 303 to `/admin/#oidc=done` (or, for a console flow, the console page it
+  flow's own done cookie (`__Host-audiosilo_oidc_done_<key>` or `audiosilo_oidc_done_<key>`, the
+  flow cookie's key, so two tabs whose callbacks both land before either finishes each keep their
+  own; named and placed as the flow cookie, but on plain http never under public_url's path: the
+  console and the web player call the finish on their origin's own `/api/v1`; Max-Age 60), and a 303
+  to a page on **public_url's origin, never under its path** (`oidcPageBase`: the console, the
+  player and the connect page load their assets and route from the origin's root, so behind a
+  proxy's prefix `<prefix>/admin/` and `<prefix>/web/connect` route nowhere; the redirect URI and
+  the hop keep the path), ending `&flow=<key>`: `/admin/#oidc=done&flow=<key>` (or, for a console flow, the console page it
   started from: `/start`'s optional `next`, sealed as `Flow.Next`, kept through the hop, `validNext`:
   a path under `/admin/` with an optional query, printable ASCII, no fragment, backslash, double
   quote (it would cost the sealed JSON two bytes), empty, `.`
   or `..` segment (`%2e` counts as a dot), at most 512 bytes, anything else dropped for the start
   page; appended to public_url, so never another origin; the console's `oidcStartHref` sends the
   page asked for, server#406) or
-  `/web/connect?oidc=1` (the player's button is 235c; `/web/connect?token=` stays QR pairing's).
-  That page calls **`POST /auth/oidc/finish`** (public, optional `{device_name, intent}`, per-IP
-  `oidcLimiter`; `intent` is the tag the player expects: a string, the empty one too, that isn't
+  `/web/connect?oidc=1&flow=<key>` (the player's button is 235c; `/web/connect?token=` stays QR pairing's).
+  That page calls **`POST /auth/oidc/finish`** (public, optional `{device_name, intent, flow}`, per-IP
+  `oidcLimiter`; `flow` is the key its landing named: the finish takes that flow's done cookie only
+  (a malformed one a 400), so each tab finishes its own; without it, a page from before the key,
+  `heldDone` takes the one whose tag is the `intent` expected, else the first held; `intent` is the tag the player expects: a string, the empty one too, that isn't
   the tag the sign-in's flow carried, or any string for an untagged sign-in, is a 403 code
   `oidc_intent_mismatch` before `ConsumeOIDC`: no session, the token unspent and left to expire,
   nothing charged, the cookie cleared, so the sign-in the player disowned can't be finished without
   the tag instead; absent or null asks nothing, as the console and a player before the field do;
-  a server before the field answers it 400, an unknown field, and keeps the cookie), which leaves the cookie on a 429 or a 400 (the sign-in stays finishable for its
-  minute) and clears it on every other answer, consumes the token once (`ConsumeOIDC`: only
+  a server before the field answers it 400, an unknown field, and keeps the cookie), which leaves the cookie on a 429, a 400 or a 500 (the store failed; the token and the session
+  share one transaction, so nothing was spent: the page's retry finishes it; the sign-in stays finishable for its minute) and clears it once the
+  token is spent or refused and on the other 401s and the 403, consumes the token once (`ConsumeOIDC`: only
   `KindOIDC`, so a pairing token planted in the cookie, an invite's QR or an own `/auth/pair`, is
   refused and left unspent; `POST /auth/exchange` in turn refuses a `KindOIDC` token; a sign-out
   everywhere or an unlink of the account's identity ends one not yet finished, the daily
@@ -4099,7 +4107,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   another kind or its
   account's disabled, or now a household member or demo account (a second check: the token is minted
   with the decision, and `leaveOwners` ends the open one of an account joining a household) (charged to `oidcLimiter`, the callback's, never `redeemLimiter`: any page can make a visitor's browser fail ten exchanges, which must not lock that address out of finishing). The console finishes on
-  `#oidc=done` (`main.tsx` strips it before the router), signs a non-admin straight back out, and
+  `#oidc=done&flow=<key>` (`main.tsx` strips it before the router, `parseOIDCReturn`; the key goes in the finish), signs a non-admin straight back out, and
   keeps a stored session when the finish signs no admin in; anything else
   lands on `/connect#oidc=<reason>` (off, unavailable, pending, disabled, not_allowed, failed, expired,
   rate_limited; `connect.js` words each in the six languages). An admin's sign-in calls

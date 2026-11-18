@@ -4,21 +4,24 @@ import { ApiError, api, setForbiddenHandler, setUnauthorizedHandler } from '@/ap
 import { clearThumbCache } from '@/api/thumb-cache';
 import { clearToken, getToken, setToken } from '@/api/token';
 import type { LoginResponse } from '@/api/types';
+import type { OIDCReturn } from './oidc-return';
 import { SessionContext, type Session, type SessionState, type SignedOutReason } from './session';
 
 /**
  * The console's session: the stored token checked once on load, or, after a
- * single sign-on (`oidcDone`: main.tsx found /admin/#oidc=done), the sign-in the
- * server holds in its cookie finished for a new session.
+ * single sign-on (`oidcReturn`: main.tsx found /admin/#oidc=done), the sign-in the
+ * server holds in its flow's cookie finished for a new session.
  */
 export function SessionProvider({
-  oidcDone,
+  oidcReturn,
   children,
 }: {
-  oidcDone: boolean;
+  oidcReturn: OIDCReturn | null;
   children: React.ReactNode;
 }) {
   const qc = useQueryClient();
+  const oidcDone = oidcReturn !== null;
+  const oidcFlow = oidcReturn?.flow;
   const [state, setState] = useState<SessionState>(() =>
     oidcDone || getToken() ? { status: 'checking' } : { status: 'signed-out', reason: null },
   );
@@ -81,7 +84,7 @@ export function SessionProvider({
       if (getToken()) setFinishing(false);
       else dropSession(reason);
     };
-    finish.current ??= api.oidcFinish().then(async (res) => {
+    finish.current ??= api.oidcFinish(oidcFlow).then(async (res) => {
       if (res.user.role === 'admin') return res;
       await api.logout(res.token).catch(() => {});
       return null;
@@ -104,7 +107,7 @@ export function SessionProvider({
     return () => {
       cancelled = true;
     };
-  }, [oidcDone, dropSession]);
+  }, [oidcDone, oidcFlow, dropSession]);
 
   // Validate a stored token once on load (and on "Try again"); a single
   // sign-on's session replaces it instead, unless that signs no admin in.
