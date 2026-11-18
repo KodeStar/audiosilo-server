@@ -34,8 +34,8 @@ const (
 	eventPut      = "put"
 	// eventReset is a progress row deleted (an import's undo, logProgressReset),
 	// its base_version the version the row had: a Stay made before it, or on a
-	// base no higher than that version, is a plain jump (resetSince), and a sync
-	// that writes the row again starts above it (firstVersion).
+	// base no higher than that version, is a plain jump (resetSince), and
+	// whatever writes the row again starts above it (firstProgressVersion).
 	eventReset = "reset"
 )
 
@@ -1051,12 +1051,12 @@ func (s *syncRun) beforeStay(ctx context.Context, p syncPrepared, stored *syncRo
 // logProgressReset) at or after the span ended, or had reached the base's
 // version when it was (a Stay answering an offer shown before the undo, sent
 // after it on that stale base). The base then can't say what the Stay saw
-// (server#415): it is a plain jump. A sync writing the row again starts above
-// the deleted row's version (firstVersion), so a Stay on a version written
+// (server#415): it is a plain jump. Whatever writes the row again starts above
+// the deleted row's version (firstProgressVersion), so a Stay on a version written
 // since still wins. The log keeps a reset longer than any event may be dated
 // (SyncRetention over syncRejectAge).
 func (s *syncRun) resetSince(ctx context.Context, p syncPrepared) (bool, error) {
-	version, at, ok, err := s.lastReset(ctx, p.target.Key)
+	version, at, ok, err := lastReset(ctx, s.tx, s.b.UserID, p.target.Key)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -1066,23 +1066,32 @@ func (s *syncRun) resetSince(ctx context.Context, p syncPrepared) (bool, error) 
 // lastReset reads the user's resets of the book's row in the log (eventReset):
 // the highest version a deleted row had, and when the newest reset was (fixed
 // width); ok is false for none.
-func (s *syncRun) lastReset(ctx context.Context, key Ref) (version int64, at string, ok bool, err error) {
+func lastReset(ctx context.Context, q querier, userID int64, key Ref) (version int64, at string, ok bool, err error) {
 	var v sql.NullInt64
 	var a sql.NullString
-	err = s.tx.QueryRowContext(ctx,
+	err = q.QueryRowContext(ctx,
 		`SELECT MAX(base_version), MAX(ended_at) FROM listening_events
 		  WHERE library_id = ? AND rel_path = ? AND user_id = ? AND kind = ?`,
-		key.LibraryID, key.Path, s.b.UserID, eventReset).Scan(&v, &a)
+		key.LibraryID, key.Path, userID, eventReset).Scan(&v, &a)
 	return v.Int64, a.String, a.Valid, err
 }
 
-// firstVersion is the version a sync gives a row it creates: 1, or one above
-// the highest version a deleted row on the book had (lastReset), so a base a
-// device acknowledged before the reset never names a version of the new row
-// (ResolvePlace, heldByStay and staysWin read it as seen).
-func (s *syncRun) firstVersion(ctx context.Context, key Ref) (int64, error) {
-	version, _, _, err := s.lastReset(ctx, key)
+// firstProgressVersion is the lowest version a write that creates userID's
+// row on key may give it: 1, or one above the highest version a deleted row on
+// the book had (lastReset), so a base a device acknowledged before the reset
+// never names a version of the new row (ResolvePlace, heldByStay and staysWin
+// read it as seen). Every writer that creates a row starts at or above it: a
+// sync (firstVersion), a PUT (SaveProgressFrom), an edit (editProgress) and an
+// import (floorNewVersions).
+func firstProgressVersion(ctx context.Context, q querier, userID int64, key Ref) (int64, error) {
+	version, _, _, err := lastReset(ctx, q, userID, key)
 	return version + 1, err
+}
+
+// firstVersion is the version a sync gives a row it creates
+// (firstProgressVersion).
+func (s *syncRun) firstVersion(ctx context.Context, key Ref) (int64, error) {
+	return firstProgressVersion(ctx, s.tx, s.b.UserID, key)
 }
 
 // heldByStay reports whether another device's Stay holds the row against this
@@ -1460,8 +1469,8 @@ func putEvent(userID int64, in Progress, tokenID int64, at, received string) eve
 // logProgressReset records, inside tx, that userID's progress row on ref, at
 // version, was deleted at now (an import's undo of a row it made), as a
 // "reset" event in the log (version as its base_version): a Stay made before
-// it, or on a base up to version, no longer wins (resetSince), and a sync
-// writing the row again starts above version (firstVersion).
+// it, or on a base up to version, no longer wins (resetSince), and whatever
+// writes the row again starts above version (firstProgressVersion).
 func logProgressReset(ctx context.Context, tx *sql.Tx, userID int64, ref Ref, version int64, now time.Time) error {
 	at := formatSessionTime(now)
 	return insertEvent(ctx, tx, eventRow{userID: userID, id: localEventID("reset-"), kind: eventReset,

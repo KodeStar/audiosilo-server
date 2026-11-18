@@ -210,6 +210,16 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 				in.Version = existing.Version + 1
 			}
 		}
+		if existing == nil {
+			// A row deleted here before (an import's undo) took its versions
+			// with it: the new row starts above them, as a sync's does, so a
+			// base a device holds from before names no version of this row.
+			first, err := firstProgressVersion(ctx, tx, userID, in.Ref)
+			if err != nil {
+				return err
+			}
+			in.Version = max(in.Version, first)
+		}
 		// RETURNING reads the dates the row ended up with (a kept start, a kept or
 		// new finish) and the offered place it keeps, so the echo carries the stored ones.
 		if err := scanProgress(tx.QueryRowContext(ctx,

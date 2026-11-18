@@ -293,3 +293,83 @@ func TestSyncStayBeforeAnImportUndo(t *testing.T) {
 		t.Fatalf("a Stay after the undo: %+v stay %d", p, g.stayVersion(t, g.book))
 	}
 }
+
+// server#415: whatever creates the row again after an import's undo deleted
+// it starts above the deleted row's version (1), as a sync does: an old app's
+// PUT (above the version it sends, too), a progress edit and an import's new
+// row, whose undo still finds it as the import wrote it. A device's base from
+// before the undo then names no version of the new row. A book with no
+// deleted row starts at 1.
+func TestProgressCreatedAgainAfterAnImportUndo(t *testing.T) {
+	t.Parallel()
+	imported := func(f *syncFixture) int64 {
+		return applyImport(t, f.ctx, f.c, f.user, func(ImportState) (*ImportWrite, error) {
+			return &ImportWrite{Progress: []ImportProgress{{Wrote: Progress{Ref: f.book, Position: 21000,
+				Duration: syncBookLen, PlaybackSpeed: 1, Version: 1, UpdatedAt: FormatStamp(f.clock.Add(-time.Hour))}}}}, nil
+		})
+	}
+	undone := func(t *testing.T) *syncFixture {
+		t.Helper()
+		f := newSyncFixture(t)
+		if _, err := f.c.UndoImport(f.ctx, imported(f)); err != nil {
+			t.Fatal(err)
+		}
+		if f.progress(t) != nil {
+			t.Fatal("setup: the undo left the row")
+		}
+		return f
+	}
+	put := func(f *syncFixture, ref Ref, version int64) {
+		t.Helper()
+		if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: ref, Position: 100, Duration: syncBookLen,
+			Version: version, DeviceID: "old-app", UpdatedAt: FormatStamp(f.clock)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantVersion := func(f *syncFixture, what string, want int64) {
+		t.Helper()
+		if p := f.progress(t); p == nil || p.Version != want {
+			t.Fatalf("%s: row %+v, want version %d", what, p, want)
+		}
+	}
+
+	f := undone(t)
+	put(f, f.book, 0)
+	wantVersion(f, "a PUT after the undo", 2)
+	// A phone that saw the imported row (base 1) never saw the old app's: its
+	// span diverges from it instead of replacing it as seen.
+	res := f.syncOne(t, "phone", f.listen("moved_back", 60, 50, 0, base(1)))
+	if p := f.progress(t); res.Status != statusDiverged || res.Kept != "stored" || p.Position != 100 {
+		t.Fatalf("a span on the deleted row's version: %+v, row %+v; want it diverged from the new row, which is kept", res, p)
+	}
+
+	f = undone(t)
+	put(f, f.book, 7)
+	wantVersion(f, "a PUT sending its own higher version", 7)
+
+	f = undone(t)
+	yes := true
+	if _, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &yes}, Scope{AllowAll: true}); err != nil {
+		t.Fatal(err)
+	}
+	wantVersion(f, "an edit after the undo", 2)
+
+	f = undone(t)
+	again := imported(f)
+	wantVersion(f, "an import after the undo", 2)
+	if _, err := f.c.UndoImport(f.ctx, again); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.progress(t); p != nil {
+		t.Fatalf("the second import's undo left its row: %+v", p)
+	}
+	put(f, f.book, 0)
+	wantVersion(f, "a PUT after the second undo", 3)
+
+	// Denied: a book no row was deleted on starts at 1.
+	f = undone(t)
+	other := Ref{LibraryID: f.lib, Path: "Author/Other"}
+	put(f, other, 0)
+	f.book = other
+	wantVersion(f, "a PUT on a book with no deleted row", 1)
+}

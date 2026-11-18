@@ -758,6 +758,9 @@ func (c *Catalog) writeImport(ctx context.Context, tx *sql.Tx, imp Import, w *Im
 	if err := setHintsTx(ctx, tx, imp.Source, imp.ID, w.Hints, formatSessionTime(now)); err != nil {
 		return err
 	}
+	if err := floorNewVersions(ctx, tx, imp.UserID, w.Progress); err != nil {
+		return err
+	}
 	if err := execEach(ctx, tx, progressUpsert, len(w.Progress), func(i int) ([]any, error) {
 		wrote := w.Progress[i].Wrote
 		return progressRowArgs(imp.UserID, wrote, finishChangeStamp(wrote.UpdatedAt, now)), nil
@@ -795,6 +798,41 @@ func execEach(ctx context.Context, tx *sql.Tx, query string, n int, args func(i 
 		}
 		if _, err := stmt.ExecContext(ctx, a...); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// floorNewVersions raises, inside tx before an import's rows are written, the
+// version of each row the import creates (no prior) on a book whose row was
+// deleted before (an earlier import's undo, the one this apply replaces among
+// them: a "reset" event) to one above the deleted row's, as every writer that
+// creates a row starts (firstProgressVersion): a base a device holds from
+// before the undo then names no version of the new row. The resets are read
+// in one statement for the person, and only when the import creates a row.
+func floorNewVersions(ctx context.Context, tx *sql.Tx, userID int64, rows []ImportProgress) error {
+	if !slices.ContainsFunc(rows, func(p ImportProgress) bool { return p.Prior == nil }) {
+		return nil
+	}
+	type reset struct {
+		ref     Ref
+		version int64
+	}
+	resets, err := queryRows(ctx, tx, func(r *sql.Rows, x *reset) error {
+		return r.Scan(&x.ref.LibraryID, &x.ref.Path, &x.version)
+	}, `SELECT library_id, rel_path, MAX(base_version) FROM listening_events
+	     WHERE user_id = ? AND kind = ? GROUP BY library_id, rel_path`, userID, eventReset)
+	if err != nil || len(resets) == 0 {
+		return err
+	}
+	deleted := make(map[Ref]int64, len(resets))
+	for _, r := range resets {
+		deleted[r.ref] = r.version
+	}
+	for i := range rows {
+		p := &rows[i]
+		if v, ok := deleted[p.Wrote.Ref]; ok && p.Prior == nil {
+			p.Wrote.Version = max(p.Wrote.Version, v+1)
 		}
 	}
 	return nil
@@ -993,8 +1031,8 @@ func (c *Catalog) undoImport(ctx context.Context, tx *sql.Tx, id int64, replacin
 				return nil, err
 			}
 			// Its versions are gone: a Stay on one of them goes as a jump
-			// (resetSince), and a sync writing the row again starts above them
-			// (firstVersion).
+			// (resetSince), and whatever writes the row again starts above
+			// them (firstProgressVersion).
 			if err := logProgressReset(ctx, tx, userID, pr.ref, pr.wrote.Version, now); err != nil {
 				return nil, err
 			}
