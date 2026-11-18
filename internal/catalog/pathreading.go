@@ -67,7 +67,7 @@ const snapshotNamesExpr = `CASE WHEN json_valid(scanned) THEN json_extract(scann
 	CASE WHEN json_valid(scanned) THEN IFNULL(json_extract(scanned, '$.series'), '') ELSE series END,
 	CASE WHEN json_valid(scanned) THEN IFNULL(json_extract(scanned, '$.narrator'), '') ELSE narrator END,
 	` + revOlderOwn + `,
-	CASE WHEN is_folder AND (NOT json_valid(scanned) OR IFNULL(json_extract(scanned, '$."` + scannedRevKey + `"'), '') <> '` + scannedRev + `')
+	CASE WHEN is_folder AND CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$."` + scannedRevKey + `"') END IS NOT '` + scannedRev + `'
 	     THEN (SELECT COUNT(*) > 1 FROM (SELECT 1 FROM book_files f WHERE f.book_id = books.id LIMIT 2)) ELSE 0 END`
 
 // revOlderOwn is whether a books row's snapshot is of revision 1 to 4 (older
