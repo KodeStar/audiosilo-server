@@ -334,7 +334,7 @@ func TestRekeyPathState(t *testing.T) {
 	}
 	countsBefore := total()
 
-	rep, err := c.RekeyPathState(ctx)
+	rep, err := c.RekeyPathState(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,12 +453,12 @@ func TestRekeyPathState(t *testing.T) {
 	if v, _ := getServerState[string](ctx, c.db, rekeyStateKey); v != pathKeysVersion {
 		t.Errorf("server_state %s = %q, want %q", rekeyStateKey, v, pathKeysVersion)
 	}
-	again, err := c.RekeyPathState(ctx)
+	again, err := c.RekeyPathState(ctx, nil)
 	if err != nil || len(again.Moved) != 0 || len(again.Skipped) != 0 || again.Rows != 0 {
 		t.Errorf("second start: %+v %v, want nothing", again, err)
 	}
 	f.exec(t, `DELETE FROM server_state WHERE key = ?`, rekeyStateKey)
-	rerun, err := c.RekeyPathState(ctx)
+	rerun, err := c.RekeyPathState(ctx, nil)
 	if err != nil || len(rerun.Moved) != 0 || rerun.Rows != 0 || len(rerun.Failed) != 0 {
 		t.Errorf("a full re-run: %+v %v, want nothing moved", rerun, err)
 	}
@@ -613,7 +613,7 @@ func TestRekeyOnUpgrade(t *testing.T) {
 	if _, err := f.c.KeyPaths(f.ctx, nil); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := f.c.RekeyPathState(f.ctx)
+	rep, err := f.c.RekeyPathState(f.ctx, nil)
 	if err != nil || rep.Moved[rekeySpelling] != 1 {
 		t.Fatalf("upgrade re-key: %+v %v, want the precomposed spelling moved", rep, err)
 	}
@@ -626,7 +626,7 @@ func TestRekeyOnUpgrade(t *testing.T) {
 		UpdatedAt: rkUpdated1, Version: 1}); err != nil {
 		t.Fatal(err)
 	}
-	rep, err = clean.c.RekeyPathState(clean.ctx)
+	rep, err = clean.c.RekeyPathState(clean.ctx, nil)
 	if err != nil || len(rep.Moved) != 0 || rep.Rows != 0 || len(rep.Skipped) != 0 {
 		t.Fatalf("nothing to move: %+v %v", rep, err)
 	}
@@ -638,18 +638,35 @@ func TestRekeyOnUpgrade(t *testing.T) {
 	}
 }
 
-// TestRekeyFailureLeavesVersionUnrecorded: a path whose move fails is reported,
-// nothing of it moves, and the start's run is not recorded, so the next start
-// tries it again.
-func TestRekeyFailureLeavesVersionUnrecorded(t *testing.T) {
+// refuseCarry is a trigger that refuses the carry's write of a bookmark onto
+// its book, so every path holding one fails to move.
+const refuseCarry = `CREATE TRIGGER refuse_carry BEFORE UPDATE OF rel_path ON bookmarks BEGIN SELECT RAISE(ABORT, 'refused'); END`
+
+// TestRekeyRetriesOnlyFailedPaths: a path whose move fails is reported and
+// nothing of it moves; the run is recorded all the same, with the path, so a
+// later start looks at that path alone (never at every path again) until it
+// moves, then at none.
+func TestRekeyRetriesOnlyFailedPaths(t *testing.T) {
 	t.Parallel()
 	f := newRekeyFixture(t)
 	f.seedEverything(t, f.ann, f.lib, rkTrack1, 30, rkUpdated1)
-	// A trigger that refuses the carry's write onto the book.
-	f.exec(t, `CREATE TRIGGER refuse_carry BEFORE UPDATE OF rel_path ON bookmarks BEGIN SELECT RAISE(ABORT, 'refused'); END`)
-	rep, err := f.c.RekeyPathState(f.ctx)
-	if err != nil || len(rep.Failed) != 1 || rep.Failed[0].Path != rkTrack1 || len(rep.Moved) != 0 {
+	f.exec(t, refuseCarry)
+	failedPaths := func() []Ref {
+		t.Helper()
+		refs, err := getServerState[[]Ref](f.ctx, f.c.db, rekeyFailedKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return refs
+	}
+	track1 := []Ref{{LibraryID: f.lib, Path: rkTrack1}}
+	var told [][2]int
+	rep, err := f.c.RekeyPathState(f.ctx, func(done, total int) { told = append(told, [2]int{done, total}) })
+	if err != nil || len(rep.Failed) != 1 || rep.Failed[0].Path != rkTrack1 || len(rep.Moved) != 0 || len(rep.Retried) != 0 {
 		t.Fatalf("report = %+v %v, want track 1 failed", rep, err)
+	}
+	if !slices.Equal(told, [][2]int{{1, 1}}) {
+		t.Errorf("progress = %v, want the one path of one", told)
 	}
 	var logged int
 	if err := f.c.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM path_rekeys`).Scan(&logged); err != nil {
@@ -658,11 +675,110 @@ func TestRekeyFailureLeavesVersionUnrecorded(t *testing.T) {
 	if f.rowCount(t, "progress", f.lib, rkTrack1) != 1 || logged != 0 {
 		t.Error("a failed move wrote something")
 	}
+	if v, _ := getServerState[string](f.ctx, f.c.db, rekeyStateKey); v != pathKeysVersion {
+		t.Errorf("the run recorded %q, want its version (every path was looked at)", v)
+	}
+	if got := failedPaths(); !slices.Equal(got, track1) {
+		t.Errorf("failed paths recorded = %+v, want track 1", got)
+	}
+
+	// A path that turns up later is a scan's to move, not a start's: the
+	// start no longer looks at every path.
+	f.exec(t, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, version, device_id, updated_at, device_name)
+		VALUES(?, ?, ?, 5, ?, 1, 'dev', ?, 'Phone')`, f.bob, f.lib, rkTrack2, rkBookLen, rkUpdated1)
+	rep, err = f.c.RekeyPathState(f.ctx, nil)
+	if err != nil || !slices.Equal(rep.Retried, track1) || len(rep.Failed) != 1 || len(rep.Moved) != 0 {
+		t.Fatalf("the next start, still refused: %+v %v, want track 1 tried again and failed", rep, err)
+	}
+	if got := failedPaths(); !slices.Equal(got, track1) {
+		t.Errorf("failed paths after a second failure = %+v, want track 1 kept", got)
+	}
+
+	f.exec(t, `DROP TRIGGER refuse_carry`)
+	rep, err = f.c.RekeyPathState(f.ctx, nil)
+	if err != nil || !slices.Equal(rep.Retried, track1) || rep.Moved[rekeyFile] != 1 || len(rep.Failed) != 0 {
+		t.Fatalf("the start after: %+v %v, want track 1 moved", rep, err)
+	}
+	if f.rowCount(t, "progress", f.lib, rkTrack1) != 0 || f.rowCount(t, "bookmarks", f.lib, rkBook) != 1 {
+		t.Error("track 1's rows did not reach the book")
+	}
+	if f.rowCount(t, "progress", f.lib, rkTrack2) != 1 {
+		t.Error("a start that retries failed paths moved another path")
+	}
+	if got := failedPaths(); len(got) != 0 {
+		t.Errorf("failed paths after the move = %+v, want none", got)
+	}
+	if rep, err := f.c.RekeyPathState(f.ctx, nil); err != nil || len(rep.Retried) != 0 || len(rep.Moved) != 0 {
+		t.Errorf("a start with nothing failed: %+v %v, want nothing looked at", rep, err)
+	}
+	// The scan-end run takes the path that turned up.
+	if rep, err := f.c.RekeyLibrary(f.ctx, f.lib); err != nil || rep.Moved[rekeyFile] != 1 {
+		t.Errorf("the scan-end run: %+v %v, want track 2 moved", rep, err)
+	}
+}
+
+// TestRekeyRetryDropsWhatIsGone: a failed path whose rows are gone by the next
+// start (the listener's account removed), or whose library is, is tried no
+// more and leaves the list.
+func TestRekeyRetryDropsWhatIsGone(t *testing.T) {
+	t.Parallel()
+	f := newRekeyFixture(t)
+	f.seedEverything(t, f.ann, f.lib, rkTrack1, 30, rkUpdated1)
+	f.exec(t, refuseCarry)
+	if rep, err := f.c.RekeyPathState(f.ctx, nil); err != nil || len(rep.Failed) != 1 {
+		t.Fatalf("report = %+v %v, want track 1 failed", rep, err)
+	}
+	// A path of a library since removed joins the list; ann's rows go.
+	gone := Ref{LibraryID: f.lib + 99, Path: "Gone/01.mp3"}
+	if err := putServerState(f.ctx, f.c.db, rekeyFailedKey, []Ref{{LibraryID: f.lib, Path: rkTrack1}, gone}, f.c.stamp()); err != nil {
+		t.Fatal(err)
+	}
+	f.exec(t, `DELETE FROM users WHERE id = ?`, f.ann)
+	rep, err := f.c.RekeyPathState(f.ctx, nil)
+	if err != nil || len(rep.Failed) != 0 || len(rep.Moved) != 0 || slices.Contains(rep.Retried, gone) {
+		t.Fatalf("the next start: %+v %v, want nothing failed or moved, the removed library's path left out", rep, err)
+	}
+	if refs, err := getServerState[[]Ref](f.ctx, f.c.db, rekeyFailedKey); err != nil || len(refs) != 0 {
+		t.Errorf("failed paths = %+v %v, want none", refs, err)
+	}
+}
+
+// TestRekeyTooManyFailuresRunsAgain: a run where more paths failed than it
+// records (the database's trouble, not a path's) is not recorded, so the next
+// start runs over every path again; its progress counts each path once.
+func TestRekeyTooManyFailuresRunsAgain(t *testing.T) {
+	t.Parallel()
+	f := newRekeyFixture(t)
+	const book, n = "Big/Book", maxRekeyFailed + 1
+	files := make([]BookFile, n)
+	for i := range files {
+		files[i] = BookFile{RelPath: fmt.Sprintf("%s/%04d.mp3", book, i), Seq: i, Duration: 10}
+	}
+	upsert(t, f.c, &Book{LibraryID: f.lib, RelPath: book, IsFolder: true, Title: "Big", Duration: 10 * n, Files: files})
+	for _, file := range files {
+		f.exec(t, `INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, created_at) VALUES(?, ?, ?, 1, 'mark', ?)`,
+			f.ann, f.lib, file.RelPath, rkUpdated1)
+	}
+	f.exec(t, refuseCarry)
+	var told [][2]int
+	rep, err := f.c.RekeyPathState(f.ctx, func(done, total int) { told = append(told, [2]int{done, total}) })
+	if err != nil || len(rep.Failed) != n {
+		t.Fatalf("report: %d failed %v, want %d", len(rep.Failed), err, n)
+	}
+	if len(told) != n || told[0] != [2]int{1, n} || told[n-1] != [2]int{n, n} {
+		t.Errorf("progress: %d calls, first %v, last %v, want 1..%d of %d", len(told), told[0], told[len(told)-1], n, n)
+	}
 	if v, _ := getServerState[string](f.ctx, f.c.db, rekeyStateKey); v != "" {
-		t.Errorf("a failed run recorded %q", v)
+		t.Errorf("a run with %d failures recorded %q", n, v)
+	}
+	if refs, _ := getServerState[[]Ref](f.ctx, f.c.db, rekeyFailedKey); len(refs) != 0 {
+		t.Errorf("a run with %d failures recorded %d paths", n, len(refs))
 	}
 	f.exec(t, `DROP TRIGGER refuse_carry`)
-	if rep, err := f.c.RekeyPathState(f.ctx); err != nil || rep.Moved[rekeyFile] != 1 {
-		t.Fatalf("the next start: %+v %v, want the path moved", rep, err)
+	if rep, err := f.c.RekeyPathState(f.ctx, nil); err != nil || rep.Moved[rekeyFile] != n || len(rep.Retried) != 0 {
+		t.Fatalf("the next start: %+v %v, want every path moved", rep.Moved, err)
+	}
+	if v, _ := getServerState[string](f.ctx, f.c.db, rekeyStateKey); v != pathKeysVersion {
+		t.Errorf("the clean run recorded %q", v)
 	}
 }

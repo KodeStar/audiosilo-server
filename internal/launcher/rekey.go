@@ -11,19 +11,25 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
-// keyPathsEvery is how often keyPathsProgress logs a re-key's progress.
-const keyPathsEvery = 5 * time.Second
+// progressEvery is how often startProgress logs a start-up job's progress.
+const progressEvery = 5 * time.Second
 
-// keyPathsProgress is catalog.KeyPaths' progress at the start: a line at most
-// every keyPathsEvery while it runs (the first start after the upgrade keys
-// every book), so a large library's start is seen to move. The last count is
-// the "keyed the books' paths" line after it.
+// keyPathsProgress is catalog.KeyPaths' progress at the start: the first start
+// after the upgrade keys every book. The last count is the "keyed the books'
+// paths" line after it.
 func keyPathsProgress(log *slog.Logger) func(done, total int) {
+	return startProgress(log, "keying the books' paths", progressEvery)
+}
+
+// startProgress is the progress of a job the start waits for: msg with the
+// counts, at most once every interval while it runs, so a large library's start
+// is seen to move. The job's own line follows its last count.
+func startProgress(log *slog.Logger, msg string, every time.Duration) func(done, total int) {
 	last := time.Now()
 	return func(done, total int) {
-		if done < total && time.Since(last) >= keyPathsEvery {
+		if done < total && time.Since(last) >= every {
 			last = time.Now()
-			log.Info("keying the books' paths", "done", done, "of", total)
+			log.Info(msg, "done", done, "of", total)
 		}
 	}
 }
@@ -31,12 +37,18 @@ func keyPathsProgress(log *slog.Logger) func(done, total int) {
 // rekeyAtStart runs the start's re-key (catalog.RekeyPathState, server#210)
 // after KeyPaths: listeners' rows stored under a track path, a disc folder or
 // another spelling of a book's path move to the book, each logged whole in
-// path_rekeys first. A repair, so a failure never stops the start: it is
-// logged, and the paths that failed are tried at the next start.
+// path_rekeys first, with a progress line every progressEvery (a library whose
+// listeners used an old player has a path a track they played). A repair, so a
+// failure never stops the start: it is logged; a run that was stopped runs
+// again at the next start, and one that finished tries only the paths that
+// failed, each named here when it does.
 func rekeyAtStart(ctx context.Context, cat *catalog.Catalog, log *slog.Logger) {
-	rep, err := cat.RekeyPathState(ctx)
+	rep, err := cat.RekeyPathState(ctx, startProgress(log, "re-keying listening state to the books' paths", progressEvery))
 	if err != nil {
 		log.Warn("re-keying listening state to the books' paths failed; trying again at the next start", "err", err)
+	}
+	for _, r := range rep.Retried {
+		log.Info("path_rekey retried", "library", r.LibraryID, "path", r.Path)
 	}
 	logRekey(log, "re-keyed listening state to the books' paths", rep, slog.LevelInfo)
 }

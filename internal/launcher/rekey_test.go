@@ -1,9 +1,12 @@
 package launcher
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,5 +74,75 @@ func TestScanEndRekeysANewBook(t *testing.T) {
 	var logged int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM path_rekeys WHERE from_path = ?`, track).Scan(&logged); err != nil || logged != 1 {
 		t.Errorf("logged %d rows (%v), want the moved one", logged, err)
+	}
+}
+
+// A start-up job's progress is logged while it runs, at most once an interval,
+// and never for its last count (the job's own line says that).
+func TestStartProgress(t *testing.T) {
+	var out bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&out, nil))
+	each := startProgress(log, "working", 0)
+	each(1, 3)
+	each(2, 3)
+	each(3, 3)
+	if got := strings.Count(out.String(), "msg=working"); got != 2 || !strings.Contains(out.String(), "done=2 of=3") {
+		t.Errorf("logged %d lines, want one a count but the last:\n%s", got, out.String())
+	}
+	out.Reset()
+	rare := startProgress(log, "working", time.Hour)
+	rare(1, 3)
+	rare(2, 3)
+	if out.Len() != 0 {
+		t.Errorf("logged within the interval:\n%s", out.String())
+	}
+}
+
+// The start's re-key names a path whose move failed, and at the next start
+// names it as the one it tries again (server#210): it looks at no other path
+// then.
+func TestRekeyAtStartNamesFailedPaths(t *testing.T) {
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const book, track = "Author/Book", "Author/Book/01.mp3"
+	if _, err := cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: book, IsFolder: true, Title: "Book",
+		Files: []catalog.BookFile{{RelPath: track}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users(id, username, password_hash, role, created_at, updated_at) VALUES(7, 'ann', 'x', 'admin', 't', 't')`,
+		`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, created_at) VALUES(7, 1, 'Author/Book/01.mp3', 1, 'mark', 't')`,
+		`CREATE TRIGGER refuse_carry BEFORE UPDATE OF rel_path ON bookmarks BEGIN SELECT RAISE(ABORT, 'refused'); END`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&out, nil))
+	rekeyAtStart(ctx, cat, log)
+	if got := out.String(); !strings.Contains(got, `msg="path_rekey failed"`) || !strings.Contains(got, "path=Author/Book/01.mp3") ||
+		strings.Contains(got, "path_rekey retried") {
+		t.Fatalf("the first start logged:\n%s", got)
+	}
+	out.Reset()
+	if _, err := db.ExecContext(ctx, `DROP TRIGGER refuse_carry`); err != nil {
+		t.Fatal(err)
+	}
+	rekeyAtStart(ctx, cat, log)
+	got := out.String()
+	if !strings.Contains(got, "path_rekey retried") || !strings.Contains(got, "path=Author/Book/01.mp3") ||
+		!strings.Contains(got, "paths_file=1") || strings.Contains(got, "path_rekey failed") {
+		t.Fatalf("the next start logged:\n%s", got)
+	}
+	out.Reset()
+	rekeyAtStart(ctx, cat, log)
+	if out.Len() != 0 {
+		t.Errorf("a start with nothing to re-key logged:\n%s", out.String())
 	}
 }

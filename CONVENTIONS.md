@@ -1537,7 +1537,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestIndexPathMovesEveryListenersFolderFavourite`).
 - **The re-key (server#210, `catalog/rekey.go`, `0084`)**: rows a client stored under a path no book
   has, but the book path rule now reads at a book, move there: `RekeyPathState` once per `pathKeysVersion`
-  at the start (after `KeyPaths`, recorded in `server_state('path_rekey')` only when no path failed; the
+  at the start (after `KeyPaths`, with a progress line every 5 s, `launcher.startProgress`; recorded in
+  `server_state('path_rekey')` once it has been over every path, with the paths whose move failed in
+  `server_state('path_rekey_failed')`, so a later start tries only those again, each named in a
+  `path_rekey retried` line, and one path that keeps failing never costs every start the whole run; a
+  run stopped part way, or one with more than `maxRekeyFailed` failures, is not recorded and runs again; the
   start that first runs it applies `0084`, so `backup.BeforeUpgrade` copied the database just before), and
   `RekeyLibrary` after every scan run that finished ok or partial (`launcher.rekeyAfterScan`, the
   scanner's `OnRunFinished`, under the server's context so a stop ends it between paths; candidates
@@ -1558,7 +1562,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   carried only the disc folder's rows), each row whole into `path_rekeys`
   (`row_json`, cascades with the user and library, never on the wire), then `carryState` (the move's
   rules: `mergeNewest`, a list entry or favourite once, the newer rating or reader's place). A guard or a
-  failure leaves the path whole for the next run; a re-run finds nothing to move. No undo command: the
+  failure leaves the path whole (a failure for the next start's retry, a guard's for the scan-end runs); a
+  re-run finds nothing to move. No undo command: the
   before-upgrade copy and the log are the way back.
 - **Auto book/folder detection**: there is **no per-library layout**. The model
   (`booksInDir` in `library/scanner.go`) matches the dominant "folder per book"
