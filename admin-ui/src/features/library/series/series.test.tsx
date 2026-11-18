@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBook, BookMeta, BookRef, SeriesCount } from '@/api/types';
 import { mockFetch, type MockReply, type MockRequest, type MockRoute } from '@/test/fetch-mock';
-import { serverInfo } from '@/test/fixtures';
+import { serverInfo, settingsWithMetadata } from '@/test/fixtures';
 import { adminBook, bookDetail, books, series } from '@/test/library-fixtures';
 import { seriesKey } from '@/lib/series-key';
 import { renderApp } from '@/test/render-app';
@@ -211,6 +211,37 @@ describe('series', () => {
     expect(preorder.querySelector('.spine-date')).toHaveTextContent('Preorder · Mar 2099');
     // A plain date carries no state word.
     expect(old.querySelector('.spine-date')?.textContent).toBe('2017');
+  });
+
+  it("counts a release as new by the server's window (server#279)", async () => {
+    // 60 days ago: new by the default 90-day window, not by this server's 30.
+    const released = new Date(Date.now() - 60 * 86_400_000).toISOString().slice(0, 10);
+    const dated: BookMeta = {
+      ...wayOfKingsMeta,
+      series: wayOfKingsMeta.series!.map((r) =>
+        r.id !== 'stormlight'
+          ? r
+          : {
+              ...r,
+              works: r.works.map((w) =>
+                w.title === 'Rhythm of War' ? { ...w, release_date: released } : w,
+              ),
+            },
+      ),
+    };
+    mockFetch(
+      routes({
+        'GET /libraries/1/meta': { body: dated },
+        'GET /admin/settings': { body: settingsWithMetadata({ upcoming_window_days: 30 }) },
+      }),
+    );
+    renderApp('/library/series');
+    const card = await screen.findByRole('region', { name: 'The Stormlight Archive' });
+    const date = formatReleaseDate(released, 'en');
+    const gap = await within(card).findByRole('img', {
+      name: `#4 Rhythm of War (${date}): not in your library`,
+    });
+    expect(gap.querySelector('.spine-date')?.textContent).toBe(date);
   });
 
   it('marks a preorder with an icon where the spine is too short for the word (server#279)', async () => {

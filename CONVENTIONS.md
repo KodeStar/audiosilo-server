@@ -659,7 +659,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   per run (`upcoming.Announce`: up to 5 titles as "Title (Series #position)", `upcoming.Release.Label`,
   the count of all, dedupe key a digest of the run's work ids). Config `upcoming.enabled` (live,
   `AUDIOSILO_UPCOMING_ENABLED`, console Settings > Metadata, setting id `metadata.upcoming`) and `upcoming.window_days` (1-365, default
-  90, restart, `AUDIOSILO_UPCOMING_WINDOW_DAYS`; 0 or anything outside refuses to load). The route is 404
+  90, restart, `AUDIOSILO_UPCOMING_WINDOW_DAYS`; 0 or anything outside refuses to load; `GET /admin/settings`
+  carries the running one read-only as `metadata.upcoming_window_days`, which the Series cards mark "New"
+  by, server#279). The route is 404
   `metadata_off`, then 404 `upcoming_off`. `MetaSeriesWork.release_date` (additive, omitted when unknown)
   feeds the console's dated gaps on the Series cards. **The calendar feed (U3, security-critical)**: `GET
   /me/upcoming/calendar` -> `{"active", "created_at"?}` (requireAuth, notKid; an API key may read it; the

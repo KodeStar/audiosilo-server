@@ -2,7 +2,7 @@ import { useId, useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Trans, useTranslation } from 'react-i18next';
 import { CalendarClock, Sparkles } from 'lucide-react';
-import { useBookMeta, useBookWorks } from '@/api/hooks';
+import { useBookMeta, useBookWorks, useSettings } from '@/api/hooks';
 import type { AdminBook, SeriesCount } from '@/api/types';
 import { BooksLink } from '@/components/books-link';
 import { BookCover } from '@/components/book-cover';
@@ -209,6 +209,8 @@ function Shelf({
   const lang = i18n.resolvedLanguage ?? 'en';
   const navigate = useNavigate();
   const now = new Date();
+  // The server's own window for "new" (upcoming.window_days), as its job counts.
+  const windowDays = useSettings().data?.metadata.upcoming_window_days;
   // The fan only fits beside the spines on wide screens (layout.wide); elsewhere
   // its covers aren't fetched.
   const spines = spineRow(placed, status?.missing ?? []);
@@ -221,7 +223,7 @@ function Shelf({
             const index = formatSpan(sp.entry, fmt);
             // A dated entry says when: a preorder, a new release, or just its date.
             const date = formatReleaseDate(sp.entry.release_date, lang);
-            const state = date ? releaseState(sp.entry.release_date, now) : undefined;
+            const state = date ? releaseState(sp.entry.release_date, now, windowDays) : undefined;
             const values = { index, title: sp.entry.title, date };
             const height = spineHeight(0, sp.entry.title);
             const stateWord = state

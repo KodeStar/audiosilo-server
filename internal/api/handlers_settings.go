@@ -41,7 +41,9 @@ func (a *API) metadataOff(w http.ResponseWriter) bool {
 //	 "restart_settings": ["network.bind", ...], "restart_pending": ["network.bind"]}
 //
 // Read-only facts ride along in their sections: metadata.available (the service
-// exists, so the switch can turn on), metadata.upcoming_status and
+// exists, so the switch can turn on), metadata.upcoming_window_days (how long a
+// release counts as new: config upcoming.window_days as running, a restart
+// setting; server#279), metadata.upcoming_status and
 // metadata.report_status (the two daily jobs' last runs, when the job exists;
 // metadata.report_unknown, the report's switch, is left out without its job),
 // metadata.region_chosen (regionChosen), players.web_player (where /web is served
@@ -56,6 +58,7 @@ func (a *API) settingsEnvelope() map[string]any {
 	sections := saved.Settings()
 	sections["metadata"]["available"] = a.meta != nil
 	sections["metadata"]["region_chosen"] = a.regionChosen(saved)
+	sections["metadata"]["upcoming_window_days"] = a.config().Upcoming.Window()
 	if st := a.upcomingStatus(context.Background()); st != nil {
 		sections["metadata"]["upcoming_status"] = st
 	}
