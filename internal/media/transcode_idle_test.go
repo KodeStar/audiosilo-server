@@ -55,8 +55,11 @@ func TestCopyIdleEndsUnreadStream(t *testing.T) {
 // is never cut off, however long its stream runs past idle.
 func TestCopyIdleKeepsReadStream(t *testing.T) {
 	t.Parallel()
-	const size = 4 << 20
-	srv, done := idleServer(t, func() io.Reader { return io.LimitReader(endless{}, size) }, 300*time.Millisecond)
+	// A steady reader's writes still wait on TCP's window updates now and then
+	// (some 400 ms seen on loopback under -race): idle leaves room for that.
+	const size = 6 << 20
+	const idle = time.Second
+	srv, done := idleServer(t, func() io.Reader { return io.LimitReader(endless{}, size) }, idle)
 	resp, err := http.Get(srv.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -76,8 +79,8 @@ func TestCopyIdleKeepsReadStream(t *testing.T) {
 	if got != size {
 		t.Fatalf("read %d bytes, want all %d", got, size)
 	}
-	if took := time.Since(start); took < time.Second {
-		t.Fatalf("the read took %v: too fast to outlast the idle time several times", took)
+	if took := time.Since(start); took < 2*idle {
+		t.Fatalf("the read took %v: too fast to outlast the idle time", took)
 	}
 	if err := <-done; err != nil {
 		t.Fatalf("copyIdle = %v, want the whole stream", err)
