@@ -1051,38 +1051,106 @@ func (c *Catalog) GetBookHolding(ctx context.Context, libraryID int64, relPath s
 	return c.GetBook(ctx, id)
 }
 
+// holdingFolders is how many folders of a path one of bookHolding's reads
+// looks up; a deeper path's next ones are read only while books lie below.
+const holdingFolders = 8
+
 // bookHolding is GetBookHolding's lookup: the id and path of the innermost
 // indexed folder book holding relPath, ErrNotFound when none does. With
 // fileOnly, relPath must be one of the book's files: a folder inside it (a disc
-// folder of a joined book) is not held.
+// folder of a joined book) is not held. Its folders are read from the
+// library's root down, holdingFolders a read, the next ones only while an
+// indexed book lies below the last (none further down can be one otherwise):
+// one read for any path as deep as the index, never the square of a deep
+// path's length.
 func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath string, fileOnly bool) (int64, string, error) {
-	args := []any{libraryID}
-	for _, d := range ancestors(relPath) {
-		args = append(args, d)
-	}
-	if len(args) == 1 {
-		return 0, "", ErrNotFound
-	}
-	n := len(args) - 1
 	held := `f.rel_path = ?`
-	args = append(args, relPath)
+	heldArgs := []any{relPath}
 	if !fileOnly {
 		held = `(f.rel_path = ? OR f.rel_path LIKE ? ESCAPE '\')`
-		args = append(args, escapeLike(relPath)+"/%")
+		heldArgs = append(heldArgs, escapeLike(relPath)+"/%")
 	}
 	var (
 		id   int64
 		book string
 	)
-	err := c.db.QueryRowContext(ctx,
-		`SELECT b.id, b.rel_path FROM books b
-		  WHERE b.library_id = ? AND b.is_folder = 1 AND b.rel_path IN (`+placeholders(n)+`)
-		    AND EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id AND `+held+`)
-		  ORDER BY length(b.rel_path) DESC LIMIT 1`, args...).Scan(&id, &book)
-	if errors.Is(err, sql.ErrNoRows) {
+	for end := strings.IndexByte(relPath, '/'); end > 0; {
+		var folders []any
+		for len(folders) < holdingFolders && end > 0 {
+			folders = append(folders, relPath[:end])
+			if next := strings.IndexByte(relPath[end+1:], '/'); next >= 0 {
+				end += 1 + next
+			} else {
+				end = -1
+			}
+		}
+		// below: whether a book lies below this read's last folder, asked
+		// only when relPath has folders after it.
+		below := `0`
+		var args []any
+		if end > 0 {
+			below = `EXISTS (SELECT 1 FROM books WHERE library_id = ? AND rel_path > ? || '/' AND rel_path < ? || '0')`
+			last := folders[len(folders)-1]
+			args = append(args, libraryID, last, last)
+		}
+		args = append(append(append(args, libraryID), folders...), heldArgs...)
+		var (
+			hid   sql.NullInt64
+			hbook sql.NullString
+			more  bool
+		)
+		err := c.db.QueryRowContext(ctx,
+			`SELECT h.id, h.rel_path, `+below+` FROM (SELECT 1) LEFT JOIN (
+			   SELECT b.id, b.rel_path FROM books b
+			    WHERE b.library_id = ? AND b.is_folder = 1 AND b.rel_path IN (`+placeholders(len(folders))+`)
+			      AND EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id AND `+held+`)
+			    ORDER BY length(b.rel_path) DESC LIMIT 1) h`, args...).Scan(&hid, &hbook, &more)
+		if err != nil {
+			return 0, "", err
+		}
+		if hid.Valid {
+			id, book = hid.Int64, hbook.String
+		}
+		if !more {
+			break
+		}
+	}
+	if id == 0 {
 		return 0, "", ErrNotFound
 	}
-	return id, book, err
+	return id, book, nil
+}
+
+// keyedFolders is the folders above k (a path in NFC, Spelling's key) a book
+// holding it can be at, innermost first: every one for a path at most
+// holdingFolders deep, else walked down from the library's root up to the
+// first that no indexed book lies below in any spelling (by rel_path or by
+// path_key, the partial index), one read a level, so as many reads as the
+// index is deep, whatever k's length.
+func (c *Catalog) keyedFolders(ctx context.Context, libraryID int64, k string) ([]string, error) {
+	if strings.Count(k, "/") <= holdingFolders {
+		return ancestors(k), nil
+	}
+	// path_key != '' names the partial index's own condition, so it is used.
+	const below = `SELECT EXISTS (SELECT 1 FROM books WHERE library_id = ?1 AND rel_path > ?2 || '/' AND rel_path < ?2 || '0')
+	                   OR EXISTS (SELECT 1 FROM books WHERE library_id = ?1 AND path_key > ?2 || '/' AND path_key < ?2 || '0'
+	                                AND path_key != '')`
+	var out []string
+	for end := strings.IndexByte(k, '/'); end > 0; {
+		d := k[:end]
+		out = append(out, d)
+		var more bool
+		if err := c.db.QueryRowContext(ctx, below, libraryID, d).Scan(&more); err != nil {
+			return nil, err
+		}
+		next := strings.IndexByte(k[end+1:], '/')
+		if !more || next < 0 {
+			break
+		}
+		end += 1 + next
+	}
+	slices.Reverse(out)
+	return out, nil
 }
 
 // BookPathAt is the path of the indexed book relPath addresses: the book at it,

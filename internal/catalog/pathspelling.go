@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"path"
 	"slices"
 	"strings"
 
@@ -250,9 +249,9 @@ func (c *Catalog) booksKeyed(ctx context.Context, libraryID int64, keys []string
 // step 2) as a file of, or a folder inside, the innermost folder book above it
 // that holds one. found is false when no book above p holds a path reading as p.
 func (c *Catalog) spellingInBook(ctx context.Context, libraryID int64, p, k string) (string, bool, error) {
-	keys := ancestors(k)
-	if len(keys) == 0 {
-		return "", false, nil
+	keys, err := c.keyedFolders(ctx, libraryID, k)
+	if err != nil || len(keys) == 0 {
+		return "", false, err
 	}
 	books, err := c.booksKeyed(ctx, libraryID, keys, true)
 	if err != nil || len(books) == 0 {
@@ -369,12 +368,13 @@ func distinct(ss ...string) []string {
 	return out
 }
 
-// ancestors is every folder above the library-relative path p, innermost
-// first ("a/b/c" -> "a/b", "a").
+// ancestors is every folder above the cleaned library-relative path p,
+// innermost first ("a/b/c" -> "a/b", "a"): slices of p, so linear in its
+// length.
 func ancestors(p string) []string {
 	var out []string
-	for d := path.Dir(p); d != "." && d != "/"; d = path.Dir(d) {
-		out = append(out, d)
+	for i := strings.LastIndexByte(p, '/'); i > 0; i = strings.LastIndexByte(p[:i], '/') {
+		out = append(out, p[:i])
 	}
 	return out
 }

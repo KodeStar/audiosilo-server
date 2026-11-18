@@ -2,12 +2,16 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	unorm "golang.org/x/text/unicode/norm"
 
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
@@ -393,5 +397,80 @@ func TestListableRefsBounded(t *testing.T) {
 	}
 	if took := time.Since(start); took > 10*time.Second {
 		t.Fatalf("a thousand deep refs took %v", took)
+	}
+}
+
+// countingDB counts the bytes of the text a catalog's reads bind.
+type countingDB struct {
+	catalogDB
+	bound atomic.Int64
+}
+
+func (d *countingDB) count(args []any) {
+	for _, a := range args {
+		if s, ok := a.(string); ok {
+			d.bound.Add(int64(len(s)))
+		}
+	}
+}
+
+func (d *countingDB) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
+	d.count(args)
+	return d.catalogDB.QueryContext(ctx, q, args...)
+}
+
+func (d *countingDB) QueryRowContext(ctx context.Context, q string, args ...any) *sql.Row {
+	d.count(args)
+	return d.catalogDB.QueryRowContext(ctx, q, args...)
+}
+
+// TestBookHoldingBounded (server#210): the folders of a path far deeper than
+// the index are looked up only as deep as books lie, never every one of them
+// (which bound the square of the path's length: a thousand deep refs below a
+// book took 45 s to replace a list with), in the spelling given (bookHolding)
+// or another (Spelling's step 4). A book's own deep file and folder, past one
+// read's folders, are still held by it, in either spelling.
+func TestBookHoldingBounded(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib := seedSpellings(t, c)
+	upsert(t, c, &Book{LibraryID: lib, RelPath: "Plain/Series", IsFolder: true, Title: "S", AddedAt: "2020-01-01",
+		Files: []BookFile{{RelPath: "Plain/Series/01.mp3", Format: "mp3"}}})
+	deep := "Plain/D\u00e9ep/" + strings.Repeat("d/", 2*holdingFolders)
+	upsert(t, c, &Book{LibraryID: lib, RelPath: "Plain/D\u00e9ep", IsFolder: true, Title: "D", AddedAt: "2020-01-01",
+		Files: []BookFile{{RelPath: deep + "01.mp3", Format: "mp3"}}})
+	ref := func(p string) Ref { return Ref{LibraryID: lib, Path: p} }
+	var refs []Ref
+	for i := range 1000 {
+		refs = append(refs, ref(fmt.Sprintf("Plain/Series/%04d/", i)+strings.Repeat("a/", 2000)+"x"))
+		if i%10 == 0 {
+			refs = append(refs, ref(fmt.Sprintf("Plain/Series/\u00c9%04d/", i)+strings.Repeat("a/", 2000)+"x"))
+		}
+	}
+	db := &countingDB{catalogDB: c.db}
+	c.db = db
+	got, err := c.listableRefs(ctx, refs, []Scope{{LibraryID: lib, AllowAll: true}})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("listable = %+v %v, want none (no ref names a file)", got, err)
+	}
+	// Every folder bound would be about 4 MB a ref; the index's depth is a
+	// few of them, plus the path itself.
+	if per := db.bound.Load() / int64(len(refs)); per > 64<<10 {
+		t.Fatalf("a deep ref bound %d bytes of folders", per)
+	}
+
+	folder := strings.TrimSuffix(deep, "/")
+	for _, p := range []string{deep + "01.mp3", folder} {
+		if book, err := c.BookPathAt(ctx, lib, p); err != nil || book != "Plain/D\u00e9ep" {
+			t.Errorf("deep %+q held by %+q %v", p, book, err)
+		}
+	}
+	if _, err := c.BookPathOfFile(ctx, lib, folder); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deep folder inside a book as a file: %v, want ErrNotFound", err)
+	}
+	for _, p := range []string{deep + "01.mp3", folder} {
+		if spelled, err := c.Spelling(ctx, lib, unorm.NFD.String(p)); err != nil || spelled != p {
+			t.Errorf("deep NFD %+q spelled %+q %v, want the index's", p, spelled, err)
+		}
 	}
 }
