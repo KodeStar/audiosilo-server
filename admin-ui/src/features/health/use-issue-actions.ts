@@ -158,7 +158,7 @@ export function useIssueActions(
     } finally {
       invalidateBooks(qc, books.map(refOf));
       invalidateIssues(qc);
-      // The choice cancels the books' open chapter detections (server#410).
+      // The choice cancels the books' chapter detections still queued (server#410).
       void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
     }
   };

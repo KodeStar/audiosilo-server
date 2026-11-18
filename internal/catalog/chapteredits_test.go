@@ -533,8 +533,8 @@ func TestChapterEditOneFileFolderRenamed(t *testing.T) {
 	}
 }
 
-// seedDetect is an open chapters.detect job for the book at p in state, as
-// the api queues it (bridge.DedupeKey); its id.
+// seedDetect is a chapters.detect job for the book at p in state, keyed as the
+// api queues it (bridge.DedupeKey); its id.
 func seedDetect(t *testing.T, c *Catalog, libID int64, p, state string) int64 {
 	t.Helper()
 	res, err := c.db.ExecContext(t.Context(),
@@ -559,47 +559,68 @@ func jobState(t *testing.T, c *Catalog, id int64) (state string, cancel bool, re
 	return state, cancel, e.String
 }
 
-// Saving an edit cancels the book's open chapters.detect job, and so does
-// choosing its chapter source (server#410): the list it finds would never be
-// used. A queued one ends at once, a working one is asked to stop, each with
-// the server's reason; another book's job, and setting the source back to
-// automatic, cancel nothing.
+// Saving an edit cancels the book's chapters.detect job while it is still
+// queued, and so does choosing its chapter source (server#410): the list it
+// would find is not used. It ends at once, with the server's reason. One the
+// Bridge already has (claimed, running or parked) is left to finish: its list
+// stays a fallback under the edit or the choice. Another book's job, and
+// setting the source back to automatic, cancel nothing.
 func TestChapterEditCancelsDetect(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	upsert(t, c, twoFiles(lib.ID, "A/Book"))
 	upsert(t, c, twoFiles(lib.ID, "B/Book"))
+	save := func() {
+		t.Helper()
+		if err := c.SaveChapterEdit(ctx, lib.ID, "A/Book", basisNow(t, c, lib.ID, "A/Book"), fourChapters, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	choose := func(p, source string) {
+		t.Helper()
+		if err := c.EditBook(ctx, lib.ID, p, BookEdit{ChapterSource: source}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// untouched fails unless the job is as it was seeded, then ends it, so the
+	// book can hold the next open job.
+	untouched := func(id int64, state, after string) {
+		t.Helper()
+		if st, cancel, why := jobState(t, c, id); st != state || cancel || why != "" {
+			t.Fatalf("%s detect after %s: %s cancel %v %q, want it left alone", state, after, st, cancel, why)
+		}
+		if _, err := c.db.ExecContext(ctx, `UPDATE bridge_jobs SET state = 'done' WHERE id = ?`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
 	queued := seedDetect(t, c, lib.ID, "A/Book", "queued")
 	other := seedDetect(t, c, lib.ID, "B/Book", "queued")
-	if err := c.SaveChapterEdit(ctx, lib.ID, "A/Book", basisNow(t, c, lib.ID, "A/Book"), fourChapters, 0); err != nil {
-		t.Fatal(err)
-	}
+	save()
 	if st, _, why := jobState(t, c, queued); st != "cancelled" || why != bridge.CancelChaptersEdited {
 		t.Fatalf("queued detect after an edit: %s %q", st, why)
 	}
 	if st, cancel, _ := jobState(t, c, other); st != "queued" || cancel {
 		t.Fatalf("another book's detect: %s cancel %v", st, cancel)
 	}
-	running := seedDetect(t, c, lib.ID, "A/Book", "running")
-	if err := c.SaveChapterEdit(ctx, lib.ID, "A/Book", basisNow(t, c, lib.ID, "A/Book"), fourChapters, 0); err != nil {
-		t.Fatal(err)
-	}
-	if st, cancel, why := jobState(t, c, running); st != "running" || !cancel || why != bridge.CancelChaptersEdited {
-		t.Fatalf("working detect after an edit: %s cancel %v %q", st, cancel, why)
+	for _, state := range []string{"claimed", "running", "needs_attention"} {
+		id := seedDetect(t, c, lib.ID, "A/Book", state)
+		save()
+		untouched(id, state, "an edit")
 	}
 
-	if err := c.EditBook(ctx, lib.ID, "B/Book", BookEdit{ChapterSource: ChapterSourceAuto}); err != nil {
-		t.Fatal(err)
-	}
+	choose("B/Book", ChapterSourceAuto)
 	if st, _, _ := jobState(t, c, other); st != "queued" {
 		t.Fatalf("detect after automatic: %s", st)
 	}
-	if err := c.EditBook(ctx, lib.ID, "B/Book", BookEdit{ChapterSource: ChaptersFromFiles}); err != nil {
-		t.Fatal(err)
-	}
+	choose("B/Book", ChaptersFromFiles)
 	if st, _, why := jobState(t, c, other); st != "cancelled" || why != bridge.CancelChaptersChosen {
 		t.Fatalf("queued detect after a choice: %s %q", st, why)
+	}
+	for _, state := range []string{"claimed", "running", "needs_attention"} {
+		id := seedDetect(t, c, lib.ID, "B/Book", state)
+		choose("B/Book", ChaptersFromFiles)
+		untouched(id, state, "a choice")
 	}
 }
 

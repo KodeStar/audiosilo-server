@@ -467,9 +467,10 @@ func (c *Catalog) DetectRefused(ctx context.Context, book *Book) error {
 }
 
 // setChapterChoice writes (or, for ChapterSourceAuto, removes) a book's choice of
-// chapter source. A choice cancels the book's open chapters.detect job
-// (bridge.CancelChaptersChosen): the list it finds would never be used, as a
-// new one is refused then (DetectRefused).
+// chapter source. A choice cancels the book's chapters.detect job while it is
+// still queued (bridge.CancelChaptersChosen): the list it would find is not
+// used under the choice, as a new one is refused then (DetectRefused). A
+// running one finishes: its list stands in again if the choice is undone.
 func (c *Catalog) setChapterChoice(ctx context.Context, tx *sql.Tx, ref Ref, source string, editor any, now string) error {
 	if source == ChapterSourceAuto {
 		_, err := tx.ExecContext(ctx, `DELETE FROM chapter_choices WHERE library_id = ? AND path = ?`, ref.LibraryID, ref.Path)
@@ -482,5 +483,5 @@ func (c *Catalog) setChapterChoice(ctx context.Context, tx *sql.Tx, ref Ref, sou
 		ref.LibraryID, ref.Path, source, editor, now); err != nil {
 		return err
 	}
-	return bridge.CancelBookJob(ctx, tx, bridge.KindDetectChapters, ref.LibraryID, ref.Path, bridge.CancelChaptersChosen, c.now())
+	return bridge.CancelQueuedBookJob(ctx, tx, bridge.KindDetectChapters, ref.LibraryID, ref.Path, bridge.CancelChaptersChosen, c.now())
 }

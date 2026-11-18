@@ -352,11 +352,12 @@ func editableBook(ctx context.Context, q querier, libraryID int64, path string) 
 
 // SaveChapterEdit stores chapters as the book's own list (chapter_edits,
 // replacing any) by userID, made on basis, and rebuilds the book's chapters
-// from it, in one transaction, cancelling the book's open chapters.detect job
-// (bridge.CancelChaptersEdited). ErrNotFound when no book is indexed at the
-// path, ErrNotBookLibrary in a podcast library, ErrChaptersBasis when basis is
-// not the book's files now, a *ChapterEditError for chapters that don't hold
-// on them (checkChapterEdit).
+// from it, in one transaction, cancelling the book's chapters.detect job while
+// it is still queued (bridge.CancelChaptersEdited; a running one finishes, its
+// list dormant under the edit and a fallback again if the edit is reverted).
+// ErrNotFound when no book is indexed at the path, ErrNotBookLibrary in a
+// podcast library, ErrChaptersBasis when basis is not the book's files now, a
+// *ChapterEditError for chapters that don't hold on them (checkChapterEdit).
 func (c *Catalog) SaveChapterEdit(ctx context.Context, libraryID int64, path string, basis ChapterBasis, chapters []EditedChapter, userID int64) error {
 	path = CleanRelPath(path)
 	err := c.db.WithTx(ctx, "SaveChapterEdit", func(tx *sql.Tx) error {
@@ -385,9 +386,9 @@ func (c *Catalog) SaveChapterEdit(ctx context.Context, libraryID int64, path str
 			libraryID, path, string(raw), nullableID(userID), now); err != nil {
 			return err
 		}
-		// A detection queued before the edit would find a list that sits
-		// dormant under it, as a new one is refused now (DetectRefused).
-		if err := bridge.CancelBookJob(ctx, tx, bridge.KindDetectChapters, libraryID, path, bridge.CancelChaptersEdited, c.now()); err != nil {
+		// A detection still queued would find a list that sits dormant under
+		// the edit, as a new one is refused now (DetectRefused).
+		if err := bridge.CancelQueuedBookJob(ctx, tx, bridge.KindDetectChapters, libraryID, path, bridge.CancelChaptersEdited, c.now()); err != nil {
 			return err
 		}
 		return refreshEffective(ctx, tx, b.ID)
