@@ -3219,7 +3219,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   claim) is an empty 200, and the console's list and detail log it once per row per process
   (`logUnreadableJobs`). SQL that reads a field of a job's params or result goes through `bridge.ParamSQL`
   (`json_valid` first, in a CASE), so one damaged row never fails a whole query (a NULL it reads is
-  passed by, `IS NOT NULL` where a `NOT IN` would keep it: `CancelOrphanAudibleJobs`).
+  passed by, `IS NOT NULL` where a `NOT IN` would keep it: `CancelOrphanAudibleJobs`). Its column and
+  path are written into the statement as they are, so they are string constants by their type
+  (`sqlLiteral`: no other package can pass it a string read at run time).
   `GET /bridge/libraries/{id}/book[?path=]` gives an INDEXED book's files with the size and mtime the
   server sees now (a single-file book, which has no file rows, is listed as its own file; no path: the
   first whole book of the library's first five by title, the mapping check's sample; 404 `no_book`; never an

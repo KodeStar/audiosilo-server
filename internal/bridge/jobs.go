@@ -34,12 +34,20 @@ const (
 // migration 0047's partial index names the same four).
 const OpenStatesSQL = `('queued', 'claimed', 'running', 'needs_attention')`
 
+// sqlLiteral is SQL text written in the source. A function that takes one
+// (ParamSQL) can only be handed string constants: a string read at run time
+// doesn't convert to it without naming the type, which no other package can
+// and this one never does, so nothing a request or a row carries can reach
+// the statement it is written into.
+type sqlLiteral string
+
 // ParamSQL is SQL reading path ('$.account') from col, a bridge_jobs JSON
 // column (params, result), as NULL when what it stores is not JSON (a damaged row):
 // json_extract on one fails the whole statement, and SQLite does not
-// short-circuit a json_valid beside it in an AND.
-func ParamSQL(col, path string) string {
-	return "CASE WHEN json_valid(" + col + ") THEN json_extract(" + col + ",'" + path + "') END"
+// short-circuit a json_valid beside it in an AND. Both are written into the
+// statement as they are, so they are constants by their type (sqlLiteral).
+func ParamSQL(col, path sqlLiteral) string {
+	return "CASE WHEN json_valid(" + string(col) + ") THEN json_extract(" + string(col) + ",'" + string(path) + "') END"
 }
 
 // IsOpenState reports whether state is one of OpenStatesSQL's.
