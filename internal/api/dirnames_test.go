@@ -231,3 +231,81 @@ func TestDirNamesOneReadInFlight(t *testing.T) {
 		t.Errorf("a failing folder read %d times, want once per request", n)
 	}
 }
+
+// TestDirNamesSlowReadIsJoined: a read in flight past the TTL is still the
+// folder's one read (a request then waits for it rather than reading again),
+// and when it fails, the requests that waited on it join one read of their
+// own rather than each reading the folder.
+func TestDirNamesSlowReadIsJoined(t *testing.T) {
+	t.Parallel()
+	var (
+		clock sync.Mutex
+		now   = time.Unix(1000, 0)
+	)
+	f := &fakeDirs{reads: map[string]int{}, names: map[string][]string{"/r": {"a"}}, gate: make(chan struct{})}
+	c := newDirNames(f.read)
+	c.now = func() time.Time {
+		clock.Lock()
+		defer clock.Unlock()
+		return now
+	}
+	leftCtx, leave := context.WithCancel(t.Context())
+	leader := make(chan error, 1)
+	go func() {
+		_, err := c.names(leftCtx, "/r", 10*time.Second)
+		leader <- err
+	}()
+	for f.count("/r") == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	clock.Lock()
+	now = now.Add(2 * dirNamesTTL) // the read is slow: past the TTL, still in flight
+	clock.Unlock()
+	var wg sync.WaitGroup
+	var bad atomic.Int32
+	for range 4 {
+		wg.Go(func() {
+			if got, err := c.names(t.Context(), "/r", 10*time.Second); err != nil || !slices.Equal(got, []string{"a"}) {
+				bad.Add(1)
+			}
+		})
+	}
+	time.Sleep(20 * time.Millisecond) // the four reach the wait
+	if n := f.count("/r"); n != 1 {
+		t.Errorf("requests during a read past the TTL: %d reads, want the one in flight", n)
+	}
+	leave() // the leader's client leaves: its read fails, the four join one read
+	if err := <-leader; !errors.Is(err, context.Canceled) {
+		t.Errorf("the leaving request: %v, want its context's error", err)
+	}
+	for f.count("/r") < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond) // the others reach that read's wait
+	f.mu.Lock()
+	close(f.gate)
+	f.mu.Unlock()
+	wg.Wait()
+	if n := f.count("/r"); n != 2 || bad.Load() != 0 {
+		t.Errorf("four waiters on a failed read: %d reads in all, %d bad answers, want the failed one and one more", n, bad.Load())
+	}
+}
+
+// TestDirNamesReadPanics: a read that panics is its request's error, and the
+// folder is read again by the next request, never left in flight for good.
+func TestDirNamesReadPanics(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	c := newDirNames(func(context.Context, string, time.Duration) ([]string, error) {
+		if calls++; calls == 1 {
+			panic("boom")
+		}
+		return []string{"a"}, nil
+	})
+	if _, err := c.names(t.Context(), "/r", time.Second); err == nil {
+		t.Fatal("a read that panicked: no error")
+	}
+	if got, err := c.names(t.Context(), "/r", time.Second); err != nil || !slices.Equal(got, []string{"a"}) {
+		t.Errorf("the next request: %v %v, want its own read's names", got, err)
+	}
+}
