@@ -4203,7 +4203,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   in a `sent_at` batch and not after a finish-state change of the same batch, is dated back by the batch's shift,
   0 to 30 s (`finishChange`, `maxFinishTransit`): the shift is the request's time on the way plus clock skew, and a
   finish sent just before an Undo (a PATCH naming `finished`) landed dated after it and finished the book again
-  (server#415); an unfinish is never dated back (a restart just after a finish). A `finish` made at or before the
+  (server#415); never past the token's own applied finish or unfinish (it saw that one, whatever its base says: on a
+  clock running behind, a restart then Mark finished would be "older"); an unfinish is never dated back (a restart
+  just after a finish). A `finish` made at or before the
   Stay that holds the row is `not_applied` `behind` (`beforeStay`, any device's, server#415: the Stay is the later
   word).
   A `finish` (applied, `older` or `behind`, not a furthest-only batch's) marks the token's session on the book finished

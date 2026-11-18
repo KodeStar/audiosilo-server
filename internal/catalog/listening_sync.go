@@ -1150,7 +1150,11 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		}
 	}
 	if stored != nil && stored.finishChangedAt.Valid {
-		if changed := parseSessionTime(stored.finishChangedAt.String); !s.finishChange(p, stored).After(changed) {
+		when, err := s.finishChange(ctx, p, stored)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		if !when.After(parseSessionTime(stored.finishChangedAt.String)) {
 			return SyncResult{Status: statusNotApplied, Reason: reasonOlder}, nil
 		}
 	}
@@ -1252,18 +1256,30 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 // just before an edit (an Undo of it, on the book page) and landing after it
 // was dated after the edit by that time, and finished the book again
 // (server#415). The transit is at most maxFinishTransit, so a skewed clock
-// moves it back no further. An unfinish is never dated back: a restart just
-// after a finish this device has no answer for yet must not become "older"
-// than it.
-func (s *syncRun) finishChange(p syncPrepared, stored *syncRow) time.Time {
+// moves it back no further. Nor is a finish dated back past this token's own
+// finish-state change (a restart whose answer it has not had yet, so its base
+// lags): the device saw that one, and on a clock running behind the transit
+// would date the finish before it. An unfinish is never dated back: a restart
+// just after a finish this device has no answer for yet must not become
+// "older" than it.
+func (s *syncRun) finishChange(ctx context.Context, p syncPrepared, stored *syncRow) (time.Time, error) {
 	key := p.target.Key
 	if p.ev.Kind != EventFinish || s.transit <= 0 || !stored.editVersion.Valid || s.changed[key] {
-		return p.ended
+		return p.ended, nil
 	}
 	if base := p.ev.BaseVersion; base != nil && *base >= stored.editVersion.Int64 {
-		return p.ended
+		return p.ended, nil
 	}
-	return p.ended.Add(-s.transit)
+	var own bool
+	if err := s.tx.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM listening_events
+		  WHERE library_id = ? AND rel_path = ? AND user_id = ? AND token_id = ? AND kind IN (?, ?)
+		    AND status = ? AND ended_at = ?)`,
+		key.LibraryID, key.Path, s.b.UserID, s.b.TokenID, EventFinish, EventUnfinish, statusApplied,
+		stored.finishChangedAt.String).Scan(&own); err != nil || own {
+		return p.ended, err
+	}
+	return p.ended.Add(-s.transit), nil
 }
 
 // recordListening counts a span's listening (every stored listen, whatever its

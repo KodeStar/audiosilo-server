@@ -84,6 +84,43 @@ func TestSyncFinishInFlightBeforeAnUndo(t *testing.T) {
 	}
 }
 
+// server#415: the transit rule dates back a finish made without seeing the
+// row's last finish-state change, by its batch's whole shift up to 30 s, so on
+// a clock running behind it lands before a change it was made after. Never
+// after the device's own change (a restart, then Mark finished before the
+// restart's answer moved its base): that is its own sync event, which it saw.
+// Another device's restart is still "older" than a finish made just after it
+// on a clock that far behind.
+func TestSyncFinishAfterItsOwnUnfinish(t *testing.T) {
+	t.Parallel()
+	const behind = 20 * time.Second // the phone's clock
+	restart := func(t *testing.T, device string) (*syncFixture, time.Time) {
+		t.Helper()
+		f := newSyncFixture(t)
+		wantResult(t, f.syncOne(t, "phone", f.finishEvent(EventFinish, 10*time.Minute)), statusApplied, "")
+		// The restart, on the device's clock (the phone's behind), lands at once:
+		// its shift moves it to now.
+		b := f.finishSentAt(t, device, f.clock.Add(-behind), nil)
+		b.Events[0].Kind = EventUnfinish
+		wantResult(t, f.sync(t, b).Results[0], statusApplied, "")
+		restartedAt := f.clock
+		f.clock = f.clock.Add(6 * time.Second) // the finish is made 5 s later, a second on the way
+		return f, restartedAt
+	}
+	finish := func(f *syncFixture, restartedAt time.Time) SyncBatch {
+		return f.finishSentAt(t, "phone", restartedAt.Add(5*time.Second-behind), base(1))
+	}
+	f, at := restart(t, "phone")
+	wantResult(t, f.sync(t, finish(f, at)).Results[0], statusApplied, "")
+	if p := f.progress(t); !p.Finished {
+		t.Fatalf("a finish after the device's own restart: %+v", p)
+	}
+
+	// Denied: the tablet's restart, which the phone never saw.
+	f, at = restart(t, "tablet")
+	wantResult(t, f.sync(t, finish(f, at)).Results[0], statusNotApplied, reasonOlder)
+}
+
 // server#359: a very short book's finish posted before its only span, in
 // separate batches: the span that lands after the token's applied finish (its
 // end just before it) closes its session finished. Another token's span, or
