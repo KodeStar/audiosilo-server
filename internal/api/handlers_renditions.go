@@ -92,7 +92,11 @@ func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalo
 		case errors.Is(err, media.ErrRefused):
 			// Remembered for an hour (or until the file changes), then tried
 			// again: Retry-After says when (server#289).
-			setRetryAfter(w, a.renditions.RefusedFor(abs))
+			left := media.RefusalLeft(err)
+			if left == 0 {
+				left = a.renditions.RefusedFor(abs) // a run that just refused
+			}
+			setRetryAfter(w, left)
 			writeErrorCode(w, http.StatusUnprocessableEntity, codeRenditionFailed, "this file can't be encoded")
 		case a.baseCtx.Err() != nil:
 			writeError(w, http.StatusServiceUnavailable, "the server is shutting down")

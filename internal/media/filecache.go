@@ -369,8 +369,10 @@ type refusal struct{ left time.Duration }
 func (refusal) Error() string        { return ErrRefused.Error() }
 func (refusal) Is(target error) bool { return target == ErrRefused }
 
-// refusalLeft is a refusal's time left, 0 for any other error.
-func refusalLeft(err error) time.Duration {
+// RefusalLeft is how long the remembered refusal an Open or Queue returned
+// has left, read under the lock that found it; 0 for any other error, and for
+// the refusal of a run that just ended (RefusedFor reads that one).
+func RefusalLeft(err error) time.Duration {
 	var r refusal
 	if errors.As(err, &r) {
 		return r.left
@@ -427,7 +429,7 @@ func (m *FileCache) Queue(runCtx context.Context, ffmpegPath, abs string) (state
 		}
 		return CacheReady, 0, 0
 	case err != nil:
-		return CacheFailed, 0, refusalLeft(err)
+		return CacheFailed, 0, RefusalLeft(err)
 	case fl != nil:
 		return CachePending, 0, 0
 	}
