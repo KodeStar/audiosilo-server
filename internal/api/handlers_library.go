@@ -513,17 +513,12 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	// variant, on a disk that ignores case, of a folder the caller's rule
 	// never named): looked at once BrowseFS has refused a path out of the root.
 	if rel != "" {
-		given, err := a.onDiskAsGiven(r.Context(), lib, rel, func() time.Duration { return a.fileWait })
-		switch {
-		case metadata.GaveUp(err):
-			writeShareNotAnswering(w)
+		given, ok := a.givenOnDisk(w, r, lib, rel, func() time.Duration { return a.fileWait },
+			"check a folder's path failed", "Could not list the folder.")
+		if !ok {
 			return
-		case r.Context().Err() != nil:
-			return // the client left: no one to answer
-		case err != nil:
-			a.writeCatalogError(w, err, "check a folder's path failed", "Could not list the folder.", "library", lib.ID)
-			return
-		case !given:
+		}
+		if !given {
 			writeError(w, http.StatusNotFound, "directory not found")
 			return
 		}
@@ -1052,15 +1047,9 @@ func (a *API) audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Lib
 		return "", false
 	}
 	if !refused {
-		given, err := a.onDiskAsGiven(r.Context(), lib, rel, func() time.Duration { return waitLeft(deadline) })
-		switch {
-		case metadata.GaveUp(err):
-			writeShareNotAnswering(w)
-			return "", false
-		case r.Context().Err() != nil:
-			return "", false // the client left: no one to answer
-		case err != nil:
-			a.writeCatalogError(w, err, "check a stream's path failed", "Could not load the file.", "library", lib.ID)
+		given, ok := a.givenOnDisk(w, r, lib, rel, func() time.Duration { return waitLeft(deadline) },
+			"check a stream's path failed", "Could not load the file.")
+		if !ok {
 			return "", false
 		}
 		refused = !given
@@ -1089,6 +1078,22 @@ func (a *API) onDiskAsGiven(ctx context.Context, lib *catalog.Library, rel strin
 	return metadata.NamesListed(ctx, lib.Root, rel, nil, func(ctx context.Context, dir string) ([]fs.DirEntry, error) {
 		return a.readDir(ctx, dir, wait())
 	})
+}
+
+// givenOnDisk is onDiskAsGiven for a handler: ok false when it has answered
+// (a listing given up on is a 503 share_not_answering, a failed lookup a 500)
+// or the client left, with no one to answer.
+func (a *API) givenOnDisk(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string,
+	wait func() time.Duration, op, msg string) (given, ok bool) {
+	given, err := a.onDiskAsGiven(r.Context(), lib, rel, wait)
+	switch {
+	case err == nil:
+		return given, true
+	case !metadata.GaveUp(err) && r.Context().Err() != nil:
+		return false, false // the client left: no one to answer
+	}
+	a.writeCatalogError(w, err, op, msg, "library", lib.ID)
+	return false, false
 }
 
 // noFile is abs as a path no file has: a NUL byte is in no file name, so every
