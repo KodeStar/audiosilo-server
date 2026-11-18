@@ -513,6 +513,9 @@ function Scrubber({
     n: number;
     play: boolean;
   }>();
+  // A move is its row's: another row chosen forgets it, so coming back to the
+  // row puts the playhead at its start again, not where the move left it.
+  if (stream && stream.at !== at && stream.kept !== at) setStream(undefined);
   const moved = transcoded && (stream?.at === at || stream?.kept === at) ? stream : undefined;
   const from = transcoded
     ? Math.min(moved?.from ?? offset, roundMs(Math.max(0, length - TRANSCODE_TAIL_S)))
@@ -541,6 +544,13 @@ function Scrubber({
       });
     };
   }, []);
+
+  // Another row (or this one moved): a seek still waiting to be asked for and a
+  // "Play 5 s" still waiting to start were the last row's.
+  useEffect(() => {
+    clearTimeout(restream.current);
+    previewing.current = false;
+  }, [at]);
 
   // A chosen row (or a moved one) puts the playhead at its start. A transcode
   // starts there: its stream is asked for from there (src).

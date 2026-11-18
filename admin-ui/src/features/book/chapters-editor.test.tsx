@@ -283,6 +283,32 @@ describe('the chapter editor', () => {
     await waitFor(() => expect(Number(srcOf().get('t'))).toBe(2999));
   });
 
+  it('puts a transcode back at a row’s start when the row is chosen again', async () => {
+    const d = bookDetail();
+    d.files = d.files.map((f) => ({ ...f, format: 'mka', codec: 'opus', direct_playable: false }));
+    mockFetch(routes(d));
+    const { container } = renderApp(URL);
+    const user = await openEditor();
+    const from = () =>
+      Number(
+        new window.URL(
+          container.querySelector('audio')!.getAttribute('src')!,
+          'http://admin.test',
+        ).searchParams.get('t'),
+      );
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    fireEvent.loadedMetadata(container.querySelector('audio')!);
+    await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
+    await waitFor(() => expect(from()).toBe(1201));
+    // Another row, then back: the move made on chapter 2 is forgotten.
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 1' }));
+    await waitFor(() => expect(from()).toBe(0));
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() => expect(from()).toBe(1200));
+    expect(container.querySelector('audio')).not.toHaveAttribute('autoplay');
+  });
+
   it('keeps the audio’s source under StrictMode, which runs a ref’s cleanup on mount', async () => {
     mockFetch(routes(bookDetail()));
     const { container } = renderApp(URL, { strict: true });
