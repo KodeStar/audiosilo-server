@@ -21,7 +21,7 @@ var (
 // IsFetchRefusal reports whether err is a known scheduling refusal, which a
 // trigger answers with a fetch status rather than a fault.
 func IsFetchRefusal(err error) bool {
-	for _, refusal := range []error{ErrFetchCooldown, ErrKindUnavailable, ErrLibraryNotWritable, ErrFetchModuleOff, ErrFetchDemo, ErrFetchLimit} {
+	for _, refusal := range []error{ErrFetchCooldown, ErrKindUnavailable, ErrLibraryNotWritable, ErrFetchModuleOff, ErrFetchDemo, ErrFetchLimit, ErrIdentityChanged} {
 		if errors.Is(err, refusal) {
 			return true
 		}
@@ -94,10 +94,6 @@ func fetchCooling(ctx context.Context, tx *sql.Tx, j NewJob, now time.Time) (boo
 	t, parseErr := time.Parse(time.RFC3339, finished.String)
 	return !folded && (parseErr != nil || now.Before(t.Add(30*time.Minute))), nil
 }
-
-// workingStatesSQL is OpenStatesSQL less needs_attention: the open jobs not
-// parked.
-const workingStatesSQL = `('queued', 'claimed', 'running')`
 
 // checkFetchLimit shares the insertion's writer transaction, after open-intent
 // dedupe. The creator owns the quota even when another listener promotes it. A
@@ -193,9 +189,11 @@ func ReadyFetchStatus(f *feed.Fetch) FetchStatus {
 	return FetchStatus{State: "ready", BytesReceived: f.Bytes, BytesTotal: &f.Bytes}
 }
 
-// UnavailableFetchStatus overlays a known scheduling refusal on a summary.
+// UnavailableFetchStatus overlays a known scheduling refusal on a summary. A
+// fetch the Bridge holds carries on with the module off (only a queued one is
+// held): it stays fetching, not unavailable (server#179).
 func UnavailableFetchStatus(st FetchStatus, refusal error) FetchStatus {
-	if refusal == nil || st.State == "ready" {
+	if refusal == nil || st.State == "ready" || (st.State == "fetching" && errors.Is(refusal, ErrFetchModuleOff)) {
 		return st
 	}
 	code := "bridge_unavailable"
@@ -293,12 +291,6 @@ func (s *Service) podcastFetchStatuses(ctx context.Context, lib int64, paths []s
 				}
 			}
 			st.Error = FetchErrorFor(c)
-		}
-		// A fetch the Bridge holds carries on with the module off (only a queued
-		// one is held): it shows as fetching, not unavailable (server#179).
-		if st.State == "fetching" && errors.Is(refusal, ErrFetchModuleOff) {
-			out[path] = st
-			continue
 		}
 		out[path] = UnavailableFetchStatus(st, refusal)
 	}

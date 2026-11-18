@@ -230,6 +230,10 @@ var kinds = map[string]kindSpec{
 // scans the table).
 const claimedStatesSQL = `('claimed', 'running')`
 
+// workingStatesSQL is OpenStatesSQL less needs_attention: the open jobs not
+// parked.
+const workingStatesSQL = `('queued', 'claimed', 'running')`
+
 // held reports whether a queued job of kind with params waits for a managed
 // module that is off (ModuleFor; with no ModuleOn wired every module counts as
 // on): no claim hands it out (nextQueued), and it refuses no new job that
@@ -630,6 +634,15 @@ func (st Status) Writable(id int64) bool {
 	return l != nil && l.Mapped && l.Writable
 }
 
+// checkNewJob is every check a new job passes before its key is looked up:
+// checkNew, then the library's kind (checkLibraryKind).
+func (s *Service) checkNewJob(ctx context.Context, j *NewJob) error {
+	if err := checkNew(j); err != nil {
+		return err
+	}
+	return s.checkLibraryKind(ctx, *j)
+}
+
 // checkNew validates a request against the kind: known, its params well formed
 // (normalised in place), a library when the kind needs one and a path only when
 // it allows one.
@@ -683,10 +696,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	if j.Kind == KindPodcastFetch && j.fetch == nil {
 		return s.EnsurePodcastFetch(ctx, j, FetchOptions{Retry: true})
 	}
-	if err := checkNew(&j); err != nil {
-		return nil, false, err
-	}
-	if err := s.checkLibraryKind(ctx, j); err != nil {
+	if err := s.checkNewJob(ctx, &j); err != nil {
 		return nil, false, err
 	}
 	var h *Heartbeat

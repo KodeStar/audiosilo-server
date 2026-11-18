@@ -104,13 +104,10 @@ const minFoldBudget = 5 * time.Second
 // settled, can't leave the next fold no time (server#219). Without a caller
 // deadline it is unbounded, as committedContext's.
 func foldContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	detached := context.WithoutCancel(ctx)
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return detached, func() {}
+	if deadline, ok := ctx.Deadline(); ok {
+		if floor := time.Now().Add(minFoldBudget); deadline.Before(floor) {
+			return context.WithDeadline(context.WithoutCancel(ctx), floor)
+		}
 	}
-	if floor := time.Now().Add(minFoldBudget); deadline.Before(floor) {
-		deadline = floor
-	}
-	return context.WithDeadline(detached, deadline)
+	return committedContext(ctx)
 }

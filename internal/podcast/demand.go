@@ -80,7 +80,7 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 		status = bridge.OpenFetchStatus(*job)
 	}
 	refusal := err
-	if err != nil && !bridge.IsFetchRefusal(err) && !errors.Is(err, bridge.ErrIdentityChanged) {
+	if err != nil && !bridge.IsFetchRefusal(err) {
 		if budget.Err() == nil {
 			return nil, nil, status, err
 		}

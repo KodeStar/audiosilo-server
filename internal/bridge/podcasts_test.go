@@ -548,9 +548,8 @@ func TestOfflineBridgeExpiresQueuedSubscribes(t *testing.T) {
 		t.Fatalf("online Bridge: %s %v", stateOf(waiting.ID), err)
 	}
 	// Denied: a server that just started gives the Bridge OnlineWindow to call in.
-	restarted := New(q.db, func() time.Time { return *q.now })
 	q.advance(OnlineWindow + time.Second)
-	restarted.started = *q.now
+	restarted := New(q.db, func() time.Time { return *q.now })
 	// The held request's Bridge reported within its lease (a requeued one is
 	// queued again, and fails with the rest).
 	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET lease_until=? WHERE id=?`, at(q.now.Add(Lease)), held.ID); err != nil {
@@ -591,14 +590,7 @@ func TestOfflineBridgeExpiresQueuedSubscribes(t *testing.T) {
 		}
 	}
 	// A Bridge that no longer runs the kind is no Bridge for it either.
-	beat := func(kinds ...string) {
-		t.Helper()
-		st := Status{Version: "0.9.0", Kinds: kinds, Libraries: []LibraryStatus{{LibraryID: q.lib, MountPath: "/podcasts", Mapped: true, Writable: true}}}
-		if err := q.SaveHeartbeat(ctx, q.token, st); err != nil {
-			t.Fatal(err)
-		}
-	}
-	beat(KindPodcastSubscribe)
+	q.beatLibrary(t, true, true, KindPodcastSubscribe)
 	again, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, "https://example.com/again.xml", false, "")
 	if err != nil {
 		t.Fatal(err)
@@ -606,7 +598,7 @@ func TestOfflineBridgeExpiresQueuedSubscribes(t *testing.T) {
 	if _, err := q.EndedPodcasts(ctx); err != nil || stateOf(again.ID) != StateQueued {
 		t.Fatalf("back online: %s %v", stateOf(again.ID), err)
 	}
-	beat(KindPodcastPoll)
+	q.beatLibrary(t, true, true, KindPodcastPoll)
 	if _, err := q.EndedPodcasts(ctx); err != nil || stateOf(again.ID) != StateFailed {
 		t.Fatalf("no subscribe kind: %s %v", stateOf(again.ID), err)
 	}

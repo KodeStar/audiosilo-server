@@ -235,10 +235,7 @@ func (s *Service) Subscribe(ctx context.Context, r SubscribeRequest) (*Job, bool
 		// adopted by the next upload. Its params and library are checked first,
 		// as Enqueue checks them, so a row that could never be queued says why
 		// (ErrInvalid, ErrNotPodcastLibrary) rather than ErrNoNewRequest.
-		if err := checkNew(&nj); err != nil {
-			return nil, false, err
-		}
-		if err := s.checkLibraryKind(ctx, nj); err != nil {
+		if err := s.checkNewJob(ctx, &nj); err != nil {
 			return nil, false, err
 		}
 		open, err := openJob(ctx, s.db, jobKey(nj))
@@ -401,10 +398,7 @@ func (s *Service) expirePrivateTx(ctx context.Context, tx *sql.Tx, now string) (
 // expireRequestsTx fails the follow requests ids (code request_expired, which
 // the player reads as "follow again") with message, and returns them as ended.
 func expireRequestsTx(ctx context.Context, tx *sql.Tx, ids []int64, now, message string) ([]Job, error) {
-	result, err := json.Marshal(struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	}{"request_expired", message})
+	result, err := json.Marshal(FetchError{Code: "request_expired", Message: message})
 	if err != nil {
 		return nil, err
 	}
@@ -421,6 +415,10 @@ func expireRequestsTx(ctx context.Context, tx *sql.Tx, ids []int64, now, message
 	}
 	return ended, nil
 }
+
+// offlineSubscribesSQL is the queued follow requests, with literals so the
+// partial idx_bridge_jobs_queue (state = 'queued') serves it.
+const offlineSubscribesSQL = `FROM bridge_jobs WHERE state='queued' AND kind='` + KindPodcastSubscribe + `'`
 
 // offlineRequestMessage is a follow request expireOfflineSubscribes failed.
 const offlineRequestMessage = "The Bridge went offline before it took up the follow request. Follow the feed again."
@@ -444,7 +442,7 @@ func (s *Service) expireOfflineSubscribes(ctx context.Context) error {
 	// The reader pool first (idx_bridge_jobs_queue): the writer only when
 	// there is a request to fail.
 	var queued bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE state=? AND kind=?)`, StateQueued, KindPodcastSubscribe).Scan(&queued); err != nil || !queued {
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 `+offlineSubscribesSQL+`)`).Scan(&queued); err != nil || !queued {
 		return err
 	}
 	s.secretFlowMu.Lock()
@@ -457,7 +455,7 @@ func (s *Service) expireOfflineSubscribes(ctx context.Context) error {
 		if err != nil || !offline(h) {
 			return err
 		}
-		ids, err := queryIDs(ctx, tx, `SELECT id FROM bridge_jobs WHERE state=? AND kind=?`, StateQueued, KindPodcastSubscribe)
+		ids, err := queryIDs(ctx, tx, `SELECT id `+offlineSubscribesSQL)
 		if err != nil {
 			return err
 		}
