@@ -140,23 +140,40 @@ func ReadDirBounded(ctx context.Context, path string, timeout time.Duration) ([]
 	return bounded(ctx, path, timeout, true, func() ([]fs.DirEntry, error) { return os.ReadDir(path) }, nil)
 }
 
+// ReadDirNamesBounded is the names in the folder at path, unsorted, as a
+// Bounded call: os.File.Readdirnames, which, unlike os.ReadDir, neither sorts
+// them nor stats an entry whose type the listing leaves out (a filesystem that
+// answers DT_UNKNOWN), so a check of a name against a large folder (NamesListed)
+// costs the listing alone.
+func ReadDirNamesBounded(ctx context.Context, path string, timeout time.Duration) ([]string, error) {
+	return bounded(ctx, path, timeout, true, func() ([]string, error) {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		return f.Readdirnames(-1)
+	}, nil)
+}
+
 // NamesListed reports whether each name of rel (a slash path under root) that
 // need admits (nil: every name) is in its folder's listing as given, byte for
-// byte, each listing read by readDir. A disk that ignores case (macOS's, a
-// Windows or SMB share) or the Unicode spelling finds a name written another
-// way, but lists it only as it is stored, so a name it finds but doesn't list
-// is not there as given. A listing that fails is false; err is a listing given
-// up on (GaveUp) or ctx's, the answer then unknown.
+// byte, each listing's names read by readDir (ReadDirNamesBounded). A disk
+// that ignores case (macOS's, a Windows or SMB share) or the Unicode spelling
+// finds a name written another way, but lists it only as it is stored, so a
+// name it finds but doesn't list is not there as given. A listing that fails
+// is false; err is a listing given up on (GaveUp) or ctx's, the answer then
+// unknown.
 func NamesListed(ctx context.Context, root, rel string, need func(name string) bool,
-	readDir func(ctx context.Context, dir string) ([]fs.DirEntry, error)) (bool, error) {
+	readDir func(ctx context.Context, dir string) ([]string, error)) (bool, error) {
 	dir := root
 	for name := range strings.SplitSeq(rel, "/") {
 		if need == nil || need(name) {
-			entries, err := readDir(ctx, dir)
+			names, err := readDir(ctx, dir)
 			if Unanswered(ctx, err) {
 				return false, cmp.Or(err, ctx.Err())
 			}
-			if err != nil || !slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == name }) {
+			if err != nil || !slices.Contains(names, name) {
 				return false, nil
 			}
 		}

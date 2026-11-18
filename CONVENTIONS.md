@@ -1175,9 +1175,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   another case than the disk's names nothing there, as a rule naming a missing folder does. A disk that
   ignores case (macOS's, a Windows or SMB share) still opens such a path as the folder it has, so the two
   routes that open the path given, the stream in every form (`audioFile`) and `/fs`, take it only when the
-  disk has it as given (`onDiskAsGiven`: a path the index holds byte for byte, `catalog.IndexHolds`, else
-  each name in its folder's listing, `metadata.NamesListed` through `API.readDir`), else answer as for a
-  missing path (a listing given up on: 503 `share_not_answering`); every other route reads the index,
+  disk has it as given (`onDiskAsGiven`: a path the index holds byte for byte, `catalog.IndexHolds`, else,
+  when a bounded lstat finds something there at all, each name in its folder's listing,
+  `metadata.NamesListed` through `API.readDir`, names only), else answer as for a missing path (a listing
+  given up on: 503 `share_not_answering`); `/fs` looks before it reads the folder (after, for a path that
+  climbs out of the root, so it keeps its 400). Every other route reads the index,
   which holds the disk's spelling only. `TestCaseVariantRoutes` compares every route on a temp dir that
   ignores case; `TestCaseVariantDiskRoutes` covers the stream and `/fs` on any disk (`readDir` lists as
   one that ignores case would).

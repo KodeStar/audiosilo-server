@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -128,9 +127,9 @@ func (c *caseEnv) foldCase(t *testing.T, variants map[string]string) {
 		}
 		hidden[at] = true
 	}
-	c.api.readDir = func(ctx context.Context, dir string, timeout time.Duration) ([]fs.DirEntry, error) {
-		entries, err := metadata.ReadDirBounded(ctx, dir, timeout)
-		return slices.DeleteFunc(entries, func(en fs.DirEntry) bool { return hidden[filepath.Join(dir, en.Name())] }), err
+	c.api.readDir = func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+		names, err := metadata.ReadDirNamesBounded(ctx, dir, timeout)
+		return slices.DeleteFunc(names, func(name string) bool { return hidden[filepath.Join(dir, name)] }), err
 	}
 }
 
@@ -216,7 +215,7 @@ func TestCaseVariantDiskRoutes(t *testing.T) {
 func TestCaseVariantDiskLookFails(t *testing.T) {
 	t.Parallel()
 	c := newCaseEnv(t)
-	c.api.readDir = func(context.Context, string, time.Duration) ([]fs.DirEntry, error) {
+	c.api.readDir = func(context.Context, string, time.Duration) ([]string, error) {
 		return nil, metadata.ErrNotAnswered
 	}
 	for _, path := range []string{bookURL(c.lib.ID, "stream", pcUnindexedT), bookURL(c.lib.ID, "fs", pcUnindexed)} {
@@ -227,6 +226,31 @@ func TestCaseVariantDiskLookFails(t *testing.T) {
 	// An indexed path needs no listing.
 	if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "stream", pcTrack), c.samTok, ""); resp.StatusCode != http.StatusOK {
 		t.Errorf("stream of an indexed track = %d %s, want 200", resp.StatusCode, body)
+	}
+}
+
+// TestCaseVariantMissingReadsNoListing: a path no file answers to is missing
+// after one lstat, with no folder listed, on the stream and /fs (a client
+// asking for missing paths in a loop costs no listing of the library's root).
+func TestCaseVariantMissingReadsNoListing(t *testing.T) {
+	t.Parallel()
+	c := newCaseEnv(t)
+	var listed []string
+	c.api.readDir = func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+		listed = append(listed, dir)
+		return metadata.ReadDirNamesBounded(ctx, dir, timeout)
+	}
+	for _, path := range []string{bookURL(c.lib.ID, "stream", pcMissingT), bookURL(c.lib.ID, "fs", pcMissing)} {
+		if resp, body := c.do(t, "GET", path, c.samTok, ""); resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s = %d %s, want 404", path, resp.StatusCode, body)
+		}
+	}
+	if len(listed) != 0 {
+		t.Errorf("missing paths listed %q, want no listing", listed)
+	}
+	// Allowed: a folder no scan has reached is listed as the disk spells it.
+	if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "fs", pcUnindexed), c.samTok, ""); resp.StatusCode != http.StatusOK || len(listed) == 0 {
+		t.Errorf("fs of an unindexed folder = %d %s after %d listings, want 200 after its names were listed", resp.StatusCode, body, len(listed))
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -369,8 +368,8 @@ func (c *Catalog) ownEntry(ctx context.Context, libraryID int64, p string, other
 // ignores the spelling lists the name as it was written, so another spelling
 // that finds it is not. A listing that fails or is given up on counts as not.
 func spelledOnDisk(ctx context.Context, root, p string) bool {
-	listed, err := metadata.NamesListed(ctx, root, p, HasOtherSpelling, func(ctx context.Context, dir string) ([]fs.DirEntry, error) {
-		return metadata.ReadDirBounded(ctx, dir, spellLookWait)
+	listed, err := metadata.NamesListed(ctx, root, p, HasOtherSpelling, func(ctx context.Context, dir string) ([]string, error) {
+		return metadata.ReadDirNamesBounded(ctx, dir, spellLookWait)
 	})
 	return listed && err == nil
 }

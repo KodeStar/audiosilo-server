@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"io/fs"
@@ -498,6 +499,15 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 			dir, rel = spelled, spelled
 		}
 	}
+	// Nor is one the disk doesn't spell as given (onDiskAsGiven: a case
+	// variant, on a disk that ignores case, of a folder the caller's rule
+	// never named), looked at before the folder is read, so such a folder is
+	// never listed and answers as fast as a missing one. A path that climbs
+	// out of the root is BrowseFS's 400 first; looked at after it.
+	early := rel != "" && filepath.IsLocal(filepath.FromSlash(dir))
+	if early && !a.fsGiven(w, r, lib, rel) {
+		return
+	}
 	ignore := library.ParseIgnore(lib.IgnorePatterns)
 	listing, err := library.BrowseFS(lib.Root, dir,
 		queryInt(r, "offset", 0), queryInt(r, "limit", 200), allow, ignore)
@@ -509,19 +519,8 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "directory not found")
 		return
 	}
-	// Nor is one the disk doesn't spell as given (onDiskAsGiven: a case
-	// variant, on a disk that ignores case, of a folder the caller's rule
-	// never named): looked at once BrowseFS has refused a path out of the root.
-	if rel != "" {
-		given, ok := a.givenOnDisk(w, r, lib, rel, func() time.Duration { return a.fileWait },
-			"check a folder's path failed", "Could not list the folder.")
-		if !ok {
-			return
-		}
-		if !given {
-			writeError(w, http.StatusNotFound, "directory not found")
-			return
-		}
+	if rel != "" && !early && !a.fsGiven(w, r, lib, rel) {
+		return
 	}
 	a.annotateWithBooks(r, lib, scope, ignore, listing)
 	writeJSON(w, http.StatusOK, listing)
@@ -1064,7 +1063,9 @@ func (a *API) audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Lib
 // library's disk as given, byte for byte: a path the index holds as given
 // (catalog.IndexHolds, the scan read it from the listings), else each of its
 // names in its folder's listing (metadata.NamesListed, a.readDir, each listing
-// bounded by wait). Share rules match byte for byte, so a rule spelled in
+// bounded by wait). A path no file answers to at all is no more there as given:
+// one bounded lstat says so, with no listing read (a request for a missing
+// path costs what it did before the check). Share rules match byte for byte, so a rule spelled in
 // another case than the disk's names nothing there, like a rule naming a
 // missing folder; but a disk that ignores case (macOS's, a Windows or SMB
 // share) opens "émile zola/x.m4b" as "Émile Zola/x.m4b", a book that rule
@@ -1075,7 +1076,15 @@ func (a *API) onDiskAsGiven(ctx context.Context, lib *catalog.Library, rel strin
 	if held, err := a.cat.IndexHolds(ctx, lib.ID, rel); err != nil || held {
 		return held, err
 	}
-	return metadata.NamesListed(ctx, lib.Root, rel, nil, func(ctx context.Context, dir string) ([]fs.DirEntry, error) {
+	if _, err := metadata.LstatBounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(rel)), wait()); err != nil {
+		if metadata.Unanswered(ctx, err) {
+			return false, cmp.Or(err, ctx.Err())
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+	}
+	return metadata.NamesListed(ctx, lib.Root, rel, nil, func(ctx context.Context, dir string) ([]string, error) {
 		return a.readDir(ctx, dir, wait())
 	})
 }
@@ -1094,6 +1103,17 @@ func (a *API) givenOnDisk(w http.ResponseWriter, r *http.Request, lib *catalog.L
 	}
 	a.writeCatalogError(w, err, op, msg, "library", lib.ID)
 	return false, false
+}
+
+// fsGiven is /fs's onDiskAsGiven: false when it has answered, a folder the
+// disk doesn't spell as given as "directory not found".
+func (a *API) fsGiven(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string) bool {
+	given, ok := a.givenOnDisk(w, r, lib, rel, func() time.Duration { return a.fileWait },
+		"check a folder's path failed", "Could not list the folder.")
+	if ok && !given {
+		writeError(w, http.StatusNotFound, "directory not found")
+	}
+	return ok && given
 }
 
 // noFile is abs as a path no file has: a NUL byte is in no file name, so every

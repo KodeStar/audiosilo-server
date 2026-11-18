@@ -144,7 +144,9 @@ func TestNamesListed(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "Author", "Book"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	list := func(ctx context.Context, dir string) ([]fs.DirEntry, error) { return os.ReadDir(dir) }
+	list := func(ctx context.Context, dir string) ([]string, error) {
+		return ReadDirNamesBounded(ctx, dir, time.Second)
+	}
 	for _, tc := range []struct {
 		rel  string
 		need func(string) bool
@@ -162,7 +164,7 @@ func TestNamesListed(t *testing.T) {
 			t.Errorf("NamesListed(%q) = %v %v, want %v", tc.rel, got, err, tc.want)
 		}
 	}
-	refused := func(context.Context, string) ([]fs.DirEntry, error) { return nil, ErrNotAnswered }
+	refused := func(context.Context, string) ([]string, error) { return nil, ErrNotAnswered }
 	if got, err := NamesListed(ctx, root, "Author/Book", nil, refused); got || !GaveUp(err) {
 		t.Errorf("a listing given up on = %v %v, want false and the error", got, err)
 	}
