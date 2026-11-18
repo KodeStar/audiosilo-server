@@ -34,9 +34,22 @@ var assetsFS embed.FS
 // data: is allowed for images so the QR pairing PNG (a data URI) renders.
 // manifest-src and worker-src ('self') let the admin console install as a PWA:
 // fetch its web manifest and register its same-origin service worker (/sw.js).
+// style-src-attr admits one style attribute by its hash and nothing else:
+// WebKit (Safari) gives an element inside every native <select>'s own
+// user-agent shadow tree style="text-overflow:inherit" and checks it against
+// the page's CSP, so without it each page with a native <select> (the connect
+// page's language picker, the console's NativeSelect) logs a refusal (#467).
+// It renders the same either way; the hash only quiets the console. Any other
+// style attribute is still refused, and a browser without style-src-attr falls
+// back to style-src 'self'.
 const contentSecurityPolicy = "default-src 'self'; img-src 'self' data:; " +
-	"style-src 'self'; script-src 'self'; connect-src 'self'; " +
+	"style-src 'self'; style-src-attr 'unsafe-hashes' " + webkitSelectStyleHash + "; " +
+	"script-src 'self'; connect-src 'self'; " +
 	"manifest-src 'self'; worker-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+
+// webkitSelectStyleHash is the CSP source for the exact attribute value
+// "text-overflow:inherit" (TestCSPWebKitSelectStyleHash pins it).
+const webkitSelectStyleHash = "'sha256-3oFxofzq3N//6J8H86e9ul4WT2OkJrtonB66gn/TLJw='"
 
 // ContentSecurityPolicy is the strict same-origin CSP applied to the admin console
 // and the baked-in connect pages. Exported so the api package can apply the identical policy

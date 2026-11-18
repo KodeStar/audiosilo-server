@@ -260,7 +260,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (a match is a 304, documents included) and text types go out gzipped to clients that accept it
   (`spa.Files`: worked out once per file and kept, redone when a web_dir file's size or mtime
   changes; never for a Range request; `Vary: Accept-Encoding`).
-  **The CSP does not change for it**: no inline script/style anywhere (`theme-init.js` is
+  **The CSP does not change for it** (its one exception: `style-src-attr 'unsafe-hashes'` with the
+  hash of `text-overflow:inherit`, which WebKit sets inside every native `<select>`'s user-agent
+  shadow tree, #467, `TestCSPWebKitSelectStyleHash`; Playwright WebKit's one `style-src-elem`
+  refusal per screenshot is its own screenshotter's probe, not the console): no inline script/style anywhere (`theme-init.js` is
   external, Base UI runs under `CSPProvider disableStyleElements`, banned libraries are
   ESLint-enforced, `admin-ui/scripts/check-csp.mjs` fails the build and `TestEmbeddedBuild`
   checks the embedded `index.html`). It keeps the classic console's token key

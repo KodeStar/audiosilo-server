@@ -138,6 +138,45 @@ func TestCSPAllowsPlainHTTP(t *testing.T) {
 	}
 }
 
+// TestCSPWebKitSelectStyleHash: the console/connect policy admits exactly one
+// style attribute, the "text-overflow:inherit" WebKit puts inside a native
+// <select>'s user-agent shadow tree (#467), by its hash, and no inline style
+// otherwise: no 'unsafe-inline' on style-src or style-src-attr, no other hash.
+func TestCSPWebKitSelectStyleHash(t *testing.T) {
+	t.Parallel()
+	sum := sha256.Sum256([]byte("text-overflow:inherit"))
+	if want := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"; webkitSelectStyleHash != want {
+		t.Fatalf("webkitSelectStyleHash = %s, want %s (the sha256 of text-overflow:inherit)", webkitSelectStyleHash, want)
+	}
+	directives := map[string]string{}
+	for _, dir := range strings.Split(contentSecurityPolicy, "; ") {
+		name, value, _ := strings.Cut(dir, " ")
+		directives[name] = value
+	}
+	if got, want := directives["style-src"], "'self'"; got != want {
+		t.Errorf("style-src = %q, want %q", got, want)
+	}
+	if got, want := directives["style-src-attr"], "'unsafe-hashes' "+webkitSelectStyleHash; got != want {
+		t.Errorf("style-src-attr = %q, want %q", got, want)
+	}
+	if _, ok := directives["style-src-elem"]; ok {
+		t.Errorf("the console CSP should leave <style> elements to style-src 'self': %s", contentSecurityPolicy)
+	}
+
+	// The header served on the connect page and the console is that policy.
+	mux := http.NewServeMux()
+	if err := Register(mux, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"/", "/admin/"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		if csp := rec.Header().Get("Content-Security-Policy"); csp != contentSecurityPolicy {
+			t.Errorf("GET %s CSP = %q, want %q", p, csp, contentSecurityPolicy)
+		}
+	}
+}
+
 // TestHTMLCSPImagesStaySameOrigin: the player loads community covers through the
 // server (GET /libraries/{id}/meta/cover), never from their own hosts, so its
 // img-src admits no other origin. Widening it would let a listener's browser
