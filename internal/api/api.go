@@ -190,6 +190,11 @@ type API struct {
 	// (or any demo visitor) opening many ?transcode=1 streams could exhaust CPU on a
 	// small self-hosted box. A full channel returns 503 rather than forking more.
 	transcodeSem chan struct{}
+	// transcodeHolds are the slots held by asks with a token, by ask, so a
+	// repeat ask takes its earlier one's slot over (transcode_slots.go);
+	// guarded by transcodeMu, nil until the first.
+	transcodeMu    sync.Mutex
+	transcodeHolds map[transcodeAsk]*transcodeHold
 	// remux is the cache of Matroska files holding MP3 copied into plain MP3
 	// (server#174), served at the same stream URL while ffmpeg is configured
 	// (remuxOn). nil without a data dir.

@@ -1,0 +1,255 @@
+package api
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/catalog"
+)
+
+// slotRequest is a GET (or HEAD) carrying cred, as the auth middleware leaves it.
+func slotRequest(method string, cred auth.Credential) *http.Request {
+	r := httptest.NewRequest(method, "/", nil)
+	return r.WithContext(withCredential(r.Context(), &auth.User{}, cred))
+}
+
+// slotAPI is an API with n transcode slots, every one but free taken.
+func slotAPI(n, free int) *API {
+	a := &API{transcodeSem: make(chan struct{}, n)}
+	for range n - free {
+		a.transcodeSem <- struct{}{}
+	}
+	return a
+}
+
+// endTaken is endTranscode for a hold taken over: it reports whether it aborted.
+func endTaken(a *API, h *transcodeHold) (aborted bool) {
+	defer func() {
+		aborted = recover() == http.ErrAbortHandler
+	}()
+	a.endTranscode(h)
+	return false
+}
+
+// TestTranscodeRepeatAskTakesOverSlot: with one slot free, the same token's
+// second ask for the same stream (Safari's range probing) takes the first's
+// slot, ending its request, rather than being refused; the first's end then
+// frees nothing, and the second's frees the slot.
+func TestTranscodeRepeatAskTakesOverSlot(t *testing.T) {
+	t.Parallel()
+	a := slotAPI(2, 1)
+	ask := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka", start: 12.5}
+	first, r1 := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+	if first == nil {
+		t.Fatal("the first ask got no slot with one free")
+	}
+	second, r2 := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+	if second == nil {
+		t.Fatal("the repeat ask got no slot: it should take the first's over")
+	}
+	if !errors.Is(r1.Context().Err(), context.Canceled) {
+		t.Fatal("the first ask's request was not ended by the takeover")
+	}
+	if r2.Context().Err() != nil {
+		t.Fatal("the repeat ask's request was ended")
+	}
+	if len(a.transcodeSem) != 2 {
+		t.Fatalf("%d slots taken after the takeover, want the same 2", len(a.transcodeSem))
+	}
+	if !endTaken(a, first) {
+		t.Fatal("the request whose slot was taken over was not aborted")
+	}
+	if len(a.transcodeSem) != 2 {
+		t.Fatal("the taken-over request's end freed the slot its successor holds")
+	}
+	if !a.transcodeSlotFree(ask) {
+		t.Fatal("a HEAD of the held ask was told busy: a GET would take its slot over")
+	}
+	if endTaken(a, second) {
+		t.Fatal("the slot's holder was aborted at its own end")
+	}
+	if len(a.transcodeSem) != 1 || len(a.transcodeHolds) != 0 {
+		t.Fatalf("after the holder's end: %d slots taken, %d holds, want 1 and 0", len(a.transcodeSem), len(a.transcodeHolds))
+	}
+}
+
+// TestTranscodeOtherAsksCountSeparately: an ask that differs in token (another
+// user's, or another device's), start, file or download takes a slot of its
+// own, refused with none free, and never ends the holder's transcode.
+func TestTranscodeOtherAsksCountSeparately(t *testing.T) {
+	t.Parallel()
+	held := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka", start: 12.5}
+	for name, other := range map[string]transcodeAsk{
+		"another token": {token: 8, lib: 1, rel: "Book/01.mka", start: 12.5},
+		"another start": {token: 7, lib: 1, rel: "Book/01.mka", start: 30},
+		"another file":  {token: 7, lib: 1, rel: "Book/02.mka", start: 12.5},
+		"a download":    {token: 7, lib: 1, rel: "Book/01.mka", start: 12.5, download: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			a := slotAPI(2, 1)
+			h, r := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: held.token}), held)
+			if h == nil {
+				t.Fatal("the held ask got no slot")
+			}
+			if a.transcodeSlotFree(other) {
+				t.Fatal("a HEAD of another ask was told a slot is free with none")
+			}
+			if o, _ := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: other.token}), other); o != nil {
+				t.Fatal("another ask got a slot with none free")
+			}
+			if r.Context().Err() != nil {
+				t.Fatal("another ask ended the holder's transcode")
+			}
+			if endTaken(a, h) || len(a.transcodeSem) != 1 {
+				t.Fatalf("the holder's end: %d slots taken, want 1", len(a.transcodeSem))
+			}
+			// Now free, the other ask is admitted.
+			if o, _ := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: other.token}), other); o == nil {
+				t.Fatal("another ask got no slot with one free")
+			}
+		})
+	}
+}
+
+// TestTranscodeUnkeyedAsksNeverTakeOver: a HEAD (it starts no ffmpeg) and an
+// ask with no token take a free slot only: they never end a same ask's
+// transcode, and are refused with none free.
+func TestTranscodeUnkeyedAsksNeverTakeOver(t *testing.T) {
+	t.Parallel()
+	ask := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka"}
+	a := slotAPI(1, 1)
+	_, r := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+	if h, _ := a.takeTranscodeSlot(slotRequest(http.MethodHead, auth.Credential{ID: 7}), ask); h != nil {
+		t.Fatal("a HEAD took over a slot")
+	}
+	if r.Context().Err() != nil {
+		t.Fatal("a HEAD ended the holder's transcode")
+	}
+	b := slotAPI(1, 1)
+	none := transcodeAsk{lib: 1, rel: "Book/01.mka"}
+	if h, _ := b.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{}), none); h == nil {
+		t.Fatal("an ask with no token got no slot with one free")
+	}
+	if h, _ := b.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{}), none); h != nil {
+		t.Fatal("a second ask with no token took over the first's slot")
+	}
+}
+
+// TestStreamTranscodeRepeatAsk: over HTTP, with one slot free, a repeat GET of
+// the same transcode URL with the same token plays and the earlier one's
+// stream breaks off (an error, not an end); the same URL with another user's
+// token, and the same token from another start, are 503 busy and leave the
+// stream playing. A HEAD answers whether a GET would run (200 for the held
+// URL, 503 for another) and starts no ffmpeg; the slot is free again once
+// the stream is closed.
+func TestStreamTranscodeRepeatAsk(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	// A stand-in ffmpeg that sends MP3 bytes until it is killed, counting its runs.
+	dir := t.TempDir()
+	runs := filepath.Join(dir, "runs")
+	ffmpeg := filepath.Join(dir, "ffmpeg")
+	script := "#!/bin/sh\necho run >> '" + runs + "'\nexec cat /dev/zero\n"
+	if err := os.WriteFile(ffmpeg, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.api.ffmpeg = ffmpeg
+	countRuns := func() int {
+		b, _ := os.ReadFile(runs)
+		return len(b) / len("run\n")
+	}
+	for range cap(e.api.transcodeSem) - 1 {
+		e.api.transcodeSem <- struct{}{}
+	}
+
+	mine, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	other, _ := e.auth.CreateUser(ctx, "other", "other-password", auth.RoleAdmin)
+	theirs, _ := e.auth.IssueToken(ctx, other.ID, auth.KindSession, "t", 0)
+	stream := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + "/stream?transcode=1&path=" +
+		url.QueryEscape("Will Wight/Cradle/01 - Unsouled.m4b")
+	at := stream + "&t=12.5"
+	client := &http.Client{Transport: &http.Transport{}, Timeout: 30 * time.Second}
+	t.Cleanup(client.CloseIdleConnections)
+	open := func(method, path, token string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest(method, e.srv.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	status := func(method, path, token string) int {
+		resp := open(method, path, token)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	readSome := func(name string, resp *http.Response) {
+		t.Helper()
+		if _, err := io.ReadFull(resp.Body, make([]byte, 4096)); err != nil {
+			t.Fatalf("%s: reading its stream: %v", name, err)
+		}
+	}
+
+	first := open("GET", at, mine)
+	defer first.Body.Close()
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first ask = %d, want 200 with one slot free", first.StatusCode)
+	}
+	readSome("first ask", first)
+
+	second := open("GET", at, mine)
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusOK {
+		t.Fatalf("repeat ask = %d, want 200: it takes the first's slot over", second.StatusCode)
+	}
+	readSome("repeat ask", second)
+	if _, err := io.Copy(io.Discard, first.Body); err == nil {
+		t.Fatal("the taken-over stream ended cleanly: a player would take it for the file's end")
+	}
+
+	if got := status("GET", at, theirs); got != http.StatusServiceUnavailable {
+		t.Fatalf("another user's same ask = %d, want 503", got)
+	}
+	if got := status("GET", stream+"&t=40", mine); got != http.StatusServiceUnavailable {
+		t.Fatalf("another start = %d, want 503", got)
+	}
+	ran := countRuns()
+	if got := status("HEAD", at, mine); got != http.StatusOK {
+		t.Fatalf("HEAD of the held ask = %d, want 200", got)
+	}
+	if got := status("HEAD", at, theirs); got != http.StatusServiceUnavailable {
+		t.Fatalf("HEAD of another user's ask = %d, want 503", got)
+	}
+	if countRuns() != ran {
+		t.Fatal("a HEAD ran ffmpeg")
+	}
+	readSome("repeat ask after the refusals", second)
+
+	_ = second.Body.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(e.api.transcodeSem) == cap(e.api.transcodeSem) {
+		if time.Now().After(deadline) {
+			t.Fatal("the closed stream never let go of its slot")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := status("HEAD", at, theirs); got != http.StatusOK {
+		t.Fatalf("HEAD with the slot free = %d, want 200", got)
+	}
+}

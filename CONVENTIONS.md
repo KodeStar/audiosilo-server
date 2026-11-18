@@ -1466,7 +1466,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`media.TranscodeOpened`, server#181) is ffmpeg's stdin read seekably as `fd:` (input seek, and a
   non-faststart m4a demuxes) when the ffmpeg lists the fd input protocol (`inputFor`: probed once
   per ffmpeg path, `-protocols`, 5 s, asked again after a probe that couldn't run), else the old
-  `pipe:0` with an output seek. A HEAD gets the transcode's headers without an ffmpeg run. The console's chapter
+  `pipe:0` with an output seek. Each transcode holds one of the 4 `transcodeSem` slots (503 + `Retry-After: 5`
+  with none free), keyed by its ask (`transcodeAsk`, `transcode_slots.go`: the credential's token id, the file, the
+  `?t=` start, `download=1`): a repeat GET of the same ask takes over the slot the earlier one holds, ending that
+  request's ffmpeg and aborting its response (`http.ErrAbortHandler`, a broken stream, never one that ended),
+  rather than needing a slot of its own, since Safari asks for one stream two or three times and plays only the
+  last; a token is one user's, so a takeover never ends another user's or device's transcode. A HEAD runs no
+  ffmpeg and takes no slot: it answers as a GET would now (200 when a slot is free or its ask holds one, else the
+  busy 503), the chapter editor's check after a failed or stalled load (`transcodeRetryAfter`). The console's chapter
   editor's transcode (its cast token, `auth.Credential.Editor`) that it has read nothing of for 10 minutes
   (`media.TranscodeIdle`: each write gets a write deadline, `copyIdle`) is ended with its ffmpeg, freeing its slot:
   a paused `<audio>` keeps its connection open while it reads nothing, and the editor asks for its stream again

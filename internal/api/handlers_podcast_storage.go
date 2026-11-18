@@ -273,7 +273,7 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 	defer f.Close()
 	defer a.prefetchStart(r, catalog.Ref{LibraryID: lib.ID, Path: rel}, true)()
 	if r.URL.Query().Get("transcode") == "1" {
-		done, start, ok := a.beginTranscode(w, r, lib.ID, rel)
+		done, r, start, ok := a.beginTranscode(w, r, lib.ID, rel)
 		if !ok {
 			return
 		}
