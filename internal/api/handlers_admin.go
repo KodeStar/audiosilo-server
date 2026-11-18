@@ -53,16 +53,25 @@ func (a *API) toAdminUser(u *auth.User, sso bool) adminUser {
 	if o := u.ManagedBy; o != nil {
 		v.ManagedBy = &adminOwner{ID: o.ID, Username: o.Username, DisplayName: o.DisplayName}
 	}
-	if sso && a.oidc != nil && !u.IsMember() && !u.IsDemo {
+	if sso && a.ssoShown(u) {
 		v.SignInProvider = a.oidc.name
 	}
 	return v
+}
+
+// ssoShown reports whether u's console object can name a single sign-on: one
+// runs, and u is an account it signs in (auth.ConsumeOIDC).
+func (a *API) ssoShown(u *auth.User) bool {
+	return a.oidc != nil && !u.IsMember() && !u.IsDemo
 }
 
 // adminUserOf is toAdminUser reading whether u signs in with the single
 // sign-on (auth.HasSSO). A failed read is logged and says none: the console
 // then asks for a password rather than trust a way in.
 func (a *API) adminUserOf(ctx context.Context, u *auth.User) adminUser {
+	if !a.ssoShown(u) {
+		return a.toAdminUser(u, false)
+	}
 	sso, err := a.auth.HasSSO(ctx, u.ID)
 	if err != nil {
 		a.log.Warn("reading an account's single sign-on failed", "user", u.ID, "err", err)
