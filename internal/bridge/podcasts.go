@@ -444,9 +444,8 @@ func (s *Service) expireOfflineSubscribes(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 `+offlineSubscribesSQL+`)`).Scan(&queued); err != nil || !queued {
 		return err
 	}
-	s.secretFlowMu.Lock()
-	defer s.secretFlowMu.Unlock()
 	var ended []Job
+	s.secretFlowMu.Lock()
 	err = s.db.WithTx(ctx, "bridge.expireOffline", func(tx *sql.Tx) error {
 		// The heartbeat again, in the transaction: one saved since the cached
 		// read keeps every request.
@@ -461,9 +460,15 @@ func (s *Service) expireOfflineSubscribes(ctx context.Context) error {
 		ended, err = expireRequestsTx(ctx, tx, ids, s.ts(), offlineRequestMessage)
 		return err
 	})
+	s.secretFlowMu.Unlock()
 	if err != nil {
 		return err
 	}
+	// Reported once the lock is let go: each end's fold has a budget of its own
+	// (foldContext), which a claim or a follow must not wait behind. The
+	// requests have ended, so none can be adopted or claimed meanwhile, and
+	// reportEnded drops a private URL whenever it runs (Subscribe's dropIfEnded
+	// covers one stored in between).
 	for _, j := range ended {
 		s.report(ctx, &j, StateQueued, "")
 	}
