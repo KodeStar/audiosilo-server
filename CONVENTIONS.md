@@ -1550,7 +1550,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   start that first runs it applies `0084`, so `backup.BeforeUpgrade` copied the database just before), and
   `RekeyLibrary` after every scan run that finished ok or partial (`launcher.rekeyAfterScan`, the
   scanner's `OnRunFinished`, under the server's context so a stop ends it between paths; candidates
-  only in the tables clients write). Books libraries only. Per path,
+  only in the tables clients write, plus the paths the scope guard kept rows on, every table, so a
+  listener's kept rows follow a later grant even when only a derived table's are left). Books libraries only. Per path,
   `rekeyTarget`: another spelling of an indexed book (`spelling`: every table), a file of a folder book
   (`file`: all but favourites, a track row's heart stays on the track), a folder inside a book (`folder`:
   the book-level rows only, lists, ratings and the reader's place, read at `BookPathAt`; a disc's timeline

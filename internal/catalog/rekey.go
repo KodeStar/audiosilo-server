@@ -424,7 +424,8 @@ func (c *Catalog) rekeyRowsAt(ctx context.Context, ref Ref) (carrySet, error) {
 // RekeyLibrary is the scan-end re-key of one library (a no-op for a podcast
 // library): rows written while their book was not indexed yet move once it is.
 // It looks for candidates in the tables clients write (rekeyTable.primary)
-// only; the start's run covers the rest. With an error (ctx's, a run stopped
+// and on the paths the scope guard kept rows on (rekeyCandidates); the start's
+// run covers the rest. With an error (ctx's, a run stopped
 // part way) the report holds what moved before it.
 func (c *Catalog) RekeyLibrary(ctx context.Context, libraryID int64) (RekeyReport, error) {
 	lib, err := c.GetLibrary(ctx, libraryID)
@@ -448,7 +449,7 @@ func (c *Catalog) rekeyPaths(ctx context.Context, libraryID int64, cands map[str
 		paths = append(paths, p)
 	}
 	slices.Sort(paths)
-	reach := map[int64][]Scope{} // each listener's access, read once a run (unreached)
+	reach := map[int64][]Scope{} // each listener's access, read once a run (outOfReach)
 	for _, p := range paths {
 		// A run stopped part way (the server stopping) leaves the rest for the
 		// next one, rather than a failure a path.
@@ -562,6 +563,31 @@ func (c *Catalog) rekeyCandidates(ctx context.Context, libraryID int64, primaryO
 			cands[p] |= t.set
 		}
 	}
+	if primaryOnly {
+		// A path the scope guard kept a listener's rows on (logged, reason
+		// scope) is looked at again too, in every table: once the other
+		// listeners' rows moved, the kept ones may be only in a derived table
+		// (a session, a day's total), and a grant since lets them follow.
+		kept, err := queryRows(ctx, c.db, func(r *sql.Rows, p *string) error { return r.Scan(p) },
+			`SELECT DISTINCT k.from_path FROM path_rekeys k WHERE k.library_id = ?1 AND k.reason = ?2
+			   AND NOT EXISTS (SELECT 1 FROM books b WHERE b.library_id = ?1 AND b.rel_path = k.from_path)`,
+			libraryID, RekeyGuardScope)
+		if err != nil {
+			return nil, fmt.Errorf("re-key candidates kept by scope: %w", err)
+		}
+		for _, p := range kept {
+			if _, ok := cands[p]; ok {
+				continue // rekeyPath reads every table its moves carry
+			}
+			set, err := c.rekeyRowsAt(ctx, Ref{LibraryID: libraryID, Path: p})
+			if err != nil {
+				return nil, err
+			}
+			if set != 0 {
+				cands[p] = set
+			}
+		}
+	}
 	var plain []Ref
 	for p := range cands {
 		if !HasOtherSpelling(p) {
@@ -639,7 +665,7 @@ type rekeyResult struct {
 // of one who can't reach where a move takes them stay on p (logged once,
 // rekeyKept), the other listeners' move. via is a track in another spelling
 // holding only a heart moved for its spelling, not as a file. reach caches
-// each listener's access (unreached).
+// each listener's access (outOfReach).
 func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, target, reason string, moves []rekeyMove,
 	reach map[int64][]Scope) (rekeyResult, error) {
 	var res rekeyResult
@@ -675,7 +701,7 @@ func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, ta
 				}
 				rows = append(rows, got...)
 			}
-			out, err := c.unreached(ctx, tx, rows, Ref{LibraryID: libraryID, Path: mv.to}, reach)
+			out, err := c.outOfReach(ctx, tx, rows, Ref{LibraryID: libraryID, Path: mv.to}, reach)
 			if err != nil {
 				return err
 			}
@@ -840,12 +866,12 @@ func readRekeyRows(ctx context.Context, tx *sql.Tx, t rekeyTable, libraryID int6
 	return out, rs.Err()
 }
 
-// unreached is the listeners with a row in rows who can't reach ref with
+// outOfReach is the listeners with a row in rows who can't reach ref with
 // their current access (admins always can), as the book path rule asks of a
 // write (api.timelinePath): a listener granted only a track, or whose access
 // was removed, would otherwise lose sight of their own row. reach holds the
 // access already read, by listener (one run's: their scopes, read once).
-func (c *Catalog) unreached(ctx context.Context, tx *sql.Tx, rows []rekeyRow, ref Ref, reach map[int64][]Scope) (map[int64]bool, error) {
+func (c *Catalog) outOfReach(ctx context.Context, tx *sql.Tx, rows []rekeyRow, ref Ref, reach map[int64][]Scope) (map[int64]bool, error) {
 	out := map[int64]bool{}
 	for _, r := range rows {
 		if !r.owner.Valid {

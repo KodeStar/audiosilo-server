@@ -599,6 +599,32 @@ func TestRekeyScopeIsPerListener(t *testing.T) {
 	}
 }
 
+// TestRekeyScopeKeptRowsFollowAGrant: the rows the scope guard kept move once
+// their listener can reach the book, even when what is left on the path is a
+// derived table's only (dan's day total: ann's progress, the path's one row a
+// scan-end run looks for, has moved), at the next scan-end run.
+func TestRekeyScopeKeptRowsFollowAGrant(t *testing.T) {
+	t.Parallel()
+	f := newRekeyFixture(t)
+	f.exec(t, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, updated_at) VALUES(?, ?, ?, 10, ?, ?)`,
+		f.ann, f.lib, rkTrack3, rkBookLen, rkUpdated1)
+	f.exec(t, `INSERT INTO listening_daily(day, user_id, library_id, rel_path, listened, sessions) VALUES('2026-01-01', ?, ?, ?, 10, 1)`,
+		f.dan, f.lib, rkTrack3)
+	rep, err := f.c.RekeyPathState(f.ctx, nil, nil)
+	if err != nil || rep.Rows != 1 || rep.Kept != 1 {
+		t.Fatalf("start run: %+v %v, want ann's row moved and dan's kept", rep, err)
+	}
+	if err := f.c.GrantWholeLibrary(f.ctx, f.dan, f.lib); err != nil {
+		t.Fatal(err)
+	}
+	if rep, err := f.c.RekeyLibrary(f.ctx, f.lib); err != nil || rep.Rows != 1 || rep.Kept != 0 {
+		t.Fatalf("scan-end run after the grant: %+v %v, want dan's row moved", rep, err)
+	}
+	if f.rowCount(t, "listening_daily", f.lib, rkTrack3) != 0 || f.rowCount(t, "listening_daily", f.lib, rkBook) != 1 {
+		t.Error("dan's day total did not follow the grant to the book")
+	}
+}
+
 // TestRekeyRespellsWhatStays: the rows a path in another spelling keeps (a
 // disc folder's timeline rows, a navigation folder's favourite) move to the
 // index's spelling of that path, keeping their own length, while its book-level
