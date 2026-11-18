@@ -33,7 +33,7 @@ import { StatusText } from '@/components/status-text';
 import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
-import { formatDate, formatNumber, formatRecent } from '@/lib/format';
+import { counted, formatDate, formatNumber, formatRecent } from '@/lib/format';
 import { regionOptions } from '@/lib/regions';
 import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
@@ -472,9 +472,21 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
               settings={settings}
               field="upcoming"
               name="upcoming"
-              note={<UpcomingWindowText days={m.upcoming_window_days} />}
               runText={<UpcomingRunText status={m.upcoming_status} />}
             />
+          ) : null}
+          {m.upcoming_window_days !== undefined && m.available ? (
+            <SettingRow
+              title={t('settings.metadata.upcomingWindow')}
+              description={t('settings.metadata.upcomingWindowBody')}
+            >
+              <span data-testid="upcoming-window">
+                {t(
+                  'settings.metadata.upcomingWindowDays',
+                  counted(m.upcoming_window_days, i18n.resolvedLanguage ?? 'en'),
+                )}
+              </span>
+            </SettingRow>
           ) : null}
           {m.report_unknown !== undefined && m.available ? (
             <JobRow
@@ -555,7 +567,6 @@ function JobRow({
   settings,
   field,
   name,
-  note,
   runText,
   onTurnedOn,
 }: {
@@ -563,8 +574,6 @@ function JobRow({
   field: 'upcoming' | 'report_unknown';
   /** The i18n key and element id stem: settings.metadata.<name>, <name>-switch. */
   name: 'upcoming' | 'report';
-  /** A line about the job shown whether or not it is on. */
-  note?: ReactNode;
   runText: ReactNode;
   /** Called once a save has turned the job on. */
   onTurnedOn?: () => void;
@@ -580,7 +589,6 @@ function JobRow({
       description={
         <>
           {t(`settings.metadata.${name}Body`)}
-          {note}
           {!m.enabled ? (
             <span className="mt-1 block">{t('settings.metadata.needsMetadata')}</span>
           ) : null}
@@ -651,24 +659,6 @@ function ReportRunText({ status }: { status?: ReportStatus }) {
       ) : (
         text
       )}
-    </span>
-  );
-}
-
-/**
- * How long a release counts as new (the Series cards' "New"): config
- * upcoming.window_days as running, which only a restart changes. Nothing from
- * an older server, which doesn't send it.
- */
-function UpcomingWindowText({ days }: { days?: number }) {
-  const { t, i18n } = useTranslation();
-  if (days === undefined) return null;
-  return (
-    <span className="mt-1 block" data-testid="upcoming-window">
-      {t('settings.metadata.upcomingWindow', {
-        count: days,
-        formatted: formatNumber(days, i18n.resolvedLanguage ?? 'en'),
-      })}
     </span>
   );
 }

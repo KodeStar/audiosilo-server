@@ -630,9 +630,7 @@ describe('settings', () => {
       'Last checked 2 hr. ago: 12 series, 5 books coming or missing',
     );
     // The window is read-only, from the server's config.
-    expect(screen.getByTestId('upcoming-window')).toHaveTextContent(
-      'A release counts as new for 90 days.',
-    );
+    expect(screen.getByTestId('upcoming-window')).toHaveTextContent('90 days');
     await userEvent.setup().click(toggle);
     expect(await screen.findByText('Upcoming releases check is off')).toBeInTheDocument();
     expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
