@@ -370,16 +370,18 @@ const oidcConsolePath = "/admin/"
 // validNext reports whether s is a console page to return to after a sign-in
 // (/start's ?next=, server#406): a path under oidcConsolePath with an optional
 // query, printable ASCII (a page's own escapes kept), no fragment (the
-// sign-in's marker is the fragment), no backslash, no empty, "." or ".."
-// segment (a browser reads %2e as a dot too). Always a path on public_url's
-// own origin: it is appended to public_url. Anything else is dropped, never
-// an error: the sign-in lands on the console's start page.
+// sign-in's marker is the fragment), no backslash, no double quote (a browser
+// sends it escaped, and the sealed flow's JSON would spend two bytes on each:
+// oidcNextMax), no empty, "." or ".." segment (a browser reads %2e as a dot
+// too). Always a path on public_url's own origin: it is appended to
+// public_url. Anything else is dropped, never an error: the sign-in lands on
+// the console's start page.
 func validNext(s string) bool {
 	if len(s) > oidcNextMax || !strings.HasPrefix(s, oidcConsolePath) {
 		return false
 	}
 	for i := range len(s) {
-		if c := s[i]; c <= ' ' || c >= 0x7f || c == '\\' || c == '#' {
+		if c := s[i]; c <= ' ' || c >= 0x7f || c == '\\' || c == '#' || c == '"' {
 			return false
 		}
 	}

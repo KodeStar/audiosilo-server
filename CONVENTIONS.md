@@ -4025,7 +4025,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   cookie, but on plain http never under public_url's path: the console and the web player call the
   finish on their origin's own `/api/v1`; Max-Age 60), and a 303 to `/admin/#oidc=done` (or, for a console flow, the console page it
   started from: `/start`'s optional `next`, sealed as `Flow.Next`, kept through the hop, `validNext`:
-  a path under `/admin/` with an optional query, printable ASCII, no fragment, backslash, empty, `.`
+  a path under `/admin/` with an optional query, printable ASCII, no fragment, backslash, double
+  quote (it would cost the sealed JSON two bytes), empty, `.`
   or `..` segment (`%2e` counts as a dot), at most 512 bytes, anything else dropped for the start
   page; appended to public_url, so never another origin; the console's `oidcStartHref` sends the
   page asked for, server#406) or

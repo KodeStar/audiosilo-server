@@ -2044,6 +2044,7 @@ func TestOIDCConsoleDeepLink(t *testing.T) {
 	}
 	for _, bad := range []string{"//evil.example/admin/", "https://evil.example/admin/", "/web/connect", "/admin/../connect",
 		"/admin/%2e%2e/connect", "/admin//evil.example", "/admin/x#oidc=done", "/admin/\\evil.example", "/admin/x y",
+		`/admin/x?q="y"`,
 		"/admin/" + strings.Repeat("a", oidcNextMax)} {
 		if loc := land(t, "return=admin&next="+url.QueryEscape(bad)); loc != oidcPublic+oidcDoneAdmin {
 			t.Fatalf("next=%q landed on %q", bad, loc)
@@ -2083,12 +2084,46 @@ func TestValidNext(t *testing.T) {
 		"/admin//evil.example":            false,
 		"/admin/%5Cevil":                  false,
 		"/admin/x#y":                      false,
+		`/admin/x?q="y"`:                  false, // a browser sends %22; raw, the sealed JSON doubles it
+		"/admin/x?q=%22y%22":              true,
 		"/admin/x\ny":                     false,
 		"/admin/café":                     false,
 	} {
 		if got := validNext(s); got != want {
 			t.Errorf("validNext(%q) = %v, want %v", s, got, want)
 		}
+	}
+}
+
+// TestOIDCFlowCookiesFitAHeader: the longest deep link validNext takes, of any
+// one character it takes, beside the longest tag still seals into a flow
+// cookie small enough that the oidcMaxFlows a browser holds (a page elsewhere
+// can start them) stay well under a proxy's 8 KB header limit: no character
+// taken costs the sealed JSON more than its own byte.
+func TestOIDCFlowCookiesFitAHeader(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	taken := 0
+	for c := byte(' '); c < 0x80; c++ {
+		head := oidcConsolePath + "x?"
+		next := head + strings.Repeat(string(c), oidcNextMax-len(head))
+		if !validNext(next) {
+			continue
+		}
+		taken++
+		v, err := e.api.oidc.sealer.Seal(oidc.Flow{State: strings.Repeat("s", 43), Nonce: strings.Repeat("n", 43),
+			Verifier: strings.Repeat("v", 43), RedirectURI: e.api.oidcRedirectURI(), Return: oidcReturnAdmin,
+			Intent: strings.Repeat("i", 128), Next: next})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// "name=value; " as the Cookie header carries each.
+		if size := len(hostFlowCookieFor(strings.Repeat("s", 43))) + len(v) + 3; size*oidcMaxFlows > 5500 {
+			t.Errorf("a deep link of %q: %d bytes a flow, %d for %d", c, size, size*oidcMaxFlows, oidcMaxFlows)
+		}
+	}
+	if taken < 60 {
+		t.Fatalf("only %d characters taken: the check ran on too few", taken)
 	}
 }
 
