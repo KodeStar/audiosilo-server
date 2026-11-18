@@ -599,16 +599,14 @@ type storedEvent struct{ ended, status string }
 // that end), up to historyJoinOverlap before it; or, a finish or unfinish, by
 // the row's finish_changed_at (a late one keeps the chain's later end).
 func (e storedEvent) endsChain(kind, at string, finishChangedAt sql.NullString) bool {
-	switch {
-	case at == e.ended:
+	if at == e.ended {
 		return true
-	case kind != EventListen:
+	}
+	if kind != EventListen {
 		return finishChangedAt.String == e.ended
-	case e.status != statusApplied:
-		return false
 	}
 	end, last := parseSessionTime(e.ended), parseSessionTime(at)
-	return !last.Before(end) && !last.After(end.Add(historyJoinOverlap))
+	return e.status == statusApplied && !last.Before(end) && !last.After(end.Add(historyJoinOverlap))
 }
 
 // storedEventIDs is which of the prepared events' ids the user's log already
