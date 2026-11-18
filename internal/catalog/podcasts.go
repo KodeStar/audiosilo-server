@@ -889,7 +889,8 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		var failures int
 		var run feedRun
 		var due, checked sql.NullString // the next scheduled poll and the last check, as stored
-		err = tx.QueryRowContext(ctx, `SELECT failures,feed_failures,feed_network_failures,failing_announced,failing_code,next_poll_at,last_checked_at FROM podcast_feed_state WHERE library_id=? AND show_path=? AND show_id=?`, *j.LibraryID, show, expected).Scan(&failures, &run.failures, &run.network, &run.announced, &run.code, &due, &checked)
+		var stored string               // the last check's error code
+		err = tx.QueryRowContext(ctx, `SELECT failures,feed_failures,feed_network_failures,failing_announced,failing_code,next_poll_at,last_checked_at,error_code FROM podcast_feed_state WHERE library_id=? AND show_path=? AND show_id=?`, *j.LibraryID, show, expected).Scan(&failures, &run.failures, &run.network, &run.announced, &run.code, &due, &checked, &stored)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -943,6 +944,14 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			if j.Kind == bridge.KindPodcastPoll && uncountedCheck(result.Code, scheduled) && due.Valid {
 				backoff = failures
 				if result.RetryAfterSeconds == nil || due.String > at {
+		} else if stored == "gone" && result.Code != "gone" {
+			// A feed that ended stays ended whatever a later check fails with
+			// (a follower's Check now: the scheduler asks no more): `gone`
+			// and no next poll are what keep the scheduled polls stopped
+			// (DuePodcastPolls), and only a success brings the feed back. The
+			// check's time (Check now's one a minute reads it), the run and a
+			// lost secret are still kept.
+			_, err = tx.ExecContext(ctx, `UPDATE podcast_feed_state SET last_checked_at=?,secret_missing=MAX(secret_missing,?),feed_failures=?,feed_network_failures=?,failing_announced=?,failing_code=? WHERE library_id=? AND show_path=? AND show_id=?`, stamp, result.Code == "feed_secret_missing", run.failures, run.network, run.announced, run.code, *j.LibraryID, show, expected)
 					at = due.String
 				}
 			}

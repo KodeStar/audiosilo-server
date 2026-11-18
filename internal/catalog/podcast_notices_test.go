@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -679,6 +680,64 @@ func TestPodcastCheckNowWithoutRequesterIsNotCounted(t *testing.T) {
 }
 
 // The failing notice's event is recorded in the fold's own transaction: a
+// A feed that ended (`gone`) stays ended when a follower's Check now of it
+// fails another way: the scheduled polls stay stopped (no next poll, still
+// `gone`), nothing is told again, and only a success brings it back.
+func TestPodcastGoneFeedStaysStoppedAfterFailedCheck(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	now := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	log := listenNotices(c)
+	lib := podcastShowsLib(t, c, ctx, 0)
+	user := seedUser(t, c, ctx)
+	if err := c.FollowPodcast(ctx, user, lib.ID, "Example Show", "a1b2c3d4e5f60718"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, 1, bridge.StateFailed, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	if got := log.take(); len(got) != 1 || got[0].Code != "gone" {
+		t.Fatalf("gone told %+v", got)
+	}
+	var checked string
+	state := func() (code string, next sql.NullString) {
+		t.Helper()
+		if err := c.db.QueryRowContext(ctx, `SELECT error_code,next_poll_at,last_checked_at FROM podcast_feed_state WHERE library_id=?`, lib.ID).Scan(&code, &next, &checked); err != nil {
+			t.Fatal(err)
+		}
+		return code, next
+	}
+	for i, code := range []string{"http_500", "timeout", "bridge_lost", "feed_secret_missing"} {
+		if err := c.FoldPodcastJob(ctx, followerPoll(lib.ID, int64(2+i), bridge.StateFailed, code, &bridge.Requester{ID: user})); err != nil {
+			t.Fatal(err)
+		}
+		if got, next := state(); got != "gone" || next.Valid {
+			t.Fatalf("after a Check now failing with %s: code %q, next poll %q, want gone and none", code, got, next.String)
+		}
+		if due, err := c.DuePodcastPolls(ctx, 10); err != nil || len(due) != 0 {
+			t.Fatalf("after a Check now failing with %s the scheduler would poll %+v (%v)", code, due, err)
+		}
+	}
+	// Each check still moves the last check's time (Check now's cooldown).
+	if want := now.Format(time.RFC3339); checked != want {
+		t.Fatalf("last checked %s, want the failed check's %s", checked, want)
+	}
+	// The lost secret is the one thing told (once): it differs from `gone`.
+	if got := log.take(); len(got) != 1 || got[0].Code != "feed_secret_missing" {
+		t.Fatalf("failed checks of a gone feed told %+v, want the lost secret only", got)
+	}
+	if err := c.FoldPodcastJob(ctx, followerPoll(lib.ID, 10, bridge.StateDone, "", &bridge.Requester{ID: user})); err != nil {
+		t.Fatal(err)
+	}
+	if got, next := state(); got != "" || !next.Valid {
+		t.Fatalf("after a successful check: code %q, next poll valid %v, want back on schedule", got, next.Valid)
+	}
+	if got := log.take(); len(got) != 1 || got[0].Kind != PodcastFeedRecovered {
+		t.Fatalf("a gone feed checked fine told %+v, want recovered", got)
+	}
+}
+
 // record that fails leaves failing_announced unset (the fold fails and is
 // tried again), so the next fold announces it, once, and never says "back"
 // for a notice that was never recorded.
