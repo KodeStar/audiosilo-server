@@ -358,9 +358,26 @@ func flowKey(state string) string {
 	return state[:16]
 }
 
-// flowKeyPattern is a flow's key as flowKey makes it: a finish's "flow" and
-// a done cookie's name hold one.
-var flowKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16}$`)
+// validFlowKey reports whether s is a flow's key as flowKey makes it: a
+// finish's "flow" and a done cookie's name hold one.
+func validFlowKey(s string) bool { return s != "" && flowKey(s) == s }
+
+// heldCookie is an OIDC cookie the browser sent: its name as setOIDCCookie
+// takes it (the base name + the flow's state or key) and its value.
+type heldCookie struct{ name, value string }
+
+// heldCookies are the request's cookies named base + a key valid takes (under
+// oidcCookieName's prefix), in the order the browser sent them.
+func (a *API) heldCookies(r *http.Request, base string, valid func(string) bool) []heldCookie {
+	prefix, _, _ := a.oidcCookieName(base)
+	var out []heldCookie
+	for _, c := range r.Cookies() {
+		if key, found := strings.CutPrefix(c.Name, prefix); found && valid(key) {
+			out = append(out, heldCookie{name: base + key, value: c.Value})
+		}
+	}
+	return out
+}
 
 // heldFlow is a flow cookie the browser sent: its name as oidcCookieName takes
 // it, and its flow (the zero Flow when it doesn't open: IssuedAt 0, no intent).
@@ -374,15 +391,10 @@ type heldFlow struct {
 // back, oldest first (one that doesn't open, a restart's or tampered with,
 // counts as oldest).
 func (a *API) heldFlows(r *http.Request) []heldFlow {
-	prefix, _, _ := a.oidcCookieName(oidcCookie)
 	var out []heldFlow
-	for _, c := range r.Cookies() {
-		key, found := strings.CutPrefix(c.Name, prefix)
-		if !found || !statePattern.MatchString(key) {
-			continue
-		}
-		f, _ := a.oidc.sealer.Open(c.Value) // the zero Flow when it doesn't open
-		out = append(out, heldFlow{name: oidcCookie + key, flow: f})
+	for _, c := range a.heldCookies(r, oidcCookie, statePattern.MatchString) {
+		f, _ := a.oidc.sealer.Open(c.value) // the zero Flow when it doesn't open
+		out = append(out, heldFlow{name: c.name, flow: f})
 	}
 	slices.SortStableFunc(out, func(x, y heldFlow) int {
 		return cmp.Compare(x.flow.IssuedAt, y.flow.IssuedAt)
@@ -774,20 +786,22 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 		// from a page before the key.
 		Flow string `json:"flow"`
 	}
-	if err := decodeJSONOptional(r, &req, 0); err != nil || (req.Flow != "" && !flowKeyPattern.MatchString(req.Flow)) {
+	if err := decodeJSONOptional(r, &req, 0); err != nil || (req.Flow != "" && !validFlowKey(req.Flow)) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	held := a.heldDone(r, req.Flow, req.Intent)
-	dropHeld := func() { a.setOIDCCookie(w, held.name, "", -1) }
+	dropHeld := func() {
+		if held.name != "" {
+			a.setOIDCCookie(w, held.name, "", -1)
+		}
+	}
 	token, intent, _ := strings.Cut(held.value, oidcIntentSep)
 	if !validIntent(intent) {
 		intent = ""
 	}
 	if token == "" {
-		if held.name != "" {
-			dropHeld()
-		}
+		dropHeld()
 		writeErrorCode(w, http.StatusUnauthorized, codeOIDCNoSignIn, "no single sign-on to finish in this browser")
 		return
 	}
@@ -827,35 +841,27 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// heldDoneCookie is a finished sign-in's cookie the browser sent: its name
-// as setOIDCCookie takes it (oidcDoneCookie + the flow's key) and its value
-// (the token, and the tag after oidcIntentSep).
-type heldDoneCookie struct{ name, value string }
-
 // heldDone is the finished sign-in a finish is for: the done cookie of flow
 // (the key the landing page was given) when the finish names one, else (a
 // page from before the key) the first held whose tag is the one expected
 // (intent, when given), else the first held. The zero value when the browser
-// holds none.
-func (a *API) heldDone(r *http.Request, flow string, intent *string) heldDoneCookie {
+// holds none. Its value is the token, and the tag after oidcIntentSep.
+func (a *API) heldDone(r *http.Request, flow string, intent *string) heldCookie {
 	if flow != "" {
 		if v := a.oidcCookieValue(r, oidcDoneCookie+flow); v != "" {
-			return heldDoneCookie{name: oidcDoneCookie + flow, value: v}
+			return heldCookie{name: oidcDoneCookie + flow, value: v}
 		}
-		return heldDoneCookie{}
+		return heldCookie{}
 	}
-	prefix, _, _ := a.oidcCookieName(oidcDoneCookie)
-	var first heldDoneCookie
-	for _, c := range r.Cookies() {
-		key, found := strings.CutPrefix(c.Name, prefix)
-		if !found || !flowKeyPattern.MatchString(key) || c.Value == "" {
+	var first heldCookie
+	for _, h := range a.heldCookies(r, oidcDoneCookie, validFlowKey) {
+		if h.value == "" {
 			continue
 		}
-		h := heldDoneCookie{name: oidcDoneCookie + key, value: c.Value}
 		if intent == nil {
 			return h
 		}
-		if _, tag, _ := strings.Cut(c.Value, oidcIntentSep); subtle.ConstantTimeCompare([]byte(tag), []byte(*intent)) == 1 {
+		if _, tag, _ := strings.Cut(h.value, oidcIntentSep); subtle.ConstantTimeCompare([]byte(tag), []byte(*intent)) == 1 {
 			return h
 		}
 		if first.name == "" {

@@ -379,10 +379,7 @@ export const api = {
    * hold, never the stored session's end.
    */
   oidcFinish: (flow?: string) =>
-    request<LoginResponse>('POST', OIDC_FINISH_PATH, {
-      device_name: 'admin-web',
-      ...(flow ? { flow } : {}),
-    }),
+    request<LoginResponse>('POST', OIDC_FINISH_PATH, { device_name: 'admin-web', flow }),
   /** Revokes the stored session, or `token` when given (never touching storage). */
   logout: (token?: string) => request<void>('POST', '/auth/logout', undefined, token),
   me: () => request<User>('GET', '/me'),

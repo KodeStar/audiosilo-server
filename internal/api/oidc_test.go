@@ -701,14 +701,11 @@ func TestOIDCFinishExpectedIntent(t *testing.T) {
 	}
 	finish := func(t *testing.T, done *http.Cookie, body string) (*http.Response, map[string]any) {
 		t.Helper()
-		headers := map[string]string{}
+		var cookies []*http.Cookie
 		if done != nil {
-			headers["Cookie"] = done.Name + "=" + done.Value
+			cookies = append(cookies, done)
 		}
-		resp, b := e.doHeaders(t, "POST", oidcFinishPath, "", body, headers)
-		var out map[string]any
-		_ = json.Unmarshal([]byte(b), &out)
-		return resp, out
+		return e.finishWith(t, body, cookies...)
 	}
 	// refused: a 403 with the code, no session, the cookie cleared, and the
 	// sign-in's token left unspent.
