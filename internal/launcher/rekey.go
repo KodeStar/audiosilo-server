@@ -16,7 +16,8 @@ const keyPathsEvery = 5 * time.Second
 
 // keyPathsProgress is catalog.KeyPaths' progress at the start: a line at most
 // every keyPathsEvery while it runs (the first start after the upgrade keys
-// every book), so a large library's start is seen to move. The last count is the "keyed the books' paths" line after it.
+// every book), so a large library's start is seen to move. The last count is
+// the "keyed the books' paths" line after it.
 func keyPathsProgress(log *slog.Logger) func(done, total int) {
 	last := time.Now()
 	return func(done, total int) {

@@ -478,13 +478,15 @@ func TestKeyPathsResumes(t *testing.T) {
 }
 
 // TestSpellingPlans: a lookup by key reads the small partial index, and the
-// start's "anything unkeyed?" check its own, never the whole table.
+// start's count of the unkeyed books and its reads of them their own, never
+// the whole table.
 func TestSpellingPlans(t *testing.T) {
 	t.Parallel()
 	c, _ := newTestCatalog(t)
 	for q, index := range map[string]string{
-		`SELECT id FROM books WHERE library_id = 1 AND path_key IN ('x') AND path_key != ''`: "idx_books_path_key",
-		`SELECT EXISTS(SELECT 1 FROM books WHERE path_key IS NULL)`:                          "idx_books_path_key_unset",
+		`SELECT id FROM books WHERE library_id = 1 AND path_key IN ('x') AND path_key != ''`:                "idx_books_path_key",
+		`SELECT COUNT(*) FROM books WHERE path_key IS NULL AND id > 0`:                                      "idx_books_path_key_unset",
+		`SELECT id, rel_path, path_key FROM books WHERE path_key IS NULL AND id > 0 ORDER BY id LIMIT 2000`: "idx_books_path_key_unset",
 	} {
 		if plan := strings.Join(queryPlan(t, c, q, nil), "\n"); !strings.Contains(plan, index) {
 			t.Errorf("%s does not use %s:\n%s", q, index, plan)
