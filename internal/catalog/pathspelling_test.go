@@ -91,7 +91,7 @@ func TestSpelling(t *testing.T) {
 		{"colliding books", "Éléna", "Éléna"},
 		{"colliding navigation folders", "Coll/Éléna", "Coll/Éléna"},
 	} {
-		got, err := c.Spelling(ctx, lib, tc.in)
+		got, err := c.Spelling(ctx, lib, tc.in, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -101,9 +101,62 @@ func TestSpelling(t *testing.T) {
 	}
 	// Another library holds none of them.
 	other, _ := c.CreateLibrary(ctx, Library{Name: "M", Root: "/tmp/m"})
-	if got, err := c.Spelling(ctx, other.ID, nfdEmile); err != nil || got != nfdEmile {
+	if got, err := c.Spelling(ctx, other.ID, nfdEmile, nil); err != nil || got != nfdEmile {
 		t.Errorf("another library: %+q %v, want the path as given", got, err)
 	}
+}
+
+// TestSpellingScope (server#210, security): a spelling the caller's scope
+// refuses counts as none. With an NFC and an NFD folder side by side and a
+// grant on the NFC one only, a third spelling reads as the NFC one, as a book,
+// a track or a navigation folder, and as a list ref, exactly as it does when
+// the NFD one is not there: nothing outside the grant changes the answer. A
+// caller granted neither gets the path as given.
+func TestSpellingScope(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib := seedSpellings(t, c)
+	const (
+		nfc = "\u00c9l\u00e9na"
+		nfd = "E\u0301le\u0301na"
+		mix = "\u00c9le\u0301na"
+	)
+	within := func(rule string) func(string) bool {
+		return func(p string) bool { return p == rule || strings.HasPrefix(p, rule+"/") }
+	}
+	onlyNFC := func(p string) bool { return within(nfc)(p) || within("Coll/"+nfc)(p) }
+	none := func(string) bool { return false }
+	cases := []struct{ in, want string }{
+		{mix, nfc},
+		{mix + "/01.mp3", nfc + "/01.mp3"},
+		{"Coll/" + mix, "Coll/" + nfc},
+	}
+	check := func(when string) {
+		t.Helper()
+		for _, tc := range cases {
+			if got, err := c.Spelling(ctx, lib, tc.in, onlyNFC); err != nil || got != tc.want {
+				t.Errorf("%s: Spelling(%+q) in the NFC grant = %+q %v, want %+q", when, tc.in, got, err, tc.want)
+			}
+			if got, err := c.Spelling(ctx, lib, tc.in, none); err != nil || got != tc.in {
+				t.Errorf("%s: Spelling(%+q) with no grant = %+q %v, want it as given", when, tc.in, got, err)
+			}
+		}
+		scopes := []Scope{{LibraryID: lib, Paths: []string{nfc}}}
+		got, err := c.listableRefs(ctx, []Ref{{LibraryID: lib, Path: mix}}, scopes)
+		if want := []Ref{{LibraryID: lib, Path: nfc}}; err != nil || !slices.Equal(got, want) {
+			t.Errorf("%s: listable %+v %v, want %+v", when, got, err, want)
+		}
+	}
+	check("both there")
+	// Without a scope, the two side by side are a collision: as given.
+	if got, err := c.Spelling(ctx, lib, mix, nil); err != nil || got != mix {
+		t.Errorf("Spelling(%+q) of every spelling = %+q %v, want it as given", mix, got, err)
+	}
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM books WHERE library_id = ? AND rel_path IN (?, ?)`,
+		lib, nfd, "Coll/"+nfd+"/B"); err != nil {
+		t.Fatal(err)
+	}
+	check("the NFD one gone")
 }
 
 // TestSpellingASCIINoLookup: a path with one Unicode spelling (every ASCII
@@ -116,10 +169,10 @@ func TestSpellingASCIINoLookup(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := c.Spelling(ctx, 1, "Author/Book/01.mp3"); err != nil || got != "Author/Book/01.mp3" {
+	if got, err := c.Spelling(ctx, 1, "Author/Book/01.mp3", nil); err != nil || got != "Author/Book/01.mp3" {
 		t.Fatalf("ASCII path: %q %v, want it without a lookup", got, err)
 	}
-	if _, err := c.Spelling(ctx, 1, nfdEmile); err == nil {
+	if _, err := c.Spelling(ctx, 1, nfdEmile, nil); err == nil {
 		t.Fatal("an accented path answered without its lookup")
 	}
 }
@@ -469,7 +522,7 @@ func TestBookHoldingBounded(t *testing.T) {
 		t.Errorf("deep folder inside a book as a file: %v, want ErrNotFound", err)
 	}
 	for _, p := range []string{deep + "01.mp3", folder} {
-		if spelled, err := c.Spelling(ctx, lib, unorm.NFD.String(p)); err != nil || spelled != p {
+		if spelled, err := c.Spelling(ctx, lib, unorm.NFD.String(p), nil); err != nil || spelled != p {
 			t.Errorf("deep NFD %+q spelled %+q %v, want the index's", p, spelled, err)
 		}
 	}

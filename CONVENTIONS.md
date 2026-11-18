@@ -1133,19 +1133,22 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`rel_path` or `path_key`, the partial index); a file of, or a folder inside (a disc folder), the
   innermost folder book above it, its files compared by NFC, a folder cut to `p`'s depth; a folder
   holding books, each name as given, NFC or NFD (at most `maxFolderSpellings` combinations, one
-  `FoldersHoldingBooks` read). Two
-  indexed paths that both read as `p` (an NFC and an NFD folder side by side on a byte-exact disk)
-  leave `p` as given: it never guesses. Never the disk, never an on-demand index. Applied by
+  `FoldersHoldingBooks` read). It takes the caller's scope (`allow`, nil for every path): a
+  spelling the scope refuses counts as none, so nothing outside it changes the answer (a third
+  spelling of an NFC and an NFD folder side by side reads as the one granted, whether the other is
+  there or not). Two indexed paths the scope admits that both read as `p` (an NFC and an NFD folder
+  side by side on a byte-exact disk) leave `p` as given: it never guesses. Never the disk, never an
+  on-demand index. Applied by
   `scopedPath` / `scopedPathIn` (`spelledPathInScope`: cap, library, clean, spelling, scope, hidden),
   so every route on them (item, chapters, cover, stream, meta, next, ebook, readalong,
   reading-progress, progress, sync events, bookmarks, notes, history, favourites, ratings, list adds,
   `POST /cast/token`) reads and stores the index's spelling; by a list's replace and remove
   (`catalog.listableRefs`, `removalRefs`); and by `/fs`
   (`handleBrowseFS` lists the folder in the index's spelling, so the listing's paths match the books
-  `annotateWithBooks` finds). `spelledIn` keeps the index's spelling only when the caller's scope
-  (for `/fs`, `VisibleInBrowse`) allows it, else the path as given: a rule naming another spelling
-  byte for byte never learns, from a 403 where a missing path reads 404, that an indexed path it
-  can't reach is there. A failed lookup is a 500 (a timed-out one a 503), never the spelling given.
+  `annotateWithBooks` finds). `spelledIn` passes the caller's scope (for `/fs`, `VisibleInBrowse`;
+  a list replace's, per ref; a list remove and the re-key every spelling), so a rule naming another
+  spelling byte for byte never learns, from a 403 where a missing path reads 404, that an indexed
+  path it can't reach is there. A failed lookup is a 500 (a timed-out one a 503), never the spelling given.
   Unchanged on purpose: `CleanRelPath` and share rules stay byte-exact; the on-demand index takes
   only the on-disk spelling (`dirPresent`), so another spelling of an unindexed book stays 404; the
   admin's folder-override route, the admin's edit of a person's progress (`exactPath`: the row

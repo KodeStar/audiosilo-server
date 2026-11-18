@@ -563,7 +563,9 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 			if !normSensitive(r.Path) && !held[r] {
 				continue
 			}
-			if _, r.Path, err = c.spelledBook(ctx, r); err != nil {
+			lib := r.LibraryID
+			allow := func(p string) bool { return ScopesAllow(scopes, Ref{LibraryID: lib, Path: p}) }
+			if _, r.Path, err = c.spelledBook(ctx, r, allow); err != nil {
 				return nil, err
 			}
 		}
@@ -638,10 +640,11 @@ func (c *Catalog) heldRefs(ctx context.Context, refs []Ref) (map[Ref]bool, error
 	return held, nil
 }
 
-// spelledBook is ref's path in the index's spelling (Spelling) and the book
-// that is or holds it (BookPathAt), "" for none.
-func (c *Catalog) spelledBook(ctx context.Context, ref Ref) (spelled, book string, err error) {
-	if spelled, err = c.Spelling(ctx, ref.LibraryID, ref.Path); err != nil {
+// spelledBook is ref's path in the index's spelling (Spelling, of the
+// spellings allow admits; nil: every one) and the book that is or holds it
+// (BookPathAt), "" for none.
+func (c *Catalog) spelledBook(ctx context.Context, ref Ref, allow func(string) bool) (spelled, book string, err error) {
+	if spelled, err = c.Spelling(ctx, ref.LibraryID, ref.Path, allow); err != nil {
 		return "", "", err
 	}
 	book, err = c.BookPathAt(ctx, ref.LibraryID, spelled)
@@ -653,10 +656,11 @@ func (c *Catalog) spelledBook(ctx context.Context, ref Ref) (spelled, book strin
 
 // removalRefs is what a remove of ref from a list takes off: ref as given (a
 // stray row can still be cleaned up), its spelling in the index, and the book
-// it names (spelledBook), so a remove by a track path or another spelling takes
-// the book's entry off (server#210).
+// it names (spelledBook, every spelling: a remove needs no access, and only
+// takes the caller's own rows off), so a remove by a track path or another
+// spelling takes the book's entry off (server#210).
 func (c *Catalog) removalRefs(ctx context.Context, ref Ref) ([]Ref, error) {
-	spelled, book, err := c.spelledBook(ctx, ref)
+	spelled, book, err := c.spelledBook(ctx, ref, nil)
 	if err != nil {
 		return nil, err
 	}

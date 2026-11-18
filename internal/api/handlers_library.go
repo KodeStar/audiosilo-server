@@ -326,19 +326,13 @@ func (a *API) spelledPathInScope(ctx context.Context, lib *catalog.Library, scop
 	return relInScope(lib, scope, rel)
 }
 
-// spelledIn is rel in the index's spelling (catalog.Spelling) when allow (the
-// caller's scope) allows that spelling, else rel as given: a spelling outside
-// the caller's access is never taken, so its answer (a 403 where rel would read
-// as missing) can't tell them an indexed path they can't reach is there.
+// spelledIn is rel in the index's spelling (catalog.Spelling) among the
+// spellings allow (the caller's scope) admits, else rel as given: a spelling
+// outside the caller's access is never taken, nor counted, so the answer (a 403
+// where rel would read as missing, or a third spelling's) can't tell them an
+// indexed path they can't reach is there.
 func (a *API) spelledIn(ctx context.Context, libraryID int64, allow func(string) bool, rel string) (string, error) {
-	spelled, err := a.cat.Spelling(ctx, libraryID, rel)
-	if err != nil {
-		return "", err
-	}
-	if spelled != rel && allow != nil && !allow(spelled) {
-		return rel, nil
-	}
-	return spelled, nil
+	return a.cat.Spelling(ctx, libraryID, rel, allow)
 }
 
 // cleanedPath is rawPath cleaned (catalog.CleanRelPath), or the 400 for one over
