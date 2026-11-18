@@ -678,7 +678,7 @@ func bookTitle(album, title string) string {
 // (server#272); Title otherwise. An album that names only the book's series
 // then gives way as TitleNotSeries says.
 func (m *Metadata) PartsTitle() string {
-	if m.AlbumTag != "" && m.Title == m.TitleTag && m.TitleTag != m.AlbumTag {
+	if m.AlbumTag != "" && m.Title == m.TitleTag {
 		return m.AlbumTag
 	}
 	return m.Title
