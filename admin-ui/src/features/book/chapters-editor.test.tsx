@@ -854,7 +854,7 @@ describe('the chapter editor', () => {
 
     // Chrome sets paused after a failed load: the Play pressed before it says
     // the audio is to play on with the new token, not the element.
-    const tokenOf = (audio: HTMLAudioElement) =>
+    const srcParams = (audio: HTMLAudioElement) =>
       new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams;
 
     it('plays on with a new token after Play, though the failed load left it paused', async () => {
@@ -863,7 +863,7 @@ describe('the chapter editor', () => {
       expect(play).toHaveBeenCalledTimes(1);
       expect(audio.paused).toBe(true);
       fireEvent.error(audio);
-      await waitFor(() => expect(tokenOf(audio).get('token')).toBe('media-tok-2'));
+      await waitFor(() => expect(srcParams(audio).get('token')).toBe('media-tok-2'));
       await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
     });
 
@@ -872,10 +872,10 @@ describe('the chapter editor', () => {
       fireEvent.play(audio);
       await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
       await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
-      expect(Number(tokenOf(audio).get('t'))).toBe(1201);
+      expect(Number(srcParams(audio).get('t'))).toBe(1201);
       fireEvent.error(audio);
-      await waitFor(() => expect(tokenOf(audio).get('token')).toBe('media-tok-2'));
-      expect(Number(tokenOf(audio).get('t'))).toBe(1201);
+      await waitFor(() => expect(srcParams(audio).get('token')).toBe('media-tok-2'));
+      expect(Number(srcParams(audio).get('t'))).toBe(1201);
       await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
     });
 
@@ -884,7 +884,7 @@ describe('the chapter editor', () => {
       fireEvent.play(audio);
       fireEvent.pause(audio);
       fireEvent.error(audio);
-      await waitFor(() => expect(tokenOf(audio).get('token')).toBe('media-tok-2'));
+      await waitFor(() => expect(srcParams(audio).get('token')).toBe('media-tok-2'));
       await new Promise((r) => setTimeout(r, 50));
       expect(play).not.toHaveBeenCalled();
     });
@@ -927,7 +927,7 @@ describe('the chapter editor', () => {
       expect(mints()).toBe(1);
     });
 
-    it('lets a stream be that has started, or that the server had a slot for', async () => {
+    it('lets a stream be that has started', async () => {
       const started = await stall(busy);
       fireEvent.playing(started.audio);
       started.wait();

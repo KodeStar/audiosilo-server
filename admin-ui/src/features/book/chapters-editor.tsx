@@ -565,7 +565,7 @@ function Scrubber({
   const previewing = useRef(false);
   // Whether the audio is meant to play: Play pressed (or the audio playing)
   // and no pause since. A failed load is no pause: Chrome sets paused then, so
-  // a new token resumes by this, not by the element.
+  // a new token resumes by this, not by the element (meantToPlay).
   const wanted = useRef(false);
   const restream = useRef<ReturnType<typeof setTimeout>>(undefined);
   // A paused transcode's wait before it lets go of its stream (PAUSED_HOLD_MS).
@@ -584,7 +584,7 @@ function Scrubber({
   // old one meanwhile (remint). Left on when the mint fails: the old token is
   // why the stream failed, so it is not asked for with it again.
   const [minting, setMinting] = useState(false);
-  // The last load failed (onError) and none has begun since: Chrome leaves
+  // The last load failed (onError) and none has begun since: Safari may leave
   // paused false then, so Play loads it again rather than pausing nothing.
   const broken = useRef(false);
   // A transcode the server had no slot for: how often it was asked for again,
@@ -786,6 +786,9 @@ function Scrubber({
 
   // Where the audio is, in seconds into the file.
   const now = () => from + (audio.current?.currentTime ?? 0);
+  // Whether a stream asked for again plays: the audio playing, Play pressed
+  // and not paused since (wanted), or "Play 5 s" waiting for it to start.
+  const meantToPlay = (a: HTMLAudioElement) => !a.paused || wanted.current || previewing.current;
   // Where a transcode asked for again starts: a seek waiting to be asked for,
   // else where the audio is; never past the file's end.
   const head = () => roundMs(Math.min(pending.current ?? now(), length));
@@ -807,7 +810,7 @@ function Scrubber({
     restream.current = setTimeout(() => {
       // Asked for: the seek waits no more (its stream may be the same URL).
       pending.current = null;
-      ask(to, !a.paused || wanted.current || previewing.current);
+      ask(to, meantToPlay(a));
     }, RESTREAM_MS);
   };
   const nudge = (d: number) => seek((pending.current ?? now()) + d);
@@ -841,7 +844,7 @@ function Scrubber({
       return;
     }
     const place = head();
-    const play = !a.paused || wanted.current || previewing.current;
+    const play = meantToPlay(a);
     pending.current = null;
     setMinting(true);
     // A failed mint says so (token.isError) with the stream left off.
