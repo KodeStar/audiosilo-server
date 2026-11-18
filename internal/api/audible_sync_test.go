@@ -976,8 +976,10 @@ func TestAudibleSyncClaimLeavesOutABadTitle(t *testing.T) {
 
 // A claim that takes an audible.sync the server can never fill (params stored
 // unreadable) ends it with its own reason and answers as if there were no job
-// (204, the Bridge has nothing to back off from), never a 500; the claim
-// after it hands out the next job.
+// (204, the Bridge has nothing to back off from), never a 500, and its ending
+// folds to nothing (FoldAudibleSync reads no params it needn't). The claim
+// going on to the job behind it is bridge's
+// TestAudibleSyncClaimUnreadableParamsFailed.
 func TestAudibleSyncClaimUnreadableParamsAnswersNoJob(t *testing.T) {
 	t.Parallel()
 	s := newAudibleSyncEnv(t)
@@ -997,6 +999,9 @@ func TestAudibleSyncClaimUnreadableParamsAnswersNoJob(t *testing.T) {
 	stored, err := s.api.bridge.Job(ctx, job.ID)
 	if err != nil || stored.State != bridge.StateFailed || !strings.Contains(stored.Error, "which Audible account") {
 		t.Fatalf("job = %+v, %v; want it failed naming its unreadable account", stored, err)
+	}
+	if err := s.cat.FoldAudibleSync(ctx, *stored); err != nil {
+		t.Fatalf("fold = %v; want nothing to record", err)
 	}
 }
 

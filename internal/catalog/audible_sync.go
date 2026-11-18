@@ -423,30 +423,35 @@ func (c *Catalog) MarkAudibleSyncQueued(ctx context.Context, account string) err
 // or after it (refusalEndedSince: a fresh sign-in while it ran, server#303, or
 // one the two's whole seconds can't order, server#359). Any other ending
 // changes nothing (the next one is due as usual; audible_sign_in, Audible
-// refusing the sign-in for now, among them). A user-state write.
+// refusing the sign-in for now, among them), and its params aren't read: a
+// sync the server ended because they can't be (bridge.fillAudibleSync) folds
+// to nothing rather than an error. A user-state write.
 func (c *Catalog) FoldAudibleSync(ctx context.Context, job bridge.Job) error {
+	synced := job.Kind == bridge.KindAudibleSync && bridge.AudibleSynced(job)
+	if !synced && bridge.AudibleRefusalCode(job) != bridge.SyncAudibleRefused {
+		return nil
+	}
 	account, err := bridge.AudibleAccountOf(job)
 	if err != nil {
 		return err
 	}
-	switch {
-	case job.Kind == bridge.KindAudibleSync && bridge.AudibleSynced(job):
+	if synced {
 		_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET last_sync_at = ? WHERE account = ?`, c.ts(), account)
-	case bridge.AudibleRefusalCode(job) == bridge.SyncAudibleRefused:
-		var ended sql.NullString
-		err = c.db.QueryRowContext(ctx, `SELECT refusal_ended_at FROM audible_accounts WHERE account = ?`, account).Scan(&ended)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		if err != nil || refusalEndedSince(ended, job.ClaimedAt) {
-			return err
-		}
-		// Only while the refusal_ended_at read stands: a sign-in or complete
-		// poll landing between the read and this write ended the refusal after
-		// the claim, so it marks nothing.
-		_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET refused_at = ? WHERE account = ? AND refusal_ended_at IS ?`,
-			c.ts(), account, ended)
+		return err
 	}
+	var ended sql.NullString
+	err = c.db.QueryRowContext(ctx, `SELECT refusal_ended_at FROM audible_accounts WHERE account = ?`, account).Scan(&ended)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil || refusalEndedSince(ended, job.ClaimedAt) {
+		return err
+	}
+	// Only while the refusal_ended_at read stands: a sign-in or complete poll
+	// landing between the read and this write ended the refusal after the
+	// claim, so it marks nothing.
+	_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET refused_at = ? WHERE account = ? AND refusal_ended_at IS ?`,
+		c.ts(), account, ended)
 	return err
 }
 
