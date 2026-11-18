@@ -632,9 +632,8 @@ func redactPodcastJSON(raw json.RawMessage) json.RawMessage {
 
 // RedactedJob is suitable for console and listener responses; claim injection is
 // the sole response path that carries a private credential. Stored JSON that
-// can't be read (a damaged row) answers null (readableJob), flagged for params.
+// can't be read (a damaged row) already reads as null (scanJob, readableJob).
 func RedactedJob(j Job) Job {
-	j = readableJob(j)
 	if !IsPodcast(j.Kind) {
 		return j
 	}
@@ -650,23 +649,6 @@ func RedactedJob(j Job) Job {
 	j.Error = redactPodcastText(j.Error)
 	j.Progress = redactPodcastJSON(j.Progress)
 	j.Result = redactPodcastJSON(j.Result)
-	return j
-}
-
-// readableJob is j with its stored params, progress and result that aren't
-// JSON (a damaged row) set to null, and its params flagged so
-// (ParamsUnreadable): encoding a json.RawMessage that isn't JSON fails, and a
-// handler that has written its 200 by then answers an empty body.
-func readableJob(j Job) Job {
-	if j.Params != nil && !json.Valid(j.Params) {
-		j.Params, j.ParamsUnreadable = nil, true
-	}
-	if j.Progress != nil && !json.Valid(j.Progress) {
-		j.Progress = nil
-	}
-	if j.Result != nil && !json.Valid(j.Result) {
-		j.Result = nil
-	}
 	return j
 }
 
@@ -780,19 +762,18 @@ func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job,
 
 // claimPriority claims the next job (claimSecret), then gives a claimed
 // audible.sync its titles (fillAudibleSync) outside the podcast secrets' lock.
-// A job of any kind whose stored params can't be read (not the JSON its
-// queueing stored, or for a podcast.subscribe not its params) can never be
-// handed out, so its first claim ends it (paramsUnreadReason): answered as it
-// is, its encoding would fail after the 200 and the empty claim would put it
-// back at the front of the queue. A job ended so (failed, never claimed again)
-// hands out the job behind it.
+// A job of any kind whose stored params can't be read (ParamsUnreadable: not
+// the JSON its queueing stored, or for a podcast.subscribe not its params) can
+// never be handed out, so its first claim ends it (paramsUnreadReason) rather
+// than handing the Bridge a job with no options. A job ended so (failed,
+// never claimed again) hands out the job behind it.
 func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
 	for {
 		j, err := s.claimSecret(ctx, token, kinds, minPriority)
 		if err != nil || j == nil {
 			return j, err
 		}
-		if j.ParamsUnreadable || !json.Valid(j.Params) {
+		if j.ParamsUnreadable {
 			if err := s.endUnfillableClaim(ctx, j, paramsUnreadReason(j.Kind),
 				fmt.Errorf("%s %d: stored params unreadable", j.Kind, j.ID),
 				"bridge: a claimed job ended, its stored params unreadable", "kind", j.Kind); err != nil {

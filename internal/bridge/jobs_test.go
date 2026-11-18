@@ -897,3 +897,23 @@ func TestParamSQLPassesDamagedRows(t *testing.T) {
 		t.Fatalf("guarded read = %d, %v; want both rows, no error", n, err)
 	}
 }
+
+// A queued job whose stored progress or result is not JSON (a damaged row) is
+// still handed out, those read as null (readableJob), so the claim's answer
+// encodes rather than going out as an empty 200 the Bridge would take again.
+func TestClaimDamagedProgressEncodes(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	damaged := q.verify(t, "Author/Damaged", 0)
+	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET progress = '{', result = 'x' WHERE id = ?`, damaged.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := q.claim(ctx, q.token, []string{KindVerify})
+	if err != nil || got == nil || got.ID != damaged.ID || got.ParamsUnreadable || got.Progress != nil || got.Result != nil {
+		t.Fatalf("claim = %+v, %v; want the job, its progress and result null", got, err)
+	}
+	if _, err := json.Marshal(got); err != nil {
+		t.Fatalf("the claim's answer doesn't encode: %v", err)
+	}
+}

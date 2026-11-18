@@ -851,9 +851,19 @@ func TestAdminBridgeJobsUnreadableParams(t *testing.T) {
 	if n := strings.Count(logs.String(), "stored params are not JSON"); n != 1 {
 		t.Fatalf("logged %d times, want once:\n%s", n, logs.String())
 	}
+	// A second press for its book answers the open job the same way, never an
+	// empty 200 (the queue's own answer, not RedactedJob's).
+	resp, body := b.do(t, "POST", "/api/v1/admin/bridge/jobs", b.adminTok,
+		fmt.Sprintf(`{"kind":"bridge.verify","library_id":%d,"path":%q}`, b.lib.ID, mistbornBook))
+	var again job
+	decodeInto(t, body, &again)
+	if resp.StatusCode != http.StatusOK || again.ID != damaged.ID || string(again.Params) != "null" ||
+		again.ParamsUnreadable == nil || !*again.ParamsUnreadable {
+		t.Fatalf("queue again: %d %s", resp.StatusCode, body)
+	}
 	// The Bridge's claim never answers it (an empty 200 it would take again):
 	// the claim ends it and hands out the job behind it.
-	resp, body := b.do(t, "GET", "/api/v1/bridge/jobs/next?wait=0", b.bridgeTok, "")
+	resp, body = b.do(t, "GET", "/api/v1/bridge/jobs/next?wait=0", b.bridgeTok, "")
 	var claimed job
 	decodeInto(t, body, &claimed)
 	if resp.StatusCode != http.StatusOK || claimed.ID != fine.ID {

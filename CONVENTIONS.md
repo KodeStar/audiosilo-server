@@ -3213,10 +3213,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   A job of any kind whose stored params can't be read (a damaged row, not JSON) ends at its first claim,
   "The server could not read this job's options." (an audible.sync or a podcast.subscribe names what it
   lost), and the claim goes on to the job behind it (`claimPriority`, `endUnfillableClaim`: one warning
-  with its kind, never an empty 200 the Bridge would take again); console and listener responses
-  (`RedactedJob`) answer such params as null with `params_unreadable` (progress and result as null),
-  logged once per row per process (`logUnreadableJobs`). SQL that reads a field of a job's params goes
-  through `bridge.ParamSQL` (`json_valid` first, in a CASE), so one damaged row never fails a whole query.
+  with its kind, never an empty 200 the Bridge would take again); every read of a job (`scanJob`,
+  `readableJob`) answers such params as null with `params_unreadable` (progress and result that aren't
+  JSON as null), so no response (the console's list, the estimate's `open_job`, a queue's answer, a
+  claim) is an empty 200, and the console's list and detail log it once per row per process
+  (`logUnreadableJobs`). SQL that reads a field of a job's params goes through `bridge.ParamSQL`
+  (`json_valid` first, in a CASE), so one damaged row never fails a whole query (a NULL it reads is
+  passed by, `IS NOT NULL` where a `NOT IN` would keep it: `CancelOrphanAudibleJobs`).
   `GET /bridge/libraries/{id}/book[?path=]` gives an INDEXED book's files with the size and mtime the
   server sees now (a single-file book, which has no file rows, is listed as its own file; no path: the
   first whole book of the library's first five by title, the mapping check's sample; 404 `no_book`; never an

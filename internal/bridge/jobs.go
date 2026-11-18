@@ -452,9 +452,9 @@ type Job struct {
 	ClaimedAt       *string    `json:"claimed_at"`
 	FinishedAt      *string    `json:"finished_at"`
 	// ParamsUnreadable marks a job whose stored params are not JSON (a damaged
-	// row), answered as params null by console and listener responses
-	// (RedactedJob), so one such row never blanks a whole job list; a claim
-	// ends such a job (claimPriority).
+	// row), read as params null (scanJob, readableJob), so one such row never
+	// blanks a response (a whole job list); a claim ends such a job
+	// (claimPriority).
 	ParamsUnreadable bool `json:"params_unreadable,omitempty"`
 }
 
@@ -505,7 +505,28 @@ func scanJob(row rowScanner) (*Job, error) {
 	}
 	j.Params, j.Progress, j.Result = json.RawMessage(params), json.RawMessage(progress), json.RawMessage(result)
 	j.LeaseUntil, j.ClaimedAt, j.FinishedAt = nullable(lease), nullable(claimed), nullable(finished)
+	j = readableJob(j)
 	return &j, nil
+}
+
+// readableJob is j with its stored params, progress and result that aren't
+// JSON (a damaged row) set to null, and its params flagged so
+// (ParamsUnreadable): encoding a json.RawMessage that isn't JSON fails, and a
+// handler that has written its 200 by then answers an empty body. Every job
+// read (scanJob) goes through it, so no response path (the console's list,
+// the estimate's open job, a queue's dedupe answer, the Bridge's claim) can
+// carry one; a claim ends a job so flagged (claimPriority).
+func readableJob(j Job) Job {
+	if j.Params != nil && !json.Valid(j.Params) {
+		j.Params, j.ParamsUnreadable = nil, true
+	}
+	if j.Progress != nil && !json.Valid(j.Progress) {
+		j.Progress = nil
+	}
+	if j.Result != nil && !json.Valid(j.Result) {
+		j.Result = nil
+	}
+	return j
 }
 
 func nullable(s sql.NullString) *string {

@@ -2854,8 +2854,10 @@ export interface BridgeJob {
   /** The stored params could not be read; the server answers them as null. */
   params_unreadable?: boolean;
   state: BridgeJobState;
-  progress: Record<string, unknown>;
-  result: Record<string, unknown>;
+  /** null when the stored progress is not JSON (a damaged row). */
+  progress: Record<string, unknown> | null;
+  /** null when the stored result is not JSON (a damaged row). */
+  result: Record<string, unknown> | null;
   error: string;
   requested_by: UserRef | null;
   priority: number;
