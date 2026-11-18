@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BULK_LIMIT, api } from '@/api/client';
-import { invalidateBooks, invalidateIssues, rescanBook, setFolderMode } from '@/api/hooks';
+import { invalidateBooks, invalidateIssues, keys, rescanBook, setFolderMode } from '@/api/hooks';
 import type { AdminBook, BookRef, IssueKind } from '@/api/types';
 import { bookRoute, refKey, refOf } from '@/lib/book-route';
 import { toastError } from '@/lib/errors';
@@ -158,6 +158,8 @@ export function useIssueActions(
     } finally {
       invalidateBooks(qc, books.map(refOf));
       invalidateIssues(qc);
+      // The choice cancels the books' open chapter detections (server#410).
+      void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
     }
   };
 

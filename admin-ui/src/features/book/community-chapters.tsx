@@ -3,7 +3,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronUp, Globe, LoaderCircle, RefreshCw } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidateBooks, invalidateIssues, settleBookEdit, useServerInfo } from '@/api/hooks';
+import {
+  invalidateBooks,
+  invalidateIssues,
+  keys,
+  settleBookEdit,
+  useServerInfo,
+} from '@/api/hooks';
 import type { AdminBookDetail, BookEditRequest } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { toastError } from '@/lib/errors';
@@ -47,6 +53,8 @@ export function CommunityChapters({ detail }: { detail: AdminBookDetail }) {
     try {
       settleBookEdit(qc, await api.editBook(b.library_id, b.path, req));
       invalidateIssues(qc);
+      // A choice cancels the book's open chapter detection (server#410).
+      if (req.chapter_source) void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
       toast.add({ title: t(done, counted(count, lang)), type: 'success' });
     } catch (err) {
       toastError(t('book.community.editFailed'), err);
