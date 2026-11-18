@@ -72,6 +72,31 @@ describe('people', () => {
     expect(screen.getByText('2 accounts · 1 active this month')).toBeInTheDocument();
   });
 
+  it('says on the card which single sign-on a password-less person signs in with', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/users': {
+          body: {
+            users: [
+              admin,
+              { ...sam, sign_in_provider: 'Keycloak' },
+              { ...sam, id: 7, username: 'demo-1', is_demo: true, sign_in_provider: 'Keycloak' },
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/people');
+    const card = await screen.findByRole('link', { name: /^sam/ });
+    expect(within(card).getByText('Signs in with Keycloak')).toBeInTheDocument();
+    expect(within(card).queryByText('Paired devices only')).toBeNull();
+    // A demo account signs in with no provider.
+    const demo = screen.getByRole('link', { name: /^demo-1/ });
+    expect(within(demo).getByText('Paired devices only')).toBeInTheDocument();
+    // From the list itself: no provider status read.
+    expect(calls.some((c) => c.path === '/admin/oidc/status')).toBe(false);
+  });
+
   it('invites someone new: account, access and invite in one go, then the QR card', async () => {
     const calls = mockFetch(
       routes({

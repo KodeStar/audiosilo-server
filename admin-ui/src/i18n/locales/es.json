@@ -297,6 +297,7 @@
   "people.card.listening": "Escuchando ahora",
   "people.card.password": "Contraseña y dispositivos vinculados",
   "people.card.pairOnly": "Solo dispositivos vinculados",
+  "people.card.sso": "Inicia sesión con {{provider}}",
   "people.card.nothing": "Nada en curso",
   "invites.title": "Invitaciones",
   "invites.description": "Una invitación activa por persona. El código solo se muestra al crearla; renueva una invitación para enviar una nueva.",

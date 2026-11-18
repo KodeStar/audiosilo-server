@@ -83,24 +83,18 @@ describe('waiting sign-ins', () => {
     expect(suggestedAccount([admin, sam, bob], row())).toBeUndefined();
   });
 
-  it('names an identity by the configured provider, else its issuer’s host', () => {
-    const configured = { issuer: ISSUER, name: 'Keycloak' };
-    expect(identityProvider({ issuer: ISSUER }, configured)).toBe('Keycloak');
-    expect(identityProvider({ issuer: 'https://old.example.net/x' }, configured)).toBe(
+  it('names an identity by the provider the server names, else its issuer’s host', () => {
+    expect(identityProvider({ issuer: ISSUER, provider: 'Keycloak' })).toBe('Keycloak');
+    expect(identityProvider({ issuer: 'https://old.example.net/x', provider: '' })).toBe(
       'old.example.net',
     );
-    expect(identityProvider({ issuer: 'not a url' }, undefined)).toBe('not a url');
+    expect(identityProvider({ issuer: 'not a url', provider: '' })).toBe('not a url');
   });
 
-  it('names the provider a person signs in with only while it is the one the server runs', () => {
-    const on = { configured: true, issuer: ISSUER, name: 'Keycloak' };
-    const mine = [{ issuer: 'https://old.example.net/x' }, { issuer: ISSUER }];
-    expect(signInProvider(mine, on)).toBe('Keycloak');
-    // Not enabled or not able to run: no identity counts, as on the server.
-    expect(signInProvider(mine, { ...on, configured: false })).toBeUndefined();
-    // Only another provider's identity, none at all, or the status not read yet.
-    expect(signInProvider([{ issuer: 'https://old.example.net/x' }], on)).toBeUndefined();
-    expect(signInProvider([], on)).toBeUndefined();
-    expect(signInProvider(mine, undefined)).toBeUndefined();
+  it('names the provider a person signs in with as the server says, never a demo account’s', () => {
+    expect(signInProvider({ sign_in_provider: 'Keycloak', is_demo: false })).toBe('Keycloak');
+    expect(signInProvider({ sign_in_provider: '', is_demo: false })).toBeUndefined();
+    // A demo account signs in with no provider, whatever the field says.
+    expect(signInProvider({ sign_in_provider: 'Keycloak', is_demo: true })).toBeUndefined();
   });
 });

@@ -20,10 +20,8 @@ import {
   forgetUsers,
   invalidateDevices,
   invalidatePeople,
-  keys,
   useDevices,
   useLibraries,
-  useOIDCStatus,
   useUser,
 } from '@/api/hooks';
 import type { AdminUser, OIDCIdentity, User, UserDetail } from '@/api/types';
@@ -119,13 +117,11 @@ function UserView({ detail }: { detail: UserDetail }) {
   const identities = detail.identities ?? [];
   // The provider they sign in with, when one of their single sign-ons is the
   // one the server runs: said in place of "player only", and, like a password,
-  // an admin's way into the console. Read only for someone who has one. A
-  // household member keeps an identity linked before they joined, but single
-  // sign-on never signs a member in (auth.ConsumeOIDC); a status that failed to
-  // read (even with an older answer cached) counts as unknown, so the page asks
-  // for a password rather than trust it.
-  const status = useOIDCStatus(identities.length > 0);
-  const sso = u.managed_by || status.isError ? undefined : signInProvider(identities, status.data);
+  // an admin's way into the console. The server says (sign_in_provider): never
+  // for a household member, who keeps an identity linked before they joined
+  // but whom single sign-on never signs in (auth.ConsumeOIDC), nor a demo
+  // account.
+  const sso = signInProvider(u);
 
   const facts = [
     u.last_seen_at
@@ -595,8 +591,7 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
       // Made an admin on their single sign-on, which the server no longer
       // counts (turned off since the page read it): ask for a password.
       if (err instanceof ApiError && err.code === 'admin_needs_password') {
-        // Both halves of the rule may be stale: the status and their identities.
-        void qc.invalidateQueries({ queryKey: keys.oidcStatus });
+        // The person as read (sign_in_provider) is stale.
         invalidatePeople(qc);
         setPromoting(true);
       }

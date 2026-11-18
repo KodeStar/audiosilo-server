@@ -56,6 +56,7 @@ export const admin: AdminUser = {
   members_count: 0,
   display_name: '',
   email: '',
+  sign_in_provider: '',
 };
 
 export const member: AdminUser = { ...admin, id: 2, username: 'sam', role: 'user' };

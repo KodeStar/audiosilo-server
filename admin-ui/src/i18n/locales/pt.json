@@ -297,6 +297,7 @@
   "people.card.listening": "A ouvir agora",
   "people.card.password": "Palavra-passe e dispositivos emparelhados",
   "people.card.pairOnly": "Só dispositivos emparelhados",
+  "people.card.sso": "Inicia sessão com {{provider}}",
   "people.card.nothing": "Nada em curso",
   "invites.title": "Convites",
   "invites.description": "Um convite ativo por pessoa. O código só é mostrado quando é criado; renove um convite para enviar um novo.",

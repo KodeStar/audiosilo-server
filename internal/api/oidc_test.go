@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,11 +76,25 @@ func (e *testEnv) get(t *testing.T, path, host string, cookies ...*http.Cookie) 
 	return resp
 }
 
-// The flow's cookies as a browser holds them for oidcPublic (https).
+// The flow's cookies as a browser holds them for oidcPublic (https): a
+// flow's own cookie starts with hostFlowCookie (hostFlowCookieFor).
 const (
 	hostFlowCookie = hostCookiePrefix + oidcCookie
 	hostDoneCookie = hostCookiePrefix + oidcDoneCookie
 )
+
+// hostFlowCookieFor is the name of the flow cookie for state, for oidcPublic.
+func hostFlowCookieFor(state string) string { return hostFlowCookie + flowKey(state) }
+
+// stateOf is the state in a callback's path.
+func stateOf(t *testing.T, path string) string {
+	t.Helper()
+	u, err := url.Parse(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Query().Get("state")
+}
 
 // respCookie is the cookie named name that resp sets (nil when none).
 func respCookie(resp *http.Response, name string) *http.Cookie {
@@ -91,13 +106,16 @@ func respCookie(resp *http.Response, name string) *http.Cookie {
 	return nil
 }
 
+// flowCookie is the flow cookie /start's resp sets: the one it doesn't delete.
 func flowCookie(t *testing.T, resp *http.Response) *http.Cookie {
 	t.Helper()
-	c := respCookie(resp, hostFlowCookie)
-	if c == nil {
-		t.Fatalf("no flow cookie: %v", resp.Header.Values("Set-Cookie"))
+	for _, c := range resp.Cookies() {
+		if strings.HasPrefix(c.Name, hostFlowCookie) && c.MaxAge > 0 {
+			return c
+		}
 	}
-	return c
+	t.Fatalf("no flow cookie: %v", resp.Header.Values("Set-Cookie"))
+	return nil
 }
 
 // start runs /start for ret and the provider's authorize: the flow cookie and
@@ -136,20 +154,30 @@ func (e *oidcEnv) callback(t *testing.T, path string, cookie *http.Cookie) strin
 }
 
 // callbackDone is callback with the finished sign-in's cookie it set (nil
-// when it set none).
-func (e *oidcEnv) callbackDone(t *testing.T, path string, cookie *http.Cookie) (string, *http.Cookie) {
+// when it set none). Other flows' cookies the browser holds ride along.
+func (e *oidcEnv) callbackDone(t *testing.T, path string, cookie *http.Cookie, held ...*http.Cookie) (string, *http.Cookie) {
 	t.Helper()
 	var cs []*http.Cookie
 	if cookie != nil {
 		cs = append(cs, cookie)
 	}
-	resp := e.get(t, path, oidcHost, cs...)
+	resp := e.get(t, path, oidcHost, append(cs, held...)...)
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("callback: %d", resp.StatusCode)
 	}
+	// Its own flow's cookie deleted (none for a state no flow has), never
+	// another's.
 	c := resp.Cookies()
-	if len(c) == 0 || c[0].Name != hostFlowCookie || c[0].MaxAge >= 0 {
-		t.Fatalf("callback left the flow cookie: %v", resp.Header.Values("Set-Cookie"))
+	if flowKey(stateOf(t, path)) != "" {
+		if len(c) == 0 || c[0].Name != hostFlowCookieFor(stateOf(t, path)) || c[0].MaxAge >= 0 {
+			t.Fatalf("callback left the flow cookie: %v", resp.Header.Values("Set-Cookie"))
+		}
+		c = c[1:]
+	}
+	for _, other := range c {
+		if strings.HasPrefix(other.Name, hostFlowCookie) {
+			t.Fatalf("callback touched another flow's cookie: %v", resp.Header.Values("Set-Cookie"))
+		}
 	}
 	return resp.Header.Get("Location"), respCookie(resp, hostDoneCookie)
 }
@@ -306,6 +334,11 @@ func TestOIDCCookieSecureAnyCase(t *testing.T) {
 		"HTTPS://audiosilo.test": {true, hostFlowCookie, "/"},
 		"https://audiosilo.test": {true, hostFlowCookie, "/"},
 		"http://audiosilo.test":  {false, oidcCookie, oidcCookiePath},
+		// Under a proxy's path prefix (server#406): the browser asks for
+		// /audiosilo/api/v1/auth/oidc/..., so the cookie's path is there.
+		"http://audiosilo.test/audiosilo/":  {false, oidcCookie, "/audiosilo" + oidcCookiePath},
+		"http://audiosilo.test/my%20books":  {false, oidcCookie, "/my%20books" + oidcCookiePath},
+		"https://audiosilo.test/audiosilo/": {true, hostFlowCookie, "/"},
 	} {
 		e := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = base })
 		rec := httptest.NewRecorder()
@@ -1049,20 +1082,29 @@ func TestOIDCFlowTamperingDenied(t *testing.T) {
 	e := newOIDCEnv(t, oidcAlice, nil)
 	e.mustUser(t, "alice", "alice@example.org")
 
+	// A state forged past the part the cookie is named by: the cookie is
+	// found, its sealed state isn't the one sent back.
 	cookie, path := e.start(t, oidcReturnAdmin)
 	u, _ := url.Parse(path)
 	q := u.Query()
-	q.Set("state", "forged")
+	q.Set("state", q.Get("state")[:16]+strings.Repeat("f", 27))
 	u.RawQuery = q.Encode()
 	wantResult(t, e.callback(t, u.RequestURI(), cookie), oidcFailed)
+	// A state no flow has: no cookie by its name.
+	q.Set("state", "forged")
+	u.RawQuery = q.Encode()
+	wantResult(t, e.callback(t, u.RequestURI(), cookie), oidcExpired)
 
 	_, path = e.start(t, oidcReturnAdmin)
 	wantResult(t, e.callback(t, path, nil), oidcExpired)
 
-	// Another flow's cookie.
+	// Another flow's cookie: under its own name it is no cookie for this
+	// state; planted under this state's name, its state isn't this one.
 	c1, _ := e.start(t, oidcReturnAdmin)
 	_, p2 := e.start(t, oidcReturnAdmin)
-	wantResult(t, e.callback(t, p2, c1), oidcFailed)
+	wantResult(t, e.callback(t, p2, c1), oidcExpired)
+	planted := &http.Cookie{Name: hostFlowCookieFor(stateOf(t, p2)), Value: c1.Value}
+	wantResult(t, e.callback(t, p2, planted), oidcFailed)
 
 	// Used once: a copy of the cookie with the same callback is refused.
 	cookie, path = e.start(t, oidcReturnAdmin)
@@ -1460,20 +1502,22 @@ func TestOIDCCallbackRateLimited(t *testing.T) {
 	t.Parallel()
 	e := newOIDCEnv(t, oidcAlice, nil)
 	e.mustUser(t, "alice", "alice@example.org")
-	foreign := &http.Cookie{Name: hostFlowCookie, Value: "not-this-server's"}
+	state := strings.Repeat("y", 43)
+	bare := oidcCallbackPath + "?code=x&state=" + state
+	foreign := &http.Cookie{Name: hostFlowCookieFor(state), Value: "not-this-server's"}
 	for range 25 {
-		wantResult(t, e.callback(t, oidcCallbackPath+"?code=x&state=y", nil), oidcExpired)
+		wantResult(t, e.callback(t, bare, nil), oidcExpired)
 	}
 	for range 9 {
-		wantResult(t, e.callback(t, oidcCallbackPath+"?code=x&state=y", foreign), oidcFailed)
+		wantResult(t, e.callback(t, bare, foreign), oidcFailed)
 	}
 	if loc := e.signIn(t, oidcReturnAdmin); !strings.Contains(loc, oidcDoneAdmin) {
 		t.Fatalf("a good sign-in under the limit: %q", loc)
 	}
 	for range 10 {
-		wantResult(t, e.callback(t, oidcCallbackPath+"?code=x&state=y", foreign), oidcFailed)
+		wantResult(t, e.callback(t, bare, foreign), oidcFailed)
 	}
-	resp := e.get(t, oidcCallbackPath+"?code=x&state=y", oidcHost)
+	resp := e.get(t, bare, oidcHost)
 	if loc := resp.Header.Get("Location"); loc != oidcPublic+"/connect#oidc="+oidcRateLimited || resp.Header.Get("Retry-After") == "" {
 		t.Fatalf("over the limit: %q %v", loc, resp.Header)
 	}
@@ -1704,5 +1748,284 @@ func TestEvictionTallyLogsOncePerHour(t *testing.T) {
 	}
 	if n := e.note(1, now.Add(time.Second)); n != 0 {
 		t.Fatalf("right after a report: %d, want none", n)
+	}
+}
+
+// browser is a cookie jar for one host, as a browser keeps it: a Set-Cookie
+// replaces the cookie of its name, a negative Max-Age deletes it, and the
+// cookies go back oldest first.
+type browser struct{ cookies []*http.Cookie }
+
+func (b *browser) apply(resp *http.Response) {
+	for _, c := range resp.Cookies() {
+		b.cookies = slices.DeleteFunc(b.cookies, func(o *http.Cookie) bool { return o.Name == c.Name })
+		if c.MaxAge >= 0 {
+			b.cookies = append(b.cookies, c)
+		}
+	}
+}
+
+func (b *browser) named(name string) *http.Cookie {
+	for _, c := range b.cookies {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// flows counts the flow cookies the browser holds.
+func (b *browser) flows() int {
+	n := 0
+	for _, c := range b.cookies {
+		if strings.HasPrefix(c.Name, hostFlowCookie) {
+			n++
+		}
+	}
+	return n
+}
+
+// start runs /start in the browser and the provider's authorize: the
+// callback's path.
+func (b *browser) start(t *testing.T, e *oidcEnv, query string) string {
+	t.Helper()
+	resp := e.get(t, oidcStartPath+"?"+query, oidcHost, b.cookies...)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("start: %d", resp.StatusCode)
+	}
+	b.apply(resp)
+	authz, err := noFollow.Get(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authz.Body.Close()
+	back, err := url.Parse(authz.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return back.RequestURI()
+}
+
+// callback sends the browser back on path: where it lands.
+func (b *browser) callback(t *testing.T, e *oidcEnv, path string) string {
+	t.Helper()
+	resp := e.get(t, path, oidcHost, b.cookies...)
+	b.apply(resp)
+	return resp.Header.Get("Location")
+}
+
+// TestOIDCTwoTabs (server#406): a sign-in started in a second tab keeps the
+// first's flow, so both finish, in either order; the oldest flows beyond
+// oidcMaxFlows are dropped at /start, and only theirs.
+func TestOIDCTwoTabs(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	var b browser
+	first := b.start(t, e, "return=admin")
+	second := b.start(t, e, "return=web")
+	if b.flows() != 2 {
+		t.Fatalf("the second tab's start left %d flows", b.flows())
+	}
+	// The first tab comes back: the second's flow stays.
+	if loc := b.callback(t, e, first); loc != oidcPublic+oidcDoneAdmin {
+		t.Fatalf("the first tab landed on %q", loc)
+	}
+	if resp, out := e.finish(t, b.named(hostDoneCookie), "admin-web"); resp.StatusCode != 200 || out["token"] == "" {
+		t.Fatalf("the first tab's finish: %d %v", resp.StatusCode, out)
+	}
+	if b.flows() != 1 {
+		t.Fatalf("after the first tab: %d flows", b.flows())
+	}
+	if loc := b.callback(t, e, second); loc != oidcPublic+oidcDoneWeb {
+		t.Fatalf("the second tab landed on %q", loc)
+	}
+	if resp, out := e.finish(t, b.named(hostDoneCookie), "web"); resp.StatusCode != 200 || out["token"] == "" {
+		t.Fatalf("the second tab's finish: %d %v", resp.StatusCode, out)
+	}
+
+	// The cap: the oldest flow goes, the newest held still finish.
+	var many browser
+	paths := make([]string, oidcMaxFlows+1)
+	for i := range paths {
+		paths[i] = many.start(t, e, "return=admin")
+	}
+	if many.flows() != oidcMaxFlows {
+		t.Fatalf("%d flows held, want %d", many.flows(), oidcMaxFlows)
+	}
+	wantResult(t, many.callback(t, e, paths[0]), oidcExpired)
+	for _, p := range paths[1:] {
+		if loc := many.callback(t, e, p); loc != oidcPublic+oidcDoneAdmin {
+			t.Fatalf("a held flow landed on %q", loc)
+		}
+	}
+}
+
+// TestOIDCConsoleDeepLink (server#406): the console page a sign-in started
+// from (?next=, through the hop too) is where it lands; anything that isn't a
+// console path on this origin, or a web sign-in's, lands on the start page.
+func TestOIDCConsoleDeepLink(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	land := func(t *testing.T, query string) string {
+		t.Helper()
+		cookie, path := e.startQuery(t, query)
+		return e.callback(t, path, cookie)
+	}
+	deep := "/admin/people/user/3?tab=devices"
+	loc := land(t, "return=admin&next="+url.QueryEscape(deep))
+	if loc != oidcPublic+deep+oidcDoneMarker {
+		t.Fatalf("a deep link landed on %q", loc)
+	}
+	cookie, path := e.startQuery(t, "return=admin&next="+url.QueryEscape(deep))
+	loc, done := e.callbackDone(t, path, cookie)
+	if resp, out := e.finish(t, done, "admin-web"); loc != oidcPublic+deep+oidcDoneMarker || resp.StatusCode != 200 || out["token"] == "" {
+		t.Fatalf("the deep link's finish: %q %d %v", loc, resp.StatusCode, out)
+	}
+	for _, bad := range []string{"//evil.example/admin/", "https://evil.example/admin/", "/web/connect", "/admin/../connect",
+		"/admin/%2e%2e/connect", "/admin//evil.example", "/admin/x#oidc=done", "/admin/\\evil.example", "/admin/x y",
+		"/admin/" + strings.Repeat("a", oidcNextMax)} {
+		if loc := land(t, "return=admin&next="+url.QueryEscape(bad)); loc != oidcPublic+oidcDoneAdmin {
+			t.Fatalf("next=%q landed on %q", bad, loc)
+		}
+	}
+	if loc := land(t, "return=web&next="+url.QueryEscape(deep)); loc != oidcPublic+oidcDoneWeb {
+		t.Fatalf("a web sign-in with a deep link landed on %q", loc)
+	}
+	// The hop keeps a good one, never a bad one.
+	resp := e.get(t, oidcStartPath+"?return=admin&next="+url.QueryEscape(deep), "evil.example")
+	if resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?hop=1&next="+url.QueryEscape(deep)+"&return=admin" {
+		t.Fatalf("hop with a deep link: %q", resp.Header.Get("Location"))
+	}
+	resp = e.get(t, oidcStartPath+"?return=admin&next=%2F%2Fevil.example", "evil.example")
+	if resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?hop=1&return=admin" {
+		t.Fatalf("hop with a bad deep link: %q", resp.Header.Get("Location"))
+	}
+}
+
+func TestValidNext(t *testing.T) {
+	t.Parallel()
+	for s, want := range map[string]bool{
+		"/admin/":                         true,
+		"/admin/people":                   true,
+		"/admin/people/user/3?tab=access": true,
+		"/admin/library/books/":           true,
+		"/admin/search?q=caf%C3%A9":       true,
+		"/admin":                          false,
+		"":                                false,
+		"/connect":                        false,
+		"//evil.example/admin/":           false,
+		"https://evil.example/admin/":     false,
+		"/admin/../connect":               false,
+		"/admin/./people":                 false,
+		"/admin/%2E%2E/connect":           false,
+		"/admin/%2Fevil":                  false, // read as an empty segment: refused, never needed
+		"/admin//evil.example":            false,
+		"/admin/%5Cevil":                  false,
+		"/admin/x#y":                      false,
+		"/admin/x\ny":                     false,
+		"/admin/café":                     false,
+	} {
+		if got := validNext(s); got != want {
+			t.Errorf("validNext(%q) = %v, want %v", s, got, want)
+		}
+	}
+}
+
+// TestOIDCSignInProvider (server#408): the console's people list and a
+// person's page say which single sign-on they sign in with, from the server:
+// only for an identity from the provider it runs, on an account it signs in.
+func TestOIDCSignInProvider(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	alice := e.mustUser(t, "alice", "alice@example.org")
+	if loc := e.signIn(t, oidcReturnWeb); loc != oidcPublic+oidcDoneWeb {
+		t.Fatalf("alice's sign-in landed on %q", loc)
+	}
+	demo, err := e.auth.CreateDemoUser(ctx, "demo-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, _, _, err := e.auth.CreateMember(ctx, e.adminID, auth.NewMember{Name: "Pip", Kind: auth.MemberGrownup,
+		Access: auth.MemberAll}, auth.MemberPolicy{Enabled: true, Max: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := e.mustUser(t, "olive", "")
+	link := func(t *testing.T, env *testEnv, user int64, issuer, subject string) {
+		t.Helper()
+		if _, err := env.db.ExecContext(ctx, `INSERT INTO user_identities(user_id, issuer, subject, link_method, linked_at)
+			VALUES(?, ?, ?, 'admin', 't')`, user, issuer, subject); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link(t, e.testEnv, demo.ID, e.idp.Issuer, "sub-demo")
+	link(t, e.testEnv, member.ID, e.idp.Issuer, "sub-pip")
+	link(t, e.testEnv, old.ID, "https://old-idp.example", "sub-olive")
+
+	admin := e.session(t, e.adminID)
+	providers := func(t *testing.T, env *testEnv) map[string]string {
+		t.Helper()
+		resp, body := env.do(t, "GET", "/api/v1/admin/users", env.session(t, env.adminID), "")
+		var out struct {
+			Users []map[string]any `json:"users"`
+		}
+		if resp.StatusCode != 200 || json.Unmarshal([]byte(body), &out) != nil {
+			t.Fatalf("list: %d %s", resp.StatusCode, body)
+		}
+		got := map[string]string{}
+		for _, u := range out.Users {
+			p, ok := u["sign_in_provider"].(string)
+			if !ok {
+				t.Fatalf("no sign_in_provider on %v", u)
+			}
+			got[u["username"].(string)] = p
+		}
+		return got
+	}
+	// Allowed: alice's identity is from the provider the server runs.
+	// Denied: a demo account's, a household member's, one from a provider no
+	// longer configured, and none at all.
+	got := providers(t, e.testEnv)
+	if got["alice"] != "Keycloak" || got["demo-1"] != "" || got[member.Username] != "" || got["olive"] != "" || got["admin"] != "" {
+		t.Fatalf("list: %v", got)
+	}
+	detail := func(t *testing.T, id int64) (map[string]any, []any) {
+		t.Helper()
+		resp, body := e.do(t, "GET", "/api/v1/admin/users/"+itoa(id), admin, "")
+		var out struct {
+			User       map[string]any `json:"user"`
+			Identities []any          `json:"identities"`
+		}
+		if resp.StatusCode != 200 || json.Unmarshal([]byte(body), &out) != nil {
+			t.Fatalf("detail: %d %s", resp.StatusCode, body)
+		}
+		return out.User, out.Identities
+	}
+	u, ids := detail(t, alice.ID)
+	if u["sign_in_provider"] != "Keycloak" || len(ids) != 1 || ids[0].(map[string]any)["provider"] != "Keycloak" {
+		t.Fatalf("alice's page: %v %v", u["sign_in_provider"], ids)
+	}
+	u, ids = detail(t, old.ID)
+	if u["sign_in_provider"] != "" || len(ids) != 1 || ids[0].(map[string]any)["provider"] != "" {
+		t.Fatalf("an old provider's identity: %v %v", u["sign_in_provider"], ids)
+	}
+	if u, _ := detail(t, demo.ID); u["sign_in_provider"] != "" {
+		t.Fatalf("a demo account: %v", u["sign_in_provider"])
+	}
+	// A PATCH answers the same.
+	resp, body := e.do(t, "PATCH", "/api/v1/admin/users/"+itoa(alice.ID), admin, `{"email":"alice@example.org"}`)
+	if resp.StatusCode != 200 || !strings.Contains(body, `"sign_in_provider":"Keycloak"`) {
+		t.Fatalf("patch: %d %s", resp.StatusCode, body)
+	}
+
+	// Denied: single sign-on off, the same identity is no way in.
+	off := newTestEnv(t)
+	bob := off.mustUser(t, "bob", "")
+	link(t, off, bob.ID, e.idp.Issuer, "sub-bob")
+	if got := providers(t, off); got["bob"] != "" {
+		t.Fatalf("off: %v", got)
 	}
 }

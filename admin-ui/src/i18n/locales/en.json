@@ -289,6 +289,7 @@
   "people.card.listening": "Listening now",
   "people.card.password": "Password and paired devices",
   "people.card.pairOnly": "Paired devices only",
+  "people.card.sso": "Signs in with {{provider}}",
   "people.card.nothing": "Nothing in progress",
   "invites.title": "Invites",
   "invites.description": "One active invite per person. A code is shown only when it's created; rotate an invite to send a fresh one.",

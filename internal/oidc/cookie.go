@@ -44,7 +44,11 @@ type Flow struct {
 	// ?intent=, "" for none): echoed only by the finish of the sign-in this
 	// flow completes, so the player can tell its own trip's return from an
 	// address typed later (audiosilo#202).
-	Intent   string `json:"i,omitempty"`
+	Intent string `json:"i,omitempty"`
+	// Next is the console page the sign-in started from (its /start's
+	// ?next=, "" for the start page): where a console sign-in lands
+	// (server#406).
+	Next     string `json:"x,omitempty"`
 	IssuedAt int64  `json:"t"` // Unix seconds
 }
 

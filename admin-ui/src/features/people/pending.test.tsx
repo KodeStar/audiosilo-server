@@ -1,8 +1,7 @@
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
-import { keys } from '@/api/hooks';
-import type { AdminUser, OIDCIdentity, OIDCPendingSignIn, OIDCStatus } from '@/api/types';
+import type { AdminUser, OIDCIdentity, OIDCPendingSignIn } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { admin, device, sam, samDetail } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
@@ -347,25 +346,19 @@ const identity: OIDCIdentity = {
   linked_by: { id: 1, username: 'chris' },
   linked_at: new Date(Date.now() - 86400_000).toISOString(),
   last_sign_in_at: null,
+  provider: 'Keycloak',
 };
 
-const status: OIDCStatus = {
-  enabled: true,
-  configured: true,
-  name: 'Keycloak',
-  issuer: ISSUER,
-  client_id: 'audiosilo',
-  client_secret_set: true,
-  redirect_uri: 'https://books.example.org/api/v1/auth/oidc/callback',
-  scopes: ['openid'],
-  username_claim: 'preferred_username',
-  groups_claim: 'groups',
-};
+/** sam, signing in with the single sign-on the server runs (the server says). */
+const ssoSam: AdminUser = { ...sam, sign_in_provider: 'Keycloak' };
 
-function personRoutes(user: AdminUser, over: Record<string, MockRoute> = {}) {
+function personRoutes(
+  user: AdminUser,
+  over: Record<string, MockRoute> = {},
+  ident: OIDCIdentity = identity,
+) {
   return signedInRoutes({
-    'GET /admin/users/2': { body: samDetail({ user, identities: [identity] }) },
-    'GET /admin/oidc/status': { body: status },
+    'GET /admin/users/2': { body: samDetail({ user, identities: [ident] }) },
     ...over,
   });
 }
@@ -373,13 +366,16 @@ function personRoutes(user: AdminUser, over: Record<string, MockRoute> = {}) {
 describe('a person’s single sign-on', () => {
   it('shows who it is, how it was linked, and unlinks after a confirm', async () => {
     const calls = mockFetch(
-      personRoutes(sam, { 'DELETE /admin/users/2/identities/9': { status: 204 } }),
+      personRoutes(ssoSam, { 'DELETE /admin/users/2/identities/9': { status: 204 } }),
     );
     renderApp('/people/user/2?tab=sign-in');
     const card = await screen.findByRole('region', { name: 'Signed in with Keycloak' });
     expect(within(card).getByText('sam@example.org')).toBeInTheDocument();
     expect(within(card).getByText(/^By chris · /)).toBeInTheDocument();
     expect(within(card).getByText('Not yet')).toBeInTheDocument();
+    // The provider is named by the server: the page never reads the provider's
+    // status (which can reach out to the provider).
+    expect(calls.some((c) => c.path === '/admin/oidc/status')).toBe(false);
     const user = userEvent.setup();
     await user.click(within(card).getByRole('button', { name: 'Unlink' }));
     const dialog = await screen.findByRole('dialog', { name: 'Unlink Keycloak from sam?' });
@@ -395,9 +391,17 @@ describe('a person’s single sign-on', () => {
     );
   });
 
+  it('names a provider since replaced by its host', async () => {
+    mockFetch(personRoutes(sam, {}, { ...identity, provider: '' }));
+    renderApp('/people/user/2?tab=sign-in');
+    expect(
+      await screen.findByRole('region', { name: 'Signed in with sso.example.org' }),
+    ).toBeInTheDocument();
+  });
+
   it('reads the person again when the identity is gone already (404)', async () => {
     const calls = mockFetch(
-      personRoutes(sam, {
+      personRoutes(ssoSam, {
         'DELETE /admin/users/2/identities/9': {
           status: 404,
           body: { error: 'no such identity', code: 'not_found' },
@@ -421,7 +425,7 @@ describe('a person’s single sign-on', () => {
   it('says a password-less admin needs a password first', async () => {
     mockFetch(
       personRoutes(
-        { ...sam, role: 'admin' },
+        { ...ssoSam, role: 'admin' },
         {
           'DELETE /admin/users/2/identities/9': {
             status: 409,
@@ -441,7 +445,7 @@ describe('a person’s single sign-on', () => {
 
   it('says a password-less person signs in with the provider, wherever it says how they sign in', async () => {
     mockFetch(
-      personRoutes(sam, {
+      personRoutes(ssoSam, {
         'GET /admin/devices': { body: { devices: [device()] } },
       }),
     );
@@ -460,20 +464,27 @@ describe('a person’s single sign-on', () => {
     ).toBeInTheDocument();
   });
 
-  it('says player only when their sign-on is not the one the server runs', async () => {
-    mockFetch(
-      personRoutes(sam, { 'GET /admin/oidc/status': { body: { ...status, configured: false } } }),
-    );
+  it('says player only when the server does not count their sign-on', async () => {
+    mockFetch(personRoutes(sam));
     renderApp('/people/user/2?tab=sign-in');
-    // The identity card is there, but single sign-on can't run: not a way in.
+    // The identity card is there, but it is not a way in (single sign-on off,
+    // another provider's, a household member's).
     await screen.findByRole('region', { name: /Signed in with/ });
     expect(await screen.findByText(/No password \(player only\)/)).toBeInTheDocument();
     expect(screen.getByText(/Signs in only by pairing a device/)).toBeInTheDocument();
   });
 
+  it('says player only for a demo account, whatever it holds', async () => {
+    mockFetch(personRoutes({ ...ssoSam, is_demo: true }));
+    renderApp('/people/user/2?tab=sign-in');
+    await screen.findByRole('region', { name: 'Signed in with Keycloak' });
+    expect(screen.getByText(/No password \(player only\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/signs in with Keycloak/i)).toBeNull();
+  });
+
   it('makes a person admin on their single sign-on alone, without asking for a password', async () => {
     const calls = mockFetch(
-      personRoutes(sam, { 'PATCH /admin/users/2': { body: { ...sam, role: 'admin' } } }),
+      personRoutes(ssoSam, { 'PATCH /admin/users/2': { body: { ...ssoSam, role: 'admin' } } }),
     );
     renderApp('/people/user/2?tab=account');
     await screen.findByText(/signs in with Keycloak/);
@@ -484,46 +495,8 @@ describe('a person’s single sign-on', () => {
     expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ role: 'admin' });
   });
 
-  it('says player only for a household member, whom single sign-on never signs in', async () => {
-    const member: AdminUser = {
-      ...sam,
-      managed_by: { id: 1, username: 'chris', display_name: '' },
-      member_kind: 'grownup',
-      member_access: 'all',
-    };
-    mockFetch(personRoutes(member));
-    renderApp('/people/user/2?tab=sign-in');
-    // The status is read (the card names the provider), yet it is no way in.
-    await screen.findByRole('region', { name: 'Signed in with Keycloak' });
-    expect(screen.getByText(/No password \(player only\)/)).toBeInTheDocument();
-    expect(screen.queryByText(/signs in with Keycloak/i)).toBeNull();
-  });
-
-  it('asks for a password once a re-read of the status fails, despite the older answer', async () => {
-    let fail = false;
-    const calls = mockFetch(
-      personRoutes(sam, {
-        'GET /admin/oidc/status': () =>
-          fail ? { status: 500, body: { error: 'could not read' } } : { body: status },
-      }),
-    );
-    const { queryClient } = renderApp('/people/user/2?tab=account');
-    await screen.findByText(/signs in with Keycloak/);
-    fail = true;
-    await act(() => queryClient.refetchQueries({ queryKey: keys.oidcStatus }));
-    expect(await screen.findByText(/player only/)).toBeInTheDocument();
-    const user = userEvent.setup();
-    await user.selectOptions(await screen.findByLabelText('Role'), 'admin');
-    expect(await screen.findByRole('dialog', { name: 'Make sam an admin' })).toBeInTheDocument();
-    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
-  });
-
   it('asks for a password to make them admin when their sign-on does not count', async () => {
-    const calls = mockFetch(
-      personRoutes(sam, {
-        'GET /admin/oidc/status': { body: { ...status, issuer: 'https://other.example.net' } },
-      }),
-    );
+    const calls = mockFetch(personRoutes(sam));
     renderApp('/people/user/2?tab=account');
     await screen.findByText(/player only/);
     const user = userEvent.setup();
@@ -534,7 +507,7 @@ describe('a person’s single sign-on', () => {
 
   it('asks for a password when the server no longer counts the sign-on', async () => {
     const calls = mockFetch(
-      personRoutes(sam, {
+      personRoutes(ssoSam, {
         'PATCH /admin/users/2': {
           status: 400,
           body: { error: 'admin accounts require a password', code: 'admin_needs_password' },
@@ -547,13 +520,15 @@ describe('a person’s single sign-on', () => {
     await user.selectOptions(await screen.findByLabelText('Role'), 'admin');
     expect(await screen.findByText(/Set a password first\./)).toBeInTheDocument();
     expect(await screen.findByRole('dialog', { name: 'Make sam an admin' })).toBeInTheDocument();
-    // Either half of the rule may be what changed: both are read again.
-    const reads = (path: string) => calls.filter((c) => c.method === 'GET' && c.path === path);
+    // The person is read again: what the server says of their sign-on changed.
     const patchAt = calls.findIndex((c) => c.method === 'PATCH');
-    await waitFor(() => {
-      expect(reads('/admin/oidc/status').some((c) => calls.indexOf(c) > patchAt)).toBe(true);
-      expect(reads('/admin/users/2').some((c) => calls.indexOf(c) > patchAt)).toBe(true);
-    });
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => c.method === 'GET' && c.path === '/admin/users/2' && calls.indexOf(c) > patchAt,
+        ),
+      ).toBe(true),
+    );
   });
 
   it('shows no card for a person without one', async () => {

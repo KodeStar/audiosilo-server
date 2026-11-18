@@ -3708,7 +3708,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   destination's address and secret only as `address_changed`/`secret_changed`. **Notifications**
   (`internal/notify`): `notification_targets` (kind webhook/ntfy/discord, name, url + secret write-only:
   the API shows `notify.Redact`'s address and `has_secret`), `server_events` (the bell's feed, 90 days,
-  `dedup_key` announces an update once per version). `notify.Service.Emit` records the event and queues one
+  `dedup_key` announces an event once while it is in the feed, an update once per version: the check
+  and the record one step per kind and key, `lockDedup`, so two emits at once announce it once,
+  server#408). `notify.Service.Emit` records the event and queues one
   delivery per enabled subscribed destination (4 workers, queue 256, drop + log when full); a delivery is
   retried twice on timeout/unreachable/429/5xx (queued again after its delay, never waited out on a
   worker), never follows a redirect, and records only a short reason
@@ -3757,8 +3759,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   podcast feed is failing" / "is back". The messages word each code and link Library > Libraries.
   And `oidc_pending` (server#235, `notify.OIDCPending` from the callback when `auth.OIDCSignIn` parks a
   sign-in, never for one refused outright: rate limited, disabled, a member): once per waiting row
-  (`dedup_key` `pending:<id>`, the row's AUTOINCREMENT id from `OIDCResult.PendingID`, kept across the
-  person's attempts; a dismissed row recorded again is a new one, as is one unseen for 30 days, which
+  while its event is in the feed (`dedup_key` `pending:<id>`, the row's AUTOINCREMENT id from
+  `OIDCResult.PendingID`, kept across the person's attempts, so a row they keep alive past the
+  feed's 90 days is announced again; a dismissed row recorded again is a new one, as is one unseen for 30 days, which
   `upsertPending` drops before it records the attempt), its data `provider` (the button's
   name), `person` (the name, else the username, left out when it holds an "@": providers often make the
   email the username) and `reason` (a Pending reason the messages word, else none): never the email,
@@ -3959,7 +3962,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `auth.oidc.scopes` as listed, else the defaults with `groups` only while `admin_group` is set or
   `allowed_group` is with `auto_create` on, `GroupPolicy`, server#406), the flow cookie (`Sealer`: AES-GCM under a key made at
   start, so a restart ends flows in flight; `Flow{state, nonce, verifier, redirect_uri, return,
-  issued_at}`, ten minutes, the callback's exchange naming the redirect URI `/start` sent; `Replay`
+  intent, next, issued_at}`, ten minutes, the callback's exchange naming the redirect URI `/start` sent; `Replay`
   refuses a state used before, remembering only a flow whose exchange succeeded, so states sent back
   bare can't fill it, and dropping the expired every ten minutes), the claims (`Claims`: the email and its verified flag taken
   together, an email cleaning changed (cut, trimmed, a control character dropped) unverified; groups a
@@ -4002,15 +4005,26 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a provider session still live (audiosilo#202; a trip that ends on `/connect#oidc=<reason>` has
   `connect.js` drop the player's held intent, sessionStorage `audiosilo.oidcIntent`, so its unspent
   tag can't be completed from the history); `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes; a callback with no cookie
-  charges nothing, since any page can make a visitor's browser send those): the flow cookie
-  (HttpOnly, SameSite=Lax; on an https public_url `__Host-audiosilo_oidc`, Path `/`, Secure, no
-  Domain, so neither a sibling subdomain nor a plain-http answer can plant one; on plain http
-  `audiosilo_oidc` on Path `/api/v1/auth/oidc/`, where a network attacker can plant one: no prefix
-  without Secure; `oidcCookieName`) is deleted on every callback; a sign-in gets a **60 s
+  charges nothing, since any page can make a visitor's browser send those): **one cookie per flow**,
+  named by its state's first 16 characters (`audiosilo_oidc_flow_<key>`, `flowKey`; the sealed state
+  still compared whole), so a sign-in started in a second tab never replaces the first's and both
+  finish (server#406); `/start` deletes the oldest beyond 4 held (`oidcMaxFlows`; every one rides on
+  each request to its path) (HttpOnly, SameSite=Lax; on an https public_url
+  `__Host-audiosilo_oidc_flow_<key>`, Path `/`, Secure, no Domain, so neither a sibling subdomain nor
+  a plain-http answer can plant one; on plain http `audiosilo_oidc_flow_<key>` on Path
+  `/api/v1/auth/oidc/` under public_url's own path (`/audiosilo/api/v1/auth/oidc/` behind a proxy's
+  prefix), where a network attacker can plant one: no prefix without Secure; `oidcCookieName`); the
+  callback deletes its state's cookie whatever happens, never another tab's (a state naming no held
+  cookie is `expired`, charging nothing); a sign-in gets a **60 s
   single-use token of its own kind** (`auth.KindOIDC`, minted in `OIDCSignIn`'s transaction) that is **never in a URL**
   (a link carrying one would sign whoever follows it in as its owner: a login CSRF), only in the
   done cookie (`__Host-audiosilo_oidc_done` or `audiosilo_oidc_done`, named and placed as the flow
-  cookie, Max-Age 60), and a 303 to `/admin/#oidc=done` or
+  cookie, Max-Age 60), and a 303 to `/admin/#oidc=done` (or, for a console flow, the console page it
+  started from: `/start`'s optional `next`, sealed as `Flow.Next`, kept through the hop, `validNext`:
+  a path under `/admin/` with an optional query, printable ASCII, no fragment, backslash, empty, `.`
+  or `..` segment (`%2e` counts as a dot), at most 1024 bytes, anything else dropped for the start
+  page; appended to public_url, so never another origin; the console's `oidcStartHref` sends the
+  page asked for, server#406) or
   `/web/connect?oidc=1` (the player's button is 235c; `/web/connect?token=` stays QR pairing's).
   That page calls **`POST /auth/oidc/finish`** (public, optional `{device_name, intent}`, per-IP
   `oidcLimiter`; `intent` is the tag the player expects: a string, the empty one too, that isn't
@@ -4044,7 +4058,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `not_linkable` for a member or demo account, `user_has_identity`, `identity_linked`),
   `POST /admin/oidc/pending/{id}/create` `{username?}` (201), `DELETE /admin/oidc/pending/{id}` (204),
   `DELETE /admin/users/{id}/identities/{identity_id}` (409 `admin_needs_password` for a password-less
-  admin's identity from the running provider); `GET /admin/users/{id}` carries `identities`. Console
+  admin's identity from the running provider); `GET /admin/users/{id}` carries `identities`, each
+  with `provider` (the configured name when it is the running provider's, else `""`: the console
+  names it by the issuer's host). Every console user object carries `sign_in_provider` (server#408,
+  `adminUser`, `auth.SSOAccounts` for the list, `HasSSO` for one): the running provider's name for
+  an account holding an identity from it that single sign-on signs in (never a household member's
+  or a demo account's), else `""`; People's card says "Signs in with <name>" in place of "Paired
+  devices only" and the person's page counts it as an admin's way in, so neither reads
+  `/admin/oidc/status` (which can reach the provider). Console
   (235b): People's Waiting sign-ins card (`features/people/pending-signins.tsx`, its count on the
   People section) and a person's Sign-in tab's "Signed in with <name>" cards with Unlink
   (`identity-card.tsx`); a sign-in that waits raises `oidc_pending` (Notifications above). Logout stays local: disabling a

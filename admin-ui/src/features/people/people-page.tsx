@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { House, KeyRound, Smartphone, UserPlus, Users } from 'lucide-react';
+import { House, KeyRound, LogIn, Smartphone, UserPlus, Users } from 'lucide-react';
 import { useDevices, useLiveSessions, useStats, useUsers } from '@/api/hooks';
 import type { AdminUser, Device, ListeningRow, ListeningSession } from '@/api/types';
 import { AvatarRing } from '@/components/avatar-ring';
@@ -22,6 +22,7 @@ import { PendingSignInsCard } from './pending-signins';
 import { displayName, peopleGroups } from './household-model';
 import { MemberChips } from './member-chips';
 import { currentBook, groupDevices } from './people-model';
+import { signInProvider } from './pending-model';
 
 const MONTH_MS = 30 * 24 * 3600 * 1000;
 
@@ -147,6 +148,8 @@ function PersonCard({
   const lang = i18n.resolvedLanguage ?? 'en';
   const current = currentBook(listening, live, u.id);
   const frac = current ? progressFraction(current.position, current.duration) : 0;
+  // No password: a single sign-on they sign in with, else paired devices only.
+  const sso = signInProvider(u);
 
   const status = u.disabled
     ? t('people.card.disabled')
@@ -191,6 +194,11 @@ function PersonCard({
               <>
                 <KeyRound className="size-3.5" aria-hidden="true" />
                 {t('people.card.password')}
+              </>
+            ) : sso ? (
+              <>
+                <LogIn className="size-3.5" aria-hidden="true" />
+                {t('people.card.sso', { provider: sso })}
               </>
             ) : (
               <>
