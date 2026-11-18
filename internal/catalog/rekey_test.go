@@ -990,6 +990,13 @@ func TestRekeyLibraryPassesByIdlePaths(t *testing.T) {
 		t.Error("stray 1's bookmark did not move to the book once the book had the file")
 	}
 	run(rkTrack3)
+	// A deleted library's memo goes with it.
+	if err := f.c.DeleteLibrary(f.ctx, f.lib); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.c.rekeyMemos[f.lib]; ok {
+		t.Error("the deleted library's re-key memo is still held")
+	}
 }
 
 // TestRekeyStoppedIsNoFailure: a path whose look or move the server's stop

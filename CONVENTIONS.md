@@ -1570,8 +1570,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   spelling and a scope-kept one are looked at every run; the memo is in memory, so a start looks at every
   path once). Books libraries only. A run the server's stop ends is no failure: its path is not
   in `Failed` (nothing recorded, the next run takes it) and the start's or the scan end's line says
-  "stopped with the server" at info. Each line names a library by `library_id` (the scan end's by its
-  name, `library`, too). Per path,
+  "stopped with the server" at info. A path's line names its library by `library_id` (the scan end's
+  by its name, `library`, too); the scan end's other lines name it by its name only. Per path,
   `rekeyTarget`: another spelling of an indexed book (`spelling`: every table), a file of a folder book
   (`file`: all but favourites, a track row's heart stays on the track), a folder inside a book (`folder`:
   the book-level rows only, lists, ratings and the reader's place, read at `BookPathAt`; a disc's timeline

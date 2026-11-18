@@ -335,7 +335,8 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 	// polls cancelled: all with the library's own delete, so no titles call can
 	// match a book of it in between. The delete takes every grant of the library
 	// away (its share rules cascade), so it commits durably (DeleteShare,
-	// server#260).
+	// server#260). Its scan-end re-key memo goes with it.
+	defer c.forgetRekeyMemo(id)
 	return c.db.WithDurableTx(ctx, "DeleteLibrary", func(tx *sql.Tx) error {
 		// The library's whole-library grant shares grant nothing once it's gone
 		// (their rule cascades away); drop them rather than leave empty shares.

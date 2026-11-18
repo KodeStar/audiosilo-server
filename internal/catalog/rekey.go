@@ -448,9 +448,7 @@ func (c *Catalog) RekeyLibrary(ctx context.Context, libraryID int64) (RekeyRepor
 		return RekeyReport{}, err
 	}
 	if len(cands) < cmp.Or(c.memoRekeyFrom, rekeyMemoFrom) {
-		c.rekeyMemosMu.Lock()
-		delete(c.rekeyMemos, libraryID)
-		c.rekeyMemosMu.Unlock()
+		c.forgetRekeyMemo(libraryID)
 		return c.rekeyPaths(ctx, libraryID, cands, nil)
 	}
 	// Read before any path is looked at: an index change during the run
@@ -483,6 +481,15 @@ func (c *Catalog) RekeyLibrary(ctx context.Context, libraryID int64) (RekeyRepor
 	c.rekeyMemos[libraryID] = rekeyMemo{print: printed, idle: idle}
 	c.rekeyMemosMu.Unlock()
 	return rep, err
+}
+
+// forgetRekeyMemo drops a library's scan-end re-key memo (RekeyLibrary): its
+// run under rekeyMemoFrom keeps none, and a deleted library's goes with it.
+// A memo dropped wrongly costs only a full look at the next scan end.
+func (c *Catalog) forgetRekeyMemo(libraryID int64) {
+	c.rekeyMemosMu.Lock()
+	delete(c.rekeyMemos, libraryID)
+	c.rekeyMemosMu.Unlock()
 }
 
 // rekeyMemoFrom is how many candidates a scan-end run has before it keeps a
