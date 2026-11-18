@@ -649,6 +649,11 @@ func RedactedJob(j Job) Job {
 	return j
 }
 
+// PollFoldWindow is how long an ended poll (or follow) waits for its fold:
+// EndedPodcasts sweeps those that ended within it, and the scheduler counts an
+// unfolded one in it as the show's poll in hand (catalog.DuePodcastPolls).
+const PollFoldWindow = 24 * time.Hour
+
 // EndedPodcasts recovers a crash between the job commit and folding
 // (idx_bridge_jobs_kind_finished serves it), after failing the follow requests
 // left queued on a Bridge that went offline (expireOfflineSubscribes).
@@ -659,7 +664,7 @@ func (s *Service) EndedPodcasts(ctx context.Context) ([]Job, error) {
 	if err := s.expireOfflineSubscribes(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('`+KindPodcastSubscribe+`','`+KindPodcastPoll+`','`+KindPodcastFetch+`','`+KindPodcastRetain+`') AND j.state IN `+EndedStatesSQL+` AND (j.kind IN ('`+KindPodcastFetch+`','`+KindPodcastRetain+`') OR j.finished_at>=?) AND NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id) ORDER BY j.id`, at(s.now().Add(-24*time.Hour)))
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('`+KindPodcastSubscribe+`','`+KindPodcastPoll+`','`+KindPodcastFetch+`','`+KindPodcastRetain+`') AND j.state IN `+EndedStatesSQL+` AND (j.kind IN ('`+KindPodcastFetch+`','`+KindPodcastRetain+`') OR j.finished_at>=?) AND NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id) ORDER BY j.id`, at(s.now().Add(-PollFoldWindow)))
 	if err != nil {
 		return nil, err
 	}

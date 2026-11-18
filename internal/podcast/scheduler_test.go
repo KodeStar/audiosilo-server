@@ -92,6 +92,11 @@ func TestSchedulerDueAndWritableBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Ended after a tick's sweep but not folded yet: still the show's poll in
+	// hand, so the same tick queues no second one for it.
+	if due, err := cat.DuePodcastPolls(ctx, 10); err != nil || len(due) != 0 {
+		t.Fatalf("an unfolded poll left the show due %+v %v", due, err)
+	}
 	// The sweep folds the outcome and the following tick cannot requeue it.
 	if err := SchedulerTick(ctx, deps); err != nil {
 		t.Fatal(err)
