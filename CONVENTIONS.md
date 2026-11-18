@@ -1379,7 +1379,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `download=1` named `<stem>.m4a`. A cold encode is waited for up to `renditionWait` (45 s, the remux's
   download wait), then 503 `rendition_pending` with `Retry-After: 15` while it goes on under `baseCtx`; never a
   live transcode. 422 `rendition_failed` is a remembered refusal (ffmpeg's, or a short copy; for an hour), with
-  `Retry-After` the seconds it has left (`FileCache.RefusedFor`, server#289);
+  `Retry-After` the seconds it has left (`FileCache.RefusedFor`, server#289; the listing's `retry_after_seconds` is
+  read with its state, `Status`/`Queue`'s `refusedFor`, so a refusal expiring between two looks keeps its hint, server#359);
   503 `rendition_error` (`Retry-After: 60`) a failure not the file's (disk guard, a run killed partway, the
   source changed). `POST
   /libraries/{id}/renditions?path=<book>` `{"kind":"watch"}` queues every file of the book whose copy is missing
@@ -4171,7 +4172,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   offsets in current order), all reads before the one write. `SyncListening` is ONE `WithUserStateTx`: checks
   (`invalid`, `unknown_kind`, an id repeated in the batch `duplicate` of a copy that passed them: a copy rejected
   leaves the next to be checked on its own, server#284), the clock (shift = now - sent_at, kept as
-  a Duration, or clock_offset, added to every time; a corrected time past now pulled back with its span, keeping
+  a Duration, or clock_offset, added to every time, a furthest-only batch's only to its `SenderDated` events, each
+  event logged with the shift it took; a corrected time past now pulled back with its span, keeping
   its length), `too_old` (older than
   90 days), the fingerprint (only for the exact book path, 10 s), the file remap (fe#188: a `*_file` of the book
   is its offset now + the seconds in it, clamped to its length; else the sent seconds); then each event in
@@ -4198,8 +4200,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a finished row for its device (so the restart span after it resolves on that device's own row, not as
   diverged from the device that finished it; an unfinish of another device's unfinished row takes nothing, so
   that device's place stays and this device's next base-0 span still diverges from it); both bump the version.
-  A `finish` (applied or `older`, not a furthest-only batch's) marks the token's session on the book finished
-  when its last span ended within `SessionGap` before it (`finishSession`, server#284), opening none.
+  A `finish` made without seeing the row's last explicit write (its base as sent below `edit_version`, or none; a
+  base at the row's own version saw all there is, where `edit_version` is above it after a move carried the row alone),
+  in a `sent_at` batch and not after a finish-state change of the same batch, is dated back by the batch's shift,
+  0 to 30 s (`finishChange`, `maxFinishTransit`): the shift is the request's time on the way plus clock skew, and a
+  finish sent just before an Undo (a PATCH naming `finished`) landed dated after it and finished the book again
+  (server#415); never past the token's own applied finish or unfinish (it saw that one, whatever its base says: on a
+  clock running behind, a restart then Mark finished would be "older"); an unfinish is never dated back (a restart
+  just after a finish). A `finish` made at or before the
+  Stay that holds the row is `not_applied` `behind` (`beforeStay`, any other device's, server#415: the Stay is the
+  later word; never the Stay's own device's, whose events arrive in the order it made them, so its finish came after
+  its Stay however the two batches' shifts date them).
+  A `finish` (applied, `older` or `behind`, not a furthest-only batch's) marks the token's session on the book finished
+  when its last span ended within `SessionGap` before it (`finishSession`, server#284), opening none; a span landing
+  after the token's applied finish, ending at most `SessionGap` before it (or up to `maxFinishTransit` after it: the
+  two are stamped together and each batch is corrected by its own shift), closes its session finished
+  (`finishedAfter`, server#359: a very short book's player posted the finish before its only span), unless one of
+  the token's sessions around the finish is finished already (the finish has its session: a backlog's earlier span
+  that opens one of its own is not a second).
   Every stored listen counts, whatever its place did: `recordSpan` (the token's session begun by the span's
   start with the latest last save, `latestSession`, extended within `SessionGap` or by `continuousPlayback`, its place,
   length and speed taken only from a span not older than its last save, server#284; a
@@ -4209,7 +4227,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   newer rows the book has; else a row; `idx_history_user_path_ended`).
   Rejected events are never stored. `listening_events` is pruned at 120 days (`PruneListeningEvents`, from
   `internal/launcher.retention`). The legacy PUT stays last-write-wins (finished included) and is logged as a `put`
-  event (`SaveProgressFrom`), stores `device_name` and `finish_changed_at` (at its `updated_at`, never past
+  event (`SaveProgressFrom`), stores its `updated_at` as fixed-width UTC milliseconds whatever form was sent
+  (server#224: the Activity funnel compares it as text, its bounds in the same form), `device_name` and
+  `finish_changed_at` (at its `updated_at`, never past
   the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too, so an
   older sync finish/unfinish can't undo it: `EditProgress` (own and admin PATCH) at now, on ANY explicit
   `finished` even one that flips nothing (server#363; bound from Go, kept by `COALESCE` when the edit names
@@ -4248,8 +4268,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`writePlace` keeps `stay_version` while the row stays its device's); every other writer clears it: another
   device's applied span (an Audible furthest-only place heard after the Stay too), `endSpanChain` (PUT, PATCH, an import's apply and
   undo, a move or join) and a finish or unfinish (not an unfinish of a row that isn't finished: it changes nothing,
-  so it keeps the hold and records no `edit_version`; nor an Audible finish heard at or before the Stay,
-  which is `behind`).
+  so it keeps the hold and records no `edit_version`; nor a finish made at or before the Stay, which is `behind`).
+  A move or join that carries a row alone keeps its version (an import's undo still finds it) and records its
+  `edit_version` one above it, so a Stay on that version is a jump too (`carryProgress`, server#415). An import's undo
+  that deletes the row it made logs a `reset` event with the row's version as its `base_version` (`logProgressReset`,
+  kind `reset`, never a client's): a Stay that ended at or before it, or whose base is at most that version (an offer
+  shown before the undo, answered after it), is a jump (`resetSince`), and whatever writes the row again starts at
+  least one above that version (`firstProgressVersion`: a sync, a PUT (above its own sent version too), a PATCH and
+  an import's new row, `floorNewVersions`), so a base acknowledged before the undo never names a version of the new
+  row (ResolvePlace, `heldByStay` and `staysWin` would read it as seen).
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
   multi-file mp3 parts share one shape: each chapter carries `file_path` (the
   library-relative file to stream via `/stream?path=`), in-file `start`/`end`, and
@@ -4403,10 +4430,20 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `AudibleRefusalCode`; `audible_sign_in`, `bridge.SyncAudibleSignIn`, the Bridge's transient sign-in refusal, never an
   import's, is an ordinary failure) sets `refused_at`, cleared by any account PUT of the Bridge's (a fresh sign-in, an edit) or a
   complete poll (`PutAudibleTitles` final: Audible answered the account), both stamping `refusal_ended_at` (`0071`):
-  a refused sync claimed in an earlier second than that (`refusalEndedSince`; `claimed_at` is whole seconds, so one
-  in the same second still marks it) is from before the fresh sign-in and marks nothing (server#303). The Bridge posts the places to `POST
+  a refused sync or poll claimed in that second or an earlier one (`refusalEndedSince`; `claimed_at` is whole
+  seconds) is from before the fresh sign-in and marks nothing (server#303), or can't be ordered against it (the
+  claim's own second: claimed just before the sign-in, or just after it while the Bridge had yet to save the new
+  one), which counts as unknown, the next job marking a refusal that stands (server#359). An account PUT for the same
+  person stops no working sync (the server can't tell a sign-in from a label edit); only a PUT mapping it to another
+  person cancels it (`CancelAudibleSyncOff`). The Bridge posts the places to `POST
   /bridge/audible/accounts/{account}/listening` `{sent_at, events}` (bridge token only, header only; body strict,
-  `sent_at` required, the Sync v2 event shapes and limits): the batch is `SyncBatch{UserID: the account's person,
+  `sent_at` required, the Sync v2 event shapes and limits; the places are dated as sent: their times
+  are Audible's own `last_updated`, not the Bridge's clock, so a Bridge's skew never moves one across a restart or a
+  Stay, server#415; the one exception is a place Audible gave no `last_updated` for, which the Bridge stamps with its
+  own clock: `AudibleUndatedEvents` finds those by their id, the hash of the place with an empty `last_updated`
+  under one of the book's synced titles (`audibleUndatedID`, CROSS-REPO §23's formula, pinned by
+  `TestAudibleUndatedID`; the finish at such a place in the same batch too), and `sent_at`'s shift corrects them
+  alone (`SyncBatch.SenderDated`; an id made another way matches nothing and is dated as sent)): the batch is `SyncBatch{UserID: the account's person,
   DeviceID: "audible:<account>", DeviceName: "Audible (<label or STORE>)", TokenID: 0, FurthestOnly: true}`, set by
   the route alone (no body field reaches either; `/me/listening/sync` refuses an unknown field). Each event's book is
   resolved under the PERSON's scopes (`userPathResolver`, `catalog.UserScopes`: no access is `no_access`), then must
@@ -4424,8 +4461,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   end, the newest applied `stay` span of the row's device in `listening_events`, never the row's `updated_at`, which
   moves on as the Stay's device listens: a place heard in the Audible app since the Stay still applies); a place past the book's end by more than 5% plus 2
   min (`furthestPastEndRatio`, the manager's wrong-match guard) is `rejected` `duration_mismatch`, one just past it
-  is the end; an unfinish is `behind`; a finish is any finish, except one heard at or before the Stay that holds the row
-  (`behind`, `beforeStay`: the Bridge sends a place at the end as a listen and a finish). The device id `audible:<account>` is this route's
+  is the end; an unfinish is `behind`; a finish is any finish (one made at or before the Stay that holds the row is
+  `behind`, as any device's is: the Bridge sends a place at the end as a listen and a finish). The device id `audible:<account>` is this route's
   alone: `/me/listening/sync` refuses a batch naming one (400), a legacy PUT naming one (a row echoed back) saves under
   none, and `EditProgress` clears it on the row it edits (the edit reaches the feed, and Audible's next place can't
   undo it unseen), as a listening import does on a row it moves on (`importer.mergeProgress`, the device name too;
@@ -4455,8 +4492,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   agree now) is offered to Audible. A move or join moves the book's titles in its per-user transaction, after the
   places (`moveAudibleTitles`, server#303), so the trigger offers the carried place (merged by the carry's rule with a
   row an earlier book left at the new path), never that left-behind row as it stood, and a carry that fails leaves the
-  titles where they were; a person with no place on the moved book still has the left-behind row offered, as the
-  player shows it for the moved book. A row written late with
+  titles where they were; a left-behind row the carry did not change (its person never played the moved book, or it
+  was the newer and won the merge) is another book's place: `keepLeftOffers` sets its `change_seq` to
+  `unofferedSeq` (-1, below every cursor, a feed's first page included: put back where it was, a row written after
+  the feed's last one would still be read), so it is not offered until its next write (server#359), and Audible's own
+  place, ahead of it, comes back by the next sync. A move only: a row already on a join's folder is the joined book's
+  own place (`mergeFurthest` counts it, and a folder joined again finds the one it left), offered whether or not a
+  part's place moved it. A row written late with
   an earlier `updated_at` (an offline backlog, a diverged apply or late finish keeping the later time, a client's
   clock behind) is still fed; the row's own `updated_at` is what the feed sends. Console:
   Account settings... (`account-settings-button.tsx`, renamed from Backup settings) holds the sync switch, the

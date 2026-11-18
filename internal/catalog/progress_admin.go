@@ -152,7 +152,14 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 			userID, ref.LibraryID, ref.Path).
 			Scan(&p.Position, &p.Duration, &p.Finished, &p.PlaybackSpeed, &p.Version, &p.DeviceID, &started, &finished)
 		if errors.Is(err, sql.ErrNoRows) {
-			// A new row: the book is started now (unless the edit names a date).
+			// A new row: the book is started now (unless the edit names a date),
+			// at a version above any a deleted row here had (the write below
+			// adds one: firstProgressVersion).
+			first, err := firstProgressVersion(ctx, tx, userID, ref)
+			if err != nil {
+				return err
+			}
+			p.Version = first - 1
 			p.PlaybackSpeed = 1
 			started = sql.NullString{String: now.UTC().Format(time.RFC3339), Valid: true}
 			if err := tx.QueryRowContext(ctx,

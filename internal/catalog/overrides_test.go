@@ -757,7 +757,7 @@ func TestMoveMergesAListenerCollision(t *testing.T) {
 		t.Fatalf("a listener collision failed the move: %v", err)
 	}
 	p, _ := c.GetProgress(ctx, uid, Ref{LibraryID: lib.ID, Path: "new/Book"})
-	if p == nil || p.Position != 3 || p.Finished || p.UpdatedAt != "2026-01-02T10:00:00Z" || p.Version != 6 {
+	if p == nil || p.Position != 3 || p.Finished || p.UpdatedAt != "2026-01-02T10:00:00.000Z" || p.Version != 6 {
 		t.Fatalf("merged progress = %+v, want the moving book's newer save (3, not finished), version 6", p)
 	}
 	var finishedAt *string
@@ -766,7 +766,7 @@ func TestMoveMergesAListenerCollision(t *testing.T) {
 		t.Fatalf("the stale finish date survived the move: %v (err %v)", finishedAt, err)
 	}
 	if p, _ := c.GetProgress(ctx, bob, Ref{LibraryID: lib.ID, Path: "new/Book"}); p == nil || p.Position != 4 ||
-		p.UpdatedAt != "2026-01-03T10:00:00Z" || p.Version != 6 {
+		p.UpdatedAt != "2026-01-03T10:00:00.000Z" || p.Version != 6 {
 		t.Fatalf("bob's merged progress = %+v, want the newer save at the new path (4), version 6", p)
 	}
 	for _, u := range []int64{uid, bob} {

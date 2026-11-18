@@ -32,6 +32,11 @@ const (
 	EventFinish   = "finish"
 	EventUnfinish = "unfinish"
 	eventPut      = "put"
+	// eventReset is a progress row deleted (an import's undo, logProgressReset),
+	// its base_version the version the row had: a Stay made before it, or on a
+	// base no higher than that version, is a plain jump (resetSince), and
+	// whatever writes the row again starts above it (firstProgressVersion).
+	eventReset = "reset"
 )
 
 // Event statuses (SyncResult.Status).
@@ -49,7 +54,8 @@ const (
 	reasonResumeBehind = "resume_behind"
 	// reasonBehind: a furthest-only batch's (SyncBatch.FurthestOnly) place not
 	// ahead of the stored one (or from before a restart or a held Stay), or its
-	// unfinish: never applied, never offered.
+	// unfinish, and another device's finish made at or before a held Stay
+	// (beforeStay): never applied, never offered.
 	reasonBehind = "behind"
 	// SyncInvalid, SyncNoAccess and SyncNotFound are also a SyncTarget's
 	// reason: the handler decides them while resolving an event's path.
@@ -118,6 +124,12 @@ const (
 	// when that listening ended no more than this after the Stay's span did
 	// (resolveListen, staysWin): a Stay made offline long ago is a plain jump.
 	staySlack = 2 * time.Minute
+	// maxFinishTransit: the most of a batch's sent_at shift a finish made
+	// without seeing the row's last explicit write is dated back by
+	// (finishChange): a request's time on the way, not a clock's skew. Also
+	// how long after its finish a span stamped with it may land dated
+	// (finishedAfter).
+	maxFinishTransit = 30 * time.Second
 )
 
 var syncEventID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -281,6 +293,12 @@ type SyncBatch struct {
 	// listening session, daily roll-up or history is recorded (owner decision
 	// 2), and TokenID is 0.
 	FurthestOnly bool
+	// SenderDated, a furthest-only batch's alone: the ids of the events whose
+	// times are the sender's own clock's (a place Audible gave no time for,
+	// which the Bridge dates when it reads it: AudibleUndatedEvents). The
+	// batch's clock shift moves these and no other: every other place carries
+	// Audible's own time, which a Bridge's skew must not move (server#415).
+	SenderDated map[string]bool
 }
 
 // SyncResult is one event's answer.
@@ -308,8 +326,11 @@ type syncPrepared struct {
 	ev             SyncEvent
 	target         SyncTarget
 	started, ended time.Time // corrected (finish/unfinish: both At)
-	from, to       float64   // whole-book seconds after the remap
-	speed          float64
+	// shift is the clock shift the event's times were corrected by: the
+	// batch's, or none for a furthest-only event not in SenderDated.
+	shift    time.Duration
+	from, to float64 // whole-book seconds after the remap
+	speed    float64
 }
 
 // length is the span's book length: the device's, else the indexed book's
@@ -332,14 +353,22 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 	// (saturating at about 292 years, the same on every platform, where a float
 	// of seconds converted back would overflow differently on amd64 and arm64);
 	// clock_offset's is bounded by MaxClockOffset, so its conversion fits.
-	var shiftDur time.Duration
+	//
+	// transit: how much of sent_at's shift may be the batch's time on the way
+	// (a clock_offset is measured, so it has none, and a furthest-only batch's
+	// finish is a place read on Audible, not an act in flight): a finish made
+	// before an edit it never saw can be dated after it by that much
+	// (finishChange).
+	var shiftDur, transit time.Duration
 	switch {
 	case b.ClockOffset != nil:
 		shiftDur = time.Duration(*b.ClockOffset * float64(time.Second))
 	case b.SentAt != nil:
 		shiftDur = now.Sub(*b.SentAt)
+		if !b.FurthestOnly {
+			transit = min(max(shiftDur, 0), maxFinishTransit)
+		}
 	}
-	shift := shiftDur.Seconds()
 	results := make([]SyncResult, len(b.Events))
 	seen := map[string]bool{}
 	var prepared []syncPrepared
@@ -387,10 +416,15 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 			continue
 		}
 		p.index, p.target = i, target
-		// The clock: every time of the batch moves by the shift; a corrected time
-		// past now is pulled back to now, both ends of a span alike (by its own
-		// length, at most maxSpan: the distance past now can saturate).
-		p.started, p.ended = p.started.Add(shiftDur), p.ended.Add(shiftDur)
+		// The clock: every time of the batch moves by the shift (a furthest-only
+		// batch's only where the sender dated the event itself, SenderDated); a
+		// corrected time past now is pulled back to now, both ends of a span
+		// alike (by its own length, at most maxSpan: the distance past now can
+		// saturate).
+		if !b.FurthestOnly || b.SenderDated[ev.ID] {
+			p.shift = shiftDur
+		}
+		p.started, p.ended = p.started.Add(p.shift), p.ended.Add(p.shift)
 		if p.ended.After(now) {
 			p.started, p.ended = now.Add(-p.ended.Sub(p.started)), now
 		}
@@ -431,7 +465,8 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 	var err error
 	if len(prepared) > 0 {
 		err = c.db.WithUserStateTx(ctx, "SyncListening", func(tx *sql.Tx) error {
-			s := syncRun{c: c, tx: tx, b: b, now: now, shift: shift, written: map[Ref]int64{}}
+			s := syncRun{c: c, tx: tx, b: b, now: now, transit: transit, written: map[Ref]int64{},
+				changed: map[Ref]bool{}}
 			var err error
 			if s.stored, err = storedEventIDs(ctx, tx, b.UserID, prepared); err != nil {
 				return err
@@ -531,11 +566,17 @@ func remapEnd(book *SyncBook, whole float64, file *string, pos *float64) float64
 
 // syncRun is one batch's transaction.
 type syncRun struct {
-	c     *Catalog
-	tx    *sql.Tx
-	b     SyncBatch
-	now   time.Time
-	shift float64
+	c   *Catalog
+	tx  *sql.Tx
+	b   SyncBatch
+	now time.Time
+	// transit is the part of the batch's clock shift that may be its time on
+	// the way (sent_at's shift, 0 to maxFinishTransit; none for a
+	// clock_offset): finishChange.
+	transit time.Duration
+	// changed: the books whose finish state this batch changed (finish), so a
+	// later finish of the batch compares with that change as it was dated.
+	changed map[Ref]bool
 	// written is the version each book's row had after this batch wrote it, or
 	// the row's own version when the batch carries on from this device's earlier
 	// POST (a replay of the newest link of its chain, or a span continuing that
@@ -658,7 +699,7 @@ func (s *syncRun) apply(ctx context.Context, p syncPrepared) (SyncResult, error)
 	return res, insertEvent(ctx, s.tx, eventRow{
 		userID: s.b.UserID, id: p.ev.ID, kind: p.ev.Kind, ref: p.target.Key, deviceID: s.b.DeviceID,
 		tokenID: s.b.TokenID, from: p.from, to: p.to, speed: p.speed, duration: p.ev.Duration,
-		started: formatSessionTime(p.started), ended: formatSessionTime(p.ended), shift: s.shift,
+		started: formatSessionTime(p.started), ended: formatSessionTime(p.ended), shift: p.shift.Seconds(),
 		start: p.ev.Start, base: p.ev.BaseVersion, status: res.Status, reason: res.Reason,
 		received: formatSessionTime(s.now),
 	})
@@ -677,11 +718,70 @@ func (s *syncRun) listen(ctx context.Context, p syncPrepared) (SyncResult, error
 		return s.furthestListen(ctx, p, stored, at)
 	}
 	mine := &ListeningOtherPlace{Position: p.to, DeviceID: s.b.DeviceID, DeviceName: s.b.DeviceName, UpdatedAt: at}
+	finished, err := s.finishedAfter(ctx, p, stored)
+	if err != nil {
+		return SyncResult{}, err
+	}
 	res, err := s.resolveListen(ctx, p, stored, mine)
 	if err != nil {
 		return res, err
 	}
-	return res, s.recordListening(ctx, p)
+	return res, s.recordListening(ctx, p, finished)
+}
+
+// finishedAfter reports whether this token's finish of the book, already
+// applied, came just after span p ended (at most SessionGap later): the finish
+// of the session the span lands in, which finishSession found no session for
+// when it came first. A very short book's player may post its finish before
+// its only span, in separate batches (server#359); a player now sends the span
+// first, which finishSession marks. The player stamps the span's end and the
+// finish together and each batch is corrected by its own sent_at shift, so the
+// span may land dated after the finish by the difference in the two requests'
+// time on the way (at most maxFinishTransit). Only while the finish has no
+// session yet: once one of the token's sessions around it is finished, a later
+// span (a backlog's earlier one, opening a session of its own) marks no other.
+// Read from the row (finished, by this device, its finish_changed_at in the
+// window) before the log: most spans land on a row no finish just changed.
+func (s *syncRun) finishedAfter(ctx context.Context, p syncPrepared, stored *syncRow) (bool, error) {
+	if stored == nil || !stored.finished || !stored.finishChangedAt.Valid || stored.deviceID != s.b.DeviceID {
+		return false, nil
+	}
+	f := parseSessionTime(stored.finishChangedAt.String)
+	if p.ended.Sub(f) > maxFinishTransit || f.Sub(p.ended) > SessionGap {
+		return false, nil
+	}
+	own, err := s.ownFinishChange(ctx, p.target.Key, stored.finishChangedAt.String, EventFinish)
+	if err != nil || !own {
+		return false, err
+	}
+	// The finish already has its session (finishSession marked the one open
+	// when it came, or an earlier span after it did here): a late span that
+	// opens a session of its own beside it is not a second finished one.
+	key := p.target.Key
+	var marked bool
+	err = s.tx.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM listening_sessions
+		  WHERE user_id = ? AND token_id = ? AND library_id = ? AND rel_path = ? AND finished = 1
+		    AND last_at >= ? AND started_at <= ?)`,
+		s.b.UserID, s.b.TokenID, key.LibraryID, key.Path, formatSessionTime(f.Add(-SessionGap)),
+		formatSessionTime(f.Add(maxFinishTransit))).Scan(&marked)
+	return !marked, err
+}
+
+// ownFinishChange reports whether the row's last finish-state change (at, its
+// finish_changed_at) was this token's own: an applied event of one of kinds
+// (EventFinish, EventUnfinish) on the book that ended then.
+func (s *syncRun) ownFinishChange(ctx context.Context, key Ref, at string, kinds ...string) (bool, error) {
+	args := []any{key.LibraryID, key.Path, s.b.UserID, s.b.TokenID, statusApplied, at}
+	for _, kind := range kinds {
+		args = append(args, kind)
+	}
+	var own bool
+	err := s.tx.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM listening_events
+		  WHERE library_id = ? AND rel_path = ? AND user_id = ? AND token_id = ? AND status = ? AND ended_at = ?
+		    AND kind IN (`+placeholders(len(kinds))+`))`, args...).Scan(&own)
+	return own, err
 }
 
 // furthestListen is a furthest-only batch's listen (SyncBatch.FurthestOnly):
@@ -695,8 +795,13 @@ func (s *syncRun) listen(ctx context.Context, p syncPrepared) (SyncResult, error
 // or offers), the row's time never moving back, its speed and its offered
 // place kept. No listening is recorded.
 func (s *syncRun) furthestListen(ctx context.Context, p syncPrepared, stored *syncRow, at string) (SyncResult, error) {
-	version := int64(1)
-	if stored != nil {
+	var version int64
+	if stored == nil {
+		var err error
+		if version, err = s.firstVersion(ctx, p.target.Key); err != nil {
+			return SyncResult{}, err
+		}
+	} else {
 		beforeRestart := stored.finishChangedAt.Valid && !p.ended.After(parseSessionTime(stored.finishChangedAt.String))
 		if stored.finished || beforeRestart || p.to <= stored.position+furthestSlack {
 			return SyncResult{Status: statusNotApplied, Reason: reasonBehind}, nil
@@ -759,14 +864,25 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 		rowAt = laterStamp(rowAt, stored.updatedAt)
 	}
 	if p.ev.Start == startStay && s.staysWin(p, stored) {
-		if err := s.writePlace(ctx, p, stored.version+1, holdStay, rowAt); err != nil {
+		reset, err := s.resetSince(ctx, p)
+		if err != nil {
 			return SyncResult{}, err
 		}
-		return SyncResult{Status: statusApplied}, nil
+		if !reset {
+			if err := s.writePlace(ctx, p, stored.version+1, holdStay, rowAt); err != nil {
+				return SyncResult{}, err
+			}
+			return SyncResult{Status: statusApplied}, nil
+		}
 	}
-	in := Place{Progression: p.to, DeviceID: s.b.DeviceID, UpdatedAt: mine.UpdatedAt, Version: 1}
+	in := Place{Progression: p.to, DeviceID: s.b.DeviceID, UpdatedAt: mine.UpdatedAt}
 	var storedPlace *Place
-	if stored != nil {
+	if stored == nil {
+		var err error
+		if in.Version, err = s.firstVersion(ctx, key); err != nil {
+			return SyncResult{}, err
+		}
+	} else {
 		in.Version = stored.version + 1
 		storedPlace = &Place{Progression: stored.position, DeviceID: stored.deviceID,
 			UpdatedAt: stored.updatedAt, Version: stored.version}
@@ -911,17 +1027,22 @@ func (s *syncRun) staysWin(p syncPrepared, stored *syncRow) bool {
 }
 
 // beforeStay reports whether a Stay holds the row (stay_version) and the span
-// ended at or before that Stay did: a furthest-only place from before the
-// listener chose the held place. The Stay's time is its own span's end, read
-// from the log (the newest applied "stay" span of the row's device on the
-// book: a held row is still its Stay's device's), never the row's updated_at:
+// (or finish) ended at or before that Stay did: a furthest-only place, or any
+// finish, from before the listener chose the held place. The Stay's time is
+// its own span's end, read from the log (the newest applied "stay" span of the
+// row's device on the book: a held row is still its Stay's device's), never
+// the row's updated_at:
 // the Stay's device listening on moves that on and keeps the hold, and a place
 // heard in the Audible app since the Stay is a new one (furthest wins) however
 // late the Bridge brings it. The row's time is never before the Stay's, so a
 // span after it needs no lookup. A Stay the log no longer holds (pruned at
 // SyncRetention) is older than any place a batch may carry (syncRejectAge).
+// Never the Stay's own device's finish: a device's events arrive in the order
+// it made them, so its finish after its Stay was made after it, though the two
+// batches' shifts (or a Stay span that ran to the book's end, stamped with its
+// finish) may date it at or before the Stay.
 func (s *syncRun) beforeStay(ctx context.Context, p syncPrepared, stored *syncRow) (bool, error) {
-	if !stored.stayVersion.Valid {
+	if !stored.stayVersion.Valid || stored.deviceID == s.b.DeviceID {
 		return false, nil
 	}
 	if t, ok := ParseStamp(stored.updatedAt); ok && p.ended.After(t) {
@@ -938,6 +1059,55 @@ func (s *syncRun) beforeStay(ctx context.Context, p syncPrepared, stored *syncRo
 		return false, err
 	}
 	return stayed.Valid && !p.ended.After(parseSessionTime(stayed.String)), nil
+}
+
+// resetSince reports whether Stay span p's base (sent, staysWin) may name a
+// version of a row that is gone: the user's row on the book was deleted (an
+// import's undo taking back a row it made: logged as a "reset" event,
+// logProgressReset) at or after the span ended, or had reached the base's
+// version when it was (a Stay answering an offer shown before the undo, sent
+// after it on that stale base). The base then can't say what the Stay saw
+// (server#415): it is a plain jump. Whatever writes the row again starts above
+// the deleted row's version (firstProgressVersion), so a Stay on a version written
+// since still wins. The log keeps a reset longer than any event may be dated
+// (SyncRetention over syncRejectAge).
+func (s *syncRun) resetSince(ctx context.Context, p syncPrepared) (bool, error) {
+	version, at, ok, err := lastReset(ctx, s.tx, s.b.UserID, p.target.Key)
+	if err != nil || !ok {
+		return false, err
+	}
+	return *p.ev.BaseVersion <= version || at >= formatSessionTime(p.ended), nil
+}
+
+// lastReset reads the user's resets of the book's row in the log (eventReset):
+// the highest version a deleted row had, and when the newest reset was (fixed
+// width); ok is false for none.
+func lastReset(ctx context.Context, q querier, userID int64, key Ref) (version int64, at string, ok bool, err error) {
+	var v sql.NullInt64
+	var a sql.NullString
+	err = q.QueryRowContext(ctx,
+		`SELECT MAX(base_version), MAX(ended_at) FROM listening_events
+		  WHERE library_id = ? AND rel_path = ? AND user_id = ? AND kind = ?`,
+		key.LibraryID, key.Path, userID, eventReset).Scan(&v, &a)
+	return v.Int64, a.String, a.Valid, err
+}
+
+// firstProgressVersion is the lowest version a write that creates userID's
+// row on key may give it: 1, or one above the highest version a deleted row on
+// the book had (lastReset), so a base a device acknowledged before the reset
+// never names a version of the new row (ResolvePlace, heldByStay and staysWin
+// read it as seen). Every writer that creates a row starts at or above it: a
+// sync (firstVersion), a PUT (SaveProgressFrom), an edit (editProgress) and an
+// import (floorNewVersions).
+func firstProgressVersion(ctx context.Context, q querier, userID int64, key Ref) (int64, error) {
+	version, _, _, err := lastReset(ctx, q, userID, key)
+	return version + 1, err
+}
+
+// firstVersion is the version a sync gives a row it creates
+// (firstProgressVersion).
+func (s *syncRun) firstVersion(ctx context.Context, key Ref) (int64, error) {
+	return firstProgressVersion(ctx, s.tx, s.b.UserID, key)
 }
 
 // heldByStay reports whether another device's Stay holds the row against this
@@ -1017,10 +1187,12 @@ func (s *syncRun) setOther(ctx context.Context, key Ref, place *ListeningOtherPl
 // (explicitWriteSet): they end a Stay's hold and record their edit_version,
 // except an unfinish of a row that isn't finished, which changes neither the
 // place nor the finish (a device that saw the book finished, late), so it
-// leaves a Stay's hold to hold that device's backlog. A furthest-only finish
-// heard at or before the Stay that holds the row is "behind", as its listen is
-// (beforeStay): the Bridge sends a place at the book's end as both, and the
-// finish alone would otherwise end the hold at the end (server#415).
+// leaves a Stay's hold to hold that device's backlog. A finish made at or
+// before the Stay that holds the row is "behind" (beforeStay), any other
+// device's: the Stay is the listener's later word (server#415; an offline
+// finish arriving after it ended the hold), and an Audible one is a place at
+// the book's end, which the Bridge sends as both a listen and a finish. A finish is
+// compared with the last finish-state change as finishChange dates it.
 func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error) {
 	key := p.target.Key
 	if s.b.FurthestOnly && p.ev.Kind == EventUnfinish {
@@ -1030,7 +1202,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 	if err != nil {
 		return SyncResult{}, err
 	}
-	if s.b.FurthestOnly && stored != nil {
+	if p.ev.Kind == EventFinish && stored != nil {
 		before, err := s.beforeStay(ctx, p, stored)
 		if err != nil {
 			return SyncResult{}, err
@@ -1040,10 +1212,15 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		}
 	}
 	if stored != nil && stored.finishChangedAt.Valid {
-		if changed := parseSessionTime(stored.finishChangedAt.String); !p.ended.After(changed) {
+		when, err := s.finishChange(ctx, p, stored)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		if !when.After(parseSessionTime(stored.finishChangedAt.String)) {
 			return SyncResult{Status: statusNotApplied, Reason: reasonOlder}, nil
 		}
 	}
+	s.changed[key] = true
 	at := formatSessionTime(p.ended)
 	day := p.ended.UTC().Format(time.RFC3339)
 	if stored == nil {
@@ -1054,16 +1231,20 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		if p.target.Book != nil {
 			duration = p.target.Book.Duration
 		}
+		first, err := s.firstVersion(ctx, key)
+		if err != nil {
+			return SyncResult{}, err
+		}
 		if _, err := s.tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed,
 			     version, device_id, device_name, updated_at, started_at, finished_at, finish_changed_at,
 			     span_at, span_version, edit_version)
-			 VALUES(?,?,?,?,?,1,1,1,?,?,?,?,?,?,?,1,1)`,
-			s.b.UserID, key.LibraryID, key.Path, duration, duration, s.b.DeviceID, s.b.DeviceName, at, day, day,
+			 VALUES(?1,?2,?3,?4,?5,1,1,?6,?7,?8,?9,?10,?11,?12,?13,?6,?6)`,
+			s.b.UserID, key.LibraryID, key.Path, duration, duration, first, s.b.DeviceID, s.b.DeviceName, at, day, day,
 			at, at); err != nil {
 			return SyncResult{}, err
 		}
-		s.written[key] = 1
+		s.written[key] = first
 		return SyncResult{Status: statusApplied}, nil
 	}
 	// The row's time never moves back (a later save elsewhere stays later).
@@ -1128,12 +1309,44 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 	return SyncResult{Status: statusApplied}, nil
 }
 
+// finishChange is when a finish (or unfinish) happened, as compared with the
+// row's last finish-state change (finish_changed_at): its corrected time,
+// except for a finish made without seeing the row's last explicit write (its
+// base, as sent, below edit_version, or none) that this batch did not make
+// itself, which is dated back by the batch's transit. A base at the row's own
+// version saw all there is, where edit_version is above it (a row a move or
+// join carried alone, carryProgress; a PUT that sent a lower version). A sent_at shift is the
+// device's clock skew plus the request's time on the way, so a finish sent
+// just before an edit (an Undo of it, on the book page) and landing after it
+// was dated after the edit by that time, and finished the book again
+// (server#415). The transit is at most maxFinishTransit, so a skewed clock
+// moves it back no further. Nor is a finish dated back past this token's own
+// finish-state change (a restart whose answer it has not had yet, so its base
+// lags): the device saw that one, and on a clock running behind the transit
+// would date the finish before it. An unfinish is never dated back: a restart
+// just after a finish this device has no answer for yet must not become
+// "older" than it.
+func (s *syncRun) finishChange(ctx context.Context, p syncPrepared, stored *syncRow) (time.Time, error) {
+	key := p.target.Key
+	if p.ev.Kind != EventFinish || s.transit <= 0 || !stored.editVersion.Valid || s.changed[key] {
+		return p.ended, nil
+	}
+	if base := p.ev.BaseVersion; base != nil && *base >= min(stored.editVersion.Int64, stored.version) {
+		return p.ended, nil
+	}
+	if own, err := s.ownFinishChange(ctx, key, stored.finishChangedAt.String, EventFinish, EventUnfinish); err != nil || own {
+		return p.ended, err
+	}
+	return p.ended.Add(-s.transit), nil
+}
+
 // recordListening counts a span's listening (every stored listen, whatever its
-// place did): the token's session and the user's history, at the span's
-// corrected times.
-func (s *syncRun) recordListening(ctx context.Context, p syncPrepared) error {
+// place did): the token's session (marked finished when finished: the token's
+// finish came just after it, finishedAfter) and the user's history, at the
+// span's corrected times.
+func (s *syncRun) recordListening(ctx context.Context, p syncPrepared, finished bool) error {
 	listened := listenedBetween(p.ended.Sub(p.started), p.to-p.from, p.speed)
-	if err := s.recordSpan(ctx, p, listened); err != nil {
+	if err := s.recordSpan(ctx, p, listened, finished); err != nil {
 		return err
 	}
 	if listened < 1 {
@@ -1150,10 +1363,10 @@ func (s *syncRun) recordListening(ctx context.Context, p syncPrepared) error {
 // resumeWindow), else opens one at the span's start. Its listening is
 // listenedBetween's clip of the span (a seek ahead, or a span longer than its
 // wall time, is not listening). Only a span ending within livePlaying of now can
-// be marked transcoded.
-func (s *syncRun) recordSpan(ctx context.Context, p syncPrepared, listened float64) error {
+// be marked transcoded; finished marks the session finished.
+func (s *syncRun) recordSpan(ctx context.Context, p syncPrepared, listened float64, finished bool) error {
 	hb := Heartbeat{UserID: s.b.UserID, Ref: p.target.Key, TokenID: s.b.TokenID, DeviceName: s.b.DeviceName,
-		Client: s.b.Client, Position: p.to, Duration: p.length(), Speed: p.speed,
+		Client: s.b.Client, Position: p.to, Duration: p.length(), Speed: p.speed, Finished: finished,
 		Transcoded: p.target.Transcoding && s.now.Sub(p.ended) <= livePlaying}
 	open, err := latestSession(ctx, s.tx, hb, p.started)
 	if err != nil {
@@ -1252,15 +1465,32 @@ func insertEvent(ctx context.Context, tx *sql.Tx, r eventRow) error {
 	return err
 }
 
+// localEventID is the id of an event the server logs itself (no client sent
+// one): prefix and 16 random hex digits.
+func localEventID(prefix string) string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return prefix + hex.EncodeToString(b[:])
+}
+
 // putEvent is a legacy PUT .../progress of in by userID's token tokenID as a
 // listening event (SaveProgressFrom): a zero-length span at in's place, at at
 // (its updated_at, fixed width), received now; the caller sets its status.
 func putEvent(userID int64, in Progress, tokenID int64, at, received string) eventRow {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return eventRow{userID: userID, id: "put-" + hex.EncodeToString(b[:]), kind: eventPut, ref: in.Ref,
+	return eventRow{userID: userID, id: localEventID("put-"), kind: eventPut, ref: in.Ref,
 		deviceID: in.DeviceID, tokenID: tokenID, from: in.Position, to: in.Position, speed: in.PlaybackSpeed,
 		duration: in.Duration, started: at, ended: at, received: received}
+}
+
+// logProgressReset records, inside tx, that userID's progress row on ref, at
+// version, was deleted at now (an import's undo of a row it made), as a
+// "reset" event in the log (version as its base_version): a Stay made before
+// it, or on a base up to version, no longer wins (resetSince), and whatever
+// writes the row again starts above version (firstProgressVersion).
+func logProgressReset(ctx context.Context, tx *sql.Tx, userID int64, ref Ref, version int64, now time.Time) error {
+	at := formatSessionTime(now)
+	return insertEvent(ctx, tx, eventRow{userID: userID, id: localEventID("reset-"), kind: eventReset,
+		ref: ref, speed: 1, started: at, ended: at, base: &version, status: statusApplied, received: at})
 }
 
 // PruneListeningEvents deletes the stored events that ended before cutoff, a

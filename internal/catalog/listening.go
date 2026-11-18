@@ -170,10 +170,17 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 // behaves exactly as before (last-write-wins, finished included).
 func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, in Progress) (*Progress, error) {
 	// Distrust an unparseable or far-future client timestamp (see
-	// plausibleUpdatedAt) and substitute server time.
-	if !plausibleUpdatedAt(in.UpdatedAt, c.now()) {
-		in.UpdatedAt = c.ts()
+	// plausibleUpdatedAt) and substitute server time. Either is stored as
+	// fixed-width UTC milliseconds (formatSessionTime), as every other progress
+	// write stamps it, so a text compare of updated_at (the Activity funnel's
+	// period bounds, a move's merge) orders a save sent with an offset or
+	// another precision rightly (server#224).
+	now := c.now()
+	saved, err := time.Parse(time.RFC3339, in.UpdatedAt)
+	if err != nil || !plausibleUpdatedAt(saved, now) {
+		saved = now
 	}
+	in.UpdatedAt = formatSessionTime(saved)
 	if in.PlaybackSpeed <= 0 {
 		in.PlaybackSpeed = 1.0
 	}
@@ -183,14 +190,10 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 	// the save's own time (already checked by plausibleUpdatedAt), so a finish
 	// replayed from an offline queue is dated when it happened, normalized to
 	// RFC3339 UTC to the second (fixed width, so they compare as strings).
-	now := c.now()
-	stamp := now.UTC().Format(time.RFC3339)
-	if t, err := time.Parse(time.RFC3339, in.UpdatedAt); err == nil {
-		stamp = t.UTC().Format(time.RFC3339)
-	}
-	at := finishChangeStamp(in.UpdatedAt, now) // the event's time, and finish_changed_at's
+	stamp := saved.UTC().Format(time.RFC3339)
+	at := finishChangeAt(saved, now) // the event's time, and finish_changed_at's
 	var out *Progress
-	err := c.db.WithUserStateTx(ctx, "SaveProgress", func(tx *sql.Tx) error {
+	err = c.db.WithUserStateTx(ctx, "SaveProgress", func(tx *sql.Tx) error {
 		existing, err := getProgress(ctx, tx, userID, in.Ref)
 		if err != nil {
 			return err
@@ -206,6 +209,16 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 			if existing != nil {
 				in.Version = existing.Version + 1
 			}
+		}
+		if existing == nil {
+			// A row deleted here before (an import's undo) took its versions
+			// with it: the new row starts above them, as a sync's does, so a
+			// base a device holds from before names no version of this row.
+			first, err := firstProgressVersion(ctx, tx, userID, in.Ref)
+			if err != nil {
+				return err
+			}
+			in.Version = max(in.Version, first)
 		}
 		// RETURNING reads the dates the row ended up with (a kept start, a kept or
 		// new finish) and the offered place it keeps, so the echo carries the stored ones.
@@ -269,35 +282,43 @@ const endStayHold = `stay_version=NULL`
 // not listening: a PATCH (own or admin), an import's apply or undo, a move or
 // join (and, written inline, a sync finish or unfinish); never a PUT, an old
 // app's listening. The row's edit_version is the version it writes (each also
-// inserts edit_version as its version, for a row it creates), so a Stay made
-// on a base below it is a plain jump (0080, staysWin).
+// inserts edit_version as its version, for a row it creates; a move or join
+// creating one inserts its version + 1, carryProgress), so a Stay made on a
+// base below it is a plain jump (0080, staysWin).
 const explicitWriteSet = endSpanChain + `, edit_version=excluded.version`
 
 // finishChangeStamp is the time a write that changes a row's finished state
-// records as finish_changed_at (and a PUT's event time): the write's own
-// updated_at, never ahead of the server's clock now (plausibleUpdatedAt allows a
-// little skew: a finish dated ahead would make a Sync v2 unfinish sent just
-// after it "older"), or now when updated_at doesn't parse. Fixed-width UTC
-// milliseconds.
+// records as finish_changed_at: the write's own updated_at as finishChangeAt
+// dates it, or now when updated_at doesn't parse.
 func finishChangeStamp(updatedAt string, now time.Time) string {
 	t, err := time.Parse(time.RFC3339, updatedAt)
-	if err != nil || t.After(now) {
+	if err != nil {
 		t = now
 	}
-	return formatSessionTime(t)
+	return finishChangeAt(t, now)
+}
+
+// finishChangeAt is finish_changed_at (and a PUT's event time) for a write
+// saved at saved: saved, never ahead of the server's clock now
+// (plausibleUpdatedAt allows a little skew: a finish dated ahead would make a
+// Sync v2 unfinish sent just after it "older"). Fixed-width UTC milliseconds.
+func finishChangeAt(saved, now time.Time) string {
+	if saved.After(now) {
+		saved = now
+	}
+	return formatSessionTime(saved)
 }
 
 // plausibleUpdatedAt reports whether a client-supplied updated_at can be
-// trusted for last-write-wins: it must parse and not be implausibly ahead of
+// trusted for last-write-wins (the caller has parsed it): it must not be implausibly ahead of
 // the server clock (a small skew is allowed so genuine cross-device ordering
 // still works). Without this check a client with a broken clock (or a garbage
 // value) sending a far-future timestamp would win every future comparison and
 // permanently wedge the book's progress at that write; the caller substitutes
-// server time (c.ts()) instead.
-func plausibleUpdatedAt(v string, now time.Time) bool {
+// server time (now) instead.
+func plausibleUpdatedAt(t, now time.Time) bool {
 	const maxSkew = 5 * time.Minute
-	t, err := time.Parse(time.RFC3339, v)
-	return err == nil && !t.After(now.Add(maxSkew))
+	return !t.After(now.Add(maxSkew))
 }
 
 // IsNewer reports whether candidate should replace current under last-write-wins
@@ -411,12 +432,19 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 		return err
 	}
 	return c.db.WithTx(ctx, "MoveDurableState", func(tx *sql.Tx) error {
+		left, err := audibleRowsAt(ctx, tx, libraryID, oldPath, newPath)
+		if err != nil {
+			return err
+		}
 		// A move is a join of one part at offset 0 that ends the book, except that
 		// a collision takes the newer save rather than the furthest.
 		if err := carryListeningState(ctx, tx, libraryID, JoinPart{Path: oldPath, Last: true}, newPath, 0, mergeNewest); err != nil {
 			return fmt.Errorf("move listening state: %w", err)
 		}
-		return moveAudibleTitles(ctx, tx, libraryID, oldPath, newPath)
+		if err := moveAudibleTitles(ctx, tx, libraryID, oldPath, newPath); err != nil {
+			return err
+		}
+		return keepLeftOffers(ctx, tx, libraryID, newPath, left)
 	})
 }
 
@@ -428,8 +456,9 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 // book left at into by the carry's rule, mergeNewest or mergeFurthest), never
 // that left-behind row as it stood before the carry, and a carry that fails
 // leaves the titles where they were (the next poll matches them afresh). A
-// person with no place on the moved book still has a left-behind row at into
-// offered, as the player shows it for the moved book.
+// left-behind row a move's carry did not change (its person never played the
+// moved book, or the row was the newer and won the merge) is another book's
+// place: its offer is taken back (keepLeftOffers, server#359).
 func moveAudibleTitles(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) error {
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE audible_titles SET match_path = ? WHERE match_library_id = ? AND match_path = ?`,
@@ -440,6 +469,56 @@ func moveAudibleTitles(ctx context.Context, tx *sql.Tx, libraryID int64, from, i
 		`UPDATE audible_titles SET contest_path = ? WHERE contest_library_id = ? AND contest_path = ?`,
 		into, libraryID, from)
 	return err
+}
+
+// leftRow is a progress row at a move's destination, before the carry, of a
+// person with an Audible title matched to the book that moves there: its
+// place.
+type leftRow struct {
+	user      int64
+	position  float64
+	finished  bool
+	updatedAt string
+}
+
+// audibleRowsAt reads, inside tx, the rows already at into (left there by an
+// earlier book) of the people whose Audible titles are matched to the book at
+// from, before their places are carried onto into.
+func audibleRowsAt(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) ([]leftRow, error) {
+	return queryRows(ctx, tx, func(rows *sql.Rows, r *leftRow) error {
+		return rows.Scan(&r.user, &r.position, &r.finished, &r.updatedAt)
+	}, `SELECT p.user_id, p.position, p.finished, p.updated_at FROM progress p
+	     WHERE p.library_id = ? AND p.rel_path = ?
+	       AND p.user_id IN (SELECT a.user_id FROM audible_titles t JOIN audible_accounts a ON a.account = t.account
+	                          WHERE t.match_library_id = ? AND t.match_path = ?)`, libraryID, into, libraryID, from)
+}
+
+// unofferedSeq is the offer position (change_seq) of a row no feed reads
+// until its next write: below every cursor, a feed's first page included
+// (AudibleProgress reads from change_seq 0), and never a counter value (0066).
+const unofferedSeq = -1
+
+// keepLeftOffers takes back, inside tx after a move's moveAudibleTitles, the
+// offer of each row left at into (audibleRowsAt) that the carry did not change
+// (the same place, finish state and time): the person never played the moved
+// book, or the left row was the newer save and won the merge. Its place is
+// another book's (mergeNewest's rule; a join's row at its folder is the joined
+// book's own, so a join takes no offer back), which the re-match trigger (0066, 0071)
+// would have offered to Audible under the moved book's titles (server#359). Put
+// back where it was, it would still be read by a feed whose cursor is not past
+// it (a row written after the feed's last one, as a book just listened to is,
+// or a feed starting afresh), so it goes below every cursor (unofferedSeq).
+// The row's next write offers it as any write does.
+func keepLeftOffers(ctx context.Context, tx *sql.Tx, libraryID int64, into string, left []leftRow) error {
+	for _, r := range left {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE progress SET change_seq = ?
+			  WHERE user_id = ? AND library_id = ? AND rel_path = ? AND position = ? AND finished = ? AND updated_at = ?`,
+			unofferedSeq, r.user, libraryID, into, r.position, r.finished, r.updatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // carryListeningState hands every listener's state on one path (part.Path) to
@@ -606,9 +685,16 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 		if !p.Finished {
 			p.FinishedAt = nil
 		}
+		// The carry is an explicit write (edit_version): a Stay on a base of
+		// either row is then a plain jump (staysWin). A merge writes a version
+		// above both; a row carried alone keeps its version (an import's undo
+		// still finds it as the import wrote it, sameProgress) and records the
+		// write one above it, so a Stay on that version is one too (server#415).
+		editVersion := p.Version + 1
 		if cur, ok := existing[r.user]; ok {
 			p = merge(cur.UserProgress, p)
 			finishChanged = newerFinishChange(cur.finishChangedAt, finishChanged)
+			editVersion = p.Version
 		}
 		if total > 0 {
 			p.Duration = total
@@ -636,7 +722,7 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 			     device_name=excluded.device_name, finish_changed_at=excluded.finish_changed_at,
 			     `+explicitWriteSet+`, `+clearOtherPlace,
 			r.user, libraryID, into, p.Position, p.Duration, p.Finished, p.PlaybackSpeed, p.Version,
-			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, p.DeviceName, finishChanged, p.Version); err != nil {
+			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, p.DeviceName, finishChanged, editVersion); err != nil {
 			return err
 		}
 	}

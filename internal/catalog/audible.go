@@ -272,7 +272,10 @@ func checkAudibleAccount(in *AudibleAccountInput) error {
 // turned on by a PUT; mapped to another person it is turned off (the console
 // turned it on for the person it showed then), its last sync forgotten and its
 // open sync cancelled. A mapping again ends a refusal (refused_at: a fresh
-// sign-in maps it again).
+// sign-in maps it again; refusal_ended_at, which FoldAudibleSync reads a job's
+// refusal against). A PUT for the same person stops no sync the Bridge is
+// working on: the server can't tell a sign-in from an edit of the label, and
+// the sync's places are the account's either way.
 func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAccountInput) (*AudibleAccount, error) {
 	if !bridge.AudibleAccountPattern.MatchString(id) {
 		return nil, audibleInvalid("account must match %s", bridge.AudibleAccountPattern)

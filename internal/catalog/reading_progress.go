@@ -128,7 +128,7 @@ func getReading(ctx context.Context, q querier, userID int64, ref Ref) (*Reading
 func (c *Catalog) SaveReadingProgress(ctx context.Context, userID int64, in ReadingSave) (*ReadingProgress, *OtherPlace, error) {
 	// Stored as fixed-width UTC milliseconds (as session times are), so a move's
 	// merge (carryListeningState) can compare two rows' times as text.
-	if t, err := time.Parse(time.RFC3339, in.UpdatedAt); err == nil && plausibleUpdatedAt(in.UpdatedAt, c.now()) {
+	if t, err := time.Parse(time.RFC3339, in.UpdatedAt); err == nil && plausibleUpdatedAt(t, c.now()) {
 		in.UpdatedAt = formatSessionTime(t)
 	} else {
 		in.UpdatedAt = c.stamp()
