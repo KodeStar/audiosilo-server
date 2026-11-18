@@ -284,6 +284,14 @@ func TestPodcastFetchStatusGoldenAndSanitization(t *testing.T) {
 	if _, err = q.db.ExecContext(ctx, `UPDATE podcast_episodes SET present=0`); err != nil {
 		t.Fatal(err)
 	}
+	// A running fetch carries on with the module off (server#179); a queued
+	// one is held.
+	if st := get(); st.State != "fetching" || st.RequestID == nil || st.Error != nil {
+		t.Fatalf("running, module off %+v", st)
+	}
+	if _, err = q.db.ExecContext(ctx, `UPDATE bridge_jobs SET state='queued'`); err != nil {
+		t.Fatal(err)
+	}
 	if st := get(); st.State != "unavailable" || st.RequestID == nil || st.Error.Code != "module_off" {
 		t.Fatalf("held %+v", st)
 	}
@@ -460,5 +468,61 @@ func TestUnreadyFetchStatusIgnoresIndexedPin(t *testing.T) {
 	}
 	if st, err := q.UnreadyFetchStatus(ctx, q.lib, "Show/other.mp3"); err != nil || st.State != "absent" {
 		t.Fatalf("not indexed %+v %v", st, err)
+	}
+}
+
+// A fetch's summary is the job's actual state (server#179): a fetch the Bridge
+// holds carries on with the Podcasts module off and says fetching, while a
+// queued one (held: no claim hands it out) is unavailable; a Bridge that went
+// offline makes even a held one unavailable.
+func TestFetchStatusFollowsTheJobState(t *testing.T) {
+	q := fetchQueue(t)
+	ctx := context.Background()
+	const path = "Show/episode.mp3"
+	j, _, err := q.EnsurePodcastFetch(ctx, demandJob(q, 100), FetchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := func() FetchStatus {
+		t.Helper()
+		st, err := q.UnreadyFetchStatus(ctx, q.lib, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	if st := OpenFetchStatus(*j); st.State != "queued" || st.RequestID == nil || *st.RequestID != j.ID {
+		t.Fatalf("queued job %+v", st)
+	}
+	q.ModuleOn = func(string) bool { return false }
+	if st := status(); st.State != "unavailable" || st.Error == nil || st.Error.Code != "module_off" {
+		t.Fatalf("queued, module off: %+v", st)
+	}
+	q.ModuleOn = nil
+	held, err := q.ClaimFor(ctx, q.token, nil, 0)
+	if err != nil || held == nil {
+		t.Fatal(err)
+	}
+	if _, err = q.UpdateHeld(ctx, j.ID, Update{Attempt: held.Attempts, State: ptr(StateRunning), Progress: json.RawMessage(`{"bytes_received":40,"bytes_total":100}`)}); err != nil {
+		t.Fatal(err)
+	}
+	running, err := q.Job(ctx, j.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := OpenFetchStatus(*running); st.State != "fetching" || st.BytesReceived != 40 || st.BytesTotal == nil || *st.BytesTotal != 100 {
+		t.Fatalf("running job %+v", st)
+	}
+	q.ModuleOn = func(string) bool { return false }
+	if st := status(); st.State != "fetching" || st.Error != nil || st.BytesReceived != 40 {
+		t.Fatalf("held, module off: %+v, want fetching", st)
+	}
+	q.ModuleOn = nil
+	q.advance(OnlineWindow + time.Second)
+	if _, err = q.db.ExecContext(ctx, `UPDATE bridge_jobs SET lease_until=? WHERE id=?`, at(q.now.Add(Lease)), j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(); st.State != "unavailable" || st.Error == nil || st.Error.Code != "bridge_unavailable" {
+		t.Fatalf("held, Bridge offline: %+v", st)
 	}
 }

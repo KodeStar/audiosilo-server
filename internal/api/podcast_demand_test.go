@@ -518,3 +518,102 @@ func TestPodcastFetchRouteTokensAndKinds(t *testing.T) {
 		t.Fatal("optional fetch became required")
 	}
 }
+
+// heldFetch queues the listener's fetch of path and has the Bridge claim it
+// and report it running: a fetch already under way.
+func heldFetch(t *testing.T, b *bridgeEnv, path string) *bridge.Job {
+	t.Helper()
+	ctx := context.Background()
+	resp, body := b.doHeaders(t, "POST", fetchRoute(b.lib.ID, path), b.userTok, fetchBody(path), podcastHeaders())
+	if resp.StatusCode != 202 {
+		t.Fatal(body)
+	}
+	held, err := b.api.bridge.ClaimFor(ctx, credentialBridgeID(t, b), []string{bridge.KindPodcastFetch}, 0)
+	if err != nil || held == nil {
+		t.Fatal(held, err)
+	}
+	running := bridge.StateRunning
+	if _, err = b.api.bridge.UpdateHeld(ctx, held.ID, bridge.Update{Attempt: held.Attempts, State: &running}); err != nil {
+		t.Fatal(err)
+	}
+	return held
+}
+
+// A stream whose budget runs out says what the job is doing (server#179): a
+// fetch the Bridge already holds is "fetching", never the "queued" its
+// request found before the last read was cut short.
+func TestPodcastStreamDeadlineSaysFetching(t *testing.T) {
+	b, f := podcastStorageEnv(t)
+	path := f.Episodes[2].Path
+	heldFetch(t, b, path)
+	b.api.podcastDemand.Budget = 200 * time.Millisecond
+	moduleOn := b.api.bridge.ModuleOn
+	var slept atomic.Bool
+	b.api.bridge.ModuleOn = func(id string) bool {
+		if slept.CompareAndSwap(false, true) {
+			time.Sleep(300 * time.Millisecond) // the status read meets a spent budget
+		}
+		return moduleOn(id)
+	}
+	resp, body := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(path)), b.userTok, "", podcastHeaders())
+	if !slept.Load() {
+		t.Fatal("the status read never ran")
+	}
+	if resp.StatusCode != 503 || !strings.Contains(body, `"code":"podcast_fetching"`) || !strings.Contains(body, `"state":"fetching"`) {
+		t.Fatalf("deadline %d %s", resp.StatusCode, body)
+	}
+}
+
+// A stream for an episode the feed gave another identity while its previous
+// identity's fetch is still under way answers a retryable 503 (unavailable,
+// identity_changed, Retry-After), never a 409 (server#179); once that fetch
+// has stopped, the next stream queues the new identity's.
+func TestPodcastStreamIdentityChangeIsRetryable(t *testing.T) {
+	b, f := podcastStorageEnv(t)
+	immediatePodcastWait(b)
+	ctx := context.Background()
+	path := f.Episodes[2].Path
+	old := heldFetch(t, b, path)
+	if _, err := b.db.ExecContext(ctx, `UPDATE podcast_episodes SET episode_id='aaaaaaaaaaaaaaaa' WHERE book_id=(SELECT id FROM books WHERE library_id=? AND rel_path=?)`, b.lib.ID, path); err != nil {
+		t.Fatal(err)
+	}
+	stream := podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(path))
+	resp, body := b.doHeaders(t, "GET", stream, b.userTok, "", podcastHeaders())
+	if resp.StatusCode != 503 || resp.Header.Get("Retry-After") == "" || !strings.Contains(body, `"code":"podcast_fetch_unavailable"`) || !strings.Contains(body, `"code":"identity_changed"`) {
+		t.Fatalf("identity changed mid-fetch %d %s", resp.StatusCode, body)
+	}
+	// The old identity's fetch was asked to stop; it does at its next report.
+	cancelled := bridge.StateCancelled
+	if _, err := b.api.bridge.UpdateHeld(ctx, old.ID, bridge.Update{Attempt: old.Attempts, State: &cancelled}); err != nil {
+		t.Fatal(err)
+	}
+	resp, body = b.doHeaders(t, "GET", stream, b.userTok, "", podcastHeaders())
+	if resp.StatusCode != 503 || !strings.Contains(body, `"state":"queued"`) {
+		t.Fatalf("after the old fetch stopped %d %s", resp.StatusCode, body)
+	}
+}
+
+// A HEAD on the claim route leases nothing (server#179): Go's GET pattern
+// would serve it and hand out a job whose body is never sent. GET still claims.
+func TestBridgeClaimHeadLeasesNothing(t *testing.T) {
+	b, f := podcastStorageEnv(t)
+	ctx := context.Background()
+	path := f.Episodes[2].Path
+	resp, body := b.doHeaders(t, "POST", fetchRoute(b.lib.ID, path), b.userTok, fetchBody(path), podcastHeaders())
+	if resp.StatusCode != 202 {
+		t.Fatal(body)
+	}
+	resp, body = b.do(t, "HEAD", "/api/v1/bridge/jobs/next", b.bridgeTok, "")
+	if resp.StatusCode != http.StatusMethodNotAllowed || resp.Header.Get("Allow") != "GET" {
+		t.Fatalf("HEAD claim %d %s", resp.StatusCode, body)
+	}
+	var state string
+	var attempts int
+	if err := b.db.QueryRowContext(ctx, `SELECT state,attempts FROM bridge_jobs WHERE kind='podcast.fetch' AND rel_path=?`, path).Scan(&state, &attempts); err != nil || state != bridge.StateQueued || attempts != 0 {
+		t.Fatalf("after HEAD: %s attempt %d %v", state, attempts, err)
+	}
+	resp, body = b.do(t, "GET", "/api/v1/bridge/jobs/next", b.bridgeTok, "")
+	if resp.StatusCode != 200 || !strings.Contains(body, path) {
+		t.Fatalf("GET claim %d %s", resp.StatusCode, body)
+	}
+}

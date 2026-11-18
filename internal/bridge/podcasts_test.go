@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -481,5 +483,224 @@ func TestNetworkFailure(t *testing.T) {
 		if NetworkFailure(code) {
 			t.Errorf("%q is counted as network-class", code)
 		}
+	}
+}
+
+// An adopt-only subscribe that could never be queued says why (server#219):
+// its params and library are checked before it looks for an open request, so
+// an OPML row with a bad URL is invalid, never limited.
+func TestSubscribeAdoptOnlyChecksParamsFirst(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	long := "https://" + strings.Repeat("a", 250) + ".example/feed.xml" // a host past 253 characters
+	if _, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: long, AdoptOnly: true}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("over-long host = %v, want ErrInvalid", err)
+	}
+	if _, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/a.xml", ShowPath: "../Show", AdoptOnly: true}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("bad show path = %v, want ErrInvalid", err)
+	}
+	// A valid row with nothing open is still only refused as limited.
+	if _, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/a.xml", AdoptOnly: true}); !errors.Is(err, ErrNoNewRequest) {
+		t.Fatalf("valid, nothing open = %v, want ErrNoNewRequest", err)
+	}
+	if _, err := q.db.ExecContext(ctx, `UPDATE libraries SET kind='books' WHERE id=?`, q.lib); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/a.xml", AdoptOnly: true}); !errors.Is(err, ErrNotPodcastLibrary) {
+		t.Fatalf("book library = %v, want ErrNotPodcastLibrary", err)
+	}
+}
+
+// A follow request never waits on a Bridge that left (server#179): once no
+// online Bridge runs podcast.subscribe, the queued requests fail as
+// request_expired when the player reads them (or the scheduler sweeps), so an
+// OPML import's next wave answers unavailable. A held one is left to its
+// lease; an online Bridge, and a Bridge given OnlineWindow after the server
+// started, keep every request.
+func TestOfflineBridgeExpiresQueuedSubscribes(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	held, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, "https://example.com/held.xml", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || c == nil || c.ID != held.ID {
+		t.Fatalf("claim %+v %v", c, err)
+	}
+	waiting, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, "https://example.com/waiting.xml", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, "https://example.com/members.xml?auth=SECRET", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateOf := func(id int64) string {
+		t.Helper()
+		j, err := q.Job(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return j.State
+	}
+	// Denied: the Bridge is online.
+	if _, err := q.SubscribeRequests(ctx, q.admin); err != nil || stateOf(waiting.ID) != StateQueued {
+		t.Fatalf("online Bridge: %s %v", stateOf(waiting.ID), err)
+	}
+	// Denied: a server that just started gives the Bridge OnlineWindow to call in.
+	restarted := New(q.db, func() time.Time { return *q.now })
+	q.advance(OnlineWindow + time.Second)
+	restarted.started = *q.now
+	// The held request's Bridge reported within its lease (a requeued one is
+	// queued again, and fails with the rest).
+	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET lease_until=? WHERE id=?`, at(q.now.Add(Lease)), held.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.SubscribeRequests(ctx, q.admin); err != nil || stateOf(waiting.ID) != StateQueued {
+		t.Fatalf("just started: %s %v", stateOf(waiting.ID), err)
+	}
+	// Allowed: the heartbeat lapsed on a server up for longer.
+	q.OnEnded = func(_ context.Context, j Job) {
+		if j.State != StateFailed {
+			t.Errorf("ended %d as %s", j.ID, j.State)
+		}
+	}
+	reqs, err := q.SubscribeRequests(ctx, q.admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{waiting.ID, secret.ID} {
+		j, err := q.Job(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o, _ := PodcastOutcomeOf(*j)
+		if j.State != StateFailed || o.Code != "request_expired" || o.Message != offlineRequestMessage || FeedFailure(o.Code) {
+			t.Fatalf("expired %d: %s %+v", id, j.State, o)
+		}
+	}
+	if stateOf(held.ID) == StateFailed {
+		t.Fatal("a held request was failed: its lease decides")
+	}
+	if q.privateURLs[secret.ID] != "" {
+		t.Fatal("an expired private request kept its URL")
+	}
+	for _, r := range reqs {
+		if r.ID == waiting.ID && r.State != StateFailed {
+			t.Fatalf("the read answered the request as %s, not its end", r.State)
+		}
+	}
+	// A Bridge that no longer runs the kind is no Bridge for it either.
+	beat := func(kinds ...string) {
+		t.Helper()
+		st := Status{Version: "0.9.0", Kinds: kinds, Libraries: []LibraryStatus{{LibraryID: q.lib, MountPath: "/podcasts", Mapped: true, Writable: true}}}
+		if err := q.SaveHeartbeat(ctx, q.token, st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	beat(KindPodcastSubscribe)
+	again, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, "https://example.com/again.xml", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.EndedPodcasts(ctx); err != nil || stateOf(again.ID) != StateQueued {
+		t.Fatalf("back online: %s %v", stateOf(again.ID), err)
+	}
+	beat(KindPodcastPoll)
+	if _, err := q.EndedPodcasts(ctx); err != nil || stateOf(again.ID) != StateFailed {
+		t.Fatalf("no subscribe kind: %s %v", stateOf(again.ID), err)
+	}
+}
+
+// Subscribe adopting an open private request while the Bridge ends it (the
+// adopt race, server#179 and server#200): no private URL outlives its request,
+// whichever commits first.
+func TestSubscribeAdoptRacesTheEnd(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	secret := "https://example.com/rss?auth=SECRET"
+	for range 20 {
+		j, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, secret, true, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		claimed, err := q.ClaimFor(ctx, q.token, nil, 0)
+		if err != nil || claimed == nil || claimed.ID != j.ID {
+			t.Fatalf("claim %+v %v", claimed, err)
+		}
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Go(func() {
+				if _, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, secret, true, ""); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		wg.Go(func() {
+			if _, err := q.UpdateHeld(ctx, j.ID, Update{Attempt: claimed.Attempts, State: ptr(StateDone)}); err != nil {
+				t.Error(err)
+			}
+		})
+		wg.Wait()
+		open, err := queryIDs(ctx, q.db, `SELECT id FROM bridge_jobs WHERE kind=? AND state IN `+OpenStatesSQL, KindPodcastSubscribe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		q.secretMu.Lock()
+		for id := range q.privateURLs {
+			if !slices.Contains(open, id) {
+				t.Errorf("job %d ended with its private URL held", id)
+			}
+		}
+		q.secretMu.Unlock()
+		// The next round starts with nothing open.
+		for _, id := range open {
+			if _, err := q.Cancel(ctx, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+// Each OnEnded fold has a budget of its own (server#219): one fold that spends
+// the caller's deadline leaves the next one minFoldBudget, never a dead
+// context.
+func TestFoldsGetTheirOwnBudget(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	var jobs []*Job
+	for i := range 2 {
+		j, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, fmt.Sprintf("https://example.com/%d.xml", i), false, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		jobs = append(jobs, j)
+	}
+	for range jobs {
+		if c, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || c == nil {
+			t.Fatalf("claim %+v %v", c, err)
+		}
+	}
+	// Both leases run out on their last attempt: one settle reports both.
+	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET attempts=?`, MaxAttempts); err != nil {
+		t.Fatal(err)
+	}
+	q.advance(Lease + time.Second)
+	short, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	var folds []error
+	q.OnEnded = func(ctx context.Context, _ Job) {
+		if len(folds) == 0 {
+			<-short.Done() // the first fold outlasts the caller's deadline
+		}
+		folds = append(folds, ctx.Err())
+	}
+	// The read after the settle meets the spent deadline; the folds are what
+	// count here.
+	if _, err := q.Job(short, jobs[0].ID); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if len(folds) != 2 || folds[1] != nil {
+		t.Fatalf("folds %v: the second fold had no time left", folds)
 	}
 }

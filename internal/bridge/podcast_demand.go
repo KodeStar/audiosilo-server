@@ -95,8 +95,14 @@ func fetchCooling(ctx context.Context, tx *sql.Tx, j NewJob, now time.Time) (boo
 	return !folded && (parseErr != nil || now.Before(t.Add(30*time.Minute))), nil
 }
 
+// workingStatesSQL is OpenStatesSQL less needs_attention: the open jobs not
+// parked.
+const workingStatesSQL = `('queued', 'claimed', 'running')`
+
 // checkFetchLimit shares the insertion's writer transaction, after open-intent
-// dedupe. The creator owns the quota even when another listener promotes it.
+// dedupe. The creator owns the quota even when another listener promotes it. A
+// parked fetch (needs_attention: the Bridge waits on something no listener can
+// change) holds none of it (server#179).
 func checkFetchLimit(ctx context.Context, tx *sql.Tx, by int64) error {
 	if by == 0 { // Scheduled work has no requester.
 		return nil
@@ -108,7 +114,7 @@ func checkFetchLimit(ctx context.Context, tx *sql.Tx, by int64) error {
 	if admin {
 		return nil
 	}
-	return checkOpenRequests(ctx, tx, KindPodcastFetch, by, ErrFetchLimit)
+	return checkOpenRequests(ctx, tx, KindPodcastFetch, by, workingStatesSQL, ErrFetchLimit)
 }
 
 // FetchStatus is the public summary, deliberately excluding job internals.
@@ -202,6 +208,10 @@ func UnavailableFetchStatus(st FetchStatus, refusal error) FetchStatus {
 		code = "demo_account"
 	case errors.Is(refusal, ErrFetchLimit):
 		code = "fetch_limit"
+	case errors.Is(refusal, ErrIdentityChanged):
+		// The episode's previous identity is still being fetched: it stops at
+		// the Bridge's next report, and the new one can be asked for then.
+		code = "identity_changed"
 	}
 	st.State = "unavailable"
 	st.RetryAfterSeconds = 2
@@ -265,25 +275,8 @@ func (s *Service) podcastFetchStatuses(ctx context.Context, lib int64, paths []s
 		switch {
 		case pinReady && present && feed.ValidFetch(f) && f.DeletedAt == "":
 			st = ReadyFetchStatus(f)
-		case state.String == StateQueued:
-			st.State = "queued"
-			st.RequestID = &id.Int64
-			st.RetryAfterSeconds = 2
-		case state.String == StateClaimed || state.String == StateRunning || state.String == StateNeedsAttention:
-			st.State = "fetching"
-			st.RequestID = &id.Int64
-			st.RetryAfterSeconds = 2
-			var p struct {
-				Received int64  `json:"bytes_received"`
-				Total    *int64 `json:"bytes_total"`
-			}
-			if json.Unmarshal([]byte(progress.String), &p) == nil {
-				st.BytesReceived = max(p.Received, 0)
-				if p.Total != nil && *p.Total >= 0 {
-					st.BytesTotal = p.Total
-					st.BytesReceived = min(st.BytesReceived, *p.Total)
-				}
-			}
+		case IsOpenState(state.String):
+			st = OpenFetchStatus(Job{ID: id.Int64, State: state.String, Progress: json.RawMessage(progress.String)})
 		case state.String == StateFailed || failures.Int64 > 0:
 			st.State = "failed"
 			if state.String == StateFailed {
@@ -301,9 +294,38 @@ func (s *Service) podcastFetchStatuses(ctx context.Context, lib int64, paths []s
 			}
 			st.Error = FetchErrorFor(c)
 		}
+		// A fetch the Bridge holds carries on with the module off (only a queued
+		// one is held): it shows as fetching, not unavailable (server#179).
+		if st.State == "fetching" && errors.Is(refusal, ErrFetchModuleOff) {
+			out[path] = st
+			continue
+		}
 		out[path] = UnavailableFetchStatus(st, refusal)
 	}
 	return out, rows.Err()
+}
+
+// OpenFetchStatus is the summary of j, an open podcast.fetch: queued until a
+// claim hands it out, then fetching (claimed, running or parked) with the
+// bytes its progress reports.
+func OpenFetchStatus(j Job) FetchStatus {
+	st := FetchStatus{State: "queued", RequestID: &j.ID, RetryAfterSeconds: 2}
+	if j.State == StateQueued {
+		return st
+	}
+	st.State = "fetching"
+	var p struct {
+		Received int64  `json:"bytes_received"`
+		Total    *int64 `json:"bytes_total"`
+	}
+	if json.Unmarshal(j.Progress, &p) == nil {
+		st.BytesReceived = max(p.Received, 0)
+		if p.Total != nil && *p.Total >= 0 {
+			st.BytesTotal = p.Total
+			st.BytesReceived = min(st.BytesReceived, *p.Total)
+		}
+	}
+	return st
 }
 
 type fetchKey struct {

@@ -51,8 +51,10 @@ func TestPodcastFetchLimitCountsCreatorOpenIntents(t *testing.T) {
 			q := fetchQueue(t)
 			ctx := context.Background()
 			by := fetchLimitListener(t, q, "listener", kid)
-			jobs := fetchLimitJobs(t, q, 18)
-			var owned *Job
+			jobs := fetchLimitJobs(t, q, 19)
+			spare := jobs[18] // the listener's, after the freed slot
+			jobs = jobs[:18]
+			var owned, parked *Job
 			for i := range 5 {
 				jobs[i].RequestedBy = by
 				j, created, err := q.EnsurePodcastFetch(ctx, jobs[i], FetchOptions{})
@@ -62,8 +64,12 @@ func TestPodcastFetchLimitCountsCreatorOpenIntents(t *testing.T) {
 				if i == 0 {
 					owned = j
 				}
-				// Every open state counts, including parked and stopping work.
-				state := []string{StateQueued, StateClaimed, StateRunning, StateNeedsAttention, StateRunning}[i]
+				if i == 3 {
+					parked = j
+				}
+				// Every working state counts, stopping work included (a parked
+				// one doesn't: below).
+				state := []string{StateQueued, StateClaimed, StateRunning, StateRunning, StateRunning}[i]
 				if _, err = q.db.ExecContext(ctx, `UPDATE bridge_jobs SET state=?,cancel_requested=? WHERE id=?`, state, i == 4, j.ID); err != nil {
 					t.Fatal(err)
 				}
@@ -102,6 +108,18 @@ func TestPodcastFetchLimitCountsCreatorOpenIntents(t *testing.T) {
 			}
 			if j, created, err = q.EnsurePodcastFetch(ctx, jobs[5], FetchOptions{}); err != nil || !created {
 				t.Fatalf("freed slot %+v, %v", j, err)
+			}
+			// At the cap again; a parked fetch (the Bridge waits on something
+			// the listener can't change) frees its slot (server#179).
+			spare.RequestedBy = by
+			if j, _, err = q.EnsurePodcastFetch(ctx, spare, FetchOptions{}); !errors.Is(err, ErrFetchLimit) {
+				t.Fatalf("at the cap again %+v, %v", j, err)
+			}
+			if _, err = q.db.ExecContext(ctx, `UPDATE bridge_jobs SET state=? WHERE id=?`, StateNeedsAttention, parked.ID); err != nil {
+				t.Fatal(err)
+			}
+			if j, created, err = q.EnsurePodcastFetch(ctx, spare, FetchOptions{}); err != nil || !created {
+				t.Fatalf("parked slot %+v, %v", j, err)
 			}
 		})
 	}

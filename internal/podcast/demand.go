@@ -59,15 +59,28 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 		}
 		return nil, nil, status, err
 	}
-	raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
-	job, _, err := d.Bridge.EnsurePodcastFetch(budget, bridge.NewJob{LibraryID: &lib.ID, Path: &rel, Params: raw, Priority: bridge.PriorityPlaying, RequestedBy: by}, bridge.FetchOptions{NoNew: noNew})
+	ensure := func(pin catalog.PodcastPin) (*bridge.Job, error) {
+		raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
+		job, _, err := d.Bridge.EnsurePodcastFetch(budget, bridge.NewJob{LibraryID: &lib.ID, Path: &rel, Params: raw, Priority: bridge.PriorityPlaying, RequestedBy: by}, bridge.FetchOptions{NoNew: noNew})
+		return job, err
+	}
+	job, err := ensure(pin)
+	if errors.Is(err, bridge.ErrIdentityChanged) {
+		// The feed gave the episode another identity since the pin was read:
+		// once more with the identity it has now. Changed again (the old
+		// identity's fetch is still stopping), the stream answers a retryable
+		// 503 (unavailable, identity_changed), never a 409 (server#179).
+		if pin, err = d.Catalog.PodcastPin(budget, lib.ID, rel); err == nil {
+			job, err = ensure(pin)
+		}
+	}
 	if job != nil {
-		status.State = "queued"
-		status.RequestID = &job.ID
-		status.RetryAfterSeconds = 2
+		// What the job is doing now: a fetch the Bridge already holds says
+		// fetching, even when the budget runs out before the next read.
+		status = bridge.OpenFetchStatus(*job)
 	}
 	refusal := err
-	if err != nil && !bridge.IsFetchRefusal(err) {
+	if err != nil && !bridge.IsFetchRefusal(err) && !errors.Is(err, bridge.ErrIdentityChanged) {
 		if budget.Err() == nil {
 			return nil, nil, status, err
 		}

@@ -30,8 +30,9 @@ type Service struct {
 	// beforeSecretHeld, tests only, runs in Subscribe between the job's
 	// commit and storing its private URL.
 	beforeSecretHeld func(*Job)
-	// OnEnded hears every committed terminal transition. It must return at once;
-	// wake background work rather than re-entering the queue here.
+	// OnEnded hears every committed terminal transition, on a context with a
+	// budget of its own (foldContext). It must return at once; wake background
+	// work rather than re-entering the queue here.
 	OnEnded func(ctx context.Context, job Job)
 
 	// OnTransition, when set (at wiring, before the first request), hears about
@@ -60,6 +61,11 @@ type Service struct {
 	hb     *Heartbeat
 	hbRead time.Time
 	hbGen  uint64
+
+	// started is when the Service was made (its clock): a Bridge gets
+	// OnlineWindow from then to call in before its silence counts as offline
+	// (expireOfflineSubscribes), so a server restart fails no follow request.
+	started time.Time
 }
 
 // New returns a Service. now may be nil to use time.Now.
@@ -67,7 +73,7 @@ func New(db *store.DB, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{db: db, now: now, wake: newSignal(), ended: newSignal(), privateURLs: map[int64]string{}}
+	return &Service{db: db, now: now, wake: newSignal(), ended: newSignal(), privateURLs: map[int64]string{}, started: now()}
 }
 
 // ts is now as the bridge tables store times: RFC3339 UTC, whole seconds, so
@@ -78,11 +84,33 @@ func (s *Service) ts() string { return s.now().UTC().Format(time.RFC3339) }
 func at(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
 // committedContext ignores a disconnected caller while retaining the operation's
-// absolute deadline, so outcome folding cannot extend a bounded media request.
+// absolute deadline, so a notification (OnTransition) cannot extend a bounded
+// media request.
 func committedContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	detached := context.WithoutCancel(ctx)
 	if deadline, ok := ctx.Deadline(); ok {
 		return context.WithDeadline(detached, deadline)
 	}
 	return detached, func() {}
+}
+
+// minFoldBudget is the least time each OnEnded fold gets of its own
+// (foldContext), whatever the caller's deadline has left.
+const minFoldBudget = 5 * time.Second
+
+// foldContext is one OnEnded fold's context: the caller's deadline as
+// committedContext keeps it, but never less than minFoldBudget from now, so a
+// slow fold, or a stream's short budget spent before an unrelated job's end was
+// settled, can't leave the next fold no time (server#219). Without a caller
+// deadline it is unbounded, as committedContext's.
+func foldContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(ctx)
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return detached, func() {}
+	}
+	if floor := time.Now().Add(minFoldBudget); deadline.Before(floor) {
+		deadline = floor
+	}
+	return context.WithDeadline(detached, deadline)
 }
