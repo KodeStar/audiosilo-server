@@ -530,15 +530,7 @@ func (c *Catalog) RemoveCollectionItem(ctx context.Context, id, userID int64, re
 		return err
 	}
 	return c.changeItems(ctx, "RemoveCollectionItem", id, userID, true, func(tx *sql.Tx, _ string) (bool, error) {
-		changed := false
-		for _, r := range refs {
-			dropped, err := collectionItems.drop(ctx, tx, id, r)
-			if err != nil {
-				return false, err
-			}
-			changed = changed || dropped
-		}
-		return changed, nil
+		return collectionItems.dropAll(ctx, tx, id, refs)
 	})
 }
 

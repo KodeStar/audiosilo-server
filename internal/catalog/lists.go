@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"path"
 	"slices"
 	"strings"
 )
@@ -440,6 +439,19 @@ func (l orderedList) drop(ctx context.Context, tx listTx, owner int64, ref Ref) 
 	return n > 0, err
 }
 
+// dropAll is drop for each of refs, reporting whether any row was removed.
+func (l orderedList) dropAll(ctx context.Context, tx listTx, owner int64, refs []Ref) (bool, error) {
+	changed := false
+	for _, r := range refs {
+		dropped, err := l.drop(ctx, tx, owner, r)
+		if err != nil {
+			return false, err
+		}
+		changed = changed || dropped
+	}
+	return changed, nil
+}
+
 // visibleItems reads an owner's entries the reader can reach now (scopes, the
 // reader's UserScopes; none = nothing), in stored order, each with its book
 // attached when one is indexed there.
@@ -505,7 +517,7 @@ func (c *Catalog) booksAt(ctx context.Context, refs []Ref) (map[Ref]Book, error)
 }
 
 // listableRefs is the skip rule of a whole-list replace: refs in order, each
-// path cleaned (CleanRelPath) and mapped to the indexed book it names (listBook:
+// path cleaned (CleanRelPath) and mapped to the indexed book it names (spelledBook:
 // a book's own path, another Unicode spelling of it, a track or a disc folder
 // of it; from the index alone, no indexing on demand), keeping only those the
 // caller's current access allows (scopes) once mapped, duplicates collapsed
@@ -533,7 +545,7 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 	var above []Ref
 	for _, r := range cands {
 		if _, ok := books[r]; !ok {
-			for d := path.Dir(r.Path); d != "." && d != "/"; d = path.Dir(d) {
+			for _, d := range ancestors(r.Path) {
 				above = append(above, Ref{LibraryID: r.LibraryID, Path: d})
 			}
 		}
@@ -543,12 +555,10 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 		return nil, err
 	}
 	held := func(r Ref) bool {
-		for d := path.Dir(r.Path); d != "." && d != "/"; d = path.Dir(d) {
-			if _, ok := holders[Ref{LibraryID: r.LibraryID, Path: d}]; ok {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(ancestors(r.Path), func(d string) bool {
+			_, ok := holders[Ref{LibraryID: r.LibraryID, Path: d}]
+			return ok
+		})
 	}
 	listed := make(map[Ref]bool, len(cands))
 	out := make([]Ref, 0, len(cands))
@@ -557,7 +567,7 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 			if !normSensitive(r.Path) && !held(r) {
 				continue
 			}
-			if r.Path, err = c.listBook(ctx, r); err != nil {
+			if _, r.Path, err = c.spelledBook(ctx, r); err != nil {
 				return nil, err
 			}
 		}
@@ -568,13 +578,6 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 		out = append(out, r)
 	}
 	return out, nil
-}
-
-// listBook is the path of the indexed book ref names when it names none
-// exactly (spelledBook); "" when there is none.
-func (c *Catalog) listBook(ctx context.Context, ref Ref) (string, error) {
-	_, book, err := c.spelledBook(ctx, ref)
-	return book, err
 }
 
 // spelledBook is ref's path in the index's spelling (Spelling) and the book
@@ -592,7 +595,7 @@ func (c *Catalog) spelledBook(ctx context.Context, ref Ref) (spelled, book strin
 
 // removalRefs is what a remove of ref from a list takes off: ref as given (a
 // stray row can still be cleaned up), its spelling in the index, and the book
-// it names (listBook), so a remove by a track path or another spelling takes
+// it names (spelledBook), so a remove by a track path or another spelling takes
 // the book's entry off (server#210).
 func (c *Catalog) removalRefs(ctx context.Context, ref Ref) ([]Ref, error) {
 	spelled, book, err := c.spelledBook(ctx, ref)

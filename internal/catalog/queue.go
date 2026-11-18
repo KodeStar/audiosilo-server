@@ -73,11 +73,7 @@ func (c *Catalog) RemoveFromQueue(ctx context.Context, userID int64, ref Ref) er
 		return err
 	}
 	return c.db.WithUserStateTx(ctx, "RemoveFromQueue", func(tx *sql.Tx) error {
-		for _, r := range refs {
-			if _, err := upNext.drop(ctx, tx, userID, r); err != nil {
-				return err
-			}
-		}
-		return nil
+		_, err := upNext.dropAll(ctx, tx, userID, refs)
+		return err
 	})
 }

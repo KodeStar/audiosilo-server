@@ -1040,7 +1040,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   read the book the path is or lies in (`ratingPath`: `ownBookPath` over `catalog.BookPathAt`, a
   disc folder its joined book's, the index alone), as PUT's `bookAt` stores it, the same scope
   rule. A whole-list replace (`PUT /me/queue`, `/me/collections/{id}/items`) maps each ref to its
-  book before the skip rule and de-duplication (`catalog.listableRefs`, `listBook`: `Spelling`
+  book before the skip rule and de-duplication (`catalog.listableRefs`, `spelledBook`: `Spelling`
   then `BookPathAt`, scope on the book), so an old player's replay naming a part path keeps the
   book instead of dropping it and deleting the stored entry (CROSS-REPO §15); a remove takes off
   the entry at the path given, its spelling and its book's (`removalRefs`). Favourites take the
