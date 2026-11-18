@@ -1,12 +1,14 @@
 package api
 
 import (
+	"cmp"
 	"crypto/subtle"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,12 +24,14 @@ import (
 // routes. Transport only: internal/oidc is the provider, the flow cookie and
 // the decision; auth/identities.go the storage.
 //
-// GET /api/v1/auth/oidc/start?return=web|admin sets the sealed flow cookie and
-// sends the browser to the provider; GET /api/v1/auth/oidc/callback checks it,
+// GET /api/v1/auth/oidc/start?return=web|admin sets the sealed flow's cookie
+// (one per flow, named by its state, so sign-ins started in two tabs both
+// finish) and sends the browser to the provider; GET /api/v1/auth/oidc/callback checks it,
 // exchanges the code, applies the decision and sends the browser on: a sign-in
 // gets a 60 s single-use token (auth.KindOIDC) in an HttpOnly cookie (never in a URL:
 // a link carrying one would sign whoever follows it in as its owner, a login
-// CSRF), and the console (/admin/#oidc=done) or the web player
+// CSRF), and the console (/admin/#oidc=done, or the console page the sign-in
+// started from: /start's ?next=) or the web player
 // (/web/connect?oidc=1) trades it for a session at POST /api/v1/auth/oidc/finish,
 // which answers as POST /auth/exchange does. Anything else lands on
 // /connect#oidc=<reason>. Every URL the provider or the browser is sent to is
@@ -47,13 +51,19 @@ const (
 	oidcStartPath    = "/api/v1/auth/oidc/start"
 	oidcCallbackPath = "/api/v1/auth/oidc/callback"
 	oidcFinishPath   = "/api/v1/auth/oidc/finish"
-	// oidcCookie holds the sealed flow from /start to the callback. Its name
-	// and path as set depend on public_url's scheme: oidcCookieName.
-	oidcCookie = "audiosilo_oidc"
+	// oidcCookie names the cookies that hold sealed flows from /start to the
+	// callback, one per flow: oidcCookie + flowKey(state), so a second tab's
+	// sign-in never replaces the first's (server#406). Their names and path
+	// as set depend on public_url's scheme: oidcCookieName.
+	oidcCookie = "audiosilo_oidc_flow_"
+	// oidcMaxFlows is how many flows a browser holds at once: /start drops
+	// the oldest beyond it (every cookie rides on each request to its path).
+	oidcMaxFlows = 4
 	// oidcDoneCookie holds a finished sign-in's token (auth.KindOIDC) until
 	// the page it lands on trades it at oidcFinishPath.
 	oidcDoneCookie = "audiosilo_oidc_done"
-	// oidcCookiePath is both cookies' path on a plain-http public_url.
+	// oidcCookiePath is the flow's cookies' path on a plain-http public_url, a
+	// flow's under public_url's own path too (oidcCookieName).
 	oidcCookiePath = "/api/v1/auth/oidc/"
 	// hostCookiePrefix makes a browser take the cookie only when it is Secure,
 	// set by this origin itself (no Domain) for Path=/: a sibling subdomain
@@ -70,8 +80,11 @@ const (
 
 // Where a finished sign-in lands: the page then calls oidcFinishPath.
 const (
-	oidcDoneAdmin = "/admin/#oidc=done"
+	oidcDoneAdmin = oidcConsolePath + oidcDoneMarker
 	oidcDoneWeb   = "/web/connect?oidc=1"
+	// oidcDoneMarker is the console's fragment for a finished sign-in, on its
+	// start page or on the deep link the sign-in started from (Flow.Next).
+	oidcDoneMarker = "#oidc=done"
 )
 
 // Where a sign-in returns (?return=): an enum, never a URL.
@@ -248,31 +261,49 @@ func sameHost(public *url.URL, host string) bool {
 }
 
 // oidcCookieName is the name one of the flow's cookies (oidcCookie,
-// oidcDoneCookie) is set and read by, its path and whether it is Secure: an
-// https public_url (in any case: it keeps the case it was typed in). There it
-// is __Host-<name> on Path=/ (the prefix demands that path, Secure and no
-// Domain), so neither a sibling subdomain nor a network attacker answering
-// plain http can plant one: a planted flow or done cookie would sign the
-// browser in as the attacker (a login CSRF). On plain http no prefix can be
-// had (it needs Secure), so a network attacker can plant one there; the
-// cookies keep the flow's path, oidcCookiePath, then.
-func (a *API) oidcCookieName(name string) (cookie, path string, secure bool) {
-	if strings.HasPrefix(strings.ToLower(a.oidcBase()), "https:") {
-		return hostCookiePrefix + name, "/", true
+// oidcDoneCookie) is set and read by, the paths it is set on and whether it
+// is Secure: an https public_url (in any case: it keeps the case it was typed
+// in). There it is __Host-<name> on Path=/ (the prefix demands that path,
+// Secure and no Domain), so neither a sibling subdomain nor a network attacker
+// answering plain http can plant one: a planted flow or done cookie would
+// sign the browser in as the attacker (a login CSRF). On plain http no prefix
+// can be had (it needs Secure), so a network attacker can plant one there;
+// the cookies keep the flow's path then, oidcCookiePath, each where it is
+// asked for. Under a public_url with a path of its own (a proxy serving the
+// server at /audiosilo/, server#406) a flow's cookie is asked for at two: the
+// console and the web player ask /start on their origin's own /api/v1, the
+// provider sends the callback to /audiosilo/api/v1/auth/oidc/callback (and
+// the hop sends /start there). So it is set on both, one copy each, and
+// /start sees the flows the browser holds wherever it is asked (heldFlows:
+// the cap, the same trip's tag). The done cookie's is the origin's own only:
+// the console and the web player call the finish there.
+func (a *API) oidcCookieName(name string) (cookie string, paths []string, secure bool) {
+	base := a.oidcBase()
+	if strings.HasPrefix(strings.ToLower(base), "https:") {
+		return hostCookiePrefix + name, []string{"/"}, true
 	}
-	return name, oidcCookiePath, false
+	paths = []string{oidcCookiePath}
+	if u, err := url.Parse(base); err == nil && strings.HasPrefix(name, oidcCookie) {
+		if prefix := strings.TrimRight(u.EscapedPath(), "/"); prefix != "" {
+			paths = append(paths, prefix+oidcCookiePath)
+		}
+	}
+	return name, paths, false
 }
 
 // setOIDCCookie sets one of the flow's cookies, name (maxAge < 0 deletes it),
-// as oidcCookieName names and places it, HttpOnly and SameSite=Lax. Secure
-// only on an https public_url: a browser never sends a Secure cookie back over
-// plain http (a server on the home network without TLS).
+// as oidcCookieName names and places it (every path it is held on), HttpOnly
+// and SameSite=Lax. Secure only on an https public_url: a browser never sends
+// a Secure cookie back over plain http (a server on the home network without
+// TLS).
 func (a *API) setOIDCCookie(w http.ResponseWriter, name, value string, maxAge int) {
-	name, path, secure := a.oidcCookieName(name)
-	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure follows public_url's scheme, see above
-		Name: name, Value: value, Path: path, MaxAge: maxAge,
-		HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode,
-	})
+	name, paths, secure := a.oidcCookieName(name)
+	for _, path := range paths {
+		http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure follows public_url's scheme, see above
+			Name: name, Value: value, Path: path, MaxAge: maxAge,
+			HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode,
+		})
+	}
 }
 
 // oidcCookieValue is one of the flow's cookies the request carries, by the
@@ -285,6 +316,88 @@ func (a *API) oidcCookieValue(r *http.Request, name string) string {
 	return ""
 }
 
+// statePattern is a flow's state as /start makes it (43 base64url
+// characters), with room to spare: anything else names no flow cookie.
+var statePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
+
+// flowKey is the part of a flow's state its cookie is named by (oidcCookie +
+// the key), "" for a state no flow of ours has. Only a prefix: the cookie's
+// sealed state is still compared whole at the callback.
+func flowKey(state string) string {
+	if !statePattern.MatchString(state) {
+		return ""
+	}
+	return state[:16]
+}
+
+// heldFlow is a flow cookie the browser sent: its name as oidcCookieName takes
+// it, and its flow (the zero Flow when it doesn't open: IssuedAt 0, no intent).
+type heldFlow struct {
+	name string
+	flow oidc.Flow
+}
+
+// heldFlows are the flow cookies the request carries, the sign-ins started in
+// this browser (other tabs, trips abandoned at the provider) and not yet
+// back, oldest first (one that doesn't open, a restart's or tampered with,
+// counts as oldest).
+func (a *API) heldFlows(r *http.Request) []heldFlow {
+	prefix, _, _ := a.oidcCookieName(oidcCookie)
+	var out []heldFlow
+	for _, c := range r.Cookies() {
+		key, found := strings.CutPrefix(c.Name, prefix)
+		if !found || !statePattern.MatchString(key) {
+			continue
+		}
+		f, _ := a.oidc.sealer.Open(c.Value) // the zero Flow when it doesn't open
+		out = append(out, heldFlow{name: oidcCookie + key, flow: f})
+	}
+	slices.SortStableFunc(out, func(x, y heldFlow) int {
+		return cmp.Compare(x.flow.IssuedAt, y.flow.IssuedAt)
+	})
+	return out
+}
+
+// oidcNextMax bounds a console deep link carried through a sign-in: with the
+// rest of the flow each sealed flow cookie stays under about 1.3 KB, so the
+// oidcMaxFlows a page elsewhere can start in this browser keep its requests'
+// Cookie header well under a proxy's 8 KB limit.
+const oidcNextMax = 512
+
+// oidcConsolePath is where the console's pages live: a deep link is under it.
+const oidcConsolePath = "/admin/"
+
+// validNext reports whether s is a console page to return to after a sign-in
+// (/start's ?next=, server#406): a path under oidcConsolePath with an optional
+// query, printable ASCII (a page's own escapes kept), no fragment (the
+// sign-in's marker is the fragment), no backslash, no double quote (a browser
+// sends it escaped, and the sealed flow's JSON would spend two bytes on each:
+// oidcNextMax), no empty, "." or ".." segment (a browser reads %2e as a dot
+// too). Always a path on public_url's own origin: it is appended to
+// public_url. Anything else is dropped, never an error: the sign-in lands on
+// the console's start page.
+func validNext(s string) bool {
+	if len(s) > oidcNextMax || !strings.HasPrefix(s, oidcConsolePath) {
+		return false
+	}
+	for i := range len(s) {
+		if c := s[i]; c <= ' ' || c >= 0x7f || c == '\\' || c == '#' || c == '"' {
+			return false
+		}
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" {
+		return false
+	}
+	segs := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	for i, seg := range segs {
+		if seg == "." || seg == ".." || (seg == "" && i != len(segs)-1) || strings.Contains(seg, `\`) {
+			return false
+		}
+	}
+	return true
+}
+
 // intentPattern is a player's intent tag: 22 to 128 base64url characters (the
 // player sends 64 hex).
 var intentPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{22,128}$`)
@@ -294,16 +407,20 @@ var intentPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{22,128}$`)
 func validIntent(s string) bool { return intentPattern.MatchString(s) }
 
 // handleOIDCStart begins a sign-in (public): ?return=web|admin (400 for
-// anything else) and an optional ?intent= tag (validIntent; a bad one is
-// dropped, and so is one the flow cookie the browser still holds carries: that
-// trip's start sent again), sealed into the flow. Off or misconfigured: /connect#oidc=off|unavailable. On
+// anything else), an optional ?intent= tag (validIntent; a bad one is
+// dropped, and so is one a flow cookie the browser still holds carries: that
+// trip's start sent again) and, for the console, an optional ?next= deep link
+// (validNext; a bad one dropped), sealed into the flow. Off or misconfigured:
+// /connect#oidc=off|unavailable. On
 // another host than public_url's, or over plain HTTP for an https public_url,
 // it first sends the browser to this route on public_url (once: ?hop=1), so
-// the flow cookie is set where the provider returns (the tag goes along). Then
-// the cookie (sealed state, nonce, PKCE verifier, the redirect URI, return,
-// the tag; ten minutes,
-// HttpOnly, SameSite=Lax; named and placed by oidcCookieName, Secure on an
-// https public_url) and a 302 to the provider's authorization URL, asking for
+// the flow cookie is set where the provider returns (the tag and the deep
+// link go along). Then the flow's own cookie, oidcCookie + flowKey(state)
+// (sealed state, nonce, PKCE verifier, the redirect URI, return, the tag, the
+// deep link; ten minutes, HttpOnly, SameSite=Lax; named and placed by
+// oidcCookieName, Secure on an https public_url), beside the flows other tabs
+// started (the oldest beyond oidcMaxFlows deleted), and a 302 to the
+// provider's authorization URL, asking for
 // oidcScopes. A provider discovered before is probed first (within the call
 // budget, so a slow one still signs people in; at most every 30 s, a failure
 // asked again after 5 s): one gone down lands on #oidc=unavailable rather
@@ -343,26 +460,35 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	if !validIntent(intent) {
 		intent = ""
 	}
+	// A console deep link, only for the console.
+	next := query.Get("next")
+	if ret != oidcReturnAdmin || !validNext(next) {
+		next = ""
+	}
 	if (plain || !sameHost(public, r.Host)) && query.Get("hop") == "" {
 		hop := url.Values{"return": {ret}, "hop": {"1"}}
 		if intent != "" {
 			hop.Set("intent", intent)
 		}
+		if next != "" {
+			hop.Set("next", next)
+		}
 		noStore(w)
 		http.Redirect(w, r, a.oidcBase()+oidcStartPath+"?"+hop.Encode(), http.StatusFound)
 		return
 	}
+	held := a.heldFlows(r)
 	// The same trip's start sent again (its address from the history, the trip
 	// abandoned at the provider, so its flow cookie is still held and its tag
 	// unspent): the new flow goes untagged, never the abandoned trip's tag.
-	if intent != "" {
-		if prev, err := a.oidc.sealer.Open(a.oidcCookieValue(r, oidcCookie)); err == nil && prev.Intent == intent {
+	for _, h := range held {
+		if intent != "" && h.flow.Intent == intent {
 			intent = ""
 		}
 	}
 	// 32 random bytes each, base64url.
 	f := oidc.Flow{State: oauth2.GenerateVerifier(), Nonce: oauth2.GenerateVerifier(),
-		Verifier: oauth2.GenerateVerifier(), RedirectURI: a.oidcRedirectURI(), Return: ret, Intent: intent}
+		Verifier: oauth2.GenerateVerifier(), RedirectURI: a.oidcRedirectURI(), Return: ret, Intent: intent, Next: next}
 	authURL, err := a.oidc.provider.AuthURL(r.Context(), f, a.oidcScopes())
 	if err != nil {
 		a.log.Warn("oidc: start failed", "err", err)
@@ -374,13 +500,18 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not start the sign-in")
 		return
 	}
-	a.setOIDCCookie(w, oidcCookie, sealed, int(oidc.FlowMaxAge/time.Second))
+	// The other tabs' flows stay (server#406); the oldest beyond the cap go.
+	for _, h := range held[:max(0, len(held)-(oidcMaxFlows-1))] {
+		a.setOIDCCookie(w, h.name, "", -1)
+	}
+	a.setOIDCCookie(w, oidcCookie+flowKey(f.State), sealed, int(oidc.FlowMaxAge/time.Second))
 	noStore(w)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
 // handleOIDCCallback finishes a sign-in (public; the provider's redirect). The
-// flow cookie is deleted whatever happens. Refused, with a failure charged to
+// flow's cookie, found by the state (flowKey), is deleted whatever happens;
+// other tabs' flows are left for their own returns. Refused, with a failure charged to
 // the address's oidcLimiter: a foreign or expired cookie, a state that isn't
 // the cookie's (constant time), a failed exchange or a refused ID token, a
 // flow already used (a copied cookie; checked after the exchange, so only a
@@ -388,14 +519,24 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 // charges nothing: it reaches nothing to guess at, and any page can make a
 // visitor's browser send ten (SameSite=Lax keeps the cookie off them), which
 // would lock that address out of signing in. The provider's ?error= (the
-// person cancelled) charges nothing either. Otherwise oidc.Decide's answer
+// person cancelled) charges nothing either, and lands on "failed" with or
+// without a flow: one sent back with no state finds no cookie, and its flow's
+// stays until it times out. Otherwise oidc.Decide's answer
 // (auth.OIDCSignIn) and its audits, then the sign-in's token in its cookie and
-// the flow's return page, or the result panel. The flow's intent tag joins the
+// the flow's return page (a console flow's deep link, Flow.Next, when it
+// carried one), or the result panel. The flow's intent tag joins the
 // token in the done cookie (oidcIntentSep), once: a tag a completed flow
 // carried before (the start URL with it sent again, from the history) is
 // dropped, so its sign-in finishes untagged.
 func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
-	a.setOIDCCookie(w, oidcCookie, "", -1)
+	q := r.URL.Query()
+	// This flow's cookie, by its state: another tab's flow stays for its own
+	// return.
+	sealed := ""
+	if key := flowKey(q.Get("state")); key != "" {
+		sealed = a.oidcCookieValue(r, oidcCookie+key)
+		a.setOIDCCookie(w, oidcCookie+key, "", -1)
+	}
 	ip := clientIP(r)
 	if !a.oidcLimiter.Allowed(ip) {
 		setRetryAfter(w, a.oidcLimiter.LockedFor(ip))
@@ -419,9 +560,16 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		a.oidcResult(w, r, reason)
 	}
-	q := r.URL.Query()
-	sealed := a.oidcCookieValue(r, oidcCookie)
 	if sealed == "" {
+		// The provider's own ending that names no flow of this browser's (some
+		// send ?error= without the state): the sign-in didn't finish, it did
+		// not time out. Whose flow it was can't be told, so that flow's cookie
+		// stays for its ten minutes, within the cap (oidcMaxFlows).
+		if e := q.Get("error"); e != "" {
+			a.log.Info("oidc: the provider ended the sign-in", "error", clip(e, 64), "flow", "none")
+			a.oidcResult(w, r, oidcFailed)
+			return
+		}
 		a.log.Info("oidc: sign-in refused", "why", "no flow cookie")
 		a.oidcResult(w, r, oidcExpired)
 		return
@@ -532,6 +680,11 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	page := oidcDoneWeb
 	if f.Return == oidcReturnAdmin {
 		page = oidcDoneAdmin
+		// The console page the sign-in started from (checked at /start, sealed
+		// since; checked again, so only a console path is ever appended).
+		if validNext(f.Next) {
+			page = f.Next + oidcDoneMarker
+		}
 	}
 	http.Redirect(w, r, a.oidcBase()+page, http.StatusSeeOther)
 }
@@ -756,7 +909,7 @@ func (a *API) handleOIDCPendingLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "user.oidc_link", u.Username, map[string]any{"method": auth.LinkAdmin, "issuer": p.Issuer})
-	writeJSON(w, http.StatusOK, toAdminUser(u))
+	writeJSON(w, http.StatusOK, a.adminUserOf(r.Context(), u))
 }
 
 // handleOIDCPendingCreate makes an ordinary account for a waiting sign-in
@@ -785,7 +938,7 @@ func (a *API) handleOIDCPendingCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "user.oidc_create", u.Username, map[string]any{"issuer": p.Issuer})
-	writeJSON(w, http.StatusCreated, toAdminUser(u))
+	writeJSON(w, http.StatusCreated, a.adminUserOf(r.Context(), u))
 }
 
 // handleOIDCPendingDismiss drops a waiting sign-in (admin only); the person's

@@ -8,11 +8,9 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { LanguageSelect } from '@/components/language-select';
+import { oidcStartHref } from '@/lib/oidc-return';
 import { useSession, type SignedOutReason } from '@/lib/session';
 import { setupPageOpen } from './setup-probe';
-
-/** Where a single sign-on for the console starts (handlers_oidc.go handleOIDCStart). */
-const OIDC_START = '/api/v1/auth/oidc/start?return=admin';
 
 /**
  * Admin sign-in. Shown in place of the console whenever there is no valid
@@ -21,8 +19,8 @@ const OIDC_START = '/api/v1/auth/oidc/start?return=admin';
  * password in the server's log, reset-admin when it's lost; or, while the
  * server's /setup page is open (--setup, no admin yet), to open that link.
  * With single sign-on configured (capabilities.oidc, server#235), "Sign in with
- * <name>" leaves for the provider and comes back on /admin/#oidc=done
- * (SessionProvider finishes it for a session).
+ * <name>" leaves for the provider and comes back on the page asked for with
+ * #oidc=done (oidcStartHref; SessionProvider finishes it for a session).
  */
 export function LoginPage({ reason }: { reason: SignedOutReason }) {
   const { t } = useTranslation();
@@ -125,7 +123,7 @@ export function LoginPage({ reason }: { reason: SignedOutReason }) {
                 <span className="h-px flex-1 bg-border" aria-hidden="true" />
               </div>
               <a
-                href={OIDC_START}
+                href={oidcStartHref()}
                 className={buttonVariants({ variant: 'outline', size: 'lg', className: 'w-full' })}
               >
                 <LogIn aria-hidden="true" />

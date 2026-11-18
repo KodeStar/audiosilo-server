@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Unlink } from 'lucide-react';
 import { api, ApiError } from '@/api/client';
-import { invalidatePeople, keys, useOIDCStatus } from '@/api/hooks';
+import { invalidatePeople, keys } from '@/api/hooks';
 import type { AdminUser, OIDCIdentity } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { FactList } from '@/components/fact-list';
@@ -28,12 +28,10 @@ export function IdentityCards({
   user: AdminUser;
   identities: readonly OIDCIdentity[];
 }) {
-  // The configured provider's name and issuer (Settings > Sign-in's status).
-  const status = useOIDCStatus().data;
   return (
     <>
       {identities.map((i) => (
-        <IdentityCard key={i.id} user={user} identity={i} provider={identityProvider(i, status)} />
+        <IdentityCard key={i.id} user={user} identity={i} provider={identityProvider(i)} />
       ))}
     </>
   );

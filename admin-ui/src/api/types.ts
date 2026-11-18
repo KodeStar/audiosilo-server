@@ -120,6 +120,13 @@ export interface AdminUser extends User {
    * links to the account on its own when it matches no other (server#235).
    */
   email: string;
+  /**
+   * The single sign-on the person signs in with now, by name ("" for none):
+   * an identity from the provider the server runs, on an account it signs in
+   * (never a household member's or a demo account's). Like a password, an
+   * admin's way into the console (server#408).
+   */
+  sign_in_provider: string;
 }
 
 /**
@@ -764,6 +771,11 @@ export interface OIDCIdentity {
   linked_by: UserRef | null;
   linked_at: string;
   last_sign_in_at: string | null;
+  /**
+   * The configured provider's name when this is the single sign-on the server
+   * runs, else "" (a provider since replaced: named by the issuer's host).
+   */
+  provider: string;
 }
 
 /**

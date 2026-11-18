@@ -1,4 +1,4 @@
-import { isOIDCReturn, takeOIDCReturn } from './oidc-return';
+import { OIDC_START, isOIDCReturn, oidcStartHref, takeOIDCReturn } from './oidc-return';
 
 describe('isOIDCReturn', () => {
   it("knows a single sign-on's return", () => {
@@ -33,5 +33,19 @@ describe('takeOIDCReturn', () => {
       ),
     ).toBe(false);
     expect(replaceState).not.toHaveBeenCalled();
+  });
+});
+
+describe('oidcStartHref', () => {
+  it('carries the console page asked for, so the sign-in lands back on it', () => {
+    expect(oidcStartHref({ pathname: '/admin/people/user/3', search: '?tab=devices' })).toBe(
+      `${OIDC_START}&next=${encodeURIComponent('/admin/people/user/3?tab=devices')}`,
+    );
+  });
+
+  it('goes without for the start page or anything outside the console', () => {
+    for (const pathname of ['/admin/', '/admin', '/', '/connect']) {
+      expect(oidcStartHref({ pathname, search: '' })).toBe(OIDC_START);
+    }
   });
 });

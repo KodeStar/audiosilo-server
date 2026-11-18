@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -44,7 +45,11 @@ type Flow struct {
 	// ?intent=, "" for none): echoed only by the finish of the sign-in this
 	// flow completes, so the player can tell its own trip's return from an
 	// address typed later (audiosilo#202).
-	Intent   string `json:"i,omitempty"`
+	Intent string `json:"i,omitempty"`
+	// Next is the console page the sign-in started from (its /start's
+	// ?next=, "" for the start page): where a console sign-in lands
+	// (server#406).
+	Next     string `json:"x,omitempty"`
 	IssuedAt int64  `json:"t"` // Unix seconds
 }
 
@@ -77,13 +82,18 @@ func NewSealer(now func() time.Time) (*Sealer, error) {
 	return &Sealer{aead: aead, now: now}, nil
 }
 
-// Seal returns f sealed as a cookie value (base64url), stamped now.
+// Seal returns f sealed as a cookie value (base64url), stamped now. Its JSON
+// keeps & < > as they are: escaped for HTML (\u0026, six bytes each) a deep
+// link of them (Flow.Next) would grow the cookie past the 4 KB a browser keeps.
 func (s *Sealer) Seal(f Flow) (string, error) {
 	f.IssuedAt = s.now().Unix()
-	plain, err := json.Marshal(f)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(f); err != nil {
 		return "", err
 	}
+	plain := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 	nonce := make([]byte, s.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err

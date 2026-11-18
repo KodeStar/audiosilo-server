@@ -29,6 +29,12 @@ type adminUser struct {
 	MembersCount  int         `json:"members_count"`
 	DisplayName   string      `json:"display_name"`
 	Email         string      `json:"email"`
+	// SignInProvider names the single sign-on the person signs in with now
+	// ("" for none): an identity from the provider the server runs, on an
+	// account it signs in (never a household member's or a demo account's,
+	// auth.ConsumeOIDC). Like a password, an admin's way into the console
+	// (server#408).
+	SignInProvider string `json:"sign_in_provider"`
 }
 
 // adminOwner is a member's owner as the console names them (display_name, else
@@ -39,13 +45,47 @@ type adminOwner struct {
 	DisplayName string `json:"display_name"`
 }
 
-func toAdminUser(u *auth.User) adminUser {
+// toAdminUser is u as the console shows it; sso says whether u holds an
+// identity from the single sign-on the server runs (auth.SSOAccounts).
+func (a *API) toAdminUser(u *auth.User, sso bool) adminUser {
 	v := adminUser{User: u, MemberAccess: u.MemberAccess, CanAddMembers: u.CanAddMembers,
 		MembersCount: u.MembersCount, DisplayName: u.DisplayName, Email: u.Email}
 	if o := u.ManagedBy; o != nil {
 		v.ManagedBy = &adminOwner{ID: o.ID, Username: o.Username, DisplayName: o.DisplayName}
 	}
+	if sso && a.ssoShown(u) {
+		v.SignInProvider = a.oidc.name
+	}
 	return v
+}
+
+// ssoShown reports whether u's console object can name a single sign-on: one
+// runs, and u is an account it signs in (auth.User.SSOAllowed).
+func (a *API) ssoShown(u *auth.User) bool {
+	return a.oidc != nil && u.SSOAllowed()
+}
+
+// adminUserOf is toAdminUser reading whether u signs in with the single
+// sign-on (auth.HasSSO). A failed read is logged and says none: the console
+// then asks for a password rather than trust a way in.
+func (a *API) adminUserOf(ctx context.Context, u *auth.User) adminUser {
+	if !a.ssoShown(u) {
+		return a.toAdminUser(u, false)
+	}
+	sso, err := a.auth.HasSSO(ctx, u.ID)
+	if err != nil {
+		a.log.Warn("reading an account's single sign-on failed", "user", u.ID, "err", err)
+	}
+	return a.toAdminUser(u, sso)
+}
+
+// adminIdentity is one of a person's linked sign-ons on their console page:
+// the identity with the configured provider's name when it is the single
+// sign-on the server runs ("" otherwise: the console names it by the
+// issuer's host), so the page needs no provider status read (server#408).
+type adminIdentity struct {
+	auth.Identity
+	Provider string `json:"provider"`
 }
 
 // adminMember is one of a person's household members on their console page:
@@ -61,9 +101,15 @@ func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not list users")
 		return
 	}
+	sso, err := a.auth.SSOAccounts(r.Context())
+	if err != nil {
+		// Without it no one reads as signing in with a provider: the list still
+		// loads.
+		a.log.Warn("reading the accounts' single sign-on failed", "err", err)
+	}
 	out := make([]adminUser, len(users))
 	for i := range users {
-		out[i] = toAdminUser(&users[i])
+		out[i] = a.toAdminUser(&users[i], sso[users[i].ID])
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": out})
 }
@@ -96,7 +142,7 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load user")
 		return
 	}
-	writeJSON(w, http.StatusCreated, toAdminUser(full))
+	writeJSON(w, http.StatusCreated, a.adminUserOf(r.Context(), full))
 }
 
 // handleGetUserDetail returns one account plus everything the admin console
@@ -155,14 +201,22 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load household members")
 		return
 	}
+	active, sso := a.oidcIssuer(), false
+	ids := make([]adminIdentity, len(identities))
+	for i, ident := range identities {
+		ids[i] = adminIdentity{Identity: ident}
+		if active != "" && ident.Issuer == active {
+			ids[i].Provider, sso = a.oidc.name, true
+		}
+	}
 	out := map[string]any{
-		"user":                 toAdminUser(u),
+		"user":                 a.toAdminUser(u, sso),
 		"accessible_libraries": libs,
 		"shares":               shares,
 		"auth_codes":           codes,
 		"members":              own,
 		"member_collections":   shared,
-		"identities":           identities,
+		"identities":           ids,
 	}
 	if u.IsMember() {
 		ownerLibs, ownerAdmin := []catalog.Library{}, false
@@ -322,7 +376,7 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.audit(r, "user.update", u.Username, details)
-	writeJSON(w, http.StatusOK, toAdminUser(u))
+	writeJSON(w, http.StatusOK, a.adminUserOf(r.Context(), u))
 }
 
 // handleDeleteUser permanently removes an account and all of its durable state

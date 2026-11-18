@@ -246,7 +246,7 @@ func (s *Service) ConsumeOIDC(ctx context.Context, secret string) (*User, error)
 	if err != nil {
 		return nil, err
 	}
-	if u.IsMember() || u.IsDemo {
+	if !u.SSOAllowed() {
 		return nil, ErrInvalidToken
 	}
 	if err := s.spendOnce(ctx, "ConsumeOIDC", hash, KindOIDC, s.ts()); err != nil {
@@ -518,7 +518,7 @@ func (s *Service) LinkPending(ctx context.Context, id, userID, by int64) (Pendin
 		if u, err = getUser(ctx, tx, userID); err != nil {
 			return err
 		}
-		if u.IsMember() || u.IsDemo {
+		if !u.SSOAllowed() {
 			return ErrNotLinkable
 		}
 		return insertIdentity(ctx, tx, userID, p.claims(), LinkAdmin, &by, s.ts())
@@ -664,4 +664,38 @@ func (s *Service) hasSignInIdentity(ctx context.Context, q rowQuerier, id int64)
 	var ok bool
 	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_identities WHERE user_id = ? AND issuer = ?)`, id, iss).Scan(&ok)
 	return ok, err
+}
+
+// SSOAccounts are the accounts holding an identity from the single sign-on
+// that can run now (activeIssuer), the console's "signs in with" (server#408);
+// nil while none can. Whether one may use it (ConsumeOIDC refuses a household
+// member or a demo account) is the caller's to say: the account is at hand.
+func (s *Service) SSOAccounts(ctx context.Context) (map[int64]bool, error) {
+	iss := s.activeIssuer()
+	if iss == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id FROM user_identities WHERE issuer = ?`, iss)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// HasSSO reports whether account id holds an identity from the single sign-on
+// that can run now (hasSignInIdentity): SSOAccounts for one account.
+func (s *Service) HasSSO(ctx context.Context, id int64) (bool, error) {
+	return s.hasSignInIdentity(ctx, s.db, id)
 }

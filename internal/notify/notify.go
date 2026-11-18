@@ -77,8 +77,10 @@ const kindTest = "test"
 type Event struct {
 	Kind string
 	Data map[string]any
-	// Dedup, when set, announces the event once: a second one with the same kind
-	// and key (still in the feed) is dropped.
+	// Dedup, when set, announces the event once while it is in the feed (90
+	// days): a second one with the same kind and key is dropped, even one
+	// emitted at the same moment (Service.dedupMu). Once the first has left
+	// the feed, the same key is announced again.
 	Dedup string
 }
 
@@ -119,6 +121,11 @@ type Service struct {
 	// logged.
 	oidcPending          []oidcPendingTaken
 	oidcPendingCapLogged time.Time
+
+	// dedupMu: an emit with a dedup key holds it from the check to the record,
+	// so two at once (two callbacks for one waiting sign-in) announce it once
+	// (server#408). Dedup emits are rare; one lock for all keys is enough.
+	dedupMu sync.Mutex
 }
 
 // oidcPendingTaken is one oidc_pending notification raised: when, and the
@@ -188,18 +195,8 @@ func (s *Service) emit(ctx context.Context, e Event, allow func() bool) {
 		return
 	}
 	ctx = context.WithoutCancel(ctx) // the request that caused it may be ending
-	if e.Dedup != "" {
-		seen, err := s.cat.ServerEventSeen(ctx, e.Kind, e.Dedup)
-		if err != nil || seen {
-			return
-		}
-	}
-	if allow != nil && !allow() {
-		return
-	}
-	ev, err := s.cat.RecordServerEvent(ctx, e.Kind, e.Data, e.Dedup)
-	if err != nil {
-		s.log.Warn("recording an event failed", "kind", e.Kind, "err", err)
+	ev, ok := s.recordEvent(ctx, e, allow)
+	if !ok {
 		return
 	}
 	targets, err := s.cat.ListNotifyTargets(ctx)
@@ -217,6 +214,28 @@ func (s *Service) emit(ctx context.Context, e Event, allow func() bool) {
 			s.log.Warn("notification queue full; dropped a delivery", "target", t.ID, "kind", e.Kind)
 		}
 	}
+}
+
+// recordEvent adds e to the feed unless its dedup key was seen or allow refuses it.
+// For a dedup key the check, the gate and the record are one step (dedupMu).
+func (s *Service) recordEvent(ctx context.Context, e Event, allow func() bool) (catalog.ServerEvent, bool) {
+	if e.Dedup != "" {
+		s.dedupMu.Lock()
+		defer s.dedupMu.Unlock()
+		seen, err := s.cat.ServerEventSeen(ctx, e.Kind, e.Dedup)
+		if err != nil || seen {
+			return catalog.ServerEvent{}, false
+		}
+	}
+	if allow != nil && !allow() {
+		return catalog.ServerEvent{}, false
+	}
+	ev, err := s.cat.RecordServerEvent(ctx, e.Kind, e.Data, e.Dedup)
+	if err != nil {
+		s.log.Warn("recording an event failed", "kind", e.Kind, "err", err)
+		return catalog.ServerEvent{}, false
+	}
+	return ev, true
 }
 
 // Test sends a test message to t now, once, and records the outcome on it. It
@@ -884,8 +903,10 @@ const (
 )
 
 // OIDCPending reports a single sign-on no account took (auth.OIDCSignIn's
-// Pending), once per waiting row (pendingID: the row keeps its id across the
-// person's attempts, and a row dismissed and recorded again is a new one), at
+// Pending), once per waiting row while its event is in the feed (pendingID:
+// the row keeps its id across the person's attempts, so one they keep alive
+// past the feed's 90 days is announced again; a row dismissed and recorded
+// again is a new one), at
 // most oidcPendingPerHour an hour for the sign-ins from one address (from,
 // which only counts: it is never in the event) and oidcPendingCeiling in all
 // (server#408): a row over either is not announced then (logged, at most once

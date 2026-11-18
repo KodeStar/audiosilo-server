@@ -289,6 +289,7 @@
   "people.card.listening": "Hört gerade",
   "people.card.password": "Passwort und gekoppelte Geräte",
   "people.card.pairOnly": "Nur gekoppelte Geräte",
+  "people.card.sso": "Meldet sich mit {{provider}} an",
   "people.card.nothing": "Nichts in Arbeit",
   "invites.title": "Einladungen",
   "invites.description": "Eine aktive Einladung pro Person. Ein Code wird nur beim Erstellen angezeigt; erneuere eine Einladung, um eine neue zu senden.",

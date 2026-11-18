@@ -197,6 +197,11 @@ type MemberRule struct {
 // IsMember reports whether u is a household member (someone manages it).
 func (u *User) IsMember() bool { return u.ManagedBy != nil }
 
+// SSOAllowed reports whether single sign-on may sign u in at all: never a
+// household member nor a demo account (ConsumeOIDC, LinkPending, the
+// console's sign_in_provider).
+func (u *User) SSOAllowed() bool { return !u.IsMember() && !u.IsDemo }
+
 // IsKid reports whether u is a kid member.
 func (u *User) IsKid() bool { return u.MemberKind != nil && *u.MemberKind == MemberKid }
 

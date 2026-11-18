@@ -4,7 +4,6 @@ import {
   type OIDCIdentity,
   type OIDCPendingList,
   type OIDCPendingSignIn,
-  type OIDCStatus,
 } from '@/api/types';
 import { hostOf } from '@/lib/format';
 import { isIndependentAccount } from './household-model';
@@ -70,31 +69,22 @@ export function suggestedAccount(
 
 /**
  * What a person's linked sign-on is called: the configured provider's name
- * when it is that provider's, else the issuer's host (a provider since
- * replaced), else the issuer as written.
+ * when it is the single sign-on the server runs (the server says so, never a
+ * provider status read), else the issuer's host (a provider since replaced),
+ * else the issuer as written.
  */
-export function identityProvider(
-  identity: Pick<OIDCIdentity, 'issuer'>,
-  configured: { issuer: string; name: string } | undefined,
-): string {
-  if (configured && configured.issuer === identity.issuer && configured.name) {
-    return configured.name;
-  }
-  return hostOf(identity.issuer) || identity.issuer;
+export function identityProvider(identity: Pick<OIDCIdentity, 'issuer' | 'provider'>): string {
+  return identity.provider || hostOf(identity.issuer) || identity.issuer;
 }
 
 /**
- * The provider a person signs in with now, by name: one of their identities is
- * from the single sign-on the server runs (enabled and configured, the same
- * issuer), which is also what counts as an admin's way into the console in
- * place of a password (the server's rule, auth.SetSSOIssuer). Undefined while
- * none is, or the status is not known yet.
+ * The provider a person signs in with now, by name, which is also what counts
+ * as an admin's way into the console in place of a password (the server's
+ * rule: sign_in_provider, server#408). Never a demo account's: a demo account
+ * signs in with no provider. Undefined for none.
  */
 export function signInProvider(
-  identities: readonly Pick<OIDCIdentity, 'issuer'>[],
-  status: Pick<OIDCStatus, 'configured' | 'issuer' | 'name'> | undefined,
+  u: Pick<AdminUser, 'sign_in_provider' | 'is_demo'>,
 ): string | undefined {
-  if (!status?.configured || !status.issuer) return undefined;
-  const counts = identities.find((i) => i.issuer === status.issuer);
-  return counts ? identityProvider(counts, status) : undefined;
+  return (!u.is_demo && u.sign_in_provider) || undefined;
 }
