@@ -194,6 +194,28 @@ func TestPodcastEpisodesOutOfBookFigures(t *testing.T) {
 	}
 }
 
+// A subscribe its claim ended because its stored params were not JSON (a
+// damaged row) folds as nothing, once, rather than failing every recovery
+// sweep for a day.
+func TestPodcastFoldUnreadableSubscribe(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	user := seedUser(t, c, ctx)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := bridge.Job{ID: 1, Kind: bridge.KindPodcastSubscribe, LibraryID: &lib.ID, State: bridge.StateFailed,
+		RequestedBy: &bridge.Requester{ID: user}, Params: json.RawMessage(`{`), Result: json.RawMessage(`{}`),
+		Error: "The server could not read which feed this subscription is for."}
+	if err := c.FoldPodcastJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	var folded int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM podcast_folded WHERE job_id = ?`, job.ID).Scan(&folded); err != nil || folded != 1 {
+		t.Fatalf("folded = %d, %v; want the job marked folded", folded, err)
+	}
+}
+
 func TestPodcastFolding(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	user := seedUser(t, c, ctx)
