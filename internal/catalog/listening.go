@@ -269,8 +269,9 @@ const endStayHold = `stay_version=NULL`
 // not listening: a PATCH (own or admin), an import's apply or undo, a move or
 // join (and, written inline, a sync finish or unfinish); never a PUT, an old
 // app's listening. The row's edit_version is the version it writes (each also
-// inserts edit_version as its version, for a row it creates), so a Stay made
-// on a base below it is a plain jump (0080, staysWin).
+// inserts edit_version as its version, for a row it creates; a move or join
+// creating one inserts its version + 1, carryProgress), so a Stay made on a
+// base below it is a plain jump (0080, staysWin).
 const explicitWriteSet = endSpanChain + `, edit_version=excluded.version`
 
 // finishChangeStamp is the time a write that changes a row's finished state
@@ -606,9 +607,16 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 		if !p.Finished {
 			p.FinishedAt = nil
 		}
+		// The carry is an explicit write (edit_version): a Stay on a base of
+		// either row is then a plain jump (staysWin). A merge writes a version
+		// above both; a row carried alone keeps its version (an import's undo
+		// still finds it as the import wrote it, sameProgress) and records the
+		// write one above it, so a Stay on that version is one too (server#415).
+		editVersion := p.Version + 1
 		if cur, ok := existing[r.user]; ok {
 			p = merge(cur.UserProgress, p)
 			finishChanged = newerFinishChange(cur.finishChangedAt, finishChanged)
+			editVersion = p.Version
 		}
 		if total > 0 {
 			p.Duration = total
@@ -636,7 +644,7 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 			     device_name=excluded.device_name, finish_changed_at=excluded.finish_changed_at,
 			     `+explicitWriteSet+`, `+clearOtherPlace,
 			r.user, libraryID, into, p.Position, p.Duration, p.Finished, p.PlaybackSpeed, p.Version,
-			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, p.DeviceName, finishChanged, p.Version); err != nil {
+			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, p.DeviceName, finishChanged, editVersion); err != nil {
 			return err
 		}
 	}
