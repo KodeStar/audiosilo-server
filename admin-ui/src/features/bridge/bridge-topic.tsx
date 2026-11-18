@@ -52,6 +52,7 @@ import {
   billingKnown,
   CREDENTIAL_SHARE_KEY,
   credentialShare,
+  GITHUB_SIGN_IN_KEY,
   githubSignInState,
   githubStep,
   setupComplete,
@@ -459,14 +460,13 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
 function GitHubAccount({ setup }: { setup: BridgeSetup }) {
   const { t } = useTranslation();
   const trouble = githubSignInState(setup);
-  if (trouble === 'refused') {
-    return <StatusText tone="warn">{t('bridge.setup.githubRefused')}</StatusText>;
-  }
-  const login = setup.github_login ? (
-    <span className="font-mono text-[12.5px]">{setup.github_login}</span>
-  ) : undefined;
-  if (trouble === 'unrefreshed') {
-    const note = <StatusText tone="warn">{t('bridge.setup.githubUnrefreshed')}</StatusText>;
+  // A sign-in GitHub refused names no account; one waiting for a refresh still does.
+  const login =
+    setup.github_login && trouble !== 'refused' ? (
+      <span className="font-mono text-[12.5px]">{setup.github_login}</span>
+    ) : undefined;
+  if (trouble) {
+    const note = <StatusText tone="warn">{t(GITHUB_SIGN_IN_KEY[trouble])}</StatusText>;
     if (!login) return note;
     return (
       <span className="inline-flex flex-wrap items-center gap-x-2">

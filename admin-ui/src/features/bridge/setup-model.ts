@@ -142,10 +142,16 @@ export function credentialShare(
     : undefined;
 }
 
-/** Why a GitHub sign-in on the Bridge can't be used now (bridge#25). */
-const GITHUB_SIGN_IN_STATES = ['unrefreshed', 'refused'] as const;
+/**
+ * The Setup card's words for why a GitHub sign-in on the Bridge can't be used
+ * now (bridge#25); the one list of the states this console knows.
+ */
+export const GITHUB_SIGN_IN_KEY = {
+  unrefreshed: 'bridge.setup.githubUnrefreshed',
+  refused: 'bridge.setup.githubRefused',
+} as const;
 
-export type GitHubSignInState = (typeof GITHUB_SIGN_IN_STATES)[number];
+export type GitHubSignInState = keyof typeof GITHUB_SIGN_IN_KEY;
 
 /**
  * The GitHub sign-in's trouble, when the Bridge reports one this console
@@ -155,7 +161,7 @@ export function githubSignInState(
   setup: Pick<BridgeSetup, 'github_state'>,
 ): GitHubSignInState | undefined {
   const state = setup.github_state;
-  return (GITHUB_SIGN_IN_STATES as readonly (string | undefined)[]).includes(state)
+  return state && Object.hasOwn(GITHUB_SIGN_IN_KEY, state)
     ? (state as GitHubSignInState)
     : undefined;
 }

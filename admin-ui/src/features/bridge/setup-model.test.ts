@@ -4,8 +4,10 @@ import en from '@/i18n/locales/en.json';
 import {
   agentCredentialSet,
   billingKnown,
+  CREDENTIAL_SHARE_KEY,
   credentialShare,
   generateNeed,
+  GITHUB_SIGN_IN_KEY,
   githubSignInState,
   githubStep,
   KNOWN_SETUP_ITEMS,
@@ -247,5 +249,15 @@ describe('credentialShare and githubSignInState (bridge#79, bridge#25)', () => {
     expect(githubSignInState({ github_state: 'refused' })).toBe('refused');
     expect(githubSignInState({})).toBeUndefined();
     expect(githubSignInState({ github_state: 'later_state' })).toBeUndefined();
+    expect(githubSignInState({ github_state: 'constructor' })).toBeUndefined();
+  });
+
+  it('has English words for every mode and state it knows', () => {
+    for (const key of [
+      ...Object.values(CREDENTIAL_SHARE_KEY),
+      ...Object.values(GITHUB_SIGN_IN_KEY),
+    ]) {
+      expect(strings[key]).toBeTruthy();
+    }
   });
 });
