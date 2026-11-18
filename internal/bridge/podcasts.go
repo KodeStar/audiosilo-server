@@ -654,6 +654,10 @@ func RedactedJob(j Job) Job {
 // unfolded one in it as the show's poll in hand (catalog.DuePodcastPolls).
 const PollFoldWindow = 24 * time.Hour
 
+// UnfoldedSQL holds for a bridge_jobs row aliased j whose outcome is not folded
+// yet: the sweep's rule, shared with the scheduler's poll in hand.
+const UnfoldedSQL = `NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id)`
+
 // EndedPodcasts recovers a crash between the job commit and folding
 // (idx_bridge_jobs_kind_finished serves it), after failing the follow requests
 // left queued on a Bridge that went offline (expireOfflineSubscribes).
@@ -664,7 +668,7 @@ func (s *Service) EndedPodcasts(ctx context.Context) ([]Job, error) {
 	if err := s.expireOfflineSubscribes(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('`+KindPodcastSubscribe+`','`+KindPodcastPoll+`','`+KindPodcastFetch+`','`+KindPodcastRetain+`') AND j.state IN `+EndedStatesSQL+` AND (j.kind IN ('`+KindPodcastFetch+`','`+KindPodcastRetain+`') OR j.finished_at>=?) AND NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id) ORDER BY j.id`, at(s.now().Add(-PollFoldWindow)))
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('`+KindPodcastSubscribe+`','`+KindPodcastPoll+`','`+KindPodcastFetch+`','`+KindPodcastRetain+`') AND j.state IN `+EndedStatesSQL+` AND (j.kind IN ('`+KindPodcastFetch+`','`+KindPodcastRetain+`') OR j.finished_at>=?) AND `+UnfoldedSQL+` ORDER BY j.id`, at(s.now().Add(-PollFoldWindow)))
 	if err != nil {
 		return nil, err
 	}
