@@ -309,6 +309,22 @@ func TestSpellingASCIINoLookup(t *testing.T) {
 	}
 }
 
+// TestHasOtherSpelling: true only for a name with another NFC or NFD spelling
+// (an accented letter in either form), never for ASCII, a curly apostrophe or
+// a Han name.
+func TestHasOtherSpelling(t *testing.T) {
+	t.Parallel()
+	nfc := "Soir\u00e9e.epub"
+	for name, want := range map[string]bool{
+		"Author/Book/01.mp3": false, "Don\u2019t Panic.epub": false, "\u4e09\u4f53.epub": false,
+		nfc: true, unorm.NFD.String(nfc): true,
+	} {
+		if got := HasOtherSpelling(name); got != want {
+			t.Errorf("HasOtherSpelling(%+q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
 // TestKeyPaths: both book inserts write the key (” for an NFC path, the NFC
 // form for any other); KeyPaths keys a row left NULL (a book an older server
 // inserted after a rollback) and, after a change of Unicode tables, every row.

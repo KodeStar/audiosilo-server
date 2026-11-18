@@ -548,7 +548,7 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 	// paths). Another spelling is looked up anyway.
 	var plain []Ref
 	for _, r := range cands {
-		if _, ok := books[r]; !ok && !normSensitive(r.Path) {
+		if _, ok := books[r]; !ok && !HasOtherSpelling(r.Path) {
 			plain = append(plain, r)
 		}
 	}
@@ -560,7 +560,7 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 	out := make([]Ref, 0, len(cands))
 	for _, r := range cands {
 		if _, ok := books[r]; !ok {
-			if !normSensitive(r.Path) && !held[r] {
+			if !HasOtherSpelling(r.Path) && !held[r] {
 				continue
 			}
 			lib := r.LibraryID

@@ -1647,7 +1647,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   in some case and Unicode form of its `<stem>.epub`, `ebookNameKey`, through a name index made once
   per folder), an on-demand index (`indexBook`: `IndexPath`, `IndexMoved`) what is on disk now
   (`ebookOnDisk`: a folder book's folder listed, a single-file book's name looked up, then its
-  folder's epubs listed only when the name has another Unicode form, `hasOtherForm`, and isn't
+  folder's epubs listed only when the name has another Unicode form, `catalog.HasOtherSpelling`, and isn't
   there as spelled); `TestScanRecordsEbookByBookEbookRule`
   and `TestEbookCaseVariantBesideSingleFile` hold them together. `books.ebook_sig` is the named file's
   size, mtime and name (`catalog.EbookSig`; a link's target's), recorded whether or not it is readable

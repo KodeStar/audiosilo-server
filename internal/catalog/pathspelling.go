@@ -43,9 +43,12 @@ func pathKey(rel string) string {
 	return unorm.NFC.String(rel)
 }
 
-// normSensitive reports whether p has another Unicode spelling: false when it
-// is both NFC and NFD, as every ASCII path is, so Spelling needs no lookup.
-func normSensitive(p string) bool {
+// HasOtherSpelling reports whether p (a path or one name) has another Unicode
+// spelling, NFC or NFD: an accented letter, Hangul, kana with a voicing mark.
+// False when it is both NFC and NFD, as every ASCII path, a curly apostrophe
+// and a Han name are, so Spelling needs no lookup and no listing could find it
+// spelled otherwise (library.BookEbook).
+func HasOtherSpelling(p string) bool {
 	return !unorm.NFC.IsNormalString(p) || !unorm.NFD.IsNormalString(p)
 }
 
@@ -224,7 +227,7 @@ func (c *Catalog) Spelling(ctx context.Context, libraryID int64, p string, allow
 // indexSpelling is Spelling from the index alone: p's spelling, and when it is
 // p because only paths allow refuses read as it, those paths (refused).
 func (c *Catalog) indexSpelling(ctx context.Context, libraryID int64, p string, allow func(string) bool) (string, []string, error) {
-	if !normSensitive(p) {
+	if !HasOtherSpelling(p) {
 		return p, nil, nil
 	}
 	if _, err := bookIDByPath(ctx, c.db, libraryID, p); !errors.Is(err, ErrNotFound) {
@@ -302,7 +305,7 @@ func (c *Catalog) ownEntry(ctx context.Context, libraryID int64, p string, other
 func spelledOnDisk(ctx context.Context, root, p string) bool {
 	dir := root
 	for _, name := range strings.Split(p, "/") {
-		if normSensitive(name) {
+		if HasOtherSpelling(name) {
 			entries, err := metadata.ReadDirBounded(ctx, dir, spellLookWait)
 			if err != nil || !slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == name }) {
 				return false

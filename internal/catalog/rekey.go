@@ -225,7 +225,7 @@ func (c *Catalog) rekeyLibrary(ctx context.Context, libraryID int64, primaryOnly
 		if err := ctx.Err(); err != nil {
 			return rep, err
 		}
-		if cands[p] == carryFavs && !normSensitive(p) {
+		if cands[p] == carryFavs && !HasOtherSpelling(p) {
 			continue // favourites move only to another spelling, and p has none
 		}
 		reason, spelled, target, err := c.rekeyTarget(ctx, libraryID, p)
@@ -317,7 +317,7 @@ func (c *Catalog) rekeyCandidates(ctx context.Context, libraryID int64, primaryO
 	}
 	var plain []Ref
 	for p := range cands {
-		if !normSensitive(p) {
+		if !HasOtherSpelling(p) {
 			plain = append(plain, Ref{LibraryID: libraryID, Path: p})
 		}
 	}
