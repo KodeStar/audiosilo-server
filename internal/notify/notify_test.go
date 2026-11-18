@@ -823,7 +823,8 @@ func TestPodcastNoticeWording(t *testing.T) {
 	n := catalog.PodcastNotice{Library: "Pods", LibraryID: 4, ShowPath: "Example Show", ShowID: "a1b2c3d4e5f60718", Show: "Example\nShow"}
 	emit := func(n catalog.PodcastNotice) message {
 		t.Helper()
-		s.PodcastNotice(ctx, n)
+		kind, data, dedup := PodcastEvent(n)
+		s.Emit(ctx, Event{Kind: kind, Data: data, Dedup: dedup})
 		events, _, err := cat.ListServerEvents(ctx, 0, 1, "")
 		if err != nil || len(events) == 0 {
 			t.Fatalf("no event: %v", err)
@@ -849,6 +850,7 @@ func TestPodcastNoticeWording(t *testing.T) {
 		{"timeout", 3, "The feed didn't answer in time. 3 checks in a row failed."},
 		{"http_503", 4, "The feed answered HTTP 503. 4 checks in a row failed."},
 		{"http_310", 3, "The feed's address redirects too many times. 3 checks in a row failed."},
+		{"redirect_loop", 3, "The feed's address redirects too many times. 3 checks in a row failed."},
 		{"gone", 1, "The feed's address says it is gone, so the Bridge stopped checking it. Follow the show again by its new address."},
 		{"feed_secret_missing", 0, "The Bridge no longer has this private feed's address. Follow the show again by its address to restore it."},
 		{"http_5xx", 3, "The Bridge couldn't check the feed. 3 checks in a row failed."},
@@ -902,18 +904,25 @@ func TestPodcastNoticeWording(t *testing.T) {
 	}
 }
 
-// The same new episodes are announced once (the scheduled scan and the
-// Bridge's rescan), other new episodes of the show again.
+// The same new episodes are known by one dedup key whatever their order (the
+// scheduled scan and the Bridge's rescan), other new episodes of the show by
+// another; a feed failing or back has none (the catalog's run tells each once).
 func TestPodcastEpisodesDedup(t *testing.T) {
-	s, cat, ctx := newService(t)
 	n := catalog.PodcastNotice{Kind: catalog.PodcastEpisodesNew, LibraryID: 1, ShowID: "a1b2c3d4e5f60718", Show: "S", Titles: []string{"B", "A"}, EpisodeIDs: []string{"b", "a"}}
-	s.PodcastNotice(ctx, n)
+	_, _, first := PodcastEvent(n)
 	n.EpisodeIDs = []string{"a", "b"}
-	s.PodcastNotice(ctx, n)
+	_, _, same := PodcastEvent(n)
 	n.EpisodeIDs = []string{"c"}
-	s.PodcastNotice(ctx, n)
-	if events, _, _ := cat.ListServerEvents(ctx, 0, 10, KindPodcastEpisodesNew); len(events) != 2 {
-		t.Fatalf("episode events = %d, want 2", len(events))
+	_, _, other := PodcastEvent(n)
+	if first == "" || same != first || other == first {
+		t.Fatalf("dedup keys %q, %q, %q: want the same set once, another set apart", first, same, other)
+	}
+	n.Kind = catalog.PodcastFeedFailing
+	if kind, _, dedup := PodcastEvent(n); kind != KindPodcastFeedFailing || dedup != "" {
+		t.Fatalf("failing: %q, dedup %q", kind, dedup)
+	}
+	if kind, _, _ := PodcastEvent(catalog.PodcastNotice{Kind: "other"}); kind != "" {
+		t.Fatalf("an unknown notice is recorded as %q", kind)
 	}
 }
 
@@ -940,7 +949,7 @@ func TestPodcastScanRaisesNoBookAdded(t *testing.T) {
 // admins who don't follow it).
 func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 	s, cat, ctx := newService(t)
-	cat.SetPodcastNotice(s.PodcastNotice)
+	cat.SetPodcastNotice(s.PodcastListener())
 	hook, push := newFakeDest(t), newFakeDest(t)
 	kinds := []string{KindPodcastEpisodesNew, KindPodcastFeedFailing, KindPodcastFeedRecovered}
 	addTarget(t, cat, TargetWebhook, hook.srv.URL, "sig", kinds...)
@@ -965,7 +974,7 @@ func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 	poll := func(id int64, state, code string) {
 		t.Helper()
 		j := bridge.Job{ID: id, Kind: bridge.KindPodcastPoll, LibraryID: &lib.ID, Path: &show, State: state,
-			Params: json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`), Result: json.RawMessage(`{"status":200,"next_poll_seconds":900}`),
+			Params: json.RawMessage(`{"show_id":"a1b2c3d4e5f60718","scheduled":true}`), Result: json.RawMessage(`{"status":200,"next_poll_seconds":900}`),
 			Error: "GET " + secretURL + " failed"}
 		if state == bridge.StateFailed {
 			raw, _ := json.Marshal(map[string]string{"code": code, "message": "fetching " + secretURL + ": connection refused"})
@@ -981,7 +990,7 @@ func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 	poll(100, bridge.StateDone, "")
 	grown := *f
 	grown.Episodes = append([]feed.Episode{{ID: "1111111111111111", GUID: "x", Path: "Example Show/2026-10-26-1111111111.mp3",
-		Title: "Episode Four", Published: "2026-10-26T21:00:00Z", EpisodeType: "full",
+		Title: "Episode Four", Published: "2026-10-26T21:00:00Z", FirstSeen: time.Now().UTC().Format(time.RFC3339), EpisodeType: "full",
 		Enclosure: feed.Enclosure{URL: secretURL + "&ep=4"}}}, f.Episodes...)
 	if _, err := cat.IndexPodcastShow(ctx, lib.ID, "Example Show", "s2", "", "", &grown, nil, false); err != nil {
 		t.Fatal(err)

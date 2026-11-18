@@ -401,15 +401,23 @@ function hostFolder(root: string): string {
   return absoluteBaseName(root).replace(/[^A-Za-z0-9._-]/g, '-') || 'audiobooks';
 }
 
+/** bridge.PriorityScheduled: the band the server's schedulers queue at. */
+const SCHEDULED_PRIORITY = -10;
+
 /**
- * Whether a job of this kind is one the server queues itself (a podcast's feed
- * checks, episode fetches and retention, an Audible account's scheduled poll,
- * backup and sync),
- * so a job with no requester reads "Scheduled by the server" rather than a
- * deleted account's (BRIDGE-03). A follow (podcast.subscribe) always has a
- * listener behind it.
+ * Whether a job is one the server queues itself (a podcast's feed checks,
+ * episode fetches and retention, an Audible account's scheduled poll, backup
+ * and sync), so one with no requester reads "Scheduled by the server" rather
+ * than a deleted account's (BRIDGE-03). A follow (podcast.subscribe) always
+ * has a listener behind it. A feed check is also a follower's Check now, so it
+ * is read by its origin: the scheduler's mark (`params.scheduled`,
+ * bridge.PollParams.Scheduled), else the scheduler's priority (a check queued
+ * before the mark existed).
  */
-export function serverScheduled(kind: string): boolean {
+export function serverScheduled(job: Pick<BridgeJob, 'kind' | 'params' | 'priority'>): boolean {
+  const { kind } = job;
+  if (kind === 'podcast.poll')
+    return job.params?.scheduled === true || job.priority === SCHEDULED_PRIORITY;
   return (
     (kind.startsWith('podcast.') && kind !== 'podcast.subscribe') ||
     kind === 'audible.poll' ||

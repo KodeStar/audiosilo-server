@@ -537,16 +537,82 @@ describe('bridge page', () => {
         'GET /admin/bridge/jobs': {
           body: {
             jobs: [
-              job({ id: 8, kind: 'podcast.poll', requested_by: null, state: 'done' }),
+              job({
+                id: 8,
+                kind: 'podcast.poll',
+                params: { scheduled: true },
+                priority: -10,
+                requested_by: null,
+                state: 'done',
+              }),
               job({ id: 9, requested_by: null, state: 'done' }),
+              // A follower's Check now whose account is gone: not the scheduler's.
+              job({ id: 10, kind: 'podcast.poll', params: {}, requested_by: null, state: 'done' }),
             ],
           },
         },
       }),
     );
     renderApp('/server?topic=bridge');
-    expect(await screen.findByText(/Scheduled by the server/)).toBeInTheDocument();
-    expect(screen.getAllByText(/Asked by a deleted account/)).toHaveLength(1);
+    expect(await screen.findAllByText(/Scheduled by the server/)).toHaveLength(1);
+    expect(screen.getAllByText(/Asked by a deleted account/)).toHaveLength(2);
+  });
+
+  it("words a failed podcast job's known code the server's way, keeping the Bridge's text in Details (server#403)", async () => {
+    mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({
+                id: 8,
+                kind: 'podcast.fetch',
+                state: 'failed',
+                error: 'The episode returned HTTP 410.',
+                result: { code: 'gone', message: 'The episode returned HTTP 410.' },
+              }),
+              job({
+                id: 9,
+                kind: 'podcast.fetch',
+                state: 'failed',
+                error: 'The server could not confirm the job before saving.',
+                result: {
+                  code: 'bridge_lost',
+                  message: 'The server could not confirm the job before saving.',
+                },
+              }),
+              job({
+                id: 10,
+                kind: 'podcast.poll',
+                state: 'failed',
+                error: 'dial tcp: connection refused',
+                result: { code: 'network' },
+              }),
+              // A code the server doesn't word keeps the Bridge's text.
+              job({
+                id: 11,
+                kind: 'podcast.fetch',
+                state: 'failed',
+                error: 'Something new went wrong.',
+                result: { code: 'brand_new' },
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    expect(await screen.findByText('The episode is no longer available.')).toBeInTheDocument();
+    expect(screen.getByText('The Bridge stopped reporting.')).toBeInTheDocument();
+    expect(screen.getByText("The feed couldn't be reached.")).toBeInTheDocument();
+    expect(screen.getByText('Something new went wrong.')).toBeInTheDocument();
+    expect(screen.queryByText('The episode returned HTTP 410.')).toBeNull();
+    expect(screen.queryByText('The server could not confirm the job before saving.')).toBeNull();
+    const gone = screen
+      .getByText('The episode is no longer available.')
+      .closest('li') as HTMLElement;
+    await userEvent.click(within(gone).getByRole('button', { name: 'Details' }));
+    expect(within(gone).getByText(/The episode returned HTTP 410\./)).toBeInTheDocument();
   });
 
   it('narrows the jobs to a kind, names a follow by its show or feed host, marks high priority (server#186, server#224)', async () => {

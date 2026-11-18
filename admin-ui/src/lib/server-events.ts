@@ -145,7 +145,7 @@ export function describeEvent(ev: ServerEvent): EventText {
     case 'bridge_job_finished':
     case 'bridge_job_failed':
       return describeBridgeJob(ev.kind, d);
-    // notify.PodcastNotice: a show's news, named by its title (never its feed
+    // notify.PodcastEvent: a show's news, named by its title (never its feed
     // address); a private show's (`private`) carries no names at all, so it is
     // "a private podcast". Podcast libraries are listed in Library > Libraries.
     case 'podcast_episodes_new':
@@ -317,15 +317,26 @@ const FEED_CODES = new Set([
   'too_large',
   'blocked_address',
   'invalid_feed_url',
-  'http_310', // the Bridge's redirect loop, not an HTTP status
+  'redirect_loop', // the Bridge's redirect loop (server#403)
+  'http_310', // an older Bridge's redirect loop, not an HTTP status
 ]);
 
-/** Why a podcast feed is failing: its code as a sentence, an HTTP status as such, else generically. */
-export function feedFailureBody(code: string): NonNullable<EventText['body']> {
+/** The HTTP status of a podcast job's `http_<status>` code, else undefined. */
+export function httpStatusOf(code: string): string | undefined {
+  return /^http_([1-5]\d{2})$/.exec(code)?.[1];
+}
+
+/** A failed poll's code as a sentence, an HTTP status as such, else undefined (a code notify doesn't word). */
+export function feedCodeText(code: string): EventText['body'] {
   if (FEED_CODES.has(code)) return { key: `events.podcast_feed_failing.code.${code}` };
-  const http = /^http_([1-5]\d{2})$/.exec(code);
-  if (http) return { key: 'events.podcast_feed_failing.http', values: { status: http[1] } };
-  return { key: 'events.podcast_feed_failing.failed' };
+  const status = httpStatusOf(code);
+  if (status) return { key: 'events.podcast_feed_failing.http', values: { status } };
+  return undefined;
+}
+
+/** Why a podcast feed is failing: its code worded (feedCodeText), else generically. */
+export function feedFailureBody(code: string): NonNullable<EventText['body']> {
+  return feedCodeText(code) ?? { key: 'events.podcast_feed_failing.failed' };
 }
 
 /** The i18n key of why a backup failed (backup.Result's error; unknown ones generically). */

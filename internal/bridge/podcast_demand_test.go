@@ -421,8 +421,31 @@ func TestPodcastFetchErrorsKeepSafeCodes(t *testing.T) {
 		}
 	}
 	// server#403: the Bridge's redirect loop is worded as one, not "HTTP 310".
-	if err := FetchErrorFor("http_310"); err.Code != "http_310" || err.Message != "The episode address redirects too many times." {
-		t.Fatalf("redirect loop %+v", err)
+	for _, code := range []string{"http_310", "redirect_loop"} { // an older Bridge's code, then its own
+		if err := FetchErrorFor(code); err.Code != code || err.Message != "The episode address redirects too many times." {
+			t.Fatalf("redirect loop %+v", err)
+		}
+	}
+}
+
+// The console's job list words a failed fetch with fetchMessages' sentences
+// (bridge.podcastCode.<code> in admin-ui's en.json): the two stay the same.
+func TestFetchMessagesMatchConsole(t *testing.T) {
+	raw, err := os.ReadFile("../../admin-ui/src/i18n/locales/en.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var en map[string]string
+	if err := json.Unmarshal(raw, &en); err != nil {
+		t.Fatal(err)
+	}
+	for code, message := range fetchMessages {
+		if code == "http_310" { // the console words it as redirect_loop
+			code = "redirect_loop"
+		}
+		if got := en["bridge.podcastCode."+code]; got != message {
+			t.Errorf("console's %s is %q, the server's %q", code, got, message)
+		}
 	}
 }
 

@@ -8,12 +8,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReadFeedFixture(t *testing.T) {
+	before := time.Now()
 	f, err := ReadFile("../testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if f.ReadAt.Before(before) || f.ReadAt.After(time.Now()) {
+		t.Fatalf("read at %v, not during the read", f.ReadAt)
 	}
 	if len(f.Episodes) != 3 || f.Episodes[2].Title != "Untitled episode" || f.Episodes[1].Fetch.DurationMS != 1512345 {
 		t.Fatalf("fixture: %+v", f)

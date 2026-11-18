@@ -228,7 +228,7 @@ func TestPodcastFolding(t *testing.T) {
 	}
 	job.Kind = bridge.KindPodcastPoll
 	job.RequestedBy = nil // the scheduler's polls: a follower's Check now backs nothing off
-	job.Params = json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`)
+	job.Params = json.RawMessage(`{"show_id":"a1b2c3d4e5f60718","scheduled":true}`)
 	show := "Example Show"
 	job.Path = &show
 	for i, code := range []string{"timeout", "timeout", "gone"} {
@@ -310,7 +310,7 @@ func TestPodcastFoldingOddOutcomes(t *testing.T) {
 		t.Fatalf("state %+v %v", st, err)
 	}
 	var p bridge.PollParams
-	if err := json.Unmarshal(st.PollParams(), &p); err != nil || len(p.ETag) > bridge.MaxPollValidator {
-		t.Fatalf("params %s %v", st.PollParams(), err)
+	if err := json.Unmarshal(st.PollParams(true), &p); err != nil || len(p.ETag) > bridge.MaxPollValidator {
+		t.Fatalf("params %s %v", st.PollParams(true), err)
 	}
 }

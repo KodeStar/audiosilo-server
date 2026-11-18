@@ -100,6 +100,10 @@ type PollParams struct {
 	ShowID       string `json:"show_id,omitempty"`
 	ETag         string `json:"etag,omitempty"`
 	LastModified string `json:"last_modified,omitempty"`
+	// Scheduled marks the scheduler's poll (server#403): only its failures
+	// count toward the admin's failing-feed notice, never a follower's Check
+	// now. Additive: a Bridge reads the params leniently and ignores it.
+	Scheduled bool `json:"scheduled,omitempty"`
 }
 
 // PodcastOutcome is a podcast job's result (plan 2.9), as the fold and a
@@ -307,6 +311,19 @@ var networkFailures = []string{"dns", "network", "timeout", "tls"}
 // announce every followed show.
 func NetworkFailure(code string) bool {
 	return slices.Contains(networkFailures, code)
+}
+
+// unsentFailures are the feed failure codes the Bridge raises before it
+// connects to anything: the address refused as written, or as resolved.
+var unsentFailures = []string{"invalid_feed_url", "blocked_address"}
+
+// FeedAnswered reports whether a failed podcast job's code says the Bridge
+// reached the feed: the feed's own failure (FeedFailure), not network-class
+// and not refused before any connection (unsentFailures). An HTTP error, a
+// redirect loop or a body that is no feed all came from the feed's host, so
+// the Bridge's internet was up (catalog.FoldPodcastJob's outage check).
+func FeedAnswered(code string) bool {
+	return FeedFailure(code) && !NetworkFailure(code) && !slices.Contains(unsentFailures, code)
 }
 
 // RecentSubscribeFailure is user's last podcast.subscribe for norm in lib when
@@ -632,6 +649,16 @@ func RedactedJob(j Job) Job {
 	return j
 }
 
+// PollFoldWindow is how long an ended poll (or follow) waits for its fold:
+// EndedPodcasts sweeps those that ended within it. The scheduler counts an
+// unfolded poll as the show's poll in hand over a shorter window of its own
+// (catalog.DuePodcastPolls).
+const PollFoldWindow = 24 * time.Hour
+
+// UnfoldedSQL holds for a bridge_jobs row aliased j whose outcome is not folded
+// yet: the sweep's rule, shared with the scheduler's poll in hand.
+const UnfoldedSQL = `NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id)`
+
 // EndedPodcasts recovers a crash between the job commit and folding
 // (idx_bridge_jobs_kind_finished serves it), after failing the follow requests
 // left queued on a Bridge that went offline (expireOfflineSubscribes).
@@ -642,7 +669,7 @@ func (s *Service) EndedPodcasts(ctx context.Context) ([]Job, error) {
 	if err := s.expireOfflineSubscribes(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('`+KindPodcastSubscribe+`','`+KindPodcastPoll+`','`+KindPodcastFetch+`','`+KindPodcastRetain+`') AND j.state IN `+EndedStatesSQL+` AND (j.kind IN ('`+KindPodcastFetch+`','`+KindPodcastRetain+`') OR j.finished_at>=?) AND NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id) ORDER BY j.id`, at(s.now().Add(-24*time.Hour)))
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('`+KindPodcastSubscribe+`','`+KindPodcastPoll+`','`+KindPodcastFetch+`','`+KindPodcastRetain+`') AND j.state IN `+EndedStatesSQL+` AND (j.kind IN ('`+KindPodcastFetch+`','`+KindPodcastRetain+`') OR j.finished_at>=?) AND `+UnfoldedSQL+` ORDER BY j.id`, at(s.now().Add(-PollFoldWindow)))
 	if err != nil {
 		return nil, err
 	}

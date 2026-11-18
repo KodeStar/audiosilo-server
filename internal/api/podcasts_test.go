@@ -408,6 +408,12 @@ func TestPodcastFollowErrorsAndCoreReads(t *testing.T) {
 	if resp.StatusCode != 202 {
 		t.Fatalf("check %d %s", resp.StatusCode, out)
 	}
+	// A Check now is no scheduled poll: its failures never count toward the
+	// failing-feed notice (server#403).
+	var params string
+	if err := b.db.QueryRowContext(context.Background(), `SELECT params FROM bridge_jobs WHERE kind='podcast.poll' AND rel_path='Example Show'`).Scan(&params); err != nil || strings.Contains(params, "scheduled") {
+		t.Fatalf("Check now params %s %v", params, err)
+	}
 	if err := b.cat.UnfollowPodcast(context.Background(), uid, b.lib.ID, "Example Show"); err != nil {
 		t.Fatal(err)
 	}

@@ -74,6 +74,12 @@ func TestSchedulerDueAndWritableBackoff(t *testing.T) {
 	if err != nil || len(jobs) != 1 || jobs[0].Priority != -10 || jobs[0].RequestedBy != nil {
 		t.Fatalf("scheduled %+v %v", jobs, err)
 	}
+	// Marked as the scheduler's, which only its failures count toward the
+	// failing-feed notice (server#403).
+	var p bridge.PollParams
+	if err := json.Unmarshal(jobs[0].Params, &p); err != nil || !p.Scheduled || p.ShowID != f.ShowID {
+		t.Fatalf("scheduled params %s %v", jobs[0].Params, err)
+	}
 	if err := SchedulerTick(ctx, deps); err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +91,11 @@ func TestSchedulerDueAndWritableBackoff(t *testing.T) {
 	_, err = queue.UpdateHeld(ctx, claim.ID, bridge.Update{Attempt: claim.Attempts, State: &done, Result: json.RawMessage(`{"status":200,"etag":"v1","next_poll_seconds":1}`)})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Ended after a tick's sweep but not folded yet: still the show's poll in
+	// hand, so the same tick queues no second one for it.
+	if due, err := cat.DuePodcastPolls(ctx, 10); err != nil || len(due) != 0 {
+		t.Fatalf("an unfolded poll left the show due %+v %v", due, err)
 	}
 	// The sweep folds the outcome and the following tick cannot requeue it.
 	if err := SchedulerTick(ctx, deps); err != nil {

@@ -427,7 +427,7 @@ func (a *API) handlePodcastCheck(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		job, _, err = a.bridge.Enqueue(r.Context(), bridge.NewJob{Kind: bridge.KindPodcastPoll, LibraryID: &lib.ID, Path: &show.Path, Params: st.PollParams(), RequestedBy: userFrom(r.Context()).ID})
+		job, _, err = a.bridge.Enqueue(r.Context(), bridge.NewJob{Kind: bridge.KindPodcastPoll, LibraryID: &lib.ID, Path: &show.Path, Params: st.PollParams(false), RequestedBy: userFrom(r.Context()).ID})
 		if errors.Is(err, bridge.ErrIdentityChanged) && !retried {
 			continue
 		}

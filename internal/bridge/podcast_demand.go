@@ -138,7 +138,10 @@ type FetchError struct {
 	Message string `json:"message"`
 }
 
-// fetchMessages is our own copy for every safe fetch error code.
+// fetchMessages is our own copy for every safe fetch error code. The console's
+// job list words a failed fetch with the same sentences (bridge.podcastCode.<code>
+// in admin-ui's en.json, PODCAST_FETCH_CODES): change both together
+// (TestFetchMessagesMatchConsole).
 var fetchMessages = map[string]string{
 	"dns":                  "The episode host could not be resolved.",
 	"network":              "The episode could not be reached.",
@@ -167,7 +170,8 @@ var fetchMessages = map[string]string{
 	"blocked_address":      "The episode address is blocked.",
 	"fetch_failed":         "The episode could not be fetched.",
 	"bridge_lost":          "The Bridge stopped reporting.",
-	"http_310":             "The episode address redirects too many times.", // the Bridge's redirect loop, not a status
+	"redirect_loop":        "The episode address redirects too many times.", // the Bridge's redirect loop (server#403)
+	"http_310":             "The episode address redirects too many times.", // an older Bridge's redirect loop, not a status
 }
 
 // HTTPStatus is the status of a podcast job's `http_NNN` failure code (1xx to

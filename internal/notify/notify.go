@@ -199,19 +199,31 @@ func (s *Service) emit(ctx context.Context, e Event, allow func() bool) {
 	if !ok {
 		return
 	}
+	s.Deliver(ctx, ev)
+}
+
+// Deliver queues an event already in the feed for every enabled destination
+// subscribed to its kind (Emit's second half, for an event recorded in the
+// transaction of the write that raised it: catalog.SetPodcastNotice). It never
+// blocks on sending.
+func (s *Service) Deliver(ctx context.Context, ev catalog.ServerEvent) {
+	if s == nil {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
 	targets, err := s.cat.ListNotifyTargets(ctx)
 	if err != nil {
 		s.log.Warn("loading notification destinations failed", "err", err)
 		return
 	}
 	for _, t := range targets {
-		if !t.Enabled || !slices.Contains(t.Events, e.Kind) {
+		if !t.Enabled || !slices.Contains(t.Events, ev.Kind) {
 			continue
 		}
 		select {
 		case s.queue <- delivery{target: t, event: ev}:
 		default:
-			s.log.Warn("notification queue full; dropped a delivery", "target", t.ID, "kind", e.Kind)
+			s.log.Warn("notification queue full; dropped a delivery", "target", t.ID, "kind", ev.Kind)
 		}
 	}
 }
@@ -623,7 +635,8 @@ var feedCodeText = map[string]string{ //nolint:gosec // G101: sentences keyed by
 	"too_large":           "The feed is larger than the Bridge accepts.",
 	"blocked_address":     "The feed's address is one the Bridge won't contact.",
 	"invalid_feed_url":    "The feed's address isn't valid.",
-	"http_310":            "The feed's address redirects too many times.", // the Bridge's redirect loop, not a status
+	"redirect_loop":       "The feed's address redirects too many times.", // the Bridge's redirect loop (server#403)
+	"http_310":            "The feed's address redirects too many times.", // an older Bridge's redirect loop, not a status
 }
 
 // feedFailingText is a failing feed's message: its code worded (an HTTP status
@@ -833,18 +846,16 @@ func SetDigest(ids []string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// PodcastNotice reports a podcast show's news (catalog.SetPodcastNotice): new
+// PodcastEvent is the feed event a podcast show's news is recorded as
+// (catalog.PodcastListener.Event, inside the write that found it): new
 // episodes (once per set of episodes: dedup is the show and their ids, so the
 // scheduled scan and the Bridge's rescan can't both announce them), a feed
 // failing or back. The data name the library and the show, with counts and
 // the failed poll's code: never the feed's address, host or the error's text.
 // A private show is hidden from admins who don't follow it, so its notice
 // says `private` instead of its title, folder and episode titles.
-func (s *Service) PodcastNotice(ctx context.Context, n catalog.PodcastNotice) {
-	if s == nil {
-		return
-	}
-	data := map[string]any{"library": n.Library, "library_id": n.LibraryID, "show_id": n.ShowID}
+func PodcastEvent(n catalog.PodcastNotice) (kind string, data map[string]any, dedup string) {
+	data = map[string]any{"library": n.Library, "library_id": n.LibraryID, "show_id": n.ShowID}
 	if n.Private {
 		data["private"] = true
 	} else {
@@ -861,14 +872,20 @@ func (s *Service) PodcastNotice(ctx context.Context, n catalog.PodcastNotice) {
 			titles = append(titles, plainLine(t, 200))
 		}
 		data["count"], data["titles"] = len(n.EpisodeIDs), titles
-		dedup := fmt.Sprintf("%d:%s:%s", n.LibraryID, n.ShowID, SetDigest(n.EpisodeIDs))
-		s.Emit(ctx, Event{Kind: KindPodcastEpisodesNew, Data: data, Dedup: dedup})
+		return KindPodcastEpisodesNew, data, fmt.Sprintf("%d:%s:%s", n.LibraryID, n.ShowID, SetDigest(n.EpisodeIDs))
 	case catalog.PodcastFeedFailing:
 		data["code"], data["failures"] = feedCode(n.Code), n.Failures
-		s.Emit(ctx, Event{Kind: KindPodcastFeedFailing, Data: data})
+		return KindPodcastFeedFailing, data, ""
 	case catalog.PodcastFeedRecovered:
-		s.Emit(ctx, Event{Kind: KindPodcastFeedRecovered, Data: data})
+		return KindPodcastFeedRecovered, data, ""
 	}
+	return "", nil, ""
+}
+
+// PodcastListener is the catalog's listener for podcast news: the event
+// recorded with the write, delivered once it commits.
+func (s *Service) PodcastListener() *catalog.PodcastListener {
+	return &catalog.PodcastListener{Event: PodcastEvent, Deliver: s.Deliver}
 }
 
 // feedCode is a failed poll's code as a message may carry it: one the messages
