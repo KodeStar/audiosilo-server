@@ -525,6 +525,9 @@ func (c *Catalog) SetCollectionItems(ctx context.Context, id, userID int64, refs
 // the entry at ref and the one of the book ref names, removalRefs; no access
 // check on the path, so a revoked one can still be cleaned up).
 func (c *Catalog) RemoveCollectionItem(ctx context.Context, id, userID int64, ref Ref) error {
+	if err := requireOwner(ctx, c.db, id, userID); err != nil {
+		return err // answer a stranger or a viewer before reading anything for them
+	}
 	refs, err := c.removalRefs(ctx, ref)
 	if err != nil {
 		return err
