@@ -3994,8 +3994,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   auto_email|admin|created). The flow (`GET /auth/oidc/start?return=web|admin`, `return` an enum,
   anything else 400; an optional `intent` tag, the web player's own random value for its trip (22 to
   128 base64url, `validIntent`; a bad one dropped, never a 400), sealed into the flow (`Flow.Intent`), kept
-  through the hop, spent at the callback by the first flow the provider completes for it (`Replay`,
-  `intent:<tag>`; a full memory drops it) and joined to the token in the done cookie (`<token>.<tag>`),
+  through the hop, spent at the callback by the first flow the provider completes for it (a `Replay` of its own,
+  `oidcFlow.intents`, so tags never take the flow states' places; a full memory drops it) and joined to the token in the done cookie (`<token>.<tag>`),
   so the finish echoes it as `intent` once, only for the sign-in that flow completed: the player gives a
   grown-up's pass through kids mode back only on its own tag, never for the start URL typed later with
   a provider session still live (audiosilo#202); `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes; a callback with no cookie

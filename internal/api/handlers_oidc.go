@@ -99,6 +99,9 @@ type oidcFlow struct {
 	provider *oidc.Provider
 	sealer   *oidc.Sealer
 	replay   *oidc.Replay
+	// intents: the player's intent tags spent (handleOIDCCallback), a memory
+	// of their own so tags never take the places flow states need.
+	intents *oidc.Replay
 	// noGroupsWarned: the accounts whose sign-in without a groups claim (while
 	// admin_group is set) has been logged this run, a noGroupsKey each
 	// (auditSignIn).
@@ -145,7 +148,7 @@ func newOIDCFlow(cfg config.OIDCConfig, log *slog.Logger) *oidcFlow {
 	if !cfg.Enabled {
 		return nil
 	}
-	f := &oidcFlow{name: cfg.DisplayName(), replay: oidc.NewReplay(nil)}
+	f := &oidcFlow{name: cfg.DisplayName(), replay: oidc.NewReplay(nil), intents: oidc.NewReplay(nil)}
 	sealer, err := oidc.NewSealer(nil)
 	if err != nil {
 		f.problem = "could not make the sign-in key"
@@ -460,12 +463,12 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail(oidcFailed, "flow used before", nil)
 		return
 	}
-	// The tag is spent with the first flow the provider completes for it,
-	// whatever the outcome below (a waiting sign-in approved since must not
-	// echo it on a second trip). A full memory refuses it: untagged, the
-	// player gives nothing back.
+	// The tag (checked at /start, sealed since) is spent with the first flow
+	// the provider completes for it, whatever the outcome below (a waiting
+	// sign-in approved since must not echo it on a second trip). A full
+	// memory refuses it: untagged, the player gives nothing back.
 	intent := f.Intent
-	if intent != "" && (!validIntent(intent) || !a.oidc.replay.Use("intent:"+intent)) {
+	if intent != "" && !a.oidc.intents.Use(intent) {
 		intent = ""
 	}
 	// The groups trimmed as the console saves them (config.yaml and the
