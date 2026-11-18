@@ -128,6 +128,25 @@ func (p AttachmentParts) Any() bool {
 	return p.Characters || p.Recaps || p.Description
 }
 
+// Names is the parts p names, in a fixed order: "characters", "recaps",
+// "description" (the player's Book.generated_parts).
+func (p AttachmentParts) Names() []string {
+	out := []string{}
+	for _, part := range []struct {
+		on   bool
+		name string
+	}{{p.Characters, "characters"}, {p.Recaps, "recaps"}, {p.Description, "description"}} {
+		if part.on {
+			out = append(out, part.name)
+		}
+	}
+	return out
+}
+
+// MarshalJSON writes p as its Names, so a Book carries which generated parts
+// it has (a field tagged omitzero leaves none out).
+func (p AttachmentParts) MarshalJSON() ([]byte, error) { return json.Marshal(p.Names()) }
+
 // AttachmentSignature is one attachment's part of a book's signature: its known
 // name, size and modification time (ns). The Bridge rewrites these files without
 // touching the audio, so a scan compares them, not the book's own signature.

@@ -1682,8 +1682,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book's attachments, never its audio (the Bridge's `POST /bridge/rescan` mode `attachments`). The
   player's `Book.generated` (list, search, item, recent, the next book) is true when the signature names
   a characters, recaps or description file (`sigParts`, an allow-list: bridge.json, chapters.json and any name a later
-  server adds are none; `Book.GeneratedParts`, off the wire, says which; the narrow column, no join), so the player asks `/meta`
-  for a book with no ASIN/ISBN too. Derived from the files: rebuildable, never carried by a move.
+  server adds are none; the narrow column, no join), so the player asks `/meta`
+  for a book with no ASIN/ISBN too. `Book.GeneratedParts` says which, on the wire as `generated_parts`
+  (`["characters","recaps","description"]`, those it has, in that order; omitted with none, beside the bool
+  older players read; server#218). Derived from the files: rebuildable, never carried by a move.
   **Series ranges** (an omnibus of books 1-3): the `series_index` field may hold a range,
   canonical `"1-3"` (input `1 - 3` and the en dash too; `metadata.ParseSeriesRange`: 0 < start <
   end <= 100000, a span of at most `metadata.MaxSeriesSpan` = 100, since the slots a range covers
