@@ -4012,8 +4012,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   done cookie (`__Host-audiosilo_oidc_done` or `audiosilo_oidc_done`, named and placed as the flow
   cookie, Max-Age 60), and a 303 to `/admin/#oidc=done` or
   `/web/connect?oidc=1` (the player's button is 235c; `/web/connect?token=` stays QR pairing's).
-  That page calls **`POST /auth/oidc/finish`** (public, optional `{device_name}`, per-IP
-  `oidcLimiter`), which leaves the cookie on a 429 or a 400 (the sign-in stays finishable for its
+  That page calls **`POST /auth/oidc/finish`** (public, optional `{device_name, intent}`, per-IP
+  `oidcLimiter`; `intent` is the tag the player expects: a string, the empty one too, that isn't
+  the tag the sign-in's flow carried, or any string for an untagged sign-in, is a 403 code
+  `oidc_intent_mismatch` before `ConsumeOIDC`: no session, the token unspent and left to expire,
+  nothing charged, the cookie cleared, so the sign-in the player disowned can't be finished without
+  the tag instead; absent or null asks nothing, as the console and a player before the field do;
+  a server before the field answers it 400, an unknown field, and keeps the cookie), which leaves the cookie on a 429 or a 400 (the sign-in stays finishable for its
   minute) and clears it on every other answer, consumes the token once (`ConsumeOIDC`: only
   `KindOIDC`, so a pairing token planted in the cookie, an invite's QR or an own `/auth/pair`, is
   refused and left unspent; `POST /auth/exchange` in turn refuses a `KindOIDC` token; a sign-out

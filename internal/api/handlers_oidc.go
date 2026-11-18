@@ -39,6 +39,8 @@ import (
 // completed (audiosilo#202). The player gives a grown-up's pass through kids
 // mode back only for its own tag: the address typed later, with a live
 // provider session, completes a sign-in too, but never with the player's tag.
+// A finish that names the tag it expects ("intent" in its body) is refused
+// for any other sign-in before a session is made (403 oidc_intent_mismatch).
 
 // Paths and names of the flow.
 const (
@@ -542,9 +544,16 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 // (the session envelope; the new device reported as there), with "intent":
 // the tag the flow carried (handleOIDCStart), only when it did. A tag rides
 // only with the token it was set beside, so it is echoed once. Optional body
-// {"device_name"}. A 429 (oidcLimiter) or a 400 (the body) leaves the cookie,
-// so the sign-in can still be finished for the rest of its minute; every other
-// answer clears it. 401 code oidc_no_sign_in without the cookie (charging
+// {"device_name", "intent"}: "intent" is the tag the player expects, and a
+// sign-in whose flow carried another tag or none is refused, 403 code
+// oidc_intent_mismatch, before its token is tried: no session, the token
+// unspent, nothing charged (no secret was tried), the cookie cleared, so the
+// sign-in the player disowned can't be finished without the tag instead.
+// Present means a string, the empty one too; absent or null asks nothing (the
+// console, a player before the field). A 429 (oidcLimiter) or a 400 (the body)
+// leaves the cookie, so the sign-in can still be finished for the rest of its
+// minute; every other answer clears it. 401 code oidc_no_sign_in without the
+// cookie, whatever the body expects (charging
 // nothing: no secret was tried), oidc_sign_in_expired for a token spent,
 // expired, unknown, of another kind, or its account's disabled or now a
 // member (charged to the address's oidcLimiter, the callback's), and while
@@ -563,6 +572,9 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		DeviceName string `json:"device_name"`
+		// Intent: the tag the player expects the sign-in to carry, nil for
+		// no expectation.
+		Intent *string `json:"intent"`
 	}
 	if err := decodeJSONOptional(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -579,6 +591,13 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	if !a.oidcOn() {
 		writeErrorCode(w, http.StatusUnauthorized, codeOIDCSignInExpired, "single sign-on is off: sign in another way")
+		return
+	}
+	// Before the token is tried: a sign-in that isn't the trip the player
+	// started makes no session and stays unspent (to expire, out of reach once
+	// the browser drops the cookie).
+	if req.Intent != nil && (intent == "" || subtle.ConstantTimeCompare([]byte(*req.Intent), []byte(intent)) != 1) {
+		writeErrorCode(w, http.StatusForbidden, codeOIDCIntentMismatch, "this single sign-on isn't the one this page started: sign in again")
 		return
 	}
 	u, err := a.auth.ConsumeOIDC(r.Context(), token)

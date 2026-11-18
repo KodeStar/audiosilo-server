@@ -590,6 +590,103 @@ func TestOIDCIntentPending(t *testing.T) {
 	}
 }
 
+// TestOIDCFinishExpectedIntent (audiosilo#202): a finish whose body names the
+// tag the player expects is answered only for the sign-in that carried it.
+// Any other is a 403 oidc_intent_mismatch before the token is tried: no
+// session, the token unspent, the cookie cleared, nothing charged. Without
+// the field (or null) the finish answers as before.
+func TestOIDCFinishExpectedIntent(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	tag := strings.Repeat("ab12", 16)
+	// trip runs a web sign-in to its done cookie; finish posts body with it.
+	trip := func(t *testing.T, query string) *http.Cookie {
+		t.Helper()
+		cookie, path := e.startQuery(t, query)
+		loc, done := e.callbackDone(t, path, cookie)
+		if loc != oidcPublic+oidcDoneWeb || done == nil {
+			t.Fatalf("landed on %q (cookie %v)", loc, done)
+		}
+		return done
+	}
+	finish := func(t *testing.T, done *http.Cookie, body string) (*http.Response, map[string]any) {
+		t.Helper()
+		headers := map[string]string{}
+		if done != nil {
+			headers["Cookie"] = done.Name + "=" + done.Value
+		}
+		resp, b := e.doHeaders(t, "POST", oidcFinishPath, "", body, headers)
+		var out map[string]any
+		_ = json.Unmarshal([]byte(b), &out)
+		return resp, out
+	}
+	// refused: a 403 with the code, no session, the cookie cleared, and the
+	// sign-in's token left unspent.
+	refused := func(t *testing.T, name string, done *http.Cookie, body string) {
+		t.Helper()
+		resp, out := finish(t, done, body)
+		if resp.StatusCode != http.StatusForbidden || out["code"] != codeOIDCIntentMismatch || out["token"] != nil || out["intent"] != nil {
+			t.Fatalf("%s: %d %v", name, resp.StatusCode, out)
+		}
+		if !clearsDone(resp) {
+			t.Fatalf("%s: the cookie kept: %v", name, resp.Header.Values("Set-Cookie"))
+		}
+		token, _, _ := strings.Cut(done.Value, oidcIntentSep)
+		if u, err := e.auth.ConsumeOIDC(context.Background(), token); err != nil || u.Username != "alice" {
+			t.Fatalf("%s: the refused finish spent the token: %v", name, err)
+		}
+	}
+
+	// Allowed: the trip's own tag; echoed as before.
+	resp, out := finish(t, trip(t, "return=web&intent="+tag), `{"device_name":"web","intent":"`+tag+`"}`)
+	if resp.StatusCode != http.StatusOK || out["token"] == "" || out["intent"] != tag || !clearsDone(resp) {
+		t.Fatalf("own tag: %d %v", resp.StatusCode, out)
+	}
+	if r, _ := e.do(t, "GET", "/api/v1/me", out["token"].(string), ""); r.StatusCode != 200 {
+		t.Fatalf("the session: %d", r.StatusCode)
+	}
+	// Denied: a sign-in another trip completed (its own tag).
+	other := strings.Repeat("cd34", 16)
+	refused(t, "another trip's sign-in", trip(t, "return=web&intent="+other), `{"device_name":"web","intent":"`+strings.Repeat("ef56", 16)+`"}`)
+	// Denied: an untagged sign-in (the start URL typed, a provider session
+	// still live) where the player expects its tag.
+	refused(t, "an untagged sign-in", trip(t, "return=web"), `{"intent":"`+strings.Repeat("7a", 32)+`"}`)
+	// Denied: a tag spent before (the start URL from the history) signs in
+	// untagged, so the player's expectation of it is refused too.
+	refused(t, "a reused tag", trip(t, "return=web&intent="+tag), `{"intent":"`+tag+`"}`)
+	// Denied: an expectation that can be no tag, the empty one included.
+	refused(t, "an empty expectation, untagged", trip(t, "return=web"), `{"intent":""}`)
+	refused(t, "an empty expectation, tagged", trip(t, "return=web&intent="+strings.Repeat("8b", 32)), `{"intent":""}`)
+	refused(t, "a prefix of the tag", trip(t, "return=web&intent="+strings.Repeat("9f", 32)), `{"intent":"`+strings.Repeat("9f", 31)+`"}`)
+	// A refusal charges the address nothing: one failure short of the lock
+	// (oidcLimiter's ten), it still isn't locked afterwards.
+	untagged := trip(t, "return=web")
+	for range 9 {
+		finish(t, &http.Cookie{Name: hostDoneCookie, Value: "guess"}, ``)
+	}
+	refused(t, "a refusal one failure short of the lock", untagged, `{"intent":"`+tag+`"}`)
+	// No cookie: there is no sign-in to mismatch (and no lock: a 401, no 429).
+	resp, out = finish(t, nil, `{"intent":"`+tag+`"}`)
+	if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCNoSignIn {
+		t.Fatalf("no cookie: %d %v", resp.StatusCode, out)
+	}
+	// Unchanged without an expectation: absent or null, tagged or not.
+	for name, c := range map[string]struct{ query, body, want string }{
+		"no field, tagged":   {"return=web&intent=" + strings.Repeat("1c", 32), `{"device_name":"web"}`, strings.Repeat("1c", 32)},
+		"null, tagged":       {"return=web&intent=" + strings.Repeat("2d", 32), `{"intent":null}`, strings.Repeat("2d", 32)},
+		"no body, untagged":  {"return=web", ``, ""},
+		"null, untagged":     {"return=web", `{"intent":null}`, ""},
+		"no field, untagged": {"return=web", `{"device_name":"web"}`, ""},
+	} {
+		resp, out := finish(t, trip(t, c.query), c.body)
+		got, _ := out["intent"].(string)
+		if resp.StatusCode != http.StatusOK || out["token"] == "" || got != c.want {
+			t.Fatalf("%s: %d %v", name, resp.StatusCode, out)
+		}
+	}
+}
+
 // TestValidIntent: a tag is 22 to 128 base64url characters.
 func TestValidIntent(t *testing.T) {
 	t.Parallel()
