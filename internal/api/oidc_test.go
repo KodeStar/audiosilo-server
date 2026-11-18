@@ -104,7 +104,13 @@ func flowCookie(t *testing.T, resp *http.Response) *http.Cookie {
 // the callback's path and query on the test server.
 func (e *oidcEnv) start(t *testing.T, ret string) (*http.Cookie, string) {
 	t.Helper()
-	resp := e.get(t, oidcStartPath+"?return="+ret, oidcHost)
+	return e.startQuery(t, "return="+ret)
+}
+
+// startQuery is start with /start's whole query.
+func (e *oidcEnv) startQuery(t *testing.T, query string) (*http.Cookie, string) {
+	t.Helper()
+	resp := e.get(t, oidcStartPath+"?"+query, oidcHost)
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("start: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
@@ -488,6 +494,71 @@ func TestOIDCWebSignIn(t *testing.T) {
 	}
 	if resp, out := e.finish(t, done, "web"); resp.StatusCode != 200 || out["token"] == "" {
 		t.Fatalf("finish: %d %v", resp.StatusCode, out)
+	}
+}
+
+// TestOIDCIntent (audiosilo#202): the web player's tag on /start comes back
+// in the finish's answer for the sign-in that flow completed, once, and never
+// for any other: the start URL typed later (a provider session still live
+// signs it in at once) finishes untagged, and so does a tag sent again.
+func TestOIDCIntent(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	tag := strings.Repeat("ab12", 16) // the player's 64 hex
+	finishTagged := func(t *testing.T, query string) map[string]any {
+		t.Helper()
+		cookie, path := e.startQuery(t, query)
+		loc, done := e.callbackDone(t, path, cookie)
+		if loc != oidcPublic+oidcDoneWeb || done == nil {
+			t.Fatalf("landed on %q (cookie %v)", loc, done)
+		}
+		if strings.Contains(loc, tag) {
+			t.Fatalf("the tag in the landing page %q", loc)
+		}
+		resp, out := e.finish(t, done, "web")
+		if resp.StatusCode != 200 || out["token"] == "" {
+			t.Fatalf("finish: %d %v", resp.StatusCode, out)
+		}
+		return out
+	}
+
+	// Denied: the device's own tagged trip abandoned at the provider, then the
+	// start URL typed (no tag): a session, untagged.
+	_, _ = e.startQuery(t, "return=web&intent="+tag)
+	if out := finishTagged(t, "return=web"); out["intent"] != nil {
+		t.Fatalf("a typed start was echoed %v", out["intent"])
+	}
+	// Allowed: the tagged trip, its own tag.
+	if out := finishTagged(t, "return=web&intent="+tag); out["intent"] != tag {
+		t.Fatalf("own trip: intent %v", out["intent"])
+	}
+	// Denied: the same tag again (the start URL from the history): spent.
+	if out := finishTagged(t, "return=web&intent="+tag); out["intent"] != nil {
+		t.Fatalf("a reused tag was echoed %v", out["intent"])
+	}
+	// Two trips in flight: the one completed echoes its own, never the other's.
+	other := strings.Repeat("cd34", 16)
+	_, _ = e.startQuery(t, "return=web&intent="+strings.Repeat("ef56", 16))
+	if out := finishTagged(t, "return=web&intent="+other); out["intent"] != other {
+		t.Fatalf("the completed trip: intent %v", out["intent"])
+	}
+	// Denied: a tag that can't be one (too short, too long, not base64url) is
+	// dropped, and the sign-in still runs.
+	for _, bad := range []string{"short", strings.Repeat("a", 129), strings.Repeat("a", 30) + ".x", strings.Repeat("a", 30) + "%2F"} {
+		if out := finishTagged(t, "return=web&intent="+bad); out["intent"] != nil {
+			t.Fatalf("intent=%q echoed %v", bad, out["intent"])
+		}
+	}
+	// The hop to public_url keeps a good tag, never a bad one.
+	hop := strings.Repeat("9f", 32)
+	resp := e.get(t, oidcStartPath+"?return=web&intent="+hop, "evil.example")
+	if resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?return=web&hop=1&intent="+hop {
+		t.Fatalf("hop with a tag: %q", resp.Header.Get("Location"))
+	}
+	resp = e.get(t, oidcStartPath+"?return=web&intent=bad%26hop%3D1", "evil.example")
+	if resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?return=web&hop=1" {
+		t.Fatalf("hop with a bad tag: %q", resp.Header.Get("Location"))
 	}
 }
 

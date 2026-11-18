@@ -31,6 +31,13 @@ import (
 // which answers as POST /auth/exchange does. Anything else lands on
 // /connect#oidc=<reason>. Every URL the provider or the browser is sent to is
 // built from public_url, never from the request's Host.
+//
+// The web player may tag its trip: /start's optional ?intent= (a random value
+// the player keeps in its tab) rides the sealed flow, then the done cookie,
+// and the finish echoes it as "intent", once, only for the sign-in that flow
+// completed (audiosilo#202). The player gives a grown-up's pass through kids
+// mode back only for its own tag: the address typed later, with a live
+// provider session, completes a sign-in too, but never with the player's tag.
 
 // Paths and names of the flow.
 const (
@@ -49,6 +56,9 @@ const (
 	// set by this origin itself (no Domain) for Path=/: a sibling subdomain
 	// or a plain-http answer can't plant one by that name.
 	hostCookiePrefix = "__Host-"
+	// oidcIntentSep joins a done cookie's token and the flow's intent tag:
+	// neither (base64url) holds it.
+	oidcIntentSep = "."
 	// oidcDoneTTL is the life of the token a sign-in hands the console or
 	// the web player (and of its cookie): long enough for the page to load and
 	// finish.
@@ -269,12 +279,30 @@ func (a *API) oidcCookieValue(r *http.Request, name string) string {
 	return ""
 }
 
+// validIntent reports whether s can be a player's intent tag: 22 to 128
+// base64url characters (the player sends 64 hex). Anything else is dropped,
+// never an error: the sign-in runs, untagged.
+func validIntent(s string) bool {
+	if len(s) < 22 || len(s) > 128 {
+		return false
+	}
+	for _, c := range []byte(s) {
+		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // handleOIDCStart begins a sign-in (public): ?return=web|admin (400 for
-// anything else). Off or misconfigured: /connect#oidc=off|unavailable. On
+// anything else) and an optional ?intent= tag (validIntent; a bad one is
+// dropped), sealed into the flow. Off or misconfigured: /connect#oidc=off|unavailable. On
 // another host than public_url's, or over plain HTTP for an https public_url,
 // it first sends the browser to this route on public_url (once: ?hop=1), so
-// the flow cookie is set where the provider returns. Then the cookie (sealed
-// state, nonce, PKCE verifier, the redirect URI, return; ten minutes,
+// the flow cookie is set where the provider returns (the tag goes along). Then
+// the cookie (sealed state, nonce, PKCE verifier, the redirect URI, return,
+// the tag; ten minutes,
 // HttpOnly, SameSite=Lax; named and placed by oidcCookieName, Secure on an
 // https public_url) and a 302 to the provider's authorization URL, asking for
 // oidcScopes. A provider discovered before is probed first (within the call
@@ -311,14 +339,22 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	// too: a browser drops a Secure cookie set over plain HTTP, and the flow
 	// would end on "expired". Behind a proxy the scheme isn't ours to know.
 	plain := public.Scheme == "https" && r.TLS == nil && !proxied(r)
+	intent := r.URL.Query().Get("intent")
+	if !validIntent(intent) {
+		intent = ""
+	}
 	if (plain || !sameHost(public, r.Host)) && r.URL.Query().Get("hop") == "" {
+		hop := a.oidcBase() + oidcStartPath + "?return=" + ret + "&hop=1"
+		if intent != "" {
+			hop += "&intent=" + intent // base64url: nothing to escape
+		}
 		noStore(w)
-		http.Redirect(w, r, a.oidcBase()+oidcStartPath+"?return="+ret+"&hop=1", http.StatusFound)
+		http.Redirect(w, r, hop, http.StatusFound) //nolint:gosec // G710: public_url's own route; the tag is base64url only (validIntent)
 		return
 	}
 	// 32 random bytes each, base64url.
 	f := oidc.Flow{State: oauth2.GenerateVerifier(), Nonce: oauth2.GenerateVerifier(),
-		Verifier: oauth2.GenerateVerifier(), RedirectURI: a.oidcRedirectURI(), Return: ret}
+		Verifier: oauth2.GenerateVerifier(), RedirectURI: a.oidcRedirectURI(), Return: ret, Intent: intent}
 	authURL, err := a.oidc.provider.AuthURL(r.Context(), f, a.oidcScopes())
 	if err != nil {
 		a.log.Warn("oidc: start failed", "err", err)
@@ -346,7 +382,10 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 // would lock that address out of signing in. The provider's ?error= (the
 // person cancelled) charges nothing either. Otherwise oidc.Decide's answer
 // (auth.OIDCSignIn) and its audits, then the sign-in's token in its cookie and
-// the flow's return page, or the result panel.
+// the flow's return page, or the result panel. The flow's intent tag joins the
+// token in the done cookie (oidcIntentSep), once: a tag a completed flow
+// carried before (the start URL with it sent again, from the history) is
+// dropped, so its sign-in finishes untagged.
 func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	a.setOIDCCookie(w, oidcCookie, "", -1)
 	ip := clientIP(r)
@@ -421,6 +460,14 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail(oidcFailed, "flow used before", nil)
 		return
 	}
+	// The tag is spent with the first flow the provider completes for it,
+	// whatever the outcome below (a waiting sign-in approved since must not
+	// echo it on a second trip). A full memory refuses it: untagged, the
+	// player gives nothing back.
+	intent := f.Intent
+	if intent != "" && (!validIntent(intent) || !a.oidc.replay.Use("intent:"+intent)) {
+		intent = ""
+	}
 	// The groups trimmed as the console saves them (config.yaml and the
 	// environment aren't): a claim's group is, so " admins" would match no one
 	// and every sign-in would lose its admin role. The finish token is minted
@@ -468,13 +515,17 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 			a.log.Warn("noting the admin's first sign-in failed", "err", err)
 		}
 	}
-	a.setOIDCCookie(w, oidcDoneCookie, res.Token, int(oidcDoneTTL/time.Second))
-	noStore(w)
-	done := oidcDoneWeb
-	if f.Return == oidcReturnAdmin {
-		done = oidcDoneAdmin
+	done := res.Token
+	if intent != "" {
+		done += oidcIntentSep + intent
 	}
-	http.Redirect(w, r, a.oidcBase()+done, http.StatusSeeOther)
+	a.setOIDCCookie(w, oidcDoneCookie, done, int(oidcDoneTTL/time.Second))
+	noStore(w)
+	page := oidcDoneWeb
+	if f.Return == oidcReturnAdmin {
+		page = oidcDoneAdmin
+	}
+	http.Redirect(w, r, a.oidcBase()+page, http.StatusSeeOther)
 }
 
 // handleOIDCFinish trades a finished sign-in for a session (public): the
@@ -482,7 +533,9 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 // token: one planted in that cookie, an invite's QR or a person's own
 // /auth/pair, would sign the browser in as someone else, and is refused and
 // left unspent), consumed once, then the answer POST /auth/exchange gives
-// (the session envelope; the new device reported as there). Optional body
+// (the session envelope; the new device reported as there), with "intent":
+// the tag the flow carried (handleOIDCStart), only when it did. A tag rides
+// only with the token it was set beside, so it is echoed once. Optional body
 // {"device_name"}. A 429 (oidcLimiter) or a 400 (the body) leaves the cookie,
 // so the sign-in can still be finished for the rest of its minute; every other
 // answer clears it. 401 code oidc_no_sign_in without the cookie (charging
@@ -510,7 +563,10 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.setOIDCCookie(w, oidcDoneCookie, "", -1)
-	token := a.oidcCookieValue(r, oidcDoneCookie)
+	token, intent, _ := strings.Cut(a.oidcCookieValue(r, oidcDoneCookie), oidcIntentSep)
+	if !validIntent(intent) {
+		intent = ""
+	}
 	if token == "" {
 		writeErrorCode(w, http.StatusUnauthorized, codeOIDCNoSignIn, "no single sign-on to finish in this browser")
 		return
@@ -526,7 +582,7 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.oidcLimiter.Reset(ip)
-	a.issuePairedSession(w, r, u.ID, req.DeviceName, false)
+	a.issuePairedSession(w, r, u.ID, req.DeviceName, false, intent)
 }
 
 // clip cuts s to n bytes for a log line.

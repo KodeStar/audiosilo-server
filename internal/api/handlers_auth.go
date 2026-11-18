@@ -256,13 +256,14 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.redeemLimiter.Reset(ip)
-	a.issuePairedSession(w, r, u.ID, req.DeviceName, codeKind == auth.CodeInvite)
+	a.issuePairedSession(w, r, u.ID, req.DeviceName, codeKind == auth.CodeInvite, "")
 }
 
 // issuePairedSession answers a consumed pairing token (exchange) or single
 // sign-on token (finish): a session for the device, the sign-in reported, the
-// session envelope.
-func (a *API) issuePairedSession(w http.ResponseWriter, r *http.Request, userID int64, deviceName string, invite bool) {
+// session envelope, with a single sign-on's intent tag when it has one ("" for
+// none: handleOIDCFinish).
+func (a *API) issuePairedSession(w http.ResponseWriter, r *http.Request, userID int64, deviceName string, invite bool, intent string) {
 	session, err := a.auth.IssueToken(r.Context(), userID, auth.KindSession, deviceName, 0)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue session")
@@ -274,7 +275,11 @@ func (a *API) issuePairedSession(w http.ResponseWriter, r *http.Request, userID 
 		return
 	}
 	a.reportSignIn(r, full, deviceName, invite)
-	writeJSON(w, http.StatusOK, a.sessionEnvelope(r, session, full))
+	out := a.sessionEnvelope(r, session, full)
+	if intent != "" {
+		out["intent"] = intent
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // sessionEnvelope is the answer to a sign-in (exchange, login, demo): the session

@@ -3992,7 +3992,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and the token)
   (`user_identities`: UNIQUE(issuer, subject) and UNIQUE(user_id, issuer), `link_method`
   auto_email|admin|created). The flow (`GET /auth/oidc/start?return=web|admin`, `return` an enum,
-  anything else 400; `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes; a callback with no cookie
+  anything else 400; an optional `intent` tag, the web player's own random value for its trip (22 to
+  128 base64url, `validIntent`; a bad one dropped, never a 400), sealed into the flow (`Flow.Intent`), kept
+  through the hop, spent at the callback by the first flow the provider completes for it (`Replay`,
+  `intent:<tag>`; a full memory drops it) and joined to the token in the done cookie (`<token>.<tag>`),
+  so the finish echoes it as `intent` once, only for the sign-in that flow completed: the player gives a
+  grown-up's pass through kids mode back only on its own tag, never for the start URL typed later with
+  a provider session still live (audiosilo#202); `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes; a callback with no cookie
   charges nothing, since any page can make a visitor's browser send those): the flow cookie
   (HttpOnly, SameSite=Lax; on an https public_url `__Host-audiosilo_oidc`, Path `/`, Secure, no
   Domain, so neither a sibling subdomain nor a plain-http answer can plant one; on plain http
@@ -4010,7 +4016,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   refused and left unspent; `POST /auth/exchange` in turn refuses a `KindOIDC` token; a sign-out
   everywhere or an unlink of the account's identity ends one not yet finished, the daily
   `PruneSingleUseTokens` drops it) and answers exactly as
-  `POST /auth/exchange` (the session envelope, `reportSignIn`); 401 code `oidc_no_sign_in` without
+  `POST /auth/exchange` (the session envelope, `reportSignIn`), plus `intent` when the flow carried a tag; 401 code `oidc_no_sign_in` without
   the cookie (nothing charged), `oidc_sign_in_expired` while single sign-on can't run (off since the
   callback: a token outlives a restart; nothing charged, the token left to expire) and for a token
   spent, expired, unknown, of

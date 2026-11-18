@@ -418,6 +418,24 @@ func wireCases(t *testing.T) []wireCase {
 			}
 			return b
 		}},
+		{name: "auth-oidc-finish", route: "POST /api/v1/auth/oidc/finish (a web sign-in started with an intent tag)",
+			body: func(t *testing.T) string {
+				e := newOIDCEnv(t, oidcAlice, nil)
+				e.mustUser(t, "alice", "alice@example.org")
+				cookie, path := e.startQuery(t, "return=web&intent="+strings.Repeat("ab", 32))
+				_, done := e.callbackDone(t, path, cookie)
+				resp, out := e.finish(t, done, "Wire browser")
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("finish = %d %v", resp.StatusCode, out)
+				}
+				b, err := json.Marshal(out)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(b)
+			},
+			// alice is no household member: auth-exchange guards those two.
+			empty: []string{"$.user.managed_by", "$.user.member_kind"}},
 		{name: "me", route: "GET /api/v1/me (a household member)", body: get("/api/v1/me", m.memberTok)},
 		{name: "libraries", route: "GET /api/v1/libraries (an admin: with root)", body: get("/api/v1/libraries", m.adminTok)},
 		{name: "fs", route: "GET /api/v1/libraries/{id}/fs?path=Will Wight", body: lib("fs", "Will Wight")},
