@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/podcast"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
@@ -139,8 +139,8 @@ func (a *API) handleAdminPodcastFetch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"downloaded": true})
 		return
 	}
-	raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
-	job, created, err := a.bridge.EnsurePodcastFetch(r.Context(), bridge.NewJob{LibraryID: &lib.ID, Path: &req.Path, Params: raw, Priority: bridge.PriorityDownload, RequestedBy: userFrom(r.Context()).ID}, bridge.FetchOptions{Retry: true})
+	job, created, err := podcast.EnsureFetch(r.Context(), a.cat, a.bridge, lib.ID, req.Path, pin,
+		bridge.NewJob{Priority: bridge.PriorityDownload, RequestedBy: userFrom(r.Context()).ID}, bridge.FetchOptions{Retry: true})
 	if !a.podcastQueueError(w, err) {
 		return
 	}

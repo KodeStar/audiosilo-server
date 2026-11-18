@@ -43,6 +43,37 @@ func (d Demand) timer(t time.Duration) (<-chan time.Time, func()) {
 	return timer.C, func() { timer.Stop() }
 }
 
+// EnsureFetch queues or adopts the fetch of the episode at rel in lib under the
+// identity pin names (bridge.EnsurePodcastFetch; nj carries the priority and
+// the requester). An identity the feed replaced between the pin's read and the
+// queue's check of it (bridge.ErrIdentityChanged) is asked for once more as the
+// episode is now: one rule for the stream and the fetch routes (server#179).
+// The same identity isn't asked again (its previous one's fetch is still
+// stopping, and the writer transaction would only refuse it again): that
+// refusal, or a second change, is the caller's to answer. An episode that left
+// the index meanwhile is bridge.ErrNotFound, as the queue's own check says it.
+func EnsureFetch(ctx context.Context, cat *catalog.Catalog, q *bridge.Service, lib int64, rel string, pin catalog.PodcastPin, nj bridge.NewJob, opt bridge.FetchOptions) (*bridge.Job, bool, error) {
+	ensure := func(pin catalog.PodcastPin) (*bridge.Job, bool, error) {
+		nj.LibraryID, nj.Path = &lib, &rel
+		nj.Params, _ = json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
+		return q.EnsurePodcastFetch(ctx, nj, opt)
+	}
+	job, created, err := ensure(pin)
+	if !errors.Is(err, bridge.ErrIdentityChanged) {
+		return job, created, err
+	}
+	fresh, perr := cat.PodcastPin(ctx, lib, rel)
+	switch {
+	case errors.Is(perr, catalog.ErrNotFound):
+		return nil, false, bridge.ErrNotFound
+	case perr != nil:
+		return nil, false, perr
+	case fresh.ShowID == pin.ShowID && fresh.EpisodeID == pin.EpisodeID:
+		return nil, false, err
+	}
+	return ensure(fresh)
+}
+
 // Fetch queues authorized work and returns an opened committed generation if it
 // becomes ready. The caller has already checked the exact path and read scope.
 func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by int64, noNew bool) (*os.File, *feed.Fetch, bridge.FetchStatus, error) {
@@ -59,27 +90,13 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 		}
 		return nil, nil, status, err
 	}
-	ensure := func(pin catalog.PodcastPin) (*bridge.Job, error) {
-		raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
-		job, _, err := d.Bridge.EnsurePodcastFetch(budget, bridge.NewJob{LibraryID: &lib.ID, Path: &rel, Params: raw, Priority: bridge.PriorityPlaying, RequestedBy: by}, bridge.FetchOptions{NoNew: noNew})
-		return job, err
-	}
-	job, err := ensure(pin)
-	if errors.Is(err, bridge.ErrIdentityChanged) {
-		// The feed gave the episode another identity since the pin was read:
-		// once more with the identity it has now. The same identity (the old
-		// one's fetch is still stopping) or changed again, the refusal is
-		// returned as it is, no fetch status: the stream answers it by its
-		// own code (server#179). The same identity isn't asked again: that
-		// would only repeat the writer transaction that just refused it.
-		fresh, perr := d.Catalog.PodcastPin(budget, lib.ID, rel)
-		switch {
-		case perr != nil:
-			err = perr
-		case fresh.ShowID != pin.ShowID || fresh.EpisodeID != pin.EpisodeID:
-			job, err = ensure(fresh)
-		}
-	}
+	// An identity the feed changed since the pin was read is asked for once
+	// more as it is now (EnsureFetch). What is left of ErrIdentityChanged (the
+	// previous identity's fetch is still stopping, or it changed again) is
+	// returned as it is, no fetch status: the stream answers it by its own
+	// code (server#179).
+	job, _, err := EnsureFetch(budget, d.Catalog, d.Bridge, lib.ID, rel, pin,
+		bridge.NewJob{Priority: bridge.PriorityPlaying, RequestedBy: by}, bridge.FetchOptions{NoNew: noNew})
 	if job != nil {
 		// What the job is doing now: a fetch the Bridge already holds says
 		// fetching, even when the budget runs out before the next read.

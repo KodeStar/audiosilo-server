@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -602,6 +603,42 @@ func TestPodcastStreamIdentityChangeIsRetryable(t *testing.T) {
 	resp, body = b.doHeaders(t, "GET", stream, b.userTok, "", podcastHeaders())
 	if resp.StatusCode != 503 || !strings.Contains(body, `"state":"queued"`) {
 		t.Fatalf("after the old fetch stopped %d %s", resp.StatusCode, body)
+	}
+}
+
+// A fetch asked for with a pin read before the feed gave the episode another
+// identity is asked for once more as the episode is now (server#179): the
+// stream, POST /podcasts/fetch and the admin's Download share
+// podcast.EnsureFetch, so none of them answers identity_changed for a pin that
+// was only stale.
+func TestEnsureFetchRereadsAStalePin(t *testing.T) {
+	b, f := podcastStorageEnv(t)
+	ctx := context.Background()
+	path := f.Episodes[2].Path
+	stale, err := b.cat.PodcastPin(ctx, b.lib.ID, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const now = "aaaaaaaaaaaaaaaa"
+	if _, err := b.db.ExecContext(ctx, `UPDATE podcast_episodes SET episode_id=? WHERE book_id=(SELECT id FROM books WHERE library_id=? AND rel_path=?)`, now, b.lib.ID, path); err != nil {
+		t.Fatal(err)
+	}
+	nj := bridge.NewJob{Priority: bridge.PriorityPlaying, RequestedBy: b.adminID}
+	// Denied: the queue itself still refuses the identity the episode no longer has.
+	raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: stale.ShowID, EpisodeID: stale.EpisodeID})
+	direct := nj
+	direct.LibraryID, direct.Path, direct.Params = &b.lib.ID, &path, raw
+	if _, _, err := b.api.bridge.EnsurePodcastFetch(ctx, direct, bridge.FetchOptions{Retry: true}); !errors.Is(err, bridge.ErrIdentityChanged) {
+		t.Fatalf("stale identity queued directly = %v, want ErrIdentityChanged", err)
+	}
+	// Allowed: read again, the episode's fetch is queued under its identity now.
+	job, created, err := podcast.EnsureFetch(ctx, b.cat, b.api.bridge, b.lib.ID, path, stale, nj, bridge.FetchOptions{Retry: true})
+	if err != nil || !created {
+		t.Fatalf("stale pin: %+v created %t, %v", job, created, err)
+	}
+	var p bridge.EpisodeParams
+	if json.Unmarshal(job.Params, &p) != nil || p.EpisodeID != now || p.ShowID != stale.ShowID {
+		t.Fatalf("queued %s, want the episode's identity now", job.Params)
 	}
 }
 
