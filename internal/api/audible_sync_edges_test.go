@@ -2,9 +2,7 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -24,10 +22,7 @@ func TestAudibleSyncRefusalInTheSignInsSecond(t *testing.T) {
 	now := time.Now()
 	s.queueSync(t, now)
 	job := s.claim(t, bridge.KindAudibleSync)
-	if _, err := s.db.ExecContext(ctx, `UPDATE bridge_jobs SET claimed_at = ? WHERE id = ?`,
-		now.UTC().Format(time.RFC3339), job.ID); err != nil {
-		t.Fatal(err)
-	}
+	s.claimedAt(t, job, now)
 	if code, out := s.putAccount(t, testAccount, s.patID, s.lib.ID); code != http.StatusOK {
 		t.Fatalf("sign in again: %d %s", code, out)
 	}
@@ -64,13 +59,12 @@ func TestAudibleListeningDatedByAudible(t *testing.T) {
 		name      string
 		heard     time.Duration // before now
 		skew      time.Duration // the Bridge's clock against the server's
-		pos       float64
 		status    string
 		reason    string
 		storedPos float64
 	}{
-		{"after the restart, Bridge ahead", 2 * time.Minute, 10 * time.Minute, 500, "applied", "", 500},
-		{"before the restart, Bridge behind", 6 * time.Minute, -10 * time.Minute, 500, "not_applied", "behind", 100},
+		{"after the restart, Bridge ahead", 2 * time.Minute, 10 * time.Minute, "applied", "", 500},
+		{"before the restart, Bridge behind", 6 * time.Minute, -10 * time.Minute, "not_applied", "behind", 100},
 	} {
 		s := newAudibleSyncEnv(t)
 		wantSync(t, s.patListens(t, "pat-1", mistbornBook, 0, 100, "0"), "applied", "")
@@ -79,15 +73,8 @@ func TestAudibleListeningDatedByAudible(t *testing.T) {
 			catalog.FormatStamp(restart), s.patID); err != nil {
 			t.Fatal(err)
 		}
-		body := fmt.Sprintf(`{"sent_at":%q,"events":[%s]}`, time.Now().Add(tc.skew).UTC().Format(time.RFC3339Nano),
-			strings.Join([]string{place("aud-1", s.lib.ID, mistbornBook, tc.pos, tc.heard)}, ","))
-		resp, out := s.do(t, "POST", audibleListeningURL, s.bridgeTok, body)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("%s: %d %s", tc.name, resp.StatusCode, out)
-		}
-		var a catalog.SyncAnswer
-		decodeInto(t, out, &a)
-		wantSync(t, a.Results[0], tc.status, tc.reason)
+		res := s.postResultsAt(t, time.Now().Add(tc.skew), place("aud-1", s.lib.ID, mistbornBook, 500, tc.heard))
+		wantSync(t, res[0], tc.status, tc.reason)
 		if p := s.patProgress(t, mistbornBook); p.Position != tc.storedPos {
 			t.Fatalf("%s: row %+v, want position %v", tc.name, p, tc.storedPos)
 		}

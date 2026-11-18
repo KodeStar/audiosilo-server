@@ -90,17 +90,13 @@ func TestSyncFinishInFlightBeforeAnUndo(t *testing.T) {
 // one long before the finish, does not.
 func TestSyncSpanAfterItsFinish(t *testing.T) {
 	t.Parallel()
-	finished := func(f *syncFixture, device string) int {
-		t.Helper()
-		return f.count(t, `SELECT COUNT(*) FROM listening_sessions WHERE token_id = ? AND finished = 1`, tokenOf(device))
-	}
 	f := newSyncFixture(t)
 	wantResult(t, f.syncOne(t, "phone", f.finishEvent(EventFinish, time.Minute)), statusApplied, "")
 	if n := f.count(t, `SELECT COUNT(*) FROM listening_sessions`); n != 0 {
 		t.Fatalf("setup: the finish opened %d sessions", n)
 	}
 	f.syncOne(t, "phone", f.listen("resume", syncBookLen-12, syncBookLen, time.Minute+time.Second, base(0)))
-	if n := finished(f, "phone"); n != 1 {
+	if n := f.count(t, `SELECT COUNT(*) FROM listening_sessions WHERE token_id = ? AND finished = 1`, tokenOf("phone")); n != 1 {
 		t.Fatalf("the span after its finish left %d finished sessions, want 1", n)
 	}
 
@@ -121,28 +117,27 @@ func TestSyncSpanAfterItsFinish(t *testing.T) {
 // after the move writes the next version, and a Stay that saw it wins.
 func TestSyncStayOnTheVersionAMoveCarried(t *testing.T) {
 	t.Parallel()
-	f := stayFixture(t, 5*time.Minute)
-	moved := Ref{LibraryID: f.lib, Path: "Author/Moved"}
-	if err := f.c.MoveDurableState(f.ctx, f.lib, f.book.Path, moved.Path); err != nil {
-		t.Fatal(err)
+	// movedFixture moves the Stay fixture's book; its events then name the
+	// moved book.
+	movedFixture := func(t *testing.T) (*syncFixture, Ref) {
+		t.Helper()
+		f := stayFixture(t, 5*time.Minute)
+		moved := Ref{LibraryID: f.lib, Path: "Author/Moved"}
+		if err := f.c.MoveDurableState(f.ctx, f.lib, f.book.Path, moved.Path); err != nil {
+			t.Fatal(err)
+		}
+		return f, moved
 	}
-	ev := f.stay(18000, 0, base(4))
-	ev.Path = moved.Path
-	f.syncOne(t, "phone", ev)
+	at := func(ev SyncEvent, ref Ref) SyncEvent { ev.Path = ref.Path; return ev }
+	f, moved := movedFixture(t)
+	f.syncOne(t, "phone", at(f.stay(18000, 0, base(4)), moved))
 	if got := f.stayVersion(t, moved); got != 0 {
 		t.Fatalf("a Stay on the moved row's version holds it (stay_version %d)", got)
 	}
 
-	g := stayFixture(t, 5*time.Minute)
-	if err := g.c.MoveDurableState(g.ctx, g.lib, g.book.Path, moved.Path); err != nil {
-		t.Fatal(err)
-	}
-	cont := g.listen("continue", 19800, 19860, time.Minute, base(4))
-	cont.Path = moved.Path
-	wantResult(t, g.syncOne(t, "watch", cont), statusApplied, "")
-	ev = g.stay(18000, 0, base(5))
-	ev.Path = moved.Path
-	wantResult(t, g.syncOne(t, "phone", ev), statusApplied, "")
+	g, moved := movedFixture(t)
+	wantResult(t, g.syncOne(t, "watch", at(g.listen("continue", 19800, 19860, time.Minute, base(4)), moved)), statusApplied, "")
+	wantResult(t, g.syncOne(t, "phone", at(g.stay(18000, 0, base(5)), moved)), statusApplied, "")
 	if got := g.stayVersion(t, moved); got != 6 {
 		t.Fatalf("a Stay on a version after the move: stay_version %d, want 6", got)
 	}

@@ -12,15 +12,10 @@ import (
 // before.
 func TestSaveProgressStoresUpdatedAtAsUTC(t *testing.T) {
 	t.Parallel()
-	c, ctx := newTestCatalog(t)
-	c.now = func() time.Time { return time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC) }
-	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	user := seedUser(t, c, ctx)
-	ref := Ref{LibraryID: lib.ID, Path: "Author/Book"}
-	p, err := c.SaveProgress(ctx, user, Progress{Ref: ref, Position: 60, Duration: 600,
+	f := newSyncFixture(t)
+	f.clock = time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	c, ctx, user := f.c, f.ctx, f.user
+	p, err := c.SaveProgress(ctx, user, Progress{Ref: f.book, Position: 60, Duration: 600,
 		UpdatedAt: "2026-10-25T02:00:00.500123+02:00"})
 	if err != nil {
 		t.Fatal(err)

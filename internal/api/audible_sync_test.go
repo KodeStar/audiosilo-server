@@ -90,7 +90,13 @@ func place(id string, lib int64, path string, pos float64, ago time.Duration) st
 // sent_at, reordering them against a span posted within that second).
 func (s *audibleSyncEnv) post(t *testing.T, events ...string) (int, string) {
 	t.Helper()
-	body := fmt.Sprintf(`{"sent_at":%q,"events":[%s]}`, time.Now().UTC().Format(time.RFC3339Nano), strings.Join(events, ","))
+	return s.postAt(t, time.Now(), events...)
+}
+
+// postAt is post with sent_at at sent (a Bridge clock off by sent - now).
+func (s *audibleSyncEnv) postAt(t *testing.T, sent time.Time, events ...string) (int, string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"sent_at":%q,"events":[%s]}`, sent.UTC().Format(time.RFC3339Nano), strings.Join(events, ","))
 	resp, out := s.do(t, "POST", audibleListeningURL, s.bridgeTok, body)
 	return resp.StatusCode, out
 }
@@ -98,13 +104,28 @@ func (s *audibleSyncEnv) post(t *testing.T, events ...string) (int, string) {
 // postResults is post's results, which must be a 200.
 func (s *audibleSyncEnv) postResults(t *testing.T, events ...string) []catalog.SyncResult {
 	t.Helper()
-	code, out := s.post(t, events...)
+	return s.postResultsAt(t, time.Now(), events...)
+}
+
+// postResultsAt is postAt's results, which must be a 200.
+func (s *audibleSyncEnv) postResultsAt(t *testing.T, sent time.Time, events ...string) []catalog.SyncResult {
+	t.Helper()
+	code, out := s.postAt(t, sent, events...)
 	if code != http.StatusOK {
 		t.Fatalf("listening: %d %s", code, out)
 	}
 	var a catalog.SyncAnswer
 	decodeInto(t, out, &a)
 	return a.Results
+}
+
+// claimedAt dates job's claim at at (claimed_at is whole seconds).
+func (s *audibleSyncEnv) claimedAt(t *testing.T, job bridge.Job, at time.Time) {
+	t.Helper()
+	if _, err := s.db.ExecContext(context.Background(), `UPDATE bridge_jobs SET claimed_at = ? WHERE id = ?`,
+		at.UTC().Format(time.RFC3339), job.ID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // patListens posts a span as pat's phone (Sync v2).
@@ -1210,17 +1231,10 @@ func TestAudibleSyncRefusalBeforeSignIn(t *testing.T) {
 	t.Parallel()
 	s := newAudibleSyncEnv(t)
 	ctx := context.Background()
-	claimedAt := func(job bridge.Job, at time.Time) {
-		t.Helper()
-		if _, err := s.db.ExecContext(ctx, `UPDATE bridge_jobs SET claimed_at = ? WHERE id = ?`,
-			at.UTC().Format(time.RFC3339), job.ID); err != nil {
-			t.Fatal(err)
-		}
-	}
 	now := time.Now()
 	s.queueSync(t, now)
 	job := s.claim(t, bridge.KindAudibleSync)
-	claimedAt(job, now.Add(-time.Minute)) // claimed a minute before the sign-in below
+	s.claimedAt(t, job, now.Add(-time.Minute)) // claimed a minute before the sign-in below
 	if code, out := s.putAccount(t, testAccount, s.patID, s.lib.ID); code != http.StatusOK {
 		t.Fatalf("sign in again: %d %s", code, out)
 	}
@@ -1231,7 +1245,7 @@ func TestAudibleSyncRefusalBeforeSignIn(t *testing.T) {
 
 	s.queueSync(t, now.Add(16*time.Minute))
 	job = s.claim(t, bridge.KindAudibleSync)
-	claimedAt(job, now.Add(time.Minute)) // after the sign-in
+	s.claimedAt(t, job, now.Add(time.Minute)) // after the sign-in
 	s.finish(t, job, bridge.StateFailed, `{"code":"audible_refused"}`, "audible_refused")
 	if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.RefusedAt == nil {
 		t.Fatalf("a refusal after the sign-in left the account unmarked: %+v", a)
