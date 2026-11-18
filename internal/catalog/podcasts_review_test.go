@@ -42,6 +42,10 @@ func TestPodcastSecretMissingSurvivesOtherOutcomes(t *testing.T) {
 				if err != nil || st.SecretMissing != missing || st.ErrorCode != code {
 					t.Fatalf("state: %+v %v, missing=%v code=%q", st, err, missing, code)
 				}
+				// The show's status says it too, for the player and the console.
+				if s, err := c.PodcastShow(ctx, lib.ID, show, 0); err != nil || s.Status.SecretMissing != missing {
+					t.Fatalf("show status: %+v %v, secret_missing want %v", s, err, missing)
+				}
 			}
 			fold()
 			check(true, "feed_secret_missing")

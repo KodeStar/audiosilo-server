@@ -3714,7 +3714,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`bridge.NetworkFailure`: `dns`, `network`, `timeout`, `tls`, what every show fails with while the
   Bridge's internet is down) need six (`catalog.NetworkFailingAfter`), and a mixed run is announced
   once the two shares add up to one (`feedRun.due`: two answers and two timeouts, say);
-  `feed_secret_missing` is announced at once without counting; another failure (`bridge_lost`, an
+  `feed_secret_missing` is announced at once without counting (and sets the show's
+  `status.secret_missing` until a check succeeds, so a client can say "follow it again by its address";
+  server#219); another failure (`bridge_lost`, an
   unwritable library) neither counts nor resets; a follower's Check now (a poll with a requester) counts
   nothing toward the run and leaves the scheduled polls' backoff as it was (`uncountedCheck`; a later
   Retry-After still holds them off), server#403, though its `gone` is still announced at once; a successful poll resets the run and, after an

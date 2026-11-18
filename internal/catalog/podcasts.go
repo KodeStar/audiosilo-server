@@ -27,6 +27,11 @@ type PodcastStatus struct {
 	LastSuccess *string       `json:"last_success"`
 	NextCheck   *string       `json:"next_check"`
 	Error       *PodcastError `json:"error"`
+	// SecretMissing: a check found the Bridge no longer holds this private
+	// feed's address (feed_secret_missing), and none has succeeded since, so
+	// following the show again by its address is what restores it
+	// (podcast_feed_state.secret_missing; server#219).
+	SecretMissing bool `json:"secret_missing"`
 }
 type PodcastShow struct {
 	LibraryID       int64         `json:"library_id"`
@@ -393,12 +398,12 @@ const followMatchSQL = `SELECT 1 FROM podcast_follows f WHERE f.library_id=s.lib
 
 const podcastShowSelect = `SELECT s.library_id,s.show_path,s.title,s.author,s.description,s.link,s.language,s.show_type,s.explicit,s.private,NULLIF(s.feed_url,''),s.feed_host,s.podcast_guid,s.cover_path,s.episode_count,s.latest_published,s.feed_sig,s.show_id,
  EXISTS(` + followMatchSQL + ` AND f.user_id=?),
- st.last_checked_at,st.last_success_at,st.next_poll_at,COALESCE(st.error_code,''),COALESCE(st.error,''),` + podcastPolicySQL + `
+ st.last_checked_at,st.last_success_at,st.next_poll_at,COALESCE(st.error_code,''),COALESCE(st.error,''),COALESCE(st.secret_missing,0),` + podcastPolicySQL + `
  FROM podcast_shows s LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path AND st.show_id=s.show_id LEFT JOIN podcast_policies p ON p.library_id=s.library_id AND p.show_path=s.show_path AND p.show_id=s.show_id`
 
 func scanPodcastShow(r interface{ Scan(...any) error }, s *PodcastShow) error {
 	var code, msg string
-	err := r.Scan(&s.LibraryID, &s.Path, &s.Title, &s.Author, &s.Description, &s.Link, &s.Language, &s.Type, &s.Explicit, &s.Private, &s.FeedURL, &s.FeedHost, &s.PodcastGUID, &s.CoverPath, &s.EpisodeCount, &s.LatestPublished, &s.FeedSig, &s.ShowID, &s.Following, &s.Status.LastChecked, &s.Status.LastSuccess, &s.Status.NextCheck, &code, &msg, &s.Retention.Mode, &s.Retention.Keep, &s.Retention.Days)
+	err := r.Scan(&s.LibraryID, &s.Path, &s.Title, &s.Author, &s.Description, &s.Link, &s.Language, &s.Type, &s.Explicit, &s.Private, &s.FeedURL, &s.FeedHost, &s.PodcastGUID, &s.CoverPath, &s.EpisodeCount, &s.LatestPublished, &s.FeedSig, &s.ShowID, &s.Following, &s.Status.LastChecked, &s.Status.LastSuccess, &s.Status.NextCheck, &code, &msg, &s.Status.SecretMissing, &s.Retention.Mode, &s.Retention.Keep, &s.Retention.Days)
 	if code != "" {
 		s.Status.Error = &PodcastError{code, msg}
 	}
