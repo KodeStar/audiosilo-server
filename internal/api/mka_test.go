@@ -522,6 +522,15 @@ func TestMatroskaAdminBookSaysRemuxCached(t *testing.T) {
 		t.Fatalf("%d cached files after the mixed book's page, want its .mka part too", n)
 	}
 
+	// A podcast episode's stream never remuxes: its page says nothing of one.
+	pods := *m.lib
+	pods.Kind = catalog.KindPodcasts
+	files := []catalog.AdminFile{{Path: mkaFile, Format: "mka", Codec: "mp3"}}
+	m.api.adminRemuxes(context.Background(), &pods, files)
+	if f := files[0]; f.RemuxCached != nil || f.DirectPlayable {
+		t.Errorf("podcast .mka remux_cached = %v, direct_playable %v; want absent and false", f.RemuxCached, f.DirectPlayable)
+	}
+
 	// With ffmpeg off there is no remux to say anything of, and nothing warms.
 	m2 := newMKAEnv(t)
 	if got := m2.adminFiles(t, mkaBook)[mkaFile]; got.RemuxCached != nil || got.DirectPlayable {

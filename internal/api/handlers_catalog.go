@@ -13,7 +13,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/meta"
@@ -284,46 +283,36 @@ func (a *API) writeBookDetail(w http.ResponseWriter, r *http.Request, lib *catal
 	writeJSON(w, http.StatusOK, d)
 }
 
-// adminRemuxes marks the book page's MP3-in-Matroska files while the remux is
-// on: each plays as stored (direct_playable: its stream is the remuxed MP3,
-// handleStream, as /item says), remux_cached says whether its copy is made
-// (until then the stream is a live transcode from the file's start, which the
-// console's chapter editor can't seek, so it asks for ?transcode=1&t= instead),
-// and the copies not made yet are warmed in the background, as /item warms
-// them for a player (warmRemux: media.FileCache.WarmAll, one at a time). A
-// file whose join or look is given up on (a share not answering) is said not
-// cached and left unwarmed, and so are the files after it (no more looks on
-// that share).
+// adminRemuxes marks the book page's MP3-in-Matroska files while they are
+// served as their remux (remuxing): each plays as stored (direct_playable: its
+// stream is the remuxed MP3, handleStream, as /item says), and remux_cached says
+// whether its copy is made (until then the stream is a live transcode from the
+// file's start, which the console's chapter editor can't seek, so it asks for
+// ?transcode=1&t= instead). The copies not made yet are warmed in the
+// background, as /item warms them for a player (warmRemuxes). A file not
+// joined, or not looked at on a share not answering, is said not cached.
 func (a *API) adminRemuxes(ctx context.Context, lib *catalog.Library, files []catalog.AdminFile) {
-	if !a.remuxOn() {
+	if !a.remuxing(lib) {
 		return
 	}
-	var cold []string
-	answering := true
+	var rels []string
+	var marked []*catalog.AdminFile
 	for i, f := range files {
-		if !media.Remuxable(f.Format, f.Codec) {
-			continue
-		}
-		cached := false
-		files[i].DirectPlayable, files[i].RemuxCached = true, &cached
-		if !answering {
-			continue
-		}
-		abs, err := library.SafeJoinBounded(ctx, lib.Root, f.Path, a.fileWait)
-		if metadata.Unanswered(ctx, err) {
-			answering = false
-			continue
-		}
-		if err != nil {
-			continue
-		}
-		if st, _ := a.remux.Status(abs); st == media.CacheReady {
-			cached = true
-		} else {
-			cold = append(cold, abs)
+		if media.Remuxable(f.Format, f.Codec) {
+			files[i].DirectPlayable, files[i].RemuxCached = true, new(bool)
+			rels = append(rels, f.Path)
+			marked = append(marked, &files[i])
 		}
 	}
-	a.remux.WarmAll(a.baseCtx, a.ffmpeg, cold)
+	abs, _ := a.warmRemuxes(ctx, lib, rels)
+	for i, p := range abs {
+		if p == "" {
+			continue
+		}
+		if st, _ := a.remux.Status(p); st == media.CacheReady {
+			*marked[i].RemuxCached = true
+		}
+	}
 }
 
 // handleCheckCommunityChapters serves POST

@@ -878,34 +878,53 @@ func (a *API) directPlayable(book *catalog.Book) bool {
 // warmRemux starts, in the background, the remuxes of the book's MP3-in-MKA
 // files while the remux is on, so the player's first stream finds them cached
 // (a cold remux of a long file takes seconds, past a player's stall timer). It
-// never blocks: media.FileCache.WarmAll runs them one at a time under the
-// server's context, skipping the cached and the known refusals. A podcast
-// library's episodes are not warmed: their stream never remuxes. Each file's
-// join is a metadata.Bounded call (ctx, at most fileWait): on a share that
-// stopped answering none is warmed, and the request goes on. It reports false
-// when a join went unanswered (metadata.Unanswered): the book's share is not
-// answering, for a caller with more looks to make there (handleItem).
+// never blocks (warmRemuxes). It reports false when a join went unanswered
+// (metadata.Unanswered): the book's share is not answering, for a caller with
+// more looks to make there (handleItem).
 func (a *API) warmRemux(ctx context.Context, lib *catalog.Library, book *catalog.Book) (answering bool) {
-	if !a.remuxOn() || lib.Kind == catalog.KindPodcasts {
+	if !a.remuxing(lib) {
 		return true
 	}
-	var paths []string
+	var rels []string
 	for _, f := range book.Files {
-		if !book.FileRemuxable(f) {
-			continue
+		if book.FileRemuxable(f) {
+			rels = append(rels, f.RelPath)
 		}
-		abs, err := library.SafeJoinBounded(ctx, lib.Root, f.RelPath, a.fileWait)
+	}
+	_, answering = a.warmRemuxes(ctx, lib, rels)
+	return answering
+}
+
+// remuxing reports whether lib's MP3-in-MKA files are served as their remux:
+// the remux is on, and lib is no podcast library (an episode's stream never
+// remuxes).
+func (a *API) remuxing(lib *catalog.Library) bool {
+	return a.remuxOn() && lib.Kind != catalog.KindPodcasts
+}
+
+// warmRemuxes joins rels (MP3-in-MKA files of one book) to lib's root and
+// starts their remuxes in the background: media.FileCache.WarmAll runs them
+// one at a time under the server's context, skipping the cached and the known
+// refusals, and runs one book's list once however often it is asked (by its
+// first path, so every caller passes the book's whole list). Each join is a
+// metadata.Bounded call (ctx, at most fileWait): on a share that stopped
+// answering none is warmed and the rest are not looked at (answering false).
+// abs holds each rel's path, "" for one not joined.
+func (a *API) warmRemuxes(ctx context.Context, lib *catalog.Library, rels []string) (abs []string, answering bool) {
+	abs = make([]string, len(rels))
+	var paths []string
+	for i, rel := range rels {
+		p, err := library.SafeJoinBounded(ctx, lib.Root, rel, a.fileWait)
 		if metadata.Unanswered(ctx, err) {
-			return false
+			return abs, false
 		}
 		if err == nil {
-			paths = append(paths, abs)
+			abs[i] = p
+			paths = append(paths, p)
 		}
 	}
-	if len(paths) > 0 {
-		a.remux.WarmAll(a.baseCtx, a.ffmpeg, paths)
-	}
-	return true
+	a.remux.WarmAll(a.baseCtx, a.ffmpeg, paths)
+	return abs, true
 }
 
 // remuxColdWait is how long a stream request waits for a remux that isn't
