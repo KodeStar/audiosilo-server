@@ -146,7 +146,7 @@ func TestSyncFurthestOnlyRespectsRestart(t *testing.T) {
 }
 
 // The Audible route's own writes keep the account's device through the guard
-// (migration 0083, ownAudiblePlace): a first place (an insert), a place ahead
+// (migration 0085, ownAudiblePlace): a first place (an insert), a place ahead
 // on its own row, and a finish heard before another device's later save (the
 // row's time is kept, so its chain starts nowhere).
 func TestSyncFurthestOnlyKeepsItsDevice(t *testing.T) {

@@ -1046,7 +1046,7 @@ func (s *syncRun) writeChainedPlace(ctx context.Context, p syncPrepared, version
 
 // ownAudiblePlace names a furthest-only batch's device (an Audible account's,
 // "audible:<account>") on the row whose place it has just written: the guard
-// (migration 0083) takes an Audible device off every row a write gives a place
+// (migration 0085) takes an Audible device off every row a write gives a place
 // (an insert, a new position or finish), so a place another writer moved never
 // stays the account's, which GET /bridge/progress would never offer to Audible.
 // This statement sets only the device, so the guard leaves it. No other batch
@@ -1059,7 +1059,7 @@ func (s *syncRun) ownAudiblePlace(ctx context.Context, key Ref) error {
 }
 
 // nameAudibleDevice names an Audible account's device on a user's row at key,
-// inside tx, after a write the guard (migration 0083) took it off: the Audible
+// inside tx, after a write the guard (migration 0085) took it off: the Audible
 // route's own place (ownAudiblePlace), or a move that left it as the account
 // wrote it (carriedAudiblePlace). It sets only the device, so the guard leaves
 // it.

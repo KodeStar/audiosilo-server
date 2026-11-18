@@ -4656,7 +4656,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   is the end; an unfinish is `behind`; a finish is any finish (one made at or before the Stay that holds the row is
   `behind`, as any device's is: the Bridge sends a place at the end as a listen and a finish). The device id `audible:<account>` is this route's
   alone: `/me/listening/sync` refuses a batch naming one (400), a legacy PUT naming one (a row echoed back) saves under
-  none, and a row keeps one only while it holds a place that account's sync wrote: the guard (`0083`, server#303, two
+  none, and a row keeps one only while it holds a place that account's sync wrote: the guard (`0085`, server#303, two
   triggers on `progress`, so no write path can miss it) drops the device and its name from every insert and every
   update that moves the row's position or finish, and the Audible route names its device again in a statement of
   its own right after writing its place (`ownAudiblePlace`, setting only the device, which the guard leaves). So an

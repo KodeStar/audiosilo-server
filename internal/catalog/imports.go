@@ -853,7 +853,7 @@ func jsonOrNil(p *Progress) (any, error) {
 // its device keeps its device name; one whose device changes takes p's (an
 // import's write: none; an undo's: the prior row's). An Audible account's
 // device stays only on a row whose place the write leaves as it was (the
-// guard, migration 0083).
+// guard, migration 0085).
 const progressUpsert = `INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 	    playback_speed, version, device_id, updated_at, started_at, finished_at, finish_changed_at, device_name,
 	    edit_version)
@@ -893,7 +893,7 @@ type progressPrior struct {
 // restored is the row an undo puts back for pr (prior must be set): the prior
 // row as it was, under a version above the one the import wrote. A row the
 // import had moved on that was an Audible account's place is stored under no
-// device (the guard, migration 0083: the undo moves its place): GET
+// device (the guard, migration 0085: the undo moves its place): GET
 // /bridge/progress may already have carried the import's place to Audible, and
 // it leaves the account's own rows out, so restored as Audible's the undo
 // would never reach it.

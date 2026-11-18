@@ -6,7 +6,7 @@ import (
 )
 
 // server#303: a row names an Audible account only while it holds a place that
-// account's own sync wrote (the guard, migration 0083). A writer that keeps or
+// account's own sync wrote (the guard, migration 0085). A writer that keeps or
 // copies the account's device while giving the row a place (a new position, a
 // finish, a joined part) leaves it with none, so GET /bridge/progress offers
 // that place to Audible; a write that leaves the place as it was (a start date,

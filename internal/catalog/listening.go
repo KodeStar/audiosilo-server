@@ -787,7 +787,7 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 		// The device name follows the merge's winner and the newer finish-state
 		// change is kept; an offered place (other_place) and a device's span chain
 		// (span_at, 0062) are dropped: they were on the old path's timeline. The
-		// guard (migration 0083) takes an Audible account's device off the row;
+		// guard (migration 0085) takes an Audible account's device off the row;
 		// a move names it again when the place is unchanged (carryRule).
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,

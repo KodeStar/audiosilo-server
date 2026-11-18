@@ -241,7 +241,7 @@ type mergeResult struct{ changed, moved, finished bool }
 //   - started_at becomes the earlier of the two, and a finished row with no
 //     finish date takes ABS's. Those alone leave updated_at as it is.
 //   - A row moved on that an Audible account wrote keeps its device here; the
-//     write stores it under none (the store's guard, migration 0083: a place
+//     write stores it under none (the store's guard, migration 0085: a place
 //     another writer moved is no longer the account's), so GET
 //     /bridge/progress carries it to Audible.
 //

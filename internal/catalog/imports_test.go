@@ -286,7 +286,7 @@ func TestUndoRestoresUnchangedProgress(t *testing.T) {
 
 // An import that moves on an Audible account's place, keeping the row's
 // device as the planner does, stores it under no device and no device name
-// (the guard, migration 0083), so GET /bridge/progress carries it to Audible;
+// (the guard, migration 0085), so GET /bridge/progress carries it to Audible;
 // an undo puts Audible's place back (import_progress_prior) under no device
 // either, so the feed carries the undo to Audible too (it may hold the
 // import's place by then).
