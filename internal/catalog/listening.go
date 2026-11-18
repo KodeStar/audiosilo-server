@@ -3,8 +3,10 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
@@ -541,7 +543,7 @@ func keepLeftOffers(ctx context.Context, tx *sql.Tx, libraryID int64, into strin
 // baseline), and only the values are bound parameters here anyway.
 func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
 	merge progressMerge) error {
-	return carryState(ctx, tx, libraryID, part, into, total, merge, carryAll)
+	return carryState(ctx, tx, libraryID, part, into, total, merge, carryAll, nil)
 }
 
 // carrySet is which of carryListeningState's tables a carry hands over: a move
@@ -563,39 +565,66 @@ const (
 	carryAll = carryTimeline | carryBookLevel | carryFavs
 )
 
-// carryState is carryListeningState for the tables in set only.
+// carryState is carryListeningState for the tables in set only, leaving the
+// rows of the listeners in keep where they are (the re-key's: a listener who
+// can't reach into keeps their own; nil for a move or a join, which carry
+// every listener's).
 func carryState(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
-	merge progressMerge, set carrySet) error {
+	merge progressMerge, set carrySet, keep []int64) error {
 	if part.Path == into {
 		return nil // nothing to carry (and the delete-after-copy below would lose it)
 	}
+	kept, err := keptArg(keep)
+	if err != nil {
+		return err
+	}
 	if set&carryTimeline != 0 {
-		if err := carryProgress(ctx, tx, libraryID, part, into, total, merge); err != nil {
+		if err := carryProgress(ctx, tx, libraryID, part, into, total, merge, keep); err != nil {
 			return err
 		}
-		if err := carryStmts(ctx, tx, libraryID, part, into, total, timelineCarries); err != nil {
+		if err := carryStmts(ctx, tx, libraryID, part, into, total, kept, timelineCarries); err != nil {
 			return err
 		}
 	}
 	if set&carryBookLevel != 0 {
-		if err := carryStmts(ctx, tx, libraryID, part, into, total, bookLevelCarries); err != nil {
+		if err := carryStmts(ctx, tx, libraryID, part, into, total, kept, bookLevelCarries); err != nil {
 			return err
 		}
 	}
 	if set&carryFavs != 0 {
-		return carryFavourites(ctx, tx, libraryID, part.Path, into)
+		return carryFavouritesKeeping(ctx, tx, libraryID, part.Path, into, kept)
 	}
 	return nil
 }
 
+// keptArg is carryState's keep as its statements bind it (?8, carryKept): a
+// JSON array of the listeners' ids, nil for none.
+func keptArg(keep []int64) (any, error) {
+	if len(keep) == 0 {
+		return nil, nil
+	}
+	js, err := json.Marshal(keep)
+	return string(js), err
+}
+
+// carryKept and carryKeptItems end a carry statement's WHERE: a row of a
+// listener in ?8 (keptArg; NULL: none) stays; a collection item is its
+// collection owner's.
+const (
+	carryKept      = ` AND (?8 IS NULL OR user_id NOT IN (SELECT value FROM json_each(?8)))`
+	carryKeptItems = ` AND (?8 IS NULL OR collection_id NOT IN (
+	    SELECT c.id FROM collections c JOIN json_each(?8) k ON k.value = c.user_id))`
+)
+
 // carryStmts runs one group of carryState's statements, each bound to the same
 // numbered parameters: ?1 into, ?2 the part's offset, ?3 total, ?4 the library,
-// ?5 the part's path, ?6 whether it ends the book, ?7 its length.
+// ?5 the part's path, ?6 whether it ends the book, ?7 its length, ?8 the
+// listeners whose rows stay (keptArg).
 func carryStmts(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
-	stmts []string) error {
+	kept any, stmts []string) error {
 	for _, stmt := range stmts {
 		if _, err := tx.ExecContext(ctx, stmt, into, part.Offset, total, libraryID, part.Path, part.Last,
-			part.Duration); err != nil {
+			part.Duration, kept); err != nil {
 			return err
 		}
 	}
@@ -604,10 +633,10 @@ func carryStmts(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart,
 
 // timelineCarries are carryTimeline's statements bar progress (carryProgress).
 var timelineCarries = []string{
-	`UPDATE bookmarks SET rel_path = ?1, position = position + ?2 WHERE library_id = ?4 AND rel_path = ?5`,
-	`UPDATE notes SET rel_path = ?1, position = position + ?2 WHERE library_id = ?4 AND rel_path = ?5`,
+	`UPDATE bookmarks SET rel_path = ?1, position = position + ?2 WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
+	`UPDATE notes SET rel_path = ?1, position = position + ?2 WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
 	`UPDATE listening_history SET rel_path = ?1, from_pos = from_pos + ?2, to_pos = to_pos + ?2
-		  WHERE library_id = ?4 AND rel_path = ?5`,
+		  WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
 	// A session that finished a part finished the joined book only when the
 	// part ends it (JoinPart.Last). Its length is the joined book's, or with that
 	// unknown where its part ends (JoinPart.end; SET reads the old end_pos).
@@ -617,41 +646,41 @@ var timelineCarries = []string{
 		                        WHEN ?2 > 0 THEN ?2 + MAX(duration, end_pos)
 		                        ELSE duration END,
 		        finished = finished AND ?6
-		  WHERE library_id = ?4 AND rel_path = ?5`,
-	`UPDATE listening_daily SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
+		  WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
+	`UPDATE listening_daily SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
 	// Sync v2's event log (0061): its places land on into's timeline.
 	`UPDATE listening_events SET rel_path = ?1, from_pos = from_pos + ?2, to_pos = to_pos + ?2
-		  WHERE library_id = ?4 AND rel_path = ?5`,
+		  WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
 	// What an import changed on the path (catalog/imports.go), so an undo still
 	// finds the row; an import that also changed into keeps that entry.
-	`UPDATE OR IGNORE import_progress_prior SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
-	`DELETE FROM import_progress_prior WHERE library_id = ?4 AND rel_path = ?5`,
+	`UPDATE OR IGNORE import_progress_prior SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
+	`DELETE FROM import_progress_prior WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
 }
 
 // bookLevelCarries are carryBookLevel's statements.
 var bookLevelCarries = []string{
 	// Lists (orderedList): a list already holding into keeps that entry.
-	`UPDATE OR IGNORE up_next SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
-	`DELETE FROM up_next WHERE library_id = ?4 AND rel_path = ?5`,
-	`UPDATE OR IGNORE collection_items SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
-	`DELETE FROM collection_items WHERE library_id = ?4 AND rel_path = ?5`,
+	`UPDATE OR IGNORE up_next SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
+	`DELETE FROM up_next WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
+	`UPDATE OR IGNORE collection_items SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5` + carryKeptItems,
+	`DELETE FROM collection_items WHERE library_id = ?4 AND rel_path = ?5` + carryKeptItems,
 	// Ratings: the newer updated_at wins, whole (as a move's progress,
 	// mergeNewest); a tie keeps into's.
 	`INSERT INTO ratings(user_id, library_id, rel_path, rating, note, created_at, updated_at)
 		 SELECT user_id, library_id, ?1, rating, note, created_at, updated_at
-		   FROM ratings WHERE library_id = ?4 AND rel_path = ?5
+		   FROM ratings WHERE library_id = ?4 AND rel_path = ?5` + carryKept + `
 		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 		     rating = excluded.rating, note = excluded.note,
 		     created_at = excluded.created_at, updated_at = excluded.updated_at
 		   WHERE excluded.updated_at > ratings.updated_at`,
-	`DELETE FROM ratings WHERE library_id = ?4 AND rel_path = ?5`,
+	`DELETE FROM ratings WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
 	// A reader's place in the ebook: the newer updated_at wins, whole, as a
 	// rating does (a tie keeps into's), under a version above both, so a save
 	// that saw either row diverges from the carried one.
 	`INSERT INTO reading_progress(user_id, library_id, rel_path, cfi, progression, version,
 		     device_id, device_name, updated_at)
 		 SELECT user_id, library_id, ?1, cfi, progression, version, device_id, device_name, updated_at
-		   FROM reading_progress WHERE library_id = ?4 AND rel_path = ?5
+		   FROM reading_progress WHERE library_id = ?4 AND rel_path = ?5` + carryKept + `
 		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 		     cfi = CASE WHEN excluded.updated_at > reading_progress.updated_at THEN excluded.cfi ELSE reading_progress.cfi END,
 		     progression = CASE WHEN excluded.updated_at > reading_progress.updated_at
@@ -662,7 +691,7 @@ var bookLevelCarries = []string{
 		                        THEN excluded.device_name ELSE reading_progress.device_name END,
 		     updated_at = MAX(excluded.updated_at, reading_progress.updated_at),
 		     version = MAX(excluded.version, reading_progress.version) + 1`,
-	`DELETE FROM reading_progress WHERE library_id = ?4 AND rel_path = ?5`,
+	`DELETE FROM reading_progress WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
 }
 
 // carryFavourites hands every listener's favourite on one path to another, inside
@@ -670,13 +699,20 @@ var bookLevelCarries = []string{
 // carryListeningState that can also be keyed on a navigation folder, so a folder
 // rename carries it too (MoveFolderFavourites).
 func carryFavourites(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) error {
+	return carryFavouritesKeeping(ctx, tx, libraryID, from, into, nil)
+}
+
+// carryFavouritesKeeping is carryFavourites leaving the favourites of the
+// listeners in kept (keptArg) where they are.
+func carryFavouritesKeeping(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string, kept any) error {
 	if _, err := tx.ExecContext(ctx,
 		`INSERT OR IGNORE INTO favourites(user_id, library_id, rel_path, created_at)
-		 SELECT user_id, library_id, ?, created_at FROM favourites WHERE library_id = ? AND rel_path = ?`,
-		into, libraryID, from); err != nil {
+		 SELECT user_id, library_id, ?1, created_at FROM favourites WHERE library_id = ?4 AND rel_path = ?5`+carryKept,
+		into, nil, nil, libraryID, from, nil, nil, kept); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `DELETE FROM favourites WHERE library_id = ? AND rel_path = ?`, libraryID, from)
+	_, err := tx.ExecContext(ctx, `DELETE FROM favourites WHERE library_id = ?4 AND rel_path = ?5`+carryKept,
+		nil, nil, nil, libraryID, from, nil, nil, kept)
 	return err
 }
 
@@ -713,12 +749,17 @@ func newerFinishChange(a, b sql.NullString) sql.NullString {
 }
 
 // carryProgress moves every listener's progress on part.Path to into, placed on
-// into's timeline (JoinPart.at), merged with any they already have there (merge).
+// into's timeline (JoinPart.at), merged with any they already have there
+// (merge), but the progress of a listener in keep.
 func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
-	merge progressMerge) error {
+	merge progressMerge, keep []int64) error {
 	from, err := progressOn(ctx, tx, libraryID, part.Path)
-	if err != nil || len(from) == 0 {
+	if err != nil {
 		return err
+	}
+	from = slices.DeleteFunc(from, func(r listenerProgress) bool { return slices.Contains(keep, r.user) })
+	if len(from) == 0 {
+		return nil
 	}
 	have, err := progressOn(ctx, tx, libraryID, into)
 	if err != nil {
@@ -779,8 +820,13 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 			return err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `DELETE FROM progress WHERE library_id = ? AND rel_path = ?`, libraryID, part.Path)
-	return err
+	for _, r := range from {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM progress WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
+			r.user, libraryID, part.Path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // progressMerge is one listener's progress from the row already on a path (have)

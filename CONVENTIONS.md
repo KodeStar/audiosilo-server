@@ -1541,7 +1541,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `server_state('path_rekey')` once it has been over every path, with the paths whose move failed in
   `server_state('path_rekey_failed')`, so a later start tries only those again, each named in a
   `path_rekey retried` line, and one path that keeps failing never costs every start the whole run; a
-  run stopped part way, or one with more than `maxRekeyFailed` failures, is not recorded and runs again; the
+  run stopped part way, or one with more than `maxRekeyFailed` failures, is not recorded and runs again; a
+  books library whose folder does not answer at the start (`launcher.rootAnswers`, the scanner's
+  `RootAvailable`: missing, unreadable, not responding, or empty with books indexed under it) is left whole,
+  logged, recorded in `server_state('path_rekey_unreached')` and run over again at a later start once it
+  answers, never re-keyed from the index alone, since `Spelling`'s look at the disk is what keeps an
+  unindexed sibling folder of another spelling apart from the book; the
   start that first runs it applies `0084`, so `backup.BeforeUpgrade` copied the database just before), and
   `RekeyLibrary` after every scan run that finished ok or partial (`launcher.rekeyAfterScan`, the
   scanner's `OnRunFinished`, under the server's context so a stop ends it between paths; candidates
@@ -1556,14 +1561,22 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   transaction a path, all or nothing: re-check the path is still no book and the target still one
   holding it (`bookStillHolds`), read
   every row (`rekeyTables`, the twin of `carryListeningState`'s list: add a table to both), the guards
-  (`scope`: every listener with a row reaches where it goes, `UserScopes`; `timeline`, `file` only: a
+  (`scope`, per listener: the rows of a listener who can't reach where a move takes them, `UserScopes`
+  (a grant on the track only, access since removed), stay on the path, logged once a listener, table and
+  path with reason `scope` (`rekeyKept`, so the scan-end runs that keep them again add nothing), while the
+  other listeners' rows move: `carryState`'s `keep`, bound as `?8`, a collection item by its
+  collection's owner; `timeline`, `file` only, over the rows that move: a
   progress row whose length is a later part's and not the book's: a track's, a tripwire, or a later
   disc's of a joined book, a disc's own place an old player saved on its track before the join, which
-  carried only the disc folder's rows), each row whole into `path_rekeys`
+  carried only the disc folder's rows), each moved row whole into `path_rekeys`
   (`row_json`, cascades with the user and library, never on the wire), then `carryState` (the move's
-  rules: `mergeNewest`, a list entry or favourite once, the newer rating or reader's place). A guard or a
-  failure leaves the path whole (a failure for the next start's retry, a guard's for the scan-end runs); a
-  re-run finds nothing to move. No undo command: the
+  rules: `mergeNewest`, a list entry or favourite once, the newer rating or reader's place). The timeline
+  guard or a failure leaves the path whole (a failure for the next start's retry, a guard's for the
+  scan-end runs); a re-run finds nothing to move. The re-key's own looks at the disk (`Spelling`'s
+  `ownEntry`, with no `spellLooks` allowance: that cap is a list replace's) are each bounded by
+  `spellLookWait` and by the mount's stuck-call cap (`metadata.Bounded`: past `maxAbandonedReads` hung
+  calls on a mount, a look there is refused at once and the path keeps the index's answer), so a share
+  that stops answering mid-run costs the run at most that many waits, not one a path. No undo command: the
   before-upgrade copy and the log are the way back.
 - **Auto book/folder detection**: there is **no per-library layout**. The model
   (`booksInDir` in `library/scanner.go`) matches the dominant "folder per book"

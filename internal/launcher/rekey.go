@@ -41,16 +41,35 @@ func startProgress(log *slog.Logger, msg string, every time.Duration) func(done,
 // listeners used an old player has a path a track they played). A repair, so a
 // failure never stops the start: it is logged; a run that was stopped runs
 // again at the next start, and one that finished tries only the paths that
-// failed, each named here when it does.
-func rekeyAtStart(ctx context.Context, cat *catalog.Catalog, log *slog.Logger) {
-	rep, err := cat.RekeyPathState(ctx, startProgress(log, "re-keying listening state to the books' paths", progressEvery))
+// failed and the libraries whose folder did not answer (answers), each named
+// here when it does.
+func rekeyAtStart(ctx context.Context, cat *catalog.Catalog, answers func(catalog.Library) bool, log *slog.Logger) {
+	rep, err := cat.RekeyPathState(ctx, answers, startProgress(log, "re-keying listening state to the books' paths", progressEvery))
 	if err != nil {
 		log.Warn("re-keying listening state to the books' paths failed; trying again at the next start", "err", err)
 	}
 	for _, r := range rep.Retried {
+		if r.Path == "" {
+			log.Info("path_rekey retried a library", "library", r.LibraryID)
+			continue
+		}
 		log.Info("path_rekey retried", "library", r.LibraryID, "path", r.Path)
 	}
+	for _, id := range rep.Unreached {
+		log.Warn("path_rekey skipped a library: its folder did not answer; trying again at the next start", "library", id)
+	}
 	logRekey(log, "re-keyed listening state to the books' paths", rep, slog.LevelInfo)
+}
+
+// rootAnswers is the start's re-key's look at each library's folder: the
+// scanner's (library.Scanner.RootAvailable: bounded, and an empty folder with
+// books indexed under it, an unmounted share, does not answer). With the
+// books' counts unread, none does: the re-key waits for the next start.
+func rootAnswers(ctx context.Context, cat *catalog.Catalog, scanner *library.Scanner) func(catalog.Library) bool {
+	counts, err := cat.CountBooksByLibrary(ctx)
+	return func(lib catalog.Library) bool {
+		return err == nil && scanner.RootAvailable(lib, counts[lib.ID])
+	}
 }
 
 // rekeyAfterScan is the scanner's OnRunFinished: the scan-end re-key of the
@@ -79,9 +98,9 @@ func rekeyAfterScan(server context.Context, cat *catalog.Catalog, log *slog.Logg
 }
 
 // logRekey logs a re-key's report: a line per failed path (warn) and per path
-// a guard kept (at skipLevel), then one with the counts (paths moved by reason,
-// rows logged, paths skipped and failed) unless it would only repeat skips
-// logged below info.
+// a guard kept rows on (at skipLevel), then one with the counts (paths moved by
+// reason, rows moved and logged, rows the scope guard kept, paths skipped and
+// failed) unless it would only repeat skips logged below info.
 func logRekey(log *slog.Logger, msg string, rep catalog.RekeyReport, skipLevel slog.Level) {
 	ctx := context.Background()
 	for _, p := range rep.Failed {
@@ -97,5 +116,6 @@ func logRekey(log *slog.Logger, msg string, rep catalog.RekeyReport, skipLevel s
 	for _, reason := range slices.Sorted(maps.Keys(rep.Moved)) {
 		args = append(args, "paths_"+reason, rep.Moved[reason])
 	}
-	log.Info(msg, append(args, "rows_logged", rep.Rows, "skipped", len(rep.Skipped), "failed", len(rep.Failed))...)
+	log.Info(msg, append(args, "rows_logged", rep.Rows, "rows_kept", rep.Kept, "skipped", len(rep.Skipped),
+		"failed", len(rep.Failed))...)
 }

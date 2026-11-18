@@ -18,7 +18,8 @@ import (
 // a disc folder of a joined book. RekeyPathState moves them to the book's own
 // path, the place the server reads them from now, and copies every moved row
 // whole into path_rekeys first, in the same transaction. Anything doubtful stays
-// where it is.
+// where it is: a listener's rows where they can't reach the book, a path a
+// guard holds, a library whose folder does not answer at the start.
 
 // rekeyStateKey is the server_state row holding the pathKeysVersion the start's
 // re-key last ran through under: it runs over every path again only when that
@@ -29,6 +30,11 @@ const rekeyStateKey = "path_rekey"
 // (a []Ref; no row when none did): the only paths a later start looks at, so
 // one path that keeps failing never costs every start the whole run.
 const rekeyFailedKey = "path_rekey_failed"
+
+// rekeyUnreachedKey is the server_state row naming the books libraries that
+// run left whole because their folder did not answer (a []int64; no row when
+// none): a later start runs over each of them again once it answers.
+const rekeyUnreachedKey = "path_rekey_unreached"
 
 // maxRekeyFailed is how many failed paths a run records. One with more (the
 // database refusing every write, not a path's own trouble) is not recorded at
@@ -52,10 +58,13 @@ const (
 	rekeyFolder = "folder"
 )
 
-// The guards that leave a path's rows where they are, as a report names them.
+// The guards that leave a path's rows where they are, as a report names them
+// (scope: only the rows of the listeners it names).
 const (
 	// RekeyGuardScope: a listener with a row on the path can't reach the book
-	// (a grant on the track only), so the row would vanish from their view.
+	// (a grant on the track only, access since removed), so their rows would
+	// vanish from their view: theirs stay (the other listeners' move), each
+	// logged once in path_rekeys with this reason.
 	RekeyGuardScope = "scope"
 	// RekeyGuardTimeline: a progress row on a track reads as a place in that
 	// track, not the book (a tripwire: no shipped client wrote one).
@@ -150,12 +159,20 @@ type RekeyReport struct {
 	Moved map[string]int
 	// Rows is how many rows it moved, each logged in path_rekeys.
 	Rows int
-	// Skipped are the paths a guard left as they were (tried again next time).
+	// Kept is how many rows the scope guard left with their listener (each
+	// logged once, reason scope).
+	Kept int
+	// Skipped are the paths a guard left as they were (tried again next time):
+	// the timeline guard's whole, the scope guard's the rows it kept.
 	Skipped []RekeyPath
+	// Unreached are the books libraries the start's run left whole because
+	// their folder did not answer (tried again at the next start).
+	Unreached []int64
 	// Failed are the paths whose move failed (nothing moved; tried again).
 	Failed []RekeyPath
-	// Retried are the paths an earlier start failed on, the only ones this
-	// start looked at (RekeyPathState).
+	// Retried are the paths an earlier start failed on and the libraries it
+	// left unreached (Path ""), the only ones this start looked at
+	// (RekeyPathState).
 	Retried []Ref
 }
 
@@ -164,6 +181,7 @@ func (r *RekeyReport) add(o RekeyReport) {
 		r.moved(k, v)
 	}
 	r.Rows += o.Rows
+	r.Kept += o.Kept
 	r.Skipped = append(r.Skipped, o.Skipped...)
 	r.Failed = append(r.Failed, o.Failed...)
 	r.Retried = append(r.Retried, o.Retried...)
@@ -181,26 +199,36 @@ func (r *RekeyReport) moved(reason string, paths int) {
 // per pathKeysVersion (run it after KeyPaths: Spelling reads the keys). The
 // run is recorded once it has been over every path, with the paths whose move
 // failed (rekeyFailedKey); a later start under the same version tries only
-// those again (Retried), until none is left. The start that first runs it
+// those again (Retried), until none is left. A library whose folder does not
+// answer (answers false: an unmounted share, a drive asleep) is left whole,
+// never re-keyed from the index alone (Spelling's look at the disk keeps a
+// sibling folder of another spelling, not indexed yet, apart from the book):
+// it is in the report's Unreached and recorded (rekeyUnreachedKey), and a later
+// start runs over it again once it answers. answers nil counts every library's
+// folder as answering. The start that first runs it
 // applies migration 0084, so a before-upgrade copy of the database was taken
 // just before (backup.BeforeUpgrade). progress, when not nil, is told after
 // each path how many are done of how many. The error is a failure to read the
 // state, the libraries or a library's candidates, or ctx's (the report then
 // holds what moved before it, and nothing is recorded: the next start runs
 // again); a path's own failure is in the report.
-func (c *Catalog) RekeyPathState(ctx context.Context, progress func(done, total int)) (RekeyReport, error) {
+func (c *Catalog) RekeyPathState(ctx context.Context, answers func(Library) bool,
+	progress func(done, total int)) (RekeyReport, error) {
 	var rep RekeyReport
+	if answers == nil {
+		answers = func(Library) bool { return true }
+	}
 	v, err := getServerState[string](ctx, c.db, rekeyStateKey)
 	if err != nil {
 		return rep, err
 	}
 	var todo []rekeyWork
 	if v == pathKeysVersion {
-		todo, rep.Retried, err = c.rekeyRetries(ctx)
-		if err != nil || len(rep.Retried) == 0 {
+		todo, rep.Retried, rep.Unreached, err = c.rekeyRetries(ctx, answers)
+		if err != nil || len(rep.Retried)+len(rep.Unreached) == 0 {
 			return rep, err
 		}
-	} else if todo, err = c.rekeyEvery(ctx); err != nil {
+	} else if todo, rep.Unreached, err = c.rekeyEvery(ctx, answers); err != nil {
 		return rep, err
 	}
 	done, total := 0, 0
@@ -221,7 +249,8 @@ func (c *Catalog) RekeyPathState(ctx context.Context, progress func(done, total 
 		}
 	}
 	return rep, c.db.WithTx(ctx, "RekeyPathState", func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM server_state WHERE key = ?`, rekeyFailedKey); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM server_state WHERE key IN (?, ?)`,
+			rekeyFailedKey, rekeyUnreachedKey); err != nil {
 			return err
 		}
 		if len(rep.Failed) > maxRekeyFailed {
@@ -239,6 +268,11 @@ func (c *Catalog) RekeyPathState(ctx context.Context, progress func(done, total 
 				return err
 			}
 		}
+		if len(rep.Unreached) > 0 {
+			if err := putServerState(ctx, tx, rekeyUnreachedKey, rep.Unreached, c.stamp()); err != nil {
+				return err
+			}
+		}
 		return putServerState(ctx, tx, rekeyStateKey, pathKeysVersion, c.stamp())
 	})
 }
@@ -250,50 +284,100 @@ type rekeyWork struct {
 	cands   map[string]carrySet
 }
 
-// rekeyEvery is a run over every path: each books library's candidates.
-func (c *Catalog) rekeyEvery(ctx context.Context) ([]rekeyWork, error) {
+// rekeyEvery is a run over every path: each books library's candidates, but
+// for the libraries whose folder does not answer (unreached).
+func (c *Catalog) rekeyEvery(ctx context.Context, answers func(Library) bool) ([]rekeyWork, []int64, error) {
 	libs, err := c.ListLibraries(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var todo []rekeyWork
+	var (
+		todo      []rekeyWork
+		unreached []int64
+	)
 	for _, lib := range libs {
 		if lib.Kind != KindBooks {
 			continue // a podcast episode is its own book; a newer server's kind is left alone
 		}
+		if !answers(lib) {
+			unreached = append(unreached, lib.ID)
+			continue
+		}
 		cands, err := c.rekeyCandidates(ctx, lib.ID, false)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		todo = append(todo, rekeyWork{lib.ID, cands})
 	}
-	return todo, nil
+	return todo, unreached, nil
 }
 
-// rekeyRetries is a run over the paths an earlier one failed on
-// (rekeyFailedKey) that still have rows, in a books library still there: the
-// work, and the paths as the report names them.
-func (c *Catalog) rekeyRetries(ctx context.Context) ([]rekeyWork, []Ref, error) {
+// rekeyRetries is a run over what an earlier one left: every path of the
+// libraries it found unreached (rekeyUnreachedKey) and the paths it failed on
+// (rekeyFailedKey) that still have rows, in a books library still there. It
+// returns the work, the paths as the report names them (a whole library's
+// with Path ""), and the libraries whose folder still does not answer (their
+// failed paths with them: the library's every path is run again later).
+func (c *Catalog) rekeyRetries(ctx context.Context, answers func(Library) bool) ([]rekeyWork, []Ref, []int64, error) {
 	failed, err := getServerState[[]Ref](ctx, c.db, rekeyFailedKey)
-	if err != nil || len(failed) == 0 {
-		return nil, nil, err
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	libs, err := getServerState[[]int64](ctx, c.db, rekeyUnreachedKey)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	var (
-		todo    []rekeyWork
-		retried []Ref
+		todo      []rekeyWork
+		retried   []Ref
+		unreached []int64
 	)
 	byLib := map[int64]map[string]carrySet{}
-	for _, r := range failed {
-		lib, err := c.GetLibrary(ctx, r.LibraryID)
+	whole := map[int64]bool{}
+	// usable is the library to retry id in, false when it is gone (so are its
+	// rows) or its folder does not answer (then it is unreached).
+	usable := func(id int64) (bool, error) {
+		lib, err := c.GetLibrary(ctx, id)
 		if errors.Is(err, ErrNotFound) || (err == nil && lib.Kind != KindBooks) {
-			continue // the library is gone: so are its rows
+			return false, nil
 		}
 		if err != nil {
-			return nil, nil, err
+			return false, err
+		}
+		if !answers(*lib) {
+			if !slices.Contains(unreached, id) {
+				unreached = append(unreached, id)
+			}
+			return false, nil
+		}
+		return true, nil
+	}
+	for _, id := range libs {
+		if ok, err := usable(id); err != nil {
+			return nil, nil, nil, err
+		} else if !ok {
+			continue
+		}
+		cands, err := c.rekeyCandidates(ctx, id, false)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		byLib[id], whole[id] = cands, true
+		todo = append(todo, rekeyWork{id, cands})
+		retried = append(retried, Ref{LibraryID: id})
+	}
+	for _, r := range failed {
+		if whole[r.LibraryID] || slices.Contains(unreached, r.LibraryID) {
+			continue // run with its library's every path
+		}
+		if ok, err := usable(r.LibraryID); err != nil {
+			return nil, nil, nil, err
+		} else if !ok {
+			continue
 		}
 		set, err := c.rekeyRowsAt(ctx, r)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if byLib[r.LibraryID] == nil {
 			byLib[r.LibraryID] = map[string]carrySet{}
@@ -302,7 +386,7 @@ func (c *Catalog) rekeyRetries(ctx context.Context) ([]rekeyWork, []Ref, error) 
 		byLib[r.LibraryID][r.Path] = set // none left: nothing to move, and off the list
 		retried = append(retried, r)
 	}
-	return todo, retried, nil
+	return todo, retried, unreached, nil
 }
 
 // rekeyRowsAt is the carry groups ref's rows are in, over every table (none
@@ -360,7 +444,7 @@ func (c *Catalog) rekeyPaths(ctx context.Context, libraryID int64, cands map[str
 		paths = append(paths, p)
 	}
 	slices.Sort(paths)
-	reach := map[int64][]Scope{} // each listener's access, read once a run (ownersReach)
+	reach := map[int64][]Scope{} // each listener's access, read once a run (unreached)
 	for _, p := range paths {
 		// A run stopped part way (the server stopping) leaves the rest for the
 		// next one, rather than a failure a path.
@@ -394,18 +478,26 @@ func (c *Catalog) rekeyOne(ctx context.Context, libraryID int64, p string, has c
 	if set&has == 0 {
 		return // nothing its moves carry (no target, or a track's favourites only)
 	}
-	rows, via, guard, err := c.rekeyPath(ctx, libraryID, p, spelled, target, reason, moves, reach)
+	res, err := c.rekeyPath(ctx, libraryID, p, spelled, target, reason, moves, reach)
 	at := RekeyPath{LibraryID: libraryID, Path: p, Target: moves[0].to}
 	switch {
 	case err != nil:
 		at.Why = err.Error()
 		rep.Failed = append(rep.Failed, at)
-	case guard != "":
-		at.Why = guard
+		return
+	case res.guard != "":
+		at.Why = res.guard
 		rep.Skipped = append(rep.Skipped, at)
-	case rows > 0:
-		rep.moved(via, 1)
-		rep.Rows += rows
+		return
+	}
+	if res.moved > 0 {
+		rep.moved(res.via, 1)
+		rep.Rows += res.moved
+	}
+	if res.kept > 0 {
+		at.Why = RekeyGuardScope
+		rep.Skipped = append(rep.Skipped, at)
+		rep.Kept += res.kept
 	}
 }
 
@@ -524,19 +616,29 @@ type rekeyRow struct {
 	cols  map[string]any
 }
 
+// rekeyResult is what rekeyPath did with a path: the rows it moved (with the
+// reason of the first move that had any: via), the rows it left because their
+// listener can't reach where they would go (kept), or the guard that left the
+// path whole (nothing written).
+type rekeyResult struct {
+	moved, kept int
+	via, guard  string
+}
+
 // rekeyPath makes p's moves (rekeyMoves; spelled: p in the index's spelling)
 // in one transaction, all or nothing: every row is copied into path_rekeys
 // first, then carried as a move carries it (carryState: progress by
 // mergeNewest, a list entry or favourite once, a rating or reader's place the
 // newer). It checks again, inside the transaction, that p is still no book and
 // that the book at target is still one holding spelled (a scan may have run
-// since the candidates were read), and returns the rows moved with the reason
-// of the first move that had any (via: a track in another spelling holding
-// only a heart moved for its spelling, not as a file), or the guard that left
-// them (nothing written). reach caches each listener's access for ownersReach.
+// since the candidates were read). The scope guard is per listener: the rows
+// of one who can't reach where a move takes them stay on p (logged once,
+// rekeyKept), the other listeners' move. via is a track in another spelling
+// holding only a heart moved for its spelling, not as a file. reach caches
+// each listener's access (unreached).
 func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, target, reason string, moves []rekeyMove,
-	reach map[int64][]Scope) (int, string, string, error) {
-	moved, via, guard := 0, "", ""
+	reach map[int64][]Scope) (rekeyResult, error) {
+	var res rekeyResult
 	err := c.db.WithTx(ctx, "RekeyPathState", func(tx *sql.Tx) error {
 		if _, err := bookIDByPath(ctx, tx, libraryID, p); err == nil {
 			return nil // indexed since: its rows are its own
@@ -551,11 +653,13 @@ func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, ta
 		}
 		type step struct {
 			rekeyMove
-			rows []rekeyRow
+			rows, kept []rekeyRow
+			keep       []int64
 		}
 		steps := make([]step, 0, len(moves))
 		n := 0
 		for _, mv := range moves {
+			st := step{rekeyMove: mv}
 			var rows []rekeyRow
 			for _, t := range rekeyTables {
 				if t.set&mv.set == 0 {
@@ -567,41 +671,46 @@ func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, ta
 				}
 				rows = append(rows, got...)
 			}
-			// A guard returns before anything is written: the commit is a rollback's.
-			if ok, err := c.ownersReach(ctx, tx, rows, Ref{LibraryID: libraryID, Path: mv.to}, reach); err != nil {
+			out, err := c.unreached(ctx, tx, rows, Ref{LibraryID: libraryID, Path: mv.to}, reach)
+			if err != nil {
 				return err
-			} else if !ok {
-				guard = RekeyGuardScope
-				return nil
 			}
+			for _, r := range rows {
+				if r.owner.Valid && out[r.owner.Int64] {
+					st.kept = append(st.kept, r)
+				} else {
+					st.rows = append(st.rows, r)
+				}
+			}
+			for u := range out {
+				st.keep = append(st.keep, u)
+			}
+			// A guard returns before anything is written: the commit is a rollback's.
 			if mv.reason == rekeyFile {
-				if tripped, err := fileRelative(ctx, tx, libraryID, spelled, target, rows); err != nil {
+				if tripped, err := fileRelative(ctx, tx, libraryID, spelled, target, st.rows); err != nil {
 					return err
 				} else if tripped {
-					guard = RekeyGuardTimeline
+					res.guard = RekeyGuardTimeline
 					return nil
 				}
 			}
-			steps = append(steps, step{mv, rows})
-			if n == 0 && len(rows) > 0 {
-				via = mv.reason
+			steps = append(steps, st)
+			if n == 0 && len(st.rows) > 0 {
+				res.via = mv.reason
 			}
-			n += len(rows)
-		}
-		if n == 0 {
-			return nil
+			n += len(st.rows)
 		}
 		at := c.stamp()
 		for _, st := range steps {
+			if err := rekeyKept(ctx, tx, at, libraryID, p, st.to, st.kept); err != nil {
+				return err
+			}
+			res.kept += len(st.kept)
+			if len(st.rows) == 0 {
+				continue
+			}
 			for _, r := range st.rows {
-				js, err := json.Marshal(r.cols)
-				if err != nil {
-					return fmt.Errorf("log a %s row: %w", r.table, err)
-				}
-				if _, err := tx.ExecContext(ctx,
-					`INSERT INTO path_rekeys(at, reason, user_id, library_id, table_name, from_path, to_path, row_json)
-					 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-					at, st.reason, r.owner, libraryID, r.table, p, st.to, string(js)); err != nil {
+				if err := logRekeyRow(ctx, tx, at, st.reason, libraryID, p, st.to, r); err != nil {
 					return err
 				}
 			}
@@ -611,17 +720,64 @@ func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, ta
 			if st.to != target {
 				length = 0
 			}
-			if err := carryState(ctx, tx, libraryID, JoinPart{Path: p, Last: true}, st.to, length, mergeNewest, st.set); err != nil {
+			if err := carryState(ctx, tx, libraryID, JoinPart{Path: p, Last: true}, st.to, length, mergeNewest, st.set,
+				st.keep); err != nil {
 				return err
 			}
 		}
-		moved = n
+		res.moved = n
 		return nil
 	})
 	if err != nil {
-		return 0, "", "", err
+		return rekeyResult{}, err
 	}
-	return moved, via, guard, nil
+	return res, nil
+}
+
+// logRekeyRow copies r, a row on from, into path_rekeys whole, with reason and
+// where it goes.
+func logRekeyRow(ctx context.Context, tx *sql.Tx, at, reason string, libraryID int64, from, to string, r rekeyRow) error {
+	js, err := json.Marshal(r.cols)
+	if err != nil {
+		return fmt.Errorf("log a %s row: %w", r.table, err)
+	}
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO path_rekeys(at, reason, user_id, library_id, table_name, from_path, to_path, row_json)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+		at, reason, r.owner, libraryID, r.table, from, to, string(js))
+	return err
+}
+
+// rekeyKept logs the rows a listener keeps on from because they can't reach
+// to (the scope guard, reason scope; nothing moves), once a listener, table
+// and path: a scan-end run that keeps them again, or rows the listener added
+// since, adds nothing, so the log never grows with the runs.
+func rekeyKept(ctx context.Context, tx *sql.Tx, at string, libraryID int64, from, to string, rows []rekeyRow) error {
+	type group struct {
+		owner int64
+		table string
+	}
+	logged := map[group]bool{}
+	for _, r := range rows {
+		g := group{r.owner.Int64, r.table}
+		known, ok := logged[g]
+		if !ok {
+			if err := tx.QueryRowContext(ctx,
+				`SELECT EXISTS (SELECT 1 FROM path_rekeys WHERE user_id = ? AND reason = ? AND library_id = ?
+				     AND table_name = ? AND from_path = ? AND to_path = ?)`,
+				r.owner.Int64, RekeyGuardScope, libraryID, r.table, from, to).Scan(&known); err != nil {
+				return err
+			}
+			logged[g] = known
+		}
+		if known {
+			continue
+		}
+		if err := logRekeyRow(ctx, tx, at, RekeyGuardScope, libraryID, from, to, r); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // bookStillHolds reports whether the book at target is still indexed and, for
@@ -680,12 +836,13 @@ func readRekeyRows(ctx context.Context, tx *sql.Tx, t rekeyTable, libraryID int6
 	return out, rs.Err()
 }
 
-// ownersReach reports whether every listener with a row in rows can reach ref
-// with their current access (admins always can), as the book path rule asks of
-// a write (api.timelinePath): a listener granted only a track would otherwise
-// lose sight of their own row. reach holds the access already read, by
-// listener (one run's: their scopes, read once).
-func (c *Catalog) ownersReach(ctx context.Context, tx *sql.Tx, rows []rekeyRow, ref Ref, reach map[int64][]Scope) (bool, error) {
+// unreached is the listeners with a row in rows who can't reach ref with
+// their current access (admins always can), as the book path rule asks of a
+// write (api.timelinePath): a listener granted only a track, or whose access
+// was removed, would otherwise lose sight of their own row. reach holds the
+// access already read, by listener (one run's: their scopes, read once).
+func (c *Catalog) unreached(ctx context.Context, tx *sql.Tx, rows []rekeyRow, ref Ref, reach map[int64][]Scope) (map[int64]bool, error) {
+	out := map[int64]bool{}
 	for _, r := range rows {
 		if !r.owner.Valid {
 			continue
@@ -695,19 +852,19 @@ func (c *Catalog) ownersReach(ctx context.Context, tx *sql.Tx, rows []rekeyRow, 
 			var admin bool
 			if err := tx.QueryRowContext(ctx, `SELECT role = 'admin' FROM users WHERE id = ?`, r.owner.Int64).
 				Scan(&admin); err != nil {
-				return false, err
+				return nil, err
 			}
 			var err error
 			if scopes, err = c.UserScopes(ctx, r.owner.Int64, admin); err != nil {
-				return false, err
+				return nil, err
 			}
 			reach[r.owner.Int64] = scopes
 		}
 		if !ScopesAllow(scopes, ref) {
-			return false, nil
+			out[r.owner.Int64] = true
 		}
 	}
-	return true, nil
+	return out, nil
 }
 
 // fileRelative is the timeline guard: whether a progress row in rows, on a

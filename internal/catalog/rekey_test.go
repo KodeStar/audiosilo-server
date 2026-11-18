@@ -299,8 +299,8 @@ func TestRekeyPathState(t *testing.T) {
 	f.seedEverything(t, f.eve, f.lib, rkDisc1, 20, rkUpdated1)
 	f.exec(t, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, updated_at) VALUES(?, ?, ?, 30, 200, ?)`,
 		f.eve, f.lib, rkTrack2, rkUpdated1)
-	// dan reaches only track 3, and eve shares the path: the scope guard keeps
-	// both (the path moves whole or not at all).
+	// dan reaches only track 3, and eve shares the path: the scope guard is per
+	// listener, so dan's row stays (logged once, reason scope) and eve's moves.
 	f.exec(t, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, updated_at) VALUES(?, ?, ?, 10, ?, ?)`,
 		f.dan, f.lib, rkTrack3, rkBookLen, rkUpdated1)
 	f.exec(t, `INSERT INTO bookmarks(user_id, library_id, rel_path, position, created_at) VALUES(?, ?, ?, 300, ?)`,
@@ -316,7 +316,7 @@ func TestRekeyPathState(t *testing.T) {
 	// What every moving path holds, to check the log against.
 	type at struct{ table, path string }
 	before := map[at][]string{}
-	for _, p := range []string{rkTrack1, rkBookNFD, rkAmelieC, rkTrack1D, rkDisc1} {
+	for _, p := range []string{rkTrack1, rkBookNFD, rkAmelieC, rkTrack1D, rkDisc1, rkTrack3} {
 		for _, table := range rekeyedTables {
 			before[at{table, p}] = dumpRows(t, c.db, table, f.lib, p)
 		}
@@ -334,15 +334,16 @@ func TestRekeyPathState(t *testing.T) {
 	}
 	countsBefore := total()
 
-	rep, err := c.RekeyPathState(ctx, nil)
+	rep, err := c.RekeyPathState(ctx, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(rep.Failed) != 0 {
 		t.Fatalf("failed: %+v", rep.Failed)
 	}
-	if rep.Moved[rekeySpelling] != 2 || rep.Moved[rekeyFile] != 2 || rep.Moved[rekeyFolder] != 1 {
-		t.Errorf("moved = %v, want spelling 2 (bob's, adm's book), file 2 (ann's, adm's track), folder 1 (eve's disc)", rep.Moved)
+	if rep.Moved[rekeySpelling] != 2 || rep.Moved[rekeyFile] != 3 || rep.Moved[rekeyFolder] != 1 || rep.Kept != 1 {
+		t.Errorf("moved = %v, kept %d, want spelling 2 (bob's, adm's book), file 3 (ann's, adm's track, eve's on track 3), "+
+			"folder 1 (eve's disc), dan's one row kept", rep.Moved, rep.Kept)
 	}
 	guards := map[string]string{}
 	for _, s := range rep.Skipped {
@@ -355,7 +356,7 @@ func TestRekeyPathState(t *testing.T) {
 	// The moves, by table: what stays and where the rest went. A track row's
 	// heart stays on the track (file), in the index's spelling: adm's, on track 1
 	// in the other spelling, joins ann's on track 1.
-	stays := map[at]bool{{"favourites", rkTrack1}: true}
+	stays := map[at]bool{{"favourites", rkTrack1}: true, {"progress", rkTrack3}: true}
 	gains := map[at]int{{"favourites", rkTrack1}: 1}
 	for _, table := range rekeyedTables {
 		if i := slices.IndexFunc(rekeyTables, func(rt rekeyTable) bool { return rt.name == table }); rekeyTables[i].set != carryBookLevel {
@@ -368,8 +369,7 @@ func TestRekeyPathState(t *testing.T) {
 			t.Errorf("%s at %+q: %d rows left, want %d", k.table, k.path, got, want)
 		}
 	}
-	for _, k := range []at{{"progress", rkTrack2}, {"progress", rkTrack3}, {"bookmarks", rkTrack3}, {"favourites", rkNav},
-		{"progress", rkOrphan}} {
+	for _, k := range []at{{"progress", rkTrack2}, {"favourites", rkNav}, {"progress", rkOrphan}} {
 		if f.rowCount(t, k.table, f.lib, k.path) != 1 {
 			t.Errorf("%s at %+q moved, want it left", k.table, k.path)
 		}
@@ -389,6 +389,12 @@ func TestRekeyPathState(t *testing.T) {
 	if bms, _ := c.ListBookmarks(ctx, f.ann, book); len(bms) != 1 || bms[0].Position != 300 {
 		t.Errorf("ann's bookmarks on the book = %+v, want one at 300", bms)
 	}
+	if bms, _ := c.ListBookmarks(ctx, f.eve, book); len(bms) != 1 || bms[0].Position != 300 {
+		t.Errorf("eve's bookmarks on the book = %+v, want hers from track 3 though dan's row there stays", bms)
+	}
+	if p, _ := c.GetProgress(ctx, f.dan, Ref{LibraryID: f.lib, Path: rkTrack3}); p == nil || p.Position != 10 {
+		t.Errorf("dan's progress on track 3 = %+v, want it kept where he can reach it", p)
+	}
 	if r, _ := c.GetRating(ctx, f.bob, book); r == nil || r.Stars != 4 {
 		t.Errorf("bob's rating = %+v, want the newer carried 4", r)
 	}
@@ -403,13 +409,27 @@ func TestRekeyPathState(t *testing.T) {
 	}
 
 	// Every row before is a row after or a logged loser: counts reconcile.
-	var logged int
-	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM path_rekeys`).Scan(&logged); err != nil {
+	var logged, kept int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM path_rekeys WHERE reason != ?`, RekeyGuardScope).
+		Scan(&logged); err != nil {
 		t.Fatal(err)
 	}
 	if logged != rep.Rows {
-		t.Errorf("path_rekeys holds %d rows, the report %d", logged, rep.Rows)
+		t.Errorf("path_rekeys holds %d moved rows, the report %d", logged, rep.Rows)
 	}
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM path_rekeys WHERE reason = ? AND user_id = ?
+		AND table_name = 'progress' AND from_path = ? AND to_path = ?`, RekeyGuardScope, f.dan, rkTrack3, rkBook).
+		Scan(&kept); err != nil || kept != 1 {
+		t.Errorf("dan's kept row logged %d times (%v), want once", kept, err)
+	}
+	logTotal := func() int {
+		var n int
+		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM path_rekeys`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	logs0 := logTotal()
 	after := total()
 	// The merges: ann's track-1 progress onto her own book save, bob's rating
 	// in the other spelling onto his rating on the book.
@@ -426,7 +446,7 @@ func TestRekeyPathState(t *testing.T) {
 		user            sql.NullInt64
 	}
 	logs, err := queryRows(ctx, c.db, func(r *sql.Rows, l *logRow) error { return r.Scan(&l.table, &l.from, &l.js, &l.user) },
-		`SELECT table_name, from_path, row_json, user_id FROM path_rekeys`)
+		`SELECT table_name, from_path, row_json, user_id FROM path_rekeys WHERE reason != ?`, RekeyGuardScope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,12 +473,12 @@ func TestRekeyPathState(t *testing.T) {
 	if v, _ := getServerState[string](ctx, c.db, rekeyStateKey); v != pathKeysVersion {
 		t.Errorf("server_state %s = %q, want %q", rekeyStateKey, v, pathKeysVersion)
 	}
-	again, err := c.RekeyPathState(ctx, nil)
+	again, err := c.RekeyPathState(ctx, nil, nil)
 	if err != nil || len(again.Moved) != 0 || len(again.Skipped) != 0 || again.Rows != 0 {
 		t.Errorf("second start: %+v %v, want nothing", again, err)
 	}
 	f.exec(t, `DELETE FROM server_state WHERE key = ?`, rekeyStateKey)
-	rerun, err := c.RekeyPathState(ctx, nil)
+	rerun, err := c.RekeyPathState(ctx, nil, nil)
 	if err != nil || len(rerun.Moved) != 0 || rerun.Rows != 0 || len(rerun.Failed) != 0 {
 		t.Errorf("a full re-run: %+v %v, want nothing moved", rerun, err)
 	}
@@ -468,6 +488,10 @@ func TestRekeyPathState(t *testing.T) {
 	}
 	if !maps.Equal(total(), after) {
 		t.Error("a re-run changed the tables")
+	}
+	if rerun.Kept != 1 || scan.Kept != 1 || logTotal() != logs0 {
+		t.Errorf("re-runs kept %d and %d rows and grew the log by %d, want dan's one row each time, logged once",
+			rerun.Kept, scan.Kept, logTotal()-logs0)
 	}
 
 	// A user delete takes their logged rows with them.
@@ -507,6 +531,71 @@ func TestRekeyScopeGuardAllowsReachableBook(t *testing.T) {
 	}
 	if f.rowCount(t, "progress", f.lib, rkAmelie) != 1 || f.rowCount(t, "progress", f.lib, rkTrack3) != 1 {
 		t.Error("rows not where the guard leaves them")
+	}
+}
+
+// TestRekeyScopeIsPerListener: on one path, the rows of a listener who can't
+// reach where they would go (dan, granted track 3 only; zed, whose access was
+// removed) stay, every table of them, logged once with reason scope, while the
+// rows of a listener who can (ann) all move: one listener never pins another's.
+func TestRekeyScopeIsPerListener(t *testing.T) {
+	t.Parallel()
+	f := newRekeyFixture(t)
+	zed := seedNamedUser(t, f.c, "zed") // no grant: access since removed
+	// Track 1 in the other spelling: the file's rows go to the book, its heart
+	// to track 1 in the index's spelling.
+	for _, u := range []int64{f.ann, f.dan, zed} {
+		f.seedEverything(t, u, f.lib, rkTrack1D, 30, rkUpdated1)
+	}
+	rows := func(table string, user int64, p string) int {
+		q := `SELECT COUNT(*) FROM ` + table + ` WHERE user_id = ? AND library_id = ? AND rel_path = ?`
+		if table == "collection_items" {
+			q = `SELECT COUNT(*) FROM collection_items i JOIN collections c ON c.id = i.collection_id
+			      WHERE c.user_id = ? AND i.library_id = ? AND i.rel_path = ?`
+		}
+		var n int
+		if err := f.c.db.QueryRowContext(f.ctx, q, user, f.lib, p).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	rep, err := f.c.RekeyPathState(f.ctx, nil, nil)
+	if err != nil || len(rep.Failed) != 0 {
+		t.Fatalf("re-key: %+v %v", rep, err)
+	}
+	n := len(rekeyedTables)
+	if rep.Moved[rekeyFile] != 1 || rep.Rows != n || rep.Kept != 2*n {
+		t.Errorf("report = %+v, want the path moved for ann's %d rows, dan's and zed's %d kept", rep, n, 2*n)
+	}
+	if len(rep.Skipped) != 1 || rep.Skipped[0].Why != RekeyGuardScope {
+		t.Errorf("skipped = %+v, want the path named once by the scope guard", rep.Skipped)
+	}
+	for _, table := range rekeyedTables {
+		to := rkBook
+		if table == "favourites" {
+			to = rkTrack1 // a track row's heart stays on the track, in the index's spelling
+		}
+		if rows(table, f.ann, rkTrack1D) != 0 || rows(table, f.ann, to) != 1 {
+			t.Errorf("%s: ann's row did not move to %+q", table, to)
+		}
+		for _, u := range []int64{f.dan, zed} {
+			if rows(table, u, rkTrack1D) != 1 || rows(table, u, to) != 0 {
+				t.Errorf("%s: user %d's row moved, want it kept", table, u)
+			}
+		}
+	}
+	var kept int
+	if err := f.c.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM path_rekeys WHERE reason = ? AND user_id IN (?, ?)
+		AND from_path = ?`, RekeyGuardScope, f.dan, zed, rkTrack1D).Scan(&kept); err != nil || kept != 2*n {
+		t.Errorf("kept rows logged %d (%v), want %d", kept, err, 2*n)
+	}
+	// A scan-end run keeps them again and logs nothing new.
+	if again, err := f.c.RekeyLibrary(f.ctx, f.lib); err != nil || again.Rows != 0 || again.Kept == 0 {
+		t.Errorf("scan-end run: %+v %v, want the kept rows kept, nothing moved", again, err)
+	}
+	var logged int
+	if err := f.c.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM path_rekeys`).Scan(&logged); err != nil || logged != 3*n {
+		t.Errorf("path_rekeys holds %d rows (%v), want %d: a re-run logs nothing again", logged, err, 3*n)
 	}
 }
 
@@ -613,7 +702,7 @@ func TestRekeyOnUpgrade(t *testing.T) {
 	if _, err := f.c.KeyPaths(f.ctx, nil); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := f.c.RekeyPathState(f.ctx, nil)
+	rep, err := f.c.RekeyPathState(f.ctx, nil, nil)
 	if err != nil || rep.Moved[rekeySpelling] != 1 {
 		t.Fatalf("upgrade re-key: %+v %v, want the precomposed spelling moved", rep, err)
 	}
@@ -626,7 +715,7 @@ func TestRekeyOnUpgrade(t *testing.T) {
 		UpdatedAt: rkUpdated1, Version: 1}); err != nil {
 		t.Fatal(err)
 	}
-	rep, err = clean.c.RekeyPathState(clean.ctx, nil)
+	rep, err = clean.c.RekeyPathState(clean.ctx, nil, nil)
 	if err != nil || len(rep.Moved) != 0 || rep.Rows != 0 || len(rep.Skipped) != 0 {
 		t.Fatalf("nothing to move: %+v %v", rep, err)
 	}
@@ -661,7 +750,7 @@ func TestRekeyRetriesOnlyFailedPaths(t *testing.T) {
 	}
 	track1 := []Ref{{LibraryID: f.lib, Path: rkTrack1}}
 	var told [][2]int
-	rep, err := f.c.RekeyPathState(f.ctx, func(done, total int) { told = append(told, [2]int{done, total}) })
+	rep, err := f.c.RekeyPathState(f.ctx, nil, func(done, total int) { told = append(told, [2]int{done, total}) })
 	if err != nil || len(rep.Failed) != 1 || rep.Failed[0].Path != rkTrack1 || len(rep.Moved) != 0 || len(rep.Retried) != 0 {
 		t.Fatalf("report = %+v %v, want track 1 failed", rep, err)
 	}
@@ -686,7 +775,7 @@ func TestRekeyRetriesOnlyFailedPaths(t *testing.T) {
 	// start no longer looks at every path.
 	f.exec(t, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, version, device_id, updated_at, device_name)
 		VALUES(?, ?, ?, 5, ?, 1, 'dev', ?, 'Phone')`, f.bob, f.lib, rkTrack2, rkBookLen, rkUpdated1)
-	rep, err = f.c.RekeyPathState(f.ctx, nil)
+	rep, err = f.c.RekeyPathState(f.ctx, nil, nil)
 	if err != nil || !slices.Equal(rep.Retried, track1) || len(rep.Failed) != 1 || len(rep.Moved) != 0 {
 		t.Fatalf("the next start, still refused: %+v %v, want track 1 tried again and failed", rep, err)
 	}
@@ -695,7 +784,7 @@ func TestRekeyRetriesOnlyFailedPaths(t *testing.T) {
 	}
 
 	f.exec(t, `DROP TRIGGER refuse_carry`)
-	rep, err = f.c.RekeyPathState(f.ctx, nil)
+	rep, err = f.c.RekeyPathState(f.ctx, nil, nil)
 	if err != nil || !slices.Equal(rep.Retried, track1) || rep.Moved[rekeyFile] != 1 || len(rep.Failed) != 0 {
 		t.Fatalf("the start after: %+v %v, want track 1 moved", rep, err)
 	}
@@ -708,7 +797,7 @@ func TestRekeyRetriesOnlyFailedPaths(t *testing.T) {
 	if got := failedPaths(); len(got) != 0 {
 		t.Errorf("failed paths after the move = %+v, want none", got)
 	}
-	if rep, err := f.c.RekeyPathState(f.ctx, nil); err != nil || len(rep.Retried) != 0 || len(rep.Moved) != 0 {
+	if rep, err := f.c.RekeyPathState(f.ctx, nil, nil); err != nil || len(rep.Retried) != 0 || len(rep.Moved) != 0 {
 		t.Errorf("a start with nothing failed: %+v %v, want nothing looked at", rep, err)
 	}
 	// The scan-end run takes the path that turned up.
@@ -725,7 +814,7 @@ func TestRekeyRetryDropsWhatIsGone(t *testing.T) {
 	f := newRekeyFixture(t)
 	f.seedEverything(t, f.ann, f.lib, rkTrack1, 30, rkUpdated1)
 	f.exec(t, refuseCarry)
-	if rep, err := f.c.RekeyPathState(f.ctx, nil); err != nil || len(rep.Failed) != 1 {
+	if rep, err := f.c.RekeyPathState(f.ctx, nil, nil); err != nil || len(rep.Failed) != 1 {
 		t.Fatalf("report = %+v %v, want track 1 failed", rep, err)
 	}
 	// A path of a library since removed joins the list; ann's rows go.
@@ -734,7 +823,7 @@ func TestRekeyRetryDropsWhatIsGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.exec(t, `DELETE FROM users WHERE id = ?`, f.ann)
-	rep, err := f.c.RekeyPathState(f.ctx, nil)
+	rep, err := f.c.RekeyPathState(f.ctx, nil, nil)
 	if err != nil || len(rep.Failed) != 0 || len(rep.Moved) != 0 || slices.Contains(rep.Retried, gone) {
 		t.Fatalf("the next start: %+v %v, want nothing failed or moved, the removed library's path left out", rep, err)
 	}
@@ -761,7 +850,7 @@ func TestRekeyTooManyFailuresRunsAgain(t *testing.T) {
 	}
 	f.exec(t, refuseCarry)
 	var told [][2]int
-	rep, err := f.c.RekeyPathState(f.ctx, func(done, total int) { told = append(told, [2]int{done, total}) })
+	rep, err := f.c.RekeyPathState(f.ctx, nil, func(done, total int) { told = append(told, [2]int{done, total}) })
 	if err != nil || len(rep.Failed) != n {
 		t.Fatalf("report: %d failed %v, want %d", len(rep.Failed), err, n)
 	}
@@ -775,10 +864,51 @@ func TestRekeyTooManyFailuresRunsAgain(t *testing.T) {
 		t.Errorf("a run with %d failures recorded %d paths", n, len(refs))
 	}
 	f.exec(t, `DROP TRIGGER refuse_carry`)
-	if rep, err := f.c.RekeyPathState(f.ctx, nil); err != nil || rep.Moved[rekeyFile] != n || len(rep.Retried) != 0 {
+	if rep, err := f.c.RekeyPathState(f.ctx, nil, nil); err != nil || rep.Moved[rekeyFile] != n || len(rep.Retried) != 0 {
 		t.Fatalf("the next start: %+v %v, want every path moved", rep.Moved, err)
 	}
 	if v, _ := getServerState[string](f.ctx, f.c.db, rekeyStateKey); v != pathKeysVersion {
 		t.Errorf("the clean run recorded %q", v)
+	}
+}
+
+// TestRekeySkipsUnansweringLibrary: the start's run leaves a library whose
+// folder does not answer whole, failed paths included (Spelling's look at the
+// disk can't keep a sibling folder of another spelling apart from the book),
+// records it, and the next start runs over its every path once it answers.
+func TestRekeySkipsUnansweringLibrary(t *testing.T) {
+	t.Parallel()
+	f := newRekeyFixture(t)
+	f.seedEverything(t, f.ann, f.lib, rkTrack1, 30, rkUpdated1)
+	f.seedEverything(t, f.bob, f.lib, rkBookNFD, 30, rkUpdated1)
+	asleep := func(l Library) bool { return l.ID != f.lib }
+	rep, err := f.c.RekeyPathState(f.ctx, asleep, nil)
+	if err != nil || len(rep.Moved) != 0 || !slices.Equal(rep.Unreached, []int64{f.lib}) {
+		t.Fatalf("report = %+v %v, want the library left whole", rep, err)
+	}
+	if f.rowCount(t, "progress", f.lib, rkTrack1) != 1 || f.rowCount(t, "progress", f.lib, rkBookNFD) != 1 {
+		t.Fatal("rows moved in a library whose folder did not answer")
+	}
+	// Still asleep at the next start (a failed path of it too): left again.
+	if err := putServerState(f.ctx, f.c.db, rekeyFailedKey, []Ref{{LibraryID: f.lib, Path: rkTrack1}}, f.c.stamp()); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = f.c.RekeyPathState(f.ctx, asleep, nil)
+	if err != nil || len(rep.Moved) != 0 || len(rep.Retried) != 0 || !slices.Equal(rep.Unreached, []int64{f.lib}) {
+		t.Fatalf("still asleep: %+v %v, want it left again", rep, err)
+	}
+	// Awake: every path of it, once.
+	rep, err = f.c.RekeyPathState(f.ctx, nil, nil)
+	if err != nil || rep.Moved[rekeyFile] != 1 || rep.Moved[rekeySpelling] != 1 || len(rep.Unreached) != 0 ||
+		!slices.Equal(rep.Retried, []Ref{{LibraryID: f.lib}}) {
+		t.Fatalf("awake: %+v %v, want its track and spelling moved", rep, err)
+	}
+	for _, key := range []string{rekeyUnreachedKey, rekeyFailedKey} {
+		if v, err := getServerState[json.RawMessage](f.ctx, f.c.db, key); err != nil || v != nil {
+			t.Errorf("%s = %s %v, want no row", key, v, err)
+		}
+	}
+	if rep, err := f.c.RekeyPathState(f.ctx, nil, nil); err != nil || len(rep.Retried) != 0 || len(rep.Moved) != 0 {
+		t.Errorf("the start after: %+v %v, want nothing", rep, err)
 	}
 }
