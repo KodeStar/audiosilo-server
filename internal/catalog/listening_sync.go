@@ -1019,7 +1019,9 @@ func (s *syncRun) ownAudiblePlace(ctx context.Context, key Ref) error {
 		return nil
 	}
 	_, err := s.tx.ExecContext(ctx,
-		`UPDATE progress SET device_id = ?, device_name = ? WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
+		`UPDATE progress SET device_id = ?1, device_name = ?2
+		  WHERE user_id = ?3 AND library_id = ?4 AND rel_path = ?5
+		    AND (device_id IS NOT ?1 OR device_name IS NOT ?2)`,
 		s.b.DeviceID, s.b.DeviceName, s.b.UserID, key.LibraryID, key.Path)
 	return err
 }
@@ -1327,9 +1329,10 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 	if err != nil {
 		return SyncResult{}, err
 	}
-	if takes {
-		s.written[key] = version
+	if !takes {
+		return SyncResult{Status: statusApplied}, nil
 	}
+	s.written[key] = version
 	return SyncResult{Status: statusApplied}, s.ownAudiblePlace(ctx, key)
 }
 
