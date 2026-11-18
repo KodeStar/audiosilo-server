@@ -142,8 +142,13 @@ func TestCSPAllowsPlainHTTP(t *testing.T) {
 // style attribute, the "text-overflow:inherit" WebKit puts inside a native
 // <select>'s user-agent shadow tree (#467), by its hash, and no inline style
 // otherwise: no 'unsafe-inline' on style-src or style-src-attr, no other hash.
+// 'unsafe-hashes' stays off scripts: script-src is 'self' alone, so no event
+// handler or javascript: URL is admitted by a hash. (That the pages are served
+// with this constant is pinned by the tests of the connect page, the console
+// and the static assets.)
 func TestCSPWebKitSelectStyleHash(t *testing.T) {
 	t.Parallel()
+	// The exact bytes WebKit sets: no space after the colon, no trailing semicolon.
 	sum := sha256.Sum256([]byte("text-overflow:inherit"))
 	if want := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"; webkitSelectStyleHash != want {
 		t.Fatalf("webkitSelectStyleHash = %s, want %s (the sha256 of text-overflow:inherit)", webkitSelectStyleHash, want)
@@ -151,29 +156,30 @@ func TestCSPWebKitSelectStyleHash(t *testing.T) {
 	directives := map[string]string{}
 	for _, dir := range strings.Split(contentSecurityPolicy, "; ") {
 		name, value, _ := strings.Cut(dir, " ")
+		// A browser keeps the first of a repeated directive and drops the rest.
+		if _, dup := directives[name]; dup {
+			t.Fatalf("the console CSP repeats %s: %s", name, contentSecurityPolicy)
+		}
 		directives[name] = value
 	}
-	if got, want := directives["style-src"], "'self'"; got != want {
-		t.Errorf("style-src = %q, want %q", got, want)
-	}
-	if got, want := directives["style-src-attr"], "'unsafe-hashes' "+webkitSelectStyleHash; got != want {
-		t.Errorf("style-src-attr = %q, want %q", got, want)
-	}
-	if _, ok := directives["style-src-elem"]; ok {
-		t.Errorf("the console CSP should leave <style> elements to style-src 'self': %s", contentSecurityPolicy)
-	}
-
-	// The header served on the connect page and the console is that policy.
-	mux := http.NewServeMux()
-	if err := Register(mux, ""); err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range []string{"/", "/admin/"} {
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
-		if csp := rec.Header().Get("Content-Security-Policy"); csp != contentSecurityPolicy {
-			t.Errorf("GET %s CSP = %q, want %q", p, csp, contentSecurityPolicy)
+	for name, want := range map[string]string{
+		"style-src":      "'self'",
+		"style-src-attr": "'unsafe-hashes' " + webkitSelectStyleHash,
+		"script-src":     "'self'",
+	} {
+		if got := directives[name]; got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
 		}
+	}
+	// Denied: no directive that would take <style> elements, <script> elements
+	// or event handlers away from the two 'self' lists above.
+	for _, name := range []string{"style-src-elem", "script-src-elem", "script-src-attr"} {
+		if _, ok := directives[name]; ok {
+			t.Errorf("the console CSP should not carry %s: %s", name, contentSecurityPolicy)
+		}
+	}
+	if n := strings.Count(contentSecurityPolicy, "'unsafe-"); n != 1 {
+		t.Errorf("the console CSP carries %d 'unsafe-*' keywords, want style-src-attr's 'unsafe-hashes' alone: %s", n, contentSecurityPolicy)
 	}
 }
 
