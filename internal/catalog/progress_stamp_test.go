@@ -42,3 +42,36 @@ func TestSaveProgressStoresUpdatedAtAsUTC(t *testing.T) {
 		}
 	}
 }
+
+// server#224: a book counts as a drop-off once two people left it unfinished
+// for 30 days; its cutoff is compared with updated_at in the stored form
+// (fixed-width UTC milliseconds), so a row saved half a second after the cutoff
+// is still fresh, and one half a second before it is stalled.
+func TestActivityDropOffCutoffInStoredForm(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		saved time.Duration // against the cutoff
+		want  int
+	}{{"after the cutoff", 500 * time.Millisecond, 0}, {"before the cutoff", -500 * time.Millisecond, 1}} {
+		f := newSessionFixture(t)
+		stalled := Ref{LibraryID: f.lib, Path: "Stalled"}
+		if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: f.lib, RelPath: "Stalled", IsFolder: true, Title: "Stalled",
+			Duration: 600, Size: 500, Format: "mp3", Codec: "mp3", AddedAt: "2026-01-15T00:00:00Z"}); err != nil {
+			t.Fatal(err)
+		}
+		at := FormatStamp(f.clock.Add(-dropOffIdle + tc.saved))
+		for _, u := range []int64{f.user, f.addUser(t, "bob", "2025-01-01T00:00:00Z", false)} {
+			if _, err := f.c.SaveProgress(f.ctx, u, Progress{Ref: stalled, Position: 400, Duration: 600, UpdatedAt: at}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var a Activity
+		if err := f.c.activityDropOffs(f.ctx, &a, time.Time{}, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+		if len(a.DropOffs) != tc.want {
+			t.Fatalf("%s: drop-offs %+v, want %d", tc.name, a.DropOffs, tc.want)
+		}
+	}
+}

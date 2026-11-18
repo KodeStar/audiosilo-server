@@ -911,7 +911,7 @@ func (c *Catalog) activityFunnel(ctx context.Context, out *Activity, from, to ti
 // book. It doesn't depend on the period: a drop-off is a book nobody came back to.
 func (c *Catalog) activityDropOffs(ctx context.Context, out *Activity, _, _ time.Time) error {
 	out.DropOffs = []DropOff{}
-	idle := c.now().Add(-dropOffIdle).UTC().Format(time.RFC3339)
+	idle := formatSessionTime(c.now().Add(-dropOffIdle)) // updated_at's own form (server#224)
 	stalled, err := c.stalledBooks(ctx, idle)
 	if err != nil || len(stalled) == 0 {
 		return err
