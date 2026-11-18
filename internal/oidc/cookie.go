@@ -114,15 +114,17 @@ func (s *Sealer) Open(v string) (Flow, error) {
 	return f, nil
 }
 
-// maxReplay bounds the states Replay remembers.
+// maxReplay bounds the keys one Replay remembers.
 const maxReplay = 10000
 
 // Replay remembers the flows a callback completed (the code exchanged, the ID
 // token checked), for FlowMaxAge, so one cookie signs in once even when a copy
-// of it is sent again with another code.
+// of it is sent again with another code. A second one, of its own, remembers
+// the intent tags those flows carried (Flow.Intent), for as long: a key is a
+// flow's state or a tag, and a tag is free again once it is forgotten.
 type Replay struct {
 	mu    sync.Mutex
-	used  map[string]time.Time // state -> when it may be forgotten
+	used  map[string]time.Time // state or tag -> when it may be forgotten
 	swept time.Time            // the last time the forgettable were dropped
 	now   func() time.Time
 }
