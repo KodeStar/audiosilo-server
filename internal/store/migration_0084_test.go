@@ -58,4 +58,17 @@ func TestMigration0084AddsPathRekeys(t *testing.T) {
 	if got := lines(t, db, `SELECT COALESCE(user_id, 'NULL') || '/' || library_id FROM path_rekeys`); strings.Join(got, ",") != "2/1" {
 		t.Fatalf("path_rekeys after a user and a library delete = %v, want only bob's row in library 1", got)
 	}
+	// A path's rows are an index seek in every table the re-key reads by path.
+	for table, index := range map[string]string{"bookmarks": "idx_bookmarks_path", "notes": "idx_notes_path",
+		"listening_history": "idx_history_path", "favourites": "idx_favourites_path"} {
+		var id, parent, unused int
+		var plan string
+		if err := db.writer.QueryRowContext(ctx, `EXPLAIN QUERY PLAN SELECT * FROM `+table+`
+			WHERE library_id = 1 AND rel_path = 'a'`).Scan(&id, &parent, &unused, &plan); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(plan, index) {
+			t.Errorf("a %s read by path: plan %q, want %s", table, plan, index)
+		}
+	}
 }

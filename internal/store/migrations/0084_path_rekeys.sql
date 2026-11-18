@@ -20,3 +20,10 @@ CREATE TABLE path_rekeys (
 );
 CREATE INDEX idx_path_rekeys_user ON path_rekeys(user_id);
 CREATE INDEX idx_path_rekeys_library ON path_rekeys(library_id);
+
+-- The re-key reads and carries a path's rows table by table (and so do a join
+-- and a move): these four had no index by path, so each path was a full scan.
+CREATE INDEX idx_bookmarks_path ON bookmarks(library_id, rel_path);
+CREATE INDEX idx_notes_path ON notes(library_id, rel_path);
+CREATE INDEX idx_history_path ON listening_history(library_id, rel_path);
+CREATE INDEX idx_favourites_path ON favourites(library_id, rel_path);
