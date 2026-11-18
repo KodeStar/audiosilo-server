@@ -552,6 +552,7 @@ const SERVER_CANCEL_REASONS: readonly string[] = [
   'a generate job for the book replaced it; make the read-along again after',
   'the book moved onto another job of this kind',
   'a newer request replaced it',
+  'its module was turned off',
   'the Audible account was removed',
   "the Audible account's library was deleted",
   'sync with Audible was turned off for the account',

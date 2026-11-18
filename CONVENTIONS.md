@@ -3119,7 +3119,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it, and `Enqueue` refuses one 409 `cannot_contribute` unless `Status.CanContribute()`. While the module
   is off a queued one is **held** (`bridge.Service.ModuleOn`, wired by `SetBridge`): claims pass over it
   (`nextQueued`) until the module is on again, so turning it off leaves its queued jobs at rest (one a
-  lapsed lease requeued included); a job the Bridge holds (claimed, running or parked) carries on.
+  lapsed lease requeued included); a claimed or running one is asked to stop at the Bridge's next report
+  (`UpdateHeld` sets `cancel_requested` with the server's reason `CancelModuleOff`, "its module was turned
+  off", in the console's `SERVER_CANCEL_REASONS`; server#218), a parked one when it reports working again.
   `sidecars.contribute` (family `sidecars`; "Share with the community" after a local run: the Bridge files
   what its engine book holds): a book `path`, params strict `{work_id?, dimensions?}` (`dimensions` from
   `characters`, `recaps`, each once, stored in that order; absent or empty = both; no `work_id` takes the

@@ -153,8 +153,9 @@ type kindSpec struct {
 	// same book (cancelOpenTx, the value its error), in the same transaction.
 	cancelsOpen map[string]string
 	// module is the managed module a job of the kind needs ("" for none): the
-	// api answers 404 module_off while it is off (ModuleFor), and a queued one
-	// is held meanwhile (Service.ModuleOn). A job that needs ModuleContributions
+	// api answers 404 module_off while it is off (ModuleFor), a queued one is
+	// held meanwhile (Service.ModuleOn), and a claimed one is asked to stop at
+	// its next report (UpdateHeld, CancelModuleOff). A job that needs ModuleContributions
 	// files to the community, so it also needs a Bridge that can
 	// (ErrCannotContribute).
 	module string
@@ -1470,6 +1471,17 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		var lease, finished any
 		switch state {
 		case StateClaimed, StateRunning:
+			// A job its managed module needs keeps working only while the module
+			// is on: a queued one is held (nextQueued), and one already claimed
+			// is asked to stop at this report, with the server's reason, as a
+			// cancel an admin asked for is (server#218).
+			if !cur.CancelRequested && s.held(cur.Kind, cur.Params) {
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE bridge_jobs SET cancel_requested = 1, error = ? WHERE id = ?`, CancelModuleOff, id); err != nil {
+					return err
+				}
+				cur.CancelRequested, cur.Error = true, CancelModuleOff
+			}
 			until := s.now().Add(Lease)
 			// Even a fieldless acknowledgement in the claim's second must
 			// distinguish its renewed lease from an undelivered response.
@@ -1693,12 +1705,15 @@ const (
 	// CancelReplacedRequest: a podcast request for a newer identity of the
 	// same work replaced the open one (Enqueue).
 	CancelReplacedRequest = "a newer request replaced it"
+	// CancelModuleOff: the managed module the job needs was turned off while
+	// the Bridge worked on it (UpdateHeld).
+	CancelModuleOff = "its module was turned off"
 )
 
 // IsCancelReason reports whether text is one of the server's own cancel
-// reasons: the kinds' cancelsOpen, CancelMoved, CancelReplacedRequest or an
-// Audible account's job's (CancelAudibleRemoved, CancelAudiblePaused,
-// CancelAudibleSyncOff).
+// reasons: the kinds' cancelsOpen, CancelMoved, CancelReplacedRequest,
+// CancelModuleOff or an Audible account's job's (CancelAudibleRemoved,
+// CancelAudiblePaused, CancelAudibleSyncOff).
 func IsCancelReason(text string) bool {
 	return slices.Contains(cancelReasons(), text)
 }
@@ -1707,7 +1722,7 @@ func IsCancelReason(text string) bool {
 // copy (SERVER_CANCEL_REASONS) is checked against (TestCancelReasonsMatchConsole).
 // The kinds are fixed at init, so it is built once.
 var cancelReasons = sync.OnceValue(func() []string {
-	out := []string{CancelMoved, CancelReplacedRequest, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff}
+	out := []string{CancelMoved, CancelReplacedRequest, CancelModuleOff, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff}
 	for _, spec := range kinds {
 		out = slices.AppendSeq(out, maps.Values(spec.cancelsOpen))
 	}

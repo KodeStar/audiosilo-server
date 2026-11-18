@@ -716,6 +716,58 @@ func TestClaimHoldsJobsOfAnOffModule(t *testing.T) {
 	}
 }
 
+// A claimed job whose managed module is turned off is asked to stop at the
+// Bridge's next report, with the server's reason, which its end keeps
+// (server#218); with the module on, and for a job that needs no module, the
+// report changes nothing.
+func TestUpdateHeldStopsAJobOfAnOffModule(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	q := newTestQueue(t)
+	q.beatSetup(t, true, true, KindSidecars, KindContribute)
+	on := true
+	q.ModuleOn = func(id string) bool { return id != ModuleContributions || on }
+	community, _, err := q.contribute("", ptr("Author/One"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, _, err := q.sidecars("", ptr("Author/Two"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if j, err := q.claim(ctx, q.token, []string{KindSidecars, KindContribute}); err != nil || j == nil {
+			t.Fatalf("claim = %+v, %v", j, err)
+		}
+	}
+	running := func(id int64) *Job {
+		t.Helper()
+		j, err := q.UpdateHeld(ctx, id, Update{Attempt: 1, State: ptr(StateRunning), Error: ptr("")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+	if j := running(community.ID); j.CancelRequested || j.Error != "" {
+		t.Fatalf("module on: %+v, want working on", j)
+	}
+	on = false
+	if j := running(local.ID); j.CancelRequested || j.Error != "" {
+		t.Fatalf("a job needing no module: %+v, want working on", j)
+	}
+	j := running(community.ID)
+	if !j.CancelRequested || j.Error != CancelModuleOff || j.State != StateRunning {
+		t.Fatalf("module off: %+v, want asked to stop with %q", j, CancelModuleOff)
+	}
+	if !IsCancelReason(j.Error) {
+		t.Fatalf("%q is not a server cancel reason", j.Error)
+	}
+	j, err = q.UpdateHeld(ctx, community.ID, Update{Attempt: 1, State: ptr(StateCancelled), Error: ptr("stopped")})
+	if err != nil || j.State != StateCancelled || j.Error != CancelModuleOff {
+		t.Fatalf("its end = %+v, %v; want cancelled with the server's reason", j, err)
+	}
+}
+
 // ModuleFor: the community kinds need contributions, and so does a generate
 // job only when it contributes.
 func TestModuleFor(t *testing.T) {
