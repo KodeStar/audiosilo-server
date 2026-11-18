@@ -126,7 +126,9 @@ const (
 	staySlack = 2 * time.Minute
 	// maxFinishTransit: the most of a batch's sent_at shift a finish made
 	// without seeing the row's last explicit write is dated back by
-	// (finishChange): a request's time on the way, not a clock's skew.
+	// (finishChange): a request's time on the way, not a clock's skew. Also
+	// how long after its finish a span stamped with it may land dated
+	// (finishedAfter).
 	maxFinishTransit = 30 * time.Second
 )
 
@@ -716,23 +718,36 @@ func (s *syncRun) listen(ctx context.Context, p syncPrepared) (SyncResult, error
 // of the session the span lands in, which finishSession found no session for
 // when it came first. A very short book's player may post its finish before
 // its only span, in separate batches (server#359); a player now sends the span
-// first, which finishSession marks. Read from the row (finished, by this
-// device, its finish_changed_at in the window) before the log: most spans land
-// on a row no finish just changed.
+// first, which finishSession marks. The player stamps the span's end and the
+// finish together and each batch is corrected by its own sent_at shift, so the
+// span may land dated after the finish by the difference in the two requests'
+// time on the way (at most maxFinishTransit). Read from the row (finished, by
+// this device, its finish_changed_at in the window) before the log: most spans
+// land on a row no finish just changed.
 func (s *syncRun) finishedAfter(ctx context.Context, p syncPrepared, stored *syncRow) (bool, error) {
 	if stored == nil || !stored.finished || !stored.finishChangedAt.Valid || stored.deviceID != s.b.DeviceID {
 		return false, nil
 	}
-	if f := parseSessionTime(stored.finishChangedAt.String); f.Before(p.ended) || f.Sub(p.ended) > SessionGap {
+	if f := parseSessionTime(stored.finishChangedAt.String); p.ended.Sub(f) > maxFinishTransit || f.Sub(p.ended) > SessionGap {
 		return false, nil
 	}
-	var ok bool
+	return s.ownFinishChange(ctx, p.target.Key, stored.finishChangedAt.String, EventFinish)
+}
+
+// ownFinishChange reports whether the row's last finish-state change (at, its
+// finish_changed_at) was this token's own: an applied event of one of kinds
+// (EventFinish, EventUnfinish) on the book that ended then.
+func (s *syncRun) ownFinishChange(ctx context.Context, key Ref, at string, kinds ...string) (bool, error) {
+	args := []any{key.LibraryID, key.Path, s.b.UserID, s.b.TokenID, statusApplied, at}
+	for _, kind := range kinds {
+		args = append(args, kind)
+	}
+	var own bool
 	err := s.tx.QueryRowContext(ctx,
 		`SELECT EXISTS(SELECT 1 FROM listening_events
-		  WHERE library_id = ? AND rel_path = ? AND user_id = ? AND token_id = ? AND kind = ? AND ended_at = ?)`,
-		p.target.Key.LibraryID, p.target.Key.Path, s.b.UserID, s.b.TokenID, EventFinish,
-		stored.finishChangedAt.String).Scan(&ok)
-	return ok, err
+		  WHERE library_id = ? AND rel_path = ? AND user_id = ? AND token_id = ? AND status = ? AND ended_at = ?
+		    AND kind IN (`+placeholders(len(kinds))+`))`, args...).Scan(&own)
+	return own, err
 }
 
 // furthestListen is a furthest-only batch's listen (SyncBatch.FurthestOnly):
@@ -1270,13 +1285,7 @@ func (s *syncRun) finishChange(ctx context.Context, p syncPrepared, stored *sync
 	if base := p.ev.BaseVersion; base != nil && *base >= stored.editVersion.Int64 {
 		return p.ended, nil
 	}
-	var own bool
-	if err := s.tx.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM listening_events
-		  WHERE library_id = ? AND rel_path = ? AND user_id = ? AND token_id = ? AND kind IN (?, ?)
-		    AND status = ? AND ended_at = ?)`,
-		key.LibraryID, key.Path, s.b.UserID, s.b.TokenID, EventFinish, EventUnfinish, statusApplied,
-		stored.finishChangedAt.String).Scan(&own); err != nil || own {
+	if own, err := s.ownFinishChange(ctx, key, stored.finishChangedAt.String, EventFinish, EventUnfinish); err != nil || own {
 		return p.ended, err
 	}
 	return p.ended.Add(-s.transit), nil

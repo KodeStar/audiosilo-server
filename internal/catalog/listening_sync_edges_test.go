@@ -137,6 +137,20 @@ func TestSyncSpanAfterItsFinish(t *testing.T) {
 		t.Fatalf("the span after its finish left %d finished sessions, want 1", n)
 	}
 
+	// The player stamps the span's end and the finish together, and each batch
+	// is corrected by its own sent_at shift: the span's batch a little longer
+	// on the way than the finish's lands dated just after the finish, and is
+	// still its session.
+	h := newSyncFixture(t)
+	wantResult(t, h.syncOne(t, "phone", h.finishEvent(EventFinish, time.Minute)), statusApplied, "")
+	late := h.batch(t, "phone", h.listen("resume", syncBookLen-12, syncBookLen, time.Minute, base(0)))
+	sent := h.clock.Add(-300 * time.Millisecond)
+	late.SentAt = &sent
+	h.sync(t, late)
+	if n := h.count(t, `SELECT COUNT(*) FROM listening_sessions WHERE token_id = ? AND finished = 1`, tokenOf("phone")); n != 1 {
+		t.Fatalf("the span dated just after its finish left %d finished sessions, want 1", n)
+	}
+
 	// Denied: another device's span at the same time, and the phone's span
 	// that ended long before the finish.
 	g := newSyncFixture(t)

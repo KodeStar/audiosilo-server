@@ -4210,7 +4210,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   word).
   A `finish` (applied, `older` or `behind`, not a furthest-only batch's) marks the token's session on the book finished
   when its last span ended within `SessionGap` before it (`finishSession`, server#284), opening none; a span landing
-  after the token's applied finish, ending at most `SessionGap` before it, closes its session finished
+  after the token's applied finish, ending at most `SessionGap` before it (or up to `maxFinishTransit` after it: the
+  two are stamped together and each batch is corrected by its own shift), closes its session finished
   (`finishedAfter`, server#359: a very short book's player posted the finish before its only span).
   Every stored listen counts, whatever its place did: `recordSpan` (the token's session begun by the span's
   start with the latest last save, `latestSession`, extended within `SessionGap` or by `continuousPlayback`, its place,
