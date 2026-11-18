@@ -2397,10 +2397,19 @@ func TestValidNext(t *testing.T) {
 // one character it takes, beside the longest tag still seals into a flow
 // cookie small enough that the oidcMaxFlows a browser holds (a page elsewhere
 // can start them) stay well under a proxy's 8 KB header limit: no character
-// taken costs the sealed JSON more than its own byte.
+// taken costs the sealed JSON more than its own byte. With as many finished
+// sign-ins' cookies beside them, each with the longest tag, the header still
+// stays under 6.5 KB.
 func TestOIDCFlowCookiesFitAHeader(t *testing.T) {
 	t.Parallel()
 	e := newOIDCEnv(t, oidcAlice, nil)
+	token, err := e.auth.IssueToken(context.Background(), e.mustUser(t, "alice", "").ID, auth.KindOIDC, "", oidcDoneTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size := len(hostDoneCookie) + 16 + len(token) + len(oidcIntentSep) + 128 + 3; 5500+size*oidcMaxFlows > 6500 {
+		t.Errorf("%d bytes a finished sign-in's cookie: %d with %d of them beside the flows", size, 5500+size*oidcMaxFlows, oidcMaxFlows)
+	}
 	taken := 0
 	for c := byte(' '); c < 0x80; c++ {
 		head := oidcConsolePath + "x?"

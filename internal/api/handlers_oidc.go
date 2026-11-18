@@ -405,8 +405,10 @@ func (a *API) heldFlows(r *http.Request) []heldFlow {
 
 // oidcNextMax bounds a console deep link carried through a sign-in: with the
 // rest of the flow each sealed flow cookie stays under about 1.3 KB, so the
-// oidcMaxFlows a page elsewhere can start in this browser keep its requests'
-// Cookie header well under a proxy's 8 KB limit.
+// oidcMaxFlows a page elsewhere can start in this browser, and as many
+// finished sign-ins' cookies beside them (about 220 bytes each with the
+// longest tag; on https both ride on every request to the origin), keep its
+// requests' Cookie header under 6.5 KB, inside a proxy's 8 KB limit.
 const oidcNextMax = 512
 
 // oidcConsolePath is where the console's pages live: a deep link is under it.
