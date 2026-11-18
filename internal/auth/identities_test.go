@@ -824,6 +824,37 @@ func TestOIDCSignInMintsToken(t *testing.T) {
 // is ended when its account becomes a member (the callback refuses members),
 // a grown-up or a kid, as an open pairing token is. Allowed: an account left
 // independent still finishes.
+// TestConsumeOIDCAsksTheAccountInItsTransaction: the finish asks SSOAllowed
+// again of the account its transaction reads, so an account that became one
+// single sign-on never signs in (here a demo account, which nothing revokes a
+// token for) after the token's read gets no session and the token stays
+// unspent. Allowed: once it is an ordinary account again, the same token
+// finishes.
+func TestConsumeOIDCAsksTheAccountInItsTransaction(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	u := mustUser(t, s, ctx, "turns", "", RoleUser)
+	tok, err := s.IssueToken(ctx, u.ID, KindOIDC, "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDemo := func(demo bool) {
+		if _, err := s.db.ExecContext(ctx, `UPDATE users SET is_demo = ? WHERE id = ?`, demo, u.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.beforeSpend = func() { setDemo(true) }
+	_, session, err := s.ConsumeOIDC(ctx, tok, "phone")
+	s.beforeSpend = nil
+	if !errors.Is(err, ErrInvalidToken) || session != "" {
+		t.Fatalf("a demo account finished a sign-in: %q %v", session, err)
+	}
+	setDemo(false)
+	if got, session, err := s.ConsumeOIDC(ctx, tok, "phone"); err != nil || got.ID != u.ID || session == "" {
+		t.Fatalf("the refused finish spent the token: %v", err)
+	}
+}
+
 func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)

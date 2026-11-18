@@ -1353,9 +1353,11 @@ func spendToken(ctx context.Context, tx *sql.Tx, hash, kind, now string, revoke 
 // committed before it, and spend (spendableSQL) refuses the token, or commits
 // after it and ends the session with the rest (endSessions; a disabled
 // account's tokens are refused): never a session that change missed, as two
-// writes left one between the spend and the mint. Nothing is read after the
+// writes left one between the spend and the mint. admit (nil: any account
+// spendableSQL lets through) is asked of the account as the transaction reads
+// it, a refusal ErrInvalidToken with nothing spent. Nothing is read after the
 // commit, so a spent token always has its session answered.
-func (s *Service) exchangeSession(ctx context.Context, op string, userID int64, deviceName string, spend func(tx *sql.Tx, now string) error) (*User, string, error) {
+func (s *Service) exchangeSession(ctx context.Context, op string, userID int64, deviceName string, spend func(tx *sql.Tx, now string) error, admit func(*User) bool) (*User, string, error) {
 	if s.beforeSpend != nil {
 		s.beforeSpend()
 	}
@@ -1368,10 +1370,13 @@ func (s *Service) exchangeSession(ctx context.Context, op string, userID int64, 
 			return err
 		}
 		var err error
-		if session, err = s.issueToken(ctx, tx, userID, KindSession, deviceName, 0); err != nil {
+		if u, err = getUser(ctx, tx, userID); err != nil {
 			return err
 		}
-		u, err = getUser(ctx, tx, userID)
+		if admit != nil && !admit(u) {
+			return ErrInvalidToken
+		}
+		session, err = s.issueToken(ctx, tx, userID, KindSession, deviceName, 0)
 		return err
 	})
 	if err != nil {
@@ -1422,7 +1427,7 @@ func (s *Service) ConsumePairing(ctx context.Context, secret, deviceName string)
 			return s.claimRefused(ctx, tx, codeID.Int64)
 		}
 		return err
-	})
+	}, nil)
 	if err != nil {
 		return nil, "", "", err
 	}

@@ -242,7 +242,7 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy, 
 // disabled or is now a household member or a demo account (which single
 // sign-on never signs in; leaveOwners ends the open token of an account
 // joining a household, so this is the second check, and the one for a demo
-// account).
+// account; the transaction asks it again of the account as it reads it).
 func (s *Service) ConsumeOIDC(ctx context.Context, secret, deviceName string) (u *User, session string, err error) {
 	hash := hashSecret(secret)
 	u, _, err = s.lookupToken(ctx, hash, KindOIDC)
@@ -254,7 +254,7 @@ func (s *Service) ConsumeOIDC(ctx context.Context, secret, deviceName string) (u
 	}
 	return s.exchangeSession(ctx, "ConsumeOIDC", u.ID, deviceName, func(tx *sql.Tx, now string) error {
 		return spendToken(ctx, tx, hash, KindOIDC, now, true)
-	})
+	}, (*User).SSOAllowed)
 }
 
 // matchEmail reads every account whose email is email (both trimmed; SQLite's
