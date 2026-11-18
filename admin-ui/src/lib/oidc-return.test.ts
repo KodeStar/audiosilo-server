@@ -1,13 +1,28 @@
-import { OIDC_START, isOIDCReturn, oidcStartHref, takeOIDCReturn } from './oidc-return';
+import { OIDC_START, oidcStartHref, parseOIDCReturn, takeOIDCReturn } from './oidc-return';
 
-describe('isOIDCReturn', () => {
-  it("knows a single sign-on's return", () => {
-    expect(isOIDCReturn('#oidc=done')).toBe(true);
+const KEY = 'aZ09-_aZ09-_aZ09';
+
+describe('parseOIDCReturn', () => {
+  it("knows a single sign-on's return, with its flow's key or from a server before it", () => {
+    expect(parseOIDCReturn(`#oidc=done&flow=${KEY}`)).toEqual({ flow: KEY });
+    expect(parseOIDCReturn('#oidc=done')).toEqual({});
   });
 
   it('ignores anything else, a token in the address included', () => {
-    for (const hash of ['', '#', '#oidc=', '#oidc=done&x=1', '#oidc_token=abc', '#other=done']) {
-      expect(isOIDCReturn(hash)).toBe(false);
+    for (const hash of [
+      '',
+      '#',
+      '#oidc=',
+      '#oidc=done&x=1',
+      '#oidc=done&flow=',
+      '#oidc=done&flow=short',
+      `#oidc=done&flow=${KEY}x`,
+      `#oidc=done&flow=${KEY}&x=1`,
+      '#oidc=done&flow=aZ09.aZ09/aZ09+aZ',
+      '#oidc_token=abc',
+      '#other=done',
+    ]) {
+      expect(parseOIDCReturn(hash)).toBeNull();
     }
   });
 });
@@ -17,10 +32,10 @@ describe('takeOIDCReturn', () => {
     const replaceState = vi.fn();
     const state = { key: 'k' };
     const done = takeOIDCReturn(
-      { hash: '#oidc=done', pathname: '/admin/', search: '?a=1' },
+      { hash: `#oidc=done&flow=${KEY}`, pathname: '/admin/', search: '?a=1' },
       { replaceState, state },
     );
-    expect(done).toBe(true);
+    expect(done).toEqual({ flow: KEY });
     expect(replaceState).toHaveBeenCalledWith(state, '', '/admin/?a=1');
   });
 
@@ -31,7 +46,7 @@ describe('takeOIDCReturn', () => {
         { hash: '#x', pathname: '/admin/', search: '' },
         { replaceState, state: null },
       ),
-    ).toBe(false);
+    ).toBeNull();
     expect(replaceState).not.toHaveBeenCalled();
   });
 });

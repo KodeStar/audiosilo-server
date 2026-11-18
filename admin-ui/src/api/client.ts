@@ -372,11 +372,14 @@ export const api = {
     }),
   /**
    * Finishes a single sign-on (OIDC) for a session (/admin/#oidc=done,
-   * handlers_oidc.go): the server reads the sign-in from its HttpOnly cookie,
-   * once. A 401 here (code oidc_no_sign_in or oidc_sign_in_expired) is a
-   * sign-in this browser doesn't hold, never the stored session's end.
+   * handlers_oidc.go): the server reads the sign-in from its flow's HttpOnly
+   * cookie, once. `flow`: the flow's key the return named (sent only when it
+   * did), so the sign-in finished is this tab's own. A 401 here (code
+   * oidc_no_sign_in or oidc_sign_in_expired) is a sign-in this browser doesn't
+   * hold, never the stored session's end.
    */
-  oidcFinish: () => request<LoginResponse>('POST', OIDC_FINISH_PATH, { device_name: 'admin-web' }),
+  oidcFinish: (flow?: string) =>
+    request<LoginResponse>('POST', OIDC_FINISH_PATH, { device_name: 'admin-web', flow }),
   /** Revokes the stored session, or `token` when given (never touching storage). */
   logout: (token?: string) => request<void>('POST', '/auth/logout', undefined, token),
   me: () => request<User>('GET', '/me'),

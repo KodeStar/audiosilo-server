@@ -7,15 +7,16 @@ import { takeOIDCReturn } from '@/lib/oidc-return';
 import { createAppRouter } from '@/router';
 import './styles/globals.css';
 
-// A single sign-on's return (/admin/#oidc=done): read and out of the address
-// bar before the router reads the location, so no navigation writes it back.
-const oidcDone = takeOIDCReturn();
+// A single sign-on's return (/admin/#oidc=done&flow=<key>): read and out of
+// the address bar before the router reads the location, so no navigation
+// writes it back.
+const oidcReturn = takeOIDCReturn();
 
 // Render once the console's language is loaded (a separate chunk unless English).
 void i18nReady.then(() =>
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <App router={createAppRouter()} queryClient={createQueryClient()} oidcDone={oidcDone} />
+      <App router={createAppRouter()} queryClient={createQueryClient()} oidcReturn={oidcReturn} />
     </StrictMode>,
   ),
 );

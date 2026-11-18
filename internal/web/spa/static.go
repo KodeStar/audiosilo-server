@@ -122,7 +122,8 @@ func (f *Files) ServeFS(w http.ResponseWriter, r *http.Request, fsys fs.FS, name
 }
 
 // ServeDocument serves the HTML document name from fsys (404 when there is none):
-// revalidated on each request (no-cache), with csp(its bytes) as its
+// revalidated on each request (no-cache; never stored, no-store, at an address
+// that names a sign-in: documentCache), with csp(its bytes) as its
 // Content-Security-Policy, worked out once per version of the file. The caller
 // sets any other headers first. Handler serves its documents with it, and so
 // does a document on its own route with its own policy (the player's reader
@@ -135,7 +136,7 @@ func (f *Files) ServeDocument(w http.ResponseWriter, r *http.Request, fsys fs.FS
 	}
 	defer done()
 	w.Header().Set("Content-Type", ContentType(name))
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", documentCache(r))
 	// The document's bytes feed its CSP (the player hashes inline scripts); both
 	// are kept per version of the file.
 	data, policy, err := f.Document(name, info, content, csp)
