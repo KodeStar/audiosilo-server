@@ -138,7 +138,13 @@ func memberID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 // writeCatalogError (a share cap, else a logged 500). auth.ErrNotFound is not
 // mapped: what wasn't found differs per call (the caller's own account is a
 // logged 500, a member's device 404 "device not found" at its one call site).
+// auth.ErrInvalidToken is the caller's device signed out since the middleware
+// checked it, refused inside the mint's write (a member's sign-in or pairing
+// code, server#444): 401, as writeSessionEnded answers.
 func (a *API) writeMemberError(w http.ResponseWriter, err error, op, generic string, logKV ...any) {
+	if writeSessionEnded(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, auth.ErrNotMember):
 		writeError(w, http.StatusNotFound, "member not found")
@@ -307,7 +313,8 @@ func (a *API) handleCreateMember(w http.ResponseWriter, r *http.Request) {
 
 // handleMemberSession answers POST /me/household/members/{id}/session: 201 and
 // the session envelope of the member signed in on the caller's device (409
-// member_disabled for a member the admin disabled), reported as a new device
+// member_disabled for a member the admin disabled; 401 when the caller's device
+// was signed out since its check, writeMemberError), reported as a new device
 // like any sign-in (server#190).
 func (a *API) handleMemberSession(w http.ResponseWriter, r *http.Request) {
 	id, ok := memberID(w, r)
@@ -331,7 +338,8 @@ func (a *API) handleMemberSession(w http.ResponseWriter, r *http.Request) {
 
 // handleMemberPair answers POST /me/household/members/{id}/pair: the pairing
 // payload for the member's own device (single use, 10 minutes, built like
-// handlePair's; 409 member_disabled for a member the admin disabled).
+// handlePair's; 409 member_disabled for a member the admin disabled, 401 when
+// the caller's device was signed out since its check).
 func (a *API) handleMemberPair(w http.ResponseWriter, r *http.Request) {
 	id, ok := memberID(w, r)
 	if !ok {
@@ -341,7 +349,7 @@ func (a *API) handleMemberPair(w http.ResponseWriter, r *http.Request) {
 	if owner == nil {
 		return
 	}
-	m, token, err := a.auth.MemberPairing(r.Context(), owner.ID, id, pairingTTL)
+	m, token, err := a.auth.MemberPairing(r.Context(), owner.ID, id, credentialFrom(r.Context()).ID, pairingTTL)
 	if err != nil {
 		a.writeMemberError(w, err, "member pairing failed", "could not set up the device", "member", id)
 		return

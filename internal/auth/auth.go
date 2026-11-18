@@ -371,13 +371,20 @@ func (s *Service) IssueToken(ctx context.Context, userID int64, kind, deviceName
 }
 
 // IssueOwnPairingToken is IssueToken(KindPairing) for the signed-in person's own
-// new device (/auth/pair), refused for a kid inside the write (refuseKid). The
-// owner's pairing for a member's device (MemberPairing) and the demo's don't
-// come here: a kid's own device is paired that way.
-func (s *Service) IssueOwnPairingToken(ctx context.Context, userID int64, ttl time.Duration) (string, error) {
+// new device (/auth/pair), from session (the token the request authenticated
+// with). Refused inside the write: for a kid (refuseKid), and with
+// ErrInvalidToken once session is signed out or the account disabled (signedIn),
+// so a code minted as Sign out everywhere or a password change commits is never
+// one that change missed. The owner's pairing for a member's device
+// (MemberPairing) and the demo's don't come here: a kid's own device is paired
+// that way.
+func (s *Service) IssueOwnPairingToken(ctx context.Context, userID, session int64, ttl time.Duration) (string, error) {
 	var secret string
 	err := s.db.WithTx(ctx, "IssueOwnPairingToken", func(tx *sql.Tx) error {
 		if err := refuseKid(ctx, tx, userID); err != nil {
+			return err
+		}
+		if err := signedIn(ctx, tx, userID, session); err != nil {
 			return err
 		}
 		var err error
@@ -482,6 +489,30 @@ func madeOn(ctx context.Context, tx *sql.Tx, userID, session int64) (sql.NullInt
 		return on, ErrInvalidToken
 	}
 	return on, nil
+}
+
+// signedIn is ErrInvalidToken unless session is userID's token, still signed in
+// and its account enabled, read inside the mint's own transaction (server#444):
+// the request's check ran before it, and a sign-out, Sign out everywhere,
+// password change or disable that committed in between has already passed over
+// the credential the mint would make (endSessions ends a person's open pairing
+// codes and their members' sign-ins made on their devices), which would outlive
+// the change that should have refused it. Stricter than madeOn: the token must
+// be there.
+func signedIn(ctx context.Context, tx *sql.Tx, userID, session int64) error {
+	var ok bool
+	err := tx.QueryRowContext(ctx,
+		`SELECT t.revoked = 0 AND u.disabled = 0 FROM tokens t JOIN users u ON u.id = t.user_id
+		  WHERE t.id = ? AND t.user_id = ?`, session, userID).Scan(&ok)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return ErrInvalidToken
+	case err != nil:
+		return err
+	case !ok:
+		return ErrInvalidToken
+	}
+	return nil
 }
 
 // insertTokenOn is insertToken recording createdOn, the owner's token a household

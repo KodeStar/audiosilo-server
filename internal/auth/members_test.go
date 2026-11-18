@@ -296,14 +296,14 @@ func TestMembers_Ownership(t *testing.T) {
 	if d, err := s.MemberDevices(ctx, adam.ID, evie.ID); err != nil || len(d) != 1 {
 		t.Fatalf("devices = %v %v", d, err)
 	}
-	if m, p, err := s.MemberPairing(ctx, adam.ID, evie.ID, 10*time.Minute); err != nil || p == "" || m.ID != evie.ID {
+	if m, p, err := s.MemberPairing(ctx, adam.ID, evie.ID, mustSessionID(t, s, ctx, adam.ID, "phone"), 10*time.Minute); err != nil || p == "" || m.ID != evie.ID {
 		t.Fatalf("pairing = %v", err)
 	}
 	for _, who := range []int64{bob.ID, evie.ID, 0} {
 		for name, err := range map[string]error{
 			"member":  func() error { _, err := s.Member(ctx, who, evie.ID); return err }(),
 			"session": func() error { _, _, err := s.MemberSession(ctx, who, evie.ID, "x", 0); return err }(),
-			"pair":    func() error { _, _, err := s.MemberPairing(ctx, who, evie.ID, 10*time.Minute); return err }(),
+			"pair":    func() error { _, _, err := s.MemberPairing(ctx, who, evie.ID, cred.ID, 10*time.Minute); return err }(),
 			"devices": func() error { _, err := s.MemberDevices(ctx, who, evie.ID); return err }(),
 			"revoke":  func() error { _, err := s.RevokeMemberDevice(ctx, who, evie.ID, cred.ID); return err }(),
 			"delete":  func() error { _, err := s.DeleteMember(ctx, who, evie.ID); return err }(),
@@ -353,7 +353,7 @@ func TestMembers_SignIns(t *testing.T) {
 	evieElsewhere, _ := s.IssueToken(ctx, evie.ID, KindSession, "tablet", 0)
 	// Bob's member signed in on a token id of adam's (bad data): never adam's.
 	bobKid := mustMember(t, s, ctx, bob.ID, NewMember{Name: "Kit", Kind: MemberKid, Access: MemberAll})
-	bobKidTok, _, _ := s.MemberSession(ctx, bob.ID, bobKid.ID, "x", pc.ID)
+	bobKidTok := plantSessionOn(t, s, ctx, bobKid.ID, pc.ID)
 
 	ins, err := s.MemberSignIns(ctx, adam.ID)
 	if err != nil || len(ins[pc.ID]) != 2 || ins[pc.ID][0] != (MemberSignIn{evie.ID, "Evie"}) || ins[pc.ID][1].ID != ellis.ID {
@@ -633,7 +633,10 @@ func TestMembers_KidRefusedInTheWrite(t *testing.T) {
 	mint := map[string]func(id int64) error{
 		"API key":       func(id int64) error { _, _, err := s.IssueAPIToken(ctx, id, 0, "dash"); return err },
 		"recovery code": func(id int64) error { _, err := s.GenerateRecoveryCode(ctx, id); return err },
-		"own pairing":   func(id int64) error { _, err := s.IssueOwnPairingToken(ctx, id, time.Minute); return err },
+		"own pairing": func(id int64) error {
+			_, err := s.IssueOwnPairingToken(ctx, id, mustSessionID(t, s, ctx, id, "tablet"), time.Minute)
+			return err
+		},
 	}
 	for what, f := range mint {
 		if err := f(evie.ID); !errors.Is(err, ErrKidAccount) {
@@ -643,11 +646,13 @@ func TestMembers_KidRefusedInTheWrite(t *testing.T) {
 			t.Errorf("grown-up's %s = %v", what, err)
 		}
 	}
+	// A kid holds sessions (the one each own pairing above was asked from).
 	var live int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE user_id = ? AND revoked = 0`, evie.ID).Scan(&live); err != nil || live != 0 {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE user_id = ? AND revoked = 0 AND kind <> ?`,
+		evie.ID, KindSession).Scan(&live); err != nil || live != 0 {
 		t.Fatalf("the kid holds %d tokens, %v", live, err)
 	}
-	if _, _, err := s.MemberPairing(ctx, adam.ID, evie.ID, 10*time.Minute); err != nil {
+	if _, _, err := s.MemberPairing(ctx, adam.ID, evie.ID, mustSessionID(t, s, ctx, adam.ID, "phone"), 10*time.Minute); err != nil {
 		t.Fatalf("owner's pairing for the kid = %v", err)
 	}
 }

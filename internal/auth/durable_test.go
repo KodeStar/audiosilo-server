@@ -67,7 +67,7 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 		"member device sign-out": func() func() error {
 			owner := user()
 			m := member(owner)
-			if _, _, err := s.MemberSession(ctx, owner.ID, m.ID, "tablet", 0); err != nil {
+			if _, _, err := s.MemberSession(ctx, owner.ID, m.ID, "tablet", mustSessionID(t, s, ctx, owner.ID, "tablet")); err != nil {
 				t.Fatal(err)
 			}
 			d, err := s.MemberDevices(ctx, owner.ID, m.ID)

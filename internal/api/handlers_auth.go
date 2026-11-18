@@ -359,7 +359,8 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 // UNLINKED (no parent auth code): single-use and at most 10 minutes, since the
 // user is present and can mint another with a tap. An optional JSON body
 // {ttl_seconds} asks for a shorter life (pairTTL; never a longer one); no body
-// is the full 10 minutes, and a malformed one is 400.
+// is the full 10 minutes, and a malformed one is 400. A session signed out
+// since the middleware checked it mints nothing (401, writeSessionEnded).
 func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return
@@ -374,8 +375,8 @@ func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
-	token, err := a.auth.IssueOwnPairingToken(r.Context(), u.ID, pairTTL(body.TTLSeconds))
-	if writeKidRefusal(w, err) {
+	token, err := a.auth.IssueOwnPairingToken(r.Context(), u.ID, credentialFrom(r.Context()).ID, pairTTL(body.TTLSeconds))
+	if writeKidRefusal(w, err) || writeSessionEnded(w, err) {
 		return
 	}
 	if err != nil {
@@ -545,8 +546,8 @@ func denyAPIKey(w http.ResponseWriter, r *http.Request) bool {
 // writeSessionEnded answers 401, as the auth middleware does, for a credential
 // mint that auth refused inside its own write because the request's session was
 // signed out after the middleware checked it (auth.ErrInvalidToken from
-// auth.madeOn: a password change or Sign out everywhere committed in between),
-// and reports whether it did.
+// auth.madeOn or auth.signedIn: a password change, sign-out or Sign out
+// everywhere committed in between), and reports whether it did.
 func writeSessionEnded(w http.ResponseWriter, err error) bool {
 	if !errors.Is(err, auth.ErrInvalidToken) {
 		return false

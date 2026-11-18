@@ -255,6 +255,16 @@ func (e *testEnv) session(t *testing.T, id int64) string {
 	return tok
 }
 
+// credentialID is the id of tok, a token as the auth middleware resolves it.
+func (e *testEnv) credentialID(t *testing.T, tok string) int64 {
+	t.Helper()
+	_, cred, err := e.auth.ResolveRequest(context.Background(), tok, auth.Presence{}, auth.KindSession, auth.KindAPI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cred.ID
+}
+
 func (e *testEnv) mustUser(t *testing.T, name, email string) *auth.User {
 	t.Helper()
 	u, err := e.auth.CreateUserWithEmail(context.Background(), name, "", auth.RoleUser, email)
@@ -922,7 +932,7 @@ func TestOIDCFinishOnlySignInTokens(t *testing.T) {
 	e := newOIDCEnv(t, oidcAlice, nil)
 	alice := e.mustUser(t, "alice", "alice@example.org")
 	_, qr, _ := e.redeemCode(t, e.authCode)
-	own, err := e.auth.IssueOwnPairingToken(context.Background(), alice.ID, time.Minute)
+	own, err := e.auth.IssueOwnPairingToken(context.Background(), alice.ID, e.credentialID(t, e.session(t, alice.ID)), time.Minute)
 	if err != nil || qr == "" {
 		t.Fatalf("tokens: %q %v", qr, err)
 	}

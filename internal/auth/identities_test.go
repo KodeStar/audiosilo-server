@@ -733,7 +733,7 @@ func TestConsumeOIDC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pair, err := s.IssueOwnPairingToken(ctx, alice.ID, time.Minute)
+	pair, err := s.IssueOwnPairingToken(ctx, alice.ID, mustSessionID(t, s, ctx, alice.ID, "laptop"), time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
