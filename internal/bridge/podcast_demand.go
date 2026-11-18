@@ -21,7 +21,7 @@ var (
 // IsFetchRefusal reports whether err is a known scheduling refusal, which a
 // trigger answers with a fetch status rather than a fault.
 func IsFetchRefusal(err error) bool {
-	for _, refusal := range []error{ErrFetchCooldown, ErrKindUnavailable, ErrLibraryNotWritable, ErrFetchModuleOff, ErrFetchDemo, ErrFetchLimit, ErrIdentityChanged} {
+	for _, refusal := range []error{ErrFetchCooldown, ErrKindUnavailable, ErrLibraryNotWritable, ErrFetchModuleOff, ErrFetchDemo, ErrFetchLimit} {
 		if errors.Is(err, refusal) {
 			return true
 		}
@@ -206,10 +206,6 @@ func UnavailableFetchStatus(st FetchStatus, refusal error) FetchStatus {
 		code = "demo_account"
 	case errors.Is(refusal, ErrFetchLimit):
 		code = "fetch_limit"
-	case errors.Is(refusal, ErrIdentityChanged):
-		// The episode's previous identity is still being fetched: it stops at
-		// the Bridge's next report, and the new one can be asked for then.
-		code = "identity_changed"
 	}
 	st.State = "unavailable"
 	st.RetryAfterSeconds = 2

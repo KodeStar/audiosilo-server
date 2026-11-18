@@ -68,10 +68,10 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 	if errors.Is(err, bridge.ErrIdentityChanged) {
 		// The feed gave the episode another identity since the pin was read:
 		// once more with the identity it has now. The same identity (the old
-		// one's fetch is still stopping) or changed again, the stream answers a
-		// retryable 503 (unavailable, identity_changed), never a 409
-		// (server#179). The same identity isn't asked again: that would only
-		// repeat the writer transaction that just refused it.
+		// one's fetch is still stopping) or changed again, the refusal is
+		// returned as it is, no fetch status: the stream answers it by its
+		// own code (server#179). The same identity isn't asked again: that
+		// would only repeat the writer transaction that just refused it.
 		fresh, perr := d.Catalog.PodcastPin(budget, lib.ID, rel)
 		switch {
 		case perr != nil:

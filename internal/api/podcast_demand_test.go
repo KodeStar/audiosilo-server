@@ -565,9 +565,13 @@ func TestPodcastStreamDeadlineSaysFetching(t *testing.T) {
 }
 
 // A stream for an episode the feed gave another identity while its previous
-// identity's fetch is still under way answers a retryable 503 (unavailable,
-// identity_changed, Retry-After), never a 409 (server#179); once that fetch
-// has stopped, the next stream queues the new identity's.
+// identity's fetch is still under way answers a retryable 503 (Retry-After)
+// under the code and body the 409 it replaces had (server#179), and no fetch
+// status: a shipped player's stream probe reads identity_changed as "drop the
+// cached item and episode lists, offer Try again" only from an answer that is
+// not a fetch status (CROSS-REPO.md section 15). Its POST is 409
+// identity_changed until that fetch has stopped (the shipped answer); then
+// the next stream queues the new identity's.
 func TestPodcastStreamIdentityChangeIsRetryable(t *testing.T) {
 	b, f := podcastStorageEnv(t)
 	immediatePodcastWait(b)
@@ -579,8 +583,16 @@ func TestPodcastStreamIdentityChangeIsRetryable(t *testing.T) {
 	}
 	stream := podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(path))
 	resp, body := b.doHeaders(t, "GET", stream, b.userTok, "", podcastHeaders())
-	if resp.StatusCode != 503 || resp.Header.Get("Retry-After") == "" || !strings.Contains(body, `"code":"podcast_fetch_unavailable"`) || !strings.Contains(body, `"code":"identity_changed"`) {
-		t.Fatalf("identity changed mid-fetch %d %s", resp.StatusCode, body)
+	var answer map[string]any
+	if err := json.Unmarshal([]byte(body), &answer); err != nil {
+		t.Fatalf("identity changed mid-fetch: %v in %s", err, body)
+	}
+	if _, pending := answer["fetch"]; resp.StatusCode != 503 || resp.Header.Get("Retry-After") != "2" || answer["code"] != "identity_changed" || pending {
+		t.Fatalf("identity changed mid-fetch %d Retry-After %q %s", resp.StatusCode, resp.Header.Get("Retry-After"), body)
+	}
+	resp, body = b.doHeaders(t, "POST", fetchRoute(b.lib.ID, path), b.userTok, fetchBody(path), podcastHeaders())
+	if resp.StatusCode != 409 || !strings.Contains(body, `"code":"identity_changed"`) {
+		t.Fatalf("Try again while the old fetch stops %d %s", resp.StatusCode, body)
 	}
 	// The old identity's fetch was asked to stop; it does at its next report.
 	cancelled := bridge.StateCancelled

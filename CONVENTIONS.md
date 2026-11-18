@@ -3328,9 +3328,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   without cancelling the job. The summary is the job's actual state: a fetch the Bridge holds says
   `fetching` even when the budget runs out before the last read, and with the module off (it carries
   on; only a queued one is held, `unavailable`). An identity change between the pin read and the
-  queue is retried once with the current pin; one whose previous identity's fetch is still stopping
-  is a retryable 503 `podcast_fetch_unavailable` (`unavailable`, `identity_changed`), never a 409
-  (server#179). Pending media answers 503 with `podcast_fetching`,
+  queue is retried once with the current pin; one whose previous identity's fetch is still stopping is a
+  retryable 503 on the stream (`writePodcastIdentityBusy`: `Retry-After: 2`, the code
+  `identity_changed` and the body of the 409 it replaces, no `fetch` summary). The code is the
+  contract with shipped players: their stream probe reads `identity_changed` on any status as "drop
+  the cached item and episode lists, offer Try again", where a `fetch` summary (`unavailable` or
+  `failed`) stops them without that, and a download's wait asks again after a 5xx. The POST still
+  answers the shipped 409 `identity_changed` until that fetch has stopped (server#179). Pending media answers 503 with `podcast_fetching`,
   `podcast_fetch_unavailable` or `podcast_fetch_failed`, `Retry-After: 2`, `Cache-Control: no-store`
   and a public `fetch` summary. Kids with read access may fetch; demo accounts cannot start disk work.
   Core player `GET /libraries/{id}/podcasts/fetch?path=` observes only; strict POST `{path}` retries

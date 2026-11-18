@@ -200,6 +200,20 @@ func (a *API) writePodcastStorageError(w http.ResponseWriter, err error) {
 	}
 }
 
+// writePodcastIdentityBusy answers a stream for an episode the feed gave another
+// identity while its previous identity's fetch is still stopping (it stops at
+// the Bridge's next report): a retryable 503 with Retry-After, under the code
+// and body the 409 it replaces had, and no fetch status (server#179). The code
+// is the contract with shipped players (CROSS-REPO.md section 15): their
+// stream probe reads identity_changed on any status as "drop the cached item
+// and episode lists, offer Try again", where a fetch status would stop them
+// without that, and a download's wait asks again after a 5xx.
+func writePodcastIdentityBusy(w http.ResponseWriter) {
+	setRetryAfter(w, 2*time.Second)
+	w.Header().Set("Cache-Control", "no-store")
+	writeErrorCode(w, 503, "identity_changed", "The podcast identity changed.")
+}
+
 // servePodcastStream answers GET /stream for the episode at rel in podcast
 // library lib: its committed generation opened (library.OpenPodcast, its checks
 // and open one metadata.Bounded call up to the stream's deadline: given up on,
@@ -239,7 +253,11 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 		var status bridge.FetchStatus
 		f, pin, status, err = a.podcastDemand.Fetch(r.Context(), *lib, rel, userFrom(r.Context()).ID, userFrom(r.Context()).IsDemo)
 		if err != nil {
-			if r.Context().Err() == nil {
+			switch {
+			case r.Context().Err() != nil: // the client left: no one to answer
+			case errors.Is(err, bridge.ErrIdentityChanged):
+				writePodcastIdentityBusy(w)
+			default:
 				a.writePodcastStorageError(w, err)
 			}
 			return
