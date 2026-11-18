@@ -12,6 +12,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -103,26 +104,7 @@ func TestStartProgress(t *testing.T) {
 // then.
 func TestRekeyAtStartNamesFailedPaths(t *testing.T) {
 	ctx := context.Background()
-	db := storetest.Open(t)
-	cat := catalog.New(db, time.Now)
-	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	const book, track = "Author/Book", "Author/Book/01.mp3"
-	if _, err := cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: book, IsFolder: true, Title: "Book",
-		Files: []catalog.BookFile{{RelPath: track}}}); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO users(id, username, password_hash, role, created_at, updated_at) VALUES(7, 'ann', 'x', 'admin', 't', 't')`,
-		`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, created_at) VALUES(7, 1, 'Author/Book/01.mp3', 1, 'mark', 't')`,
-		`CREATE TRIGGER refuse_carry BEFORE UPDATE OF rel_path ON bookmarks BEGIN SELECT RAISE(ABORT, 'refused'); END`,
-	} {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatal(err)
-		}
-	}
+	db, cat, _ := trackBookmark(t, "L", t.TempDir(), true)
 	var out bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&out, nil))
 	rekeyAtStart(ctx, cat, nil, log)
@@ -153,26 +135,9 @@ func TestRekeyAtStartNamesFailedPaths(t *testing.T) {
 // library, and the next start, with the folder back, runs over it.
 func TestRekeyAtStartSkipsUnansweringRoot(t *testing.T) {
 	ctx := context.Background()
-	db := storetest.Open(t)
-	cat := catalog.New(db, time.Now)
 	root := filepath.Join(t.TempDir(), "share") // not there yet: a stat fails
-	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, cat, _ := trackBookmark(t, "L", root, false)
 	const book, track = "Author/Book", "Author/Book/01.mp3"
-	if _, err := cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: book, IsFolder: true, Title: "Book",
-		Files: []catalog.BookFile{{RelPath: track}}}); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO users(id, username, password_hash, role, created_at, updated_at) VALUES(7, 'ann', 'x', 'admin', 't', 't')`,
-		`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, created_at) VALUES(7, 1, 'Author/Book/01.mp3', 1, 'mark', 't')`,
-	} {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatal(err)
-		}
-	}
 	marks := func(p string) int {
 		var n int
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bookmarks WHERE rel_path = ?`, p).Scan(&n); err != nil {
@@ -202,25 +167,7 @@ func TestRekeyAtStartSkipsUnansweringRoot(t *testing.T) {
 // stop ended says so at info, no failure (server#210).
 func TestRekeyAfterScanLogs(t *testing.T) {
 	ctx := context.Background()
-	db := storetest.Open(t)
-	cat := catalog.New(db, time.Now)
-	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: "Author/Book", IsFolder: true, Title: "Book",
-		Files: []catalog.BookFile{{RelPath: "Author/Book/01.mp3"}}}); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO users(id, username, password_hash, role, created_at, updated_at) VALUES(7, 'ann', 'x', 'admin', 't', 't')`,
-		`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, created_at) VALUES(7, 1, 'Author/Book/01.mp3', 1, 'mark', 't')`,
-		`CREATE TRIGGER refuse_carry BEFORE UPDATE OF rel_path ON bookmarks BEGIN SELECT RAISE(ABORT, 'refused'); END`,
-	} {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatal(err)
-		}
-	}
+	db, cat, lib := trackBookmark(t, "Main", t.TempDir(), true)
 	var out bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&out, nil))
 	nexts := 0
@@ -257,4 +204,35 @@ func TestRekeyAfterScanLogs(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM server_state WHERE key LIKE 'path_rekey%'`).Scan(&recorded); err != nil || recorded != 0 {
 		t.Errorf("a stopped start recorded %d server_state rows (%v), want none", recorded, err)
 	}
+}
+
+// trackBookmark is a catalog with library name at root holding the folder book
+// Author/Book and, at its track Author/Book/01.mp3, a bookmark of user 7's;
+// with refuse, a trigger refuses every move of a bookmark (a failed path).
+func trackBookmark(t *testing.T, name, root string, refuse bool) (*store.DB, *catalog.Catalog, *catalog.Library) {
+	t.Helper()
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: name, Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: "Author/Book", IsFolder: true, Title: "Book",
+		Files: []catalog.BookFile{{RelPath: "Author/Book/01.mp3"}}}); err != nil {
+		t.Fatal(err)
+	}
+	qs := []string{
+		`INSERT INTO users(id, username, password_hash, role, created_at, updated_at) VALUES(7, 'ann', 'x', 'admin', 't', 't')`,
+		`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, created_at) VALUES(7, 1, 'Author/Book/01.mp3', 1, 'mark', 't')`,
+	}
+	if refuse {
+		qs = append(qs, `CREATE TRIGGER refuse_carry BEFORE UPDATE OF rel_path ON bookmarks BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+	}
+	for _, q := range qs {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return db, cat, lib
 }

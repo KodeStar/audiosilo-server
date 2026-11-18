@@ -448,17 +448,22 @@ func (c *Catalog) RekeyLibrary(ctx context.Context, libraryID int64) (RekeyRepor
 		return RekeyReport{}, err
 	}
 	if len(cands) < cmp.Or(c.memoRekeyFrom, rekeyMemoFrom) {
-		c.setRekeyMemo(libraryID, nil)
+		c.rekeyMemosMu.Lock()
+		delete(c.rekeyMemos, libraryID)
+		c.rekeyMemosMu.Unlock()
 		return c.rekeyPaths(ctx, libraryID, cands, nil)
 	}
 	// Read before any path is looked at: an index change during the run
 	// leaves a print the next run's won't match, so it looks at every path.
-	print, err := c.indexPrint(ctx, libraryID)
+	printed, err := c.indexPrint(ctx, libraryID)
 	if err != nil {
 		return RekeyReport{}, err
 	}
 	idle := map[string]carrySet{}
-	if memo := c.rekeyMemoOf(libraryID); memo != nil && memo.print == print {
+	c.rekeyMemosMu.Lock()
+	memo, ok := c.rekeyMemos[libraryID]
+	c.rekeyMemosMu.Unlock()
+	if ok && memo.print == printed {
 		for p, set := range cands {
 			if memo.idle[p] == set {
 				idle[p] = set
@@ -471,7 +476,12 @@ func (c *Catalog) RekeyLibrary(ctx context.Context, libraryID int64) (RekeyRepor
 			idle[p] = cands[p]
 		}
 	})
-	c.setRekeyMemo(libraryID, &rekeyMemo{print: print, idle: idle})
+	c.rekeyMemosMu.Lock()
+	if c.rekeyMemos == nil {
+		c.rekeyMemos = map[int64]rekeyMemo{}
+	}
+	c.rekeyMemos[libraryID] = rekeyMemo{print: printed, idle: idle}
+	c.rekeyMemosMu.Unlock()
 	return rep, err
 }
 
@@ -486,29 +496,6 @@ const rekeyMemoFrom = 500
 type rekeyMemo struct {
 	print uint64
 	idle  map[string]carrySet
-}
-
-func (c *Catalog) rekeyMemoOf(libraryID int64) *rekeyMemo {
-	c.rekeyIdleMu.Lock()
-	defer c.rekeyIdleMu.Unlock()
-	if m, ok := c.rekeyIdle[libraryID]; ok {
-		return &m
-	}
-	return nil
-}
-
-// setRekeyMemo records library libraryID's memo (nil: none).
-func (c *Catalog) setRekeyMemo(libraryID int64, m *rekeyMemo) {
-	c.rekeyIdleMu.Lock()
-	defer c.rekeyIdleMu.Unlock()
-	if m == nil {
-		delete(c.rekeyIdle, libraryID)
-		return
-	}
-	if c.rekeyIdle == nil {
-		c.rekeyIdle = map[int64]rekeyMemo{}
-	}
-	c.rekeyIdle[libraryID] = *m
 }
 
 // indexPrint is a print of what rekeyTarget reads of a library's index: each

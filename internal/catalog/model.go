@@ -357,9 +357,9 @@ type Catalog struct {
 	// spellLooked, tests only, runs as each of Spelling's looks at the disk
 	// begins (ownEntry).
 	spellLooked func()
-	// rekeyIdle is each library's scan-end re-key memo (RekeyLibrary).
-	rekeyIdleMu sync.Mutex
-	rekeyIdle   map[int64]rekeyMemo
+	// rekeyMemos is each library's scan-end re-key memo (RekeyLibrary).
+	rekeyMemosMu sync.Mutex
+	rekeyMemos   map[int64]rekeyMemo
 	// memoRekeyFrom, tests only, is rekeyMemoFrom when not 0.
 	memoRekeyFrom int
 	// rekeyLooked, tests only, runs as rekeyOne looks at a path.
