@@ -401,7 +401,7 @@ func (a *API) audibleSyncNow(r *http.Request, account string, titlesChanged bool
 	if a.bridge == nil || !a.moduleOn(bridge.ModuleAudible) {
 		return
 	}
-	if err := a.audibleQueues().SyncNow(r.Context(), a.log, account, titlesChanged); err != nil {
+	if err := a.audibleQueues().SyncNow(r.Context(), account, titlesChanged); err != nil {
 		a.log.Warn("audible: queue a sync after a console change failed", "account", account, "err", err)
 	}
 }

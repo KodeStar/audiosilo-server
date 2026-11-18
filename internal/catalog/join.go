@@ -119,7 +119,7 @@ func (c *Catalog) JoinDurableState(ctx context.Context, libraryID int64, into st
 			if p.Unplaced {
 				continue
 			}
-			if err := carryListeningState(ctx, tx, libraryID, p, into, total, mergeFurthest); err != nil {
+			if err := carryListeningState(ctx, tx, libraryID, p, into, total, joinCarry); err != nil {
 				return fmt.Errorf("join listening state: %w", err)
 			}
 		}

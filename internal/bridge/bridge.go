@@ -8,6 +8,8 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -53,6 +55,21 @@ type Service struct {
 	// follows the Bridge's heartbeat.
 	ModuleOn func(id string) bool
 
+	// ClaimAudibleSync, when set (at wiring, before the first request), is
+	// the params a claim of an account's audible.sync answers: the account and
+	// its titles to sync as they are now (AudibleSyncClaim). The queued job
+	// stores the account alone (server#303); with none wired a claim answers
+	// the params as queued.
+	ClaimAudibleSync func(ctx context.Context, account string) (json.RawMessage, error)
+	// Log, when set (at wiring, before the first request), hears what a claim
+	// settles without answering an error (fillAudibleSync ending a sync it
+	// can't fill); New leaves it discarding.
+	Log *slog.Logger
+	// syncFills counts, per Audible account, the claims in a row that failed
+	// to read its audible.sync's titles (fillAudibleSync), under syncFillMu.
+	syncFillMu sync.Mutex
+	syncFills  map[string]syncFill
+
 	// hb caches the last heartbeat as read (status.go), so GET /server, which
 	// every client calls often, reads the database at most every heartbeatTTL.
 	// hbGen counts the cache's writes (a heartbeat saved, Forget): a read that
@@ -76,7 +93,8 @@ func New(db *store.DB, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{db: db, now: now, wake: newSignal(), ended: newSignal(), privateURLs: map[int64]string{}}
+	return &Service{db: db, now: now, wake: newSignal(), ended: newSignal(), privateURLs: map[int64]string{},
+		syncFills: map[string]syncFill{}, Log: slog.New(slog.DiscardHandler)}
 }
 
 // ts is now as the bridge tables store times: RFC3339 UTC, whole seconds, so

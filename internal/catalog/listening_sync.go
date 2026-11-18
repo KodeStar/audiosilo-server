@@ -117,6 +117,8 @@ const (
 	// how close a resume_behind span must start to its device's offered place to
 	// carry the offer on (resolveListen), and all three say whether a span
 	// continues its device's chain from an earlier POST (continues).
+	// historyJoinOverlap is also how far before its device's chain's end a span
+	// may end and still come after it (resolveListen, fe#216).
 	historyJoinGap     = 60 * time.Second
 	historyJoinOverlap = 2 * time.Second
 	historyJoinPos     = 5.0
@@ -583,15 +585,35 @@ type syncRun struct {
 	// chain: continues): a base-0 span resolves on it.
 	written map[Ref]int64
 	// stored is the batch's event ids already in the log (a replay: duplicate),
-	// each with the end it was stored with (ended_at, corrected then).
-	stored map[string]string
+	// each with the end it was stored with (ended_at, corrected then) and its
+	// status.
+	stored map[string]storedEvent
+}
+
+// storedEvent is a logged event a replay names: its end (ended_at) and status.
+type storedEvent struct{ ended, status string }
+
+// endsChain reports whether a replayed event of kind (e, as logged) is the
+// newest link of its device's chain ending at at: it ended there; or, a listen
+// that applied inside the overlap before the chain's end (resolveListen keeps
+// that end), up to historyJoinOverlap before it; or, a finish or unfinish, by
+// the row's finish_changed_at (a late one keeps the chain's later end).
+func (e storedEvent) endsChain(kind, at string, finishChangedAt sql.NullString) bool {
+	if at == e.ended {
+		return true
+	}
+	if kind != EventListen {
+		return finishChangedAt.String == e.ended
+	}
+	end, last := parseSessionTime(e.ended), parseSessionTime(at)
+	return e.status == statusApplied && !last.Before(end) && !last.After(end.Add(historyJoinOverlap))
 }
 
 // storedEventIDs is which of the prepared events' ids the user's log already
-// holds, each with its stored ended_at, read in one statement (a batch is at
-// most MaxSyncEvents ids).
-func storedEventIDs(ctx context.Context, tx *sql.Tx, userID int64, prepared []syncPrepared) (map[string]string, error) {
-	out := map[string]string{}
+// holds, each with its stored ended_at and status, read in one statement (a
+// batch is at most MaxSyncEvents ids).
+func storedEventIDs(ctx context.Context, tx *sql.Tx, userID int64, prepared []syncPrepared) (map[string]storedEvent, error) {
+	out := map[string]storedEvent{}
 	if len(prepared) == 0 {
 		return out, nil
 	}
@@ -600,15 +622,18 @@ func storedEventIDs(ctx context.Context, tx *sql.Tx, userID int64, prepared []sy
 	for _, p := range prepared {
 		args = append(args, p.ev.ID)
 	}
-	type storedEvent struct{ id, ended string }
-	evs, err := queryRows(ctx, tx, func(rows *sql.Rows, e *storedEvent) error { return rows.Scan(&e.id, &e.ended) },
-		`SELECT event_id, ended_at FROM listening_events WHERE user_id = ? AND event_id IN (`+placeholders(len(prepared))+`)`,
-		args...)
+	type logged struct {
+		id string
+		storedEvent
+	}
+	evs, err := queryRows(ctx, tx, func(rows *sql.Rows, e *logged) error { return rows.Scan(&e.id, &e.ended, &e.status) },
+		`SELECT event_id, ended_at, status FROM listening_events WHERE user_id = ? AND event_id IN (`+
+			placeholders(len(prepared))+`)`, args...)
 	if err != nil {
 		return nil, err
 	}
 	for _, e := range evs {
-		out[e.id] = e.ended
+		out[e.id] = e.storedEvent
 	}
 	return out, nil
 }
@@ -627,8 +652,10 @@ type syncRow struct {
 	otherDeviceID sql.NullString
 	otherVersion  sql.NullInt64
 	// spanAt is the end of the span the row's device last applied (or of a
-	// finish or unfinish of its own after it), null unless recorded at the row's
-	// current version (0062): that device's chain (chainOf).
+	// finish or unfinish of its own after it, or the later end its chain had
+	// when one was applied inside the overlap before it: resolveListen), null
+	// unless recorded at the row's current version (0062): that device's chain
+	// (chainOf).
 	spanAt sql.NullString
 	// stayVersion is the version a Stay wrote (0080), null when none holds the
 	// row: the Stay's own device writing again keeps it, every other writer
@@ -660,22 +687,20 @@ func (s *syncRun) row(ctx context.Context, key Ref) (*syncRow, error) {
 // apply runs one prepared event: the dedupe, then its kind's rule, then its
 // row in the log.
 func (s *syncRun) apply(ctx context.Context, p syncPrepared) (SyncResult, error) {
-	if ended, replay := s.stored[p.ev.ID]; replay {
+	if logged, replay := s.stored[p.ev.ID]; replay {
 		// A replay (the post that stored it lost its answer, so the device sends
 		// it again ahead of what it recorded since): when it is the newest link
-		// of this device's chain on the row (chainOf, ending at its end: no edit,
-		// PUT or other writer since, and it wrote the row, not a span that
-		// diverged and kept the stored place; a finish or unfinish by its
-		// finish_changed_at, as a late one keeps the chain's later end), the
-		// device's later events on base 0 chain on it, as they would have in
-		// that post.
+		// of this device's chain on the row (chainOf, ending at its end or, a
+		// span applied inside the overlap, within it: endsChain; no edit, PUT or
+		// other writer since, and it wrote the row, not a span that diverged and
+		// kept the stored place), the device's later events on base 0 chain on
+		// it, as they would have in that post.
 		if _, ok := s.written[p.target.Key]; !ok {
 			stored, err := s.row(ctx, p.target.Key)
 			if err != nil {
 				return SyncResult{}, err
 			}
-			if at, chained := s.chainOf(stored); chained &&
-				(at == ended || p.ev.Kind != EventListen && stored.finishChangedAt.String == ended) {
+			if at, chained := s.chainOf(stored); chained && logged.endsChain(p.ev.Kind, at, stored.finishChangedAt) {
 				s.written[p.target.Key] = stored.version
 			}
 		}
@@ -887,7 +912,12 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 		storedPlace = &Place{Progression: stored.position, DeviceID: stored.deviceID,
 			UpdatedAt: stored.updatedAt, Version: stored.version}
 		if chained {
-			storedPlace.UpdatedAt = chainAt
+			// The chain's end is this device's own last span, dated by its POST's
+			// shift, which carries that request's time on the way: a later POST's
+			// span (a bare move just after a pause) can land dated a little before
+			// it, so one ending up to historyJoinOverlap before it still comes
+			// after it, as continues reads a start (fe#216).
+			storedPlace.UpdatedAt = formatSessionTime(parseSessionTime(chainAt).Add(-historyJoinOverlap))
 		}
 	}
 	outcome := ResolvePlace(storedPlace, in, base)
@@ -944,7 +974,14 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 	if stored != nil && stored.otherVersion.Valid && sent != nil && *sent >= stored.otherVersion.Int64 {
 		offer = clearOffer
 	}
-	if err := s.writePlace(ctx, p, in.Version, offer, rowAt); err != nil {
+	// The chain never moves back (as finish keeps it): a span applied inside the
+	// overlap before the chain's end leaves that end, so the device's next span
+	// is measured from its last real end, not 2 s further back each time.
+	spanAt := formatSessionTime(p.ended)
+	if chained {
+		spanAt = laterStamp(spanAt, chainAt)
+	}
+	if err := s.writeChainedPlace(ctx, p, in.Version, offer, rowAt, spanAt); err != nil {
 		return SyncResult{}, err
 	}
 	return SyncResult{Status: statusApplied}, nil
@@ -970,9 +1007,16 @@ const (
 // device's (the Stay's own device writing again) and dropped when another
 // device's place replaces it, unless offer is holdStay.
 func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64, offer placeOffer, updatedAt string) error {
+	return s.writeChainedPlace(ctx, p, version, offer, updatedAt, formatSessionTime(p.ended))
+}
+
+// writeChainedPlace is writePlace with the chain's end given (spanAt): the
+// span's own end, or the later end of the chain it was applied on
+// (resolveListen).
+func (s *syncRun) writeChainedPlace(ctx context.Context, p syncPrepared, version int64, offer placeOffer,
+	updatedAt, spanAt string) error {
 	key := p.target.Key
 	clear, stay := offer != keepOffer, offer == holdStay
-	spanAt := formatSessionTime(p.ended)
 	if _, err := s.tx.ExecContext(ctx,
 		`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed,
 		     version, device_id, device_name, updated_at, started_at, span_at, span_version)
@@ -997,7 +1041,35 @@ func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64,
 		return err
 	}
 	s.written[key] = version
-	return nil
+	return s.ownAudiblePlace(ctx, key)
+}
+
+// ownAudiblePlace names a furthest-only batch's device (an Audible account's,
+// "audible:<account>") on the row whose place it has just written: the guard
+// (migration 0085) takes an Audible device off every row a write gives a place
+// (an insert, a new position or finish), so a place another writer moved never
+// stays the account's, which GET /bridge/progress would never offer to Audible.
+// This statement sets only the device, so the guard leaves it. No other batch
+// names one: its device is its own (/me/listening/sync refuses an Audible id).
+func (s *syncRun) ownAudiblePlace(ctx context.Context, key Ref) error {
+	if !s.b.FurthestOnly {
+		return nil
+	}
+	return nameAudibleDevice(ctx, s.tx, s.b.UserID, key, s.b.DeviceID, s.b.DeviceName)
+}
+
+// nameAudibleDevice names an Audible account's device on a user's row at key,
+// inside tx, after a write the guard (migration 0085) took it off: the Audible
+// route's own place (ownAudiblePlace), or a move that left it as the account
+// wrote it (carriedAudiblePlace). It sets only the device, so the guard leaves
+// it.
+func nameAudibleDevice(ctx context.Context, tx *sql.Tx, userID int64, key Ref, deviceID, deviceName string) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE progress SET device_id = ?1, device_name = ?2
+		  WHERE user_id = ?3 AND library_id = ?4 AND rel_path = ?5
+		    AND (device_id IS NOT ?1 OR device_name IS NOT ?2)`,
+		deviceID, deviceName, userID, key.LibraryID, key.Path)
+	return err
 }
 
 // staysWin reports whether a Stay span wins over the row (S1, 0080): its base
@@ -1245,7 +1317,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 			return SyncResult{}, err
 		}
 		s.written[key] = first
-		return SyncResult{Status: statusApplied}, nil
+		return SyncResult{Status: statusApplied}, s.ownAudiblePlace(ctx, key)
 	}
 	// The row's time never moves back (a later save elsewhere stays later).
 	updated := laterStamp(at, stored.updatedAt)
@@ -1303,10 +1375,11 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 	if err != nil {
 		return SyncResult{}, err
 	}
-	if takes {
-		s.written[key] = version
+	if !takes {
+		return SyncResult{Status: statusApplied}, nil
 	}
-	return SyncResult{Status: statusApplied}, nil
+	s.written[key] = version
+	return SyncResult{Status: statusApplied}, s.ownAudiblePlace(ctx, key)
 }
 
 // finishChange is when a finish (or unfinish) happened, as compared with the

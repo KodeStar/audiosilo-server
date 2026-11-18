@@ -729,7 +729,26 @@ func validShowPath(p *string) bool {
 func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job, error) {
 	return s.claimPriority(ctx, token, kinds, nil)
 }
+
+// claimPriority claims the next job (claimSecret), then gives a claimed
+// audible.sync its titles (fillAudibleSync) outside the podcast secrets' lock.
+// A sync the fill ended instead (failed, so never claimed again) hands out the
+// job behind it.
 func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
+	for {
+		j, err := s.claimSecret(ctx, token, kinds, minPriority)
+		if err != nil || j == nil || j.Kind != KindAudibleSync || s.ClaimAudibleSync == nil {
+			return j, err
+		}
+		if j, err = s.fillAudibleSync(ctx, j); j != nil || err != nil {
+			return j, err
+		}
+	}
+}
+
+// claimSecret claims the next job, a private podcast.subscribe with its feed
+// URL put back from memory, under secretFlowMu.
+func (s *Service) claimSecret(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
 	j, err := s.claimStored(ctx, token, kinds, minPriority)

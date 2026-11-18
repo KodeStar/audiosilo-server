@@ -1542,7 +1542,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
   a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new
   timeline, a listener's progress already at the new path merged by a strategy the caller
-  passes (`progressMerge`), a favourite landing once, so a collision never fails a move. A
+  passes (`carryRule`: `moveCarry` or `joinCarry`), a favourite landing once, so a collision never fails a move. A
   **move** takes the newest save whole (`mergeNewest`: `updated_at`, then version; a row
   already at the new path is a removed book's, so its position or finish must not win by
   being further on); a **join** keeps the furthest (`mergeFurthest`: the rows are parts of one
@@ -4354,7 +4354,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   is its offset now + the seconds in it, clamped to its length; else the sent seconds); then each event in
   corrected-time order: an id already stored for the user is `duplicate` (a replay whose answer was lost: when it
   is the newest link of the device's chain on the row, `span_at` at the row's version equal to its stored `ended_at`
-  (a finish or unfinish: `finish_changed_at`, a late one keeping the chain's later end), the device's later base-0
+  (a span applied inside the overlap, which keeps the chain's later end: up to 2 s after it; a finish or unfinish:
+  `finish_changed_at`, a late one keeping the chain's later end; `endsChain`), the device's later base-0
   events chain on it; a replay of a span that kept the stored place, or one an edit or
   another writer has since overtaken, seeds nothing); a listen runs `ResolvePlace`
   (whole-book seconds as the progression; in-batch chaining: base 0 on a book this batch wrote resolves on
@@ -4418,7 +4419,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   finish or unfinish that leaves the row the device's moves it there, never back, and starts one only when it
   is not older than the row's `updated_at` (a save elsewhere since stays newer), a finish with no row starts it,
   one that leaves another device's row ends it), and while the row is still the device's at that version its next span,
-  in this POST or a later one, compares with `span_at`, not the kept `updated_at`. A base-0 span of a later POST
+  in this POST or a later one, compares with `span_at` less `historyJoinOverlap` (2 s: each POST is dated by its own
+  shift, which carries its time on the way, so a bare move posted just after a span can land dated before that span's
+  end, fe#216; a span applied inside those 2 s leaves `span_at` at the chain's later end, as a finish does, so the
+  overlap never adds up across spans), not the kept `updated_at`. A base-0 span of a later POST
   resolves on the row's version when it continues the chain (`continues`: from within 5 s of the place, or
   starting 0-60 s after `span_at`, 2 s overlap), and so do the POST's base-0 spans after it (in-batch chaining);
   until one does, each is judged on its own, so one that does not still diverges from its own place (a device signed out and
@@ -4591,14 +4595,27 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   unreleased ASIN; released, it syncs, the re-match trigger offering its book's place again, `0071`). **Audible to
   here**: `audible/scheduler.go` `queueSyncs` (while the Bridge offers the kind) queues one `audible.sync` per
   `DueAudibleSyncs` account (sync on, not paused, `refused_at` NULL, `bridgeUserSQL`, `sync_queued_at` older than
-  `bridge.AudibleSyncEvery`, 15 min) at priority -10, none for an account with no synced title; params
-  `{account, titles:[{asin, library_id, path, runtime_s}]}` (strict, `audibleSyncParams`; ASIN once each, a clean
-  book path or `.`; at most 1 MiB, `AudibleSync` drops the last titles past it), internal, quiet, `ModuleFor`
-  audible, deduped per account, `promotes` (a queued one takes the newest titles), only the newest ended kept
+  `bridge.AudibleSyncEvery`, 15 min) at priority -10, none for an account with no synced title
+  (`HasAudibleSyncTitles`); queued params `{account}` alone (strict, `audibleSyncParams`, `bridge.AudibleSync`;
+  server#303: the queue no longer stores every title four times an hour), and the claim answers
+  `{account, titles:[{asin, library_id, path, runtime_s}]}` as the titles are then (`bridge.Service.ClaimAudibleSync`,
+  wired to `api.audibleSyncClaim` over `AudibleSyncTitles`; at most 1 MiB, `AudibleSyncClaim` leaves out the last
+  titles past it, and any title the Bridge's strict `ParseParams` would refuse the whole list for (not an ASIN, no
+  library, a path that is not a clean book path, a negative runtime, an ASIN twice: the checks the queued params
+  had), and the server logs both; a claim whose titles can't be read hands nothing out and puts the job back
+  unspent, `ReleaseUnsentClaim`, for an account's sync at most `maxUnspentSyncFills`, 3, claims in a row: the next
+  failing claim leaves it claimed and undelivered, so its lease spends the attempt, and the jobs behind it are
+  handed out meanwhile; the last attempt's failing claim ends it at once (`failUnsentClaim`), its error "The server
+  could not read this account's titles." rather than the lapsed lease's Bridge one, and a sync whose stored params
+  can't be read ends at its first claim, "The server could not read which Audible account this sync is for."; a
+  claim that ended a sync so goes on to the job behind it (`claimPriority`: 200 that job, else 204 or its wait),
+  never a 500, and logs the read's error once at warn once the job has ended (`endUnfillableSync`, `bridge.Service.Log`: job, the account when read; the ending's fold reads no params, `FoldAudibleSync`); the job as stored keeps `{account}`, as a private feed URL is injected at claim),
+  internal, quiet, `ModuleFor` audible, deduped per account, `promotes`, only the newest ended kept
   (`pruneAudibleEnded`). A console change to which titles sync (`PATCH .../titles/...` `{rejected}` or `{no_sync}`)
   or turning sync on queues the account's sync at once (`audible.SyncNow`, `catalog.AudibleSyncQueueable`: the same
-  rule bar the 15 min, an online Bridge offering the kind; a title change queues even an empty title list, so the
-  Bridge drops a left-out title now; a sync the Bridge already runs keeps its titles). Ended (`OnEnded`, `FoldAudibleSync`): a sync that read Audible's places sets
+  rule bar the 15 min, an online Bridge offering the kind; a title change queues one even with no title left, so the
+  Bridge drops a left-out title now; an open one not claimed yet syncs the newest set; a sync the Bridge already
+  runs keeps the titles its claim gave it). Ended (`OnEnded`, `FoldAudibleSync`): a sync that read Audible's places sets
   `last_sync_at` (`bridge.AudibleSynced`: done, its result neither `waiting` nor `sync_off`, the Bridge's result
   fields, hand-mirrored); a sync or a poll (bridge#40: the console's accounts card then asks for a sign-in on
   the Bridge instead of showing it checked) failed with code `audible_refused` (result `code`, or an `audible_refused:` error prefix,
@@ -4639,10 +4656,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   is the end; an unfinish is `behind`; a finish is any finish (one made at or before the Stay that holds the row is
   `behind`, as any device's is: the Bridge sends a place at the end as a listen and a finish). The device id `audible:<account>` is this route's
   alone: `/me/listening/sync` refuses a batch naming one (400), a legacy PUT naming one (a row echoed back) saves under
-  none, and `EditProgress` clears it on the row it edits (the edit reaches the feed, and Audible's next place can't
-  undo it unseen), as a listening import does on a row it moves on (`importer.mergeProgress`, the device name too;
-  its undo restores Audible's place from `import_progress_prior` under no device either, `progressPrior.restored`, so
-  the feed carries the undo to Audible too). No listening session, `listening_daily` or history row is recorded
+  none, and a row keeps one only while it holds a place that account's sync wrote: the guard (`0085`, server#303, two
+  triggers on `progress`, so no write path can miss it) drops the device and its name from every insert and every
+  update that moves the row's position or finish, and the Audible route names its device again in a statement of
+  its own right after writing its place (`ownAudiblePlace`, setting only the device, which the guard leaves). So an
+  edit that moves Audible's place reaches the feed (Audible's next place can't undo it unseen), as does a listening
+  import moving it on (the planner keeps the row's device; the store drops it), its undo restoring Audible's place
+  from `import_progress_prior` (the feed carries the undo to Audible too); a write that leaves the place as it was
+  (an edit naming only dates) keeps the device, and so does a moved book's carried row whose place is the one the
+  account wrote, unchanged (a folder renamed, a rescan's carry: `carriedAudiblePlace` names the device again as the
+  Audible route does), so the feed never offers Audible its own place back over a rewind made in the Audible app
+  since. A join's carried rows lose it, the first part's at offset 0 too (`carryRule.keepsAudible`): a part's place
+  is on a longer book, which the joined book's Audible title never gave, so the feed offers it. No listening session, `listening_daily` or history row is recorded
   (owner decision 2); the
   events are logged with token 0. 200 the Sync v2 answer; 403 `sync_off` (the module or the account's sync off, or
   the account paused: no library), 403 `user_unavailable` (the person disabled, a kid or a demo since:
@@ -4666,7 +4691,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book to the next number, so a newly matched or re-synced book's existing place (or one left out for a length that may
   agree now) is offered to Audible. A move or join moves the book's titles in its per-user transaction, after the
   places (`moveAudibleTitles`, server#303), so the trigger offers the carried place (merged by the carry's rule with a
-  row an earlier book left at the new path), never that left-behind row as it stood, and a carry that fails leaves the
+  row an earlier book left at the new path; after a move the feed leaves it out while it is the account's own, `carriedAudiblePlace`), never that left-behind row as it stood, and a carry that fails leaves the
   titles where they were; a left-behind row the carry did not change (its person never played the moved book, or it
   was the newer and won the merge) is another book's place: `keepLeftOffers` sets its `change_seq` to
   `unofferedSeq` (-1, below every cursor, a feed's first page included: put back where it was, a row written after

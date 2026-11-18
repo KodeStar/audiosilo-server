@@ -144,3 +144,28 @@ func TestSyncFurthestOnlyRespectsRestart(t *testing.T) {
 	wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(3000, 10*time.Minute))).Results[0],
 		statusApplied, "")
 }
+
+// The Audible route's own writes keep the account's device through the guard
+// (migration 0085, ownAudiblePlace): a first place (an insert), a place ahead
+// on its own row, and a finish heard before another device's later save (the
+// row's time is kept, so its chain starts nowhere).
+func TestSyncFurthestOnlyKeepsItsDevice(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	want := func(what string) {
+		t.Helper()
+		if p := f.progress(t); p.DeviceID != "audible:acct0001" || p.DeviceName != "Audible (Chris US)" {
+			t.Fatalf("%s: %+v", what, p)
+		}
+	}
+	wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(1000, 10*time.Minute))).Results[0], statusApplied, "")
+	want("a first place")
+	wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(2000, 5*time.Minute))).Results[0], statusApplied, "")
+	want("a place ahead")
+	wantResult(t, f.syncOne(t, "phone", f.listen("resume", 2000, 2100, 0, base(2))), statusApplied, "")
+	wantResult(t, f.sync(t, f.audibleBatch(t, f.finishEvent(EventFinish, 3*time.Minute))).Results[0], statusApplied, "")
+	if p := f.progress(t); !p.Finished {
+		t.Fatalf("Audible's finish: %+v", p)
+	}
+	want("a finish heard before the phone's save")
+}

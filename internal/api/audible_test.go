@@ -1143,7 +1143,7 @@ func TestAudibleTitlesAreUserState(t *testing.T) {
 	if err := b.cat.MarkAudibleSyncQueued(ctx, testAccount); err != nil {
 		t.Fatal(err)
 	}
-	sync, _ := bridge.AudibleSync(testAccount, nil, 0)
+	sync := bridge.AudibleSync(testAccount, 0)
 	for _, j := range []bridge.Job{
 		{Kind: bridge.KindAudibleSync, Params: sync.Params, State: bridge.StateDone},
 		{Kind: bridge.KindAudibleSync, Params: sync.Params, State: bridge.StateFailed, Error: bridge.SyncAudibleRefused},

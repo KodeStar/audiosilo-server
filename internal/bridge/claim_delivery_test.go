@@ -125,3 +125,58 @@ func TestReleaseUnsentClaimHonorsCancellation(t *testing.T) {
 		t.Fatalf("cancelled claim %+v, %v", got, err)
 	}
 }
+
+// failUnsentClaim ends an untouched claim failed with its reason; a cancel
+// asked for meanwhile (an admin's, or the server's own with its reason) ends it
+// cancelled instead, keeping that reason; a claim the Bridge reported on, or
+// one a lapsed lease handed out again, is left as it is.
+func TestFailUnsentClaim(t *testing.T) {
+	const reason = "the claim could not be filled"
+	for _, tc := range []struct {
+		name      string
+		meanwhile func(q *testQueue, ctx context.Context, claim *Job) (*Job, error)
+		state     string
+		attempts  int
+		err       string
+	}{
+		{name: "untouched", state: StateFailed, attempts: 1, err: reason},
+		{name: "cancel asked", state: StateCancelled, attempts: 1,
+			meanwhile: func(q *testQueue, ctx context.Context, claim *Job) (*Job, error) {
+				_, err := q.Cancel(ctx, claim.ID)
+				return claim, err
+			}},
+		{name: "reported", state: StateRunning, attempts: 1,
+			meanwhile: func(q *testQueue, ctx context.Context, claim *Job) (*Job, error) {
+				_, err := q.UpdateHeld(ctx, claim.ID, Update{Attempt: claim.Attempts, State: ptr(StateRunning)})
+				return claim, err
+			}},
+		{name: "claimed again", state: StateClaimed, attempts: 2,
+			meanwhile: func(q *testQueue, ctx context.Context, claim *Job) (*Job, error) {
+				q.advance(Lease + time.Second)
+				_, err := q.ClaimFor(ctx, q.token, nil, 0)
+				return claim, err
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := newTestQueue(t)
+			ctx := context.Background()
+			queued := q.verify(t, "Author/Book", 0)
+			claim, err := q.ClaimFor(ctx, q.token, nil, 0)
+			if err != nil || claim == nil {
+				t.Fatalf("claim %+v, %v", claim, err)
+			}
+			if tc.meanwhile != nil {
+				if claim, err = tc.meanwhile(q, ctx, claim); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := q.failUnsentClaim(ctx, claim, reason); err != nil {
+				t.Fatal(err)
+			}
+			got, err := q.Job(ctx, queued.ID)
+			if err != nil || got.State != tc.state || got.Attempts != tc.attempts || got.Error != tc.err {
+				t.Fatalf("after = %+v, %v; want %s after %d attempts, error %q", got, err, tc.state, tc.attempts, tc.err)
+			}
+		})
+	}
+}

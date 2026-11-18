@@ -284,11 +284,12 @@ func TestUndoRestoresUnchangedProgress(t *testing.T) {
 	}
 }
 
-// An import that moves on an Audible account's place (the importer clears
-// its device: importer.mergeProgress) stores it under no device and no device
-// name, so GET /bridge/progress carries it to Audible; an undo puts Audible's
-// place back (import_progress_prior) under no device either, so the feed
-// carries the undo to Audible too (it may hold the import's place by then).
+// An import that moves on an Audible account's place, keeping the row's
+// device as the planner does, stores it under no device and no device name
+// (the guard, migration 0085), so GET /bridge/progress carries it to Audible;
+// an undo puts Audible's place back (import_progress_prior) under no device
+// either, so the feed carries the undo to Audible too (it may hold the
+// import's place by then).
 func TestImportOverAudiblePlace(t *testing.T) {
 	t.Parallel()
 	f := newImportFixture(t)
@@ -307,7 +308,7 @@ func TestImportOverAudiblePlace(t *testing.T) {
 			t.Errorf("the import's prior = %+v", have)
 		}
 		up := have
-		up.Position, up.Version, up.UpdatedAt, up.DeviceID, up.DeviceName = 3000, have.Version+1, FormatStamp(day(3, 22)), "", ""
+		up.Position, up.Version, up.UpdatedAt = 3000, have.Version+1, FormatStamp(day(3, 22))
 		return &ImportWrite{Progress: []ImportProgress{{Prior: &have, Wrote: up}}}, nil
 	}); err != nil {
 		t.Fatal(err)

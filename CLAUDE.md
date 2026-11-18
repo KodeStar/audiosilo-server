@@ -356,7 +356,10 @@ a Stay on a base below it is a plain jump); see Listening sync (Stay wins) in CO
 `books.path_key` (the book's path in NFC, `''` when already NFC, NULL until `catalog.KeyPaths` keys it at the start;
 derived, never on the wire) and its two partial indexes; see Path spelling in CONVENTIONS.md. `0084` (server#210) adds
 `path_rekeys`, the re-key's log (every row `catalog.RekeyPathState` / `RekeyLibrary` moved to its book, whole, in
-`row_json`; cascades with the user and the library, never on the wire); see Move-tracking (the re-key) in CONVENTIONS.md.
+`row_json`; cascades with the user and the library, never on the wire); see Move-tracking (the re-key) in CONVENTIONS.md. `0085` (server#303) adds
+the triggers `progress_audible_place_insert` / `_update` (the Audible device guard: an insert, or an update moving a
+row's position or finish, drops an `audible:<account>` device; only the Audible route names its device again,
+`ownAudiblePlace`); see Audible sync in CONVENTIONS.md.
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403

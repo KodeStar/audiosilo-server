@@ -43,6 +43,8 @@ func (a *API) SetBridge(b *bridge.Service) {
 		a.log.Warn("expire private podcast requests failed", "err", err)
 	}
 	b.OnTransition = func(ctx context.Context, job bridge.Job, _ string) { a.notifyBridgeJob(ctx, &job) }
+	b.ClaimAudibleSync = a.audibleSyncClaim
+	b.Log = a.log
 	b.OnEnded = func(ctx context.Context, job bridge.Job) {
 		if bridge.IsPodcast(job.Kind) {
 			if err := a.cat.FoldPodcastJob(ctx, job); err != nil {
@@ -467,16 +469,14 @@ func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 	case job == nil:
 		claimEnded(ctx, w)
 	default:
-		// Claim cleanup outlives a disconnected request, but is bounded so a
-		// database fault cannot hold this handler indefinitely.
+		// Claim cleanup outlives a disconnected request (ReleaseUnsentClaim
+		// detaches and bounds it).
 		delivered := false
 		defer func() {
 			if delivered {
 				return
 			}
-			cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer stop()
-			if err := a.bridge.ReleaseUnsentClaim(cleanup, job); err != nil {
+			if err := a.bridge.ReleaseUnsentClaim(ctx, job); err != nil {
 				a.log.Warn("bridge claim release failed", "job_id", job.ID, "err", err)
 			}
 		}()

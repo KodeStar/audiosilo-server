@@ -609,11 +609,9 @@ func TestAudibleSyncScheduler(t *testing.T) {
 	if len(j) != 1 || j[0].State != bridge.StateQueued || j[0].Priority != -10 {
 		t.Fatalf("first tick = %+v, want one queued sync (acct0002's sync is off)", j)
 	}
-	var p bridge.AudibleSyncParams
-	if err := json.Unmarshal(j[0].Params, &p); err != nil || p.Account != testAccount || len(p.Titles) != 2 ||
-		p.Titles[0] != (bridge.AudibleSyncTitle{ASIN: mistbornASIN, LibraryID: s.lib.ID, Path: mistbornBook, RuntimeS: 36000}) ||
-		p.Titles[1].ASIN != cradleASIN {
-		t.Fatalf("params = %s, %v", j[0].Params, err)
+	// Queued with the account alone (server#303); the claim answers the titles.
+	if string(j[0].Params) != `{"account":"`+testAccount+`"}` {
+		t.Fatalf("queued params = %s", j[0].Params)
 	}
 	if err := audible.SchedulerTick(ctx, d, now.Add(10*time.Minute)); err != nil {
 		t.Fatal(err)
@@ -625,6 +623,12 @@ func TestAudibleSyncScheduler(t *testing.T) {
 	// Claimed and done: the account's last sync. The next is due 15 minutes
 	// after the last was queued.
 	job := s.claim(t, bridge.KindAudibleSync)
+	var p bridge.AudibleSyncParams
+	if err := json.Unmarshal(job.Params, &p); err != nil || p.Account != testAccount || len(p.Titles) != 2 ||
+		p.Titles[0] != (bridge.AudibleSyncTitle{ASIN: mistbornASIN, LibraryID: s.lib.ID, Path: mistbornBook, RuntimeS: 36000}) ||
+		p.Titles[1].ASIN != cradleASIN {
+		t.Fatalf("claimed params = %s, %v", job.Params, err)
+	}
 	s.finish(t, job, bridge.StateDone, `{"sent":1}`, "")
 	if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.LastSyncAt == nil || a.RefusedAt != nil {
 		t.Fatalf("after a done sync: %+v", a)
@@ -947,11 +951,66 @@ func TestAudibleListeningRuntimeMismatch(t *testing.T) {
 	}
 }
 
+// A stored title the Bridge's strict params would refuse (here a runtime below
+// 0, which the titles route never stores) is left out of the claim, so the
+// account's other titles still sync instead of the whole job failing there.
+func TestAudibleSyncClaimLeavesOutABadTitle(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	s.beat(t, bridge.KindVerify, bridge.KindAudibleSync)
+	if _, err := s.db.ExecContext(ctx, `UPDATE audible_titles SET runtime_s = -1 WHERE account = ? AND asin = ?`,
+		testAccount, cradleASIN); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.api.bridge.Enqueue(ctx, bridge.AudibleSync(testAccount, bridge.PriorityScheduled)); err != nil {
+		t.Fatal(err)
+	}
+	var p bridge.AudibleSyncParams
+	job := s.claim(t, bridge.KindAudibleSync)
+	if err := json.Unmarshal(job.Params, &p); err != nil || p.Account != testAccount || len(p.Titles) != 1 ||
+		p.Titles[0].ASIN != mistbornASIN {
+		t.Fatalf("claimed params = %s, %v; want the good title alone", job.Params, err)
+	}
+}
+
+// A claim that takes an audible.sync the server can never fill (params stored
+// unreadable) ends it with its own reason and answers as if there were no job
+// (204, the Bridge has nothing to back off from), never a 500, and its ending
+// folds to nothing (FoldAudibleSync reads no params it needn't). The claim
+// going on to the job behind it is bridge's
+// TestAudibleSyncClaimUnreadableParamsFailed.
+func TestAudibleSyncClaimUnreadableParamsAnswersNoJob(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	s.beat(t, bridge.KindVerify, bridge.KindAudibleSync)
+	job, _, err := s.api.bridge.Enqueue(ctx, bridge.AudibleSync(testAccount, bridge.PriorityScheduled))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE bridge_jobs SET params = '{' WHERE id = ?`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := s.do(t, "GET", "/api/v1/bridge/jobs/next?wait=0&kind="+bridge.KindAudibleSync, s.bridgeTok, "")
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("claim = %d %s, want 204", resp.StatusCode, out)
+	}
+	stored, err := s.api.bridge.Job(ctx, job.ID)
+	if err != nil || stored.State != bridge.StateFailed || !strings.Contains(stored.Error, "which Audible account") {
+		t.Fatalf("job = %+v, %v; want it failed naming its unreadable account", stored, err)
+	}
+	if err := s.cat.FoldAudibleSync(ctx, *stored); err != nil {
+		t.Fatalf("fold = %v; want nothing to record", err)
+	}
+}
+
 // A console change to which titles take part in an account's sync queues its
-// audible.sync at once with the titles now (an open one the Bridge hasn't
-// claimed takes them), so the Bridge stops pushing a left-out title without
-// waiting for the next turn; with no Bridge running audible.sync, nothing is
-// queued.
+// audible.sync at once, even with no title left (the Bridge is told the set
+// is empty), so the Bridge stops pushing a left-out title without waiting for
+// the next turn; with no Bridge running audible.sync, nothing is queued. The
+// queue holds the account alone, and the claim answers the titles as they are
+// then (server#303): an open sync not claimed yet syncs the newest set.
 func TestAudibleSyncQueuedOnTitleChange(t *testing.T) {
 	t.Parallel()
 	s := newAudibleSyncEnv(t)
@@ -962,9 +1021,9 @@ func TestAudibleSyncQueuedOnTitleChange(t *testing.T) {
 			t.Fatalf("patch %s: %d %s", asin, resp.StatusCode, out)
 		}
 	}
-	syncs := func() []bridge.AudibleSyncParams {
+	queued := func() []string {
 		t.Helper()
-		var out []bridge.AudibleSyncParams
+		var out []string
 		rows, err := s.db.QueryContext(ctx, `SELECT params FROM bridge_jobs WHERE kind = ? AND state = ?`,
 			bridge.KindAudibleSync, bridge.StateQueued)
 		if err != nil {
@@ -972,33 +1031,53 @@ func TestAudibleSyncQueuedOnTitleChange(t *testing.T) {
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var raw []byte
-			var p bridge.AudibleSyncParams
-			if err := rows.Scan(&raw); err != nil || json.Unmarshal(raw, &p) != nil {
+			var raw string
+			if err := rows.Scan(&raw); err != nil {
 				t.Fatal(err)
 			}
-			out = append(out, p)
+			out = append(out, raw)
 		}
 		if err := rows.Err(); err != nil {
 			t.Fatal(err)
 		}
 		return out
 	}
+	claimed := func() []string {
+		t.Helper()
+		var p bridge.AudibleSyncParams
+		job := s.claim(t, bridge.KindAudibleSync)
+		if err := json.Unmarshal(job.Params, &p); err != nil || p.Account != testAccount || p.Titles == nil {
+			t.Fatalf("claimed params = %s, %v", job.Params, err)
+		}
+		s.finish(t, job, bridge.StateDone, `{"sent":0}`, "")
+		var asins []string
+		for _, title := range p.Titles {
+			asins = append(asins, title.ASIN)
+		}
+		return asins
+	}
 	patch(mistbornASIN, `{"no_sync":true}`)
-	if got := syncs(); len(got) != 0 {
+	if got := queued(); len(got) != 0 {
 		t.Fatalf("queued with no Bridge running audible.sync: %+v", got)
 	}
 	s.beat(t, bridge.KindVerify, bridge.KindAudibleSync)
 	patch(cradleASIN, `{"rejected":true}`)
-	if got := syncs(); len(got) != 1 || len(got[0].Titles) != 0 {
+	if got := queued(); len(got) != 1 || got[0] != `{"account":"`+testAccount+`"}` {
 		t.Fatalf("after Not this book = %+v", got)
 	}
 	patch(mistbornASIN, `{"no_sync":false}`)
-	if got := syncs(); len(got) != 1 || len(got[0].Titles) != 1 || got[0].Titles[0].ASIN != mistbornASIN {
-		t.Fatalf("after Sync again = %+v", got)
+	if got := queued(); len(got) != 1 {
+		t.Fatalf("after Sync again = %+v, want the open sync", got)
+	}
+	if got := claimed(); len(got) != 1 || got[0] != mistbornASIN {
+		t.Fatalf("claimed after Sync again = %v", got)
+	}
+	patch(mistbornASIN, `{"no_sync":true}`)
+	if got := claimed(); len(got) != 0 {
+		t.Fatalf("claimed with every title left out = %v, want an empty list", got)
 	}
 	patch(mistbornASIN, `{"dest_path":"Other/Place"}`) // a destination changes no sync
-	if got := syncs(); len(got) != 1 {
+	if got := queued(); len(got) != 0 {
 		t.Fatalf("after a destination = %+v", got)
 	}
 }

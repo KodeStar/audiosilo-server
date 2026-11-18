@@ -438,8 +438,9 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 			return err
 		}
 		// A move is a join of one part at offset 0 that ends the book, except that
-		// a collision takes the newer save rather than the furthest.
-		if err := carryListeningState(ctx, tx, libraryID, JoinPart{Path: oldPath, Last: true}, newPath, 0, mergeNewest); err != nil {
+		// a collision takes the newer save rather than the furthest and a carried
+		// Audible place stays the account's (moveCarry).
+		if err := carryListeningState(ctx, tx, libraryID, JoinPart{Path: oldPath, Last: true}, newPath, 0, moveCarry); err != nil {
 			return fmt.Errorf("move listening state: %w", err)
 		}
 		if err := moveAudibleTitles(ctx, tx, libraryID, oldPath, newPath); err != nil {
@@ -527,8 +528,8 @@ func keepLeftOffers(ctx context.Context, tx *sql.Tx, libraryID int64, into strin
 // (JoinDurableState). Positions land on into's timeline (JoinPart.at; unchanged
 // for a move); total is into's length (0 = unknown: each row takes where its
 // part ends on into's timeline, JoinPart.end).
-// Progress where the listener already has some on into merges by merge: a move
-// takes the newer save (mergeNewest), a join the furthest (mergeFurthest); a
+// Progress where the listener already has some on into merges by rule: a move
+// takes the newer save (moveCarry), a join the furthest (joinCarry); a
 // favourite lands once; an up-next entry or collection item already on into
 // stays (with its position) and the carried one goes; a rating already on into
 // is replaced only by a newer one (updated_at; a tie keeps into's), and so is a
@@ -541,8 +542,8 @@ func keepLeftOffers(ctx context.Context, tx *sql.Tx, libraryID int64, into strin
 // purpose: that concatenation trips gosec G202 (the project lints at a green
 // baseline), and only the values are bound parameters here anyway.
 func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
-	merge progressMerge) error {
-	return carryState(ctx, tx, libraryID, part, into, total, merge, carryAll, nil)
+	rule carryRule) error {
+	return carryState(ctx, tx, libraryID, part, into, total, rule, carryAll, nil)
 }
 
 // carrySet is which of carryListeningState's tables a carry hands over: a move
@@ -569,7 +570,7 @@ const (
 // can't reach into keeps their own; nil for a move or a join, which carry
 // every listener's).
 func carryState(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
-	merge progressMerge, set carrySet, keep []int64) error {
+	rule carryRule, set carrySet, keep []int64) error {
 	if part.Path == into {
 		return nil // nothing to carry (and the delete-after-copy below would lose it)
 	}
@@ -578,7 +579,7 @@ func carryState(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart,
 		return err
 	}
 	if set&carryTimeline != 0 {
-		if err := carryProgress(ctx, tx, libraryID, part, into, total, merge, keep, kept); err != nil {
+		if err := carryProgress(ctx, tx, libraryID, part, into, total, rule, keep, kept); err != nil {
 			return err
 		}
 		if err := carryStmts(ctx, tx, libraryID, part, into, total, kept, timelineCarries); err != nil {
@@ -732,10 +733,10 @@ func newerFinishChange(a, b sql.NullString) sql.NullString {
 
 // carryProgress moves every listener's progress on part.Path to into, placed on
 // into's timeline (JoinPart.at), merged with any they already have there
-// (merge), but the progress of a listener in keep (kept: the same, as
+// (rule), but the progress of a listener in keep (kept: the same, as
 // carryKept binds it).
 func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
-	merge progressMerge, keep []int64, kept string) error {
+	rule carryRule, keep []int64, kept string) error {
 	from, err := progressOn(ctx, tx, libraryID, part.Path)
 	if err != nil {
 		return err
@@ -769,7 +770,7 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 		// write one above it, so a Stay on that version is one too (server#415).
 		editVersion := p.Version + 1
 		if cur, ok := existing[r.user]; ok {
-			p = merge(cur.UserProgress, p)
+			p = rule.merge(cur.UserProgress, p)
 			finishChanged = newerFinishChange(cur.finishChangedAt, finishChanged)
 			editVersion = p.Version
 		}
@@ -785,7 +786,9 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 		}
 		// The device name follows the merge's winner and the newer finish-state
 		// change is kept; an offered place (other_place) and a device's span chain
-		// (span_at, 0062) are dropped: they were on the old path's timeline.
+		// (span_at, 0062) are dropped: they were on the old path's timeline. The
+		// guard (migration 0085) takes an Audible account's device off the row;
+		// a move names it again when the place is unchanged (carryRule).
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 			     playback_speed, version, device_id, updated_at, started_at, finished_at, device_name,
@@ -802,15 +805,46 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, p.DeviceName, finishChanged, editVersion); err != nil {
 			return err
 		}
+		if rule.keepsAudible && carriedAudiblePlace(r.UserProgress, p) {
+			if err := nameAudibleDevice(ctx, tx, r.user, Ref{LibraryID: libraryID, Path: into},
+				p.DeviceID, p.DeviceName); err != nil {
+				return err
+			}
+		}
 	}
 	return carryStmts(ctx, tx, libraryID, part, into, total, kept,
 		[]string{`DELETE FROM progress WHERE library_id = ?4 AND rel_path = ?5` + carryKept})
 }
 
-// progressMerge is one listener's progress from the row already on a path (have)
-// and the row carried onto it (carried): mergeNewest for a move, mergeFurthest for
-// a join.
-type progressMerge func(have, carried UserProgress) UserProgress
+// carriedAudiblePlace reports whether a move wrote a row (written) holding the
+// place an Audible account's sync left on the row it carried (from): the carried
+// row won and its place is unchanged. The rename of a book's folder or a rescan's
+// carry gives the account's place no new value, so the row stays the account's:
+// offered back, the Bridge could push it over a rewind made in the Audible app
+// since. A join never asks (carryRule.keepsAudible).
+func carriedAudiblePlace(from, written UserProgress) bool {
+	return IsAudibleDevice(from.DeviceID) && written.DeviceID == from.DeviceID &&
+		written.Position == from.Position && written.Finished == from.Finished
+}
+
+// carryRule is how a carry treats one listener's progress: moveCarry for a move,
+// joinCarry for a join.
+type carryRule struct {
+	// merge is the row already on a path (have) merged with the row carried onto
+	// it (carried).
+	merge func(have, carried UserProgress) UserProgress
+	// keepsAudible names an Audible account's device again on a carried row
+	// holding its place unchanged (carriedAudiblePlace). Only a move does: a
+	// joined part's place is on a longer book, even the first part's at offset 0,
+	// and the joined book's Audible title (moveAudibleTitles) never gave it, so
+	// the feed offers it and the Bridge decides.
+	keepsAudible bool
+}
+
+var (
+	moveCarry = carryRule{merge: mergeNewest, keepsAudible: true}
+	joinCarry = carryRule{merge: mergeFurthest}
+)
 
 // mergeNewest is a move's merge: the newer save wins whole (IsNewer: updated_at,
 // then version), under a version above both. A row already at a book's new path is

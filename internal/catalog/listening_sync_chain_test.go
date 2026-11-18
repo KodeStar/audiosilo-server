@@ -453,3 +453,108 @@ func TestSyncReplayOfALateFinishChains(t *testing.T) {
 		}
 	}
 }
+
+// A replay of a span applied inside the overlap before the chain's end (which
+// it kept, as a late finish does) still seeds the chain: the span wrote the
+// row's version, so the base-0 span after it applies as it did in the same
+// POST rather than diverging from the device's own place.
+func TestSyncReplayOfAnOverlapSpanChains(t *testing.T) {
+	t.Parallel()
+	for _, replay := range []bool{false, true} {
+		f := newSyncFixture(t)
+		wantResult(t, f.syncOne(t, "watch", f.listen("resume", 1000, 1100, 10*time.Second, base(0))), statusApplied, "")
+		move := f.listen("jump", 3000, 3000, 11500*time.Millisecond, base(f.progress(t).Version))
+		if replay {
+			wantResult(t, f.syncOne(t, "watch", move), statusApplied, "") // stored; its answer lost
+		}
+		r := f.sync(t, f.batch(t, "watch", move, f.listen("moved_back", 400, 500, 5*time.Second, base(0)))).Results
+		if back := r[1]; back.Status != statusApplied || f.progress(t).Position != 500 {
+			t.Fatalf("replay %v: %+v, row at %v; want applied at 500", replay, back, f.progress(t).Position)
+		}
+	}
+}
+
+// A replay of a span inside the overlap that did not apply (the backstop's
+// resume_behind) wrote nothing, so it seeds no chain: the base-0 span after it
+// diverges as it would without the replay, the device's further place kept.
+func TestSyncReplayOfAnOverlapSpanNotAppliedDoesNotChain(t *testing.T) {
+	t.Parallel()
+	for _, replay := range []bool{false, true} {
+		f := newSyncFixture(t)
+		wantResult(t, f.syncOne(t, "watch", f.listen("resume", 5000, 5100, 10*time.Second, base(0))), statusApplied, "")
+		behind := f.listen("resume", 100, 200, 11*time.Second, base(f.progress(t).Version))
+		if replay {
+			wantResult(t, f.syncOne(t, "watch", behind), statusNotApplied, reasonResumeBehind)
+		}
+		r := f.sync(t, f.batch(t, "watch", behind, f.listen("moved_back", 400, 500, 5*time.Second, base(0)))).Results
+		if back := r[1]; back.Status != statusDiverged || back.Kept != "stored" || f.progress(t).Position != 5100 {
+			t.Fatalf("replay %v: %+v, row at %v; want diverged, 5100 kept", replay, back, f.progress(t).Position)
+		}
+	}
+}
+
+// fe#216: each POST is dated by its own sent_at shift, which carries the
+// request's time on the way, so a device's bare move (a span of no length: a
+// seek while paused) posted after its last span can land dated up to its
+// latency before that span's end. A span of the device's own chain ending up
+// to historyJoinOverlap before the chain's end still comes after it (as
+// continues reads a start), so the move applies instead of being "older";
+// one further back is still older.
+func TestSyncChainOverlapsAcrossShifts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		gap   time.Duration // the move's end after the span's, by the device's clock
+		delay time.Duration // the first POST's time on the way (its extra shift)
+		want  string
+	}{
+		{"a move half a second after, the first POST 1.5 s on the way", 500 * time.Millisecond, 1500 * time.Millisecond, statusApplied},
+		{"a move landing 2 s before the chain's end", 0, 2 * time.Second, statusApplied},
+		{"a move landing 3 s before the chain's end", 0, 3 * time.Second, statusNotApplied},
+	} {
+		f := newSyncFixture(t)
+		// The span ended 10 s ago by the device's clock (no skew); its POST took
+		// delay to arrive, so its shift dates it delay later.
+		span := f.listen("resume", 1000, 1100, 10*time.Second, base(0))
+		first := f.batch(t, "watch", span)
+		sent := f.clock.Add(-tc.delay)
+		first.SentAt = &sent
+		wantResult(t, f.sync(t, first).Results[0], statusApplied, "")
+		seen := f.progress(t).Version
+		// The bare move, posted at once (no shift), base the version it saw.
+		move := f.listen("jump", 3000, 3000, 10*time.Second-tc.gap, base(seen))
+		res := f.syncOne(t, "watch", move)
+		reason := ""
+		if tc.want == statusNotApplied {
+			reason = reasonOlder
+		}
+		if res.Status != tc.want || res.Reason != reason {
+			t.Fatalf("%s: %+v, want %s %s", tc.name, res, tc.want, reason)
+		}
+		if p := f.progress(t); (tc.want == statusApplied) != (p.Position == 3000) {
+			t.Fatalf("%s: row %+v", tc.name, p)
+		}
+	}
+}
+
+// The overlap is measured from the chain's last real end: a span applied
+// inside it leaves that end where it was (as a finish does), so a device's
+// spans each dated a little before the last cannot walk the place back 2 s at
+// a time. The move 1.5 s before the chain's end applies (fe#216); one 1.5 s
+// before that move, 3 s before the chain's end, is older; the device's next
+// span after the chain's end applies as ever.
+func TestSyncChainOverlapKeepsItsEnd(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	wantResult(t, f.syncOne(t, "watch", f.listen("resume", 1000, 1100, 10*time.Second, base(0))), statusApplied, "")
+	seen := func() *int64 { return base(f.progress(t).Version) }
+	wantResult(t, f.syncOne(t, "watch", f.listen("jump", 3000, 3000, 11500*time.Millisecond, seen())), statusApplied, "")
+	wantResult(t, f.syncOne(t, "watch", f.listen("jump", 2000, 2000, 13*time.Second, seen())), statusNotApplied, reasonOlder)
+	if p := f.progress(t); p.Position != 3000 {
+		t.Fatalf("after a move 3 s before the chain's end: %+v", p)
+	}
+	wantResult(t, f.syncOne(t, "watch", f.listen("resume", 3000, 3003, 5*time.Second, seen())), statusApplied, "")
+	if p := f.progress(t); p.Position != 3003 {
+		t.Fatalf("after the next span: %+v", p)
+	}
+}

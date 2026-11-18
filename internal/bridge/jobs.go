@@ -61,12 +61,15 @@ const (
 	// defaultParamsBytes bounds a job's params as sent, unless its kind sets
 	// its own (kindSpec.maxParams); MaxParamsBytes is the most any kind an
 	// admin may queue takes (the console's POST /admin/bridge/jobs body; an
-	// internal kind's params, audible.sync's larger ones, are the server's own).
+	// internal kind's params are the server's own).
 	defaultParamsBytes = 16 << 10
 	MaxParamsBytes     = max(defaultParamsBytes, maxCorrectParamsBytes)
 	maxProgressBytes   = 16 << 10
 	maxResultBytes     = 64 << 10
 	maxErrorBytes      = 2 << 10
+
+	// releaseTimeout bounds settleUnsentClaim.
+	releaseTimeout = 5 * time.Second
 )
 
 // KindVerify is Phase 0's proof job: the Bridge stats a book (or a library's
@@ -196,8 +199,7 @@ var kinds = map[string]kindSpec{
 	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
 	KindVerify:           {needsLibrary: true, book: bookOptional, params: verifyParams},
 	KindAudiblePoll:      {book: bookNone, params: audiblePollParams, module: ModuleAudible, internal: true, quiet: true, suffix: audibleAccountSuffix, promotes: true},
-	KindAudibleSync: {book: bookNone, params: audibleSyncParams, module: ModuleAudible, internal: true, quiet: true, suffix: audibleAccountSuffix,
-		promotes: true, maxParams: maxAudibleSyncParamsBytes},
+	KindAudibleSync:      {book: bookNone, params: audibleSyncParams, module: ModuleAudible, internal: true, quiet: true, suffix: audibleAccountSuffix, promotes: true},
 	KindAudibleImport: {needsLibrary: true, book: bookNone, writes: true, libraryKind: libraryBooks, params: audibleImportParams,
 		module: ModuleAudible, internal: true, suffix: audibleImportSuffix},
 	KindLibrivoxFetch: {needsLibrary: true, book: bookNone, writes: true, libraryKind: libraryBooks, params: librivoxFetchParams,
@@ -1291,18 +1293,45 @@ func checkOpenRequests(ctx context.Context, tx *sql.Tx, kind string, by int64, s
 }
 
 // ReleaseUnsentClaim returns an undelivered claim without spending an attempt.
-// The state, attempt and lease identify the untouched claim: any Bridge report
-// either changes its state or renews its lease, and makes this a no-op.
-// Cleanup must use a context independent of the disconnected claim request.
+// A job whose cancel was asked for is cancelled instead.
 func (s *Service) ReleaseUnsentClaim(ctx context.Context, claim *Job) error {
-	var job *Job
-	err := s.db.WithTx(ctx, "bridge.ReleaseUnsentClaim", func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET
+	now := s.ts()
+	return s.settleUnsentClaim(ctx, claim, "bridge.ReleaseUnsentClaim", `UPDATE bridge_jobs SET
 		 state=CASE WHEN cancel_requested=1 THEN 'cancelled' ELSE 'queued' END,
 		 attempts=attempts-1,lease_until=NULL,claimed_at=NULL,updated_at=?,
-		 finished_at=CASE WHEN cancel_requested=1 THEN ? ELSE NULL END
-		 WHERE id=? AND state='claimed' AND attempts=? AND lease_until=? AND claimed_at=?`,
-			s.ts(), s.ts(), claim.ID, claim.Attempts, claim.LeaseUntil, claim.ClaimedAt)
+		 finished_at=CASE WHEN cancel_requested=1 THEN ? ELSE NULL END`+unsentClaimSQL, now, now)
+}
+
+// failUnsentClaim ends an undelivered claim the server could not fill, on its
+// last attempt or when no attempt ever could, with reason as its error: at once
+// rather than when its lease runs out, which would name the Bridge (expireSQL).
+// A job whose cancel was asked for is cancelled instead.
+func (s *Service) failUnsentClaim(ctx context.Context, claim *Job, reason string) error {
+	now := s.ts()
+	return s.settleUnsentClaim(ctx, claim, "bridge.failUnsentClaim", `UPDATE bridge_jobs SET
+		 state=CASE WHEN cancel_requested=1 THEN 'cancelled' ELSE 'failed' END,
+		 error=CASE WHEN cancel_requested=1 THEN error ELSE ? END,
+		 lease_until=NULL,updated_at=?,finished_at=?`+unsentClaimSQL, reason, now, now)
+}
+
+// unsentClaimSQL picks an undelivered claim (its id, attempts, lease and claim
+// time follow the update's own args): the state, attempt and lease identify the
+// untouched claim, as any Bridge report either changes its state or renews its
+// lease, and makes the update a no-op.
+const unsentClaimSQL = `
+		 WHERE id=? AND state='claimed' AND attempts=? AND lease_until=? AND claimed_at=?`
+
+// settleUnsentClaim runs update (ending in unsentClaimSQL, with its own args)
+// on an undelivered claim. It runs detached from ctx's cancellation (the claim
+// request may have gone) and bounded, so a database fault cannot hold the
+// caller indefinitely.
+func (s *Service) settleUnsentClaim(ctx context.Context, claim *Job, op, update string, args ...any) error {
+	ctx, stop := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer stop()
+	var job *Job
+	err := s.db.WithTx(ctx, op, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, update,
+			append(args, claim.ID, claim.Attempts, claim.LeaseUntil, claim.ClaimedAt)...)
 		if err != nil {
 			return err
 		}

@@ -109,12 +109,22 @@ func (c *Catalog) AudibleSyncFor(ctx context.Context, account string) (*AudibleS
 }
 
 // AudibleSyncTitles are account's titles that take part in its sync
-// (syncTitleSQL), by ASIN: audible.sync's params.
+// (syncTitleSQL), by ASIN: the titles a claim of its audible.sync answers
+// (bridge.Service.ClaimAudibleSync).
 func (c *Catalog) AudibleSyncTitles(ctx context.Context, account string) ([]bridge.AudibleSyncTitle, error) {
 	return queryRows(ctx, c.db, func(rows *sql.Rows, t *bridge.AudibleSyncTitle) error {
 		return rows.Scan(&t.ASIN, &t.LibraryID, &t.Path, &t.RuntimeS)
 	}, `SELECT t.asin, t.match_library_id, t.match_path, t.runtime_s FROM audible_titles t
 		 WHERE t.account = ? AND `+syncTitleSQL+` ORDER BY t.asin`, account)
+}
+
+// HasAudibleSyncTitles reports whether any of account's titles takes part in
+// its sync (syncTitleSQL): the scheduler queues no audible.sync without one.
+func (c *Catalog) HasAudibleSyncTitles(ctx context.Context, account string) (bool, error) {
+	var has bool
+	err := c.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM audible_titles t WHERE t.account = ? AND `+syncTitleSQL+`)`,
+		account).Scan(&has)
+	return has, err
 }
 
 // AudibleSyncBooks are the books account's sync may write (its titles'
@@ -413,30 +423,35 @@ func (c *Catalog) MarkAudibleSyncQueued(ctx context.Context, account string) err
 // or after it (refusalEndedSince: a fresh sign-in while it ran, server#303, or
 // one the two's whole seconds can't order, server#359). Any other ending
 // changes nothing (the next one is due as usual; audible_sign_in, Audible
-// refusing the sign-in for now, among them). A user-state write.
+// refusing the sign-in for now, among them), and its params aren't read: a
+// sync the server ended because they can't be (bridge.fillAudibleSync) folds
+// to nothing rather than an error. A user-state write.
 func (c *Catalog) FoldAudibleSync(ctx context.Context, job bridge.Job) error {
+	synced := job.Kind == bridge.KindAudibleSync && bridge.AudibleSynced(job)
+	if !synced && bridge.AudibleRefusalCode(job) != bridge.SyncAudibleRefused {
+		return nil
+	}
 	account, err := bridge.AudibleAccountOf(job)
 	if err != nil {
 		return err
 	}
-	switch {
-	case job.Kind == bridge.KindAudibleSync && bridge.AudibleSynced(job):
+	if synced {
 		_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET last_sync_at = ? WHERE account = ?`, c.ts(), account)
-	case bridge.AudibleRefusalCode(job) == bridge.SyncAudibleRefused:
-		var ended sql.NullString
-		err = c.db.QueryRowContext(ctx, `SELECT refusal_ended_at FROM audible_accounts WHERE account = ?`, account).Scan(&ended)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		if err != nil || refusalEndedSince(ended, job.ClaimedAt) {
-			return err
-		}
-		// Only while the refusal_ended_at read stands: a sign-in or complete
-		// poll landing between the read and this write ended the refusal after
-		// the claim, so it marks nothing.
-		_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET refused_at = ? WHERE account = ? AND refusal_ended_at IS ?`,
-			c.ts(), account, ended)
+		return err
 	}
+	var ended sql.NullString
+	err = c.db.QueryRowContext(ctx, `SELECT refusal_ended_at FROM audible_accounts WHERE account = ?`, account).Scan(&ended)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil || refusalEndedSince(ended, job.ClaimedAt) {
+		return err
+	}
+	// Only while the refusal_ended_at read stands: a sign-in or complete poll
+	// landing between the read and this write ended the refusal after the
+	// claim, so it marks nothing.
+	_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET refused_at = ? WHERE account = ? AND refusal_ended_at IS ?`,
+		c.ts(), account, ended)
 	return err
 }
 

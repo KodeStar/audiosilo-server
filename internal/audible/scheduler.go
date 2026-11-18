@@ -12,7 +12,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
@@ -94,10 +93,9 @@ func queuePolls(ctx context.Context, d modules.Deps, now time.Time) error {
 
 // queueSyncs queues each due account's audible.sync (Phase 4c:
 // catalog.DueAudibleSyncs, every bridge.AudibleSyncEvery per account with sync
-// on, not paused or refused), its params the account's synced titles at queue
-// time; an account with none queues nothing until its next turn. A queued
-// sync the Bridge hasn't claimed yet takes the newest titles (the kind
-// promotes).
+// on, not paused or refused); an account with no synced title queues nothing
+// until its next turn. The job names the account alone: the Bridge's claim
+// reads its titles as they are then (bridge.Service.ClaimAudibleSync).
 func queueSyncs(ctx context.Context, d modules.Deps, now time.Time) error {
 	due, err := d.Catalog.DueAudibleSyncs(ctx, now, maxPerTick)
 	if err != nil {
@@ -109,26 +107,24 @@ func queueSyncs(ctx context.Context, d modules.Deps, now time.Time) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		errs = append(errs, q.queueSync(ctx, d.Log, account, false))
+		errs = append(errs, q.queueSync(ctx, account, false))
 	}
 	return errors.Join(errs...)
 }
 
-// queueSync queues account's audible.sync with its synced titles as params
-// (none queues nothing unless empty, the Bridge then told the set is empty)
-// and records its queue time.
-func (q Queues) queueSync(ctx context.Context, log *slog.Logger, account string, empty bool) error {
-	titles, err := q.Catalog.AudibleSyncTitles(ctx, account)
-	if err != nil {
-		return fmt.Errorf("sync audible account %s: %w", account, err)
-	}
-	if len(titles) > 0 || empty {
-		job, dropped := bridge.AudibleSync(account, titles, bridge.PriorityScheduled)
-		if dropped > 0 && log != nil {
-			log.Warn("audible: an account's sync leaves out titles past the params' bound", "account", account,
-				"dropped", dropped)
+// queueSync queues account's audible.sync when it has a synced title, or
+// always when empty (the Bridge's claim then tells it the set is empty), and
+// records its queue time.
+func (q Queues) queueSync(ctx context.Context, account string, empty bool) error {
+	queue := empty
+	if !queue {
+		var err error
+		if queue, err = q.Catalog.HasAudibleSyncTitles(ctx, account); err != nil {
+			return fmt.Errorf("sync audible account %s: %w", account, err)
 		}
-		if _, _, err := q.Bridge.Enqueue(ctx, job); err != nil {
+	}
+	if queue {
+		if _, _, err := q.Bridge.Enqueue(ctx, bridge.AudibleSync(account, bridge.PriorityScheduled)); err != nil {
 			return fmt.Errorf("sync audible account %s: %w", account, err)
 		}
 	}
@@ -140,11 +136,11 @@ func (q Queues) queueSync(ctx context.Context, log *slog.Logger, account string,
 // "Don't sync this book") or its sync was turned on, so the Bridge stops
 // pushing a title the console just left out without waiting for the next
 // turn: only while an online Bridge runs audible.sync and the account would be
-// due but for its time (catalog.AudibleSyncQueueable). Its params are the
-// titles now, even none when titlesChanged (the Bridge is told the set is
-// empty); an open sync the Bridge hasn't claimed yet takes them (the kind
-// promotes), one it is running keeps the ones it was given.
-func (q Queues) SyncNow(ctx context.Context, log *slog.Logger, account string, titlesChanged bool) error {
+// due but for its time (catalog.AudibleSyncQueueable), even with no synced
+// title when titlesChanged (the Bridge is told the set is empty). The claim
+// reads the titles, so an open sync the Bridge hasn't claimed yet syncs the
+// new set; one it is running keeps the titles its claim gave it.
+func (q Queues) SyncNow(ctx context.Context, account string, titlesChanged bool) error {
 	h, err := q.Bridge.Online(ctx)
 	if err != nil || h == nil || !h.Offers(bridge.KindAudibleSync) {
 		return err
@@ -153,5 +149,5 @@ func (q Queues) SyncNow(ctx context.Context, log *slog.Logger, account string, t
 	if err != nil || !ok {
 		return err
 	}
-	return q.queueSync(ctx, log, account, titlesChanged)
+	return q.queueSync(ctx, account, titlesChanged)
 }
