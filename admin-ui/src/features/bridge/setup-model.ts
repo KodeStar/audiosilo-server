@@ -116,10 +116,17 @@ export function agentCredentialSet(setup: Pick<BridgeSetup, 'items'>): boolean |
   return setup.items.find((i) => i.id === 'agent')?.done;
 }
 
-/** How the Bridge hands its agent credential to the agent container (bridge#79). */
-export type CredentialShare = 'group' | 'world' | 'group_required';
+/**
+ * The Setup card's words for each way the Bridge hands its agent credential to
+ * the agent container (bridge#79); the one list of the modes this console knows.
+ */
+export const CREDENTIAL_SHARE_KEY = {
+  group: 'bridge.setup.credentialShareGroup',
+  world: 'bridge.setup.credentialShareWorld',
+  group_required: 'bridge.setup.credentialShareGroupRequired',
+} as const;
 
-const CREDENTIAL_SHARES: readonly string[] = ['group', 'world', 'group_required'];
+export type CredentialShare = keyof typeof CREDENTIAL_SHARE_KEY;
 
 /**
  * The agent credential's hand-off, when the Bridge reports one this console
@@ -130,11 +137,15 @@ export function credentialShare(
   setup: Pick<BridgeSetup, 'agent_credential'>,
 ): CredentialShare | undefined {
   const share = setup.agent_credential;
-  return share && CREDENTIAL_SHARES.includes(share) ? (share as CredentialShare) : undefined;
+  return share && Object.hasOwn(CREDENTIAL_SHARE_KEY, share)
+    ? (share as CredentialShare)
+    : undefined;
 }
 
 /** Why a GitHub sign-in on the Bridge can't be used now (bridge#25). */
-export type GitHubSignInState = 'unrefreshed' | 'refused';
+const GITHUB_SIGN_IN_STATES = ['unrefreshed', 'refused'] as const;
+
+export type GitHubSignInState = (typeof GITHUB_SIGN_IN_STATES)[number];
 
 /**
  * The GitHub sign-in's trouble, when the Bridge reports one this console
@@ -144,7 +155,9 @@ export function githubSignInState(
   setup: Pick<BridgeSetup, 'github_state'>,
 ): GitHubSignInState | undefined {
   const state = setup.github_state;
-  return state === 'unrefreshed' || state === 'refused' ? state : undefined;
+  return (GITHUB_SIGN_IN_STATES as readonly (string | undefined)[]).includes(state)
+    ? (state as GitHubSignInState)
+    : undefined;
 }
 
 /** The checklist's GitHub step, when it has one. */

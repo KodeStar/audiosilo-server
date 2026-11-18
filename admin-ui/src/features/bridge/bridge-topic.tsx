@@ -50,6 +50,7 @@ import {
   ACCOUNTS_TAB,
   agentCredentialSet,
   billingKnown,
+  CREDENTIAL_SHARE_KEY,
   credentialShare,
   githubSignInState,
   githubStep,
@@ -398,7 +399,7 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
                   [
                     t('bridge.setup.credentialHandoff'),
                     <StatusText key="share" tone={share === 'group' ? 'ok' : 'warn'}>
-                      {t(SHARE_KEY[share])}
+                      {t(CREDENTIAL_SHARE_KEY[share])}
                     </StatusText>,
                   ],
                 ] as [string, React.ReactNode][])),
@@ -446,13 +447,6 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
   );
 }
 
-/** The hand-off row's words for each way the agent credential goes (bridge#79). */
-const SHARE_KEY = {
-  group: 'bridge.setup.credentialShareGroup',
-  world: 'bridge.setup.credentialShareWorld',
-  group_required: 'bridge.setup.credentialShareGroupRequired',
-} as const;
-
 /**
  * The GitHub account row, agreeing with the checklist's GitHub step: the
  * account's name; or, when the step is done with no name reported (the gh
@@ -466,19 +460,20 @@ function GitHubAccount({ setup }: { setup: BridgeSetup }) {
   if (trouble === 'refused') {
     return <StatusText tone="warn">{t('bridge.setup.githubRefused')}</StatusText>;
   }
-  if (setup.github_login) {
-    const login = <span className="font-mono text-[12.5px]">{setup.github_login}</span>;
-    if (trouble !== 'unrefreshed') return login;
+  const login = setup.github_login ? (
+    <span className="font-mono text-[12.5px]">{setup.github_login}</span>
+  ) : undefined;
+  if (trouble === 'unrefreshed') {
+    const note = <StatusText tone="warn">{t('bridge.setup.githubUnrefreshed')}</StatusText>;
+    if (!login) return note;
     return (
       <span className="inline-flex flex-wrap items-center gap-x-2">
         {login}
-        <StatusText tone="warn">{t('bridge.setup.githubUnrefreshed')}</StatusText>
+        {note}
       </span>
     );
   }
-  if (trouble === 'unrefreshed') {
-    return <StatusText tone="warn">{t('bridge.setup.githubUnrefreshed')}</StatusText>;
-  }
+  if (login) return login;
   const step = githubStep(setup);
   if (step?.done) {
     return (
