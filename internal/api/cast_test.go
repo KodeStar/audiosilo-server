@@ -620,6 +620,10 @@ func TestLongResponseKeepsTheCastTokenInUse(t *testing.T) {
 					break
 				}
 			}
+			// The keep at the end stamps a later millisecond than the one read
+			// above: this wait is in step with the keeps, so the two would
+			// otherwise tie about one run in five.
+			time.Sleep(c.api.castKeepEvery / 4)
 			w.WriteHeader(http.StatusOK)
 		}), bookMediaKinds)
 		req := httptest.NewRequest("GET", mediaURL(c.lib, "stream", cradlePart, tok), nil)
