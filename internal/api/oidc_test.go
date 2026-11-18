@@ -1874,10 +1874,6 @@ func TestOIDCConsoleDeepLink(t *testing.T) {
 		return e.callback(t, path, cookie)
 	}
 	deep := "/admin/people/user/3?tab=devices"
-	loc := land(t, "return=admin&next="+url.QueryEscape(deep))
-	if loc != oidcPublic+deep+oidcDoneMarker {
-		t.Fatalf("a deep link landed on %q", loc)
-	}
 	cookie, path := e.startQuery(t, "return=admin&next="+url.QueryEscape(deep))
 	loc, done := e.callbackDone(t, path, cookie)
 	if resp, out := e.finish(t, done, "admin-web"); loc != oidcPublic+deep+oidcDoneMarker || resp.StatusCode != 200 || out["token"] == "" {

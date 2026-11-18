@@ -320,11 +320,10 @@ func flowKey(state string) string {
 }
 
 // heldFlow is a flow cookie the browser sent: its name as oidcCookieName takes
-// it, and its flow when it opens (ok).
+// it, and its flow (the zero Flow when it doesn't open: IssuedAt 0, no intent).
 type heldFlow struct {
 	name string
 	flow oidc.Flow
-	ok   bool
 }
 
 // heldFlows are the flow cookies the request carries, the sign-ins started in
@@ -339,21 +338,13 @@ func (a *API) heldFlows(r *http.Request) []heldFlow {
 		if !found || !statePattern.MatchString(key) {
 			continue
 		}
-		f, err := a.oidc.sealer.Open(c.Value)
-		out = append(out, heldFlow{name: oidcCookie + key, flow: f, ok: err == nil})
+		f, _ := a.oidc.sealer.Open(c.Value) // the zero Flow when it doesn't open
+		out = append(out, heldFlow{name: oidcCookie + key, flow: f})
 	}
 	slices.SortStableFunc(out, func(x, y heldFlow) int {
-		return cmp.Compare(issuedAt(x), issuedAt(y))
+		return cmp.Compare(x.flow.IssuedAt, y.flow.IssuedAt)
 	})
 	return out
-}
-
-// issuedAt orders held flows: when each was made, 0 for one that didn't open.
-func issuedAt(h heldFlow) int64 {
-	if !h.ok {
-		return 0
-	}
-	return h.flow.IssuedAt
 }
 
 // oidcNextMax bounds a console deep link carried through a sign-in.
@@ -475,7 +466,7 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	// abandoned at the provider, so its flow cookie is still held and its tag
 	// unspent): the new flow goes untagged, never the abandoned trip's tag.
 	for _, h := range held {
-		if intent != "" && h.ok && h.flow.Intent == intent {
+		if intent != "" && h.flow.Intent == intent {
 			intent = ""
 		}
 	}
@@ -523,8 +514,9 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	// This flow's cookie, by its state: another tab's flow stays for its own
 	// return.
-	key := flowKey(q.Get("state"))
-	if key != "" {
+	sealed := ""
+	if key := flowKey(q.Get("state")); key != "" {
+		sealed = a.oidcCookieValue(r, oidcCookie+key)
 		a.setOIDCCookie(w, oidcCookie+key, "", -1)
 	}
 	ip := clientIP(r)
@@ -549,10 +541,6 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 			a.log.Warn("oidc: sign-in refused", "why", why)
 		}
 		a.oidcResult(w, r, reason)
-	}
-	sealed := ""
-	if key != "" {
-		sealed = a.oidcCookieValue(r, oidcCookie+key)
 	}
 	if sealed == "" {
 		a.log.Info("oidc: sign-in refused", "why", "no flow cookie")
