@@ -806,3 +806,49 @@ func TestBridgeTokenCheckFailureIsNotUnauthorized(t *testing.T) {
 		t.Fatalf("a token the server couldn't check = %d %s, want 503", resp.StatusCode, body)
 	}
 }
+
+// A job whose stored params are not JSON (a damaged row) no longer blanks the
+// console's job list or its detail (encoding the raw params failed after the
+// 200, an empty body): the job is answered with params null and
+// params_unreadable, its neighbours as they are, and the log names the row once
+// however often the console polls.
+func TestAdminBridgeJobsUnreadableParams(t *testing.T) {
+	t.Parallel()
+	e, logs := newTestEnv(t), &syncBuffer{}
+	e.api.log = slog.New(slog.NewTextHandler(logs, nil))
+	b := newBridgeEnvOn(t, e)
+	damaged := b.queue(t, mistbornBook, `{"hold_seconds":1}`)
+	fine := b.queue(t, cradleBook, `{"hold_seconds":2}`)
+	if _, err := b.db.ExecContext(context.Background(), `UPDATE bridge_jobs SET params = '{' WHERE id = ?`, damaged.ID); err != nil {
+		t.Fatal(err)
+	}
+	type job struct {
+		ID               int64           `json:"id"`
+		Params           json.RawMessage `json:"params"`
+		ParamsUnreadable *bool           `json:"params_unreadable"`
+	}
+	for range 2 {
+		resp, body := b.do(t, "GET", "/api/v1/admin/bridge/jobs", b.adminTok, "")
+		var list struct{ Jobs []job }
+		decodeInto(t, body, &list)
+		byID := map[int64]job{}
+		for _, j := range list.Jobs {
+			byID[j.ID] = j
+		}
+		d, f := byID[damaged.ID], byID[fine.ID]
+		if resp.StatusCode != http.StatusOK || string(d.Params) != "null" || d.ParamsUnreadable == nil || !*d.ParamsUnreadable ||
+			string(f.Params) != `{"hold_seconds":2}` || f.ParamsUnreadable != nil {
+			t.Fatalf("list: %d %s", resp.StatusCode, body)
+		}
+		resp, body = b.do(t, "GET", fmt.Sprintf("/api/v1/admin/bridge/jobs/%d", damaged.ID), b.adminTok, "")
+		var one job
+		decodeInto(t, body, &one)
+		if resp.StatusCode != http.StatusOK || one.ID != damaged.ID || string(one.Params) != "null" ||
+			one.ParamsUnreadable == nil || !*one.ParamsUnreadable {
+			t.Fatalf("detail: %d %s", resp.StatusCode, body)
+		}
+	}
+	if n := strings.Count(logs.String(), "stored params are not JSON"); n != 1 {
+		t.Fatalf("logged %d times, want once:\n%s", n, logs.String())
+	}
+}

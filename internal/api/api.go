@@ -179,6 +179,10 @@ type API struct {
 	// id (keepCastInUse), guarded by castKeepMu.
 	castKeepMu   sync.Mutex
 	castKeepRuns map[int64]*castKeepRun
+	// unreadableJobs holds the Bridge jobs whose damaged params the console's
+	// job list or detail has logged, by id, so each is logged once
+	// (logUnreadableJobs), not at every poll.
+	unreadableJobs sync.Map
 
 	// transcodeSem bounds the number of concurrent ffmpeg transcodes. Each transcode
 	// is a long-lived process pinning roughly a core; without a cap a single client

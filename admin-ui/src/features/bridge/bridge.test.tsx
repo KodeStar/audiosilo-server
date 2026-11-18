@@ -615,6 +615,27 @@ describe('bridge page', () => {
     expect(within(gone).getByText(/The episode returned HTTP 410\./)).toBeInTheDocument();
   });
 
+  it("keeps a job whose stored params the server couldn't read, saying so in Details", async () => {
+    mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({ id: 8, state: 'failed', params: null, params_unreadable: true, progress: {} }),
+              job({ id: 9 }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const details = await screen.findAllByRole('button', { name: 'Details' });
+    expect(details).toHaveLength(2);
+    expect(screen.queryByText("The server could not read this job's options.")).toBeNull();
+    await userEvent.click(details[0]);
+    expect(screen.getByText("The server could not read this job's options.")).toBeInTheDocument();
+  });
+
   it('narrows the jobs to a kind, names a follow by its show or feed host, marks high priority (server#186, server#224)', async () => {
     const calls = mockFetch(
       routes({

@@ -2849,7 +2849,10 @@ export interface BridgeJob {
   kind: string;
   library_id: number | null;
   path: string | null;
-  params: Record<string, unknown>;
+  /** null when the stored params are not JSON (a damaged row): params_unreadable. */
+  params: Record<string, unknown> | null;
+  /** The stored params could not be read; the server answers them as null. */
+  params_unreadable?: boolean;
   state: BridgeJobState;
   progress: Record<string, unknown>;
   result: Record<string, unknown>;

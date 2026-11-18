@@ -1037,11 +1037,26 @@ func (a *API) handleAdminBridgeJobs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not list jobs")
 		return
 	}
+	a.logUnreadableJobs(jobs...)
 	out := map[string]any{"jobs": jobs}
 	if next > 0 {
 		out["next_before"] = next
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// logUnreadableJobs warns once per job (unreadableJobs) about each of jobs, as
+// RedactedJob answers them, whose stored params are not JSON: the response
+// carries them as null with params_unreadable, and the log says which row.
+func (a *API) logUnreadableJobs(jobs ...bridge.Job) {
+	for _, j := range jobs {
+		if !j.ParamsUnreadable {
+			continue
+		}
+		if _, logged := a.unreadableJobs.LoadOrStore(j.ID, struct{}{}); !logged {
+			a.log.Warn("bridge: a job's stored params are not JSON, answered as null", "job", j.ID, "kind", j.Kind)
+		}
+	}
 }
 
 // handleAdminBridgeJob serves GET /admin/bridge/jobs/{id}.
@@ -1054,7 +1069,9 @@ func (a *API) handleAdminBridgeJob(w http.ResponseWriter, r *http.Request) {
 	if !a.writeBridgeError(w, err, "bridge job failed") {
 		return
 	}
-	writeJSON(w, http.StatusOK, bridge.RedactedJob(*job))
+	out := bridge.RedactedJob(*job)
+	a.logUnreadableJobs(out)
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleAdminBridgeCancel serves POST /admin/bridge/jobs/{id}/cancel: cancel a

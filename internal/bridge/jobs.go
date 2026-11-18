@@ -443,6 +443,10 @@ type Job struct {
 	UpdatedAt       string     `json:"updated_at"`
 	ClaimedAt       *string    `json:"claimed_at"`
 	FinishedAt      *string    `json:"finished_at"`
+	// ParamsUnreadable marks a job whose stored params are not JSON (a damaged
+	// row), answered as params null by console and listener responses
+	// (RedactedJob), so one such row never blanks a whole job list.
+	ParamsUnreadable bool `json:"params_unreadable,omitempty"`
 }
 
 // Target is the job's book path for an audit entry ("" for a job about a whole

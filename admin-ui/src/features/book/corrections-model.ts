@@ -375,7 +375,7 @@ export function alreadySuggested(
   const out = new Set<CorrectionField>();
   if (!job || job.kind !== KIND_CORRECT) return out;
   if (job.state === 'failed' || job.state === 'cancelled') return out;
-  const changes = (job.params as { changes?: unknown }).changes;
+  const changes = (job.params as { changes?: unknown } | null)?.changes;
   if (!Array.isArray(changes)) return out;
   for (const ch of changes as unknown[]) {
     if (!ch || typeof ch !== 'object') continue;

@@ -632,8 +632,10 @@ func redactPodcastJSON(raw json.RawMessage) json.RawMessage {
 }
 
 // RedactedJob is suitable for console and listener responses; claim injection is
-// the sole response path that carries a private credential.
+// the sole response path that carries a private credential. Stored JSON that
+// can't be read (a damaged row) answers null (readableJob), flagged for params.
 func RedactedJob(j Job) Job {
+	j = readableJob(j)
 	if !IsPodcast(j.Kind) {
 		return j
 	}
@@ -649,6 +651,23 @@ func RedactedJob(j Job) Job {
 	j.Error = redactPodcastText(j.Error)
 	j.Progress = redactPodcastJSON(j.Progress)
 	j.Result = redactPodcastJSON(j.Result)
+	return j
+}
+
+// readableJob is j with its stored params, progress and result that aren't
+// JSON (a damaged row) set to null, and its params flagged so
+// (ParamsUnreadable): encoding a json.RawMessage that isn't JSON fails, and a
+// handler that has written its 200 by then answers an empty body.
+func readableJob(j Job) Job {
+	if j.Params != nil && !json.Valid(j.Params) {
+		j.Params, j.ParamsUnreadable = nil, true
+	}
+	if j.Progress != nil && !json.Valid(j.Progress) {
+		j.Progress = nil
+	}
+	if j.Result != nil && !json.Valid(j.Result) {
+		j.Result = nil
+	}
 	return j
 }
 

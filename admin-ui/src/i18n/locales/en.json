@@ -3251,6 +3251,7 @@
   "bridge.jobs.details": "Details",
   "bridge.jobs.result": "Result",
   "bridge.jobs.params": "Options",
+  "bridge.jobs.paramsUnreadable": "The server could not read this job's options.",
   "bridge.result.filesOk_one": "{{n}} file checked, it matches",
   "bridge.result.filesOk_other": "{{n}} files checked, all match",
   "bridge.result.filesBad_one": "{{n}} file checked, it doesn't match",
