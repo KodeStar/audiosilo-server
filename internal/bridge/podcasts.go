@@ -233,12 +233,11 @@ func (s *Service) Subscribe(ctx context.Context, r SubscribeRequest) (*Job, bool
 		// with none open it is refused at once, without the lock or Enqueue's
 		// writer transaction (server#219). One opened since this read is
 		// adopted by the next upload.
-		var open bool
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL+`)`, jobKey(nj)).Scan(&open); err != nil {
+		open, err := openJob(ctx, s.db, jobKey(nj))
+		if err != nil {
 			return nil, false, err
 		}
-		if !open {
+		if open == nil {
 			return nil, false, ErrNoNewRequest
 		}
 	}
