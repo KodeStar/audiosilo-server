@@ -4086,7 +4086,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or `..` segment (`%2e` counts as a dot), at most 512 bytes, anything else dropped for the start
   page; appended to public_url, so never another origin; the console's `oidcStartHref` sends the
   page asked for, server#406) or
-  `/web/connect?oidc=1&flow=<key>` (the player's button is 235c; `/web/connect?token=` stays QR pairing's).
+  `/web/connect?oidc=1&flow=<key>` (the player's button is 235c; `/web/connect?token=` stays QR pairing's;
+  an HTML document asked for with a `token`, `oidc` or `flow` query goes out `Cache-Control: no-store`
+  instead of `no-cache`, `spa.documentCache`, so no browser or proxy keeps a page under an address
+  with a pairing token or a flow's key in it).
   That page calls **`POST /auth/oidc/finish`** (public, optional `{device_name, intent, flow}`, per-IP
   `oidcLimiter`; `flow` is the key its landing named: the finish takes that flow's done cookie only
   (a malformed one a 400), so each tab finishes its own; without it, a page from before the key,

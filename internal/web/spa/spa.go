@@ -17,8 +17,10 @@
 // Caching: files under AssetDirs are fingerprinted and cached for a year; HTML and
 // every other file revalidate on each request (no-cache), so a new release is
 // picked up at once. Every file carries a strong ETag, so a revalidation is a 304,
-// and text goes out gzipped to clients that accept it (see Files). Every response
-// carries nosniff; HTML gets DocumentCSP and other files FileCSP.
+// and text goes out gzipped to clients that accept it (see Files). An HTML
+// document asked for at an address that names a sign-in (signInParams) is never
+// stored at all (no-store). Every response carries nosniff; HTML gets DocumentCSP
+// and other files FileCSP.
 package spa
 
 import (
@@ -47,6 +49,28 @@ type Config struct {
 }
 
 const immutable = "public, max-age=31536000, immutable"
+
+// signInParams are the query parameters of a page address that names a sign-in:
+// QR pairing's token (/web/connect?token=, a credential) and a single sign-on's
+// landing (/web/connect?oidc=1&flow=<key>, the key of the flow whose finished
+// sign-in waits in a cookie).
+var signInParams = []string{"token", "oidc", "flow"}
+
+// documentCache is the Cache-Control an HTML document goes out with: no-cache
+// (kept, revalidated on each request), or no-store when the address carries one
+// of signInParams, so neither the browser nor a proxy keeps a copy filed under
+// an address with a pairing token or a flow's key in it.
+func documentCache(r *http.Request) string {
+	if r.URL.RawQuery != "" {
+		q := r.URL.Query()
+		for _, p := range signInParams {
+			if q.Has(p) {
+				return "no-store"
+			}
+		}
+	}
+	return "no-cache"
+}
 
 // Go's mime table falls back to the OS registry, which on some Windows hosts maps
 // .js to text/plain - and a module script served as text/plain never runs. Pin

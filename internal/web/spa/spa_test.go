@@ -83,6 +83,41 @@ func TestRouting(t *testing.T) {
 	}
 }
 
+// TestDocumentNeverStoredWithSignIn: an HTML document asked for at an address
+// that names a sign-in (QR pairing's ?token=, a single sign-on's landing
+// ?oidc=1&flow=<key>) goes out no-store, a deep link's app shell too, so no
+// browser or proxy keeps a copy under that address. Any other address keeps
+// no-cache, and a file that is no document keeps its own caching.
+func TestDocumentNeverStoredWithSignIn(t *testing.T) {
+	h := app()
+	for target, want := range map[string]string{
+		"/web/connect?oidc=1&flow=AAAAAAAAAAAAAAAA": "no-store",
+		"/web/connect?token=secret":                 "no-store",
+		"/web/connect?flow=AAAAAAAAAAAAAAAA":        "no-store",
+		"/web/connect?oidc":                         "no-store",
+		"/web/?token=secret":                        "no-store",
+		"/web/library/1/deep?x=1&token=secret":      "no-store", // the app shell for a client route
+		"/web/about.html?token=":                    "no-store",
+		// Any other address: revalidated, as before.
+		"/web/connect":                   "no-cache",
+		"/web/connect?tab=1":             "no-cache",
+		"/web/connect?tokens=1&oidcs=2":  "no-cache",
+		"/web/library/token/flow":        "no-cache",
+		"/web/theme-init.js?token=x":     "no-cache",
+		"/web/assets/app-1.js?token=x":   immutable,
+		"/web/_expo/entry-2.js?flow=abc": immutable,
+	} {
+		rec := req(h, http.MethodGet, target)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", target, rec.Code)
+			continue
+		}
+		if got := rec.Header().Get("Cache-Control"); got != want {
+			t.Errorf("GET %s Cache-Control = %q, want %q", target, got, want)
+		}
+	}
+}
+
 func TestCSPPerKind(t *testing.T) {
 	h := app()
 	doc := req(h, http.MethodGet, "/web/")
