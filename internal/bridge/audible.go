@@ -521,21 +521,39 @@ func AudibleSync(account string, priority int) NewJob {
 	return NewJob{Kind: KindAudibleSync, Params: raw, Priority: priority}
 }
 
+// audibleSyncTitleOK reports whether t is a title a sync's params may name:
+// an ASIN, a library, a clean book path and a runtime of 0 or more (what the
+// queued params were checked for while they held the titles, and what the
+// Bridge's strict ParseParams refuses a whole list for).
+func audibleSyncTitleOK(t AudibleSyncTitle) bool {
+	return asinPattern.MatchString(t.ASIN) && t.LibraryID > 0 && t.RuntimeS >= 0 &&
+		t.Path != "" && len(t.Path) <= relpath.MaxBytes && (t.Path == "." || relpath.Clean(t.Path) == t.Path)
+}
+
 // AudibleSyncClaim is the params a claim of account's audible.sync answers:
-// the account and its titles (in the order given), leaving out the last ones
-// when the params would pass maxAudibleSyncParamsBytes (dropped reports how
-// many).
-func AudibleSyncClaim(account string, titles []AudibleSyncTitle) (params json.RawMessage, dropped int) {
-	if titles == nil {
-		titles = []AudibleSyncTitle{}
+// the account and its titles (in the order given). A title the Bridge would
+// refuse the whole list for is left out (bad: not audibleSyncTitleOK, or an
+// ASIN a second time), so one odd stored title never fails the account's
+// sync, and so are the last ones when the params would pass
+// maxAudibleSyncParamsBytes (dropped reports how many).
+func AudibleSyncClaim(account string, titles []AudibleSyncTitle) (params json.RawMessage, bad []AudibleSyncTitle, dropped int) {
+	keep := make([]AudibleSyncTitle, 0, len(titles))
+	seen := make(map[string]bool, len(titles))
+	for _, t := range titles {
+		if !audibleSyncTitleOK(t) || seen[t.ASIN] {
+			bad = append(bad, t)
+			continue
+		}
+		seen[t.ASIN] = true
+		keep = append(keep, t)
 	}
-	keep := titles
+	good := len(keep)
 	raw, _ := json.Marshal(AudibleSyncParams{Account: account, Titles: keep})
 	for len(raw) > maxAudibleSyncParamsBytes && len(keep) > 0 {
 		keep = keep[:len(keep)*9/10]
 		raw, _ = json.Marshal(AudibleSyncParams{Account: account, Titles: keep})
 	}
-	return raw, len(titles) - len(keep)
+	return raw, bad, good - len(keep)
 }
 
 // fillAudibleSync gives a claimed audible.sync the params its claim answers

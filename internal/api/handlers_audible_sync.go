@@ -199,14 +199,20 @@ func (a *API) handleBridgeProgress(w http.ResponseWriter, r *http.Request) {
 
 // audibleSyncClaim is the params a claim of account's audible.sync answers
 // (bridge.Service.ClaimAudibleSync): the account's titles to sync as they are
-// now (server#303: the queued job names the account alone), the last ones
-// left out past the params' bound, which is logged.
+// now (server#303: the queued job names the account alone). A stored title
+// the Bridge would refuse the whole list for is left out, and so are the last
+// ones past the params' bound; both are logged.
 func (a *API) audibleSyncClaim(ctx context.Context, account string) (json.RawMessage, error) {
 	titles, err := a.cat.AudibleSyncTitles(ctx, account)
 	if err != nil {
 		return nil, err
 	}
-	params, dropped := bridge.AudibleSyncClaim(account, titles)
+	params, bad, dropped := bridge.AudibleSyncClaim(account, titles)
+	if len(bad) > 0 {
+		a.log.Warn("audible: an account's sync leaves out titles it can't name (the first is given)", "account", account,
+			"left_out", len(bad), "asin", bridge.CleanText(bad[0].ASIN, 64), "library_id", bad[0].LibraryID,
+			"path", bridge.CleanText(bad[0].Path, 256), "runtime_s", bad[0].RuntimeS)
+	}
 	if dropped > 0 {
 		a.log.Warn("audible: an account's sync leaves out titles past the params' bound", "account", account,
 			"dropped", dropped)

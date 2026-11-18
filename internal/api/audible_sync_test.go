@@ -951,6 +951,29 @@ func TestAudibleListeningRuntimeMismatch(t *testing.T) {
 	}
 }
 
+// A stored title the Bridge's strict params would refuse (here a runtime below
+// 0, which the titles route never stores) is left out of the claim, so the
+// account's other titles still sync instead of the whole job failing there.
+func TestAudibleSyncClaimLeavesOutABadTitle(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	s.beat(t, bridge.KindVerify, bridge.KindAudibleSync)
+	if _, err := s.db.ExecContext(ctx, `UPDATE audible_titles SET runtime_s = -1 WHERE account = ? AND asin = ?`,
+		testAccount, cradleASIN); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.api.bridge.Enqueue(ctx, bridge.AudibleSync(testAccount, bridge.PriorityScheduled)); err != nil {
+		t.Fatal(err)
+	}
+	var p bridge.AudibleSyncParams
+	job := s.claim(t, bridge.KindAudibleSync)
+	if err := json.Unmarshal(job.Params, &p); err != nil || p.Account != testAccount || len(p.Titles) != 1 ||
+		p.Titles[0].ASIN != mistbornASIN {
+		t.Fatalf("claimed params = %s, %v; want the good title alone", job.Params, err)
+	}
+}
+
 // A console change to which titles take part in an account's sync queues its
 // audible.sync at once, even with no title left (the Bridge is told the set
 // is empty), so the Bridge stops pushing a left-out title without waiting for

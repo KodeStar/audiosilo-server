@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/relpath"
 )
 
 // audible.sync's queued params are strict: an account id and nothing else
@@ -39,14 +42,59 @@ func TestAudibleSyncClaim(t *testing.T) {
 	for i := range many {
 		many[i] = AudibleSyncTitle{ASIN: fmt.Sprintf("B%09d", i), LibraryID: 1, Path: fmt.Sprintf("Author %d/Series/Book %d", i, i), RuntimeS: 36000}
 	}
-	raw, dropped := AudibleSyncClaim("acct0001", many)
+	raw, bad, dropped := AudibleSyncClaim("acct0001", many)
 	var p AudibleSyncParams
-	if err := json.Unmarshal(raw, &p); err != nil || dropped == 0 || len(raw) > maxAudibleSyncParamsBytes ||
+	if err := json.Unmarshal(raw, &p); err != nil || dropped == 0 || len(bad) != 0 || len(raw) > maxAudibleSyncParamsBytes ||
 		len(p.Titles)+dropped != len(many) || p.Titles[0] != many[0] {
-		t.Fatalf("dropped %d, %d bytes, %d titles, %v", dropped, len(raw), len(p.Titles), err)
+		t.Fatalf("dropped %d, bad %d, %d bytes, %d titles, %v", dropped, len(bad), len(raw), len(p.Titles), err)
 	}
-	if raw, dropped := AudibleSyncClaim("acct0001", nil); string(raw) != `{"account":"acct0001","titles":[]}` || dropped != 0 {
-		t.Fatalf("none = %s, %d", raw, dropped)
+	if raw, bad, dropped := AudibleSyncClaim("acct0001", nil); string(raw) != `{"account":"acct0001","titles":[]}` ||
+		len(bad) != 0 || dropped != 0 {
+		t.Fatalf("none = %s, %d, %d", raw, len(bad), dropped)
+	}
+}
+
+// A title the Bridge's strict params would refuse the whole list for (the
+// checks the queued params had while they held the titles) is left out of the
+// claim and reported, the titles around it kept in order.
+func TestAudibleSyncClaimLeavesOutBadTitles(t *testing.T) {
+	t.Parallel()
+	good := func(asin string) AudibleSyncTitle {
+		return AudibleSyncTitle{ASIN: asin, LibraryID: 1, Path: "A/B", RuntimeS: 36000}
+	}
+	with := func(change func(*AudibleSyncTitle)) AudibleSyncTitle {
+		title := good("B00000BAD0")
+		change(&title)
+		return title
+	}
+	titles := []AudibleSyncTitle{
+		good("B000000001"),
+		with(func(t *AudibleSyncTitle) { t.ASIN = "b00000bad0" }),
+		with(func(t *AudibleSyncTitle) { t.ASIN = "" }),
+		with(func(t *AudibleSyncTitle) { t.LibraryID = 0 }),
+		with(func(t *AudibleSyncTitle) { t.Path = "" }),
+		with(func(t *AudibleSyncTitle) { t.Path = "A/../B" }),
+		with(func(t *AudibleSyncTitle) { t.Path = "/A/B" }),
+		with(func(t *AudibleSyncTitle) { t.Path = strings.Repeat("a", relpath.MaxBytes+1) }),
+		with(func(t *AudibleSyncTitle) { t.RuntimeS = -1 }),
+		good("B000000001"), // an ASIN a second time
+		{ASIN: "B000000002", LibraryID: 2, Path: ".", RuntimeS: 0},
+	}
+	raw, bad, dropped := AudibleSyncClaim("acct0001", titles)
+	want := `{"account":"acct0001","titles":[{"asin":"B000000001","library_id":1,"path":"A/B","runtime_s":36000},` +
+		`{"asin":"B000000002","library_id":2,"path":".","runtime_s":0}]}`
+	if string(raw) != want || len(bad) != len(titles)-2 || dropped != 0 {
+		t.Fatalf("claim = %s, %d bad, %d dropped", raw, len(bad), dropped)
+	}
+	// What is left is what the queued params' check took.
+	var p AudibleSyncParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatal(err)
+	}
+	for _, title := range p.Titles {
+		if !audibleSyncTitleOK(title) {
+			t.Errorf("kept %+v", title)
+		}
 	}
 }
 
@@ -64,7 +112,7 @@ func TestAudibleSyncQueued(t *testing.T) {
 	var asked []string
 	q.ClaimAudibleSync = func(_ context.Context, account string) (json.RawMessage, error) {
 		asked = append(asked, account)
-		raw, _ := AudibleSyncClaim(account, titles)
+		raw, _, _ := AudibleSyncClaim(account, titles)
 		return raw, nil
 	}
 	job, created, err := q.Enqueue(ctx, AudibleSync("acct0001", -10))
@@ -122,7 +170,7 @@ func TestAudibleSyncClaimFailsUnspent(t *testing.T) {
 		t.Fatalf("after a failed fill = %+v, %v; want it queued, unspent", stored, err)
 	}
 	q.ClaimAudibleSync = func(_ context.Context, account string) (json.RawMessage, error) {
-		raw, _ := AudibleSyncClaim(account, nil)
+		raw, _, _ := AudibleSyncClaim(account, nil)
 		return raw, nil
 	}
 	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got == nil || got.ID != job.ID ||
@@ -140,7 +188,7 @@ func TestAudibleSyncClaimUnreadableParamsSpent(t *testing.T) {
 	ctx := context.Background()
 	q.beat(t, KindVerify, KindAudibleSync)
 	q.ClaimAudibleSync = func(_ context.Context, account string) (json.RawMessage, error) {
-		raw, _ := AudibleSyncClaim(account, nil)
+		raw, _, _ := AudibleSyncClaim(account, nil)
 		return raw, nil
 	}
 	job, _, err := q.Enqueue(ctx, AudibleSync("acct0001", -10))

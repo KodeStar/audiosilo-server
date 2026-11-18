@@ -4599,7 +4599,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   server#303: the queue no longer stores every title four times an hour), and the claim answers
   `{account, titles:[{asin, library_id, path, runtime_s}]}` as the titles are then (`bridge.Service.ClaimAudibleSync`,
   wired to `api.audibleSyncClaim` over `AudibleSyncTitles`; at most 1 MiB, `AudibleSyncClaim` leaves out the last
-  titles past it and the server logs it; a claim whose titles can't be read hands nothing out and puts the job back
+  titles past it, and any title the Bridge's strict `ParseParams` would refuse the whole list for (not an ASIN, no
+  library, a path that is not a clean book path, a negative runtime, an ASIN twice: the checks the queued params
+  had), and the server logs both; a claim whose titles can't be read hands nothing out and puts the job back
   unspent, `ReleaseUnsentClaim`; the job as stored keeps `{account}`, as a private feed URL is injected at claim),
   internal, quiet, `ModuleFor` audible, deduped per account, `promotes`, only the newest ended kept
   (`pruneAudibleEnded`). A console change to which titles sync (`PATCH .../titles/...` `{rejected}` or `{no_sync}`)
