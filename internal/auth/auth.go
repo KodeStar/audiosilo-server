@@ -582,23 +582,48 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	if neverTouched(row.kind) || !s.needsTouch(row, p) {
 		return u, cred, nil
 	}
-	// The app is written only when this request named one, decided in SQL rather
-	// than from the value read above: a request without the header racing one with
-	// it (covers loading beside an API call) must not write back the stale app.
-	// The touch is user state: it leaves the content generation, and so every
-	// cache keyed on it, where it was (store.DB.ExecUserState), and drops the
-	// token's own cached row, whose last_seen, address and app it changed, so
-	// the next request reads them again (needsTouch); a lookup that read the row
-	// before the touch committed puts nothing after the drop (lookupToken's mark).
+	// The touch drops the token's own cached row, whose last_seen, address and
+	// app it changed, so the next request reads them again (needsTouch); a
+	// lookup that read the row before the touch committed puts nothing after the
+	// drop (lookupToken's mark). A cast token's use also moves its expiry
+	// (castExpiry; "" for every other kind).
 	defer s.tokens.Delete(hash)
-	_, _ = s.db.ExecUserState(ctx,
-		`UPDATE tokens SET last_seen = ?1, last_ip = COALESCE(NULLIF(?2, ''), last_ip),
-		        client_app = CASE WHEN ?3 = '' THEN client_app ELSE ?3 END,
-		        client_version = CASE WHEN ?3 = '' THEN client_version ELSE ?4 END,
-		        client_platform = CASE WHEN ?3 = '' THEN client_platform ELSE ?5 END
-		  WHERE id = ?6`,
-		s.ts(), p.IP, p.Client.App, p.Client.Version, p.Client.Platform, row.id)
+	slideTo := ""
+	if row.kind == KindCast {
+		slideTo = s.castExpiry(row.grant)
+	}
+	_ = s.touch(ctx, row.id, row.kind, p, slideTo)
 	return u, cred, nil
+}
+
+// touchRowSQL is a token's touch: last_seen (?1), the address when the
+// request had one (?2) and the app only when the request named one (?3-?5),
+// decided in SQL rather than from the value read before it, so a request
+// without the header racing one with it (covers loading beside an API call)
+// never writes back the stale app; and a cast token's sliding expiry (?7, ""
+// for none: castExpiry), which never shortens it and never revives one already
+// past (?8, now as s.ts() writes it; expires_at is RFC3339 UTC, so it compares
+// as text).
+const touchRowSQL = `UPDATE tokens SET last_seen = ?1, last_ip = COALESCE(NULLIF(?2, ''), last_ip),
+        client_app = CASE WHEN ?3 = '' THEN client_app ELSE ?3 END,
+        client_version = CASE WHEN ?3 = '' THEN client_version ELSE ?4 END,
+        client_platform = CASE WHEN ?3 = '' THEN client_platform ELSE ?5 END,
+        expires_at = CASE WHEN ?7 <> '' AND expires_at > ?8 THEN MAX(expires_at, ?7) ELSE expires_at END
+  WHERE id = ?6`
+
+// touch writes token id's touch (touchRowSQL), of kind, as p reports the
+// request and moving a cast token's expiry to slideTo ("" leaves it). It is
+// user state: it leaves the content generation, and so every cache keyed on
+// it, where it was (store.DB.ExecUserState); a caller holding the token's
+// cached row drops it. A cast token's last_seen is in milliseconds (castStamp).
+func (s *Service) touch(ctx context.Context, id int64, kind string, p Presence, slideTo string) error {
+	stamp := s.ts()
+	if kind == KindCast {
+		stamp = s.castStamp()
+	}
+	_, err := s.db.ExecUserState(ctx, touchRowSQL,
+		stamp, p.IP, p.Client.App, p.Client.Version, p.Client.Platform, id, slideTo, s.ts())
+	return err
 }
 
 // checkToken is whether hash (hashSecret's) is a valid token of one of kinds, writing
@@ -621,8 +646,9 @@ func (s *Service) checkToken(ctx context.Context, hash string, media *bookMedia,
 }
 
 // needsTouch reports whether a request must write its token's row: last_seen is
-// unset, unreadable, ahead of the clock or touchInterval old, or the request
-// reports an address or an app the row doesn't hold.
+// unset, unreadable, ahead of the clock or touchInterval old (a cast token's
+// CastTouchInterval: the cap ranks them by it), or the request reports an
+// address or an app the row doesn't hold.
 func (s *Service) needsTouch(row tokenRow, p Presence) bool {
 	if (p.IP != "" && p.IP != row.lastIP) || (p.Client.App != "" && p.Client != row.client) || !row.lastSeen.Valid {
 		return true
@@ -631,8 +657,12 @@ func (s *Service) needsTouch(row tokenRow, p Presence) bool {
 	if err != nil {
 		return true
 	}
+	every := touchInterval
+	if row.kind == KindCast {
+		every = CastTouchInterval
+	}
 	age := s.now().Sub(seen)
-	return age < 0 || age >= touchInterval
+	return age < 0 || age >= every
 }
 
 // tokenRow is what lookupToken reads about a valid token besides its user.

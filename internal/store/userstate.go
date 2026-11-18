@@ -114,10 +114,13 @@ var userStateTables = map[string]tableRule{
 	"audible_titles": {rows: true},
 	"audible_accounts": {free: []string{"last_poll_at", "last_queued_at", "policy_since", "sync_queued_at",
 		"last_sync_at", "refused_at", "refusal_ended_at"}},
-	// A token's touch (auth.Service.resolve): the token cache holds the row,
-	// and drops the touched one itself. Any other change (a revoke, a new
-	// token) moves the generation.
-	"tokens": {free: []string{"last_seen", "last_ip", "client_app", "client_version", "client_platform"}},
+	// A token's touch (auth.Service.resolve, KeepCastToken): the token cache
+	// holds the row, and drops the touched one itself. expires_at is a cast
+	// token's sliding expiry (auth castExpiry, server#446), only ever moved
+	// later by a touch; the cache never holds a cast token, and a session's
+	// expiry no touch changes. Any other change (a revoke, a new token) moves
+	// the generation.
+	"tokens": {free: []string{"last_seen", "last_ip", "client_app", "client_version", "client_platform", "expires_at"}},
 	// A Bridge's heartbeat (bridge.SaveHeartbeat): when it was heard and what
 	// it sent, which changes on every beat while an ASR worker is attached
 	// (workers[].last_seen). No content cache reads the row: GET /server's

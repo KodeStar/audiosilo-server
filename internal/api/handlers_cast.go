@@ -14,7 +14,9 @@ import (
 // handleMintCastToken answers POST /cast/token {library_id, path} with 201
 // {token, expires_at}: a cast token for the book at path (a part path resolves to
 // its book, whose path the token then covers), ending with the caller's own
-// token. The caller must be allowed the book (400/403/404 as the media routes
+// token. expires_at is when it ends if no receiver uses it: each use moves it
+// on, up to a bound from the mint (auth's castExpiry), so a player renewing
+// before it is never early, only cautious. The caller must be allowed the book (400/403/404 as the media routes
 // answer); a podcast episode is 403 not_a_book. Demo accounts may cast (they can play); an API key may not
 // (denyAPIKey's containment rule: a key never mints another credential, even a
 // cast token, which would die with it). The console's chapter editor, whose

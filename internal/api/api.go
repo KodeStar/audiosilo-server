@@ -165,6 +165,10 @@ type API struct {
 	ipLimiter      *rateLimiter // general request rate, per IP (see rateLimit)
 	tokenLimiter   *rateLimiter // authenticated API rate, per credential (see requireAuth)
 	mediaLimiter   *rateLimiter // authenticated media rate, per credential (see requireMediaAuth)
+	// castKeepEvery is how often a response a cast token authenticated keeps
+	// the token in use while it runs (keepCastInUse): auth.CastTouchInterval,
+	// shorter in tests.
+	castKeepEvery time.Duration
 
 	// transcodeSem bounds the number of concurrent ffmpeg transcodes. Each transcode
 	// is a long-lived process pinning roughly a core; without a cap a single client
@@ -289,6 +293,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		ipLimiter:      newBucketLimiter(limits.Address),
 		tokenLimiter:   newBucketLimiter(limits.Token),
 		mediaLimiter:   newBucketLimiter(limits.Media),
+		castKeepEvery:  auth.CastTouchInterval,
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 		remuxWait:      remuxColdWait,
 		remuxLongWait:  remuxDownloadWait,

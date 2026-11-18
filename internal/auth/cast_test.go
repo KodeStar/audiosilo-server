@@ -68,13 +68,18 @@ func TestCastTokenLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Minted beside it and never used.
+	idle, _, err := s.IssueCastToken(ctx, u.ID, sessID, 3, "Author/Book")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if want := now.UTC().Add(castTokenTTL).Truncate(time.Second).Format(millisUTC); expires != want || len(expires) != len(millisUTC) {
 		t.Fatalf("expires_at = %q, want %q (fixed-width ms UTC)", expires, want)
 	}
 	// Only the hash is stored, as a tokens row of kind cast with its grant.
 	var stored, path string
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT t.token_hash, g.rel_path FROM tokens t JOIN cast_grants g ON g.token_id = t.id WHERE t.kind = 'cast'`).
+		`SELECT t.token_hash, g.rel_path FROM tokens t JOIN cast_grants g ON g.token_id = t.id WHERE t.kind = 'cast' ORDER BY t.id`).
 		Scan(&stored, &path); err != nil || stored != hashSecret(secret) || strings.Contains(stored, secret) || path != "Author/Book" {
 		t.Fatalf("stored %q %q, %v; want only the secret's hash", stored, path, err)
 	}
@@ -121,14 +126,23 @@ func TestCastTokenLifecycle(t *testing.T) {
 		t.Fatalf("re-enabled user's token = %v", err)
 	}
 
-	// Denied: expired (allowed just before; the expiry is in whole seconds).
+	// Denied: expired, castTokenTTL after its mint with no use since (the
+	// expiry is in whole seconds). Allowed: a use just before its expiry, which
+	// moves it on (castExpiry, TestCastTokenExpirySlidesWhileInUse).
 	*now = now.Add(castTokenTTL - time.Second)
 	if _, _, err := resolveCast(s, ctx, secret, "Author/Book"); err != nil {
 		t.Fatalf("a token just before its expiry = %v", err)
 	}
 	*now = now.Add(2 * time.Second)
-	if _, _, err := resolveCast(s, ctx, secret, "Author/Book"); !errors.Is(err, ErrInvalidToken) {
+	if _, _, err := resolveCast(s, ctx, idle, "Author/Book"); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("expired token = %v, want ErrInvalidToken", err)
+	}
+	if _, _, err := resolveCast(s, ctx, secret, "Author/Book"); err != nil {
+		t.Fatalf("a token used just before its expiry = %v", err)
+	}
+	*now = now.Add(castTokenTTL)
+	if _, _, err := resolveCast(s, ctx, secret, "Author/Book"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("a token castTokenTTL after its last use = %v, want ErrInvalidToken", err)
 	}
 
 	// A mint deletes the expired cast tokens (anyone's) and their grants.
@@ -137,8 +151,8 @@ func TestCastTokenLifecycle(t *testing.T) {
 	}
 	var n int
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT (SELECT COUNT(*) FROM tokens WHERE token_hash = ?) + (SELECT COUNT(*) FROM cast_grants)`, hashSecret(secret)).
-		Scan(&n); err != nil || n != 1 {
+		`SELECT (SELECT COUNT(*) FROM tokens WHERE token_hash IN (?, ?)) + (SELECT COUNT(*) FROM cast_grants)`,
+		hashSecret(secret), hashSecret(idle)).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("expired token rows + grants after a mint = %d, %v; want the new grant only", n, err)
 	}
 
@@ -585,5 +599,139 @@ func TestPruneCastTokens(t *testing.T) {
 	prune()
 	if rows(live) != 0 {
 		t.Fatalf("an expired cast token outlived the retention: %d rows", rows(live))
+	}
+}
+
+// castTokenID is the tokens row id of cast token secret.
+func castTokenID(t *testing.T, s *Service, ctx context.Context, secret string) int64 {
+	t.Helper()
+	var id int64
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM tokens WHERE token_hash = ? AND kind = 'cast'`, hashSecret(secret)).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// server#446: a cast token in use outlives its first castTokenTTL, each use
+// (a request, or KeepCastToken while a long response runs) moving its expiry to
+// castTokenTTL from then, never past castTokenMaxLife after its mint. Allowed:
+// a token used once a day lives into its third day, and one kept in use by a
+// long response alone. Denied: past the bound however it is used, a day after
+// its last use, an expired token kept (never revived), and an editor token,
+// whose life is fixed.
+func TestCastTokenExpirySlidesWhileInUse(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	sam, _, phone := castSender(t, s, ctx, "sam")
+	mint := func(issue func(context.Context, int64, int64, int64, string) (string, string, error)) string {
+		t.Helper()
+		sec, _, err := issue(ctx, sam.ID, phone, 3, "Author/Book")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sec
+	}
+	start := *now
+	at := func(d time.Duration) { *now = start.Add(d) }
+	playing, kept, idle := mint(s.IssueCastToken), mint(s.IssueCastToken), mint(s.IssueCastToken)
+	editor := mint(s.IssueEditorToken)
+	use := func(what, secret string, live bool) {
+		t.Helper()
+		_, _, err := resolveCast(s, ctx, secret, "Author/Book/01.mp3")
+		wantLive(t, what, live, err)
+	}
+	keep := func(secret string) {
+		t.Helper()
+		if err := s.KeepCastToken(ctx, castTokenID(t, s, ctx, secret)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	at(3 * time.Hour)
+	use("the editor token in use", editor, true)
+	at(editorTokenTTL + time.Second)
+	use("the editor token past its fixed life", editor, false)
+
+	// A use and a keep that move the expiry are user state (store's tokens
+	// rule): the content caches stay warm.
+	at(23 * time.Hour)
+	gen := s.db.ContentGeneration()
+	use("the playing token on its first day", playing, true)
+	keep(kept)
+	if s.db.ContentGeneration() != gen {
+		t.Fatalf("moving a cast token's expiry moved the content generation %d -> %d", gen, s.db.ContentGeneration())
+	}
+	at(25 * time.Hour)
+	use("the idle token a day after its mint", idle, false)
+	use("the playing token past its first expiry", playing, true)
+	use("the token a long response kept in use", kept, true)
+	keep(idle)
+	use("the expired token after a keep", idle, false)
+
+	at(48 * time.Hour)
+	use("the playing token on its second day", playing, true)
+	at(71 * time.Hour)
+	use("the playing token on its third day", playing, true)
+	at(castTokenMaxLife - time.Second)
+	use("the playing token just inside its bound", playing, true)
+	at(castTokenMaxLife + time.Second)
+	use("the playing token past castTokenMaxLife", playing, false)
+	use("the kept token a day after its last use", kept, false)
+}
+
+// server#446: a request touches a cast token at most once a CastTouchInterval
+// (other tokens once a touchInterval), and in milliseconds, so a token a
+// receiver reads from never ranks behind one minted seconds before its last
+// use, nor one minted in the same second before its first. Allowed: the token
+// in use survives a mint at the cap both ways. Denied: the least recently used
+// idle token goes instead.
+func TestCastTokenInUseOutranksTheRecentMints(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name            string
+		usedAtMint      bool
+		mintIdle, useAt time.Duration
+	}{
+		{"within the minute", true, 5 * time.Second, 30 * time.Second},
+		{"within the second", false, 100 * time.Millisecond, 500 * time.Millisecond},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s, ctx, now := newTestServiceWithClock(t)
+			sam, _, phone := castSender(t, s, ctx, "sam")
+			start := now.Truncate(time.Second).Add(time.Second)
+			*now = start
+			mint := func() string {
+				t.Helper()
+				sec, _, err := s.IssueCastToken(ctx, sam.ID, phone, 3, "Author/Book")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return sec
+			}
+			playing := mint()
+			if c.usedAtMint {
+				if _, _, err := resolveCast(s, ctx, playing, "Author/Book/01.mp3"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			*now = start.Add(c.mintIdle)
+			var idle []string
+			for range maxCastTokens - 1 {
+				idle = append(idle, mint())
+			}
+			*now = start.Add(c.useAt)
+			if _, _, err := resolveCast(s, ctx, playing, "Author/Book/02.mp3"); err != nil {
+				t.Fatal(err)
+			}
+			*now = now.Add(c.mintIdle / 5)
+			newest := mint()
+			_, _, err := resolveCast(s, ctx, playing, "Author/Book/03.mp3")
+			wantLive(t, "the token in use after a mint at the cap", true, err)
+			_, _, err = resolveCast(s, ctx, newest, "Author/Book")
+			wantLive(t, "the new token", true, err)
+			_, _, err = resolveCast(s, ctx, idle[0], "Author/Book")
+			wantLive(t, "the least recently used idle token", false, err)
+		})
 	}
 }

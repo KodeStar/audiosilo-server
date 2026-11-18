@@ -2832,16 +2832,21 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   file of it); demo accounts may mint (they can play); an API key may not (403, `denyAPIKey`'s
   containment: a key never mints another credential, even a cast token, which would die with it). A cast token is a
   `tokens` row of kind `cast` (`auth.IssueCastToken`: SHA-256 hash only, `expires_at` 24 h in whole
-  seconds, `castTokenTTL`) plus a `cast_grants` row (the book, and `parent_token_id`: the caller's
+  seconds, `castTokenTTL`, which each use moves to 24 h from then, never past `castTokenMaxLife`, 72 h
+  after the mint: `castExpiry`, server#446, so a receiver reading a long book keeps its token; the
+  answer's `expires_at` is when it ends unused, which the player's renewal reads; `created_at` and
+  `last_seen` in milliseconds, `millisUTC`) plus a `cast_grants` row (the book, and `parent_token_id`: the caller's
   own token); one transaction deletes every dead cast token (`pruneCastTokensSQL`: expired, or no
   grant, or its parent gone, signed out or expired) and keeps the `maxCastTokens` (20) most recently used
   the sending token minted, so a run of casts on one device never ends the cast another device of the person
   is playing (server#216), and the person's `maxCastTokensPerPerson` (100) most recently used over all their
   devices (`trimCastTokensSQL`: by `last_seen`, which each cover or stream request bumps at most once a
-  `touchInterval`, else `created_at`, so a sender re-minting drops an idle token before the one its receiver
-  is reading; the token just minted always stays, even after the clock steps back). The console's chapter editor streams a book the same way and sends
+  `CastTouchInterval` (10 s) and a long response keeps current while it runs and at its end
+  (`api.keepCastInUse` -> `auth.KeepCastToken`, server#446), else `created_at`, so a sender re-minting drops
+  an idle token before the one its receiver is reading; the token just minted always stays, even after the
+  clock steps back). The console's chapter editor streams a book the same way and sends
   `"editor": true` (console-only, additive; a player never sends it): `auth.IssueEditorToken` mints the same
-  token with `cast_grants.editor = 1` (`0078`), a 4 h life (`editorTokenTTL`) and a cap of its own
+  token with `cast_grants.editor = 1` (`0078`), a fixed 4 h life (`editorTokenTTL`, no slide) and a cap of its own
   (`maxEditorTokens`, 5), each cap counting only its own use, so editing many books never drops a token a
   receiver is playing with; it allows no more than a cast token, so any caller may ask. The daily retention (`internal/launcher.retention`) runs the same prune
   (`auth.PruneCastTokens`), so a dead token's row (the receiver's `last_ip`) and grant (which book
@@ -2853,7 +2858,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   expiry is checked on each hit): **signing out the device that
   minted it** (logout, My devices, the console's sign-out of that device or Sign out everywhere, a
   password change or reset that ends that session) **ends it**, as do the account's delete or
-  disabling, its scope and the 24 h. **Acceptance**: `ResolveRequest` never accepts a cast token;
+  disabling, its scope and its expiry. **Acceptance**: `ResolveRequest` never accepts a cast token;
   `auth.ResolveCastRequest(secret, presence, libraryID, path, kinds...)` does, only when its
   grant covers the path (`castGrant.covers`: same library, the book's path itself or below it on a
   segment boundary via `relpath.Within`, `Book` never reaches `Book 2`; an empty path on either side
@@ -3950,7 +3955,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   person > Sign-in, not offered for a household member. A user's **last activity** is
   derived from `MAX(tokens.last_seen)` (bumped by authenticated requests in
   `ResolveRequest`, at most once a minute per token unless the request's address or
-  app changed: `touchInterval`) - there is no `last_login` column; don't add one.
+  app changed: `touchInterval`; a cast token's every `CastTouchInterval`, in milliseconds) - there is no
+  `last_login` column; don't add one.
 - **Single sign-on, Sign in with OpenID Connect (server#235, capability `oidc`, `internal/oidc`,
   `auth/identities.go`, `api/handlers_oidc.go`, `0077`)**: config `auth.oidc.*` (`config/oidc.go`,
   settings section `signin`): the provider fields (enabled, name, issuer, client_id, scopes, claims

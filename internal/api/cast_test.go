@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -583,5 +585,58 @@ func TestCastTokenNotABook(t *testing.T) {
 	status, out = mint(books, cradleBook)
 	if status != http.StatusCreated || strings.Contains(out, `"code"`) || !strings.Contains(out, `"token"`) {
 		t.Fatalf("book %d %s", status, out)
+	}
+}
+
+// server#446: a response a cast token authenticated keeps the token in use
+// while it runs and as it ends (keepCastInUse), so a receiver reading one long
+// file never looks idle to the cap, nor lets its expiry run out. Allowed: the
+// cast token's last_seen moves during a long response and again at its end.
+// Denied: a session's long response is touched only as it starts.
+func TestLongResponseKeepsTheCastTokenInUse(t *testing.T) {
+	t.Parallel()
+	c := newCastEnv(t)
+	c.api.castKeepEvery = 20 * time.Millisecond
+	ctx := context.Background()
+	cast := c.castToken(t, cradleBook)
+	lastSeen := func(kind string) string {
+		t.Helper()
+		var seen string
+		if err := c.db.QueryRowContext(ctx, `SELECT COALESCE(last_seen, '') FROM tokens
+			WHERE kind = ? AND user_id = ? ORDER BY id DESC LIMIT 1`, kind, c.sam).Scan(&seen); err != nil {
+			t.Fatal(err)
+		}
+		return seen
+	}
+	long := func(tok, kind string) (start, later, end string) {
+		t.Helper()
+		h := c.api.mediaAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			start = lastSeen(kind)
+			// A few intervals, or as long as a loaded writer takes to land a
+			// keep (a cast token's last_seen moving ends the wait early).
+			for deadline := time.Now().Add(10 * time.Second); ; {
+				time.Sleep(5 * c.api.castKeepEvery)
+				if later = lastSeen(kind); later != start || kind != auth.KindCast || time.Now().After(deadline) {
+					break
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+		}), bookMediaKinds)
+		req := httptest.NewRequest("GET", mediaURL(c.lib, "stream", cradlePart, tok), nil)
+		req.SetPathValue("id", strconv.FormatInt(c.lib, 10))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("long %s response = %d %s", kind, rec.Code, rec.Body)
+		}
+		return start, later, lastSeen(kind)
+	}
+	start, later, end := long(cast, auth.KindCast)
+	if start == "" || later <= start || end <= later {
+		t.Fatalf("the cast token's last_seen at the start, during and at the end = %q %q %q, want each later", start, later, end)
+	}
+	start, later, end = long(c.samTok, auth.KindSession)
+	if start == "" || later != start || end != start {
+		t.Fatalf("a session's last_seen at the start, during and at the end = %q %q %q, want the start's alone", start, later, end)
 	}
 }

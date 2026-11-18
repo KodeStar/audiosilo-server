@@ -441,13 +441,59 @@ func (a *API) requireBookMediaAuth(next http.Handler) http.Handler {
 
 // mediaAuth is requireMediaAuth, requireBookMediaAuth and requireFeedAuth: the
 // media rate limit and authentication described on requireMediaAuth, accepting
-// the token kinds given.
+// the token kinds given. A response a cast token authenticated keeps it in use
+// while it runs (keepCastInUse).
 func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 	return mediaHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ctx, ok := a.authLimited(w, r, a.mediaLimiter, true, kinds, func(ctx context.Context) { a.mediaCrossOrigin(ctx, w) }); ok {
-			next.ServeHTTP(w, r.WithContext(ctx))
+		ctx, ok := a.authLimited(w, r, a.mediaLimiter, true, kinds, func(ctx context.Context) { a.mediaCrossOrigin(ctx, w) })
+		if !ok {
+			return
 		}
+		if cred := credentialFrom(ctx); cred.Kind == auth.KindCast {
+			defer a.keepCastInUse(ctx, cred.ID)()
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})}
+}
+
+// keepCastInUse keeps cast token id in use while the response it authenticated
+// runs (server#446): the request touched it as it started (auth's resolve), but a
+// receiver can read one long file in a single response for hours, and a token
+// that looks idle that long is the first a sender's re-mint at the cap drops,
+// and its expiry runs out mid-book. It touches the token every castKeepEvery
+// (auth.KeepCastToken: last_seen and the sliding expiry) and returns the func
+// that stops it, which touches it once more when the response outlived one
+// interval, so the token's last use is the response's end. On a context the
+// client's leaving doesn't end: the touch at the end follows exactly that.
+func (a *API) keepCastInUse(ctx context.Context, id int64) (stop func()) {
+	ctx = context.WithoutCancel(ctx)
+	keep := func() {
+		if err := a.auth.KeepCastToken(ctx, id); err != nil {
+			a.log.Warn("keeping a cast token in use failed", "token", id, "err", err)
+		}
+	}
+	start := time.Now()
+	done, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		tick := time.NewTicker(a.castKeepEvery)
+		defer tick.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+				keep()
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+		if time.Since(start) >= a.castKeepEvery {
+			keep()
+		}
+	}
 }
 
 // mediaCrossOrigin opens an authenticated media answer (ctx) to a cross-site
