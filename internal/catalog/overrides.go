@@ -539,13 +539,13 @@ func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, erro
 // precedence: refreshEffective writes its values to the books row and the book page
 // shows it as provenance, so the two can never disagree.
 func (l *bookLayers) resolve() map[string]FieldValue {
-	scanned, baseline, layout := l.scannedFields()
+	scanned, baseline, layout, abs := l.scannedFields()
 	out := make(map[string]FieldValue, len(OverrideFields))
 	for _, field := range OverrideFields {
 		fv := FieldValue{Value: scanned[field], Scanned: scanned[field]}
 		switch fv.Value {
 		case "":
-		case l.abs[field]:
+		case abs[field]:
 			fv.Source = SourceABS
 		case baseline[field], layout[field]:
 			fv.Source = SourcePath
@@ -586,38 +586,44 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 //
 // A series with no position takes the one its title gives
 // (titlePosition), so the untagged copies of a numbered series still sit in it
-// by number.
-func (l *bookLayers) scannedFields() (scanned, baseline, layout bookFields) {
+// by number. abs is the ABS file's layer (l.abs) the values are told apart by:
+// with that position too when the title is the file's.
+func (l *bookLayers) scannedFields() (scanned, baseline, layout, abs bookFields) {
 	scanned, baseline, layout = l.readScanned()
 	scanned = l.overABS(scanned)
 	if t := scanned[FieldTitle]; t != "" && t != baseline[FieldTitle] && t == metadata.PathTitle(l.path, l.isFolder) {
 		baseline = maps.Clone(baseline)
 		baseline[FieldTitle] = t
 	}
-	scanned, baseline = titlePosition(scanned, baseline, layout)
-	return scanned, baseline, layout
+	scanned, baseline, abs = titlePosition(scanned, baseline, layout, l.abs)
+	return scanned, baseline, layout, abs
 }
 
 // titlePosition is scanned with the position its title gives
 // (metadata.PositionInTitle: "He Who Fights with Monsters 4: A LitRPG Adventure"
 // is #4 of He Who Fights With Monsters) when it has a series and no position,
-// and baseline with it too when the title is the path's (so the position reads
-// as the path's, else a tag's); both unchanged otherwise.
-func titlePosition(scanned, baseline, layout bookFields) (bookFields, bookFields) {
+// and the layer the title came from with it too, so the position reads as the
+// title's source: abs when the title is the ABS file's (server#213), baseline
+// when it is the path's, else a tag's. All unchanged otherwise.
+func titlePosition(scanned, baseline, layout, abs bookFields) (bookFields, bookFields, bookFields) {
 	if scanned[FieldSeries] == "" || ParseSeriesIndex(scanned[FieldSeriesIndex]) != 0 {
-		return scanned, baseline
+		return scanned, baseline, abs
 	}
 	p, ok := metadata.PositionInTitle(scanned[FieldTitle], scanned[FieldSeries])
 	if !ok {
-		return scanned, baseline
+		return scanned, baseline, abs
 	}
 	scanned = maps.Clone(scanned)
 	scanned[FieldSeriesIndex] = FormatSeriesPosition(p)
-	if t := scanned[FieldTitle]; t == baseline[FieldTitle] || (layout != nil && t == layout[FieldTitle]) {
+	switch t := scanned[FieldTitle]; {
+	case abs[FieldTitle] != "" && t == abs[FieldTitle]:
+		abs = maps.Clone(abs)
+		abs[FieldSeriesIndex] = scanned[FieldSeriesIndex]
+	case t == baseline[FieldTitle] || (layout != nil && t == layout[FieldTitle]):
 		baseline = maps.Clone(baseline)
 		baseline[FieldSeriesIndex] = scanned[FieldSeriesIndex]
 	}
-	return scanned, baseline
+	return scanned, baseline, abs
 }
 
 // readScanned is scannedFields before the title's position.

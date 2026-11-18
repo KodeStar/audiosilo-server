@@ -103,6 +103,40 @@ func TestABSFileSeriesPosition(t *testing.T) {
 	}
 }
 
+// TestABSFileTitlePosition: a series position read from the title
+// (titlePosition) has the title's source: the ABS file's when the file gave the
+// title (server#213), a tag's when the tags did.
+func TestABSFileTitlePosition(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const title, series = "He Who Fights with Monsters 4: A LitRPG Adventure", "He Who Fights with Monsters"
+	for _, tc := range []struct {
+		path string
+		abs  *metadata.ABSFile
+		tag  string
+		want string
+	}{
+		{"A/File", &metadata.ABSFile{Title: title, Series: []metadata.ABSSeries{{Name: series}}}, "Other", SourceABS},
+		{"A/Tags", nil, title, SourceTag},
+	} {
+		b := &Book{LibraryID: lib.ID, RelPath: tc.path, IsFolder: true, Title: tc.tag, Series: series}
+		if tc.abs != nil {
+			b.ABS = ABSReading{Sig: "1:1", File: tc.abs}
+		}
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+		d, err := c.AdminBookDetail(ctx, lib.ID, tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := d.Fields[FieldSeriesIndex]; got.Value != "4" || got.Source != tc.want {
+			t.Errorf("%s: series_index = %q (%s), want 4 (%s)", tc.path, got.Value, got.Source, tc.want)
+		}
+	}
+}
+
 // TestABSFileOnlyForFolderBooks: ABS keeps metadata.json in a book's own folder,
 // so a file book records none even when handed one.
 func TestABSFileOnlyForFolderBooks(t *testing.T) {

@@ -1642,7 +1642,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   stopped answering: its lstat and read are `metadata.Bounded` calls, see In-process probe) is
   left as it was by the backfill and by a re-index (`ABSReading.Unread`: `UpsertBook` keeps the stored
   `abs_sig` and `abs_file` with no `abs_indexed_at`, so the book keeps its ABS values and the next scan
-  reads it again; server#213); both log a warning. Known gap: a position read from an ABS title (`titlePosition`) shows as `tag`.
+  reads it again; server#213); both log a warning. A position read from the title (`titlePosition`) takes the
+  title's source: `abs` when the file gave the title, the path's or a tag's otherwise (server#213).
   **Bridge attachments** (`metadata/attachments.go`, `library/attachments.go`, `catalog/attachments.go`,
   migrations `0048`, `0050`, `0051`, `0058`; BRIDGE-PLAN.md Phases 1a, 1c, 1d and 3c): the Bridge writes a book's generated `characters.json`,
   `recaps.json`, `description.json`, `chapters.json` (chapters found in the narration), `bridge.json` (provenance) and
