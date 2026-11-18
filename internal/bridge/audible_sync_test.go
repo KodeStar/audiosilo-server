@@ -183,7 +183,8 @@ func TestAudibleSyncClaimFailsUnspent(t *testing.T) {
 // While the titles keep failing to read (a database fault), a sync is put back
 // unspent only maxUnspentSyncFills claims in a row: the next failing claim
 // leaves it claimed and undelivered, so the claim after it hands out the job
-// behind it, each lapsed lease spends an attempt and MaxAttempts ends it.
+// behind it, each lapsed lease spends an attempt, and the last attempt's
+// failing claim ends it, naming the titles (syncTitlesUnread).
 func TestAudibleSyncClaimFailsSpentInTheEnd(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
