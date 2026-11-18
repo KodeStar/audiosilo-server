@@ -46,6 +46,14 @@ describe('podcastJobReason', () => {
     ).toBeUndefined();
   });
 
+  it('leaves a job the server ended for its unreadable params to its own error', () => {
+    for (const kind of ['podcast.fetch', 'podcast.poll']) {
+      expect(
+        podcastJobReason({ kind, state: 'failed', result: {}, params_unreadable: true }),
+      ).toBeUndefined();
+    }
+  });
+
   it('has an English sentence for every code it words', () => {
     const keys = [...PODCAST_FETCH_CODES, 'http'].map((c) => `bridge.podcastCode.${c}`);
     const dict = en as Record<string, string>;

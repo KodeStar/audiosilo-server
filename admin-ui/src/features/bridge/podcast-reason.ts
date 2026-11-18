@@ -55,15 +55,17 @@ export interface PodcastReason {
  * The server's wording of a failed podcast.fetch or podcast.poll, else
  * undefined (the Bridge's own text then). The code is the result's, and a
  * failed job without one is bridge_lost, as the server reads it
- * (bridge.PodcastOutcomeOf). A fetch words its codes as the player's status
- * does (bridge.FetchErrorFor), a poll as the failing-feed notice does
- * (notify's feedCodeText).
+ * (bridge.PodcastOutcomeOf), except one the server ended at its claim because
+ * it could not read the job's params (params_unreadable): the Bridge never had
+ * it, and the server's own error says so. A fetch words its codes as the
+ * player's status does (bridge.FetchErrorFor), a poll as the failing-feed
+ * notice does (notify's feedCodeText).
  */
 export function podcastJobReason(
-  job: Pick<BridgeJob, 'kind' | 'state' | 'result'>,
+  job: Pick<BridgeJob, 'kind' | 'state' | 'result' | 'params_unreadable'>,
 ): PodcastReason | undefined {
   if (job.kind !== 'podcast.fetch' && job.kind !== 'podcast.poll') return undefined;
-  if (job.state !== 'failed') return undefined;
+  if (job.state !== 'failed' || job.params_unreadable) return undefined;
   const code = text(job.result?.code) ?? 'bridge_lost';
   if (job.kind === 'podcast.poll') {
     if (POLL_OWN_CODES.has(code)) return { key: `bridge.podcastCode.${code}` };
