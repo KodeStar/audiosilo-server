@@ -79,7 +79,7 @@ type Event struct {
 	Data map[string]any
 	// Dedup, when set, announces the event once while it is in the feed (90
 	// days): a second one with the same kind and key is dropped, even one
-	// emitted at the same moment (Service.dedupLocks). Once the first has left
+	// emitted at the same moment (Service.dedupMu). Once the first has left
 	// the feed, the same key is announced again.
 	Dedup string
 }
@@ -122,42 +122,10 @@ type Service struct {
 	oidcPending          []oidcPendingTaken
 	oidcPendingCapLogged time.Time
 
-	// dedupLocks: an emit with a dedup key holds its key's lock from the check
-	// to the record, so two at once (two callbacks for one waiting sign-in)
-	// announce it once (server#408). A key's entry lives while it is held.
-	dedupMu    sync.Mutex
-	dedupLocks map[string]*dedupLock
-}
-
-// dedupLock serializes the emits of one kind and dedup key; held counts the
-// emits holding or waiting for it.
-type dedupLock struct {
-	sync.Mutex
-	held int
-}
-
-// lockDedup takes key's lock and returns its release.
-func (s *Service) lockDedup(key string) func() {
-	s.dedupMu.Lock()
-	l := s.dedupLocks[key]
-	if l == nil {
-		if s.dedupLocks == nil {
-			s.dedupLocks = map[string]*dedupLock{}
-		}
-		l = &dedupLock{}
-		s.dedupLocks[key] = l
-	}
-	l.held++
-	s.dedupMu.Unlock()
-	l.Lock()
-	return func() {
-		l.Unlock()
-		s.dedupMu.Lock()
-		if l.held--; l.held == 0 {
-			delete(s.dedupLocks, key)
-		}
-		s.dedupMu.Unlock()
-	}
+	// dedupMu: an emit with a dedup key holds it from the check to the record,
+	// so two at once (two callbacks for one waiting sign-in) announce it once
+	// (server#408). Dedup emits are rare; one lock for all keys is enough.
+	dedupMu sync.Mutex
 }
 
 // oidcPendingTaken is one oidc_pending notification raised: when, and the
@@ -221,26 +189,14 @@ func (s *Service) Emit(ctx context.Context, e Event) {
 }
 
 // emit is Emit with a gate: allow (when set) runs after the dedup check and
-// before the event is recorded, and false drops it. The check, the gate and
-// the record are one step per dedup key (lockDedup).
+// before the event is recorded, and false drops it.
 func (s *Service) emit(ctx context.Context, e Event, allow func() bool) {
 	if s == nil {
 		return
 	}
 	ctx = context.WithoutCancel(ctx) // the request that caused it may be ending
-	if e.Dedup != "" {
-		defer s.lockDedup(e.Kind + "\x00" + e.Dedup)()
-		seen, err := s.cat.ServerEventSeen(ctx, e.Kind, e.Dedup)
-		if err != nil || seen {
-			return
-		}
-	}
-	if allow != nil && !allow() {
-		return
-	}
-	ev, err := s.cat.RecordServerEvent(ctx, e.Kind, e.Data, e.Dedup)
-	if err != nil {
-		s.log.Warn("recording an event failed", "kind", e.Kind, "err", err)
+	ev, ok := s.recordEvent(ctx, e, allow)
+	if !ok {
 		return
 	}
 	targets, err := s.cat.ListNotifyTargets(ctx)
@@ -258,6 +214,28 @@ func (s *Service) emit(ctx context.Context, e Event, allow func() bool) {
 			s.log.Warn("notification queue full; dropped a delivery", "target", t.ID, "kind", e.Kind)
 		}
 	}
+}
+
+// recordEvent adds e to the feed unless its dedup key was seen or allow refuses it.
+// For a dedup key the check, the gate and the record are one step (dedupMu).
+func (s *Service) recordEvent(ctx context.Context, e Event, allow func() bool) (catalog.ServerEvent, bool) {
+	if e.Dedup != "" {
+		s.dedupMu.Lock()
+		defer s.dedupMu.Unlock()
+		seen, err := s.cat.ServerEventSeen(ctx, e.Kind, e.Dedup)
+		if err != nil || seen {
+			return catalog.ServerEvent{}, false
+		}
+	}
+	if allow != nil && !allow() {
+		return catalog.ServerEvent{}, false
+	}
+	ev, err := s.cat.RecordServerEvent(ctx, e.Kind, e.Data, e.Dedup)
+	if err != nil {
+		s.log.Warn("recording an event failed", "kind", e.Kind, "err", err)
+		return catalog.ServerEvent{}, false
+	}
+	return ev, true
 }
 
 // Test sends a test message to t now, once, and records the outcome on it. It

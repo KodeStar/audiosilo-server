@@ -352,7 +352,7 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 
 // TestConcurrentEmitsDedupOnce (server#408): emits of one kind and dedup key
 // at the same moment (two callbacks for one waiting sign-in) announce it
-// once; another key is still announced, and no key's lock outlives its emits.
+// once; another key is still announced.
 func TestConcurrentEmitsDedupOnce(t *testing.T) {
 	s, cat, ctx := newService(t)
 	const n = 16
@@ -378,11 +378,6 @@ func TestConcurrentEmitsDedupOnce(t *testing.T) {
 	}
 	if len(events) != 2 {
 		t.Fatalf("%d events for two keys emitted %d times at once, want 2", len(events), n)
-	}
-	s.dedupMu.Lock()
-	defer s.dedupMu.Unlock()
-	if len(s.dedupLocks) != 0 {
-		t.Fatalf("dedup locks left behind: %v", s.dedupLocks)
 	}
 }
 

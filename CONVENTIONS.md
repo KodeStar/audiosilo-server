@@ -3709,7 +3709,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`internal/notify`): `notification_targets` (kind webhook/ntfy/discord, name, url + secret write-only:
   the API shows `notify.Redact`'s address and `has_secret`), `server_events` (the bell's feed, 90 days,
   `dedup_key` announces an event once while it is in the feed, an update once per version: the check
-  and the record one step per kind and key, `lockDedup`, so two emits at once announce it once,
+  and the record one step under `dedupMu`, so two emits at once announce it once,
   server#408). `notify.Service.Emit` records the event and queues one
   delivery per enabled subscribed destination (4 workers, queue 256, drop + log when full); a delivery is
   retried twice on timeout/unreachable/429/5xx (queued again after its delay, never waited out on a
