@@ -654,9 +654,11 @@ The policy is the server's `web.contentSecurityPolicy` and does not change for t
   session token in an image URL (`?token=`): this is a full-privilege admin credential and URLs
   leak into proxy logs and history. `img-src` allows `'self' data:` but **not** `blob:`.
 - **`style-src-attr` admits one hash and nothing else:** the `text-overflow:inherit` that WebKit
-  (Safari) puts on an element inside every native `<select>`'s user-agent shadow tree and checks
-  against the page CSP (server#467). It renders the same refused or not; the hash keeps Safari's
-  console quiet on pages with a `NativeSelect`. It is no licence for `style=""` in our markup.
+  (Safari) puts on the button slot of every native `<select>`'s user-agent shadow tree and checks
+  against the page CSP (server#467). It renders the same refused or not, as long as no select
+  sets `text-overflow`; the hash keeps Safari's console quiet on pages with a `NativeSelect`. It
+  is no licence for `style=""` in our markup. It is a WebKit regression, fixed upstream
+  (bugs.webkit.org 327212): the directive goes once the affected Safari releases are out of use.
 - **Playwright WebKit screenshots log one `style-src-elem` refusal each.** Before every screenshot
   Playwright's screenshotter appends and removes a `<style>body {}</style>` (its WebKit-only
   animation sync, in an isolated world), which this policy refuses. It is the test tool, not the

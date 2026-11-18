@@ -260,13 +260,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (a match is a 304, documents included) and text types go out gzipped to clients that accept it
   (`spa.Files`: worked out once per file and kept, redone when a web_dir file's size or mtime
   changes; never for a Range request; `Vary: Accept-Encoding`).
-  **The CSP does not change for it** (its one exception: `style-src-attr 'unsafe-hashes'` with the
-  hash of `text-overflow:inherit`, which WebKit sets inside every native `<select>`'s user-agent
-  shadow tree, #467, `TestCSPWebKitSelectStyleHash`; Playwright WebKit's one `style-src-elem`
-  refusal per screenshot is its own screenshotter's probe, not the console): no inline script/style anywhere (`theme-init.js` is
+  **The CSP does not change for it**: no inline script/style anywhere (`theme-init.js` is
   external, Base UI runs under `CSPProvider disableStyleElements`, banned libraries are
   ESLint-enforced, `admin-ui/scripts/check-csp.mjs` fails the build and `TestEmbeddedBuild`
-  checks the embedded `index.html`). It keeps the classic console's token key
+  checks the embedded `index.html`). The policy's one inline allowance is not the console's:
+  `style-src-attr 'unsafe-hashes'` with the hash of `text-overflow:inherit`, which WebKit sets
+  on the button slot of every native `<select>`'s user-agent shadow tree (#467,
+  `TestCSPWebKitSelectStyleHash`; a WebKit regression fixed upstream, bugs.webkit.org 327212,
+  so the directive goes once the affected Safari releases are out of use). Playwright WebKit's
+  one `style-src-elem` refusal per screenshot is its own screenshotter's probe, not the
+  console. The console keeps the classic console's token key
   (`localStorage["audiosilo_token"]`), so an admin stays signed in across the upgrade. A 403 from
   an `/admin` endpoint makes the console re-check `/me` and sign a demoted admin out.
   Admin-only endpoints that exist for it: `GET /admin/libraries` adds `book_count` and
