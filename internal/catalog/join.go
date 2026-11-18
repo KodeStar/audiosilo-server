@@ -115,11 +115,7 @@ func (c *Catalog) JoinDurableState(ctx context.Context, libraryID int64, into st
 		return err
 	}
 	return c.db.WithTx(ctx, "JoinDurableState", func(tx *sql.Tx) error {
-		froms := make([]string, len(parts))
-		for i, p := range parts {
-			froms[i] = p.Path
-		}
-		left, err := audibleRowsAt(ctx, tx, libraryID, froms, into)
+		left, err := audibleRowsAt(ctx, tx, libraryID, parts, into)
 		if err != nil {
 			return err
 		}

@@ -584,8 +584,13 @@ func AudibleSynced(j Job) bool {
 // CancelAudibleSyncs cancels account's open sync inside tx (removed or paused,
 // as CancelAudiblePolls).
 func CancelAudibleSyncs(ctx context.Context, tx *sql.Tx, account, reason string, now time.Time) error {
+	return cancelOpenTx(ctx, tx, audibleSyncKey(account), at(now), reason)
+}
+
+// audibleSyncKey is the dedupe key of account's sync job.
+func audibleSyncKey(account string) string {
 	job, _ := AudibleSync(account, nil, 0)
-	return cancelOpenTx(ctx, tx, jobKey(job), at(now), reason)
+	return jobKey(job)
 }
 
 // CancelWorkingAudibleSync asks the Bridge, inside tx, to stop account's sync
@@ -594,6 +599,5 @@ func CancelAudibleSyncs(ctx context.Context, tx *sql.Tx, account, reason string,
 // account's fold marks no refusal for a job asked to stop). A queued one stays:
 // claimed after the sign-in, it uses the new one.
 func CancelWorkingAudibleSync(ctx context.Context, tx *sql.Tx, account string, now time.Time) error {
-	job, _ := AudibleSync(account, nil, 0)
-	return requestCancelTx(ctx, tx, jobKey(job), at(now), CancelAudibleSignedIn)
+	return requestCancelTx(ctx, tx, audibleSyncKey(account), at(now), CancelAudibleSignedIn)
 }

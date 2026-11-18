@@ -137,10 +137,9 @@ func (a *API) handleBridgeAudibleListening(w http.ResponseWriter, r *http.Reques
 	// are Audible's own last_updated, on Audible's clock, not the Bridge's, so
 	// the Bridge's skew (sent_at against this server's clock) must not move
 	// them, before or after a Stay (beforeStay, server#415).
-	var asSent float64
 	answer, err := a.cat.SyncListening(r.Context(), catalog.SyncBatch{
 		UserID: acct.UserID, DeviceID: acct.DeviceID(), TokenID: 0, DeviceName: acct.DeviceName(),
-		ClockOffset: &asSent, Events: events, Targets: targets, FurthestOnly: true,
+		ClockOffset: new(float64), Events: events, Targets: targets, FurthestOnly: true,
 	})
 	if err != nil {
 		a.writeCatalogError(w, err, op, "could not sync listening", "account", id)

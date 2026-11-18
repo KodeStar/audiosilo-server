@@ -340,21 +340,19 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 	// (saturating at about 292 years, the same on every platform, where a float
 	// of seconds converted back would overflow differently on amd64 and arm64);
 	// clock_offset's is bounded by MaxClockOffset, so its conversion fits.
-	var shiftDur time.Duration
+	//
+	// transit: how much of sent_at's shift may be the batch's time on the way
+	// (a clock_offset is measured, so it has none): a finish made before an
+	// edit it never saw can be dated after it by that much (finishChange).
+	var shiftDur, transit time.Duration
 	switch {
 	case b.ClockOffset != nil:
 		shiftDur = time.Duration(*b.ClockOffset * float64(time.Second))
 	case b.SentAt != nil:
 		shiftDur = now.Sub(*b.SentAt)
-	}
-	shift := shiftDur.Seconds()
-	// transit: how much of sent_at's shift may be the batch's time on the way
-	// (a clock_offset is measured, so it has none): a finish made before an
-	// edit it never saw can be dated after it by that much (finishChange).
-	var transit time.Duration
-	if b.ClockOffset == nil && b.SentAt != nil {
 		transit = min(max(shiftDur, 0), maxFinishTransit)
 	}
+	shift := shiftDur.Seconds()
 	results := make([]SyncResult, len(b.Events))
 	seen := map[string]bool{}
 	var prepared []syncPrepared
@@ -1354,13 +1352,19 @@ func insertEvent(ctx context.Context, tx *sql.Tx, r eventRow) error {
 	return err
 }
 
+// localEventID is the id of an event the server logs itself (no client sent
+// one): prefix and 16 random hex digits.
+func localEventID(prefix string) string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return prefix + hex.EncodeToString(b[:])
+}
+
 // putEvent is a legacy PUT .../progress of in by userID's token tokenID as a
 // listening event (SaveProgressFrom): a zero-length span at in's place, at at
 // (its updated_at, fixed width), received now; the caller sets its status.
 func putEvent(userID int64, in Progress, tokenID int64, at, received string) eventRow {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return eventRow{userID: userID, id: "put-" + hex.EncodeToString(b[:]), kind: eventPut, ref: in.Ref,
+	return eventRow{userID: userID, id: localEventID("put-"), kind: eventPut, ref: in.Ref,
 		deviceID: in.DeviceID, tokenID: tokenID, from: in.Position, to: in.Position, speed: in.PlaybackSpeed,
 		duration: in.Duration, started: at, ended: at, received: received}
 }
@@ -1369,10 +1373,8 @@ func putEvent(userID int64, in Progress, tokenID int64, at, received string) eve
 // deleted at now (an import's undo of a row it made), as a "reset" event in
 // the log: a Stay made before it no longer wins (resetSince).
 func logProgressReset(ctx context.Context, tx *sql.Tx, userID int64, ref Ref, now time.Time) error {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
 	at := formatSessionTime(now)
-	return insertEvent(ctx, tx, eventRow{userID: userID, id: "reset-" + hex.EncodeToString(b[:]), kind: eventReset,
+	return insertEvent(ctx, tx, eventRow{userID: userID, id: localEventID("reset-"), kind: eventReset,
 		ref: ref, speed: 1, started: at, ended: at, status: statusApplied, received: at})
 }
 

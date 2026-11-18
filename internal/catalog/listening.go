@@ -177,7 +177,7 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 	// another precision rightly (server#224).
 	now := c.now()
 	saved, err := time.Parse(time.RFC3339, in.UpdatedAt)
-	if err != nil || !plausibleUpdatedAt(in.UpdatedAt, now) {
+	if err != nil || !plausibleUpdatedAt(saved, now) {
 		saved = now
 	}
 	in.UpdatedAt = formatSessionTime(saved)
@@ -191,7 +191,13 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 	// replayed from an offline queue is dated when it happened, normalized to
 	// RFC3339 UTC to the second (fixed width, so they compare as strings).
 	stamp := saved.UTC().Format(time.RFC3339)
-	at := finishChangeStamp(in.UpdatedAt, now) // the event's time, and finish_changed_at's
+	// The event's time, and finish_changed_at's: saved, never ahead of now
+	// (finishChangeStamp's rule).
+	atT := saved
+	if atT.After(now) {
+		atT = now
+	}
+	at := formatSessionTime(atT)
 	var out *Progress
 	err = c.db.WithUserStateTx(ctx, "SaveProgress", func(tx *sql.Tx) error {
 		existing, err := getProgress(ctx, tx, userID, in.Ref)
@@ -278,7 +284,8 @@ const endStayHold = `stay_version=NULL`
 const explicitWriteSet = endSpanChain + `, edit_version=excluded.version`
 
 // finishChangeStamp is the time a write that changes a row's finished state
-// records as finish_changed_at (and a PUT's event time): the write's own
+// records as finish_changed_at (SaveProgressFrom applies the same rule to a
+// parsed time): the write's own
 // updated_at, never ahead of the server's clock now (plausibleUpdatedAt allows a
 // little skew: a finish dated ahead would make a Sync v2 unfinish sent just
 // after it "older"), or now when updated_at doesn't parse. Fixed-width UTC
@@ -292,16 +299,15 @@ func finishChangeStamp(updatedAt string, now time.Time) string {
 }
 
 // plausibleUpdatedAt reports whether a client-supplied updated_at can be
-// trusted for last-write-wins: it must parse and not be implausibly ahead of
+// trusted for last-write-wins (the caller has parsed it): it must not be implausibly ahead of
 // the server clock (a small skew is allowed so genuine cross-device ordering
 // still works). Without this check a client with a broken clock (or a garbage
 // value) sending a far-future timestamp would win every future comparison and
 // permanently wedge the book's progress at that write; the caller substitutes
 // server time (c.ts()) instead.
-func plausibleUpdatedAt(v string, now time.Time) bool {
+func plausibleUpdatedAt(t, now time.Time) bool {
 	const maxSkew = 5 * time.Minute
-	t, err := time.Parse(time.RFC3339, v)
-	return err == nil && !t.After(now.Add(maxSkew))
+	return !t.After(now.Add(maxSkew))
 }
 
 // IsNewer reports whether candidate should replace current under last-write-wins
@@ -415,7 +421,7 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 		return err
 	}
 	return c.db.WithTx(ctx, "MoveDurableState", func(tx *sql.Tx) error {
-		left, err := audibleRowsAt(ctx, tx, libraryID, []string{oldPath}, newPath)
+		left, err := audibleRowsAt(ctx, tx, libraryID, []JoinPart{{Path: oldPath}}, newPath)
 		if err != nil {
 			return err
 		}
@@ -467,11 +473,11 @@ type leftRow struct {
 
 // audibleRowsAt reads, inside tx, the rows already at into (left there by an
 // earlier book, or a joined book's own) of the people whose Audible titles are
-// matched to one of froms, before their places are carried onto into.
-func audibleRowsAt(ctx context.Context, tx *sql.Tx, libraryID int64, froms []string, into string) ([]leftRow, error) {
+// matched to one of froms' paths, before their places are carried onto into.
+func audibleRowsAt(ctx context.Context, tx *sql.Tx, libraryID int64, froms []JoinPart, into string) ([]leftRow, error) {
 	args := []any{libraryID, into, libraryID}
 	for _, f := range froms {
-		args = append(args, f)
+		args = append(args, f.Path)
 	}
 	return queryRows(ctx, tx, func(rows *sql.Rows, r *leftRow) error {
 		return rows.Scan(&r.user, &r.position, &r.finished, &r.updatedAt, &r.seq)
@@ -485,12 +491,10 @@ func audibleRowsAt(ctx context.Context, tx *sql.Tx, libraryID int64, froms []str
 // each row left at into (audibleRowsAt) that the carry did not change (the
 // same place, finish state and time): the person never played the moved book,
 // or the left row won the carry's merge (a move's newer save, a join's further
-// place). Its
-// place is another book's, which the re-match trigger (0066, 0071) would have
-// offered to Audible under the moved book's titles (server#359); its offer
-// position goes back to where it was, so a feed already past it does not read
-// it again, and Audible's own place, ahead of it, comes back by the next sync.
-// The row's next write offers it as any write does.
+// place). Its place is another book's, which the re-match trigger (0066, 0071)
+// would have offered to Audible under the moved book's titles (server#359); its
+// offer position goes back to where it was, so a feed already past it does not
+// read it again. The row's next write offers it as any write does.
 func keepLeftOffers(ctx context.Context, tx *sql.Tx, libraryID int64, into string, left []leftRow) error {
 	for _, r := range left {
 		if _, err := tx.ExecContext(ctx,
