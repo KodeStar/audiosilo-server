@@ -35,6 +35,10 @@
       }
     ],
     "format": "string",
+    "generated": "boolean",
+    "generated_parts": [
+      "string"
+    ],
     "genres": [
       "string"
     ],
