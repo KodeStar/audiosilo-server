@@ -537,16 +537,25 @@ describe('bridge page', () => {
         'GET /admin/bridge/jobs': {
           body: {
             jobs: [
-              job({ id: 8, kind: 'podcast.poll', requested_by: null, state: 'done' }),
+              job({
+                id: 8,
+                kind: 'podcast.poll',
+                params: { scheduled: true },
+                priority: -10,
+                requested_by: null,
+                state: 'done',
+              }),
               job({ id: 9, requested_by: null, state: 'done' }),
+              // A follower's Check now whose account is gone: not the scheduler's.
+              job({ id: 10, kind: 'podcast.poll', params: {}, requested_by: null, state: 'done' }),
             ],
           },
         },
       }),
     );
     renderApp('/server?topic=bridge');
-    expect(await screen.findByText(/Scheduled by the server/)).toBeInTheDocument();
-    expect(screen.getAllByText(/Asked by a deleted account/)).toHaveLength(1);
+    expect(await screen.findAllByText(/Scheduled by the server/)).toHaveLength(1);
+    expect(screen.getAllByText(/Asked by a deleted account/)).toHaveLength(2);
   });
 
   it('narrows the jobs to a kind, names a follow by its show or feed host, marks high priority (server#186, server#224)', async () => {

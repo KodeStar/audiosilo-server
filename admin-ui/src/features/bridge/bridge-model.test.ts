@@ -251,17 +251,26 @@ describe('bridgeServerUrl', () => {
 });
 
 describe('serverScheduled', () => {
+  const of = (kind: string, over: { params?: Record<string, unknown>; priority?: number } = {}) =>
+    serverScheduled({ kind, params: {}, priority: 0, ...over });
   it('names the jobs the server queues itself: podcasts, Audible polls and syncs', () => {
-    expect(serverScheduled('podcast.poll')).toBe(true);
-    expect(serverScheduled('podcast.fetch')).toBe(true);
-    expect(serverScheduled('podcast.retain')).toBe(true);
-    expect(serverScheduled('audible.poll')).toBe(true);
-    expect(serverScheduled('audible.sync')).toBe(true);
+    expect(of('podcast.fetch')).toBe(true);
+    expect(of('podcast.retain')).toBe(true);
+    expect(of('audible.poll')).toBe(true);
+    expect(of('audible.sync')).toBe(true);
   });
   it('leaves out a follow and the book jobs, which someone asks for', () => {
-    expect(serverScheduled('podcast.subscribe')).toBe(false);
-    expect(serverScheduled('sidecars.generate')).toBe(false);
-    expect(serverScheduled('bridge.verify')).toBe(false);
+    expect(of('podcast.subscribe')).toBe(false);
+    expect(of('sidecars.generate')).toBe(false);
+    expect(of('bridge.verify')).toBe(false);
+  });
+  it("reads a feed check by its origin: the scheduler's mark or priority, not a Check now", () => {
+    expect(of('podcast.poll', { params: { scheduled: true } })).toBe(true);
+    // Queued by the scheduler before the mark existed.
+    expect(of('podcast.poll', { priority: -10 })).toBe(true);
+    // A follower's Check now, its requester since deleted.
+    expect(of('podcast.poll')).toBe(false);
+    expect(of('podcast.poll', { params: { show_id: 'a1b2c3d4e5f60718' } })).toBe(false);
   });
 });
 

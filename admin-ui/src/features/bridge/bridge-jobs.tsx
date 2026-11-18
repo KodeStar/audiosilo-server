@@ -173,7 +173,7 @@ function JobRow({
   const meta = [
     job.requested_by
       ? t('bridge.jobs.by', { name: job.requested_by.username })
-      : serverScheduled(job.kind)
+      : serverScheduled(job)
         ? t('bridge.jobs.byServer')
         : t('bridge.jobs.byNobody'),
     t('bridge.jobs.created', { when: formatRelative(job.created_at, lang) }),
