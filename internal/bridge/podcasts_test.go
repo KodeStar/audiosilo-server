@@ -630,6 +630,50 @@ func TestOfflineBridgeExpiresQueuedSubscribes(t *testing.T) {
 	}
 }
 
+// foldContext's floor of its own per fold stops maxFoldOverrun past the
+// caller's deadline, so one settle that ends many jobs cannot hold its request
+// open for minFoldBudget per job; with no caller deadline a fold has none.
+func TestFoldContextBounds(t *testing.T) {
+	deadlineOf := func(ctx context.Context) time.Duration {
+		t.Helper()
+		d, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("no deadline")
+		}
+		return time.Until(d)
+	}
+	near := time.Second / 2
+	for _, tc := range []struct {
+		name   string
+		caller time.Duration // the caller's deadline, from now
+		want   time.Duration // the fold's, from now
+	}{
+		{"caller has longer", time.Minute, time.Minute},
+		{"caller spent: the floor", -time.Second, minFoldBudget},
+		{"floor cut at the overrun", -(maxFoldOverrun - 2*time.Second), 2 * time.Second},
+	} {
+		caller, cancel := context.WithDeadline(context.Background(), time.Now().Add(tc.caller))
+		fold, done := foldContext(caller)
+		if got := deadlineOf(fold); got > tc.want+near || got < tc.want-near {
+			t.Errorf("%s: fold has %v, want %v", tc.name, got, tc.want)
+		}
+		done()
+		cancel()
+	}
+	caller, cancel := context.WithDeadline(context.Background(), time.Now().Add(-maxFoldOverrun-time.Second))
+	defer cancel()
+	fold, done := foldContext(caller)
+	defer done()
+	if fold.Err() == nil {
+		t.Fatal("a fold past the overrun still had time")
+	}
+	fold, done = foldContext(context.Background())
+	defer done()
+	if _, ok := fold.Deadline(); ok {
+		t.Fatal("a caller with no deadline gave its fold one")
+	}
+}
+
 // Subscribe adopting an open private request while the Bridge ends it (the
 // adopt race, server#179 and server#200): no private URL outlives its request,
 // whichever commits first.

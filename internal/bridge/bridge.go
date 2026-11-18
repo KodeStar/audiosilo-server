@@ -98,17 +98,28 @@ func committedContext(ctx context.Context) (context.Context, context.CancelFunc)
 }
 
 // minFoldBudget is the least time each OnEnded fold gets of its own
-// (foldContext), whatever the caller's deadline has left.
-const minFoldBudget = 5 * time.Second
+// (foldContext), whatever the caller's deadline has left, and maxFoldOverrun how
+// far past that deadline the folds of one caller may run in all.
+const (
+	minFoldBudget  = 5 * time.Second
+	maxFoldOverrun = 2 * minFoldBudget
+)
 
 // foldContext is one OnEnded fold's context: the caller's deadline as
 // committedContext keeps it, but never less than minFoldBudget from now, so a
 // slow fold, or a stream's short budget spent before an unrelated job's end was
-// settled, can't leave the next fold no time (server#219). Without a caller
-// deadline it is unbounded, as committedContext's.
+// settled, can't leave the next fold no time (server#219). The floor stops at
+// maxFoldOverrun past the caller's deadline, so a settle that ends many jobs
+// holds its request that much longer at most; a fold that misses it is
+// recovered by the scheduler's sweep (EndedPodcasts). Without a caller deadline
+// it is unbounded, as committedContext's.
 func foldContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if deadline, ok := ctx.Deadline(); ok {
-		if floor := time.Now().Add(minFoldBudget); deadline.Before(floor) {
+		floor := time.Now().Add(minFoldBudget)
+		if limit := deadline.Add(maxFoldOverrun); limit.Before(floor) {
+			floor = limit
+		}
+		if deadline.Before(floor) {
 			return context.WithDeadline(context.WithoutCancel(ctx), floor)
 		}
 	}
