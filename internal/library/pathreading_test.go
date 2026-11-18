@@ -1,6 +1,7 @@
 package library
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -228,7 +229,10 @@ func TestScanTitleNotSeries(t *testing.T) {
 // tag ("Portal to Nova Roma: Paris"), and so does one whose tag names its
 // folder ("The Expanse Box Set: Leviathan Wakes" in "Leviathan Wakes") or is on
 // its last file too (the series as the album, the book's title on every file,
-// in a folder naming neither). One read before revision 5 is put right
+// in a folder naming neither). Where the files' tags differ, the name they
+// share past the album is the book's ("The Great Hunt" of "The Wheel of Time:
+// The Great Hunt - The Wheel"), and only tags that share none give the album.
+// One read before revision 5 is put right
 // by the next scan from one read of its first file's tags, and of its last's
 // where the title turns on them, with no re-index; a book of one file needs no
 // read and is stamped.
@@ -261,12 +265,33 @@ func TestScanPartsTitle(t *testing.T) {
 	for _, f := range []string{"/01.mp3", "/02.mp3", "/03.mp3"} {
 		silence(t, root, shared+f, 1, "album=Harry Potter", "title="+sharedTitle, "artist=J.K. Rowling")
 	}
+	// The series as the album and each file titled "<album>: <book> <part or
+	// chapter>" in a folder that names neither: the name the files share.
+	const hunt, nova, athens = "Robert Jordan/Book 2", "Pat Writer/Book 2", "Pat Writer/Nova Roma 4"
+	const wot, huntTitle = "The Wheel of Time", "The Wheel of Time: The Great Hunt - "
+	for i, ch := range []string{"The Wheel", "The Flame", "The Dragon"} {
+		silence(t, root, fmt.Sprintf("%s/%02d.mp3", hunt, i+1), 1, "album="+wot, "title="+huntTitle+ch, "artist=Robert Jordan")
+	}
+	for i, part := range []string{"1", "2"} {
+		silence(t, root, fmt.Sprintf("%s/%02d.mp3", nova, i+1), 1, "album=Portal to Nova Roma", "title=Portal to Nova Roma: Paris (Part "+part+")", "artist=Pat Writer")
+		silence(t, root, fmt.Sprintf("%s/%02d.mp3", athens, i+1), 1, "album=Portal to Nova Roma", "title=Portal to Nova Roma: Athens - Part "+part, "artist=Pat Writer")
+	}
+	// Each file's title only its chapter past the album: the album, which a
+	// series tag naming it then gives way to the folder (TitleNotSeries).
+	const eye, eyeSeries = "Robert Jordan/The Eye of the World", "Robert Jordan 2/The Eye of the World"
+	for i, ch := range []string{"Ravens", "An Empty Road", "The Peddler"} {
+		silence(t, root, fmt.Sprintf("%s/%02d.mp3", eye, i+1), 1, "album="+wot, "title="+wot+" - "+ch, "artist=Robert Jordan")
+		silence(t, root, fmt.Sprintf("%s/%02d.mp3", eyeSeries, i+1), 1, "album="+wot, "title="+wot+" - "+ch, "artist=Robert Jordan", "series="+wot)
+	}
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
 	s := NewScanner(cat, ffprobe, slog.Default())
 	if _, err := s.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{parts: album, single: "Portal to Nova Roma: Paris", boxed: boxTitle, shared: sharedTitle}
+	want := map[string]string{
+		parts: album, single: "Portal to Nova Roma: Paris", boxed: boxTitle, shared: sharedTitle,
+		hunt: "The Great Hunt", nova: "Paris", athens: "Athens", eye: wot, eyeSeries: "The Eye of the World",
+	}
 	check := func(when string) {
 		t.Helper()
 		for rel, title := range want {
@@ -281,6 +306,10 @@ func TestScanPartsTitle(t *testing.T) {
 	// The snapshots of revision 4: the first file's title tag as the title.
 	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$.title', ?, '$."@rev"', '4'), title = ?
 		WHERE rel_path = ?`, album+" - Letters 1-4", album+" - Letters 1-4", parts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$.title', ?, '$."@rev"', '4'), title = ?
+		WHERE rel_path = ?`, huntTitle+"The Wheel", huntTitle+"The Wheel", hunt); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@rev"', '4') WHERE rel_path IN (?, ?)`, single, shared); err != nil {

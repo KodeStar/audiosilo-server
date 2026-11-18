@@ -1015,7 +1015,7 @@ const pathFlushEvery = 500
 // nil reads the same), except a book of several files' first title tag that
 // names that file (metadata.PartsTitle: the album instead, unless the book's
 // folder or last, its last file's tags, nil for unread, says the tag is the
-// book's), and an album tag that only names the book's series, which gives way
+// book's, or the two tags share a name past the album), and an album tag that only names the book's series, which gives way
 // to the book's own title (metadata.TitleNotSeries), and md's narrator. So the
 // leaf's series fills only a series the tags leave out.
 func readNames(b *catalog.Book, md, last *metadata.Metadata) *metadata.Metadata {

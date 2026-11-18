@@ -373,8 +373,25 @@ func TestPartsTitle(t *testing.T) {
 		// that names neither: the files agree, so the tag is the book's.
 		{"every file carries it", "Harry Potter", "Harry Potter and the Philosopher's Stone", "HP1", "harry potter and the philosopher's stone", "Harry Potter and the Philosopher's Stone"},
 		{"a longer name for the album", "Mistborn", "Mistborn: The Final Empire (Unabridged)", "Mistborn 1 - The Final Empire", "Mistborn: The Final Empire (Unabridged)", "Mistborn: The Final Empire (Unabridged)"},
-		// A bracketed part is the file's: the tags differ.
-		{"bracketed parts differ", "Sapiens", "Sapiens: A Brief History (Part 1)", "Sapiens", "Sapiens: A Brief History (Part 2)", "Sapiens"},
+		// Tags that differ only in a bracketed part marker name the book.
+		{"bracketed parts, folder names the album", "Sapiens", "Sapiens: A Brief History (Part 1)", "Sapiens", "Sapiens: A Brief History (Part 2)", "Sapiens: A Brief History"},
+		{"bracketed parts, no separator", "Harry Potter", "Harry Potter and the Philosopher's Stone (Part 1)", "HP1", "Harry Potter and the Philosopher's Stone (Part 2)", "Harry Potter and the Philosopher's Stone"},
+		// The series as the album, the book's name past it on every file, then
+		// the file's part or chapter, in a folder that names neither: the name
+		// the files share is the book's.
+		{"shared name, chapter tails", "The Wheel of Time", "The Wheel of Time: The Great Hunt - The Wheel", "Book 2", "The Wheel of Time: The Great Hunt - The Dragon", "The Great Hunt"},
+		{"shared name, bracketed parts", "Portal to Nova Roma", "Portal to Nova Roma: Paris (Part 1)", "Book 2", "Portal to Nova Roma: Paris (Part 2)", "Paris"},
+		{"shared name, part tails", "Portal to Nova Roma", "Portal to Nova Roma: Athens - Part 1", "Nova Roma 4", "Portal to Nova Roma: Athens - Part 2", "Athens"},
+		{"shared name of two parts", "Cosmere", "Cosmere: Mistborn - The Final Empire - Chapter 1", "Book 1", "Cosmere: Mistborn - The Final Empire - Chapter 38", "Mistborn - The Final Empire"},
+		{"shared subtitle, generic folder", "Sapiens", "Sapiens: A Brief History (Part 1)", "Book 2", "Sapiens: A Brief History (Part 2)", "A Brief History"},
+		// Tags that share nothing past the album but a marker: each file's own
+		// chapter, so the album. With the series as the album and no series tag
+		// that is the series' name ("The Eye of the World"): the files name no
+		// book, and TitleNotSeries takes the folder only once a tag says series.
+		{"only chapters past the album", "The Wheel of Time", "The Wheel of Time - Ravens", "The Eye of the World", "The Wheel of Time - The Peddler", "The Wheel of Time"},
+		{"only a part marker shared", "Dune", "Dune: Part 1 - Chapter 1", "Book 1", "Dune: Part 1 - Chapter 9", "Dune"},
+		{"underscore chapters", "The Diary of a Nobody", "The Diary of a Nobody_Ch00", "Diary of a Nobody", "The Diary of a Nobody_Ch24", "The Diary of a Nobody"},
+		{"underscore chapters as written", "secret_agent", "secret_agent_ch01", "Secret Agent", "secret_agent_ch13", "secret_agent"},
 	}
 	for _, tc := range cases {
 		var m Metadata
