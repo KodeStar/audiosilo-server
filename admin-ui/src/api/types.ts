@@ -1917,6 +1917,13 @@ export interface AdminFile {
    * while the server remuxes them.
    */
   direct_playable: boolean;
+  /**
+   * On an MP3 in .mka while the server remuxes them (absent on every other
+   * file): whether its remuxed copy is made. Until it is, its stream is a live
+   * transcode from the file's start, which can't be seeked. The page's GET
+   * starts the copies not made yet.
+   */
+  remux_cached?: boolean;
 }
 
 /** catalog.Listener: one user's progress on the book. */

@@ -96,6 +96,10 @@ type AdminFile struct {
 	// as stored (Opus or FLAC in .mka, ALAC, AC-3), which the console's
 	// chapter editor plays through ?transcode=1.
 	DirectPlayable bool `json:"direct_playable"`
+	// RemuxCached is set by the API on an MP3 in .mka while it remuxes them:
+	// whether its remuxed copy is made (api adminRemuxes). Absent on every
+	// other file.
+	RemuxCached *bool `json:"remux_cached,omitempty"`
 }
 
 // Listener is one user's progress on the book.
