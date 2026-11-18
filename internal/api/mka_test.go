@@ -126,6 +126,28 @@ func (m *mkaEnv) directPlayable(t *testing.T, book string) bool {
 	return chapters.DirectPlayable
 }
 
+// filesPlayable is the admin book page's direct_playable for each of book's
+// files, by path.
+func (m *mkaEnv) filesPlayable(t *testing.T, book string) map[string]bool {
+	t.Helper()
+	var d struct {
+		Files []struct {
+			Path           string `json:"path"`
+			DirectPlayable bool   `json:"direct_playable"`
+		} `json:"files"`
+	}
+	u := "/api/v1/admin/libraries/" + strconv.FormatInt(m.lib.ID, 10) + "/book?path=" + url.QueryEscape(book)
+	resp, body := m.do(t, "GET", u, m.token, "")
+	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &d) != nil {
+		t.Fatalf("admin book %s = %d %s", book, resp.StatusCode, body)
+	}
+	out := map[string]bool{}
+	for _, f := range d.Files {
+		out[f.Path] = f.DirectPlayable
+	}
+	return out
+}
+
 // cachedFiles counts the remuxed copies in the env's remux cache folder (not
 // the .part files of remuxes under way).
 func (m *mkaEnv) cachedFiles(t *testing.T) int {
@@ -185,6 +207,10 @@ func TestMatroskaAudioWithoutFFmpeg(t *testing.T) {
 			t.Errorf("%s direct_playable without ffmpeg, want false", book)
 		}
 	}
+	// The console's chapter editor plays these through a transcode.
+	if got := m.filesPlayable(t, mkaBook); got[mkaFile] {
+		t.Errorf("admin %s direct_playable without ffmpeg, want false", mkaFile)
+	}
 	if resp, _ := m.do(t, "GET", m.url("stream", mkaFile), m.token, ""); resp.StatusCode != http.StatusOK ||
 		resp.Header.Get("Content-Type") != "audio/x-matroska" {
 		t.Fatalf("stream = %d %q, want 200 audio/x-matroska", resp.StatusCode, resp.Header.Get("Content-Type"))
@@ -207,6 +233,15 @@ func TestMatroskaMP3IsRemuxed(t *testing.T) {
 	for book, want := range map[string]bool{mkaBook: true, mkaMixed: true, mkaAACBook: false} {
 		if got := m.directPlayable(t, book); got != want {
 			t.Errorf("%s direct_playable = %v, want %v", book, got, want)
+		}
+	}
+	// The admin book page says so per file too, so the console's chapter
+	// editor streams the remux rather than transcoding it (server#410).
+	for _, book := range []string{mkaBook, mkaMixed, mkaAACBook} {
+		for path, got := range m.filesPlayable(t, book) {
+			if want := path != mkaAACFile; got != want {
+				t.Errorf("admin %s direct_playable = %v, want %v", path, got, want)
+			}
 		}
 	}
 

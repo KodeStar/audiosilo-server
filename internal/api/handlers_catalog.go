@@ -13,6 +13,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/meta"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
@@ -276,6 +277,13 @@ func (a *API) writeBookDetail(w http.ResponseWriter, r *http.Request, lib *catal
 	}
 	if b.Ebook != nil {
 		d.Book.Readalong = a.readalongOf(r.Context(), lib, b.Path, b.IsFolder, b.Ebook.Path, adminAudioFiles(d))
+	}
+	// An MP3 in Matroska plays as stored here while the remux is on: its
+	// stream is the remuxed MP3 (handleStream), as /item's direct_playable says.
+	if a.remuxOn() {
+		for i, f := range d.Files {
+			d.Files[i].DirectPlayable = f.DirectPlayable || media.Remuxable(f.Format, f.Codec)
+		}
 	}
 	writeJSON(w, http.StatusOK, d)
 }
