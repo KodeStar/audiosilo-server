@@ -163,6 +163,18 @@ func TestSyncSpanAfterItsFinish(t *testing.T) {
 		t.Fatalf("the span dated just after its finish left %d finished sessions, want 1", n)
 	}
 
+	// Denied: the finish already has its session (the one open when it came);
+	// a backlog's earlier span that opens a session of its own is not a second
+	// finished one.
+	k := newSyncFixture(t)
+	k.syncOne(t, "phone", k.listen("resume", 600, 660, time.Minute, base(0)))
+	wantResult(t, k.syncOne(t, "phone", k.finishEvent(EventFinish, time.Minute)), statusApplied, "")
+	k.syncOne(t, "phone", k.listen("resume", 0, 60, 3*time.Minute, base(0)))
+	if all, done := k.count(t, `SELECT COUNT(*) FROM listening_sessions`),
+		k.count(t, `SELECT COUNT(*) FROM listening_sessions WHERE finished = 1`); all != 2 || done != 1 {
+		t.Fatalf("a late earlier span after a finish with its session: %d sessions, %d finished; want 2 and 1", all, done)
+	}
+
 	// Denied: another device's span at the same time, and the phone's span
 	// that ended long before the finish.
 	g := newSyncFixture(t)

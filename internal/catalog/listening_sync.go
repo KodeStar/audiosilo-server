@@ -721,17 +721,35 @@ func (s *syncRun) listen(ctx context.Context, p syncPrepared) (SyncResult, error
 // first, which finishSession marks. The player stamps the span's end and the
 // finish together and each batch is corrected by its own sent_at shift, so the
 // span may land dated after the finish by the difference in the two requests'
-// time on the way (at most maxFinishTransit). Read from the row (finished, by
-// this device, its finish_changed_at in the window) before the log: most spans
-// land on a row no finish just changed.
+// time on the way (at most maxFinishTransit). Only while the finish has no
+// session yet: once one of the token's sessions around it is finished, a later
+// span (a backlog's earlier one, opening a session of its own) marks no other.
+// Read from the row (finished, by this device, its finish_changed_at in the
+// window) before the log: most spans land on a row no finish just changed.
 func (s *syncRun) finishedAfter(ctx context.Context, p syncPrepared, stored *syncRow) (bool, error) {
 	if stored == nil || !stored.finished || !stored.finishChangedAt.Valid || stored.deviceID != s.b.DeviceID {
 		return false, nil
 	}
-	if f := parseSessionTime(stored.finishChangedAt.String); p.ended.Sub(f) > maxFinishTransit || f.Sub(p.ended) > SessionGap {
+	f := parseSessionTime(stored.finishChangedAt.String)
+	if p.ended.Sub(f) > maxFinishTransit || f.Sub(p.ended) > SessionGap {
 		return false, nil
 	}
-	return s.ownFinishChange(ctx, p.target.Key, stored.finishChangedAt.String, EventFinish)
+	own, err := s.ownFinishChange(ctx, p.target.Key, stored.finishChangedAt.String, EventFinish)
+	if err != nil || !own {
+		return false, err
+	}
+	// The finish already has its session (finishSession marked the one open
+	// when it came, or an earlier span after it did here): a late span that
+	// opens a session of its own beside it is not a second finished one.
+	key := p.target.Key
+	var marked bool
+	err = s.tx.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM listening_sessions
+		  WHERE user_id = ? AND token_id = ? AND library_id = ? AND rel_path = ? AND finished = 1
+		    AND last_at >= ? AND started_at <= ?)`,
+		s.b.UserID, s.b.TokenID, key.LibraryID, key.Path, formatSessionTime(f.Add(-SessionGap)),
+		formatSessionTime(f.Add(maxFinishTransit))).Scan(&marked)
+	return !marked, err
 }
 
 // ownFinishChange reports whether the row's last finish-state change (at, its

@@ -4213,7 +4213,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   when its last span ended within `SessionGap` before it (`finishSession`, server#284), opening none; a span landing
   after the token's applied finish, ending at most `SessionGap` before it (or up to `maxFinishTransit` after it: the
   two are stamped together and each batch is corrected by its own shift), closes its session finished
-  (`finishedAfter`, server#359: a very short book's player posted the finish before its only span).
+  (`finishedAfter`, server#359: a very short book's player posted the finish before its only span), unless one of
+  the token's sessions around the finish is finished already (the finish has its session: a backlog's earlier span
+  that opens one of its own is not a second).
   Every stored listen counts, whatever its place did: `recordSpan` (the token's session begun by the span's
   start with the latest last save, `latestSession`, extended within `SessionGap` or by `continuousPlayback`, its place,
   length and speed taken only from a span not older than its last save, server#284; a
