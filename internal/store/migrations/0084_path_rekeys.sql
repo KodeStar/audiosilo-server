@@ -21,7 +21,9 @@ CREATE TABLE path_rekeys (
     row_json   TEXT NOT NULL      -- the row as it was, every column by name
 );
 CREATE INDEX idx_path_rekeys_user ON path_rekeys(user_id);
-CREATE INDEX idx_path_rekeys_library ON path_rekeys(library_id);
+-- By library and path: the library's cascade, and a re-key's look for a
+-- listener's rows on a path it already logged (reason scope, rekeyKept).
+CREATE INDEX idx_path_rekeys_library ON path_rekeys(library_id, from_path);
 
 -- The re-key reads and carries a path's rows table by table (and so do a join
 -- and a move): these four had no index by path, so each path was a full scan.
