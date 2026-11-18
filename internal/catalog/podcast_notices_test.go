@@ -697,28 +697,28 @@ func TestDuePodcastPollsUnfoldedPollInHand(t *testing.T) {
 			t.Fatalf("%s: due %+v %v, want %d", why, refs, err, want)
 		}
 	}
+	setFinished := func(id int64, at time.Time) {
+		t.Helper()
+		if _, err := c.db.ExecContext(ctx, `UPDATE bridge_jobs SET finished_at=? WHERE id=?`, at.Format(time.RFC3339), id); err != nil {
+			t.Fatal(err)
+		}
+	}
 	due(1, "no poll")
+	recent := now.Add(-5 * time.Minute)
 	for i, state := range []string{bridge.StateDone, bridge.StateFailed, bridge.StateCancelled} {
 		id := int64(100 + i)
-		finished := now.Add(-5 * time.Minute).Format(time.RFC3339)
-		if _, err := c.db.ExecContext(ctx, `INSERT INTO bridge_jobs(id,kind,library_id,rel_path,state,dedupe_key,created_at,updated_at,finished_at) VALUES(?,'podcast.poll',?,'Example Show',?,'k','t','t',?)`, id, lib.ID, state, finished); err != nil {
+		if _, err := c.db.ExecContext(ctx, `INSERT INTO bridge_jobs(id,kind,library_id,rel_path,state,dedupe_key,created_at,updated_at,finished_at) VALUES(?,'podcast.poll',?,'Example Show',?,'k','t','t',?)`, id, lib.ID, state, recent.Format(time.RFC3339)); err != nil {
 			t.Fatal(err)
 		}
 		due(0, state+" and not folded")
-		setFinished := func(at time.Time) {
-			t.Helper()
-			if _, err := c.db.ExecContext(ctx, `UPDATE bridge_jobs SET finished_at=? WHERE id=?`, at.Format(time.RFC3339), id); err != nil {
-				t.Fatal(err)
-			}
-		}
-		setFinished(now.Add(-pollInHandWindow))
+		setFinished(id, now.Add(-pollInHandWindow))
 		due(0, state+" unfolded at the window's edge")
 		// Past the scheduler's window the show is polled again, though the sweep
 		// still tries the fold for bridge.PollFoldWindow.
-		setFinished(now.Add(-pollInHandWindow - time.Second))
+		setFinished(id, now.Add(-pollInHandWindow-time.Second))
 		due(1, state+" unfolded past the window")
-		setFinished(now.Add(-5 * time.Minute))
-		if _, err := c.db.ExecContext(ctx, `INSERT INTO podcast_folded(job_id,at) VALUES(?,?)`, id, finished); err != nil {
+		setFinished(id, recent)
+		if _, err := c.db.ExecContext(ctx, `INSERT INTO podcast_folded(job_id,at) VALUES(?,?)`, id, recent.Format(time.RFC3339)); err != nil {
 			t.Fatal(err)
 		}
 		due(1, state+" and folded")
