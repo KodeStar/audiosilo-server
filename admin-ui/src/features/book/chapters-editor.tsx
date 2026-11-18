@@ -554,6 +554,10 @@ function Scrubber({
   const preview = useRef<ReturnType<typeof setTimeout>>(undefined);
   // Whether "Play 5 s" waits for a transcode to start, to time the five seconds.
   const previewing = useRef(false);
+  // Whether the audio is meant to play: Play pressed (or the audio playing)
+  // and no pause since. A failed load is no pause: Chrome sets paused then, so
+  // a new token resumes by this, not by the element.
+  const wanted = useRef(false);
   const restream = useRef<ReturnType<typeof setTimeout>>(undefined);
   // A paused transcode's wait before it lets go of its stream (PAUSED_HOLD_MS).
   const hold = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -670,6 +674,8 @@ function Scrubber({
     clearTimeout(restream.current);
     clearTimeout(hold.current);
     previewing.current = false;
+    // A new transcode is asked for not playing; a start kept plays on.
+    if (audio.current?.paused) wanted.current = false;
     stopRetry();
     busy.current = 0;
     if (transcoded) setFailed(false);
@@ -787,7 +793,7 @@ function Scrubber({
     restream.current = setTimeout(() => {
       // Asked for: the seek waits no more (its stream may be the same URL).
       pending.current = null;
-      ask(to, !a.paused || previewing.current);
+      ask(to, !a.paused || wanted.current || previewing.current);
     }, RESTREAM_MS);
   };
   const nudge = (d: number) => seek((pending.current ?? now()) + d);
@@ -798,16 +804,18 @@ function Scrubber({
     previewing.current = false;
     stopRetry();
     if (!a.paused && !broken.current) {
+      wanted.current = false;
       a.pause();
       return;
     }
+    wanted.current = true;
     // One that failed (a busy transcode given up on waiting for) loads again first.
     if (broken.current) a.load();
     void a.play().catch(() => {});
   };
   // A failed load mints a new token once (reminted), then gives up. A
   // transcode is asked for again from where it was once the token is here,
-  // playing if it was.
+  // playing if it was meant to (wanted: the element may say paused by now).
   const remint = (a: HTMLAudioElement) => {
     if (reminted.current) {
       setFailed(true);
@@ -819,7 +827,7 @@ function Scrubber({
       return;
     }
     const place = head();
-    const play = !a.paused || previewing.current;
+    const play = !a.paused || wanted.current || previewing.current;
     pending.current = null;
     setMinting(true);
     // A failed mint says so (token.isError) with the stream left off.
@@ -982,6 +990,7 @@ function Scrubber({
           onSeeked={(e) => setPos(from + e.currentTarget.currentTime)}
           onPlay={() => {
             clearTimeout(hold.current);
+            wanted.current = true;
             setPlaying(true);
           }}
           onPlaying={() => {
@@ -990,7 +999,9 @@ function Scrubber({
             clearTimeout(preview.current);
             preview.current = setTimeout(() => audio.current?.pause(), PREVIEW_MS);
           }}
-          onPause={() => {
+          // A failed load's pause (Chrome's) is no pause: it still means to play.
+          onPause={(e) => {
+            if (!e.currentTarget.error) wanted.current = false;
             setPlaying(false);
             if (transcoded) pausedHold();
           }}

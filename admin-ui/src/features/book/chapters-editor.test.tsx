@@ -851,6 +851,43 @@ describe('the chapter editor', () => {
       await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
       expect(play.mock.contexts[0]).toBe(audio);
     });
+
+    // Chrome sets paused after a failed load: the Play pressed before it says
+    // the audio is to play on with the new token, not the element.
+    const tokenOf = (audio: HTMLAudioElement) =>
+      new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams;
+
+    it('plays on with a new token after Play, though the failed load left it paused', async () => {
+      const { user, audio } = await listen({ status: 401, body: { error: 'unauthorized' } });
+      await user.click(screen.getByRole('button', { name: 'Play' }));
+      expect(play).toHaveBeenCalledTimes(1);
+      expect(audio.paused).toBe(true);
+      fireEvent.error(audio);
+      await waitFor(() => expect(tokenOf(audio).get('token')).toBe('media-tok-2'));
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    });
+
+    it('plays on with a new token after a move made while playing', async () => {
+      const { user, audio } = await listen({ status: 401, body: { error: 'unauthorized' } });
+      fireEvent.play(audio);
+      await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+      expect(Number(tokenOf(audio).get('t'))).toBe(1201);
+      fireEvent.error(audio);
+      await waitFor(() => expect(tokenOf(audio).get('token')).toBe('media-tok-2'));
+      expect(Number(tokenOf(audio).get('t'))).toBe(1201);
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    });
+
+    it('does not play with a new token once paused', async () => {
+      const { audio } = await listen({ status: 401, body: { error: 'unauthorized' } });
+      fireEvent.play(audio);
+      fireEvent.pause(audio);
+      fireEvent.error(audio);
+      await waitFor(() => expect(tokenOf(audio).get('token')).toBe('media-tok-2'));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(play).not.toHaveBeenCalled();
+    });
   });
 
   it('plays the stored file when the server can’t transcode', async () => {
