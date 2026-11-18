@@ -4018,7 +4018,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `heldFlows` sees the flows at either and the cap and the same-trip tag check hold), where a
   network attacker can plant one: no prefix without Secure; `oidcCookieName`); the
   callback deletes its state's cookie whatever happens, never another tab's (a state naming no held
-  cookie is `expired`, charging nothing); a sign-in gets a **60 s
+  cookie is `expired`, charging nothing; the provider's `?error=` is `failed` even with no state,
+  and its flow's cookie then stays for its ten minutes: whose it was can't be told); a sign-in gets a **60 s
   single-use token of its own kind** (`auth.KindOIDC`, minted in `OIDCSignIn`'s transaction) that is **never in a URL**
   (a link carrying one would sign whoever follows it in as its owner: a login CSRF), only in the
   done cookie (`__Host-audiosilo_oidc_done` or `audiosilo_oidc_done`, named and placed as the flow

@@ -519,7 +519,9 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 // charges nothing: it reaches nothing to guess at, and any page can make a
 // visitor's browser send ten (SameSite=Lax keeps the cookie off them), which
 // would lock that address out of signing in. The provider's ?error= (the
-// person cancelled) charges nothing either. Otherwise oidc.Decide's answer
+// person cancelled) charges nothing either, and lands on "failed" with or
+// without a flow: one sent back with no state finds no cookie, and its flow's
+// stays until it times out. Otherwise oidc.Decide's answer
 // (auth.OIDCSignIn) and its audits, then the sign-in's token in its cookie and
 // the flow's return page (a console flow's deep link, Flow.Next, when it
 // carried one), or the result panel. The flow's intent tag joins the
@@ -559,6 +561,15 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		a.oidcResult(w, r, reason)
 	}
 	if sealed == "" {
+		// The provider's own ending that names no flow of this browser's (some
+		// send ?error= without the state): the sign-in didn't finish, it did
+		// not time out. Whose flow it was can't be told, so that flow's cookie
+		// stays for its ten minutes, within the cap (oidcMaxFlows).
+		if e := q.Get("error"); e != "" {
+			a.log.Info("oidc: the provider ended the sign-in", "error", clip(e, 64), "flow", "none")
+			a.oidcResult(w, r, oidcFailed)
+			return
+		}
 		a.log.Info("oidc: sign-in refused", "why", "no flow cookie")
 		a.oidcResult(w, r, oidcExpired)
 		return

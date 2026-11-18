@@ -1162,6 +1162,18 @@ func TestOIDCFlowTamperingDenied(t *testing.T) {
 	if loc := e.callback(t, path, cookie); !strings.Contains(loc, oidcDoneAdmin) {
 		t.Fatalf("a flow sent back bare was remembered: %q", loc)
 	}
+
+	// The provider ended it without naming the state: still "failed" (it did
+	// not time out), nothing charged, and no flow's cookie touched (whose it
+	// was can't be told: callbackDone checks none is), so another tab's
+	// sign-in still finishes.
+	cookie, path = e.start(t, oidcReturnAdmin)
+	for range 12 {
+		wantResult(t, e.callback(t, oidcCallbackPath+"?error=access_denied", cookie), oidcFailed)
+	}
+	if loc := e.callback(t, path, cookie); !strings.Contains(loc, oidcDoneAdmin) {
+		t.Fatalf("after an ending that named no state: %q", loc)
+	}
 }
 
 // TestOIDCTokenRefused: an ID token the checks refuse (a symmetric signature,
