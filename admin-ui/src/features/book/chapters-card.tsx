@@ -99,9 +99,7 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
       settleBookEdit(qc, await api.editBook(b.library_id, b.path, { chapter_source: source }));
       invalidateIssues(qc);
       // A choice cancels the book's open chapter detection (server#410).
-      if (source !== 'auto') {
-        void qc.invalidateQueries({ queryKey: keys.bookBridgeJobs(b.library_id, b.path) });
-      }
+      void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
       toast.add({ title: t('book.community.switched'), type: 'success' });
     } catch (err) {
       toastError(t('book.community.editFailed'), err);

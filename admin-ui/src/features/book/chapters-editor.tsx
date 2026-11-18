@@ -128,7 +128,7 @@ export function ChaptersEditor({
       settleBookEdit(qc, await api.saveChapters(b.library_id, b.path, editRequest(rows, basis)));
       invalidateIssues(qc);
       // The save cancelled the book's open chapter detection (server#410).
-      void qc.invalidateQueries({ queryKey: keys.bookBridgeJobs(b.library_id, b.path) });
+      void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
       toast.add({
         title: t('book.chapters.edit.saved'),
         description: t('book.chapters.edit.savedBody'),
