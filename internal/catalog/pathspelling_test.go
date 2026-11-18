@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -256,5 +257,36 @@ func TestListableRefsMapToBooks(t *testing.T) {
 	var left int
 	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM up_next WHERE user_id = ?`, user).Scan(&left); err != nil || left != 0 {
 		t.Fatalf("queue rows after the removes = %d %v, want none", left, err)
+	}
+}
+
+// TestListableRefsBounded: a replace's refs are looked up as deep as the index
+// has books, never a path's every folder: a ref over MaxPathBytes is skipped,
+// and a thousand deep refs below a folder holding books answer at once. A track
+// below a nested book still maps to it.
+func TestListableRefsBounded(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib := seedSpellings(t, c)
+	upsert(t, c, &Book{LibraryID: lib, RelPath: "Plain/Series", IsFolder: true, Title: "S", AddedAt: "2020-01-01",
+		Files: []BookFile{{RelPath: "Plain/Series/01.mp3", Format: "mp3"}}})
+	upsert(t, c, &Book{LibraryID: lib, RelPath: "Plain/Series/Book 2", IsFolder: true, Title: "B", AddedAt: "2020-01-01",
+		Files: []BookFile{{RelPath: "Plain/Series/Book 2/CD 1/01.mp3", Format: "mp3"}}})
+	all := []Scope{{LibraryID: lib, AllowAll: true}}
+	ref := func(p string) Ref { return Ref{LibraryID: lib, Path: p} }
+	refs := []Ref{ref(strings.Repeat("a/", MaxPathBytes) + "x"), ref("Plain/Series/Book 2/CD 1/01.mp3"), ref("Plain/Series/01.mp3")}
+	for i := range 1000 {
+		refs = append(refs, ref(fmt.Sprintf("Plain/%04d/", i)+strings.Repeat("a/", 2000)+"x"))
+	}
+	start := time.Now()
+	got, err := c.listableRefs(ctx, refs, all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []Ref{ref("Plain/Series/Book 2"), ref("Plain/Series")}; !slices.Equal(got, want) {
+		t.Fatalf("listable = %+v, want %+v", got, want)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("a thousand deep refs took %v", took)
 	}
 }

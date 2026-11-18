@@ -522,12 +522,16 @@ func (c *Catalog) booksAt(ctx context.Context, refs []Ref) (map[Ref]Book, error)
 // of it; from the index alone, no indexing on demand), keeping only those the
 // caller's current access allows (scopes) once mapped, duplicates collapsed
 // after mapping (the first wins). An old player's replace naming a book by a
-// part path keeps the book (server#210, CROSS-REPO §15). Nothing skipped is an
-// error.
+// part path keeps the book (server#210, CROSS-REPO §15). A path over
+// MaxPathBytes as sent is no file's (server#289) and is skipped before it is
+// cleaned or looked up. Nothing skipped is an error.
 func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) ([]Ref, error) {
 	given := make(map[Ref]bool, len(refs))
 	var cands []Ref
 	for _, r := range refs {
+		if len(r.Path) > MaxPathBytes {
+			continue
+		}
 		r.Path = CleanRelPath(r.Path)
 		if r.Path == "" || given[r] {
 			continue
@@ -540,31 +544,23 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 		return nil, err
 	}
 	// A ref no indexed book lies above, in a spelling with no other, names no
-	// book: one read of every ancestor spares it the lookups (a replace may
-	// list a thousand paths).
-	var above []Ref
+	// book: heldRefs spares it the lookups (a replace may list a thousand
+	// paths). Another spelling is looked up anyway.
+	var plain []Ref
 	for _, r := range cands {
-		if _, ok := books[r]; !ok {
-			for _, d := range ancestors(r.Path) {
-				above = append(above, Ref{LibraryID: r.LibraryID, Path: d})
-			}
+		if _, ok := books[r]; !ok && !normSensitive(r.Path) {
+			plain = append(plain, r)
 		}
 	}
-	holders, err := c.booksAt(ctx, above)
+	held, err := c.heldRefs(ctx, plain)
 	if err != nil {
 		return nil, err
-	}
-	held := func(r Ref) bool {
-		return slices.ContainsFunc(ancestors(r.Path), func(d string) bool {
-			_, ok := holders[Ref{LibraryID: r.LibraryID, Path: d}]
-			return ok
-		})
 	}
 	listed := make(map[Ref]bool, len(cands))
 	out := make([]Ref, 0, len(cands))
 	for _, r := range cands {
 		if _, ok := books[r]; !ok {
-			if !normSensitive(r.Path) && !held(r) {
+			if !normSensitive(r.Path) && !held[r] {
 				continue
 			}
 			if _, r.Path, err = c.spelledBook(ctx, r); err != nil {
@@ -578,6 +574,68 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// heldRefs reports which of refs (cleaned paths) have an indexed book at one
+// of their folders. It walks the folders down from the library's root a level
+// at a time, all refs at once (two reads a level), and leaves a ref at its
+// first folder that is a book (held) or holds none at or below it
+// (FoldersHoldingBooks: no folder further down can be one). So the reads
+// follow the index's depth, never a path's: every folder of a path, looked up
+// at once, costs the square of its length.
+func (c *Catalog) heldRefs(ctx context.Context, refs []Ref) (map[Ref]bool, error) {
+	type walk struct {
+		ref Ref
+		end int // where the folder of this level ends in ref.Path
+	}
+	held := map[Ref]bool{}
+	var alive []walk
+	for _, r := range refs {
+		if i := strings.IndexByte(r.Path, '/'); i > 0 {
+			alive = append(alive, walk{r, i})
+		}
+	}
+	for len(alive) > 0 {
+		folders := make([]Ref, len(alive))
+		byLib := map[int64][]string{}
+		seen := map[Ref]bool{}
+		for i, w := range alive {
+			folders[i] = Ref{LibraryID: w.ref.LibraryID, Path: w.ref.Path[:w.end]}
+			if !seen[folders[i]] {
+				seen[folders[i]] = true
+				byLib[w.ref.LibraryID] = append(byLib[w.ref.LibraryID], folders[i].Path)
+			}
+		}
+		books, err := c.booksAt(ctx, folders)
+		if err != nil {
+			return nil, err
+		}
+		holding := map[Ref]bool{}
+		for lib, paths := range byLib {
+			found, err := c.FoldersHoldingBooks(ctx, lib, paths)
+			if err != nil {
+				return nil, err
+			}
+			for p := range found {
+				holding[Ref{LibraryID: lib, Path: p}] = true
+			}
+		}
+		next := alive[:0]
+		for i, w := range alive {
+			if _, ok := books[folders[i]]; ok {
+				held[w.ref] = true
+				continue
+			}
+			j := strings.IndexByte(w.ref.Path[w.end+1:], '/')
+			if !holding[folders[i]] || j < 0 {
+				continue
+			}
+			w.end += 1 + j
+			next = append(next, w)
+		}
+		alive = next
+	}
+	return held, nil
 }
 
 // spelledBook is ref's path in the index's spelling (Spelling) and the book
