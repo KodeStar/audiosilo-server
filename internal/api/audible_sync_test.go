@@ -128,6 +128,16 @@ func (s *audibleSyncEnv) claimedAt(t *testing.T, job bridge.Job, at time.Time) {
 	}
 }
 
+// claimLater claims a job of kind and dates its claim a minute on: clear of
+// the second the fixture's complete poll ended the account's refusal in, where
+// a refusal marks nothing (refusalEndedSince).
+func (s *audibleSyncEnv) claimLater(t *testing.T, kind string) bridge.Job {
+	t.Helper()
+	job := s.claim(t, kind)
+	s.claimedAt(t, job, time.Now().Add(time.Minute))
+	return job
+}
+
 // patListens posts a span as pat's phone (Sync v2).
 func (s *audibleSyncEnv) patListens(t *testing.T, id, path string, from, to float64, base string) catalog.SyncResult {
 	t.Helper()
@@ -627,7 +637,7 @@ func TestAudibleSyncScheduler(t *testing.T) {
 	}
 
 	// Audible refused the account: no sync until it is mapped again.
-	job = s.claim(t, bridge.KindAudibleSync)
+	job = s.claimLater(t, bridge.KindAudibleSync)
 	s.finish(t, job, bridge.StateFailed, `{"code":"audible_refused","message":"sign in again"}`, "audible_refused: sign in again")
 	if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.RefusedAt == nil {
 		t.Fatalf("after a refused sync: %+v", a)
@@ -747,7 +757,7 @@ func TestAudibleSyncLastSyncAndRefusal(t *testing.T) {
 		}
 	}
 	s.queueSync(t, now.Add(32*time.Minute))
-	s.finish(t, s.claim(t, bridge.KindAudibleSync), bridge.StateFailed, `{"code":"audible_refused"}`, "audible_refused")
+	s.finish(t, s.claimLater(t, bridge.KindAudibleSync), bridge.StateFailed, `{"code":"audible_refused"}`, "audible_refused")
 	if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.RefusedAt == nil {
 		t.Fatalf("after a refused sync: %+v", a)
 	}

@@ -1746,7 +1746,7 @@ const (
 // IsCancelReason reports whether text is one of the server's own cancel
 // reasons: the kinds' cancelsOpen, CancelMoved, CancelReplacedRequest,
 // CancelModuleOff or an Audible account's job's (CancelAudibleRemoved,
-// CancelAudiblePaused, CancelAudibleSyncOff, CancelAudibleSignedIn).
+// CancelAudiblePaused, CancelAudibleSyncOff).
 func IsCancelReason(text string) bool {
 	return slices.Contains(cancelReasons(), text)
 }
@@ -1755,8 +1755,7 @@ func IsCancelReason(text string) bool {
 // copy (SERVER_CANCEL_REASONS) is checked against (TestCancelReasonsMatchConsole).
 // The kinds are fixed at init, so it is built once.
 var cancelReasons = sync.OnceValue(func() []string {
-	out := []string{CancelMoved, CancelReplacedRequest, CancelModuleOff, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff,
-		CancelAudibleSignedIn}
+	out := []string{CancelMoved, CancelReplacedRequest, CancelModuleOff, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff}
 	for _, spec := range kinds {
 		out = slices.AppendSeq(out, maps.Values(spec.cancelsOpen))
 	}
@@ -1773,14 +1772,9 @@ func cancelOpenTx(ctx context.Context, tx *sql.Tx, key, now, reason string) erro
 		  WHERE dedupe_key = ?1 AND state IN ('queued', 'needs_attention')`, key, now, reason); err != nil {
 		return err
 	}
-	return requestCancelTx(ctx, tx, key, now, reason)
-}
-
-// requestCancelTx asks the Bridge, inside tx, to stop the job with dedupe key
-// key that it holds: a working job ends at the Bridge's next report; its reason
-// is recorded now and kept through those reports (UpdateHeld), unless an admin
-// asked first. No held job is no change.
-func requestCancelTx(ctx context.Context, tx *sql.Tx, key, now, reason string) error {
+	// A working job ends at the Bridge's next report; its reason is recorded
+	// now and kept through those reports (UpdateHeld), unless an admin asked
+	// first.
 	_, err := tx.ExecContext(ctx,
 		`UPDATE bridge_jobs SET error = CASE WHEN cancel_requested = 1 THEN error ELSE ?3 END,
 		        cancel_requested = 1, updated_at = ?2

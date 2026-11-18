@@ -339,15 +339,11 @@ func (c *Catalog) MarkAudibleSyncQueued(ctx context.Context, account string) err
 // (bridge.SyncAudibleRefused) marks it refused, so no sync is queued and the
 // console's accounts card asks for a sign-in again (bridge#40), until the
 // Bridge maps the account again or polls it whole (PutAudibleTitles: Audible
-// answered the account), unless the refusal ended after the job was claimed
-// (refusal_ended_at, server#303: a fresh sign-in while it ran) or the job was
-// asked to stop (cancel_requested: a sign-in while it worked asks that,
-// PutAudibleAccount, exact where refusal_ended_at's whole seconds can't say
-// which came first in the claim's own second, server#359; a sync turned off,
-// an account removed or paused, or an admin's cancel: the next job marks a
-// refusal that stands). Any other ending changes nothing (the next one is due
-// as usual; audible_sign_in, Audible refusing the sign-in for now, among
-// them). A user-state write.
+// answered the account), unless the refusal ended in the job's claim's second
+// or after it (refusalEndedSince: a fresh sign-in while it ran, server#303, or
+// one the two's whole seconds can't order, server#359). Any other ending
+// changes nothing (the next one is due as usual; audible_sign_in, Audible
+// refusing the sign-in for now, among them). A user-state write.
 func (c *Catalog) FoldAudibleSync(ctx context.Context, job bridge.Job) error {
 	account, err := bridge.AudibleAccountOf(job)
 	if err != nil {
@@ -356,7 +352,7 @@ func (c *Catalog) FoldAudibleSync(ctx context.Context, job bridge.Job) error {
 	switch {
 	case job.Kind == bridge.KindAudibleSync && bridge.AudibleSynced(job):
 		_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET last_sync_at = ? WHERE account = ?`, c.ts(), account)
-	case bridge.AudibleRefusalCode(job) == bridge.SyncAudibleRefused && !job.CancelRequested:
+	case bridge.AudibleRefusalCode(job) == bridge.SyncAudibleRefused:
 		var ended sql.NullString
 		err = c.db.QueryRowContext(ctx, `SELECT refusal_ended_at FROM audible_accounts WHERE account = ?`, account).Scan(&ended)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -375,14 +371,18 @@ func (c *Catalog) FoldAudibleSync(ctx context.Context, job bridge.Job) error {
 }
 
 // refusalEndedSince reports whether an account's refusal ended (ended, its
-// refusal_ended_at) in a later second than a sync's claim (claimed, whole
-// seconds): that sync's refusal is from before it. Unknown either way, it did
-// not.
+// refusal_ended_at) in the second of a job's claim (claimed, whole seconds) or
+// a later one: that job's refusal is from before it, or can't be told from one
+// that is. In the claim's own second the two can't be ordered (a sync or poll
+// claimed just before the sign-in, or just after it while the Bridge had yet
+// to save the new sign-in): the refusal counts as unknown rather than marking
+// an account just signed in, and one that stands is marked by the next job
+// (server#359). Unknown either way, it did not.
 func refusalEndedSince(ended sql.NullString, claimed *string) bool {
 	if !ended.Valid || claimed == nil {
 		return false
 	}
 	end, ok1 := ParseStamp(ended.String)
 	at, ok2 := ParseStamp(*claimed)
-	return ok1 && ok2 && end.Truncate(time.Second).After(at)
+	return ok1 && ok2 && !end.Truncate(time.Second).Before(at)
 }

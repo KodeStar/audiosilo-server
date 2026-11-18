@@ -4429,11 +4429,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `AudibleRefusalCode`; `audible_sign_in`, `bridge.SyncAudibleSignIn`, the Bridge's transient sign-in refusal, never an
   import's, is an ordinary failure) sets `refused_at`, cleared by any account PUT of the Bridge's (a fresh sign-in, an edit) or a
   complete poll (`PutAudibleTitles` final: Audible answered the account), both stamping `refusal_ended_at` (`0071`):
-  a refused sync claimed in an earlier second than that (`refusalEndedSince`; `claimed_at` is whole seconds) is from
-  before the fresh sign-in and marks nothing (server#303); an account PUT also asks the Bridge to stop the sync it
-  holds (`bridge.CancelWorkingAudibleSync`, reason `CancelAudibleSignedIn`; a queued one stays, claimed after with the
-  new sign-in), and a job asked to stop (`cancel_requested`, whoever asked) marks no refusal, so one claimed in the
-  sign-in's own second marks nothing either (server#359). The Bridge posts the places to `POST
+  a refused sync or poll claimed in that second or an earlier one (`refusalEndedSince`; `claimed_at` is whole
+  seconds) is from before the fresh sign-in and marks nothing (server#303), or can't be ordered against it (the
+  claim's own second: claimed just before the sign-in, or just after it while the Bridge had yet to save the new
+  one), which counts as unknown, the next job marking a refusal that stands (server#359). An account PUT for the same
+  person stops no working sync (the server can't tell a sign-in from a label edit); only a PUT mapping it to another
+  person cancels it (`CancelAudibleSyncOff`). The Bridge posts the places to `POST
   /bridge/audible/accounts/{account}/listening` `{sent_at, events}` (bridge token only, header only; body strict,
   `sent_at` required, the Sync v2 event shapes and limits; the places are dated as sent, clock offset 0: their times
   are Audible's own `last_updated`, not the Bridge's clock, so a Bridge's skew never moves one across a restart or a

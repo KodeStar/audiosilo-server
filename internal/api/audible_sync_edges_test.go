@@ -10,41 +10,86 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
-// server#359: a sign-in in the same second as a sync's claim can't be ordered
-// by refusal_ended_at (whole seconds), so the sign-in asks the Bridge to stop
-// the sync it holds, and that sync's refusal marks nothing. A sync claimed
-// after the sign-in (none held then) that Audible refuses still marks the
-// account.
-func TestAudibleSyncRefusalInTheSignInsSecond(t *testing.T) {
+// server#359: a sign-in in the same second as a job's claim can't be ordered
+// against it (refusal_ended_at against claimed_at, whole seconds), so the
+// refusal a sync or a poll claimed in that second brings back marks nothing:
+// it is the old sign-in's, or can't be told from one that is. Claimed a
+// second later, a refusal marks the account.
+func TestAudibleRefusalInTheSignInsSecond(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, kind := range []string{bridge.KindAudibleSync, bridge.KindAudiblePoll} {
+		s := newAudibleSyncEnv(t)
+		s.beat(t, bridge.KindVerify, bridge.KindAudibleSync, bridge.KindAudiblePoll)
+		open := func() bridge.Job {
+			t.Helper()
+			if kind == bridge.KindAudibleSync {
+				s.queueSync(t, time.Now().Add(16*time.Minute))
+			} else if resp, out := s.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/poll", s.adminTok, ""); resp.StatusCode != http.StatusCreated {
+				t.Fatalf("Check now: %d %s", resp.StatusCode, out)
+			}
+			return s.claim(t, kind)
+		}
+		refused := func() bool {
+			t.Helper()
+			a, err := s.cat.AudibleAccount(ctx, testAccount)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return a.RefusedAt != nil
+		}
+		job := open()
+		if code, out := s.putAccount(t, testAccount, s.patID, s.lib.ID); code != http.StatusOK {
+			t.Fatalf("%s: sign in again: %d %s", kind, code, out)
+		}
+		var ended string
+		if err := s.db.QueryRowContext(ctx, `SELECT refusal_ended_at FROM audible_accounts WHERE account = ?`, testAccount).
+			Scan(&ended); err != nil {
+			t.Fatal(err)
+		}
+		signedIn, ok := catalog.ParseStamp(ended)
+		if !ok {
+			t.Fatalf("%s: refusal_ended_at %q", kind, ended)
+		}
+		s.claimedAt(t, job, signedIn) // the sign-in's own second
+		s.finish(t, job, bridge.StateFailed, `{"code":"audible_refused"}`, "audible_refused")
+		if refused() {
+			t.Fatalf("%s: a refusal claimed in the sign-in's second marked the account", kind)
+		}
+
+		// Denied: claimed in the next second, a refusal marks the account.
+		job = open()
+		s.claimedAt(t, job, signedIn.Add(time.Second))
+		s.finish(t, job, bridge.StateFailed, `{"code":"audible_refused"}`, "audible_refused")
+		if !refused() {
+			t.Fatalf("%s: a refusal claimed after the sign-in left the account unmarked", kind)
+		}
+	}
+}
+
+// An account PUT for the same person (the Bridge can't say whether it is a
+// sign-in or an edit of the label) stops no sync the Bridge is working on, and
+// records no reason on it; mapped to another person, the sync is cancelled.
+func TestAudibleAccountPutKeepsAWorkingSync(t *testing.T) {
 	t.Parallel()
 	s := newAudibleSyncEnv(t)
 	ctx := context.Background()
-	now := time.Now()
-	s.queueSync(t, now)
+	s.queueSync(t, time.Now())
 	job := s.claim(t, bridge.KindAudibleSync)
-	s.claimedAt(t, job, now)
 	if code, out := s.putAccount(t, testAccount, s.patID, s.lib.ID); code != http.StatusOK {
-		t.Fatalf("sign in again: %d %s", code, out)
+		t.Fatalf("put again: %d %s", code, out)
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE audible_accounts SET refusal_ended_at = ? WHERE account = ?`,
-		now.UTC().Format(time.RFC3339Nano), testAccount); err != nil {
-		t.Fatal(err)
-	}
-	held, err := s.api.bridge.Job(ctx, job.ID)
-	if err != nil || !held.CancelRequested || held.Error != bridge.CancelAudibleSignedIn {
-		t.Fatalf("the held sync after a sign-in = %+v, %v; want asked to stop", held, err)
-	}
-	s.finish(t, job, bridge.StateFailed, `{"code":"audible_refused"}`, "audible_refused")
-	if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.RefusedAt != nil {
-		t.Fatalf("a refusal in the sign-in's second marked the account: %+v", a)
+	if held, err := s.api.bridge.Job(ctx, job.ID); err != nil || held.CancelRequested || held.Error != "" {
+		t.Fatalf("the working sync after a PUT for the same person = %+v, %v; want left alone", held, err)
 	}
 
-	// Denied: claimed after the sign-in, a refusal marks the account.
-	s.queueSync(t, now.Add(16*time.Minute))
-	job = s.claim(t, bridge.KindAudibleSync)
-	s.finish(t, job, bridge.StateFailed, `{"code":"audible_refused"}`, "audible_refused")
-	if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.RefusedAt == nil {
-		t.Fatalf("a refusal after the sign-in left the account unmarked: %+v", a)
+	// Denied: mapped to another person, the working sync is asked to stop.
+	quinnID, _ := newUserWithSession(t, s.testEnv, "quinn", false)
+	if code, out := s.putAccount(t, testAccount, quinnID, s.lib.ID); code != http.StatusOK {
+		t.Fatalf("mapped to quinn: %d %s", code, out)
+	}
+	if held, err := s.api.bridge.Job(ctx, job.ID); err != nil || !held.CancelRequested || held.Error != bridge.CancelAudibleSyncOff {
+		t.Fatalf("the working sync after a remap = %+v, %v; want asked to stop", held, err)
 	}
 }
 
