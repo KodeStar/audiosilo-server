@@ -3,7 +3,6 @@ package catalog
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -574,12 +573,12 @@ func carryState(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart,
 	if part.Path == into {
 		return nil // nothing to carry (and the delete-after-copy below would lose it)
 	}
-	kept, err := keptArg(keep)
+	keep, kept, err := idList(keep)
 	if err != nil {
 		return err
 	}
 	if set&carryTimeline != 0 {
-		if err := carryProgress(ctx, tx, libraryID, part, into, total, merge, keep); err != nil {
+		if err := carryProgress(ctx, tx, libraryID, part, into, total, merge, keep, kept); err != nil {
 			return err
 		}
 		if err := carryStmts(ctx, tx, libraryID, part, into, total, kept, timelineCarries); err != nil {
@@ -592,36 +591,26 @@ func carryState(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart,
 		}
 	}
 	if set&carryFavs != 0 {
-		return carryFavouritesKeeping(ctx, tx, libraryID, part.Path, into, kept)
+		return carryStmts(ctx, tx, libraryID, part, into, total, kept, favouriteCarries)
 	}
 	return nil
 }
 
-// keptArg is carryState's keep as its statements bind it (?8, carryKept): a
-// JSON array of the listeners' ids, nil for none.
-func keptArg(keep []int64) (any, error) {
-	if len(keep) == 0 {
-		return nil, nil
-	}
-	js, err := json.Marshal(keep)
-	return string(js), err
-}
-
 // carryKept and carryKeptItems end a carry statement's WHERE: a row of a
-// listener in ?8 (keptArg; NULL: none) stays; a collection item is its
-// collection owner's.
+// listener in ?8 (a JSON array of ids, idList's; "[]" for none) stays; a
+// collection item is its collection owner's.
 const (
-	carryKept      = ` AND (?8 IS NULL OR user_id NOT IN (SELECT value FROM json_each(?8)))`
-	carryKeptItems = ` AND (?8 IS NULL OR collection_id NOT IN (
-	    SELECT c.id FROM collections c JOIN json_each(?8) k ON k.value = c.user_id))`
+	carryKept      = ` AND user_id NOT IN (SELECT value FROM json_each(?8))`
+	carryKeptItems = ` AND collection_id NOT IN (
+	    SELECT c.id FROM collections c JOIN json_each(?8) k ON k.value = c.user_id)`
 )
 
 // carryStmts runs one group of carryState's statements, each bound to the same
 // numbered parameters: ?1 into, ?2 the part's offset, ?3 total, ?4 the library,
 // ?5 the part's path, ?6 whether it ends the book, ?7 its length, ?8 the
-// listeners whose rows stay (keptArg).
+// listeners whose rows stay (carryKept).
 func carryStmts(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
-	kept any, stmts []string) error {
+	kept string, stmts []string) error {
 	for _, stmt := range stmts {
 		if _, err := tx.ExecContext(ctx, stmt, into, part.Offset, total, libraryID, part.Path, part.Last,
 			part.Duration, kept); err != nil {
@@ -699,21 +688,14 @@ var bookLevelCarries = []string{
 // carryListeningState that can also be keyed on a navigation folder, so a folder
 // rename carries it too (MoveFolderFavourites).
 func carryFavourites(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) error {
-	return carryFavouritesKeeping(ctx, tx, libraryID, from, into, nil)
+	return carryStmts(ctx, tx, libraryID, JoinPart{Path: from}, into, 0, "[]", favouriteCarries)
 }
 
-// carryFavouritesKeeping is carryFavourites leaving the favourites of the
-// listeners in kept (keptArg) where they are.
-func carryFavouritesKeeping(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string, kept any) error {
-	if _, err := tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO favourites(user_id, library_id, rel_path, created_at)
-		 SELECT user_id, library_id, ?1, created_at FROM favourites WHERE library_id = ?4 AND rel_path = ?5`+carryKept,
-		into, nil, nil, libraryID, from, nil, nil, kept); err != nil {
-		return err
-	}
-	_, err := tx.ExecContext(ctx, `DELETE FROM favourites WHERE library_id = ?4 AND rel_path = ?5`+carryKept,
-		nil, nil, nil, libraryID, from, nil, nil, kept)
-	return err
+// favouriteCarries are carryFavs' statements (carryStmts' parameters).
+var favouriteCarries = []string{
+	`INSERT OR IGNORE INTO favourites(user_id, library_id, rel_path, created_at)
+	 SELECT user_id, library_id, ?1, created_at FROM favourites WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
+	`DELETE FROM favourites WHERE library_id = ?4 AND rel_path = ?5` + carryKept,
 }
 
 // listenerProgress is one listener's progress row on a path, with its device
@@ -750,9 +732,10 @@ func newerFinishChange(a, b sql.NullString) sql.NullString {
 
 // carryProgress moves every listener's progress on part.Path to into, placed on
 // into's timeline (JoinPart.at), merged with any they already have there
-// (merge), but the progress of a listener in keep.
+// (merge), but the progress of a listener in keep (kept: the same, as
+// carryKept binds it).
 func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
-	merge progressMerge, keep []int64) error {
+	merge progressMerge, keep []int64, kept string) error {
 	from, err := progressOn(ctx, tx, libraryID, part.Path)
 	if err != nil {
 		return err
@@ -820,13 +803,8 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 			return err
 		}
 	}
-	for _, r := range from {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM progress WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
-			r.user, libraryID, part.Path); err != nil {
-			return err
-		}
-	}
-	return nil
+	return carryStmts(ctx, tx, libraryID, part, into, total, kept,
+		[]string{`DELETE FROM progress WHERE library_id = ?4 AND rel_path = ?5` + carryKept})
 }
 
 // progressMerge is one listener's progress from the row already on a path (have)
