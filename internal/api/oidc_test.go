@@ -682,8 +682,9 @@ func TestOIDCIntentPending(t *testing.T) {
 // TestOIDCFinishExpectedIntent (audiosilo#202): a finish whose body names the
 // tag the player expects is answered only for the sign-in that carried it.
 // Any other is a 403 oidc_intent_mismatch before the token is tried: no
-// session, the token unspent, the cookie cleared, nothing charged. Without
-// the field (or null) the finish answers as before.
+// session, the token unspent, its flow's cookie cleared, nothing charged (a
+// finish naming no flow clears none: TestOIDCFinishDisownedClearsNothing).
+// Without the field (or null) the finish answers as before.
 func TestOIDCFinishExpectedIntent(t *testing.T) {
 	t.Parallel()
 	e := newOIDCEnv(t, oidcAlice, nil)
@@ -707,11 +708,13 @@ func TestOIDCFinishExpectedIntent(t *testing.T) {
 		}
 		return e.finishWith(t, body, cookies...)
 	}
-	// refused: a 403 with the code, no session, the cookie cleared, and the
-	// sign-in's token left unspent.
+	// refused: a 403 with the code, no session, the flow's cookie cleared (the
+	// finish names it, as its landing page does), and the sign-in's token left
+	// unspent.
 	refused := func(t *testing.T, name string, done *http.Cookie, body string) {
 		t.Helper()
-		resp, out := finish(t, done, body)
+		flow := strings.TrimPrefix(done.Name, hostDoneCookie)
+		resp, out := finish(t, done, strings.Replace(body, "{", `{"flow":"`+flow+`",`, 1))
 		if resp.StatusCode != http.StatusForbidden || out["code"] != codeOIDCIntentMismatch || out["token"] != nil || out["intent"] != nil {
 			t.Fatalf("%s: %d %v", name, resp.StatusCode, out)
 		}
@@ -2149,6 +2152,67 @@ func TestOIDCFinishWithoutFlow(t *testing.T) {
 	resp, out = e.finishWith(t, `{"intent":"`+other+`"}`, b.cookies...)
 	if resp.StatusCode != http.StatusOK || out["intent"] != other {
 		t.Fatalf("the tagged trip's own finish after: %d %v", resp.StatusCode, out)
+	}
+}
+
+// TestOIDCFinishDisownedClearsNothing: a finish that names no flow (a page
+// from before the key) and expects a tag no held sign-in carries is a 403
+// oidc_intent_mismatch that clears nothing: which of them is its own can't be
+// told, and the first held may be another tab's. Each stays for its own page.
+// The twin that clears is a finish naming its flow
+// (TestOIDCFinishExpectedIntent): only that flow's cookie.
+func TestOIDCFinishDisownedClearsNothing(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	tag := strings.Repeat("ab12", 16)
+	var b browser
+	console := b.start(t, e, "return=admin")
+	player := b.start(t, e, "return=web&intent="+tag)
+	stray := b.start(t, e, "return=web")
+	for _, callback := range []string{console, player, stray} {
+		if _, done := b.callback(t, e, callback); done == nil {
+			t.Fatal("no sign-in")
+		}
+	}
+	// Denied: tags no held sign-in carries, the empty one and a prefix of a
+	// held one included. No session, and every cookie still held.
+	for name, body := range map[string]string{
+		"another tag":       `{"intent":"` + strings.Repeat("ef56", 16) + `"}`,
+		"the empty tag":     `{"intent":""}`,
+		"a prefix of a tag": `{"intent":"` + tag[:len(tag)-1] + `"}`,
+	} {
+		resp, out := e.finishWith(t, body, b.cookies...)
+		b.apply(resp)
+		if resp.StatusCode != http.StatusForbidden || out["code"] != codeOIDCIntentMismatch || out["token"] != nil {
+			t.Fatalf("%s: %d %v", name, resp.StatusCode, out)
+		}
+		if len(resp.Cookies()) != 0 || b.doneCount() != 3 {
+			t.Fatalf("%s cleared a sign-in: %v, %d held", name, resp.Header.Values("Set-Cookie"), b.doneCount())
+		}
+	}
+	// A refusal that names its flow clears that flow's cookie, and only it.
+	strayKey := flowKey(stateOf(t, stray))
+	resp, out := e.finishWith(t, `{"flow":"`+strayKey+`","intent":"`+strings.Repeat("ef56", 16)+`"}`, b.cookies...)
+	b.apply(resp)
+	if resp.StatusCode != http.StatusForbidden || out["code"] != codeOIDCIntentMismatch {
+		t.Fatalf("a named flow's refusal: %d %v", resp.StatusCode, out)
+	}
+	if c := resp.Cookies(); len(c) != 1 || c[0].Name != hostDoneCookie+strayKey || c[0].MaxAge >= 0 || b.doneCount() != 2 {
+		t.Fatalf("a named flow's refusal cleared %v, %d held", resp.Header.Values("Set-Cookie"), b.doneCount())
+	}
+	// Allowed: the other tabs' sign-ins still finish, each for its own page.
+	if resp, out := b.finish(t, e, flowKey(stateOf(t, console)), "admin-web"); resp.StatusCode != http.StatusOK || out["token"] == "" {
+		t.Fatalf("the console's finish after the refusals: %d %v", resp.StatusCode, out)
+	}
+	resp, out = e.finishWith(t, `{"intent":"`+tag+`"}`, b.cookies...)
+	b.apply(resp)
+	if resp.StatusCode != http.StatusOK || out["intent"] != tag || b.doneCount() != 0 {
+		t.Fatalf("the player's own tag after the refusals: %d %v, %d held", resp.StatusCode, out, b.doneCount())
+	}
+	// No sign-in held at all is still the 401, whatever the finish expects.
+	if resp, out := e.finishWith(t, `{"intent":"`+tag+`"}`); resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCNoSignIn {
+		t.Fatalf("nothing held: %d %v", resp.StatusCode, out)
 	}
 }
 

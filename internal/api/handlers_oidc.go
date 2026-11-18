@@ -764,7 +764,10 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 // another tag or none is refused, 403 code oidc_intent_mismatch, before its
 // token is tried: no session, the token unspent, nothing charged (no secret
 // was tried), its cookie cleared, so the sign-in the player disowned can't be
-// finished without the tag instead. Present means a string, the empty one too;
+// finished without the tag instead. That cookie is the named flow's only: a
+// finish that names no flow and expects a tag no held sign-in carries is the
+// same 403 and clears nothing, since which of them is its own can't be told
+// and any may be another tab's. Present means a string, the empty one too;
 // absent or null asks nothing (the console, a player before the field). The
 // done cookie stays while the token is untried or unspent: a 429
 // (oidcLimiter), a 400 (the body) and a 500 (the store failed, so nothing was
@@ -800,17 +803,16 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	held := a.heldDone(r, req.Flow, req.Intent)
+	// disowned: sign-ins are held, none of them this finish's (held is the
+	// zero value then, so nothing is cleared).
+	held, disowned := a.heldDone(r, req.Flow, req.Intent)
 	dropHeld := func() {
 		if held.name != "" {
 			a.setOIDCCookie(w, held.name, "", -1)
 		}
 	}
-	token, intent, _ := strings.Cut(held.value, oidcIntentSep)
-	if !validIntent(intent) {
-		intent = ""
-	}
-	if token == "" {
+	token, intent, _ := doneParts(held.value)
+	if token == "" && !disowned {
 		dropHeld()
 		writeErrorCode(w, http.StatusUnauthorized, codeOIDCNoSignIn, "no single sign-on to finish in this browser")
 		return
@@ -823,7 +825,7 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 	// Before the token is tried: a sign-in that isn't the trip the player
 	// started makes no session and stays unspent (to expire, out of reach once
 	// the browser drops the cookie).
-	if req.Intent != nil && (intent == "" || subtle.ConstantTimeCompare([]byte(*req.Intent), []byte(intent)) != 1) {
+	if disowned || (req.Intent != nil && (intent == "" || subtle.ConstantTimeCompare([]byte(*req.Intent), []byte(intent)) != 1)) {
 		dropHeld()
 		writeErrorCode(w, http.StatusForbidden, codeOIDCIntentMismatch, "this single sign-on isn't the one this page started: sign in again")
 		return
@@ -851,37 +853,53 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// doneParts are a done cookie's token and its flow's tag, "" for none and for
+// a tail that can be no tag (validIntent). wellFormed is false for such a
+// tail: the callback sets a token alone, or with a tag /start checked.
+func doneParts(value string) (token, tag string, wellFormed bool) {
+	token, tag, tagged := strings.Cut(value, oidcIntentSep)
+	if tagged && !validIntent(tag) {
+		return token, "", false
+	}
+	return token, tag, true
+}
+
 // heldDone is the finished sign-in a finish is for: the done cookie of flow
-// (the key the landing page was given) when the finish names one, else (a
-// page from before the key) the first held whose tag is the one expected
-// (intent; none when not given, so a page that expects no tag takes an
-// untagged sign-in before another tab's tagged trip), else the first held.
-// The zero value when the browser holds none. Its value is the token, and the
-// tag after oidcIntentSep.
-func (a *API) heldDone(r *http.Request, flow string, intent *string) heldCookie {
+// (the key the landing page was given) when the finish names one. Else (a
+// page from before the key) one of those held: with no tag expected (intent
+// nil) the first untagged, so that page takes an untagged sign-in before
+// another tab's tagged trip, else the first held; with a tag expected the
+// first that carries it, and none when none does. disowned then: sign-ins are
+// held, but which is this finish's own can't be told, so it is given none (to
+// refuse, and to clear) rather than another tab's. The zero value, not
+// disowned, when the browser holds none.
+func (a *API) heldDone(r *http.Request, flow string, intent *string) (own heldCookie, disowned bool) {
+	var held []heldCookie
 	if flow != "" {
-		if v := a.oidcCookieValue(r, oidcDoneCookie+flow); v != "" {
-			return heldCookie{name: oidcDoneCookie + flow, value: v}
-		}
-		return heldCookie{}
+		held = append(held, heldCookie{name: oidcDoneCookie + flow, value: a.oidcCookieValue(r, oidcDoneCookie+flow)})
+	} else {
+		held = a.heldCookies(r, oidcDoneCookie, validFlowKey)
 	}
-	want := ""
-	if intent != nil {
-		want = *intent
+	held = slices.DeleteFunc(held, func(h heldCookie) bool { return h.value == "" })
+	switch {
+	case len(held) == 0:
+		return heldCookie{}, false
+	case flow != "":
+		return held[0], false
 	}
-	var first heldCookie
-	for _, h := range a.heldCookies(r, oidcDoneCookie, validFlowKey) {
-		if h.value == "" {
-			continue
+	for _, h := range held {
+		_, tag, _ := doneParts(h.value)
+		if intent == nil && tag == "" {
+			return h, false
 		}
-		if _, tag, _ := strings.Cut(h.value, oidcIntentSep); subtle.ConstantTimeCompare([]byte(tag), []byte(want)) == 1 {
-			return h
-		}
-		if first.name == "" {
-			first = h
+		if intent != nil && tag != "" && subtle.ConstantTimeCompare([]byte(tag), []byte(*intent)) == 1 {
+			return h, false
 		}
 	}
-	return first
+	if intent == nil {
+		return held[0], false
+	}
+	return heldCookie{}, true
 }
 
 // clip cuts s to n bytes for a log line.

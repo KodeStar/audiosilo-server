@@ -4093,10 +4093,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   That page calls **`POST /auth/oidc/finish`** (public, optional `{device_name, intent, flow}`, per-IP
   `oidcLimiter`; `flow` is the key its landing named: the finish takes that flow's done cookie only
   (a malformed one a 400), so each tab finishes its own; without it, a page from before the key,
-  `heldDone` takes the one whose tag is the `intent` expected (none without one, so an untagged sign-in before another tab's tagged trip), else the first held; `intent` is the tag the player expects: a string, the empty one too, that isn't
+  `heldDone` takes one of those held: with no `intent` the first untagged (so an untagged sign-in
+  before another tab's tagged trip), else the first held; with one, the first that carries it, and
+  none when none does (the 403 below, clearing nothing: which is its own can't be told, and any may
+  be another tab's).
+  `intent` is the tag the player expects: a string, the empty one too, that isn't
   the tag the sign-in's flow carried, or any string for an untagged sign-in, is a 403 code
   `oidc_intent_mismatch` before `ConsumeOIDC`: no session, the token unspent and left to expire,
-  nothing charged, the cookie cleared, so the sign-in the player disowned can't be finished without
+  nothing charged, the named flow's cookie cleared (never another's), so the sign-in the player
+  disowned can't be finished without
   the tag instead; absent or null asks nothing, as the console and a player before the field do;
   a server before the field answers it 400, an unknown field, and keeps the cookie), which leaves the cookie on a 429, a 400 or a 500 (the store failed; the token and the session
   share one transaction, so nothing was spent: the page's retry finishes it, the console's once after half a second, `finishOIDC`; the sign-in stays finishable for its minute) and clears it once the
