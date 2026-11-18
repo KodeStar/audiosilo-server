@@ -725,6 +725,42 @@ func TestDuePodcastPollsUnfoldedPollInHand(t *testing.T) {
 	}
 }
 
+// A poll whose fold lands only after the show's next poll has folded (the
+// scheduler queued that one past pollInHandWindow) is stale: it is marked
+// folded but moves nothing and tells nothing.
+func TestPodcastStalePollFoldIgnored(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	now := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	log := listenNotices(c)
+	lib := podcastShowsLib(t, c, ctx, 0)
+	for _, id := range []int64{300, 301} {
+		if _, err := c.db.ExecContext(ctx, `INSERT INTO bridge_jobs(id,kind,library_id,rel_path,state,dedupe_key,created_at,updated_at,finished_at) VALUES(?,'podcast.poll',?,'Example Show','done','k','t','t',?)`, id, lib.ID, now.Format(time.RFC3339)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, 301, bridge.StateDone, "")); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, 300, bridge.StateFailed, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	var code string
+	var failures int
+	var next sql.NullString
+	if err := c.db.QueryRowContext(ctx, `SELECT error_code,failures,next_poll_at FROM podcast_feed_state WHERE library_id=? AND show_path='Example Show'`, lib.ID).Scan(&code, &failures, &next); err != nil || code != "" || failures != 0 || !next.Valid {
+		t.Fatalf("a stale poll's fold moved the feed: code %q failures %d next %v (%v)", code, failures, next, err)
+	}
+	var folded bool
+	if err := c.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM podcast_folded WHERE job_id=300)`).Scan(&folded); err != nil || !folded {
+		t.Fatalf("the stale poll was left for the sweep to retry (%v)", err)
+	}
+	if got := log.take(); len(got) != 0 {
+		t.Fatalf("a stale poll told %+v", got)
+	}
+}
+
 // A feed that ended (`gone`) stays ended when a follower's Check now of it
 // fails another way: the scheduled polls stay stopped (no next poll, still
 // `gone`), nothing is told again, and only a success brings it back.

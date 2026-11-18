@@ -856,6 +856,15 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		if err != nil || n == 0 {
 			return err
 		}
+		// A poll whose fold kept failing past pollInHandWindow can land after
+		// the next poll of its show has folded: its outcome is stale and would
+		// undo the newer one's (feed state, run, notices).
+		if j.Kind == bridge.KindPodcastPoll {
+			var newer bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs n JOIN podcast_folded f ON f.job_id=n.id WHERE n.library_id=? AND n.rel_path=? AND n.kind=? AND n.id>?)`, *j.LibraryID, j.Target(), bridge.KindPodcastPoll, j.ID).Scan(&newer); err != nil || newer {
+				return err
+			}
+		}
 		if j.Kind == bridge.KindPodcastFetch {
 			return c.foldPodcastFetch(ctx, tx, j)
 		}

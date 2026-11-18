@@ -3959,7 +3959,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   same second's next write), as is any read while the stamp is ahead of the clock (the clock set back)),
   `podcast_feed_failing` and `podcast_feed_recovered` (`catalog.FoldPodcastJob`, `podcast.poll` only,
   idempotent through `podcast_folded`; the scheduler queues no poll for a show with one in hand, open or
-  ended and not folded yet within `pollInHandWindow` (so a fold that keeps failing pauses the show's polls no longer, while the sweep retries it for the longer `bridge.PollFoldWindow`), `catalog.DuePodcastPolls`; `0076` adds `podcast_feed_state.feed_failures`,
+  ended and not folded yet within `pollInHandWindow` (so a fold that keeps failing pauses the show's polls no longer, while the sweep retries it for the longer `bridge.PollFoldWindow`; such a poll folding after the show's next one has is stale and only marked folded), `catalog.DuePodcastPolls`; `0076` adds `podcast_feed_state.feed_failures`,
   `feed_network_failures` and `failing_announced`, while `failures` still drives the backoff: a failure
   whose code is the feed's (`bridge.FeedFailure`, not `notFeedFailures`) counts, announced once at the
   third in a row (`catalog.FeedFailingAfter`) or at once for `gone`; network-class codes
