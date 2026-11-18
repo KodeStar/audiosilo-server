@@ -4084,7 +4084,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a path under `/admin/` with an optional query, printable ASCII, no fragment, backslash, double
   quote (it would cost the sealed JSON two bytes), empty, `.`
   or `..` segment (`%2e` counts as a dot), at most 512 bytes, anything else dropped for the start
-  page; appended to public_url, so never another origin; the console's `oidcStartHref` sends the
+  page; appended to public_url's origin (`oidcPageBase`), so never another origin; the console's `oidcStartHref` sends the
   page asked for, server#406) or
   `/web/connect?oidc=1&flow=<key>` (the player's button is 235c; `/web/connect?token=` stays QR pairing's;
   an HTML document asked for with a `token`, `oidc` or `flow` query goes out `Cache-Control: no-store`

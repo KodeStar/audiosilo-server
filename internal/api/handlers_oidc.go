@@ -418,9 +418,9 @@ const oidcConsolePath = "/admin/"
 // sign-in's marker is the fragment), no backslash, no double quote (a browser
 // sends it escaped, and the sealed flow's JSON would spend two bytes on each:
 // oidcNextMax), no empty, "." or ".." segment (a browser reads %2e as a dot
-// too). Always a path on public_url's own origin: it is appended to
-// public_url. Anything else is dropped, never an error: the sign-in lands on
-// the console's start page.
+// too). Always a path on public_url's own origin: it is appended to that
+// origin (oidcPageBase). Anything else is dropped, never an error: the sign-in
+// lands on the console's start page.
 func validNext(s string) bool {
 	if len(s) > oidcNextMax || !strings.HasPrefix(s, oidcConsolePath) {
 		return false
