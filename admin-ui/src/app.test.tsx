@@ -199,6 +199,25 @@ describe('single sign-on', () => {
     );
   });
 
+  it('asks once more when the server failed the finish (nothing was spent)', async () => {
+    let finishes = 0;
+    const calls = mockFetch({
+      ...signedInRoutes(),
+      'POST /auth/oidc/finish': () =>
+        ++finishes === 1
+          ? { status: 500, body: { error: 'could not finish the single sign-on: try again' } }
+          : { body: { token: 'sso-session', user: admin, server_id: 'srv-1' } },
+    });
+    renderApp('/', { oidcReturn: { flow: 'aZ09-_aZ09-_aZ09' } });
+    expect(
+      await screen.findByRole('heading', { level: 1, name: /chris\.$/ }, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(getToken()).toBe('sso-session');
+    const sent = calls.filter((c) => c.path === '/auth/oidc/finish');
+    expect(sent).toHaveLength(2);
+    expect(sent[1].body).toEqual({ device_name: 'admin-web', flow: 'aZ09-_aZ09-_aZ09' });
+  });
+
   it('signs a non-admin straight back out, leaving no session', async () => {
     const calls = mockFetch({
       'POST /auth/oidc/finish': {

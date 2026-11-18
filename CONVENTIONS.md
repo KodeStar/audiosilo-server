@@ -4096,7 +4096,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   nothing charged, the cookie cleared, so the sign-in the player disowned can't be finished without
   the tag instead; absent or null asks nothing, as the console and a player before the field do;
   a server before the field answers it 400, an unknown field, and keeps the cookie), which leaves the cookie on a 429, a 400 or a 500 (the store failed; the token and the session
-  share one transaction, so nothing was spent: the page's retry finishes it; the sign-in stays finishable for its minute) and clears it once the
+  share one transaction, so nothing was spent: the page's retry finishes it, the console's once after half a second, `finishOIDC`; the sign-in stays finishable for its minute) and clears it once the
   token is spent or refused and on the other 401s and the 403, consumes the token once (`ConsumeOIDC`: only
   `KindOIDC`, so a pairing token planted in the cookie, an invite's QR or an own `/auth/pair`, is
   refused and left unspent; `POST /auth/exchange` in turn refuses a `KindOIDC` token; a sign-out

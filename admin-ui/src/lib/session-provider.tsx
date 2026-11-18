@@ -7,6 +7,25 @@ import type { LoginResponse } from '@/api/types';
 import type { OIDCReturn } from './oidc-return';
 import { SessionContext, type Session, type SessionState, type SignedOutReason } from './session';
 
+/** The pause before a single sign-on's finish is asked once more after the server failed it. */
+const OIDC_FINISH_RETRY_MS = 500;
+
+/**
+ * Finishes the single sign-on of `flow`, once more after a pause when the
+ * server failed it (a 5xx: the store failed, so nothing was spent and the
+ * sign-in's cookie stays for the rest of its minute, handlers_oidc.go). A
+ * refusal (4xx) or a network failure, which may have spent it, is final.
+ */
+async function finishOIDC(flow: string | undefined): Promise<LoginResponse> {
+  try {
+    return await api.oidcFinish(flow);
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.status < 500) throw err;
+    await new Promise((resolve) => setTimeout(resolve, OIDC_FINISH_RETRY_MS));
+    return api.oidcFinish(flow);
+  }
+}
+
 /**
  * The console's session: the stored token checked once on load, or, after a
  * single sign-on (`oidcReturn`: main.tsx found /admin/#oidc=done), the sign-in the
@@ -84,7 +103,7 @@ export function SessionProvider({
       if (getToken()) setFinishing(false);
       else dropSession(reason);
     };
-    finish.current ??= api.oidcFinish(oidcFlow).then(async (res) => {
+    finish.current ??= finishOIDC(oidcFlow).then(async (res) => {
       if (res.user.role === 'admin') return res;
       await api.logout(res.token).catch(() => {});
       return null;
