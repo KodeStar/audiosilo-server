@@ -4,7 +4,9 @@ import en from '@/i18n/locales/en.json';
 import {
   agentCredentialSet,
   billingKnown,
+  credentialShare,
   generateNeed,
+  githubSignInState,
   githubStep,
   KNOWN_SETUP_ITEMS,
   setupComplete,
@@ -227,5 +229,23 @@ describe('githubStep and billingKnown', () => {
     expect(billingKnown({ setup: setup([item('asr', true)]), estimates: est(true) })).toBe(true);
     expect(billingKnown({ setup: undefined, estimates: est(false) })).toBe(false);
     expect(billingKnown({ setup: undefined, estimates: undefined })).toBe(false);
+  });
+});
+
+describe('credentialShare and githubSignInState (bridge#79, bridge#25)', () => {
+  it('words the hand-off modes it knows, and nothing for none or a later one', () => {
+    expect(credentialShare({ agent_credential: 'group' })).toBe('group');
+    expect(credentialShare({ agent_credential: 'world' })).toBe('world');
+    expect(credentialShare({ agent_credential: 'group_required' })).toBe('group_required');
+    expect(credentialShare({})).toBeUndefined();
+    expect(credentialShare({ agent_credential: 'later_mode' })).toBeUndefined();
+    expect(credentialShare({ agent_credential: 'constructor' })).toBeUndefined();
+  });
+
+  it("tells a sign-in's trouble apart, and nothing for none or a later state", () => {
+    expect(githubSignInState({ github_state: 'unrefreshed' })).toBe('unrefreshed');
+    expect(githubSignInState({ github_state: 'refused' })).toBe('refused');
+    expect(githubSignInState({})).toBeUndefined();
+    expect(githubSignInState({ github_state: 'later_state' })).toBeUndefined();
   });
 });

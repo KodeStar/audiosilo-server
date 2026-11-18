@@ -50,6 +50,8 @@ import {
   ACCOUNTS_TAB,
   agentCredentialSet,
   billingKnown,
+  credentialShare,
+  githubSignInState,
   githubStep,
   setupComplete,
   setupProgress,
@@ -342,6 +344,7 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
   const complete = done === total;
   const offline = presence(status) === 'offline';
   const agent = agentCredentialSet(setup);
+  const share = credentialShare(setup);
   const accounts = bridgeTabLink(status.ui_url, ACCOUNTS_TAB);
   // Ready on the Bridge's side, but nothing is offered while the module is off (BRIDGE-07).
   const modules = useSettings().data?.modules;
@@ -389,6 +392,16 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
                     </StatusText>,
                   ],
                 ] as [string, React.ReactNode][])),
+            ...(share === undefined
+              ? []
+              : ([
+                  [
+                    t('bridge.setup.credentialHandoff'),
+                    <StatusText key="share" tone={share === 'group' ? 'ok' : 'warn'}>
+                      {t(SHARE_KEY[share])}
+                    </StatusText>,
+                  ],
+                ] as [string, React.ReactNode][])),
             ...(offline
               ? []
               : ([
@@ -433,15 +446,38 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
   );
 }
 
+/** The hand-off row's words for each way the agent credential goes (bridge#79). */
+const SHARE_KEY = {
+  group: 'bridge.setup.credentialShareGroup',
+  world: 'bridge.setup.credentialShareWorld',
+  group_required: 'bridge.setup.credentialShareGroupRequired',
+} as const;
+
 /**
  * The GitHub account row, agreeing with the checklist's GitHub step: the
  * account's name; or, when the step is done with no name reported (the gh
  * CLI's token, say), signed in, in the Bridge's own words; else not signed in.
+ * A sign-in GitHub refused, or one whose refresh failed (still signed in,
+ * waiting for GitHub), says so rather than reading as none (bridge#25).
  */
 function GitHubAccount({ setup }: { setup: BridgeSetup }) {
   const { t } = useTranslation();
+  const trouble = githubSignInState(setup);
+  if (trouble === 'refused') {
+    return <StatusText tone="warn">{t('bridge.setup.githubRefused')}</StatusText>;
+  }
   if (setup.github_login) {
-    return <span className="font-mono text-[12.5px]">{setup.github_login}</span>;
+    const login = <span className="font-mono text-[12.5px]">{setup.github_login}</span>;
+    if (trouble !== 'unrefreshed') return login;
+    return (
+      <span className="inline-flex flex-wrap items-center gap-x-2">
+        {login}
+        <StatusText tone="warn">{t('bridge.setup.githubUnrefreshed')}</StatusText>
+      </span>
+    );
+  }
+  if (trouble === 'unrefreshed') {
+    return <StatusText tone="warn">{t('bridge.setup.githubUnrefreshed')}</StatusText>;
   }
   const step = githubStep(setup);
   if (step?.done) {

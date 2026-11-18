@@ -116,6 +116,37 @@ export function agentCredentialSet(setup: Pick<BridgeSetup, 'items'>): boolean |
   return setup.items.find((i) => i.id === 'agent')?.done;
 }
 
+/** How the Bridge hands its agent credential to the agent container (bridge#79). */
+export type CredentialShare = 'group' | 'world' | 'group_required';
+
+const CREDENTIAL_SHARES: readonly string[] = ['group', 'world', 'group_required'];
+
+/**
+ * The agent credential's hand-off, when the Bridge reports one this console
+ * words; undefined with none (the agent container's own credential, an older
+ * Bridge) or a value it doesn't know.
+ */
+export function credentialShare(
+  setup: Pick<BridgeSetup, 'agent_credential'>,
+): CredentialShare | undefined {
+  const share = setup.agent_credential;
+  return share && CREDENTIAL_SHARES.includes(share) ? (share as CredentialShare) : undefined;
+}
+
+/** Why a GitHub sign-in on the Bridge can't be used now (bridge#25). */
+export type GitHubSignInState = 'unrefreshed' | 'refused';
+
+/**
+ * The GitHub sign-in's trouble, when the Bridge reports one this console
+ * words; undefined otherwise (it works, there is none, or an older Bridge).
+ */
+export function githubSignInState(
+  setup: Pick<BridgeSetup, 'github_state'>,
+): GitHubSignInState | undefined {
+  const state = setup.github_state;
+  return state === 'unrefreshed' || state === 'refused' ? state : undefined;
+}
+
 /** The checklist's GitHub step, when it has one. */
 export function githubStep(setup: Pick<BridgeSetup, 'items'>): BridgeSetupItem | undefined {
   return setup.items.find((i) => i.id === 'github');
