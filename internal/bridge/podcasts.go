@@ -135,7 +135,7 @@ func PodcastOutcomeOf(j Job) (PodcastOutcome, error) {
 
 func subscribeParams(raw json.RawMessage) (json.RawMessage, error) {
 	var p SubscribeParams
-	if decodeStrict(raw, &p) != nil || !feed.ValidHex(p.FeedURLSHA256, 64) || p.FeedHost == "" || len(p.FeedHost) > 253 || p.ShowPath != "" && !feed.ShowPath(p.ShowPath) {
+	if decodeStrict(raw, &p) != nil || !feed.ValidHex(p.FeedURLSHA256, 64) || p.FeedHost == "" || len(p.FeedHost) > feed.MaxHostLen || p.ShowPath != "" && !feed.ShowPath(p.ShowPath) {
 		return nil, invalid("invalid subscribe params")
 	}
 	if p.Private {

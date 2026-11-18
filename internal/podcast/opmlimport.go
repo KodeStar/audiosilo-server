@@ -77,7 +77,8 @@ func FollowError(err error) (RowError, string) {
 	switch {
 	case errors.Is(err, feed.ErrInvalidFeedURL), errors.Is(err, bridge.ErrInvalid):
 		// bridge.ErrInvalid: a request the queue's params check refuses, an
-		// adopt-only row's included (server#219), never "limited".
+		// adopt-only row's included (server#219), never "limited". A backstop:
+		// feed.NormalizeFeedURL refuses the URLs that check does.
 		code, status = "invalid_feed_url", RowInvalid
 	case errors.Is(err, bridge.ErrTooManyRequests), errors.Is(err, bridge.ErrNoNewRequest):
 		code, status = "too_many_requests", RowLimited

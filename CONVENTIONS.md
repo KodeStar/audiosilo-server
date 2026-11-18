@@ -3378,12 +3378,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`GET /podcasts/discovery/providers|search`, `GET /podcasts/discovery/artwork?id=`) and
   `internal/podcast` follows by URL for both `POST /podcasts/follow`'s `feed_url` and every row of
   `POST /podcasts/opml/import?library_id=` (`Follower.Follow`: module, whole grant, URL stable under a
-  second `NormalizeFeedURL` (else `invalid_feed_url`, 400 on the single follow), known show by hash,
+  second `NormalizeFeedURL`, its host at most 253 characters (`feed.MaxHostLen`; else
+  `invalid_feed_url`, 400 on the single follow, whatever the Bridge's state), known show by hash,
   else an online Bridge offering `podcast.subscribe`; the single follow keeps its 200/202 envelopes).
   An open subscribe for the same URL at the other privacy is `bridge.ErrPrivacyConflict` (409
-  `privacy_conflict`, an `error` row), checked inside the dedupe transaction. A URL the queue's
-  params check refuses (`bridge.ErrInvalid`, a host past 253 characters) is `invalid_feed_url` (400,
-  an `invalid` row), an adopt-only row's included: its params are checked before it looks for an open
+  `privacy_conflict`, an `error` row), checked inside the dedupe transaction. A request the queue's
+  params check refuses (`bridge.ErrInvalid`: a backstop, the normalization refuses the same URLs) is
+  `invalid_feed_url` too (400, an `invalid` row), an adopt-only row's included: its params are checked before it looks for an open
   request (server#219). A queued follow request fails `request_expired` once no online Bridge runs
   `podcast.subscribe` (`expireOfflineSubscribes`, on the player's request poll and the scheduler's
   sweep, when the silence has lasted `OnlineWindow` since a sweep first saw it: a server restart, a

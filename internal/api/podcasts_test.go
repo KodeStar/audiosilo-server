@@ -398,8 +398,8 @@ func TestPodcastFollowErrorsAndCoreReads(t *testing.T) {
 		post(body, 400, "invalid_request")
 	}
 	post(fmt.Sprintf(`{"library_id":%d,"feed_url":"ftp://x/y"}`, b.lib.ID), 400, "invalid_feed_url")
-	// A URL only the queue's params check refuses (a host past 253
-	// characters) is invalid too, never a 500.
+	// A host past 253 characters (feed.MaxHostLen, what the queue's params
+	// take) is invalid too, never a 500.
 	post(fmt.Sprintf(`{"library_id":%d,"feed_url":"https://%s.example/feed.xml"}`, b.lib.ID, strings.Repeat("a", 250)), 400, "invalid_feed_url")
 	post(fmt.Sprintf(`{"library_id":%d,"path":"Missing"}`, b.lib.ID), 404, "show_not_found")
 	post(fmt.Sprintf(`{"library_id":%d,"path":"Example Show"}`, b.lib.ID), 200, "")
