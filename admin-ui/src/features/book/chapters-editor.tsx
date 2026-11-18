@@ -161,14 +161,21 @@ export function ChaptersEditor({
   );
   // Opened with a copy still to come: the server is asked to start the book's
   // (a view of the page starts none, so browsing the console pushes no
-  // listener's copy out of the cache). The answer is let go: the player reads
-  // the page again for the one it waits for (Scrubber).
+  // listener's copy out of the cache). A good answer becomes the page unless
+  // the page changed meanwhile (a save's reply is newer); a failed one is let go.
   const warmed = useRef(false);
   useEffect(() => {
     if (warmed.current || remuxWaiting.size === 0) return;
     warmed.current = true;
-    api.adminBook(b.library_id, b.path, true).catch(() => {});
-  }, [remuxWaiting, b.library_id, b.path]);
+    const key = keys.book(b.library_id, b.path);
+    const asked = qc.getQueryState(key)?.dataUpdatedAt;
+    api
+      .adminBook(b.library_id, b.path, true)
+      .then((d) => {
+        if (qc.getQueryState(key)?.dataUpdatedAt === asked) qc.setQueryData(key, d);
+      })
+      .catch(() => {});
+  }, [remuxWaiting, b.library_id, b.path, qc]);
 
   return (
     <div className="flex flex-col gap-3.5">

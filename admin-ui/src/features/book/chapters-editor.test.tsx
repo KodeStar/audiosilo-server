@@ -497,6 +497,22 @@ describe('the chapter editor', () => {
     await waitFor(() => expect(warms(calls)).toHaveLength(1));
   });
 
+  it('takes the warm read as the page, so a copy made by then plays as the remux', async () => {
+    mockFetch(
+      routes(mkaDetail(false), {
+        'GET /admin/libraries/1/book': (req) => ({
+          body: mkaDetail(req.query.get('warm') === '1'),
+        }),
+      }),
+    );
+    const { container } = renderApp(URL);
+    const user = await openEditor();
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() =>
+      expect(container.querySelector('audio')?.getAttribute('src')).not.toContain('transcode'),
+    );
+  });
+
   it('asks for no warm when every copy is made', async () => {
     const calls = mockFetch(routes(mkaDetail(true)));
     renderApp(URL);

@@ -501,11 +501,11 @@ func TestMatroskaAdminBookSaysRemuxCached(t *testing.T) {
 
 	read := func(book, path string, warm bool) *bool {
 		t.Helper()
-		files := m.adminFiles(t, book)
+		files := m.adminFiles
 		if warm {
-			files = m.adminFilesWarm(t, book)
+			files = m.adminFilesWarm
 		}
-		f, ok := files[path]
+		f, ok := files(t, book)[path]
 		if !ok {
 			t.Fatalf("admin %s has no file %s", book, path)
 		}

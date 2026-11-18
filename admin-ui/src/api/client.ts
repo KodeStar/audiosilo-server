@@ -822,7 +822,7 @@ export const api = {
   adminBook: (libraryId: number, path: string, warm = false) =>
     request<AdminBookDetail>(
       'GET',
-      `/admin/libraries/${libraryId}/book${pathQuery(path)}${warm ? '&warm=1' : ''}`,
+      `/admin/libraries/${libraryId}/book${bookQuery({ path, warm: warm ? 1 : undefined })}`,
     ),
   /** Sets or reverts overrides; answers with the updated book page. */
   editBook: (libraryId: number, path: string, edit: BookEditRequest) =>
