@@ -1166,8 +1166,15 @@ func TestOIDCLandsOnOriginUnderPrefix(t *testing.T) {
 		if done == nil {
 			t.Fatalf("no sign-in: %q", page)
 		}
-		if fin, out := e.finishWith(t, `{"flow":"`+flowKey(stateOf(t, callback))+`"}`, b.sent(oidcFinishPath)...); fin.StatusCode != 200 || out["token"] == "" {
+		if b.dones(oidcFinishPath) != 1 {
+			t.Fatalf("%d finished sign-ins sent to the finish after landing on %q, want 1", b.dones(oidcFinishPath), page)
+		}
+		if fin, out := b.finish(t, e, `{"flow":"`+flowKey(stateOf(t, callback))+`"}`); fin.StatusCode != 200 || out["token"] == "" {
 			t.Fatalf("finish after landing on %q: %d %v", page, fin.StatusCode, out)
+		}
+		// The finish deleted the done cookie where the callback set it.
+		if b.dones(oidcFinishPath) != 0 {
+			t.Fatalf("the done cookie outlived the finish after landing on %q: %v", page, b.sent(oidcFinishPath))
 		}
 		return page
 	}
@@ -2402,16 +2409,43 @@ func (b *pathBrowser) flows(path string) int {
 	return n
 }
 
-func (b *pathBrowser) get(t *testing.T, e *oidcEnv, path string) *http.Response {
-	t.Helper()
-	resp := e.get(t, strings.TrimPrefix(path, b.prefix), oidcHost, b.sent(path)...)
+// dones counts the finished sign-ins' cookies the browser sends to path.
+func (b *pathBrowser) dones(path string) int {
+	n := 0
+	for _, c := range b.sent(path) {
+		if strings.HasPrefix(strings.TrimPrefix(c.Name, hostCookiePrefix), oidcDoneCookie) {
+			n++
+		}
+	}
+	return n
+}
+
+// apply takes resp's cookies as a browser does: one replaces the cookie of its
+// name and path, a negative Max-Age deletes that one only.
+func (b *pathBrowser) apply(resp *http.Response) {
 	for _, c := range resp.Cookies() {
 		b.cookies = slices.DeleteFunc(b.cookies, func(o *http.Cookie) bool { return o.Name == c.Name && o.Path == c.Path })
 		if c.MaxAge >= 0 {
 			b.cookies = append(b.cookies, c)
 		}
 	}
+}
+
+func (b *pathBrowser) get(t *testing.T, e *oidcEnv, path string) *http.Response {
+	t.Helper()
+	resp := e.get(t, strings.TrimPrefix(path, b.prefix), oidcHost, b.sent(path)...)
+	b.apply(resp)
 	return resp
+}
+
+// finish is the landing page's finish where the console and the player ask
+// it, the origin's own /api/v1, with the cookies the browser sends there. Its
+// answer's cookies are taken, so a sign-in it cleared is gone from the jar.
+func (b *pathBrowser) finish(t *testing.T, e *oidcEnv, body string) (*http.Response, map[string]any) {
+	t.Helper()
+	resp, out := e.finishWith(t, body, b.sent(oidcFinishPath)...)
+	b.apply(resp)
+	return resp, out
 }
 
 // start runs /start at path and the provider's authorize: the callback's
@@ -2461,7 +2495,13 @@ func TestOIDCFlowsHeldUnderPrefix(t *testing.T) {
 		if want != "" {
 			body = `{"device_name":"web","flow":"` + key + `","intent":"` + want + `"}`
 		}
-		return e.finishWith(t, body, b.sent(oidcFinishPath)...)
+		fin, out := b.finish(t, e, body)
+		// Spent or refused, the done cookie is deleted on the path it was set
+		// on: the origin's own, never one under the prefix.
+		if b.dones(oidcFinishPath) != 0 || b.dones(prefix+oidcFinishPath) != 0 {
+			t.Fatalf("the done cookie outlived its finish (%d): %v", fin.StatusCode, b.cookies)
+		}
+		return fin, out
 	}
 
 	// Denied: a trip abandoned at the provider, its start URL sent again from
