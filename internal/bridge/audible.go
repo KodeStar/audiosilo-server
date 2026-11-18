@@ -543,14 +543,17 @@ func AudibleSyncClaim(account string, titles []AudibleSyncTitle) (params json.Ra
 
 // fillAudibleSync gives a claimed audible.sync the params its claim answers
 // (ClaimAudibleSync: the account's titles now; the job stores the account
-// alone). One that can't be read goes back to the queue unspent
-// (ReleaseUnsentClaim), so the next claim takes it again.
+// alone). One whose titles can't be read goes back to the queue unspent
+// (ReleaseUnsentClaim), so the next claim takes it again. One whose own params
+// name no account never will: it stays claimed and undelivered, so its lease
+// runs out and spends the attempt, and MaxAttempts fails it rather than every
+// claim taking it again.
 func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 	account, err := AudibleAccountOf(*j)
-	var params json.RawMessage
-	if err == nil {
-		params, err = s.ClaimAudibleSync(ctx, account)
+	if err != nil {
+		return nil, fmt.Errorf("audible.sync %d: params: %w", j.ID, err)
 	}
+	params, err := s.ClaimAudibleSync(ctx, account)
 	if err != nil {
 		return nil, errors.Join(err, s.ReleaseUnsentClaim(ctx, j))
 	}

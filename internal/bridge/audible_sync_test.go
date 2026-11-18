@@ -131,6 +131,33 @@ func TestAudibleSyncClaimFailsUnspent(t *testing.T) {
 	}
 }
 
+// A claimed audible.sync whose stored params name no account can never be
+// filled: it is not put back unspent (every claim would take it again) but
+// left claimed, so its lease spends the attempt and MaxAttempts ends it.
+func TestAudibleSyncClaimUnreadableParamsSpent(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	q.beat(t, KindVerify, KindAudibleSync)
+	q.ClaimAudibleSync = func(_ context.Context, account string) (json.RawMessage, error) {
+		raw, _ := AudibleSyncClaim(account, nil)
+		return raw, nil
+	}
+	job, _, err := q.Enqueue(ctx, AudibleSync("acct0001", -10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET params = '{' WHERE id = ?`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err == nil || got != nil {
+		t.Fatalf("claim = %+v, %v; want an error and no job", got, err)
+	}
+	if stored, err := q.Job(ctx, job.ID); err != nil || stored.State != StateClaimed || stored.Attempts != 1 {
+		t.Fatalf("after an unreadable fill = %+v, %v; want it claimed, the attempt spent", stored, err)
+	}
+}
+
 // AudibleRefusalCode reads audible_refused from a failed sync's result code or
 // its error's prefix; nothing from a done or cancelled one, or another error.
 func TestAudibleRefusalCode(t *testing.T) {
