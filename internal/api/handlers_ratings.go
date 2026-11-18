@@ -18,17 +18,8 @@ import (
 // caller's scope allows that book, else the path as given. On a failure it
 // writes the answer and returns false.
 func (a *API) ratingPath(w http.ResponseWriter, r *http.Request, generic string) (*catalog.Library, string, bool) {
-	lib, path, scope, status, msg := a.authorizedScope(r)
-	if status != 0 {
-		writeError(w, status, msg)
-		return nil, "", false
-	}
-	key, err := ownBookPath(r.Context(), lib, scope, path, a.cat.BookPathAt)
-	if err != nil {
-		a.writeCatalogError(w, err, "resolve book path failed", generic, "library", lib.ID, "path", path)
-		return nil, "", false
-	}
-	return lib, key, true
+	lib, key, _, ok := a.bookKeyed(w, r, a.cat.BookPathAt, generic)
+	return lib, key, ok
 }
 
 // handleGetRating answers the caller's rating of the book at ?path=
