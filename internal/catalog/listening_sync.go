@@ -117,6 +117,8 @@ const (
 	// how close a resume_behind span must start to its device's offered place to
 	// carry the offer on (resolveListen), and all three say whether a span
 	// continues its device's chain from an earlier POST (continues).
+	// historyJoinOverlap is also how far before its device's chain's end a span
+	// may end and still come after it (resolveListen, fe#216).
 	historyJoinGap     = 60 * time.Second
 	historyJoinOverlap = 2 * time.Second
 	historyJoinPos     = 5.0
@@ -887,7 +889,12 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 		storedPlace = &Place{Progression: stored.position, DeviceID: stored.deviceID,
 			UpdatedAt: stored.updatedAt, Version: stored.version}
 		if chained {
-			storedPlace.UpdatedAt = chainAt
+			// The chain's end is this device's own last span, dated by its POST's
+			// shift, which carries that request's time on the way: a later POST's
+			// span (a bare move just after a pause) can land dated a little before
+			// it, so one ending up to historyJoinOverlap before it still comes
+			// after it, as continues reads a start (fe#216).
+			storedPlace.UpdatedAt = formatSessionTime(parseSessionTime(chainAt).Add(-historyJoinOverlap))
 		}
 	}
 	outcome := ResolvePlace(storedPlace, in, base)

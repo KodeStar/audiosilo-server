@@ -453,3 +453,47 @@ func TestSyncReplayOfALateFinishChains(t *testing.T) {
 		}
 	}
 }
+
+// fe#216: each POST is dated by its own sent_at shift, which carries the
+// request's time on the way, so a device's bare move (a span of no length: a
+// seek while paused) posted after its last span can land dated up to its
+// latency before that span's end. A span of the device's own chain ending up
+// to historyJoinOverlap before the chain's end still comes after it (as
+// continues reads a start), so the move applies instead of being "older";
+// one further back is still older.
+func TestSyncChainOverlapsAcrossShifts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		gap   time.Duration // the move's end after the span's, by the device's clock
+		delay time.Duration // the first POST's time on the way (its extra shift)
+		want  string
+	}{
+		{"a move half a second after, the first POST 1.5 s on the way", 500 * time.Millisecond, 1500 * time.Millisecond, statusApplied},
+		{"a move landing 2 s before the chain's end", 0, 2 * time.Second, statusApplied},
+		{"a move landing 3 s before the chain's end", 0, 3 * time.Second, statusNotApplied},
+	} {
+		f := newSyncFixture(t)
+		// The span ended 10 s ago by the device's clock (no skew); its POST took
+		// delay to arrive, so its shift dates it delay later.
+		span := f.listen("resume", 1000, 1100, 10*time.Second, base(0))
+		first := f.batch(t, "watch", span)
+		sent := f.clock.Add(-tc.delay)
+		first.SentAt = &sent
+		wantResult(t, f.sync(t, first).Results[0], statusApplied, "")
+		seen := f.progress(t).Version
+		// The bare move, posted at once (no shift), base the version it saw.
+		move := f.listen("jump", 3000, 3000, 10*time.Second-tc.gap, base(seen))
+		res := f.syncOne(t, "watch", move)
+		reason := ""
+		if tc.want == statusNotApplied {
+			reason = reasonOlder
+		}
+		if res.Status != tc.want || res.Reason != reason {
+			t.Fatalf("%s: %+v, want %s %s", tc.name, res, tc.want, reason)
+		}
+		if p := f.progress(t); (tc.want == statusApplied) != (p.Position == 3000) {
+			t.Fatalf("%s: row %+v", tc.name, p)
+		}
+	}
+}

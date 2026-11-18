@@ -4418,7 +4418,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   finish or unfinish that leaves the row the device's moves it there, never back, and starts one only when it
   is not older than the row's `updated_at` (a save elsewhere since stays newer), a finish with no row starts it,
   one that leaves another device's row ends it), and while the row is still the device's at that version its next span,
-  in this POST or a later one, compares with `span_at`, not the kept `updated_at`. A base-0 span of a later POST
+  in this POST or a later one, compares with `span_at` less `historyJoinOverlap` (2 s: each POST is dated by its own
+  shift, which carries its time on the way, so a bare move posted just after a span can land dated before that span's
+  end, fe#216), not the kept `updated_at`. A base-0 span of a later POST
   resolves on the row's version when it continues the chain (`continues`: from within 5 s of the place, or
   starting 0-60 s after `span_at`, 2 s overlap), and so do the POST's base-0 spans after it (in-batch chaining);
   until one does, each is judged on its own, so one that does not still diverges from its own place (a device signed out and
