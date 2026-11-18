@@ -697,6 +697,7 @@ describe('the chapter editor', () => {
 
     it('waits and asks again when the server is too busy, with no new token', async () => {
       const { user, audio, mints, looks } = await listen(busy);
+      fireEvent.play(audio);
       fireEvent.error(audio);
       await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
       expect(load).toHaveBeenCalledTimes(1);
@@ -726,6 +727,16 @@ describe('the chapter editor', () => {
       expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
     });
 
+    it('asks a busy stream paused before it failed for again without playing it', async () => {
+      const { audio } = await listen(busy);
+      fireEvent.play(audio);
+      fireEvent.pause(audio);
+      fireEvent.error(audio);
+      await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(play).not.toHaveBeenCalled();
+    });
+
     it('drops the wait when another row is chosen', async () => {
       const { user, audio, looks } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
       fireEvent.error(audio);
@@ -740,6 +751,7 @@ describe('the chapter editor', () => {
       const { audio } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
       const line = 'The server is busy. Trying again in a moment.';
       expect(screen.queryByText(line)).not.toBeInTheDocument();
+      fireEvent.play(audio);
       fireEvent.error(audio);
       expect(await screen.findByText(line)).toBeInTheDocument();
       // Asked again: the line goes.

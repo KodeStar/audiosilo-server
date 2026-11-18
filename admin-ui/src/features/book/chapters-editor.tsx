@@ -687,8 +687,10 @@ function Scrubber({
     clearTimeout(restream.current);
     clearTimeout(hold.current);
     previewing.current = false;
-    // A new transcode is asked for not playing; a start kept plays on.
-    if (audio.current?.paused) wanted.current = false;
+    // A new transcode is asked for not playing; a start kept plays on. A failed
+    // load is no start kept: Safari may leave its paused false.
+    const a = audio.current;
+    if (!a || a.paused || broken.current) wanted.current = false;
     stopRetry();
     busy.current = 0;
     if (transcoded) setFailed(false);
@@ -866,7 +868,8 @@ function Scrubber({
     void transcodeRetryAfter(url, look.signal).then((wait) => {
       if (look.signal.aborted || audio.current !== a) return;
       if (stalled) {
-        if (!wait) return;
+        // Paused while it was looked at (a headset's pause): nothing to ask again.
+        if (!wait || !meantToPlay(a)) return;
         broken.current = true;
         setPlaying(false);
       } else if (wait === undefined) {
@@ -883,8 +886,11 @@ function Scrubber({
       again.current = setTimeout(() => {
         setWaiting(false);
         if (audio.current !== a) return;
+        // Paused since (before its load failed, or while it waited): loaded
+        // again, not played. Read before the load, which sets paused.
+        const play = meantToPlay(a);
         a.load();
-        void a.play().catch(() => {});
+        if (play) void a.play().catch(() => {});
       }, wait * 1000);
     });
   };
