@@ -2152,6 +2152,42 @@ func TestOIDCFinishWithoutFlow(t *testing.T) {
 	}
 }
 
+// TestOIDCDoneCookiesCapped: finished sign-ins no page has finished yet are
+// held up to oidcMaxFlows, as flows are: the callback deletes the oldest
+// beyond it (on https each rides on every request to the origin). Allowed: the
+// newest still finish, each by its flow. Denied: the oldest is gone.
+func TestOIDCDoneCookiesCapped(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	var b browser
+	var keys []string
+	for range oidcMaxFlows + 1 {
+		callback := b.start(t, e, "return=admin")
+		if _, done := b.callback(t, e, callback); done == nil {
+			t.Fatal("no sign-in")
+		}
+		keys = append(keys, flowKey(stateOf(t, callback)))
+		if b.doneCount() > oidcMaxFlows {
+			t.Fatalf("%d finished sign-ins held, want at most %d", b.doneCount(), oidcMaxFlows)
+		}
+	}
+	if b.doneCount() != oidcMaxFlows || b.named(hostDoneCookie+keys[0]) != nil {
+		t.Fatalf("held %d, the oldest still held: %v", b.doneCount(), b.named(hostDoneCookie+keys[0]) != nil)
+	}
+	if resp, out := b.finish(t, e, keys[0], "admin-web"); resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCNoSignIn {
+		t.Fatalf("the oldest's finish: %d %v", resp.StatusCode, out)
+	}
+	for _, key := range keys[1:] {
+		if resp, out := b.finish(t, e, key, "admin-web"); resp.StatusCode != http.StatusOK || out["token"] == "" {
+			t.Fatalf("a held sign-in's finish: %d %v", resp.StatusCode, out)
+		}
+	}
+	if b.doneCount() != 0 {
+		t.Fatalf("%d left after every finish", b.doneCount())
+	}
+}
+
 // pathBrowser is a browser in front of a proxy that serves the server under
 // prefix: a cookie jar that keeps each cookie to its path. It asks for a path
 // as the address bar has it, sends only the cookies whose path holds it, and

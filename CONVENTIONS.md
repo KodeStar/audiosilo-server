@@ -4072,7 +4072,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (a link carrying one would sign whoever follows it in as its owner: a login CSRF), only in the
   flow's own done cookie (`__Host-audiosilo_oidc_done_<key>` or `audiosilo_oidc_done_<key>`, the
   flow cookie's key, so two tabs whose callbacks both land before either finishes each keep their
-  own; named and placed as the flow cookie, but on plain http never under public_url's path: the
+  own, the callback deleting the oldest beyond `oidcMaxFlows` as `/start` does flows (on https each
+  rides on every request to the origin, and a page elsewhere can complete trips a live provider
+  session doesn't stop); named and placed as the flow cookie, but on plain http never under public_url's path: the
   console and the web player call the finish on their origin's own `/api/v1`; Max-Age 60), and a 303
   to a page on **public_url's origin, never under its path** (`oidcPageBase`: the console, the
   player and the connect page load their assets and route from the origin's root, so behind a

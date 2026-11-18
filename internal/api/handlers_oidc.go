@@ -59,7 +59,8 @@ const (
 	// as set depend on public_url's scheme: oidcCookieName.
 	oidcCookie = "audiosilo_oidc_flow_"
 	// oidcMaxFlows is how many flows a browser holds at once: /start drops
-	// the oldest beyond it (every cookie rides on each request to its path).
+	// the oldest beyond it (every cookie rides on each request to its path),
+	// and the callback the oldest finished sign-ins (oidcDoneCookie) beyond it.
 	oidcMaxFlows = 4
 	// oidcDoneCookie names the cookies that hold finished sign-ins' tokens
 	// (auth.KindOIDC) until the page each lands on trades it at
@@ -720,7 +721,14 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		done += oidcIntentSep + intent
 	}
 	// The flow's own done cookie, named by the key its flow cookie had (the
-	// state matched it whole above), beside other tabs' finished sign-ins.
+	// state matched it whole above), beside other tabs' finished sign-ins,
+	// the oldest beyond oidcMaxFlows deleted as /start deletes flows: on an
+	// https public_url each rides on every request to the origin, and a page
+	// elsewhere can complete trips a live provider session doesn't stop.
+	held := a.heldCookies(r, oidcDoneCookie, validFlowKey)
+	for _, h := range held[:max(0, len(held)-(oidcMaxFlows-1))] {
+		a.setOIDCCookie(w, h.name, "", -1)
+	}
 	key := flowKey(f.State)
 	a.setOIDCCookie(w, oidcDoneCookie+key, done, int(oidcDoneTTL/time.Second))
 	noStore(w)
