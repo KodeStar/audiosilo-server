@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -207,5 +208,53 @@ func TestSpellingPlans(t *testing.T) {
 		if plan := strings.Join(queryPlan(t, c, q, nil), "\n"); !strings.Contains(plan, index) {
 			t.Errorf("%s does not use %s:\n%s", q, index, plan)
 		}
+	}
+}
+
+// TestListableRefsMapToBooks (server#210): a whole-list replace maps a track,
+// a disc folder and another spelling to the book they name, collapses refs
+// that name one book after mapping (the first place wins), skips a book outside
+// scope once mapped and a path that names none; a remove by a track or another
+// spelling takes the book's entry off, and the literal one too.
+func TestListableRefsMapToBooks(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib := seedSpellings(t, c)
+	user := seedUser(t, c, ctx)
+	ref := func(p string) Ref { return Ref{LibraryID: lib, Path: p} }
+	all := []Scope{{LibraryID: lib, AllowAll: true}}
+	got, err := c.listableRefs(ctx, []Ref{
+		ref(nfdEmile + "/02.mp3"), ref(nfcEmile), ref(nfcAmelie), ref("Été/CD 2"),
+		ref("Nowhere/01.mp3"), ref("Auteurs"),
+	}, all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Ref{ref(nfcEmile), ref(nfdAmelie), ref(joinedEte)}
+	if !slices.Equal(got, want) {
+		t.Fatalf("listable = %+v, want %+v", got, want)
+	}
+	// Scope is the mapped book's: a grant reaching only one track keeps nothing.
+	track := []Scope{{LibraryID: lib, Paths: []string{nfcEmile + "/02.mp3"}}}
+	if got, err := c.listableRefs(ctx, []Ref{ref(nfcEmile + "/02.mp3")}, track); err != nil || len(got) != 0 {
+		t.Fatalf("listable under a track grant = %+v %v, want none", got, err)
+	}
+
+	if err := c.SetQueue(ctx, user, []Ref{ref(nfcEmile), ref(nfdAmelie)}, all, nil); err != nil {
+		t.Fatal(err)
+	}
+	// A stray row at a track (an old server's), cleaned up by its literal path.
+	if _, err := c.db.ExecContext(ctx, `INSERT INTO up_next(user_id, library_id, rel_path, position, added_at) VALUES(?, ?, ?, 9, 't')`,
+		user, lib, nfdEmile+"/01.mp3"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{nfdEmile + "/01.mp3", nfcAmelie} {
+		if err := c.RemoveFromQueue(ctx, user, ref(p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var left int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM up_next WHERE user_id = ?`, user).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("queue rows after the removes = %d %v, want none", left, err)
 	}
 }

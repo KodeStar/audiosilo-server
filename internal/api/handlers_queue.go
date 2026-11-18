@@ -84,11 +84,12 @@ func (a *API) decodeListAdd(w http.ResponseWriter, r *http.Request) (catalog.Ref
 	return catalog.Ref{LibraryID: lib.ID, Path: book.RelPath}, in.Position, scopes, true
 }
 
-// listRemoveRef reads ?library_id=&path= of a remove from a list, the path in
-// the index's spelling (catalog.Spelling). There is no access check: a remove
-// only touches the caller's own rows, so a revoked path can still be cleaned up,
-// and it answers the same whatever the path names.
-func (a *API) listRemoveRef(w http.ResponseWriter, r *http.Request) (catalog.Ref, bool) {
+// listRemoveRef reads ?library_id=&path= of a remove from a list (the catalog
+// takes off the entry at it and its book's: a track path or another spelling
+// removes the book). There is no access check: a remove only touches the
+// caller's own rows, so a revoked path can still be cleaned up, and it answers
+// the same whatever the path names.
+func listRemoveRef(w http.ResponseWriter, r *http.Request) (catalog.Ref, bool) {
 	libID, err := strconv.ParseInt(r.URL.Query().Get("library_id"), 10, 64)
 	if err != nil || libID <= 0 {
 		writeError(w, http.StatusBadRequest, "invalid library id")
@@ -103,12 +104,7 @@ func (a *API) listRemoveRef(w http.ResponseWriter, r *http.Request) (catalog.Ref
 		writeError(w, http.StatusBadRequest, "path is required")
 		return catalog.Ref{}, false
 	}
-	spelled, err := a.cat.Spelling(r.Context(), libID, path)
-	if err != nil {
-		a.writeCatalogError(w, err, "resolve path spelling failed", "could not remove the book", "library", libID)
-		return catalog.Ref{}, false
-	}
-	return catalog.Ref{LibraryID: libID, Path: spelled}, true
+	return catalog.Ref{LibraryID: libID, Path: path}, true
 }
 
 // handleGetQueue answers the caller's up-next queue, in order, with only the
@@ -130,9 +126,9 @@ func (a *API) writeQueue(w http.ResponseWriter, r *http.Request, scopes []catalo
 	writeJSON(w, http.StatusOK, map[string]any{"queue": items})
 }
 
-// handleSetQueue replaces the caller's whole queue (the skip rule: only exactly
-// indexed books in their scope; others are left out, not an error) and answers
-// the stored result.
+// handleSetQueue replaces the caller's whole queue (the skip rule: each entry
+// mapped to the indexed book it names, only books in their scope; others are
+// left out, not an error) and answers the stored result.
 func (a *API) handleSetQueue(w http.ResponseWriter, r *http.Request) {
 	items, ok := decodeListReplace(w, r)
 	if !ok {
@@ -170,7 +166,7 @@ func (a *API) handleAddToQueue(w http.ResponseWriter, r *http.Request) {
 
 // handleRemoveFromQueue takes a book off the caller's queue (idempotent).
 func (a *API) handleRemoveFromQueue(w http.ResponseWriter, r *http.Request) {
-	ref, ok := a.listRemoveRef(w, r)
+	ref, ok := listRemoveRef(w, r)
 	if !ok {
 		return
 	}

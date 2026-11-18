@@ -241,7 +241,8 @@ Player redesign Phase 1b: `up_next` (`0025`: a user's queue) and `collections` /
 `collection_items` / `collection_shares` (`0026`: named lists, shared read-only with named
 users). Items are path-keyed like favourites (no FK to `books`), ordered by `position`, and
 share ONE implementation (`catalog/lists.go` `orderedList`: add-at/move as one range shift plus
-the row, remove leaving a gap (positions need not be dense), replace with the skip rule writing
+the row, remove leaving a gap (positions need not be dense; a remove by a part path or another spelling
+takes the book's entry off too), replace with the skip rule (each ref mapped to its book first) writing
 only the rows that changed, books attached by `booksAt`); every read passes through the
 READER's current access (a viewer never sees or counts an owner's item outside their own
 shares; such "hidden" rows are kept). An add works in the list as the CALLER sees it (their
@@ -544,7 +545,8 @@ Player redesign Phase 1b (`api/handlers_ratings.go`, `handlers_mydevices.go`): *
 are `GET`/`PUT`/`DELETE /libraries/{id}/rating?path=` (`{"rating": Rating | null}`; `Rating =
 {library_id, path, rating 1-5, note, created_at, updated_at}`; PUT `{rating, note?}` resolves a
 part path to its book with `bookAt` and stores on the book's path, 400 for a rating that isn't a
-whole 1-5 or a note over 500 runes after trimming; GET/DELETE are exact via `authorizedPath`;
+whole 1-5 or a note over 500 runes after trimming; GET/DELETE read the book's the same way, from the index
+alone (`ratingPath`; see Path-addressed API, the book-path rule, in CONVENTIONS.md);
 DELETE 204 idempotent) and `GET /me/ratings` (`{"ratings": [Rating + book?]}`, newest first,
 scope-filtered like favourites: a revoked share hides a rating, never deletes it; books via
 `BooksByPaths`). Table `ratings` (`0027`), path-keyed, carried by `carryListeningState` (a

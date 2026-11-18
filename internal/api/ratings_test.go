@@ -84,9 +84,9 @@ func TestRatingEndpoints(t *testing.T) {
 	if _, body := e.do(t, "GET", e.at("rating", cradleBook), e.kidTok, ""); !strings.Contains(body, `"rating":4`) {
 		t.Fatalf("GET the book's rating = %s", body)
 	}
-	// GET and DELETE are exact, like progress: the part path holds nothing.
-	if _, body := e.do(t, "GET", e.at("rating", cradlePart), e.kidTok, ""); strings.TrimSpace(body) != `{"rating":null}` {
-		t.Fatalf("GET the part path = %s, want null", body)
+	// GET at a part path reads the book's, as PUT writes it (server#210).
+	if _, body := e.do(t, "GET", e.at("rating", cradlePart), e.kidTok, ""); !strings.Contains(body, `"rating":4`) {
+		t.Fatalf("GET the part path = %s, want the book's rating", body)
 	}
 
 	for _, bad := range []string{`{"rating":0}`, `{"rating":6}`, `{"rating":4.5}`, `{"rating":"4"}`, `{"rating":null}`,

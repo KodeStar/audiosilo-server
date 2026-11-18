@@ -42,7 +42,8 @@ func (c *Catalog) AddToQueue(ctx context.Context, userID int64, ref Ref, positio
 }
 
 // SetQueue replaces a user's whole queue with refs, in order, by the skip rule
-// (listableRefs: only exactly indexed books in scopes, duplicates collapsed).
+// (listableRefs: each ref mapped to the indexed book it names, only books in
+// scopes, duplicates collapsed).
 // Stored entries not in the result are deleted, hidden (out-of-scope) ones
 // included, except those keep allows: the caller's GatedScopes, the podcast
 // entries an old player can't see, which stay in their place (see
@@ -62,12 +63,21 @@ func (c *Catalog) SetQueue(ctx context.Context, userID int64, refs []Ref, scopes
 	})
 }
 
-// RemoveFromQueue takes a book off a user's queue (idempotent). It needs no
-// access check: it only removes the user's own row, so a revoked path can still
-// be cleaned up.
+// RemoveFromQueue takes a book off a user's queue (idempotent): the entry at
+// ref and the one of the book ref names (removalRefs). It needs no access
+// check: it only removes the user's own rows, so a revoked path can still be
+// cleaned up.
 func (c *Catalog) RemoveFromQueue(ctx context.Context, userID int64, ref Ref) error {
-	return c.db.WithUserStateTx(ctx, "RemoveFromQueue", func(tx *sql.Tx) error {
-		_, err := upNext.drop(ctx, tx, userID, ref)
+	refs, err := c.removalRefs(ctx, ref)
+	if err != nil {
 		return err
+	}
+	return c.db.WithUserStateTx(ctx, "RemoveFromQueue", func(tx *sql.Tx) error {
+		for _, r := range refs {
+			if _, err := upNext.drop(ctx, tx, userID, r); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }

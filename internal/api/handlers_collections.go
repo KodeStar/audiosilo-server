@@ -202,7 +202,7 @@ func (a *API) handleRemoveCollectionItem(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	ref, ok := a.listRemoveRef(w, r)
+	ref, ok := listRemoveRef(w, r)
 	if !ok {
 		return
 	}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 )
@@ -504,31 +505,107 @@ func (c *Catalog) booksAt(ctx context.Context, refs []Ref) (map[Ref]Book, error)
 }
 
 // listableRefs is the skip rule of a whole-list replace: refs in order, each
-// path cleaned (CleanRelPath), duplicates collapsed (the first wins), keeping only
-// those that name exactly an indexed book (no part path, no indexing on demand)
-// the caller's current access allows (scopes). Nothing skipped is an error.
+// path cleaned (CleanRelPath) and mapped to the indexed book it names (listBook:
+// a book's own path, another Unicode spelling of it, a track or a disc folder
+// of it; from the index alone, no indexing on demand), keeping only those the
+// caller's current access allows (scopes) once mapped, duplicates collapsed
+// after mapping (the first wins). An old player's replace naming a book by a
+// part path keeps the book (server#210, CROSS-REPO §15). Nothing skipped is an
+// error.
 func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) ([]Ref, error) {
-	seen := make(map[Ref]bool, len(refs))
+	given := make(map[Ref]bool, len(refs))
 	var cands []Ref
 	for _, r := range refs {
 		r.Path = CleanRelPath(r.Path)
-		if r.Path == "" || seen[r] || !ScopesAllow(scopes, r) {
+		if r.Path == "" || given[r] {
 			continue
 		}
-		seen[r] = true
+		given[r] = true
 		cands = append(cands, r)
 	}
-	books, err := c.booksAt(ctx, cands)
+	books, err := c.booksAt(ctx, cands) // the refs that name a book exactly, in one read
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Ref, 0, len(cands))
+	// A ref no indexed book lies above, in a spelling with no other, names no
+	// book: one read of every ancestor spares it the lookups (a replace may
+	// list a thousand paths).
+	var above []Ref
 	for _, r := range cands {
-		if _, ok := books[r]; ok {
-			out = append(out, r)
+		if _, ok := books[r]; !ok {
+			for d := path.Dir(r.Path); d != "." && d != "/"; d = path.Dir(d) {
+				above = append(above, Ref{LibraryID: r.LibraryID, Path: d})
+			}
 		}
 	}
+	holders, err := c.booksAt(ctx, above)
+	if err != nil {
+		return nil, err
+	}
+	held := func(r Ref) bool {
+		for d := path.Dir(r.Path); d != "." && d != "/"; d = path.Dir(d) {
+			if _, ok := holders[Ref{LibraryID: r.LibraryID, Path: d}]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	listed := make(map[Ref]bool, len(cands))
+	out := make([]Ref, 0, len(cands))
+	for _, r := range cands {
+		if _, ok := books[r]; !ok {
+			if !normSensitive(r.Path) && !held(r) {
+				continue
+			}
+			if r.Path, err = c.listBook(ctx, r); err != nil {
+				return nil, err
+			}
+		}
+		if r.Path == "" || listed[r] || !ScopesAllow(scopes, r) {
+			continue
+		}
+		listed[r] = true
+		out = append(out, r)
+	}
 	return out, nil
+}
+
+// listBook is the path of the indexed book ref names when it names none
+// exactly (spelledBook); "" when there is none.
+func (c *Catalog) listBook(ctx context.Context, ref Ref) (string, error) {
+	_, book, err := c.spelledBook(ctx, ref)
+	return book, err
+}
+
+// spelledBook is ref's path in the index's spelling (Spelling) and the book
+// that is or holds it (BookPathAt), "" for none.
+func (c *Catalog) spelledBook(ctx context.Context, ref Ref) (spelled, book string, err error) {
+	if spelled, err = c.Spelling(ctx, ref.LibraryID, ref.Path); err != nil {
+		return "", "", err
+	}
+	book, err = c.BookPathAt(ctx, ref.LibraryID, spelled)
+	if errors.Is(err, ErrNotFound) {
+		return spelled, "", nil
+	}
+	return spelled, book, err
+}
+
+// removalRefs is what a remove of ref from a list takes off: ref as given (a
+// stray row can still be cleaned up), its spelling in the index, and the book
+// it names (listBook), so a remove by a track path or another spelling takes
+// the book's entry off (server#210).
+func (c *Catalog) removalRefs(ctx context.Context, ref Ref) ([]Ref, error) {
+	spelled, book, err := c.spelledBook(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	refs := []Ref{ref}
+	for _, p := range []string{spelled, book} {
+		if r := (Ref{LibraryID: ref.LibraryID, Path: p}); p != "" && !slices.Contains(refs, r) {
+			refs = append(refs, r)
+		}
+	}
+	return refs, nil
 }
 
 // stamp is the time lists and collections record (added_at, created_at,

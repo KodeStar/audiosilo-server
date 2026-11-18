@@ -1029,17 +1029,26 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   for a context, so a request's deadline would only throw the read away at its last write): the
   POST waits for it up to `favouriteIndexWait`, 5 s, under the player's 15 s request timeout, and it
   is saved when it ends.
-  **Progress is the book's** (#199): `GET`/`PUT`/`PATCH .../progress?path=` key the row (and
-  PUT's listening session) on the path of the indexed book the path is or names a file of
-  (`api.progressPath` over `catalog.BookPathOfFile`: the book at it, else the innermost folder
-  book one of whose files it is), when the caller's scope allows that book; otherwise on the
-  path as given, as before (a navigation folder, a book not indexed yet, a grant reaching only a
-  part, a disc folder of a joined book: a download of that disc saves there, on the disc's own
-  timeline). No on-demand index on a save, and a failed lookup is a 500 (a timed-out one a 503,
-  `writeCatalogError`), never a save under another key. Rows old clients already wrote
-  under a part path stay where they are (not merged), and bookmarks, notes, history,
-  favourites and the queue are not canonicalized (follow-ups). `POST /cast/token` already grants
-  the book's path (`bookAt`).
+  **The book-path rule** (#199, server#210): `GET`/`PUT`/`PATCH .../progress?path=`, the sync
+  events, and `GET`/`POST .../bookmarks|notes|history` key the row (and PUT's listening session)
+  on the path of the indexed book the path is or names a file of (`api.timelinePath` over
+  `catalog.BookPathOfFile`: the book at it, else the innermost folder book one of whose files it
+  is), when the caller's scope allows that book; otherwise on the path as given, as before (a
+  navigation folder, a book not indexed yet, a grant reaching only a part, a disc folder of a
+  joined book: a download of that disc saves there, on the disc's own timeline). The answers
+  carry that path (a bookmark's or note's `path`, as progress's). A rating's `GET`/`DELETE`
+  read the book the path is or lies in (`ratingPath`: `ownBookPath` over `catalog.BookPathAt`, a
+  disc folder its joined book's, the index alone), as PUT's `bookAt` stores it, the same scope
+  rule. A whole-list replace (`PUT /me/queue`, `/me/collections/{id}/items`) maps each ref to its
+  book before the skip rule and de-duplication (`catalog.listableRefs`, `listBook`: `Spelling`
+  then `BookPathAt`, scope on the book), so an old player's replay naming a part path keeps the
+  book instead of dropping it and deleting the stored entry (CROSS-REPO §15); a remove takes off
+  the entry at the path given, its spelling and its book's (`removalRefs`). Favourites take the
+  spelling only, never the file-to-book mapping: the shipped Folders view hearts a
+  track by its own path and shows the heart by path equality. No on-demand index on a save, and
+  a failed lookup is a 500 (a timed-out one a 503, `writeCatalogError`), never a save under
+  another key. Rows old clients already wrote under a part path stay where they are (not
+  merged until the re-key server#210 plans). `POST /cast/token` grants the book's path (`bookAt`).
   **The ebook** (Bridge Phase 3b, capability `ebooks`, `api/handlers_ebook.go`): `GET
   /libraries/{id}/ebook?path=<the book's own path>` serves the file the scan recorded for the book
   (`books.ebook_path`, see Auto book/folder detection), opened fresh by `library.OpenEbook`: joined
@@ -1117,7 +1126,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `scopedPath` / `scopedPathIn` (`spelledPathInScope`: cap, library, clean, spelling, scope, hidden),
   so every route on them (item, chapters, cover, stream, meta, next, ebook, readalong,
   reading-progress, progress, sync events, bookmarks, notes, history, favourites, ratings, list adds,
-  `POST /cast/token`) reads and stores the index's spelling; by `listRemoveRef`; and by `/fs`
+  `POST /cast/token`) reads and stores the index's spelling; by a list's replace and remove
+  (`catalog.listableRefs`, `removalRefs`); and by `/fs`
   (`handleBrowseFS` lists the folder in the index's spelling, so the listing's paths match the books
   `annotateWithBooks` finds). `spelledIn` keeps the index's spelling only when the caller's scope
   (for `/fs`, `VisibleInBrowse`) allows it, else the path as given: a rule naming another spelling
@@ -4222,7 +4232,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   podcast's show or episode path is capped by `feed.ShowPath` / `EpisodePath`, the route's 400 `invalid_request`). The handler
   resolves each distinct
   `(library_id, path)` as PUT progress does (`scopedPathIn`: 403 -> `no_access`, 404 -> `not_found`, a path
-  cleaning to nothing or over the cap -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
+  cleaning to nothing or over the cap -> `invalid`; then `timelinePath`; then `SyncBookAt`, the book's length and its files'
   offsets in current order), all reads before the one write. `SyncListening` is ONE `WithUserStateTx`: checks
   (`invalid`, `unknown_kind`, an id repeated in the batch `duplicate` of a copy that passed them: a copy rejected
   leaves the next to be checked on its own, server#284), the clock (shift = now - sent_at, kept as

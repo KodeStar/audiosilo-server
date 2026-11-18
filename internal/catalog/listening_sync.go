@@ -248,7 +248,7 @@ func (c *Catalog) SyncBookAt(ctx context.Context, libraryID int64, path string) 
 }
 
 // SyncTarget is what the handler resolved for one (library_id, path) a batch
-// names: the progress key (the book's path, progressPath's rule), or the reason
+// names: the progress key (the book's path, the api's timelinePath rule), or the reason
 // its events are rejected (SyncNoAccess, SyncNotFound, SyncInvalid).
 type SyncTarget struct {
 	Key    Ref
