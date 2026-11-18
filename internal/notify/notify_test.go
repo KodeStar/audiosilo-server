@@ -350,6 +350,42 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 	}
 }
 
+// TestConcurrentEmitsDedupOnce (server#408): emits of one kind and dedup key
+// at the same moment (two callbacks for one waiting sign-in) announce it
+// once; another key is still announced, and no key's lock outlives its emits.
+func TestConcurrentEmitsDedupOnce(t *testing.T) {
+	s, cat, ctx := newService(t)
+	const n = 16
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			key := "pending:1"
+			if i == 0 {
+				key = "pending:2"
+			}
+			s.Emit(ctx, Event{Kind: KindOIDCPending, Data: map[string]any{"provider": "Keycloak"}, Dedup: key})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	events, _, err := cat.ListServerEvents(ctx, 0, 50, KindOIDCPending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("%d events for two keys emitted %d times at once, want 2", len(events), n)
+	}
+	s.dedupMu.Lock()
+	defer s.dedupMu.Unlock()
+	if len(s.dedupLocks) != 0 {
+		t.Fatalf("dedup locks left behind: %v", s.dedupLocks)
+	}
+}
+
 func TestNilServiceIsSafe(t *testing.T) {
 	var s *Service
 	s.Run(context.Background())

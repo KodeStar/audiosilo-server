@@ -77,8 +77,10 @@ const kindTest = "test"
 type Event struct {
 	Kind string
 	Data map[string]any
-	// Dedup, when set, announces the event once: a second one with the same kind
-	// and key (still in the feed) is dropped.
+	// Dedup, when set, announces the event once while it is in the feed (90
+	// days): a second one with the same kind and key is dropped, even one
+	// emitted at the same moment (Service.dedupLocks). Once the first has left
+	// the feed, the same key is announced again.
 	Dedup string
 }
 
@@ -119,6 +121,43 @@ type Service struct {
 	// logged.
 	oidcPending          []oidcPendingTaken
 	oidcPendingCapLogged time.Time
+
+	// dedupLocks: an emit with a dedup key holds its key's lock from the check
+	// to the record, so two at once (two callbacks for one waiting sign-in)
+	// announce it once (server#408). A key's entry lives while it is held.
+	dedupMu    sync.Mutex
+	dedupLocks map[string]*dedupLock
+}
+
+// dedupLock serializes the emits of one kind and dedup key; held counts the
+// emits holding or waiting for it.
+type dedupLock struct {
+	sync.Mutex
+	held int
+}
+
+// lockDedup takes key's lock and returns its release.
+func (s *Service) lockDedup(key string) func() {
+	s.dedupMu.Lock()
+	l := s.dedupLocks[key]
+	if l == nil {
+		if s.dedupLocks == nil {
+			s.dedupLocks = map[string]*dedupLock{}
+		}
+		l = &dedupLock{}
+		s.dedupLocks[key] = l
+	}
+	l.held++
+	s.dedupMu.Unlock()
+	l.Lock()
+	return func() {
+		l.Unlock()
+		s.dedupMu.Lock()
+		if l.held--; l.held == 0 {
+			delete(s.dedupLocks, key)
+		}
+		s.dedupMu.Unlock()
+	}
 }
 
 // oidcPendingTaken is one oidc_pending notification raised: when, and the
@@ -182,13 +221,15 @@ func (s *Service) Emit(ctx context.Context, e Event) {
 }
 
 // emit is Emit with a gate: allow (when set) runs after the dedup check and
-// before the event is recorded, and false drops it.
+// before the event is recorded, and false drops it. The check, the gate and
+// the record are one step per dedup key (lockDedup).
 func (s *Service) emit(ctx context.Context, e Event, allow func() bool) {
 	if s == nil {
 		return
 	}
 	ctx = context.WithoutCancel(ctx) // the request that caused it may be ending
 	if e.Dedup != "" {
+		defer s.lockDedup(e.Kind + "\x00" + e.Dedup)()
 		seen, err := s.cat.ServerEventSeen(ctx, e.Kind, e.Dedup)
 		if err != nil || seen {
 			return
@@ -884,8 +925,10 @@ const (
 )
 
 // OIDCPending reports a single sign-on no account took (auth.OIDCSignIn's
-// Pending), once per waiting row (pendingID: the row keeps its id across the
-// person's attempts, and a row dismissed and recorded again is a new one), at
+// Pending), once per waiting row while its event is in the feed (pendingID:
+// the row keeps its id across the person's attempts, so one they keep alive
+// past the feed's 90 days is announced again; a row dismissed and recorded
+// again is a new one), at
 // most oidcPendingPerHour an hour for the sign-ins from one address (from,
 // which only counts: it is never in the event) and oidcPendingCeiling in all
 // (server#408): a row over either is not announced then (logged, at most once
