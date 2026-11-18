@@ -33,7 +33,7 @@ type File struct {
 	Show                  Show      `json:"show"`
 	Episodes              []Episode `json:"episodes"`
 	// ReadAt is when ReadFile began reading the file (zero for a File not
-	// read from disk): catalog.IndexPodcastShow's staleness check.
+	// read from disk): catalog.IndexPodcastShow orders its folds by it.
 	ReadAt time.Time `json:"-"`
 }
 type Show struct {
@@ -185,7 +185,7 @@ func ReadFile(filename, show string, log *slog.Logger) (*File, error) {
 	if data.Version != 1 || len(data.Episodes) > 20000 || !ValidHex(data.ShowID, 16) || !ValidHex(data.FeedURLSHA256, 64) {
 		return nil, ErrInvalidFeed
 	}
-	data.UpdatedAt, data.ReadAt = timestamp(data.UpdatedAt), readAt
+	data.ReadAt = readAt
 	data.Show.Title = capText(data.Show.Title, 300)
 	data.Show.Author = capText(data.Show.Author, 300)
 	data.Show.Description = capText(data.Show.Description, 4000)

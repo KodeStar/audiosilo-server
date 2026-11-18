@@ -594,7 +594,6 @@ func TestPodcastNetworkFailuresJudgedAcrossTheBridge(t *testing.T) {
 	}
 }
 
-// Only the scheduler's polls count (bridge.PollParams.Scheduled): a Check now
 // A round's polls can be folded within one second (the stamps are whole
 // seconds): the round's first show still sees the others' checks of the round
 // before, and an outage counts at most its first failure. A feed failing alone
@@ -655,6 +654,7 @@ func TestPodcastOutageFoldedInOnePass(t *testing.T) {
 	}
 }
 
+// Only the scheduler's polls count (bridge.PollParams.Scheduled): a Check now
 // stays uncounted even once its requester is gone (requested_by is then NULL,
 // which used to read as the scheduler's).
 func TestPodcastCheckNowWithoutRequesterIsNotCounted(t *testing.T) {
@@ -679,7 +679,6 @@ func TestPodcastCheckNowWithoutRequesterIsNotCounted(t *testing.T) {
 	}
 }
 
-// The failing notice's event is recorded in the fold's own transaction: a
 // A feed that ended (`gone`) stays ended when a follower's Check now of it
 // fails another way: the scheduled polls stay stopped (no next poll, still
 // `gone`), nothing is told again, and only a success brings it back.
@@ -738,6 +737,7 @@ func TestPodcastGoneFeedStaysStoppedAfterFailedCheck(t *testing.T) {
 	}
 }
 
+// The failing notice's event is recorded in the fold's own transaction: a
 // record that fails leaves failing_announced unset (the fold fails and is
 // tried again), so the next fold announces it, once, and never says "back"
 // for a notice that was never recorded.
@@ -865,18 +865,35 @@ func TestPodcastNewEpisodesByGUID(t *testing.T) {
 	}
 }
 
-// A scan that read an older feed.json before the Bridge's rescan indexed a
-// newer one doesn't fold it over that index; one read after it (a feed.json
-// restored from a backup) is indexed.
+// A scan that read feed.json before the Bridge's rescan read and indexed a
+// newer one doesn't fold it over that index, even when the Bridge wrote both
+// within one second (its updated_at can't order them: the reads do). A later
+// read is always folded, so a refusal never sticks: the same second's next
+// write, and a feed.json restored from a backup.
 func TestPodcastStaleFeedFoldRefused(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
 	if err != nil {
 		t.Fatal(err)
 	}
-	older := podcastFixture(t)
-	newer := withEpisode(older, "1111111111111111", "new.mp3", "New", "2026-11-17T00:00:00Z")
-	newer.UpdatedAt = "2026-11-17T01:00:00Z"
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	start := now
+	// readAt is f as read from disk ms after the start; every feed.json here
+	// carries the same updated_at (the Bridge's stamp is whole seconds).
+	readAt := func(f *feed.File, ms int) *feed.File {
+		r := *f
+		r.UpdatedAt, r.ReadAt = "2026-11-17T12:00:00Z", start.Add(time.Duration(ms)*time.Millisecond)
+		return &r
+	}
+	index := func(f *feed.File, sig string, force bool) bool {
+		t.Helper()
+		changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", sig, "", "", f, nil, force)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return changed
+	}
 	count := func() int {
 		t.Helper()
 		var n int
@@ -885,47 +902,48 @@ func TestPodcastStaleFeedFoldRefused(t *testing.T) {
 		}
 		return n
 	}
-	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
-	c.now = func() time.Time { return now }
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", older, nil, false); err != nil {
-		t.Fatal(err)
-	}
-	// The scan reads the old feed.json...
-	scanRead := *older
-	scanRead.ReadAt = now.Add(time.Minute)
-	// ...the Bridge writes a newer one and its rescan indexes it...
-	now = now.Add(2 * time.Minute)
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "new", "", "", newer, nil, true); err != nil {
-		t.Fatal(err)
-	}
-	want := count()
+	older := podcastFixture(t)
+	newer := withEpisode(older, "1111111111111111", "new.mp3", "New", "2026-11-17T00:00:00Z")
+	newest := withEpisode(newer, "2222222222222222", "newest.mp3", "Newest", "2026-11-17T00:00:01Z")
+	index(readAt(older, 0), "old", false)
+	base := count()
+	// The scan reads the old feed.json, the Bridge writes a newer one and
+	// its rescan reads and indexes it...
+	now = now.Add(time.Second)
+	scanRead := readAt(older, 100)
+	index(readAt(newer, 200), "new", true)
 	// ...then the scan commits what it read.
-	if changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", &scanRead, nil, false); err != nil || changed || count() != want {
-		t.Fatalf("a stale fold: changed %v, %v, %d episodes, want %d", changed, err, count(), want)
+	if index(scanRead, "old", false) || count() != base+1 {
+		t.Fatalf("a stale fold went through: %d episodes, want %d", count(), base+1)
+	}
+	// The Bridge's next write in the same second, read later, is folded.
+	if !index(readAt(newest, 300), "newest", true) || count() != base+2 {
+		t.Fatalf("the same second's next write: %d episodes, want %d", count(), base+2)
 	}
 	// A feed.json restored from an older backup, read after that index.
-	restored := *older
-	restored.ReadAt = now.Add(time.Minute)
-	if changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", &restored, nil, false); err != nil || !changed || count() != want-1 {
-		t.Fatalf("a restored feed.json: changed %v, %v, %d episodes, want %d", changed, err, count(), want-1)
+	if !index(readAt(older, 400), "old", false) || count() != base {
+		t.Fatalf("a restored feed.json: %d episodes, want %d", count(), base)
 	}
 
 	// The show followed again by a new address (another show_id at the
 	// path): a scan that read the old feed.json before the replacement was
-	// indexed doesn't put the old show back.
-	scanRead = *older
-	scanRead.ReadAt = now.Add(time.Minute)
-	now = now.Add(2 * time.Minute)
-	replaced := *newer
-	replaced.ShowID, replaced.UpdatedAt = "b000000000000001", "2026-11-17T02:00:00Z"
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "replaced", "", "", &replaced, nil, true); err != nil {
-		t.Fatal(err)
-	}
+	// read and indexed doesn't put the old show back.
+	scanRead = readAt(newer, 500)
+	replaced := readAt(newer, 600)
+	replaced.ShowID = "b000000000000001"
+	index(replaced, "replaced", true)
 	var id string
-	if changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", &scanRead, nil, false); err != nil || changed {
-		t.Fatalf("a stale fold of the replaced show: changed %v, %v", changed, err)
+	if index(scanRead, "new", false) {
+		t.Fatal("a stale fold of the replaced show went through")
 	}
 	if err := c.db.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=?`, lib.ID).Scan(&id); err != nil || id != replaced.ShowID {
 		t.Fatalf("show_id %q (%v), want the replacement's %q", id, err, replaced.ShowID)
+	}
+
+	// The clock set back behind the index's read: reads are folded all the
+	// same, rather than refused until the clock catches up.
+	now = start.Add(-time.Hour)
+	if !index(readAt(older, -3600_000+100), "old", false) {
+		t.Fatal("a read after the clock was set back was refused")
 	}
 }

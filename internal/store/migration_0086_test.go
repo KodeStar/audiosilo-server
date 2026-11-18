@@ -9,7 +9,7 @@ import (
 // TestMigration0083KeepsTheAnnouncedCode: a feed already announced failing
 // takes its last failed check's code as the code it was announced with, so a
 // `gone` told before isn't told again (server#403); one not announced has
-// none. Every show starts with no feed.json stamp.
+// none. Every show starts with no feed.json read stamp.
 func TestMigration0083KeepsTheAnnouncedCode(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -33,7 +33,7 @@ func TestMigration0083KeepsTheAnnouncedCode(t *testing.T) {
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("announced codes:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if got := lines(t, db, `SELECT '[' || feed_updated_at || ']' FROM podcast_shows`); len(got) != 1 || got[0] != "[]" {
-		t.Fatalf("feed_updated_at = %v, want empty", got)
+	if got := lines(t, db, `SELECT '[' || feed_read_at || ']' FROM podcast_shows`); len(got) != 1 || got[0] != "[]" {
+		t.Fatalf("feed_read_at = %v, want empty", got)
 	}
 }

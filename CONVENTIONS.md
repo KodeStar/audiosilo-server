@@ -3949,10 +3949,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `catalog.NewEpisodeWindow` (72 h), so a first index, a forced rescan of a feed already indexed, a rebuilt
   index, missing rows indexed again, and an index restored from an older backup or written after a long
   outage announce nothing; up to 5 titles, newest first; `dedup_key` the library, show id and a hash of the new
-  episode ids, so the scheduled scan and the Bridge's rescan can't both announce them; a scan that read an
-  older feed.json (its `updated_at`, kept as `podcast_shows.feed_updated_at`, `0083`) before the Bridge's
-  rescan indexed a newer one doesn't fold it over that index, whatever either's `show_id`, while a
-  feed.json restored from a backup, read after it, is indexed),
+  episode ids, so the scheduled scan and the Bridge's rescan can't both announce them; a scan that read
+  feed.json before the Bridge's rescan read and indexed a newer one doesn't fold it over that index,
+  whatever either's `show_id`: the folds are ordered by when this server read the file (`feed.File.ReadAt`,
+  kept to the nanosecond as `podcast_shows.feed_read_at`, `0083`; `staleFeed`), never by the Bridge's
+  whole-second `updated_at`, so a later read is always folded (a feed.json restored from a backup, the
+  same second's next write), as is any read while the stamp is ahead of the clock (the clock set back)),
   `podcast_feed_failing` and `podcast_feed_recovered` (`catalog.FoldPodcastJob`, `podcast.poll` only,
   idempotent through `podcast_folded`; `0076` adds `podcast_feed_state.feed_failures`,
   `feed_network_failures` and `failing_announced`, while `failures` still drives the backoff: a failure
