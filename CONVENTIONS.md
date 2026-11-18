@@ -3940,7 +3940,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the Bridge's own text that can name its folders, is the bell's `detail`, never sent out), and podcasts
   (server#232, admin only, through `catalog.SetPodcastNotice`: the event (`notify.PodcastEvent`) is recorded
   in the same transaction as the write that found the news, its dedup key checked there too, and delivered
-  after the commit (`notify.Service.Deliver`), so a crash can't lose a notice whose flag committed, server#403):
+  after the commit (`notify.Service.Deliver`), so a crash can't lose the feed's record of a notice whose flag
+  committed; the destinations aren't sent it again after a crash between the two, there being no per-event
+  delivery record, server#403):
   `podcast_episodes_new`, one per show per index (`catalog.IndexPodcastShow`: episodes new to a show indexed
   before under the same `show_id`, its rows all there: a path, GUID and episode id not indexed, not
   published before the show's previous `latest_published` (the same date, a date-only twin, or no date is
