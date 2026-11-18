@@ -4689,7 +4689,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   copy from the playhead once it is made and the audio is not playing (never by the `<audio>`'s duration, which
   Safari may report finite for a live stream). An ask a seek was made since leaves that seek waiting (`seeks`),
   and Play after a failed load loads again (Chrome leaves `paused` false then). Its `<audio>` failing is
-  looked at before a new token is minted (`transcodeRetryAfter` fetches the same URL and lets the body go): a 503
+  looked at before a new token is minted (`transcodeRetryAfter` sends a HEAD of the same URL, which starts no ffmpeg): a 503
   with `Retry-After` (no transcode slot free) is asked for again after that wait and played, up to three times
   per row (`BUSY_TRIES`), with no mint, the player saying the server is busy while it waits; any other answer
   mints once, as a stored file's failure does (a transcode asks for no stream with the old token meanwhile, then

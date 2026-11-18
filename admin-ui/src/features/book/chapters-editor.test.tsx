@@ -677,7 +677,7 @@ describe('the chapter editor', () => {
             status: 201,
             body: { token: `media-tok-${++n}`, expires_at: 'x' },
           }),
-          'GET /libraries/1/stream': stream,
+          'HEAD /libraries/1/stream': stream,
         }),
       );
       const { container } = renderApp(URL);
@@ -703,6 +703,8 @@ describe('the chapter editor', () => {
       expect(load).toHaveBeenCalledTimes(1);
       // The look at the answer asked for the same stream, with the editor's token.
       expect(looks()).toHaveLength(1);
+      // A HEAD: it starts no transcode of its own.
+      expect(looks()[0].method).toBe('HEAD');
       expect(looks()[0].query.get('transcode')).toBe('1');
       expect(looks()[0].query.get('token')).toBe('media-tok-1');
       expect(mints()).toBe(1);
@@ -817,7 +819,7 @@ describe('the chapter editor', () => {
             ++n === 1
               ? { status: 201, body: { token: 'media-tok-1', expires_at: 'x' } }
               : { status: 500, body: { error: 'down' } },
-          'GET /libraries/1/stream': { status: 401, body: { error: 'unauthorized' } },
+          'HEAD /libraries/1/stream': { status: 401, body: { error: 'unauthorized' } },
         }),
       );
       const { container } = renderApp(URL);

@@ -289,19 +289,19 @@ export const streamUrl = (
 
 /**
  * How long to wait before asking for a transcode again, in seconds, after its
- * <audio> failed (an <audio> can't read the answer's status): the server's
- * Retry-After when it had no transcode slot free (503 with one), 0 when the
- * stream is there after all, undefined for any other answer or none (a token
- * that ran out, a file gone, no ffmpeg). The answer's body is let go of at once:
- * a transcode it started holds a slot until then.
+ * <audio> failed or stalled (an <audio> can't read the answer's status): the
+ * server's Retry-After when it has no transcode slot free for it (503 with
+ * one), 0 when the stream would play now, undefined for any other answer or
+ * none (a token that ran out, a file gone, no ffmpeg). Asked with a HEAD, which
+ * the server answers as it would the GET without starting a transcode (an
+ * ffmpeg, holding one of its few slots).
  */
 export async function transcodeRetryAfter(
   url: string,
   signal?: AbortSignal,
 ): Promise<number | undefined> {
   try {
-    const res = await fetch(url, { signal });
-    void res.body?.cancel().catch(() => {});
+    const res = await fetch(url, { method: 'HEAD', signal });
     if (res.ok) return 0;
     const wait = Number(res.headers.get('Retry-After'));
     if (res.status !== 503 || !Number.isFinite(wait) || wait <= 0) return undefined;
