@@ -290,28 +290,33 @@ func (a *API) writeBookDetail(w http.ResponseWriter, r *http.Request, lib *catal
 // file's start, which the console's chapter editor can't seek, so it asks for
 // ?transcode=1&t= instead). The copies not made yet are warmed in the
 // background, as /item warms them for a player (warmRemuxes). A file not
-// joined, or not looked at on a share not answering, is said not cached.
+// joined, or not looked at on a share not answering, is said not cached. One
+// the remux refused is left unmarked: its stream is the stored Matroska, which
+// no browser plays, and no copy is coming for the editor to wait for.
 func (a *API) adminRemuxes(ctx context.Context, lib *catalog.Library, files []catalog.AdminFile) {
 	if !a.remuxing(lib) {
 		return
 	}
 	var rels []string
-	var marked []*catalog.AdminFile
+	var at []int
 	for i, f := range files {
 		if media.Remuxable(f.Format, f.Codec) {
-			files[i].DirectPlayable, files[i].RemuxCached = true, new(bool)
 			rels = append(rels, f.Path)
-			marked = append(marked, &files[i])
+			at = append(at, i)
 		}
 	}
-	abs, _ := a.warmRemuxes(ctx, lib, rels)
-	for i, p := range abs {
-		if p == "" {
+	abs, answering := a.warmRemuxes(ctx, lib, rels)
+	for k, i := range at {
+		st := media.CacheMissing
+		// No look on a share that stopped answering: each would wait out its own bound.
+		if answering && abs[k] != "" {
+			st, _ = a.remux.Status(abs[k])
+		}
+		if st == media.CacheFailed {
 			continue
 		}
-		if st, _ := a.remux.Status(p); st == media.CacheReady {
-			*marked[i].RemuxCached = true
-		}
+		cached := st == media.CacheReady
+		files[i].DirectPlayable, files[i].RemuxCached = true, &cached
 	}
 }
 

@@ -542,6 +542,30 @@ func TestMatroskaAdminBookSaysRemuxCached(t *testing.T) {
 	}
 }
 
+// TestMatroskaAdminBookRefusedRemux: an MP3-in-MKA (as indexed) whose remux
+// ffmpeg refuses is served as stored, which no browser plays: the admin book
+// page then says it is no remux (direct_playable false, no remux_cached), so
+// the chapter editor transcodes it and waits for no copy that never comes.
+func TestMatroskaAdminBookRefusedRemux(t *testing.T) {
+	t.Parallel()
+	m := newMKAEnv(t)
+	m.api.ffmpeg = "ffmpeg"
+	// AAC inside where the index says MP3: the remux's mp3 muxer refuses it.
+	aac, err := os.ReadFile(filepath.Join(m.lib.Root, filepath.FromSlash(mkaAACFile)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.lib.Root, filepath.FromSlash(mkaFile)), aac, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.adminFiles(t, mkaBook) // warms it
+	m.api.remux.Wait()
+	got := m.adminFiles(t, mkaBook)[mkaFile]
+	if got.RemuxCached != nil || got.DirectPlayable {
+		t.Fatalf("refused remux_cached = %v, direct_playable %v; want absent and false", got.RemuxCached, got.DirectPlayable)
+	}
+}
+
 // TestMatroskaColdRemuxTranscodes: a stream that finds its remux still running
 // after the bounded wait is transcoded live (a download still named .mp3), the
 // remux goes on, and the next request gets the cached copy.
