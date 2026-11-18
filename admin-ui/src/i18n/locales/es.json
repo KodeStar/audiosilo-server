@@ -2507,6 +2507,7 @@
   "events.bridge_job_finished.describe": "Descripción lista para {{name}}",
   "events.bridge_job_finished.detect": "Capítulos encontrados para {{name}}",
   "events.bridge_job_finished.detectUnused": "Se guardaron, pero el libro usa otros capítulos. Elige su fuente de capítulos en la página del libro.",
+  "events.bridge_job_finished.detectUnusedEdited": "Se guardaron, pero el libro usa los capítulos editados en este servidor. Revierte la edición en la página del libro para usarlos.",
   "events.bridge_job_failed.title": "Trabajo de la Bridge fallido: {{name}}",
   "events.bridge_job_failed.attention": "Trabajo de la Bridge que requiere atención: {{name}}",
   "events.unknown": "Ha pasado algo ({{kind}})",

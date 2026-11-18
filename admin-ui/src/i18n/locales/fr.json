@@ -2507,6 +2507,7 @@
   "events.bridge_job_finished.describe": "Description prête pour {{name}}",
   "events.bridge_job_finished.detect": "Chapitres trouvés pour {{name}}",
   "events.bridge_job_finished.detectUnused": "Ils ont été enregistrés, mais le livre utilise d’autres chapitres. Choisissez sa source de chapitres sur la page du livre.",
+  "events.bridge_job_finished.detectUnusedEdited": "Ils ont été enregistrés, mais le livre utilise les chapitres modifiés sur ce serveur. Annulez la modification sur la page du livre pour les utiliser.",
   "events.bridge_job_failed.title": "Échec d'une tâche de la Bridge : {{name}}",
   "events.bridge_job_failed.attention": "Tâche de la Bridge à examiner : {{name}}",
   "events.unknown": "Un événement s'est produit ({{kind}})",

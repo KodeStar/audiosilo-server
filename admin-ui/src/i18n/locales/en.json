@@ -2342,6 +2342,7 @@
   "events.bridge_job_finished.describe": "Description ready for {{name}}",
   "events.bridge_job_finished.detect": "Chapters found for {{name}}",
   "events.bridge_job_finished.detectUnused": "They were saved, but the book uses other chapters. Choose its chapter source on the book page.",
+  "events.bridge_job_finished.detectUnusedEdited": "They were saved, but the book uses the chapters edited on this server. Revert the edit on the book page to use them.",
   "events.bridge_job_failed.title": "Bridge job failed: {{name}}",
   "events.bridge_job_failed.attention": "Bridge job needs attention: {{name}}",
   "events.unknown": "Something happened ({{kind}})",

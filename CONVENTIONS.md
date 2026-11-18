@@ -3258,8 +3258,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `cancel_requested`), since the generate run writes the description itself. Notifications word a detect
   job as the chapters ("Chapters found: <book>"; the event carries the book's `chapters_source` once done,
   read after the Bridge's attachments rescan, and the message promises "Listeners see them in the player now."
-  only when it is `generated`, else says they were saved but the book uses other chapters; the bell's body
-  says so too, `detectUnused`), and its `chapters_not_detected` park (no headings were heard;
+  only when it is `generated`, else says they were saved but the book uses other chapters (under an edit saved
+  while it ran, `edited`: that reverting the edit brings them in); the bell's body says so too, `detectUnused`
+  and `detectUnusedEdited`), and its `chapters_not_detected` park (no headings were heard;
   a person's decision) says to add markers or match the book to a recording with a chapter list. The
   console's Health `no_chapters` offers **Detect chapters** (row and bulk; `fixFor` + `detectAvailable`: an
   online Bridge with the `chapters` feature): `health/detect-chapters-dialog.tsx` confirms with the

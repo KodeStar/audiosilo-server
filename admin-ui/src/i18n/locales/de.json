@@ -2342,6 +2342,7 @@
   "events.bridge_job_finished.describe": "Beschreibung bereit für {{name}}",
   "events.bridge_job_finished.detect": "Kapitel gefunden für {{name}}",
   "events.bridge_job_finished.detectUnused": "Sie wurden gespeichert, aber das Buch verwendet andere Kapitel. Wähle seine Kapitelquelle auf der Buchseite.",
+  "events.bridge_job_finished.detectUnusedEdited": "Sie wurden gespeichert, aber das Buch verwendet die auf diesem Server bearbeiteten Kapitel. Setze die Bearbeitung auf der Buchseite zurück, um sie zu verwenden.",
   "events.bridge_job_failed.title": "Bridge-Aufgabe fehlgeschlagen: {{name}}",
   "events.bridge_job_failed.attention": "Bridge-Aufgabe braucht Aufmerksamkeit: {{name}}",
   "events.unknown": "Es ist etwas passiert ({{kind}})",

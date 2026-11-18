@@ -110,6 +110,8 @@ describe('Bridge job events', () => {
       ).body;
     expect(done('files')).toEqual({ key: 'events.bridge_job_finished.detectUnused' });
     expect(done('community')).toEqual({ key: 'events.bridge_job_finished.detectUnused' });
+    // An edit saved while the job ran: reverting it brings them in, no source choice does.
+    expect(done('edited')).toEqual({ key: 'events.bridge_job_finished.detectUnusedEdited' });
     expect(done('generated')).toBeUndefined();
     // A server that names no source says nothing more.
     expect(done()).toBeUndefined();
