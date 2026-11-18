@@ -167,8 +167,9 @@ func (r *RekeyReport) moved(reason string, paths int) {
 // version is recorded only when no path failed, so a failed path is tried at
 // the next start. The start that first runs it applies migration 0084, so a
 // before-upgrade copy of the database was taken just before (backup.BeforeUpgrade).
-// The error is a failure to read the state or the libraries; a path's own
-// failure is in the report.
+// The error is a failure to read the state, the libraries or a library's
+// candidates, or ctx's (the report then holds what moved before it); a path's
+// own failure is in the report.
 func (c *Catalog) RekeyPathState(ctx context.Context) (RekeyReport, error) {
 	var rep RekeyReport
 	if v, err := getServerState[string](ctx, c.db, rekeyStateKey); err != nil || v == pathKeysVersion {
@@ -183,10 +184,10 @@ func (c *Catalog) RekeyPathState(ctx context.Context) (RekeyReport, error) {
 			continue // a podcast episode is its own book; a newer server's kind is left alone
 		}
 		r, err := c.rekeyLibrary(ctx, lib.ID, false)
+		rep.add(r) // what a run stopped part way moved is in the report too
 		if err != nil {
 			return rep, err
 		}
-		rep.add(r)
 	}
 	if len(rep.Failed) > 0 {
 		return rep, nil
@@ -199,7 +200,8 @@ func (c *Catalog) RekeyPathState(ctx context.Context) (RekeyReport, error) {
 // RekeyLibrary is the scan-end re-key of one library (a no-op for a podcast
 // library): rows written while their book was not indexed yet move once it is.
 // It looks for candidates in the tables clients write (rekeyTable.primary)
-// only; the start's run covers the rest.
+// only; the start's run covers the rest. With an error (ctx's, a run stopped
+// part way) the report holds what moved before it.
 func (c *Catalog) RekeyLibrary(ctx context.Context, libraryID int64) (RekeyReport, error) {
 	lib, err := c.GetLibrary(ctx, libraryID)
 	if err != nil || lib.Kind != KindBooks {

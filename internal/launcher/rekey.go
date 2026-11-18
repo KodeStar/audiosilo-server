@@ -53,15 +53,14 @@ func rekeyAfterScan(server context.Context, cat *catalog.Catalog, log *slog.Logg
 	next func(context.Context, library.RunReport)) func(context.Context, library.RunReport) {
 	return func(ctx context.Context, r library.RunReport) {
 		if r.Status == catalog.RunOK || r.Status == catalog.RunPartial {
-			if rep, err := cat.RekeyLibrary(server, r.Library.ID); err != nil {
-				if server.Err() == nil {
-					log.Warn("re-keying listening state after a scan failed", "library", r.Library.Name, "err", err)
-				}
-			} else {
-				// A path a guard keeps is kept at every scan: said at debug
-				// level here, at info by the start's run.
-				logRekey(log.With("library", r.Library.Name), "re-keyed listening state after a scan", rep, slog.LevelDebug)
+			rep, err := cat.RekeyLibrary(server, r.Library.ID)
+			if err != nil && server.Err() == nil {
+				log.Warn("re-keying listening state after a scan failed", "library", r.Library.Name, "err", err)
 			}
+			// What a run stopped part way moved is logged too. A path a guard
+			// keeps is kept at every scan: said at debug level here, at info by
+			// the start's run.
+			logRekey(log.With("library", r.Library.Name), "re-keyed listening state after a scan", rep, slog.LevelDebug)
 		}
 		next(ctx, r)
 	}
