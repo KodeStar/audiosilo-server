@@ -1366,13 +1366,14 @@ type Update struct {
 var ErrNotHeld = errors.New("the job is not held by this claim")
 
 // ErrCancelledWhileHeld is ErrNotHeld for a job that ended cancelled with no
-// later claim than this one: a parked job cancelled (by an admin, or by the
-// server itself: Cancel*, cancelsOpen), which ends at once, a working one whose
-// lease ran out after the cancel was asked for, or one this claim lost to a
-// lapsed lease and that was cancelled while queued again. The 409 not_held then
-// carries reason "cancelled", so the Bridge records the job cancelled rather
-// than lost, which is how it ended (bridge#35, BRIDGE-04). errors.Is reads it as
-// ErrNotHeld too.
+// later claim than this one (never attempt 0, which is no claim): a parked job
+// cancelled (by an admin, or by the server itself: Cancel*, cancelsOpen), which
+// ends at once, as does a held one whose book moved onto another open job of
+// its kind (MoveJobs), a working one whose lease ran out after the cancel was
+// asked for, or one this claim lost to a lapsed lease and that was cancelled
+// while queued again. The 409 not_held then carries reason "cancelled", so the
+// Bridge records the job cancelled rather than lost, which is how it ended
+// (bridge#35, BRIDGE-04). errors.Is reads it as ErrNotHeld too.
 var ErrCancelledWhileHeld = fmt.Errorf("%w: it was cancelled", ErrNotHeld)
 
 // heldStates are the states the Bridge holds a job in (it may report on it);
@@ -1446,7 +1447,8 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 			return err
 		}
 		if !slices.Contains(heldStates, cur.State) || cur.Attempts != u.Attempt {
-			if cur.State == StateCancelled && cur.Attempts == u.Attempt {
+			// Attempt 0 is no claim: a job cancelled before any took it.
+			if cur.State == StateCancelled && cur.Attempts == u.Attempt && u.Attempt > 0 {
 				return ErrCancelledWhileHeld
 			}
 			return ErrNotHeld
