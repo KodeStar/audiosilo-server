@@ -113,14 +113,17 @@ func queueSyncs(ctx context.Context, d modules.Deps, now time.Time) error {
 }
 
 // queueSync queues account's audible.sync when it has a synced title, or
-// whatever it has when empty (the Bridge then told the set is empty), and
+// always when empty (the Bridge's claim then tells it the set is empty), and
 // records its queue time.
 func (q Queues) queueSync(ctx context.Context, account string, empty bool) error {
-	has, err := q.Catalog.HasAudibleSyncTitles(ctx, account)
-	if err != nil {
-		return fmt.Errorf("sync audible account %s: %w", account, err)
+	queue := empty
+	if !queue {
+		var err error
+		if queue, err = q.Catalog.HasAudibleSyncTitles(ctx, account); err != nil {
+			return fmt.Errorf("sync audible account %s: %w", account, err)
+		}
 	}
-	if has || empty {
+	if queue {
 		if _, _, err := q.Bridge.Enqueue(ctx, bridge.AudibleSync(account, bridge.PriorityScheduled)); err != nil {
 			return fmt.Errorf("sync audible account %s: %w", account, err)
 		}
