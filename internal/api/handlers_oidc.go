@@ -63,7 +63,7 @@ const (
 	// the page it lands on trades it at oidcFinishPath.
 	oidcDoneCookie = "audiosilo_oidc_done"
 	// oidcCookiePath is the flow's cookies' path on a plain-http public_url, a
-	// flow's under public_url's own path (oidcCookieName).
+	// flow's under public_url's own path too (oidcCookieName).
 	oidcCookiePath = "/api/v1/auth/oidc/"
 	// hostCookiePrefix makes a browser take the cookie only when it is Secure,
 	// set by this origin itself (no Domain) for Path=/: a sibling subdomain
@@ -261,41 +261,49 @@ func sameHost(public *url.URL, host string) bool {
 }
 
 // oidcCookieName is the name one of the flow's cookies (oidcCookie,
-// oidcDoneCookie) is set and read by, its path and whether it is Secure: an
-// https public_url (in any case: it keeps the case it was typed in). There it
-// is __Host-<name> on Path=/ (the prefix demands that path, Secure and no
-// Domain), so neither a sibling subdomain nor a network attacker answering
-// plain http can plant one: a planted flow or done cookie would sign the
-// browser in as the attacker (a login CSRF). On plain http no prefix can be
-// had (it needs Secure), so a network attacker can plant one there; the
-// cookies keep the flow's path then, oidcCookiePath, each where it is read: a
-// flow's under public_url's own path, where the provider sends the callback
-// (a proxy serving the server at /audiosilo/ has the browser ask for
-// /audiosilo/api/v1/auth/oidc/callback, server#406); the done cookie's not,
-// as the console and the web player call the finish on their origin's own
-// /api/v1.
-func (a *API) oidcCookieName(name string) (cookie, path string, secure bool) {
+// oidcDoneCookie) is set and read by, the paths it is set on and whether it
+// is Secure: an https public_url (in any case: it keeps the case it was typed
+// in). There it is __Host-<name> on Path=/ (the prefix demands that path,
+// Secure and no Domain), so neither a sibling subdomain nor a network attacker
+// answering plain http can plant one: a planted flow or done cookie would
+// sign the browser in as the attacker (a login CSRF). On plain http no prefix
+// can be had (it needs Secure), so a network attacker can plant one there;
+// the cookies keep the flow's path then, oidcCookiePath, each where it is
+// asked for. Under a public_url with a path of its own (a proxy serving the
+// server at /audiosilo/, server#406) a flow's cookie is asked for at two: the
+// console and the web player ask /start on their origin's own /api/v1, the
+// provider sends the callback to /audiosilo/api/v1/auth/oidc/callback (and
+// the hop sends /start there). So it is set on both, one copy each, and
+// /start sees the flows the browser holds wherever it is asked (heldFlows:
+// the cap, the same trip's tag). The done cookie's is the origin's own only:
+// the console and the web player call the finish there.
+func (a *API) oidcCookieName(name string) (cookie string, paths []string, secure bool) {
 	base := a.oidcBase()
 	if strings.HasPrefix(strings.ToLower(base), "https:") {
-		return hostCookiePrefix + name, "/", true
+		return hostCookiePrefix + name, []string{"/"}, true
 	}
-	prefix := ""
+	paths = []string{oidcCookiePath}
 	if u, err := url.Parse(base); err == nil && strings.HasPrefix(name, oidcCookie) {
-		prefix = strings.TrimRight(u.EscapedPath(), "/")
+		if prefix := strings.TrimRight(u.EscapedPath(), "/"); prefix != "" {
+			paths = append(paths, prefix+oidcCookiePath)
+		}
 	}
-	return name, prefix + oidcCookiePath, false
+	return name, paths, false
 }
 
 // setOIDCCookie sets one of the flow's cookies, name (maxAge < 0 deletes it),
-// as oidcCookieName names and places it, HttpOnly and SameSite=Lax. Secure
-// only on an https public_url: a browser never sends a Secure cookie back over
-// plain http (a server on the home network without TLS).
+// as oidcCookieName names and places it (every path it is held on), HttpOnly
+// and SameSite=Lax. Secure only on an https public_url: a browser never sends
+// a Secure cookie back over plain http (a server on the home network without
+// TLS).
 func (a *API) setOIDCCookie(w http.ResponseWriter, name, value string, maxAge int) {
-	name, path, secure := a.oidcCookieName(name)
-	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure follows public_url's scheme, see above
-		Name: name, Value: value, Path: path, MaxAge: maxAge,
-		HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode,
-	})
+	name, paths, secure := a.oidcCookieName(name)
+	for _, path := range paths {
+		http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure follows public_url's scheme, see above
+			Name: name, Value: value, Path: path, MaxAge: maxAge,
+			HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode,
+		})
+	}
 }
 
 // oidcCookieValue is one of the flow's cookies the request carries, by the

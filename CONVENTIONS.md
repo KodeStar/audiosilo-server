@@ -4012,8 +4012,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   each request to its path) (HttpOnly, SameSite=Lax; on an https public_url
   `__Host-audiosilo_oidc_flow_<key>`, Path `/`, Secure, no Domain, so neither a sibling subdomain nor
   a plain-http answer can plant one; on plain http `audiosilo_oidc_flow_<key>` on Path
-  `/api/v1/auth/oidc/` under public_url's own path (`/audiosilo/api/v1/auth/oidc/` behind a proxy's
-  prefix), where a network attacker can plant one: no prefix without Secure; `oidcCookieName`); the
+  `/api/v1/auth/oidc/`, and a second copy under public_url's own path when it has one
+  (`/audiosilo/api/v1/auth/oidc/` behind a proxy's prefix: the provider sends the callback there,
+  while the console and the web player ask `/start` on the origin's own `/api/v1`, so `/start`'s
+  `heldFlows` sees the flows at either and the cap and the same-trip tag check hold), where a
+  network attacker can plant one: no prefix without Secure; `oidcCookieName`); the
   callback deletes its state's cookie whatever happens, never another tab's (a state naming no held
   cookie is `expired`, charging nothing); a sign-in gets a **60 s
   single-use token of its own kind** (`auth.KindOIDC`, minted in `OIDCSignIn`'s transaction) that is **never in a URL**

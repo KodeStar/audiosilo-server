@@ -43,9 +43,15 @@ type oidcEnv struct {
 
 func newOIDCEnv(t *testing.T, p oidctest.Person, configure func(*config.OIDCConfig)) *oidcEnv {
 	t.Helper()
+	return newOIDCEnvAt(t, oidcPublic, p, configure)
+}
+
+// newOIDCEnvAt is newOIDCEnv with public_url public.
+func newOIDCEnvAt(t *testing.T, public string, p oidctest.Person, configure func(*config.OIDCConfig)) *oidcEnv {
+	t.Helper()
 	idp := oidctest.New(t, "audiosilo", oidcSecret, p)
 	e := newTestEnvWith(t, func(c *config.Config) {
-		c.PublicURL = oidcPublic
+		c.PublicURL = public
 		c.Auth.OIDC = config.OIDCConfig{Enabled: true, Name: "Keycloak", Issuer: idp.Issuer, ClientID: "audiosilo", ClientSecret: oidcSecret}
 		if configure != nil {
 			configure(&c.Auth.OIDC)
@@ -327,25 +333,33 @@ func TestOIDCServerInfo(t *testing.T) {
 func TestOIDCCookieSecureAnyCase(t *testing.T) {
 	t.Parallel()
 	type want struct {
-		secure     bool
-		name, path string
+		secure bool
+		name   string
+		paths  []string
 	}
 	for base, w := range map[string]want{
-		"HTTPS://audiosilo.test": {true, hostFlowCookie, "/"},
-		"https://audiosilo.test": {true, hostFlowCookie, "/"},
-		"http://audiosilo.test":  {false, oidcCookie, oidcCookiePath},
-		// Under a proxy's path prefix (server#406): the browser asks for
-		// /audiosilo/api/v1/auth/oidc/..., so the cookie's path is there.
-		"http://audiosilo.test/audiosilo/":  {false, oidcCookie, "/audiosilo" + oidcCookiePath},
-		"http://audiosilo.test/my%20books":  {false, oidcCookie, "/my%20books" + oidcCookiePath},
-		"https://audiosilo.test/audiosilo/": {true, hostFlowCookie, "/"},
+		"HTTPS://audiosilo.test": {true, hostFlowCookie, []string{"/"}},
+		"https://audiosilo.test": {true, hostFlowCookie, []string{"/"}},
+		"http://audiosilo.test":  {false, oidcCookie, []string{oidcCookiePath}},
+		// Under a proxy's path prefix (server#406): the provider sends the
+		// callback to /audiosilo/api/v1/auth/oidc/..., the console and the
+		// player ask /start on the origin's own /api/v1, so a copy at each.
+		"http://audiosilo.test/audiosilo/":  {false, oidcCookie, []string{oidcCookiePath, "/audiosilo" + oidcCookiePath}},
+		"http://audiosilo.test/my%20books":  {false, oidcCookie, []string{oidcCookiePath, "/my%20books" + oidcCookiePath}},
+		"https://audiosilo.test/audiosilo/": {true, hostFlowCookie, []string{"/"}},
 	} {
 		e := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = base })
 		rec := httptest.NewRecorder()
 		e.api.setOIDCCookie(rec, oidcCookie, "v", 600)
-		if c := rec.Result().Cookies(); len(c) != 1 || c[0].Secure != w.secure || c[0].Name != w.name ||
-			c[0].Path != w.path || c[0].Domain != "" {
-			t.Errorf("public_url %s: %+v, want %+v", base, c, w)
+		var paths []string
+		for _, c := range rec.Result().Cookies() {
+			if c.Secure != w.secure || c.Name != w.name || c.Domain != "" {
+				t.Errorf("public_url %s: %+v, want %+v", base, c, w)
+			}
+			paths = append(paths, c.Path)
+		}
+		if !slices.Equal(paths, w.paths) {
+			t.Errorf("public_url %s: paths %q, want %q", base, paths, w.paths)
 		}
 	}
 	// The done cookie stays where the finish is called: the console and the
@@ -1866,6 +1880,147 @@ func TestOIDCTwoTabs(t *testing.T) {
 		if loc := many.callback(t, e, p); loc != oidcPublic+oidcDoneAdmin {
 			t.Fatalf("a held flow landed on %q", loc)
 		}
+	}
+}
+
+// pathBrowser is a browser in front of a proxy that serves the server under
+// prefix: a cookie jar that keeps each cookie to its path. It asks for a path
+// as the address bar has it, sends only the cookies whose path holds it, and
+// the proxy takes the prefix off.
+type pathBrowser struct {
+	prefix  string
+	cookies []*http.Cookie
+}
+
+// sent are the cookies the browser sends to path.
+func (b *pathBrowser) sent(path string) []*http.Cookie {
+	var out []*http.Cookie
+	for _, c := range b.cookies {
+		if strings.HasPrefix(path, c.Path) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// flows counts the flow cookies the browser sends to path.
+func (b *pathBrowser) flows(path string) int {
+	n := 0
+	for _, c := range b.sent(path) {
+		if strings.HasPrefix(c.Name, oidcCookie) {
+			n++
+		}
+	}
+	return n
+}
+
+func (b *pathBrowser) get(t *testing.T, e *oidcEnv, path string) *http.Response {
+	t.Helper()
+	resp := e.get(t, strings.TrimPrefix(path, b.prefix), oidcHost, b.sent(path)...)
+	for _, c := range resp.Cookies() {
+		b.cookies = slices.DeleteFunc(b.cookies, func(o *http.Cookie) bool { return o.Name == c.Name && o.Path == c.Path })
+		if c.MaxAge >= 0 {
+			b.cookies = append(b.cookies, c)
+		}
+	}
+	return resp
+}
+
+// start runs /start at path and the provider's authorize: the callback's
+// path as the provider sends the browser to it.
+func (b *pathBrowser) start(t *testing.T, e *oidcEnv, path string) string {
+	t.Helper()
+	resp := b.get(t, e, path)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("start: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	authz, err := noFollow.Get(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authz.Body.Close()
+	back, err := url.Parse(authz.Header.Get("Location"))
+	if err != nil || !strings.HasPrefix(back.Path, b.prefix+oidcCallbackPath) {
+		t.Fatalf("authorize sent the browser to %q", authz.Header.Get("Location"))
+	}
+	return back.RequestURI()
+}
+
+// TestOIDCFlowsHeldUnderPrefix (server#406): on a plain-http public_url with a
+// path (a proxy serving the server under /audiosilo/) the console and the web
+// player still ask /start on their origin's own /api/v1, while the provider
+// sends the callback under the prefix. /start sees the flows the browser
+// holds at either, so the cap and the same-trip tag check (audiosilo#202)
+// hold there as anywhere, and the callback takes its flow's cookie from both.
+func TestOIDCFlowsHeldUnderPrefix(t *testing.T) {
+	t.Parallel()
+	const prefix = "/audiosilo"
+	public := "http://" + oidcHost + prefix
+	e := newOIDCEnvAt(t, public, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	b := &pathBrowser{prefix: prefix}
+	// finish lands callback and asks the finish where the player does (the
+	// origin's own /api/v1), expecting the tag want when it is not "".
+	finish := func(t *testing.T, callback, want string) (*http.Response, map[string]any) {
+		t.Helper()
+		resp := b.get(t, e, callback)
+		if loc := resp.Header.Get("Location"); loc != public+oidcDoneWeb {
+			t.Fatalf("landed on %q", loc)
+		}
+		headers := map[string]string{}
+		for _, c := range b.sent(oidcFinishPath) {
+			if c.Name == oidcDoneCookie {
+				headers["Cookie"] = c.Name + "=" + c.Value
+			}
+		}
+		body := `{"device_name":"web"}`
+		if want != "" {
+			body = `{"device_name":"web","intent":"` + want + `"}`
+		}
+		fin, raw := e.doHeaders(t, "POST", oidcFinishPath, "", body, headers)
+		var out map[string]any
+		_ = json.Unmarshal([]byte(raw), &out)
+		return fin, out
+	}
+
+	// Denied: a trip abandoned at the provider, its start URL sent again from
+	// the history while the browser still holds its flow cookie: the new flow
+	// goes untagged, so the finish the player asks for its tag is refused.
+	tag := strings.Repeat("5c", 32)
+	first := b.start(t, e, oidcStartPath+"?return=web&intent="+tag)
+	again := b.start(t, e, oidcStartPath+"?return=web&intent="+tag)
+	if fin, out := finish(t, again, tag); fin.StatusCode != http.StatusForbidden || out["code"] != codeOIDCIntentMismatch || out["token"] != nil {
+		t.Fatalf("an abandoned trip's start sent again: %d %v", fin.StatusCode, out)
+	}
+	// The finished flow's cookie is gone wherever it was held, the abandoned
+	// one's still there for its own return.
+	for _, at := range []string{oidcStartPath, prefix + oidcCallbackPath} {
+		if n := b.flows(at); n != 1 {
+			t.Fatalf("%d flows held at %s after one of two finished", n, at)
+		}
+	}
+	// Allowed: the abandoned trip comes back and finishes, with its own tag.
+	if fin, out := finish(t, first, tag); fin.StatusCode != http.StatusOK || out["token"] == "" || out["intent"] != tag {
+		t.Fatalf("the first trip: %d %v", fin.StatusCode, out)
+	}
+
+	// The cap, asked where the console and the player ask and where the hop
+	// to public_url does: never more than oidcMaxFlows held.
+	var last string
+	for i := range oidcMaxFlows + 2 {
+		at := oidcStartPath + "?return=web"
+		if i%2 == 1 {
+			at = prefix + oidcStartPath + "?return=web&hop=1"
+		}
+		last = b.start(t, e, at)
+	}
+	for _, at := range []string{oidcStartPath, prefix + oidcCallbackPath} {
+		if n := b.flows(at); n != oidcMaxFlows {
+			t.Fatalf("%d flows held at %s, want %d", n, at, oidcMaxFlows)
+		}
+	}
+	if fin, out := finish(t, last, ""); fin.StatusCode != http.StatusOK || out["token"] == "" {
+		t.Fatalf("the last flow under the cap: %d %v", fin.StatusCode, out)
 	}
 }
 
