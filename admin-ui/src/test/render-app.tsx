@@ -11,10 +11,7 @@ import { createAppRouter } from '@/router';
  * main.tsx passes a single sign-on's return; `strict` under StrictMode, as
  * main.tsx renders it (the dev server's extra effect and ref cycles).
  */
-export function renderApp(
-  path = '/',
-  opts: { oidcReturn?: OIDCReturn; strict?: boolean } = {},
-) {
+export function renderApp(path = '/', opts: { oidcReturn?: OIDCReturn; strict?: boolean } = {}) {
   const history = createMemoryHistory({ initialEntries: [`/admin${path === '/' ? '' : path}`] });
   const router = createAppRouter({ history });
   const queryClient = new QueryClient({
