@@ -381,8 +381,8 @@ func TestSplitDiscsIssue(t *testing.T) {
 // GetBookHolding answers a path below a folder book from the index: a disc folder
 // of a joined book, or a file in it, is that book (the innermost folder book
 // holding it); a folder's single-file books, a path no book's files are under, a
-// sibling whose name only starts like a disc's, and a LIKE wildcard ("CD_") match
-// nothing.
+// sibling whose name only starts like a disc's, a LIKE wildcard ("CD_") and a disc
+// in another case ("cd1": a byte-exact disk keeps it apart) match nothing.
 func TestGetBookHolding(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -409,7 +409,7 @@ func TestGetBookHolding(t *testing.T) {
 			t.Errorf("GetBookHolding(%q) = %+v (err %v), want %s", p, b, err, want)
 		}
 	}
-	for _, p := range []string{"A/Book", "A/Book/CD3", "A/Book/CD", "A/Bookx/CD1", "A/Book/CD_", "A/Book/CD%", "A", "A/Single.m4b/x"} {
+	for _, p := range []string{"A/Book", "A/Book/CD3", "A/Book/CD", "A/Bookx/CD1", "A/Book/CD_", "A/Book/CD%", "A/Book/cd1", "A/Book/Cd2/01.mp3", "A", "A/Single.m4b/x"} {
 		if b, err := c.GetBookHolding(ctx, lib.ID, p); !errors.Is(err, ErrNotFound) {
 			t.Errorf("GetBookHolding(%q) = %+v (err %v), want ErrNotFound", p, b, err)
 		}

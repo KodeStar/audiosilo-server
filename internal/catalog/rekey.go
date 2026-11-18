@@ -946,8 +946,9 @@ func bookStillHolds(ctx context.Context, tx *sql.Tx, libraryID int64, target, sp
 		held = `EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id AND f.rel_path = ?)`
 		args = append([]any{spelled}, args...)
 	case rekeyFolder:
-		held = `EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id AND f.rel_path LIKE ? ESCAPE '\')`
-		args = append([]any{escapeLike(spelled) + "/%"}, args...)
+		below, belowArgs := belowPathSQL("f.rel_path", spelled)
+		held = `EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id AND ` + below + `)`
+		args = append(belowArgs, args...)
 	}
 	var ok bool
 	err := tx.QueryRowContext(ctx, `SELECT b.duration, `+held+` FROM books b WHERE b.library_id = ? AND b.rel_path = ?`,
@@ -1057,11 +1058,12 @@ func fileRelative(ctx context.Context, tx *sql.Tx, libraryID int64, file, book s
 				discLen   float64
 				discFirst bool
 			)
+			disc := book + "/" + rest[:i]
 			if err := tx.QueryRowContext(ctx,
 				`SELECT COALESCE(SUM(duration), 0),
-				        COALESCE((SELECT rel_path FROM book_files WHERE book_id = ?1 ORDER BY seq, id LIMIT 1), '') LIKE ?2 ESCAPE '\'
-				   FROM book_files WHERE book_id = ?1 AND rel_path LIKE ?2 ESCAPE '\'`,
-				bookID, escapeLike(book+"/"+rest[:i])+"/%").Scan(&discLen, &discFirst); err != nil {
+				        COALESCE((SELECT rel_path >= ?2 AND rel_path < ?3 FROM book_files WHERE book_id = ?1 ORDER BY seq, id LIMIT 1), 0)
+				   FROM book_files WHERE book_id = ?1 AND rel_path >= ?2 AND rel_path < ?3`,
+				bookID, disc+"/", disc+"0").Scan(&discLen, &discFirst); err != nil {
 				return false, err
 			}
 			if !discFirst {

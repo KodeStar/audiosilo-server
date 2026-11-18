@@ -132,16 +132,24 @@ func pathsORFilterSQL(col string, paths []string) (string, []any) {
 	var conds []string
 	var args []any
 	for _, p := range paths {
-		// The exact-match arm binds p literally; the subtree arm is the byte range
-		// of the paths that start with p+"/" ('0' is the byte after '/'), so it is
-		// the literal, case-sensitive prefix of the authoritative Go gate
-		// (relpath.Within). LIKE was neither: it ignores ASCII case, so a grant on
-		// "Saga" reached a sibling "saga/..." on a case-sensitive filesystem, and
-		// its wildcards needed escaping.
-		conds = append(conds, "("+col+" = ? OR ("+col+" >= ? AND "+col+" < ?))")
-		args = append(args, p, p+"/", p+"0")
+		// The exact-match arm binds p literally; the subtree arm is belowPathSQL's
+		// byte range, the authoritative Go gate's prefix (relpath.Within). LIKE
+		// ignored ASCII case: a grant on "Saga" reached a sibling "saga/..." on a
+		// case-sensitive filesystem.
+		below, belowArgs := belowPathSQL(col, p)
+		conds = append(conds, "("+col+" = ? OR "+below+")")
+		args = append(append(args, p), belowArgs...)
 	}
 	return "(" + strings.Join(conds, " OR ") + ")", args
+}
+
+// belowPathSQL is the condition that col is a path below p: the byte range of
+// the paths that start with p+"/" ('0' is the byte after '/'), so the
+// literal, case-sensitive prefix relpath.Within checks, with no wildcards to
+// escape. LIKE is neither (it ignores ASCII case: "Book/cd1/%" matches
+// "Book/CD1/01.mp3").
+func belowPathSQL(col, p string) (string, []any) {
+	return "(" + col + " >= ? AND " + col + " < ?)", []any{p + "/", p + "0"}
 }
 
 // pathsJSONFilterSQL is pathFilterSQL's single-parameter form: the paths as one

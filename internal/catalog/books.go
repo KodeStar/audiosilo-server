@@ -1068,8 +1068,9 @@ func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath stri
 	held := `f.rel_path = ?`
 	heldArgs := []any{relPath}
 	if !fileOnly {
-		held = `(f.rel_path = ? OR f.rel_path LIKE ? ESCAPE '\')`
-		heldArgs = append(heldArgs, escapeLike(relPath)+"/%")
+		below, belowArgs := belowPathSQL("f.rel_path", relPath)
+		held = `(f.rel_path = ? OR ` + below + `)`
+		heldArgs = append(heldArgs, belowArgs...)
 	}
 	var (
 		id   int64
