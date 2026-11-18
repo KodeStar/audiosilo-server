@@ -168,3 +168,49 @@ func TestPodcastKeepWindowUndatedSerial(t *testing.T) {
 		}
 	}
 }
+
+// A show of dated and undated episodes is fetched in the order it lists
+// (server#179): Archive, oldest first, takes the undated ones first as the
+// list and /next put them, and Keep N's newest N are dated ones.
+func TestPodcastFetchOrderMixedDates(t *testing.T) {
+	t.Parallel()
+	c, lib, _, f := undatedSerial(t)
+	ctx := t.Context()
+	f.Episodes = f.Episodes[:5]
+	for i, day := range []string{"2026-01-03T00:00:00Z", "", "2026-01-01T00:00:00Z", "", "2026-01-02T00:00:00Z"} {
+		f.Episodes[i].Published = day
+		f.Episodes[i].Season, f.Episodes[i].Episode = nil, nil
+	}
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "mixed", "", "", f, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	var oldest []string
+	page, err := c.PodcastEpisodesWithin(ctx, lib.ID, "Fixture Show", "oldest", 50, "", Scope{LibraryID: lib.ID, AllowAll: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range page.Episodes {
+		oldest = append(oldest, e.Path)
+	}
+	if len(oldest) != 5 || oldest[2] != f.Episodes[2].Path || oldest[4] != f.Episodes[0].Path {
+		t.Fatalf("listed oldest first %v", oldest)
+	}
+	fetchOrder := func(p Policy) []string {
+		t.Helper()
+		cands, err := c.PodcastFetchCandidates(ctx, PodcastWorkShow{Ref: Ref{LibraryID: lib.ID, Path: "Fixture Show"}, ShowID: f.ShowID, Policy: p})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, e := range cands {
+			got = append(got, e.Path)
+		}
+		return got
+	}
+	if got := fetchOrder(Policy{Mode: "archive"}); !slices.Equal(got, oldest) {
+		t.Fatalf("archive fetches\n%v\nwant the list's order\n%v", got, oldest)
+	}
+	if got := fetchOrder(Policy{Mode: "keep", Keep: 2}); !slices.Equal(got, []string{f.Episodes[0].Path, f.Episodes[4].Path}) {
+		t.Fatalf("keep 2 fetches %v", got)
+	}
+}
