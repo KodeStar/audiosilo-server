@@ -68,11 +68,8 @@ func audiblePollParams(raw json.RawMessage) (json.RawMessage, error) {
 // with its params' account, so each account has at most one open job of the
 // kind.
 func audibleAccountSuffix(j NewJob) string {
-	var p struct {
-		Account string `json:"account"`
-	}
-	_ = json.Unmarshal(j.Params, &p)
-	return "|" + p.Account
+	account, _ := AudibleAccountOf(Job{Params: j.Params})
+	return "|" + account
 }
 
 // AudiblePoll is the NewJob that polls account, planning its unmatched
