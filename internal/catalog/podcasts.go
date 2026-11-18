@@ -813,14 +813,21 @@ func (c *Catalog) PodcastState(ctx context.Context, lib int64, show string) (Pod
 	return s, err
 }
 
+// pollInHandWindow is how long DuePodcastPolls counts an ended poll whose fold
+// has not landed as the show's poll in hand. It is the scheduler's own window,
+// far shorter than bridge.PollFoldWindow (the sweep's): a fold that keeps
+// failing pauses that show's polls for at most this long, while the sweep goes
+// on retrying the fold for the whole day.
+const pollInHandWindow = 15 * time.Minute
+
 // DuePodcastPolls are the followed shows whose feed check is due and has no
 // poll in hand: none open, and none ended but not folded yet within
-// bridge.PollFoldWindow (its fold moves next_poll_at). A poll
+// pollInHandWindow (its fold moves next_poll_at). A poll
 // that ends between a tick's sweep and this read is the second case: without
 // it the same show is queued again within the second (server#403).
 func (c *Catalog) DuePodcastPolls(ctx context.Context, limit int) ([]Ref, error) {
 	now := c.now().UTC()
-	return queryRows(ctx, c.db, func(r *sql.Rows, p *Ref) error { return r.Scan(&p.LibraryID, &p.Path) }, `SELECT s.library_id,s.show_path FROM podcast_shows s JOIN libraries l ON l.id=s.library_id LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path AND st.show_id=s.show_id WHERE l.kind='podcasts' AND EXISTS(`+followMatchSQL+`) AND COALESCE(st.error_code,'')<>'gone' AND (st.next_poll_at IS NULL OR st.next_poll_at<=?) AND NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.library_id=s.library_id AND j.rel_path=s.show_path AND j.kind='podcast.poll' AND (j.state IN `+bridge.OpenStatesSQL+` OR j.state IN `+bridge.EndedStatesSQL+` AND j.finished_at>=? AND `+bridge.UnfoldedSQL+`)) ORDER BY st.next_poll_at,s.library_id,s.show_path LIMIT ?`, now.Format(time.RFC3339), now.Add(-bridge.PollFoldWindow).Format(time.RFC3339), limit)
+	return queryRows(ctx, c.db, func(r *sql.Rows, p *Ref) error { return r.Scan(&p.LibraryID, &p.Path) }, `SELECT s.library_id,s.show_path FROM podcast_shows s JOIN libraries l ON l.id=s.library_id LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path AND st.show_id=s.show_id WHERE l.kind='podcasts' AND EXISTS(`+followMatchSQL+`) AND COALESCE(st.error_code,'')<>'gone' AND (st.next_poll_at IS NULL OR st.next_poll_at<=?) AND NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.library_id=s.library_id AND j.rel_path=s.show_path AND j.kind='podcast.poll' AND (j.state IN `+bridge.OpenStatesSQL+` OR j.state IN `+bridge.EndedStatesSQL+` AND j.finished_at>=? AND `+bridge.UnfoldedSQL+`)) ORDER BY st.next_poll_at,s.library_id,s.show_path LIMIT ?`, now.Format(time.RFC3339), now.Add(-pollInHandWindow).Format(time.RFC3339), limit)
 }
 func (c *Catalog) PodcastNotWritable(ctx context.Context, ref Ref) error {
 	_, err := c.db.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,error_code,error,next_poll_at) SELECT library_id,show_path,show_id,'library_not_writable','The Bridge cannot write to this library.',? FROM podcast_shows WHERE library_id=? AND show_path=? ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET error_code=excluded.error_code,error=excluded.error,next_poll_at=excluded.next_poll_at`, c.now().Add(30*time.Minute).UTC().Format(time.RFC3339), ref.LibraryID, ref.Path)

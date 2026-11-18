@@ -680,8 +680,8 @@ func TestPodcastCheckNowWithoutRequesterIsNotCounted(t *testing.T) {
 }
 
 // An ended poll not folded yet is the show's poll in hand, whatever it ended
-// as, but only within bridge.PollFoldWindow: one whose fold never comes holds
-// the show back no longer than the sweep keeps trying it (server#403).
+// as, but only within pollInHandWindow: one whose fold keeps failing holds the
+// show back that long, not the day the sweep keeps trying it (server#403).
 func TestDuePodcastPollsUnfoldedPollInHand(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	now := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
@@ -700,19 +700,24 @@ func TestDuePodcastPollsUnfoldedPollInHand(t *testing.T) {
 	due(1, "no poll")
 	for i, state := range []string{bridge.StateDone, bridge.StateFailed, bridge.StateCancelled} {
 		id := int64(100 + i)
-		finished := now.Add(-time.Hour).Format(time.RFC3339)
+		finished := now.Add(-5 * time.Minute).Format(time.RFC3339)
 		if _, err := c.db.ExecContext(ctx, `INSERT INTO bridge_jobs(id,kind,library_id,rel_path,state,dedupe_key,created_at,updated_at,finished_at) VALUES(?,'podcast.poll',?,'Example Show',?,'k','t','t',?)`, id, lib.ID, state, finished); err != nil {
 			t.Fatal(err)
 		}
 		due(0, state+" and not folded")
-		// Past the window the sweep no longer folds it, nor does it hold the show.
-		if _, err := c.db.ExecContext(ctx, `UPDATE bridge_jobs SET finished_at=? WHERE id=?`, now.Add(-bridge.PollFoldWindow-time.Second).Format(time.RFC3339), id); err != nil {
-			t.Fatal(err)
+		setFinished := func(at time.Time) {
+			t.Helper()
+			if _, err := c.db.ExecContext(ctx, `UPDATE bridge_jobs SET finished_at=? WHERE id=?`, at.Format(time.RFC3339), id); err != nil {
+				t.Fatal(err)
+			}
 		}
+		setFinished(now.Add(-pollInHandWindow))
+		due(0, state+" unfolded at the window's edge")
+		// Past the scheduler's window the show is polled again, though the sweep
+		// still tries the fold for bridge.PollFoldWindow.
+		setFinished(now.Add(-pollInHandWindow - time.Second))
 		due(1, state+" unfolded past the window")
-		if _, err := c.db.ExecContext(ctx, `UPDATE bridge_jobs SET finished_at=? WHERE id=?`, finished, id); err != nil {
-			t.Fatal(err)
-		}
+		setFinished(now.Add(-5 * time.Minute))
 		if _, err := c.db.ExecContext(ctx, `INSERT INTO podcast_folded(job_id,at) VALUES(?,?)`, id, finished); err != nil {
 			t.Fatal(err)
 		}

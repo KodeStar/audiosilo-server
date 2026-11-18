@@ -650,8 +650,9 @@ func RedactedJob(j Job) Job {
 }
 
 // PollFoldWindow is how long an ended poll (or follow) waits for its fold:
-// EndedPodcasts sweeps those that ended within it, and the scheduler counts an
-// unfolded one in it as the show's poll in hand (catalog.DuePodcastPolls).
+// EndedPodcasts sweeps those that ended within it. The scheduler counts an
+// unfolded poll as the show's poll in hand over a shorter window of its own
+// (catalog.DuePodcastPolls).
 const PollFoldWindow = 24 * time.Hour
 
 // UnfoldedSQL holds for a bridge_jobs row aliased j whose outcome is not folded
