@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -266,6 +267,10 @@ const spellLookWait = 5 * time.Second
 // by p, the same file, so it is not; a disk that keeps the spellings apart
 // finds p only when a folder or file of that spelling is there beside it. A
 // look that fails or is given up on counts as not (the index's answer stands).
+// Two files apart by their ids may still be one on a disk whose ids don't
+// follow the file (a share mounted without the server's inode numbers, a FUSE
+// mount): p is its own only when each of its names that has another spelling
+// is in its folder's listing as given (spelledOnDisk).
 func (c *Catalog) ownEntry(ctx context.Context, libraryID int64, p string, others []string) bool {
 	lib, err := c.GetLibrary(ctx, libraryID)
 	if err != nil || lib.Root == "" {
@@ -286,6 +291,24 @@ func (c *Catalog) ownEntry(ctx context.Context, libraryID int64, p string, other
 		if fi := look(o); fi != nil && os.SameFile(at, fi) {
 			return false
 		}
+	}
+	return spelledOnDisk(ctx, lib.Root, p)
+}
+
+// spelledOnDisk reports whether each name of p (a path under root) that has
+// another Unicode spelling is listed in its folder as given: a disk that
+// ignores the spelling lists the name as it was written, so another spelling
+// that finds it is not. A listing that fails or is given up on counts as not.
+func spelledOnDisk(ctx context.Context, root, p string) bool {
+	dir := root
+	for _, name := range strings.Split(p, "/") {
+		if normSensitive(name) {
+			entries, err := metadata.ReadDirBounded(ctx, dir, spellLookWait)
+			if err != nil || !slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == name }) {
+				return false
+			}
+		}
+		dir = filepath.Join(dir, name)
 	}
 	return true
 }

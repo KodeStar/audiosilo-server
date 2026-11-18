@@ -211,6 +211,20 @@ func TestOwnEntry(t *testing.T) {
 	if c.ownEntry(ctx, lib.ID+99, "a", nil) {
 		t.Error("ownEntry in no library = true")
 	}
+	// Whatever the disk's file ids say, a name is its own only as its folder
+	// lists it: the decomposed folder is listed, its precomposed spelling never
+	// (on a disk that finds it by that spelling too, or one that has no such
+	// entry), and a name with no other spelling is not looked up.
+	if err := os.WriteFile(filepath.Join(root, "E\u0301mile", "01.mp3"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]bool{
+		"E\u0301mile/01.mp3": true, "\u00c9mile/01.mp3": false, "E\u0301mile": true, "\u00c9mile": false, "a": true,
+	} {
+		if got := spelledOnDisk(ctx, root, p); got != want {
+			t.Errorf("spelledOnDisk(%+q) = %v, want %v", p, got, want)
+		}
+	}
 }
 
 // TestSpellingOwnEntry (server#210): on a disk that keeps an NFC and an NFD

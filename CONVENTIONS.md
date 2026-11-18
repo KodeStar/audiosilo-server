@@ -1139,7 +1139,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   there or not). Two indexed paths the scope admits that both read as `p` (an NFC and an NFD folder
   side by side on a byte-exact disk) leave `p` as given: it never guesses. Never an on-demand index,
   and the disk only for one check (`ownEntry`, two bounded `Lstat`s, only when the index would read
-  `p` as another path or report it `outside`): a `p` that is an entry of its own there (a disk that
+  `p` as another path or report it `outside`, and when their file ids differ, the listings of `p`'s
+  names that have another spelling, `spelledOnDisk`, as a share or FUSE mount whose ids don't follow
+  the file would tell one file apart from itself): a `p` that is an entry of its own there (a disk that
   keeps an NFC and an NFD name apart, `p`'s folder not indexed yet) stays as given, so a folder no
   scan has reached is never taken for the indexed one beside it (nor its rows moved there by the
   re-key); a disk that ignores the spelling finds the same file by both, and a look that fails
