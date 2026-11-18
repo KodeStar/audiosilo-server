@@ -35,6 +35,7 @@ function file(name: string, seq: number, duration: number): AdminFile {
     codec: 'mp3',
     size: 1000,
     bitrate: 0,
+    direct_playable: true,
   };
 }
 
@@ -67,15 +68,20 @@ const rows = (...r: [number, string, boolean?][]): DraftRow[] =>
 describe('the whole-book timeline', () => {
   it('lays the files end to end in play order, by the basis lengths', () => {
     expect(SPANS).toEqual([
-      { path: `${BOOK}/01.mp3`, name: '01.mp3', start: 0, end: 100 },
-      { path: `${BOOK}/02.mp3`, name: '02.mp3', start: 100, end: 150 },
+      { path: `${BOOK}/01.mp3`, name: '01.mp3', start: 0, end: 100, playable: true },
+      { path: `${BOOK}/02.mp3`, name: '02.mp3', start: 100, end: 150, playable: true },
     ]);
   });
 
   it('falls back to the file’s own length without a basis entry', () => {
     expect(fileSpans([file('01.mp3', 1, 12.3456)], BOOK, { files: [] })).toEqual([
-      { path: `${BOOK}/01.mp3`, name: '01.mp3', start: 0, end: 12.346 },
+      { path: `${BOOK}/01.mp3`, name: '01.mp3', start: 0, end: 12.346, playable: true },
     ]);
+  });
+
+  it('says which files a browser can’t play as stored', () => {
+    const mka = { ...file('01.mka', 1, 10), format: 'mka', codec: 'opus', direct_playable: false };
+    expect(fileSpans([mka], BOOK, { files: [] })[0].playable).toBe(false);
   });
 
   it('maps a whole-book time to a file and back', () => {

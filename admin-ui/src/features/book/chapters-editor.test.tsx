@@ -6,6 +6,7 @@ import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
 import { libraries, serverInfo } from '@/test/fixtures';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
+import { formatStamp } from './chapters-edit-model';
 import { signedInRoutes } from '@/test/routes';
 
 const BOOK_PATH = 'Brandon Sanderson/The Stormlight Archive/01 - The Way of Kings';
@@ -238,6 +239,56 @@ describe('the chapter editor', () => {
     fireEvent.error(container.querySelector('audio')!);
     expect(await screen.findByText(/The audio didn’t load/)).toBeInTheDocument();
     expect(mints()).toHaveLength(2);
+  });
+
+  it('plays a file no browser plays as stored through the transcode, asking again on a seek', async () => {
+    // Opus in .mka (server#410): the stored file would play as silence.
+    const d = bookDetail();
+    d.files = d.files.map((f) => ({ ...f, format: 'mka', codec: 'opus', direct_playable: false }));
+    mockFetch(routes(d));
+    const { container } = renderApp(URL);
+    const user = await openEditor();
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    const srcOf = () =>
+      new window.URL(container.querySelector('audio')!.getAttribute('src')!, 'http://admin.test')
+        .searchParams;
+    const row = Number(srcOf().get('t'));
+    expect(srcOf().get('transcode')).toBe('1');
+    expect(srcOf().get('token')).toBe('media-tok');
+    expect(row).toBeGreaterThan(0);
+
+    // The transcode's clock counts from where it started.
+    const audio = container.querySelector('audio')!;
+    fireEvent.loadedMetadata(audio);
+    Object.defineProperty(audio, 'currentTime', { value: 2.5, writable: true });
+    fireEvent.timeUpdate(audio);
+    await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
+    // A seek asks for the stream again from there, on a new <audio>.
+    await waitFor(() => expect(Number(srcOf().get('t'))).toBe(row + 3.5));
+    expect(container.querySelector('audio')).not.toBe(audio);
+    await user.click(screen.getByRole('button', { name: 'Start chapter 2 at the playhead' }));
+    expect(screen.getByRole('textbox', { name: 'Start of chapter 2' })).toHaveValue(
+      formatStamp(row + 3.5),
+    );
+  });
+
+  it('plays the stored file when the server can’t transcode', async () => {
+    const d = bookDetail();
+    d.files = d.files.map((f) => ({ ...f, format: 'mka', codec: 'opus', direct_playable: false }));
+    mockFetch(
+      routes(d, {
+        'GET /server': {
+          body: { ...serverInfo, capabilities: { ...serverInfo.capabilities, transcode: false } },
+        },
+      }),
+    );
+    const { container } = renderApp(URL);
+    const user = await openEditor();
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    const src = container.querySelector('audio')!.getAttribute('src')!;
+    expect(src).not.toContain('transcode');
   });
 
   it('reads the book’s jobs again after a save: it cancelled a queued detection', async () => {

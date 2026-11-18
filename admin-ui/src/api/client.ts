@@ -270,9 +270,22 @@ const pathQuery = (path: string) => `?${new URLSearchParams({ path }).toString()
 /**
  * An audio file's stream URL for an <audio> element: `token` is a book media token
  * (api.bookMediaToken), never the session's, which would leak into logs and history.
+ * With `transcodeFrom`, the file's live MP3 transcode from that many seconds into
+ * it (?transcode=1&t=), for a file no browser plays as stored.
  */
-export const streamUrl = (libraryId: number, path: string, token: string) =>
-  `${API}/libraries/${libraryId}/stream?${new URLSearchParams({ path, token }).toString()}`;
+export const streamUrl = (
+  libraryId: number,
+  path: string,
+  token: string,
+  transcodeFrom?: number,
+) => {
+  const q = new URLSearchParams({ path, token });
+  if (transcodeFrom !== undefined) {
+    q.set('transcode', '1');
+    q.set('t', String(transcodeFrom));
+  }
+  return `${API}/libraries/${libraryId}/stream?${q.toString()}`;
+};
 
 /**
  * The filters GET /admin/books and /admin/books/facets share

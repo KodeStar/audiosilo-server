@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path"
 
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/relpath"
 )
@@ -90,6 +91,10 @@ type AdminFile struct {
 	Codec    string  `json:"codec"`
 	Size     int64   `json:"size"`
 	Bitrate  int64   `json:"bitrate"`
+	// DirectPlayable is media.DirectPlayable for the file: false for one a
+	// browser can't play as stored (Opus or FLAC in .mka), which the
+	// console's chapter editor plays through ?transcode=1.
+	DirectPlayable bool `json:"direct_playable"`
 }
 
 // Listener is one user's progress on the book.
@@ -233,7 +238,8 @@ func adminFiles(b AdminBook, files []BookFile) []AdminFile {
 		if codec == "" {
 			codec = b.Codec // parts indexed before per-file codecs were recorded
 		}
-		af := AdminFile{Path: f.RelPath, Seq: f.Seq, Duration: f.Duration, Format: f.Format, Codec: codec, Size: f.Size}
+		af := AdminFile{Path: f.RelPath, Seq: f.Seq, Duration: f.Duration, Format: f.Format, Codec: codec, Size: f.Size,
+			DirectPlayable: media.DirectPlayable(f.Format, codec)}
 		if f.Duration > 0 {
 			af.Bitrate = int64(float64(f.Size*8) / f.Duration)
 		}

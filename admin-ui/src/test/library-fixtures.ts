@@ -247,6 +247,7 @@ export function bookDetail(over: Partial<AdminBookDetail> = {}): AdminBookDetail
         codec: 'aac',
         size: 48_000_000,
         bitrate: 128000,
+        direct_playable: true,
       },
     ],
     listeners: [

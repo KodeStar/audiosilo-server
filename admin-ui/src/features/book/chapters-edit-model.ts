@@ -45,6 +45,8 @@ export interface FileSpan {
   /** Whole-book seconds where it starts and ends. */
   start: number;
   end: number;
+  /** Whether a browser plays it as stored (AdminFile.direct_playable); else the scrubber transcodes it. */
+  playable: boolean;
 }
 
 /** One row of the editor. A file-start row is fixed: its title is editable, its time is not. */
@@ -73,7 +75,13 @@ export function fileSpans(files: AdminFile[], bookPath: string, basis: ChapterBa
   return sortFiles(files).map((f) => {
     const start = at;
     at += lengthMs(f);
-    return { path: f.path, name: fileName(f.path, bookPath), start: start / 1000, end: at / 1000 };
+    return {
+      path: f.path,
+      name: fileName(f.path, bookPath),
+      start: start / 1000,
+      end: at / 1000,
+      playable: f.direct_playable,
+    };
   });
 }
 

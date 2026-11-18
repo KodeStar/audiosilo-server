@@ -162,6 +162,7 @@ const file = (path: string, seq: number, duration: number): AdminFile => ({
   codec: 'mp3',
   size: 1,
   bitrate: 0,
+  direct_playable: true,
 });
 
 describe('chapter ribbon', () => {

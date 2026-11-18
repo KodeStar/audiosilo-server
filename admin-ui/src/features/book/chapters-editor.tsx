@@ -12,7 +12,13 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import { api, streamUrl } from '@/api/client';
-import { invalidateIssues, keys, settleBookEdit, useBookMediaToken } from '@/api/hooks';
+import {
+  invalidateIssues,
+  keys,
+  settleBookEdit,
+  useBookMediaToken,
+  useServerInfo,
+} from '@/api/hooks';
 import type { AdminBookDetail } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { LeaveGuard } from '@/components/leave-guard';
@@ -431,10 +437,19 @@ function TimeInput({
 const PREVIEW_MS = 5000;
 
 /**
+ * How long a transcoded file's playhead rests before the stream is asked for
+ * again from there: a drag of the slider asks once, not at every step.
+ */
+const RESTREAM_MS = 250;
+
+/**
  * The editor's player: the chosen row's file, streamed with a book media token
  * (never the session's), at the row's start. Nudges by a second or a tenth, plays
  * five seconds from the start, and sets the row's start (or adds a chapter) at
- * the playhead. Times shown are whole-book.
+ * the playhead. Times shown are whole-book. A file no browser plays as stored
+ * (Opus or FLAC in .mka) is transcoded when the server can (server#410): the
+ * stream starts where the playhead is, so a move of it asks again from there (a
+ * transcode can't be seeked), the audio's own clock counting from that start.
  */
 function Scrubber({
   libraryId,
@@ -457,9 +472,14 @@ function Scrubber({
 }) {
   const { t } = useTranslation();
   const token = useBookMediaToken(libraryId, bookPath);
+  const canTranscode = useServerInfo().data?.capabilities.transcode ?? false;
   const audio = useRef<HTMLAudioElement>(null);
   const preview = useRef<ReturnType<typeof setTimeout>>(undefined);
-  // The seek waiting for a newly chosen file to load.
+  // Whether "Play 5 s" waits for a transcode to start, to time the five seconds.
+  const previewing = useRef(false);
+  const restream = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // The seek (seconds into the file) waiting for a newly chosen file to load,
+  // or for a transcode to be asked for again.
   const pending = useRef<number | null>(null);
   const [pos, setPos] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -471,28 +491,65 @@ function Scrubber({
   const target = row ? toFileTime(spans, row.start) : undefined;
   const span = target?.span;
   const offset = target?.offset ?? 0;
-  const src = token.data && span ? streamUrl(libraryId, span.path, token.data) : undefined;
+  const transcoded = !!span && !span.playable && canTranscode;
+  // A transcode's start: the row's, until the playhead moves (for this row:
+  // `at`); `n` makes each move a new <audio>, even to the same start.
+  const at = span ? `${span.path}@${offset}` : '';
+  const [stream, setStream] = useState<{ at: string; from: number; n: number; play: boolean }>();
+  const moved = transcoded && stream?.at === at ? stream : undefined;
+  const from = transcoded ? (moved?.from ?? offset) : 0;
+  const src =
+    token.data && span
+      ? streamUrl(libraryId, span.path, token.data, transcoded ? from : undefined)
+      : undefined;
 
-  // A chosen row (or a moved one) puts the playhead at its start.
+  // A chosen row (or a moved one) puts the playhead at its start. A transcode
+  // starts there: its <audio> is a new one (keyed by its start).
   useEffect(() => {
     const a = audio.current;
     if (!a || !src) return;
+    if (transcoded) {
+      // Another row's seek waits for nothing now.
+      clearTimeout(restream.current);
+      pending.current = null;
+      return;
+    }
     if (a.readyState >= 1 && a.currentSrc.endsWith(src)) a.currentTime = offset;
     else pending.current = offset;
-  }, [src, offset]);
+  }, [src, offset, transcoded]);
 
-  useEffect(() => () => clearTimeout(preview.current), []);
+  useEffect(
+    () => () => {
+      clearTimeout(preview.current);
+      clearTimeout(restream.current);
+    },
+    [],
+  );
 
   const length = span ? span.end - span.start : 0;
+  // Where the audio is, in seconds into the file.
+  const now = () => from + (audio.current?.currentTime ?? 0);
   const seek = (s: number) => {
     const a = audio.current;
-    if (a) a.currentTime = Math.min(Math.max(s, 0), length);
+    if (!a) return;
+    const to = roundMs(Math.min(Math.max(s, 0), length));
+    if (!transcoded) {
+      a.currentTime = to;
+      return;
+    }
+    pending.current = to;
+    setPos(to);
+    clearTimeout(restream.current);
+    restream.current = setTimeout(() => {
+      setStream({ at, from: to, n: (stream?.n ?? 0) + 1, play: !a.paused || previewing.current });
+    }, RESTREAM_MS);
   };
-  const nudge = (d: number) => seek((audio.current?.currentTime ?? 0) + d);
+  const nudge = (d: number) => seek((pending.current ?? now()) + d);
   const toggle = () => {
     const a = audio.current;
     if (!a) return;
     clearTimeout(preview.current);
+    previewing.current = false;
     if (a.paused) void a.play().catch(() => {});
     else a.pause();
   };
@@ -500,6 +557,11 @@ function Scrubber({
     const a = audio.current;
     if (!a) return;
     clearTimeout(preview.current);
+    previewing.current = transcoded;
+    if (transcoded) {
+      seek(offset);
+      return;
+    }
     a.currentTime = offset;
     void a.play().catch(() => {});
     preview.current = setTimeout(() => a.pause(), PREVIEW_MS);
@@ -509,8 +571,8 @@ function Scrubber({
   // the book has for it is still this file, not the start of the next.
   const here = () => {
     if (!span) return 0;
-    const at = pending.current ?? audio.current?.currentTime ?? pos;
-    return toBookTime(span, Math.min(at, length));
+    const head = pending.current ?? (audio.current ? now() : pos);
+    return toBookTime(span, Math.min(head, length));
   };
   const unavailable = failed || token.isError;
   // The controls wait for a file to play and give up with it.
@@ -534,20 +596,30 @@ function Scrubber({
       </div>
       {src ? (
         <audio
+          key={transcoded ? `${at}#${moved?.n ?? 0}` : undefined}
           ref={audio}
           src={src}
           preload="metadata"
+          autoPlay={moved?.play}
+          // A new <audio> (another file, or a transcode asked again) plays only when told to.
+          onLoadStart={() => setPlaying(false)}
           onLoadedMetadata={(e) => {
             setFailed(false);
             reminted.current = false;
-            if (pending.current !== null) {
-              e.currentTarget.currentTime = pending.current;
-              pending.current = null;
-            }
+            // A transcode starts where the seek (or the row) asked.
+            if (transcoded) setPos(from);
+            else if (pending.current !== null) e.currentTarget.currentTime = pending.current;
+            pending.current = null;
           }}
-          onTimeUpdate={(e) => setPos(e.currentTarget.currentTime)}
-          onSeeked={(e) => setPos(e.currentTarget.currentTime)}
+          onTimeUpdate={(e) => setPos(from + e.currentTarget.currentTime)}
+          onSeeked={(e) => setPos(from + e.currentTarget.currentTime)}
           onPlay={() => setPlaying(true)}
+          onPlaying={() => {
+            if (!previewing.current) return;
+            previewing.current = false;
+            clearTimeout(preview.current);
+            preview.current = setTimeout(() => audio.current?.pause(), PREVIEW_MS);
+          }}
           onPause={() => setPlaying(false)}
           onError={() => {
             if (reminted.current) {

@@ -1911,6 +1911,8 @@ export interface AdminFile {
   codec: string;
   size: number;
   bitrate: number;
+  /** media.DirectPlayable for the file: false for one no browser plays as stored (Opus or FLAC in .mka). */
+  direct_playable: boolean;
 }
 
 /** catalog.Listener: one user's progress on the book. */
