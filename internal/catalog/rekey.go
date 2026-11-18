@@ -783,7 +783,7 @@ type rekeyResult struct {
 
 // rekeyPath makes p's moves (rekeyMoves; spelled: p in the index's spelling)
 // in one transaction, all or nothing: every row is copied into path_rekeys
-// first, then carried as a move carries it (carryState: progress by
+// first, then carried as a move carries it (carryState, moveCarry: progress by
 // mergeNewest, a list entry or favourite once, a rating or reader's place the
 // newer). It checks again, inside the transaction, that p is still no book and
 // that the book at target is still one holding spelled (a scan may have run
@@ -876,7 +876,7 @@ func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, ta
 			if st.to != target {
 				length = 0
 			}
-			if err := carryState(ctx, tx, libraryID, JoinPart{Path: p, Last: true}, st.to, length, mergeNewest, st.set,
+			if err := carryState(ctx, tx, libraryID, JoinPart{Path: p, Last: true}, st.to, length, moveCarry, st.set,
 				st.keep); err != nil {
 				return err
 			}

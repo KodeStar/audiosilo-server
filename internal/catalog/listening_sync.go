@@ -1060,7 +1060,7 @@ func (s *syncRun) ownAudiblePlace(ctx context.Context, key Ref) error {
 
 // nameAudibleDevice names an Audible account's device on a user's row at key,
 // inside tx, after a write the guard (migration 0083) took it off: the Audible
-// route's own place (ownAudiblePlace), or a carry that left it as the account
+// route's own place (ownAudiblePlace), or a move that left it as the account
 // wrote it (carriedAudiblePlace). It sets only the device, so the guard leaves
 // it.
 func nameAudibleDevice(ctx context.Context, tx *sql.Tx, userID int64, key Ref, deviceID, deviceName string) error {

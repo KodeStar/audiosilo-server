@@ -8,11 +8,10 @@ import (
 // server#303: a row names an Audible account only while it holds a place that
 // account's own sync wrote (the guard, migration 0083). A writer that keeps or
 // copies the account's device while giving the row a place (a new position, a
-// finish, a join's part at an offset) leaves it with none, so GET
-// /bridge/progress offers that place to Audible; a write that leaves the place
-// as it was (a start date, an edit naming only dates, a move carrying the row)
-// keeps the account's device, and the feed still leaves Audible's own place
-// out.
+// finish, a joined part) leaves it with none, so GET /bridge/progress offers
+// that place to Audible; a write that leaves the place as it was (a start date,
+// an edit naming only dates, a move carrying the row) keeps the account's
+// device, and the feed still leaves Audible's own place out.
 func TestAudibleDeviceGuard(t *testing.T) {
 	t.Parallel()
 	const path, moved = "Author/Book", "Author/Moved"
@@ -128,22 +127,34 @@ func TestAudibleDeviceGuard(t *testing.T) {
 	if rows := feed(); len(rows) != 0 {
 		t.Fatalf("feed after the merge = %+v, want Audible's own place left out", rows)
 	}
-	// A join's later part puts the place further on the joined book's
-	// timeline: a place Audible never gave, so no longer the account's.
-	if err := f.c.JoinDurableState(f.ctx, f.lib.ID, "Author", []JoinPart{{Path: again, Offset: 3600, Last: true}},
+	// A join's first part, at offset 0 with its place unchanged, is still a
+	// place on a longer book, which the joined book's Audible title never gave:
+	// no longer the account's, and the feed offers it.
+	const folder = "Author"
+	if err := f.c.JoinDurableState(f.ctx, f.lib.ID, folder, []JoinPart{{Path: again}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	wantNone(folder, "a join's first part at offset 0")
+	if rows := feed(); len(rows) != 1 || rows[0].Path != folder || rows[0].Position != 1500 {
+		t.Fatalf("feed after the join = %+v, want the joined book's place offered", rows)
+	}
+	// So does a join's later part, further on the joined book's timeline.
+	exec(`DELETE FROM progress WHERE user_id = ? AND rel_path = ?`, f.user, folder)
+	exec(`INSERT INTO progress(user_id, library_id, rel_path, position, duration, version, device_id, device_name, updated_at)
+	      VALUES(?, ?, ?, 1000, 36000, 1, 'phone', 'Phone', '2026-11-03T08:00:00.000Z')`, f.user, f.lib.ID, again)
+	audibles(again)
+	if err := f.c.JoinDurableState(f.ctx, f.lib.ID, folder, []JoinPart{{Path: again, Offset: 3600, Last: true}},
 		0); err != nil {
 		t.Fatal(err)
 	}
-	wantNone("Author", "a row joined at an offset")
+	wantNone(folder, "a row joined at an offset")
 }
 
-// A carry names Audible's device again only on a row holding the place it
-// carried: never when the row already at the new path wins the merge (a newer
-// save for a move, a tie for a join, which keeps the folder's), even with the
-// same place, and so for a join's part at offset 0 only when its place is the
-// furthest (inside the part's length: one clamped to it is a place Audible
-// never gave).
-func TestAudibleDeviceCarriedOnlyWhenItsPlaceWins(t *testing.T) {
+// A carry names Audible's device again only for a move whose carried row wins
+// the merge: never when the row already at the new path is the newer save,
+// even with the same place, and never for a join, whatever its part's place
+// (the furthest, tied or clamped to the part's length).
+func TestAudibleDeviceCarriedOnlyByAMoveItsPlaceWins(t *testing.T) {
 	t.Parallel()
 	const path = "Author/Book"
 	for _, tc := range []struct {
@@ -156,10 +167,14 @@ func TestAudibleDeviceCarriedOnlyWhenItsPlaceWins(t *testing.T) {
 	}{
 		{name: "a move onto a newer save of the same place", into: "Author/Moved", phone: 1000,
 			phoneAt: "2099-01-01T00:00:00.000Z", wantDevice: "phone", wantPos: 1000},
+		{name: "a move onto an older save", into: "Author/Moved", phone: 500,
+			phoneAt: "2020-01-01T00:00:00.000Z", wantDevice: "audible:acct0001", wantPos: 1000},
+		{name: "a move onto no row", into: "Author/Moved", wantDevice: "audible:acct0001", wantPos: 1000},
 		{name: "a join's first part tied with the folder's place", into: "Author", phone: 1000,
 			phoneAt: "2020-01-01T00:00:00.000Z", join: &JoinPart{Path: path}, wantDevice: "phone", wantPos: 1000},
 		{name: "a join's first part further than the folder's place", into: "Author", phone: 500,
-			phoneAt: "2099-01-01T00:00:00.000Z", join: &JoinPart{Path: path}, wantDevice: "audible:acct0001", wantPos: 1000},
+			phoneAt: "2099-01-01T00:00:00.000Z", join: &JoinPart{Path: path}, wantDevice: "", wantPos: 1000},
+		{name: "a join's first part alone", into: "Author", join: &JoinPart{Path: path}, wantDevice: "", wantPos: 1000},
 		{name: "a join's first part clamped to its length", into: "Author",
 			join: &JoinPart{Path: path, Duration: 900}, wantDevice: "", wantPos: 900},
 	} {
