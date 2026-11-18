@@ -1302,10 +1302,10 @@ func (s *Service) ReleaseUnsentClaim(ctx context.Context, claim *Job) error {
 		 finished_at=CASE WHEN cancel_requested=1 THEN ? ELSE NULL END`+unsentClaimSQL, now, now)
 }
 
-// failUnsentClaim ends an undelivered claim on its last attempt with reason as
-// its error, at once rather than when its lease runs out, which would name the
-// Bridge (expireSQL) for a claim the server could not fill. A job whose cancel
-// was asked for is cancelled instead.
+// failUnsentClaim ends an undelivered claim the server could not fill, on its
+// last attempt or when no attempt ever could, with reason as its error: at once
+// rather than when its lease runs out, which would name the Bridge (expireSQL).
+// A job whose cancel was asked for is cancelled instead.
 func (s *Service) failUnsentClaim(ctx context.Context, claim *Job, reason string) error {
 	now := s.ts()
 	return s.settleUnsentClaim(ctx, claim, "bridge.failUnsentClaim", `UPDATE bridge_jobs SET

@@ -4606,7 +4606,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   unspent, `ReleaseUnsentClaim`, for an account's sync at most `maxUnspentSyncFills`, 3, claims in a row: the next
   failing claim leaves it claimed and undelivered, so its lease spends the attempt, and the jobs behind it are
   handed out meanwhile; the last attempt's failing claim ends it at once (`failUnsentClaim`), its error "The server
-  could not read this account's titles." rather than the lapsed lease's Bridge one; the job as stored keeps `{account}`, as a private feed URL is injected at claim),
+  could not read this account's titles." rather than the lapsed lease's Bridge one, and a sync whose stored params
+  can't be read ends at its first claim, "The server could not read which Audible account this sync is for."; the
+  job as stored keeps `{account}`, as a private feed URL is injected at claim),
   internal, quiet, `ModuleFor` audible, deduped per account, `promotes`, only the newest ended kept
   (`pruneAudibleEnded`). A console change to which titles sync (`PATCH .../titles/...` `{rejected}` or `{no_sync}`)
   or turning sync on queues the account's sync at once (`audible.SyncNow`, `catalog.AudibleSyncQueueable`: the same

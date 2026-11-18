@@ -261,9 +261,10 @@ func TestAudibleSyncClaimFailsSpentInTheEnd(t *testing.T) {
 }
 
 // A claimed audible.sync whose stored params can't be read can never be
-// filled: it is not put back unspent (every claim would take it again) but
-// left claimed, so its lease spends the attempt and MaxAttempts ends it.
-func TestAudibleSyncClaimUnreadableParamsSpent(t *testing.T) {
+// filled: neither put back unspent (every claim would take it again) nor left
+// for its lease to spend every attempt, it ends at its first claim with its
+// own reason (syncParamsUnread).
+func TestAudibleSyncClaimUnreadableParamsFailed(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
 	ctx := context.Background()
@@ -282,8 +283,9 @@ func TestAudibleSyncClaimUnreadableParamsSpent(t *testing.T) {
 	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err == nil || got != nil {
 		t.Fatalf("claim = %+v, %v; want an error and no job", got, err)
 	}
-	if stored, err := q.Job(ctx, job.ID); err != nil || stored.State != StateClaimed || stored.Attempts != 1 {
-		t.Fatalf("after an unreadable fill = %+v, %v; want it claimed, the attempt spent", stored, err)
+	if stored, err := q.Job(ctx, job.ID); err != nil || stored.State != StateFailed || stored.Attempts != 1 ||
+		stored.Error != syncParamsUnread {
+		t.Fatalf("after an unreadable fill = %+v, %v; want it failed at once, naming its params", stored, err)
 	}
 }
 

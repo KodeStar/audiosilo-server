@@ -565,6 +565,11 @@ const maxUnspentSyncFills = 3
 // kept failing to read the account's titles (fillAudibleSync).
 const syncTitlesUnread = "The server could not read this account's titles."
 
+// syncParamsUnread is the error of an audible.sync ended because the params
+// stored when it was queued can't be read, so no claim could ever fill it
+// (fillAudibleSync).
+const syncParamsUnread = "The server could not read which Audible account this sync is for."
+
 // syncFill counts the claims in a row that failed to read the titles of one
 // audible.sync (job).
 type syncFill struct {
@@ -600,18 +605,19 @@ func (s *Service) syncFillOK(account string) {
 // (ReleaseUnsentClaim), so the next claim takes it again, but only
 // maxUnspentSyncFills claims in a row: while the read keeps failing (a
 // database fault), every claim would take the job again, never spend it, and
-// hand out nothing behind it. From then on it stays claimed and undelivered,
-// as one whose own params can't be read (not the JSON its queueing stored)
-// does from the first: its lease runs out and spends the attempt, MaxAttempts
-// fails it, and the claims meanwhile hand out the jobs behind it. The last
-// attempt's failing claim ends it at once (failUnsentClaim) with
-// syncTitlesUnread as its reason: the server, not the Bridge, stopped it. A
-// claim cut short (the Bridge left, the server is stopping) counts as no
-// failure.
+// hand out nothing behind it. From then on it stays claimed and undelivered:
+// its lease runs out and spends the attempt, and the claims meanwhile hand out
+// the jobs behind it. The last attempt's failing claim ends it at once
+// (failUnsentClaim) with syncTitlesUnread as its reason: the server, not the
+// Bridge, stopped it. One whose own params can't be read (not the JSON its
+// queueing stored) can never be filled, so its first claim ends it so, with
+// syncParamsUnread. A claim cut short (the Bridge left, the server is
+// stopping) counts as no failure.
 func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 	account, err := AudibleAccountOf(*j)
 	if err != nil {
-		return nil, fmt.Errorf("audible.sync %d: params: %w", j.ID, err)
+		return nil, errors.Join(fmt.Errorf("audible.sync %d: params: %w", j.ID, err),
+			s.failUnsentClaim(ctx, j, syncParamsUnread))
 	}
 	params, err := s.ClaimAudibleSync(ctx, account)
 	if err != nil {
