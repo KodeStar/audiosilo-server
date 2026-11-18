@@ -607,7 +607,7 @@ function Scrubber({
   // with it is the failure's (FAILED_PAUSE_MS).
   const erred = useRef(-Infinity);
   // A stalled transcode the server had a slot for was loaded again (lookAtStream):
-  // stalled again, it didn't load.
+  // stalled again, it didn't load. Each ask (a seek, a new token) gets its own.
   const restalled = useRef(false);
   // A transcode the server had no slot for: how often it was asked for again,
   // the wait before the next ask (said while it lasts), and the look at the
@@ -675,9 +675,11 @@ function Scrubber({
   // from the stream as it is then, not as this render saw it: an ask from a
   // timer or a promise must not repeat the count of one made since (asked).
   // One <audio> plays every ask, so a busy stream's look and its wait to be
-  // asked for again were the last stream's: the new one's failure looks anew.
+  // asked for again were the last stream's: the new one's failure looks anew,
+  // and a stall of it is loaded again once (restalled) as the last one's was.
   const ask = (to: number, play: boolean) => {
     stopRetry();
+    restalled.current = false;
     const made = seeks.current;
     setStream((s) => ({ at, from: to, n: (s?.n ?? 0) + 1, play, seeks: made }));
   };

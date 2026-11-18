@@ -1030,6 +1030,24 @@ describe('the chapter editor', () => {
       expect(mints()).toBe(1);
     });
 
+    it('loads a stalled stream again once for each ask: a seek since gets its own', async () => {
+      const { user, audio, looks, wait } = await stall({ status: 200, raw: '' });
+      wait();
+      await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+
+      // A seek asks for a new stream, which stalls too: loaded again, not given up on.
+      await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
+      await waitFor(() => expect(Number(srcParams(audio).get('t'))).toBe(1201));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      fireEvent.loadStart(audio);
+      fireEvent.play(audio);
+      act(() => vi.advanceTimersByTime(6000));
+      vi.useRealTimers();
+      await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      expect(looks()).toHaveLength(2);
+      expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
+    });
+
     it('lets a stalled stream be that starts while the server is asked about it', async () => {
       let answer: (r: MockReply) => void = () => {};
       const { audio, looks, wait } = await stall(() => new Promise<MockReply>((r) => (answer = r)));
