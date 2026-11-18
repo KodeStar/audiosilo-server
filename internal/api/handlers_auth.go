@@ -237,7 +237,8 @@ func writeInviteError(w http.ResponseWriter, err error, fallback string) {
 // redeem limiter since it is now the claim point. The claim (or the revoke)
 // and the session are one transaction (auth.ConsumePairing): a failure to
 // write the session burns no use and answers 500, uncharged (only a token
-// the lookup found valid reaches that write, so a guess is always charged).
+// the lookup found valid reaches that write; a guess is charged unless the
+// database fails to answer its lookup, a 500 that tells it nothing).
 func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	if !allowAttempt(w, a.redeemLimiter, ip) {

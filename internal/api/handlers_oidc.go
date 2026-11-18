@@ -695,7 +695,8 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 // /auth/pair, would sign the browser in as someone else, and is refused and
 // left unspent), consumed once with the device's session minted in the same
 // transaction (auth.ConsumeOIDC: a 500, uncharged, when the session can't be
-// written, the token left unspent), then the answer POST /auth/exchange gives
+// written, the token left unspent to expire, the cookie cleared as for every
+// other answer, so the person signs in again), then the answer POST /auth/exchange gives
 // (the session envelope; the new device reported as there), with "intent":
 // the tag the flow carried (handleOIDCStart), only when it did. A tag rides
 // only with the token it was set beside, so it is echoed once. Optional body
