@@ -974,6 +974,32 @@ func TestAudibleSyncClaimLeavesOutABadTitle(t *testing.T) {
 	}
 }
 
+// A claim that takes an audible.sync the server can never fill (params stored
+// unreadable) ends it with its own reason and answers as if there were no job
+// (204, the Bridge has nothing to back off from), never a 500; the claim
+// after it hands out the next job.
+func TestAudibleSyncClaimUnreadableParamsAnswersNoJob(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	s.beat(t, bridge.KindVerify, bridge.KindAudibleSync)
+	job, _, err := s.api.bridge.Enqueue(ctx, bridge.AudibleSync(testAccount, bridge.PriorityScheduled))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE bridge_jobs SET params = '{' WHERE id = ?`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := s.do(t, "GET", "/api/v1/bridge/jobs/next?wait=0&kind="+bridge.KindAudibleSync, s.bridgeTok, "")
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("claim = %d %s, want 204", resp.StatusCode, out)
+	}
+	stored, err := s.api.bridge.Job(ctx, job.ID)
+	if err != nil || stored.State != bridge.StateFailed || !strings.Contains(stored.Error, "which Audible account") {
+		t.Fatalf("job = %+v, %v; want it failed naming its unreadable account", stored, err)
+	}
+}
+
 // A console change to which titles take part in an account's sync queues its
 // audible.sync at once, even with no title left (the Bridge is told the set
 // is empty), so the Bridge stops pushing a left-out title without waiting for

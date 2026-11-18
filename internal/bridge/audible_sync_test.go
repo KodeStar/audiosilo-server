@@ -184,7 +184,8 @@ func TestAudibleSyncClaimFailsUnspent(t *testing.T) {
 // unspent only maxUnspentSyncFills claims in a row: the next failing claim
 // leaves it claimed and undelivered, so the claim after it hands out the job
 // behind it, each lapsed lease spends an attempt, and the last attempt's
-// failing claim ends it, naming the titles (syncTitlesUnread).
+// failing claim ends it, naming the titles (syncTitlesUnread), and hands out
+// the job behind it rather than an error.
 func TestAudibleSyncClaimFailsSpentInTheEnd(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
@@ -233,10 +234,20 @@ func TestAudibleSyncClaimFailsSpentInTheEnd(t *testing.T) {
 		q.advance(Lease + time.Second)
 		failed("after a lapsed lease", StateClaimed, attempt)
 	}
+	behind, _, err = q.Enqueue(ctx, AudibleSync("acct0002", -20))
+	if err != nil {
+		t.Fatal(err)
+	}
 	q.advance(Lease + time.Second)
-	failed("the last attempt", StateFailed, MaxAttempts)
-	if stored, err := q.Job(ctx, job.ID); err != nil || stored.Error != syncTitlesUnread {
-		t.Fatalf("in the end = %+v, %v; want the titles named as the reason", stored, err)
+	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got == nil || got.ID != behind.ID {
+		t.Fatalf("the last attempt's claim = %+v, %v; want the sync behind it", got, err)
+	}
+	if stored, err := q.Job(ctx, job.ID); err != nil || stored.State != StateFailed || stored.Attempts != MaxAttempts ||
+		stored.Error != syncTitlesUnread {
+		t.Fatalf("in the end = %+v, %v; want it failed, the titles named as the reason", stored, err)
+	}
+	if _, err := q.UpdateHeld(ctx, behind.ID, Update{Attempt: 1, State: ptr(StateDone)}); err != nil {
+		t.Fatal(err)
 	}
 	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got != nil {
 		t.Fatalf("the claim after = %+v, %v; want nothing left", got, err)
@@ -263,7 +274,7 @@ func TestAudibleSyncClaimFailsSpentInTheEnd(t *testing.T) {
 // A claimed audible.sync whose stored params can't be read can never be
 // filled: neither put back unspent (every claim would take it again) nor left
 // for its lease to spend every attempt, it ends at its first claim with its
-// own reason (syncParamsUnread).
+// own reason (syncParamsUnread), and that claim hands out the job behind it.
 func TestAudibleSyncClaimUnreadableParamsFailed(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
@@ -277,11 +288,15 @@ func TestAudibleSyncClaimUnreadableParamsFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	behind, _, err := q.Enqueue(ctx, AudibleSync("acct0002", -20))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET params = '{' WHERE id = ?`, job.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err == nil || got != nil {
-		t.Fatalf("claim = %+v, %v; want an error and no job", got, err)
+	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got == nil || got.ID != behind.ID {
+		t.Fatalf("claim = %+v, %v; want the sync behind it", got, err)
 	}
 	if stored, err := q.Job(ctx, job.ID); err != nil || stored.State != StateFailed || stored.Attempts != 1 ||
 		stored.Error != syncParamsUnread {

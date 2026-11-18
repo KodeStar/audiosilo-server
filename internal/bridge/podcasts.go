@@ -732,12 +732,18 @@ func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job,
 
 // claimPriority claims the next job (claimSecret), then gives a claimed
 // audible.sync its titles (fillAudibleSync) outside the podcast secrets' lock.
+// A sync the fill ended instead (failed, so never claimed again) hands out the
+// job behind it.
 func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
-	j, err := s.claimSecret(ctx, token, kinds, minPriority)
-	if err == nil && j != nil && j.Kind == KindAudibleSync && s.ClaimAudibleSync != nil {
-		return s.fillAudibleSync(ctx, j)
+	for {
+		j, err := s.claimSecret(ctx, token, kinds, minPriority)
+		if err != nil || j == nil || j.Kind != KindAudibleSync || s.ClaimAudibleSync == nil {
+			return j, err
+		}
+		if j, err = s.fillAudibleSync(ctx, j); j != nil || err != nil {
+			return j, err
+		}
 	}
-	return j, err
 }
 
 // claimSecret claims the next job, a private podcast.subscribe with its feed

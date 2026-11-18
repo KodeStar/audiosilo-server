@@ -613,20 +613,22 @@ func (s *Service) syncFillOK(account string) {
 // queueing stored) can never be filled, so its first claim ends it so, with
 // syncParamsUnread. A claim cut short (the Bridge left, the server is
 // stopping) counts as no failure.
+//
+// A job the fill ended answers no job and no error (the claim goes on to the
+// job behind it, claimPriority), as a lost private request does: the server
+// settled it, so the Bridge has nothing to back off from.
 func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 	account, err := AudibleAccountOf(*j)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("audible.sync %d: params: %w", j.ID, err),
-			s.failUnsentClaim(ctx, j, syncParamsUnread))
+		return nil, s.failUnsentClaim(ctx, j, syncParamsUnread)
 	}
 	params, err := s.ClaimAudibleSync(ctx, account)
 	if err != nil {
 		if ctx.Err() == nil && s.syncFillFailed(account, j.ID) > maxUnspentSyncFills {
-			err = fmt.Errorf("audible.sync %d: titles: %w", j.ID, err)
 			if j.Attempts >= MaxAttempts {
-				err = errors.Join(err, s.failUnsentClaim(ctx, j, syncTitlesUnread))
+				return nil, s.failUnsentClaim(ctx, j, syncTitlesUnread)
 			}
-			return nil, err
+			return nil, fmt.Errorf("audible.sync %d: titles: %w", j.ID, err)
 		}
 		return nil, errors.Join(err, s.ReleaseUnsentClaim(ctx, j))
 	}
