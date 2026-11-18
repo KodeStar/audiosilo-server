@@ -44,6 +44,16 @@ type testEnv struct {
 	db       *store.DB
 }
 
+// credentialID is the id of tok, a token as the auth middleware resolves it.
+func (e *testEnv) credentialID(t *testing.T, tok string) int64 {
+	t.Helper()
+	_, cred, err := e.auth.ResolveRequest(context.Background(), tok, auth.Presence{}, auth.KindSession, auth.KindAPI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cred.ID
+}
+
 func newTestEnv(t *testing.T) *testEnv {
 	return newTestEnvWith(t, nil)
 }
