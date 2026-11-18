@@ -40,7 +40,7 @@ const maxNoticeTitles = 5
 // (SetPodcastNotice). It names the show and carries codes and counts only:
 // never a feed address, its host or an error's text, which can hold a private
 // feed's credentials. A private show's notice is sent without its names
-// (notify.PodcastNotice): admins who don't follow it never see it.
+// (notify.PodcastEvent): admins who don't follow it never see it.
 type PodcastNotice struct {
 	Kind      string // PodcastEpisodesNew, PodcastFeedFailing or PodcastFeedRecovered
 	Library   string

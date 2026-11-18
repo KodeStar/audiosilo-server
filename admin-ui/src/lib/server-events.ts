@@ -145,7 +145,7 @@ export function describeEvent(ev: ServerEvent): EventText {
     case 'bridge_job_finished':
     case 'bridge_job_failed':
       return describeBridgeJob(ev.kind, d);
-    // notify.PodcastNotice: a show's news, named by its title (never its feed
+    // notify.PodcastEvent: a show's news, named by its title (never its feed
     // address); a private show's (`private`) carries no names at all, so it is
     // "a private podcast". Podcast libraries are listed in Library > Libraries.
     case 'podcast_episodes_new':
