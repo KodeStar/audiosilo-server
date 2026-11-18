@@ -1288,7 +1288,9 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 // row's last finish-state change (finish_changed_at): its corrected time,
 // except for a finish made without seeing the row's last explicit write (its
 // base, as sent, below edit_version, or none) that this batch did not make
-// itself, which is dated back by the batch's transit. A sent_at shift is the
+// itself, which is dated back by the batch's transit. A base at the row's own
+// version saw all there is, where edit_version is above it (a row a move or
+// join carried alone, carryProgress; a PUT that sent a lower version). A sent_at shift is the
 // device's clock skew plus the request's time on the way, so a finish sent
 // just before an edit (an Undo of it, on the book page) and landing after it
 // was dated after the edit by that time, and finished the book again
@@ -1304,7 +1306,7 @@ func (s *syncRun) finishChange(ctx context.Context, p syncPrepared, stored *sync
 	if p.ev.Kind != EventFinish || s.transit <= 0 || !stored.editVersion.Valid || s.changed[key] {
 		return p.ended, nil
 	}
-	if base := p.ev.BaseVersion; base != nil && *base >= stored.editVersion.Int64 {
+	if base := p.ev.BaseVersion; base != nil && *base >= min(stored.editVersion.Int64, stored.version) {
 		return p.ended, nil
 	}
 	if own, err := s.ownFinishChange(ctx, key, stored.finishChangedAt.String, EventFinish, EventUnfinish); err != nil || own {

@@ -4199,7 +4199,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a finished row for its device (so the restart span after it resolves on that device's own row, not as
   diverged from the device that finished it; an unfinish of another device's unfinished row takes nothing, so
   that device's place stays and this device's next base-0 span still diverges from it); both bump the version.
-  A `finish` made without seeing the row's last explicit write (its base as sent below `edit_version`, or none),
+  A `finish` made without seeing the row's last explicit write (its base as sent below `edit_version`, or none; a
+  base at the row's own version saw all there is, where `edit_version` is above it after a move carried the row alone),
   in a `sent_at` batch and not after a finish-state change of the same batch, is dated back by the batch's shift,
   0 to 30 s (`finishChange`, `maxFinishTransit`): the shift is the request's time on the way plus clock skew, and a
   finish sent just before an Undo (a PATCH naming `finished`) landed dated after it and finished the book again

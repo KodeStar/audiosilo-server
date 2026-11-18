@@ -133,6 +133,33 @@ func TestSyncFinishAfterItsOwnUnfinish(t *testing.T) {
 	wantResult(t, f.sync(t, finish(f, at)).Results[0], statusNotApplied, reasonOlder)
 }
 
+// server#415: a row a move carried alone keeps its version and records the
+// move's write above it, so a device on the row's version has seen all there
+// is: its finish, made 5 s after the tablet's restart on a clock 20 s behind,
+// is not dated back before the restart (the transit rule), and applies.
+func TestSyncFinishOnAMovedRowsVersion(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	wantResult(t, f.syncOne(t, "phone", f.listen("resume", 0, 600, 20*time.Minute, base(0))), statusApplied, "")
+	wantResult(t, f.syncOne(t, "tablet", f.finishEvent(EventFinish, 10*time.Minute)), statusApplied, "")
+	wantResult(t, f.syncOne(t, "tablet", f.finishEvent(EventUnfinish, 0)), statusApplied, "")
+	restartedAt := f.clock
+	if p := f.progress(t); p.Finished || p.Version != 3 {
+		t.Fatalf("setup: %+v, want the restarted row at version 3", p)
+	}
+	moved := Ref{LibraryID: f.lib, Path: "Author/Moved"}
+	if err := f.c.MoveDurableState(f.ctx, f.lib, f.book.Path, moved.Path); err != nil {
+		t.Fatal(err)
+	}
+	f.book = moved
+	f.clock = f.clock.Add(6 * time.Second)
+	b := f.finishSentAt(t, "phone", restartedAt.Add(5*time.Second-20*time.Second), base(3))
+	wantResult(t, f.sync(t, b).Results[0], statusApplied, "")
+	if p := f.progress(t); !p.Finished {
+		t.Fatalf("a finish on the moved row's version: %+v", p)
+	}
+}
+
 // server#359: a very short book's finish posted before its only span, in
 // separate batches: the span that lands after the token's applied finish (its
 // end just before it) closes its session finished. Another token's span, or
