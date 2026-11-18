@@ -1051,9 +1051,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   spelling only, never the file-to-book mapping: the shipped Folders view hearts a
   track by its own path and shows the heart by path equality. No on-demand index on a save, and
   a failed lookup is a 500 (a timed-out one a 503, `writeCatalogError`), never a save under
-  another key. Rows old clients already wrote under a part path stay where they are (not
-  merged until the re-key server#210 plans), and a part path's `GET` of bookmarks, notes and
-  history reads the book's, not them. `POST /cast/token` grants the book's path (`bookAt`).
+  another key. Rows old clients already wrote under a track path, another spelling or (the
+  book-level ones) a disc folder move to the book at the start and after each scan (the re-key, see
+  Move-tracking). `POST /cast/token` grants the book's path (`bookAt`).
   **The ebook** (Bridge Phase 3b, capability `ebooks`, `api/handlers_ebook.go`): `GET
   /libraries/{id}/ebook?path=<the book's own path>` serves the file the scan recorded for the book
   (`books.ebook_path`, see Auto book/folder detection), opened fresh by `library.OpenEbook`: joined
@@ -1505,6 +1505,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`IndexPath`'s `movedFrom`, `IndexMoved`) does the same from one listener's request: a move is a fact
   about the disk, so every listener's folder favourite follows it (owner decision on server#254,
   `TestIndexPathMovesEveryListenersFolderFavourite`).
+- **The re-key (server#210, `catalog/rekey.go`, `0084`)**: rows a client stored under a path no book
+  has, but the book path rule now reads at a book, move there: `RekeyPathState` once per `pathKeysVersion`
+  at the start (after `KeyPaths`, recorded in `server_state('path_rekey')` only when no path failed; the
+  start that first runs it applies `0084`, so `backup.BeforeUpgrade` copied the database just before), and
+  `RekeyLibrary` after every scan run that finished ok or partial (`launcher.rekeyAfterScan`, the
+  scanner's `OnRunFinished`; candidates only in the tables clients write). Books libraries only. Per path,
+  `rekeyTarget`: another spelling of an indexed book (`spelling`: every table), a file of a folder book
+  (`file`: all but favourites, a track row's heart stays on the track), a folder inside a book (`folder`:
+  the book-level rows only, lists, ratings and the reader's place, read at `BookPathAt`; a disc's timeline
+  rows keep their key); anything else stays (navigation folders, orphans, colliding keys). One writer
+  transaction a path, all or nothing: re-check the path is still no book and the target still one, read
+  every row (`rekeyTables`, the twin of `carryListeningState`'s list: add a table to both), the guards
+  (`scope`: every listener with a row reaches the book, `UserScopes`; `timeline`, `file` only: a progress
+  row whose length is a later track's and not the book's, a tripwire), each row whole into `path_rekeys`
+  (`row_json`, cascades with the user and library, never on the wire), then `carryState` (the move's
+  rules: `mergeNewest`, a list entry or favourite once, the newer rating or reader's place). A guard or a
+  failure leaves the path whole for the next run; a re-run finds nothing to move. No undo command: the
+  before-upgrade copy and the log are the way back.
 - **Auto book/folder detection**: there is **no per-library layout**. The model
   (`booksInDir` in `library/scanner.go`) matches the dominant "folder per book"
   convention (and Audiobookshelf): **a directory that directly contains audio is

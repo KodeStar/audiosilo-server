@@ -152,6 +152,10 @@ func Run(ctx context.Context, opts Options) error {
 	} else if n > 0 {
 		log.Info("keyed the books' paths", "books", n)
 	}
+	// Listeners' rows stored under a track path, a disc folder or another
+	// spelling move to the book's path, each logged whole first (server#210):
+	// after KeyPaths (it resolves spellings by the keys), once per key version.
+	rekeyAtStart(ctx, cat, log)
 	// The search index's rows written before Chinese and Japanese text was set
 	// apart a character a token (or with older Unicode tables) are rewritten
 	// once, so a search finds a word inside such a title.
@@ -168,7 +172,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	ffmpeg, ffprobe := resolveTools(ctx, abs, opts, log)
 	scanner := library.NewScanner(cat, ffprobe, log)
-	scanner.OnRunFinished = ntf.ScanFinished
+	scanner.OnRunFinished = rekeyAfterScan(cat, log, ntf.ScanFinished)
 	cat.SetPodcastNotice(ntf.PodcastNotice)
 	scanner.SetConcurrency(cfg.Scan.Concurrency)
 

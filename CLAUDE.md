@@ -354,7 +354,9 @@ never moves the place; cleared by every other writer) and `progress.edit_version
 explicit write that is not listening: a PATCH, an import's apply or undo, a move or join, a sync finish or unfinish;
 a Stay on a base below it is a plain jump); see Listening sync (Stay wins) in CONVENTIONS.md. `0083` (server#210) adds
 `books.path_key` (the book's path in NFC, `''` when already NFC, NULL until `catalog.KeyPaths` keys it at the start;
-derived, never on the wire) and its two partial indexes; see Path spelling in CONVENTIONS.md.
+derived, never on the wire) and its two partial indexes; see Path spelling in CONVENTIONS.md. `0084` (server#210) adds
+`path_rekeys`, the re-key's log (every row `catalog.RekeyPathState` / `RekeyLibrary` moved to its book, whole, in
+`row_json`; cascades with the user and the library, never on the wire); see Move-tracking (the re-key) in CONVENTIONS.md.
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -405,7 +407,7 @@ keep this index in step (one line per topic).
   - Transcoding
   - Watch renditions (Track W2, `media/rendition.go`, `api/handlers_renditions.go`: `stream?rendition=watch`, the renditions routes, the cache)
   - Sharing & access (shares)
-  - Move-tracking
+  - Move-tracking (incl. the re-key, server#210: `catalog/rekey.go`, `0084` `path_rekeys`, at the start and after each scan)
   - Auto book/folder detection
   - Metadata overrides (admin redesign Phase 2a, `catalog/overrides.go`)
   - Series spellings (`catalog/moreseries.go`)
