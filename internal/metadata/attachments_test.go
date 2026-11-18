@@ -218,3 +218,31 @@ func TestReadAttachmentFiles(t *testing.T) {
 		t.Errorf("missing: %v, want a read error that isn't ErrAttachmentInvalid", err)
 	}
 }
+
+// TestAttachmentPartsJSON: the parts go on the wire as their names, in a fixed
+// order (Book.generated_parts), and read back the same; a field tagged
+// omitzero leaves none out, and a name this server doesn't know is ignored.
+func TestAttachmentPartsJSON(t *testing.T) {
+	t.Parallel()
+	type book struct {
+		Parts AttachmentParts `json:"generated_parts,omitzero"`
+	}
+	for want, p := range map[string]AttachmentParts{
+		`{}`: {},
+		`{"generated_parts":["characters","description"]}`:          {Characters: true, Description: true},
+		`{"generated_parts":["characters","recaps","description"]}`: AllAttachmentParts,
+	} {
+		raw, err := json.Marshal(book{p})
+		if err != nil || string(raw) != want {
+			t.Fatalf("marshal %+v = %s (err %v), want %s", p, raw, err, want)
+		}
+		var back book
+		if err := json.Unmarshal(raw, &back); err != nil || back.Parts != p {
+			t.Fatalf("unmarshal %s = %+v (err %v), want %+v", raw, back.Parts, err, p)
+		}
+	}
+	var p AttachmentParts
+	if err := json.Unmarshal([]byte(`["recaps","a later part"]`), &p); err != nil || p != (AttachmentParts{Recaps: true}) {
+		t.Fatalf("an unknown name: %+v (err %v), want recaps alone", p, err)
+	}
+}

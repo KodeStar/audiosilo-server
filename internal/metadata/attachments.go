@@ -147,6 +147,28 @@ func (p AttachmentParts) Names() []string {
 // it has (a field tagged omitzero leaves none out).
 func (p AttachmentParts) MarshalJSON() ([]byte, error) { return json.Marshal(p.Names()) }
 
+// UnmarshalJSON reads p back from its Names, so a Book read from its own JSON
+// (a test decoding a list answer, say) keeps its parts rather than failing on
+// the list; a name a newer server adds is ignored.
+func (p *AttachmentParts) UnmarshalJSON(b []byte) error {
+	var names []string
+	if err := json.Unmarshal(b, &names); err != nil {
+		return err
+	}
+	*p = AttachmentParts{}
+	for _, n := range names {
+		switch n {
+		case "characters":
+			p.Characters = true
+		case "recaps":
+			p.Recaps = true
+		case "description":
+			p.Description = true
+		}
+	}
+	return nil
+}
+
 // AttachmentSignature is one attachment's part of a book's signature: its known
 // name, size and modification time (ns). The Bridge rewrites these files without
 // touching the audio, so a scan compares them, not the book's own signature.
