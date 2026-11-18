@@ -1776,12 +1776,14 @@ var cancelReasons = sync.OnceValue(func() []string {
 
 // cancelOpenTx cancels the open job with dedupe key key, inside tx, as Cancel
 // does: at once when it is queued or parked, else by asking the Bridge
-// (cancel_requested). reason is its error. No open job is no change.
+// (cancel_requested). reason is its error. No open job is no change. Each
+// UPDATE repeats idx_bridge_jobs_open's condition (OpenStatesSQL) so SQLite
+// can use that partial index instead of scanning every finished job.
 func cancelOpenTx(ctx context.Context, tx *sql.Tx, key, now, reason string) error {
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE bridge_jobs SET state = 'cancelled', cancel_requested = 1, lease_until = NULL, error = ?3,
 		        finished_at = ?2, updated_at = ?2
-		  WHERE dedupe_key = ?1 AND state IN ('queued', 'needs_attention')`, key, now, reason); err != nil {
+		  WHERE dedupe_key = ?1 AND state IN `+OpenStatesSQL+` AND state IN ('queued', 'needs_attention')`, key, now, reason); err != nil {
 		return err
 	}
 	// A working job ends at the Bridge's next report; its reason is recorded
@@ -1790,7 +1792,7 @@ func cancelOpenTx(ctx context.Context, tx *sql.Tx, key, now, reason string) erro
 	_, err := tx.ExecContext(ctx,
 		`UPDATE bridge_jobs SET error = CASE WHEN cancel_requested = 1 THEN error ELSE ?3 END,
 		        cancel_requested = 1, updated_at = ?2
-		  WHERE dedupe_key = ?1 AND state IN `+claimedStatesSQL, key, now, reason)
+		  WHERE dedupe_key = ?1 AND state IN `+OpenStatesSQL+` AND state IN `+claimedStatesSQL, key, now, reason)
 	return err
 }
 
