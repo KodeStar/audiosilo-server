@@ -210,19 +210,73 @@ func (c *Catalog) keyPathsIn(ctx context.Context, after int64, all bool) (int, i
 // an NFC and an NFD name apart, with p's not indexed yet), so a folder no scan
 // has reached is never taken for the indexed one beside it.
 func (c *Catalog) Spelling(ctx context.Context, libraryID int64, p string, allow func(string) bool) (spelled string, outside bool, err error) {
+	return c.spelling(ctx, libraryID, p, allow, nil)
+}
+
+// spelling is Spelling with its look at the disk taken from looks (nil: no
+// bound but the look's own wait): a path asked for once looks are spent gets
+// the index's answer, as one whose look fails does.
+func (c *Catalog) spelling(ctx context.Context, libraryID int64, p string, allow func(string) bool,
+	looks *spellLooks) (spelled string, outside bool, err error) {
 	s, refused, err := c.indexSpelling(ctx, libraryID, p, allow)
+	own := func(others []string) bool {
+		lctx, done, ok := looks.take(ctx)
+		if !ok {
+			return false
+		}
+		defer done()
+		return c.ownEntry(lctx, libraryID, p, others)
+	}
 	switch {
 	case err != nil:
 		return "", false, err
 	case s != p:
-		if c.ownEntry(ctx, libraryID, p, []string{s}) {
+		if own([]string{s}) {
 			return p, false, nil
 		}
 		return s, false, nil
 	case len(refused) > 0:
-		return p, !c.ownEntry(ctx, libraryID, p, refused), nil
+		return p, !own(refused), nil
 	}
 	return p, false, nil
+}
+
+// spellLooks bounds Spelling's looks at the disk over one request that spells
+// many paths (a list replace names up to a thousand): a count, and a time for
+// them all, so a share that answers slowly or not at all costs the request a
+// few seconds, never its timeout (each look alone may wait spellLookWait, and
+// makes several calls). Once either is spent a path gets the index's answer.
+// One request's, never shared between goroutines.
+type spellLooks struct {
+	left  int       // looks still to make
+	until time.Time // and when the last may end
+}
+
+// A list replace's looks at the disk (listableRefs): this many, within this
+// long in all.
+const (
+	listSpellLooks = 16
+	listSpellWait  = 5 * time.Second
+)
+
+// newSpellLooks is a request's allowance of n looks, all within wait from now.
+func newSpellLooks(n int, wait time.Duration) *spellLooks {
+	return &spellLooks{left: n, until: time.Now().Add(wait)}
+}
+
+// take claims one look: the context it runs under (ended when the looks' time
+// is, so a look under way then is given up on), its release, and false when
+// none is left. A nil l always has one, under ctx.
+func (l *spellLooks) take(ctx context.Context) (context.Context, context.CancelFunc, bool) {
+	if l == nil {
+		return ctx, func() {}, true
+	}
+	if l.left <= 0 || !time.Now().Before(l.until) {
+		return nil, nil, false
+	}
+	l.left--
+	lctx, cancel := context.WithDeadline(ctx, l.until)
+	return lctx, cancel, true
 }
 
 // indexSpelling is Spelling from the index alone: p's spelling, and when it is
@@ -284,6 +338,9 @@ const spellLookWait = 5 * time.Second
 // mount): p is its own only when each of its names that has another spelling
 // is in its folder's listing as given (spelledOnDisk).
 func (c *Catalog) ownEntry(ctx context.Context, libraryID int64, p string, others []string) bool {
+	if c.spellLooked != nil {
+		c.spellLooked()
+	}
 	lib, err := c.GetLibrary(ctx, libraryID)
 	if err != nil || lib.Root == "" {
 		return false

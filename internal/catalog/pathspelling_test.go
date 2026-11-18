@@ -720,3 +720,69 @@ func TestBookHoldingBounded(t *testing.T) {
 		}
 	}
 }
+
+// TestListReplaceBoundsDiskLooks (server#210): a list replace naming many
+// books in another spelling looks at the disk for the first few only
+// (listSpellLooks), each of which a share that stopped answering would hold
+// for seconds, and spells the rest from the index, so every ref still reaches
+// its book. A remove, one ref, keeps its look.
+func TestListReplaceBoundsDiskLooks(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const books = 3 * listSpellLooks
+	var refs, want []Ref
+	for i := range books {
+		p := fmt.Sprintf("Livre %03d été", i) // NFC in the index
+		upsert(t, c, &Book{LibraryID: lib.ID, RelPath: p, IsFolder: true, Title: p, AddedAt: "2020-01-01",
+			Files: []BookFile{{RelPath: p + "/01.mp3", Format: "mp3"}}})
+		refs = append(refs, Ref{LibraryID: lib.ID, Path: unorm.NFD.String(p)})
+		want = append(want, Ref{LibraryID: lib.ID, Path: p})
+	}
+	var looked atomic.Int64
+	c.spellLooked = func() { looked.Add(1) }
+	got, err := c.listableRefs(ctx, refs, []Scope{{LibraryID: lib.ID, AllowAll: true}})
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("listable = %d refs %v, want each of the %d books in the index's spelling", len(got), err, books)
+	}
+	if n := looked.Load(); n != listSpellLooks {
+		t.Errorf("the replace looked at the disk %d times, want %d", n, listSpellLooks)
+	}
+	looked.Store(0)
+	if rm, err := c.removalRefs(ctx, refs[0]); err != nil || !slices.Contains(rm, want[0]) || looked.Load() != 1 {
+		t.Errorf("a remove = %+v %v after %d looks, want the book's entry after one", rm, err, looked.Load())
+	}
+}
+
+// TestSpellLooks: an allowance hands out its looks, each under a context that
+// ends when the allowance's time does, and none once the looks or the time
+// are spent; no allowance (nil) always has one, under the caller's context.
+func TestSpellLooks(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	if lctx, done, ok := (*spellLooks)(nil).take(ctx); !ok || lctx != ctx {
+		t.Error("no allowance: want a look under the caller's context")
+	} else {
+		done()
+	}
+	l := newSpellLooks(2, time.Hour)
+	for i := range 2 {
+		lctx, done, ok := l.take(ctx)
+		if !ok {
+			t.Fatalf("look %d refused", i)
+		}
+		if at, has := lctx.Deadline(); !has || !at.Equal(l.until) {
+			t.Errorf("look %d ends at %v (%v), want the allowance's %v", i, at, has, l.until)
+		}
+		done()
+	}
+	if _, _, ok := l.take(ctx); ok {
+		t.Error("a third look of two was allowed")
+	}
+	if _, _, ok := newSpellLooks(2, -time.Second).take(ctx); ok {
+		t.Error("a look was allowed after the allowance's time")
+	}
+}

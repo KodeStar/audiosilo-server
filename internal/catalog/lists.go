@@ -558,6 +558,11 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 	}
 	listed := make(map[Ref]bool, len(cands))
 	out := make([]Ref, 0, len(cands))
+	// Each ref in another spelling may look at the disk (Spelling): the whole
+	// replace gets a few looks and a few seconds for them, so a share that
+	// stopped answering never holds it to the request's timeout; the refs past
+	// that are spelled from the index alone.
+	looks := newSpellLooks(listSpellLooks, listSpellWait)
 	for _, r := range cands {
 		if _, ok := books[r]; !ok {
 			if !HasOtherSpelling(r.Path) && !held[r] {
@@ -565,7 +570,7 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 			}
 			lib := r.LibraryID
 			allow := func(p string) bool { return ScopesAllow(scopes, Ref{LibraryID: lib, Path: p}) }
-			if _, r.Path, err = c.spelledBook(ctx, r, allow); err != nil {
+			if _, r.Path, err = c.spelledBook(ctx, r, allow, looks); err != nil {
 				return nil, err
 			}
 		}
@@ -642,9 +647,10 @@ func (c *Catalog) heldRefs(ctx context.Context, refs []Ref) (map[Ref]bool, error
 
 // spelledBook is ref's path in the index's spelling (Spelling, of the
 // spellings allow admits; nil: every one) and the book that is or holds it
-// (BookPathAt), "" for none.
-func (c *Catalog) spelledBook(ctx context.Context, ref Ref, allow func(string) bool) (spelled, book string, err error) {
-	if spelled, _, err = c.Spelling(ctx, ref.LibraryID, ref.Path, allow); err != nil {
+// (BookPathAt), "" for none. looks bounds the look at the disk over a request
+// that asks for many refs (nil: one ref's own).
+func (c *Catalog) spelledBook(ctx context.Context, ref Ref, allow func(string) bool, looks *spellLooks) (spelled, book string, err error) {
+	if spelled, _, err = c.spelling(ctx, ref.LibraryID, ref.Path, allow, looks); err != nil {
 		return "", "", err
 	}
 	book, err = c.BookPathAt(ctx, ref.LibraryID, spelled)
@@ -660,7 +666,7 @@ func (c *Catalog) spelledBook(ctx context.Context, ref Ref, allow func(string) b
 // takes the caller's own rows off), so a remove by a track path or another
 // spelling takes the book's entry off (server#210).
 func (c *Catalog) removalRefs(ctx context.Context, ref Ref) ([]Ref, error) {
-	spelled, book, err := c.spelledBook(ctx, ref, nil)
+	spelled, book, err := c.spelledBook(ctx, ref, nil, nil)
 	if err != nil {
 		return nil, err
 	}

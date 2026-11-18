@@ -354,6 +354,9 @@ type Catalog struct {
 	// chunkKeyPaths, tests only, is KeyPaths' transaction size when not 0
 	// (keyPathsChunk, the package's, otherwise).
 	chunkKeyPaths int
+	// spellLooked, tests only, runs as each of Spelling's looks at the disk
+	// begins (ownEntry).
+	spellLooked func()
 }
 
 // OnBookChange adds f to the listeners that hear, after the fact and without

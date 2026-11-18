@@ -1147,7 +1147,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   keeps an NFC and an NFD name apart, `p`'s folder not indexed yet) stays as given, so a folder no
   scan has reached is never taken for the indexed one beside it (nor its rows moved there by the
   re-key); a disk that ignores the spelling finds the same file by both, and a look that fails
-  leaves the index's answer. Applied by
+  leaves the index's answer. A request that spells many paths shares one allowance of looks
+  (`spellLooks`: a list replace's `listSpellLooks` looks within `listSpellWait` in all, each look's
+  context ending with it), the paths past it spelled from the index alone, so a share that stopped
+  answering never holds a replace of a thousand refs to the request's timeout
+  (`TestListReplaceBoundsDiskLooks`). Applied by
   `scopedPath` / `scopedPathIn` (`spelledPathInScope`: cap, library, clean, spelling, scope, hidden),
   so every route on them (item, chapters, cover, stream, meta, next, ebook, readalong,
   reading-progress, progress, sync events, bookmarks, notes, history, favourites, ratings, list adds,
