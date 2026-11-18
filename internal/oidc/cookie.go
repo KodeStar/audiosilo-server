@@ -12,7 +12,8 @@ import (
 )
 
 // The flow cookie: what /start chose (state, nonce, PKCE verifier, the
-// redirect URI it sent the provider, where the sign-in returns) carried to
+// redirect URI it sent the provider, where the sign-in returns, the player's
+// intent tag) carried to
 // /callback in the browser, sealed with AES-GCM under a key made at start and
 // held only in memory, so no database row exists for an anonymous /start and a
 // restart ends every flow under way. It is valid for FlowMaxAge after /start
@@ -39,7 +40,12 @@ type Flow struct {
 	// name the same, whatever public_url says by the callback.
 	RedirectURI string `json:"u"`
 	Return      string `json:"r"`
-	IssuedAt    int64  `json:"t"` // Unix seconds
+	// Intent is the web player's own random tag for this trip (its /start's
+	// ?intent=, "" for none): echoed only by the finish of the sign-in this
+	// flow completes, so the player can tell its own trip's return from an
+	// address typed later (audiosilo#202).
+	Intent   string `json:"i,omitempty"`
+	IssuedAt int64  `json:"t"` // Unix seconds
 }
 
 // flowAD binds a sealed cookie to its use.
@@ -108,15 +114,17 @@ func (s *Sealer) Open(v string) (Flow, error) {
 	return f, nil
 }
 
-// maxReplay bounds the states Replay remembers.
+// maxReplay bounds the keys one Replay remembers.
 const maxReplay = 10000
 
 // Replay remembers the flows a callback completed (the code exchanged, the ID
 // token checked), for FlowMaxAge, so one cookie signs in once even when a copy
-// of it is sent again with another code.
+// of it is sent again with another code. A second one, of its own, remembers
+// the intent tags those flows carried (Flow.Intent), for as long: a key is a
+// flow's state or a tag, and a tag is free again once it is forgotten.
 type Replay struct {
 	mu    sync.Mutex
-	used  map[string]time.Time // state -> when it may be forgotten
+	used  map[string]time.Time // state or tag -> when it may be forgotten
 	swept time.Time            // the last time the forgettable were dropped
 	now   func() time.Time
 }

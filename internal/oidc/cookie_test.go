@@ -15,7 +15,7 @@ func TestSealerRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := Flow{State: "st", Nonce: "no", Verifier: "ve", RedirectURI: "https://a.example/cb", Return: "admin"}
+	in := Flow{State: "st", Nonce: "no", Verifier: "ve", RedirectURI: "https://a.example/cb", Return: "admin", Intent: "in"}
 	v, err := s.Seal(in)
 	if err != nil {
 		t.Fatal(err)
@@ -25,7 +25,7 @@ func TestSealerRoundTrip(t *testing.T) {
 	}
 	got, err := s.Open(v)
 	if err != nil || got.State != "st" || got.Nonce != "no" || got.Verifier != "ve" || got.Return != "admin" ||
-		got.RedirectURI != "https://a.example/cb" {
+		got.RedirectURI != "https://a.example/cb" || got.Intent != "in" {
 		t.Fatalf("Open = %+v, %v", got, err)
 	}
 

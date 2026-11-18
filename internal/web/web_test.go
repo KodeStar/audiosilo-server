@@ -678,6 +678,17 @@ func TestReaderDocument(t *testing.T) {
 	}
 }
 
+// TestConnectPageDropsOIDCIntent (audiosilo#202): a single sign-on that ends
+// on the connect page's result panel drops the web player's intent held in the
+// tab (src/components/connect/oidc-intent.ts's key), so the trip's tag isn't
+// left for its start URL sent again from the history.
+func TestConnectPageDropsOIDCIntent(t *testing.T) {
+	t.Parallel()
+	if js := readFile(t, "assets/connect.js"); !strings.Contains(js, `sessionStorage.removeItem("audiosilo.oidcIntent")`) {
+		t.Error("connect.js no longer drops the player's single sign-on intent on #oidc=<reason>")
+	}
+}
+
 // TestConnectPageNamesWhatExists: every string the connect page's script or
 // markup asks the dictionary for is in it (a plural by its .one form), and every
 // element the script looks up by id is in the page, so a typed code's wording

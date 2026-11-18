@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,15 @@ import (
 // which answers as POST /auth/exchange does. Anything else lands on
 // /connect#oidc=<reason>. Every URL the provider or the browser is sent to is
 // built from public_url, never from the request's Host.
+//
+// The web player may tag its trip: /start's optional ?intent= (a random value
+// the player keeps in its tab) rides the sealed flow, then the done cookie,
+// and the finish echoes it as "intent", once, only for the sign-in that flow
+// completed (audiosilo#202). The player gives a grown-up's pass through kids
+// mode back only for its own tag: the address typed later, with a live
+// provider session, completes a sign-in too, but never with the player's tag.
+// A finish that names the tag it expects ("intent" in its body) is refused
+// for any other sign-in before a session is made (403 oidc_intent_mismatch).
 
 // Paths and names of the flow.
 const (
@@ -49,6 +59,9 @@ const (
 	// set by this origin itself (no Domain) for Path=/: a sibling subdomain
 	// or a plain-http answer can't plant one by that name.
 	hostCookiePrefix = "__Host-"
+	// oidcIntentSep joins a done cookie's token and the flow's intent tag:
+	// neither (base64url) holds it.
+	oidcIntentSep = "."
 	// oidcDoneTTL is the life of the token a sign-in hands the console or
 	// the web player (and of its cookie): long enough for the page to load and
 	// finish.
@@ -89,6 +102,9 @@ type oidcFlow struct {
 	provider *oidc.Provider
 	sealer   *oidc.Sealer
 	replay   *oidc.Replay
+	// intents: the player's intent tags spent (handleOIDCCallback), a memory
+	// of their own so tags never take the places flow states need.
+	intents *oidc.Replay
 	// noGroupsWarned: the accounts whose sign-in without a groups claim (while
 	// admin_group is set) has been logged this run, a noGroupsKey each
 	// (auditSignIn).
@@ -135,7 +151,7 @@ func newOIDCFlow(cfg config.OIDCConfig, log *slog.Logger) *oidcFlow {
 	if !cfg.Enabled {
 		return nil
 	}
-	f := &oidcFlow{name: cfg.DisplayName(), replay: oidc.NewReplay(nil)}
+	f := &oidcFlow{name: cfg.DisplayName(), replay: oidc.NewReplay(nil), intents: oidc.NewReplay(nil)}
 	sealer, err := oidc.NewSealer(nil)
 	if err != nil {
 		f.problem = "could not make the sign-in key"
@@ -269,12 +285,23 @@ func (a *API) oidcCookieValue(r *http.Request, name string) string {
 	return ""
 }
 
+// intentPattern is a player's intent tag: 22 to 128 base64url characters (the
+// player sends 64 hex).
+var intentPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{22,128}$`)
+
+// validIntent reports whether s can be a player's intent tag (intentPattern).
+// Anything else is dropped, never an error: the sign-in runs, untagged.
+func validIntent(s string) bool { return intentPattern.MatchString(s) }
+
 // handleOIDCStart begins a sign-in (public): ?return=web|admin (400 for
-// anything else). Off or misconfigured: /connect#oidc=off|unavailable. On
+// anything else) and an optional ?intent= tag (validIntent; a bad one is
+// dropped, and so is one the flow cookie the browser still holds carries: that
+// trip's start sent again), sealed into the flow. Off or misconfigured: /connect#oidc=off|unavailable. On
 // another host than public_url's, or over plain HTTP for an https public_url,
 // it first sends the browser to this route on public_url (once: ?hop=1), so
-// the flow cookie is set where the provider returns. Then the cookie (sealed
-// state, nonce, PKCE verifier, the redirect URI, return; ten minutes,
+// the flow cookie is set where the provider returns (the tag goes along). Then
+// the cookie (sealed state, nonce, PKCE verifier, the redirect URI, return,
+// the tag; ten minutes,
 // HttpOnly, SameSite=Lax; named and placed by oidcCookieName, Secure on an
 // https public_url) and a 302 to the provider's authorization URL, asking for
 // oidcScopes. A provider discovered before is probed first (within the call
@@ -282,9 +309,10 @@ func (a *API) oidcCookieValue(r *http.Request, name string) string {
 // asked again after 5 s): one gone down lands on #oidc=unavailable rather
 // than the browser being sent to it.
 func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
 	// Never the request's own value from here on: the enum's constant.
 	var ret string
-	switch r.URL.Query().Get("return") {
+	switch query.Get("return") {
 	case oidcReturnWeb:
 		ret = oidcReturnWeb
 	case oidcReturnAdmin:
@@ -311,14 +339,30 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	// too: a browser drops a Secure cookie set over plain HTTP, and the flow
 	// would end on "expired". Behind a proxy the scheme isn't ours to know.
 	plain := public.Scheme == "https" && r.TLS == nil && !proxied(r)
-	if (plain || !sameHost(public, r.Host)) && r.URL.Query().Get("hop") == "" {
+	intent := query.Get("intent")
+	if !validIntent(intent) {
+		intent = ""
+	}
+	if (plain || !sameHost(public, r.Host)) && query.Get("hop") == "" {
+		hop := url.Values{"return": {ret}, "hop": {"1"}}
+		if intent != "" {
+			hop.Set("intent", intent)
+		}
 		noStore(w)
-		http.Redirect(w, r, a.oidcBase()+oidcStartPath+"?return="+ret+"&hop=1", http.StatusFound)
+		http.Redirect(w, r, a.oidcBase()+oidcStartPath+"?"+hop.Encode(), http.StatusFound)
 		return
+	}
+	// The same trip's start sent again (its address from the history, the trip
+	// abandoned at the provider, so its flow cookie is still held and its tag
+	// unspent): the new flow goes untagged, never the abandoned trip's tag.
+	if intent != "" {
+		if prev, err := a.oidc.sealer.Open(a.oidcCookieValue(r, oidcCookie)); err == nil && prev.Intent == intent {
+			intent = ""
+		}
 	}
 	// 32 random bytes each, base64url.
 	f := oidc.Flow{State: oauth2.GenerateVerifier(), Nonce: oauth2.GenerateVerifier(),
-		Verifier: oauth2.GenerateVerifier(), RedirectURI: a.oidcRedirectURI(), Return: ret}
+		Verifier: oauth2.GenerateVerifier(), RedirectURI: a.oidcRedirectURI(), Return: ret, Intent: intent}
 	authURL, err := a.oidc.provider.AuthURL(r.Context(), f, a.oidcScopes())
 	if err != nil {
 		a.log.Warn("oidc: start failed", "err", err)
@@ -346,7 +390,10 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 // would lock that address out of signing in. The provider's ?error= (the
 // person cancelled) charges nothing either. Otherwise oidc.Decide's answer
 // (auth.OIDCSignIn) and its audits, then the sign-in's token in its cookie and
-// the flow's return page, or the result panel.
+// the flow's return page, or the result panel. The flow's intent tag joins the
+// token in the done cookie (oidcIntentSep), once: a tag a completed flow
+// carried before (the start URL with it sent again, from the history) is
+// dropped, so its sign-in finishes untagged.
 func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	a.setOIDCCookie(w, oidcCookie, "", -1)
 	ip := clientIP(r)
@@ -421,6 +468,14 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail(oidcFailed, "flow used before", nil)
 		return
 	}
+	// The tag (checked at /start, sealed since) is spent with the first flow
+	// the provider completes for it, whatever the outcome below (a waiting
+	// sign-in approved since must not echo it on a second trip). A full
+	// memory refuses it: untagged, the player gives nothing back.
+	intent := f.Intent
+	if intent != "" && !a.oidc.intents.Use(intent) {
+		intent = ""
+	}
 	// The groups trimmed as the console saves them (config.yaml and the
 	// environment aren't): a claim's group is, so " admins" would match no one
 	// and every sign-in would lose its admin role. The finish token is minted
@@ -468,13 +523,17 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 			a.log.Warn("noting the admin's first sign-in failed", "err", err)
 		}
 	}
-	a.setOIDCCookie(w, oidcDoneCookie, res.Token, int(oidcDoneTTL/time.Second))
-	noStore(w)
-	done := oidcDoneWeb
-	if f.Return == oidcReturnAdmin {
-		done = oidcDoneAdmin
+	done := res.Token
+	if intent != "" {
+		done += oidcIntentSep + intent
 	}
-	http.Redirect(w, r, a.oidcBase()+done, http.StatusSeeOther)
+	a.setOIDCCookie(w, oidcDoneCookie, done, int(oidcDoneTTL/time.Second))
+	noStore(w)
+	page := oidcDoneWeb
+	if f.Return == oidcReturnAdmin {
+		page = oidcDoneAdmin
+	}
+	http.Redirect(w, r, a.oidcBase()+page, http.StatusSeeOther)
 }
 
 // handleOIDCFinish trades a finished sign-in for a session (public): the
@@ -482,10 +541,19 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 // token: one planted in that cookie, an invite's QR or a person's own
 // /auth/pair, would sign the browser in as someone else, and is refused and
 // left unspent), consumed once, then the answer POST /auth/exchange gives
-// (the session envelope; the new device reported as there). Optional body
-// {"device_name"}. A 429 (oidcLimiter) or a 400 (the body) leaves the cookie,
-// so the sign-in can still be finished for the rest of its minute; every other
-// answer clears it. 401 code oidc_no_sign_in without the cookie (charging
+// (the session envelope; the new device reported as there), with "intent":
+// the tag the flow carried (handleOIDCStart), only when it did. A tag rides
+// only with the token it was set beside, so it is echoed once. Optional body
+// {"device_name", "intent"}: "intent" is the tag the player expects, and a
+// sign-in whose flow carried another tag or none is refused, 403 code
+// oidc_intent_mismatch, before its token is tried: no session, the token
+// unspent, nothing charged (no secret was tried), the cookie cleared, so the
+// sign-in the player disowned can't be finished without the tag instead.
+// Present means a string, the empty one too; absent or null asks nothing (the
+// console, a player before the field). A 429 (oidcLimiter) or a 400 (the body)
+// leaves the cookie, so the sign-in can still be finished for the rest of its
+// minute; every other answer clears it. 401 code oidc_no_sign_in without the
+// cookie, whatever the body expects (charging
 // nothing: no secret was tried), oidc_sign_in_expired for a token spent,
 // expired, unknown, of another kind, or its account's disabled or now a
 // member (charged to the address's oidcLimiter, the callback's), and while
@@ -504,19 +572,32 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		DeviceName string `json:"device_name"`
+		// Intent: the tag the player expects the sign-in to carry, nil for
+		// no expectation.
+		Intent *string `json:"intent"`
 	}
 	if err := decodeJSONOptional(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	a.setOIDCCookie(w, oidcDoneCookie, "", -1)
-	token := a.oidcCookieValue(r, oidcDoneCookie)
+	token, intent, _ := strings.Cut(a.oidcCookieValue(r, oidcDoneCookie), oidcIntentSep)
+	if !validIntent(intent) {
+		intent = ""
+	}
 	if token == "" {
 		writeErrorCode(w, http.StatusUnauthorized, codeOIDCNoSignIn, "no single sign-on to finish in this browser")
 		return
 	}
 	if !a.oidcOn() {
 		writeErrorCode(w, http.StatusUnauthorized, codeOIDCSignInExpired, "single sign-on is off: sign in another way")
+		return
+	}
+	// Before the token is tried: a sign-in that isn't the trip the player
+	// started makes no session and stays unspent (to expire, out of reach once
+	// the browser drops the cookie).
+	if req.Intent != nil && (intent == "" || subtle.ConstantTimeCompare([]byte(*req.Intent), []byte(intent)) != 1) {
+		writeErrorCode(w, http.StatusForbidden, codeOIDCIntentMismatch, "this single sign-on isn't the one this page started: sign in again")
 		return
 	}
 	u, err := a.auth.ConsumeOIDC(r.Context(), token)
@@ -526,7 +607,14 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.oidcLimiter.Reset(ip)
-	a.issuePairedSession(w, r, u.ID, req.DeviceName, false)
+	out := a.pairedSession(w, r, u.ID, req.DeviceName, false)
+	if out == nil {
+		return
+	}
+	if intent != "" {
+		out["intent"] = intent
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // clip cuts s to n bytes for a log line.

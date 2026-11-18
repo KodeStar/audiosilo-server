@@ -104,7 +104,14 @@ func flowCookie(t *testing.T, resp *http.Response) *http.Cookie {
 // the callback's path and query on the test server.
 func (e *oidcEnv) start(t *testing.T, ret string) (*http.Cookie, string) {
 	t.Helper()
-	resp := e.get(t, oidcStartPath+"?return="+ret, oidcHost)
+	return e.startQuery(t, "return="+ret)
+}
+
+// startQuery is start with /start's whole query, and the cookies the browser
+// holds.
+func (e *oidcEnv) startQuery(t *testing.T, query string, cookies ...*http.Cookie) (*http.Cookie, string) {
+	t.Helper()
+	resp := e.get(t, oidcStartPath+"?"+query, oidcHost, cookies...)
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("start: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
@@ -322,7 +329,7 @@ func TestOIDCStart(t *testing.T) {
 	}
 	// Another Host: sent to the same route on public_url first, once.
 	resp := e.get(t, oidcStartPath+"?return=admin", "evil.example")
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?return=admin&hop=1" {
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?hop=1&return=admin" {
 		t.Fatalf("another host: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	if len(resp.Cookies()) != 0 {
@@ -337,7 +344,7 @@ func TestOIDCStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?return=admin&hop=1" ||
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?hop=1&return=admin" ||
 		len(resp.Cookies()) != 0 {
 		t.Fatalf("plain HTTP on the public host: %d %q %v", resp.StatusCode, resp.Header.Get("Location"), resp.Cookies())
 	}
@@ -488,6 +495,277 @@ func TestOIDCWebSignIn(t *testing.T) {
 	}
 	if resp, out := e.finish(t, done, "web"); resp.StatusCode != 200 || out["token"] == "" {
 		t.Fatalf("finish: %d %v", resp.StatusCode, out)
+	}
+}
+
+// TestOIDCIntent (audiosilo#202): the web player's tag on /start comes back
+// in the finish's answer for the sign-in that flow completed, once, and never
+// for any other: the start URL typed later (a provider session still live
+// signs it in at once) finishes untagged, and so does a tag sent again.
+func TestOIDCIntent(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	tag := strings.Repeat("ab12", 16) // the player's 64 hex
+	finishTagged := func(t *testing.T, query string, held ...*http.Cookie) map[string]any {
+		t.Helper()
+		cookie, path := e.startQuery(t, query, held...)
+		loc, done := e.callbackDone(t, path, cookie)
+		if loc != oidcPublic+oidcDoneWeb || done == nil {
+			t.Fatalf("landed on %q (cookie %v)", loc, done)
+		}
+		resp, out := e.finish(t, done, "web")
+		if resp.StatusCode != 200 || out["token"] == "" {
+			t.Fatalf("finish: %d %v", resp.StatusCode, out)
+		}
+		return out
+	}
+
+	// Denied: the device's own tagged trip abandoned at the provider, then the
+	// start URL typed (no tag): a session, untagged.
+	_, _ = e.startQuery(t, "return=web&intent="+tag)
+	if out := finishTagged(t, "return=web"); out["intent"] != nil {
+		t.Fatalf("a typed start was echoed %v", out["intent"])
+	}
+	// Allowed: the tagged trip, its own tag.
+	if out := finishTagged(t, "return=web&intent="+tag); out["intent"] != tag {
+		t.Fatalf("own trip: intent %v", out["intent"])
+	}
+	// Denied: the same tag again (the start URL from the history): spent.
+	if out := finishTagged(t, "return=web&intent="+tag); out["intent"] != nil {
+		t.Fatalf("a reused tag was echoed %v", out["intent"])
+	}
+	// Denied: a trip abandoned at the provider, its start URL sent again from
+	// the history while the browser still holds its flow cookie: untagged.
+	again := strings.Repeat("7a", 32)
+	abandoned, _ := e.startQuery(t, "return=web&intent="+again)
+	if out := finishTagged(t, "return=web&intent="+again, abandoned); out["intent"] != nil {
+		t.Fatalf("an abandoned trip's start sent again was echoed %v", out["intent"])
+	}
+	// Allowed: a new trip's tag beside another trip's flow cookie.
+	fresh := strings.Repeat("8b", 32)
+	if out := finishTagged(t, "return=web&intent="+fresh, abandoned); out["intent"] != fresh {
+		t.Fatalf("a new trip beside an old flow cookie: intent %v", out["intent"])
+	}
+	// Two trips in flight: the one completed echoes its own, never the other's.
+	other := strings.Repeat("cd34", 16)
+	_, _ = e.startQuery(t, "return=web&intent="+strings.Repeat("ef56", 16))
+	if out := finishTagged(t, "return=web&intent="+other); out["intent"] != other {
+		t.Fatalf("the completed trip: intent %v", out["intent"])
+	}
+	// Denied: a tag that can't be one (validIntent) is dropped, and the
+	// sign-in still runs.
+	if out := finishTagged(t, "return=web&intent="+strings.Repeat("a", 30)+"%2F"); out["intent"] != nil {
+		t.Fatalf("a bad tag echoed %v", out["intent"])
+	}
+	// The hop to public_url keeps a good tag, never a bad one.
+	hop := strings.Repeat("9f", 32)
+	resp := e.get(t, oidcStartPath+"?return=web&intent="+hop, "evil.example")
+	if resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?hop=1&intent="+hop+"&return=web" {
+		t.Fatalf("hop with a tag: %q", resp.Header.Get("Location"))
+	}
+	resp = e.get(t, oidcStartPath+"?return=web&intent=bad%26hop%3D1", "evil.example")
+	if resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?hop=1&return=web" {
+		t.Fatalf("hop with a bad tag: %q", resp.Header.Get("Location"))
+	}
+}
+
+// TestOIDCIntentPending: a tagged trip that ends waiting for an admin spends
+// its tag, so once the account is there, the same start URL sent again
+// (the history) signs in untagged.
+func TestOIDCIntentPending(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	tag := strings.Repeat("c3", 32)
+	cookie, path := e.startQuery(t, "return=web&intent="+tag)
+	wantResult(t, e.callback(t, path, cookie), oidcPending)
+	e.mustUser(t, "alice", "alice@example.org")
+	cookie, path = e.startQuery(t, "return=web&intent="+tag)
+	loc, done := e.callbackDone(t, path, cookie)
+	if loc != oidcPublic+oidcDoneWeb || done == nil {
+		t.Fatalf("landed on %q (cookie %v)", loc, done)
+	}
+	if resp, out := e.finish(t, done, "web"); resp.StatusCode != 200 || out["intent"] != nil {
+		t.Fatalf("after a pending trip: %d intent %v", resp.StatusCode, out["intent"])
+	}
+}
+
+// TestOIDCFinishExpectedIntent (audiosilo#202): a finish whose body names the
+// tag the player expects is answered only for the sign-in that carried it.
+// Any other is a 403 oidc_intent_mismatch before the token is tried: no
+// session, the token unspent, the cookie cleared, nothing charged. Without
+// the field (or null) the finish answers as before.
+func TestOIDCFinishExpectedIntent(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	tag := strings.Repeat("ab12", 16)
+	// trip runs a web sign-in to its done cookie; finish posts body with it.
+	trip := func(t *testing.T, query string) *http.Cookie {
+		t.Helper()
+		cookie, path := e.startQuery(t, query)
+		loc, done := e.callbackDone(t, path, cookie)
+		if loc != oidcPublic+oidcDoneWeb || done == nil {
+			t.Fatalf("landed on %q (cookie %v)", loc, done)
+		}
+		return done
+	}
+	finish := func(t *testing.T, done *http.Cookie, body string) (*http.Response, map[string]any) {
+		t.Helper()
+		headers := map[string]string{}
+		if done != nil {
+			headers["Cookie"] = done.Name + "=" + done.Value
+		}
+		resp, b := e.doHeaders(t, "POST", oidcFinishPath, "", body, headers)
+		var out map[string]any
+		_ = json.Unmarshal([]byte(b), &out)
+		return resp, out
+	}
+	// refused: a 403 with the code, no session, the cookie cleared, and the
+	// sign-in's token left unspent.
+	refused := func(t *testing.T, name string, done *http.Cookie, body string) {
+		t.Helper()
+		resp, out := finish(t, done, body)
+		if resp.StatusCode != http.StatusForbidden || out["code"] != codeOIDCIntentMismatch || out["token"] != nil || out["intent"] != nil {
+			t.Fatalf("%s: %d %v", name, resp.StatusCode, out)
+		}
+		if !clearsDone(resp) {
+			t.Fatalf("%s: the cookie kept: %v", name, resp.Header.Values("Set-Cookie"))
+		}
+		token, _, _ := strings.Cut(done.Value, oidcIntentSep)
+		if u, err := e.auth.ConsumeOIDC(context.Background(), token); err != nil || u.Username != "alice" {
+			t.Fatalf("%s: the refused finish spent the token: %v", name, err)
+		}
+	}
+
+	// Allowed: the trip's own tag; echoed as before.
+	resp, out := finish(t, trip(t, "return=web&intent="+tag), `{"device_name":"web","intent":"`+tag+`"}`)
+	if resp.StatusCode != http.StatusOK || out["token"] == "" || out["intent"] != tag || !clearsDone(resp) {
+		t.Fatalf("own tag: %d %v", resp.StatusCode, out)
+	}
+	if r, _ := e.do(t, "GET", "/api/v1/me", out["token"].(string), ""); r.StatusCode != 200 {
+		t.Fatalf("the session: %d", r.StatusCode)
+	}
+	// Denied: a sign-in another trip completed (its own tag).
+	other := strings.Repeat("cd34", 16)
+	refused(t, "another trip's sign-in", trip(t, "return=web&intent="+other), `{"device_name":"web","intent":"`+strings.Repeat("ef56", 16)+`"}`)
+	// Denied: an untagged sign-in (the start URL typed, a provider session
+	// still live) where the player expects its tag.
+	refused(t, "an untagged sign-in", trip(t, "return=web"), `{"intent":"`+strings.Repeat("7a", 32)+`"}`)
+	// Denied: a tag spent before (the start URL from the history) signs in
+	// untagged, so the player's expectation of it is refused too.
+	refused(t, "a reused tag", trip(t, "return=web&intent="+tag), `{"intent":"`+tag+`"}`)
+	// Denied: an expectation that can be no tag, the empty one included.
+	refused(t, "an empty expectation, untagged", trip(t, "return=web"), `{"intent":""}`)
+	refused(t, "an empty expectation, tagged", trip(t, "return=web&intent="+strings.Repeat("8b", 32)), `{"intent":""}`)
+	refused(t, "a prefix of the tag", trip(t, "return=web&intent="+strings.Repeat("9f", 32)), `{"intent":"`+strings.Repeat("9f", 31)+`"}`)
+	// A refusal charges the address nothing: one failure short of the lock
+	// (oidcLimiter's ten), it still isn't locked afterwards.
+	untagged := trip(t, "return=web")
+	for range 9 {
+		finish(t, &http.Cookie{Name: hostDoneCookie, Value: "guess"}, ``)
+	}
+	refused(t, "a refusal one failure short of the lock", untagged, `{"intent":"`+tag+`"}`)
+	// No cookie: there is no sign-in to mismatch (and no lock: a 401, no 429).
+	resp, out = finish(t, nil, `{"intent":"`+tag+`"}`)
+	if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCNoSignIn {
+		t.Fatalf("no cookie: %d %v", resp.StatusCode, out)
+	}
+	// Unchanged without an expectation: absent or null, tagged or not.
+	for name, c := range map[string]struct{ query, body, want string }{
+		"no field, tagged":   {"return=web&intent=" + strings.Repeat("1c", 32), `{"device_name":"web"}`, strings.Repeat("1c", 32)},
+		"null, tagged":       {"return=web&intent=" + strings.Repeat("2d", 32), `{"intent":null}`, strings.Repeat("2d", 32)},
+		"no body, untagged":  {"return=web", ``, ""},
+		"null, untagged":     {"return=web", `{"intent":null}`, ""},
+		"no field, untagged": {"return=web", `{"device_name":"web"}`, ""},
+	} {
+		resp, out := finish(t, trip(t, c.query), c.body)
+		got, _ := out["intent"].(string)
+		if resp.StatusCode != http.StatusOK || out["token"] == "" || got != c.want {
+			t.Fatalf("%s: %d %v", name, resp.StatusCode, out)
+		}
+	}
+}
+
+// TestValidIntent: a tag is 22 to 128 base64url characters.
+func TestValidIntent(t *testing.T) {
+	t.Parallel()
+	for s, want := range map[string]bool{
+		"":                                  false,
+		"short":                             false,
+		strings.Repeat("a", 21):             false,
+		strings.Repeat("a", 22):             true,
+		strings.Repeat("ab12", 16):          true,
+		strings.Repeat("aZ9-_", 25) + "abc": true,
+		strings.Repeat("a", 129):            false,
+		strings.Repeat("a", 30) + ".x":      false,
+		strings.Repeat("a", 30) + "/":       false,
+		strings.Repeat("a", 30) + "&hop=1":  false,
+	} {
+		if got := validIntent(s); got != want {
+			t.Errorf("validIntent(%q) = %v, want %v", s, got, want)
+		}
+	}
+}
+
+// TestOIDCFinishCookieTag: the done cookie's tag is read only when it can be
+// one (validIntent). Anything else after the token finishes the sign-in
+// untagged, never echoed, and an expectation of it is refused as for any
+// untagged sign-in.
+func TestOIDCFinishCookieTag(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	// forged runs a tagged web sign-in and swaps its cookie's tag for tail.
+	forged := func(t *testing.T, tag, tail string) *http.Cookie {
+		t.Helper()
+		cookie, path := e.startQuery(t, "return=web&intent="+tag)
+		_, done := e.callbackDone(t, path, cookie)
+		if done == nil {
+			t.Fatal("no finished sign-in")
+		}
+		token, got, _ := strings.Cut(done.Value, oidcIntentSep)
+		if got != tag {
+			t.Fatalf("the cookie's tag = %q, want %q", got, tag)
+		}
+		return &http.Cookie{Name: done.Name, Value: token + tail}
+	}
+	// Denied: a tail that can be no tag is never echoed; the sign-in still runs.
+	for name, c := range map[string]struct{ tag, tail string }{
+		"too short":          {strings.Repeat("a1", 32), ".short"},
+		"empty":              {strings.Repeat("b2", 32), "."},
+		"a second separator": {strings.Repeat("c3", 32), "." + strings.Repeat("c3", 32) + ".x"},
+	} {
+		resp, out := e.finish(t, forged(t, c.tag, c.tail), "web")
+		if resp.StatusCode != http.StatusOK || out["token"] == "" || out["intent"] != nil {
+			t.Fatalf("%s: %d %v", name, resp.StatusCode, out)
+		}
+	}
+	// Denied: an expectation that names such a tail word for word.
+	done := forged(t, strings.Repeat("d4", 32), ".short")
+	resp, b := e.doHeaders(t, "POST", oidcFinishPath, "", `{"intent":"short"}`,
+		map[string]string{"Cookie": done.Name + "=" + done.Value})
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(b, codeOIDCIntentMismatch) {
+		t.Fatalf("an expectation of a tail that is no tag: %d %s", resp.StatusCode, b)
+	}
+}
+
+// TestOIDCIntentMemoryFull: with the memory of spent tags full, a new tag is
+// dropped at the callback, so the sign-in runs untagged (the player gives
+// nothing back) and the flow states' own memory is untouched.
+func TestOIDCIntentMemoryFull(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	for i := 0; e.api.oidc.intents.Use("spent-" + strconv.Itoa(i)); i++ {
+	}
+	cookie, path := e.startQuery(t, "return=web&intent="+strings.Repeat("e5", 32))
+	loc, done := e.callbackDone(t, path, cookie)
+	if loc != oidcPublic+oidcDoneWeb || done == nil {
+		t.Fatalf("landed on %q (cookie %v)", loc, done)
+	}
+	if resp, out := e.finish(t, done, "web"); resp.StatusCode != http.StatusOK || out["token"] == "" || out["intent"] != nil {
+		t.Fatalf("a tag past a full memory: %d %v", resp.StatusCode, out)
 	}
 }
 

@@ -94,6 +94,7 @@ const (
 	codeAdminNeedsPassword       = "admin_needs_password"
 	codeOIDCNoSignIn             = "oidc_no_sign_in"      // POST /auth/oidc/finish without a finished sign-in's cookie
 	codeOIDCSignInExpired        = "oidc_sign_in_expired" // POST /auth/oidc/finish: the sign-in's token spent or expired
+	codeOIDCIntentMismatch       = "oidc_intent_mismatch" // POST /auth/oidc/finish: the body's "intent" isn't the sign-in's tag (403)
 	codePasswordTooShort         = "password_too_short"
 	codeCannotDeleteSelf         = "cannot_delete_self"
 	codeFolderUnreadable         = "folder_unreadable"
