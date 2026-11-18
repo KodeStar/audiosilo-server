@@ -68,6 +68,12 @@ const (
 	// flowKey(state), so two tabs whose callbacks both land before either
 	// finishes each finish their own.
 	oidcDoneCookie = "audiosilo_oidc_done_"
+	// oidcDoneLegacy is the one done cookie a server from before the per-flow
+	// names set (builds before v2.7.0), placed as the per-flow ones are. A
+	// finish that names no flow still reads it (heldDone), so a sign-in caught
+	// across the upgrade finishes in its minute. Remove in v2.8.0, with its
+	// read there.
+	oidcDoneLegacy = "audiosilo_oidc_done"
 	// oidcCookiePath is the flow's cookies' path on a plain-http public_url, a
 	// flow's under public_url's own path too (oidcCookieName).
 	oidcCookiePath = "/api/v1/auth/oidc/"
@@ -873,12 +879,17 @@ func doneParts(value string) (token, tag string, wellFormed bool) {
 // held, but which is this finish's own can't be told, so it is given none (to
 // refuse, and to clear) rather than another tab's. The zero value, not
 // disowned, when the browser holds none.
+//
+// A finish that names no flow is also what a page makes that a build before
+// the per-flow names landed, so that build's one cookie (oidcDoneLegacy)
+// counts among those held, first: it is the oldest.
 func (a *API) heldDone(r *http.Request, flow string, intent *string) (own heldCookie, disowned bool) {
 	var held []heldCookie
 	if flow != "" {
 		held = append(held, heldCookie{name: oidcDoneCookie + flow, value: a.oidcCookieValue(r, oidcDoneCookie+flow)})
 	} else {
-		held = a.heldCookies(r, oidcDoneCookie, validFlowKey)
+		held = append(held, heldCookie{name: oidcDoneLegacy, value: a.oidcCookieValue(r, oidcDoneLegacy)})
+		held = append(held, a.heldCookies(r, oidcDoneCookie, validFlowKey)...)
 	}
 	held = slices.DeleteFunc(held, func(h heldCookie) bool { return h.value == "" })
 	switch {

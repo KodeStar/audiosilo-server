@@ -2216,6 +2216,65 @@ func TestOIDCFinishDisownedClearsNothing(t *testing.T) {
 	}
 }
 
+// TestOIDCFinishLegacyDoneCookie: a sign-in whose callback a server from
+// before the per-flow names answered left the one done cookie of that time
+// (oidcDoneLegacy; Max-Age 60), and its landing named no flow. A finish with
+// no flow still takes it after the upgrade, its tag too, and clears it under
+// that name. Denied: a finish naming a flow never reads it, and on https the
+// bare name is no cookie of ours.
+func TestOIDCFinishLegacyDoneCookie(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	alice := e.mustUser(t, "alice", "alice@example.org")
+	const hostLegacy = hostCookiePrefix + oidcDoneLegacy
+	mint := func(t *testing.T) string {
+		t.Helper()
+		tok, err := e.auth.IssueToken(context.Background(), alice.ID, auth.KindOIDC, "", oidcDoneTTL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+	clearsLegacy := func(resp *http.Response) bool {
+		c := resp.Cookies()
+		return len(c) == 1 && c[0].Name == hostLegacy && c[0].MaxAge < 0 && c[0].Path == "/" && c[0].Secure
+	}
+	// Denied: a finish that names a flow, and the bare name on https.
+	tok := mint(t)
+	for name, c := range map[string]struct {
+		cookie, body string
+	}{
+		"a named flow":  {hostLegacy, `{"flow":"` + someFlow + `"}`},
+		"the bare name": {oidcDoneLegacy, ``},
+	} {
+		resp, out := e.finishWith(t, c.body, &http.Cookie{Name: c.cookie, Value: tok})
+		if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCNoSignIn || len(resp.Cookies()) != 0 {
+			t.Fatalf("%s: %d %v %v", name, resp.StatusCode, out, resp.Header.Values("Set-Cookie"))
+		}
+	}
+	// Allowed: no flow named, untagged (the console's finish).
+	resp, out := e.finishWith(t, `{"device_name":"admin-web"}`, &http.Cookie{Name: hostLegacy, Value: tok})
+	if resp.StatusCode != http.StatusOK || out["token"] == "" || out["intent"] != nil || !clearsLegacy(resp) {
+		t.Fatalf("the old cookie: %d %v %v", resp.StatusCode, out, resp.Header.Values("Set-Cookie"))
+	}
+	// Allowed: the player's, with the tag its flow carried; and that cookie is
+	// taken before a newer flow's own sign-in, which stays for its page.
+	tag := strings.Repeat("cd34", 16)
+	_, newer := e.signInDone(t, oidcReturnAdmin)
+	old := &http.Cookie{Name: hostLegacy, Value: mint(t) + oidcIntentSep + tag}
+	resp, out = e.finishWith(t, `{"intent":"`+tag+`"}`, newer, old)
+	if resp.StatusCode != http.StatusOK || out["intent"] != tag || !clearsLegacy(resp) {
+		t.Fatalf("the old cookie, tagged: %d %v %v", resp.StatusCode, out, resp.Header.Values("Set-Cookie"))
+	}
+	old = &http.Cookie{Name: hostLegacy, Value: mint(t)}
+	if resp, out = e.finishWith(t, ``, newer, old); resp.StatusCode != http.StatusOK || out["token"] == "" || !clearsLegacy(resp) {
+		t.Fatalf("the old cookie beside a newer flow's: %d %v %v", resp.StatusCode, out, resp.Header.Values("Set-Cookie"))
+	}
+	if resp, out := e.finish(t, newer, "admin-web"); resp.StatusCode != http.StatusOK || out["token"] == "" {
+		t.Fatalf("the newer flow's own finish: %d %v", resp.StatusCode, out)
+	}
+}
+
 // TestOIDCDoneCookiesCapped: finished sign-ins no page has finished yet are
 // held up to oidcMaxFlows, as flows are: the callback deletes the oldest
 // beyond it (on https each rides on every request to the origin). Allowed: the

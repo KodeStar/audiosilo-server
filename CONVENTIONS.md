@@ -4097,6 +4097,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   before another tab's tagged trip), else the first held; with one, the first that carries it, and
   none when none does (the 403 below, clearing nothing: which is its own can't be told, and any may
   be another tab's).
+  Among them, first, is the one cookie a build before the per-flow names set (`oidcDoneLegacy`,
+  `[__Host-]audiosilo_oidc_done`), so a sign-in caught across the upgrade finishes; that read goes
+  in v2.8.0.
   `intent` is the tag the player expects: a string, the empty one too, that isn't
   the tag the sign-in's flow carried, or any string for an untagged sign-in, is a 403 code
   `oidc_intent_mismatch` before `ConsumeOIDC`: no session, the token unspent and left to expire,
