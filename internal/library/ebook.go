@@ -74,7 +74,7 @@ func ebookOnDisk(root, relPath string, folder bool) catalog.EbookReading {
 	if !folder {
 		name := ebookName(relPath)
 		r := ebookNamed(root, dir, name)
-		if r.Sig != "" || r.Unread || !hasOtherForm(name) {
+		if r.Sig != "" || r.Unread || !catalog.HasOtherSpelling(name) {
 			return r
 		}
 		// Not there by that name, and a name with accents may be spelled in
@@ -117,14 +117,6 @@ func ebookName(relPath string) string { return stemOf(relPath) + ".epub" }
 // by: its NFC form, lower-cased, so the walk hands over entries named in another
 // case or Unicode form of it (ebookCandidate decides which counts).
 func ebookNameKey(name string) string { return strings.ToLower(norm.NFC.String(name)) }
-
-// hasOtherForm reports whether name can be spelled in another Unicode form
-// (NFC or NFD: an accented letter, Hangul, kana with a voicing mark), as macOS
-// writes NFD; plain ASCII, a curly apostrophe or a Han name has none, so no
-// listing could find it spelled otherwise.
-func hasOtherForm(name string) bool {
-	return !norm.NFC.IsNormalString(name) || !norm.NFD.IsNormalString(name)
-}
 
 // isEpubEntry reports whether a directory entry is one BookEbook's rule looks at:
 // not a folder, not hidden, named .epub in any case. Links are kept (a

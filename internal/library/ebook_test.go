@@ -321,9 +321,6 @@ func TestBookEbookUnicodeForms(t *testing.T) {
 	if ebookNameKey(nfd+".EPUB") != ebookNameKey(nfc+".epub") {
 		t.Error("ebookNameKey differs across case and Unicode form")
 	}
-	if hasOtherForm("Don’t Panic.epub") || hasOtherForm("三体.epub") || !hasOtherForm(nfc+".epub") || !hasOtherForm(nfd+".epub") {
-		t.Error("hasOtherForm: want true only for a name with another NFC/NFD spelling")
-	}
 }
 
 // A file swapped for another as OpenEbook opens it is refused, never served

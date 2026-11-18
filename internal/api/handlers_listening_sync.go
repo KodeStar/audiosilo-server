@@ -139,7 +139,7 @@ type syncResolver func(libraryID int64, path string) (*catalog.Library, string, 
 // syncTargets resolves every distinct (library_id, path) the events name, as
 // PUT .../progress resolves its path: the scope check (resolve; 403 is the
 // events' no_access, 404 their not_found, a path that cleans to nothing or is
-// over catalog.MaxPathBytes their invalid), the progress key (progressPath: a
+// over catalog.MaxPathBytes their invalid), the progress key (timelinePath: a
 // file or part path keys its book), and the indexed book there with its files'
 // offsets. allowed, when not nil, is every progress key the batch may write
 // (an Audible account's synced books, catalog.AudibleSyncBooks), each with ""
@@ -172,7 +172,7 @@ func (a *API) syncTargets(w http.ResponseWriter, r *http.Request, events []catal
 			writeError(w, status, msg)
 			return nil, false
 		}
-		key, err := a.progressPath(ctx, lib, scope, rel)
+		key, err := a.timelinePath(ctx, lib, scope, rel)
 		if err != nil {
 			a.writeCatalogError(w, err, "resolve progress path failed", "could not sync listening",
 				"library", lib.ID, "path", rel)

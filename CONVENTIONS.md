@@ -980,7 +980,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **Path-addressed API**: content endpoints are `GET /libraries/{id}/{item,
   chapters,cover,stream}?path=` and `{GET,PUT} .../progress?path=` etc. The path
   is the handle (a query param, to avoid encoded-slash issues). Every one resolved through
-  `pathInScope` (`authorizedPath`/`authorizedScope`/`scopedPath*`; not the browse, the list-remove, the podcast or
+  `pathInScope` (`authorizedPath`/`authorizedScope`/`scopedPath*`, which take it through `spelledPathInScope`: see
+  Path spelling; not the browse, the list-remove, the podcast or
   the admin folder-override route, which takes its path on its own) checks it first: over `catalog.MaxPathBytes` (4096 bytes as sent) is 400 `path is too
   long`, before it is cleaned, looked up or stored (server#289). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
@@ -1004,7 +1005,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   recorded) is a look given up on too, 503 `share_not_answering`. The on-demand index takes a path only in its on-disk
   spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a
   case-insensitive filesystem a case variant opens the same folder, and indexing it would add a
-  duplicate book everyone sees, so it is a 404. `stream` serves an
+  duplicate book everyone sees, so it is a 404; the stream and `/fs` take a path only as the disk spells
+  it too (Path spelling, case). `stream` serves an
   audio file path directly, or transcodes it with `?transcode=1` (see below), or with
   `?rendition=watch` serves its watch rendition whatever else the query says (see Watch renditions). The
   `/fs` view lists **audio files and directories only** (non-audio like `.jpg`/
@@ -1034,17 +1036,33 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   for a context, so a request's deadline would only throw the read away at its last write): the
   POST waits for it up to `favouriteIndexWait`, 5 s, under the player's 15 s request timeout, and it
   is saved when it ends.
-  **Progress is the book's** (#199): `GET`/`PUT`/`PATCH .../progress?path=` key the row (and
-  PUT's listening session) on the path of the indexed book the path is or names a file of
-  (`api.progressPath` over `catalog.BookPathOfFile`: the book at it, else the innermost folder
-  book one of whose files it is), when the caller's scope allows that book; otherwise on the
-  path as given, as before (a navigation folder, a book not indexed yet, a grant reaching only a
-  part, a disc folder of a joined book: a download of that disc saves there, on the disc's own
-  timeline). No on-demand index on a save, and a failed lookup is a 500 (a timed-out one a 503,
-  `writeCatalogError`), never a save under another key. Rows old clients already wrote
-  under a part path stay where they are (not merged), and bookmarks, notes, history,
-  favourites and the queue are not canonicalized (follow-ups). `POST /cast/token` already grants
-  the book's path (`bookAt`).
+  **The book-path rule** (#199, server#210): `GET`/`PUT`/`PATCH .../progress?path=`, the sync
+  events, and `GET`/`POST .../bookmarks|notes|history` key the row (and PUT's listening session)
+  on the path of the indexed book the path is or names a file of (`api.timelinePath` over
+  `catalog.BookPathOfFile`: the book at it, else the innermost folder book one of whose files it
+  is), when the caller's scope allows that book; otherwise on the path as given, as before (a
+  navigation folder, a book not indexed yet, a grant reaching only a part, a disc folder of a
+  joined book: a download of that disc saves there, on the disc's own timeline). The answers
+  carry that path (a bookmark's or note's `path`, as progress's). A rating's `GET`/`DELETE`
+  read the book the path is or lies in (`ratingPath`: `ownBookPath` over `catalog.BookPathAt`, a
+  disc folder its joined book's, the index alone), as PUT's `bookAt` stores it, the same scope
+  rule. A whole-list replace (`PUT /me/queue`, `/me/collections/{id}/items`) maps each ref to its
+  book before the skip rule and de-duplication (`catalog.listableRefs`, `spelledBook`: `Spelling`
+  then `BookPathAt`, scope on the book; a ref over `MaxPathBytes` skipped, and `heldRefs` walks
+  the other refs' folders down only as deep as the index has books, never a path's every folder,
+  as `bookHolding` (`holdingFolders` folders a read, the next only while books lie below) and
+  `Spelling`'s step 4 (`keyedFolders`) do for one path),
+  so an old player's replay naming a part path keeps the
+  book instead of dropping it and deleting the stored entry (CROSS-REPO §15); a remove takes off
+  the entry at the path given, its spelling and its book's (`removalRefs`), and a favourite's or
+  rating's `DELETE` the row at the path given too (`api.removedPaths`), so a row an older server
+  stored in another spelling or at a part path can still be cleaned up. Favourites take the
+  spelling only, never the file-to-book mapping: the shipped Folders view hearts a
+  track by its own path and shows the heart by path equality. No on-demand index on a save, and
+  a failed lookup is a 500 (a timed-out one a 503, `writeCatalogError`), never a save under
+  another key. Rows old clients already wrote under a track path, another spelling or (the
+  book-level ones) a disc folder move to the book at the start and after each scan (the re-key, see
+  Move-tracking). `POST /cast/token` grants the book's path (`bookAt`).
   **The ebook** (Bridge Phase 3b, capability `ebooks`, `api/handlers_ebook.go`): `GET
   /libraries/{id}/ebook?path=<the book's own path>` serves the file the scan recorded for the book
   (`books.ebook_path`, see Auto book/folder detection), opened fresh by `library.OpenEbook`: joined
@@ -1104,6 +1122,79 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `catalog.Readalong`) is on `GET /libraries/{id}/item` and the console's book detail only, never a
   list row, omitted with no ebook or no valid map (`api.readalongOf`, from the indexed head; a failure
   is logged and reads as none; its digest checked the same way, so an ebook edit shows before any scan).
+- **Path spelling (server#210, `catalog/pathspelling.go`, `0083`)**: a name with an accent has two
+  Unicode spellings, NFC (precomposed) and NFD (decomposed); a disk keeps either and a hand-typed or
+  shared link may carry the other. The index keeps every path as the disk spells it and compares by
+  NFC: `books.path_key` is `''` when `rel_path` is NFC (every ASCII path), else `NFC(rel_path)`, NULL
+  until keyed. Both book inserts write it (the scan's upsert, the podcast episode insert); `KeyPaths`
+  at the start (after `KeySeries`, a failure stops the start) keys every NULL row (a book an older
+  server inserted after a rollback) and every row when `pathKeysVersion` (`"1/" + norm.Version`)
+  differs from `server_state('path_keys')`, in transactions of `keyPathsChunk` (2,000) books in id
+  order, each committed before the next (the log stays a few MB on a library of any size), with a
+  progress line every 5 s: a start stopped part way keeps what it keyed (the NULL rows are what is
+  left; a re-key of every book records its last id in `server_state('path_keys_resume')`), and the
+  version is stored once every book is keyed. `Catalog.Spelling(lib, p)` is the index's spelling of a
+  cleaned path, from the index alone: a path with no other spelling (`HasOtherSpelling`: NFC and NFD
+  both) is `p` with no query; then a book at `p` exactly, or a file of or folder inside one
+  (`bookHolding`, so a track spelled as indexed costs one lookup), or a folder holding books as given (a
+  navigation folder: what the index has as given is never read as another spelling, so a book of the other
+  spelling beside it never takes its place, even with no disk to look at); the one book whose NFC path is `NFC(p)`
+  (`rel_path` or `path_key`, the partial index); a file of, or a folder inside (a disc folder), the
+  innermost folder book above it, its files compared by NFC, a folder cut to `p`'s depth; a folder
+  holding books, each name as given, NFC or NFD (at most `maxFolderSpellings` combinations, one
+  `FoldersHoldingBooks` read). It takes the caller's scope (`allow`, nil for every path): a
+  spelling the scope refuses counts as none, so nothing outside it changes the answer (a third
+  spelling of an NFC and an NFD folder side by side reads as the one granted, whether the other is
+  there or not). Two indexed paths the scope admits that both read as `p` (an NFC and an NFD folder
+  side by side on a byte-exact disk) leave `p` as given: it never guesses. Never an on-demand index,
+  and the disk only for one check (`ownEntry`, two bounded `Lstat`s, only when the index would read
+  `p` as another path or report it `outside`, and when their file ids differ, the listings of `p`'s
+  names that have another spelling, `spelledOnDisk`, as a share or FUSE mount whose ids don't follow
+  the file would tell one file apart from itself): a `p` that is an entry of its own there (a disk that
+  keeps an NFC and an NFD name apart, `p`'s folder not indexed yet) stays as given, so a folder no
+  scan has reached is never taken for the indexed one beside it (nor its rows moved there by the
+  re-key); a disk that ignores the spelling finds the same file by both, and a look that fails
+  leaves the index's answer. A request that spells many paths shares one allowance of looks
+  (`spellLooks`: a list replace's `listSpellLooks` looks within `listSpellWait` in all, each look's
+  context ending with it), the paths past it spelled from the index alone, so a share that stopped
+  answering never holds a replace of a thousand refs to the request's timeout
+  (`TestListReplaceBoundsDiskLooks`). Applied by
+  `scopedPath` / `scopedPathIn` (`spelledPathInScope`: cap, library, clean, spelling, scope, hidden),
+  so every route on them (item, chapters, cover, stream, meta, next, ebook, readalong,
+  reading-progress, progress, sync events, bookmarks, notes, history, favourites, ratings, list adds,
+  `POST /cast/token`) reads and stores the index's spelling; by a list's replace and remove
+  (`catalog.listableRefs`, `removalRefs`); and by `/fs`
+  (`handleBrowseFS` lists the folder in the index's spelling, so the listing's paths match the books
+  `annotateWithBooks` finds). `spelledIn` passes the caller's scope (for `/fs`, `VisibleInBrowse`;
+  a list replace's, per ref; a list remove and the re-key every spelling), so a rule naming another
+  spelling byte for byte never learns, from a 403 where a missing path reads 404, that an indexed
+  path it can't reach is there. When such a rule admits the path as given but the only indexed
+  paths reading as it lie outside the scope (`Spelling`'s `outside`), every route answers exactly
+  as for a path with nothing there (status, body, type; `TestSpellingContentRoutesDenied` compares
+  them): the path as given (`spelledPath`), so the catalog's routes read nothing at it (the
+  on-demand index takes only the on-disk spelling) and the listener's own state reads and stores
+  at it, while the stream, the one route that opens the file at the path itself (on a disk that
+  ignores the spelling, macOS's or a share's, the refused book's file), opens none: `audioFile`
+  joins it as usual, then names no file (`noFile`), so its download, transcode, remux and rendition
+  forms each answer as for a missing file; `/fs` "directory not found". A failed lookup is a 500 (a timed-out one a 503), never the spelling given.
+  Case is no spelling: share rules and paths compare byte for byte, case included, so a rule spelled in
+  another case than the disk's names nothing there, as a rule naming a missing folder does. A disk that
+  ignores case (macOS's, a Windows or SMB share) still opens such a path as the folder it has, so the two
+  routes that open the path given, the stream in every form (`audioFile`) and `/fs`, take it only when the
+  disk has it as given (`onDiskAsGiven`: a path the index holds byte for byte, `catalog.IndexHolds`, else,
+  when a bounded lstat finds something there at all, each name in its folder's listing,
+  `metadata.NamesListed` through `API.readDir`, names only), else answer as for a missing path (a listing
+  given up on: 503 `share_not_answering`); `/fs` looks before it reads the folder (after, for a path that
+  climbs out of the root, so it keeps its 400). Every other route reads the index,
+  which holds the disk's spelling only. `TestCaseVariantRoutes` compares every route on a temp dir that
+  ignores case; `TestCaseVariantDiskRoutes` covers the stream and `/fs` on any disk (`readDir` lists as
+  one that ignores case would).
+  Unchanged on purpose: `CleanRelPath` and share rules stay byte-exact; the on-demand index takes
+  only the on-disk spelling (`dirPresent`), so another spelling of an unindexed book stays 404; the
+  admin's folder-override route, the admin's edit of a person's progress (`exactPath`: the row
+  by its own path) and the Bridge's routes (`pathInScope` itself, the Audible sync's
+  `userPathResolver`) take the paths as given and match exactly. The admin's other book routes on
+  `authorizedPath` (book page, edits, covers, chapters, rescan) take the spelling like a player's.
 - **Recognized audio** is `metadata.AudioExtensions` (`IsAudio`), including `.mp4`
   (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`. `.mka` (Matroska audio, #161)
   has its chapters read by ffprobe; stored, it is `audio/x-matroska` (also sniffed from its EBML
@@ -1463,6 +1554,59 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`IndexPath`'s `movedFrom`, `IndexMoved`) does the same from one listener's request: a move is a fact
   about the disk, so every listener's folder favourite follows it (owner decision on server#254,
   `TestIndexPathMovesEveryListenersFolderFavourite`).
+- **The re-key (server#210, `catalog/rekey.go`, `0084`)**: rows a client stored under a path no book
+  has, but the book path rule now reads at a book, move there: `RekeyPathState` once per `pathKeysVersion`
+  at the start (after `KeyPaths` and the config's libraries' sync, before the scanner starts, with a progress line every 5 s, `launcher.startProgress`; recorded in
+  `server_state('path_rekey')` once it has been over every path, with the paths whose move failed in
+  `server_state('path_rekey_failed')`, so a later start tries only those again, each named in a
+  `path_rekey retried` line, and one path that keeps failing never costs every start the whole run; a
+  run stopped part way, or one with more than `maxRekeyFailed` failures, is not recorded and runs again; a
+  books library whose folder does not answer at the start (`launcher.rootAnswers`, the scanner's
+  `RootAvailable`: missing, unreadable, not responding, or empty with books indexed under it) is left whole,
+  logged, recorded in `server_state('path_rekey_unreached')` and run over again at a later start once it
+  answers, never re-keyed from the index alone, since `Spelling`'s look at the disk is what keeps an
+  unindexed sibling folder of another spelling apart from the book; the
+  start that first runs it applies `0084`, so `backup.BeforeUpgrade` copied the database just before), and
+  `RekeyLibrary` after every scan run that finished ok or partial (`launcher.rekeyAfterScan`, the
+  scanner's `OnRunFinished`, under the server's context so a stop ends it between paths; candidates
+  only in the tables clients write, plus the paths the scope guard kept rows on, every table, so a
+  listener's kept rows follow a later grant even when only a derived table's are left; with
+  `rekeyMemoFrom` (500) candidates or more it passes by each one its last run found nothing to do for
+  (`rekeyOne`'s idle) while its rows are in the same tables and the library's index is as it was
+  (`indexPrint`, a sum of hashes of every book's and file's path, read before the run), so tens of
+  thousands of stray paths cost a print, not a lookup each, every scan; a path with another Unicode
+  spelling and a scope-kept one are looked at every run; the memo is in memory, so a start looks at every
+  path once). Books libraries only. A run the server's stop ends is no failure: its path is not
+  in `Failed` (nothing recorded, the next run takes it) and the start's or the scan end's line says
+  "stopped with the server" at info. A path's line names its library by `library_id` (the scan end's
+  by its name, `library`, too); the scan end's other lines name it by its name only. Per path,
+  `rekeyTarget`: another spelling of an indexed book (`spelling`: every table), a file of a folder book
+  (`file`: all but favourites, a track row's heart stays on the track), a folder inside a book (`folder`:
+  the book-level rows only, lists, ratings and the reader's place, read at `BookPathAt`; a disc's timeline
+  rows keep their key); anything else stays (navigation folders, orphans, colliding keys). A path in
+  another spelling than the index's moves the rows its reason leaves to that spelling (`rekeyMoves`: a
+  track's heart, a disc folder's timeline rows, a navigation folder's favourite; each its own length),
+  so none stays where every read now passes by. One writer
+  transaction a path, all or nothing: re-check the path is still no book and the target still one
+  holding it (`bookStillHolds`), read
+  every row (`rekeyTables`, the twin of `carryListeningState`'s list: add a table to both), the guards
+  (`scope`, per listener: the rows of a listener who can't reach where a move takes them, `UserScopes`
+  (a grant on the track only, access since removed), stay on the path, logged once a listener, table and
+  path with reason `scope` (`rekeyKept`, so the scan-end runs that keep them again add nothing), while the
+  other listeners' rows move: `carryState`'s `keep`, bound as `?8`, a collection item by its
+  collection's owner; `timeline`, `file` only, over the rows that move: a
+  progress row whose length is a later part's and not the book's: a track's, a tripwire, or a later
+  disc's of a joined book, a disc's own place an old player saved on its track before the join, which
+  carried only the disc folder's rows), each moved row whole into `path_rekeys`
+  (`row_json`, cascades with the user and library, never on the wire), then `carryState` (the move's
+  rules: `mergeNewest`, a list entry or favourite once, the newer rating or reader's place). The timeline
+  guard or a failure leaves the path whole (a failure for the next start's retry, a guard's for the
+  scan-end runs); a re-run finds nothing to move. The re-key's own looks at the disk (`Spelling`'s
+  `ownEntry`, with no `spellLooks` allowance: that cap is a list replace's) are each bounded by
+  `spellLookWait` and by the mount's stuck-call cap (`metadata.Bounded`: past `maxAbandonedReads` hung
+  calls on a mount, a look there is refused at once and the path keeps the index's answer), so a share
+  that stops answering mid-run costs the run at most that many waits, not one a path. No undo command: the
+  before-upgrade copy and the log are the way back.
 - **Auto book/folder detection**: there is **no per-library layout**. The model
   (`booksInDir` in `library/scanner.go`) matches the dominant "folder per book"
   convention (and Audiobookshelf): **a directory that directly contains audio is
@@ -1556,7 +1700,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   in some case and Unicode form of its `<stem>.epub`, `ebookNameKey`, through a name index made once
   per folder), an on-demand index (`indexBook`: `IndexPath`, `IndexMoved`) what is on disk now
   (`ebookOnDisk`: a folder book's folder listed, a single-file book's name looked up, then its
-  folder's epubs listed only when the name has another Unicode form, `hasOtherForm`, and isn't
+  folder's epubs listed only when the name has another Unicode form, `catalog.HasOtherSpelling`, and isn't
   there as spelled); `TestScanRecordsEbookByBookEbookRule`
   and `TestEbookCaseVariantBesideSingleFile` hold them together. `books.ebook_sig` is the named file's
   size, mtime and name (`catalog.EbookSig`; a link's target's), recorded whether or not it is readable
@@ -4199,7 +4343,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   podcast's show or episode path is capped by `feed.ShowPath` / `EpisodePath`, the route's 400 `invalid_request`). The handler
   resolves each distinct
   `(library_id, path)` as PUT progress does (`scopedPathIn`: 403 -> `no_access`, 404 -> `not_found`, a path
-  cleaning to nothing or over the cap -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
+  cleaning to nothing or over the cap -> `invalid`; then `timelinePath`; then `SyncBookAt`, the book's length and its files'
   offsets in current order), all reads before the one write. `SyncListening` is ONE `WithUserStateTx`: checks
   (`invalid`, `unknown_kind`, an id repeated in the batch `duplicate` of a copy that passed them: a copy rejected
   leaves the next to be checked on its own, server#284), the clock (shift = now - sent_at, kept as

@@ -241,7 +241,8 @@ Player redesign Phase 1b: `up_next` (`0025`: a user's queue) and `collections` /
 `collection_items` / `collection_shares` (`0026`: named lists, shared read-only with named
 users). Items are path-keyed like favourites (no FK to `books`), ordered by `position`, and
 share ONE implementation (`catalog/lists.go` `orderedList`: add-at/move as one range shift plus
-the row, remove leaving a gap (positions need not be dense), replace with the skip rule writing
+the row, remove leaving a gap (positions need not be dense; a remove by a part path or another spelling
+takes the book's entry off too), replace with the skip rule (each ref mapped to its book first) writing
 only the rows that changed, books attached by `booksAt`); every read passes through the
 READER's current access (a viewer never sees or counts an owner's item outside their own
 shares; such "hidden" rows are kept). An add works in the list as the CALLER sees it (their
@@ -351,7 +352,11 @@ books by it; see Community metadata lookup (Other recordings) in CONVENTIONS.md)
 `progress.stay_version` (the version a sync `stay` span wrote: while set, another device's span on a base below it
 never moves the place; cleared by every other writer) and `progress.edit_version` (the version of the row's last
 explicit write that is not listening: a PATCH, an import's apply or undo, a move or join, a sync finish or unfinish;
-a Stay on a base below it is a plain jump); see Listening sync (Stay wins) in CONVENTIONS.md.
+a Stay on a base below it is a plain jump); see Listening sync (Stay wins) in CONVENTIONS.md. `0083` (server#210) adds
+`books.path_key` (the book's path in NFC, `''` when already NFC, NULL until `catalog.KeyPaths` keys it at the start;
+derived, never on the wire) and its two partial indexes; see Path spelling in CONVENTIONS.md. `0084` (server#210) adds
+`path_rekeys`, the re-key's log (every row `catalog.RekeyPathState` / `RekeyLibrary` moved to its book, whole, in
+`row_json`; cascades with the user and the library, never on the wire); see Move-tracking (the re-key) in CONVENTIONS.md.
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -396,12 +401,13 @@ keep this index in step (one line per topic).
   - Content generation (`store/userstate.go`: user-state writes, the per-cache audit)
   - Path safety
   - Path-addressed API
+  - Path spelling (server#210, `catalog/pathspelling.go`, `0083`: `books.path_key`, `KeyPaths`, `Spelling`, where it is applied, what stays exact)
   - Recognized audio
   - In-process probe (server#261, `metadata/fastprobe*.go`: ffprobe's answer read in Go, ffprobe the fallback)
   - Transcoding
   - Watch renditions (Track W2, `media/rendition.go`, `api/handlers_renditions.go`: `stream?rendition=watch`, the renditions routes, the cache)
   - Sharing & access (shares)
-  - Move-tracking
+  - Move-tracking (incl. the re-key, server#210: `catalog/rekey.go`, `0084` `path_rekeys`, at the start and after each scan)
   - Auto book/folder detection
   - Metadata overrides (admin redesign Phase 2a, `catalog/overrides.go`)
   - Series spellings (`catalog/moreseries.go`)
@@ -541,7 +547,9 @@ Player redesign Phase 1b (`api/handlers_ratings.go`, `handlers_mydevices.go`): *
 are `GET`/`PUT`/`DELETE /libraries/{id}/rating?path=` (`{"rating": Rating | null}`; `Rating =
 {library_id, path, rating 1-5, note, created_at, updated_at}`; PUT `{rating, note?}` resolves a
 part path to its book with `bookAt` and stores on the book's path, 400 for a rating that isn't a
-whole 1-5 or a note over 500 runes after trimming; GET/DELETE are exact via `authorizedPath`;
+whole 1-5 or a note over 500 runes after trimming; GET/DELETE read the book's the same way, from the index
+alone (`ratingPath`; DELETE also clears a row at the path given, `removedPaths`; see Path-addressed API, the
+book-path rule, in CONVENTIONS.md);
 DELETE 204 idempotent) and `GET /me/ratings` (`{"ratings": [Rating + book?]}`, newest first,
 scope-filtered like favourites: a revoked share hides a rating, never deletes it; books via
 `BooksByPaths`). Table `ratings` (`0027`), path-keyed, carried by `carryListeningState` (a

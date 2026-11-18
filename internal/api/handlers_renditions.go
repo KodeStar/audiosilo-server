@@ -68,12 +68,13 @@ func writeRetry(w http.ResponseWriter, retry time.Duration, code, msg string) {
 // renditionWait, then 503 rendition_pending while it goes on under the server's
 // context; never a live transcode (not rangeable, so a watch couldn't resume
 // it). Its looks at the file (the join, media.Source) given up on at the
-// stream's deadline are a 503 share_not_answering.
-func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel, kind string, deadline time.Time) {
+// stream's deadline are a 503 share_not_answering. A refused rel answers as no
+// file there (audioFile).
+func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, refused bool, kind string, deadline time.Time) {
 	if !a.renditionKindAllowed(w, lib, kind) {
 		return
 	}
-	abs, ok := audioFile(w, r, lib, rel, deadline)
+	abs, ok := a.audioFile(w, r, lib, rel, refused, deadline)
 	if !ok {
 		return
 	}

@@ -12,8 +12,8 @@ import (
 
 // Per-user listening state is addressed by (library, path) - the book path -
 // matching the path-based identity. Each handler authorizes the path against
-// the caller's share scope (authorizedPath, or authorizedScope for progress,
-// which keeps a part path's progress on its book: progressPath).
+// the caller's share scope (authorizedScope), and progress, bookmarks, notes and
+// history keep a part path's state on its book (timelinePath).
 
 // handleListProgress returns the caller's progress rows (for paths they can
 // still access), used to seed an offline client's local copy on first sync. The
@@ -33,17 +33,50 @@ func (a *API) handleListProgress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"progress": items})
 }
 
-// progressPath is the path a caller's progress on path is kept under (#199):
-// the path of the indexed book path is or names a file of (a track file path is
-// its book's: catalog.BookPathOfFile) when the caller's scope allows that book,
-// else path itself as before (a navigation folder, a book not indexed yet, a
-// book above a grant that reaches only its part, and a folder inside a book: a
-// disc folder of a joined book is written to by a download of that disc, on the
-// disc's own timeline, not the joined book's). No book is read on demand, so a
-// save costs one or two index lookups; a failed lookup is the caller's 500,
-// never a save under the wrong key.
-func (a *API) progressPath(ctx context.Context, lib *catalog.Library, scope catalog.Scope, path string) (string, error) {
-	book, err := a.cat.BookPathOfFile(ctx, lib.ID, path)
+// timelinePath is the path a caller's state on a book's timeline is kept under
+// (progress #199, and bookmarks, notes and history server#210): the path of the
+// indexed book path is or names a file of (a track file path is its book's:
+// catalog.BookPathOfFile) when the caller's scope allows that book, else path
+// itself as before (a navigation folder, a book not indexed yet, a book above a
+// grant that reaches only its part, and a folder inside a book: a disc folder
+// of a joined book is written to by a download of that disc, on the disc's own
+// timeline, not the joined book's). No book is read on demand, so a save costs
+// one or two index lookups; a failed lookup is the caller's 500, never a save
+// under the wrong key.
+func (a *API) timelinePath(ctx context.Context, lib *catalog.Library, scope catalog.Scope, path string) (string, error) {
+	return ownBookPath(ctx, lib, scope, path, a.cat.BookPathOfFile)
+}
+
+// timelineKey is authorizedScope with the path replaced by its timelinePath. On
+// a failure it writes the answer (generic for a failed lookup) and returns false.
+func (a *API) timelineKey(w http.ResponseWriter, r *http.Request, generic string) (*catalog.Library, string, catalog.Scope, bool) {
+	return a.bookKeyed(w, r, a.cat.BookPathOfFile, generic)
+}
+
+// bookKeyed is authorizedScope with the path replaced by ownBookPath's key for
+// `of` (timelineKey, ratingPath). On a failure it writes the answer and returns
+// false.
+func (a *API) bookKeyed(w http.ResponseWriter, r *http.Request,
+	of func(context.Context, int64, string) (string, error), generic string) (*catalog.Library, string, catalog.Scope, bool) {
+	lib, path, scope, status, msg := a.authorizedScope(r)
+	if status != 0 {
+		writeError(w, status, msg)
+		return nil, "", scope, false
+	}
+	key, err := ownBookPath(r.Context(), lib, scope, path, of)
+	if err != nil {
+		a.writeCatalogError(w, err, "resolve book path failed", generic, "library", lib.ID, "path", path)
+		return nil, "", scope, false
+	}
+	return lib, key, scope, true
+}
+
+// ownBookPath is the book `of` finds for path (from the index alone) when the
+// caller's scope allows it, else path itself: the key of state about a book
+// that a part path names (timelinePath, ratingPath).
+func ownBookPath(ctx context.Context, lib *catalog.Library, scope catalog.Scope, path string,
+	of func(context.Context, int64, string) (string, error)) (string, error) {
+	book, err := of(ctx, lib.ID, path)
 	if errors.Is(err, catalog.ErrNotFound) || (err == nil && book != path && !scope.Allows(book)) {
 		return path, nil
 	}
@@ -51,19 +84,12 @@ func (a *API) progressPath(ctx context.Context, lib *catalog.Library, scope cata
 }
 
 // handleGetProgress answers the caller's progress on the book path addresses
-// (progressPath: a part path reads its book's row).
+// (timelinePath: a part path reads its book's row).
 func (a *API) handleGetProgress(w http.ResponseWriter, r *http.Request) {
-	lib, path, scope, status, msg := a.authorizedScope(r)
-	if status != 0 {
-		writeError(w, status, msg)
+	lib, path, _, ok := a.timelineKey(w, r, "could not load progress")
+	if !ok {
 		return
 	}
-	key, err := a.progressPath(r.Context(), lib, scope, path)
-	if err != nil {
-		a.writeCatalogError(w, err, "resolve progress path failed", "could not load progress", "library", lib.ID, "path", path)
-		return
-	}
-	path = key
 	u := userFrom(r.Context())
 	p, err := a.cat.GetProgress(r.Context(), u.ID, catalog.Ref{LibraryID: lib.ID, Path: path})
 	if err != nil {
@@ -74,7 +100,7 @@ func (a *API) handleGetProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePutProgress upserts progress using last-write-wins reconciliation, on
-// the book path addresses (progressPath), as is its listening session. A path
+// the book path addresses (timelinePath), as is its listening session. A path
 // over catalog.MaxPathBytes is 400 (pathInScope).
 func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
@@ -87,7 +113,7 @@ func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	key, err := a.progressPath(r.Context(), lib, scope, path)
+	key, err := a.timelinePath(r.Context(), lib, scope, path)
 	if err != nil {
 		a.writeCatalogError(w, err, "resolve progress path failed", "could not save progress", "library", lib.ID, "path", path)
 		return
@@ -119,19 +145,12 @@ func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 // the position, set or clear the start and finish dates. The admin's edit
 // (catalog.EditProgress) with the caller's scope: a path outside it is 403, and a
 // new row is created only for an indexed book. It is not playback, so it records
-// no listening session. A part path edits its book's row (progressPath).
+// no listening session. A part path edits its book's row (timelinePath).
 func (a *API) handleEditMyProgress(w http.ResponseWriter, r *http.Request) {
-	lib, path, scope, status, msg := a.authorizedScope(r)
-	if status != 0 {
-		writeError(w, status, msg)
+	lib, path, scope, ok := a.timelineKey(w, r, "could not save progress")
+	if !ok {
 		return
 	}
-	key, err := a.progressPath(r.Context(), lib, scope, path)
-	if err != nil {
-		a.writeCatalogError(w, err, "resolve progress path failed", "could not save progress", "library", lib.ID, "path", path)
-		return
-	}
-	path = key
 	body := decodeProgressEdit(w, r)
 	if body == nil {
 		return
@@ -151,9 +170,8 @@ func (a *API) handleEditMyProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleListBookmarks(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
-	if status != 0 {
-		writeError(w, status, msg)
+	lib, path, _, ok := a.timelineKey(w, r, "could not load bookmarks")
+	if !ok {
 		return
 	}
 	u := userFrom(r.Context())
@@ -166,9 +184,8 @@ func (a *API) handleListBookmarks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleAddBookmark(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
-	if status != 0 {
-		writeError(w, status, msg)
+	lib, path, _, ok := a.timelineKey(w, r, "could not save bookmark")
+	if !ok {
 		return
 	}
 	var bm catalog.Bookmark
@@ -200,9 +217,8 @@ func (a *API) handleDeleteBookmark(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleListNotes(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
-	if status != 0 {
-		writeError(w, status, msg)
+	lib, path, _, ok := a.timelineKey(w, r, "could not load notes")
+	if !ok {
 		return
 	}
 	u := userFrom(r.Context())
@@ -215,9 +231,8 @@ func (a *API) handleListNotes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleAddNote(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
-	if status != 0 {
-		writeError(w, status, msg)
+	lib, path, _, ok := a.timelineKey(w, r, "could not save note")
+	if !ok {
 		return
 	}
 	var n catalog.Note
@@ -249,9 +264,8 @@ func (a *API) handleDeleteNote(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleListHistory(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
-	if status != 0 {
-		writeError(w, status, msg)
+	lib, path, _, ok := a.timelineKey(w, r, "could not load history")
+	if !ok {
 		return
 	}
 	u := userFrom(r.Context())
@@ -266,9 +280,8 @@ func (a *API) handleListHistory(w http.ResponseWriter, r *http.Request) {
 
 // handleAddHistory records a listening span (from/to positions over a time range).
 func (a *API) handleAddHistory(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
-	if status != 0 {
-		writeError(w, status, msg)
+	lib, path, _, ok := a.timelineKey(w, r, "could not save history")
+	if !ok {
 		return
 	}
 	var in struct {
@@ -369,8 +382,9 @@ func (a *API) indexFavourite(ctx context.Context, lib *catalog.Library, scope ca
 	}
 }
 
-// handleRemoveFavourite clears the caller's favourite for a path (idempotent).
-// Keyed by ?path= as given (one favourite per user+library+path).
+// handleRemoveFavourite clears the caller's favourite for a path (idempotent):
+// the one at ?path= in the index's spelling (one favourite per
+// user+library+path), and one stored at the path as given (removedPaths).
 func (a *API) handleRemoveFavourite(w http.ResponseWriter, r *http.Request) {
 	lib, path, status, msg := a.authorizedPath(r)
 	if status != 0 {
@@ -378,9 +392,24 @@ func (a *API) handleRemoveFavourite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
-	if err := a.cat.RemoveFavourite(r.Context(), u.ID, catalog.Ref{LibraryID: lib.ID, Path: path}); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not remove favourite")
-		return
+	for _, p := range removedPaths(r, path) {
+		if err := a.cat.RemoveFavourite(r.Context(), u.ID, catalog.Ref{LibraryID: lib.ID, Path: p}); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not remove favourite")
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// removedPaths is what a remove of the caller's row keyed on key (the path the
+// route resolved ?path= to: its spelling, its book) takes off: key, and the
+// ?path= as given (cleaned) when that differs, so a row an older server stored
+// in another spelling or at a part path can still be cleaned up by the path a
+// list answered it with, as a list's remove does (catalog removalRefs). The
+// caller's own rows only, past the route's scope check.
+func removedPaths(r *http.Request, key string) []string {
+	if given := catalog.CleanRelPath(r.URL.Query().Get("path")); given != key {
+		return []string{key, given}
+	}
+	return []string{key}
 }

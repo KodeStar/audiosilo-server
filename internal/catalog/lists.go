@@ -439,6 +439,19 @@ func (l orderedList) drop(ctx context.Context, tx listTx, owner int64, ref Ref) 
 	return n > 0, err
 }
 
+// dropAll is drop for each of refs, reporting whether any row was removed.
+func (l orderedList) dropAll(ctx context.Context, tx listTx, owner int64, refs []Ref) (bool, error) {
+	changed := false
+	for _, r := range refs {
+		dropped, err := l.drop(ctx, tx, owner, r)
+		if err != nil {
+			return false, err
+		}
+		changed = changed || dropped
+	}
+	return changed, nil
+}
+
 // visibleItems reads an owner's entries the reader can reach now (scopes, the
 // reader's UserScopes; none = nothing), in stored order, each with its book
 // attached when one is indexed there.
@@ -504,31 +517,166 @@ func (c *Catalog) booksAt(ctx context.Context, refs []Ref) (map[Ref]Book, error)
 }
 
 // listableRefs is the skip rule of a whole-list replace: refs in order, each
-// path cleaned (CleanRelPath), duplicates collapsed (the first wins), keeping only
-// those that name exactly an indexed book (no part path, no indexing on demand)
-// the caller's current access allows (scopes). Nothing skipped is an error.
+// path cleaned (CleanRelPath) and mapped to the indexed book it names (spelledBook:
+// a book's own path, another Unicode spelling of it, a track or a disc folder
+// of it; from the index alone, no indexing on demand), keeping only those the
+// caller's current access allows (scopes) once mapped, duplicates collapsed
+// after mapping (the first wins). An old player's replace naming a book by a
+// part path keeps the book (server#210, CROSS-REPO §15). A path over
+// MaxPathBytes as sent is no file's (server#289) and is skipped before it is
+// cleaned or looked up. Nothing skipped is an error.
 func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) ([]Ref, error) {
-	seen := make(map[Ref]bool, len(refs))
+	given := make(map[Ref]bool, len(refs))
 	var cands []Ref
 	for _, r := range refs {
-		r.Path = CleanRelPath(r.Path)
-		if r.Path == "" || seen[r] || !ScopesAllow(scopes, r) {
+		if len(r.Path) > MaxPathBytes {
 			continue
 		}
-		seen[r] = true
+		r.Path = CleanRelPath(r.Path)
+		if r.Path == "" || given[r] {
+			continue
+		}
+		given[r] = true
 		cands = append(cands, r)
 	}
-	books, err := c.booksAt(ctx, cands)
+	books, err := c.booksAt(ctx, cands) // the refs that name a book exactly, in one read
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Ref, 0, len(cands))
+	// A ref no indexed book lies above, in a spelling with no other, names no
+	// book: heldRefs spares it the lookups (a replace may list a thousand
+	// paths). Another spelling is looked up anyway.
+	var plain []Ref
 	for _, r := range cands {
-		if _, ok := books[r]; ok {
-			out = append(out, r)
+		if _, ok := books[r]; !ok && !HasOtherSpelling(r.Path) {
+			plain = append(plain, r)
 		}
 	}
+	held, err := c.heldRefs(ctx, plain)
+	if err != nil {
+		return nil, err
+	}
+	listed := make(map[Ref]bool, len(cands))
+	out := make([]Ref, 0, len(cands))
+	// Each ref in another spelling may look at the disk (Spelling): the whole
+	// replace gets a few looks and a few seconds for them, so a share that
+	// stopped answering never holds it to the request's timeout; the refs past
+	// that are spelled from the index alone.
+	looks := newSpellLooks(listSpellLooks, listSpellWait)
+	for _, r := range cands {
+		if _, ok := books[r]; !ok {
+			if !HasOtherSpelling(r.Path) && !held[r] {
+				continue
+			}
+			lib := r.LibraryID
+			allow := func(p string) bool { return ScopesAllow(scopes, Ref{LibraryID: lib, Path: p}) }
+			if _, r.Path, err = c.spelledBook(ctx, r, allow, looks); err != nil {
+				return nil, err
+			}
+		}
+		if r.Path == "" || listed[r] || !ScopesAllow(scopes, r) {
+			continue
+		}
+		listed[r] = true
+		out = append(out, r)
+	}
 	return out, nil
+}
+
+// heldRefs reports which of refs (cleaned paths) have an indexed book at one
+// of their folders. It walks the folders down from the library's root a level
+// at a time, all refs at once (two reads a level), and leaves a ref at its
+// first folder that is a book (held) or holds none at or below it
+// (FoldersHoldingBooks: no folder further down can be one). So the reads
+// follow the index's depth, never a path's: every folder of a path, looked up
+// at once, costs the square of its length.
+func (c *Catalog) heldRefs(ctx context.Context, refs []Ref) (map[Ref]bool, error) {
+	type walk struct {
+		ref Ref
+		end int // where the folder of this level ends in ref.Path
+	}
+	held := map[Ref]bool{}
+	var alive []walk
+	for _, r := range refs {
+		if i := strings.IndexByte(r.Path, '/'); i > 0 {
+			alive = append(alive, walk{r, i})
+		}
+	}
+	for len(alive) > 0 {
+		folders := make([]Ref, len(alive))
+		byLib := map[int64][]string{}
+		seen := map[Ref]bool{}
+		for i, w := range alive {
+			folders[i] = Ref{LibraryID: w.ref.LibraryID, Path: w.ref.Path[:w.end]}
+			if !seen[folders[i]] {
+				seen[folders[i]] = true
+				byLib[w.ref.LibraryID] = append(byLib[w.ref.LibraryID], folders[i].Path)
+			}
+		}
+		books, err := c.booksAt(ctx, folders)
+		if err != nil {
+			return nil, err
+		}
+		holding := map[Ref]bool{}
+		for lib, paths := range byLib {
+			found, err := c.FoldersHoldingBooks(ctx, lib, paths)
+			if err != nil {
+				return nil, err
+			}
+			for p := range found {
+				holding[Ref{LibraryID: lib, Path: p}] = true
+			}
+		}
+		next := alive[:0]
+		for i, w := range alive {
+			if _, ok := books[folders[i]]; ok {
+				held[w.ref] = true
+				continue
+			}
+			j := strings.IndexByte(w.ref.Path[w.end+1:], '/')
+			if !holding[folders[i]] || j < 0 {
+				continue
+			}
+			w.end += 1 + j
+			next = append(next, w)
+		}
+		alive = next
+	}
+	return held, nil
+}
+
+// spelledBook is ref's path in the index's spelling (Spelling, of the
+// spellings allow admits; nil: every one) and the book that is or holds it
+// (BookPathAt), "" for none. looks bounds the look at the disk over a request
+// that asks for many refs (nil: one ref's own).
+func (c *Catalog) spelledBook(ctx context.Context, ref Ref, allow func(string) bool, looks *spellLooks) (spelled, book string, err error) {
+	if spelled, _, err = c.spelling(ctx, ref.LibraryID, ref.Path, allow, looks); err != nil {
+		return "", "", err
+	}
+	book, err = c.BookPathAt(ctx, ref.LibraryID, spelled)
+	if errors.Is(err, ErrNotFound) {
+		return spelled, "", nil
+	}
+	return spelled, book, err
+}
+
+// removalRefs is what a remove of ref from a list takes off: ref as given (a
+// stray row can still be cleaned up), its spelling in the index, and the book
+// it names (spelledBook, every spelling: a remove needs no access, and only
+// takes the caller's own rows off), so a remove by a track path or another
+// spelling takes the book's entry off (server#210).
+func (c *Catalog) removalRefs(ctx context.Context, ref Ref) ([]Ref, error) {
+	spelled, book, err := c.spelledBook(ctx, ref, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	refs := []Ref{ref}
+	for _, p := range []string{spelled, book} {
+		if r := (Ref{LibraryID: ref.LibraryID, Path: p}); p != "" && !slices.Contains(refs, r) {
+			refs = append(refs, r)
+		}
+	}
+	return refs, nil
 }
 
 // stamp is the time lists and collections record (added_at, created_at,

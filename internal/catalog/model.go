@@ -351,6 +351,19 @@ type Catalog struct {
 	dups store.GenMap[dupKey, dupFound]
 	// exportPaged, tests only, runs after each page ExportLibraryBooks reads.
 	exportPaged func()
+	// chunkKeyPaths, tests only, is KeyPaths' transaction size when not 0
+	// (keyPathsChunk, the package's, otherwise).
+	chunkKeyPaths int
+	// spellLooked, tests only, runs as each of Spelling's looks at the disk
+	// begins (ownEntry).
+	spellLooked func()
+	// rekeyMemos is each library's scan-end re-key memo (RekeyLibrary).
+	rekeyMemosMu sync.Mutex
+	rekeyMemos   map[int64]rekeyMemo
+	// memoRekeyFrom, tests only, is rekeyMemoFrom when not 0.
+	memoRekeyFrom int
+	// rekeyLooked, tests only, runs as rekeyOne looks at a path.
+	rekeyLooked func(p string)
 }
 
 // OnBookChange adds f to the listeners that hear, after the fact and without

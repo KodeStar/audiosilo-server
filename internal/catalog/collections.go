@@ -521,11 +521,19 @@ func (c *Catalog) SetCollectionItems(ctx context.Context, id, userID int64, refs
 	})
 }
 
-// RemoveCollectionItem takes a book off a collection userID owns (idempotent; no
-// access check on the path, so a revoked one can still be cleaned up).
+// RemoveCollectionItem takes a book off a collection userID owns (idempotent;
+// the entry at ref and the one of the book ref names, removalRefs; no access
+// check on the path, so a revoked one can still be cleaned up).
 func (c *Catalog) RemoveCollectionItem(ctx context.Context, id, userID int64, ref Ref) error {
+	if err := requireOwner(ctx, c.db, id, userID); err != nil {
+		return err // answer a stranger or a viewer before reading anything for them
+	}
+	refs, err := c.removalRefs(ctx, ref)
+	if err != nil {
+		return err
+	}
 	return c.changeItems(ctx, "RemoveCollectionItem", id, userID, true, func(tx *sql.Tx, _ string) (bool, error) {
-		return collectionItems.drop(ctx, tx, id, ref)
+		return collectionItems.dropAll(ctx, tx, id, refs)
 	})
 }
 

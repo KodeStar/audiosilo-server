@@ -143,6 +143,16 @@ func Run(ctx context.Context, opts Options) error {
 	} else if n > 0 {
 		log.Info("keyed the books' series", "books", n)
 	}
+	// Every book's path in NFC (books.path_key, server#210), keyed for the books
+	// that have none and again when the Unicode tables change, before a request
+	// in another spelling of a path is answered (catalog.Spelling reads only the
+	// keys). A failure stops the start, as KeySeries' does; the books keyed by
+	// then stay keyed, and the next start goes on from there.
+	if n, err := cat.KeyPaths(ctx, keyPathsProgress(log)); err != nil {
+		return fmt.Errorf("keying the books' paths: %w", err)
+	} else if n > 0 {
+		log.Info("keyed the books' paths", "books", n)
+	}
 	// The search index's rows written before Chinese and Japanese text was set
 	// apart a character a token (or with older Unicode tables) are rewritten
 	// once, so a search finds a word inside such a title.
@@ -159,7 +169,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	ffmpeg, ffprobe := resolveTools(ctx, abs, opts, log)
 	scanner := library.NewScanner(cat, ffprobe, log)
-	scanner.OnRunFinished = ntf.ScanFinished
+	scanner.OnRunFinished = rekeyAfterScan(ctx, cat, log, ntf.ScanFinished)
 	cat.SetPodcastNotice(ntf.PodcastNotice)
 	scanner.SetConcurrency(cfg.Scan.Concurrency)
 
@@ -212,6 +222,13 @@ func Run(ctx context.Context, opts Options) error {
 			log.Info("first-run setup marked finished (setup.skip)")
 		}
 	}
+	// Listeners' rows stored under a track path, a disc folder or another
+	// spelling move to the book's path, each logged whole first (server#210):
+	// after KeyPaths (it resolves spellings by the keys) and after the config's
+	// libraries are synced (Spelling looks at each library's root as it is now),
+	// once per key version, before the scanner starts; a library whose folder
+	// doesn't answer now (the scanner's root check) is left for the next start.
+	rekeyAtStart(ctx, cat, rootAnswers(ctx, cat, scanner, log), log)
 	scanner.Start(ctx)
 	if _, err := scanner.EnqueueAll(ctx, library.TriggerStartup, nil); err != nil {
 		log.Warn("startup scan: list libraries failed", "err", err)

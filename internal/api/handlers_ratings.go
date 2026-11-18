@@ -12,12 +12,21 @@ import (
 // star rating and note on a book, path-keyed like progress. Transport only; the
 // rules live in catalog/ratings.go.
 
-// handleGetRating answers the caller's rating of the book at ?path= (exact):
-// {"rating": Rating | null}.
+// ratingPath is the path the caller's rating at ?path= is kept under: the
+// indexed book the path is or lies in (catalog.BookPathAt, the index alone: a
+// track or a disc folder is its book's, as PUT's bookAt resolves it) when the
+// caller's scope allows that book, else the path as given. On a failure it
+// writes the answer and returns false.
+func (a *API) ratingPath(w http.ResponseWriter, r *http.Request, generic string) (*catalog.Library, string, bool) {
+	lib, key, _, ok := a.bookKeyed(w, r, a.cat.BookPathAt, generic)
+	return lib, key, ok
+}
+
+// handleGetRating answers the caller's rating of the book at ?path=
+// (ratingPath): {"rating": Rating | null}.
 func (a *API) handleGetRating(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
-	if status != 0 {
-		writeError(w, status, msg)
+	lib, path, ok := a.ratingPath(w, r, "could not load rating")
+	if !ok {
 		return
 	}
 	rating, err := a.cat.GetRating(r.Context(), userFrom(r.Context()).ID, catalog.Ref{LibraryID: lib.ID, Path: path})
@@ -69,17 +78,19 @@ func (a *API) handlePutRating(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"rating": saved})
 }
 
-// handleDeleteRating clears the caller's rating of the book at ?path= (exact).
+// handleDeleteRating clears the caller's rating of the book at ?path=
+// (ratingPath), and one stored at the path as given (removedPaths).
 // Idempotent: 204 whether or not there was one.
 func (a *API) handleDeleteRating(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
-	if status != 0 {
-		writeError(w, status, msg)
+	lib, path, ok := a.ratingPath(w, r, "could not remove rating")
+	if !ok {
 		return
 	}
-	if err := a.cat.DeleteRating(r.Context(), userFrom(r.Context()).ID, catalog.Ref{LibraryID: lib.ID, Path: path}); err != nil {
-		a.writeCatalogError(w, err, "delete rating failed", "could not remove rating", "library", lib.ID, "path", path)
-		return
+	for _, p := range removedPaths(r, path) {
+		if err := a.cat.DeleteRating(r.Context(), userFrom(r.Context()).ID, catalog.Ref{LibraryID: lib.ID, Path: p}); err != nil {
+			a.writeCatalogError(w, err, "delete rating failed", "could not remove rating", "library", lib.ID, "path", p)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

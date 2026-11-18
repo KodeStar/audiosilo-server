@@ -2,8 +2,10 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -207,6 +209,27 @@ func (a *API) authorizedPath(r *http.Request) (*catalog.Library, string, int, st
 	return lib, rel, status, msg
 }
 
+// exactPath is authorizedPath taking ?path= in the spelling given (pathInScope,
+// no catalog.Spelling): an admin's edit of a person's stored row, which the
+// console names by the row's own path, so a row an older server stored in
+// another spelling is the one edited, not the index spelling's.
+func (a *API) exactPath(r *http.Request) (*catalog.Library, string, int, string) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		return nil, "", http.StatusBadRequest, "invalid library id"
+	}
+	raw := r.URL.Query().Get("path")
+	if len(raw) > catalog.MaxPathBytes {
+		return nil, "", http.StatusBadRequest, msgPathTooLong
+	}
+	lib, scope, status, msg := a.libraryScope(r, id)
+	if status != 0 {
+		return nil, "", status, msg
+	}
+	lib, rel, _, status, msg := pathInScope(lib, scope, raw)
+	return lib, rel, status, msg
+}
+
 // authorizedScope is authorizedPath plus the caller's scope, for an endpoint that
 // resolves the path to a book (bookForPath), which may lie above it.
 func (a *API) authorizedScope(r *http.Request) (*catalog.Library, string, catalog.Scope, int, string) {
@@ -220,17 +243,24 @@ func (a *API) authorizedScope(r *http.Request) (*catalog.Library, string, catalo
 // scopedPath is authorizedScope for a library id and a raw path the caller got
 // from elsewhere.
 func (a *API) scopedPath(r *http.Request, libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
+	lib, rel, scope, _, status, msg := a.scopedFile(r, libraryID, rawPath)
+	return lib, rel, scope, status, msg
+}
+
+// scopedFile is scopedPath with refused (spelledPath): for the stream, the one
+// route that opens the file at the path itself.
+func (a *API) scopedFile(r *http.Request, libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, bool, int, string) {
 	// Over the cap is 400 whatever the library (server#291): before the
 	// library is looked up, so an unknown or ungranted one doesn't answer
 	// 404/403 for it.
 	if len(rawPath) > catalog.MaxPathBytes {
-		return nil, "", catalog.Scope{}, http.StatusBadRequest, msgPathTooLong
+		return nil, "", catalog.Scope{}, false, http.StatusBadRequest, msgPathTooLong
 	}
 	lib, scope, status, msg := a.libraryScope(r, libraryID)
 	if status != 0 {
-		return nil, "", scope, status, msg
+		return nil, "", scope, false, status, msg
 	}
-	return pathInScope(lib, scope, rawPath)
+	return a.spelledPath(r.Context(), lib, scope, rawPath)
 }
 
 // scopedPathIn is scopedPath with the caller's scopes already loaded
@@ -251,7 +281,7 @@ func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID in
 	if status != 0 {
 		return nil, "", scope, status, msg
 	}
-	return pathInScope(lib, scope, rawPath)
+	return a.spelledPathInScope(r.Context(), lib, scope, rawPath)
 }
 
 // msgPathTooLong is the 400 for a path over catalog.MaxPathBytes, on every
@@ -273,20 +303,88 @@ func pathTooLong(w http.ResponseWriter, rawPath string) bool {
 }
 
 // pathInScope cleans rawPath and checks scope allows it (400 empty or over
-// catalog.MaxPathBytes, 403 outside, 404 through a hidden folder).
+// catalog.MaxPathBytes, 403 outside, 404 through a hidden folder), taking the
+// path in the spelling given: the Bridge's routes, which send the index's own
+// paths. A player's route takes it through spelledPathInScope.
 func pathInScope(lib *catalog.Library, scope catalog.Scope, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
+	rel, status, msg := cleanedPath(rawPath)
+	if status != 0 {
+		return nil, "", scope, status, msg
+	}
+	return relInScope(lib, scope, rel)
+}
+
+// spelledPathInScope is pathInScope with the cleaned path in the index's
+// spelling (spelledIn: another Unicode spelling of an indexed path the caller's
+// scope allows reads as the index's), before the scope and hidden checks, so
+// those judge the path that is read. A failed lookup is a 500 (a timed-out one
+// a 503), never the path as given.
+func (a *API) spelledPathInScope(ctx context.Context, lib *catalog.Library, scope catalog.Scope, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
+	lib, rel, scope, _, status, msg := a.spelledPath(ctx, lib, scope, rawPath)
+	return lib, rel, scope, status, msg
+}
+
+// spelledPath is spelledPathInScope with refused: the path, which the caller's
+// scope admits as given (a rule written in that spelling), names only indexed
+// paths the scope refuses (spelledIn's missing). It is the path as given, as
+// for a path the index has nothing at: every route answers it as such (the
+// catalog's from the index, which the on-demand index reads only in the
+// spelling on disk), so nothing in the answer tells the caller the refused
+// book is there. Only the stream opens the file at the path itself, which a
+// disk that ignores the difference (macOS, SMB) would find in the refused
+// book: it answers as for no file there (audioFile).
+func (a *API) spelledPath(ctx context.Context, lib *catalog.Library, scope catalog.Scope, rawPath string) (*catalog.Library, string, catalog.Scope, bool, int, string) {
+	rel, status, msg := cleanedPath(rawPath)
+	if status != 0 {
+		return nil, "", scope, false, status, msg
+	}
+	rel, refused, err := a.spelledIn(ctx, lib.ID, scope.Allows, rel)
+	if err != nil {
+		a.log.Warn("resolve path spelling failed", "library", lib.ID, "err", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", scope, false, http.StatusServiceUnavailable, "request timed out"
+		}
+		return nil, "", scope, false, http.StatusInternalServerError, "could not resolve the path"
+	}
+	lib, rel, scope, status, msg = relInScope(lib, scope, rel)
+	return lib, rel, scope, refused && status == 0, status, msg
+}
+
+// spelledIn is rel in the index's spelling (catalog.Spelling) among the
+// spellings allow (the caller's scope) admits, else rel as given: a spelling
+// outside the caller's access is never taken, nor counted, so the answer (a 403
+// where rel would read as missing, or a third spelling's) can't tell them an
+// indexed path they can't reach is there. missing reports that rel, which allow
+// admits as given (a rule written in that spelling), names only indexed paths
+// it refuses: the caller answers as for a path with nothing there, and never
+// opens rel on a disk that ignores the difference (macOS, SMB), where it would
+// reach the refused book's files (spelledPath, /fs).
+func (a *API) spelledIn(ctx context.Context, libraryID int64, allow func(string) bool, rel string) (spelled string, missing bool, err error) {
+	spelled, outside, err := a.cat.Spelling(ctx, libraryID, rel, allow)
+	return spelled, outside && (allow == nil || allow(rel)), err
+}
+
+// cleanedPath is rawPath cleaned (catalog.CleanRelPath), or the 400 for one over
+// catalog.MaxPathBytes or one that cleans away to nothing.
+func cleanedPath(rawPath string) (string, int, string) {
 	// A path no file can have is refused before it is cleaned, looked up (a
 	// book's ancestors are walked) or stored (server#289).
 	if len(rawPath) > catalog.MaxPathBytes {
-		return nil, "", scope, http.StatusBadRequest, msgPathTooLong
+		return "", http.StatusBadRequest, msgPathTooLong
 	}
 	// Normalize before the scope check so ".." can't smuggle an out-of-scope path
 	// past a subtree grant (see catalog.CleanRelPath). An input that cleans away
 	// to nothing ("", ".", "/", "Author/..") addresses no content.
 	rel := catalog.CleanRelPath(rawPath)
 	if rel == "" {
-		return nil, "", scope, http.StatusBadRequest, "path is required"
+		return "", http.StatusBadRequest, "path is required"
 	}
+	return rel, 0, ""
+}
+
+// relInScope checks scope allows rel, a cleaned path (403 outside, 404 through
+// a hidden folder).
+func relInScope(lib *catalog.Library, scope catalog.Scope, rel string) (*catalog.Library, string, catalog.Scope, int, string) {
 	if !scope.Allows(rel) {
 		return nil, "", scope, http.StatusForbidden, msgNoPathAccess
 	}
@@ -381,8 +479,37 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	if !scope.AllowAll {
 		allow = scope.VisibleInBrowse
 	}
+	// A folder asked for in another Unicode spelling is listed in the index's
+	// (spelledIn), so the listing's path and its entries' are the paths the
+	// index, and so annotateWithBooks, has. One whose index spelling the caller
+	// can't see is missing, never listed from the disk in the spelling given.
+	dir := r.URL.Query().Get("path")
+	rel := catalog.CleanRelPath(dir)
+	if rel != "" {
+		spelled, missing, err := a.spelledIn(r.Context(), lib.ID, allow, rel)
+		if err != nil {
+			a.writeCatalogError(w, err, "resolve path spelling failed", "Could not list the folder.", "library", lib.ID)
+			return
+		}
+		if missing {
+			writeError(w, http.StatusNotFound, "directory not found")
+			return
+		}
+		if spelled != rel {
+			dir, rel = spelled, spelled
+		}
+	}
+	// Nor is one the disk doesn't spell as given (onDiskAsGiven: a case
+	// variant, on a disk that ignores case, of a folder the caller's rule
+	// never named), looked at before the folder is read, so such a folder is
+	// never listed and answers as fast as a missing one. A path that climbs
+	// out of the root is BrowseFS's 400 first; looked at after it.
+	early := rel != "" && filepath.IsLocal(filepath.FromSlash(dir))
+	if early && !a.fsGiven(w, r, lib, rel) {
+		return
+	}
 	ignore := library.ParseIgnore(lib.IgnorePatterns)
-	listing, err := library.BrowseFS(lib.Root, r.URL.Query().Get("path"),
+	listing, err := library.BrowseFS(lib.Root, dir,
 		queryInt(r, "offset", 0), queryInt(r, "limit", 200), allow, ignore)
 	if errors.Is(err, library.ErrOutsideRoot) {
 		writeError(w, http.StatusBadRequest, "invalid path")
@@ -390,6 +517,9 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeError(w, http.StatusNotFound, "directory not found")
+		return
+	}
+	if rel != "" && !early && !a.fsGiven(w, r, lib, rel) {
 		return
 	}
 	a.annotateWithBooks(r, lib, scope, ignore, listing)
@@ -813,13 +943,18 @@ const remuxDownloadWait = 45 * time.Second
 // a share that stopped answering is a 503 share_not_answering by then.
 func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	deadline := time.Now().Add(a.streamWait)
-	lib, rel, status, msg := a.authorizedPath(r)
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid library id")
+		return
+	}
+	lib, rel, _, refused, status, msg := a.scopedFile(r, id, r.URL.Query().Get("path"))
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
 	if q := r.URL.Query(); q.Has("rendition") {
-		a.serveRendition(w, r, lib, rel, q.Get("rendition"), deadline)
+		a.serveRendition(w, r, lib, rel, refused, q.Get("rendition"), deadline)
 		return
 	}
 	if lib.Kind == catalog.KindPodcasts {
@@ -827,7 +962,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	abs, ok := audioFile(w, r, lib, rel, deadline)
+	abs, ok := a.audioFile(w, r, lib, rel, refused, deadline)
 	if !ok {
 		return
 	}
@@ -890,8 +1025,13 @@ func lookAtSource(w http.ResponseWriter, r *http.Request, abs string, deadline t
 // the library root can also hold non-audio sidecar files (.nfo, .jpg, a stray
 // .env/backup); BrowseFS hides those from listings, and cover art has its own
 // endpoint, so serving them here would be an avenue to exfiltrate arbitrary
-// in-scope files by guessing paths.
-func audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, deadline time.Time) (string, bool) {
+// in-scope files by guessing paths. A refused rel (spelledPath: another
+// spelling of a book outside the caller's scope), and one the disk doesn't
+// spell as given (onDiskAsGiven: a case variant, on a disk that ignores case,
+// of a file a share rule spelled that way never named), is joined and checked
+// the same, then its path is one no file has (noFile), so every form of the
+// stream answers as for a missing file and none opens the file it would find.
+func (a *API) audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, refused bool, deadline time.Time) (string, bool) {
 	if !metadata.IsAudio(rel) {
 		writeError(w, http.StatusNotFound, "not an audio file")
 		return "", false
@@ -905,8 +1045,82 @@ func audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return "", false
 	}
+	if !refused {
+		given, ok := a.givenOnDisk(w, r, lib, rel, func() time.Duration { return waitLeft(deadline) },
+			"check a stream's path failed", "Could not load the file.")
+		if !ok {
+			return "", false
+		}
+		refused = !given
+	}
+	if refused {
+		abs = noFile(abs)
+	}
 	return abs, true
 }
+
+// onDiskAsGiven reports whether rel (cleaned, scope-checked) is on the
+// library's disk as given, byte for byte: a path the index holds as given
+// (catalog.IndexHolds, the scan read it from the listings), else each of its
+// names in its folder's listing (metadata.NamesListed, a.readDir, each listing
+// bounded by wait). A path no file answers to at all is no more there as given:
+// one bounded lstat says so, with no listing read (a request for a missing
+// path costs what it did before the check). Share rules match byte for byte, so a rule spelled in
+// another case than the disk's names nothing there, like a rule naming a
+// missing folder; but a disk that ignores case (macOS's, a Windows or SMB
+// share) opens "émile zola/x.m4b" as "Émile Zola/x.m4b", a book that rule
+// never named. A route that opens rel itself (the stream, /fs) answers a path
+// that isn't there as given as missing. err is a failed index lookup, a
+// listing given up on (metadata.GaveUp) or ctx's.
+func (a *API) onDiskAsGiven(ctx context.Context, lib *catalog.Library, rel string, wait func() time.Duration) (bool, error) {
+	if held, err := a.cat.IndexHolds(ctx, lib.ID, rel); err != nil || held {
+		return held, err
+	}
+	if _, err := metadata.LstatBounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(rel)), wait()); err != nil {
+		if metadata.Unanswered(ctx, err) {
+			return false, cmp.Or(err, ctx.Err())
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+	}
+	return metadata.NamesListed(ctx, lib.Root, rel, nil, func(ctx context.Context, dir string) ([]string, error) {
+		return a.readDir(ctx, dir, wait())
+	})
+}
+
+// givenOnDisk is onDiskAsGiven for a handler: ok false when it has answered
+// (a listing given up on is a 503 share_not_answering, a failed lookup a 500)
+// or the client left, with no one to answer.
+func (a *API) givenOnDisk(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string,
+	wait func() time.Duration, op, msg string) (given, ok bool) {
+	given, err := a.onDiskAsGiven(r.Context(), lib, rel, wait)
+	switch {
+	case err == nil:
+		return given, true
+	case !metadata.GaveUp(err) && r.Context().Err() != nil:
+		return false, false // the client left: no one to answer
+	}
+	a.writeCatalogError(w, err, op, msg, "library", lib.ID)
+	return false, false
+}
+
+// fsGiven is /fs's onDiskAsGiven: false when it has answered, a folder the
+// disk doesn't spell as given as "directory not found".
+func (a *API) fsGiven(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string) bool {
+	given, ok := a.givenOnDisk(w, r, lib, rel, func() time.Duration { return a.fileWait },
+		"check a folder's path failed", "Could not list the folder.")
+	if ok && !given {
+		writeError(w, http.StatusNotFound, "directory not found")
+	}
+	return ok && given
+}
+
+// noFile is abs as a path no file has: a NUL byte is in no file name, so every
+// look at it (a stat, an open) fails at once without reaching the disk, as a
+// missing file's does, and each of the stream's forms answers as it does for
+// one (audioFile).
+func noFile(abs string) string { return abs + "\x00" }
 
 // copyName is the download name of abs's cached copy: its stem with the
 // copy's extension.

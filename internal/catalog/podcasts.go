@@ -237,8 +237,8 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 			}
 			var id int64
 			indexedAt := c.ts() // the books row's, and its episode row's stamp of it
-			err = tx.QueryRowContext(ctx, `INSERT INTO books(library_id,rel_path,title,author,duration,cover_path,cover_art,format,size,mtime,indexed_at,added_at,description,has_cover,codec,chapters_source,genres_checked,released_checked)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1) ON CONFLICT(library_id,rel_path) DO UPDATE SET title=excluded.title,author=excluded.author,duration=excluded.duration,cover_path=excluded.cover_path,cover_art=excluded.cover_art,format=excluded.format,size=excluded.size,mtime=excluded.mtime,indexed_at=excluded.indexed_at,description=excluded.description,has_cover=excluded.has_cover,codec=excluded.codec,chapters_source=excluded.chapters_source RETURNING id`, lib, e.Path, e.Title, f.Show.Author, duration, cover, coverVersion, strings.TrimPrefix(strings.ToLower(path.Ext(e.Path)), "."), info.Size, info.MTime, indexedAt, e.FirstSeen, e.Description, cover != "", codec, chapterSource).Scan(&id)
+			err = tx.QueryRowContext(ctx, `INSERT INTO books(library_id,rel_path,title,author,duration,cover_path,cover_art,format,size,mtime,indexed_at,added_at,description,has_cover,codec,chapters_source,genres_checked,released_checked,path_key)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?) ON CONFLICT(library_id,rel_path) DO UPDATE SET path_key=excluded.path_key,title=excluded.title,author=excluded.author,duration=excluded.duration,cover_path=excluded.cover_path,cover_art=excluded.cover_art,format=excluded.format,size=excluded.size,mtime=excluded.mtime,indexed_at=excluded.indexed_at,description=excluded.description,has_cover=excluded.has_cover,codec=excluded.codec,chapters_source=excluded.chapters_source RETURNING id`, lib, e.Path, e.Title, f.Show.Author, duration, cover, coverVersion, strings.TrimPrefix(strings.ToLower(path.Ext(e.Path)), "."), info.Size, info.MTime, indexedAt, e.FirstSeen, e.Description, cover != "", codec, chapterSource, pathKey(e.Path)).Scan(&id)
 			if err != nil {
 				return err
 			}

@@ -132,3 +132,40 @@ func TestBoundedBurstKeepsToTheCap(t *testing.T) {
 		t.Errorf("a stat once the share answers = %v, want it made", err)
 	}
 }
+
+// TestNamesListed: each name must be in its folder's listing byte for byte (a
+// disk that ignores case finds "a" as "A" but lists only "A"); need limits the
+// names looked at; a listing that fails reads as not there, one given up on is
+// the error.
+func TestNamesListed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "Author", "Book"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	list := func(ctx context.Context, dir string) ([]string, error) {
+		return ReadDirNamesBounded(ctx, dir, time.Second)
+	}
+	for _, tc := range []struct {
+		rel  string
+		need func(string) bool
+		want bool
+	}{
+		{"Author/Book", nil, true},
+		{"author/Book", nil, false},
+		{"Author/book", nil, false},
+		{"Author/Gone", nil, false},
+		{"Gone/Book", nil, false},
+		{"Author/book", func(name string) bool { return name != "book" }, true},
+	} {
+		got, err := NamesListed(ctx, root, tc.rel, tc.need, list)
+		if err != nil || got != tc.want {
+			t.Errorf("NamesListed(%q) = %v %v, want %v", tc.rel, got, err, tc.want)
+		}
+	}
+	refused := func(context.Context, string) ([]string, error) { return nil, ErrNotAnswered }
+	if got, err := NamesListed(ctx, root, "Author/Book", nil, refused); got || !GaveUp(err) {
+		t.Errorf("a listing given up on = %v %v, want false and the error", got, err)
+	}
+}

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"maps"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -160,8 +159,8 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     released, released_checked, genres_checked, tag_asin, tag_isbn, tag_language, hints_checked,
 		     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
 		     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at,
-		     file_order, file_order_indexed_at, ebook_path, ebook_sig, ebook_size, duration_rev, duration_rev_indexed_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,1,?,?,'','',?,?,?,?,?,?,?,?,?,?,CASE WHEN ? THEN 0 ELSE `+durationRev+` END,?)
+		     file_order, file_order_indexed_at, ebook_path, ebook_sig, ebook_size, duration_rev, duration_rev_indexed_at, path_key)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,1,?,?,'','',?,?,?,?,?,?,?,?,?,?,CASE WHEN ? THEN 0 ELSE `+durationRev+` END,?,?)
 		 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 		     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 		     series=excluded.series, series_index=excluded.series_index,
@@ -195,7 +194,10 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     ebook_path=CASE WHEN ? THEN books.ebook_path ELSE excluded.ebook_path END,
 		     ebook_sig=CASE WHEN ? THEN books.ebook_sig ELSE excluded.ebook_sig END,
 		     ebook_size=CASE WHEN ? THEN books.ebook_size ELSE excluded.ebook_size END,
-		     duration_rev=excluded.duration_rev, duration_rev_indexed_at=excluded.duration_rev_indexed_at
+		     duration_rev=excluded.duration_rev, duration_rev_indexed_at=excluded.duration_rev_indexed_at,
+		     -- rel_path never changes here: this only keys a row an older server
+		     -- inserted after a rollback (KeyPaths).
+		     path_key=excluded.path_key
 		     -- added_at intentionally not updated: it records first-seen, so a
 		     -- re-index of an existing book keeps its original added date.
 		 RETURNING id`,
@@ -206,7 +208,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 		b.Released, b.TagASIN, b.TagISBN, b.TagLanguage, string(scannedChapters), chaptersHash(string(scannedChapters)),
 		absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
-		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.LengthUncounted, indexedAt, b.ABS.Unread, b.ABS.Unread, b.EbookFile.Unread,
+		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.LengthUncounted, indexedAt, pathKey(b.RelPath), b.ABS.Unread, b.ABS.Unread, b.EbookFile.Unread,
 		b.EbookFile.Unread, b.EbookFile.Unread).Scan(&id); err != nil {
 		return 0, err
 	}
@@ -792,35 +794,36 @@ func (c *Catalog) SplitFolders(ctx context.Context, libraryID int64, folders []s
 // EXISTS: joined by an OR in one, SQLite (no ANALYZE statistics here) seeks on
 // library_id alone and reads the library's books for every folder. The folders
 // are bound as they are, not as JSON, which would turn a name that isn't valid
-// UTF-8 into another (see pathsJSONFilterSQL).
+// UTF-8 into another (see pathsJSONFilterSQL). They are read foldersChunk a
+// query, so any number of them (the re-key's every candidate's) stays under
+// SQLite's limit on bound variables.
 func (c *Catalog) FoldersHoldingBooks(ctx context.Context, libraryID int64, folders []string) (map[string]bool, error) {
 	out := map[string]bool{}
-	if len(folders) == 0 {
-		return out, nil
-	}
-	args := make([]any, 0, len(folders)+2)
-	for _, f := range folders {
-		args = append(args, f)
-	}
-	args = append(args, libraryID, libraryID)
-	rows, err := c.db.QueryContext(ctx, `WITH f(path) AS (VALUES `+strings.Repeat("(?),", len(folders)-1)+`(?))
-		SELECT DISTINCT path FROM f
-		 WHERE EXISTS (SELECT 1 FROM books b WHERE b.library_id = ? AND b.rel_path = f.path)
-		    OR EXISTS (SELECT 1 FROM books b WHERE b.library_id = ?
-		                 AND b.rel_path > f.path || '/' AND b.rel_path < f.path || '0')`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
+	for start := 0; start < len(folders); start += foldersChunk {
+		part := folders[start:min(start+foldersChunk, len(folders))]
+		args := make([]any, 0, len(part)+2)
+		for _, f := range part {
+			args = append(args, f)
+		}
+		args = append(args, libraryID, libraryID)
+		found, err := queryRows(ctx, c.db, func(r *sql.Rows, p *string) error { return r.Scan(p) },
+			`WITH f(path) AS (VALUES `+strings.Repeat("(?),", len(part)-1)+`(?))
+			SELECT DISTINCT path FROM f
+			 WHERE EXISTS (SELECT 1 FROM books b WHERE b.library_id = ? AND b.rel_path = f.path)
+			    OR EXISTS (SELECT 1 FROM books b WHERE b.library_id = ?
+			                 AND b.rel_path > f.path || '/' AND b.rel_path < f.path || '0')`, args...)
+		if err != nil {
 			return nil, err
 		}
-		out[p] = true
+		for _, p := range found {
+			out[p] = true
+		}
 	}
-	return out, rows.Err()
+	return out, nil
 }
+
+// foldersChunk is how many folders one of FoldersHoldingBooks' queries binds.
+const foldersChunk = 500
 
 // DeleteBooksNotIn removes books in a library whose rel_path is not in keep and
 // returns their paths. Used by the scanner to prune vanished files (the paths go
@@ -1049,38 +1052,106 @@ func (c *Catalog) GetBookHolding(ctx context.Context, libraryID int64, relPath s
 	return c.GetBook(ctx, id)
 }
 
+// holdingFolders is how many folders of a path one of bookHolding's reads
+// looks up; a deeper path's next ones are read only while books lie below.
+const holdingFolders = 8
+
 // bookHolding is GetBookHolding's lookup: the id and path of the innermost
 // indexed folder book holding relPath, ErrNotFound when none does. With
 // fileOnly, relPath must be one of the book's files: a folder inside it (a disc
-// folder of a joined book) is not held.
+// folder of a joined book) is not held. Its folders are read from the
+// library's root down, holdingFolders a read, the next ones only while an
+// indexed book lies below the last (none further down can be one otherwise):
+// one read for any path as deep as the index, never the square of a deep
+// path's length.
 func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath string, fileOnly bool) (int64, string, error) {
-	args := []any{libraryID}
-	for d := path.Dir(relPath); d != "." && d != "/"; d = path.Dir(d) {
-		args = append(args, d)
-	}
-	if len(args) == 1 {
-		return 0, "", ErrNotFound
-	}
-	n := len(args) - 1
 	held := `f.rel_path = ?`
-	args = append(args, relPath)
+	heldArgs := []any{relPath}
 	if !fileOnly {
 		held = `(f.rel_path = ? OR f.rel_path LIKE ? ESCAPE '\')`
-		args = append(args, escapeLike(relPath)+"/%")
+		heldArgs = append(heldArgs, escapeLike(relPath)+"/%")
 	}
 	var (
 		id   int64
 		book string
 	)
-	err := c.db.QueryRowContext(ctx,
-		`SELECT b.id, b.rel_path FROM books b
-		  WHERE b.library_id = ? AND b.is_folder = 1 AND b.rel_path IN (`+placeholders(n)+`)
-		    AND EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id AND `+held+`)
-		  ORDER BY length(b.rel_path) DESC LIMIT 1`, args...).Scan(&id, &book)
-	if errors.Is(err, sql.ErrNoRows) {
+	for end := strings.IndexByte(relPath, '/'); end > 0; {
+		var folders []any
+		for len(folders) < holdingFolders && end > 0 {
+			folders = append(folders, relPath[:end])
+			if next := strings.IndexByte(relPath[end+1:], '/'); next >= 0 {
+				end += 1 + next
+			} else {
+				end = -1
+			}
+		}
+		// below: whether a book lies below this read's last folder, asked
+		// only when relPath has folders after it.
+		below := `0`
+		var args []any
+		if end > 0 {
+			below = `EXISTS (SELECT 1 FROM books WHERE library_id = ? AND rel_path > ? || '/' AND rel_path < ? || '0')`
+			last := folders[len(folders)-1]
+			args = append(args, libraryID, last, last)
+		}
+		args = append(append(append(args, libraryID), folders...), heldArgs...)
+		var (
+			hid   sql.NullInt64
+			hbook sql.NullString
+			more  bool
+		)
+		err := c.db.QueryRowContext(ctx,
+			`SELECT h.id, h.rel_path, `+below+` FROM (SELECT 1) LEFT JOIN (
+			   SELECT b.id, b.rel_path FROM books b
+			    WHERE b.library_id = ? AND b.is_folder = 1 AND b.rel_path IN (`+placeholders(len(folders))+`)
+			      AND EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id AND `+held+`)
+			    ORDER BY length(b.rel_path) DESC LIMIT 1) h`, args...).Scan(&hid, &hbook, &more)
+		if err != nil {
+			return 0, "", err
+		}
+		if hid.Valid {
+			id, book = hid.Int64, hbook.String
+		}
+		if !more {
+			break
+		}
+	}
+	if id == 0 {
 		return 0, "", ErrNotFound
 	}
-	return id, book, err
+	return id, book, nil
+}
+
+// keyedFolders is the folders above k (a path in NFC, Spelling's key) a book
+// holding it can be at, innermost first: every one for a path at most
+// holdingFolders deep, else walked down from the library's root up to the
+// first that no indexed book lies below in any spelling (by rel_path or by
+// path_key, the partial index), one read a level, so as many reads as the
+// index is deep, whatever k's length.
+func (c *Catalog) keyedFolders(ctx context.Context, libraryID int64, k string) ([]string, error) {
+	if strings.Count(k, "/") <= holdingFolders {
+		return ancestors(k), nil
+	}
+	// path_key != '' names the partial index's own condition, so it is used.
+	const below = `SELECT EXISTS (SELECT 1 FROM books WHERE library_id = ?1 AND rel_path > ?2 || '/' AND rel_path < ?2 || '0')
+	                   OR EXISTS (SELECT 1 FROM books WHERE library_id = ?1 AND path_key > ?2 || '/' AND path_key < ?2 || '0'
+	                                AND path_key != '')`
+	var out []string
+	for end := strings.IndexByte(k, '/'); end > 0; {
+		d := k[:end]
+		out = append(out, d)
+		var more bool
+		if err := c.db.QueryRowContext(ctx, below, libraryID, d).Scan(&more); err != nil {
+			return nil, err
+		}
+		next := strings.IndexByte(k[end+1:], '/')
+		if !more || next < 0 {
+			break
+		}
+		end += 1 + next
+	}
+	slices.Reverse(out)
+	return out, nil
 }
 
 // BookPathAt is the path of the indexed book relPath addresses: the book at it,
