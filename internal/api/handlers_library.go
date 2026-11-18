@@ -497,13 +497,14 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 			dir, rel = spelled, spelled
 		}
 	}
-	// Nor is one the disk doesn't spell as given (onDiskAsGiven: a case
-	// variant, on a disk that ignores case, of a folder the caller's rule
-	// never named), looked at before the folder is read, so such a folder is
-	// never listed and answers as fast as a missing one. A path that climbs
-	// out of the root is BrowseFS's 400 first; looked at after it.
+	// Nor is one outside the caller's share rules (allow), nor one the disk
+	// doesn't spell as given (onDiskAsGiven: a case variant, on a disk that
+	// ignores case, of a folder the caller's rule never named), looked at
+	// before the folder is read, so such a folder is never listed and answers
+	// as fast as a missing one. A path that climbs out of the root is
+	// BrowseFS's 400 first; looked at after it.
 	early := rel != "" && filepath.IsLocal(filepath.FromSlash(dir))
-	if early && !a.fsGiven(w, r, lib, rel) {
+	if early && !a.fsGiven(w, r, lib, rel, allow) {
 		return
 	}
 	ignore := library.ParseIgnore(lib.IgnorePatterns)
@@ -517,7 +518,7 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "directory not found")
 		return
 	}
-	if rel != "" && !early && !a.fsGiven(w, r, lib, rel) {
+	if rel != "" && !early && !a.fsGiven(w, r, lib, rel, allow) {
 		return
 	}
 	a.annotateWithBooks(r, lib, scope, ignore, listing)
@@ -1132,8 +1133,16 @@ func (a *API) givenOnDisk(w http.ResponseWriter, r *http.Request, lib *catalog.L
 }
 
 // fsGiven is /fs's onDiskAsGiven: false when it has answered, a folder the
-// disk doesn't spell as given as "directory not found".
-func (a *API) fsGiven(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string) bool {
+// disk doesn't spell as given as "directory not found". So is a folder outside
+// the caller's share rules (allow, Scope.VisibleInBrowse; nil allows every
+// one), answered before any listing is read: a listing of it would hold none
+// of their entries, and a 200 for it where a missing one is a 404 would tell
+// them it is there.
+func (a *API) fsGiven(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, allow func(string) bool) bool {
+	if allow != nil && !allow(rel) {
+		writeError(w, http.StatusNotFound, "directory not found")
+		return false
+	}
 	given, ok := a.givenOnDisk(w, r, lib, rel, func() time.Duration { return a.fileWait },
 		"check a folder's path failed", "Could not list the folder.")
 	if ok && !given {

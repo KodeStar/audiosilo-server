@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -292,6 +293,8 @@ func TestCaseVariantCostsWhatMissingDoes(t *testing.T) {
 		t.Error("an unindexed folder was answered with no listing")
 	}
 	reset()
+	at := time.Now() // the listings' clock held, so a slow run never outlives the TTL
+	c.api.listed.now = func() time.Time { return at }
 	for range 20 {
 		for _, p := range []string{pcMissingT, pcLowMissingT} {
 			c.do(t, "GET", bookURL(c.lib.ID, "stream", p), c.samTok, "")
@@ -305,6 +308,41 @@ func TestCaseVariantCostsWhatMissingDoes(t *testing.T) {
 	}
 	if counts[""] != 1 || len(listed) != 2 {
 		t.Errorf("40 requests for missing paths listed %q, want the root and the author folder once each", listed)
+	}
+}
+
+// TestFSOutsideScopeIsMissing (security): /fs answers a folder outside the
+// caller's share rules as a missing one, with no listing read: hal, whose rule
+// is the author folder in lower case, can't tell from a 200 that the folder as
+// the disk spells it, its book or another author's folder is there. Allowed:
+// the library's root (their entries only) and a folder in their rule (ida).
+func TestFSOutsideScopeIsMissing(t *testing.T) {
+	t.Parallel()
+	c := newCaseEnv(t)
+	inner := c.api.listed.read
+	var reads atomic.Int32
+	c.api.listed.read = func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+		reads.Add(1)
+		return inner(ctx, dir, timeout)
+	}
+	for _, p := range []string{pcAuthor, pcBook, "Other", "Other/Book", "Nowhere"} {
+		if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "fs", p), c.halTok, ""); resp.StatusCode != http.StatusNotFound {
+			t.Errorf("hal's fs %+q = %d %s, want 404", p, resp.StatusCode, body)
+		}
+	}
+	if n := reads.Load(); n != 0 {
+		t.Errorf("folders outside the rule read %d listings, want none", n)
+	}
+	for _, p := range []string{pcBook, "Other/Book"} { // as a missing folder in the rule
+		c.same(t, c.halTok, "GET", c.get("fs"), p, pcLowMissing)
+	}
+	if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "fs", ""), c.halTok, ""); resp.StatusCode != http.StatusOK ||
+		strings.Contains(body, "Other") {
+		t.Errorf("hal's root = %d %s, want 200 without the folder outside the rule", resp.StatusCode, body)
+	}
+	if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "fs", pcBook), c.idaTok, ""); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(body, "01.mp3") {
+		t.Errorf("ida's book folder = %d %s, want its listing", resp.StatusCode, body)
 	}
 }
 

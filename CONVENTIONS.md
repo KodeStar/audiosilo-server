@@ -1185,12 +1185,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   each name in its folder's listing, `metadata.NamesListed` from the root down through `API.listed`, names
   only), else answer as for a missing path (a listing given up on: 503 `share_not_answering`). A missing
   path and a case variant take the same steps (no lstat first: the same listings up to the first name not
-  listed), and the listings are kept a few seconds (`dirNames`: `dirNamesTTL` 3 s from the read, at most
-  `dirNamesMax` folders and `dirNamesBytes` of names, oldest dropped first, one read in flight per folder,
-  a failed read never kept, no invalidation), so the check's time never tells a rule spelled in another
-  case that the folder is there, and missing paths in a loop read a folder once in the TTL
-  (`TestCaseVariantCostsWhatMissingDoes`). `/fs` looks before it reads the folder (after, for a path that
-  climbs out of the root, so it keeps its 400). Every other route reads the index,
+  listed), and the listings are kept a few seconds (`dirNames`: `dirNamesTTL` 3 s from the read's start,
+  at most `dirNamesMax` folders and `dirNamesBytes` of names kept, oldest dropped first, one read in flight
+  per folder however long it takes, a failed read never kept and its waiters joining one read of their own,
+  no invalidation), so the check's time never tells a rule spelled in another case that the folder is there,
+  and missing paths in a loop read a folder once in the TTL (`TestCaseVariantCostsWhatMissingDoes`; a
+  folder whose names pass the bound once a request). `/fs` looks before it reads the folder (after, for a
+  path that climbs out of the root, so it keeps its 400), and answers a folder outside the caller's share
+  rules (`VisibleInBrowse`) as a missing one before any listing (`TestFSOutsideScopeIsMissing`). Every other route reads the index,
   which holds the disk's spelling only. `TestCaseVariantRoutes` compares every route on a temp dir that
   ignores case; `TestCaseVariantDiskRoutes` covers the stream and `/fs` on any disk (`listed.read` lists as
   one that ignores case would).
@@ -1508,7 +1510,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **Sharing & access (shares)**: access is via `shares` = named sets of path
   rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library
   (`AllowAll` or specific `Paths`); `Scope.Allows` gates item endpoints,
-  `Scope.VisibleInBrowse` filters `/fs` to a navigable subtree, and
+  `Scope.VisibleInBrowse` filters `/fs` to a navigable subtree (a folder outside it is a 404, as a
+  missing one), and
   `pathFilterSQL` scopes `ListBooks`/`Search` and the player's browse aggregates
   (`People`/`Series` given a `*Scope`, which also pins them to the scope's library;
   nil = the admin's unscoped view). Every content handler authorizes
