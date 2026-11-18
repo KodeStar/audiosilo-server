@@ -175,13 +175,6 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 		} else if err != nil {
 			return err
 		}
-		// A place an Audible account wrote, edited, is no longer Audible's: GET
-		// /bridge/progress leaves the account's own rows out (no echo), so the
-		// edit would never reach Audible and Audible's next place could undo it.
-		// The edit names no device, as an edit's new row (Bridge Phase 4c).
-		if IsAudibleDevice(p.DeviceID) {
-			p.DeviceID = ""
-		}
 		wasFinished := p.Finished
 		if e.Finished != nil {
 			p.Finished = *e.Finished

@@ -997,7 +997,24 @@ func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64,
 		return err
 	}
 	s.written[key] = version
-	return nil
+	return s.ownAudiblePlace(ctx, key)
+}
+
+// ownAudiblePlace names a furthest-only batch's device (an Audible account's,
+// "audible:<account>") on the row whose place it has just written: the guard
+// (migration 0083) takes an Audible device off every row a write gives a place
+// (an insert, a new position or finish), so a place another writer moved never
+// stays the account's, which GET /bridge/progress would never offer to Audible.
+// This statement sets only the device, so the guard leaves it. No other batch
+// names one: its device is its own (/me/listening/sync refuses an Audible id).
+func (s *syncRun) ownAudiblePlace(ctx context.Context, key Ref) error {
+	if !s.b.FurthestOnly {
+		return nil
+	}
+	_, err := s.tx.ExecContext(ctx,
+		`UPDATE progress SET device_id = ?, device_name = ? WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
+		s.b.DeviceID, s.b.DeviceName, s.b.UserID, key.LibraryID, key.Path)
+	return err
 }
 
 // staysWin reports whether a Stay span wins over the row (S1, 0080): its base
@@ -1245,7 +1262,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 			return SyncResult{}, err
 		}
 		s.written[key] = first
-		return SyncResult{Status: statusApplied}, nil
+		return SyncResult{Status: statusApplied}, s.ownAudiblePlace(ctx, key)
 	}
 	// The row's time never moves back (a later save elsewhere stays later).
 	updated := laterStamp(at, stored.updatedAt)
@@ -1306,7 +1323,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 	if takes {
 		s.written[key] = version
 	}
-	return SyncResult{Status: statusApplied}, nil
+	return SyncResult{Status: statusApplied}, s.ownAudiblePlace(ctx, key)
 }
 
 // finishChange is when a finish (or unfinish) happened, as compared with the

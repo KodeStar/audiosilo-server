@@ -4639,10 +4639,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   is the end; an unfinish is `behind`; a finish is any finish (one made at or before the Stay that holds the row is
   `behind`, as any device's is: the Bridge sends a place at the end as a listen and a finish). The device id `audible:<account>` is this route's
   alone: `/me/listening/sync` refuses a batch naming one (400), a legacy PUT naming one (a row echoed back) saves under
-  none, and `EditProgress` clears it on the row it edits (the edit reaches the feed, and Audible's next place can't
-  undo it unseen), as a listening import does on a row it moves on (`importer.mergeProgress`, the device name too;
-  its undo restores Audible's place from `import_progress_prior` under no device either, `progressPrior.restored`, so
-  the feed carries the undo to Audible too). No listening session, `listening_daily` or history row is recorded
+  none, and a row keeps one only while it holds a place that account's sync wrote: the guard (`0083`, server#303, two
+  triggers on `progress`, so no write path can miss it) drops the device and its name from every insert and every
+  update that moves the row's position or finish, and the Audible route names its device again in a statement of
+  its own right after writing its place (`ownAudiblePlace`, setting only the device, which the guard leaves). So an
+  edit that moves Audible's place reaches the feed (Audible's next place can't undo it unseen), as does a listening
+  import moving it on (the planner keeps the row's device; the store drops it), its undo restoring Audible's place
+  from `import_progress_prior` (the feed carries the undo to Audible too), and a moved or joined book's carried row
+  (offered once: the Bridge drops a place within its echo window of the one Audible last gave); a write that leaves
+  the place as it was (an edit naming only dates) keeps the device. No listening session, `listening_daily` or history row is recorded
   (owner decision 2); the
   events are logged with token 0. 200 the Sync v2 answer; 403 `sync_off` (the module or the account's sync off, or
   the account paused: no library), 403 `user_unavailable` (the person disabled, a kid or a demo since:

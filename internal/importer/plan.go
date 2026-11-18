@@ -240,9 +240,10 @@ type mergeResult struct{ changed, moved, finished bool }
 //     "continue listening" as a stamp of now would.
 //   - started_at becomes the earlier of the two, and a finished row with no
 //     finish date takes ABS's. Those alone leave updated_at as it is.
-//   - A row moved on that an Audible account wrote (catalog.IsAudibleDevice)
-//     takes no device and no device name, so GET /bridge/progress carries it
-//     to Audible.
+//   - A row moved on that an Audible account wrote keeps its device here; the
+//     write stores it under none (the store's guard, migration 0083: a place
+//     another writer moved is no longer the account's), so GET
+//     /bridge/progress carries it to Audible.
 //
 // A changed row gets a version above the one it replaces.
 func mergeProgress(have *catalog.Progress, a Progress, m Match, now time.Time) (catalog.Progress, mergeResult) {
@@ -296,12 +297,6 @@ func mergeProgress(have *catalog.Progress, a Progress, m Match, now time.Time) (
 	w.Version = have.Version + 1
 	if r.moved {
 		w.UpdatedAt = abs.UpdatedAt
-		// Moved on, an Audible account's place is no longer Audible's, as in
-		// EditProgress (Bridge Phase 4c); an undo restores it from
-		// import_progress_prior.
-		if catalog.IsAudibleDevice(w.DeviceID) {
-			w.DeviceID, w.DeviceName = "", ""
-		}
 	}
 	return w, r
 }
