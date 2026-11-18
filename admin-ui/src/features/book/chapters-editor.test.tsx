@@ -284,6 +284,40 @@ describe('the chapter editor', () => {
     await waitFor(() => expect(Number(srcOf().get('t'))).toBe(2999));
   });
 
+  it('keeps a seek made while an earlier ask is on its way', async () => {
+    const d = bookDetail();
+    d.files = d.files.map((f) => ({ ...f, format: 'mka', codec: 'opus', direct_playable: false }));
+    mockFetch(routes(d));
+    const { container } = renderApp(URL);
+    const user = await openEditor();
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    const from = () =>
+      Number(
+        new window.URL(
+          container.querySelector('audio')!.getAttribute('src')!,
+          'http://admin.test',
+        ).searchParams.get('t'),
+      );
+    const slider = screen.getByRole('slider');
+    expect(from()).toBe(1200);
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Forward 1 second' }));
+      // The move is asked for, and another is made before that ask lands.
+      act(() => {
+        vi.advanceTimersByTime(250);
+        fireEvent.change(slider, { target: { value: '1500' } });
+      });
+      expect(from()).toBe(1201);
+      expect(slider).toHaveValue('1500');
+      act(() => vi.advanceTimersByTime(250));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(from()).toBe(1500);
+  });
+
   it('puts a transcode back at a row’s start when the row is chosen again', async () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, 'play');
     const d = bookDetail();
@@ -433,9 +467,8 @@ describe('the chapter editor', () => {
     play.mockRestore();
   });
 
-  it('transcodes an MP3 in .mka from the playhead while its remux is still being made', async () => {
-    // The server answers a cold remux with a live transcode from the file's
-    // start, which can't be seeked: no length.
+  // A one-file book of MP3 in .mka, its remux made or not (remux_cached).
+  const mkaDetail = (cached: boolean) => {
     const d = bookDetail({
       chapter_basis: { files: [{ path: '01.mka', size: 48_000_000, duration_ms: 3_000_000 }] },
     });
@@ -445,45 +478,76 @@ describe('the chapter editor', () => {
       format: 'mka',
       codec: 'mp3',
       direct_playable: true,
+      remux_cached: cached,
     }));
     d.chapters = d.chapters?.map((c) => ({ ...c, file_path: `${BOOK_PATH}/01.mka` }));
-    mockFetch(routes(d));
-    const { container } = renderApp(URL);
-    const user = await openEditor();
-    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
-    const audio = container.querySelector('audio')!;
-    const query = () =>
-      new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams;
-    // The remux, as the file is played.
-    expect(query().get('transcode')).toBeNull();
-    Object.defineProperty(audio, 'duration', { value: Infinity, configurable: true });
-    fireEvent.loadedMetadata(audio);
-    // A live stream: the file is asked for as a transcode from the row's start.
-    await waitFor(() => expect(query().get('transcode')).toBe('1'));
-    expect(Number(query().get('t'))).toBe(1200);
-    expect(container.querySelector('audio')).toBe(audio);
-    // And a seek asks for it again from there.
-    await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
-    await waitFor(() => expect(Number(query().get('t'))).toBe(1201));
+    return d;
+  };
+
+  it('transcodes an MP3 in .mka from the playhead until the page says its remux is made', async () => {
+    // The server would answer a cold remux with a live transcode from the
+    // file's start, which can't be seeked: the page says it is cold, whatever
+    // length a browser reports for that stream (Safari's may be finite).
+    let d = mkaDetail(false);
+    const calls = mockFetch(routes(d, { 'GET /admin/libraries/1/book': () => ({ body: d }) }));
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const { container } = renderApp(URL);
+      const user = await openEditor();
+      await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+      await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+      const audio = container.querySelector('audio')!;
+      const query = () =>
+        new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams;
+      expect(query().get('transcode')).toBe('1');
+      expect(Number(query().get('t'))).toBe(1200);
+      // A seek asks for it again from there.
+      await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
+      await waitFor(() => expect(Number(query().get('t'))).toBe(1201));
+
+      // The page is read again while it waits for the copy.
+      const reads = () => calls.filter((c) => c.path === '/admin/libraries/1/book').length;
+      const before = reads();
+      act(() => vi.advanceTimersByTime(5000));
+      await waitFor(() => expect(reads()).toBe(before + 1));
+      expect(query().get('transcode')).toBe('1');
+
+      // Made while it plays: it plays on as the transcode.
+      d = mkaDetail(true);
+      Object.defineProperty(audio, 'paused', { value: false, configurable: true });
+      fireEvent.play(audio);
+      act(() => vi.advanceTimersByTime(5000));
+      await waitFor(() => expect(reads()).toBe(before + 2));
+      expect(query().get('transcode')).toBe('1');
+      // Paused 2.5 s into the transcode: the copy takes over from there.
+      Object.defineProperty(audio, 'paused', { value: true, configurable: true });
+      Object.defineProperty(audio, 'currentTime', {
+        value: 2.5,
+        writable: true,
+        configurable: true,
+      });
+      fireEvent.pause(audio);
+      await waitFor(() => expect(query().get('transcode')).toBeNull());
+      expect(container.querySelector('audio')).toBe(audio);
+      fireEvent.loadedMetadata(audio);
+      expect(audio.currentTime).toBe(1203.5);
+      // No more reads once it is made.
+      const after = reads();
+      act(() => vi.advanceTimersByTime(15_000));
+      expect(reads()).toBe(after);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('plays an MP3 in .mka as its remux once that is made', async () => {
-    const d = bookDetail();
-    d.files = d.files.map((f) => ({
-      ...f,
-      path: `${BOOK_PATH}/01.mka`,
-      format: 'mka',
-      codec: 'mp3',
-      direct_playable: true,
-    }));
-    mockFetch(routes(d));
+    mockFetch(routes(mkaDetail(true)));
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
     await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
     const audio = container.querySelector('audio')!;
-    Object.defineProperty(audio, 'duration', { value: 3000, configurable: true });
+    expect(audio.getAttribute('src')).not.toContain('transcode');
     fireEvent.loadedMetadata(audio);
     // A copy with a length: seeked in place, the row's start set at load.
     expect(audio.currentTime).toBe(1200);
@@ -618,6 +682,50 @@ describe('the chapter editor', () => {
       expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
       await new Promise((r) => setTimeout(r, 300));
       expect(play).toHaveBeenCalledTimes(1);
+    });
+
+    it('loads again on Play after a failed load that left the audio unpaused', async () => {
+      // Chrome leaves paused false after a failed load: Play must not pause it.
+      const { user, audio } = await listen({ ...busy, headers: { 'Retry-After': '0.4' } });
+      Object.defineProperty(audio, 'paused', { value: false, configurable: true });
+      fireEvent.play(audio);
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
+      fireEvent.error(audio);
+      await screen.findByText('The server is busy. Trying again in a moment.');
+      const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause');
+      await user.click(screen.getByRole('button', { name: 'Play' }));
+      expect(pause).not.toHaveBeenCalled();
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+      // Its load has begun: the button pauses it again.
+      fireEvent.loadStart(audio);
+      await user.click(screen.getByRole('button', { name: 'Pause' }));
+      expect(pause).toHaveBeenCalledTimes(1);
+    });
+
+    it('says it can’t play when a new token fails, asking nothing with the old one', async () => {
+      let n = 0;
+      const calls = mockFetch(
+        routes(opus(), {
+          'POST /cast/token': () =>
+            ++n === 1
+              ? { status: 201, body: { token: 'media-tok-1', expires_at: 'x' } }
+              : { status: 500, body: { error: 'down' } },
+          'GET /libraries/1/stream': { status: 401, body: { error: 'unauthorized' } },
+        }),
+      );
+      const { container } = renderApp(URL);
+      const user = await openEditor();
+      await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+      await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+      const audio = container.querySelector('audio')!;
+      // Playing: its stream would load at once if it came back.
+      await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
+      fireEvent.error(audio);
+      expect(await screen.findByText(/The audio didn’t load/)).toBeInTheDocument();
+      expect(n).toBe(2);
+      expect(audio.getAttribute('src')).toBeNull();
+      expect(calls.filter((c) => c.path === '/libraries/1/stream')).toHaveLength(1);
     });
 
     it('mints a new token when the answer is not a busy one', async () => {

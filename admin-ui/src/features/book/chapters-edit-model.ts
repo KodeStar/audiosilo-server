@@ -49,8 +49,8 @@ export interface FileSpan {
   playable: boolean;
   /**
    * An .mka the server plays as its MP3 remux (playable): until that copy is
-   * made, the server answers with a live transcode from the file's start instead,
-   * which can't be seeked (handleStream).
+   * made (AdminFile.remux_cached), the server answers with a live transcode
+   * from the file's start instead, which can't be seeked (handleStream).
    */
   remuxed: boolean;
 }

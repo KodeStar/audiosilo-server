@@ -4594,14 +4594,20 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   transcode is asked for only to play (`preload="none"` unless asked to play): a row chosen or a move made while
   paused starts no ffmpeg, the playhead shown set from the stream's start; one that has played and stays paused
   10 s (`PAUSED_HOLD_MS`) is asked for again from the playhead, not to play, which closes its stream and frees the
-  slot. An MP3 in .mka (`direct_playable` true) the server answers with its live transcode from the file's start
-  (the remux not cached yet, `serveRemuxed`; the `<audio>` reads no finite duration) is played as a transcode
-  from the playhead from then on, until another file is chosen, so its seeks work. Its `<audio>` failing is
+  slot. An MP3 in .mka (`direct_playable` true) whose remux is not cached yet would be answered with a live
+  transcode from the file's start (`serveRemuxed`), which can't be seeked: the book page says per such file
+  whether its copy is made (`files[].remux_cached`, `adminRemuxes`; absent on every other file) and its GET warms
+  the copies not made (`media.FileCache.WarmAll`, as `/item` does), so the editor plays a cold one as a transcode
+  from the playhead, reads the page again every 5 s (`REMUX_POLL_MS`) while that file is chosen, and plays the
+  copy from the playhead once it is made and the audio is not playing (never by the `<audio>`'s duration, which
+  Safari may report finite for a live stream). An ask a seek was made since leaves that seek waiting (`seeks`),
+  and Play after a failed load loads again (Chrome leaves `paused` false then). Its `<audio>` failing is
   looked at before a new token is minted (`transcodeRetryAfter` fetches the same URL and lets the body go): a 503
   with `Retry-After` (no transcode slot free) is asked for again after that wait and played, up to three times
   per row (`BUSY_TRIES`), with no mint, the player saying the server is busy while it waits; any other answer
   mints once, as a stored file's failure does (a transcode asks for no stream with the old token meanwhile, then
-  asks again from where it was, playing if it was); the console offers no
+  asks again from where it was, playing if it was; a mint that fails says it can't play, asking nothing with the
+  old token); the console offers no
   Edit chapters in a podcast library (`ChaptersCard` reads the library's kind). A `chapters.detect` job for a book
   whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, `catalog.DetectRefused` from
   the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list
