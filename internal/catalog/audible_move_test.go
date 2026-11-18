@@ -59,8 +59,10 @@ func TestAudibleTitlesMoveAfterTheirPlaces(t *testing.T) {
 // server#359: a row left at the new path that the move doesn't change is
 // another book's place, never offered to Audible under the moved book's
 // title: its person never played the moved book, or the left row was the
-// newer and won the merge. Its offer position (change_seq) stays where it was.
-// A row the move does carry is offered (above).
+// newer and won the merge. Written after the feed's last row (the person's
+// newest write, as a book just listened to and then replaced is), it is not
+// read by that feed's cursor, nor by a feed that starts afresh. Its next write
+// offers it. A row the move does carry is offered (above).
 func TestAudibleMoveLeavesALeftRowUnoffered(t *testing.T) {
 	t.Parallel()
 	const oldPath, newPath = "Author/Old", "Author/New"
@@ -72,25 +74,36 @@ func TestAudibleMoveLeavesALeftRowUnoffered(t *testing.T) {
 		if tc.played {
 			f.savePlace(t, oldPath, 5000, f.clock.Add(-48*time.Hour))
 		}
-		f.savePlace(t, newPath, 100, f.clock.Add(-time.Hour)) // an earlier book's, left behind
-		seq := func() int64 {
+		acct, err := f.c.AudibleSyncFor(f.ctx, "acct0001")
+		if err != nil {
+			t.Fatal(err)
+		}
+		scopes := []Scope{{LibraryID: f.lib.ID, AllowAll: true}}
+		feed := func(since string) ([]AudibleProgressRow, string) {
 			t.Helper()
-			var n int64
-			if err := f.c.db.QueryRowContext(f.ctx, `SELECT change_seq FROM progress WHERE user_id = ? AND rel_path = ?`,
-				f.user, newPath).Scan(&n); err != nil {
+			rows, next, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, since, 0)
+			if err != nil {
 				t.Fatal(err)
 			}
-			return n
+			return rows, next
 		}
-		before := seq()
+		_, cursor := feed("")                                 // the Bridge's last sync, before the left row was written
+		f.savePlace(t, newPath, 100, f.clock.Add(-time.Hour)) // an earlier book's, left behind
 		if err := f.c.MoveDurableState(f.ctx, f.lib.ID, oldPath, newPath); err != nil {
 			t.Fatal(err)
 		}
 		if p, _ := f.c.GetProgress(f.ctx, f.user, Ref{LibraryID: f.lib.ID, Path: newPath}); p == nil || p.Position != 100 {
 			t.Fatalf("%s: row at the new path = %+v, want the left row", tc.name, p)
 		}
-		if after := seq(); after != before {
-			t.Fatalf("%s: the left row's offer moved from %d to %d", tc.name, before, after)
+		for _, since := range []string{cursor, ""} {
+			if got, _ := feed(since); len(got) != 0 {
+				t.Fatalf("%s: feed from %q after the move = %+v, want the left row never offered", tc.name, since, got)
+			}
+		}
+		// Its next write offers it, as any write does.
+		f.savePlace(t, newPath, 160, f.clock)
+		if got, _ := feed(cursor); len(got) != 1 || got[0].Position != 160 {
+			t.Fatalf("%s: feed after the row's next write = %+v, want it offered", tc.name, got)
 		}
 	}
 }

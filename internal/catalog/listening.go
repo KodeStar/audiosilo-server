@@ -462,13 +462,12 @@ func moveAudibleTitles(ctx context.Context, tx *sql.Tx, libraryID int64, from, i
 
 // leftRow is a progress row at a move's or join's destination, before the
 // carry, of a person with an Audible title matched to a part that moves
-// there: its place and its offer position (change_seq, 0066).
+// there: its place.
 type leftRow struct {
 	user      int64
 	position  float64
 	finished  bool
 	updatedAt string
-	seq       int64
 }
 
 // audibleRowsAt reads, inside tx, the rows already at into (left there by an
@@ -480,27 +479,34 @@ func audibleRowsAt(ctx context.Context, tx *sql.Tx, libraryID int64, froms []Joi
 		args = append(args, f.Path)
 	}
 	return queryRows(ctx, tx, func(rows *sql.Rows, r *leftRow) error {
-		return rows.Scan(&r.user, &r.position, &r.finished, &r.updatedAt, &r.seq)
-	}, `SELECT p.user_id, p.position, p.finished, p.updated_at, p.change_seq FROM progress p
+		return rows.Scan(&r.user, &r.position, &r.finished, &r.updatedAt)
+	}, `SELECT p.user_id, p.position, p.finished, p.updated_at FROM progress p
 	     WHERE p.library_id = ? AND p.rel_path = ?
 	       AND p.user_id IN (SELECT a.user_id FROM audible_titles t JOIN audible_accounts a ON a.account = t.account
 	                          WHERE t.match_library_id = ? AND t.match_path IN (`+placeholders(len(froms))+`))`, args...)
 }
+
+// unofferedSeq is the offer position (change_seq) of a row no feed reads
+// until its next write: below every cursor, a feed's first page included
+// (AudibleProgress reads from change_seq 0), and never a counter value (0066).
+const unofferedSeq = -1
 
 // keepLeftOffers takes back, inside tx after moveAudibleTitles, the offer of
 // each row left at into (audibleRowsAt) that the carry did not change (the
 // same place, finish state and time): the person never played the moved book,
 // or the left row won the carry's merge (a move's newer save, a join's further
 // place). Its place is another book's, which the re-match trigger (0066, 0071)
-// would have offered to Audible under the moved book's titles (server#359); its
-// offer position goes back to where it was, so a feed already past it does not
-// read it again. The row's next write offers it as any write does.
+// would have offered to Audible under the moved book's titles (server#359). Put
+// back where it was, it would still be read by a feed whose cursor is not past
+// it (a row written after the feed's last one, as a book just listened to is,
+// or a feed starting afresh), so it goes below every cursor (unofferedSeq).
+// The row's next write offers it as any write does.
 func keepLeftOffers(ctx context.Context, tx *sql.Tx, libraryID int64, into string, left []leftRow) error {
 	for _, r := range left {
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE progress SET change_seq = ?
 			  WHERE user_id = ? AND library_id = ? AND rel_path = ? AND position = ? AND finished = ? AND updated_at = ?`,
-			r.seq, r.user, libraryID, into, r.position, r.finished, r.updatedAt); err != nil {
+			unofferedSeq, r.user, libraryID, into, r.position, r.finished, r.updatedAt); err != nil {
 			return err
 		}
 	}

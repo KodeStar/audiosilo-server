@@ -4480,9 +4480,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   places (`moveAudibleTitles`, server#303), so the trigger offers the carried place (merged by the carry's rule with a
   row an earlier book left at the new path), never that left-behind row as it stood, and a carry that fails leaves the
   titles where they were; a left-behind row the carry did not change (its person never played the moved book, or it
-  was the newer and won the merge) is another book's place: `keepLeftOffers` puts its `change_seq` back
-  (`audibleRowsAt` read it before the carry), so it is not offered (server#359), and Audible's own place, ahead of it,
-  comes back by the next sync. A row written late with
+  was the newer and won the merge) is another book's place: `keepLeftOffers` sets its `change_seq` to
+  `unofferedSeq` (-1, below every cursor, a feed's first page included: put back where it was, a row written after
+  the feed's last one would still be read), so it is not offered until its next write (server#359), and Audible's own
+  place, ahead of it, comes back by the next sync. A row written late with
   an earlier `updated_at` (an offline backlog, a diverged apply or late finish keeping the later time, a client's
   clock behind) is still fed; the row's own `updated_at` is what the feed sends. Console:
   Account settings... (`account-settings-button.tsx`, renamed from Backup settings) holds the sync switch, the
