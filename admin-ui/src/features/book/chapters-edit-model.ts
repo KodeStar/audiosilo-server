@@ -17,7 +17,10 @@ import { fileName, sortFiles } from './book-model';
 
 /** The server's rules on an edited list (the 400 chapters_invalid details). */
 export const MAX_CHAPTERS = 2000;
-/** Consecutive chapters start at least this far apart (seconds). */
+/**
+ * Consecutive chapters start at least this far apart (seconds), unless both are
+ * files' starts (fixed rows): a file under a second long is still editable.
+ */
 export const MIN_GAP = 1;
 /** A title is 1 to this many bytes of UTF-8. */
 export const MAX_TITLE_BYTES = 200;
@@ -73,6 +76,16 @@ export function fileSpans(files: AdminFile[], bookPath: string, basis: ChapterBa
     return { path: f.path, name: fileName(f.path, bookPath), start: start / 1000, end: at / 1000 };
   });
 }
+
+/**
+ * The spans that start a chapter: all but a last file of no length (one the scan
+ * read no length for), which starts at the book's end, where no chapter can (the
+ * server's rule: catalog snapToFiles).
+ */
+const startingSpans = (spans: FileSpan[]) => {
+  const end = timelineEnd(spans);
+  return spans.filter((s) => s.start < end);
+};
 
 /** The book's length on the timeline (the last file's end). */
 export const timelineEnd = (spans: FileSpan[]) => spans.at(-1)?.end ?? 0;
@@ -148,7 +161,7 @@ export function draftFromChapters(chapters: AdminChapter[], spans: FileSpan[]): 
     }))
     .sort((a, b) => a.start - b.start);
   const own = [...rows];
-  for (const span of spans) {
+  for (const span of startingSpans(spans)) {
     const at = nearest(own, span.start, FILE_START_SLACK);
     if (at) {
       at.start = roundMs(span.start);
@@ -270,12 +283,14 @@ export function validateDraft(rows: DraftRow[], spans: FileSpan[]): Validation {
   const end = timelineEnd(spans);
   const sorted = byStart(rows);
   sorted.forEach((r, i) => {
+    const prev = sorted[i - 1];
     if (r.start < 0 || r.start >= end) out.set(r.key, 'out_of_range');
-    else if (i > 0 && roundMs(r.start - sorted[i - 1].start) < MIN_GAP) out.set(r.key, 'order');
+    else if (prev && !(r.fixed && prev.fixed) && roundMs(r.start - prev.start) < MIN_GAP)
+      out.set(r.key, 'order');
     else if (!titleOk(r.title)) out.set(r.key, 'title');
   });
   const starts = new Set(sorted.map((r) => r.start));
-  const fileStart = spans.some((s) => !starts.has(roundMs(s.start)));
+  const fileStart = startingSpans(spans).some((s) => !starts.has(roundMs(s.start)));
   const order: InvalidDetail[] = ['out_of_range', 'order', 'title'];
   const first = fileStart ? 'file_start' : order.find((d) => [...out.values()].includes(d));
   return { rows: out, first };
@@ -393,7 +408,7 @@ export function rowsFromPaste(
   current: DraftRow[],
 ): DraftRow[] {
   const used = new Set<PastedChapter>();
-  const rows: DraftRow[] = spans.map((span) => {
+  const rows: DraftRow[] = startingSpans(spans).map((span) => {
     const at = nearest(pasted, span.start, MIN_GAP, used);
     if (at) used.add(at);
     const before = pasted.filter((p) => p.start < span.start).at(-1);

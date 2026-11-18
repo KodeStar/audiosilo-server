@@ -8,6 +8,7 @@ import (
 	"math"
 	"slices"
 
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -17,8 +18,8 @@ import (
 // made on. It is the first chapter source (applyChapterSource): above a choice,
 // the community's, the generated ones and the files'. It applies only while the
 // book's files are those (chaptersOnFiles: count, book-relative path, size; in
-// another order its chapters move with their files; a single-file book's one
-// file by size alone, so a renamed file keeps it), placed on them by
+// another order its chapters move with their files; a book of one file, loose
+// or in a folder, by its size alone, so a renamed file keeps it), placed on them by
 // placeOnFiles at the same place in the same file, by the lengths it was made
 // on; on other files it is dormant, never applied to other audio,
 // and the book's chapters come from the next source. No chapter crosses a file:
@@ -37,15 +38,16 @@ const ChapterEditGenerator = "console"
 const (
 	ChapterEditEmpty      = "empty"        // no chapters
 	ChapterEditTooMany    = "too_many"     // over metadata.MaxChapterListEntries
-	ChapterEditOrder      = "order"        // not in time order, at least minChapterGapMS apart
+	ChapterEditOrder      = "order"        // out of order, or under minChapterGapMS apart unless both are files' starts
 	ChapterEditOutOfRange = "out_of_range" // a start before 0 or at or past the book's end
 	ChapterEditTitle      = "title"        // a title metadata.ListChapterTitle refuses
 	ChapterEditFileStart  = "file_start"   // a file's start begins no chapter
 )
 
-// minChapterGapMS is how close two edited chapters may start. The console's
-// editor mirrors these rules and limits (admin-ui chapters-edit-model.ts
-// validateDraft): change both together.
+// minChapterGapMS is how close two edited chapters may start, unless both are
+// files' starts (fixed: a file under a second long is still editable). The
+// console's editor mirrors these rules and limits (admin-ui
+// chapters-edit-model.ts validateDraft): change both together.
 const minChapterGapMS = 1000
 
 // fileStartSnapMS is how far a chapter may start from a file's start and still
@@ -128,17 +130,22 @@ func msSums(n int, length func(int) int64) []int64 {
 }
 
 // snapToFiles moves the chapter start (starts, milliseconds) within
-// fileStartSnapMS of each file's start onto it, and reports whether every file
-// starts a chapter. fileStarts are the files' starts (fileStartsMS without the
-// end). Each file takes the nearest start in reach that no file before it
-// took, so a file shorter than twice fileStartSnapMS never takes the chapter
-// of the file before or after it. A file of no length (one the scan read no
-// length for) starts where the next one does, and the one chapter there starts
-// both, as the console's editor has it.
-func snapToFiles(starts, fileStarts []int64) bool {
-	taken := make([]bool, len(starts))
+// fileStartSnapMS of each file's start onto it, and reports which starts are
+// files' starts now (fixed, by index) and whether every file starts a chapter.
+// fileStarts are the files' starts (fileStartsMS without the end), end where
+// the last one ends. Each file takes the nearest start in reach that no file
+// before it took, so a file shorter than twice fileStartSnapMS never takes the
+// chapter of the file before or after it. A file of no length (one the scan
+// read no length for) starts where the next one does, and the one chapter
+// there starts both, as the console's editor has it; one at the end, after
+// the book's audio, starts none (no chapter starts at the end).
+func snapToFiles(starts, fileStarts []int64, end int64) (fixed []bool, ok bool) {
+	fixed = make([]bool, len(starts))
 	var prev int64
 	for k, fs := range fileStarts {
+		if fs >= end {
+			break
+		}
 		if k > 0 && fs == prev {
 			continue
 		}
@@ -146,7 +153,7 @@ func snapToFiles(starts, fileStarts []int64) bool {
 		best, bestD := -1, int64(0)
 		for i, s := range starts {
 			d := max(s-fs, fs-s)
-			if taken[i] || d > fileStartSnapMS {
+			if fixed[i] || d > fileStartSnapMS {
 				continue
 			}
 			if best < 0 || d < bestD {
@@ -154,11 +161,11 @@ func snapToFiles(starts, fileStarts []int64) bool {
 			}
 		}
 		if best < 0 {
-			return false
+			return nil, false
 		}
-		starts[best], taken[best] = fs, true
+		starts[best], fixed[best] = fs, true
 	}
-	return true
+	return fixed, true
 }
 
 // checkChapterEdit is an edit's chapters as its list stores them (titles
@@ -166,8 +173,9 @@ func snapToFiles(starts, fileStarts []int64) bool {
 // to the next start or the book's end) when they hold on the book's files
 // (in play order), else a *ChapterEditError naming the first rule broken: some
 // chapters, at most metadata.MaxChapterListEntries; each start in the book
-// and each title one a chapter list may hold; every file starting a chapter;
-// the starts in order at least minChapterGapMS apart.
+// and each title one a chapter list may hold; every file starting a chapter
+// (but one of no length at the end); the starts in order at least
+// minChapterGapMS apart, two files' starts only apart.
 func checkChapterEdit(chapters []EditedChapter, files []BookFile) ([]metadata.ChapterListEntry, error) {
 	refuse := func(detail string) ([]metadata.ChapterListEntry, error) {
 		return nil, &ChapterEditError{Detail: detail}
@@ -197,12 +205,16 @@ func checkChapterEdit(chapters []EditedChapter, files []BookFile) ([]metadata.Ch
 		}
 		entries[i].Title = title
 	}
-	if !snapToFiles(starts, fileStarts[:len(files)]) {
+	fixed, ok := snapToFiles(starts, fileStarts[:len(files)], end)
+	if !ok {
 		return refuse(ChapterEditFileStart)
 	}
 	for i := range starts {
-		if i > 0 && starts[i]-starts[i-1] < minChapterGapMS {
-			return refuse(ChapterEditOrder)
+		if i > 0 {
+			gap := starts[i] - starts[i-1]
+			if gap <= 0 || (gap < minChapterGapMS && !(fixed[i] && fixed[i-1])) {
+				return refuse(ChapterEditOrder)
+			}
 		}
 		next := end
 		if i+1 < len(starts) {
@@ -221,13 +233,19 @@ func checkChapterEdit(chapters []EditedChapter, files []BookFile) ([]metadata.Ch
 // its book offset on the files' lengths now (fileStartsMS). So a file that
 // reads a little longer or shorter now (another probe of the same file) moves
 // no chapter within its audio. nil when they don't fit the files: a start out
-// of order or past the end, one at or past its file's end now, or a file
+// of order or past the end, one at or past its file's end now, a file
 // starting no chapter (a start within fileStartSnapMS of a file's start is its
-// first chapter). Pure: no I/O.
+// first chapter), or one the list gave no length that has one now (it starts
+// no chapter of the edit, so its audio would be in none). Pure: no I/O.
 func placeOnFiles(entries []metadata.ChapterListEntry, files []BookFile, listed []int64) []metadata.Chapter {
 	n := len(files)
 	if len(entries) == 0 || n == 0 || len(listed) != n {
 		return nil
+	}
+	for k, f := range files {
+		if listed[k] == 0 && msOf(f.Duration) > 0 {
+			return nil
+		}
 	}
 	at := msSums(n, func(i int) int64 { return listed[i] }) // where each file starts on the list's timeline
 	now := fileStartsMS(files)                              // and on the book's as it is now
@@ -235,7 +253,7 @@ func placeOnFiles(entries []metadata.ChapterListEntry, files []BookFile, listed 
 	for i, e := range entries {
 		starts[i] = e.StartMS
 	}
-	if !snapToFiles(starts, at[:n]) {
+	if _, ok := snapToFiles(starts, at[:n], at[n]); !ok {
 		return nil
 	}
 	out := make([]metadata.Chapter, len(entries))
@@ -269,10 +287,11 @@ func editedChapters(raw string, files []BookFile, b *Book) []metadata.Chapter {
 	if list == nil {
 		return nil
 	}
-	// A single-file book's one file is the book: renamed, it is the book moved
-	// (the edit moved with it: MoveDurableState), the same audio, so its size
-	// alone is compared.
-	if !b.IsFolder && len(list.Files) == 1 && len(files) == 1 {
+	// A book of one file, loose or in its folder, is matched by that file's
+	// size alone: a single-file book's file renamed is the book moved (the edit
+	// moved with it: MoveDurableState), and a one-file folder's renamed in
+	// place is the same audio under another name, as a loose file's would be.
+	if len(list.Files) == 1 && len(files) == 1 {
 		list.Files[0].Path = bookFileName(files[0].RelPath, b.RelPath)
 	}
 	order := listedOrder(list.Files, files, b.RelPath)
@@ -332,7 +351,8 @@ func editableBook(ctx context.Context, q querier, libraryID int64, path string) 
 
 // SaveChapterEdit stores chapters as the book's own list (chapter_edits,
 // replacing any) by userID, made on basis, and rebuilds the book's chapters
-// from it, in one transaction. ErrNotFound when no book is indexed at the
+// from it, in one transaction, cancelling the book's open chapters.detect job
+// (bridge.CancelChaptersEdited). ErrNotFound when no book is indexed at the
 // path, ErrNotBookLibrary in a podcast library, ErrChaptersBasis when basis is
 // not the book's files now, a *ChapterEditError for chapters that don't hold
 // on them (checkChapterEdit).
@@ -362,6 +382,11 @@ func (c *Catalog) SaveChapterEdit(ctx context.Context, libraryID int64, path str
 			 ON CONFLICT(library_id, path) DO UPDATE SET
 			     list = excluded.list, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
 			libraryID, path, string(raw), nullableID(userID), now); err != nil {
+			return err
+		}
+		// A detection queued before the edit would find a list that sits
+		// dormant under it, as a new one is refused now (DetectRefused).
+		if err := bridge.CancelBookJob(ctx, tx, bridge.KindDetectChapters, libraryID, path, bridge.CancelChaptersEdited, c.now()); err != nil {
 			return err
 		}
 		return refreshEffective(ctx, tx, b.ID)

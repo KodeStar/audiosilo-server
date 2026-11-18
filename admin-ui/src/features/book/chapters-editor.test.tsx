@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBookDetail, ChapterEditRequest } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
-import { libraries } from '@/test/fixtures';
+import { libraries, serverInfo } from '@/test/fixtures';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -238,6 +238,26 @@ describe('the chapter editor', () => {
     fireEvent.error(container.querySelector('audio')!);
     expect(await screen.findByText(/The audio didn’t load/)).toBeInTheDocument();
     expect(mints()).toHaveLength(2);
+  });
+
+  it('reads the book’s jobs again after a save: it cancelled a queued detection', async () => {
+    const calls = mockFetch(
+      routes(bookDetail(), {
+        'GET /server': {
+          body: { ...serverInfo, capabilities: { ...serverInfo.capabilities, bridge: true } },
+        },
+        'GET /admin/bridge/jobs': { body: { jobs: [], next_before: 0 } },
+        'PUT /admin/libraries/1/book/chapters': { body: bookDetail() },
+      }),
+    );
+    renderApp(URL);
+    const user = await openEditor();
+    const jobReads = () => calls.filter((c) => c.path === '/admin/bridge/jobs').length;
+    await waitFor(() => expect(jobReads()).toBe(1));
+    await user.type(screen.getByRole('textbox', { name: 'Title of chapter 2' }), '!');
+    await user.click(screen.getByRole('button', { name: 'Save chapters' }));
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    await waitFor(() => expect(jobReads()).toBe(2));
   });
 
   it('asks before discarding unsaved changes', async () => {

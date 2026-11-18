@@ -20,6 +20,7 @@ import {
   titleOk,
   toBookTime,
   toFileTime,
+  timelineEnd,
   validateDraft,
 } from './chapters-edit-model';
 
@@ -238,6 +239,33 @@ describe('validateDraft', () => {
     expect(validateDraft(many, SPANS).first).toBe('too_many');
     // The second file's start is missing.
     expect(validateDraft(rows([0, 'One', true], [40, 'Two']), SPANS).first).toBe('file_start');
+  });
+
+  it('lets two files’ starts be under a second apart, never a chapter of the admin’s own', () => {
+    // A 400 ms file between two others (server#410).
+    const spans = fileSpans(
+      [file('01.mp3', 1, 100), file('02.mp3', 2, 0.4), file('03.mp3', 3, 50)],
+      BOOK,
+      { files: [] },
+    );
+    const fixed = rows([0, 'One', true], [100, 'Sting', true], [100.4, 'Two', true]);
+    expect(validateDraft(fixed, spans).first).toBeUndefined();
+    const own = rows([0, 'One', true], [100, 'Sting', true], [100.4, 'Two', true], [100.9, 'Mine']);
+    expect(Object.fromEntries(validateDraft(own, spans).rows)).toEqual({ k3: 'order' });
+  });
+
+  it('asks no chapter of a last file of no length', () => {
+    // The scan read no length for 03.mp3: it starts at the book's end.
+    const spans = fileSpans(
+      [file('01.mp3', 1, 100), file('02.mp3', 2, 50), file('03.mp3', 3, 0)],
+      BOOK,
+      { files: [] },
+    );
+    const draft = draftFromChapters([chapter(0, '01.mp3', 0, 100, 0)], spans);
+    expect(draft.map((r) => r.start)).toEqual([0, 100]);
+    expect(validateDraft(draft, spans).first).toBeUndefined();
+    const pasted = parseTimestamps('0:00 One\n1:40 Two', timelineEnd(spans));
+    expect(rowsFromPaste(pasted.chapters, spans, draft).map((r) => r.start)).toEqual([0, 100]);
   });
 
   it('counts a title’s bytes, not its characters', () => {

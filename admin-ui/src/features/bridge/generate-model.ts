@@ -536,8 +536,9 @@ export function parkHint(
 
 /**
  * The reasons the server writes on a job it cancels itself, in plain words
- * (internal/bridge/jobs.go: the kinds' `cancelsOpen`, CancelMoved and
- * CancelReplacedRequest; internal/bridge/audible.go: an Audible poll's
+ * (internal/bridge/jobs.go: the kinds' `cancelsOpen`, CancelMoved,
+ * CancelReplacedRequest, CancelModuleOff, and a chapter detection's
+ * CancelChaptersEdited and CancelChaptersChosen; internal/bridge/audible.go: an Audible poll's
  * CancelAudibleRemoved and CancelAudiblePaused, an Audible sync's
  * CancelAudibleSyncOff; also on a working job it asked
  * to stop, kept through the Bridge's reports): shown as a sentence. Any other
@@ -553,6 +554,8 @@ const SERVER_CANCEL_REASONS: readonly string[] = [
   'the book moved onto another job of this kind',
   'a newer request replaced it',
   'its module was turned off',
+  "the book's chapters were edited in the console",
+  'a chapter source was chosen for the book',
   'the Audible account was removed',
   "the Audible account's library was deleted",
   'sync with Audible was turned off for the account',

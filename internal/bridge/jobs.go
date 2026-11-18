@@ -611,13 +611,15 @@ var ErrDescribeOpen = errors.New("a description job is open for the book")
 // ErrChaptersChosen is a chapters.detect job for a book whose chapter source
 // an admin chose (the files' or the community's): the chapters it would find
 // stand in only when none was chosen, so they would never be used (a 409
-// chapters_chosen). The api checks it, as the catalog holds the choice.
+// chapters_chosen). catalog.DetectRefused answers it, as the catalog holds
+// the choice; making one cancels an open job (CancelChaptersChosen).
 var ErrChaptersChosen = errors.New("an admin chose the book's chapter source")
 
 // ErrChaptersEdited is a chapters.detect job for a book whose chapters an
 // admin edited, while the edit applies (catalog.ChaptersFromEdited): an edit
 // stands over every other source, so a found list would sit dormant under it
-// (a 409 chapters_edited). The api checks it, as the catalog holds the edit.
+// (a 409 chapters_edited). catalog.DetectRefused answers it, as the catalog
+// holds the edit; saving one cancels an open job (CancelChaptersEdited).
 var ErrChaptersEdited = errors.New("an admin edited the book's chapters")
 
 // ErrCannotContribute is a job that files to the community (ModuleFor names
@@ -1741,11 +1743,20 @@ const (
 	// CancelModuleOff: the Contributions module was turned off while the
 	// Bridge worked on a job that only files to the community (stopsShare).
 	CancelModuleOff = "its module was turned off"
+	// CancelChaptersEdited: an admin saved the book's own chapters
+	// (catalog.SaveChapterEdit) while a chapters.detect job was open: the
+	// list it finds would sit dormant under the edit (ErrChaptersEdited).
+	CancelChaptersEdited = "the book's chapters were edited in the console"
+	// CancelChaptersChosen: an admin chose the book's chapter source (the
+	// files' or the community's) while a chapters.detect job was open: the
+	// list it finds would never be used (ErrChaptersChosen).
+	CancelChaptersChosen = "a chapter source was chosen for the book"
 )
 
 // IsCancelReason reports whether text is one of the server's own cancel
 // reasons: the kinds' cancelsOpen, CancelMoved, CancelReplacedRequest,
-// CancelModuleOff or an Audible account's job's (CancelAudibleRemoved,
+// CancelModuleOff, a chapter detection's (CancelChaptersEdited,
+// CancelChaptersChosen) or an Audible account's job's (CancelAudibleRemoved,
 // CancelAudiblePaused, CancelAudibleSyncOff).
 func IsCancelReason(text string) bool {
 	return slices.Contains(cancelReasons(), text)
@@ -1755,7 +1766,8 @@ func IsCancelReason(text string) bool {
 // copy (SERVER_CANCEL_REASONS) is checked against (TestCancelReasonsMatchConsole).
 // The kinds are fixed at init, so it is built once.
 var cancelReasons = sync.OnceValue(func() []string {
-	out := []string{CancelMoved, CancelReplacedRequest, CancelModuleOff, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff}
+	out := []string{CancelMoved, CancelReplacedRequest, CancelModuleOff, CancelChaptersEdited, CancelChaptersChosen,
+		CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff}
 	for _, spec := range kinds {
 		out = slices.AppendSeq(out, maps.Values(spec.cancelsOpen))
 	}
@@ -1780,6 +1792,15 @@ func cancelOpenTx(ctx context.Context, tx *sql.Tx, key, now, reason string) erro
 		        cancel_requested = 1, updated_at = ?2
 		  WHERE dedupe_key = ?1 AND state IN `+claimedStatesSQL, key, now, reason)
 	return err
+}
+
+// CancelBookJob cancels the open job of kind for the book at (libraryID,
+// path) inside tx, a catalog write that leaves it nothing to do
+// (CancelChaptersEdited, CancelChaptersChosen), as cancelOpenTx does: at once
+// when it is queued or parked, else at the Bridge's next report. reason is its
+// error; no open job is no change.
+func CancelBookJob(ctx context.Context, tx *sql.Tx, kind string, libraryID int64, path, reason string, now time.Time) error {
+	return cancelOpenTx(ctx, tx, DedupeKey(kind, &libraryID, &path), at(now), reason)
 }
 
 // MoveJobs carries a book's jobs to its new path inside a move's transaction

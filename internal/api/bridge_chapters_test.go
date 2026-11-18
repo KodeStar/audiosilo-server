@@ -294,8 +294,19 @@ func TestBridgeDetectRefusedForEditedChapters(t *testing.T) {
 		t.Fatalf("revert: %d %s", resp.StatusCode, body)
 	}
 	// Allowed: the edit reverted.
-	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
+	resp, body = b.queueDetect(t, b.adminTok, mistbornBook, `{}`)
+	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("detect after the revert: %d %s, want 201", resp.StatusCode, body)
+	}
+	decodeInto(t, body, &job)
+	// An edit saved while it waits cancels it: the list it would find sits
+	// under the edit.
+	if resp, body := b.do(t, "PUT", editURL, b.adminTok, edit); resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit again: %d %s", resp.StatusCode, body)
+	}
+	if got, err := b.api.bridge.Job(ctx, job.ID); err != nil || got.State != bridge.StateCancelled ||
+		got.Error != bridge.CancelChaptersEdited {
+		t.Fatalf("detect queued before the edit: %+v, %v; want cancelled by the edit", got, err)
 	}
 }
 

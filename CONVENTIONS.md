@@ -3144,10 +3144,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `sidecars.generate` job is open for the book (that run finds them itself), 409 `describe_open`
   (`ErrDescribeOpen`) while a `sidecars.describe` job is (both rewrite the book's bridge.json on the Bridge;
   a describe is refused 409 `detect_open` while a detect job is open, the other way round), and 409
-  `chapters_chosen` (`ErrChaptersChosen`, checked by the api's queue handler from `catalog.ChapterChoice`)
+  `chapters_chosen` (`ErrChaptersChosen`, answered by `catalog.DetectRefused`, the queue handler's one check)
   for a book whose chapter source an admin chose (files or community: a found list stands in only with no
   choice, so it would never be used), and 409 `chapters_edited` (`ErrChaptersEdited`) for a book whose edited
-  chapters apply (Edited chapters); a NEW `sidecars.generate` is refused 409 `detect_open` (`ErrDetectOpen`)
+  chapters apply (Edited chapters); making such a choice or saving an edit cancels the book's open detect job in
+  its transaction (`bridge.CancelBookJob`, reasons `CancelChaptersChosen` "a chapter source was chosen for the
+  book" and `CancelChaptersEdited` "the book's chapters were edited in the console", server#410); a NEW `sidecars.generate` is refused 409 `detect_open` (`ErrDetectOpen`)
   only while a detect job is queued, claimed or running, since cancelling it would throw its transcription
   away and the generate run after it reuses it, while a PARKED one (`chapters_not_detected`, a person's
   decision) is cancelled by the new generate job in its transaction ("it finds the chapters itself"), as
@@ -4541,13 +4543,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it was made on (book-relative path, size, `duration_ms`). It is the FIRST source: `applyChapterSource` reads it
   before the choice (edited > choice/community > generated > files) and uses it (`applyEdited`) while its files are
   the book's (`listedOrder`, as a chapters.json: path and size; in another play order its chapters move with their
-  files, `chaptersInOrder`; a single-file book's one file by size alone, so a renamed file keeps its edit), placed
+  files, `chaptersInOrder`; a book of one file, loose or in its folder, by that file's size alone, so a renamed
+  file keeps its edit, server#410), placed
   by the pure `placeOnFiles` (each chapter in the file its start falls in, at the same place in it by the lengths the
   list was made on, to the next start or the file's end, its book offset on the files' lengths now; so another probe
   reading a file a little longer or shorter moves no chapter in its audio, and one at or past its file's end now
-  leaves the edit dormant; a start within 50 ms of a file's start is that file's first chapter, each file taking the
+  leaves the edit dormant, as does a file the list gave no length that reads one now (its audio would be in no
+  chapter); a start within 50 ms of a file's start is that file's first chapter, each file taking the
   nearest start no file before it took (`snapToFiles`, so a file under 100 ms never takes its neighbour's; a file
-  of no length shares the next file's, as in the console's editor); file starts are the
+  of no length shares the next file's, as in the console's editor, and one at the end starts none); file starts are the
   sums of the files' lengths in whole milliseconds, `fileStartsMS`, as the console sums the basis); on other files it is dormant (the next source's
   chapters, never applied to other audio) and applies again when the files come back. `chapters_source = "edited"`
   (`ChaptersFromEdited`, never a choice), `chapters_fit` = `listFitKey(list, "", files)`. No chapter crosses a file:
@@ -4559,7 +4563,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the admin row `edited`. Routes (admin only, audited `book.chapters_edited` / `book.chapters_reverted`): `PUT
   /admin/libraries/{id}/book/chapters?path=` `{"basis": <the page's chapter_basis>, "chapters": [{"start": <whole-book
   s, kept to the ms>, "title"}]}` -> the book page; 400 `{"error":"chapters_invalid","code":"chapters_invalid",
-  "detail": empty|too_many (> 2000)|order (< 1 s apart or out of order)|out_of_range (< 0 or at or past the end)|title
+  "detail": empty|too_many (> 2000)|order (< 1 s apart, unless both are files' starts, so a file under a second
+  is editable; or out of order)|out_of_range (< 0 or at or past the end)|title
   (1-200 bytes trimmed, no control character: `metadata.ListChapterTitle`, the chapters.json rule)|file_start}`; 409
   `chapters_basis` when the basis is not the book's files now (path, size, `duration_ms`, in play order); 409
   `not_book_library` in a podcast library; 404 no book; a body without `basis` or with an unknown field is 400.
@@ -4569,9 +4574,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   old app shows ordinary chapters). The editor's player streams the chosen row's file with an editor token
   (`POST /cast/token` with `"editor": true`, Cast tokens above), never the session token; the console offers no
   Edit chapters in a podcast library (`ChaptersCard` reads the library's kind). A `chapters.detect` job for a book
-  whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, checked by the api's queue
-  handler from the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list
-  would sit under the edit, never used. Only the console queues detect jobs (the player never does): Health's Detect
+  whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, `catalog.DetectRefused` from
+  the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list
+  would sit under the edit, never used; saving an edit cancels an open one (`bridge.CancelChaptersEdited`). Only the console queues detect jobs (the player never does): Health's Detect
   dialog passes such a book over (`skipNotes`) and `errors.ts` words the code.
 - ffprobe is optional; code paths must degrade gracefully when it is absent (with it, most files
   are read in-process: see In-process probe)

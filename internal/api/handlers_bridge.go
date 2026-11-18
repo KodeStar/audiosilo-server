@@ -943,19 +943,12 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if nj.Kind == bridge.KindDetectChapters {
-			choice, err := a.cat.ChapterChoice(r.Context(), book.LibraryID, book.RelPath)
-			if err != nil {
-				a.writeCatalogError(w, err, "bridge queue failed", "could not read the book's chapter choice")
-				return
-			}
-			if choice != "" {
-				a.writeBridgeError(w, bridge.ErrChaptersChosen, "bridge queue failed")
-				return
-			}
-			// A dormant edit (other files) is no refusal: the book's
-			// chapters come from the next source, a found list among them.
-			if book.ChaptersSource == catalog.ChaptersFromEdited {
-				a.writeBridgeError(w, bridge.ErrChaptersEdited, "bridge queue failed")
+			if err := a.cat.DetectRefused(r.Context(), book.LibraryID, book.RelPath); err != nil {
+				if errors.Is(err, bridge.ErrChaptersChosen) || errors.Is(err, bridge.ErrChaptersEdited) {
+					a.writeBridgeError(w, err, "bridge queue failed")
+				} else {
+					a.writeBookError(w, err, "bridge queue failed", "could not read the book's chapters")
+				}
 				return
 			}
 		}
