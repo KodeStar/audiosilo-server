@@ -782,3 +782,56 @@ func TestFoldsGetTheirOwnBudget(t *testing.T) {
 		t.Fatalf("folds %v: the second fold had no time left", folds)
 	}
 }
+
+// A claimed podcast.subscribe whose stored params can't be read can never be
+// handed out with its feed: rather than answering the claim an error (a 500)
+// and waiting out its lease, it ends at its first claim with its own reason
+// (subscribeParamsUnread), lets go of its private feed URL, logs one warning,
+// and the claim hands out the job behind it, or none.
+func TestSubscribeClaimUnreadableParamsFailed(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	logged := logTo(q)
+	damaged, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, "https://example.com/private?auth=SECRET123", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	behind, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, "https://example.com/public.xml", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	damage := func(id int64) {
+		t.Helper()
+		if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET params = '{' WHERE id = ?`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	damage(damaged.ID)
+	if got, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || got == nil || got.ID != behind.ID {
+		t.Fatalf("claim = %+v, %v; want the subscribe behind it", got, err)
+	}
+	if stored, err := q.Job(ctx, damaged.ID); err != nil || stored.State != StateFailed || stored.Attempts != 1 ||
+		stored.Error != subscribeParamsUnread {
+		t.Fatalf("damaged subscribe = %+v, %v; want it failed at its first claim, naming its params", stored, err)
+	}
+	if _, held := q.privateURLs[damaged.ID]; held {
+		t.Fatal("the ended subscribe's private feed URL is still held")
+	}
+	if out := logged.String(); strings.Count(out, "\n") != 1 || !strings.Contains(out, "level=WARN") ||
+		!strings.Contains(out, fmt.Sprintf("job=%d", damaged.ID)) || strings.Contains(out, "SECRET123") {
+		t.Fatalf("logged = %q; want one warning naming the job", out)
+	}
+
+	// Nothing behind it: the claim answers no job, not an error.
+	last, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, "https://example.com/other.xml", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	damage(last.ID)
+	if got, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || got != nil {
+		t.Fatalf("claim = %+v, %v; want none", got, err)
+	}
+	if stored, err := q.Job(ctx, last.ID); err != nil || stored.State != StateFailed || stored.Error != subscribeParamsUnread {
+		t.Fatalf("last subscribe = %+v, %v; want it failed", stored, err)
+	}
+}

@@ -1316,6 +1316,20 @@ func (s *Service) failUnsentClaim(ctx context.Context, claim *Job, reason string
 		 lease_until=NULL,updated_at=?,finished_at=?`+unsentClaimSQL, reason, now, now)
 }
 
+// endUnfillableClaim ends claim, a job no claim could fill now (an
+// audible.sync, fillAudibleSync, or a podcast.subscribe, claimPriority), with
+// reason (failUnsentClaim) and logs its read error (readErr) at warn with msg
+// and attrs, once it has ended. A settle that fails leaves the claim to its
+// lease and answers both errors, so the claim's own error reports them.
+func (s *Service) endUnfillableClaim(ctx context.Context, claim *Job, reason string, readErr error, msg string,
+	attrs ...any) error {
+	if err := s.failUnsentClaim(ctx, claim, reason); err != nil {
+		return errors.Join(readErr, err)
+	}
+	s.Log.Warn(msg, append([]any{"job", claim.ID, "err", readErr}, attrs...)...)
+	return nil
+}
+
 // unsentClaimSQL picks an undelivered claim (its id, attempts, lease and claim
 // time follow the update's own args): the state, attempt and lease identify the
 // untouched claim, as any Bridge report either changes its state or renews its

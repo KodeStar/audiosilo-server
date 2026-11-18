@@ -617,11 +617,11 @@ func (s *Service) syncFillOK(account string) {
 // A job the fill ended answers no job and no error (the claim goes on to the
 // job behind it, claimPriority), as a lost private request does: the server
 // settled it, so the Bridge has nothing to back off from. The read's error is
-// logged instead (Log), once, as the job ends (endUnfillableSync).
+// logged instead (Log), once, as the job ends (endUnfillableClaim).
 func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 	account, err := AudibleAccountOf(*j)
 	if err != nil {
-		return nil, s.endUnfillableSync(ctx, j, syncParamsUnread,
+		return nil, s.endUnfillableClaim(ctx, j, syncParamsUnread,
 			fmt.Errorf("audible.sync %d: params: %w", j.ID, err), "audible: a sync ended, its stored params unreadable")
 	}
 	params, err := s.ClaimAudibleSync(ctx, account)
@@ -629,7 +629,7 @@ func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 		if ctx.Err() == nil && s.syncFillFailed(account, j.ID) > maxUnspentSyncFills {
 			err = fmt.Errorf("audible.sync %d: titles: %w", j.ID, err)
 			if j.Attempts >= MaxAttempts {
-				return nil, s.endUnfillableSync(ctx, j, syncTitlesUnread, err,
+				return nil, s.endUnfillableClaim(ctx, j, syncTitlesUnread, err,
 					"audible: a sync ended on its last attempt, its titles unread", "account", account)
 			}
 			return nil, err
@@ -639,19 +639,6 @@ func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 	s.syncFillOK(account)
 	j.Params = params
 	return j, nil
-}
-
-// endUnfillableSync ends claim, an audible.sync no claim could fill now, with
-// reason (failUnsentClaim) and logs its read error (readErr) at warn with msg
-// and attrs, once it has ended. A settle that fails leaves the claim to its
-// lease and answers both errors, so the claim's own error reports them.
-func (s *Service) endUnfillableSync(ctx context.Context, claim *Job, reason string, readErr error, msg string,
-	attrs ...any) error {
-	if err := s.failUnsentClaim(ctx, claim, reason); err != nil {
-		return errors.Join(readErr, err)
-	}
-	s.Log.Warn(msg, append([]any{"job", claim.ID, "err", readErr}, attrs...)...)
-	return nil
 }
 
 // AudibleAccountOf reads an audible.sync's or audible.poll's account (both

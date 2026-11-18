@@ -3460,7 +3460,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   an empty URL (a follow that restores a private show's URL is private, whatever its flag says),
   display labels are redacted, a restart expires unclaimed requests (so does deleting the
   requester's account, `requested_by` NULL: `lostPrivateRequests`, server#179), and deleting a library keeps only
-  the URLs of open subscribes (`bridge.PruneSecrets`, under Subscribe's lock, run to the end). Podcast
+  the URLs of open subscribes (`bridge.PruneSecrets`, under Subscribe's lock, run to the end). A subscribe
+  whose stored params can't be read (a damaged row; `lostPrivateRequests` passes it by) ends at its first
+  claim, "The server could not read which feed this subscription is for.", and the claim goes on to the job
+  behind it (`claimPriority`, `endUnfillableClaim`: one warning, never a 500), as audible.sync's does. Podcast
   errors, progress and results are redacted before storage; their notifications carry codes and show names
   only (see Backups, audit log, notifications: `podcast_feed_failing`). The module scheduler
   folds ended outcomes idempotently, wakes on job endings and sweeps every minute, then queues
@@ -4684,7 +4687,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   could not read this account's titles." rather than the lapsed lease's Bridge one, and a sync whose stored params
   can't be read ends at its first claim, "The server could not read which Audible account this sync is for."; a
   claim that ended a sync so goes on to the job behind it (`claimPriority`: 200 that job, else 204 or its wait),
-  never a 500, and logs the read's error once at warn once the job has ended (`endUnfillableSync`, `bridge.Service.Log`: job, the account when read; the ending's fold reads no params, `FoldAudibleSync`); the job as stored keeps `{account}`, as a private feed URL is injected at claim),
+  never a 500, and logs the read's error once at warn once the job has ended (`endUnfillableClaim`, `bridge.Service.Log`: job, the account when read; the ending's fold reads no params, `FoldAudibleSync`); the job as stored keeps `{account}`, as a private feed URL is injected at claim),
   internal, quiet, `ModuleFor` audible, deduped per account, `promotes`, only the newest ended kept
   (`pruneAudibleEnded`). A console change to which titles sync (`PATCH .../titles/...` `{rejected}` or `{no_sync}`)
   or turning sync on queues the account's sync at once (`audible.SyncNow`, `catalog.AudibleSyncQueueable`: the same

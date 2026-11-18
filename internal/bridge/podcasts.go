@@ -515,12 +515,15 @@ func (s *Service) offlineLasted(offline bool) bool {
 // server doesn't hold (it restarted since they were asked for), or whose
 // requester's account was deleted since (requested_by is set NULL: a private
 // feed is that person's credential, never followed for nobody), read through q.
+// One whose params can't be read is passed by (json_valid first, in a CASE so
+// json_extract never reads it): its claim ends it (claimPriority), where a
+// malformed row here would fail every claim.
 func (s *Service) lostPrivateRequests(ctx context.Context, q rowsQuerier) ([]int64, error) {
 	type request struct {
 		id       int64
 		orphaned bool
 	}
-	rows, err := q.QueryContext(ctx, `SELECT id, requested_by IS NULL FROM bridge_jobs WHERE kind=? AND state=? AND json_extract(params,'$.private')=1`, KindPodcastSubscribe, StateQueued)
+	rows, err := q.QueryContext(ctx, `SELECT id, requested_by IS NULL FROM bridge_jobs WHERE kind=? AND state=? AND CASE WHEN json_valid(params) THEN json_extract(params,'$.private') END=1`, KindPodcastSubscribe, StateQueued)
 	if err != nil {
 		return nil, err
 	}
@@ -759,13 +762,26 @@ func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job,
 
 // claimPriority claims the next job (claimSecret), then gives a claimed
 // audible.sync its titles (fillAudibleSync) outside the podcast secrets' lock.
-// A sync the fill ended instead (failed, so never claimed again) hands out the
-// job behind it.
+// A podcast.subscribe whose stored params can't be read (not the JSON its
+// queueing stored) can never be handed out with its feed, so its first claim
+// ends it (subscribeParamsUnread), as one of audible.sync's does. A job ended
+// so (failed, never claimed again) hands out the job behind it.
 func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
 	for {
-		j, err := s.claimSecret(ctx, token, kinds, minPriority)
-		if err != nil || j == nil || j.Kind != KindAudibleSync || s.ClaimAudibleSync == nil {
+		j, unread, err := s.claimSecret(ctx, token, kinds, minPriority)
+		if err != nil || j == nil {
 			return j, err
+		}
+		if unread != nil {
+			if err := s.endUnfillableClaim(ctx, j, subscribeParamsUnread,
+				fmt.Errorf("podcast.subscribe %d: params: %w", j.ID, unread),
+				"podcasts: a subscribe ended, its stored params unreadable"); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if j.Kind != KindAudibleSync || s.ClaimAudibleSync == nil {
+			return j, nil
 		}
 		if j, err = s.fillAudibleSync(ctx, j); j != nil || err != nil {
 			return j, err
@@ -773,19 +789,25 @@ func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string
 	}
 }
 
+// subscribeParamsUnread is the error of a podcast.subscribe ended at its claim
+// because the params stored when it was queued can't be read (claimPriority).
+const subscribeParamsUnread = "The server could not read which feed this subscription is for."
+
 // claimSecret claims the next job, a private podcast.subscribe with its feed
-// URL put back from memory, under secretFlowMu.
-func (s *Service) claimSecret(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
+// URL put back from memory, under secretFlowMu. A podcast.subscribe whose
+// params can't be read comes back as stored, with their read error (unread),
+// for claimPriority to end outside the lock.
+func (s *Service) claimSecret(ctx context.Context, token int64, kinds []string, minPriority *int32) (j *Job, unread, err error) {
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
-	j, err := s.claimStored(ctx, token, kinds, minPriority)
+	j, err = s.claimStored(ctx, token, kinds, minPriority)
 	if err != nil || j == nil {
-		return j, err
+		return j, nil, err
 	}
 	if j.Kind == KindPodcastSubscribe {
 		var p SubscribeParams
 		if err := json.Unmarshal(j.Params, &p); err != nil {
-			return nil, err
+			return j, err, nil
 		}
 		if p.Private {
 			s.secretMu.Lock()
@@ -794,7 +816,7 @@ func (s *Service) claimSecret(ctx context.Context, token int64, kinds []string, 
 			j.Params, err = json.Marshal(p)
 		}
 	}
-	return j, err
+	return j, nil, err
 }
 
 var ErrIdentityChanged = errors.New("podcast identity changed")

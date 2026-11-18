@@ -62,7 +62,7 @@ type Service struct {
 	// the params as queued.
 	ClaimAudibleSync func(ctx context.Context, account string) (json.RawMessage, error)
 	// Log, when set (at wiring, before the first request), hears what a claim
-	// settles without answering an error (fillAudibleSync ending a sync it
+	// settles without answering an error (endUnfillableClaim ending a job it
 	// can't fill); New leaves it discarding.
 	Log *slog.Logger
 	// syncFills counts, per Audible account, the claims in a row that failed
