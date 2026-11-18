@@ -283,9 +283,12 @@ var plainLooks = belowLooks{
 }
 
 // resolveBelow is resolveExisting(p) for a path p under rootAbs, a root with no
-// symlinks in it: the names below the root are looked at one at a time (lk), a
+// symlinks in it (a path inside the root is; one out of it is some path out of
+// it): the names below the root are looked at one at a time (lk), a
 // link resolved where it is met (one out of the root ends the walk there, its
-// target returned, nothing below it looked at) and the walk going on from its
+// own target returned, a path out of the root, nothing below it looked at:
+// every path through such a link is refused, one that would come back into
+// the root through a folder above it too) and the walk going on from its
 // target, down to the first name that isn't there (it and the names after it
 // kept as they are; there false). With lk.listed, a name is looked at only
 // once its folder lists it as given. EvalSymlinks would Lstat every name from
@@ -317,7 +320,11 @@ func resolveBelow(rootAbs, p string, lk belowLooks) (target string, there bool, 
 				return rest(), false, err
 			}
 			if !withinRoot(rootAbs, resolved) {
-				return filepath.Join(append([]string{resolved}, names[i+1:]...)...), true, nil
+				// The target alone, never joined with the names after it: below
+				// a link to a folder above the root ("up/<root>/Book/link/x")
+				// they would read as a path back inside it, its links not
+				// looked at.
+				return resolved, true, nil
 			}
 			next = resolved
 		}

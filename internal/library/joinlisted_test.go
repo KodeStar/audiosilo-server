@@ -107,22 +107,25 @@ func TestSafeJoinListedVariantCostsWhatMissingDoes(t *testing.T) {
 
 // TestSafeJoinListedLinkOutOfRoot (security): a path through a link out of
 // the root is ErrOutsideRoot whatever the folder it points to holds, and
-// nothing below the link is listed or looked at. Allowed: a link to a folder
-// inside the root is followed, as SafeJoin follows it; a dangling one is a
-// path with nothing there.
+// nothing below the link is listed or looked at, a path that comes back into
+// the root through a link to the folder holding it ("Up/lib/...") too: a link
+// out of the root further down it would go unlooked at. Allowed: a link to a
+// folder inside the root is followed, as SafeJoin follows it; a dangling one
+// is a path with nothing there.
 func TestSafeJoinListedLinkOutOfRoot(t *testing.T) {
 	t.Parallel()
-	root, err := filepath.EvalSymlinks(t.TempDir())
+	base, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	root := filepath.Join(base, "lib")
 	outside, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, outside, "present/01.mp3", []byte("x"))
 	writeFile(t, root, "Book/01.mp3", []byte("x"))
-	for link, to := range map[string]string{"Out": outside, "In": filepath.Join(root, "Book"), "Gone": filepath.Join(root, "nope")} {
+	for link, to := range map[string]string{"Out": outside, "In": filepath.Join(root, "Book"), "Gone": filepath.Join(root, "nope"), "Up": base} {
 		if err := os.Symlink(to, filepath.Join(root, link)); err != nil {
 			t.Skipf("symlinks unsupported on this platform: %v", err)
 		}
@@ -138,13 +141,14 @@ func TestSafeJoinListedLinkOutOfRoot(t *testing.T) {
 		}
 	)
 	ctx := t.Context()
-	for _, rel := range []string{"Out", "Out/present", "Out/present/01.mp3", "Out/absent", "Out/absent/01.mp3"} {
+	for _, rel := range []string{"Out", "Out/present", "Out/present/01.mp3", "Out/absent", "Out/absent/01.mp3",
+		"Up", "Up/lib/Book/01.mp3", "Up/lib/Out/present/01.mp3"} {
 		if _, _, err := SafeJoinListed(ctx, root, rel, time.Second, names); !errors.Is(err, ErrOutsideRoot) {
 			t.Errorf("SafeJoinListed(%+q) err = %v, want ErrOutsideRoot", rel, err)
 		}
 	}
 	for _, d := range dirs {
-		if strings.HasPrefix(d, outside) {
+		if !withinRoot(root, d) {
 			t.Errorf("listed %q, a folder out of the root", d)
 		}
 	}

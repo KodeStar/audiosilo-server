@@ -327,12 +327,17 @@ func TestListDirIsBrowseFSUnpaged(t *testing.T) {
 // resolveBelow resolves a path under a resolved root as resolveExisting does
 // (links inside and out, deep ones, dangling ones, missing names, a file taken
 // for a folder), and SafeJoin built on it allows and refuses the same paths.
+// Security: a path through a link out of the root is refused wherever the
+// names after the link lead, back into the root through a folder above it
+// too ("A/B/up/<root>/..."), where a link out of the root further down would
+// otherwise go unlooked at.
 func TestResolveBelowIsResolveExisting(t *testing.T) {
 	t.Parallel()
-	root, err := filepath.EvalSymlinks(t.TempDir())
+	base, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	root := filepath.Join(base, "lib")
 	outside := t.TempDir()
 	writeFile(t, outside, "secret/s.txt", []byte("x"))
 	writeFile(t, root, "A/B/C/f.mp3", []byte("x"))
@@ -368,11 +373,18 @@ func TestResolveBelowIsResolveExisting(t *testing.T) {
 		"A/B/in/B/out/s.txt":            false,
 		"A/B/C/rel/out/s.txt":           false,
 		"A/B/C/missing/../../out/s.txt": false,
+		// "up" is the folder holding the root: back in through it.
+		"A/B/up/lib/A/B/out/s.txt": false,
+		"A/B/up/lib/A/B/C/f.mp3":   false,
 	}
 	for rel, allowed := range cases {
 		full := filepath.Join(root, filepath.FromSlash(rel))
-		if got, _, _ := resolveBelow(root, full, plainLooks); got != resolveExisting(full) {
-			t.Errorf("resolveBelow(%q) = %q, resolveExisting = %q", rel, got, resolveExisting(full))
+		got, _, _ := resolveBelow(root, full, plainLooks)
+		if want := resolveExisting(full); allowed && got != want {
+			t.Errorf("resolveBelow(%q) = %q, resolveExisting = %q", rel, got, want)
+		}
+		if !allowed && withinRoot(root, got) {
+			t.Errorf("resolveBelow(%q) = %q, inside the root; want a path out of it", rel, got)
 		}
 		if _, err := SafeJoin(root, rel); (err == nil) != allowed {
 			t.Errorf("SafeJoin(%q) err = %v, want allowed %v", rel, err, allowed)
