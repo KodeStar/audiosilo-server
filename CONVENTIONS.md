@@ -3148,9 +3148,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   for a book whose chapter source an admin chose (files or community: a found list stands in only with no
   choice, so it would never be used), and 409 `chapters_edited` (`ErrChaptersEdited`) for a book whose edited
   chapters apply (Edited chapters); making such a choice or saving an edit cancels the book's detect job in
-  its transaction only while it is still QUEUED (`bridge.CancelQueuedBookJob`, reasons `CancelChaptersChosen`
+  its transaction while it is QUEUED or PARKED (`bridge.CancelWaitingBookJob`, reasons `CancelChaptersChosen`
   "a chapter source was chosen for the book" and `CancelChaptersEdited` "the book's chapters were edited in the
-  console", server#410). One the Bridge already has (claimed, running or parked) is left to finish: its work is
+  console", server#410). One the Bridge is working on (claimed or running) is left to finish: its work is
   under way, and its list stays the book's fallback, dormant under the edit or the choice and used again once
   that is reverted (its finished event and notification say the book uses the edited chapters and to revert the
   edit, `detectUnusedEdited`); a NEW `sidecars.generate` is refused 409 `detect_open` (`ErrDetectOpen`)
@@ -4593,8 +4593,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Edit chapters in a podcast library (`ChaptersCard` reads the library's kind). A `chapters.detect` job for a book
   whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, `catalog.DetectRefused` from
   the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list
-  would sit under the edit, never used; saving an edit cancels a queued one only (`bridge.CancelChaptersEdited`;
-  one the Bridge already has finishes, its list a fallback: `bridge.CancelQueuedBookJob`). Only the console queues detect jobs (the player never does): Health's Detect
+  would sit under the edit, never used; saving an edit cancels a queued or parked one (`bridge.CancelChaptersEdited`;
+  a claimed or running one finishes, its list a fallback: `bridge.CancelWaitingBookJob`). Only the console queues detect jobs (the player never does): Health's Detect
   dialog passes such a book over (`skipNotes`) and `errors.ts` words the code.
 - ffprobe is optional; code paths must degrade gracefully when it is absent (with it, most files
   are read in-process: see In-process probe)

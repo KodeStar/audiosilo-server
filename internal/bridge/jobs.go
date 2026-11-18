@@ -612,14 +612,14 @@ var ErrDescribeOpen = errors.New("a description job is open for the book")
 // an admin chose (the files' or the community's): the chapters it would find
 // stand in only when none was chosen, so they would never be used (a 409
 // chapters_chosen). catalog.DetectRefused answers it, as the catalog holds
-// the choice; making one cancels a queued job (CancelChaptersChosen).
+// the choice; making one cancels a queued or parked job (CancelChaptersChosen).
 var ErrChaptersChosen = errors.New("an admin chose the book's chapter source")
 
 // ErrChaptersEdited is a chapters.detect job for a book whose chapters an
 // admin edited, while the edit applies (catalog.ChaptersFromEdited): an edit
 // stands over every other source, so a found list would sit dormant under it
 // (a 409 chapters_edited). catalog.DetectRefused answers it, as the catalog
-// holds the edit; saving one cancels a queued job (CancelChaptersEdited).
+// holds the edit; saving one cancels a queued or parked job (CancelChaptersEdited).
 var ErrChaptersEdited = errors.New("an admin edited the book's chapters")
 
 // ErrCannotContribute is a job that files to the community (ModuleFor names
@@ -1744,13 +1744,15 @@ const (
 	// Bridge worked on a job that only files to the community (stopsShare).
 	CancelModuleOff = "its module was turned off"
 	// CancelChaptersEdited: an admin saved the book's own chapters
-	// (catalog.SaveChapterEdit) while a chapters.detect job was queued: the
-	// list it would find sits dormant under the edit (ErrChaptersEdited). One
-	// the Bridge already has runs on (CancelQueuedBookJob).
+	// (catalog.SaveChapterEdit) while a chapters.detect job was queued or
+	// parked: the list it would find sits dormant under the edit
+	// (ErrChaptersEdited). One the Bridge is working on runs on
+	// (CancelWaitingBookJob).
 	CancelChaptersEdited = "the book's chapters were edited in the console"
 	// CancelChaptersChosen: an admin chose the book's chapter source (the
-	// files' or the community's) while a chapters.detect job was queued: the
-	// list it would find is not used under the choice (ErrChaptersChosen).
+	// files' or the community's) while a chapters.detect job was queued or
+	// parked: the list it would find is not used under the choice
+	// (ErrChaptersChosen).
 	CancelChaptersChosen = "a chapter source was chosen for the book"
 )
 
@@ -1778,10 +1780,7 @@ var cancelReasons = sync.OnceValue(func() []string {
 // UPDATE repeats idx_bridge_jobs_open's condition (OpenStatesSQL) so SQLite
 // can use that partial index instead of scanning every finished job.
 func cancelOpenTx(ctx context.Context, tx *sql.Tx, key, now, reason string) error {
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE bridge_jobs SET state = 'cancelled', cancel_requested = 1, lease_until = NULL, error = ?3,
-		        finished_at = ?2, updated_at = ?2
-		  WHERE dedupe_key = ?1 AND state IN `+OpenStatesSQL+` AND state IN ('queued', 'needs_attention')`, key, now, reason); err != nil {
+	if err := cancelWaitingTx(ctx, tx, key, now, reason); err != nil {
 		return err
 	}
 	// A working job ends at the Bridge's next report; its reason is recorded
@@ -1794,20 +1793,25 @@ func cancelOpenTx(ctx context.Context, tx *sql.Tx, key, now, reason string) erro
 	return err
 }
 
-// CancelQueuedBookJob cancels the job of kind for the book at (libraryID,
-// path) inside tx while it still waits to be claimed (queued), a catalog write
-// that leaves it nothing to do (CancelChaptersEdited, CancelChaptersChosen).
-// reason is its error. One the Bridge has (claimed, running or parked) is left
-// alone: its work is under way or done, and what it writes stays a fallback
-// under the write. No queued job is no change. The UPDATE repeats
-// idx_bridge_jobs_open's condition, as cancelOpenTx's do.
-func CancelQueuedBookJob(ctx context.Context, tx *sql.Tx, kind string, libraryID int64, path, reason string, now time.Time) error {
+// cancelWaitingTx ends the open job with dedupe key key at once, inside tx,
+// when it waits on no Bridge: queued, or parked (needs_attention). reason is
+// its error. A claimed or running one is left as it is.
+func cancelWaitingTx(ctx context.Context, tx *sql.Tx, key, now, reason string) error {
 	_, err := tx.ExecContext(ctx,
 		`UPDATE bridge_jobs SET state = 'cancelled', cancel_requested = 1, lease_until = NULL, error = ?3,
 		        finished_at = ?2, updated_at = ?2
-		  WHERE dedupe_key = ?1 AND state IN `+OpenStatesSQL+` AND state = 'queued'`,
-		DedupeKey(kind, &libraryID, &path), at(now), reason)
+		  WHERE dedupe_key = ?1 AND state IN `+OpenStatesSQL+` AND state IN ('queued', 'needs_attention')`, key, now, reason)
 	return err
+}
+
+// CancelWaitingBookJob cancels the job of kind for the book at (libraryID,
+// path) inside tx while it is queued or parked (needs_attention), a catalog
+// write that leaves it nothing to do (CancelChaptersEdited,
+// CancelChaptersChosen). reason is its error. One the Bridge is working on
+// (claimed or running) is left to finish: its work is under way, and what it
+// writes stays a fallback under the write. No waiting job is no change.
+func CancelWaitingBookJob(ctx context.Context, tx *sql.Tx, kind string, libraryID int64, path, reason string, now time.Time) error {
+	return cancelWaitingTx(ctx, tx, DedupeKey(kind, &libraryID, &path), at(now), reason)
 }
 
 // MoveJobs carries a book's jobs to its new path inside a move's transaction

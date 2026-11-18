@@ -53,7 +53,7 @@ export function CommunityChapters({ detail }: { detail: AdminBookDetail }) {
     try {
       settleBookEdit(qc, await api.editBook(b.library_id, b.path, req));
       invalidateIssues(qc);
-      // A choice cancels the book's chapter detection if it was still queued (server#410).
+      // A choice cancels the book's chapter detection if it was queued or parked (server#410).
       if (req.chapter_source) void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
       toast.add({ title: t(done, counted(count, lang)), type: 'success' });
     } catch (err) {

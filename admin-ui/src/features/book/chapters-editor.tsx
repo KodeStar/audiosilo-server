@@ -127,7 +127,7 @@ export function ChaptersEditor({
     try {
       settleBookEdit(qc, await api.saveChapters(b.library_id, b.path, editRequest(rows, basis)));
       invalidateIssues(qc);
-      // The save cancelled the book's chapter detection if it was still queued (server#410).
+      // The save cancelled the book's chapter detection if it was queued or parked (server#410).
       void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
       toast.add({
         title: t('book.chapters.edit.saved'),

@@ -559,12 +559,12 @@ func jobState(t *testing.T, c *Catalog, id int64) (state string, cancel bool, re
 	return state, cancel, e.String
 }
 
-// Saving an edit cancels the book's chapters.detect job while it is still
-// queued, and so does choosing its chapter source (server#410): the list it
+// Saving an edit cancels the book's chapters.detect job while it is queued or
+// parked, and so does choosing its chapter source (server#410): the list it
 // would find is not used. It ends at once, with the server's reason. One the
-// Bridge already has (claimed, running or parked) is left to finish: its list
-// stays a fallback under the edit or the choice. Another book's job, and
-// setting the source back to automatic, cancel nothing.
+// Bridge is working on (claimed or running) is left to finish: its list stays
+// a fallback under the edit or the choice. Another book's job, and setting the
+// source back to automatic, cancel nothing.
 func TestChapterEditCancelsDetect(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -603,7 +603,12 @@ func TestChapterEditCancelsDetect(t *testing.T) {
 	if st, cancel, _ := jobState(t, c, other); st != "queued" || cancel {
 		t.Fatalf("another book's detect: %s cancel %v", st, cancel)
 	}
-	for _, state := range []string{"claimed", "running", "needs_attention"} {
+	parked := seedDetect(t, c, lib.ID, "A/Book", "needs_attention")
+	save()
+	if st, _, why := jobState(t, c, parked); st != "cancelled" || why != bridge.CancelChaptersEdited {
+		t.Fatalf("parked detect after an edit: %s %q", st, why)
+	}
+	for _, state := range []string{"claimed", "running"} {
 		id := seedDetect(t, c, lib.ID, "A/Book", state)
 		save()
 		untouched(id, state, "an edit")
@@ -617,7 +622,12 @@ func TestChapterEditCancelsDetect(t *testing.T) {
 	if st, _, why := jobState(t, c, other); st != "cancelled" || why != bridge.CancelChaptersChosen {
 		t.Fatalf("queued detect after a choice: %s %q", st, why)
 	}
-	for _, state := range []string{"claimed", "running", "needs_attention"} {
+	parked = seedDetect(t, c, lib.ID, "B/Book", "needs_attention")
+	choose("B/Book", ChaptersFromFiles)
+	if st, _, why := jobState(t, c, parked); st != "cancelled" || why != bridge.CancelChaptersChosen {
+		t.Fatalf("parked detect after a choice: %s %q", st, why)
+	}
+	for _, state := range []string{"claimed", "running"} {
 		id := seedDetect(t, c, lib.ID, "B/Book", state)
 		choose("B/Book", ChaptersFromFiles)
 		untouched(id, state, "a choice")
