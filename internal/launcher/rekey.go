@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -62,14 +63,24 @@ func rekeyAtStart(ctx context.Context, cat *catalog.Catalog, answers func(catalo
 }
 
 // rootAnswers is the start's re-key's look at each library's folder: the
-// scanner's (library.Scanner.RootAvailable: bounded, and an empty folder with
-// books indexed under it, an unmounted share, does not answer). With the
-// books' counts unread, none does: the re-key waits for the next start.
+// scanner's (library.Scanner.RootsAvailable: every library's at once, at most
+// one probe timeout for them all, and an empty folder with books indexed under
+// it, an unmounted share, does not answer), made on the first question only (a
+// start with nothing to re-key asks none). With the libraries or the books'
+// counts unread, none answers: the re-key waits for the next start.
 func rootAnswers(ctx context.Context, cat *catalog.Catalog, scanner *library.Scanner) func(catalog.Library) bool {
-	counts, err := cat.CountBooksByLibrary(ctx)
-	return func(lib catalog.Library) bool {
-		return err == nil && scanner.RootAvailable(lib, counts[lib.ID])
-	}
+	roots := sync.OnceValue(func() map[int64]bool {
+		libs, err := cat.ListLibraries(ctx)
+		if err != nil {
+			return nil
+		}
+		counts, err := cat.CountBooksByLibrary(ctx)
+		if err != nil {
+			return nil
+		}
+		return scanner.RootsAvailable(libs, counts)
+	})
+	return func(lib catalog.Library) bool { return roots()[lib.ID] }
 }
 
 // rekeyAfterScan is the scanner's OnRunFinished: the scan-end re-key of the
