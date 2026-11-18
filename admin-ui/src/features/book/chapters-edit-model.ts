@@ -170,9 +170,13 @@ export function draftFromChapters(chapters: AdminChapter[], spans: FileSpan[]): 
     }))
     .sort((a, b) => a.start - b.start);
   const own = [...rows];
+  // Each file takes a chapter no file before it took (the server's rule), so a
+  // file shorter than the slack doesn't take the chapter of the file before it.
+  const taken = new Set<DraftRow>();
   for (const span of startingSpans(spans)) {
-    const at = nearest(own, span.start, FILE_START_SLACK);
+    const at = nearest(own, span.start, FILE_START_SLACK, taken);
     if (at) {
+      taken.add(at);
       at.start = roundMs(span.start);
       at.fixed = true;
       continue;

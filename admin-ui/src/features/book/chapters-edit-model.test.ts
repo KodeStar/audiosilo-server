@@ -277,6 +277,23 @@ describe('validateDraft', () => {
     expect(Object.fromEntries(validateDraft(twice, spans).rows)).toEqual({ k2: 'order' });
   });
 
+  it('gives a file shorter than the snap its own row, not the row of the file before it', () => {
+    // 01.mp3 is one MP3 frame long: the chapter at 0 is its start, never 02.mp3's too.
+    const spans = fileSpans([file('01.mp3', 1, 0.026), file('02.mp3', 2, 100)], BOOK, {
+      files: [],
+    });
+    const draft = draftFromChapters(
+      [chapter(0, '01.mp3', 0, 0.026, 0), chapter(1, '02.mp3', 5, 100, 5.026)],
+      spans,
+    );
+    expect(draft.map((r) => [r.start, r.fixed])).toEqual([
+      [0, true],
+      [0.026, true],
+      [5.026, false],
+    ]);
+    expect(validateDraft(draft, spans).first).toBeUndefined();
+  });
+
   it('asks no chapter of a last file of no length', () => {
     // The scan read no length for 03.mp3: it starts at the book's end.
     const spans = fileSpans(
