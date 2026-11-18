@@ -889,15 +889,17 @@ func (s *Service) expiresAt(ttl time.Duration) any {
 	return s.now().Add(ttl).UTC().Format(time.RFC3339)
 }
 
-// pastExpiry reports whether an RFC3339 expiry stamp is in the past - the
+// pastExpiry reports whether an RFC3339 expiry stamp is reached - the
 // read-side twin of expiresAt. NULL (no expiry) and unparsable stamps count as
-// not expired.
+// not expired. A stamp ends its credential at that second, as the SQL checks
+// read it (valid while expires_at > s.ts(): touchRowSQL, spendableSQL, a code's
+// claim), so a token this answers for is one the touch still slides.
 func (s *Service) pastExpiry(expires sql.NullString) bool {
 	if !expires.Valid {
 		return false
 	}
 	t, err := time.Parse(time.RFC3339, expires.String)
-	return err == nil && s.now().After(t)
+	return err == nil && !s.now().Before(t)
 }
 
 // insertAuthCode writes one auth_codes row. Shared by invite and recovery mints

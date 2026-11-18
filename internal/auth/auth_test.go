@@ -307,6 +307,26 @@ func TestExpiredTokenRejected(t *testing.T) {
 	}
 }
 
+// TestTokenEndsAtItsExpiry: a token is valid up to the second before its
+// expires_at and refused from that second on, as the SQL checks read it (a
+// touch slides a cast token only while expires_at > now: touchRowSQL), so the
+// lookup never accepts a token its touch would leave expiring.
+func TestTokenEndsAtItsExpiry(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	*now = now.Truncate(time.Second)
+	u, _ := s.CreateUser(ctx, "u", "pw-pw-pw-pw", RoleUser)
+	secret, _ := s.IssueToken(ctx, u.ID, KindPairing, "", time.Minute)
+	*now = now.Add(time.Minute - time.Second)
+	if _, err := s.ResolveToken(ctx, secret, KindPairing); err != nil {
+		t.Fatalf("a second before its expiry: %v", err)
+	}
+	*now = now.Add(time.Second)
+	if _, err := s.ResolveToken(ctx, secret, KindPairing); err != ErrInvalidToken {
+		t.Fatalf("at its expiry: %v, want ErrInvalidToken", err)
+	}
+}
+
 func TestOptionalPasswordForNonAdmins(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
