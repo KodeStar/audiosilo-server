@@ -260,6 +260,23 @@ describe('validateDraft', () => {
     expect(Object.fromEntries(validateDraft(own, spans).rows)).toEqual({ k3: 'order' });
   });
 
+  it('gives files that start together one row, and refuses two at the same moment', () => {
+    // The scan read no length for 02.mp3: it starts where 03.mp3 does.
+    const spans = fileSpans(
+      [file('01.mp3', 1, 100), file('02.mp3', 2, 0), file('03.mp3', 3, 50)],
+      BOOK,
+      { files: [] },
+    );
+    const draft = draftFromChapters([chapter(0, '01.mp3', 0, 100, 0)], spans);
+    expect(draft.map((r) => r.start)).toEqual([0, 100]);
+    expect(validateDraft(draft, spans).first).toBeUndefined();
+    const pasted = parseTimestamps('0:00 One\n1:40 Two', timelineEnd(spans));
+    expect(rowsFromPaste(pasted.chapters, spans, draft).map((r) => r.start)).toEqual([0, 100]);
+    // The server refuses two chapters at one moment, files' starts or not.
+    const twice = rows([0, 'One', true], [100, 'Two', true], [100, 'Three', true]);
+    expect(Object.fromEntries(validateDraft(twice, spans).rows)).toEqual({ k2: 'order' });
+  });
+
   it('asks no chapter of a last file of no length', () => {
     // The scan read no length for 03.mp3: it starts at the book's end.
     const spans = fileSpans(

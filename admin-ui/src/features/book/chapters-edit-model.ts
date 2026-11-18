@@ -86,13 +86,14 @@ export function fileSpans(files: AdminFile[], bookPath: string, basis: ChapterBa
 }
 
 /**
- * The spans that start a chapter: all but a last file of no length (one the scan
- * read no length for), which starts at the book's end, where no chapter can (the
- * server's rule: catalog snapToFiles).
+ * The spans that start a chapter (the server's rule: catalog snapToFiles): one
+ * per start, of files that start together (one of no length before another) the
+ * last, the one with audio; none for a last file of no length (one the scan read
+ * no length for), which starts at the book's end, where no chapter can.
  */
 const startingSpans = (spans: FileSpan[]) => {
   const end = timelineEnd(spans);
-  return spans.filter((s) => s.start < end);
+  return spans.filter((s, i) => s.start < end && s.start !== spans[i + 1]?.start);
 };
 
 /** The book's length on the timeline (the last file's end). */
@@ -292,9 +293,10 @@ export function validateDraft(rows: DraftRow[], spans: FileSpan[]): Validation {
   const sorted = byStart(rows);
   sorted.forEach((r, i) => {
     const prev = sorted[i - 1];
+    // Two files' starts may be closer than MIN_GAP, never at the same moment.
+    const gap = prev ? roundMs(r.start - prev.start) : Infinity;
     if (r.start < 0 || r.start >= end) out.set(r.key, 'out_of_range');
-    else if (prev && !(r.fixed && prev.fixed) && roundMs(r.start - prev.start) < MIN_GAP)
-      out.set(r.key, 'order');
+    else if (gap <= 0 || (gap < MIN_GAP && !(r.fixed && prev?.fixed))) out.set(r.key, 'order');
     else if (!titleOk(r.title)) out.set(r.key, 'title');
   });
   const starts = new Set(sorted.map((r) => r.start));
