@@ -1058,12 +1058,12 @@ func fileRelative(ctx context.Context, tx *sql.Tx, libraryID int64, file, book s
 				discLen   float64
 				discFirst bool
 			)
-			disc := book + "/" + rest[:i]
+			lo, hi := belowRange(book + "/" + rest[:i])
 			if err := tx.QueryRowContext(ctx,
 				`SELECT COALESCE(SUM(duration), 0),
 				        COALESCE((SELECT rel_path >= ?2 AND rel_path < ?3 FROM book_files WHERE book_id = ?1 ORDER BY seq, id LIMIT 1), 0)
 				   FROM book_files WHERE book_id = ?1 AND rel_path >= ?2 AND rel_path < ?3`,
-				bookID, disc+"/", disc+"0").Scan(&discLen, &discFirst); err != nil {
+				bookID, lo, hi).Scan(&discLen, &discFirst); err != nil {
 				return false, err
 			}
 			if !discFirst {

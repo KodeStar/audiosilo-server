@@ -132,10 +132,7 @@ func pathsORFilterSQL(col string, paths []string) (string, []any) {
 	var conds []string
 	var args []any
 	for _, p := range paths {
-		// The exact-match arm binds p literally; the subtree arm is belowPathSQL's
-		// byte range, the authoritative Go gate's prefix (relpath.Within). LIKE
-		// ignored ASCII case: a grant on "Saga" reached a sibling "saga/..." on a
-		// case-sensitive filesystem.
+		// The exact-match arm binds p literally; the subtree arm is belowPathSQL.
 		below, belowArgs := belowPathSQL(col, p)
 		conds = append(conds, "("+col+" = ? OR "+below+")")
 		args = append(append(args, p), belowArgs...)
@@ -149,8 +146,12 @@ func pathsORFilterSQL(col string, paths []string) (string, []any) {
 // escape. LIKE is neither (it ignores ASCII case: "Book/cd1/%" matches
 // "Book/CD1/01.mp3").
 func belowPathSQL(col, p string) (string, []any) {
-	return "(" + col + " >= ? AND " + col + " < ?)", []any{p + "/", p + "0"}
+	lo, hi := belowRange(p)
+	return "(" + col + " >= ? AND " + col + " < ?)", []any{lo, hi}
 }
+
+// belowRange is belowPathSQL's bounds, for a query that binds them itself.
+func belowRange(p string) (lo, hi string) { return p + "/", p + "0" }
 
 // pathsJSONFilterSQL is pathFilterSQL's single-parameter form: the paths as one
 // JSON array. A row passes when its path, or one of its prefixes ending just

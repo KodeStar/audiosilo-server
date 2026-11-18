@@ -1091,9 +1091,9 @@ func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath stri
 		below := `0`
 		var args []any
 		if end > 0 {
-			below = `EXISTS (SELECT 1 FROM books WHERE library_id = ? AND rel_path > ? || '/' AND rel_path < ? || '0')`
-			last := folders[len(folders)-1]
-			args = append(args, libraryID, last, last)
+			sub, subArgs := belowPathSQL("rel_path", folders[len(folders)-1].(string))
+			below = `EXISTS (SELECT 1 FROM books WHERE library_id = ? AND ` + sub + `)`
+			args = append(append(args, libraryID), subArgs...)
 		}
 		args = append(append(append(args, libraryID), folders...), heldArgs...)
 		var (
