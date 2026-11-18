@@ -283,19 +283,24 @@ const scannedStampKey = "@indexed_at"
 // series tag carrying its position, "Discworld, book #40": SplitSeriesTag; a
 // title in any script not generic: IsGenericTitle; the MP4 narrator item and
 // a narrator tag over composer), which a snapshot stamped from an older
-// revision never had. The next scan reads such a book again where a newer
-// revision may read it otherwise (Signature.NamesCheck) and stamps the rest
-// (StampScannedRev). A new revision adds today's to revOlderOwn's list, so its
-// snapshots are stamped too.
+// revision never had; one of revision 4 predates revision 5, when a book of
+// several files stopped taking its first file's title tag over the album that
+// tag extends (metadata.PartsTitle, server#272). The next scan reads such a
+// book again where a newer revision may read it otherwise
+// (Signature.NamesCheck) and stamps the rest (StampScannedRev). A new revision
+// adds the one before it to revOlderOwn's list, so its snapshots are stamped
+// too.
 const (
 	scannedRevKey = "@rev"
-	scannedRev    = "4"
+	scannedRev    = "5"
 	// The revisions that brought a reading in, so a snapshot of one needs no read
 	// for it (Signature.NamesCheck): TitleNotSeries (MaybeSeriesTitle), a leaf
-	// that states a series (PathLeafSeries), the tag reading (tagReadingMayDiffer).
+	// that states a series (PathLeafSeries), the tag reading (tagReadingMayDiffer),
+	// a book of several files' title.
 	revTitleNotSeries = 2
 	revLeafSeries     = 3
 	revTagReading     = 4
+	revPartsTitle     = 5
 )
 
 // revNumber is a snapshot's revision as a number: 0 before revision 1 (none),

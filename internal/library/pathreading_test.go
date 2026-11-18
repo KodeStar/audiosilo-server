@@ -193,7 +193,7 @@ func TestScanTitleNotSeries(t *testing.T) {
 	// for its series (read, unchanged) by their readings, and the one whose title
 	// isn't a series, never read, stamped (StampScannedRev), so no later scan
 	// tests it again.
-	wantRevs := []string{edited + "=4", vall + "=4", first + "=4", tufo + "=4", carl + "=4"}
+	wantRevs := []string{edited + "=5", vall + "=5", first + "=5", tufo + "=5", carl + "=5"}
 	slices.Sort(wantRevs)
 	if !slices.Equal(revs, wantRevs) {
 		t.Errorf("revisions = %v, want %v", revs, wantRevs)
@@ -220,6 +220,80 @@ func TestScanTitleNotSeries(t *testing.T) {
 	}
 	want[edited] = "Emergence"
 	check("after clearing the edit")
+}
+
+// A book of several files takes its album over its first file's title tag
+// that extends it (metadata.PartsTitle, server#272): each file's tag names that
+// file ("Frankenstein; ... - Letters 1-4"). A book of one file keeps the title
+// tag ("Portal to Nova Roma: Paris"). One read before revision 5 is put right
+// by the next scan from one read of its first file's tags, with no re-index;
+// a book of one file needs no read and is stamped.
+func TestScanPartsTitle(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root reads unreadable files")
+	}
+	ctx := t.Context()
+	ffprobe := lookFFprobe(t)
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	const (
+		parts  = "Mary Shelley/Frankenstein"
+		single = "Dennis E. Taylor/Paris"
+		album  = "Frankenstein; or, The Modern Prometheus"
+	)
+	silence(t, root, parts+"/01.mp3", 1, "album="+album, "title="+album+" - Letters 1-4", "artist=Mary Shelley")
+	silence(t, root, parts+"/02.mp3", 1, "album="+album, "title="+album+" - Chapters 1-4", "artist=Mary Shelley")
+	silence(t, root, single+"/Paris.mp3", 1, "album=Portal to Nova Roma", "title=Portal to Nova Roma: Paris", "artist=Dennis E. Taylor")
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, ffprobe, slog.Default())
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{parts: album, single: "Portal to Nova Roma: Paris"}
+	check := func(when string) {
+		t.Helper()
+		for rel, title := range want {
+			b, err := cat.GetBookByPath(ctx, lib.ID, rel)
+			if err != nil || b.Title != title {
+				t.Errorf("%s: %s = %+v (err %v), want title %q", when, rel, b, err, title)
+			}
+		}
+	}
+	check("first scan")
+
+	// The snapshots of revision 4: the first file's title tag as the title.
+	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$.title', ?, '$."@rev"', '4'), title = ?
+		WHERE rel_path = ?`, album+" - Letters 1-4", album+" - Letters 1-4", parts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@rev"', '4') WHERE rel_path = ?`, single); err != nil {
+		t.Fatal(err)
+	}
+	sigs, err := cat.Signatures(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sigs[parts].NamesCheck || sigs[single].NamesCheck || !sigs[single].RevStamp {
+		t.Fatalf("signatures: several files %+v, one file %+v; want the first read, the other stamped", sigs[parts], sigs[single])
+	}
+	// The book of one file is never read: unreadable, it keeps its reading.
+	f := filepath.Join(root, filepath.FromSlash(single+"/Paris.mp3"))
+	if err := os.Chmod(f, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(f, 0o644) })
+	res, err := s.Scan(ctx, *lib)
+	if err != nil || res.Updated != 0 {
+		t.Fatalf("rescan = %+v (err %v), want the title backfilled, nothing re-indexed", res.ScanCounts, err)
+	}
+	check("after the backfill")
+	var stale int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books
+		WHERE json_extract(scanned, '$."@rev"') IS NOT '5'`).Scan(&stale); err != nil || stale != 0 {
+		t.Fatalf("snapshots before today's revision after the backfill = %d (err %v), want 0", stale, err)
+	}
 }
 
 // A book one folder deep whose snapshot alone would settle its path reading
@@ -277,7 +351,7 @@ func TestScanNamesCheckWaitsForRead(t *testing.T) {
 	if _, err := s.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	reading("readable again", "From The Ashes", "4")
+	reading("readable again", "From The Ashes", "5")
 }
 
 // A leaf named "Author; Series; Book NN[; Title]" states the book's series and
@@ -372,7 +446,7 @@ func TestScanLeafStatesSeries(t *testing.T) {
 	check("after the backfill")
 	var stale int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books
-		WHERE json_extract(scanned, '$."@rev"') IS NOT '4'`).Scan(&stale); err != nil || stale != 0 {
+		WHERE json_extract(scanned, '$."@rev"') IS NOT '5'`).Scan(&stale); err != nil || stale != 0 {
 		t.Fatalf("snapshots before today's revision after the backfill = %d (err %v), want 0", stale, err)
 	}
 	sigs, err := cat.Signatures(ctx, lib.ID)
@@ -461,7 +535,7 @@ func TestScanTagReadingRevision(t *testing.T) {
 	}
 	var stale int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books
-		WHERE json_extract(scanned, '$."@rev"') IS NOT '4'`).Scan(&stale); err != nil || stale != 0 {
+		WHERE json_extract(scanned, '$."@rev"') IS NOT '5'`).Scan(&stale); err != nil || stale != 0 {
 		t.Fatalf("snapshots before today's revision after the backfill = %d (err %v), want 0", stale, err)
 	}
 	if sigs, err = cat.Signatures(ctx, lib.ID); err != nil {

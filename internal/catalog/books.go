@@ -439,7 +439,10 @@ type Signature struct {
 	// title (metadata.MaybeSeriesTitle); before revision 3 (a leaf named
 	// "Author; Series; Book NN[; Title]" states the series and position the tags
 	// leave out: metadata.DeriveFromPath), one whose leaf is so named
-	// (metadata.PathLeafSeries).
+	// (metadata.PathLeafSeries); before revision 4, one the tag reading may read
+	// otherwise (tagReadingMayDiffer); before revision 5 (a book of several
+	// files no longer takes its first file's title tag: metadata.PartsTitle),
+	// one of several files.
 	NamesCheck bool
 	// DurationStale: a book holding an MP3 whose lengths were read before
 	// today's revision (durationRev: books.duration_rev), or since by an
@@ -447,7 +450,7 @@ type Signature struct {
 	// indexes once more though its files are unchanged, so a VBR MP3 with no
 	// Xing or VBRI header has its frames counted (SRV-16).
 	DurationStale bool
-	// RevStamp: a book whose snapshot is its own and of revision 1 or 2 (so
+	// RevStamp: a book whose snapshot is its own and of revision 1 to 4 (so
 	// PathOK) that needs no read (not NamesCheck), which the next scan stamps
 	// with today's revision (StampScannedRev), so it is never tested again.
 	RevStamp bool
@@ -569,17 +572,17 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var stored sql.NullInt64
 		var files, rev sql.NullString
 		var format, title, series, narrator string
-		var revOlder bool
+		var revOlder, severalFiles bool
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.CoverArt, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.HintsUnchecked, &sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
-			&stored, &format, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &narrator, &revOlder,
+			&stored, &format, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &narrator, &revOlder, &severalFiles,
 			&sig.DurationStale); err != nil {
 			return nil, err
 		}
 		if rev.String != scannedRev {
-			sig.NamesCheck = namesCheck(revNumber(rev.String), rel, sig.IsFolder, format, title, series, narrator)
+			sig.NamesCheck = namesCheck(revNumber(rev.String), rel, sig.IsFolder, severalFiles, format, title, series, narrator)
 			sig.RevStamp = !sig.NamesCheck && revOlder
 		}
 		switch {

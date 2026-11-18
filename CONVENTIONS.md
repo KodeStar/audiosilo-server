@@ -1801,20 +1801,29 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   as they do now (a series tag carrying its position, `metadata.SplitSeriesTag`; a title in any
   script not generic, `IsGenericTitle`; the MP4 `\xa9nrt` item and a narrator tag over composer)
   still holds the old reading; the snapshot carries the narrator too, so a backfill rewrites it.
-  **Backfill of revisions 2 to 4**: a snapshot older than today's that a newer revision may read
+  **A book of several files' title** (`@rev` 5, server#272): `bookTitle` prefers a title tag that
+  extends the album with a tail that isn't a track marker, which for a book of several files is its
+  first file's own name ("Frankenstein; or, The Modern Prometheus - Letters 1-4", "The Odyssey: Book
+  01"), so `readNames` takes `metadata.PartsTitle` for one (the album when the title is such a tag;
+  `TitleNotSeries` then applies as for any album). A book of one file keeps the title tag ("Portal to
+  Nova Roma: Paris"). Corpus check: the LibriVox perf library (120 books) and the testbed libraries
+  renamed four books, each to its album (Frankenstein, The Odyssey, The Diary of a Nobody, The Secret
+  Agent's `secret_agent`), and nothing else.
+  **Backfill of revisions 2 to 5**: a snapshot older than today's that a newer revision may read
   otherwise (`Signature.NamesCheck`, `namesCheck` by `revNumber`: before revision 2 a title
   `metadata.MaybeSeriesTitle` flags, over the snapshot's title and series; before revision 3 a leaf
   `metadata.PathLeafSeries` reads; before revision 4 `tagReadingMayDiffer`: an MP4, a narrator, a
-  series `SplitSeriesTag` splits, a non-ASCII letter in the title or path)
+  series `SplitSeriesTag` splits, a non-ASCII letter in the title or path; before revision 5 a book
+  of several files, which `Signatures` counts in `book_files` only for a folder book's older snapshot)
   is read once by the next scan with the PathRead read and rewritten by `SetPathReading` (which
   skips only a snapshot already at `scannedRev`), no re-index and no migration (a
   `PathFromSnapshot` one waits for that read too, so an unreadable file never records today's
   revision with its names unread). The reads run `readSlots` wide (`tagRead`, batched
   `tagReadsPerSlot` per slot, applied before each backfill flush; one a Stop cuts short is dropped
   for the next scan), so a large revision-4 backfill (every narrated book) costs one parallel tag
-  read each, once. A current `@rev` 1 to 3 snapshot it doesn't flag
+  read each, once. A current `@rev` 1 to 4 snapshot it doesn't flag
   (`Signature.RevStamp`: its stamp the row's `indexed_at`) is stamped at today's revision by that
-  scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 to 3,
+  scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 to 4,
   `revOlderOwn`), so later scans don't test it again (`MaybeSeriesTitle` is about 2 µs a row); a
   snapshot of no revision stays until its next re-index or path reading. A stamped book is never
   tested again, so a later change that makes the reading change more books (`TitleNotSeries` more

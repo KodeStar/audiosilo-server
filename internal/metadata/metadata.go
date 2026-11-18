@@ -670,6 +670,20 @@ func bookTitle(album, title string) string {
 	return a
 }
 
+// PartsTitle is the title of a book of several files whose tags gave m (its
+// first file's): the album when Title is a title tag that extends it
+// (bookTitle took "Frankenstein; or, The Modern Prometheus - Letters 1-4" over
+// "Frankenstein; or, The Modern Prometheus"), since each file of such a book
+// names itself in its title tag, a chapter's name rather than the book's
+// (server#272); Title otherwise. An album that names only the book's series
+// then gives way as TitleNotSeries says.
+func (m *Metadata) PartsTitle() string {
+	if m.AlbumTag != "" && m.Title == m.TitleTag && m.TitleTag != m.AlbumTag {
+		return m.AlbumTag
+	}
+	return m.Title
+}
+
 // albumTail is what a title tag adds to the album when it extends it at a word
 // boundary (both canonTag'd, the joining punctuation trimmed), "" when it
 // doesn't.

@@ -1001,15 +1001,21 @@ const pathFlushEvery = 500
 // (metadata.DeriveFromPath, the series and position a leaf named "Author;
 // Series; Book NN[; Title]" states included) as the baseline, then md's tags,
 // which are authoritative when present (an unreadable file's md carries none;
-// nil reads the same), except an album tag that only names the book's series,
-// which gives way to the book's own title (metadata.TitleNotSeries), and md's
-// narrator. So the leaf's series fills only a series the tags leave out.
+// nil reads the same), except a book of several files' first title tag, which
+// names that file (metadata.PartsTitle: the album instead), and an album tag
+// that only names the book's series, which gives way to the book's own title
+// (metadata.TitleNotSeries), and md's narrator. So the leaf's series fills only
+// a series the tags leave out.
 func readNames(b *catalog.Book, md *metadata.Metadata) *metadata.Metadata {
 	n := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
 	if md == nil {
 		return n
 	}
-	n.Title = chooseTitle(md.Title, n.Title)
+	title := md.Title
+	if len(b.Files) > 1 {
+		title = md.PartsTitle()
+	}
+	n.Title = chooseTitle(title, n.Title)
 	if strings.TrimSpace(md.Author) != "" {
 		n.Author = md.Author
 	}

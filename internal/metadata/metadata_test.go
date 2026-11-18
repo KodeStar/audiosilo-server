@@ -351,6 +351,27 @@ func TestBookTitle(t *testing.T) {
 	}
 }
 
+// TestPartsTitle: a book of several files takes the album over a title tag
+// that extends it (the first file's: a chapter's name), and keeps a title the
+// album gave, or one with no album to give way to.
+func TestPartsTitle(t *testing.T) {
+	cases := []struct{ name, album, title, want string }{
+		{"chapter tail gives way", "Frankenstein; or, The Modern Prometheus", "Frankenstein; or, The Modern Prometheus - Letters 1-4", "Frankenstein; or, The Modern Prometheus"},
+		{"book tail gives way too", "The Odyssey", "The Odyssey: Book 01", "The Odyssey"},
+		{"underscore tail gives way", "The Diary of a Nobody", "The Diary of a Nobody_Ch00", "The Diary of a Nobody"},
+		{"album already chosen", "Pride and Prejudice", "Chapters 21-22", "Pride and Prejudice"},
+		{"no album", "", "The Essays of Francis Bacon 01", "The Essays of Francis Bacon 01"},
+		{"no title tag", "Main Street", "", "Main Street"},
+	}
+	for _, tc := range cases {
+		var m Metadata
+		m.setTitle(tc.album, tc.title)
+		if got := m.PartsTitle(); got != tc.want {
+			t.Errorf("%s: PartsTitle(%q, %q) = %q, want %q", tc.name, tc.album, tc.title, got, tc.want)
+		}
+	}
+}
+
 func TestIsGenericTitle(t *testing.T) {
 	generic := []string{
 		"", "Track 01", "track 1", "Chapter 12", "Part 3", "Disc 2",

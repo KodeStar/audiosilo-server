@@ -177,8 +177,8 @@ func TestStampScannedRev(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantRevs := map[string]string{
-		plain: "4|A Parade of Horribles", stale: "1|The Final Empire", series: "1|Without Law",
-		series2: "4|Without Law", leaf: "2|From The Ashes", plain2: "4|The Butcher's Masquerade",
+		plain: "5|A Parade of Horribles", stale: "1|The Final Empire", series: "1|Without Law",
+		series2: "5|Without Law", leaf: "2|From The Ashes", plain2: "5|The Butcher's Masquerade",
 	}
 	for rel, w := range wantRevs {
 		var got string
@@ -224,8 +224,14 @@ func TestNamesCheckByRevision(t *testing.T) {
 		{"no revision", 0, "Charles Dickens/Great Expectations", "mp3", "Great Expectations", "", "", false},
 	}
 	for _, c := range cases {
-		if got := namesCheck(c.rev, c.rel, true, c.format, c.title, c.series, c.nar); got != c.want {
+		if got := namesCheck(c.rev, c.rel, true, false, c.format, c.title, c.series, c.nar); got != c.want {
 			t.Errorf("%s: namesCheck = %v, want %v", c.name, got, c.want)
+		}
+	}
+	// Revision 5: a book of several files is read once, whatever its title.
+	for rev, want := range map[int]bool{0: true, 4: true, 5: false} {
+		if got := namesCheck(rev, "Mary Shelley/Frankenstein", true, true, "mp3", "Frankenstein", "", ""); got != want {
+			t.Errorf("several files at %d: namesCheck = %v, want %v", rev, got, want)
 		}
 	}
 	if revNumber("3") != 3 || revNumber("") != 0 || revNumber("x") != 0 || revNumber("-1") != 0 {
