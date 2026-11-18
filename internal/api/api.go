@@ -146,7 +146,8 @@ type API struct {
 	// a field so tests can see when it is read.
 	mountHints func(exclude ...string) []string
 	// listed is the listings (their names) the stream and /fs check a path's
-	// spelling against (asGiven), the catalog's (Catalog.DirNames, which its
+	// spelling against (asGiven), and a book read on demand (indexOnDemand),
+	// the catalog's (Catalog.DirNames, which its
 	// Spelling reads too) kept a few seconds; a field so a test on a disk that
 	// tells case apart can list a folder as one that ignores it would.
 	listed *metadata.DirNames

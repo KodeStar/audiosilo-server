@@ -327,6 +327,72 @@ func TestCaseVariantCostsWhatMissingDoes(t *testing.T) {
 	}
 }
 
+// TestCaseVariantOnDemandCostsWhatMissingDoes (security): the routes that
+// resolve a book, reading on demand one the index doesn't hold (bookAt), take
+// a case variant of a folder the disk has through the steps of a path with
+// nothing there: the same listings (indexOnDemand), and the scanner's own
+// read, whose stat a disk that ignores case answers for the variant alone,
+// never begun. Allowed: a book no scan has reached, as the disk spells it, is
+// read and answered.
+func TestCaseVariantOnDemandCostsWhatMissingDoes(t *testing.T) {
+	t.Parallel()
+	c := newCaseEnv(t)
+	c.foldCase(t, map[string]string{pcLowAuthor: pcAuthor, pcBookVariant: pcBook})
+	inner := c.read
+	var (
+		mu     sync.Mutex
+		listed []string
+		reads  atomic.Int32
+	)
+	root, err := filepath.EvalSymlinks(c.lib.Root) // the walk lists below the resolved root
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := c.api.indexPath
+	c.api.indexPath = func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool) (*catalog.Book, error) {
+		reads.Add(1)
+		return index(ctx, lib, rel, allow)
+	}
+	steps := func(tok, u string, want int) []string {
+		t.Helper()
+		c.listWith(func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+			mu.Lock()
+			listed = append(listed, strings.TrimPrefix(dir, root))
+			mu.Unlock()
+			return inner(ctx, dir, timeout)
+		}) // a fresh cache, so each request reads its own listings
+		mu.Lock()
+		listed = nil
+		mu.Unlock()
+		if resp, body := c.do(t, "GET", u, tok, ""); resp.StatusCode != want {
+			t.Errorf("GET %s = %d %s, want %d", u, resp.StatusCode, body, want)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(listed)
+	}
+	for _, endpoint := range []string{"item", "chapters", "cover"} {
+		for _, k := range []struct{ tok, variant, missing string }{
+			{c.halTok, pcLowBook, pcLowMissing},
+			{c.halTok, pcLowTrack, pcLowMissingT},
+			{c.idaTok, pcBookVariant, pcMissing},
+		} {
+			v := steps(k.tok, bookURL(c.lib.ID, endpoint, k.variant), http.StatusNotFound)
+			m := steps(k.tok, bookURL(c.lib.ID, endpoint, k.missing), http.StatusNotFound)
+			if len(v) == 0 || !slices.Equal(v, m) {
+				t.Errorf("%s: the variant %+q listed %q, the missing %+q %q; want the same listings", endpoint, k.variant, v, k.missing, m)
+			}
+		}
+	}
+	if n := reads.Load(); n != 0 {
+		t.Errorf("the scanner began %d on-demand reads of variants and missing paths, want none", n)
+	}
+	// Allowed: as the disk spells it, read on demand.
+	if got := steps(c.idaTok, bookURL(c.lib.ID, "item", pcUnindexed), http.StatusOK); len(got) == 0 || reads.Load() != 1 {
+		t.Errorf("an unindexed book listed %q and began %d reads, want its folders' listings and one read", got, reads.Load())
+	}
+}
+
 // TestFSOutsideScopeIsMissing (security): /fs answers a folder outside the
 // caller's share rules as a missing one, with no listing read: hal, whose rule
 // is the author folder in lower case, can't tell from a 200 that the folder as

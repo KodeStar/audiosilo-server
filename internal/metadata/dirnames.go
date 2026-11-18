@@ -10,8 +10,9 @@ import (
 )
 
 // DirNames keeps, for a few seconds, the names of the folders a check of a
-// path's spelling has listed (library.SafeJoinListed for the stream and /fs,
-// catalog's ownEntry for Spelling's look at the disk), so the check costs the
+// path's spelling has listed (library.SafeJoinListed for the stream, /fs and
+// a book read on demand, catalog's ownEntry for Spelling's look at the disk),
+// so the check costs the
 // same whether or not the disk has the path in another spelling: a missing path
 // and a variant (another case, another Unicode form) both walk the same
 // listings and stop at the first name not listed. A folder is read once however

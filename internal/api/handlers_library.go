@@ -419,15 +419,34 @@ func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catal
 		if lib.Kind == catalog.KindPodcasts {
 			return nil, library.ErrNotIndexable
 		}
-		// Each look at the share given fileWait: one that stopped answering is
-		// a 503 share_not_answering, not this request's own time running out.
-		return a.indexPath(library.WithLookTimeout(ctx, a.fileWait), *lib, path, scope.Allows)
+		return a.indexOnDemand(ctx, lib, path, scope.Allows)
 	case err != nil:
 		return nil, err
 	case !scope.Allows(b.RelPath):
 		return nil, library.ErrNotAllowed
 	}
 	return b, nil
+}
+
+// indexOnDemand reads the book at path (cleaned, scope-checked, no book of the
+// index at it) on demand (a.indexPath), each look at the share given fileWait:
+// one that stopped answering is a 503 share_not_answering, not this request's
+// own time running out. Only a path the disk has as given, byte for byte
+// (library.SafeJoinListed, through the kept listings, a.listed, as asGiven's):
+// any other is library.ErrNotIndexable, a path with nothing there. The
+// scanner's own read stats the path before it checks its spelling
+// (resolveBook, dirPresent), so on a disk that ignores case a case variant of
+// a folder it has would cost a stat and the folders' listings where a missing
+// path costs one failed look; here the two take the same steps, so how long
+// the 404 takes never tells a rule spelled in another case that the folder is
+// there, on any route that resolves a book (bookAt, a favourite).
+func (a *API) indexOnDemand(ctx context.Context, lib *catalog.Library, path string, allow func(string) bool) (*catalog.Book, error) {
+	if _, there, err := library.SafeJoinListed(ctx, lib.Root, path, a.fileWait, a.listed.Names); err != nil {
+		return nil, err
+	} else if !there {
+		return nil, library.ErrNotIndexable
+	}
+	return a.indexPath(library.WithLookTimeout(ctx, a.fileWait), *lib, path, allow)
 }
 
 // bookAt is bookForPath for a handler: on a failure it writes the answer and

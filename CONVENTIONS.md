@@ -1203,11 +1203,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   for a path that climbs out of the root by its names, so it keeps its 400; a leading slash is no climb,
   `/Author` is looked at first as `Author` is), and answers a folder outside the caller's share
   rules (`VisibleInBrowse`) as a missing one before any listing (`TestFSOutsideScopeIsMissing`). Every
-  other route reads the index, which holds the disk's spelling only. `TestCaseVariantRoutes` compares
+  other route reads the index, which holds the disk's spelling only, and reads a book it doesn't hold on
+  demand (`bookAt`, a favourite) only once the same join finds the path there as given
+  (`API.indexOnDemand`: the scanner's own read stats the path before `dirPresent` checks its spelling,
+  a stat and the folders' listings a case variant would cost and a missing path would not;
+  `TestCaseVariantOnDemandCostsWhatMissingDoes`), so a new folder beside one listed in the last 3 s may
+  answer 404 until its listing is read again. `Spelling` makes no look for a `p` the scope refuses as
+  given that only refused paths read as (its caller refuses `p` whatever the disk has), and `ownEntry`
+  lists below the root as `SafeJoinListed` resolves it (`metadata.EvalSymlinksBounded`), so the two read
+  a folder's one kept listing however the library's root is written. `TestCaseVariantRoutes` compares
   every route on a temp dir that ignores case; `TestCaseVariantDiskRoutes` covers the stream and `/fs` on
   any disk (`listWith` lists as one that ignores case would).
   Unchanged on purpose: `CleanRelPath` and share rules stay byte-exact; the on-demand index takes
-  only the on-disk spelling (`dirPresent`), so another spelling of an unindexed book stays 404; the
+  only the on-disk spelling (`indexOnDemand`, then `dirPresent`), so another spelling of an unindexed book stays 404; the
   admin's folder-override route, the admin's edit of a person's progress (`exactPath`: the row
   by its own path) and the Bridge's routes (`pathInScope` itself, the Audible sync's
   `userPathResolver`) take the paths as given and match exactly. The admin's other book routes on

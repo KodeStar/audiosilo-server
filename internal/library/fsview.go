@@ -166,8 +166,9 @@ func SafeJoin(root, relPath string) (string, error) {
 }
 
 // SafeJoinListed is SafeJoin for a route that opens the path only as the disk
-// spells it (the stream, /fs), each of its looks bounded (ctx, at most timeout
-// in all, counted on the path's mount as metadata.Bounded's): there reports
+// spells it (the stream, /fs, a book read on demand), each of its looks
+// bounded (ctx, at most timeout in all, counted on the path's mount as
+// metadata.Bounded's): there reports
 // whether each name of relPath is in its folder's listing as given, byte for
 // byte, the listings read through names (a metadata.DirNames' Names). Share
 // rules match byte for byte, so a rule spelled in another case than the disk's
