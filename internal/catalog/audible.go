@@ -386,13 +386,13 @@ func (c *Catalog) CancelOrphanAudibleJobs(ctx context.Context) (int, error) {
 	// A job whose params name no account (a damaged row reads as NULL) is
 	// passed by: NULL NOT IN an empty audible_accounts is true, and a NULL
 	// account would fail the scan, the whole sweep with it.
-	account := bridge.ParamSQL("params", "$.account")
+	accountSQL := bridge.ParamSQL("params", "$.account")
 	err := c.db.WithTx(ctx, "CancelOrphanAudibleJobs", func(tx *sql.Tx) error {
 		var err error
 		gone, err = queryRows(ctx, tx, func(rows *sql.Rows, account *string) error { return rows.Scan(account) },
-			`SELECT DISTINCT `+account+` FROM bridge_jobs
+			`SELECT DISTINCT `+accountSQL+` FROM bridge_jobs
 			  WHERE kind IN (?, ?, ?) AND state IN `+bridge.OpenStatesSQL+` AND cancel_requested = 0
-			    AND `+account+` IS NOT NULL AND `+account+` NOT IN (SELECT account FROM audible_accounts)`,
+			    AND `+accountSQL+` IS NOT NULL AND `+accountSQL+` NOT IN (SELECT account FROM audible_accounts)`,
 			bridge.KindAudiblePoll, bridge.KindAudibleImport, bridge.KindAudibleSync)
 		if err != nil {
 			return err
