@@ -36,7 +36,7 @@ func TestSealerRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSealerKeepsDeepLinkSmall: a deep link of & < > (each &, six bytes,
+// TestSealerKeepsDeepLinkSmall: a deep link of & < > (each \u0026, six bytes,
 // as JSON escapes them for HTML) still seals into a cookie a browser keeps
 // (4 KB, name included), and opens as sent.
 func TestSealerKeepsDeepLinkSmall(t *testing.T) {

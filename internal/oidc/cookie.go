@@ -83,8 +83,8 @@ func NewSealer(now func() time.Time) (*Sealer, error) {
 }
 
 // Seal returns f sealed as a cookie value (base64url), stamped now. Its JSON
-// keeps & < > as they are: escaped (&, six bytes each) a deep link of
-// them (Flow.Next) would grow the cookie past the 4 KB a browser keeps.
+// keeps & < > as they are: escaped for HTML (\u0026, six bytes each) a deep
+// link of them (Flow.Next) would grow the cookie past the 4 KB a browser keeps.
 func (s *Sealer) Seal(f Flow) (string, error) {
 	f.IssuedAt = s.now().Unix()
 	var buf bytes.Buffer
