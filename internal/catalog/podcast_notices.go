@@ -107,8 +107,9 @@ type poll struct {
 	// follower's Check now.
 	scheduled bool
 	// reachable: the Bridge reached another feed since this show's previous
-	// check, or checked none (bridgeReachedFeeds), so a network-class failure
-	// is this feed's, not the Bridge's own internet.
+	// check (a success or an HTTP answer), or failed to reach none
+	// (bridgeReachedFeeds), so a network-class failure is this feed's, not the
+	// Bridge's own internet.
 	reachable bool
 }
 

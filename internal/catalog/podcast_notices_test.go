@@ -556,6 +556,41 @@ func TestPodcastNetworkFailuresJudgedAcrossTheBridge(t *testing.T) {
 	if got := log2.take(); len(got) != 1 || got[0].Failures != NetworkFailingAfter {
 		t.Fatalf("a lone show told %+v", got)
 	}
+
+	// Another feed failing with an HTTP error was reached all the same: a
+	// dead host's timeouts beside it count; a check failed at the Bridge
+	// (bridge_lost) says nothing of its internet either way.
+	c3, ctx3 := newTestCatalog(t)
+	now3 := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	c3.now = func() time.Time { return now3 }
+	log3 := listenNotices(c3)
+	pair := podcastShowsLib(t, c3, ctx3, 2)
+	id3 := int64(0)
+	fold3 := func(n int, state, code string) {
+		t.Helper()
+		id3++
+		now3 = now3.Add(10 * time.Minute)
+		if err := c3.FoldPodcastJob(ctx3, showPoll(pair.ID, id3, n, state, code)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for n := range 3 {
+		fold3(n, bridge.StateDone, "")
+	}
+	for range NetworkFailingAfter {
+		fold3(0, bridge.StateFailed, "timeout")
+		fold3(1, bridge.StateFailed, "http_500")
+		fold3(2, bridge.StateFailed, "bridge_lost")
+	}
+	var dead []PodcastNotice
+	for _, n := range log3.take() {
+		if n.ShowPath == "Example Show" {
+			dead = append(dead, n)
+		}
+	}
+	if len(dead) != 1 || dead[0].Code != "timeout" || dead[0].Failures != NetworkFailingAfter {
+		t.Fatalf("a dead host beside an answering feed told %+v, want failing timeout after %d", dead, NetworkFailingAfter)
+	}
 }
 
 // Only the scheduler's polls count (bridge.PollParams.Scheduled): a Check now
