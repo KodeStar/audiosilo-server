@@ -191,13 +191,7 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 	// replayed from an offline queue is dated when it happened, normalized to
 	// RFC3339 UTC to the second (fixed width, so they compare as strings).
 	stamp := saved.UTC().Format(time.RFC3339)
-	// The event's time, and finish_changed_at's: saved, never ahead of now
-	// (finishChangeStamp's rule).
-	atT := saved
-	if atT.After(now) {
-		atT = now
-	}
-	at := formatSessionTime(atT)
+	at := finishChangeAt(saved, now) // the event's time, and finish_changed_at's
 	var out *Progress
 	err = c.db.WithUserStateTx(ctx, "SaveProgress", func(tx *sql.Tx) error {
 		existing, err := getProgress(ctx, tx, userID, in.Ref)
@@ -284,18 +278,25 @@ const endStayHold = `stay_version=NULL`
 const explicitWriteSet = endSpanChain + `, edit_version=excluded.version`
 
 // finishChangeStamp is the time a write that changes a row's finished state
-// records as finish_changed_at (SaveProgressFrom applies the same rule to a
-// parsed time): the write's own
-// updated_at, never ahead of the server's clock now (plausibleUpdatedAt allows a
-// little skew: a finish dated ahead would make a Sync v2 unfinish sent just
-// after it "older"), or now when updated_at doesn't parse. Fixed-width UTC
-// milliseconds.
+// records as finish_changed_at: the write's own updated_at as finishChangeAt
+// dates it, or now when updated_at doesn't parse.
 func finishChangeStamp(updatedAt string, now time.Time) string {
 	t, err := time.Parse(time.RFC3339, updatedAt)
-	if err != nil || t.After(now) {
+	if err != nil {
 		t = now
 	}
-	return formatSessionTime(t)
+	return finishChangeAt(t, now)
+}
+
+// finishChangeAt is finish_changed_at (and a PUT's event time) for a write
+// saved at saved: saved, never ahead of the server's clock now
+// (plausibleUpdatedAt allows a little skew: a finish dated ahead would make a
+// Sync v2 unfinish sent just after it "older"). Fixed-width UTC milliseconds.
+func finishChangeAt(saved, now time.Time) string {
+	if saved.After(now) {
+		saved = now
+	}
+	return formatSessionTime(saved)
 }
 
 // plausibleUpdatedAt reports whether a client-supplied updated_at can be
@@ -304,7 +305,7 @@ func finishChangeStamp(updatedAt string, now time.Time) string {
 // still works). Without this check a client with a broken clock (or a garbage
 // value) sending a far-future timestamp would win every future comparison and
 // permanently wedge the book's progress at that write; the caller substitutes
-// server time (c.ts()) instead.
+// server time (now) instead.
 func plausibleUpdatedAt(t, now time.Time) bool {
 	const maxSkew = 5 * time.Minute
 	return !t.After(now.Add(maxSkew))
