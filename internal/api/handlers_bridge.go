@@ -516,7 +516,7 @@ func claimEnded(ctx context.Context, w http.ResponseWriter) {
 // The answer is the job as stored; its cancel_requested asks the Bridge to stop.
 // 409 code not_held when the claim no longer holds it (it ended, was cancelled,
 // or its lease ran out and it was claimed again), with reason "cancelled" when
-// it was cancelled while this claim held it (bridge#35).
+// it ended cancelled with no later claim (bridge.ErrCancelledWhileHeld, bridge#35).
 func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r, "id", "invalid job id")
 	if !ok {
@@ -600,7 +600,7 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 		body := map[string]string{"error": "the job is no longer held by this claim", "code": "not_held"}
 		if errors.Is(err, bridge.ErrCancelledWhileHeld) {
 			// Still not_held (an older Bridge drops the job as before); reason
-			// tells a newer one an admin's cancel ended it, not a lost lease.
+			// tells a newer one a cancel ended it, not a lost lease.
 			body["reason"] = "cancelled"
 		}
 		writeJSON(w, http.StatusConflict, body)

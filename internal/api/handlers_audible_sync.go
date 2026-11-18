@@ -151,8 +151,9 @@ func (a *API) handleBridgeAudibleListening(w http.ResponseWriter, r *http.Reques
 // the person can still reach, rows the account itself wrote left out, oldest
 // change first, after the cursor since). 200 {rows, next, more, server_time}:
 // next is the cursor to send as since next time (kept between polls), more
-// whether to ask again at once, server_time the server's clock (RFC 3339), which
-// the Bridge reads the rows' updated_at against rather than its own (bridge#50). 400 invalid_request (no account, a bad limit or cursor); 403
+// whether to ask again at once, server_time the server's clock (RFC 3339),
+// which the Bridge reads the rows' updated_at against rather than its own
+// (bridge#50). 400 invalid_request (no account, a bad limit or cursor); 403
 // sync_off, user_unavailable; 404 unknown_account.
 func (a *API) handleBridgeProgress(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
