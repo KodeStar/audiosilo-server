@@ -19,8 +19,26 @@ const (
 // FeedFailingAfter is how many polls in a row the feed itself fails before
 // it is announced as failing (`gone` and a lost private-feed secret are
 // announced at once). NetworkFailingAfter is the same for network-class
-// failures (bridge.NetworkFailure), which every show raises at once while the
-// Bridge's own internet is down: a short outage there announces nothing.
+// failures (bridge.NetworkFailure).
+//
+// A Bridge that loses its own internet fails every show with a network-class
+// code at once, and two rules keep that outage out of the notices. Each covers
+// what the other can't, so both stay:
+//
+//   - The reach gate (bridgeReachedFeeds) judges by the other feeds: a
+//     network-class failure counts only when a check of another feed since the
+//     show's previous one says the Bridge was online, or none says it wasn't.
+//     It holds however long the outage lasts, but only where other feeds were
+//     checked in that time, and it can't tell an outage from every feed
+//     failing that way for its own reasons: none of those is announced.
+//   - The weight (NetworkFailingAfter, feedRun.due) covers where the gate has
+//     nothing to judge by: a lone show, the other shows not due in the window,
+//     and the outage's first failure (the other feeds' last word is still a
+//     success). There the failure counts, at half an answer's share, so an
+//     outage shorter than six backed-off polls announces nothing.
+//
+// Neither is the polls' backoff, which follows podcast_feed_state.failures
+// (FoldPodcastJob) whatever the notices count.
 const (
 	FeedFailingAfter    = 3
 	NetworkFailingAfter = 6

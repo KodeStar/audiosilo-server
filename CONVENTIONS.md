@@ -3964,7 +3964,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Bridge's internet is down) need six (`catalog.NetworkFailingAfter`) and count only when the Bridge
   reached another feed since the show's previous check (a success, or an answer such as an HTTP error,
   `bridge.FeedAnswered`), or failed to reach none (`bridgeReachedFeeds`, server#403: a check failed at the Bridge
-  says nothing; an outage counts at most one per show, a lone show as before), and a mixed run is announced
+  says nothing; an outage counts at most one per show, a lone show as before; the six and the gate are the
+  two outage rules, each covering what the other can't: the comment at `catalog.NetworkFailingAfter`), and a mixed run is announced
   once the two shares add up to one (`feedRun.due`: two answers and two timeouts, say);
   `feed_secret_missing` is announced at once without counting (and sets the show's
   `status.secret_missing` until a check succeeds, so a client can say "follow it again by its address";
