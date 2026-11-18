@@ -69,3 +69,56 @@ func TestAudibleTitlesMoveAfterTheirPlaces(t *testing.T) {
 		t.Fatalf("feed after the move = %+v, want the moved book's place", got)
 	}
 }
+
+// server#359: a row left at the new path that the move doesn't change is
+// another book's place, never offered to Audible under the moved book's
+// title: its person never played the moved book, or the left row was the
+// newer and won the merge. Its offer position (change_seq) stays where it was.
+// A row the move does carry is offered (above).
+func TestAudibleMoveLeavesALeftRowUnoffered(t *testing.T) {
+	t.Parallel()
+	const oldPath, newPath = "Author/Old", "Author/New"
+	for _, tc := range []struct {
+		name   string
+		played bool // the person has a place on the moved book (older than the left row)
+	}{{"never played", false}, {"left row newer", true}} {
+		f := newAudibleFixture(t, "manual")
+		on := true
+		if _, err := f.c.PatchAudibleAccount(f.ctx, "acct0001", AudibleAccountPatch{Sync: &on}); err != nil {
+			t.Fatal(err)
+		}
+		title := avail("B000000001", "")
+		title.Match = &AudibleMatch{LibraryID: f.lib.ID, Path: oldPath, How: "asin"}
+		f.poll(t, "p1", title)
+		save := func(path string, pos float64, at time.Time) {
+			t.Helper()
+			if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: Ref{LibraryID: f.lib.ID, Path: path}, Position: pos,
+				Duration: 36000, DeviceID: "phone", UpdatedAt: at.UTC().Format(time.RFC3339)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if tc.played {
+			save(oldPath, 5000, f.clock.Add(-48*time.Hour))
+		}
+		save(newPath, 100, f.clock.Add(-time.Hour)) // an earlier book's, left behind
+		seq := func() int64 {
+			t.Helper()
+			var n int64
+			if err := f.c.db.QueryRowContext(f.ctx, `SELECT change_seq FROM progress WHERE user_id = ? AND rel_path = ?`,
+				f.user, newPath).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+		before := seq()
+		if err := f.c.MoveDurableState(f.ctx, f.lib.ID, oldPath, newPath); err != nil {
+			t.Fatal(err)
+		}
+		if p, _ := f.c.GetProgress(f.ctx, f.user, Ref{LibraryID: f.lib.ID, Path: newPath}); p == nil || p.Position != 100 {
+			t.Fatalf("%s: row at the new path = %+v, want the left row", tc.name, p)
+		}
+		if after := seq(); after != before {
+			t.Fatalf("%s: the left row's offer moved from %d to %d", tc.name, before, after)
+		}
+	}
+}

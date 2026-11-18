@@ -115,6 +115,14 @@ func (c *Catalog) JoinDurableState(ctx context.Context, libraryID int64, into st
 		return err
 	}
 	return c.db.WithTx(ctx, "JoinDurableState", func(tx *sql.Tx) error {
+		froms := make([]string, len(parts))
+		for i, p := range parts {
+			froms[i] = p.Path
+		}
+		left, err := audibleRowsAt(ctx, tx, libraryID, froms, into)
+		if err != nil {
+			return err
+		}
 		for _, p := range parts {
 			if p.Unplaced {
 				continue
@@ -131,7 +139,7 @@ func (c *Catalog) JoinDurableState(ctx context.Context, libraryID int64, into st
 				return fmt.Errorf("join audible titles: %w", err)
 			}
 		}
-		return nil
+		return keepLeftOffers(ctx, tx, libraryID, into, left)
 	})
 }
 

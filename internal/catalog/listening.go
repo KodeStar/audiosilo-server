@@ -412,12 +412,19 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 		return err
 	}
 	return c.db.WithTx(ctx, "MoveDurableState", func(tx *sql.Tx) error {
+		left, err := audibleRowsAt(ctx, tx, libraryID, []string{oldPath}, newPath)
+		if err != nil {
+			return err
+		}
 		// A move is a join of one part at offset 0 that ends the book, except that
 		// a collision takes the newer save rather than the furthest.
 		if err := carryListeningState(ctx, tx, libraryID, JoinPart{Path: oldPath, Last: true}, newPath, 0, mergeNewest); err != nil {
 			return fmt.Errorf("move listening state: %w", err)
 		}
-		return moveAudibleTitles(ctx, tx, libraryID, oldPath, newPath)
+		if err := moveAudibleTitles(ctx, tx, libraryID, oldPath, newPath); err != nil {
+			return err
+		}
+		return keepLeftOffers(ctx, tx, libraryID, newPath, left)
 	})
 }
 
@@ -429,8 +436,9 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 // book left at into by the carry's rule, mergeNewest or mergeFurthest), never
 // that left-behind row as it stood before the carry, and a carry that fails
 // leaves the titles where they were (the next poll matches them afresh). A
-// person with no place on the moved book still has a left-behind row at into
-// offered, as the player shows it for the moved book.
+// left-behind row the carry did not change (its person never played the moved
+// book, or the row was the newer and won the merge) is another book's place:
+// its offer is taken back (keepLeftOffers, server#359).
 func moveAudibleTitles(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) error {
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE audible_titles SET match_path = ? WHERE match_library_id = ? AND match_path = ?`,
@@ -441,6 +449,55 @@ func moveAudibleTitles(ctx context.Context, tx *sql.Tx, libraryID int64, from, i
 		`UPDATE audible_titles SET contest_path = ? WHERE contest_library_id = ? AND contest_path = ?`,
 		into, libraryID, from)
 	return err
+}
+
+// leftRow is a progress row at a move's or join's destination, before the
+// carry, of a person with an Audible title matched to a part that moves
+// there: its place and its offer position (change_seq, 0066).
+type leftRow struct {
+	user      int64
+	position  float64
+	finished  bool
+	updatedAt string
+	seq       int64
+}
+
+// audibleRowsAt reads, inside tx, the rows already at into (left there by an
+// earlier book, or a joined book's own) of the people whose Audible titles are
+// matched to one of froms, before their places are carried onto into.
+func audibleRowsAt(ctx context.Context, tx *sql.Tx, libraryID int64, froms []string, into string) ([]leftRow, error) {
+	args := []any{libraryID, into, libraryID}
+	for _, f := range froms {
+		args = append(args, f)
+	}
+	return queryRows(ctx, tx, func(rows *sql.Rows, r *leftRow) error {
+		return rows.Scan(&r.user, &r.position, &r.finished, &r.updatedAt, &r.seq)
+	}, `SELECT p.user_id, p.position, p.finished, p.updated_at, p.change_seq FROM progress p
+	     WHERE p.library_id = ? AND p.rel_path = ?
+	       AND p.user_id IN (SELECT a.user_id FROM audible_titles t JOIN audible_accounts a ON a.account = t.account
+	                          WHERE t.match_library_id = ? AND t.match_path IN (`+placeholders(len(froms))+`))`, args...)
+}
+
+// keepLeftOffers takes back, inside tx after moveAudibleTitles, the offer of
+// each row left at into (audibleRowsAt) that the carry did not change (the
+// same place, finish state and time): the person never played the moved book,
+// or the left row won the carry's merge (a move's newer save, a join's further
+// place). Its
+// place is another book's, which the re-match trigger (0066, 0071) would have
+// offered to Audible under the moved book's titles (server#359); its offer
+// position goes back to where it was, so a feed already past it does not read
+// it again, and Audible's own place, ahead of it, comes back by the next sync.
+// The row's next write offers it as any write does.
+func keepLeftOffers(ctx context.Context, tx *sql.Tx, libraryID int64, into string, left []leftRow) error {
+	for _, r := range left {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE progress SET change_seq = ?
+			  WHERE user_id = ? AND library_id = ? AND rel_path = ? AND position = ? AND finished = ? AND updated_at = ?`,
+			r.seq, r.user, libraryID, into, r.position, r.finished, r.updatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // carryListeningState hands every listener's state on one path (part.Path) to
