@@ -81,9 +81,7 @@ func (c *Catalog) KeyPaths(ctx context.Context, progress func(done, total int)) 
 	}
 	all := v != pathKeysVersion
 	var after int64
-	where := `path_key IS NULL AND id > ?`
 	if all {
-		where = `id > ?`
 		resume, err := getServerState[pathKeysResume](ctx, c.db, pathKeysResumeKey)
 		if err != nil {
 			return 0, err
@@ -93,7 +91,7 @@ func (c *Catalog) KeyPaths(ctx context.Context, progress func(done, total int)) 
 		}
 	}
 	var total int
-	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books WHERE `+where, after).Scan(&total); err != nil {
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books WHERE `+keyPathsWhere(all), after).Scan(&total); err != nil {
 		return 0, err
 	}
 	if total == 0 && !all {
@@ -101,7 +99,7 @@ func (c *Catalog) KeyPaths(ctx context.Context, progress func(done, total int)) 
 	}
 	keyed := 0
 	for {
-		n, last, err := c.keyPathsIn(ctx, where, after, all)
+		n, last, err := c.keyPathsIn(ctx, after, all)
 		if err != nil {
 			return keyed, err
 		}
@@ -122,11 +120,20 @@ func (c *Catalog) KeyPaths(ctx context.Context, progress func(done, total int)) 
 	})
 }
 
+// keyPathsWhere is the books KeyPaths keys past an id (?): every one with all,
+// else those with no key.
+func keyPathsWhere(all bool) string {
+	if all {
+		return `id > ?`
+	}
+	return `path_key IS NULL AND id > ?`
+}
+
 // keyPathsIn is one of KeyPaths' transactions: the next keyPathsChunk books
-// past id after that where admits, keyed. With all (a re-key of every book) it
+// past id after (keyPathsWhere), keyed. With all (a re-key of every book) it
 // records the last id done in the same transaction. It returns how many books
 // it read and the last one's id (0 and after when none were left).
-func (c *Catalog) keyPathsIn(ctx context.Context, where string, after int64, all bool) (int, int64, error) {
+func (c *Catalog) keyPathsIn(ctx context.Context, after int64, all bool) (int, int64, error) {
 	n, last := 0, after
 	err := c.db.WithTx(ctx, "KeyPaths", func(tx *sql.Tx) error {
 		type book struct {
@@ -135,7 +142,7 @@ func (c *Catalog) keyPathsIn(ctx context.Context, where string, after int64, all
 			stored sql.NullString
 		}
 		books, err := queryRows(ctx, tx, func(r *sql.Rows, b *book) error { return r.Scan(&b.id, &b.rel, &b.stored) },
-			`SELECT id, rel_path, path_key FROM books WHERE `+where+` ORDER BY id LIMIT ?`, after, cmp.Or(c.chunkKeyPaths, keyPathsChunk))
+			`SELECT id, rel_path, path_key FROM books WHERE `+keyPathsWhere(all)+` ORDER BY id LIMIT ?`, after, cmp.Or(c.chunkKeyPaths, keyPathsChunk))
 		if err != nil || len(books) == 0 {
 			return err
 		}

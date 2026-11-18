@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -226,6 +228,36 @@ func restoreLogged(t *testing.T, c *Catalog, table, rowJSON string) string {
 var rekeyedTables = []string{"progress", "bookmarks", "notes", "listening_history", "listening_sessions", "listening_daily",
 	"listening_events", "import_progress_prior", "up_next", "collection_items", "ratings", "reading_progress", "favourites"}
 
+// TestRekeyTablesMatchCarry: rekeyTables names every table carryState writes,
+// in the carry group that writes it, so no carried row is missing from the log.
+func TestRekeyTablesMatchCarry(t *testing.T) {
+	want := map[string]carrySet{"progress": carryTimeline, "favourites": carryFavs}
+	table := regexp.MustCompile(`(?:UPDATE(?: OR IGNORE)?|INSERT INTO|DELETE FROM)\s+(\w+)`)
+	for set, stmts := range map[carrySet][]string{carryTimeline: timelineCarries, carryBookLevel: bookLevelCarries} {
+		for _, stmt := range stmts {
+			m := table.FindStringSubmatch(stmt)
+			if m == nil {
+				t.Fatalf("no table in %q", stmt)
+			}
+			want[m[1]] = set
+		}
+	}
+	got := map[string]carrySet{}
+	for _, rt := range rekeyTables {
+		got[rt.name] = rt.set
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("rekeyTables = %v, carried = %v", got, want)
+	}
+	var names []string
+	for _, rt := range rekeyTables {
+		names = append(names, rt.name)
+	}
+	if !slices.Equal(names, rekeyedTables) {
+		t.Errorf("rekeyTables = %v, the tests' rekeyedTables = %v", names, rekeyedTables)
+	}
+}
+
 // rowCount is how many rows table holds at p in lib.
 func (f *rekeyFixture) rowCount(t *testing.T, table string, lib int64, p string) int {
 	t.Helper()
@@ -326,7 +358,7 @@ func TestRekeyPathState(t *testing.T) {
 		{"favourites", rkTrack1D}: true,
 	}
 	for _, table := range rekeyedTables {
-		if !slices.Contains([]string{"up_next", "collection_items", "ratings", "reading_progress"}, table) {
+		if i := slices.IndexFunc(rekeyTables, func(rt rekeyTable) bool { return rt.name == table }); rekeyTables[i].set != carryBookLevel {
 			stays[at{table, rkDisc1}] = true // a disc's timeline and its heart (folder)
 		}
 	}
@@ -434,7 +466,7 @@ func TestRekeyPathState(t *testing.T) {
 	if err != nil || len(scan.Moved) != 0 {
 		t.Errorf("scan-end run: %+v %v, want nothing moved", scan, err)
 	}
-	if !equalCounts(total(), after) {
+	if !maps.Equal(total(), after) {
 		t.Error("a re-run changed the tables")
 	}
 
@@ -444,15 +476,6 @@ func TestRekeyPathState(t *testing.T) {
 	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM path_rekeys WHERE user_id = ?`, f.bob).Scan(&bobs); err != nil || bobs != 0 {
 		t.Errorf("bob's logged rows after his delete: %d (%v)", bobs, err)
 	}
-}
-
-func equalCounts(a, b map[string]int) bool {
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return len(a) == len(b)
 }
 
 // TestRekeyScopeGuardAllowsReachableBook: the scope guard is per path: dan,

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"path"
 	"slices"
 )
 
@@ -142,14 +141,19 @@ type RekeyReport struct {
 
 func (r *RekeyReport) add(o RekeyReport) {
 	for k, v := range o.Moved {
-		if r.Moved == nil {
-			r.Moved = map[string]int{}
-		}
-		r.Moved[k] += v
+		r.moved(k, v)
 	}
 	r.Rows += o.Rows
 	r.Skipped = append(r.Skipped, o.Skipped...)
 	r.Failed = append(r.Failed, o.Failed...)
+}
+
+// moved counts paths moved for reason.
+func (r *RekeyReport) moved(reason string, paths int) {
+	if r.Moved == nil {
+		r.Moved = map[string]int{}
+	}
+	r.Moved[reason] += paths
 }
 
 // RekeyPathState is the start's re-key: every books library, every table, once
@@ -211,6 +215,7 @@ func (c *Catalog) rekeyLibrary(ctx context.Context, libraryID int64, primaryOnly
 		paths = append(paths, p)
 	}
 	slices.Sort(paths)
+	reach := map[int64][]Scope{} // each listener's access, read once a run (ownersReach)
 	for _, p := range paths {
 		if cands[p] == carryFavs && !normSensitive(p) {
 			continue // favourites move only to another spelling, and p has none
@@ -220,11 +225,10 @@ func (c *Catalog) rekeyLibrary(ctx context.Context, libraryID int64, primaryOnly
 			rep.Failed = append(rep.Failed, RekeyPath{LibraryID: libraryID, Path: p, Why: err.Error()})
 			continue
 		}
-		set := rekeySet(reason)
-		if set&cands[p] == 0 {
+		if rekeySet(reason)&cands[p] == 0 {
 			continue // nothing its reason moves (no target, or a track's favourites only)
 		}
-		rows, guard, err := c.rekeyPath(ctx, libraryID, rekeyMove{from: p, spelled: spelled, to: target, reason: reason, set: set})
+		rows, guard, err := c.rekeyPath(ctx, libraryID, p, spelled, target, reason, reach)
 		at := RekeyPath{LibraryID: libraryID, Path: p, Target: target}
 		switch {
 		case err != nil:
@@ -234,10 +238,7 @@ func (c *Catalog) rekeyLibrary(ctx context.Context, libraryID int64, primaryOnly
 			at.Why = guard
 			rep.Skipped = append(rep.Skipped, at)
 		case rows > 0:
-			if rep.Moved == nil {
-				rep.Moved = map[string]int{}
-			}
-			rep.Moved[reason]++
+			rep.moved(reason, 1)
 			rep.Rows += rows
 		}
 	}
@@ -260,8 +261,8 @@ func rekeySet(reason string) carrySet {
 // rekeyCandidates are the library's paths with rows and no indexed book, each
 // with the carry groups its rows are in. A path no indexed book lies above, in
 // a spelling with no other, can be no book's (an orphan of a removed book, a
-// navigation folder's favourite): one batched read of every ancestor leaves it
-// out without its own lookups, as listableRefs does.
+// navigation folder's favourite): heldRefs leaves it out without its own
+// lookups, as listableRefs does.
 func (c *Catalog) rekeyCandidates(ctx context.Context, libraryID int64, primaryOnly bool) (map[string]carrySet, error) {
 	cands := map[string]carrySet{}
 	for _, t := range rekeyTables {
@@ -276,32 +277,26 @@ func (c *Catalog) rekeyCandidates(ctx context.Context, libraryID int64, primaryO
 			cands[p] |= t.set
 		}
 	}
-	var above []Ref
+	var plain []Ref
 	for p := range cands {
-		for d := path.Dir(p); d != "." && d != "/"; d = path.Dir(d) {
-			above = append(above, Ref{LibraryID: libraryID, Path: d})
+		if !normSensitive(p) {
+			plain = append(plain, Ref{LibraryID: libraryID, Path: p})
 		}
 	}
-	holders, err := c.booksAt(ctx, above)
+	held, err := c.heldRefs(ctx, plain)
 	if err != nil {
 		return nil, err
 	}
-	for p := range cands {
-		if normSensitive(p) {
-			continue
-		}
-		held := false
-		for d := path.Dir(p); d != "." && d != "/" && !held; d = path.Dir(d) {
-			_, held = holders[Ref{LibraryID: libraryID, Path: d}]
-		}
-		if !held {
-			delete(cands, p)
+	for _, r := range plain {
+		if !held[r] {
+			delete(cands, r.Path)
 		}
 	}
 	return cands, nil
 }
 
-// rekeyTarget is where p's rows belong, from the index alone: another spelling
+// rekeyTarget is where p's rows belong, from the index (and Spelling's one look
+// at the disk, for a path with another spelling only): another spelling
 // of an indexed book is that book (spelling); a file of a folder book, in any
 // spelling, is the book (file); a folder inside a book is the book for its
 // book-level rows (folder). reason is "" when p is none of them (a navigation
@@ -318,15 +313,16 @@ func (c *Catalog) rekeyTarget(ctx context.Context, libraryID int64, p string) (r
 			return "", "", "", err
 		}
 	}
-	if book, err := c.BookPathOfFile(ctx, libraryID, spelled); err == nil {
-		return rekeyFile, spelled, book, nil
-	} else if !errors.Is(err, ErrNotFound) {
-		return "", "", "", err
-	}
-	if book, err := c.BookPathAt(ctx, libraryID, spelled); err == nil {
-		return rekeyFolder, spelled, book, nil
-	} else if !errors.Is(err, ErrNotFound) {
-		return "", "", "", err
+	// spelled is no book (a candidate, or checked above): only a book holding it.
+	for _, h := range []struct {
+		reason   string
+		fileOnly bool
+	}{{rekeyFile, true}, {rekeyFolder, false}} {
+		if _, book, err := c.bookHolding(ctx, libraryID, spelled, h.fileOnly); err == nil {
+			return h.reason, spelled, book, nil
+		} else if !errors.Is(err, ErrNotFound) {
+			return "", "", "", err
+		}
 	}
 	return "", spelled, "", nil
 }
@@ -338,26 +334,17 @@ type rekeyRow struct {
 	cols  map[string]any
 }
 
-// errRekeyGuard ends a path's transaction when a guard leaves its rows where
-// they are; the guard's name is returned beside it.
-var errRekeyGuard = errors.New("re-key guard")
-
-// rekeyMove is one path's move: its rows on from (spelled: from in the index's
-// spelling) in set's tables go to the book at to, for reason.
-type rekeyMove struct {
-	from, spelled, to, reason string
-	set                       carrySet
-}
-
-// rekeyPath makes m in one transaction, all or nothing: every row is copied
+// rekeyPath moves p's rows (spelled: p in the index's spelling) in the tables
+// reason moves (rekeySet) to the book at target in one transaction, all or
+// nothing: every row is copied
 // into path_rekeys first, then carried as a move carries it (carryState:
 // progress by mergeNewest, a list entry or favourite once, a rating or
 // reader's place the newer). It checks again, inside the transaction, that
 // from is still no book and to still one (a scan may have run since the
 // candidates were read), and returns the rows moved, or the guard that left
-// them (nothing written).
-func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, m rekeyMove) (int, string, error) {
-	p, target, reason, set := m.from, m.to, m.reason, m.set
+// them (nothing written). reach caches each listener's access for ownersReach.
+func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, target, reason string, reach map[int64][]Scope) (int, string, error) {
+	set := rekeySet(reason)
 	moved, guard := 0, ""
 	err := c.db.WithTx(ctx, "RekeyPathState", func(tx *sql.Tx) error {
 		if _, err := bookIDByPath(ctx, tx, libraryID, p); err == nil {
@@ -386,18 +373,19 @@ func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, m rekeyMove) (
 		if len(rows) == 0 {
 			return nil
 		}
-		if ok, err := c.ownersReach(ctx, tx, rows, Ref{LibraryID: libraryID, Path: target}); err != nil {
+		// A guard returns before anything is written: the commit is a rollback's.
+		if ok, err := c.ownersReach(ctx, tx, rows, Ref{LibraryID: libraryID, Path: target}, reach); err != nil {
 			return err
 		} else if !ok {
 			guard = RekeyGuardScope
-			return errRekeyGuard
+			return nil
 		}
 		if reason == rekeyFile {
-			if tripped, err := fileRelative(ctx, tx, libraryID, m.spelled, target, rows); err != nil {
+			if tripped, err := fileRelative(ctx, tx, libraryID, spelled, target, rows); err != nil {
 				return err
 			} else if tripped {
 				guard = RekeyGuardTimeline
-				return errRekeyGuard
+				return nil
 			}
 		}
 		at := c.stamp()
@@ -419,10 +407,10 @@ func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, m rekeyMove) (
 		moved = len(rows)
 		return nil
 	})
-	if errors.Is(err, errRekeyGuard) {
-		return 0, guard, nil
+	if err != nil {
+		return 0, "", err
 	}
-	return moved, "", err
+	return moved, guard, nil
 }
 
 // readRekeyRows reads every row of t on p, each column by name.
@@ -462,22 +450,25 @@ func readRekeyRows(ctx context.Context, tx *sql.Tx, t rekeyTable, libraryID int6
 // ownersReach reports whether every listener with a row in rows can reach ref
 // with their current access (admins always can), as the book path rule asks of
 // a write (api.timelinePath): a listener granted only a track would otherwise
-// lose sight of their own row.
-func (c *Catalog) ownersReach(ctx context.Context, tx *sql.Tx, rows []rekeyRow, ref Ref) (bool, error) {
-	seen := map[int64]bool{}
+// lose sight of their own row. reach holds the access already read, by
+// listener (one run's: their scopes, read once).
+func (c *Catalog) ownersReach(ctx context.Context, tx *sql.Tx, rows []rekeyRow, ref Ref, reach map[int64][]Scope) (bool, error) {
 	for _, r := range rows {
-		if !r.owner.Valid || seen[r.owner.Int64] {
+		if !r.owner.Valid {
 			continue
 		}
-		seen[r.owner.Int64] = true
-		var admin bool
-		if err := tx.QueryRowContext(ctx, `SELECT role = 'admin' FROM users WHERE id = ?`, r.owner.Int64).
-			Scan(&admin); err != nil {
-			return false, err
-		}
-		scopes, err := c.UserScopes(ctx, r.owner.Int64, admin)
-		if err != nil {
-			return false, err
+		scopes, ok := reach[r.owner.Int64]
+		if !ok {
+			var admin bool
+			if err := tx.QueryRowContext(ctx, `SELECT role = 'admin' FROM users WHERE id = ?`, r.owner.Int64).
+				Scan(&admin); err != nil {
+				return false, err
+			}
+			var err error
+			if scopes, err = c.UserScopes(ctx, r.owner.Int64, admin); err != nil {
+				return false, err
+			}
+			reach[r.owner.Int64] = scopes
 		}
 		if !ScopesAllow(scopes, ref) {
 			return false, nil
@@ -512,12 +503,7 @@ func fileRelative(ctx context.Context, tx *sql.Tx, libraryID int64, file, book s
 		if r.table != "progress" {
 			continue
 		}
-		d, ok := r.cols["duration"].(float64)
-		if !ok {
-			if n, isInt := r.cols["duration"].(int64); isInt {
-				d, ok = float64(n), true
-			}
-		}
+		d, ok := r.cols["duration"].(float64) // REAL NOT NULL: always a float
 		if ok && math.Abs(d-fileLen) <= timelineSlack && math.Abs(d-bookLen) > timelineSlack {
 			return true, nil
 		}
