@@ -939,6 +939,19 @@ describe('the chapter editor', () => {
       expect(mints()).toBe(1);
     });
 
+    it('plays on when a stalled stream starts while it waits to be asked for again', async () => {
+      const { audio, looks, wait } = await stall({ ...busy, headers: { 'Retry-After': '0.2' } });
+      wait();
+      await screen.findByText('The server is busy. Trying again in a moment.');
+      expect(looks()).toHaveLength(1);
+      fireEvent.playing(audio);
+      expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
+      await new Promise((r) => setTimeout(r, 300));
+      expect(load).not.toHaveBeenCalled();
+      expect(play).not.toHaveBeenCalled();
+    });
+
     it('lets a stream be that has started', async () => {
       const started = await stall(busy);
       fireEvent.playing(started.audio);

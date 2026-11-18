@@ -1042,10 +1042,13 @@ function Scrubber({
             stall.current = setTimeout(() => stuck.current?.(), STALL_MS);
           }}
           // A busy stream's tries count until one plays: Safari's stalled one
-          // has loaded its metadata every time.
+          // has loaded its metadata every time. A stalled one that starts while
+          // it waits to be asked for again plays on: the wait and the look go.
           onPlaying={() => {
-            clearTimeout(stall.current);
+            stopRetry();
             busy.current = 0;
+            broken.current = false;
+            setPlaying(true);
             if (!previewing.current) return;
             previewing.current = false;
             clearTimeout(preview.current);
