@@ -173,7 +173,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	ffmpeg, ffprobe := resolveTools(ctx, abs, opts, log)
 	scanner := library.NewScanner(cat, ffprobe, log)
-	scanner.OnRunFinished = rekeyAfterScan(cat, log, ntf.ScanFinished)
+	scanner.OnRunFinished = rekeyAfterScan(ctx, cat, log, ntf.ScanFinished)
 	cat.SetPodcastNotice(ntf.PodcastNotice)
 	scanner.SetConcurrency(cfg.Scan.Concurrency)
 

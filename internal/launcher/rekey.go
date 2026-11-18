@@ -45,12 +45,18 @@ func rekeyAtStart(ctx context.Context, cat *catalog.Catalog, log *slog.Logger) {
 // library a run just finished (catalog.RekeyLibrary), so a row a client stored
 // while its book was not indexed yet moves to it now, then next (the
 // notifications). Only after a run that finished (ok or partial); a failure is
-// logged and tried again after the next scan.
-func rekeyAfterScan(cat *catalog.Catalog, log *slog.Logger, next func(context.Context, library.RunReport)) func(context.Context, library.RunReport) {
+// logged and tried again after the next scan. It runs under server, the
+// server's context, not the one OnRunFinished is handed (which outlives the
+// server, for the run's record): a stop ends it between two paths, the rest
+// left for the next scan, rather than waiting for every path.
+func rekeyAfterScan(server context.Context, cat *catalog.Catalog, log *slog.Logger,
+	next func(context.Context, library.RunReport)) func(context.Context, library.RunReport) {
 	return func(ctx context.Context, r library.RunReport) {
 		if r.Status == catalog.RunOK || r.Status == catalog.RunPartial {
-			if rep, err := cat.RekeyLibrary(ctx, r.Library.ID); err != nil {
-				log.Warn("re-keying listening state after a scan failed", "library", r.Library.Name, "err", err)
+			if rep, err := cat.RekeyLibrary(server, r.Library.ID); err != nil {
+				if server.Err() == nil {
+					log.Warn("re-keying listening state after a scan failed", "library", r.Library.Name, "err", err)
+				}
 			} else {
 				// A path a guard keeps is kept at every scan: said at debug
 				// level here, at info by the start's run.

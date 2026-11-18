@@ -50,7 +50,7 @@ func TestScanEndRekeysANewBook(t *testing.T) {
 
 	scanner := library.NewScanner(cat, "", discardLog())
 	heard := make(chan library.RunReport, 1)
-	scanner.OnRunFinished = rekeyAfterScan(cat, discardLog(), func(_ context.Context, r library.RunReport) { heard <- r })
+	scanner.OnRunFinished = rekeyAfterScan(ctx, cat, discardLog(), func(_ context.Context, r library.RunReport) { heard <- r })
 	scanner.Start(ctx)
 	scanner.Enqueue(*lib, library.TriggerManual, nil)
 	select {
