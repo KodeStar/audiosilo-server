@@ -315,13 +315,18 @@ func (a *API) spelledPathInScope(ctx context.Context, lib *catalog.Library, scop
 	if status != 0 {
 		return nil, "", scope, status, msg
 	}
-	rel, err := a.spelledIn(ctx, lib.ID, scope.Allows, rel)
+	rel, missing, err := a.spelledIn(ctx, lib.ID, scope.Allows, rel)
 	if err != nil {
 		a.log.Warn("resolve path spelling failed", "library", lib.ID, "err", err)
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, "", scope, http.StatusServiceUnavailable, "request timed out"
 		}
 		return nil, "", scope, http.StatusInternalServerError, "could not resolve the path"
+	}
+	if missing {
+		// As a hidden path reads (relInScope): nothing more than a missing
+		// file's answer, on every route, the ones that open the file included.
+		return nil, "", scope, http.StatusNotFound, "not found"
 	}
 	return relInScope(lib, scope, rel)
 }
@@ -330,9 +335,14 @@ func (a *API) spelledPathInScope(ctx context.Context, lib *catalog.Library, scop
 // spellings allow (the caller's scope) admits, else rel as given: a spelling
 // outside the caller's access is never taken, nor counted, so the answer (a 403
 // where rel would read as missing, or a third spelling's) can't tell them an
-// indexed path they can't reach is there.
-func (a *API) spelledIn(ctx context.Context, libraryID int64, allow func(string) bool, rel string) (string, error) {
-	return a.cat.Spelling(ctx, libraryID, rel, allow)
+// indexed path they can't reach is there. missing reports that rel, which allow
+// admits as given (a rule written in that spelling), names only indexed paths
+// it refuses: the caller answers 404, as its catalog routes do for a path the
+// index has nothing at, and never opens rel on a disk that ignores the
+// difference (macOS, SMB), where it would reach the refused book's files.
+func (a *API) spelledIn(ctx context.Context, libraryID int64, allow func(string) bool, rel string) (spelled string, missing bool, err error) {
+	spelled, outside, err := a.cat.Spelling(ctx, libraryID, rel, allow)
+	return spelled, outside && (allow == nil || allow(rel)), err
 }
 
 // cleanedPath is rawPath cleaned (catalog.CleanRelPath), or the 400 for one over
@@ -452,12 +462,17 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	}
 	// A folder asked for in another Unicode spelling is listed in the index's
 	// (spelledIn), so the listing's path and its entries' are the paths the
-	// index, and so annotateWithBooks, has.
+	// index, and so annotateWithBooks, has. One whose index spelling the caller
+	// can't see is missing, never listed from the disk in the spelling given.
 	dir := r.URL.Query().Get("path")
 	if rel := catalog.CleanRelPath(dir); rel != "" {
-		spelled, err := a.spelledIn(r.Context(), lib.ID, allow, rel)
+		spelled, missing, err := a.spelledIn(r.Context(), lib.ID, allow, rel)
 		if err != nil {
 			a.writeCatalogError(w, err, "resolve path spelling failed", "Could not list the folder.", "library", lib.ID)
+			return
+		}
+		if missing {
+			writeError(w, http.StatusNotFound, "directory not found")
 			return
 		}
 		if spelled != rel {

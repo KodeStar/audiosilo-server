@@ -181,51 +181,64 @@ func (c *Catalog) keyPathsIn(ctx context.Context, where string, after int64, all
 // it never guesses. The result is p or an indexed path allow admits; a caller
 // still checks scope and hidden paths on it, and reads the disk only through
 // SafeJoin.
-func (c *Catalog) Spelling(ctx context.Context, libraryID int64, p string, allow func(string) bool) (string, error) {
+//
+// outside reports that p is as given because the only indexed paths reading
+// as it are ones allow refuses: p names, in another spelling, something the
+// caller can't reach, which a caller whose scope admits p as given (a rule
+// written in that spelling) must answer as missing, never by opening p on a
+// disk that ignores the difference (server#210).
+func (c *Catalog) Spelling(ctx context.Context, libraryID int64, p string, allow func(string) bool) (spelled string, outside bool, err error) {
 	if !normSensitive(p) {
-		return p, nil
+		return p, false, nil
 	}
 	if _, err := bookIDByPath(ctx, c.db, libraryID, p); !errors.Is(err, ErrNotFound) {
-		return p, err // the book at p, or a failed lookup
+		return p, false, err // the book at p, or a failed lookup
 	}
 	// A track or disc folder spelled as the index has it (every seek of a
 	// stream asks): one lookup, not the reads of steps 3 and 4.
 	if _, _, err := c.bookHolding(ctx, libraryID, p, false); !errors.Is(err, ErrNotFound) {
-		return p, err
+		return p, false, err
 	}
 	k := unorm.NFC.String(p)
 	books, err := c.booksKeyed(ctx, libraryID, []string{k}, false)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	m := spellMatch{allow: allow}
+	m := &spellMatch{allow: allow}
 	for _, b := range books {
 		m.add(b.rel)
 	}
 	if s, found := m.one(p); found {
-		return s, nil
+		return s, false, nil
 	}
-	if s, found, err := c.spellingInBook(ctx, libraryID, p, k, allow); found || err != nil {
-		return s, err
+	if s, found, err := c.spellingInBook(ctx, libraryID, p, k, m); found || err != nil {
+		return s, false, err
 	}
-	return c.folderSpelling(ctx, libraryID, p, allow)
+	s, err := c.folderSpelling(ctx, libraryID, p, m)
+	return s, s == p && m.out && len(m.in) == 0, err
 }
 
 // spellMatch gathers the indexed paths one of Spelling's steps finds reading
-// as p: those allow admits (nil: every one), each once.
+// as p: those allow admits (nil: every one), each once, and whether any step
+// found one it refuses (out).
 type spellMatch struct {
 	allow func(string) bool
 	in    []string
+	out   bool
 }
 
 func (m *spellMatch) add(s string) {
-	if (m.allow == nil || m.allow(s)) && !slices.Contains(m.in, s) {
+	switch {
+	case m.allow != nil && !m.allow(s):
+		m.out = true
+	case !slices.Contains(m.in, s):
 		m.in = append(m.in, s)
 	}
 }
 
 // one is the step's answer: the one path it found, or p for two (it never
-// guesses); found is false when it found none, so the next step looks.
+// guesses); found is false when it found none, so the next step looks (afresh:
+// in is emptied, out kept).
 func (m *spellMatch) one(p string) (string, bool) {
 	switch len(m.in) {
 	case 0:
@@ -235,6 +248,9 @@ func (m *spellMatch) one(p string) (string, bool) {
 	}
 	return p, true
 }
+
+// next empties in for the next step's (or folder's) matches.
+func (m *spellMatch) next() { m.in = m.in[:0] }
 
 // keyedBook is a book booksKeyed found: its stored path and NFC key.
 type keyedBook struct {
@@ -275,10 +291,10 @@ func (c *Catalog) booksKeyed(ctx context.Context, libraryID int64, keys []string
 
 // spellingInBook is Spelling's step 4: p (key k, and held as given by no book:
 // step 2) as a file of, or a folder inside, the innermost folder book above it
-// that holds one allow admits (two books side by side whose folders read as
-// one are looked in both). found is false when no book above p holds such a
+// that holds one m admits (two books side by side whose folders read as one
+// are looked in both). found is false when no book above p holds such a
 // path.
-func (c *Catalog) spellingInBook(ctx context.Context, libraryID int64, p, k string, allow func(string) bool) (string, bool, error) {
+func (c *Catalog) spellingInBook(ctx context.Context, libraryID int64, p, k string, m *spellMatch) (string, bool, error) {
 	keys, err := c.keyedFolders(ctx, libraryID, k)
 	if err != nil || len(keys) == 0 {
 		return "", false, err
@@ -293,7 +309,7 @@ func (c *Catalog) spellingInBook(ctx context.Context, libraryID int64, p, k stri
 	}
 	depth := strings.Count(p, "/") + 1
 	for _, key := range keys { // innermost first
-		m := spellMatch{allow: allow}
+		m.next()
 		for _, b := range byKey[key] {
 			files, err := queryRows(ctx, c.db, func(r *sql.Rows, f *string) error { return r.Scan(f) },
 				`SELECT rel_path FROM book_files WHERE book_id = ?`, b.id)
@@ -322,15 +338,17 @@ const maxFolderSpellings = 32
 
 // folderSpelling is Spelling's step 5: p as a folder holding indexed books,
 // each of its names in the spelling given, NFC or NFD (one FoldersHoldingBooks
-// read), the one allow admits. p when the index holds books below p as given,
-// or below none or several of the other spellings it admits.
-func (c *Catalog) folderSpelling(ctx context.Context, libraryID int64, p string, allow func(string) bool) (string, error) {
+// read), the one m admits. p when the index holds books below p as given (m.out
+// then cleared: p is there itself), or below none or several of the other
+// spellings it admits.
+func (c *Catalog) folderSpelling(ctx context.Context, libraryID int64, p string, m *spellMatch) (string, error) {
 	spellings := folderSpellings(p)
 	holding, err := c.FoldersHoldingBooks(ctx, libraryID, spellings)
 	if err != nil || holding[p] {
+		m.out = false
 		return p, err
 	}
-	m := spellMatch{allow: allow}
+	m.next()
 	for _, s := range spellings {
 		if holding[s] {
 			m.add(s)

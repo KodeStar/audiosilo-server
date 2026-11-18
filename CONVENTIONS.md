@@ -1148,7 +1148,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `annotateWithBooks` finds). `spelledIn` passes the caller's scope (for `/fs`, `VisibleInBrowse`;
   a list replace's, per ref; a list remove and the re-key every spelling), so a rule naming another
   spelling byte for byte never learns, from a 403 where a missing path reads 404, that an indexed
-  path it can't reach is there. A failed lookup is a 500 (a timed-out one a 503), never the spelling given.
+  path it can't reach is there. When such a rule admits the path as given but the only indexed
+  paths reading as it lie outside the scope (`Spelling`'s `outside`), every route answers 404 "not
+  found" (`spelledPathInScope`; `/fs` "directory not found"), the ones that open the file
+  included (stream with download, transcode, remux and rendition, cover, ebook, readalong): on a
+  disk that ignores the spelling (macOS, SMB) the path as given would open the refused book's
+  files (`TestSpellingContentRoutesDenied`). A failed lookup is a 500 (a timed-out one a 503), never the spelling given.
   Unchanged on purpose: `CleanRelPath` and share rules stay byte-exact; the on-demand index takes
   only the on-disk spelling (`dirPresent`), so another spelling of an unindexed book stays 404; the
   admin's folder-override route, the admin's edit of a person's progress (`exactPath`: the row

@@ -644,7 +644,7 @@ func (c *Catalog) heldRefs(ctx context.Context, refs []Ref) (map[Ref]bool, error
 // spellings allow admits; nil: every one) and the book that is or holds it
 // (BookPathAt), "" for none.
 func (c *Catalog) spelledBook(ctx context.Context, ref Ref, allow func(string) bool) (spelled, book string, err error) {
-	if spelled, err = c.Spelling(ctx, ref.LibraryID, ref.Path, allow); err != nil {
+	if spelled, _, err = c.Spelling(ctx, ref.LibraryID, ref.Path, allow); err != nil {
 		return "", "", err
 	}
 	book, err = c.BookPathAt(ctx, ref.LibraryID, spelled)

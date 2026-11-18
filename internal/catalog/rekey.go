@@ -308,7 +308,7 @@ func (c *Catalog) rekeyCandidates(ctx context.Context, libraryID int64, primaryO
 // folder, an orphan, a path two books' keys collide on: Spelling never guesses).
 // spelled is p in the index's spelling (Spelling).
 func (c *Catalog) rekeyTarget(ctx context.Context, libraryID int64, p string) (reason, spelled, target string, err error) {
-	if spelled, err = c.Spelling(ctx, libraryID, p, nil); err != nil { // each owner's reach is the scope guard's
+	if spelled, _, err = c.Spelling(ctx, libraryID, p, nil); err != nil { // each owner's reach is the scope guard's
 		return "", "", "", err
 	}
 	if spelled != p {
