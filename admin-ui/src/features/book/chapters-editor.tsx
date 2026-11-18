@@ -567,9 +567,15 @@ function Scrubber({
     token.data && span && !minting
       ? streamUrl(libraryId, span.path, token.data, transcoded ? from : undefined)
       : undefined;
-  // Asks for the transcode again from `to`, playing then when `play`.
-  const ask = (to: number, play: boolean) =>
-    setStream({ at, from: to, n: (stream?.n ?? 0) + 1, play });
+  // Asks for the transcode again from `to`, playing then when `play`. Counted
+  // from the stream as it is then, not as this render saw it: an ask from a
+  // timer or a promise must not repeat the count of one made since (asked).
+  // One <audio> plays every ask, so a busy stream's look and its wait to be
+  // asked for again were the last stream's: the new one's failure looks anew.
+  const ask = (to: number, play: boolean) => {
+    stopRetry();
+    setStream((s) => ({ at, from: to, n: (s?.n ?? 0) + 1, play }));
+  };
 
   // A closed editor lets go of its stream: a detached element goes on loading
   // until it is collected, and a transcode's ffmpeg holds one of the server's
@@ -834,8 +840,10 @@ function Scrubber({
           // A transcode is asked for only to play: each ask starts an ffmpeg
           // that holds one of the server's few transcode slots.
           preload={transcoded ? (moved?.play ? 'auto' : 'none') : 'metadata'}
-          // A new source (another file, or a transcode asked again) plays only when told to.
-          onLoadStart={() => setPlaying(false)}
+          // A new source (another file, or a transcode asked again) plays only
+          // when told to: play() may have run before its load began (asked), so
+          // the element says whether it plays, not the event.
+          onLoadStart={(e) => setPlaying(!e.currentTarget.paused)}
           onLoadedMetadata={(e) => {
             setFailed(false);
             reminted.current = false;

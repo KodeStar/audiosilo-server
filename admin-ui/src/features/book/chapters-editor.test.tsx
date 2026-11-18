@@ -380,6 +380,10 @@ describe('the chapter editor', () => {
     await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
     expect(container.querySelector('audio')).toBe(audio);
     expect(play.mock.contexts[1]).toBe(audio);
+    // Its load can begin after play() ran: the button says it plays.
+    fireEvent.play(audio);
+    fireEvent.loadStart(audio);
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
     play.mockRestore();
   });
 
@@ -583,6 +587,24 @@ describe('the chapter editor', () => {
       // Asked again: the line goes.
       await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
       expect(screen.queryByText(line)).not.toBeInTheDocument();
+    });
+
+    it('stops waiting when a move asks for the stream again from elsewhere', async () => {
+      const { user, audio } = await listen({ ...busy, headers: { 'Retry-After': '0.4' } });
+      const from = () =>
+        Number(
+          new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams.get('t'),
+        );
+      fireEvent.error(audio);
+      await screen.findByText('The server is busy. Trying again in a moment.');
+      load.mockClear();
+      await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
+      await waitFor(() => expect(from()).toBe(1201));
+      // The wait was the old stream's: it ends with the ask, and the new
+      // stream is not loaded again when it would have run out.
+      expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
+      await new Promise((r) => setTimeout(r, 500));
+      expect(load).not.toHaveBeenCalled();
     });
 
     it('asks at once when Play is pressed during the wait, and not again after it', async () => {
