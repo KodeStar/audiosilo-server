@@ -5,6 +5,7 @@
 package library
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -154,7 +155,7 @@ func SafeJoin(root, relPath string) (string, error) {
 	// links in it) only the names under it need looking at (resolveBelow).
 	var target string
 	if rerr == nil {
-		target = resolveBelow(rootAbs, full)
+		target, _, _ = resolveBelow(rootAbs, full, plainLooks)
 	} else {
 		target = resolveExisting(full)
 	}
@@ -164,32 +165,165 @@ func SafeJoin(root, relPath string) (string, error) {
 	return full, nil
 }
 
+// SafeJoinListed is SafeJoin for a route that opens the path only as the disk
+// spells it (the stream, /fs), each of its looks bounded (ctx, at most timeout
+// in all, counted on the path's mount as metadata.Bounded's): there reports
+// whether each name of relPath is in its folder's listing as given, byte for
+// byte, the listings read through names (a metadata.DirNames' Names). Share
+// rules match byte for byte, so a rule spelled in another case than the disk's
+// names nothing there, as a rule naming a missing folder does; but a disk that
+// ignores case or the Unicode form (macOS's, a Windows or SMB share) opens
+// "émile zola/x.m4b" as "Émile Zola/x.m4b", which lists only as stored. Each
+// name is looked for in the listing before it is looked at (resolveBelow), so
+// a variant and a missing path take the same steps, up to the first name not
+// listed, and none past it: no Lstat a variant would answer and a missing name
+// would not. A link out of the root is ErrOutsideRoot as soon as it is
+// reached, nothing below it listed or looked at, so the answer never tells
+// what the folder it points to holds. err is that, or a look given up on
+// (metadata.GaveUp) or ctx's; a listing or look that fails otherwise is a name
+// not there.
+func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Duration,
+	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) (abs string, there bool, err error) {
+	deadline := time.Now().Add(timeout)
+	wait := func() time.Duration { return max(time.Until(deadline), time.Nanosecond) }
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", false, err
+	}
+	resolved, rerr := metadata.Bounded(ctx, rootAbs, wait(), func() (string, error) { return filepath.EvalSymlinks(rootAbs) }, nil)
+	if metadata.Unanswered(ctx, rerr) {
+		return "", false, cmp.Or(rerr, ctx.Err())
+	}
+	if rerr != nil {
+		resolved = rootAbs
+	}
+	full := filepath.Join(resolved, filepath.FromSlash(relPath))
+	if !withinRoot(resolved, full) {
+		return "", false, ErrOutsideRoot
+	}
+	if rerr != nil {
+		return full, false, nil // no root to list: nothing there
+	}
+	target, there, err := resolveBelow(resolved, full, boundedLooks(ctx, wait, names))
+	switch {
+	case err != nil:
+		return "", false, err
+	case !withinRoot(resolved, target):
+		return "", false, ErrOutsideRoot
+	}
+	return full, there, nil
+}
+
+// belowLooks are resolveBelow's looks at a name under the root: SafeJoin's
+// plain ones (plainLooks, under one Bounded call), or SafeJoinListed's, each
+// bounded and a name first looked for in its folder's listing.
+type belowLooks struct {
+	// lstat is the name's Lstat, nil when it is not there (or the look
+	// failed); err only for a look that went unanswered.
+	lstat func(path string) (fs.FileInfo, error)
+	// eval is a link's target, every link in it resolved, "" when it does not
+	// resolve (a dangling link); err as lstat's.
+	eval func(path string) (string, error)
+	// listed, when not nil, reports whether name is in dir's listing as given;
+	// err as lstat's. Not nil: a name not listed ends the walk unlooked at.
+	listed func(dir, name string) (bool, error)
+}
+
+// boundedLooks are SafeJoinListed's: each a metadata.Bounded look of its own,
+// within wait, a name first looked for in its folder's listing (names).
+func boundedLooks(ctx context.Context, wait func() time.Duration,
+	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) belowLooks {
+	answered := func(err error) error { // a look's error that is no answer, else nil
+		if metadata.Unanswered(ctx, err) {
+			return cmp.Or(err, ctx.Err())
+		}
+		return nil
+	}
+	return belowLooks{
+		lstat: func(p string) (fs.FileInfo, error) {
+			fi, err := metadata.LstatBounded(ctx, p, wait())
+			if err != nil {
+				return nil, answered(err)
+			}
+			return fi, nil
+		},
+		eval: func(p string) (string, error) {
+			r, err := metadata.Bounded(ctx, p, wait(), func() (string, error) { return filepath.EvalSymlinks(p) }, nil)
+			if err != nil {
+				return "", answered(err)
+			}
+			return r, nil
+		},
+		listed: func(dir, name string) (bool, error) {
+			ns, err := names(ctx, dir, wait())
+			if err != nil {
+				return false, answered(err)
+			}
+			return slices.Contains(ns, name), nil
+		},
+	}
+}
+
+// plainLooks are SafeJoin's: os.Lstat and filepath.EvalSymlinks, no listing.
+var plainLooks = belowLooks{
+	lstat: func(p string) (fs.FileInfo, error) {
+		fi, err := os.Lstat(p)
+		if err != nil {
+			return nil, nil //nolint:nilerr // a name not there ends the walk, as any failed look does
+		}
+		return fi, nil
+	},
+	eval: func(p string) (string, error) {
+		r, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			return "", nil //nolint:nilerr // a dangling link: nothing there to resolve
+		}
+		return r, nil
+	},
+}
+
 // resolveBelow is resolveExisting(p) for a path p under rootAbs, a root with no
-// symlinks in it: the names below the root are looked at one Lstat each, down
-// to the first that is a link (from which resolveExisting resolves the rest) or
-// that isn't there (it and the names after it kept as they are). EvalSymlinks
-// would Lstat every name from the filesystem's root down, the root's own
-// included, which on a network share or a FUSE pool (Unraid's /mnt/user) is a
-// round trip each, on every cover and stream request.
-func resolveBelow(rootAbs, p string) string {
+// symlinks in it: the names below the root are looked at one at a time (lk), a
+// link resolved where it is met (one out of the root ends the walk there, its
+// target returned, nothing below it looked at) and the walk going on from its
+// target, down to the first name that isn't there (it and the names after it
+// kept as they are; there false). With lk.listed, a name is looked at only
+// once its folder lists it as given. EvalSymlinks would Lstat every name from
+// the filesystem's root down, the root's own included, which on a network
+// share or a FUSE pool (Unraid's /mnt/user) is a round trip each, on every
+// cover and stream request. err is a look's that went unanswered.
+func resolveBelow(rootAbs, p string, lk belowLooks) (target string, there bool, err error) {
 	rel, err := filepath.Rel(rootAbs, p)
 	if err != nil || rel == "." {
-		return p
+		return p, true, nil //nolint:nilerr // p is the root, or not under it: checked by the caller
 	}
 	names := strings.Split(rel, string(filepath.Separator))
 	cur := rootAbs
 	for i, name := range names {
+		rest := func() string { return filepath.Join(append([]string{cur}, names[i:]...)...) }
+		if lk.listed != nil {
+			if in, err := lk.listed(cur, name); err != nil || !in {
+				return rest(), false, err
+			}
+		}
 		next := filepath.Join(cur, name)
-		info, err := os.Lstat(next)
-		if err != nil {
-			return filepath.Join(append([]string{cur}, names[i:]...)...)
+		info, err := lk.lstat(next)
+		if err != nil || info == nil {
+			return rest(), false, err
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
-			return resolveExisting(filepath.Join(append([]string{next}, names[i+1:]...)...))
+			resolved, err := lk.eval(next)
+			if err != nil || resolved == "" {
+				return rest(), false, err
+			}
+			if !withinRoot(rootAbs, resolved) {
+				return filepath.Join(append([]string{resolved}, names[i+1:]...)...), true, nil
+			}
+			next = resolved
 		}
 		cur = next
 	}
-	return cur
+	return cur, true, nil
 }
 
 // withinRoot reports whether p is the root itself or nested under it.

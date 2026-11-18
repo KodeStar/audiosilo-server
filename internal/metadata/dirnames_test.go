@@ -1,4 +1,4 @@
-package api
+package metadata
 
 import (
 	"context"
@@ -9,11 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
-// fakeDirs is a dirNames read that counts its reads per folder and answers
+// fakeDirs is a DirNames read that counts its reads per folder and answers
 // each folder's names or err, after gate when gate is set.
 type fakeDirs struct {
 	mu    sync.Mutex
@@ -47,10 +45,10 @@ func (f *fakeDirs) count(dir string) int {
 	return f.reads[dir]
 }
 
-// newFakeDirNames is a dirNames over a fakeDirs, its clock at now.
-func newFakeDirNames(names map[string][]string, now *time.Time) (*dirNames, *fakeDirs) {
+// newFakeDirNames is a DirNames over a fakeDirs, its clock at now.
+func newFakeDirNames(names map[string][]string, now *time.Time) (*DirNames, *fakeDirs) {
 	f := &fakeDirs{reads: map[string]int{}, names: names}
-	c := newDirNames(f.read)
+	c := NewDirNames(f.read)
 	c.now = func() time.Time { return *now }
 	return c, f
 }
@@ -62,7 +60,7 @@ func TestDirNamesKeepsAFolderForItsTTL(t *testing.T) {
 	now := time.Unix(1000, 0)
 	c, f := newFakeDirNames(map[string][]string{"/r": {"a", "b"}}, &now)
 	for range 5 {
-		if got, err := c.names(t.Context(), "/r", time.Second); err != nil || !slices.Equal(got, []string{"a", "b"}) {
+		if got, err := c.Names(t.Context(), "/r", time.Second); err != nil || !slices.Equal(got, []string{"a", "b"}) {
 			t.Fatalf("names = %v %v", got, err)
 		}
 	}
@@ -70,7 +68,7 @@ func TestDirNamesKeepsAFolderForItsTTL(t *testing.T) {
 		t.Errorf("read %d times within the TTL, want 1", n)
 	}
 	now = now.Add(dirNamesTTL)
-	if _, err := c.names(t.Context(), "/r", time.Second); err != nil || f.count("/r") != 2 {
+	if _, err := c.Names(t.Context(), "/r", time.Second); err != nil || f.count("/r") != 2 {
 		t.Errorf("after the TTL: %v, %d reads, want 2", err, f.count("/r"))
 	}
 	now = now.Add(2 * dirNamesTTL)
@@ -97,7 +95,7 @@ func TestDirNamesBounds(t *testing.T) {
 	c.max = 2
 	c.cap = 3 * (1 + dirNameCost) // three one-letter names
 	for _, d := range []string{"/a", "/b", "/c"} {
-		if _, err := c.names(t.Context(), d, time.Second); err != nil {
+		if _, err := c.Names(t.Context(), d, time.Second); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -109,7 +107,7 @@ func TestDirNamesBounds(t *testing.T) {
 		t.Errorf("after three folders: /a kept %v, %d entries, %d bytes; want the oldest dropped, 2 entries", kept, held, size)
 	}
 	for range 3 {
-		if got, err := c.names(t.Context(), "/big", time.Second); err != nil || len(got) != 100 {
+		if got, err := c.Names(t.Context(), "/big", time.Second); err != nil || len(got) != 100 {
 			t.Fatalf("big: %d names, %v", len(got), err)
 		}
 	}
@@ -124,12 +122,12 @@ func TestDirNamesBounds(t *testing.T) {
 	// one of the three goes.
 	c.max = 10
 	for _, d := range []string{"/a", "/b", "/c"} {
-		if _, err := c.names(t.Context(), d, time.Second); err != nil {
+		if _, err := c.Names(t.Context(), d, time.Second); err != nil {
 			t.Fatal(err)
 		}
 	}
 	f.names["/d"] = []string{"4"}
-	if _, err := c.names(t.Context(), "/d", time.Second); err != nil {
+	if _, err := c.Names(t.Context(), "/d", time.Second); err != nil {
 		t.Fatal(err)
 	}
 	c.mu.Lock()
@@ -152,7 +150,7 @@ func TestDirNamesOneReadInFlight(t *testing.T) {
 	var bad atomic.Int32
 	for range 8 {
 		wg.Go(func() {
-			if got, err := c.names(t.Context(), "/r", 10*time.Second); err != nil || !slices.Equal(got, []string{"a"}) {
+			if got, err := c.Names(t.Context(), "/r", 10*time.Second); err != nil || !slices.Equal(got, []string{"a"}) {
 				bad.Add(1)
 			}
 		})
@@ -176,7 +174,7 @@ func TestDirNamesOneReadInFlight(t *testing.T) {
 	leftCtx, leave := context.WithCancel(t.Context())
 	leader := make(chan error, 1)
 	go func() {
-		_, err := c.names(leftCtx, "/s", 10*time.Second)
+		_, err := c.Names(leftCtx, "/s", 10*time.Second)
 		leader <- err
 	}()
 	for f.count("/s") == 0 {
@@ -184,7 +182,7 @@ func TestDirNamesOneReadInFlight(t *testing.T) {
 	}
 	waiter := make(chan []string, 1)
 	go func() {
-		got, _ := c.names(t.Context(), "/s", 10*time.Second)
+		got, _ := c.Names(t.Context(), "/s", 10*time.Second)
 		waiter <- got
 	}()
 	time.Sleep(20 * time.Millisecond)
@@ -207,11 +205,11 @@ func TestDirNamesOneReadInFlight(t *testing.T) {
 	f.gate = make(chan struct{})
 	f.mu.Unlock()
 	f.names["/t"] = []string{"c"}
-	go func() { _, _ = c.names(t.Context(), "/t", 10*time.Second) }()
+	go func() { _, _ = c.Names(t.Context(), "/t", 10*time.Second) }()
 	for f.count("/t") == 0 {
 		time.Sleep(time.Millisecond)
 	}
-	if _, err := c.names(t.Context(), "/t", 10*time.Millisecond); !metadata.GaveUp(err) {
+	if _, err := c.Names(t.Context(), "/t", 10*time.Millisecond); !GaveUp(err) {
 		t.Errorf("a wait past its timeout: %v, want ErrNotAnswered", err)
 	}
 	f.mu.Lock()
@@ -223,7 +221,7 @@ func TestDirNamesOneReadInFlight(t *testing.T) {
 	f.gate, f.err = nil, errors.New("eio")
 	f.mu.Unlock()
 	for range 2 {
-		if _, err := c.names(t.Context(), "/u", time.Second); err == nil {
+		if _, err := c.Names(t.Context(), "/u", time.Second); err == nil {
 			t.Fatal("want the read's error")
 		}
 	}
@@ -243,7 +241,7 @@ func TestDirNamesSlowReadIsJoined(t *testing.T) {
 		now   = time.Unix(1000, 0)
 	)
 	f := &fakeDirs{reads: map[string]int{}, names: map[string][]string{"/r": {"a"}}, gate: make(chan struct{})}
-	c := newDirNames(f.read)
+	c := NewDirNames(f.read)
 	c.now = func() time.Time {
 		clock.Lock()
 		defer clock.Unlock()
@@ -252,7 +250,7 @@ func TestDirNamesSlowReadIsJoined(t *testing.T) {
 	leftCtx, leave := context.WithCancel(t.Context())
 	leader := make(chan error, 1)
 	go func() {
-		_, err := c.names(leftCtx, "/r", 10*time.Second)
+		_, err := c.Names(leftCtx, "/r", 10*time.Second)
 		leader <- err
 	}()
 	for f.count("/r") == 0 {
@@ -265,7 +263,7 @@ func TestDirNamesSlowReadIsJoined(t *testing.T) {
 	var bad atomic.Int32
 	for range 4 {
 		wg.Go(func() {
-			if got, err := c.names(t.Context(), "/r", 10*time.Second); err != nil || !slices.Equal(got, []string{"a"}) {
+			if got, err := c.Names(t.Context(), "/r", 10*time.Second); err != nil || !slices.Equal(got, []string{"a"}) {
 				bad.Add(1)
 			}
 		})
@@ -296,16 +294,16 @@ func TestDirNamesSlowReadIsJoined(t *testing.T) {
 func TestDirNamesReadPanics(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	c := newDirNames(func(context.Context, string, time.Duration) ([]string, error) {
+	c := NewDirNames(func(context.Context, string, time.Duration) ([]string, error) {
 		if calls++; calls == 1 {
 			panic("boom")
 		}
 		return []string{"a"}, nil
 	})
-	if _, err := c.names(t.Context(), "/r", time.Second); err == nil {
+	if _, err := c.Names(t.Context(), "/r", time.Second); err == nil {
 		t.Fatal("a read that panicked: no error")
 	}
-	if got, err := c.names(t.Context(), "/r", time.Second); err != nil || !slices.Equal(got, []string{"a"}) {
+	if got, err := c.Names(t.Context(), "/r", time.Second); err != nil || !slices.Equal(got, []string{"a"}) {
 		t.Errorf("the next request: %v %v, want its own read's names", got, err)
 	}
 }

@@ -156,26 +156,23 @@ func ReadDirNamesBounded(ctx context.Context, path string, timeout time.Duration
 	}, nil)
 }
 
-// NamesListed reports whether each name of rel (a slash path under root) that
-// need admits (nil: every name) is in its folder's listing as given, byte for
-// byte, each listing's names read by readDir (ReadDirNamesBounded). A disk
-// that ignores case (macOS's, a Windows or SMB share) or the Unicode spelling
-// finds a name written another way, but lists it only as it is stored, so a
-// name it finds but doesn't list is not there as given. A listing that fails
-// is false; err is a listing given up on (GaveUp) or ctx's, the answer then
-// unknown.
-func NamesListed(ctx context.Context, root, rel string, need func(name string) bool,
+// NamesListed reports whether each name of rel (a slash path under root) is
+// in its folder's listing as given, byte for byte, each listing's names read
+// by readDir (a DirNames' Names, or ReadDirNamesBounded). A disk that ignores
+// case (macOS's, a Windows or SMB share) or the Unicode spelling finds a name
+// written another way, but lists it only as it is stored, so a name it finds
+// but doesn't list is not there as given. A listing that fails is false; err
+// is a listing given up on (GaveUp) or ctx's, the answer then unknown.
+func NamesListed(ctx context.Context, root, rel string,
 	readDir func(ctx context.Context, dir string) ([]string, error)) (bool, error) {
 	dir := root
 	for name := range strings.SplitSeq(rel, "/") {
-		if need == nil || need(name) {
-			names, err := readDir(ctx, dir)
-			if Unanswered(ctx, err) {
-				return false, cmp.Or(err, ctx.Err())
-			}
-			if err != nil || !slices.Contains(names, name) {
-				return false, nil
-			}
+		names, err := readDir(ctx, dir)
+		if Unanswered(ctx, err) {
+			return false, cmp.Or(err, ctx.Err())
+		}
+		if err != nil || !slices.Contains(names, name) {
+			return false, nil
 		}
 		dir = filepath.Join(dir, name)
 	}

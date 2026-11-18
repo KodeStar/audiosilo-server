@@ -27,7 +27,7 @@ import (
 // Zola/...", so every route answers a path the disk doesn't spell as given as
 // a path with nothing there: the index's routes find no book at it, and the
 // stream and /fs, which open the path itself, look at the listings
-// (onDiskAsGiven). All NFC: case, not the Unicode spelling (pathspelling_test).
+// (asGiven). All NFC: case, not the Unicode spelling (pathspelling_test).
 const (
 	pcAuthor      = "Émile Zola"
 	pcBook        = pcAuthor + "/Germinal"
@@ -56,6 +56,15 @@ type caseEnv struct {
 	// folds is whether the temp dir ignores case itself; when it doesn't, the
 	// env stands in for a disk that does (foldCase).
 	folds bool
+	// read is how the API's listings (a.listed) read a folder (listWith).
+	read func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)
+}
+
+// listWith makes the API read its listings with read, in a cache of its own,
+// empty.
+func (c *caseEnv) listWith(read func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) {
+	c.read = read
+	c.api.listed = metadata.NewDirNames(read)
 }
 
 func newCaseEnv(t *testing.T) *caseEnv {
@@ -74,6 +83,7 @@ func newCaseEnv(t *testing.T) *caseEnv {
 	}
 	writeTree(t, root, pcUnindexedT)
 	c := &caseEnv{testEnv: e, lib: lib, folds: ignoresCase(t, root)}
+	c.listWith(metadata.ReadDirNamesBounded)
 	sam, samTok := newUserWithSession(t, e, "sam", false)
 	if err := e.cat.GrantWholeLibrary(ctx, sam, lib.ID); err != nil {
 		t.Fatal(err)
@@ -113,7 +123,7 @@ func ignoresCase(t *testing.T, dir string) bool {
 // foldCase makes the library's disk answer to each of variants (a path in
 // another case than the disk's) as one that ignores case would, when the temp
 // dir doesn't already: a link at the variant to the folder the disk has (the
-// open finds it), kept out of the listings the API reads (a.listed.read), which on
+// open finds it), kept out of the listings the API reads (listWith), which on
 // such a disk name only the stored spelling. Links made after the scan, so
 // none is indexed.
 func (c *caseEnv) foldCase(t *testing.T, variants map[string]string) {
@@ -129,10 +139,10 @@ func (c *caseEnv) foldCase(t *testing.T, variants map[string]string) {
 		}
 		hidden[at] = true
 	}
-	c.api.listed.read = func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+	c.listWith(func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
 		names, err := metadata.ReadDirNamesBounded(ctx, dir, timeout)
 		return slices.DeleteFunc(names, func(name string) bool { return hidden[filepath.Join(dir, name)] }), err
-	}
+	})
 }
 
 // same asserts tok's request at path answers exactly as the one at missing, a
@@ -217,9 +227,9 @@ func TestCaseVariantDiskRoutes(t *testing.T) {
 func TestCaseVariantDiskLookFails(t *testing.T) {
 	t.Parallel()
 	c := newCaseEnv(t)
-	c.api.listed.read = func(context.Context, string, time.Duration) ([]string, error) {
+	c.listWith(func(context.Context, string, time.Duration) ([]string, error) {
 		return nil, metadata.ErrNotAnswered
-	}
+	})
 	for _, path := range []string{bookURL(c.lib.ID, "stream", pcUnindexedT), bookURL(c.lib.ID, "fs", pcUnindexed)} {
 		if resp, body := c.do(t, "GET", path, c.samTok, ""); resp.StatusCode != http.StatusServiceUnavailable {
 			t.Errorf("GET %s = %d %s, want 503", path, resp.StatusCode, body)
@@ -233,29 +243,35 @@ func TestCaseVariantDiskLookFails(t *testing.T) {
 
 // TestCaseVariantCostsWhatMissingDoes (security): on the stream and /fs, a
 // case variant of a folder the disk has and a path with nothing there take the
-// same steps, the same listings in the same order (onDiskAsGiven, no lstat
-// that would answer the missing one sooner), so how long the check takes never
+// same steps, the same listings in the same order (asGiven, each name looked
+// for in its folder's listing before any lstat a variant would answer and a
+// missing name would not: TestSafeJoinListedVariantCostsWhatMissingDoes counts
+// the lstats too), so how long the check takes never
 // tells a rule spelled in another case (hal) or a variant inside a rule (ida)
 // that the folder is there. A path the index holds reads no listing, and a
-// folder is read once while dirNames keeps it: a client asking for missing
+// folder is read once while the listings keep it: a client asking for missing
 // paths in a loop reads the root once.
 func TestCaseVariantCostsWhatMissingDoes(t *testing.T) {
 	t.Parallel()
 	c := newCaseEnv(t)
 	c.foldCase(t, map[string]string{pcLowAuthor: pcAuthor, pcBookVariant: pcBook})
-	inner := c.api.listed.read
+	inner := c.read
 	var (
 		mu     sync.Mutex
 		listed []string
 	)
-	c.api.listed.read = func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+	root, err := filepath.EvalSymlinks(c.lib.Root) // the walk lists below the resolved root
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
 		mu.Lock()
-		listed = append(listed, strings.TrimPrefix(dir, c.lib.Root))
+		listed = append(listed, strings.TrimPrefix(dir, root))
 		mu.Unlock()
 		return inner(ctx, dir, timeout)
 	}
 	reset := func() { // a fresh cache, so each request reads its own listings
-		c.api.listed = newDirNames(c.api.listed.read)
+		c.listWith(read)
 		mu.Lock()
 		listed = nil
 		mu.Unlock()
@@ -294,7 +310,7 @@ func TestCaseVariantCostsWhatMissingDoes(t *testing.T) {
 	}
 	reset()
 	at := time.Now() // the listings' clock held, so a slow run never outlives the TTL
-	c.api.listed.now = func() time.Time { return at }
+	c.api.listed.SetClockForTests(func() time.Time { return at })
 	for range 20 {
 		for _, p := range []string{pcMissingT, pcLowMissingT} {
 			c.do(t, "GET", bookURL(c.lib.ID, "stream", p), c.samTok, "")
@@ -319,12 +335,12 @@ func TestCaseVariantCostsWhatMissingDoes(t *testing.T) {
 func TestFSOutsideScopeIsMissing(t *testing.T) {
 	t.Parallel()
 	c := newCaseEnv(t)
-	inner := c.api.listed.read
+	inner := c.read
 	var reads atomic.Int32
-	c.api.listed.read = func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+	c.listWith(func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
 		reads.Add(1)
 		return inner(ctx, dir, timeout)
-	}
+	})
 	for _, p := range []string{pcAuthor, pcBook, "Other", "Other/Book", "Nowhere"} {
 		if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "fs", p), c.halTok, ""); resp.StatusCode != http.StatusNotFound {
 			t.Errorf("hal's fs %+q = %d %s, want 404", p, resp.StatusCode, body)
@@ -343,6 +359,57 @@ func TestFSOutsideScopeIsMissing(t *testing.T) {
 	if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "fs", pcBook), c.idaTok, ""); resp.StatusCode != http.StatusOK ||
 		!strings.Contains(body, "01.mp3") {
 		t.Errorf("ida's book folder = %d %s, want its listing", resp.StatusCode, body)
+	}
+}
+
+// TestFSLinkOutOfRootIsMissing (security): /fs through a link inside the
+// library that points out of it answers as a missing folder, whatever the
+// folder it points to holds, and lists nothing there; the stream answers a
+// file through it the same whether the file is there or not. Allowed: a link
+// to a folder inside the library is listed and streamed through.
+func TestFSLinkOutOfRootIsMissing(t *testing.T) {
+	t.Parallel()
+	c := newCaseEnv(t)
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTree(t, outside, "present/01.mp3")
+	for link, to := range map[string]string{"Out": outside, "In": filepath.Join(c.lib.Root, pcAuthor)} {
+		if err := os.Symlink(to, filepath.Join(c.lib.Root, link)); err != nil {
+			t.Skipf("symlinks unsupported on this platform: %v", err)
+		}
+	}
+	inner := c.read
+	var (
+		mu   sync.Mutex
+		dirs []string
+	)
+	c.listWith(func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+		mu.Lock()
+		dirs = append(dirs, dir)
+		mu.Unlock()
+		return inner(ctx, dir, timeout)
+	})
+	for _, p := range []string{"Out", "Out/present", "Out/absent"} {
+		c.same(t, c.samTok, "GET", c.get("fs"), p, "Nowhere")
+	}
+	c.same(t, c.samTok, "GET", c.get("stream"), "Out/present/01.mp3", "Out/absent/01.mp3")
+	mu.Lock()
+	for _, d := range dirs {
+		if strings.HasPrefix(d, outside) {
+			t.Errorf("listed %q, a folder out of the library", d)
+		}
+	}
+	mu.Unlock()
+
+	if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "fs", "In"), c.samTok, ""); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(body, "Germinal") {
+		t.Errorf("fs through a link inside the library = %d %s, want its listing", resp.StatusCode, body)
+	}
+	if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "stream", "In/Germinal/01.mp3"), c.samTok, ""); resp.StatusCode != http.StatusOK ||
+		!strings.HasPrefix(body, "placeholder ") {
+		t.Errorf("stream through a link inside the library = %d %.80q, want the file", resp.StatusCode, body)
 	}
 }
 

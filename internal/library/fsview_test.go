@@ -371,8 +371,8 @@ func TestResolveBelowIsResolveExisting(t *testing.T) {
 	}
 	for rel, allowed := range cases {
 		full := filepath.Join(root, filepath.FromSlash(rel))
-		if got, want := resolveBelow(root, full), resolveExisting(full); got != want {
-			t.Errorf("resolveBelow(%q) = %q, resolveExisting = %q", rel, got, want)
+		if got, _, _ := resolveBelow(root, full, plainLooks); got != resolveExisting(full) {
+			t.Errorf("resolveBelow(%q) = %q, resolveExisting = %q", rel, got, resolveExisting(full))
 		}
 		if _, err := SafeJoin(root, rel); (err == nil) != allowed {
 			t.Errorf("SafeJoin(%q) err = %v, want allowed %v", rel, err, allowed)

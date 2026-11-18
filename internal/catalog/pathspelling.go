@@ -5,8 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -218,24 +216,24 @@ func (c *Catalog) Spelling(ctx context.Context, libraryID int64, p string, allow
 func (c *Catalog) spelling(ctx context.Context, libraryID int64, p string, allow func(string) bool,
 	looks *spellLooks) (spelled string, outside bool, err error) {
 	s, refused, err := c.indexSpelling(ctx, libraryID, p, allow)
-	own := func(others []string) bool {
+	own := func() bool {
 		lctx, done, ok := looks.take(ctx)
 		if !ok {
 			return false
 		}
 		defer done()
-		return c.ownEntry(lctx, libraryID, p, others)
+		return c.ownEntry(lctx, libraryID, p)
 	}
 	switch {
 	case err != nil:
 		return "", false, err
 	case s != p:
-		if own([]string{s}) {
+		if own() {
 			return p, false, nil
 		}
 		return s, false, nil
 	case len(refused) > 0:
-		return p, !own(refused), nil
+		return p, !own(), nil
 	}
 	return p, false, nil
 }
@@ -327,16 +325,18 @@ func (c *Catalog) indexSpelling(ctx context.Context, libraryID int64, p string, 
 const spellLookWait = 5 * time.Second
 
 // ownEntry reports whether p is an entry of its own on the library's disk:
-// there, and none of others (indexed paths reading as p) is the same file. A
-// disk that ignores the Unicode spelling (macOS, SMB) finds the indexed entry
-// by p, the same file, so it is not; a disk that keeps the spellings apart
-// finds p only when a folder or file of that spelling is there beside it. A
-// look that fails or is given up on counts as not (the index's answer stands).
-// Two files apart by their ids may still be one on a disk whose ids don't
-// follow the file (a share mounted without the server's inode numbers, a FUSE
-// mount): p is its own only when each of its names that has another spelling
-// is in its folder's listing as given (spelledOnDisk).
-func (c *Catalog) ownEntry(ctx context.Context, libraryID int64, p string, others []string) bool {
+// each of its names in its folder's listing as given, byte for byte
+// (metadata.NamesListed, through the kept listings, c.listed). A disk that
+// ignores the Unicode spelling (macOS, SMB) finds the indexed entry by p but
+// lists it only as stored, the other spelling (the indexed one: the scan read
+// it from that listing), so p is not; a disk that keeps the spellings apart
+// lists p only when a folder or file of that spelling is there beside it,
+// whatever its file ids say (a share mounted without the server's inode
+// numbers, a FUSE mount). Listings only, no stat: a variant and a missing name
+// read the same listings, up to the first name not listed, and a folder once
+// while it is kept, so how long the look takes never tells which. A listing
+// that fails or is given up on counts as not (the index's answer stands).
+func (c *Catalog) ownEntry(ctx context.Context, libraryID int64, p string) bool {
 	if c.spellLooked != nil {
 		c.spellLooked()
 	}
@@ -344,32 +344,8 @@ func (c *Catalog) ownEntry(ctx context.Context, libraryID int64, p string, other
 	if err != nil || lib.Root == "" {
 		return false
 	}
-	look := func(rel string) os.FileInfo {
-		fi, err := metadata.LstatBounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(rel)), spellLookWait)
-		if err != nil {
-			return nil
-		}
-		return fi
-	}
-	at := look(p)
-	if at == nil {
-		return false
-	}
-	for _, o := range others {
-		if fi := look(o); fi != nil && os.SameFile(at, fi) {
-			return false
-		}
-	}
-	return spelledOnDisk(ctx, lib.Root, p)
-}
-
-// spelledOnDisk reports whether each name of p (a path under root) that has
-// another Unicode spelling is listed in its folder as given: a disk that
-// ignores the spelling lists the name as it was written, so another spelling
-// that finds it is not. A listing that fails or is given up on counts as not.
-func spelledOnDisk(ctx context.Context, root, p string) bool {
-	listed, err := metadata.NamesListed(ctx, root, p, HasOtherSpelling, func(ctx context.Context, dir string) ([]string, error) {
-		return metadata.ReadDirNamesBounded(ctx, dir, spellLookWait)
+	listed, err := metadata.NamesListed(ctx, lib.Root, p, func(ctx context.Context, dir string) ([]string, error) {
+		return c.listed.Names(ctx, dir, spellLookWait)
 	})
 	return listed && err == nil
 }

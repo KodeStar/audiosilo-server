@@ -1,32 +1,32 @@
-package api
+package metadata
 
 import (
 	"container/list"
 	"context"
 	"fmt"
 	"sync"
+	"testing"
 	"time"
-
-	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
-// dirNames keeps, for a few seconds, the names of the folders the stream and
-// /fs have listed to check a path's spelling (onDiskAsGiven), so a path's
-// check costs the same whether or not the disk has it in another case.
-// Every path the index doesn't hold walks the same listings (a missing one and a
-// case variant both stop at the first name not listed), and a folder is read
-// once however many requests ask while its read is in flight (they wait for it,
-// however long it takes: its own timeout ends it) and once in dirNamesTTL from
-// that read's start: a client probing names under a large folder can neither
-// time the read against a missing path's nor make the server read the folder
-// again on every request. Bounded: dirNamesMax folders and dirNamesBytes of
-// names kept, the oldest dropped first; a folder whose names alone pass the
-// bound is read for the requests waiting on that read only. A failed or
-// given-up read is never kept: whoever waited on it joins the next read of the
-// folder (one of them makes it). Nothing invalidates an entry (no filesystem
-// watcher here): it lives dirNamesTTL from its read's start, so a name added on
-// disk answers within that, and a path the index holds is never looked up.
-type dirNames struct {
+// DirNames keeps, for a few seconds, the names of the folders a check of a
+// path's spelling has listed (library.SafeJoinListed for the stream and /fs,
+// catalog's ownEntry for Spelling's look at the disk), so the check costs the
+// same whether or not the disk has the path in another spelling: a missing path
+// and a variant (another case, another Unicode form) both walk the same
+// listings and stop at the first name not listed. A folder is read once however
+// many requests ask while its read is in flight (they wait for it, however long
+// it takes: its own timeout ends it) and once in dirNamesTTL from that read's
+// start: a client probing names under a large folder can neither time the read
+// against a missing path's nor make the server read the folder again on every
+// request. Bounded: dirNamesMax folders and dirNamesBytes of names kept, the
+// oldest dropped first; a folder whose names alone pass the bound is read for
+// the requests waiting on that read only. A failed or given-up read is never
+// kept: whoever waited on it joins the next read of the folder (one of them
+// makes it). Nothing invalidates an entry (no filesystem watcher here): it
+// lives dirNamesTTL from its read's start, so a name added on disk answers
+// within that.
+type DirNames struct {
 	read func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)
 	now  func() time.Time
 	ttl  time.Duration
@@ -56,7 +56,7 @@ type dirListing struct {
 	ready chan struct{}
 	names []string
 	err   error
-	kept  bool // counted in dirNames.kept and size (cost), under mu
+	kept  bool // counted in DirNames.kept and size (cost), under mu
 	cost  int  // its names' bytes and dirNameCost a slot of the slice
 }
 
@@ -70,15 +70,28 @@ func (l *dirListing) done() bool {
 	}
 }
 
-func newDirNames(read func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) *dirNames {
-	return &dirNames{read: read, now: time.Now, ttl: dirNamesTTL, max: dirNamesMax, cap: dirNamesBytes,
+// NewDirNames is a DirNames whose folders are read by read
+// (ReadDirNamesBounded, or a test's stand-in).
+func NewDirNames(read func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) *DirNames {
+	return &DirNames{read: read, now: time.Now, ttl: dirNamesTTL, max: dirNamesMax, cap: dirNamesBytes,
 		order: list.New(), byDir: map[string]*list.Element{}}
 }
 
-// names is dir's names, unsorted, as read at most ttl ago, waiting at most
+// SetClockForTests sets the clock c ages its entries by, so a test that runs
+// slowly never outlives the TTL it counts on. Tests only.
+func (c *DirNames) SetClockForTests(now func() time.Time) {
+	if !testing.Testing() {
+		panic("metadata.SetClockForTests called outside a test binary")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = now
+}
+
+// Names is dir's names, unsorted, as read at most ttl ago, waiting at most
 // timeout for a read: the kept one, the one in flight, or this request's own.
-// A wait that runs out is metadata.ErrNotAnswered, as a read's would be.
-func (c *dirNames) names(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+// A wait that runs out is ErrNotAnswered, as a read's would be.
+func (c *DirNames) Names(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		l, lead := c.join(dir)
@@ -90,7 +103,7 @@ func (c *dirNames) names(ctx context.Context, dir string, timeout time.Duration)
 			return names, err
 		}
 		if !time.Now().Before(deadline) {
-			return nil, fmt.Errorf("%s: %w", dir, metadata.ErrNotAnswered)
+			return nil, fmt.Errorf("%s: %w", dir, ErrNotAnswered)
 		}
 	}
 }
@@ -98,7 +111,7 @@ func (c *dirNames) names(ctx context.Context, dir string, timeout time.Duration)
 // join is dir's entry and whether this request is to read it (lead): the one
 // kept or in flight, else a new one. A failed read its reader has yet to drop
 // is dropped here.
-func (c *dirNames) join(dir string) (*dirListing, bool) {
+func (c *DirNames) join(dir string) (*dirListing, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now() // under mu: order stays the order of the reads' starts
@@ -119,7 +132,7 @@ func (c *dirNames) join(dir string) (*dirListing, bool) {
 // bound (or it was dropped meanwhile: expired). A panic in the read is its
 // error, so l never stays in flight for good (expire and trim pass over a read
 // in flight).
-func (c *dirNames) fill(ctx context.Context, l *dirListing, timeout time.Duration) ([]string, error) {
+func (c *DirNames) fill(ctx context.Context, l *dirListing, timeout time.Duration) ([]string, error) {
 	func() {
 		defer func() {
 			if p := recover(); p != nil {
@@ -151,7 +164,7 @@ func (c *dirNames) fill(ctx context.Context, l *dirListing, timeout time.Duratio
 // await is l's names once its read is done, within deadline; again when that
 // read failed (its client may have left; its error says nothing of this
 // request's): the caller then joins the folder's next read, or makes it.
-func (c *dirNames) await(ctx context.Context, l *dirListing, deadline time.Time) (names []string, again bool, err error) {
+func (c *DirNames) await(ctx context.Context, l *dirListing, deadline time.Time) (names []string, again bool, err error) {
 	if !l.done() { // a kept read answers at once, whatever the time left
 		t := time.NewTimer(time.Until(deadline))
 		defer t.Stop()
@@ -160,7 +173,7 @@ func (c *dirNames) await(ctx context.Context, l *dirListing, deadline time.Time)
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
 		case <-t.C:
-			return nil, false, fmt.Errorf("%s: %w", l.dir, metadata.ErrNotAnswered)
+			return nil, false, fmt.Errorf("%s: %w", l.dir, ErrNotAnswered)
 		}
 	}
 	if l.err != nil {
@@ -172,7 +185,7 @@ func (c *dirNames) await(ctx context.Context, l *dirListing, deadline time.Time)
 // expire drops the entries read ttl or more before now, a read still in flight
 // aside (waited on however long it takes: its own timeout ends it). Caller
 // holds mu.
-func (c *dirNames) expire(now time.Time) {
+func (c *DirNames) expire(now time.Time) {
 	for el := c.order.Front(); el != nil && now.Sub(el.Value.(*dirListing).at) >= c.ttl; {
 		next := el.Next()
 		if el.Value.(*dirListing).done() {
@@ -184,7 +197,7 @@ func (c *dirNames) expire(now time.Time) {
 
 // trim drops the oldest kept entries until those kept are within the bounds (a
 // read in flight holds nothing yet). Caller holds mu.
-func (c *dirNames) trim() {
+func (c *DirNames) trim() {
 	for el := c.order.Front(); el != nil && (c.kept > c.max || c.size > c.cap); {
 		next := el.Next()
 		if el.Value.(*dirListing).kept {
@@ -196,7 +209,7 @@ func (c *dirNames) trim() {
 
 // drop forgets el's entry (a request waiting on it still gets its read).
 // Caller holds mu.
-func (c *dirNames) drop(el *list.Element) {
+func (c *DirNames) drop(el *list.Element) {
 	l := c.order.Remove(el).(*dirListing)
 	delete(c.byDir, l.dir)
 	if l.kept {
