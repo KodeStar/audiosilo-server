@@ -329,3 +329,54 @@ func storedPaths(t *testing.T, e *testEnv, q string, args ...any) []string {
 	}
 	return out
 }
+
+// TestSpellingStrayRows: a row an older server stored in another spelling than
+// the index's (a side row) can still be cleaned up by the path the lists answer
+// it with: a favourite's and a rating's DELETE take off the row at the path
+// given as well as the index spelling's, and an admin's progress edit names
+// the person's row by its own path (exact), never moving to the index's.
+func TestSpellingStrayRows(t *testing.T) {
+	t.Parallel()
+	s := newSpellingEnv(t)
+	ctx := context.Background()
+	count := func(table string) int {
+		t.Helper()
+		var n int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table+` WHERE user_id = ? AND rel_path = ?`, s.sam, spNFDBook).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO favourites(user_id, library_id, rel_path, created_at) VALUES(?, ?, ?, 't')`,
+		s.sam, s.lib.ID, spNFDBook); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.cat.SetRating(ctx, s.sam, catalog.Ref{LibraryID: s.lib.ID, Path: spNFDBook}, 3, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{"favourites", "rating"} {
+		if resp, body := s.do(t, "DELETE", bookURL(s.lib.ID, endpoint, spNFDBook), s.samTok, ""); resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("DELETE %s NFD = %d %s", endpoint, resp.StatusCode, body)
+		}
+	}
+	if fav, rated := count("favourites"), count("ratings"); fav != 0 || rated != 0 {
+		t.Fatalf("side rows left after the removes: %d favourites, %d ratings", fav, rated)
+	}
+
+	if _, err := s.cat.SaveProgress(ctx, s.sam, catalog.Progress{Ref: catalog.Ref{LibraryID: s.lib.ID, Path: spNFDBook},
+		Position: 7, Duration: 300}); err != nil {
+		t.Fatal(err)
+	}
+	edit := "/api/v1/admin/libraries/" + strconv.FormatInt(s.lib.ID, 10) + "/progress?path=" +
+		url.QueryEscape(spNFDBook) + "&user_id=" + strconv.FormatInt(s.sam, 10)
+	if resp, body := s.do(t, "PATCH", edit, adminSession(t, s.testEnv), `{"finished":true}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin edit of the side row = %d %s", resp.StatusCode, body)
+	}
+	side, err := s.cat.GetProgress(ctx, s.sam, catalog.Ref{LibraryID: s.lib.ID, Path: spNFDBook})
+	if err != nil || side == nil || !side.Finished {
+		t.Fatalf("the side row after the admin's edit = %+v %v, want it finished", side, err)
+	}
+	if p, err := s.cat.GetProgress(ctx, s.sam, catalog.Ref{LibraryID: s.lib.ID, Path: spNFCBook}); err != nil || p != nil {
+		t.Fatalf("the admin's edit of the side row wrote the index spelling's row: %+v %v", p, err)
+	}
+}

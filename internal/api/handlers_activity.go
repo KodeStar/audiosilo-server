@@ -268,9 +268,9 @@ func (b *progressEditBody) edit() catalog.ProgressEdit {
 
 // handleEditProgress is an admin's edit of a user's progress on a book
 // (?path=&user_id=): mark finished or not, move the position, set or clear the
-// start and finish dates.
+// start and finish dates. The path is the row's own, exact (exactPath).
 func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
-	lib, p, status, msg := a.authorizedPath(r)
+	lib, p, status, msg := a.exactPath(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return

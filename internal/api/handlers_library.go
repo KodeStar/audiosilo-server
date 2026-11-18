@@ -207,6 +207,27 @@ func (a *API) authorizedPath(r *http.Request) (*catalog.Library, string, int, st
 	return lib, rel, status, msg
 }
 
+// exactPath is authorizedPath taking ?path= in the spelling given (pathInScope,
+// no catalog.Spelling): an admin's edit of a person's stored row, which the
+// console names by the row's own path, so a row an older server stored in
+// another spelling is the one edited, not the index spelling's.
+func (a *API) exactPath(r *http.Request) (*catalog.Library, string, int, string) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		return nil, "", http.StatusBadRequest, "invalid library id"
+	}
+	raw := r.URL.Query().Get("path")
+	if len(raw) > catalog.MaxPathBytes {
+		return nil, "", http.StatusBadRequest, msgPathTooLong
+	}
+	lib, scope, status, msg := a.libraryScope(r, id)
+	if status != 0 {
+		return nil, "", status, msg
+	}
+	lib, rel, _, status, msg := pathInScope(lib, scope, raw)
+	return lib, rel, status, msg
+}
+
 // authorizedScope is authorizedPath plus the caller's scope, for an endpoint that
 // resolves the path to a book (bookForPath), which may lie above it.
 func (a *API) authorizedScope(r *http.Request) (*catalog.Library, string, catalog.Scope, int, string) {

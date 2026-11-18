@@ -1045,12 +1045,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the other refs' folders down only as deep as the index has books, never a path's every folder),
   so an old player's replay naming a part path keeps the
   book instead of dropping it and deleting the stored entry (CROSS-REPO §15); a remove takes off
-  the entry at the path given, its spelling and its book's (`removalRefs`). Favourites take the
+  the entry at the path given, its spelling and its book's (`removalRefs`), and a favourite's or
+  rating's `DELETE` the row at the path given too (`api.removedPaths`), so a row an older server
+  stored in another spelling or at a part path can still be cleaned up. Favourites take the
   spelling only, never the file-to-book mapping: the shipped Folders view hearts a
   track by its own path and shows the heart by path equality. No on-demand index on a save, and
   a failed lookup is a 500 (a timed-out one a 503, `writeCatalogError`), never a save under
   another key. Rows old clients already wrote under a part path stay where they are (not
-  merged until the re-key server#210 plans). `POST /cast/token` grants the book's path (`bookAt`).
+  merged until the re-key server#210 plans), and a part path's `GET` of bookmarks, notes and
+  history reads the book's, not them. `POST /cast/token` grants the book's path (`bookAt`).
   **The ebook** (Bridge Phase 3b, capability `ebooks`, `api/handlers_ebook.go`): `GET
   /libraries/{id}/ebook?path=<the book's own path>` serves the file the scan recorded for the book
   (`books.ebook_path`, see Auto book/folder detection), opened fresh by `library.OpenEbook`: joined
@@ -1139,8 +1142,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   can't reach is there. A failed lookup is a 500 (a timed-out one a 503), never the spelling given.
   Unchanged on purpose: `CleanRelPath` and share rules stay byte-exact; the on-demand index takes
   only the on-disk spelling (`dirPresent`), so another spelling of an unindexed book stays 404; the
-  admin's folder-override route and the Bridge's routes (`pathInScope` itself, the Audible sync's
-  `userPathResolver`) take the index's paths and match exactly.
+  admin's folder-override route, the admin's edit of a person's progress (`exactPath`: the row
+  by its own path) and the Bridge's routes (`pathInScope` itself, the Audible sync's
+  `userPathResolver`) take the paths as given and match exactly. The admin's other book routes on
+  `authorizedPath` (book page, edits, covers, chapters, rescan) take the spelling like a player's.
 - **Recognized audio** is `metadata.AudioExtensions` (`IsAudio`), including `.mp4`
   (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`. `.mka` (Matroska audio, #161)
   has its chapters read by ffprobe; stored, it is `audio/x-matroska` (also sniffed from its EBML

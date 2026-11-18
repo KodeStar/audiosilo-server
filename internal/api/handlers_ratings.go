@@ -79,15 +79,18 @@ func (a *API) handlePutRating(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDeleteRating clears the caller's rating of the book at ?path=
-// (ratingPath). Idempotent: 204 whether or not there was one.
+// (ratingPath), and one stored at the path as given (removedPaths).
+// Idempotent: 204 whether or not there was one.
 func (a *API) handleDeleteRating(w http.ResponseWriter, r *http.Request) {
 	lib, path, ok := a.ratingPath(w, r, "could not remove rating")
 	if !ok {
 		return
 	}
-	if err := a.cat.DeleteRating(r.Context(), userFrom(r.Context()).ID, catalog.Ref{LibraryID: lib.ID, Path: path}); err != nil {
-		a.writeCatalogError(w, err, "delete rating failed", "could not remove rating", "library", lib.ID, "path", path)
-		return
+	for _, p := range removedPaths(r, path) {
+		if err := a.cat.DeleteRating(r.Context(), userFrom(r.Context()).ID, catalog.Ref{LibraryID: lib.ID, Path: p}); err != nil {
+			a.writeCatalogError(w, err, "delete rating failed", "could not remove rating", "library", lib.ID, "path", p)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

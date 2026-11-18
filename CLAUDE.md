@@ -546,7 +546,8 @@ are `GET`/`PUT`/`DELETE /libraries/{id}/rating?path=` (`{"rating": Rating | null
 {library_id, path, rating 1-5, note, created_at, updated_at}`; PUT `{rating, note?}` resolves a
 part path to its book with `bookAt` and stores on the book's path, 400 for a rating that isn't a
 whole 1-5 or a note over 500 runes after trimming; GET/DELETE read the book's the same way, from the index
-alone (`ratingPath`; see Path-addressed API, the book-path rule, in CONVENTIONS.md);
+alone (`ratingPath`; DELETE also clears a row at the path given, `removedPaths`; see Path-addressed API, the
+book-path rule, in CONVENTIONS.md);
 DELETE 204 idempotent) and `GET /me/ratings` (`{"ratings": [Rating + book?]}`, newest first,
 scope-filtered like favourites: a revoked share hides a rating, never deletes it; books via
 `BooksByPaths`). Table `ratings` (`0027`), path-keyed, carried by `carryListeningState` (a

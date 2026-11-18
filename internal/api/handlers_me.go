@@ -382,8 +382,9 @@ func (a *API) indexFavourite(ctx context.Context, lib *catalog.Library, scope ca
 	}
 }
 
-// handleRemoveFavourite clears the caller's favourite for a path (idempotent).
-// Keyed by ?path= as given (one favourite per user+library+path).
+// handleRemoveFavourite clears the caller's favourite for a path (idempotent):
+// the one at ?path= in the index's spelling (one favourite per
+// user+library+path), and one stored at the path as given (removedPaths).
 func (a *API) handleRemoveFavourite(w http.ResponseWriter, r *http.Request) {
 	lib, path, status, msg := a.authorizedPath(r)
 	if status != 0 {
@@ -391,9 +392,24 @@ func (a *API) handleRemoveFavourite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
-	if err := a.cat.RemoveFavourite(r.Context(), u.ID, catalog.Ref{LibraryID: lib.ID, Path: path}); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not remove favourite")
-		return
+	for _, p := range removedPaths(r, path) {
+		if err := a.cat.RemoveFavourite(r.Context(), u.ID, catalog.Ref{LibraryID: lib.ID, Path: p}); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not remove favourite")
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// removedPaths is what a remove of the caller's row keyed on key (the path the
+// route resolved ?path= to: its spelling, its book) takes off: key, and the
+// ?path= as given (cleaned) when that differs, so a row an older server stored
+// in another spelling or at a part path can still be cleaned up by the path a
+// list answered it with, as a list's remove does (catalog removalRefs). The
+// caller's own rows only, past the route's scope check.
+func removedPaths(r *http.Request, key string) []string {
+	if given := catalog.CleanRelPath(r.URL.Query().Get("path")); given != key {
+		return []string{key, given}
+	}
+	return []string{key}
 }
