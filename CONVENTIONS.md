@@ -1120,7 +1120,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   until keyed. Both book inserts write it (the scan's upsert, the podcast episode insert); `KeyPaths`
   at the start (after `KeySeries`, a failure stops the start) keys every NULL row (a book an older
   server inserted after a rollback) and every row when `pathKeysVersion` (`"1/" + norm.Version`)
-  differs from `server_state('path_keys')`. `Catalog.Spelling(lib, p)` is the index's spelling of a
+  differs from `server_state('path_keys')`, in transactions of `keyPathsChunk` (2,000) books in id
+  order, each committed before the next (the log stays a few MB on a library of any size), with a
+  progress line every 5 s: a start stopped part way keeps what it keyed (the NULL rows are what is
+  left; a re-key of every book records its last id in `server_state('path_keys_resume')`), and the
+  version is stored once every book is keyed. `Catalog.Spelling(lib, p)` is the index's spelling of a
   cleaned path, from the index alone: a path with no other spelling (`normSensitive`: NFC and NFD
   both) is `p` with no query; then a book at `p` exactly, or a file of or folder inside one
   (`bookHolding`, so a track spelled as indexed costs one lookup); the one book whose NFC path is `NFC(p)`

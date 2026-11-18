@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -43,36 +44,95 @@ func normSensitive(p string) bool {
 	return !unorm.NFC.IsNormalString(p) || !unorm.NFD.IsNormalString(p)
 }
 
+// pathKeysResumeKey is the server_state row of a re-key over every book (a
+// pathKeysVersion change) under way: the version it keys for and the last book
+// id done, so a start stopped part way on goes on from there.
+const pathKeysResumeKey = "path_keys_resume"
+
+// pathKeysResume is pathKeysResumeKey's value.
+type pathKeysResume struct {
+	Version string `json:"version"`
+	After   int64  `json:"after"`
+}
+
+// keyPathsChunk is how many books one of KeyPaths' transactions keys: small
+// enough that the write-ahead log stays a few MB on a library of any size (each
+// commit lets it be checkpointed), large enough that 100,000 books take 50.
+const keyPathsChunk = 2000
+
 // KeyPaths writes books.path_key for every book that has none (migration 0083
 // left every row NULL; a book an older server inserted after a rollback has
-// none either), and for every book whenever pathKeysVersion changes. One
-// transaction at the start, before the server answers (Spelling reads the keys).
-// It returns how many books it keyed.
-func (c *Catalog) KeyPaths(ctx context.Context) (int, error) {
+// none either), and for every book whenever pathKeysVersion changes. At the
+// start, before the server answers (Spelling reads the keys), in transactions of
+// keyPathsChunk books in id order, each committed before the next, so the log
+// never holds the whole table and a start stopped part way loses nothing: the
+// NULL rows are what is left, and a re-key of every book records the last id it
+// did (pathKeysResumeKey). The version is stored once every book is keyed.
+// progress, when not nil, is told after each transaction how many books are
+// done of how many. It returns how many books it keyed.
+func (c *Catalog) KeyPaths(ctx context.Context, progress func(done, total int)) (int, error) {
 	v, err := getServerState[string](ctx, c.db, pathKeysKey)
 	if err != nil {
 		return 0, err
 	}
-	where := `WHERE path_key IS NULL`
-	if v != pathKeysVersion {
-		where = ``
-	} else {
-		var unkeyed bool
-		if err := c.db.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM books WHERE path_key IS NULL)`).Scan(&unkeyed); err != nil || !unkeyed {
+	all := v != pathKeysVersion
+	var after int64
+	where := `path_key IS NULL AND id > ?`
+	if all {
+		where = `id > ?`
+		resume, err := getServerState[pathKeysResume](ctx, c.db, pathKeysResumeKey)
+		if err != nil {
 			return 0, err
 		}
+		if resume.Version == pathKeysVersion {
+			after = resume.After
+		}
+	}
+	var total int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books WHERE `+where, after).Scan(&total); err != nil {
+		return 0, err
+	}
+	if total == 0 && !all {
+		return 0, nil
 	}
 	keyed := 0
-	err = c.db.WithTx(ctx, "KeyPaths", func(tx *sql.Tx) error {
+	for {
+		n, last, err := c.keyPathsIn(ctx, where, after, all)
+		if err != nil {
+			return keyed, err
+		}
+		keyed += n
+		after = last
+		if n == 0 {
+			break
+		}
+		if progress != nil {
+			progress(keyed, total)
+		}
+	}
+	return keyed, c.db.WithTx(ctx, "KeyPaths", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM server_state WHERE key = ?`, pathKeysResumeKey); err != nil {
+			return err
+		}
+		return putServerState(ctx, tx, pathKeysKey, pathKeysVersion, c.stamp())
+	})
+}
+
+// keyPathsIn is one of KeyPaths' transactions: the next keyPathsChunk books
+// past id after that where admits, keyed. With all (a re-key of every book) it
+// records the last id done in the same transaction. It returns how many books
+// it read and the last one's id (0 and after when none were left).
+func (c *Catalog) keyPathsIn(ctx context.Context, where string, after int64, all bool) (int, int64, error) {
+	n, last := 0, after
+	err := c.db.WithTx(ctx, "KeyPaths", func(tx *sql.Tx) error {
 		type book struct {
 			id     int64
 			rel    string
 			stored sql.NullString
 		}
 		books, err := queryRows(ctx, tx, func(r *sql.Rows, b *book) error { return r.Scan(&b.id, &b.rel, &b.stored) },
-			`SELECT id, rel_path, path_key FROM books `+where)
-		if err != nil {
+			`SELECT id, rel_path, path_key FROM books WHERE `+where+` ORDER BY id LIMIT ?`, after, cmp.Or(c.chunkKeyPaths, keyPathsChunk))
+		if err != nil || len(books) == 0 {
 			return err
 		}
 		set, err := tx.PrepareContext(ctx, `UPDATE books SET path_key = ? WHERE id = ?`)
@@ -87,10 +147,16 @@ func (c *Catalog) KeyPaths(ctx context.Context) (int, error) {
 				}
 			}
 		}
-		keyed = len(books)
-		return putServerState(ctx, tx, pathKeysKey, pathKeysVersion, c.stamp())
+		n, last = len(books), books[len(books)-1].id
+		if !all {
+			return nil
+		}
+		return putServerState(ctx, tx, pathKeysResumeKey, pathKeysResume{Version: pathKeysVersion, After: last}, c.stamp())
 	})
-	return keyed, err
+	if err != nil {
+		return 0, after, err
+	}
+	return n, last, nil
 }
 
 // Spelling is the index's spelling of p, a cleaned library-relative path a

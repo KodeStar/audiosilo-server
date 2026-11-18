@@ -351,6 +351,9 @@ type Catalog struct {
 	dups store.GenMap[dupKey, dupFound]
 	// exportPaged, tests only, runs after each page ExportLibraryBooks reads.
 	exportPaged func()
+	// chunkKeyPaths, tests only, is KeyPaths' transaction size when not 0
+	// (keyPathsChunk, the package's, otherwise).
+	chunkKeyPaths int
 }
 
 // OnBookChange adds f to the listeners that hear, after the fact and without

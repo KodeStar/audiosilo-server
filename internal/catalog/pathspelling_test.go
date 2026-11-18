@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -162,17 +164,17 @@ func TestKeyPaths(t *testing.T) {
 	}
 
 	// The first start keys every book (no version stored yet), then nothing.
-	if n, err := c.KeyPaths(ctx); err != nil || n == 0 {
+	if n, err := c.KeyPaths(ctx, nil); err != nil || n == 0 {
 		t.Fatalf("first KeyPaths: %d %v, want every book", n, err)
 	}
-	if n, err := c.KeyPaths(ctx); err != nil || n != 0 {
+	if n, err := c.KeyPaths(ctx, nil); err != nil || n != 0 {
 		t.Fatalf("second KeyPaths: %d %v, want 0", n, err)
 	}
 	// A row an older server inserted (NULL) is keyed at the next start.
 	if _, err := c.db.ExecContext(ctx, `UPDATE books SET path_key = NULL WHERE library_id = ? AND rel_path = ?`, lib, nfdAmelie); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := c.KeyPaths(ctx); err != nil || n != 1 {
+	if n, err := c.KeyPaths(ctx, nil); err != nil || n != 1 {
 		t.Fatalf("KeyPaths over a NULL row: %d %v, want 1", n, err)
 	}
 	if got, _ := key(nfdAmelie); got != nfcAmelie {
@@ -189,11 +191,114 @@ func TestKeyPaths(t *testing.T) {
 	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books`).Scan(&total); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := c.KeyPaths(ctx); err != nil || n != total {
+	if n, err := c.KeyPaths(ctx, nil); err != nil || n != total {
 		t.Fatalf("KeyPaths after a version change: %d %v, want %d", n, err, total)
 	}
 	if got, ok := key(nfcEmile); !ok || got != "" {
 		t.Errorf("stale key after the version change = %+q", got)
+	}
+}
+
+// TestKeyPathsResumes (server#210): KeyPaths keys in transactions of a few
+// books, each committed before the next, so a start stopped part way keeps
+// what it keyed and the next one does only the rest: the NULL rows, or, for a
+// re-key of every book (a version change), the books past the last id done.
+// The version is stored only once every book is keyed.
+func TestKeyPathsResumes(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib := seedSpellings(t, c)
+	c.chunkKeyPaths = 3
+	var total int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books`).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total <= 2*c.chunkKeyPaths {
+		t.Fatalf("%d books: too few for three transactions", total)
+	}
+	count := func(where string) int {
+		t.Helper()
+		var n int
+		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books WHERE `+where).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	version := func() string {
+		t.Helper()
+		v, err := getServerState[string](ctx, c.db, pathKeysKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	// stopAfterOne is KeyPaths stopped once its first transaction committed.
+	stopAfterOne := func() {
+		t.Helper()
+		stop, cancel := context.WithCancel(ctx)
+		defer cancel()
+		var told [][2]int
+		_, err := c.KeyPaths(stop, func(done, of int) {
+			told = append(told, [2]int{done, of})
+			cancel()
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("stopped KeyPaths = %v, want context.Canceled", err)
+		}
+		if len(told) != 1 || told[0][0] != c.chunkKeyPaths {
+			t.Fatalf("progress = %v, want one transaction of %d", told, c.chunkKeyPaths)
+		}
+	}
+
+	// Books an older server inserted (NULL): the stopped start keyed one
+	// transaction's worth; the next keys the rest.
+	if err := putServerState(ctx, c.db, pathKeysKey, pathKeysVersion, c.stamp()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET path_key = NULL`); err != nil {
+		t.Fatal(err)
+	}
+	stopAfterOne()
+	if n := count(`path_key IS NULL`); n != total-c.chunkKeyPaths {
+		t.Fatalf("after the stopped start %d books unkeyed, want %d", n, total-c.chunkKeyPaths)
+	}
+	if n, err := c.KeyPaths(ctx, nil); err != nil || n != total-c.chunkKeyPaths {
+		t.Fatalf("next start keyed %d %v, want the %d left", n, err, total-c.chunkKeyPaths)
+	}
+	if n := count(`path_key IS NULL`); n != 0 {
+		t.Fatalf("%d books unkeyed after the next start", n)
+	}
+
+	// A version change keys every book again: stopped part way, the version
+	// stays the old one and the next start goes on past the last id done.
+	if err := putServerState(ctx, c.db, pathKeysKey, "0/older", c.stamp()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET path_key = 'stale'`); err != nil {
+		t.Fatal(err)
+	}
+	stopAfterOne()
+	if v := version(); v != "0/older" {
+		t.Fatalf("version after a stopped re-key = %q, want the old one", v)
+	}
+	if n := count(`path_key = 'stale'`); n != total-c.chunkKeyPaths {
+		t.Fatalf("after the stopped re-key %d books stale, want %d", n, total-c.chunkKeyPaths)
+	}
+	if n, err := c.KeyPaths(ctx, nil); err != nil || n != total-c.chunkKeyPaths {
+		t.Fatalf("next start re-keyed %d %v, want the %d left", n, err, total-c.chunkKeyPaths)
+	}
+	if n := count(`path_key = 'stale' OR path_key IS NULL`); n != 0 {
+		t.Fatalf("%d books not re-keyed", n)
+	}
+	if v := version(); v != pathKeysVersion {
+		t.Fatalf("version = %q, want %q", v, pathKeysVersion)
+	}
+	if r, err := getServerState[pathKeysResume](ctx, c.db, pathKeysResumeKey); err != nil || r != (pathKeysResume{}) {
+		t.Fatalf("resume row left behind: %+v %v", r, err)
+	}
+	var k string
+	if err := c.db.QueryRowContext(ctx, `SELECT path_key FROM books WHERE library_id = ? AND rel_path = ?`, lib, nfdAmelie).Scan(&k); err != nil || k != nfcAmelie {
+		t.Fatalf("key of %+q = %+q %v, want %+q", nfdAmelie, k, err, nfcAmelie)
 	}
 }
 

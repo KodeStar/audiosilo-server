@@ -146,8 +146,9 @@ func Run(ctx context.Context, opts Options) error {
 	// Every book's path in NFC (books.path_key, server#210), keyed for the books
 	// that have none and again when the Unicode tables change, before a request
 	// in another spelling of a path is answered (catalog.Spelling reads only the
-	// keys). A failure stops the start, as KeySeries' does.
-	if n, err := cat.KeyPaths(ctx); err != nil {
+	// keys). A failure stops the start, as KeySeries' does; the books keyed by
+	// then stay keyed, and the next start goes on from there.
+	if n, err := cat.KeyPaths(ctx, keyPathsProgress(log)); err != nil {
 		return fmt.Errorf("keying the books' paths: %w", err)
 	} else if n > 0 {
 		log.Info("keyed the books' paths", "books", n)

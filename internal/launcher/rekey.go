@@ -5,10 +5,27 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 )
+
+// keyPathsEvery is how often keyPathsProgress logs a re-key's progress.
+const keyPathsEvery = 5 * time.Second
+
+// keyPathsProgress is catalog.KeyPaths' progress at the start: a line at most
+// every keyPathsEvery while it runs (the first start after the upgrade keys
+// every book), so a large library's start is seen to move. The last count is the "keyed the books' paths" line after it.
+func keyPathsProgress(log *slog.Logger) func(done, total int) {
+	last := time.Now()
+	return func(done, total int) {
+		if done < total && time.Since(last) >= keyPathsEvery {
+			last = time.Now()
+			log.Info("keying the books' paths", "done", done, "of", total)
+		}
+	}
+}
 
 // rekeyAtStart runs the start's re-key (catalog.RekeyPathState, server#210)
 // after KeyPaths: listeners' rows stored under a track path, a disc folder or

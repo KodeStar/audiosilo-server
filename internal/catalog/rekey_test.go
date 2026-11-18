@@ -524,7 +524,7 @@ func TestRekeyOnUpgrade(t *testing.T) {
 	f.seedEverything(t, f.ann, f.lib, rkAmelieC, 30, rkUpdated1)
 	f.exec(t, `UPDATE books SET path_key = NULL`)
 	f.exec(t, `DELETE FROM server_state WHERE key IN (?, ?)`, pathKeysKey, rekeyStateKey)
-	if _, err := f.c.KeyPaths(f.ctx); err != nil {
+	if _, err := f.c.KeyPaths(f.ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	rep, err := f.c.RekeyPathState(f.ctx)
