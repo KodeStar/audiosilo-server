@@ -270,8 +270,9 @@ func (a *API) followByURL(w http.ResponseWriter, r *http.Request, lib int64, raw
 		return
 	case errors.Is(err, bridge.ErrInvalid):
 		// A URL the queue's params check refuses (as an import row's
-		// invalid_feed_url), never a 500.
-		writeErrorCode(w, 400, "invalid_feed_url", "Invalid feed URL.")
+		// invalid_feed_url, FollowError's code and copy), never a 500.
+		e, _ := podcast.FollowError(err)
+		writeErrorCode(w, 400, e.Code, e.Message)
 		return
 	default:
 		a.podcastQueueError(w, err)
