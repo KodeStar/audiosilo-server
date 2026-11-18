@@ -558,7 +558,7 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 		return nil, Credential{}, err
 	}
 	cred := Credential{ID: row.id, Kind: row.kind, DeviceID: row.deviceID, DeviceName: row.deviceName, Client: row.client,
-		Book: row.grant.path}
+		Book: row.grant.path, Editor: row.grant.editor}
 	if p.Client.App != "" {
 		cred.Client = p.Client
 	}

@@ -218,12 +218,13 @@ func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 // output is not byte-seekable (no Range / Content-Length); a client seeks by
 // re-requesting with a new startSec. The ffmpeg process is bound to the request
 // context, so a client disconnect kills it, and so does a client that has read
-// nothing for transcodeIdle (a paused player's held stream). log may be nil. Its look at the
+// nothing for idle (TranscodeIdle: a paused player's held stream; 0 never ends
+// a stream for that). log may be nil. Its look at the
 // file is a metadata.Bounded stat (the request's context, at most wait), as
 // ServeFile's open: one given up on (metadata.GaveUp) is returned with nothing
 // written, for the caller to answer; every other outcome is answered here and
 // returns nil.
-func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath string, startSec float64, wait time.Duration, log *slog.Logger) error {
+func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath string, startSec float64, wait, idle time.Duration, log *slog.Logger) error {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -234,7 +235,7 @@ func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath strin
 		http.Error(w, "not found", http.StatusNotFound)
 		return nil
 	}
-	transcodeInput(w, r, inputSpec{url: absPath}, ffmpegPath, startSec, transcodeIdle, log)
+	transcodeInput(w, r, inputSpec{url: absPath}, ffmpegPath, startSec, idle, log)
 	return nil
 }
 
@@ -251,7 +252,7 @@ func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegP
 	}
 	in := inputFor(ffmpegPath)
 	in.file = f
-	transcodeInput(w, r, in, ffmpegPath, startSec, transcodeIdle, log)
+	transcodeInput(w, r, in, ffmpegPath, startSec, TranscodeIdle, log)
 }
 
 // inputSpec is how ffmpeg reads its input: a path (proto ""), or the
@@ -354,14 +355,16 @@ func transcodeArgs(in inputSpec, startSec float64) []string {
 	)
 }
 
-// transcodeIdle is how long a transcode waits for its client to read before
+// TranscodeIdle is how long a transcode waits for its client to read before
 // it ends the stream (copyIdle): a paused <audio> stops reading once its
 // buffer is full, yet keeps the connection, and with it one of the server's
 // few transcode slots and an ffmpeg, for as long as the page stays open. A
 // playing client reads every few seconds (a browser buffers a few minutes of
 // it at most), and the web player asks for a transcode again after a pause of
-// 30 s (TRANSCODE_STALE_PAUSE_MS), the console's chapter editor after 10 s.
-const transcodeIdle = 10 * time.Minute
+// 30 s (TRANSCODE_STALE_PAUSE_MS), the console's chapter editor after 10 s. A
+// Cast receiver asks for nothing again on resume, so its streams get no idle
+// end (the api's transcodeIdleFor).
+const TranscodeIdle = 10 * time.Minute
 
 // transcodeInput runs ffmpeg over in from startSec and streams its MP3 to w,
 // ending it (and ffmpeg) when the client has read nothing for idle.
@@ -416,6 +419,10 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 // has not read in that time fails, ending the copy. A ResponseWriter with no
 // deadlines (a test's recorder) copies with none.
 func copyIdle(w http.ResponseWriter, src io.Reader, idle time.Duration) error {
+	if idle <= 0 {
+		_, err := io.Copy(w, src)
+		return err
+	}
 	rc := http.NewResponseController(w)
 	_, err := io.Copy(deadlineWriter{w: w, rc: rc, idle: idle}, src)
 	if err == nil {

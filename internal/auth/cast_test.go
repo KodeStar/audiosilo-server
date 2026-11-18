@@ -465,9 +465,13 @@ func TestEditorTokensCountApartFromCasts(t *testing.T) {
 		}
 		editors = append(editors, sec)
 	}
-	// Allowed: the cast token outlives every editor mint past the editor's cap.
-	if _, _, err := resolveCast(s, ctx, cast, "Author/Book/01.mp3"); err != nil {
-		t.Fatalf("editor mints dropped a cast token: %v", err)
+	// Allowed: the cast token outlives every editor mint past the editor's cap,
+	// and its credential says it is a receiver's (the transcode's idle end).
+	if _, cred, err := resolveCast(s, ctx, cast, "Author/Book/01.mp3"); err != nil || cred.Editor {
+		t.Fatalf("editor mints dropped a cast token: %v (editor %v)", err, cred.Editor)
+	}
+	if _, cred, err := resolveCast(s, ctx, editors[len(editors)-1], "Author/Book/01.mp3"); err != nil || !cred.Editor {
+		t.Fatalf("the newest editor token = %v, editor %v; want the editor's", err, cred.Editor)
 	}
 	// Denied: the editor's own oldest, past its cap. An editor token reads what a
 	// cast token reads (its book) and nothing else.

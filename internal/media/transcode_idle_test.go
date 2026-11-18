@@ -119,3 +119,26 @@ func TestTranscodeIdleEndsFFmpeg(t *testing.T) {
 		t.Fatal("an unread transcode held its handler (and ffmpeg) on")
 	}
 }
+
+// TestCopyIdleNoneKeepsUnreadStream: with no idle time (a Cast receiver's,
+// which asks for nothing again on resume) an unread stream is never ended for
+// it, only by the client going away.
+func TestCopyIdleNoneKeepsUnreadStream(t *testing.T) {
+	t.Parallel()
+	srv, done := idleServer(t, func() io.Reader { return endless{} }, 0)
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("copyIdle = %v while the client is there, want it still copying", err)
+	case <-time.After(time.Second):
+	}
+	resp.Body.Close()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the stream outlived its client")
+	}
+}

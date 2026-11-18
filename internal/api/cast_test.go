@@ -17,6 +17,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/media"
 )
 
 // The sibling of the fixture's Cradle folder whose name shares its prefix.
@@ -721,5 +722,28 @@ func TestCastKeepIsOnePerToken(t *testing.T) {
 	case <-run.finished:
 	default:
 		t.Fatal("a bare API's keep had not finished when its response ended")
+	}
+}
+
+// TestTranscodeIdleForCastReceiver: a Cast receiver's transcode never ends for
+// want of reads (its sender only says play on resume, asking nothing again),
+// while the chapter editor's cast token, a session's and an API key's do.
+func TestTranscodeIdleForCastReceiver(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		cred auth.Credential
+		want time.Duration
+	}{
+		{"receiver", auth.Credential{Kind: auth.KindCast}, 0},
+		{"editor", auth.Credential{Kind: auth.KindCast, Editor: true}, media.TranscodeIdle},
+		{"session", auth.Credential{Kind: auth.KindSession}, media.TranscodeIdle},
+		{"api key", auth.Credential{Kind: auth.KindAPI}, media.TranscodeIdle},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r = r.WithContext(withCredential(r.Context(), &auth.User{}, c.cred))
+		if got := transcodeIdleFor(r); got != c.want {
+			t.Errorf("%s: transcodeIdleFor = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

@@ -1178,10 +1178,21 @@ func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloa
 	if downloadName != "" {
 		media.SetAttachment(w.Header(), downloadName)
 	}
-	if err := media.Transcode(w, r, abs, a.ffmpeg, start, waitLeft(deadline), a.log); err != nil {
+	if err := media.Transcode(w, r, abs, a.ffmpeg, start, waitLeft(deadline), transcodeIdleFor(r), a.log); err != nil {
 		w.Header().Del("Content-Disposition")
 		writeShareNotAnswering(w)
 	}
+}
+
+// transcodeIdleFor is how long r's transcode waits for its client to read
+// before it ends: media.TranscodeIdle, except for a Cast receiver's (a cast
+// token not the console's chapter editor's), which never asks for its stream
+// again on resume, so a pause ended it for good (the sender only says play).
+func transcodeIdleFor(r *http.Request) time.Duration {
+	if c := credentialFrom(r.Context()); c.Kind == auth.KindCast && !c.Editor {
+		return 0
+	}
+	return media.TranscodeIdle
 }
 
 // serveRemuxed answers with abs's remuxed MP3 (media.NewRemuxer) with Range and
