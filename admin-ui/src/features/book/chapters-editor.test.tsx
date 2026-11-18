@@ -540,6 +540,60 @@ describe('the chapter editor', () => {
     }
   });
 
+  it('stops reading the page once it says the remux was refused, and keeps the transcode', async () => {
+    let d = mkaDetail(false);
+    const calls = mockFetch(routes(d, { 'GET /admin/libraries/1/book': () => ({ body: d }) }));
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const { container } = renderApp(URL);
+      const user = await openEditor();
+      await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+      await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+      const audio = container.querySelector('audio')!;
+      expect(audio.getAttribute('src')).toContain('transcode=1');
+      const reads = () => calls.filter((c) => c.path === '/admin/libraries/1/book').length;
+      const before = reads();
+      // Refused: no remux, so no copy to wait for.
+      d = mkaDetail(false);
+      d.files = d.files.map((f) => ({ ...f, direct_playable: false, remux_cached: undefined }));
+      act(() => vi.advanceTimersByTime(5000));
+      await waitFor(() => expect(reads()).toBe(before + 1));
+      // The answer lands (the page's query takes it) before the next tick.
+      await act(() => new Promise((r) => setTimeout(r, 50)));
+      act(() => vi.advanceTimersByTime(15_000));
+      expect(reads()).toBe(before + 1);
+      expect(audio.getAttribute('src')).toContain('transcode=1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the page and the draft when a read for the remux fails', async () => {
+    let fail = false;
+    const d = mkaDetail(false);
+    mockFetch(
+      routes(d, {
+        'GET /admin/libraries/1/book': () =>
+          fail ? { status: 403, body: { error: 'forbidden' } } : { body: d },
+      }),
+    );
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const { container } = renderApp(URL);
+      const user = await openEditor();
+      await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+      await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+      fail = true;
+      for (let i = 0; i < 3; i++) {
+        act(() => vi.advanceTimersByTime(5000));
+        await act(() => new Promise((r) => setTimeout(r, 50)));
+      }
+      expect(screen.getByRole('button', { name: 'Save chapters' })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('plays an MP3 in .mka as its remux once that is made', async () => {
     mockFetch(routes(mkaDetail(true)));
     const { container } = renderApp(URL);

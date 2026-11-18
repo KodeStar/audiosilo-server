@@ -147,10 +147,16 @@ export function ChaptersEditor({
   };
 
   const chosen = rows.find((r) => r.key === selected);
-  // The MP3-in-.mka files whose remux is made, as the page says now: unlike the
-  // files it opened on, read again while the player waits for one (Scrubber).
+  // The MP3-in-.mka files whose remux is made, and those whose copy is still
+  // to come, as the page says now: unlike the files it opened on, read again
+  // while the player waits for one (Scrubber). One the remux refused is in
+  // neither (the page says no remux of it): it stays a transcode.
   const remuxReady = useMemo(
     () => new Set((detail.files ?? []).filter((f) => f.remux_cached).map((f) => f.path)),
+    [detail.files],
+  );
+  const remuxWaiting = useMemo(
+    () => new Set((detail.files ?? []).filter((f) => f.remux_cached === false).map((f) => f.path)),
     [detail.files],
   );
 
@@ -162,6 +168,7 @@ export function ChaptersEditor({
         bookPath={b.path}
         spans={spans}
         remuxReady={remuxReady}
+        remuxWaiting={remuxWaiting}
         row={chosen}
         n={number(selected)}
         withHours={withHours}
@@ -500,6 +507,7 @@ function Scrubber({
   bookPath,
   spans,
   remuxReady,
+  remuxWaiting,
   row,
   n,
   withHours,
@@ -511,6 +519,8 @@ function Scrubber({
   spans: FileSpan[];
   /** The paths of the MP3-in-.mka files whose remux is made. */
   remuxReady: ReadonlySet<string>;
+  /** The paths of the MP3-in-.mka files whose remux is still to be made. */
+  remuxWaiting: ReadonlySet<string>;
   row?: DraftRow;
   n: number;
   withHours: boolean;
@@ -567,7 +577,11 @@ function Scrubber({
   const [remux, setRemux] = useState<{ path?: string; cold: boolean }>({ cold: false });
   if (remux.path !== span?.path) setRemux({ path: span?.path, cold: remuxCold });
   const cold = remux.cold;
-  const carry = useRef<number | null>(null);
+  // Whether the page still says the chosen file's copy is coming (not refused).
+  const remuxComing = !!span && remuxWaiting.has(span.path);
+  // Where the copy that took over starts, for the row it was taken on (`at`):
+  // another row chosen before it loads starts at its own start.
+  const carry = useRef<{ at: string; to: number } | null>(null);
   const offset = target?.offset ?? 0;
   const length = span ? span.end - span.start : 0;
   const transcoded = !!span && canTranscode && (!span.playable || cold);
@@ -662,31 +676,49 @@ function Scrubber({
       if (!keptHere) setPos(from);
       return;
     }
-    const to = carry.current ?? offset;
+    const to = carry.current?.at === at ? carry.current.to : offset;
     carry.current = null;
     if (a.readyState >= 1 && a.currentSrc.endsWith(src)) a.currentTime = to;
     else pending.current = to;
-  }, [src, offset, transcoded, from, keptHere, askSeeks]);
+  }, [src, offset, transcoded, from, keptHere, askSeeks, at]);
 
   // A cold remux's copy is made (the page says so) and the audio does not
-  // play: the file plays as that copy from here on, from the playhead (a
-  // switch while it plays would cut it off). Until then the page is read
-  // again now and then: its GET starts the copy, and says when it is made.
+  // play, nor waits to be asked for again to play (busy): the file plays as
+  // that copy from here on, from the playhead (a switch while it plays would
+  // cut it off). Until then the page is read again now and then: its GET
+  // starts the copy, and says when it is made. Each read waits for the last,
+  // and one that fails is let go: it is the page's own query only once read,
+  // so a failed read never takes the page (and the editor's draft) down.
   useEffect(() => {
-    if (!cold || remuxCold || playing) return;
-    carry.current = roundMs(
-      Math.min(pending.current ?? from + (audio.current?.currentTime ?? 0), length),
-    );
+    if (!cold || remuxCold || playing || waiting) return;
+    carry.current = {
+      at,
+      to: roundMs(Math.min(pending.current ?? from + (audio.current?.currentTime ?? 0), length)),
+    };
     setRemux((r) => ({ ...r, cold: false }));
-  }, [cold, remuxCold, playing, from, length]);
+  }, [cold, remuxCold, playing, waiting, at, from, length]);
   useEffect(() => {
-    if (!cold || !remuxCold) return;
-    const poll = setInterval(
-      () => void qc.invalidateQueries({ queryKey: keys.book(libraryId, bookPath), exact: true }),
-      REMUX_POLL_MS,
-    );
-    return () => clearInterval(poll);
-  }, [cold, remuxCold, qc, libraryId, bookPath]);
+    if (!cold || !remuxComing) return;
+    let reading = false;
+    let live = true;
+    const poll = setInterval(() => {
+      if (reading) return;
+      reading = true;
+      api
+        .adminBook(libraryId, bookPath)
+        .then((d) => {
+          if (live) qc.setQueryData(keys.book(libraryId, bookPath), d);
+        })
+        .catch(() => {})
+        .finally(() => {
+          reading = false;
+        });
+    }, REMUX_POLL_MS);
+    return () => {
+      live = false;
+      clearInterval(poll);
+    };
+  }, [cold, remuxComing, qc, libraryId, bookPath]);
 
   // A transcode asked for again plays on the same <audio>: a new src loads by
   // itself, the same one is loaded again, and one asked for to play plays.

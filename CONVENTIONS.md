@@ -4596,9 +4596,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   10 s (`PAUSED_HOLD_MS`) is asked for again from the playhead, not to play, which closes its stream and frees the
   slot. An MP3 in .mka (`direct_playable` true) whose remux is not cached yet would be answered with a live
   transcode from the file's start (`serveRemuxed`), which can't be seeked: the book page says per such file
-  whether its copy is made (`files[].remux_cached`, `adminRemuxes`; absent on every other file) and its GET warms
+  whether its copy is made (`files[].remux_cached`, `adminRemuxes`; absent on every other file, and on one the remux
+  refused, which is then not `direct_playable`) and its GET warms
   the copies not made (`media.FileCache.WarmAll`, as `/item` does), so the editor plays a cold one as a transcode
-  from the playhead, reads the page again every 5 s (`REMUX_POLL_MS`) while that file is chosen, and plays the
+  from the playhead, reads the page again every 5 s (`REMUX_POLL_MS`, one read at a time, a failed one let go so it
+  never takes the page and its draft down) while that file is chosen and its copy still to come, and plays the
   copy from the playhead once it is made and the audio is not playing (never by the `<audio>`'s duration, which
   Safari may report finite for a live stream). An ask a seek was made since leaves that seek waiting (`seeks`),
   and Play after a failed load loads again (Chrome leaves `paused` false then). Its `<audio>` failing is
