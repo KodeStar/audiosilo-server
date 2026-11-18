@@ -347,12 +347,12 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		intent = ""
 	}
 	if (plain || !sameHost(public, r.Host)) && r.URL.Query().Get("hop") == "" {
-		hop := a.oidcBase() + oidcStartPath + "?return=" + ret + "&hop=1"
+		q := url.Values{"return": {ret}, "hop": {"1"}}
 		if intent != "" {
-			hop += "&intent=" + intent // base64url: nothing to escape
+			q.Set("intent", intent)
 		}
 		noStore(w)
-		http.Redirect(w, r, hop, http.StatusFound) //nolint:gosec // G710: public_url's own route; the tag is base64url only (validIntent)
+		http.Redirect(w, r, a.oidcBase()+oidcStartPath+"?"+q.Encode(), http.StatusFound)
 		return
 	}
 	// 32 random bytes each, base64url.
@@ -585,7 +585,14 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.oidcLimiter.Reset(ip)
-	a.issuePairedSession(w, r, u.ID, req.DeviceName, false, intent)
+	out := a.pairedSession(w, r, u.ID, req.DeviceName, false)
+	if out == nil {
+		return
+	}
+	if intent != "" {
+		out["intent"] = intent
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // clip cuts s to n bytes for a log line.

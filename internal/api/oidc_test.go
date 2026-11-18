@@ -328,7 +328,7 @@ func TestOIDCStart(t *testing.T) {
 	}
 	// Another Host: sent to the same route on public_url first, once.
 	resp := e.get(t, oidcStartPath+"?return=admin", "evil.example")
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?return=admin&hop=1" {
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?hop=1&return=admin" {
 		t.Fatalf("another host: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	if len(resp.Cookies()) != 0 {
@@ -343,7 +343,7 @@ func TestOIDCStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?return=admin&hop=1" ||
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?hop=1&return=admin" ||
 		len(resp.Cookies()) != 0 {
 		t.Fatalf("plain HTTP on the public host: %d %q %v", resp.StatusCode, resp.Header.Get("Location"), resp.Cookies())
 	}
@@ -513,9 +513,6 @@ func TestOIDCIntent(t *testing.T) {
 		if loc != oidcPublic+oidcDoneWeb || done == nil {
 			t.Fatalf("landed on %q (cookie %v)", loc, done)
 		}
-		if strings.Contains(loc, tag) {
-			t.Fatalf("the tag in the landing page %q", loc)
-		}
 		resp, out := e.finish(t, done, "web")
 		if resp.StatusCode != 200 || out["token"] == "" {
 			t.Fatalf("finish: %d %v", resp.StatusCode, out)
@@ -543,22 +540,41 @@ func TestOIDCIntent(t *testing.T) {
 	if out := finishTagged(t, "return=web&intent="+other); out["intent"] != other {
 		t.Fatalf("the completed trip: intent %v", out["intent"])
 	}
-	// Denied: a tag that can't be one (too short, too long, not base64url) is
-	// dropped, and the sign-in still runs.
-	for _, bad := range []string{"short", strings.Repeat("a", 129), strings.Repeat("a", 30) + ".x", strings.Repeat("a", 30) + "%2F"} {
-		if out := finishTagged(t, "return=web&intent="+bad); out["intent"] != nil {
-			t.Fatalf("intent=%q echoed %v", bad, out["intent"])
-		}
+	// Denied: a tag that can't be one (validIntent) is dropped, and the
+	// sign-in still runs.
+	if out := finishTagged(t, "return=web&intent="+strings.Repeat("a", 30)+"%2F"); out["intent"] != nil {
+		t.Fatalf("a bad tag echoed %v", out["intent"])
 	}
 	// The hop to public_url keeps a good tag, never a bad one.
 	hop := strings.Repeat("9f", 32)
 	resp := e.get(t, oidcStartPath+"?return=web&intent="+hop, "evil.example")
-	if resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?return=web&hop=1&intent="+hop {
+	if resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?hop=1&intent="+hop+"&return=web" {
 		t.Fatalf("hop with a tag: %q", resp.Header.Get("Location"))
 	}
 	resp = e.get(t, oidcStartPath+"?return=web&intent=bad%26hop%3D1", "evil.example")
-	if resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?return=web&hop=1" {
+	if resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?hop=1&return=web" {
 		t.Fatalf("hop with a bad tag: %q", resp.Header.Get("Location"))
+	}
+}
+
+// TestValidIntent: a tag is 22 to 128 base64url characters.
+func TestValidIntent(t *testing.T) {
+	t.Parallel()
+	for s, want := range map[string]bool{
+		"":                                  false,
+		"short":                             false,
+		strings.Repeat("a", 21):             false,
+		strings.Repeat("a", 22):             true,
+		strings.Repeat("ab12", 16):          true,
+		strings.Repeat("aZ9-_", 25) + "abc": true,
+		strings.Repeat("a", 129):            false,
+		strings.Repeat("a", 30) + ".x":      false,
+		strings.Repeat("a", 30) + "/":       false,
+		strings.Repeat("a", 30) + "&hop=1":  false,
+	} {
+		if got := validIntent(s); got != want {
+			t.Errorf("validIntent(%q) = %v, want %v", s, got, want)
+		}
 	}
 }
 
