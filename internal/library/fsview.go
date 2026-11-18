@@ -190,7 +190,7 @@ func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Dura
 	if err != nil {
 		return "", false, err
 	}
-	resolved, rerr := metadata.Bounded(ctx, rootAbs, wait(), func() (string, error) { return filepath.EvalSymlinks(rootAbs) }, nil)
+	resolved, rerr := metadata.EvalSymlinksBounded(ctx, rootAbs, wait())
 	if metadata.Unanswered(ctx, rerr) {
 		return "", false, cmp.Or(rerr, ctx.Err())
 	}
@@ -248,7 +248,7 @@ func boundedLooks(ctx context.Context, wait func() time.Duration,
 			return fi, nil
 		},
 		eval: func(p string) (string, error) {
-			r, err := metadata.Bounded(ctx, p, wait(), func() (string, error) { return filepath.EvalSymlinks(p) }, nil)
+			r, err := metadata.EvalSymlinksBounded(ctx, p, wait())
 			if err != nil {
 				return "", answered(err)
 			}

@@ -262,11 +262,18 @@ func TestOwnEntry(t *testing.T) {
 func TestOwnEntryCostsWhatMissingDoes(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "Auteurs", "E\u0301mile", "Germinal"), 0o755); err != nil {
+	given := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(given, "Auteurs", "E\u0301mile", "Germinal"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: root})
+	// The library's root as written, not cleaned: its folders are listed
+	// below the resolved root, as library.SafeJoinListed lists them (one kept
+	// listing for both).
+	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: given + string(filepath.Separator)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(given)
 	if err != nil {
 		t.Fatal(err)
 	}

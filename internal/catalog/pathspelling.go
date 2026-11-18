@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -332,10 +333,12 @@ const spellLookWait = 5 * time.Second
 // it from that listing), so p is not; a disk that keeps the spellings apart
 // lists p only when a folder or file of that spelling is there beside it,
 // whatever its file ids say (a share mounted without the server's inode
-// numbers, a FUSE mount). Listings only, no stat: a variant and a missing name
-// read the same listings, up to the first name not listed, and a folder once
-// while it is kept, so how long the look takes never tells which. A listing
-// that fails or is given up on counts as not (the index's answer stands).
+// numbers, a FUSE mount). Listings only, no stat of a name of p (the library's
+// root alone is resolved, as library.SafeJoinListed's): a variant and a
+// missing name read the same listings, up to the first name not listed, and a
+// folder once while it is kept, so how long the look takes never tells which.
+// A listing that fails or is given up on counts as not (the index's answer
+// stands), and so does a root that doesn't resolve.
 func (c *Catalog) ownEntry(ctx context.Context, libraryID int64, p string) bool {
 	if c.spellLooked != nil {
 		c.spellLooked()
@@ -344,7 +347,17 @@ func (c *Catalog) ownEntry(ctx context.Context, libraryID int64, p string) bool 
 	if err != nil || lib.Root == "" {
 		return false
 	}
-	listed, err := metadata.NamesListed(ctx, lib.Root, p, func(ctx context.Context, dir string) ([]string, error) {
+	// The root as library.SafeJoinListed lists below it (absolute, its links
+	// resolved), so a folder both look at is read once while it is kept, under
+	// one name, however the library's root is written.
+	root, err := filepath.Abs(lib.Root)
+	if err == nil {
+		root, err = metadata.EvalSymlinksBounded(ctx, root, spellLookWait)
+	}
+	if err != nil {
+		return false
+	}
+	listed, err := metadata.NamesListed(ctx, root, p, func(ctx context.Context, dir string) ([]string, error) {
 		return c.listed.Names(ctx, dir, spellLookWait)
 	})
 	return listed && err == nil
