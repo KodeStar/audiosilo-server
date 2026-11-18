@@ -552,9 +552,7 @@ func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 		params, err = s.AudibleSyncParams(ctx, account)
 	}
 	if err != nil {
-		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer stop()
-		return nil, errors.Join(err, s.ReleaseUnsentClaim(cleanup, j))
+		return nil, errors.Join(err, s.ReleaseUnsentClaim(ctx, j))
 	}
 	j.Params = params
 	return j, nil
@@ -563,9 +561,7 @@ func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 // AudibleAccountOf reads an audible.sync's or audible.poll's account (both
 // params name it as "account").
 func AudibleAccountOf(j Job) (account string, err error) {
-	var p struct {
-		Account string `json:"account"`
-	}
+	var p AudibleSyncQueued
 	err = json.Unmarshal(j.Params, &p)
 	return p.Account, err
 }

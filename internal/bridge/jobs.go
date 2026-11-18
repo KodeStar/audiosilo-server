@@ -61,12 +61,15 @@ const (
 	// defaultParamsBytes bounds a job's params as sent, unless its kind sets
 	// its own (kindSpec.maxParams); MaxParamsBytes is the most any kind an
 	// admin may queue takes (the console's POST /admin/bridge/jobs body; an
-	// internal kind's params, audible.sync's larger ones, are the server's own).
+	// internal kind's params are the server's own).
 	defaultParamsBytes = 16 << 10
 	MaxParamsBytes     = max(defaultParamsBytes, maxCorrectParamsBytes)
 	maxProgressBytes   = 16 << 10
 	maxResultBytes     = 64 << 10
 	maxErrorBytes      = 2 << 10
+
+	// releaseTimeout bounds ReleaseUnsentClaim.
+	releaseTimeout = 5 * time.Second
 )
 
 // KindVerify is Phase 0's proof job: the Bridge stats a book (or a library's
@@ -1292,8 +1295,11 @@ func checkOpenRequests(ctx context.Context, tx *sql.Tx, kind string, by int64, s
 // ReleaseUnsentClaim returns an undelivered claim without spending an attempt.
 // The state, attempt and lease identify the untouched claim: any Bridge report
 // either changes its state or renews its lease, and makes this a no-op.
-// Cleanup must use a context independent of the disconnected claim request.
+// It runs detached from ctx's cancellation (the claim request may have gone)
+// and bounded, so a database fault cannot hold the caller indefinitely.
 func (s *Service) ReleaseUnsentClaim(ctx context.Context, claim *Job) error {
+	ctx, stop := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer stop()
 	var job *Job
 	err := s.db.WithTx(ctx, "bridge.ReleaseUnsentClaim", func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET

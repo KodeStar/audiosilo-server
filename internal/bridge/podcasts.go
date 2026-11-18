@@ -729,7 +729,20 @@ func validShowPath(p *string) bool {
 func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job, error) {
 	return s.claimPriority(ctx, token, kinds, nil)
 }
+
+// claimPriority claims the next job (claimSecret), then gives a claimed
+// audible.sync its titles (fillAudibleSync) outside the podcast secrets' lock.
 func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
+	j, err := s.claimSecret(ctx, token, kinds, minPriority)
+	if err == nil && j != nil && j.Kind == KindAudibleSync && s.AudibleSyncParams != nil {
+		return s.fillAudibleSync(ctx, j)
+	}
+	return j, err
+}
+
+// claimSecret claims the next job, a private podcast.subscribe with its feed
+// URL put back from memory, under secretFlowMu.
+func (s *Service) claimSecret(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
 	j, err := s.claimStored(ctx, token, kinds, minPriority)
@@ -747,9 +760,6 @@ func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string
 			s.secretMu.Unlock()
 			j.Params, err = json.Marshal(p)
 		}
-	}
-	if j.Kind == KindAudibleSync && s.AudibleSyncParams != nil {
-		return s.fillAudibleSync(ctx, j)
 	}
 	return j, err
 }
