@@ -1,11 +1,13 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"slices"
 	"strings"
@@ -235,7 +237,7 @@ func (c *Catalog) RekeyPathState(ctx context.Context, answers func(Library) bool
 	for _, w := range todo {
 		total += len(w.cands)
 	}
-	tick := func() {
+	tick := func(string, bool) {
 		done++
 		if progress != nil {
 			progress(done, total)
@@ -427,6 +429,15 @@ func (c *Catalog) rekeyRowsAt(ctx context.Context, ref Ref) (carrySet, error) {
 // and on the paths the scope guard kept rows on (rekeyCandidates); the start's
 // run covers the rest. With an error (ctx's, a run stopped
 // part way) the report holds what moved before it.
+//
+// A library with many paths no book will take (a client's stray rows: tens of
+// thousands cost seconds a scan) looks again only at what may have changed: a
+// candidate its last run found nothing to do for (rekeyOne's idle), with rows
+// in the same tables, is passed by while the index's books and files are as
+// they were then (indexPrint). Only at rekeyMemoFrom candidates or more, and
+// never for a path with another Unicode spelling (Spelling looks at the disk
+// for it) nor one a guard kept rows on (scope: a grant since lets them follow;
+// it is never idle). In memory: a start looks at every path once.
 func (c *Catalog) RekeyLibrary(ctx context.Context, libraryID int64) (RekeyReport, error) {
 	lib, err := c.GetLibrary(ctx, libraryID)
 	if err != nil || lib.Kind != KindBooks {
@@ -436,13 +447,123 @@ func (c *Catalog) RekeyLibrary(ctx context.Context, libraryID int64) (RekeyRepor
 	if err != nil {
 		return RekeyReport{}, err
 	}
-	return c.rekeyPaths(ctx, libraryID, cands, nil)
+	if len(cands) < cmp.Or(c.memoRekeyFrom, rekeyMemoFrom) {
+		c.setRekeyMemo(libraryID, nil)
+		return c.rekeyPaths(ctx, libraryID, cands, nil)
+	}
+	// Read before any path is looked at: an index change during the run
+	// leaves a print the next run's won't match, so it looks at every path.
+	print, err := c.indexPrint(ctx, libraryID)
+	if err != nil {
+		return RekeyReport{}, err
+	}
+	idle := map[string]carrySet{}
+	if memo := c.rekeyMemoOf(libraryID); memo != nil && memo.print == print {
+		for p, set := range cands {
+			if memo.idle[p] == set {
+				idle[p] = set
+				delete(cands, p)
+			}
+		}
+	}
+	rep, err := c.rekeyPaths(ctx, libraryID, cands, func(p string, nothing bool) {
+		if nothing && !HasOtherSpelling(p) {
+			idle[p] = cands[p]
+		}
+	})
+	c.setRekeyMemo(libraryID, &rekeyMemo{print: print, idle: idle})
+	return rep, err
+}
+
+// rekeyMemoFrom is how many candidates a scan-end run has before it keeps a
+// memo of the idle ones (RekeyLibrary): below, looking again at each costs
+// less than reading the index's print.
+const rekeyMemoFrom = 500
+
+// rekeyMemo is a library's last scan-end run: the index's print it read
+// (indexPrint) and the candidates it found nothing to do for, each with the
+// carry groups its rows were in.
+type rekeyMemo struct {
+	print uint64
+	idle  map[string]carrySet
+}
+
+func (c *Catalog) rekeyMemoOf(libraryID int64) *rekeyMemo {
+	c.rekeyIdleMu.Lock()
+	defer c.rekeyIdleMu.Unlock()
+	if m, ok := c.rekeyIdle[libraryID]; ok {
+		return &m
+	}
+	return nil
+}
+
+// setRekeyMemo records library libraryID's memo (nil: none).
+func (c *Catalog) setRekeyMemo(libraryID int64, m *rekeyMemo) {
+	c.rekeyIdleMu.Lock()
+	defer c.rekeyIdleMu.Unlock()
+	if m == nil {
+		delete(c.rekeyIdle, libraryID)
+		return
+	}
+	if c.rekeyIdle == nil {
+		c.rekeyIdle = map[int64]rekeyMemo{}
+	}
+	c.rekeyIdle[libraryID] = *m
+}
+
+// indexPrint is a print of what rekeyTarget reads of a library's index: each
+// book's id, path, key and whether it is a folder, and each file's book and
+// path, summed as hashes (no order needed): any book or file added, removed,
+// moved or re-keyed changes it.
+func (c *Catalog) indexPrint(ctx context.Context, libraryID int64) (uint64, error) {
+	books, err := c.printRows(ctx, `SELECT 'b', id, rel_path, COALESCE(path_key, '-'), is_folder FROM books
+		WHERE library_id = ?`, libraryID)
+	if err != nil {
+		return 0, err
+	}
+	files, err := c.printRows(ctx, `SELECT 'f', f.book_id, f.rel_path FROM book_files f JOIN books b ON b.id = f.book_id
+		WHERE b.library_id = ?`, libraryID)
+	return books + files, err
+}
+
+// printRows is the sum of a hash of each row q reads (every column, in turn).
+func (c *Catalog) printRows(ctx context.Context, q string, args ...any) (uint64, error) {
+	rs, err := c.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rs.Close()
+	cols, err := rs.Columns()
+	if err != nil {
+		return 0, err
+	}
+	vals := make([]sql.RawBytes, len(cols))
+	dest := make([]any, len(cols))
+	for i := range vals {
+		dest[i] = &vals[i]
+	}
+	var sum uint64
+	for rs.Next() {
+		if err := rs.Scan(dest...); err != nil {
+			return 0, err
+		}
+		h := fnv.New64a()
+		for _, v := range vals {
+			_, _ = h.Write(v)
+			_, _ = h.Write([]byte{0})
+		}
+		sum += h.Sum64()
+	}
+	return sum, rs.Err()
 }
 
 // rekeyPaths re-keys one books library's candidate paths (each with the carry
-// groups its rows are in), each in its own transaction, in path order. tick,
-// when not nil, runs after each.
-func (c *Catalog) rekeyPaths(ctx context.Context, libraryID int64, cands map[string]carrySet, tick func()) (RekeyReport, error) {
+// groups its rows are in), each in its own transaction, in path order. done,
+// when not nil, runs after each, told whether it found nothing to do there
+// (rekeyOne's idle). Stopped (ctx ended), it returns ctx's error and what
+// moved before: the path it was on is no failure (rekeyOne).
+func (c *Catalog) rekeyPaths(ctx context.Context, libraryID int64, cands map[string]carrySet,
+	done func(p string, idle bool)) (RekeyReport, error) {
 	var rep RekeyReport
 	paths := make([]string, 0, len(cands))
 	for p := range cands {
@@ -456,24 +577,32 @@ func (c *Catalog) rekeyPaths(ctx context.Context, libraryID int64, cands map[str
 		if err := ctx.Err(); err != nil {
 			return rep, err
 		}
-		c.rekeyOne(ctx, libraryID, p, cands[p], reach, &rep)
-		if tick != nil {
-			tick()
+		idle := c.rekeyOne(ctx, libraryID, p, cands[p], reach, &rep)
+		if done != nil {
+			done(p, idle)
 		}
 	}
-	return rep, nil
+	return rep, ctx.Err()
 }
 
 // rekeyOne re-keys the candidate path p, whose rows are in the carry groups
-// has, into rep: moved, kept by a guard, failed, or nothing to do.
-func (c *Catalog) rekeyOne(ctx context.Context, libraryID int64, p string, has carrySet, reach map[int64][]Scope, rep *RekeyReport) {
+// has, into rep: moved, kept by a guard, failed, or nothing to do. idle is the
+// last, from the index alone (p, has and the books and files it reads): with
+// those as they were, it would find nothing to do again.
+func (c *Catalog) rekeyOne(ctx context.Context, libraryID int64, p string, has carrySet, reach map[int64][]Scope,
+	rep *RekeyReport) (idle bool) {
+	if c.rekeyLooked != nil {
+		c.rekeyLooked(p)
+	}
 	if has == 0 || (has == carryFavs && !HasOtherSpelling(p)) {
-		return // no row left; or favourites, which move only to another spelling, and p has none
+		return true // no row left; or favourites, which move only to another spelling, and p has none
 	}
 	reason, spelled, target, err := c.rekeyTarget(ctx, libraryID, p)
 	if err != nil {
-		rep.Failed = append(rep.Failed, RekeyPath{LibraryID: libraryID, Path: p, Why: err.Error()})
-		return
+		if ctx.Err() == nil { // stopped (the server stopping): the path is no failure, the next run takes it
+			rep.Failed = append(rep.Failed, RekeyPath{LibraryID: libraryID, Path: p, Why: err.Error()})
+		}
+		return false
 	}
 	moves := rekeyMoves(p, reason, spelled, target)
 	var set carrySet
@@ -481,19 +610,21 @@ func (c *Catalog) rekeyOne(ctx context.Context, libraryID int64, p string, has c
 		set |= mv.set
 	}
 	if set&has == 0 {
-		return // nothing its moves carry (no target, or a track's favourites only)
+		return true // nothing its moves carry (no target, or a track's favourites only)
 	}
 	res, err := c.rekeyPath(ctx, libraryID, p, spelled, target, reason, moves, reach)
 	at := RekeyPath{LibraryID: libraryID, Path: p, Target: moves[0].to}
 	switch {
+	case err != nil && ctx.Err() != nil:
+		return false // stopped: its transaction rolled back, the next run takes it
 	case err != nil:
 		at.Why = err.Error()
 		rep.Failed = append(rep.Failed, at)
-		return
+		return false
 	case res.guard != "":
 		at.Why = res.guard
 		rep.Skipped = append(rep.Skipped, at)
-		return
+		return false
 	}
 	if res.moved > 0 {
 		rep.moved(res.via, 1)
@@ -504,6 +635,7 @@ func (c *Catalog) rekeyOne(ctx context.Context, libraryID int64, p string, has c
 		rep.Skipped = append(rep.Skipped, at)
 		rep.Kept += res.kept
 	}
+	return false
 }
 
 // rekeyMove is one of a path's moves: its rows in the carry groups set go to

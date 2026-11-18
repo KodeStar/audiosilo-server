@@ -46,18 +46,21 @@ func startProgress(log *slog.Logger, msg string, every time.Duration) func(done,
 // here when it does.
 func rekeyAtStart(ctx context.Context, cat *catalog.Catalog, answers func(catalog.Library) bool, log *slog.Logger) {
 	rep, err := cat.RekeyPathState(ctx, answers, startProgress(log, "re-keying listening state to the books' paths", progressEvery))
-	if err != nil {
+	switch {
+	case err != nil && ctx.Err() != nil:
+		log.Info("re-keying listening state to the books' paths stopped with the server; going on at the next start")
+	case err != nil:
 		log.Warn("re-keying listening state to the books' paths failed; trying again at the next start", "err", err)
 	}
 	for _, r := range rep.Retried {
 		if r.Path == "" {
-			log.Info("path_rekey retried a library", "library", r.LibraryID)
+			log.Info("path_rekey retried a library", "library_id", r.LibraryID)
 			continue
 		}
-		log.Info("path_rekey retried", "library", r.LibraryID, "path", r.Path)
+		log.Info("path_rekey retried", "library_id", r.LibraryID, "path", r.Path)
 	}
 	for _, id := range rep.Unreached {
-		log.Warn("path_rekey skipped a library: its folder did not answer; trying again at the next start", "library", id)
+		log.Warn("path_rekey skipped a library: its folder did not answer; trying again at the next start", "library_id", id)
 	}
 	logRekey(log, "re-keyed listening state to the books' paths", rep, slog.LevelInfo)
 }
@@ -101,12 +104,17 @@ func rekeyAfterScan(server context.Context, cat *catalog.Catalog, log *slog.Logg
 	return func(ctx context.Context, r library.RunReport) {
 		if r.Status == catalog.RunOK || r.Status == catalog.RunPartial {
 			rep, err := cat.RekeyLibrary(server, r.Library.ID)
-			if err != nil && server.Err() == nil {
+			switch {
+			case err != nil && server.Err() != nil:
+				log.Info("re-keying listening state after a scan stopped with the server; the next scan goes on",
+					"library", r.Library.Name)
+			case err != nil:
 				log.Warn("re-keying listening state after a scan failed", "library", r.Library.Name, "err", err)
 			}
 			// What a run stopped part way moved is logged too. A path a guard
 			// keeps is kept at every scan: said at debug level here, at info by
-			// the start's run.
+			// the start's run. Each line names the library (its paths' lines
+			// its id too).
 			logRekey(log.With("library", r.Library.Name), "re-keyed listening state after a scan", rep, slog.LevelDebug)
 		}
 		next(ctx, r)
@@ -120,10 +128,10 @@ func rekeyAfterScan(server context.Context, cat *catalog.Catalog, log *slog.Logg
 func logRekey(log *slog.Logger, msg string, rep catalog.RekeyReport, skipLevel slog.Level) {
 	ctx := context.Background()
 	for _, p := range rep.Failed {
-		log.Warn("path_rekey failed", "library", p.LibraryID, "path", p.Path, "to", p.Target, "err", p.Why)
+		log.Warn("path_rekey failed", "library_id", p.LibraryID, "path", p.Path, "to", p.Target, "err", p.Why)
 	}
 	for _, p := range rep.Skipped {
-		log.Log(ctx, skipLevel, "path_rekey skipped", "library", p.LibraryID, "path", p.Path, "to", p.Target, "guard", p.Why)
+		log.Log(ctx, skipLevel, "path_rekey skipped", "library_id", p.LibraryID, "path", p.Path, "to", p.Target, "guard", p.Why)
 	}
 	if len(rep.Moved) == 0 && len(rep.Failed) == 0 && (len(rep.Skipped) == 0 || skipLevel < slog.LevelInfo) {
 		return

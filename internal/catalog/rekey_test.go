@@ -938,3 +938,75 @@ func TestRekeySkipsUnansweringLibrary(t *testing.T) {
 		t.Errorf("the start after: %+v %v, want nothing", rep, err)
 	}
 }
+
+// TestRekeyLibraryPassesByIdlePaths: a scan-end run looks again only at what
+// may have changed since the last: a path it found nothing to do for (a stray
+// track no book has) is passed by while its rows' tables and the index are as
+// they were; a new path, a path with rows in another table, and every path once
+// the index changes are looked at; a path the scope guard kept rows on is
+// looked at every run (a grant since lets them follow).
+func TestRekeyLibraryPassesByIdlePaths(t *testing.T) {
+	t.Parallel()
+	f := newRekeyFixture(t)
+	f.c.memoRekeyFrom = 1
+	var looked []string
+	f.c.rekeyLooked = func(p string) { looked = append(looked, p) }
+	stray := func(i int) string { return fmt.Sprintf("%s/stray-%d.mp3", rkNavBook, i) }
+	for i := range 5 {
+		f.exec(t, `INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, created_at) VALUES(?, ?, ?, 1, '', ?)`,
+			f.ann, f.lib, stray(i), rkUpdated1)
+	}
+	// dan reaches track 3 only: his progress there is kept, not moved.
+	f.exec(t, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, updated_at) VALUES(?, ?, ?, 10, ?, ?)`,
+		f.dan, f.lib, rkTrack3, rkBookLen, rkUpdated1)
+	run := func(want ...string) {
+		t.Helper()
+		looked = nil
+		rep, err := f.c.RekeyLibrary(f.ctx, f.lib)
+		if err != nil || len(rep.Failed) != 0 || rep.Kept != 1 {
+			t.Fatalf("re-key: %+v %v, want dan's row kept", rep, err)
+		}
+		slices.Sort(looked)
+		slices.Sort(want)
+		if !slices.Equal(looked, want) {
+			t.Fatalf("looked at %+q, want %+q", looked, want)
+		}
+	}
+	all := []string{rkTrack3, stray(0), stray(1), stray(2), stray(3), stray(4)}
+	run(all...)
+	run(rkTrack3)
+	f.exec(t, `INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, created_at) VALUES(?, ?, ?, 1, '', ?)`,
+		f.ann, f.lib, stray(5), rkUpdated1)
+	run(rkTrack3, stray(5))
+	f.exec(t, `INSERT INTO ratings(user_id, library_id, rel_path, rating, note, created_at, updated_at) VALUES(?, ?, ?, 4, '', ?, ?)`,
+		f.ann, f.lib, stray(0), rkUpdated1, rkUpdated1)
+	run(rkTrack3, stray(0))
+	run(rkTrack3)
+	// The index changes: a file of the book is added, which takes stray 1.
+	upsert(t, f.c, &Book{LibraryID: f.lib, RelPath: rkNavBook, IsFolder: true, Title: "Livre",
+		Files: []BookFile{{RelPath: rkNavBook + "/01.mp3"}, {RelPath: stray(1), Seq: 1}}})
+	run(append(all, stray(5))...)
+	if f.rowCount(t, "bookmarks", f.lib, stray(1)) != 0 || f.rowCount(t, "bookmarks", f.lib, rkNavBook) != 1 {
+		t.Error("stray 1's bookmark did not move to the book once the book had the file")
+	}
+	run(rkTrack3)
+}
+
+// TestRekeyStoppedIsNoFailure: a path whose look or move the server's stop
+// ends is not reported failed (the start would record it for a retry, the log
+// would warn): the run returns the stop, and the next run takes the path.
+func TestRekeyStoppedIsNoFailure(t *testing.T) {
+	t.Parallel()
+	f := newRekeyFixture(t)
+	f.exec(t, `INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, created_at) VALUES(?, ?, ?, 1, '', ?)`,
+		f.ann, f.lib, rkTrack2, rkUpdated1)
+	stopped, stop := context.WithCancel(f.ctx)
+	stop()
+	var rep RekeyReport
+	if idle := f.c.rekeyOne(stopped, f.lib, rkTrack2, carryTimeline, map[int64][]Scope{}, &rep); idle || len(rep.Failed) != 0 {
+		t.Fatalf("a stopped path: idle %v, report %+v, want neither idle nor failed", idle, rep)
+	}
+	if rep, err := f.c.RekeyLibrary(f.ctx, f.lib); err != nil || rep.Rows != 1 || len(rep.Failed) != 0 {
+		t.Fatalf("the next run: %+v %v, want the bookmark moved", rep, err)
+	}
+}

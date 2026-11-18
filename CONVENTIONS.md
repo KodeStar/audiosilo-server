@@ -1562,7 +1562,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `RekeyLibrary` after every scan run that finished ok or partial (`launcher.rekeyAfterScan`, the
   scanner's `OnRunFinished`, under the server's context so a stop ends it between paths; candidates
   only in the tables clients write, plus the paths the scope guard kept rows on, every table, so a
-  listener's kept rows follow a later grant even when only a derived table's are left). Books libraries only. Per path,
+  listener's kept rows follow a later grant even when only a derived table's are left; with
+  `rekeyMemoFrom` (500) candidates or more it passes by each one its last run found nothing to do for
+  (`rekeyOne`'s idle) while its rows are in the same tables and the library's index is as it was
+  (`indexPrint`, a sum of hashes of every book's and file's path, read before the run), so tens of
+  thousands of stray paths cost a print, not a lookup each, every scan; a path with another Unicode
+  spelling and a scope-kept one are looked at every run; the memo is in memory, so a start looks at every
+  path once). Books libraries only. A run the server's stop ends is no failure: its path is not
+  in `Failed` (nothing recorded, the next run takes it) and the start's or the scan end's line says
+  "stopped with the server" at info. Each line names a library by `library_id` (the scan end's by its
+  name, `library`, too). Per path,
   `rekeyTarget`: another spelling of an indexed book (`spelling`: every table), a file of a folder book
   (`file`: all but favourites, a track row's heart stays on the track), a folder inside a book (`folder`:
   the book-level rows only, lists, ratings and the reader's place, read at `BookPathAt`; a disc's timeline

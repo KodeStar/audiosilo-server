@@ -196,3 +196,65 @@ func TestRekeyAtStartSkipsUnansweringRoot(t *testing.T) {
 		t.Fatalf("with the folder back, %d bookmarks on the book; logged:\n%s", marks(book), got)
 	}
 }
+
+// The scan-end re-key's lines name the library once by name and its paths'
+// lines by id (library_id), never two values under one key; one the server's
+// stop ended says so at info, no failure (server#210).
+func TestRekeyAfterScanLogs(t *testing.T) {
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: "Author/Book", IsFolder: true, Title: "Book",
+		Files: []catalog.BookFile{{RelPath: "Author/Book/01.mp3"}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users(id, username, password_hash, role, created_at, updated_at) VALUES(7, 'ann', 'x', 'admin', 't', 't')`,
+		`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, created_at) VALUES(7, 1, 'Author/Book/01.mp3', 1, 'mark', 't')`,
+		`CREATE TRIGGER refuse_carry BEFORE UPDATE OF rel_path ON bookmarks BEGIN SELECT RAISE(ABORT, 'refused'); END`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&out, nil))
+	nexts := 0
+	run := library.RunReport{Library: *lib, Status: catalog.RunOK}
+	rekeyAfterScan(ctx, cat, log, func(context.Context, library.RunReport) { nexts++ })(ctx, run)
+	got := out.String()
+	if !strings.Contains(got, `msg="path_rekey failed" library=Main library_id=1 path=Author/Book/01.mp3`) ||
+		strings.Contains(got, "library=1") {
+		t.Fatalf("the scan end logged:\n%s", got)
+	}
+
+	out.Reset()
+	stopped, stop := context.WithCancel(ctx)
+	stop()
+	rekeyAfterScan(stopped, cat, log, func(context.Context, library.RunReport) { nexts++ })(ctx, run)
+	got = out.String()
+	if !strings.Contains(got, `level=INFO msg="re-keying listening state after a scan stopped with the server; the next scan goes on" library=Main`) ||
+		strings.Contains(got, "level=WARN") {
+		t.Fatalf("a scan end the stop ended logged:\n%s", got)
+	}
+	if nexts != 2 {
+		t.Errorf("the run was handed on %d times, want 2", nexts)
+	}
+
+	// The start's: stopped, at info, and nothing recorded for the next start.
+	out.Reset()
+	rekeyAtStart(stopped, cat, nil, log)
+	got = out.String()
+	if !strings.Contains(got, `level=INFO msg="re-keying listening state to the books' paths stopped with the server; going on at the next start"`) ||
+		strings.Contains(got, "level=WARN") {
+		t.Fatalf("a start the stop ended logged:\n%s", got)
+	}
+	var recorded int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM server_state WHERE key LIKE 'path_rekey%'`).Scan(&recorded); err != nil || recorded != 0 {
+		t.Errorf("a stopped start recorded %d server_state rows (%v), want none", recorded, err)
+	}
+}
