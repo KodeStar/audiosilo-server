@@ -464,7 +464,8 @@ const BUSY_TRIES = 3;
  * (direct_playable false: Opus or FLAC in .mka, ALAC, AC-3) is transcoded when
  * the server can (server#410): the stream starts where the playhead is, so a move
  * of it asks again from there (a transcode can't be seeked), the audio's own
- * clock counting from that start.
+ * clock counting from that start. It is asked for only to play (preload none):
+ * a row chosen or a move made while paused starts no ffmpeg.
  */
 function Scrubber({
   libraryId,
@@ -563,8 +564,8 @@ function Scrubber({
 
   // Another row (or this one moved): a seek still waiting to be asked for, a
   // "Play 5 s" still waiting to start and a busy transcode waiting to be asked
-  // for again were the last row's, and a transcode given up on has its tries
-  // again.
+  // for again were the last row's. A transcode that failed is not loaded again
+  // until it plays, so its row's controls come back here, not at a load.
   useEffect(() => {
     clearTimeout(restream.current);
     previewing.current = false;
@@ -575,7 +576,10 @@ function Scrubber({
   }, [at, transcoded]);
 
   // A chosen row (or a moved one) puts the playhead at its start. A transcode
-  // starts there: its stream is asked for from there (src).
+  // starts there: its stream is asked for from there (src), and nothing loads
+  // until it plays, so the playhead shown is set here. Not for a start just set
+  // at the playhead (kept): the stream plays on, the playhead where it was.
+  const keptHere = moved?.kept === at;
   useEffect(() => {
     const a = audio.current;
     if (!a || !src) return;
@@ -583,11 +587,12 @@ function Scrubber({
       // Another row's seek waits for nothing now.
       clearTimeout(restream.current);
       pending.current = null;
+      if (!keptHere) setPos(from);
       return;
     }
     if (a.readyState >= 1 && a.currentSrc.endsWith(src)) a.currentTime = offset;
     else pending.current = offset;
-  }, [src, offset, transcoded]);
+  }, [src, offset, transcoded, from, keptHere]);
 
   useEffect(
     () => () => {
@@ -644,7 +649,7 @@ function Scrubber({
   };
   // A transcode fails for want of a slot too (503, every one busy), which is
   // no fault of the token: it is asked for again after the server's
-  // Retry-After, and plays then.
+  // Retry-After, and plays then, since it was only asked for to play.
   const onError = () => {
     const a = audio.current;
     if (!transcoded || !src || !a) {
@@ -730,7 +735,9 @@ function Scrubber({
           key={transcoded ? `${span?.path}#${moved?.n ?? 0}` : undefined}
           ref={attach}
           src={src}
-          preload="metadata"
+          // A transcode is asked for only to play: each ask starts an ffmpeg
+          // that holds one of the server's few transcode slots.
+          preload={transcoded ? (moved?.play ? 'auto' : 'none') : 'metadata'}
           autoPlay={moved?.play}
           // A new <audio> (another file, or a transcode asked again) plays only when told to.
           onLoadStart={() => setPlaying(false)}

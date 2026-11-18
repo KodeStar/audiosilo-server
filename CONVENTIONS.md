@@ -4582,8 +4582,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `/item`'s is: `writeBookDetail`) says no browser plays as stored (Opus or FLAC in .mka, ALAC,
   AC-3) is played through `?transcode=1&t=` when the server has ffmpeg (`capabilities.transcode`), each move of the
   playhead asking again from there on a new `<audio>` (never from the file's last second, which would leave ffmpeg
-  no audio; a start set at the playhead plays on), the one replaced let go of (its src removed), so its ffmpeg
-  frees its transcode slot (server#410); the console offers no
+  no audio; a start set at the playhead plays on; a move is forgotten once another row is chosen, so a row chosen
+  again starts at its start), the one replaced let go of (its src removed once it has left the page, never in the
+  ref cleanup StrictMode runs on mount), so its ffmpeg frees its transcode slot (server#410). A transcode is asked
+  for only to play (`preload="none"` unless it autoplays): a row chosen or a move made while paused starts no
+  ffmpeg, the playhead shown set from the stream's start. Its `<audio>` failing is looked at before a new token
+  is minted (`transcodeRetryAfter` fetches the same URL and lets the body go): a 503 with `Retry-After` (no
+  transcode slot free) is asked for again after that wait and played, up to three times per row (`BUSY_TRIES`),
+  with no mint; any other answer mints once, as a stored file's failure does; the console offers no
   Edit chapters in a podcast library (`ChaptersCard` reads the library's kind). A `chapters.detect` job for a book
   whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, `catalog.DetectRefused` from
   the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list

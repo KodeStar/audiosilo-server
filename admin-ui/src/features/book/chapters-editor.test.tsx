@@ -320,6 +320,36 @@ describe('the chapter editor', () => {
     expect(container.querySelector('audio')!.getAttribute('src')).toContain('token=media-tok');
   });
 
+  it('asks for a transcode only to play: a row chosen or a move made while paused starts none', async () => {
+    const d = bookDetail();
+    d.files = d.files.map((f) => ({ ...f, format: 'mka', codec: 'opus', direct_playable: false }));
+    mockFetch(routes(d));
+    const { container } = renderApp(URL);
+    const user = await openEditor();
+    const audio = () => container.querySelector('audio')!;
+    const from = () =>
+      Number(
+        new window.URL(audio().getAttribute('src')!, 'http://admin.test').searchParams.get('t'),
+      );
+    const playhead = () => Number((screen.getByRole('slider') as HTMLInputElement).value);
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    // Nothing loads (no ffmpeg, no transcode slot), and the playhead is the row's start all the same.
+    expect(audio()).toHaveAttribute('preload', 'none');
+    expect(audio()).not.toHaveAttribute('autoplay');
+    await waitFor(() => expect(playhead()).toBe(1200));
+    await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
+    await waitFor(() => expect(from()).toBe(1201));
+    expect(audio()).toHaveAttribute('preload', 'none');
+    expect(audio()).not.toHaveAttribute('autoplay');
+    expect(playhead()).toBe(1201);
+    // "Play 5 s" asks for it, to play.
+    await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
+    await waitFor(() => expect(audio()).toHaveAttribute('autoplay'));
+    expect(from()).toBe(1200);
+    expect(audio()).toHaveAttribute('preload', 'auto');
+  });
+
   describe('a transcode that fails', () => {
     const opus = () => {
       const d = bookDetail();
