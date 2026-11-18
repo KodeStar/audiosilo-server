@@ -3217,7 +3217,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `readableJob`) answers such params as null with `params_unreadable` (progress and result that aren't
   JSON as null), so no response (the console's list, the estimate's `open_job`, a queue's answer, a
   claim) is an empty 200, and the console's list and detail log it once per row per process
-  (`logUnreadableJobs`). SQL that reads a field of a job's params goes through `bridge.ParamSQL`
+  (`logUnreadableJobs`). SQL that reads a field of a job's params or result goes through `bridge.ParamSQL`
   (`json_valid` first, in a CASE), so one damaged row never fails a whole query (a NULL it reads is
   passed by, `IS NOT NULL` where a `NOT IN` would keep it: `CancelOrphanAudibleJobs`).
   `GET /bridge/libraries/{id}/book[?path=]` gives an INDEXED book's files with the size and mtime the
