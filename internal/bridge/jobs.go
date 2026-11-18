@@ -68,7 +68,7 @@ const (
 	maxResultBytes     = 64 << 10
 	maxErrorBytes      = 2 << 10
 
-	// releaseTimeout bounds ReleaseUnsentClaim.
+	// releaseTimeout bounds settleUnsentClaim.
 	releaseTimeout = 5 * time.Second
 )
 
@@ -1293,55 +1293,45 @@ func checkOpenRequests(ctx context.Context, tx *sql.Tx, kind string, by int64, s
 }
 
 // ReleaseUnsentClaim returns an undelivered claim without spending an attempt.
-// The state, attempt and lease identify the untouched claim: any Bridge report
-// either changes its state or renews its lease, and makes this a no-op.
-// It runs detached from ctx's cancellation (the claim request may have gone)
-// and bounded, so a database fault cannot hold the caller indefinitely.
+// A job whose cancel was asked for is cancelled instead.
 func (s *Service) ReleaseUnsentClaim(ctx context.Context, claim *Job) error {
-	ctx, stop := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
-	defer stop()
-	var job *Job
-	err := s.db.WithTx(ctx, "bridge.ReleaseUnsentClaim", func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET
+	now := s.ts()
+	return s.settleUnsentClaim(ctx, claim, "bridge.ReleaseUnsentClaim", `UPDATE bridge_jobs SET
 		 state=CASE WHEN cancel_requested=1 THEN 'cancelled' ELSE 'queued' END,
 		 attempts=attempts-1,lease_until=NULL,claimed_at=NULL,updated_at=?,
-		 finished_at=CASE WHEN cancel_requested=1 THEN ? ELSE NULL END
-		 WHERE id=? AND state='claimed' AND attempts=? AND lease_until=? AND claimed_at=?`,
-			s.ts(), s.ts(), claim.ID, claim.Attempts, claim.LeaseUntil, claim.ClaimedAt)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
-		if err != nil || n == 0 {
-			return err
-		}
-		job, err = getJob(ctx, tx, claim.ID)
-		return err
-	})
-	if err == nil && job != nil {
-		s.wake.fire()
-		s.report(ctx, job, StateClaimed, "")
-	}
-	return err
+		 finished_at=CASE WHEN cancel_requested=1 THEN ? ELSE NULL END`+unsentClaimSQL, now, now)
 }
 
 // failUnsentClaim ends an undelivered claim on its last attempt with reason as
 // its error, at once rather than when its lease runs out, which would name the
 // Bridge (expireSQL) for a claim the server could not fill. A job whose cancel
-// was asked for is cancelled instead. The same untouched claim as
-// ReleaseUnsentClaim, run the same way.
+// was asked for is cancelled instead.
 func (s *Service) failUnsentClaim(ctx context.Context, claim *Job, reason string) error {
+	now := s.ts()
+	return s.settleUnsentClaim(ctx, claim, "bridge.failUnsentClaim", `UPDATE bridge_jobs SET
+		 state=CASE WHEN cancel_requested=1 THEN 'cancelled' ELSE 'failed' END,
+		 error=CASE WHEN cancel_requested=1 THEN error ELSE ? END,
+		 lease_until=NULL,updated_at=?,finished_at=?`+unsentClaimSQL, reason, now, now)
+}
+
+// unsentClaimSQL picks an undelivered claim (its id, attempts, lease and claim
+// time follow the update's own args): the state, attempt and lease identify the
+// untouched claim, as any Bridge report either changes its state or renews its
+// lease, and makes the update a no-op.
+const unsentClaimSQL = `
+		 WHERE id=? AND state='claimed' AND attempts=? AND lease_until=? AND claimed_at=?`
+
+// settleUnsentClaim runs update (ending in unsentClaimSQL, with its own args)
+// on an undelivered claim. It runs detached from ctx's cancellation (the claim
+// request may have gone) and bounded, so a database fault cannot hold the
+// caller indefinitely.
+func (s *Service) settleUnsentClaim(ctx context.Context, claim *Job, op, update string, args ...any) error {
 	ctx, stop := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 	defer stop()
 	var job *Job
-	err := s.db.WithTx(ctx, "bridge.failUnsentClaim", func(tx *sql.Tx) error {
-		now := s.ts()
-		res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET
-		 state=CASE WHEN cancel_requested=1 THEN 'cancelled' ELSE 'failed' END,
-		 error=CASE WHEN cancel_requested=1 THEN error ELSE ? END,
-		 lease_until=NULL,updated_at=?,finished_at=?
-		 WHERE id=? AND state='claimed' AND attempts=? AND lease_until=? AND claimed_at=?`,
-			reason, now, now, claim.ID, claim.Attempts, claim.LeaseUntil, claim.ClaimedAt)
+	err := s.db.WithTx(ctx, op, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, update,
+			append(args, claim.ID, claim.Attempts, claim.LeaseUntil, claim.ClaimedAt)...)
 		if err != nil {
 			return err
 		}
