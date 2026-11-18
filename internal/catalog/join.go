@@ -115,10 +115,6 @@ func (c *Catalog) JoinDurableState(ctx context.Context, libraryID int64, into st
 		return err
 	}
 	return c.db.WithTx(ctx, "JoinDurableState", func(tx *sql.Tx) error {
-		left, err := audibleRowsAt(ctx, tx, libraryID, parts, into)
-		if err != nil {
-			return err
-		}
 		for _, p := range parts {
 			if p.Unplaced {
 				continue
@@ -129,13 +125,16 @@ func (c *Catalog) JoinDurableState(ctx context.Context, libraryID int64, into st
 		}
 		// An Audible title matched to a part is the joined book's (one match a
 		// title, so moved rather than copied), once the parts' places have
-		// landed on it (moveAudibleTitles).
+		// landed on it (moveAudibleTitles). A row already on the folder is the
+		// joined book's own place (mergeFurthest counts it, and a folder joined
+		// again finds the one it left), so it is offered to Audible whether or
+		// not a part's place moved it: a move's keepLeftOffers has no part here.
 		for _, p := range parts {
 			if err := moveAudibleTitles(ctx, tx, libraryID, p.Path, into); err != nil {
 				return fmt.Errorf("join audible titles: %w", err)
 			}
 		}
-		return keepLeftOffers(ctx, tx, libraryID, into, left)
+		return nil
 	})
 }
 

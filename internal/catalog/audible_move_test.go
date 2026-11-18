@@ -108,6 +108,44 @@ func TestAudibleMoveLeavesALeftRowUnoffered(t *testing.T) {
 	}
 }
 
+// server#359: a row already on a join's folder is the joined book's own place
+// (a folder joined, split and joined again finds the one it left), so a title
+// matched to a part offers it to Audible once the title moves onto the folder,
+// whether the person never played the part or the part's place is behind it:
+// only a move takes a left row's offer back.
+func TestAudibleJoinOffersTheFoldersOwnRow(t *testing.T) {
+	t.Parallel()
+	const into, part = "Author/Book", "Author/Book/Disc 1"
+	for _, tc := range []struct {
+		name   string
+		played bool // the person has a place on the part, older and behind
+	}{{"never played the part", false}, {"the part's place behind", true}} {
+		f := syncedTitleAt(t, part)
+		acct, err := f.c.AudibleSyncFor(f.ctx, "acct0001")
+		if err != nil {
+			t.Fatal(err)
+		}
+		scopes := []Scope{{LibraryID: f.lib.ID, AllowAll: true}}
+		if tc.played {
+			f.savePlace(t, part, 300, f.clock.Add(-48*time.Hour))
+		}
+		_, cursor, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, "", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.savePlace(t, into, 18000, f.clock.Add(-time.Hour)) // from when the folder was joined before
+		if err := f.c.JoinDurableState(f.ctx, f.lib.ID, into, []JoinPart{{Path: part, Last: true}}, 0); err != nil {
+			t.Fatal(err)
+		}
+		for _, since := range []string{cursor, ""} {
+			rows, _, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, since, 0)
+			if err != nil || len(rows) != 1 || rows[0].Path != into || rows[0].Position != 18000 || rows[0].ASIN != syncedASIN {
+				t.Fatalf("%s: feed from %q after the join = %+v, %v; want the folder's own place", tc.name, since, rows, err)
+			}
+		}
+	}
+}
+
 // syncedASIN is syncedTitleAt's title.
 const syncedASIN = "B000000001"
 

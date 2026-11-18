@@ -422,7 +422,7 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 		return err
 	}
 	return c.db.WithTx(ctx, "MoveDurableState", func(tx *sql.Tx) error {
-		left, err := audibleRowsAt(ctx, tx, libraryID, []JoinPart{{Path: oldPath}}, newPath)
+		left, err := audibleRowsAt(ctx, tx, libraryID, oldPath, newPath)
 		if err != nil {
 			return err
 		}
@@ -446,9 +446,9 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 // book left at into by the carry's rule, mergeNewest or mergeFurthest), never
 // that left-behind row as it stood before the carry, and a carry that fails
 // leaves the titles where they were (the next poll matches them afresh). A
-// left-behind row the carry did not change (its person never played the moved
-// book, or the row was the newer and won the merge) is another book's place:
-// its offer is taken back (keepLeftOffers, server#359).
+// left-behind row a move's carry did not change (its person never played the
+// moved book, or the row was the newer and won the merge) is another book's
+// place: its offer is taken back (keepLeftOffers, server#359).
 func moveAudibleTitles(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) error {
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE audible_titles SET match_path = ? WHERE match_library_id = ? AND match_path = ?`,
@@ -461,9 +461,9 @@ func moveAudibleTitles(ctx context.Context, tx *sql.Tx, libraryID int64, from, i
 	return err
 }
 
-// leftRow is a progress row at a move's or join's destination, before the
-// carry, of a person with an Audible title matched to a part that moves
-// there: its place.
+// leftRow is a progress row at a move's destination, before the carry, of a
+// person with an Audible title matched to the book that moves there: its
+// place.
 type leftRow struct {
 	user      int64
 	position  float64
@@ -472,19 +472,15 @@ type leftRow struct {
 }
 
 // audibleRowsAt reads, inside tx, the rows already at into (left there by an
-// earlier book, or a joined book's own) of the people whose Audible titles are
-// matched to one of froms' paths, before their places are carried onto into.
-func audibleRowsAt(ctx context.Context, tx *sql.Tx, libraryID int64, froms []JoinPart, into string) ([]leftRow, error) {
-	args := []any{libraryID, into, libraryID}
-	for _, f := range froms {
-		args = append(args, f.Path)
-	}
+// earlier book) of the people whose Audible titles are matched to the book at
+// from, before their places are carried onto into.
+func audibleRowsAt(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) ([]leftRow, error) {
 	return queryRows(ctx, tx, func(rows *sql.Rows, r *leftRow) error {
 		return rows.Scan(&r.user, &r.position, &r.finished, &r.updatedAt)
 	}, `SELECT p.user_id, p.position, p.finished, p.updated_at FROM progress p
 	     WHERE p.library_id = ? AND p.rel_path = ?
 	       AND p.user_id IN (SELECT a.user_id FROM audible_titles t JOIN audible_accounts a ON a.account = t.account
-	                          WHERE t.match_library_id = ? AND t.match_path IN (`+placeholders(len(froms))+`))`, args...)
+	                          WHERE t.match_library_id = ? AND t.match_path = ?)`, libraryID, into, libraryID, from)
 }
 
 // unofferedSeq is the offer position (change_seq) of a row no feed reads
@@ -492,11 +488,12 @@ func audibleRowsAt(ctx context.Context, tx *sql.Tx, libraryID int64, froms []Joi
 // (AudibleProgress reads from change_seq 0), and never a counter value (0066).
 const unofferedSeq = -1
 
-// keepLeftOffers takes back, inside tx after moveAudibleTitles, the offer of
-// each row left at into (audibleRowsAt) that the carry did not change (the
-// same place, finish state and time): the person never played the moved book,
-// or the left row won the carry's merge (a move's newer save, a join's further
-// place). Its place is another book's, which the re-match trigger (0066, 0071)
+// keepLeftOffers takes back, inside tx after a move's moveAudibleTitles, the
+// offer of each row left at into (audibleRowsAt) that the carry did not change
+// (the same place, finish state and time): the person never played the moved
+// book, or the left row was the newer save and won the merge. Its place is
+// another book's (mergeNewest's rule; a join's row at its folder is the joined
+// book's own, so a join takes no offer back), which the re-match trigger (0066, 0071)
 // would have offered to Audible under the moved book's titles (server#359). Put
 // back where it was, it would still be read by a feed whose cursor is not past
 // it (a row written after the feed's last one, as a book just listened to is,
