@@ -4172,7 +4172,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   offsets in current order), all reads before the one write. `SyncListening` is ONE `WithUserStateTx`: checks
   (`invalid`, `unknown_kind`, an id repeated in the batch `duplicate` of a copy that passed them: a copy rejected
   leaves the next to be checked on its own, server#284), the clock (shift = now - sent_at, kept as
-  a Duration, or clock_offset, added to every time; a corrected time past now pulled back with its span, keeping
+  a Duration, or clock_offset, added to every time, a furthest-only batch's only to its `SenderDated` events, each
+  event logged with the shift it took; a corrected time past now pulled back with its span, keeping
   its length), `too_old` (older than
   90 days), the fingerprint (only for the exact book path, 10 s), the file remap (fe#188: a `*_file` of the book
   is its offset now + the seconds in it, clamped to its length; else the sent seconds); then each event in
@@ -4436,9 +4437,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   person stops no working sync (the server can't tell a sign-in from a label edit); only a PUT mapping it to another
   person cancels it (`CancelAudibleSyncOff`). The Bridge posts the places to `POST
   /bridge/audible/accounts/{account}/listening` `{sent_at, events}` (bridge token only, header only; body strict,
-  `sent_at` required, the Sync v2 event shapes and limits; the places are dated as sent, clock offset 0: their times
+  `sent_at` required, the Sync v2 event shapes and limits; the places are dated as sent: their times
   are Audible's own `last_updated`, not the Bridge's clock, so a Bridge's skew never moves one across a restart or a
-  Stay, server#415): the batch is `SyncBatch{UserID: the account's person,
+  Stay, server#415; the one exception is a place Audible gave no `last_updated` for, which the Bridge stamps with its
+  own clock: `AudibleUndatedEvents` finds those by their id, the hash of the place with an empty `last_updated`
+  under one of the book's synced titles (`audibleUndatedID`, CROSS-REPO §23's formula, pinned by
+  `TestAudibleUndatedID`; the finish at such a place in the same batch too), and `sent_at`'s shift corrects them
+  alone (`SyncBatch.SenderDated`; an id made another way matches nothing and is dated as sent)): the batch is `SyncBatch{UserID: the account's person,
   DeviceID: "audible:<account>", DeviceName: "Audible (<label or STORE>)", TokenID: 0, FurthestOnly: true}`, set by
   the route alone (no body field reaches either; `/me/listening/sync` refuses an unknown field). Each event's book is
   resolved under the PERSON's scopes (`userPathResolver`, `catalog.UserScopes`: no access is `no_access`), then must

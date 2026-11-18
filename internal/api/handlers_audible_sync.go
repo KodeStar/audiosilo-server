@@ -21,9 +21,10 @@ import (
 // sync_off.
 
 // audibleListeningRequest is a batch of an account's places: the Bridge's
-// clock when it sent them (checked, not used: the places carry Audible's own
-// times) and the events (listen spans of no length at Audible's place,
-// finishes), each decoded on its own as a player's are.
+// clock when it sent them (it corrects only the places Audible gave no time
+// for, which the Bridge dates itself: the rest carry Audible's own times) and
+// the events (listen spans of no length at Audible's place, finishes), each
+// decoded on its own as a player's are.
 type audibleListeningRequest struct {
 	SentAt string            `json:"sent_at"`
 	Events []json.RawMessage `json:"events"`
@@ -115,7 +116,8 @@ func (a *API) handleBridgeAudibleListening(w http.ResponseWriter, r *http.Reques
 	if !decodeSyncEnvelope(w, r, &in) {
 		return
 	}
-	if _, err := time.Parse(time.RFC3339, in.SentAt); err != nil {
+	sentAt, err := time.Parse(time.RFC3339, in.SentAt)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "sent_at is required")
 		return
 	}
@@ -133,13 +135,20 @@ func (a *API) handleBridgeAudibleListening(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// FurthestOnly and TokenID 0 are this route's alone: no request body can
-	// set either. The places are dated as sent (clock offset 0): their times
-	// are Audible's own last_updated, on Audible's clock, not the Bridge's, so
-	// the Bridge's skew (sent_at against this server's clock) must not move
-	// them, before or after a Stay (beforeStay, server#415).
+	// set either. The places are dated as sent: their times are Audible's own
+	// last_updated, on Audible's clock, not the Bridge's, so the Bridge's skew
+	// (sent_at against this server's clock) must not move them, before or after
+	// a Stay (beforeStay, server#415). The exception is a place Audible gave no
+	// time for, which the Bridge dates on its own clock: sent_at corrects those
+	// alone (SenderDated).
+	undated, err := a.cat.AudibleUndatedEvents(r.Context(), id, events)
+	if err != nil {
+		a.writeCatalogError(w, err, op, "could not sync listening", "account", id)
+		return
+	}
 	answer, err := a.cat.SyncListening(r.Context(), catalog.SyncBatch{
 		UserID: acct.UserID, DeviceID: acct.DeviceID(), TokenID: 0, DeviceName: acct.DeviceName(),
-		ClockOffset: new(float64), Events: events, Targets: targets, FurthestOnly: true,
+		SentAt: &sentAt, SenderDated: undated, Events: events, Targets: targets, FurthestOnly: true,
 	})
 	if err != nil {
 		a.writeCatalogError(w, err, op, "could not sync listening", "account", id)

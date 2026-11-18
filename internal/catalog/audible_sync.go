@@ -2,11 +2,14 @@ package catalog
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -146,6 +149,73 @@ func (c *Catalog) AudibleSyncBooks(ctx context.Context, account string) (map[Ref
 			out[t.ref] = ""
 		} else if _, ok := out[t.ref]; !ok {
 			out[t.ref] = reasonDurationMismatch
+		}
+	}
+	return out, nil
+}
+
+// audibleUndatedID is the id the Bridge gives the event of a place Audible
+// sent no last_updated for (CROSS-REPO.md §23: "aud-" and the first 32 hex of
+// sha256(account|asin|position_ms|last_updated|kind|library_id|path), its
+// last_updated empty), kind "" for the listen and EventFinish for the finish.
+func audibleUndatedID(account, asin string, positionMs int64, kind string, ref Ref) string {
+	sum := sha256.Sum256([]byte(account + "|" + asin + "|" + strconv.FormatInt(positionMs, 10) + "||" + kind + "|" +
+		strconv.FormatInt(ref.LibraryID, 10) + "|" + ref.Path))
+	return "aud-" + hex.EncodeToString(sum[:])[:32]
+}
+
+// AudibleUndatedEvents are the ids of the events of account's batch that the
+// Bridge dated on its own clock: a place Audible gave no last_updated for is
+// stamped with the Bridge's clock when it read it, every other with Audible's
+// own time. The wire doesn't say which, but the event's id does: it is a hash
+// of the place with its last_updated (audibleUndatedID), so an id that is the
+// hash of the event's own place under one of the book's synced titles with no
+// last_updated is one of these, and so is the finish at such a place in the
+// same batch (a finish carries no place; the Bridge sends it right after its
+// listen, and one split from it into the next batch is dated as sent). The
+// listening route corrects these alone by the Bridge's clock (SyncBatch.
+// SenderDated): uncorrected, a Bridge running behind dated one before a
+// restart or Stay made since, and it was answered "behind" at every sync, its
+// id never changing (server#415). An id the Bridge makes another way matches
+// nothing here and is dated as sent.
+func (c *Catalog) AudibleUndatedEvents(ctx context.Context, account string, events []SyncEvent) (map[string]bool, error) {
+	titles, err := c.AudibleSyncTitles(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	asins := make(map[Ref][]string, len(titles))
+	for _, t := range titles {
+		ref := Ref{LibraryID: t.LibraryID, Path: t.Path}
+		asins[ref] = append(asins[ref], t.ASIN)
+	}
+	type heard struct {
+		asin string
+		ms   int64
+	}
+	out := map[string]bool{}
+	places := map[Ref][]heard{} // the undated places, by book as sent
+	for _, ev := range events {
+		if ev.Kind != EventListen || ev.undecodable {
+			continue
+		}
+		ref := Ref{LibraryID: ev.LibraryID, Path: ev.Path}
+		ms := int64(math.Round(ev.ToPos * 1000))
+		for _, asin := range asins[ref] {
+			if audibleUndatedID(account, asin, ms, "", ref) == ev.ID {
+				out[ev.ID] = true
+				places[ref] = append(places[ref], heard{asin, ms})
+			}
+		}
+	}
+	for _, ev := range events {
+		if ev.Kind != EventFinish {
+			continue
+		}
+		ref := Ref{LibraryID: ev.LibraryID, Path: ev.Path}
+		for _, h := range places[ref] {
+			if audibleUndatedID(account, h.asin, h.ms, EventFinish, ref) == ev.ID {
+				out[ev.ID] = true
+			}
 		}
 	}
 	return out, nil

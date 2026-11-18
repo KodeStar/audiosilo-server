@@ -2,6 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -123,5 +126,53 @@ func TestAudibleListeningDatedByAudible(t *testing.T) {
 		if p := s.patProgress(t, mistbornBook); p.Position != tc.storedPos {
 			t.Fatalf("%s: row %+v, want position %v", tc.name, p, tc.storedPos)
 		}
+	}
+}
+
+// undatedID is the Bridge's event id for a place Audible sent no last_updated
+// for (CROSS-REPO §23's formula, its last_updated empty): kind "" for the
+// listen, "finish" for the finish.
+func undatedID(asin string, ms int64, kind string, lib int64, path string) string {
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s|%s|%d||%s|%d|%s", testAccount, asin, ms, kind, lib, path))
+	return "aud-" + hex.EncodeToString(sum[:])[:32]
+}
+
+// server#415: a place Audible gave no last_updated for is stamped by the
+// Bridge with its own clock, so it alone is corrected by the Bridge's sent_at.
+// With that clock ten minutes behind and a restart here five minutes ago, the
+// undated place and the finish at the book's end apply (dated now), where a
+// place carrying Audible's own time at that instant is behind.
+func TestAudibleListeningUndatedPlace(t *testing.T) {
+	t.Parallel()
+	const behind = 10 * time.Minute
+	s := newAudibleSyncEnv(t)
+	wantSync(t, s.patListens(t, "pat-1", mistbornBook, 0, 100, "0"), "applied", "")
+	if _, err := s.db.ExecContext(context.Background(), `UPDATE progress SET finish_changed_at = ? WHERE user_id = ?`,
+		catalog.FormatStamp(time.Now().Add(-5*time.Minute)), s.patID); err != nil {
+		t.Fatal(err)
+	}
+	post := func(events ...string) []catalog.SyncResult {
+		t.Helper()
+		return s.postResultsAt(t, time.Now().Add(-behind), events...)
+	}
+	// Denied: Audible's own time, ten minutes ago, is not the Bridge's to move.
+	wantSync(t, post(place("aud-dated", s.lib.ID, mistbornBook, 400, behind))[0], "not_applied", "behind")
+	if p := s.patProgress(t, mistbornBook); p.Position != 100 {
+		t.Fatalf("a dated place from before the restart moved the row: %+v", p)
+	}
+
+	wantSync(t, post(place(undatedID(mistbornASIN, 500000, "", s.lib.ID, mistbornBook), s.lib.ID, mistbornBook, 500, behind))[0], "applied", "")
+	if p := s.patProgress(t, mistbornBook); p.Position != 500 {
+		t.Fatalf("an undated place on a Bridge clock behind: %+v, want it applied", p)
+	}
+
+	at := time.Now().Add(-behind).UTC().Format(time.RFC3339)
+	finish := fmt.Sprintf(`{"id":%q,"kind":"finish","library_id":%d,"path":%q,"at":%q}`,
+		undatedID(mistbornASIN, 36000000, "finish", s.lib.ID, mistbornBook), s.lib.ID, mistbornBook, at)
+	res := post(place(undatedID(mistbornASIN, 36000000, "", s.lib.ID, mistbornBook), s.lib.ID, mistbornBook, 36000, behind), finish)
+	wantSync(t, res[0], "applied", "")
+	wantSync(t, res[1], "applied", "")
+	if p := s.patProgress(t, mistbornBook); !p.Finished {
+		t.Fatalf("an undated finish on a Bridge clock behind: %+v, want the book finished", p)
 	}
 }

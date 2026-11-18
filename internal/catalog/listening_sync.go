@@ -293,6 +293,12 @@ type SyncBatch struct {
 	// listening session, daily roll-up or history is recorded (owner decision
 	// 2), and TokenID is 0.
 	FurthestOnly bool
+	// SenderDated, a furthest-only batch's alone: the ids of the events whose
+	// times are the sender's own clock's (a place Audible gave no time for,
+	// which the Bridge dates when it reads it: AudibleUndatedEvents). The
+	// batch's clock shift moves these and no other: every other place carries
+	// Audible's own time, which a Bridge's skew must not move (server#415).
+	SenderDated map[string]bool
 }
 
 // SyncResult is one event's answer.
@@ -320,8 +326,11 @@ type syncPrepared struct {
 	ev             SyncEvent
 	target         SyncTarget
 	started, ended time.Time // corrected (finish/unfinish: both At)
-	from, to       float64   // whole-book seconds after the remap
-	speed          float64
+	// shift is the clock shift the event's times were corrected by: the
+	// batch's, or none for a furthest-only event not in SenderDated.
+	shift    time.Duration
+	from, to float64 // whole-book seconds after the remap
+	speed    float64
 }
 
 // length is the span's book length: the device's, else the indexed book's
@@ -346,17 +355,20 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 	// clock_offset's is bounded by MaxClockOffset, so its conversion fits.
 	//
 	// transit: how much of sent_at's shift may be the batch's time on the way
-	// (a clock_offset is measured, so it has none): a finish made before an
-	// edit it never saw can be dated after it by that much (finishChange).
+	// (a clock_offset is measured, so it has none, and a furthest-only batch's
+	// finish is a place read on Audible, not an act in flight): a finish made
+	// before an edit it never saw can be dated after it by that much
+	// (finishChange).
 	var shiftDur, transit time.Duration
 	switch {
 	case b.ClockOffset != nil:
 		shiftDur = time.Duration(*b.ClockOffset * float64(time.Second))
 	case b.SentAt != nil:
 		shiftDur = now.Sub(*b.SentAt)
-		transit = min(max(shiftDur, 0), maxFinishTransit)
+		if !b.FurthestOnly {
+			transit = min(max(shiftDur, 0), maxFinishTransit)
+		}
 	}
-	shift := shiftDur.Seconds()
 	results := make([]SyncResult, len(b.Events))
 	seen := map[string]bool{}
 	var prepared []syncPrepared
@@ -404,10 +416,15 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 			continue
 		}
 		p.index, p.target = i, target
-		// The clock: every time of the batch moves by the shift; a corrected time
-		// past now is pulled back to now, both ends of a span alike (by its own
-		// length, at most maxSpan: the distance past now can saturate).
-		p.started, p.ended = p.started.Add(shiftDur), p.ended.Add(shiftDur)
+		// The clock: every time of the batch moves by the shift (a furthest-only
+		// batch's only where the sender dated the event itself, SenderDated); a
+		// corrected time past now is pulled back to now, both ends of a span
+		// alike (by its own length, at most maxSpan: the distance past now can
+		// saturate).
+		if !b.FurthestOnly || b.SenderDated[ev.ID] {
+			p.shift = shiftDur
+		}
+		p.started, p.ended = p.started.Add(p.shift), p.ended.Add(p.shift)
 		if p.ended.After(now) {
 			p.started, p.ended = now.Add(-p.ended.Sub(p.started)), now
 		}
@@ -448,7 +465,7 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 	var err error
 	if len(prepared) > 0 {
 		err = c.db.WithUserStateTx(ctx, "SyncListening", func(tx *sql.Tx) error {
-			s := syncRun{c: c, tx: tx, b: b, now: now, shift: shift, transit: transit, written: map[Ref]int64{},
+			s := syncRun{c: c, tx: tx, b: b, now: now, transit: transit, written: map[Ref]int64{},
 				changed: map[Ref]bool{}}
 			var err error
 			if s.stored, err = storedEventIDs(ctx, tx, b.UserID, prepared); err != nil {
@@ -549,11 +566,10 @@ func remapEnd(book *SyncBook, whole float64, file *string, pos *float64) float64
 
 // syncRun is one batch's transaction.
 type syncRun struct {
-	c     *Catalog
-	tx    *sql.Tx
-	b     SyncBatch
-	now   time.Time
-	shift float64
+	c   *Catalog
+	tx  *sql.Tx
+	b   SyncBatch
+	now time.Time
 	// transit is the part of the batch's clock shift that may be its time on
 	// the way (sent_at's shift, 0 to maxFinishTransit; none for a
 	// clock_offset): finishChange.
@@ -683,7 +699,7 @@ func (s *syncRun) apply(ctx context.Context, p syncPrepared) (SyncResult, error)
 	return res, insertEvent(ctx, s.tx, eventRow{
 		userID: s.b.UserID, id: p.ev.ID, kind: p.ev.Kind, ref: p.target.Key, deviceID: s.b.DeviceID,
 		tokenID: s.b.TokenID, from: p.from, to: p.to, speed: p.speed, duration: p.ev.Duration,
-		started: formatSessionTime(p.started), ended: formatSessionTime(p.ended), shift: s.shift,
+		started: formatSessionTime(p.started), ended: formatSessionTime(p.ended), shift: p.shift.Seconds(),
 		start: p.ev.Start, base: p.ev.BaseVersion, status: res.Status, reason: res.Reason,
 		received: formatSessionTime(s.now),
 	})
