@@ -9,6 +9,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -417,6 +418,13 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 func copyIdle(w http.ResponseWriter, src io.Reader, idle time.Duration) error {
 	rc := http.NewResponseController(w)
 	_, err := io.Copy(deadlineWriter{w: w, rc: rc, idle: idle}, src)
+	if err == nil {
+		// The bytes still buffered reach the client under the deadline too:
+		// net/http's own flush after the handler has none.
+		if ferr := rc.Flush(); ferr != nil && !errors.Is(ferr, http.ErrNotSupported) {
+			err = ferr
+		}
+	}
 	// The connection outlives the answer (keep-alive): its next one has no deadline.
 	_ = rc.SetWriteDeadline(time.Time{})
 	return err
