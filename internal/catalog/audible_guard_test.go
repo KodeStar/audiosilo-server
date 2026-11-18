@@ -136,3 +136,67 @@ func TestAudibleDeviceGuard(t *testing.T) {
 	}
 	wantNone("Author", "a row joined at an offset")
 }
+
+// A carry names Audible's device again only on a row holding the place it
+// carried: never when the row already at the new path wins the merge (a newer
+// save for a move, a tie for a join, which keeps the folder's), even with the
+// same place, and so for a join's part at offset 0 only when its place is the
+// furthest (inside the part's length: one clamped to it is a place Audible
+// never gave).
+func TestAudibleDeviceCarriedOnlyWhenItsPlaceWins(t *testing.T) {
+	t.Parallel()
+	const path = "Author/Book"
+	for _, tc := range []struct {
+		name, into string
+		phone      float64 // the phone's row already at into (0: none)
+		phoneAt    string
+		join       *JoinPart
+		wantDevice string
+		wantPos    float64
+	}{
+		{name: "a move onto a newer save of the same place", into: "Author/Moved", phone: 1000,
+			phoneAt: "2099-01-01T00:00:00.000Z", wantDevice: "phone", wantPos: 1000},
+		{name: "a join's first part tied with the folder's place", into: "Author", phone: 1000,
+			phoneAt: "2020-01-01T00:00:00.000Z", join: &JoinPart{Path: path}, wantDevice: "phone", wantPos: 1000},
+		{name: "a join's first part further than the folder's place", into: "Author", phone: 500,
+			phoneAt: "2099-01-01T00:00:00.000Z", join: &JoinPart{Path: path}, wantDevice: "audible:acct0001", wantPos: 1000},
+		{name: "a join's first part clamped to its length", into: "Author",
+			join: &JoinPart{Path: path, Duration: 900}, wantDevice: "", wantPos: 900},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := syncedTitleAt(t, path)
+			f.savePlace(t, path, 1000, f.clock.Add(-time.Hour))
+			exec := func(query string, args ...any) {
+				t.Helper()
+				if _, err := f.c.db.ExecContext(f.ctx, query, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			exec(`UPDATE progress SET device_id = 'audible:acct0001', device_name = 'Audible (US)'
+			       WHERE user_id = ? AND library_id = ? AND rel_path = ?`, f.user, f.lib.ID, path)
+			if tc.phone > 0 {
+				exec(`INSERT INTO progress(user_id, library_id, rel_path, position, duration, version, device_id, device_name, updated_at)
+				      VALUES(?, ?, ?, ?, 36000, 1, 'phone', 'Phone', ?)`, f.user, f.lib.ID, tc.into, tc.phone, tc.phoneAt)
+			}
+			var err error
+			if tc.join != nil {
+				err = f.c.JoinDurableState(f.ctx, f.lib.ID, tc.into, []JoinPart{*tc.join}, 0)
+			} else {
+				err = f.c.MoveDurableState(f.ctx, f.lib.ID, path, tc.into)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var device string
+			var pos float64
+			if err := f.c.db.QueryRowContext(f.ctx, `SELECT device_id, position FROM progress
+			    WHERE user_id = ? AND library_id = ? AND rel_path = ?`, f.user, f.lib.ID, tc.into).Scan(&device, &pos); err != nil {
+				t.Fatal(err)
+			}
+			if device != tc.wantDevice || pos != tc.wantPos {
+				t.Fatalf("row at %s = %q at %v, want %q at %v", tc.into, device, pos, tc.wantDevice, tc.wantPos)
+			}
+		})
+	}
+}
