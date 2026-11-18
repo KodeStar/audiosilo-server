@@ -443,6 +443,13 @@ const PREVIEW_MS = 5000;
 const RESTREAM_MS = 250;
 
 /**
+ * How long a transcode that has played stays paused before it lets go of its
+ * stream: its ffmpeg holds one of the server's few transcode slots until the
+ * connection closes. Play asks for it again from the playhead.
+ */
+const PAUSED_HOLD_MS = 10_000;
+
+/**
  * How far before a file's end a transcode is ever asked for (seconds): one asked
  * for at the very end leaves ffmpeg no audio to send, which the <audio> reads as
  * an error (the player's TRANSCODE_TAIL_S).
@@ -465,7 +472,13 @@ const BUSY_TRIES = 3;
  * the server can (server#410): the stream starts where the playhead is, so a move
  * of it asks again from there (a transcode can't be seeked), the audio's own
  * clock counting from that start. It is asked for only to play (preload none):
- * a row chosen or a move made while paused starts no ffmpeg.
+ * a row chosen or a move made while paused starts no ffmpeg, and one paused for
+ * PAUSED_HOLD_MS lets go of its stream. An MP3 in .mka whose remux the server
+ * has not made yet comes as a live transcode from the file's start: the
+ * player then asks for that file's transcode from the playhead too, as for any
+ * other, until another file is chosen. One <audio> plays every row: a browser
+ * that lets audio play only after a click on it (Safari) keeps letting it play
+ * as the stream is asked for again.
  */
 function Scrubber({
   libraryId,
@@ -494,6 +507,8 @@ function Scrubber({
   // Whether "Play 5 s" waits for a transcode to start, to time the five seconds.
   const previewing = useRef(false);
   const restream = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // A paused transcode's wait before it lets go of its stream (PAUSED_HOLD_MS).
+  const hold = useRef<ReturnType<typeof setTimeout>>(undefined);
   // The seek (seconds into the file) waiting for a newly chosen file to load,
   // or for a transcode to be asked for again.
   const pending = useRef<number | null>(null);
@@ -504,23 +519,34 @@ function Scrubber({
   // have run out (four hours) or been dropped by the cap on editor tokens (a
   // sixth book's editor), so the first failure mints again before giving up.
   const reminted = useRef(false);
+  // A transcode's new token is on its way: no stream is asked for with the
+  // old one meanwhile (remint).
+  const [minting, setMinting] = useState(false);
   // A transcode the server had no slot for: how often it was asked for again,
-  // the wait before the next ask, and the look at the answer it failed with.
+  // the wait before the next ask (said while it lasts), and the look at the
+  // answer it failed with.
   const busy = useRef(0);
+  const [waiting, setWaiting] = useState(false);
   const again = useRef<ReturnType<typeof setTimeout>>(undefined);
   const probe = useRef<AbortController>(undefined);
   const stopRetry = () => {
     clearTimeout(again.current);
     probe.current?.abort();
+    setWaiting(false);
   };
+  // An MP3 in .mka (remuxed) the server answered with a live transcode: its
+  // remux is still being made. Another file forgets it, so coming back finds
+  // the copy made since.
+  const [live, setLive] = useState<string>();
   const target = row ? toFileTime(spans, row.start) : undefined;
   const span = target?.span;
+  if (live !== undefined && live !== span?.path) setLive(undefined);
   const offset = target?.offset ?? 0;
   const length = span ? span.end - span.start : 0;
-  const transcoded = !!span && !span.playable && canTranscode;
+  const transcoded = !!span && canTranscode && (!span.playable || live === span.path);
   // A transcode's start: the row's, until the playhead moves (for this row:
   // `at`, or `kept`, the start just set at the playhead, where it already
-  // plays); `n` makes each move a new <audio>, even to the same start. Never in
+  // plays); `n` counts the asks, so one to the same start loads again. Never in
   // the file's last second (TRANSCODE_TAIL_S).
   const at = span ? `${span.path}@${offset}` : '';
   const [stream, setStream] = useState<{
@@ -538,16 +564,18 @@ function Scrubber({
     ? Math.min(moved?.from ?? offset, roundMs(Math.max(0, length - TRANSCODE_TAIL_S)))
     : 0;
   const src =
-    token.data && span
+    token.data && span && !minting
       ? streamUrl(libraryId, span.path, token.data, transcoded ? from : undefined)
       : undefined;
+  // Asks for the transcode again from `to`, playing then when `play`.
+  const ask = (to: number, play: boolean) =>
+    setStream({ at, from: to, n: (stream?.n ?? 0) + 1, play });
 
-  // A replaced <audio> (another file, a transcode asked again) or a closed
-  // editor lets go of its stream: a detached element goes on loading until it
-  // is collected, and a transcode's ffmpeg holds one of the server's few
-  // transcode slots until its connection closes. Only once it has left the
-  // page (after the commit): StrictMode runs a ref's cleanup once on mount
-  // too, the element still in place, and a src taken off then is never put back.
+  // A closed editor lets go of its stream: a detached element goes on loading
+  // until it is collected, and a transcode's ffmpeg holds one of the server's
+  // few transcode slots until its connection closes. Only once it has left the
+  // page (after the commit): StrictMode runs a ref's cleanup once on mount too,
+  // the element still in place, and a src taken off then is never put back.
   const attach = useCallback((el: HTMLAudioElement | null) => {
     audio.current = el;
     if (!el) return;
@@ -571,6 +599,7 @@ function Scrubber({
     previewing.current = false;
     clearTimeout(again.current);
     probe.current?.abort();
+    setWaiting(false);
     busy.current = 0;
     if (transcoded) setFailed(false);
   }, [at, transcoded]);
@@ -594,10 +623,25 @@ function Scrubber({
     else pending.current = offset;
   }, [src, offset, transcoded, from, keptHere]);
 
+  // A transcode asked for again plays on the same <audio>: a new src loads by
+  // itself, the same one is loaded again, and one asked for to play plays.
+  const asked = useRef<{ src?: string; n: number }>(undefined);
+  const askN = moved?.n ?? 0;
+  const askPlay = moved?.play ?? false;
+  useEffect(() => {
+    const a = audio.current;
+    const last = asked.current;
+    asked.current = { src, n: askN };
+    if (!a || !src || !transcoded || (last?.src === src && last.n === askN)) return;
+    if (last?.src === src) a.load();
+    if (askPlay && last?.n !== askN) void a.play().catch(() => {});
+  }, [src, askN, askPlay, transcoded]);
+
   useEffect(
     () => () => {
       clearTimeout(preview.current);
       clearTimeout(restream.current);
+      clearTimeout(hold.current);
       clearTimeout(again.current);
       probe.current?.abort();
     },
@@ -617,10 +661,11 @@ function Scrubber({
     pending.current = to;
     setPos(to);
     clearTimeout(restream.current);
+    clearTimeout(hold.current);
     restream.current = setTimeout(() => {
       // Asked for: the seek waits no more (its stream may be the same URL).
       pending.current = null;
-      setStream({ at, from: to, n: (stream?.n ?? 0) + 1, play: !a.paused || previewing.current });
+      ask(to, !a.paused || previewing.current);
     }, RESTREAM_MS);
   };
   const nudge = (d: number) => seek((pending.current ?? now()) + d);
@@ -638,22 +683,36 @@ function Scrubber({
     if (a.error) a.load();
     void a.play().catch(() => {});
   };
-  // A failed load mints a new token once (reminted), then gives up.
-  const remint = () => {
+  // A failed load mints a new token once (reminted), then gives up. A
+  // transcode is asked for again from where it was once the token is here,
+  // playing if it was.
+  const remint = (a: HTMLAudioElement) => {
     if (reminted.current) {
       setFailed(true);
       return;
     }
     reminted.current = true;
-    void token.refetch();
+    if (!transcoded) {
+      void token.refetch();
+      return;
+    }
+    const place = roundMs(Math.min(pending.current ?? now(), length));
+    const play = !a.paused || previewing.current;
+    pending.current = null;
+    setMinting(true);
+    void token.refetch().then((minted) => {
+      setMinting(false);
+      if (!minted.isError) ask(place, play);
+    });
   };
   // A transcode fails for want of a slot too (503, every one busy), which is
   // no fault of the token: it is asked for again after the server's
   // Retry-After, and plays then, since it was only asked for to play.
   const onError = () => {
     const a = audio.current;
-    if (!transcoded || !src || !a) {
-      remint();
+    if (!a) return;
+    if (!transcoded || !src) {
+      remint(a);
       return;
     }
     stopRetry();
@@ -662,32 +721,64 @@ function Scrubber({
     void transcodeRetryAfter(src, look.signal).then((wait) => {
       if (look.signal.aborted || audio.current !== a) return;
       if (wait === undefined) {
-        remint();
+        remint(a);
         return;
       }
       if (++busy.current > BUSY_TRIES) {
         setFailed(true);
         return;
       }
+      setWaiting(true);
       again.current = setTimeout(() => {
+        setWaiting(false);
         if (audio.current !== a) return;
         a.load();
         void a.play().catch(() => {});
       }, wait * 1000);
     });
   };
+  // A transcode paused after it has played lets go of its stream after a
+  // while (PAUSED_HOLD_MS): asked for again from the playhead, not to play, it
+  // loads nothing (preload none), and its connection and ffmpeg's slot are let
+  // go of. Read at the wait's end, as the row and its stream are then (letGo).
+  const letGo = useRef<() => void>(undefined);
+  useEffect(() => {
+    letGo.current = () => {
+      const a = audio.current;
+      if (!a || !transcoded || !a.paused || a.currentTime <= 0 || pending.current !== null) return;
+      ask(roundMs(Math.min(now(), length)), false);
+    };
+  });
+  const pausedHold = () => {
+    clearTimeout(hold.current);
+    hold.current = setTimeout(() => letGo.current?.(), PAUSED_HOLD_MS);
+  };
+  // The live transcode an MP3 in .mka is answered with while its remux is
+  // being made (no length: it can't be seeked): its file is transcoded from
+  // here on, asked for from where the playhead waits.
+  const goneLive = (a: HTMLAudioElement) => {
+    if (!span?.remuxed || !canTranscode || Number.isFinite(a.duration)) return false;
+    const to = pending.current ?? offset;
+    pending.current = null;
+    setLive(span.path);
+    setStream({ at, from: to, n: (stream?.n ?? 0) + 1, play: !a.paused });
+    return true;
+  };
   const playFive = () => {
     const a = audio.current;
     if (!a) return;
     clearTimeout(preview.current);
     previewing.current = transcoded;
-    if (transcoded) {
+    // A transcode already asked for from the row's start and not played yet
+    // plays at once, in this click; else it is asked for from there.
+    if (transcoded && (from !== offset || pending.current !== null || a.currentTime > 0)) {
       seek(offset);
       return;
     }
-    a.currentTime = offset;
+    if (!transcoded) a.currentTime = offset;
+    else if (a.error) a.load();
     void a.play().catch(() => {});
-    preview.current = setTimeout(() => a.pause(), PREVIEW_MS);
+    if (!transcoded) preview.current = setTimeout(() => a.pause(), PREVIEW_MS);
   };
   // The playhead: the seek a file still loading waits for, else where the audio is.
   // Never past the file's end: audio that plays on a little longer than the length
@@ -730,21 +821,20 @@ function Scrubber({
           </b>
         </span>
       </div>
-      {src ? (
+      {span && (src || minting) ? (
         <audio
-          key={transcoded ? `${span?.path}#${moved?.n ?? 0}` : undefined}
           ref={attach}
           src={src}
           // A transcode is asked for only to play: each ask starts an ffmpeg
           // that holds one of the server's few transcode slots.
           preload={transcoded ? (moved?.play ? 'auto' : 'none') : 'metadata'}
-          autoPlay={moved?.play}
-          // A new <audio> (another file, or a transcode asked again) plays only when told to.
+          // A new source (another file, or a transcode asked again) plays only when told to.
           onLoadStart={() => setPlaying(false)}
           onLoadedMetadata={(e) => {
             setFailed(false);
             reminted.current = false;
             busy.current = 0;
+            if (!transcoded && goneLive(e.currentTarget)) return;
             // A transcode starts where the seek (or the row) asked; a seek made
             // since it was asked for waits for its own.
             if (transcoded) {
@@ -760,14 +850,20 @@ function Scrubber({
             if (!transcoded || pending.current === null) setPos(from + e.currentTarget.currentTime);
           }}
           onSeeked={(e) => setPos(from + e.currentTarget.currentTime)}
-          onPlay={() => setPlaying(true)}
+          onPlay={() => {
+            clearTimeout(hold.current);
+            setPlaying(true);
+          }}
           onPlaying={() => {
             if (!previewing.current) return;
             previewing.current = false;
             clearTimeout(preview.current);
             preview.current = setTimeout(() => audio.current?.pause(), PREVIEW_MS);
           }}
-          onPause={() => setPlaying(false)}
+          onPause={() => {
+            setPlaying(false);
+            if (transcoded) pausedHold();
+          }}
           onError={onError}
         />
       ) : null}
@@ -834,6 +930,10 @@ function Scrubber({
       {unavailable ? (
         <p role="alert" className="text-[12.5px] text-muted-foreground">
           {t('book.chapters.edit.unavailable')}
+        </p>
+      ) : waiting ? (
+        <p role="status" className="text-[12.5px] text-muted-foreground">
+          {t('book.chapters.edit.busy')}
         </p>
       ) : null}
     </section>

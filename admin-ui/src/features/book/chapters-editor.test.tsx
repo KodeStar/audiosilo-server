@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBookDetail, ChapterEditRequest } from '@/api/types';
@@ -264,11 +264,12 @@ describe('the chapter editor', () => {
     Object.defineProperty(audio, 'currentTime', { value: 2.5, writable: true });
     fireEvent.timeUpdate(audio);
     await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
-    // A seek asks for the stream again from there, on a new <audio>.
+    // A seek asks for the stream again from there, on the same <audio>: its new
+    // source lets go of the old stream (its ffmpeg holds a transcode slot).
     await waitFor(() => expect(Number(srcOf().get('t'))).toBe(row + 3.5));
-    expect(container.querySelector('audio')).not.toBe(audio);
-    // The replaced one lets go of its stream (its ffmpeg holds a transcode slot).
-    expect(audio.getAttribute('src')).toBeNull();
+    expect(container.querySelector('audio')).toBe(audio);
+    // The new stream's clock starts again.
+    audio.currentTime = 0;
     const moved = container.querySelector('audio');
     await user.click(screen.getByRole('button', { name: 'Start chapter 2 at the playhead' }));
     expect(screen.getByRole('textbox', { name: 'Start of chapter 2' })).toHaveValue(
@@ -284,6 +285,7 @@ describe('the chapter editor', () => {
   });
 
   it('puts a transcode back at a row’s start when the row is chosen again', async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play');
     const d = bookDetail();
     d.files = d.files.map((f) => ({ ...f, format: 'mka', codec: 'opus', direct_playable: false }));
     mockFetch(routes(d));
@@ -306,7 +308,8 @@ describe('the chapter editor', () => {
     await waitFor(() => expect(from()).toBe(0));
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
     await waitFor(() => expect(from()).toBe(1200));
-    expect(container.querySelector('audio')).not.toHaveAttribute('autoplay');
+    expect(play).not.toHaveBeenCalled();
+    play.mockRestore();
   });
 
   it('keeps the audio’s source under StrictMode, which runs a ref’s cleanup on mount', async () => {
@@ -321,6 +324,7 @@ describe('the chapter editor', () => {
   });
 
   it('asks for a transcode only to play: a row chosen or a move made while paused starts none', async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play');
     const d = bookDetail();
     d.files = d.files.map((f) => ({ ...f, format: 'mka', codec: 'opus', direct_playable: false }));
     mockFetch(routes(d));
@@ -336,18 +340,151 @@ describe('the chapter editor', () => {
     await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
     // Nothing loads (no ffmpeg, no transcode slot), and the playhead is the row's start all the same.
     expect(audio()).toHaveAttribute('preload', 'none');
-    expect(audio()).not.toHaveAttribute('autoplay');
     await waitFor(() => expect(playhead()).toBe(1200));
     await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
     await waitFor(() => expect(from()).toBe(1201));
     expect(audio()).toHaveAttribute('preload', 'none');
-    expect(audio()).not.toHaveAttribute('autoplay');
+    expect(play).not.toHaveBeenCalled();
     expect(playhead()).toBe(1201);
-    // "Play 5 s" asks for it, to play.
+    // "Play 5 s" asks for it from the row's start, to play.
+    const el = audio();
     await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
-    await waitFor(() => expect(audio()).toHaveAttribute('autoplay'));
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    expect(play.mock.contexts[0]).toBe(el);
     expect(from()).toBe(1200);
     expect(audio()).toHaveAttribute('preload', 'auto');
+    play.mockRestore();
+  });
+
+  it('plays a transcode on the <audio> the click played, so Safari lets it play on', async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play');
+    const d = bookDetail();
+    d.files = d.files.map((f) => ({ ...f, format: 'mka', codec: 'opus', direct_playable: false }));
+    mockFetch(routes(d));
+    const { container } = renderApp(URL);
+    const user = await openEditor();
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    const audio = container.querySelector('audio')!;
+    const from = () =>
+      Number(new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams.get('t'));
+    // "Play 5 s" on a row just chosen plays its stream at once, in the click.
+    fireEvent.click(screen.getByRole('button', { name: 'Play 5 s' }));
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(from()).toBe(1200);
+    // A move while it plays asks again from there and plays on the same element.
+    Object.defineProperty(audio, 'paused', { value: false, configurable: true });
+    Object.defineProperty(audio, 'currentTime', { value: 2, writable: true, configurable: true });
+    await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
+    await waitFor(() => expect(from()).toBe(1203));
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    expect(container.querySelector('audio')).toBe(audio);
+    expect(play.mock.contexts[1]).toBe(audio);
+    play.mockRestore();
+  });
+
+  it('lets go of a paused transcode’s stream after a while, and plays on from there', async () => {
+    const d = bookDetail();
+    d.files = d.files.map((f) => ({ ...f, format: 'mka', codec: 'opus', direct_playable: false }));
+    mockFetch(routes(d));
+    const { container } = renderApp(URL);
+    const user = await openEditor();
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    const audio = container.querySelector('audio')!;
+    const from = () =>
+      Number(new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams.get('t'));
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play');
+    fireEvent.loadedMetadata(audio);
+    // Paused before it played: nothing to let go of (it loaded nothing).
+    vi.useFakeTimers();
+    try {
+      fireEvent.pause(audio);
+      act(() => vi.advanceTimersByTime(10_000));
+      expect(from()).toBe(1200);
+      // Played 4.5 s, then paused: held a while, then let go of, at the playhead.
+      Object.defineProperty(audio, 'currentTime', {
+        value: 4.5,
+        writable: true,
+        configurable: true,
+      });
+      fireEvent.pause(audio);
+      act(() => vi.advanceTimersByTime(9_000));
+      expect(from()).toBe(1200);
+      act(() => vi.advanceTimersByTime(1_000));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(from()).toBe(1204.5);
+    expect(audio).toHaveAttribute('preload', 'none');
+    expect(play).not.toHaveBeenCalled();
+    Object.defineProperty(audio, 'currentTime', { value: 0, writable: true, configurable: true });
+    await waitFor(() =>
+      expect(screen.getByRole('slider', { name: /Position in/ })).toHaveValue('1204.5'),
+    );
+    // Play asks for it from there, in the click.
+    await user.click(screen.getByRole('button', { name: 'Play' }));
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(play.mock.contexts[0]).toBe(audio);
+    play.mockRestore();
+  });
+
+  it('transcodes an MP3 in .mka from the playhead while its remux is still being made', async () => {
+    // The server answers a cold remux with a live transcode from the file's
+    // start, which can't be seeked: no length.
+    const d = bookDetail({
+      chapter_basis: { files: [{ path: '01.mka', size: 48_000_000, duration_ms: 3_000_000 }] },
+    });
+    d.files = d.files.map((f) => ({
+      ...f,
+      path: `${BOOK_PATH}/01.mka`,
+      format: 'mka',
+      codec: 'mp3',
+      direct_playable: true,
+    }));
+    d.chapters = d.chapters?.map((c) => ({ ...c, file_path: `${BOOK_PATH}/01.mka` }));
+    mockFetch(routes(d));
+    const { container } = renderApp(URL);
+    const user = await openEditor();
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    const audio = container.querySelector('audio')!;
+    const query = () =>
+      new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams;
+    // The remux, as the file is played.
+    expect(query().get('transcode')).toBeNull();
+    Object.defineProperty(audio, 'duration', { value: Infinity, configurable: true });
+    fireEvent.loadedMetadata(audio);
+    // A live stream: the file is asked for as a transcode from the row's start.
+    await waitFor(() => expect(query().get('transcode')).toBe('1'));
+    expect(Number(query().get('t'))).toBe(1200);
+    expect(container.querySelector('audio')).toBe(audio);
+    // And a seek asks for it again from there.
+    await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
+    await waitFor(() => expect(Number(query().get('t'))).toBe(1201));
+  });
+
+  it('plays an MP3 in .mka as its remux once that is made', async () => {
+    const d = bookDetail();
+    d.files = d.files.map((f) => ({
+      ...f,
+      path: `${BOOK_PATH}/01.mka`,
+      format: 'mka',
+      codec: 'mp3',
+      direct_playable: true,
+    }));
+    mockFetch(routes(d));
+    const { container } = renderApp(URL);
+    const user = await openEditor();
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    const audio = container.querySelector('audio')!;
+    Object.defineProperty(audio, 'duration', { value: 3000, configurable: true });
+    fireEvent.loadedMetadata(audio);
+    // A copy with a length: seeked in place, the row's start set at load.
+    expect(audio.currentTime).toBe(1200);
+    await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
+    expect(audio.getAttribute('src')).not.toContain('transcode');
   });
 
   describe('a transcode that fails', () => {
@@ -432,8 +569,20 @@ describe('the chapter editor', () => {
       fireEvent.error(audio);
       await waitFor(() => expect(looks()).toHaveLength(1));
       await user.click(screen.getByRole('button', { name: 'Listen from chapter 1' }));
+      expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
       await new Promise((r) => setTimeout(r, 300));
       expect(play).not.toHaveBeenCalled();
+    });
+
+    it('says the server is busy while it waits to ask again', async () => {
+      const { audio } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
+      const line = 'The server is busy. Trying again in a moment.';
+      expect(screen.queryByText(line)).not.toBeInTheDocument();
+      fireEvent.error(audio);
+      expect(await screen.findByText(line)).toBeInTheDocument();
+      // Asked again: the line goes.
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText(line)).not.toBeInTheDocument();
     });
 
     it('asks at once when Play is pressed during the wait, and not again after it', async () => {
@@ -441,9 +590,10 @@ describe('the chapter editor', () => {
       fireEvent.error(audio);
       await waitFor(() => expect(looks()).toHaveLength(1));
       // Past the look's answer, into the wait.
-      await new Promise((r) => setTimeout(r, 20));
+      await screen.findByText('The server is busy. Trying again in a moment.');
       await user.click(screen.getByRole('button', { name: 'Play' }));
       expect(play).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
       await new Promise((r) => setTimeout(r, 300));
       expect(play).toHaveBeenCalledTimes(1);
     });
@@ -458,6 +608,24 @@ describe('the chapter editor', () => {
       fireEvent.error(audio);
       expect(await screen.findByText(/The audio didn’t load/)).toBeInTheDocument();
       expect(mints()).toBe(2);
+    });
+
+    it('plays on from where it was after a new token, when it was playing', async () => {
+      const { audio, mints } = await listen({ status: 401, body: { error: 'unauthorized' } });
+      const query = () =>
+        new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams;
+      Object.defineProperty(audio, 'paused', { value: false, configurable: true });
+      Object.defineProperty(audio, 'currentTime', {
+        value: 30,
+        writable: true,
+        configurable: true,
+      });
+      fireEvent.error(audio);
+      await waitFor(() => expect(query().get('token')).toBe('media-tok-2'));
+      expect(mints()).toBe(2);
+      expect(Number(query().get('t'))).toBe(1230);
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+      expect(play.mock.contexts[0]).toBe(audio);
     });
   });
 

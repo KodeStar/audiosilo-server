@@ -47,6 +47,12 @@ export interface FileSpan {
   end: number;
   /** Whether a browser plays it as stored (AdminFile.direct_playable); else the scrubber transcodes it. */
   playable: boolean;
+  /**
+   * An .mka the server plays as its MP3 remux (playable): until that copy is
+   * made, the server answers with a live transcode from the file's start instead,
+   * which can't be seeked (handleStream).
+   */
+  remuxed: boolean;
 }
 
 /** One row of the editor. A file-start row is fixed: its title is editable, its time is not. */
@@ -81,6 +87,7 @@ export function fileSpans(files: AdminFile[], bookPath: string, basis: ChapterBa
       start: start / 1000,
       end: at / 1000,
       playable: f.direct_playable,
+      remuxed: f.direct_playable && /\.mka$/i.test(f.path),
     };
   });
 }

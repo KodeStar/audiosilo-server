@@ -782,6 +782,7 @@
   "book.chapters.edit.setHereLabel": "Start chapter {{n}} at the playhead",
   "book.chapters.edit.addHere": "Add at playhead",
   "book.chapters.edit.unavailable": "The audio didn’t load, so the player can’t play it. You can still type the times.",
+  "book.chapters.edit.busy": "The server is busy. Trying again in a moment.",
   "book.chapters.edit.source": "Chapters edited on this server.",
   "book.chapters.edit.editedBy": "Edited by {{user}}, {{when}}.",
   "book.chapters.edit.editedAt": "Edited {{when}}.",

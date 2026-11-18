@@ -782,6 +782,7 @@
   "book.chapters.edit.setHereLabel": "Kapitel {{n}} an der Abspielposition beginnen",
   "book.chapters.edit.addHere": "An Abspielposition hinzufügen",
   "book.chapters.edit.unavailable": "Das Audio wurde nicht geladen, daher kann der Player es nicht abspielen. Du kannst die Zeiten trotzdem eingeben.",
+  "book.chapters.edit.busy": "Der Server ist ausgelastet. Gleich wird es erneut versucht.",
   "book.chapters.edit.source": "Auf diesem Server bearbeitete Kapitel.",
   "book.chapters.edit.editedBy": "Bearbeitet von {{user}}, {{when}}.",
   "book.chapters.edit.editedAt": "Bearbeitet {{when}}.",

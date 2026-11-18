@@ -68,20 +68,50 @@ const rows = (...r: [number, string, boolean?][]): DraftRow[] =>
 describe('the whole-book timeline', () => {
   it('lays the files end to end in play order, by the basis lengths', () => {
     expect(SPANS).toEqual([
-      { path: `${BOOK}/01.mp3`, name: '01.mp3', start: 0, end: 100, playable: true },
-      { path: `${BOOK}/02.mp3`, name: '02.mp3', start: 100, end: 150, playable: true },
+      {
+        path: `${BOOK}/01.mp3`,
+        name: '01.mp3',
+        start: 0,
+        end: 100,
+        playable: true,
+        remuxed: false,
+      },
+      {
+        path: `${BOOK}/02.mp3`,
+        name: '02.mp3',
+        start: 100,
+        end: 150,
+        playable: true,
+        remuxed: false,
+      },
     ]);
   });
 
   it('falls back to the file’s own length without a basis entry', () => {
     expect(fileSpans([file('01.mp3', 1, 12.3456)], BOOK, { files: [] })).toEqual([
-      { path: `${BOOK}/01.mp3`, name: '01.mp3', start: 0, end: 12.346, playable: true },
+      {
+        path: `${BOOK}/01.mp3`,
+        name: '01.mp3',
+        start: 0,
+        end: 12.346,
+        playable: true,
+        remuxed: false,
+      },
     ]);
   });
 
   it('says which files a browser can’t play as stored', () => {
     const mka = { ...file('01.mka', 1, 10), format: 'mka', codec: 'opus', direct_playable: false };
     expect(fileSpans([mka], BOOK, { files: [] })[0].playable).toBe(false);
+  });
+
+  it('says which files the server plays as their MP3 remux', () => {
+    const mp3 = { ...file('01.MKA', 1, 10), format: 'mka', codec: 'mp3', direct_playable: true };
+    const opus = { ...file('02.mka', 2, 10), format: 'mka', codec: 'opus', direct_playable: false };
+    expect(fileSpans([mp3, opus], BOOK, { files: [] }).map((s) => s.remuxed)).toEqual([
+      true,
+      false,
+    ]);
   });
 
   it('maps a whole-book time to a file and back', () => {

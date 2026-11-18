@@ -814,6 +814,7 @@
   "book.chapters.edit.setHereLabel": "Começar o capítulo {{n}} na posição atual",
   "book.chapters.edit.addHere": "Adicionar na posição atual",
   "book.chapters.edit.unavailable": "O áudio não carregou, por isso o leitor não o consegue reproduzir. Ainda pode escrever os tempos.",
+  "book.chapters.edit.busy": "O servidor está ocupado. Vai tentar de novo dentro de momentos.",
   "book.chapters.edit.source": "Capítulos editados neste servidor.",
   "book.chapters.edit.editedBy": "Editados por {{user}}, {{when}}.",
   "book.chapters.edit.editedAt": "Editados {{when}}.",
