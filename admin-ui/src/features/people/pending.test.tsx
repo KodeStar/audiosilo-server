@@ -352,13 +352,9 @@ const identity: OIDCIdentity = {
 /** sam, signing in with the single sign-on the server runs (the server says). */
 const ssoSam: AdminUser = { ...sam, sign_in_provider: 'Keycloak' };
 
-function personRoutes(
-  user: AdminUser,
-  over: Record<string, MockRoute> = {},
-  ident: OIDCIdentity = identity,
-) {
+function personRoutes(user: AdminUser, over: Record<string, MockRoute> = {}) {
   return signedInRoutes({
-    'GET /admin/users/2': { body: samDetail({ user, identities: [ident] }) },
+    'GET /admin/users/2': { body: samDetail({ user, identities: [identity] }) },
     ...over,
   });
 }
@@ -392,7 +388,13 @@ describe('a person’s single sign-on', () => {
   });
 
   it('names a provider since replaced by its host', async () => {
-    mockFetch(personRoutes(sam, {}, { ...identity, provider: '' }));
+    mockFetch(
+      personRoutes(sam, {
+        'GET /admin/users/2': {
+          body: samDetail({ user: sam, identities: [{ ...identity, provider: '' }] }),
+        },
+      }),
+    );
     renderApp('/people/user/2?tab=sign-in');
     expect(
       await screen.findByRole('region', { name: 'Signed in with sso.example.org' }),

@@ -240,11 +240,10 @@ export function useServerInfoLive() {
  * The single sign-on as the server runs it, and its provider's discovery (tried
  * when due by the request itself, so a minute's staleness is enough).
  */
-export function useOIDCStatus(enabled = true) {
+export function useOIDCStatus() {
   return useQuery({
     queryKey: keys.oidcStatus,
     queryFn: api.oidcStatus,
-    enabled,
     staleTime: 60_000,
   });
 }
