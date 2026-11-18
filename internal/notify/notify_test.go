@@ -637,7 +637,8 @@ func TestBridgeCommunityJobWording(t *testing.T) {
 // or failed; a park because no chapters were heard says what to do instead. A
 // finished one promises listeners the chapters only when they are the book's
 // now (chapters_source generated); else, or when that isn't known, it says
-// they were saved but the book uses other chapters.
+// they were saved but the book uses other chapters, and under an admin's edit
+// (saved while the job ran) that reverting it brings them in.
 func TestBridgeDetectJobWording(t *testing.T) {
 	t.Parallel()
 	s, _, _ := newService(t)
@@ -656,6 +657,12 @@ func TestBridgeDetectJobWording(t *testing.T) {
 			strings.Contains(m.Text, "Listeners see") || !strings.Contains(m.Text, "uses other chapters") {
 			t.Errorf("finished on %q chapters = %+v", src, m)
 		}
+	}
+	edited := event(KindBridgeJobFinished, "done")
+	edited.Data["chapters_source"] = catalog.ChaptersFromEdited
+	if m := compose(edited, s.server()); m.Title != "Chapters found: The Black Gate" ||
+		!strings.Contains(m.Text, "edited on this server. Revert the edit") || strings.Contains(m.Text, "chapter source") {
+		t.Errorf("finished on edited chapters = %+v", m)
 	}
 	if m := compose(event(KindBridgeJobFailed, "failed"), s.server()); m.Title != "Chapters failed: The Black Gate" {
 		t.Errorf("failed = %+v", m)

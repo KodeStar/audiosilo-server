@@ -20,6 +20,7 @@ import {
   titleOk,
   toBookTime,
   toFileTime,
+  timelineEnd,
   validateDraft,
 } from './chapters-edit-model';
 
@@ -34,6 +35,7 @@ function file(name: string, seq: number, duration: number): AdminFile {
     codec: 'mp3',
     size: 1000,
     bitrate: 0,
+    direct_playable: true,
   };
 }
 
@@ -66,14 +68,49 @@ const rows = (...r: [number, string, boolean?][]): DraftRow[] =>
 describe('the whole-book timeline', () => {
   it('lays the files end to end in play order, by the basis lengths', () => {
     expect(SPANS).toEqual([
-      { path: `${BOOK}/01.mp3`, name: '01.mp3', start: 0, end: 100 },
-      { path: `${BOOK}/02.mp3`, name: '02.mp3', start: 100, end: 150 },
+      {
+        path: `${BOOK}/01.mp3`,
+        name: '01.mp3',
+        start: 0,
+        end: 100,
+        playable: true,
+        remuxed: false,
+      },
+      {
+        path: `${BOOK}/02.mp3`,
+        name: '02.mp3',
+        start: 100,
+        end: 150,
+        playable: true,
+        remuxed: false,
+      },
     ]);
   });
 
   it('falls back to the file’s own length without a basis entry', () => {
     expect(fileSpans([file('01.mp3', 1, 12.3456)], BOOK, { files: [] })).toEqual([
-      { path: `${BOOK}/01.mp3`, name: '01.mp3', start: 0, end: 12.346 },
+      {
+        path: `${BOOK}/01.mp3`,
+        name: '01.mp3',
+        start: 0,
+        end: 12.346,
+        playable: true,
+        remuxed: false,
+      },
+    ]);
+  });
+
+  it('says which files a browser can’t play as stored', () => {
+    const mka = { ...file('01.mka', 1, 10), format: 'mka', codec: 'opus', direct_playable: false };
+    expect(fileSpans([mka], BOOK, { files: [] })[0].playable).toBe(false);
+  });
+
+  it('says which files the server plays as their MP3 remux', () => {
+    const mp3 = { ...file('01.MKA', 1, 10), format: 'mka', codec: 'mp3', direct_playable: true };
+    const opus = { ...file('02.mka', 2, 10), format: 'mka', codec: 'opus', direct_playable: false };
+    expect(fileSpans([mp3, opus], BOOK, { files: [] }).map((s) => s.remuxed)).toEqual([
+      true,
+      false,
     ]);
   });
 
@@ -238,6 +275,67 @@ describe('validateDraft', () => {
     expect(validateDraft(many, SPANS).first).toBe('too_many');
     // The second file's start is missing.
     expect(validateDraft(rows([0, 'One', true], [40, 'Two']), SPANS).first).toBe('file_start');
+  });
+
+  it('lets two files’ starts be under a second apart, never a chapter of the admin’s own', () => {
+    // A 400 ms file between two others (server#410).
+    const spans = fileSpans(
+      [file('01.mp3', 1, 100), file('02.mp3', 2, 0.4), file('03.mp3', 3, 50)],
+      BOOK,
+      { files: [] },
+    );
+    const fixed = rows([0, 'One', true], [100, 'Sting', true], [100.4, 'Two', true]);
+    expect(validateDraft(fixed, spans).first).toBeUndefined();
+    const own = rows([0, 'One', true], [100, 'Sting', true], [100.4, 'Two', true], [100.9, 'Mine']);
+    expect(Object.fromEntries(validateDraft(own, spans).rows)).toEqual({ k3: 'order' });
+  });
+
+  it('gives files that start together one row, and refuses two at the same moment', () => {
+    // The scan read no length for 02.mp3: it starts where 03.mp3 does.
+    const spans = fileSpans(
+      [file('01.mp3', 1, 100), file('02.mp3', 2, 0), file('03.mp3', 3, 50)],
+      BOOK,
+      { files: [] },
+    );
+    const draft = draftFromChapters([chapter(0, '01.mp3', 0, 100, 0)], spans);
+    expect(draft.map((r) => r.start)).toEqual([0, 100]);
+    expect(validateDraft(draft, spans).first).toBeUndefined();
+    const pasted = parseTimestamps('0:00 One\n1:40 Two', timelineEnd(spans));
+    expect(rowsFromPaste(pasted.chapters, spans, draft).map((r) => r.start)).toEqual([0, 100]);
+    // The server refuses two chapters at one moment, files' starts or not.
+    const twice = rows([0, 'One', true], [100, 'Two', true], [100, 'Three', true]);
+    expect(Object.fromEntries(validateDraft(twice, spans).rows)).toEqual({ k2: 'order' });
+  });
+
+  it('gives a file shorter than the snap its own row, not the row of the file before it', () => {
+    // 01.mp3 is one MP3 frame long: the chapter at 0 is its start, never 02.mp3's too.
+    const spans = fileSpans([file('01.mp3', 1, 0.026), file('02.mp3', 2, 100)], BOOK, {
+      files: [],
+    });
+    const draft = draftFromChapters(
+      [chapter(0, '01.mp3', 0, 0.026, 0), chapter(1, '02.mp3', 5, 100, 5.026)],
+      spans,
+    );
+    expect(draft.map((r) => [r.start, r.fixed])).toEqual([
+      [0, true],
+      [0.026, true],
+      [5.026, false],
+    ]);
+    expect(validateDraft(draft, spans).first).toBeUndefined();
+  });
+
+  it('asks no chapter of a last file of no length', () => {
+    // The scan read no length for 03.mp3: it starts at the book's end.
+    const spans = fileSpans(
+      [file('01.mp3', 1, 100), file('02.mp3', 2, 50), file('03.mp3', 3, 0)],
+      BOOK,
+      { files: [] },
+    );
+    const draft = draftFromChapters([chapter(0, '01.mp3', 0, 100, 0)], spans);
+    expect(draft.map((r) => r.start)).toEqual([0, 100]);
+    expect(validateDraft(draft, spans).first).toBeUndefined();
+    const pasted = parseTimestamps('0:00 One\n1:40 Two', timelineEnd(spans));
+    expect(rowsFromPaste(pasted.chapters, spans, draft).map((r) => r.start)).toEqual([0, 100]);
   });
 
   it('counts a title’s bytes, not its characters', () => {

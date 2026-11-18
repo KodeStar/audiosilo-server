@@ -1,10 +1,12 @@
 package catalog
 
 import (
+	"database/sql"
 	"errors"
 	"slices"
 	"testing"
 
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/chapteralign"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
@@ -112,26 +114,27 @@ func TestPlaceOnFiles(t *testing.T) {
 // its own is no fit.
 func TestSnapToFilesShortFile(t *testing.T) {
 	t.Parallel()
-	fileStarts := []int64{0, 1000, 1040} // the second file is 40 ms long
+	bounds := []int64{0, 1000, 1040, 2000} // the second file is 40 ms long
 	starts := []int64{0, 1002, 1039}
-	if !snapToFiles(starts, fileStarts) || !slices.Equal(starts, []int64{0, 1000, 1040}) {
+	if fixed, ok := snapToFiles(starts, bounds); !ok || !slices.Equal(starts, []int64{0, 1000, 1040}) ||
+		!slices.Equal(fixed, []bool{true, true, true}) {
 		t.Fatalf("each file its own chapter = %v, want [0 1000 1040]", starts)
 	}
 	// The 40 ms file has no chapter: the one before it is no stand-in.
 	starts = []int64{0, 1000}
-	if snapToFiles(starts, fileStarts) {
+	if _, ok := snapToFiles(starts, bounds); ok {
 		t.Fatalf("a file with no chapter fitted: %v", starts)
 	}
 	// Nearest wins, not first: 990 is the second file's, 1035 the third's.
 	starts = []int64{0, 990, 1035}
-	if !snapToFiles(starts, []int64{0, 1000, 1030}) || !slices.Equal(starts, []int64{0, 1000, 1030}) {
+	if _, ok := snapToFiles(starts, []int64{0, 1000, 1030, 2000}); !ok || !slices.Equal(starts, []int64{0, 1000, 1030}) {
 		t.Fatalf("nearest start = %v, want [0 1000 1030]", starts)
 	}
 	// A file of no length (one the scan read no length for) starts where the
 	// next file does: the one chapter there starts both, as in the console's
 	// editor (validateDraft), and it is placed in the file with the audio.
 	starts = []int64{0, 1003}
-	if !snapToFiles(starts, []int64{0, 1000, 1000}) || !slices.Equal(starts, []int64{0, 1000}) {
+	if _, ok := snapToFiles(starts, []int64{0, 1000, 1000, 1500}); !ok || !slices.Equal(starts, []int64{0, 1000}) {
 		t.Fatalf("a file of no length = %v, want [0 1000]", starts)
 	}
 	files := []BookFile{{RelPath: "A/1.mp3", Duration: 1000}, {RelPath: "A/2.mp3"}, {RelPath: "A/3.mp3", Duration: 500}}
@@ -160,19 +163,21 @@ func TestCheckChapterEdit(t *testing.T) {
 		chapters []EditedChapter
 		detail   string
 	}{
-		"none":              {nil, ChapterEditEmpty},
-		"too many":          {long, ChapterEditTooMany},
-		"before 0":          {[]EditedChapter{{0, "A"}, {-1, "B"}, {1800, "C"}}, ChapterEditOutOfRange},
-		"at the end":        {[]EditedChapter{{0, "A"}, {1800, "C"}, {3600, "D"}}, ChapterEditOutOfRange},
-		"rounds to the end": {[]EditedChapter{{0, "A"}, {1800, "C"}, {3599.9996, "D"}}, ChapterEditOutOfRange},
-		"empty title":       {[]EditedChapter{{0, "  "}, {1800, "C"}}, ChapterEditTitle},
-		"invisible title":   {[]EditedChapter{{0, "\u200b\u2800"}, {1800, "C"}}, ChapterEditTitle},
-		"long title":        {[]EditedChapter{{0, "A"}, {1800, title201}}, ChapterEditTitle},
-		"control character": {[]EditedChapter{{0, "A\tB"}, {1800, "C"}}, ChapterEditTitle},
-		"no file start":     {[]EditedChapter{{0, "A"}, {1700, "B"}}, ChapterEditFileStart},
-		"first not at 0":    {[]EditedChapter{{0.2, "A"}, {1800, "B"}}, ChapterEditFileStart},
-		"out of order":      {[]EditedChapter{{0, "A"}, {1800, "C"}, {900, "B"}}, ChapterEditOrder},
-		"under a second":    {[]EditedChapter{{0, "A"}, {0.999, "B"}, {1800, "C"}}, ChapterEditOrder},
+		"none":                         {nil, ChapterEditEmpty},
+		"too many":                     {long, ChapterEditTooMany},
+		"before 0":                     {[]EditedChapter{{0, "A"}, {-1, "B"}, {1800, "C"}}, ChapterEditOutOfRange},
+		"at the end":                   {[]EditedChapter{{0, "A"}, {1800, "C"}, {3600, "D"}}, ChapterEditOutOfRange},
+		"rounds to the end":            {[]EditedChapter{{0, "A"}, {1800, "C"}, {3599.9996, "D"}}, ChapterEditOutOfRange},
+		"empty title":                  {[]EditedChapter{{0, "  "}, {1800, "C"}}, ChapterEditTitle},
+		"invisible title":              {[]EditedChapter{{0, "\u200b\u2800"}, {1800, "C"}}, ChapterEditTitle},
+		"long title":                   {[]EditedChapter{{0, "A"}, {1800, title201}}, ChapterEditTitle},
+		"control character":            {[]EditedChapter{{0, "A\tB"}, {1800, "C"}}, ChapterEditTitle},
+		"no file start":                {[]EditedChapter{{0, "A"}, {1700, "B"}}, ChapterEditFileStart},
+		"first not at 0":               {[]EditedChapter{{0.2, "A"}, {1800, "B"}}, ChapterEditFileStart},
+		"out of order":                 {[]EditedChapter{{0, "A"}, {1800, "C"}, {900, "B"}}, ChapterEditOrder},
+		"under a second":               {[]EditedChapter{{0, "A"}, {0.999, "B"}, {1800, "C"}}, ChapterEditOrder},
+		"under a second before a file": {[]EditedChapter{{0, "A"}, {1799.5, "B"}, {1800, "C"}}, ChapterEditOrder},
+		"a file's start twice":         {[]EditedChapter{{0, "A"}, {1800, "B"}, {1800, "C"}}, ChapterEditOrder},
 	} {
 		_, err := checkChapterEdit(c.chapters, files)
 		if ce, ok := errors.AsType[*ChapterEditError](err); !ok || ce.Detail != c.detail {
@@ -446,5 +451,219 @@ func TestChapterEditFollowsAMoveNotAJoin(t *testing.T) {
 	var n int
 	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chapter_edits WHERE path = 'J'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("joined book's edits = %d, %v; want none", n, err)
+	}
+}
+
+// A file under a second long is editable (server#410): two files' starts are
+// fixed, so only a chapter of the admin's own needs the second apart. A last
+// file of no length (one the scan read no length for) starts no chapter: the
+// edit holds on the files before it, and goes dormant once that file reads a
+// length (its audio in no chapter of the edit).
+func TestChapterEditShortAndEmptyFiles(t *testing.T) {
+	t.Parallel()
+	short := []BookFile{{RelPath: "A/1.mp3", Duration: 600}, {RelPath: "A/2.mp3", Duration: 0.4}, {RelPath: "A/3.mp3", Duration: 600}}
+	entries, err := checkChapterEdit([]EditedChapter{{0, "A"}, {600, "Sting"}, {600.4, "B"}, {900, "C"}}, short)
+	if err != nil {
+		t.Fatalf("a 400 ms file: %v", err)
+	}
+	if got := placeOnFiles(entries, short, lengthsOf(short)); len(got) != 4 || got[1].FileIndex != 1 || got[1].End != 0.4 ||
+		got[2].FileIndex != 2 || got[2].BookOffset != 600.4 {
+		t.Fatalf("placed over a 400 ms file = %+v", got)
+	}
+	// A chapter of the admin's own still keeps the second from a file's start.
+	if _, err := checkChapterEdit([]EditedChapter{{0, "A"}, {600, "Sting"}, {600.4, "B"}, {600.9, "C"}}, short); err == nil {
+		t.Fatal("a chapter 500 ms after a file's start was taken")
+	}
+
+	trailing := []BookFile{{RelPath: "A/1.mp3", Duration: 600}, {RelPath: "A/2.mp3", Duration: 600}, {RelPath: "A/3.mp3"}}
+	entries, err = checkChapterEdit([]EditedChapter{{0, "A"}, {300, "B"}, {600, "C"}}, trailing)
+	if err != nil {
+		t.Fatalf("a last file of no length: %v", err)
+	}
+	want := []metadata.Chapter{{Index: 0, Title: "A", FilePath: "A/1.mp3", End: 300},
+		{Index: 1, Title: "B", FilePath: "A/1.mp3", Start: 300, End: 600, BookOffset: 300},
+		{Index: 2, Title: "C", FileIndex: 1, FilePath: "A/2.mp3", End: 600, BookOffset: 600}}
+	listed := lengthsOf(trailing)
+	if got := placeOnFiles(entries, trailing, listed); !slices.Equal(got, want) {
+		t.Fatalf("placed over a last file of no length = %+v\nwant %+v", got, want)
+	}
+	read := slices.Clone(trailing)
+	read[2].Duration = 120
+	if got := placeOnFiles(entries, read, listed); got != nil {
+		t.Fatalf("a file the edit had no length for reads one now: %+v, want dormant", got)
+	}
+	// One in the middle the same: no chapter of the edit holds its audio now.
+	mid := []BookFile{{RelPath: "A/1.mp3", Duration: 600}, {RelPath: "A/2.mp3"}, {RelPath: "A/3.mp3", Duration: 600}}
+	entries, err = checkChapterEdit([]EditedChapter{{0, "A"}, {600, "B"}}, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed = lengthsOf(mid)
+	mid[1].Duration = 30
+	if got := placeOnFiles(entries, mid, listed); got != nil {
+		t.Fatalf("a middle file the edit had no length for reads one now: %+v, want dormant", got)
+	}
+}
+
+// A one-file folder's file renamed in place keeps the folder's edit, matched
+// by its size as a loose file is (server#410); another size is other audio.
+func TestChapterEditOneFileFolderRenamed(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const p = "A/Book"
+	folder := func(name string, size int64) *Book {
+		f := p + "/" + name
+		return &Book{LibraryID: lib.ID, RelPath: p, IsFolder: true, Title: "Book", Duration: 3600, AddedAt: "2020-01-01T00:00:00Z",
+			Files:    []BookFile{{RelPath: f, Duration: 3600, Size: size}},
+			Chapters: []metadata.Chapter{{Index: 0, Title: "Whole", FilePath: f, End: 3600}}}
+	}
+	upsert(t, c, folder("Old name.m4b", 99))
+	if err := c.SaveChapterEdit(ctx, lib.ID, p, basisNow(t, c, lib.ID, p), []EditedChapter{{0, "A"}, {1800, "B"}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	upsert(t, c, folder("New name.m4b", 99))
+	if b := mustBook(t, c, ctx, lib.ID, p); b.ChaptersSource != ChaptersFromEdited ||
+		!slices.Equal(titlesOf(b), []string{"A", "B"}) || b.Chapters[1].FilePath != p+"/New name.m4b" {
+		t.Fatalf("renamed in its folder: %q from %q", titlesOf(b), b.ChaptersSource)
+	}
+	upsert(t, c, folder("New name.m4b", 100))
+	if b := mustBook(t, c, ctx, lib.ID, p); b.ChaptersSource != "" {
+		t.Fatalf("another file: %q from %q, want the files'", titlesOf(b), b.ChaptersSource)
+	}
+}
+
+// seedDetect is a chapters.detect job for the book at p in state, keyed as the
+// api queues it (bridge.DedupeKey); its id.
+func seedDetect(t *testing.T, c *Catalog, libID int64, p, state string) int64 {
+	t.Helper()
+	res, err := c.db.ExecContext(t.Context(),
+		`INSERT INTO bridge_jobs(kind, library_id, rel_path, state, params, dedupe_key, created_at, updated_at)
+		 VALUES(?, ?, ?, ?, '{}', ?, 't', 't')`,
+		bridge.KindDetectChapters, libID, p, state, bridge.DedupeKey(bridge.KindDetectChapters, &libID, &p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
+// jobState is a job's state, cancel_requested and error.
+func jobState(t *testing.T, c *Catalog, id int64) (state string, cancel bool, reason string) {
+	t.Helper()
+	var e sql.NullString
+	if err := c.db.QueryRowContext(t.Context(), `SELECT state, cancel_requested, error FROM bridge_jobs WHERE id = ?`, id).
+		Scan(&state, &cancel, &e); err != nil {
+		t.Fatal(err)
+	}
+	return state, cancel, e.String
+}
+
+// Saving an edit cancels the book's chapters.detect job while it is queued or
+// parked, and so does choosing its chapter source (server#410): the list it
+// would find is not used. It ends at once, with the server's reason. One the
+// Bridge is working on (claimed or running) is left to finish: its list stays
+// a fallback under the edit or the choice. Another book's job, and setting the
+// source back to automatic, cancel nothing.
+func TestChapterEditCancelsDetect(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	upsert(t, c, twoFiles(lib.ID, "A/Book"))
+	upsert(t, c, twoFiles(lib.ID, "B/Book"))
+	save := func() {
+		t.Helper()
+		if err := c.SaveChapterEdit(ctx, lib.ID, "A/Book", basisNow(t, c, lib.ID, "A/Book"), fourChapters, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	choose := func(p, source string) {
+		t.Helper()
+		if err := c.EditBook(ctx, lib.ID, p, BookEdit{ChapterSource: source}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// untouched fails unless the job is as it was seeded, then ends it, so the
+	// book can hold the next open job.
+	untouched := func(id int64, state, after string) {
+		t.Helper()
+		if st, cancel, why := jobState(t, c, id); st != state || cancel || why != "" {
+			t.Fatalf("%s detect after %s: %s cancel %v %q, want it left alone", state, after, st, cancel, why)
+		}
+		if _, err := c.db.ExecContext(ctx, `UPDATE bridge_jobs SET state = 'done' WHERE id = ?`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queued := seedDetect(t, c, lib.ID, "A/Book", "queued")
+	other := seedDetect(t, c, lib.ID, "B/Book", "queued")
+	save()
+	if st, _, why := jobState(t, c, queued); st != "cancelled" || why != bridge.CancelChaptersEdited {
+		t.Fatalf("queued detect after an edit: %s %q", st, why)
+	}
+	if st, cancel, _ := jobState(t, c, other); st != "queued" || cancel {
+		t.Fatalf("another book's detect: %s cancel %v", st, cancel)
+	}
+	parked := seedDetect(t, c, lib.ID, "A/Book", "needs_attention")
+	save()
+	if st, _, why := jobState(t, c, parked); st != "cancelled" || why != bridge.CancelChaptersEdited {
+		t.Fatalf("parked detect after an edit: %s %q", st, why)
+	}
+	for _, state := range []string{"claimed", "running"} {
+		id := seedDetect(t, c, lib.ID, "A/Book", state)
+		save()
+		untouched(id, state, "an edit")
+	}
+
+	choose("B/Book", ChapterSourceAuto)
+	if st, _, _ := jobState(t, c, other); st != "queued" {
+		t.Fatalf("detect after automatic: %s", st)
+	}
+	choose("B/Book", ChaptersFromFiles)
+	if st, _, why := jobState(t, c, other); st != "cancelled" || why != bridge.CancelChaptersChosen {
+		t.Fatalf("queued detect after a choice: %s %q", st, why)
+	}
+	parked = seedDetect(t, c, lib.ID, "B/Book", "needs_attention")
+	choose("B/Book", ChaptersFromFiles)
+	if st, _, why := jobState(t, c, parked); st != "cancelled" || why != bridge.CancelChaptersChosen {
+		t.Fatalf("parked detect after a choice: %s %q", st, why)
+	}
+	for _, state := range []string{"claimed", "running"} {
+		id := seedDetect(t, c, lib.ID, "B/Book", state)
+		choose("B/Book", ChaptersFromFiles)
+		untouched(id, state, "a choice")
+	}
+}
+
+// DetectRefused names a chosen source and an applied edit, and lets a
+// detection through with neither or with a dormant edit.
+func TestDetectRefused(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const p = "A/Book"
+	upsert(t, c, twoFiles(lib.ID, p))
+	if err := c.DetectRefused(ctx, mustBook(t, c, ctx, lib.ID, p)); err != nil {
+		t.Fatalf("no choice, no edit: %v", err)
+	}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{ChapterSource: ChaptersFromCommunity}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DetectRefused(ctx, mustBook(t, c, ctx, lib.ID, p)); !errors.Is(err, bridge.ErrChaptersChosen) {
+		t.Fatalf("a choice: %v, want ErrChaptersChosen", err)
+	}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{ChapterSource: ChapterSourceAuto}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SaveChapterEdit(ctx, lib.ID, p, basisNow(t, c, lib.ID, p), fourChapters, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DetectRefused(ctx, mustBook(t, c, ctx, lib.ID, p)); !errors.Is(err, bridge.ErrChaptersEdited) {
+		t.Fatalf("an applied edit: %v, want ErrChaptersEdited", err)
+	}
+	other := twoFiles(lib.ID, p)
+	other.Files[1].Size = 21
+	upsert(t, c, other)
+	if err := c.DetectRefused(ctx, mustBook(t, c, ctx, lib.ID, p)); err != nil {
+		t.Fatalf("a dormant edit: %v", err)
 	}
 }

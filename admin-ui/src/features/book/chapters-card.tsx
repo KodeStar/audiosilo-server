@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { AudioLines, Info, ListRestart, Lock, Pencil, Undo2 } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidateIssues, settleBookEdit, useLibraries, useServerInfo } from '@/api/hooks';
+import { invalidateIssues, keys, settleBookEdit, useLibraries, useServerInfo } from '@/api/hooks';
 import type { AdminBookDetail, AdminChapter, BookEditRequest, ChapterSource } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { InlineEdit } from '@/components/inline-edit';
@@ -98,6 +98,8 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
     try {
       settleBookEdit(qc, await api.editBook(b.library_id, b.path, { chapter_source: source }));
       invalidateIssues(qc);
+      // A choice cancels the book's chapter detection if it was queued or parked (server#410).
+      void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
       toast.add({ title: t('book.community.switched'), type: 'success' });
     } catch (err) {
       toastError(t('book.community.editFailed'), err);

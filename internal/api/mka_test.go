@@ -126,6 +126,57 @@ func (m *mkaEnv) directPlayable(t *testing.T, book string) bool {
 	return chapters.DirectPlayable
 }
 
+// adminFile is one file of the admin book page, as the console reads it.
+type adminFile struct {
+	DirectPlayable bool  `json:"direct_playable"`
+	RemuxCached    *bool `json:"remux_cached"`
+}
+
+// adminFiles is the admin book page's files of book, by path.
+func (m *mkaEnv) adminFiles(t *testing.T, book string) map[string]adminFile {
+	t.Helper()
+	return m.adminFilesAt(t, book, "")
+}
+
+// adminFilesWarm is adminFiles read as the chapter editor reads it (warm=1),
+// starting the remuxes not made yet.
+func (m *mkaEnv) adminFilesWarm(t *testing.T, book string) map[string]adminFile {
+	t.Helper()
+	return m.adminFilesAt(t, book, "&warm=1")
+}
+
+// adminFilesAt is adminFiles with extra appended to the page's query.
+func (m *mkaEnv) adminFilesAt(t *testing.T, book, extra string) map[string]adminFile {
+	t.Helper()
+	var d struct {
+		Files []struct {
+			Path string `json:"path"`
+			adminFile
+		} `json:"files"`
+	}
+	u := "/api/v1/admin/libraries/" + strconv.FormatInt(m.lib.ID, 10) + "/book?path=" + url.QueryEscape(book) + extra
+	resp, body := m.do(t, "GET", u, m.token, "")
+	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &d) != nil {
+		t.Fatalf("admin book %s = %d %s", book, resp.StatusCode, body)
+	}
+	out := map[string]adminFile{}
+	for _, f := range d.Files {
+		out[f.Path] = f.adminFile
+	}
+	return out
+}
+
+// filesPlayable is the admin book page's direct_playable for each of book's
+// files, by path.
+func (m *mkaEnv) filesPlayable(t *testing.T, book string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for path, f := range m.adminFiles(t, book) {
+		out[path] = f.DirectPlayable
+	}
+	return out
+}
+
 // cachedFiles counts the remuxed copies in the env's remux cache folder (not
 // the .part files of remuxes under way).
 func (m *mkaEnv) cachedFiles(t *testing.T) int {
@@ -185,6 +236,10 @@ func TestMatroskaAudioWithoutFFmpeg(t *testing.T) {
 			t.Errorf("%s direct_playable without ffmpeg, want false", book)
 		}
 	}
+	// The console's chapter editor plays these through a transcode.
+	if got := m.filesPlayable(t, mkaBook); got[mkaFile] {
+		t.Errorf("admin %s direct_playable without ffmpeg, want false", mkaFile)
+	}
 	if resp, _ := m.do(t, "GET", m.url("stream", mkaFile), m.token, ""); resp.StatusCode != http.StatusOK ||
 		resp.Header.Get("Content-Type") != "audio/x-matroska" {
 		t.Fatalf("stream = %d %q, want 200 audio/x-matroska", resp.StatusCode, resp.Header.Get("Content-Type"))
@@ -207,6 +262,15 @@ func TestMatroskaMP3IsRemuxed(t *testing.T) {
 	for book, want := range map[string]bool{mkaBook: true, mkaMixed: true, mkaAACBook: false} {
 		if got := m.directPlayable(t, book); got != want {
 			t.Errorf("%s direct_playable = %v, want %v", book, got, want)
+		}
+	}
+	// The admin book page says so per file too, so the console's chapter
+	// editor streams the remux rather than transcoding it (server#410).
+	for _, book := range []string{mkaBook, mkaMixed, mkaAACBook} {
+		for path, got := range m.filesPlayable(t, book) {
+			if want := path != mkaAACFile; got != want {
+				t.Errorf("admin %s direct_playable = %v, want %v", path, got, want)
+			}
 		}
 	}
 
@@ -419,6 +483,118 @@ func TestMatroskaRemuxWarmsOnItem(t *testing.T) {
 	m2.api.remux.Wait()
 	if n := m2.cachedFiles(t); n != 0 {
 		t.Fatalf("%d cached files with ffmpeg off, want none", n)
+	}
+}
+
+// TestMatroskaAdminBookSaysRemuxCached: the admin book page says per file
+// whether an MP3-in-MKA's remux is made (remux_cached), so the console's chapter
+// editor transcodes a cold one from its playhead rather than taking the live
+// transcode a cold stream answers with (one it can't seek), and starts the
+// cold ones' remuxes in the background without waiting for them when the
+// editor asks (warm=1). A plain read of the page warms nothing, so admin
+// browsing pushes no listener's copy out of the cache. Other files never carry
+// it, and with ffmpeg off nothing is warmed.
+func TestMatroskaAdminBookSaysRemuxCached(t *testing.T) {
+	t.Parallel()
+	m := newMKAEnv(t)
+	m.api.ffmpeg = "ffmpeg"
+
+	read := func(book, path string, warm bool) *bool {
+		t.Helper()
+		files := m.adminFiles
+		if warm {
+			files = m.adminFilesWarm
+		}
+		f, ok := files(t, book)[path]
+		if !ok {
+			t.Fatalf("admin %s has no file %s", book, path)
+		}
+		return f.RemuxCached
+	}
+	cached := func(book, path string) *bool {
+		t.Helper()
+		return read(book, path, false)
+	}
+	// A view of the page says the copy is not made and starts none.
+	if got := cached(mkaBook, mkaFile); got == nil || *got {
+		t.Fatalf("remux_cached on a view = %v, want false", got)
+	}
+	m.api.remux.Wait()
+	if n := m.cachedFiles(t); n != 0 {
+		t.Fatalf("%d cached files after a view of the page, want none", n)
+	}
+
+	release := holdRuns(t, m.api.remux)
+	// Held: the editor's read answers at once, the copy not made yet.
+	if got := read(mkaBook, mkaFile, true); got == nil || *got {
+		t.Fatalf("remux_cached before the remux = %v, want false", got)
+	}
+	if n := m.cachedFiles(t); n != 0 {
+		t.Fatalf("%d cached files while held, want none yet", n)
+	}
+	release()
+	m.api.remux.Wait()
+	if n := m.cachedFiles(t); n != 1 {
+		t.Fatalf("%d cached files after the page's warm, want the book's one", n)
+	}
+	if got := cached(mkaBook, mkaFile); got == nil || !*got {
+		t.Fatalf("remux_cached after the warm = %v, want true", got)
+	}
+	// An AAC .mka is no remux, and neither is a plain MP3 part.
+	if got := cached(mkaAACBook, mkaAACFile); got != nil {
+		t.Errorf("AAC .mka remux_cached = %v, want absent", *got)
+	}
+	for path, f := range m.adminFilesWarm(t, mkaMixed) {
+		if path != mkaMixedPart && f.RemuxCached != nil {
+			t.Errorf("%s remux_cached = %v, want absent", path, *f.RemuxCached)
+		}
+	}
+	m.api.remux.Wait()
+	if n := m.cachedFiles(t); n != 2 {
+		t.Fatalf("%d cached files after the mixed book's page, want its .mka part too", n)
+	}
+
+	// A podcast episode's stream never remuxes: its page says nothing of one.
+	pods := *m.lib
+	pods.Kind = catalog.KindPodcasts
+	files := []catalog.AdminFile{{Path: mkaFile, Format: "mka", Codec: "mp3"}}
+	m.api.adminRemuxes(context.Background(), &pods, files, true)
+	if f := files[0]; f.RemuxCached != nil || f.DirectPlayable {
+		t.Errorf("podcast .mka remux_cached = %v, direct_playable %v; want absent and false", f.RemuxCached, f.DirectPlayable)
+	}
+
+	// With ffmpeg off there is no remux to say anything of, and nothing warms.
+	m2 := newMKAEnv(t)
+	if got := m2.adminFilesWarm(t, mkaBook)[mkaFile]; got.RemuxCached != nil || got.DirectPlayable {
+		t.Fatalf("without ffmpeg remux_cached = %v, direct_playable %v; want absent and false", got.RemuxCached, got.DirectPlayable)
+	}
+	m2.api.remux.Wait()
+	if n := m2.cachedFiles(t); n != 0 {
+		t.Fatalf("%d cached files with ffmpeg off, want none", n)
+	}
+}
+
+// TestMatroskaAdminBookRefusedRemux: an MP3-in-MKA (as indexed) whose remux
+// ffmpeg refuses is served as stored, which no browser plays: the admin book
+// page then says it is no remux (direct_playable false, no remux_cached), so
+// the chapter editor transcodes it and waits for no copy that never comes.
+func TestMatroskaAdminBookRefusedRemux(t *testing.T) {
+	t.Parallel()
+	m := newMKAEnv(t)
+	m.api.ffmpeg = "ffmpeg"
+	// AAC inside where the index says MP3: the remux's mp3 muxer refuses it.
+	aac, err := os.ReadFile(filepath.Join(m.lib.Root, filepath.FromSlash(mkaAACFile)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.lib.Root, filepath.FromSlash(mkaFile)), aac, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.adminFilesWarm(t, mkaBook) // warms it
+	m.api.remux.Wait()
+	got := m.adminFiles(t, mkaBook)[mkaFile]
+	if got.RemuxCached != nil || got.DirectPlayable {
+		t.Fatalf("refused remux_cached = %v, direct_playable %v; want absent and false", got.RemuxCached, got.DirectPlayable)
 	}
 }
 

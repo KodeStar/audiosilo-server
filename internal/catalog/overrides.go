@@ -1084,7 +1084,7 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		}
 	}
 	if edit.ChapterSource != "" {
-		if err := setChapterChoice(ctx, tx, Ref{LibraryID: ref.LibraryID, Path: path}, edit.ChapterSource, editor, now); err != nil {
+		if err := c.setChapterChoice(ctx, tx, Ref{LibraryID: ref.LibraryID, Path: path}, edit.ChapterSource, editor, now); err != nil {
 			return err
 		}
 	}

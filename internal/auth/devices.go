@@ -55,7 +55,9 @@ type Presence struct {
 // app it last reported. DeviceID is the device the request acts for: ID itself,
 // or for a cast token (KindCast) the sender's token that minted it, so what a
 // receiver streams counts toward the sender's listening session. Book is a cast
-// token's book (its grant's library-relative path), "" for every other kind.
+// token's book (its grant's library-relative path), "" for every other kind,
+// and Editor marks a cast token minted for the console's chapter editor
+// (IssueEditorToken), not a Cast receiver.
 type Credential struct {
 	ID         int64
 	Kind       string
@@ -63,6 +65,7 @@ type Credential struct {
 	DeviceName string
 	Client     ClientInfo
 	Book       string
+	Editor     bool
 }
 
 // Device is a signed-in token as the admin console lists it: a session (a paired

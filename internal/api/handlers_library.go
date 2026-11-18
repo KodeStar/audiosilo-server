@@ -878,34 +878,67 @@ func (a *API) directPlayable(book *catalog.Book) bool {
 // warmRemux starts, in the background, the remuxes of the book's MP3-in-MKA
 // files while the remux is on, so the player's first stream finds them cached
 // (a cold remux of a long file takes seconds, past a player's stall timer). It
-// never blocks: media.FileCache.WarmAll runs them one at a time under the
-// server's context, skipping the cached and the known refusals. A podcast
-// library's episodes are not warmed: their stream never remuxes. Each file's
-// join is a metadata.Bounded call (ctx, at most fileWait): on a share that
-// stopped answering none is warmed, and the request goes on. It reports false
-// when a join went unanswered (metadata.Unanswered): the book's share is not
-// answering, for a caller with more looks to make there (handleItem).
+// never blocks (warmRemuxes). It reports false when a join went unanswered
+// (metadata.Unanswered): the book's share is not answering, for a caller with
+// more looks to make there (handleItem).
 func (a *API) warmRemux(ctx context.Context, lib *catalog.Library, book *catalog.Book) (answering bool) {
-	if !a.remuxOn() || lib.Kind == catalog.KindPodcasts {
+	if !a.remuxing(lib) {
 		return true
 	}
-	var paths []string
+	var rels []string
 	for _, f := range book.Files {
-		if !book.FileRemuxable(f) {
-			continue
-		}
-		abs, err := library.SafeJoinBounded(ctx, lib.Root, f.RelPath, a.fileWait)
-		if metadata.Unanswered(ctx, err) {
-			return false
-		}
-		if err == nil {
-			paths = append(paths, abs)
+		if book.FileRemuxable(f) {
+			rels = append(rels, f.RelPath)
 		}
 	}
-	if len(paths) > 0 {
+	_, answering = a.warmRemuxes(ctx, lib, rels)
+	return answering
+}
+
+// remuxing reports whether lib's MP3-in-MKA files are served as their remux:
+// the remux is on, and lib is no podcast library (an episode's stream never
+// remuxes).
+func (a *API) remuxing(lib *catalog.Library) bool {
+	return a.remuxOn() && lib.Kind != catalog.KindPodcasts
+}
+
+// warmRemuxes joins rels (MP3-in-MKA files of one book) to lib's root and
+// starts their remuxes in the background: media.FileCache.WarmAll runs them
+// one at a time under the server's context, skipping the cached and the known
+// refusals, and runs one book's list once however often it is asked (by its
+// first path, so every caller passes the book's whole list). Each join is a
+// metadata.Bounded call (ctx, at most fileWait): on a share that stopped
+// answering none is warmed and the rest are not looked at (answering false).
+// abs holds each rel's path, "" for one not joined.
+func (a *API) warmRemuxes(ctx context.Context, lib *catalog.Library, rels []string) (abs []string, answering bool) {
+	abs, answering = a.joinRemuxes(ctx, lib, rels)
+	if answering {
+		var paths []string
+		for _, p := range abs {
+			if p != "" {
+				paths = append(paths, p)
+			}
+		}
 		a.remux.WarmAll(a.baseCtx, a.ffmpeg, paths)
 	}
-	return true
+	return abs, answering
+}
+
+// joinRemuxes is warmRemuxes' joins without the warm: abs holds each rel's
+// path under lib's root, "" for one not joined, and answering is false (the
+// rest not looked at) once a join went unanswered.
+func (a *API) joinRemuxes(ctx context.Context, lib *catalog.Library, rels []string) (abs []string, answering bool) {
+	abs = make([]string, len(rels))
+	for i, rel := range rels {
+		p, err := library.SafeJoinBounded(ctx, lib.Root, rel, a.fileWait)
+		if metadata.Unanswered(ctx, err) {
+			return abs, false
+		}
+		if err == nil {
+			abs[i] = p
+		}
+	}
+	return abs, true
 }
 
 // remuxColdWait is how long a stream request waits for a remux that isn't
@@ -1159,10 +1192,23 @@ func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloa
 	if downloadName != "" {
 		media.SetAttachment(w.Header(), downloadName)
 	}
-	if err := media.Transcode(w, r, abs, a.ffmpeg, start, waitLeft(deadline), a.log); err != nil {
+	if err := media.Transcode(w, r, abs, a.ffmpeg, start, waitLeft(deadline), transcodeIdleFor(r), a.log); err != nil {
 		w.Header().Del("Content-Disposition")
 		writeShareNotAnswering(w)
 	}
+}
+
+// transcodeIdleFor is how long r's transcode waits for its client to read
+// before it ends: media.TranscodeIdle for the console's chapter editor (its
+// cast token, auth.Credential.Editor), which asks for its stream again after a
+// 10 s pause; 0 (no idle end) for every other client. The web player does not
+// ask again for a transcode it loaded but never played, so it would stall
+// after a long wait, and a Cast receiver asks for nothing again on resume.
+func transcodeIdleFor(r *http.Request) time.Duration {
+	if c := credentialFrom(r.Context()); c.Kind == auth.KindCast && c.Editor {
+		return media.TranscodeIdle
+	}
+	return 0
 }
 
 // serveRemuxed answers with abs's remuxed MP3 (media.NewRemuxer) with Range and

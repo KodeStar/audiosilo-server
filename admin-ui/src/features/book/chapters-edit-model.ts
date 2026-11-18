@@ -17,7 +17,10 @@ import { fileName, sortFiles } from './book-model';
 
 /** The server's rules on an edited list (the 400 chapters_invalid details). */
 export const MAX_CHAPTERS = 2000;
-/** Consecutive chapters start at least this far apart (seconds). */
+/**
+ * Consecutive chapters start at least this far apart (seconds), unless both are
+ * files' starts (fixed rows): a file under a second long is still editable.
+ */
 export const MIN_GAP = 1;
 /** A title is 1 to this many bytes of UTF-8. */
 export const MAX_TITLE_BYTES = 200;
@@ -42,6 +45,14 @@ export interface FileSpan {
   /** Whole-book seconds where it starts and ends. */
   start: number;
   end: number;
+  /** Whether a browser plays it as stored (AdminFile.direct_playable); else the scrubber transcodes it. */
+  playable: boolean;
+  /**
+   * An .mka the server plays as its MP3 remux (playable): until that copy is
+   * made (AdminFile.remux_cached), the server answers with a live transcode
+   * from the file's start instead, which can't be seeked (handleStream).
+   */
+  remuxed: boolean;
 }
 
 /** One row of the editor. A file-start row is fixed: its title is editable, its time is not. */
@@ -70,9 +81,28 @@ export function fileSpans(files: AdminFile[], bookPath: string, basis: ChapterBa
   return sortFiles(files).map((f) => {
     const start = at;
     at += lengthMs(f);
-    return { path: f.path, name: fileName(f.path, bookPath), start: start / 1000, end: at / 1000 };
+    return {
+      path: f.path,
+      name: fileName(f.path, bookPath),
+      start: start / 1000,
+      end: at / 1000,
+      playable: f.direct_playable,
+      // media.Remuxable's rule; direct_playable says the server's remux is on.
+      remuxed: f.direct_playable && /^mka$/i.test(f.format) && /^mp3$/i.test(f.codec),
+    };
   });
 }
+
+/**
+ * The spans that start a chapter (the server's rule: catalog snapToFiles): one
+ * per start, of files that start together (one of no length before another) the
+ * last, the one with audio; none for a last file of no length (one the scan read
+ * no length for), which starts at the book's end, where no chapter can.
+ */
+const startingSpans = (spans: FileSpan[]) => {
+  const end = timelineEnd(spans);
+  return spans.filter((s, i) => s.start < end && s.start !== spans[i + 1]?.start);
+};
 
 /** The book's length on the timeline (the last file's end). */
 export const timelineEnd = (spans: FileSpan[]) => spans.at(-1)?.end ?? 0;
@@ -148,9 +178,13 @@ export function draftFromChapters(chapters: AdminChapter[], spans: FileSpan[]): 
     }))
     .sort((a, b) => a.start - b.start);
   const own = [...rows];
-  for (const span of spans) {
-    const at = nearest(own, span.start, FILE_START_SLACK);
+  // Each file takes a chapter no file before it took (the server's rule), so a
+  // file shorter than the slack doesn't take the chapter of the file before it.
+  const taken = new Set<DraftRow>();
+  for (const span of startingSpans(spans)) {
+    const at = nearest(own, span.start, FILE_START_SLACK, taken);
     if (at) {
+      taken.add(at);
       at.start = roundMs(span.start);
       at.fixed = true;
       continue;
@@ -270,12 +304,15 @@ export function validateDraft(rows: DraftRow[], spans: FileSpan[]): Validation {
   const end = timelineEnd(spans);
   const sorted = byStart(rows);
   sorted.forEach((r, i) => {
+    const prev = sorted[i - 1];
+    // Two files' starts may be closer than MIN_GAP, never at the same moment.
+    const gap = prev ? roundMs(r.start - prev.start) : Infinity;
     if (r.start < 0 || r.start >= end) out.set(r.key, 'out_of_range');
-    else if (i > 0 && roundMs(r.start - sorted[i - 1].start) < MIN_GAP) out.set(r.key, 'order');
+    else if (gap <= 0 || (gap < MIN_GAP && !(r.fixed && prev?.fixed))) out.set(r.key, 'order');
     else if (!titleOk(r.title)) out.set(r.key, 'title');
   });
   const starts = new Set(sorted.map((r) => r.start));
-  const fileStart = spans.some((s) => !starts.has(roundMs(s.start)));
+  const fileStart = startingSpans(spans).some((s) => !starts.has(roundMs(s.start)));
   const order: InvalidDetail[] = ['out_of_range', 'order', 'title'];
   const first = fileStart ? 'file_start' : order.find((d) => [...out.values()].includes(d));
   return { rows: out, first };
@@ -393,7 +430,7 @@ export function rowsFromPaste(
   current: DraftRow[],
 ): DraftRow[] {
   const used = new Set<PastedChapter>();
-  const rows: DraftRow[] = spans.map((span) => {
+  const rows: DraftRow[] = startingSpans(spans).map((span) => {
     const at = nearest(pasted, span.start, MIN_GAP, used);
     if (at) used.add(at);
     const before = pasted.filter((p) => p.start < span.start).at(-1);

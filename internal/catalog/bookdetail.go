@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path"
 
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/relpath"
 )
@@ -90,6 +91,15 @@ type AdminFile struct {
 	Codec    string  `json:"codec"`
 	Size     int64   `json:"size"`
 	Bitrate  int64   `json:"bitrate"`
+	// DirectPlayable is media.DirectPlayable for the file (the API adds an
+	// MP3 in .mka while it remuxes them): false for one a browser can't play
+	// as stored (Opus or FLAC in .mka, ALAC, AC-3), which the console's
+	// chapter editor plays through ?transcode=1.
+	DirectPlayable bool `json:"direct_playable"`
+	// RemuxCached is set by the API on an MP3 in .mka while it remuxes them:
+	// whether its remuxed copy is made (api adminRemuxes). Absent on every
+	// other file.
+	RemuxCached *bool `json:"remux_cached,omitempty"`
 }
 
 // Listener is one user's progress on the book.
@@ -233,7 +243,8 @@ func adminFiles(b AdminBook, files []BookFile) []AdminFile {
 		if codec == "" {
 			codec = b.Codec // parts indexed before per-file codecs were recorded
 		}
-		af := AdminFile{Path: f.RelPath, Seq: f.Seq, Duration: f.Duration, Format: f.Format, Codec: codec, Size: f.Size}
+		af := AdminFile{Path: f.RelPath, Seq: f.Seq, Duration: f.Duration, Format: f.Format, Codec: codec, Size: f.Size,
+			DirectPlayable: media.DirectPlayable(f.Format, codec)}
 		if f.Duration > 0 {
 			af.Bitrate = int64(float64(f.Size*8) / f.Duration)
 		}

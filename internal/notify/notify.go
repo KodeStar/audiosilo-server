@@ -466,8 +466,13 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		// Found chapters stand in only when the book has no other source (one
 		// an admin chose, or the community's, keeps them out of the player), so
 		// they are promised to listeners only when they are the book's now.
+		// Under an admin's edit (saved while the job ran) they are a fallback
+		// only: the chapter source can't put them over it.
 		if str("job_kind") == bridge.KindDetectChapters && str("chapters_source") != catalog.ChaptersFromGenerated {
 			m.Text = "The chapters were saved, but the book uses other chapters. Choose its chapter source on the book page."
+			if str("chapters_source") == catalog.ChaptersFromEdited {
+				m.Text = "The chapters were saved, but the book uses the chapters edited on this server. Revert the edit on the book page to use them."
+			}
 		}
 		// A read-along says how much of the ebook lined up with the narration.
 		if c, ok := ev.Data["coverage"].(float64); ok && str("job_kind") == bridge.KindReadalong {

@@ -270,9 +270,49 @@ const pathQuery = (path: string) => `?${new URLSearchParams({ path }).toString()
 /**
  * An audio file's stream URL for an <audio> element: `token` is a book media token
  * (api.bookMediaToken), never the session's, which would leak into logs and history.
+ * With `transcodeFrom`, the file's live MP3 transcode from that many seconds into
+ * it (?transcode=1&t=), for a file no browser plays as stored.
  */
-export const streamUrl = (libraryId: number, path: string, token: string) =>
-  `${API}/libraries/${libraryId}/stream?${new URLSearchParams({ path, token }).toString()}`;
+export const streamUrl = (
+  libraryId: number,
+  path: string,
+  token: string,
+  transcodeFrom?: number,
+) => {
+  const q = new URLSearchParams({ path, token });
+  if (transcodeFrom !== undefined) {
+    q.set('transcode', '1');
+    q.set('t', String(transcodeFrom));
+  }
+  return `${API}/libraries/${libraryId}/stream?${q.toString()}`;
+};
+
+/**
+ * How long to wait before asking for a transcode again, in seconds, after its
+ * <audio> failed (an <audio> can't read the answer's status): the server's
+ * Retry-After when it had no transcode slot free (503 with one), 0 when the
+ * stream is there after all, undefined for any other answer or none (a token
+ * that ran out, a file gone, no ffmpeg). The answer's body is let go of at once:
+ * a transcode it started holds a slot until then.
+ */
+export async function transcodeRetryAfter(
+  url: string,
+  signal?: AbortSignal,
+): Promise<number | undefined> {
+  try {
+    const res = await fetch(url, { signal });
+    void res.body?.cancel().catch(() => {});
+    if (res.ok) return 0;
+    const wait = Number(res.headers.get('Retry-After'));
+    if (res.status !== 503 || !Number.isFinite(wait) || wait <= 0) return undefined;
+    return Math.min(wait, TRANSCODE_RETRY_MAX_S);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The longest wait a busy transcode's Retry-After is taken at its word for (seconds). */
+const TRANSCODE_RETRY_MAX_S = 30;
 
 /**
  * The filters GET /admin/books and /admin/books/facets share
@@ -775,8 +815,15 @@ export const api = {
       'GET',
       `/admin/series${bookQuery({ library_id: libraryId })}`,
     ),
-  adminBook: (libraryId: number, path: string) =>
-    request<AdminBookDetail>('GET', `/admin/libraries/${libraryId}/book${pathQuery(path)}`),
+  /**
+   * The book page. `warm` (the chapter editor's ask, and only its) has the server
+   * start the remuxes of its MP3-in-.mka files not made yet; a plain read starts none.
+   */
+  adminBook: (libraryId: number, path: string, warm = false) =>
+    request<AdminBookDetail>(
+      'GET',
+      `/admin/libraries/${libraryId}/book${pathQuery(path)}${warm ? '&warm=1' : ''}`,
+    ),
   /** Sets or reverts overrides; answers with the updated book page. */
   editBook: (libraryId: number, path: string, edit: BookEditRequest) =>
     request<AdminBookDetail>('PATCH', `/admin/libraries/${libraryId}/book${pathQuery(path)}`, edit),

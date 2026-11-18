@@ -1441,7 +1441,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`media.TranscodeOpened`, server#181) is ffmpeg's stdin read seekably as `fd:` (input seek, and a
   non-faststart m4a demuxes) when the ffmpeg lists the fd input protocol (`inputFor`: probed once
   per ffmpeg path, `-protocols`, 5 s, asked again after a probe that couldn't run), else the old
-  `pipe:0` with an output seek. A HEAD gets the transcode's headers without an ffmpeg run. The scanner records each
+  `pipe:0` with an output seek. A HEAD gets the transcode's headers without an ffmpeg run. The console's chapter
+  editor's transcode (its cast token, `auth.Credential.Editor`) that it has read nothing of for 10 minutes
+  (`media.TranscodeIdle`: each write gets a write deadline, `copyIdle`) is ended with its ffmpeg, freeing its slot:
+  a paused `<audio>` keeps its connection open while it reads nothing, and the editor asks for its stream again
+  after a 10 s pause. Every other client's transcode gets no idle end (`transcodeIdleFor`): the web player asks
+  again only after a pause of 30 s once played (`TRANSCODE_STALE_PAUSE_MS`), not for a track loaded and never
+  played, and a Cast receiver asks for nothing again on resume. The scanner records each
   book's audio `codec` (ffprobe `codec_name`, `0008` migration); `item`/`chapters`
   expose `direct_playable` (`Book.PlaysInBrowsers`: `media.DirectPlayable` of the book's format and
   codec, and every file's container) so a client knows when to
@@ -3144,10 +3150,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `sidecars.generate` job is open for the book (that run finds them itself), 409 `describe_open`
   (`ErrDescribeOpen`) while a `sidecars.describe` job is (both rewrite the book's bridge.json on the Bridge;
   a describe is refused 409 `detect_open` while a detect job is open, the other way round), and 409
-  `chapters_chosen` (`ErrChaptersChosen`, checked by the api's queue handler from `catalog.ChapterChoice`)
+  `chapters_chosen` (`ErrChaptersChosen`, answered by `catalog.DetectRefused`, the queue handler's one check)
   for a book whose chapter source an admin chose (files or community: a found list stands in only with no
   choice, so it would never be used), and 409 `chapters_edited` (`ErrChaptersEdited`) for a book whose edited
-  chapters apply (Edited chapters); a NEW `sidecars.generate` is refused 409 `detect_open` (`ErrDetectOpen`)
+  chapters apply (Edited chapters); making such a choice or saving an edit cancels the book's detect job in
+  its transaction while it is QUEUED or PARKED (`bridge.CancelWaitingBookJob`, reasons `CancelChaptersChosen`
+  "a chapter source was chosen for the book" and `CancelChaptersEdited` "the book's chapters were edited in the
+  console", server#410). One the Bridge is working on (claimed or running) is left to finish: its work is
+  under way, and its list stays the book's fallback, dormant under the edit or the choice and used again once
+  that is reverted (its finished event and notification say the book uses the edited chapters and to revert the
+  edit, `detectUnusedEdited`); a NEW `sidecars.generate` is refused 409 `detect_open` (`ErrDetectOpen`)
   only while a detect job is queued, claimed or running, since cancelling it would throw its transcription
   away and the generate run after it reuses it, while a PARKED one (`chapters_not_detected`, a person's
   decision) is cancelled by the new generate job in its transaction ("it finds the chapters itself"), as
@@ -3256,8 +3268,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `cancel_requested`), since the generate run writes the description itself. Notifications word a detect
   job as the chapters ("Chapters found: <book>"; the event carries the book's `chapters_source` once done,
   read after the Bridge's attachments rescan, and the message promises "Listeners see them in the player now."
-  only when it is `generated`, else says they were saved but the book uses other chapters; the bell's body
-  says so too, `detectUnused`), and its `chapters_not_detected` park (no headings were heard;
+  only when it is `generated`, else says they were saved but the book uses other chapters (under an edit saved
+  while it ran, `edited`: that reverting the edit brings them in); the bell's body says so too, `detectUnused`
+  and `detectUnusedEdited`), and its `chapters_not_detected` park (no headings were heard;
   a person's decision) says to add markers or match the book to a recording with a chapter list. The
   console's Health `no_chapters` offers **Detect chapters** (row and bulk; `fixFor` + `detectAvailable`: an
   online Bridge with the `chapters` feature): `health/detect-chapters-dialog.tsx` confirms with the
@@ -4545,13 +4558,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it was made on (book-relative path, size, `duration_ms`). It is the FIRST source: `applyChapterSource` reads it
   before the choice (edited > choice/community > generated > files) and uses it (`applyEdited`) while its files are
   the book's (`listedOrder`, as a chapters.json: path and size; in another play order its chapters move with their
-  files, `chaptersInOrder`; a single-file book's one file by size alone, so a renamed file keeps its edit), placed
+  files, `chaptersInOrder`; a book of one file, loose or in its folder, by that file's size alone, so a renamed
+  file keeps its edit, server#410), placed
   by the pure `placeOnFiles` (each chapter in the file its start falls in, at the same place in it by the lengths the
   list was made on, to the next start or the file's end, its book offset on the files' lengths now; so another probe
   reading a file a little longer or shorter moves no chapter in its audio, and one at or past its file's end now
-  leaves the edit dormant; a start within 50 ms of a file's start is that file's first chapter, each file taking the
+  leaves the edit dormant, as does a file the list gave no length that reads one now (its audio would be in no
+  chapter); a start within 50 ms of a file's start is that file's first chapter, each file taking the
   nearest start no file before it took (`snapToFiles`, so a file under 100 ms never takes its neighbour's; a file
-  of no length shares the next file's, as in the console's editor); file starts are the
+  of no length shares the next file's, as in the console's editor, and one at the end starts none); file starts are the
   sums of the files' lengths in whole milliseconds, `fileStartsMS`, as the console sums the basis); on other files it is dormant (the next source's
   chapters, never applied to other audio) and applies again when the files come back. `chapters_source = "edited"`
   (`ChaptersFromEdited`, never a choice), `chapters_fit` = `listFitKey(list, "", files)`. No chapter crosses a file:
@@ -4563,7 +4578,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the admin row `edited`. Routes (admin only, audited `book.chapters_edited` / `book.chapters_reverted`): `PUT
   /admin/libraries/{id}/book/chapters?path=` `{"basis": <the page's chapter_basis>, "chapters": [{"start": <whole-book
   s, kept to the ms>, "title"}]}` -> the book page; 400 `{"error":"chapters_invalid","code":"chapters_invalid",
-  "detail": empty|too_many (> 2000)|order (< 1 s apart or out of order)|out_of_range (< 0 or at or past the end)|title
+  "detail": empty|too_many (> 2000)|order (< 1 s apart, unless both are files' starts, so a file under a second
+  is editable; or out of order)|out_of_range (< 0 or at or past the end)|title
   (1-200 bytes trimmed, no control character: `metadata.ListChapterTitle`, the chapters.json rule)|file_start}`; 409
   `chapters_basis` when the basis is not the book's files now (path, size, `duration_ms`, in play order); 409
   `not_book_library` in a podcast library; 404 no book; a body without `basis` or with an unknown field is 400.
@@ -4571,11 +4587,42 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`{state: applied|dormant, edited_by: username|null, edited_at}`, omitted with none) and `chapter_basis` (`{files:
   [{path, size, duration_ms}]}`, always); `chapter_source` and the player's `chapters_source` may be `"edited"` (an
   old app shows ordinary chapters). The editor's player streams the chosen row's file with an editor token
-  (`POST /cast/token` with `"editor": true`, Cast tokens above), never the session token; the console offers no
+  (`POST /cast/token` with `"editor": true`, Cast tokens above), never the session token; a file the book page's
+  `files[].direct_playable` (`media.DirectPlayable`, and true for an MP3 in .mka while the server remuxes them, as
+  `/item`'s is: `writeBookDetail`) says no browser plays as stored (Opus or FLAC in .mka, ALAC,
+  AC-3) is played through `?transcode=1&t=` when the server has ffmpeg (`capabilities.transcode`), each move of the
+  playhead asking again from there (never from the file's last second, which would leave ffmpeg no audio; a start
+  set at the playhead plays on; a move is forgotten once another row is chosen, so a row chosen again starts at its
+  start). ONE `<audio>` plays every row, its src changed (or loaded again for the same URL) and `play()` called on
+  it, so Safari, which lets an element play unprompted only once a click has played it, plays on after a move; a
+  new src lets go of the old stream, so its ffmpeg frees its transcode slot, and a closed editor removes the src
+  once the element has left the page (never in the ref cleanup StrictMode runs on mount) (server#410). A
+  transcode is asked for only to play (`preload="none"` unless asked to play): a row chosen or a move made while
+  paused starts no ffmpeg, the playhead shown set from the stream's start; one that has played and stays paused
+  10 s (`PAUSED_HOLD_MS`) is asked for again from the playhead, not to play, which closes its stream and frees the
+  slot. An MP3 in .mka (`direct_playable` true) whose remux is not cached yet would be answered with a live
+  transcode from the file's start (`serveRemuxed`), which can't be seeked: the book page says per such file
+  whether its copy is made (`files[].remux_cached`, `adminRemuxes`; absent on every other file, and on one the remux
+  refused, which is then not `direct_playable`); its GET with `warm=1`, which only the editor sends (once as it
+  opens with a copy still to come, and on each re-read), warms the copies not made (`media.FileCache.WarmAll`, as
+  `/item` does), while a view of the page, a save's reply or any other answer with the page warms nothing, so
+  browsing the console pushes no listener's copy out of the cache. The editor plays a cold one as a transcode
+  from the playhead, reads the page again every 5 s (`REMUX_POLL_MS`, one read at a time, a failed one let go so it
+  never takes the page and its draft down) while that file is chosen and its copy still to come, and plays the
+  copy from the playhead once it is made and the audio is not playing (never by the `<audio>`'s duration, which
+  Safari may report finite for a live stream). An ask a seek was made since leaves that seek waiting (`seeks`),
+  and Play after a failed load loads again (Chrome leaves `paused` false then). Its `<audio>` failing is
+  looked at before a new token is minted (`transcodeRetryAfter` fetches the same URL and lets the body go): a 503
+  with `Retry-After` (no transcode slot free) is asked for again after that wait and played, up to three times
+  per row (`BUSY_TRIES`), with no mint, the player saying the server is busy while it waits; any other answer
+  mints once, as a stored file's failure does (a transcode asks for no stream with the old token meanwhile, then
+  asks again from where it was, playing if it was; a mint that fails says it can't play, asking nothing with the
+  old token); the console offers no
   Edit chapters in a podcast library (`ChaptersCard` reads the library's kind). A `chapters.detect` job for a book
-  whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, checked by the api's queue
-  handler from the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list
-  would sit under the edit, never used. Only the console queues detect jobs (the player never does): Health's Detect
+  whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, `catalog.DetectRefused` from
+  the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list
+  would sit under the edit, never used; saving an edit cancels a queued or parked one (`bridge.CancelChaptersEdited`;
+  a claimed or running one finishes, its list a fallback: `bridge.CancelWaitingBookJob`). Only the console queues detect jobs (the player never does): Health's Detect
   dialog passes such a book over (`skipNotes`) and `errors.ts` words the code.
 - ffprobe is optional; code paths must degrade gracefully when it is absent (with it, most files
   are read in-process: see In-process probe)

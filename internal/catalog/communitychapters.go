@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/chapteralign"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
@@ -443,36 +444,45 @@ func replaceChapters(ctx context.Context, tx *sql.Tx, bookID int64, chs []metada
 	return nil
 }
 
-// ChapterChoice is the admin's choice of chapter source for the book at
-// (libID, path): ChaptersFromFiles, ChaptersFromCommunity, or "" when it is
-// left automatic (also for a path with no book).
-func (c *Catalog) ChapterChoice(ctx context.Context, libID int64, path string) (string, error) {
-	return chapterChoice(ctx, c.db, libID, CleanRelPath(path))
-}
-
-// chapterChoice is the admin's choice of chapter source for a book ("" =
-// automatic).
-func chapterChoice(ctx context.Context, q querier, libID int64, path string) (string, error) {
-	var source string
-	err := q.QueryRowContext(ctx,
-		`SELECT source FROM chapter_choices WHERE library_id = ? AND path = ?`, libID, path).Scan(&source)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+// DetectRefused is why a chapters.detect job for book would find a list never
+// used: bridge.ErrChaptersChosen when an admin chose its chapter source,
+// bridge.ErrChaptersEdited while an edit of its chapters applies (a dormant
+// one, made on other files, is none: the book's chapters come from the next
+// source, a found list among them); nil when neither. book is as the caller
+// just read it (GetBookByPath), so only the choice is read here.
+func (c *Catalog) DetectRefused(ctx context.Context, book *Book) error {
+	var chosen bool
+	if err := c.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM chapter_choices WHERE library_id = ? AND path = ?)`,
+		book.LibraryID, book.RelPath).Scan(&chosen); err != nil {
+		return err
 	}
-	return source, err
+	switch {
+	case chosen:
+		return bridge.ErrChaptersChosen
+	case book.ChaptersSource == ChaptersFromEdited:
+		return bridge.ErrChaptersEdited
+	}
+	return nil
 }
 
 // setChapterChoice writes (or, for ChapterSourceAuto, removes) a book's choice of
-// chapter source.
-func setChapterChoice(ctx context.Context, tx *sql.Tx, ref Ref, source string, editor any, now string) error {
+// chapter source. A choice cancels the book's chapters.detect job while it is
+// queued or parked (bridge.CancelChaptersChosen): the list it would find is
+// not used under the choice, as a new one is refused then (DetectRefused). A
+// claimed or running one finishes: its list stands in again if the choice is
+// undone.
+func (c *Catalog) setChapterChoice(ctx context.Context, tx *sql.Tx, ref Ref, source string, editor any, now string) error {
 	if source == ChapterSourceAuto {
 		_, err := tx.ExecContext(ctx, `DELETE FROM chapter_choices WHERE library_id = ? AND path = ?`, ref.LibraryID, ref.Path)
 		return err
 	}
-	_, err := tx.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO chapter_choices(library_id, path, source, updated_by, updated_at) VALUES(?,?,?,?,?)
 		 ON CONFLICT(library_id, path) DO UPDATE SET
 		     source = excluded.source, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
-		ref.LibraryID, ref.Path, source, editor, now)
-	return err
+		ref.LibraryID, ref.Path, source, editor, now); err != nil {
+		return err
+	}
+	return bridge.CancelWaitingBookJob(ctx, tx, bridge.KindDetectChapters, ref.LibraryID, ref.Path, bridge.CancelChaptersChosen, c.now())
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/meta"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
@@ -244,20 +246,29 @@ func (a *API) writeBookError(w http.ResponseWriter, err error, op, genericMsg st
 	a.writeCatalogError(w, err, op, genericMsg, logKV...)
 }
 
-// handleAdminBook serves GET /admin/libraries/{id}/book?path=: the book page.
-// authorizedPath resolves the library and path (an admin's scope is the whole
-// library); these endpoints only touch the database, so a path that isn't an
-// indexed book is the catalog's 404.
+// handleAdminBook serves GET /admin/libraries/{id}/book?path=[&warm=1]: the
+// book page. authorizedPath resolves the library and path (an admin's scope is
+// the whole library); these endpoints only touch the database, so a path that
+// isn't an indexed book is the catalog's 404. warm=1 is the chapter editor's
+// ask to start the remuxes not made yet (adminRemuxes); no other read of the
+// page starts one.
 func (a *API) handleAdminBook(w http.ResponseWriter, r *http.Request) {
 	lib, p, status, msg := a.authorizedPath(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
-	a.writeBookDetail(w, r, lib, p)
+	a.writeBookPage(w, r, lib, p, r.URL.Query().Get("warm") == "1")
 }
 
+// writeBookDetail answers with the book page, warming nothing (writeBookPage).
 func (a *API) writeBookDetail(w http.ResponseWriter, r *http.Request, lib *catalog.Library, p string) {
+	a.writeBookPage(w, r, lib, p, false)
+}
+
+// writeBookPage answers with the book page; warm starts the remuxes of its
+// MP3-in-Matroska files not made yet (adminRemuxes).
+func (a *API) writeBookPage(w http.ResponseWriter, r *http.Request, lib *catalog.Library, p string, warm bool) {
 	// Asked before the page is read: a check that ends in between is then in the
 	// page, rather than missing from a page that says none is running.
 	ref := catalog.Ref{LibraryID: lib.ID, Path: catalog.CleanRelPath(p)}
@@ -277,7 +288,51 @@ func (a *API) writeBookDetail(w http.ResponseWriter, r *http.Request, lib *catal
 	if b.Ebook != nil {
 		d.Book.Readalong = a.readalongOf(r.Context(), lib, b.Path, b.IsFolder, b.Ebook.Path, adminAudioFiles(d))
 	}
+	a.adminRemuxes(r.Context(), lib, d.Files, warm)
 	writeJSON(w, http.StatusOK, d)
+}
+
+// adminRemuxes marks the book page's MP3-in-Matroska files while they are
+// served as their remux (remuxing): each plays as stored (direct_playable: its
+// stream is the remuxed MP3, handleStream, as /item says), and remux_cached says
+// whether its copy is made (until then the stream is a live transcode from the
+// file's start, which the console's chapter editor can't seek, so it asks for
+// ?transcode=1&t= instead). With warm (the editor's ask, never a mere view of
+// the page or a save's reply, so browsing the console pushes no listener's
+// copy out of the cache) the copies not made yet are warmed in the
+// background, as /item warms them for a player (warmRemuxes). A file not
+// joined, or not looked at on a share not answering, is said not cached. One
+// the remux refused is left unmarked: its stream is the stored Matroska, which
+// no browser plays, and no copy is coming for the editor to wait for.
+func (a *API) adminRemuxes(ctx context.Context, lib *catalog.Library, files []catalog.AdminFile, warm bool) {
+	if !a.remuxing(lib) {
+		return
+	}
+	var rels []string
+	var at []int
+	for i, f := range files {
+		if media.Remuxable(f.Format, f.Codec) {
+			rels = append(rels, f.Path)
+			at = append(at, i)
+		}
+	}
+	join := a.joinRemuxes
+	if warm {
+		join = a.warmRemuxes
+	}
+	abs, answering := join(ctx, lib, rels)
+	for k, i := range at {
+		st := media.CacheMissing
+		// No look on a share that stopped answering: each would wait out its own bound.
+		if answering && abs[k] != "" {
+			st, _, _ = a.remux.Status(abs[k])
+		}
+		if st == media.CacheFailed {
+			continue
+		}
+		cached := st == media.CacheReady
+		files[i].DirectPlayable, files[i].RemuxCached = true, &cached
+	}
 }
 
 // handleCheckCommunityChapters serves POST
