@@ -250,7 +250,7 @@ func TestMembers_KindChangeClearsCredentials(t *testing.T) {
 	if _, err := s.ResolveToken(ctx, key, KindAPI); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("API key still works: %v", err)
 	}
-	if _, _, err := s.ConsumePairing(ctx, pairing); !errors.Is(err, ErrInvalidToken) {
+	if _, _, _, err := s.ConsumePairing(ctx, pairing, ""); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("pairing token still works: %v", err)
 	}
 

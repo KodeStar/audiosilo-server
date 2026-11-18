@@ -148,7 +148,7 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			return func() error { _, _, err := s.ConsumePairing(ctx, tok); return err }
+			return func() error { _, _, _, err := s.ConsumePairing(ctx, tok, ""); return err }
 		},
 		"invite use claimed by a pairing": func() func() error {
 			u := user()
@@ -164,7 +164,7 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			return func() error { _, _, err := s.ConsumePairing(ctx, tok); return err }
+			return func() error { _, _, _, err := s.ConsumePairing(ctx, tok, ""); return err }
 		},
 		"Bridge pairing code replaced": func() func() error {
 			admin := mustUser(t, s, ctx, "coder", "admin-password", RoleAdmin)

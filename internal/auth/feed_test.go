@@ -45,7 +45,7 @@ func TestFeedTokenOnlyOnTheFeed(t *testing.T) {
 	if _, _, err := s.ResolveCastRequest(ctx, feed, Presence{}, 1, "Book", KindSession, KindAPI, KindCast); !errors.Is(err, ErrInvalidToken) {
 		t.Errorf("ResolveCastRequest = %v, want ErrInvalidToken", err)
 	}
-	if _, _, err := s.ConsumePairing(ctx, feed); !errors.Is(err, ErrInvalidToken) {
+	if _, _, _, err := s.ConsumePairing(ctx, feed, ""); !errors.Is(err, ErrInvalidToken) {
 		t.Errorf("ConsumePairing(feed) = %v, want ErrInvalidToken", err)
 	}
 	// And no other credential of the person's is a feed token.

@@ -127,7 +127,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `ConsumePairing` path. **Redeem validates without consuming** (opening an
   invite link costs nothing); **exchange claims the use** - `ConsumePairing`
   folds the cap check, the code-expiry check and the first-claim `redeemed_at`
-  stamp into one atomic UPDATE, and rejects a disabled/deleted user first, so a
+  stamp into one atomic UPDATE, in the transaction that mints the device's session,
+  and rejects a disabled/deleted user or a signed-out token first, so a
   rejected attempt never burns a use or marks an invite accepted (`uses` counts
   devices that actually paired). Linked pairing tokens die with their code: delete/
   supersede/recovery-regeneration cascade (`ON DELETE CASCADE`), rotate revokes
@@ -186,8 +187,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   write moves the content generation, so the token cache refuses an ended token on the very next
   request, media `?token=` included. A password sign-in racing the change gets no session:
   `IssueSession` writes it only while the hash `Authenticate` verified is still the account's and the
-  account enabled, in its writer transaction, else `ErrInvalidCreds` (401). A shipped app takes its
-  existing 401 path (signed out, pair again).
+  account enabled, in its writer transaction, else `ErrInvalidCreds` (401). An exchange or a single
+  sign-on's finish racing it gets none either: `ConsumePairing` and `ConsumeOIDC` spend the token and
+  mint the session in one durable transaction (`auth.exchangeSession`), the spend reading the token
+  again there (unrevoked, unexpired, its account enabled: `spendableSQL`), so a change that committed
+  after the token's read refuses it (401) and one that commits after the mint ends the session with the
+  rest. A shipped app takes its existing 401 path (signed out, pair again).
 - **Personal API keys (`tokens.kind='api'`)**: user-minted, **non-expiring** bearer
   tokens for headless integrations, owner-scoped mint/list/revoke via
   `POST`/`GET`/`DELETE /auth/tokens` (`IssueAPIToken`/`ListAPITokens`/

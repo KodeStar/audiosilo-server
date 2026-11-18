@@ -702,6 +702,43 @@ func TestExchangeExpiredInvite(t *testing.T) {
 	}
 }
 
+// TestExchangeSessionWriteFailureSpendsNothing: the claim (or the revoke) and
+// the session are one transaction, so a session that can't be written answers
+// 500 and leaves the pairing token unspent and the invite's one use unclaimed;
+// allowed: the same tokens exchange once the write works again.
+func TestExchangeSessionWriteFailureSpendsNothing(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
+	code, err := e.auth.CreateAuthCode(ctx, member.ID, "invite", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, invited, _ := e.redeemCode(t, code)
+	unlinked, err := e.auth.IssueToken(ctx, member.ID, auth.KindPairing, "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.ExecContext(ctx, `CREATE TRIGGER no_sessions BEFORE INSERT ON tokens WHEN NEW.kind = 'session'
+		BEGIN SELECT RAISE(ABORT, 'no sessions'); END`); err != nil {
+		t.Fatal(err)
+	}
+	for name, tok := range map[string]string{"invite": invited, "unlinked": unlinked} {
+		if status, body := e.exchangeToken(t, tok, "d"); status != http.StatusInternalServerError {
+			t.Fatalf("%s with no session written = %d %s, want 500", name, status, body)
+		}
+	}
+	if _, err := e.db.ExecContext(ctx, `DROP TRIGGER no_sessions`); err != nil {
+		t.Fatal(err)
+	}
+	for name, tok := range map[string]string{"invite": invited, "unlinked": unlinked} {
+		if status, body := e.exchangeToken(t, tok, "d"); status != http.StatusOK {
+			t.Fatalf("%s once the write works = %d %s, want 200", name, status, body)
+		}
+	}
+}
+
 // TestMultipleRedeemsShareCap: opening the invite link more than once mints
 // distinct pairing tokens that all draw on the SAME invite budget - the cap
 // binds across tokens, not per token.

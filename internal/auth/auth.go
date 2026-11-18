@@ -216,6 +216,10 @@ type Service struct {
 	// it is off or can't run; unset, none): only an identity from it is an
 	// admin's way into the console (decision 5). SetSSOIssuer.
 	ssoIssuer atomic.Pointer[func() string]
+	// beforeSpend is nil but in tests: it runs between a single-use token's
+	// read and the transaction that spends it and mints its session
+	// (exchangeSession), where a test commits a sign-out.
+	beforeSpend func()
 }
 
 // SetSSOIssuer says which provider's identities count as an admin's way into
@@ -1310,12 +1314,22 @@ func (s *Service) PruneSingleUseTokens(ctx context.Context) (int64, error) {
 	return res.RowsAffected()
 }
 
-// spendOnce revokes the unrevoked token hash of kind, at now: the one use of a
-// single-use token. The revoke-if-not-revoked write means two racing callers
-// cannot both win; the loser gets ErrInvalidToken.
-func (s *Service) spendOnce(ctx context.Context, op, hash, kind, now string) error {
-	res, err := s.db.ExecDurable(ctx, op,
-		`UPDATE tokens SET revoked = 1, last_seen = ? WHERE token_hash = ? AND kind = ? AND revoked = 0`, now, hash, kind)
+// spendableSQL is a single-use token's validity read again inside the
+// transaction that spends it (exchangeSession), over tokens: token ?1 of kind
+// ?2, unrevoked, unexpired at ?3 (s.ts(); expires_at is RFC3339 UTC, so it
+// compares as text) and its account enabled. lookupToken read the same before
+// the transaction; a Sign out everywhere, a password change (endSessions), a
+// household joined (leaveOwners) or an account disabled that committed since
+// is caught here.
+const spendableSQL = `token_hash = ?1 AND kind = ?2 AND revoked = 0 AND (expires_at IS NULL OR expires_at > ?3)
+	AND user_id IN (SELECT id FROM users WHERE disabled = 0)`
+
+// spendOnce revokes the single-use token hash of kind inside tx, at now: its
+// one use. The revoke-if-still-spendable write (spendableSQL) means two racing
+// callers cannot both win, nor one racing a sign-out; the loser gets
+// ErrInvalidToken.
+func spendOnce(ctx context.Context, tx *sql.Tx, hash, kind, now string) error {
+	res, err := tx.ExecContext(ctx, `UPDATE tokens SET revoked = 1, last_seen = ?3 WHERE `+spendableSQL, hash, kind, now)
 	if err != nil {
 		return err
 	}
@@ -1325,69 +1339,121 @@ func (s *Service) spendOnce(ctx context.Context, op, hash, kind, now string) err
 	return nil
 }
 
-// ConsumePairing validates a pairing token and consumes it, returning the
-// bound user. An UNLINKED token (minted by /auth/pair, the demo flow, or
-// pre-migration) is atomically revoked - strictly single-use, and the
-// revoke-if-not-revoked write means two racing exchanges cannot both win. A
-// LINKED token instead atomically claims one use on its parent code - folding
-// the cap check, the code-expiry check, and the first-claim redeemed_at stamp
-// into one UPDATE - and is NOT revoked: the code's cap and expiry govern how
-// many more devices may pair with it. A disabled user is rejected before any
-// use is consumed. It also returns the kind of code the token came from
-// (CodeInvite or CodeRecovery; "" for an unlinked token), so the server can report
-// an invite being used.
-func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, string, error) {
+// exchangeSession is the device's session for userID, minted in the one
+// durable transaction that spends the single-use token it is exchanged for
+// (spend). A Sign out everywhere, a password change or a disabled account
+// either committed before it, and spend (spendableSQL) refuses the token, or
+// commits after it and ends the session with the rest (endSessions; a disabled
+// account's tokens are refused): never a session that change missed, as two
+// writes left one between the spend and the mint.
+func (s *Service) exchangeSession(ctx context.Context, op string, userID int64, deviceName string, spend func(*sql.Tx) error) (string, error) {
+	if s.beforeSpend != nil {
+		s.beforeSpend()
+	}
+	var session string
+	err := s.db.WithDurableTx(ctx, op, func(tx *sql.Tx) error {
+		if err := spend(tx); err != nil {
+			return err
+		}
+		var err error
+		session, err = s.issueToken(ctx, tx, userID, KindSession, deviceName, 0)
+		return err
+	})
+	return session, err
+}
+
+// errClaimRefused is ConsumePairing's claim on a code refused inside its
+// transaction, classified once it has rolled back.
+var errClaimRefused = errors.New("auth: code claim refused")
+
+// ConsumePairing validates a pairing token, consumes it and mints the device's
+// session (named deviceName) in the same transaction (exchangeSession),
+// returning the bound user and the session's secret. An UNLINKED token (minted
+// by /auth/pair, the demo flow, or pre-migration) is revoked: strictly
+// single-use, and two racing exchanges cannot both win. A LINKED token instead
+// claims one use on its parent code, folding the cap check, the code-expiry
+// check, and the first-claim redeemed_at stamp into one UPDATE, and is NOT
+// revoked: the code's cap and expiry govern how many more devices may pair
+// with it. A disabled user, or a token signed out (a Sign out everywhere, a
+// password change) since the read, is rejected before any use is consumed. It
+// also returns the kind of code the token came from (CodeInvite or
+// CodeRecovery; "" for an unlinked token), so the server can report an invite
+// being used.
+func (s *Service) ConsumePairing(ctx context.Context, secret, deviceName string) (u *User, session, codeKind string, err error) {
 	hash := hashSecret(secret)
 	u, row, err := s.lookupToken(ctx, hash, KindPairing)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	codeID := row.codeID
 	now := s.ts()
 	if !codeID.Valid {
-		if err := s.spendOnce(ctx, "ConsumePairing", hash, KindPairing, now); err != nil {
-			return nil, "", err
+		session, err = s.exchangeSession(ctx, "ConsumePairing", u.ID, deviceName, func(tx *sql.Tx) error {
+			return spendOnce(ctx, tx, hash, KindPairing, now)
+		})
+		if err != nil {
+			return nil, "", "", err
 		}
-		return u, "", nil
+		return u, session, "", nil
 	}
-	// Both stamps are RFC3339 UTC, so the lexical expires_at comparison is
-	// chronological (same convention as supersedeActiveInvites).
-	res, err := s.db.ExecDurable(ctx, "ConsumePairing",
-		`UPDATE auth_codes SET uses = uses + 1, redeemed_at = COALESCE(redeemed_at, ?)
-		   WHERE id = ? AND (max_uses = 0 OR uses < max_uses)
-		     AND (expires_at IS NULL OR expires_at > ?)`, now, codeID.Int64, now)
+	session, err = s.exchangeSession(ctx, "ConsumePairing", u.ID, deviceName, func(tx *sql.Tx) error {
+		// The token stays (the code governs it), so the spend is its last_seen,
+		// written only while it is still spendable.
+		res, err := tx.ExecContext(ctx, `UPDATE tokens SET last_seen = ?3 WHERE `+spendableSQL, hash, KindPairing, now)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrInvalidToken
+		}
+		// Both stamps are RFC3339 UTC, so the lexical expires_at comparison is
+		// chronological (same convention as supersedeActiveInvites).
+		res, err = tx.ExecContext(ctx,
+			`UPDATE auth_codes SET uses = uses + 1, redeemed_at = COALESCE(redeemed_at, ?)
+			   WHERE id = ? AND (max_uses = 0 OR uses < max_uses)
+			     AND (expires_at IS NULL OR expires_at > ?)`, now, codeID.Int64, now)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return errClaimRefused
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT kind FROM auth_codes WHERE id = ?`, codeID.Int64).Scan(&codeKind); err != nil {
+			codeKind = "" // the pairing stands; only the report loses its kind
+		}
+		return nil
+	})
+	if errors.Is(err, errClaimRefused) {
+		return nil, "", "", s.claimRefused(ctx, codeID.Int64)
+	}
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		// Read-only classification so the transport can tell the user why: the
-		// invite being gone means the token is orphaned (treat as invalid).
-		var (
-			maxUses, uses int
-			cexp          sql.NullString
-		)
-		cerr := s.db.QueryRowContext(ctx,
-			`SELECT max_uses, uses, expires_at FROM auth_codes WHERE id = ?`, codeID.Int64).
-			Scan(&maxUses, &uses, &cexp)
-		if errors.Is(cerr, sql.ErrNoRows) {
-			return nil, "", ErrInvalidToken
-		}
-		if cerr != nil {
-			return nil, "", cerr
-		}
-		if serr := s.codeState(maxUses, uses, cexp); serr != nil {
-			return nil, "", serr
-		}
-		// Unreachable unless the SQL and Go liveness checks disagree; report the
-		// claim failure as exhaustion rather than inventing a new state.
-		return nil, "", ErrCodeExhausted
+	return u, session, codeKind, nil
+}
+
+// claimRefused says why ConsumePairing's claim on code id was refused, read
+// after the fact so the transport can tell the user why: the invite being gone
+// means the token is orphaned (treat as invalid).
+func (s *Service) claimRefused(ctx context.Context, id int64) error {
+	var (
+		maxUses, uses int
+		cexp          sql.NullString
+	)
+	err := s.db.QueryRowContext(ctx, `SELECT max_uses, uses, expires_at FROM auth_codes WHERE id = ?`, id).
+		Scan(&maxUses, &uses, &cexp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidToken
 	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE tokens SET last_seen = ? WHERE token_hash = ?`, now, hash)
-	var kind string
-	if err := s.db.QueryRowContext(ctx, `SELECT kind FROM auth_codes WHERE id = ?`, codeID.Int64).Scan(&kind); err != nil {
-		kind = "" // the pairing stands; only the report loses its kind
+	if err != nil {
+		return err
 	}
-	return u, kind, nil
+	if err := s.codeState(maxUses, uses, cexp); err != nil {
+		return err
+	}
+	// Unreachable unless the SQL and Go liveness checks disagree; report the
+	// claim failure as exhaustion rather than inventing a new state.
+	return ErrCodeExhausted
 }
 
 // userColumns selects the user fields plus a derived last-activity timestamp

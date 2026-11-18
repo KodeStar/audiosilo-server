@@ -233,26 +233,33 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy, 
 	return res, err
 }
 
-// ConsumeOIDC trades a token OIDCSignIn minted (KindOIDC) for its account, once
-// (spendOnce: two racing finishes cannot both win). Any other token (a
-// pairing token, a session) is ErrInvalidToken and left as it was, as is a
-// spent or expired one, or one whose account is disabled or is now a
-// household member or a demo account (which single sign-on never signs in;
-// leaveOwners ends the open token of an account joining a household, so this
-// is the second check, and the one for a demo account).
-func (s *Service) ConsumeOIDC(ctx context.Context, secret string) (*User, error) {
+// ConsumeOIDC trades a token OIDCSignIn minted (KindOIDC) for its account and
+// the device's session (named deviceName), spent and minted in one transaction
+// (exchangeSession: two racing finishes cannot both win, and a Sign out
+// everywhere or a password change committing alongside never leaves a session
+// it missed). Any other token (a pairing token, a session) is ErrInvalidToken
+// and left as it was, as is a spent or expired one, or one whose account is
+// disabled or is now a household member or a demo account (which single
+// sign-on never signs in; leaveOwners ends the open token of an account
+// joining a household, so this is the second check, and the one for a demo
+// account).
+func (s *Service) ConsumeOIDC(ctx context.Context, secret, deviceName string) (u *User, session string, err error) {
 	hash := hashSecret(secret)
-	u, _, err := s.lookupToken(ctx, hash, KindOIDC)
+	u, _, err = s.lookupToken(ctx, hash, KindOIDC)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !u.SSOAllowed() {
-		return nil, ErrInvalidToken
+		return nil, "", ErrInvalidToken
 	}
-	if err := s.spendOnce(ctx, "ConsumeOIDC", hash, KindOIDC, s.ts()); err != nil {
-		return nil, err
+	now := s.ts()
+	session, err = s.exchangeSession(ctx, "ConsumeOIDC", u.ID, deviceName, func(tx *sql.Tx) error {
+		return spendOnce(ctx, tx, hash, KindOIDC, now)
+	})
+	if err != nil {
+		return nil, "", err
 	}
-	return u, nil
+	return u, session, nil
 }
 
 // matchEmail reads every account whose email is email (both trimmed; SQLite's
