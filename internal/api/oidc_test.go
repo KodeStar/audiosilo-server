@@ -708,6 +708,67 @@ func TestValidIntent(t *testing.T) {
 	}
 }
 
+// TestOIDCFinishCookieTag: the done cookie's tag is read only when it can be
+// one (validIntent). Anything else after the token finishes the sign-in
+// untagged, never echoed, and an expectation of it is refused as for any
+// untagged sign-in.
+func TestOIDCFinishCookieTag(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	// forged runs a tagged web sign-in and swaps its cookie's tag for tail.
+	forged := func(t *testing.T, tag, tail string) *http.Cookie {
+		t.Helper()
+		cookie, path := e.startQuery(t, "return=web&intent="+tag)
+		_, done := e.callbackDone(t, path, cookie)
+		if done == nil {
+			t.Fatal("no finished sign-in")
+		}
+		token, got, _ := strings.Cut(done.Value, oidcIntentSep)
+		if got != tag {
+			t.Fatalf("the cookie's tag = %q, want %q", got, tag)
+		}
+		return &http.Cookie{Name: done.Name, Value: token + tail}
+	}
+	// Denied: a tail that can be no tag is never echoed; the sign-in still runs.
+	for name, c := range map[string]struct{ tag, tail string }{
+		"too short":          {strings.Repeat("a1", 32), ".short"},
+		"empty":              {strings.Repeat("b2", 32), "."},
+		"a second separator": {strings.Repeat("c3", 32), "." + strings.Repeat("c3", 32) + ".x"},
+	} {
+		resp, out := e.finish(t, forged(t, c.tag, c.tail), "web")
+		if resp.StatusCode != http.StatusOK || out["token"] == "" || out["intent"] != nil {
+			t.Fatalf("%s: %d %v", name, resp.StatusCode, out)
+		}
+	}
+	// Denied: an expectation that names such a tail word for word.
+	done := forged(t, strings.Repeat("d4", 32), ".short")
+	resp, b := e.doHeaders(t, "POST", oidcFinishPath, "", `{"intent":"short"}`,
+		map[string]string{"Cookie": done.Name + "=" + done.Value})
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(b, codeOIDCIntentMismatch) {
+		t.Fatalf("an expectation of a tail that is no tag: %d %s", resp.StatusCode, b)
+	}
+}
+
+// TestOIDCIntentMemoryFull: with the memory of spent tags full, a new tag is
+// dropped at the callback, so the sign-in runs untagged (the player gives
+// nothing back) and the flow states' own memory is untouched.
+func TestOIDCIntentMemoryFull(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	for i := 0; e.api.oidc.intents.Use("spent-" + strconv.Itoa(i)); i++ {
+	}
+	cookie, path := e.startQuery(t, "return=web&intent="+strings.Repeat("e5", 32))
+	loc, done := e.callbackDone(t, path, cookie)
+	if loc != oidcPublic+oidcDoneWeb || done == nil {
+		t.Fatalf("landed on %q (cookie %v)", loc, done)
+	}
+	if resp, out := e.finish(t, done, "web"); resp.StatusCode != http.StatusOK || out["token"] == "" || out["intent"] != nil {
+		t.Fatalf("a tag past a full memory: %d %v", resp.StatusCode, out)
+	}
+}
+
 // TestOIDCFinish: a sign-in's token reaches the page only in its cookie
 // (HttpOnly, Lax, Secure and __Host- on Path=/ for an https public_url, 60 s),
 // never in a URL; POST /auth/oidc/finish trades it once, clearing the cookie,
