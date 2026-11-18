@@ -236,7 +236,8 @@ func writeInviteError(w http.ResponseWriter, err error, fallback string) {
 // token (/auth/pair, demo) is single-use and revoked here. Exchange shares the
 // redeem limiter since it is now the claim point. The claim (or the revoke)
 // and the session are one transaction (auth.ConsumePairing): a failure to
-// write the session burns no use and answers 500, uncharged.
+// write the session burns no use and answers 500, uncharged (only a token
+// the lookup found valid reaches that write, so a guess is always charged).
 func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	if !allowAttempt(w, a.redeemLimiter, ip) {
@@ -251,34 +252,27 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, session, codeKind, err := a.auth.ConsumePairing(r.Context(), req.PairingToken, req.DeviceName)
-	if err != nil && !errors.Is(err, auth.ErrInvalidToken) && !errors.Is(err, auth.ErrCodeExhausted) && !errors.Is(err, auth.ErrCodeExpired) {
-		writeError(w, http.StatusInternalServerError, "could not issue session")
-		return
-	}
-	if err != nil {
+	switch {
+	case auth.Refused(err):
 		a.redeemLimiter.Fail(ip)
 		writeInviteError(w, err, "invalid or expired pairing token")
 		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "could not issue session")
+		return
 	}
 	a.redeemLimiter.Reset(ip)
-	if out := a.pairedSession(w, r, u.ID, session, req.DeviceName, codeKind == auth.CodeInvite); out != nil {
-		writeJSON(w, http.StatusOK, out)
-	}
+	writeJSON(w, http.StatusOK, a.pairedSession(r, u, session, req.DeviceName, codeKind == auth.CodeInvite))
 }
 
 // pairedSession answers a consumed pairing token (exchange) or single sign-on
-// token (finish), session the device's session minted with the spend
-// (ConsumePairing, ConsumeOIDC: one transaction, so a sign-out everywhere
-// committing beside it never leaves one it missed): the sign-in reported, and
-// the session envelope for the caller to write (nil once an error is written).
-func (a *API) pairedSession(w http.ResponseWriter, r *http.Request, userID int64, session, deviceName string, invite bool) map[string]any {
-	full, err := a.auth.GetUser(r.Context(), userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load account")
-		return nil
-	}
-	a.reportSignIn(r, full, deviceName, invite)
-	return a.sessionEnvelope(r, session, full)
+// token (finish): u and session the account and the device's session, read and
+// minted with the spend (ConsumePairing, ConsumeOIDC: one transaction, so a
+// sign-out everywhere committing beside it never leaves one it missed), the
+// sign-in reported, and the session envelope for the caller to write.
+func (a *API) pairedSession(r *http.Request, u *auth.User, session, deviceName string, invite bool) map[string]any {
+	a.reportSignIn(r, u, deviceName, invite)
+	return a.sessionEnvelope(r, session, u)
 }
 
 // sessionEnvelope is the answer to a sign-in (exchange, login, demo): the session

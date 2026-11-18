@@ -756,20 +756,17 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, session, err := a.auth.ConsumeOIDC(r.Context(), token, req.DeviceName)
-	if err != nil && !errors.Is(err, auth.ErrInvalidToken) {
-		writeError(w, http.StatusInternalServerError, "could not issue session")
-		return
-	}
-	if err != nil {
+	switch {
+	case auth.Refused(err):
 		a.oidcLimiter.Fail(ip)
 		writeErrorCode(w, http.StatusUnauthorized, codeOIDCSignInExpired, "the single sign-on has expired or was used: sign in again")
 		return
-	}
-	a.oidcLimiter.Reset(ip)
-	out := a.pairedSession(w, r, u.ID, session, req.DeviceName, false)
-	if out == nil {
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "could not issue session")
 		return
 	}
+	a.oidcLimiter.Reset(ip)
+	out := a.pairedSession(r, u, session, req.DeviceName, false)
 	if intent != "" {
 		out["intent"] = intent
 	}

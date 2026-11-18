@@ -747,14 +747,14 @@ func TestConsumeOIDC(t *testing.T) {
 			t.Fatalf("%s token finished a sign-in: %v", name, err)
 		}
 	}
-	if u, _, _, err := s.ConsumePairing(ctx, pair, ""); err != nil || u.ID != alice.ID {
+	if u, err := consumePairing(s, ctx, pair); err != nil || u.ID != alice.ID {
 		t.Fatalf("the refused pairing token was spent: %v", err)
 	}
 	if _, err := s.ResolveToken(ctx, sess, KindSession); err != nil {
 		t.Fatalf("the refused session was ended: %v", err)
 	}
 	// Denied: the sign-in's token at an exchange; it stays unspent too.
-	if _, _, _, err := s.ConsumePairing(ctx, sso, ""); !errors.Is(err, ErrInvalidToken) {
+	if _, err := consumePairing(s, ctx, sso); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("an exchange took a sign-in's token: %v", err)
 	}
 	// Allowed: once.

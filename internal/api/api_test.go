@@ -724,7 +724,8 @@ func TestExchangeSessionWriteFailureSpendsNothing(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'no sessions'); END`); err != nil {
 		t.Fatal(err)
 	}
-	for name, tok := range map[string]string{"invite": invited, "unlinked": unlinked} {
+	tokens := map[string]string{"invite": invited, "unlinked": unlinked}
+	for name, tok := range tokens {
 		if status, body := e.exchangeToken(t, tok, "d"); status != http.StatusInternalServerError {
 			t.Fatalf("%s with no session written = %d %s, want 500", name, status, body)
 		}
@@ -732,7 +733,7 @@ func TestExchangeSessionWriteFailureSpendsNothing(t *testing.T) {
 	if _, err := e.db.ExecContext(ctx, `DROP TRIGGER no_sessions`); err != nil {
 		t.Fatal(err)
 	}
-	for name, tok := range map[string]string{"invite": invited, "unlinked": unlinked} {
+	for name, tok := range tokens {
 		if status, body := e.exchangeToken(t, tok, "d"); status != http.StatusOK {
 			t.Fatalf("%s once the write works = %d %s, want 200", name, status, body)
 		}
