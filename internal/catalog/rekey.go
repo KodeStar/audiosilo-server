@@ -246,7 +246,7 @@ func (c *Catalog) rekeyLibrary(ctx context.Context, libraryID int64, primaryOnly
 		if set&cands[p] == 0 {
 			continue // nothing its moves carry (no target, or a track's favourites only)
 		}
-		rows, guard, err := c.rekeyPath(ctx, libraryID, p, spelled, target, reason, moves, reach)
+		rows, via, guard, err := c.rekeyPath(ctx, libraryID, p, spelled, target, reason, moves, reach)
 		at := RekeyPath{LibraryID: libraryID, Path: p, Target: moves[0].to}
 		switch {
 		case err != nil:
@@ -256,7 +256,7 @@ func (c *Catalog) rekeyLibrary(ctx context.Context, libraryID int64, primaryOnly
 			at.Why = guard
 			rep.Skipped = append(rep.Skipped, at)
 		case rows > 0:
-			rep.moved(moves[0].reason, 1)
+			rep.moved(via, 1)
 			rep.Rows += rows
 		}
 	}
@@ -384,12 +384,13 @@ type rekeyRow struct {
 // mergeNewest, a list entry or favourite once, a rating or reader's place the
 // newer). It checks again, inside the transaction, that p is still no book and
 // that the book at target is still one holding spelled (a scan may have run
-// since the candidates were read), and returns the rows moved, or the guard
-// that left them (nothing written). reach caches each listener's access for
-// ownersReach.
+// since the candidates were read), and returns the rows moved with the reason
+// of the first move that had any (via: a track in another spelling holding
+// only a heart moved for its spelling, not as a file), or the guard that left
+// them (nothing written). reach caches each listener's access for ownersReach.
 func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, target, reason string, moves []rekeyMove,
-	reach map[int64][]Scope) (int, string, error) {
-	moved, guard := 0, ""
+	reach map[int64][]Scope) (int, string, string, error) {
+	moved, via, guard := 0, "", ""
 	err := c.db.WithTx(ctx, "RekeyPathState", func(tx *sql.Tx) error {
 		if _, err := bookIDByPath(ctx, tx, libraryID, p); err == nil {
 			return nil // indexed since: its rows are its own
@@ -436,6 +437,9 @@ func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, ta
 				}
 			}
 			steps = append(steps, step{mv, rows})
+			if n == 0 && len(rows) > 0 {
+				via = mv.reason
+			}
 			n += len(rows)
 		}
 		if n == 0 {
@@ -469,9 +473,9 @@ func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, ta
 		return nil
 	})
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
-	return moved, guard, nil
+	return moved, via, guard, nil
 }
 
 // bookStillHolds reports whether the book at target is still indexed and, for
