@@ -8,10 +8,11 @@ import (
 // server#303: a row names an Audible account only while it holds a place that
 // account's own sync wrote (the guard, migration 0083). A writer that keeps or
 // copies the account's device while giving the row a place (a new position, a
-// finish, a carried row) leaves it with none, so GET /bridge/progress offers
-// that place to Audible; a write that leaves the place as it was (a start
-// date, an edit naming only dates) keeps the account's device, and the feed
-// still leaves Audible's own place out.
+// finish, a join's part at an offset) leaves it with none, so GET
+// /bridge/progress offers that place to Audible; a write that leaves the place
+// as it was (a start date, an edit naming only dates, a move carrying the row)
+// keeps the account's device, and the feed still leaves Audible's own place
+// out.
 func TestAudibleDeviceGuard(t *testing.T) {
 	t.Parallel()
 	const path, moved = "Author/Book", "Author/Moved"
@@ -103,13 +104,35 @@ func TestAudibleDeviceGuard(t *testing.T) {
 		f.user, f.lib.ID)
 	wantNone("Author/Copy", "a new row naming Audible's device")
 
-	// A carried row (a move) is a place this write gives the moved book.
+	// A carried row whose place is the one Audible's sync wrote stays the
+	// account's (a folder renamed, a rescan's carry): the feed doesn't offer
+	// Audible its own place back, which the Bridge could push over a rewind
+	// made in the Audible app since.
 	audibles(path)
 	if err := f.c.MoveDurableState(f.ctx, f.lib.ID, path, moved); err != nil {
 		t.Fatal(err)
 	}
-	wantNone(moved, "a moved row")
-	if rows := feed(); len(rows) != 1 || rows[0].Path != moved || rows[0].Position != 1500 {
-		t.Fatalf("feed after the move = %+v", rows)
+	wantAudible(moved, "a moved row")
+	if rows := feed(); len(rows) != 0 {
+		t.Fatalf("feed after the move = %+v, want Audible's own place left out", rows)
 	}
+	// So does one merged over an older row an earlier book left there (the
+	// carried row wins, its place moving the row the guard watches).
+	const again = "Author/Again"
+	exec(`INSERT INTO progress(user_id, library_id, rel_path, position, duration, version, device_id, device_name, updated_at)
+	      VALUES(?, ?, ?, 50, 36000, 1, 'phone', 'Phone', '2020-01-01T00:00:00.000Z')`, f.user, f.lib.ID, again)
+	if err := f.c.MoveDurableState(f.ctx, f.lib.ID, moved, again); err != nil {
+		t.Fatal(err)
+	}
+	wantAudible(again, "a moved row merged over an older one")
+	if rows := feed(); len(rows) != 0 {
+		t.Fatalf("feed after the merge = %+v, want Audible's own place left out", rows)
+	}
+	// A join's later part puts the place further on the joined book's
+	// timeline: a place Audible never gave, so no longer the account's.
+	if err := f.c.JoinDurableState(f.ctx, f.lib.ID, "Author", []JoinPart{{Path: again, Offset: 3600, Last: true}},
+		0); err != nil {
+		t.Fatal(err)
+	}
+	wantNone("Author", "a row joined at an offset")
 }

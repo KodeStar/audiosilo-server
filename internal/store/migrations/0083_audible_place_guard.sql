@@ -10,10 +10,10 @@
 -- route (catalog.SyncListening, a furthest-only batch) names its device again
 -- in a statement of its own right after writing its place (ownAudiblePlace),
 -- which sets only device_id and device_name, so it fires neither trigger. A
--- carried (moved or joined) row the carry inserts, or whose place it moves,
--- loses the device too: the feed then offers Audible its own place once, which
--- the Bridge drops as the place it last heard (a merge that leaves the row's
--- place as it was keeps the device it names). The triggers' own update sets
+-- carry (a moved or joined book's rows) is named again the same way when the
+-- row it wrote holds the place the account wrote, unchanged on the new
+-- timeline (catalog.carriedAudiblePlace): offered back, the Bridge could push
+-- it over a rewind made in the Audible app since. The triggers' own update sets
 -- neither position nor finished, so it never fires them again
 -- (progress_change_seq_update moves the row's change_seq, which offers the
 -- place to Audible: a guarded write draws two counter numbers, the Audible

@@ -785,12 +785,12 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 		}
 		// The device name follows the merge's winner and the newer finish-state
 		// change is kept; an offered place (other_place) and a device's span chain
-		// (span_at, 0062) are dropped: they were on the old path's timeline. An
-		// Audible account's device is dropped too from a row this inserts or
-		// whose place it moves (the guard, migration 0083: a place this write
-		// gives a row is no longer the account's own), so the feed offers the
-		// carried place to Audible, which the Bridge drops when it is the place
-		// Audible last gave; a merge leaving the row's place as it was keeps it.
+		// (span_at, 0062) are dropped: they were on the old path's timeline. The
+		// guard (migration 0083) takes an Audible account's device off a row this
+		// inserts or whose place it moves; a carried row whose place is the one
+		// the account's sync wrote (a move, a join's first part, the merge's
+		// winner) is named for it again (carriedAudiblePlace), so the feed does
+		// not offer Audible its own place back.
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 			     playback_speed, version, device_id, updated_at, started_at, finished_at, device_name,
@@ -807,9 +807,27 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, p.DeviceName, finishChanged, editVersion); err != nil {
 			return err
 		}
+		if carriedAudiblePlace(r.UserProgress, p) {
+			if err := nameAudibleDevice(ctx, tx, r.user, Ref{LibraryID: libraryID, Path: into},
+				p.DeviceID, p.DeviceName); err != nil {
+				return err
+			}
+		}
 	}
 	return carryStmts(ctx, tx, libraryID, part, into, total, kept,
 		[]string{`DELETE FROM progress WHERE library_id = ?4 AND rel_path = ?5` + carryKept})
+}
+
+// carriedAudiblePlace reports whether a carry wrote a row (written) holding
+// the place an Audible account's sync left on the row it carried (from): the
+// carried row won and its place is unchanged on the new timeline (a move, a
+// join's part at offset 0 left inside its length). The rename of a book's
+// folder, a rescan's carry or a join gives the account's place no new value, so
+// the row stays the account's: offered back, the Bridge could push it over a
+// rewind made in the Audible app since.
+func carriedAudiblePlace(from, written UserProgress) bool {
+	return IsAudibleDevice(from.DeviceID) && written.DeviceID == from.DeviceID &&
+		written.Position == from.Position && written.Finished == from.Finished
 }
 
 // progressMerge is one listener's progress from the row already on a path (have)

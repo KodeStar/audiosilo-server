@@ -4657,9 +4657,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   its own right after writing its place (`ownAudiblePlace`, setting only the device, which the guard leaves). So an
   edit that moves Audible's place reaches the feed (Audible's next place can't undo it unseen), as does a listening
   import moving it on (the planner keeps the row's device; the store drops it), its undo restoring Audible's place
-  from `import_progress_prior` (the feed carries the undo to Audible too), and a moved or joined book's carried row
-  (offered once: the Bridge drops a place within its echo window of the one Audible last gave); a write that leaves
-  the place as it was (an edit naming only dates) keeps the device. No listening session, `listening_daily` or history row is recorded
+  from `import_progress_prior` (the feed carries the undo to Audible too); a write that leaves the place as it was
+  (an edit naming only dates) keeps the device, and so does a moved or joined book's carried row whose place is the
+  one the account wrote, unchanged on the new timeline (a folder renamed, a rescan's carry, a join's part at offset
+  0: `carriedAudiblePlace` names the device again as the Audible route does), so the feed never offers Audible its
+  own place back over a rewind made in the Audible app since (a join's later part, at an offset, loses it). No listening session, `listening_daily` or history row is recorded
   (owner decision 2); the
   events are logged with token 0. 200 the Sync v2 answer; 403 `sync_off` (the module or the account's sync off, or
   the account paused: no library), 403 `user_unavailable` (the person disabled, a kid or a demo since:
@@ -4683,7 +4685,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book to the next number, so a newly matched or re-synced book's existing place (or one left out for a length that may
   agree now) is offered to Audible. A move or join moves the book's titles in its per-user transaction, after the
   places (`moveAudibleTitles`, server#303), so the trigger offers the carried place (merged by the carry's rule with a
-  row an earlier book left at the new path), never that left-behind row as it stood, and a carry that fails leaves the
+  row an earlier book left at the new path; the feed leaves it out while it is the account's own, `carriedAudiblePlace`), never that left-behind row as it stood, and a carry that fails leaves the
   titles where they were; a left-behind row the carry did not change (its person never played the moved book, or it
   was the newer and won the merge) is another book's place: `keepLeftOffers` sets its `change_seq` to
   `unofferedSeq` (-1, below every cursor, a feed's first page included: put back where it was, a row written after

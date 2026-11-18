@@ -1034,11 +1034,20 @@ func (s *syncRun) ownAudiblePlace(ctx context.Context, key Ref) error {
 	if !s.b.FurthestOnly {
 		return nil
 	}
-	_, err := s.tx.ExecContext(ctx,
+	return nameAudibleDevice(ctx, s.tx, s.b.UserID, key, s.b.DeviceID, s.b.DeviceName)
+}
+
+// nameAudibleDevice names an Audible account's device on a user's row at key,
+// inside tx, after a write the guard (migration 0083) took it off: the Audible
+// route's own place (ownAudiblePlace), or a carry that left it as the account
+// wrote it (carriedAudiblePlace). It sets only the device, so the guard leaves
+// it.
+func nameAudibleDevice(ctx context.Context, tx *sql.Tx, userID int64, key Ref, deviceID, deviceName string) error {
+	_, err := tx.ExecContext(ctx,
 		`UPDATE progress SET device_id = ?1, device_name = ?2
 		  WHERE user_id = ?3 AND library_id = ?4 AND rel_path = ?5
 		    AND (device_id IS NOT ?1 OR device_name IS NOT ?2)`,
-		s.b.DeviceID, s.b.DeviceName, s.b.UserID, key.LibraryID, key.Path)
+		deviceID, deviceName, userID, key.LibraryID, key.Path)
 	return err
 }
 
