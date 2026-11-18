@@ -561,6 +561,10 @@ func AudibleSyncClaim(account string, titles []AudibleSyncTitle) (params json.Ra
 // (fillAudibleSync).
 const maxUnspentSyncFills = 3
 
+// syncTitlesUnread is the error of an audible.sync ended because its claims
+// kept failing to read the account's titles (fillAudibleSync).
+const syncTitlesUnread = "The server could not read this account's titles."
+
 // syncFill counts the claims in a row that failed to read the titles of one
 // audible.sync (job).
 type syncFill struct {
@@ -599,8 +603,11 @@ func (s *Service) syncFillOK(account string) {
 // hand out nothing behind it. From then on it stays claimed and undelivered,
 // as one whose own params can't be read (not the JSON its queueing stored)
 // does from the first: its lease runs out and spends the attempt, MaxAttempts
-// fails it, and the claims meanwhile hand out the jobs behind it. A claim cut
-// short (the Bridge left, the server is stopping) counts as no failure.
+// fails it, and the claims meanwhile hand out the jobs behind it. The last
+// attempt's failing claim ends it at once (failUnsentClaim) with
+// syncTitlesUnread as its reason: the server, not the Bridge, stopped it. A
+// claim cut short (the Bridge left, the server is stopping) counts as no
+// failure.
 func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 	account, err := AudibleAccountOf(*j)
 	if err != nil {
@@ -609,7 +616,11 @@ func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 	params, err := s.ClaimAudibleSync(ctx, account)
 	if err != nil {
 		if ctx.Err() == nil && s.syncFillFailed(account, j.ID) > maxUnspentSyncFills {
-			return nil, fmt.Errorf("audible.sync %d: titles: %w", j.ID, err)
+			err = fmt.Errorf("audible.sync %d: titles: %w", j.ID, err)
+			if j.Attempts >= MaxAttempts {
+				err = errors.Join(err, s.failUnsentClaim(ctx, j, syncTitlesUnread))
+			}
+			return nil, err
 		}
 		return nil, errors.Join(err, s.ReleaseUnsentClaim(ctx, j))
 	}

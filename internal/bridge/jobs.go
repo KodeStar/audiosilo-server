@@ -1325,6 +1325,40 @@ func (s *Service) ReleaseUnsentClaim(ctx context.Context, claim *Job) error {
 	return err
 }
 
+// failUnsentClaim ends an undelivered claim on its last attempt with reason as
+// its error, at once rather than when its lease runs out, which would name the
+// Bridge (expireSQL) for a claim the server could not fill. A job whose cancel
+// was asked for is cancelled instead. The same untouched claim as
+// ReleaseUnsentClaim, run the same way.
+func (s *Service) failUnsentClaim(ctx context.Context, claim *Job, reason string) error {
+	ctx, stop := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer stop()
+	var job *Job
+	err := s.db.WithTx(ctx, "bridge.failUnsentClaim", func(tx *sql.Tx) error {
+		now := s.ts()
+		res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET
+		 state=CASE WHEN cancel_requested=1 THEN 'cancelled' ELSE 'failed' END,
+		 error=CASE WHEN cancel_requested=1 THEN error ELSE ? END,
+		 lease_until=NULL,updated_at=?,finished_at=?
+		 WHERE id=? AND state='claimed' AND attempts=? AND lease_until=? AND claimed_at=?`,
+			reason, now, now, claim.ID, claim.Attempts, claim.LeaseUntil, claim.ClaimedAt)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil || n == 0 {
+			return err
+		}
+		job, err = getJob(ctx, tx, claim.ID)
+		return err
+	})
+	if err == nil && job != nil {
+		s.wake.fire()
+		s.report(ctx, job, StateClaimed, "")
+	}
+	return err
+}
+
 // nextQueued is the id of the next queued job of one of kinds (highest
 // priority, then oldest), 0 for none, passing over a held one: a job that needs
 // a managed module that is off (held) waits, queued, until the module is on

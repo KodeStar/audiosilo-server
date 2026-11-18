@@ -226,17 +226,19 @@ func TestAudibleSyncClaimFailsSpentInTheEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Each lapsed lease puts it back spent, and the next failing claim spends
-	// another attempt at once, until MaxAttempts ends it.
-	for attempt := 2; attempt <= MaxAttempts; attempt++ {
+	// another attempt at once; the last attempt's ends it there, naming the
+	// server's read rather than the Bridge.
+	for attempt := 2; attempt < MaxAttempts; attempt++ {
 		q.advance(Lease + time.Second)
 		failed("after a lapsed lease", StateClaimed, attempt)
 	}
 	q.advance(Lease + time.Second)
-	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got != nil {
-		t.Fatalf("the last claim = %+v, %v; want nothing left", got, err)
+	failed("the last attempt", StateFailed, MaxAttempts)
+	if stored, err := q.Job(ctx, job.ID); err != nil || stored.Error != syncTitlesUnread {
+		t.Fatalf("in the end = %+v, %v; want the titles named as the reason", stored, err)
 	}
-	if stored, err := q.Job(ctx, job.ID); err != nil || stored.State != StateFailed {
-		t.Fatalf("in the end = %+v, %v; want it failed", stored, err)
+	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got != nil {
+		t.Fatalf("the claim after = %+v, %v; want nothing left", got, err)
 	}
 
 	// A read that works again forgets the failures: the account's next sync is
