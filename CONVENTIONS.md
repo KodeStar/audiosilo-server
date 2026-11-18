@@ -1137,8 +1137,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   spelling the scope refuses counts as none, so nothing outside it changes the answer (a third
   spelling of an NFC and an NFD folder side by side reads as the one granted, whether the other is
   there or not). Two indexed paths the scope admits that both read as `p` (an NFC and an NFD folder
-  side by side on a byte-exact disk) leave `p` as given: it never guesses. Never the disk, never an
-  on-demand index. Applied by
+  side by side on a byte-exact disk) leave `p` as given: it never guesses. Never an on-demand index,
+  and the disk only for one check (`ownEntry`, two bounded `Lstat`s, only when the index would read
+  `p` as another path or report it `outside`): a `p` that is an entry of its own there (a disk that
+  keeps an NFC and an NFD name apart, `p`'s folder not indexed yet) stays as given, so a folder no
+  scan has reached is never taken for the indexed one beside it (nor its rows moved there by the
+  re-key); a disk that ignores the spelling finds the same file by both, and a look that fails
+  leaves the index's answer. Applied by
   `scopedPath` / `scopedPathIn` (`spelledPathInScope`: cap, library, clean, spelling, scope, hidden),
   so every route on them (item, chapters, cover, stream, meta, next, ebook, readalong,
   reading-progress, progress, sync events, bookmarks, notes, history, favourites, ratings, list adds,

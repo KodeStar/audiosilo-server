@@ -5,10 +5,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	unorm "golang.org/x/text/unicode/norm"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // Path spelling (server#210). A name with an accent has two Unicode spellings,
@@ -161,7 +166,7 @@ func (c *Catalog) keyPathsIn(ctx context.Context, where string, after int64, all
 // Spelling is the index's spelling of p, a cleaned library-relative path a
 // client sent: p itself when the index holds it as given or holds nothing it
 // could mean, else the one indexed path allow admits whose NFC form is p's.
-// From the index alone, never the disk:
+// From the index (indexSpelling), but for one look at the disk (below):
 //
 //  1. a path with no other Unicode spelling (every ASCII path) is p, no lookup;
 //  2. a book at p exactly, or a file of or folder inside a book (bookHolding),
@@ -187,50 +192,111 @@ func (c *Catalog) keyPathsIn(ctx context.Context, where string, after int64, all
 // caller can't reach, which a caller whose scope admits p as given (a rule
 // written in that spelling) must answer as missing, never by opening p on a
 // disk that ignores the difference (server#210).
+//
+// The one look at the disk: p is never read as another spelling, nor reported
+// outside, when it is an entry of its own there (ownEntry: a disk that keeps
+// an NFC and an NFD name apart, with p's not indexed yet), so a folder no scan
+// has reached is never taken for the indexed one beside it.
 func (c *Catalog) Spelling(ctx context.Context, libraryID int64, p string, allow func(string) bool) (spelled string, outside bool, err error) {
+	s, refused, err := c.indexSpelling(ctx, libraryID, p, allow)
+	switch {
+	case err != nil:
+		return "", false, err
+	case s != p:
+		if c.ownEntry(ctx, libraryID, p, []string{s}) {
+			return p, false, nil
+		}
+		return s, false, nil
+	case len(refused) > 0:
+		return p, !c.ownEntry(ctx, libraryID, p, refused), nil
+	}
+	return p, false, nil
+}
+
+// indexSpelling is Spelling from the index alone: p's spelling, and when it is
+// p because only paths allow refuses read as it, those paths (refused).
+func (c *Catalog) indexSpelling(ctx context.Context, libraryID int64, p string, allow func(string) bool) (string, []string, error) {
 	if !normSensitive(p) {
-		return p, false, nil
+		return p, nil, nil
 	}
 	if _, err := bookIDByPath(ctx, c.db, libraryID, p); !errors.Is(err, ErrNotFound) {
-		return p, false, err // the book at p, or a failed lookup
+		return p, nil, err // the book at p, or a failed lookup
 	}
 	// A track or disc folder spelled as the index has it (every seek of a
 	// stream asks): one lookup, not the reads of steps 3 and 4.
 	if _, _, err := c.bookHolding(ctx, libraryID, p, false); !errors.Is(err, ErrNotFound) {
-		return p, false, err
+		return p, nil, err
 	}
 	k := unorm.NFC.String(p)
 	books, err := c.booksKeyed(ctx, libraryID, []string{k}, false)
 	if err != nil {
-		return "", false, err
+		return "", nil, err
 	}
 	m := &spellMatch{allow: allow}
 	for _, b := range books {
 		m.add(b.rel)
 	}
 	if s, found := m.one(p); found {
-		return s, false, nil
+		return s, nil, nil
 	}
 	if s, found, err := c.spellingInBook(ctx, libraryID, p, k, m); found || err != nil {
-		return s, false, err
+		return s, nil, err
 	}
 	s, err := c.folderSpelling(ctx, libraryID, p, m)
-	return s, s == p && m.out && len(m.in) == 0, err
+	if err != nil || s != p || len(m.in) > 0 {
+		return s, nil, err
+	}
+	return p, m.out, nil
+}
+
+// spellLookWait bounds each of ownEntry's looks at the disk: a share that
+// stopped answering leaves the index's answer standing.
+const spellLookWait = 5 * time.Second
+
+// ownEntry reports whether p is an entry of its own on the library's disk:
+// there, and none of others (indexed paths reading as p) is the same file. A
+// disk that ignores the Unicode spelling (macOS, SMB) finds the indexed entry
+// by p, the same file, so it is not; a disk that keeps the spellings apart
+// finds p only when a folder or file of that spelling is there beside it. A
+// look that fails or is given up on counts as not (the index's answer stands).
+func (c *Catalog) ownEntry(ctx context.Context, libraryID int64, p string, others []string) bool {
+	lib, err := c.GetLibrary(ctx, libraryID)
+	if err != nil || lib.Root == "" {
+		return false
+	}
+	look := func(rel string) os.FileInfo {
+		fi, err := metadata.LstatBounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(rel)), spellLookWait)
+		if err != nil {
+			return nil
+		}
+		return fi
+	}
+	at := look(p)
+	if at == nil {
+		return false
+	}
+	for _, o := range others {
+		if fi := look(o); fi != nil && os.SameFile(at, fi) {
+			return false
+		}
+	}
+	return true
 }
 
 // spellMatch gathers the indexed paths one of Spelling's steps finds reading
-// as p: those allow admits (nil: every one), each once, and whether any step
-// found one it refuses (out).
+// as p: those allow admits (nil: every one), each once, and those it refuses
+// (out), over every step.
 type spellMatch struct {
-	allow func(string) bool
-	in    []string
-	out   bool
+	allow   func(string) bool
+	in, out []string
 }
 
 func (m *spellMatch) add(s string) {
 	switch {
 	case m.allow != nil && !m.allow(s):
-		m.out = true
+		if !slices.Contains(m.out, s) {
+			m.out = append(m.out, s)
+		}
 	case !slices.Contains(m.in, s):
 		m.in = append(m.in, s)
 	}
@@ -345,7 +411,7 @@ func (c *Catalog) folderSpelling(ctx context.Context, libraryID int64, p string,
 	spellings := folderSpellings(p)
 	holding, err := c.FoldersHoldingBooks(ctx, libraryID, spellings)
 	if err != nil || holding[p] {
-		m.out = false
+		m.out = nil
 		return p, err
 	}
 	m.next()

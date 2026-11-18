@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -171,6 +173,107 @@ func TestSpellingScope(t *testing.T) {
 	}
 	if _, outside, err := c.Spelling(ctx, lib, "Rien/Ic\u00ed", nfdRule); err != nil || outside {
 		t.Errorf("Spelling of a path nothing reads as = outside %v %v", outside, err)
+	}
+}
+
+// TestOwnEntry: p is an entry of its own when it is on the disk and none of
+// the others is the same file; another spelling of an indexed name is not,
+// whether the disk ignores the spelling (it finds the same folder) or keeps
+// them apart (it finds nothing by p).
+func TestOwnEntry(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	root := t.TempDir()
+	for _, d := range []string{"a", "b", "E\u0301mile"} {
+		if err := os.Mkdir(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		p      string
+		others []string
+		want   bool
+	}{
+		{"a", []string{"b"}, true},
+		{"a", []string{"missing"}, true},
+		{"a", []string{"a"}, false},
+		{"missing", []string{"a"}, false},
+		{"\u00c9mile", []string{"E\u0301mile"}, false},
+	} {
+		if got := c.ownEntry(ctx, lib.ID, tc.p, tc.others); got != tc.want {
+			t.Errorf("ownEntry(%+q, %+q) = %v, want %v", tc.p, tc.others, got, tc.want)
+		}
+	}
+	if c.ownEntry(ctx, lib.ID+99, "a", nil) {
+		t.Error("ownEntry in no library = true")
+	}
+}
+
+// TestSpellingOwnEntry (server#210): on a disk that keeps an NFC and an NFD
+// name apart, a spelling that is a folder of its own there (not indexed yet)
+// is never read as the indexed one beside it, nor reported outside a scope;
+// once it is gone, it is again. On a disk that ignores the spelling (macOS)
+// the two are one folder, read as the index's.
+func TestSpellingOwnEntry(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	root := t.TempDir()
+	const (
+		nfc = "\u00c9mile/Germinal"
+		nfd = "E\u0301mile/Germinal"
+	)
+	if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(nfc)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upsert(t, c, &Book{LibraryID: lib.ID, RelPath: nfc, IsFolder: true, Title: "G", AddedAt: "2020-01-01",
+		Files: []BookFile{{RelPath: nfc + "/01.mp3", Format: "mp3"}}})
+	nfdRule := func(p string) bool { return p == nfd || strings.HasPrefix(p, nfd+"/") }
+	spell := func(allow func(string) bool) (string, bool) {
+		t.Helper()
+		got, outside, err := c.Spelling(ctx, lib.ID, nfd, allow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got, outside
+	}
+	if got, _ := spell(nil); got != nfc {
+		t.Fatalf("NFD with only the NFC folder on disk = %+q, want %+q", got, nfc)
+	}
+	if _, outside := spell(nfdRule); !outside {
+		t.Fatal("NFD under an NFD rule, only the NFC folder on disk: not outside")
+	}
+	err = os.MkdirAll(filepath.Join(root, filepath.FromSlash(nfd)), 0o755)
+	if fi1, _ := os.Stat(filepath.Join(root, filepath.FromSlash(nfd))); err != nil || fi1 == nil {
+		t.Fatalf("mkdir NFD: %v", err)
+	}
+	fiC, _ := os.Stat(filepath.Join(root, filepath.FromSlash(nfc)))
+	fiD, _ := os.Stat(filepath.Join(root, filepath.FromSlash(nfd)))
+	if os.SameFile(fiC, fiD) {
+		t.Log("this disk ignores the Unicode spelling: one folder")
+		if got, _ := spell(nil); got != nfc {
+			t.Errorf("NFD on a disk ignoring the spelling = %+q, want %+q", got, nfc)
+		}
+		return
+	}
+	if got, outside := spell(nil); got != nfd || outside {
+		t.Errorf("NFD, a folder of its own beside the NFC one = %+q outside=%v, want it as given", got, outside)
+	}
+	if got, outside := spell(nfdRule); got != nfd || outside {
+		t.Errorf("NFD under an NFD rule, a folder of its own = %+q outside=%v, want it as given, not outside", got, outside)
+	}
+	if err := os.RemoveAll(filepath.Join(root, "E\u0301mile")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := spell(nil); got != nfc {
+		t.Errorf("NFD once its folder is gone = %+q, want %+q", got, nfc)
 	}
 }
 
