@@ -2,7 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBookDetail, ChapterEditRequest } from '@/api/types';
-import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
+import { mockFetch, type MockReply, type MockRequest, type MockRoute } from '@/test/fetch-mock';
 import { libraries, serverInfo } from '@/test/fixtures';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
@@ -739,6 +739,47 @@ describe('the chapter editor', () => {
       expect(play).not.toHaveBeenCalled();
     });
 
+    // An <audio> event at a given time (its timeStamp, ms), the element's
+    // error set first when `failed` (WebKit keeps it while a busy stream waits).
+    const at = (audio: HTMLAudioElement, type: string, ms: number) => {
+      const ev = new Event(type);
+      Object.defineProperty(ev, 'timeStamp', { value: ms });
+      act(() => {
+        audio.dispatchEvent(ev);
+      });
+    };
+    const failed = (audio: HTMLAudioElement) =>
+      Object.defineProperty(audio, 'error', { value: { code: 2 }, configurable: true });
+
+    it('does not play a busy stream paused while it waits, though WebKit keeps the error', async () => {
+      const { audio } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
+      Object.defineProperty(audio, 'paused', { value: false, configurable: true });
+      fireEvent.play(audio);
+      failed(audio);
+      at(audio, 'error', 1000);
+      await screen.findByText('The server is busy. Trying again in a moment.');
+      // A headset's pause, well after the failure: the error is still set.
+      Object.defineProperty(audio, 'paused', { value: true, configurable: true });
+      at(audio, 'pause', 3000);
+      await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(play).not.toHaveBeenCalled();
+    });
+
+    // Chrome's: the element paused as its load fails.
+    it.each([
+      ['before its error', 1000, 1001],
+      ['just after its error', 1100, 1000],
+    ])('counts the pause a failed load makes as none: %s', async (_, pauseAt, errorAt) => {
+      const { audio } = await listen({ ...busy, headers: { 'Retry-After': '0.02' } });
+      fireEvent.play(audio);
+      failed(audio);
+      if (pauseAt < errorAt) at(audio, 'pause', pauseAt);
+      at(audio, 'error', errorAt);
+      if (pauseAt > errorAt) at(audio, 'pause', pauseAt);
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    });
+
     it('drops the wait when another row is chosen', async () => {
       const { user, audio, looks } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
       fireEvent.error(audio);
@@ -962,14 +1003,44 @@ describe('the chapter editor', () => {
       expect(started.looks()).toHaveLength(0);
     });
 
-    it('lets a slow stream be when the server has a slot for it', async () => {
-      const { looks, wait } = await stall({ status: 200, raw: '' });
+    // WebKit, one slot free: it drops the stream it was given and waits on
+    // with none, the look answering that the server would play it now.
+    it('loads a stalled stream again once when the server has a slot, then says it didn’t load', async () => {
+      const { audio, looks, mints, wait } = await stall({ status: 200, raw: '' });
+      const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause');
+      wait();
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+      expect(looks()).toHaveLength(1);
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play.mock.contexts[0]).toBe(audio);
+      expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
+
+      // Loaded again, it stalls again: it didn't load, and lets go of the stream.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      fireEvent.loadStart(audio);
+      fireEvent.play(audio);
+      act(() => vi.advanceTimersByTime(6000));
+      vi.useRealTimers();
+      expect(await screen.findByText(/The audio didn’t load/)).toBeInTheDocument();
+      expect(looks()).toHaveLength(2);
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+      expect(pause).toHaveBeenCalled();
+      expect(mints()).toBe(1);
+    });
+
+    it('lets a stalled stream be that starts while the server is asked about it', async () => {
+      let answer: (r: MockReply) => void = () => {};
+      const { audio, looks, wait } = await stall(() => new Promise<MockReply>((r) => (answer = r)));
       wait();
       await waitFor(() => expect(looks()).toHaveLength(1));
+      Object.defineProperty(audio, 'readyState', { value: 4, configurable: true });
+      answer({ status: 200, raw: '' });
       await new Promise((r) => setTimeout(r, 50));
-      expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
       expect(load).not.toHaveBeenCalled();
       expect(play).not.toHaveBeenCalled();
+      expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
     });
   });
 

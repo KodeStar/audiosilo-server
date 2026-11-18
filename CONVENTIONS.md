@@ -4691,7 +4691,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and Play after a failed load loads again (Chrome leaves `paused` false then). Its `<audio>` failing is
   looked at before a new token is minted (`transcodeRetryAfter` sends a HEAD of the same URL, which starts no ffmpeg): a 503
   with `Retry-After` (no transcode slot free) is asked for again after that wait and played, up to three times
-  per row (`BUSY_TRIES`), with no mint, the player saying the server is busy while it waits; any other answer
+  per row (`BUSY_TRIES`), with no mint, the player saying the server is busy while it waits (a pause then is one
+  meant, though WebKit keeps the element's `error` set: only a pause within `FAILED_PAUSE_MS` of the failure, Chrome's
+  own, still means to play); a transcode asked to play that has not started after `STALL_MS` (Safari's, with no error)
+  is looked at the same way, and one the server would play now that is still stalled is loaded again once (WebKit
+  dropped the stream it was given), then "didn't load"; any other answer
   mints once, as a stored file's failure does (a transcode asks for no stream with the old token meanwhile, then
   asks again from where it was, playing if it was; a mint that fails says it can't play, asking nothing with the
   old token); the console offers no
