@@ -228,16 +228,18 @@ func (s *Service) Subscribe(ctx context.Context, r SubscribeRequest) (*Job, bool
 		return nil, false, err
 	}
 	nj := NewJob{Kind: KindPodcastSubscribe, LibraryID: &lib, Params: raw, RequestedBy: user, Priority: PriorityListener, feedRedacted: feed.RedactURL(norm), adoptOnly: r.AdoptOnly}
+	// Enqueue's own checks, made once here (enqueueChecked below), before an
+	// adopt-only request looks for its open one: a row that could never be
+	// queued says why (ErrInvalid, ErrNotPodcastLibrary) rather than
+	// ErrNoNewRequest (server#219).
+	if err := s.checkNewJob(ctx, &nj); err != nil {
+		return nil, false, err
+	}
 	if r.AdoptOnly {
 		// An OPML row past the upload's new requests only adopts an open one:
 		// with none open it is refused at once, without the lock or Enqueue's
 		// writer transaction (server#219). One opened since this read is
-		// adopted by the next upload. Its params and library are checked first,
-		// as Enqueue checks them, so a row that could never be queued says why
-		// (ErrInvalid, ErrNotPodcastLibrary) rather than ErrNoNewRequest.
-		if err := s.checkNewJob(ctx, &nj); err != nil {
-			return nil, false, err
-		}
+		// adopted by the next upload.
 		open, err := openJob(ctx, s.db, jobKey(nj))
 		if err != nil {
 			return nil, false, err
@@ -248,7 +250,7 @@ func (s *Service) Subscribe(ctx context.Context, r SubscribeRequest) (*Job, bool
 	}
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
-	j, created, err := s.Enqueue(ctx, nj)
+	j, created, err := s.enqueueChecked(ctx, nj)
 	if err == nil && private {
 		if s.beforeSecretHeld != nil {
 			s.beforeSecretHeld(j)

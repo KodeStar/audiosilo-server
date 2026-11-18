@@ -3384,7 +3384,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   An open subscribe for the same URL at the other privacy is `bridge.ErrPrivacyConflict` (409
   `privacy_conflict`, an `error` row), checked inside the dedupe transaction. A request the queue's
   params check refuses (`bridge.ErrInvalid`: a backstop, the normalization refuses the same URLs) is
-  `invalid_feed_url` too (400, an `invalid` row), an adopt-only row's included: its params are checked before it looks for an open
+  `invalid_feed_url` too (400, an `invalid` row), an adopt-only row's included: `Subscribe` checks
+  every request once (`checkNewJob`, then `enqueueChecked`) before an adopt-only one looks for an open
   request (server#219). A queued follow request fails `request_expired` once no online Bridge runs
   `podcast.subscribe` (`expireOfflineSubscribes`, on the player's request poll and the scheduler's
   sweep, when the silence has lasted `OnlineWindow` since a sweep first saw it: a server restart, a

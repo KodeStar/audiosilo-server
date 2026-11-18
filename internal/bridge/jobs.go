@@ -692,13 +692,20 @@ func checkNew(j *NewJob) error {
 // ErrContributeOpen, ErrReadalongOpen); the open job of its own kind is still returned either way.
 // The caller has resolved the library and the book (j.Path is the book's
 // indexed path) and checked the job's module is on (ModuleFor).
-func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
+func (s *Service) Enqueue(ctx context.Context, j NewJob) (*Job, bool, error) {
 	if j.Kind == KindPodcastFetch && j.fetch == nil {
 		return s.EnsurePodcastFetch(ctx, j, FetchOptions{Retry: true})
 	}
 	if err := s.checkNewJob(ctx, &j); err != nil {
 		return nil, false, err
 	}
+	return s.enqueueChecked(ctx, j)
+}
+
+// enqueueChecked is Enqueue for a job checkNewJob has already passed (params
+// normalised): Subscribe checks an adopt-only request before it looks for the
+// open one, and the check isn't made twice.
+func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
 	var h *Heartbeat
 	if j.fetch == nil {
 		if h, err = s.LastHeartbeat(ctx); err != nil {
