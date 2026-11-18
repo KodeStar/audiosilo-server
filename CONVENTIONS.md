@@ -1542,7 +1542,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
   a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new
   timeline, a listener's progress already at the new path merged by a strategy the caller
-  passes (`progressMerge`), a favourite landing once, so a collision never fails a move. A
+  passes (`carryRule`: `moveCarry` or `joinCarry`), a favourite landing once, so a collision never fails a move. A
   **move** takes the newest save whole (`mergeNewest`: `updated_at`, then version; a row
   already at the new path is a removed book's, so its position or finish must not win by
   being further on); a **join** keeps the furthest (`mergeFurthest`: the rows are parts of one
