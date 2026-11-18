@@ -451,6 +451,22 @@ describe('Settings > Bridge setup', () => {
     ).toBeInTheDocument();
   });
 
+  it('reads a credential held back by agent.require_group as set, not as none (bridge#79)', async () => {
+    const s = status();
+    s.setup = { ...s.setup!, agent_credential: 'group_required' };
+    // The agent step is optional (bridge#36) and not done while the credential is held back.
+    s.setup.items = s.setup.items.map((i) =>
+      i.id === 'agent' ? { ...i, done: false, required: false } : i,
+    );
+    mockFetch(routes({ 'GET /admin/bridge': { body: s } }));
+    renderApp(SETTINGS);
+    await screen.findByText('Everything required is done');
+    const card = setupCard();
+    expect(within(card).getByText(/^Held back: agent.require_group is on/)).toBeInTheDocument();
+    expect(within(card).getByText('Set')).toBeInTheDocument();
+    expect(within(card).queryByText('Not set')).toBeNull();
+  });
+
   it('shows no hand-off row for a Bridge that reports none', async () => {
     mockFetch(routes());
     renderApp(SETTINGS);
