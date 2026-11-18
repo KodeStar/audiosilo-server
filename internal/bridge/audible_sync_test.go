@@ -312,9 +312,7 @@ func TestAudibleSyncClaimUnreadableParamsFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET params = '{' WHERE id = ?`, job.ID); err != nil {
-		t.Fatal(err)
-	}
+	q.damageParams(t, job.ID)
 	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got == nil || got.ID != behind.ID {
 		t.Fatalf("claim = %+v, %v; want the sync behind it", got, err)
 	}

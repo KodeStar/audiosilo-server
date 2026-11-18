@@ -205,8 +205,7 @@ func TestPodcastFoldUnreadableSubscribe(t *testing.T) {
 		t.Fatal(err)
 	}
 	job := bridge.Job{ID: 1, Kind: bridge.KindPodcastSubscribe, LibraryID: &lib.ID, State: bridge.StateFailed,
-		RequestedBy: &bridge.Requester{ID: user}, Params: json.RawMessage(`{`), Result: json.RawMessage(`{}`),
-		Error: "The server could not read which feed this subscription is for."}
+		RequestedBy: &bridge.Requester{ID: user}, Params: json.RawMessage(`{`), Result: json.RawMessage(`{}`)}
 	if err := c.FoldPodcastJob(ctx, job); err != nil {
 		t.Fatal(err)
 	}

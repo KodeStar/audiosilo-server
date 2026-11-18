@@ -800,13 +800,7 @@ func TestSubscribeClaimUnreadableParamsFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	damage := func(id int64) {
-		t.Helper()
-		if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET params = '{' WHERE id = ?`, id); err != nil {
-			t.Fatal(err)
-		}
-	}
-	damage(damaged.ID)
+	q.damageParams(t, damaged.ID)
 	if got, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || got == nil || got.ID != behind.ID {
 		t.Fatalf("claim = %+v, %v; want the subscribe behind it", got, err)
 	}
@@ -827,7 +821,7 @@ func TestSubscribeClaimUnreadableParamsFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	damage(last.ID)
+	q.damageParams(t, last.ID)
 	if got, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || got != nil {
 		t.Fatalf("claim = %+v, %v; want none", got, err)
 	}
