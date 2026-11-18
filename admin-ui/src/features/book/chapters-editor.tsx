@@ -11,7 +11,7 @@ import {
   Trash2,
   TriangleAlert,
 } from 'lucide-react';
-import { api, streamUrl } from '@/api/client';
+import { api, streamUrl, transcodeRetryAfter } from '@/api/client';
 import {
   invalidateIssues,
   keys,
@@ -450,6 +450,13 @@ const RESTREAM_MS = 250;
 const TRANSCODE_TAIL_S = 1;
 
 /**
+ * How often a transcode the server had no slot for (503, every one busy) is
+ * asked for again, each after the server's Retry-After, before the player says
+ * it can't play.
+ */
+const BUSY_TRIES = 3;
+
+/**
  * The editor's player: the chosen row's file, streamed with a book media token
  * (never the session's), at the row's start. Nudges by a second or a tenth, plays
  * five seconds from the start, and sets the row's start (or adds a chapter) at
@@ -496,6 +503,15 @@ function Scrubber({
   // have run out (four hours) or been dropped by the cap on editor tokens (a
   // sixth book's editor), so the first failure mints again before giving up.
   const reminted = useRef(false);
+  // A transcode the server had no slot for: how often it was asked for again,
+  // the wait before the next ask, and the look at the answer it failed with.
+  const busy = useRef(0);
+  const again = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const probe = useRef<AbortController>(undefined);
+  const stopRetry = () => {
+    clearTimeout(again.current);
+    probe.current?.abort();
+  };
   const target = row ? toFileTime(spans, row.start) : undefined;
   const span = target?.span;
   const offset = target?.offset ?? 0;
@@ -545,12 +561,18 @@ function Scrubber({
     };
   }, []);
 
-  // Another row (or this one moved): a seek still waiting to be asked for and a
-  // "Play 5 s" still waiting to start were the last row's.
+  // Another row (or this one moved): a seek still waiting to be asked for, a
+  // "Play 5 s" still waiting to start and a busy transcode waiting to be asked
+  // for again were the last row's, and a transcode given up on has its tries
+  // again.
   useEffect(() => {
     clearTimeout(restream.current);
     previewing.current = false;
-  }, [at]);
+    clearTimeout(again.current);
+    probe.current?.abort();
+    busy.current = 0;
+    if (transcoded) setFailed(false);
+  }, [at, transcoded]);
 
   // A chosen row (or a moved one) puts the playhead at its start. A transcode
   // starts there: its stream is asked for from there (src).
@@ -571,6 +593,8 @@ function Scrubber({
     () => () => {
       clearTimeout(preview.current);
       clearTimeout(restream.current);
+      clearTimeout(again.current);
+      probe.current?.abort();
     },
     [],
   );
@@ -600,8 +624,52 @@ function Scrubber({
     if (!a) return;
     clearTimeout(preview.current);
     previewing.current = false;
-    if (a.paused) void a.play().catch(() => {});
-    else a.pause();
+    stopRetry();
+    if (!a.paused) {
+      a.pause();
+      return;
+    }
+    // One that failed (a busy transcode given up on waiting for) loads again first.
+    if (a.error) a.load();
+    void a.play().catch(() => {});
+  };
+  // A failed load mints a new token once (reminted), then gives up.
+  const remint = () => {
+    if (reminted.current) {
+      setFailed(true);
+      return;
+    }
+    reminted.current = true;
+    void token.refetch();
+  };
+  // A transcode fails for want of a slot too (503, every one busy), which is
+  // no fault of the token: it is asked for again after the server's
+  // Retry-After, and plays then.
+  const onError = () => {
+    const a = audio.current;
+    if (!transcoded || !src || !a) {
+      remint();
+      return;
+    }
+    stopRetry();
+    const look = new AbortController();
+    probe.current = look;
+    void transcodeRetryAfter(src, look.signal).then((wait) => {
+      if (look.signal.aborted || audio.current !== a) return;
+      if (wait === undefined) {
+        remint();
+        return;
+      }
+      if (++busy.current > BUSY_TRIES) {
+        setFailed(true);
+        return;
+      }
+      again.current = setTimeout(() => {
+        if (audio.current !== a) return;
+        a.load();
+        void a.play().catch(() => {});
+      }, wait * 1000);
+    });
   };
   const playFive = () => {
     const a = audio.current;
@@ -669,6 +737,7 @@ function Scrubber({
           onLoadedMetadata={(e) => {
             setFailed(false);
             reminted.current = false;
+            busy.current = 0;
             // A transcode starts where the seek (or the row) asked; a seek made
             // since it was asked for waits for its own.
             if (transcoded) {
@@ -692,14 +761,7 @@ function Scrubber({
             preview.current = setTimeout(() => audio.current?.pause(), PREVIEW_MS);
           }}
           onPause={() => setPlaying(false)}
-          onError={() => {
-            if (reminted.current) {
-              setFailed(true);
-              return;
-            }
-            reminted.current = true;
-            void token.refetch();
-          }}
+          onError={onError}
         />
       ) : null}
       <input

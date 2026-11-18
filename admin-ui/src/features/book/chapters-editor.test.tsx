@@ -320,6 +320,117 @@ describe('the chapter editor', () => {
     expect(container.querySelector('audio')!.getAttribute('src')).toContain('token=media-tok');
   });
 
+  describe('a transcode that fails', () => {
+    const opus = () => {
+      const d = bookDetail();
+      d.files = d.files.map((f) => ({
+        ...f,
+        format: 'mka',
+        codec: 'opus',
+        direct_playable: false,
+      }));
+      return d;
+    };
+    // jsdom plays nothing: the asks to load and play again are counted.
+    let load: ReturnType<typeof vi.spyOn>;
+    let play: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      load = vi.spyOn(HTMLMediaElement.prototype, 'load');
+      play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    async function listen(stream: MockRoute) {
+      let n = 0;
+      const calls = mockFetch(
+        routes(opus(), {
+          'POST /cast/token': () => ({
+            status: 201,
+            body: { token: `media-tok-${++n}`, expires_at: 'x' },
+          }),
+          'GET /libraries/1/stream': stream,
+        }),
+      );
+      const { container } = renderApp(URL);
+      const user = await openEditor();
+      await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+      await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+      load.mockClear();
+      return {
+        user,
+        audio: container.querySelector('audio')!,
+        mints: () => calls.filter((c) => c.path === '/cast/token').length,
+        looks: () => calls.filter((c) => c.path === '/libraries/1/stream'),
+      };
+    }
+    // Every transcode slot taken: 503 with a Retry-After (a short one, for the test).
+    const busy = { status: 503, raw: '', headers: { 'Retry-After': '0.02' } };
+
+    it('waits and asks again when the server is too busy, with no new token', async () => {
+      const { user, audio, mints, looks } = await listen(busy);
+      fireEvent.error(audio);
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+      expect(load).toHaveBeenCalledTimes(1);
+      // The look at the answer asked for the same stream, with the editor's token.
+      expect(looks()).toHaveLength(1);
+      expect(looks()[0].query.get('transcode')).toBe('1');
+      expect(looks()[0].query.get('token')).toBe('media-tok-1');
+      expect(mints()).toBe(1);
+      expect(audio.getAttribute('src')).toContain('media-tok-1');
+      expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
+
+      // Still busy after three asks: it gives up, the token still the first.
+      fireEvent.error(audio);
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+      fireEvent.error(audio);
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(3));
+      fireEvent.error(audio);
+      expect(await screen.findByText(/The audio didn’t load/)).toBeInTheDocument();
+      expect(play).toHaveBeenCalledTimes(3);
+      expect(mints()).toBe(1);
+
+      // Another row has its own tries.
+      await user.click(screen.getByRole('button', { name: 'Listen from chapter 1' }));
+      await waitFor(() =>
+        expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument(),
+      );
+      expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+    });
+
+    it('drops the wait when another row is chosen', async () => {
+      const { user, audio, looks } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
+      fireEvent.error(audio);
+      await waitFor(() => expect(looks()).toHaveLength(1));
+      await user.click(screen.getByRole('button', { name: 'Listen from chapter 1' }));
+      await new Promise((r) => setTimeout(r, 300));
+      expect(play).not.toHaveBeenCalled();
+    });
+
+    it('asks at once when Play is pressed during the wait, and not again after it', async () => {
+      const { user, audio, looks } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
+      fireEvent.error(audio);
+      await waitFor(() => expect(looks()).toHaveLength(1));
+      // Past the look's answer, into the wait.
+      await new Promise((r) => setTimeout(r, 20));
+      await user.click(screen.getByRole('button', { name: 'Play' }));
+      expect(play).toHaveBeenCalledTimes(1);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(play).toHaveBeenCalledTimes(1);
+    });
+
+    it('mints a new token when the answer is not a busy one', async () => {
+      const { audio, mints } = await listen({ status: 401, body: { error: 'unauthorized' } });
+      fireEvent.error(audio);
+      await waitFor(() => expect(audio.getAttribute('src')).toContain('media-tok-2'));
+      expect(mints()).toBe(2);
+      expect(play).not.toHaveBeenCalled();
+      // The new token fails too: it can't play, and no third mint.
+      fireEvent.error(audio);
+      expect(await screen.findByText(/The audio didn’t load/)).toBeInTheDocument();
+      expect(mints()).toBe(2);
+    });
+  });
+
   it('plays the stored file when the server can’t transcode', async () => {
     const d = bookDetail();
     d.files = d.files.map((f) => ({ ...f, format: 'mka', codec: 'opus', direct_playable: false }));
