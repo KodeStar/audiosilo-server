@@ -109,11 +109,14 @@ export function setupComplete(setup: Pick<BridgeSetup, 'items'>): boolean {
 }
 
 /**
- * Whether the agent credential is set, as the agent step says; undefined when
- * the checklist has no agent step (nothing to say).
+ * `value` when it is one of `known`'s own keys (so a later value, or one like
+ * `constructor`, is none), else undefined.
  */
-export function agentCredentialSet(setup: Pick<BridgeSetup, 'items'>): boolean | undefined {
-  return setup.items.find((i) => i.id === 'agent')?.done;
+function knownKey<K extends string>(
+  known: Readonly<Record<K, string>>,
+  value: string | undefined,
+): K | undefined {
+  return value !== undefined && Object.hasOwn(known, value) ? (value as K) : undefined;
 }
 
 /**
@@ -136,10 +139,15 @@ export type CredentialShare = keyof typeof CREDENTIAL_SHARE_KEY;
 export function credentialShare(
   setup: Pick<BridgeSetup, 'agent_credential'>,
 ): CredentialShare | undefined {
-  const share = setup.agent_credential;
-  return share && Object.hasOwn(CREDENTIAL_SHARE_KEY, share)
-    ? (share as CredentialShare)
-    : undefined;
+  return knownKey(CREDENTIAL_SHARE_KEY, setup.agent_credential);
+}
+
+/**
+ * Whether the agent credential is set, as the agent step says; undefined when
+ * the checklist has no agent step (nothing to say).
+ */
+export function agentCredentialSet(setup: Pick<BridgeSetup, 'items'>): boolean | undefined {
+  return setup.items.find((i) => i.id === 'agent')?.done;
 }
 
 /**
@@ -160,10 +168,7 @@ export type GitHubSignInState = keyof typeof GITHUB_SIGN_IN_KEY;
 export function githubSignInState(
   setup: Pick<BridgeSetup, 'github_state'>,
 ): GitHubSignInState | undefined {
-  const state = setup.github_state;
-  return state && Object.hasOwn(GITHUB_SIGN_IN_KEY, state)
-    ? (state as GitHubSignInState)
-    : undefined;
+  return knownKey(GITHUB_SIGN_IN_KEY, setup.github_state);
 }
 
 /** The checklist's GitHub step, when it has one. */
