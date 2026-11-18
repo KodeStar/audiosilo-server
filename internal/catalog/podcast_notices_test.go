@@ -679,6 +679,47 @@ func TestPodcastCheckNowWithoutRequesterIsNotCounted(t *testing.T) {
 	}
 }
 
+// An ended poll not folded yet is the show's poll in hand, whatever it ended
+// as, but only within bridge.PollFoldWindow: one whose fold never comes holds
+// the show back no longer than the sweep keeps trying it (server#403).
+func TestDuePodcastPollsUnfoldedPollInHand(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	now := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	lib := podcastShowsLib(t, c, ctx, 0)
+	user := seedUser(t, c, ctx)
+	if err := c.FollowPodcast(ctx, user, lib.ID, "Example Show", "a1b2c3d4e5f60718"); err != nil {
+		t.Fatal(err)
+	}
+	due := func(want int, why string) {
+		t.Helper()
+		if refs, err := c.DuePodcastPolls(ctx, 10); err != nil || len(refs) != want {
+			t.Fatalf("%s: due %+v %v, want %d", why, refs, err, want)
+		}
+	}
+	due(1, "no poll")
+	for i, state := range []string{bridge.StateDone, bridge.StateFailed, bridge.StateCancelled} {
+		id := int64(100 + i)
+		finished := now.Add(-time.Hour).Format(time.RFC3339)
+		if _, err := c.db.ExecContext(ctx, `INSERT INTO bridge_jobs(id,kind,library_id,rel_path,state,dedupe_key,created_at,updated_at,finished_at) VALUES(?,'podcast.poll',?,'Example Show',?,'k','t','t',?)`, id, lib.ID, state, finished); err != nil {
+			t.Fatal(err)
+		}
+		due(0, state+" and not folded")
+		// Past the window the sweep no longer folds it, nor does it hold the show.
+		if _, err := c.db.ExecContext(ctx, `UPDATE bridge_jobs SET finished_at=? WHERE id=?`, now.Add(-bridge.PollFoldWindow-time.Second).Format(time.RFC3339), id); err != nil {
+			t.Fatal(err)
+		}
+		due(1, state+" unfolded past the window")
+		if _, err := c.db.ExecContext(ctx, `UPDATE bridge_jobs SET finished_at=? WHERE id=?`, finished, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.db.ExecContext(ctx, `INSERT INTO podcast_folded(job_id,at) VALUES(?,?)`, id, finished); err != nil {
+			t.Fatal(err)
+		}
+		due(1, state+" and folded")
+	}
+}
+
 // A feed that ended (`gone`) stays ended when a follower's Check now of it
 // fails another way: the scheduled polls stay stopped (no next poll, still
 // `gone`), nothing is told again, and only a success brings it back.
