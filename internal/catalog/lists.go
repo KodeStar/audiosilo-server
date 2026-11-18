@@ -302,8 +302,9 @@ func (l orderedList) keptRows(rows []listRow, listed map[Ref]bool, keep []Scope,
 // into next (the listed rows, in their new order; listed holds their refs): each
 // kept row goes just after the listed row that last preceded it in the stored
 // order (rows, everything stored now), or first when none did. When the new
-// order of the listed rows would put kept rows out of their stored order, they
-// all go after next instead, in stored order.
+// order of the listed rows would put kept rows out of their stored order, the
+// ones first in the list stay first and the rest go after next, all in stored
+// order (server#219: a leading episode no longer moves to the end).
 func withKept(rows, next []listRow, listed map[Ref]bool, kept []listRow) []listRow {
 	if len(kept) == 0 {
 		return next
@@ -334,7 +335,10 @@ func withKept(rows, next []listRow, listed map[Ref]bool, kept []listRow) []listR
 	for _, r := range out {
 		if isKept[r.Ref] {
 			if r.Ref != kept[order].Ref {
-				return append(slices.Clone(next), kept...)
+				// The leading ones are kept's first rows: they come before every
+				// listed row in the stored order, so before every other kept row.
+				lead := after[Ref{}]
+				return slices.Concat(lead, next, kept[len(lead):])
 			}
 			order++
 		}
