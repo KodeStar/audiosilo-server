@@ -502,10 +502,12 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	// case, of a folder the caller's rule never named), nor one through a link
 	// out of the root, looked at before the folder is read, so such a folder is
 	// never listed and answers as a missing one does. A path that climbs out of
-	// the root by its names is BrowseFS's 400 first; looked at after it. A
-	// local one can leave the root only through a link: one the index holds
+	// the root by its names is BrowseFS's 400 first; looked at after it. One
+	// that doesn't, as BrowseFS joins it (a leading slash is no climb:
+	// "/Author" is the root's "Author", and would be read before the look
+	// otherwise), can leave the root only through a link: one the index holds
 	// (no look made before BrowseFS's) is "directory not found" too.
-	early := rel != "" && filepath.IsLocal(filepath.FromSlash(dir))
+	early := rel != "" && filepath.IsLocal(filepath.Join(".", filepath.FromSlash(dir)))
 	if early && !a.fsGiven(w, r, lib, rel, allow) {
 		return
 	}

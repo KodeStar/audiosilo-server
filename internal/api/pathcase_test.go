@@ -341,7 +341,8 @@ func TestFSOutsideScopeIsMissing(t *testing.T) {
 		reads.Add(1)
 		return inner(ctx, dir, timeout)
 	})
-	for _, p := range []string{pcAuthor, pcBook, "Other", "Other/Book", "Nowhere"} {
+	// A leading slash names the same folder ("/Other" is the root's "Other").
+	for _, p := range []string{pcAuthor, pcBook, "Other", "Other/Book", "Nowhere", "/Other", "/" + pcBook} {
 		if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "fs", p), c.halTok, ""); resp.StatusCode != http.StatusNotFound {
 			t.Errorf("hal's fs %+q = %d %s, want 404", p, resp.StatusCode, body)
 		}
@@ -391,7 +392,9 @@ func TestFSLinkOutOfRootIsMissing(t *testing.T) {
 		mu.Unlock()
 		return inner(ctx, dir, timeout)
 	})
-	for _, p := range []string{"Out", "Out/present", "Out/absent"} {
+	// With a leading slash too: the same folder, looked at before it is read
+	// (read first, the link would answer 400 where a missing folder is a 404).
+	for _, p := range []string{"Out", "Out/present", "Out/absent", "/Out", "/Out/present"} {
 		c.same(t, c.samTok, "GET", c.get("fs"), p, "Nowhere")
 	}
 	c.same(t, c.samTok, "GET", c.get("stream"), "Out/present/01.mp3", "Out/absent/01.mp3")

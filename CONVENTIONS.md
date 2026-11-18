@@ -1196,8 +1196,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestSafeJoinListedVariantCostsWhatMissingDoes`; a folder whose names pass the bound once a request). A
   link out of the root ends the walk where it is met, nothing below it listed or looked at: the stream's
   400 `invalid path`, `/fs`'s "directory not found" whatever the folder it points to holds
-  (`TestFSLinkOutOfRootIsMissing`). `/fs` looks before it reads the folder (after, for a path that climbs
-  out of the root by its names, so it keeps its 400), and answers a folder outside the caller's share
+  (`TestFSLinkOutOfRootIsMissing`). `resolveBelow` returns such a link's own target, never joined with
+  the names after it, so `SafeJoin` too refuses every path through it: joined, a link to a folder above
+  the root (`up/<root>/Book/link/x`) read as a path back inside the root, a link out of it further down
+  never looked at (`TestResolveBelowIsResolveExisting`). `/fs` looks before it reads the folder (after,
+  for a path that climbs out of the root by its names, so it keeps its 400; a leading slash is no climb,
+  `/Author` is looked at first as `Author` is), and answers a folder outside the caller's share
   rules (`VisibleInBrowse`) as a missing one before any listing (`TestFSOutsideScopeIsMissing`). Every
   other route reads the index, which holds the disk's spelling only. `TestCaseVariantRoutes` compares
   every route on a temp dir that ignores case; `TestCaseVariantDiskRoutes` covers the stream and `/fs` on
