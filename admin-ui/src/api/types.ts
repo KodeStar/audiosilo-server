@@ -2892,6 +2892,11 @@ export interface SidecarsPark {
   hint?: string;
   /** RFC 3339: an availability park resumes by itself then. */
   retry_at?: string;
+  /**
+   * The park's message for people, without its code (bridge#28): the Bridge's
+   * own page reads it; absent from an older Bridge, whose job error carries it.
+   */
+  message?: string;
 }
 
 /** sidecars.generate's progress (and sidecars.describe's, step and stage "describing"). */

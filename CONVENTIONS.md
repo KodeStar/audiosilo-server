@@ -2962,7 +2962,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`Service.held`, the claims' own rule: a queued job whose module is off); kinds asked in name order), and
   `Service.Blocker` names the open job that refuses a new job of a kind now). States queued -> claimed -> running -> done | failed | needs_attention | cancelled; the Bridge PARKS
   a job it keeps running (`needs_attention`, the park's code in `progress.park.code`, its message in
-  `error`) and unparks it (back to `running`) under the same claim: a held state, so its reports still
+  `error`, and without the code in `progress.park.message` from a Bridge that sends it, bridge#28: its own
+  page reads that, the server keeps it with the progress and the console doesn't read it) and unparks it (back to `running`) under the same claim: a held state, so its reports still
   land, but a parked job's lease is dropped (only claimed and running leases expire) and a running
   report renews it. A report that keeps a parked job parked and names no park (absent, null, or with
   no code, as `ParkCode` reads it) keeps the stored one (`carryPark`; the stored progress whole when the
