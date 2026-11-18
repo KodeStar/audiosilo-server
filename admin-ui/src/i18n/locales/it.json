@@ -3299,7 +3299,7 @@
   "bridge.setup.credentialNotSet": "Non impostata",
   "bridge.setup.credentialHandoff": "Consegna della credenziale",
   "bridge.setup.credentialShareGroup": "Riservata al gruppo del Bridge",
-  "bridge.setup.credentialShareWorld": "Leggibile da ogni utente del volume di scambio finché l'agente non la prende: aggiungi il gruppo del Bridge al container dell'agente",
+  "bridge.setup.credentialShareWorld": "Leggibile da ogni utente del volume staging finché l'agente non la prende: aggiungi il gruppo del Bridge al container dell'agente o, se ce l'ha già, guarda il log del Bridge",
   "bridge.setup.credentialShareGroupRequired": "Trattenuta: agent.require_group è attivo e il gruppo del Bridge non è utilizzabile (vedi Accounts sul Bridge)",
   "bridge.setup.githubUnrefreshed": "Impossibile rinnovare l'accesso: il Bridge continua a riprovare",
   "bridge.setup.githubRefused": "GitHub ha rifiutato l'accesso: accedi di nuovo sul Bridge",
