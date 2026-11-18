@@ -138,6 +138,51 @@ func TestCSPAllowsPlainHTTP(t *testing.T) {
 	}
 }
 
+// TestCSPWebKitSelectStyleHash: the console/connect policy admits exactly one
+// style attribute, the "text-overflow:inherit" WebKit puts inside a native
+// <select>'s user-agent shadow tree (#467), by its hash, and no inline style
+// otherwise: no 'unsafe-inline' on style-src or style-src-attr, no other hash.
+// 'unsafe-hashes' stays off scripts: script-src is 'self' alone, so no event
+// handler or javascript: URL is admitted by a hash. (That the pages are served
+// with this constant is pinned by the tests of the connect page, the console
+// and the static assets.)
+func TestCSPWebKitSelectStyleHash(t *testing.T) {
+	t.Parallel()
+	// The exact bytes WebKit sets: no space after the colon, no trailing semicolon.
+	sum := sha256.Sum256([]byte("text-overflow:inherit"))
+	if want := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"; webkitSelectStyleHash != want {
+		t.Fatalf("webkitSelectStyleHash = %s, want %s (the sha256 of text-overflow:inherit)", webkitSelectStyleHash, want)
+	}
+	directives := map[string]string{}
+	for _, dir := range strings.Split(contentSecurityPolicy, "; ") {
+		name, value, _ := strings.Cut(dir, " ")
+		// A browser keeps the first of a repeated directive and drops the rest.
+		if _, dup := directives[name]; dup {
+			t.Fatalf("the console CSP repeats %s: %s", name, contentSecurityPolicy)
+		}
+		directives[name] = value
+	}
+	for name, want := range map[string]string{
+		"style-src":      "'self'",
+		"style-src-attr": "'unsafe-hashes' " + webkitSelectStyleHash,
+		"script-src":     "'self'",
+	} {
+		if got := directives[name]; got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+	// Denied: no directive that would take <style> elements, <script> elements
+	// or event handlers away from the two 'self' lists above.
+	for _, name := range []string{"style-src-elem", "script-src-elem", "script-src-attr"} {
+		if _, ok := directives[name]; ok {
+			t.Errorf("the console CSP should not carry %s: %s", name, contentSecurityPolicy)
+		}
+	}
+	if n := strings.Count(contentSecurityPolicy, "'unsafe-"); n != 1 {
+		t.Errorf("the console CSP carries %d 'unsafe-*' keywords, want style-src-attr's 'unsafe-hashes' alone: %s", n, contentSecurityPolicy)
+	}
+}
+
 // TestHTMLCSPImagesStaySameOrigin: the player loads community covers through the
 // server (GET /libraries/{id}/meta/cover), never from their own hosts, so its
 // img-src admits no other origin. Widening it would let a listener's browser

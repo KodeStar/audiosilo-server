@@ -34,9 +34,28 @@ var assetsFS embed.FS
 // data: is allowed for images so the QR pairing PNG (a data URI) renders.
 // manifest-src and worker-src ('self') let the admin console install as a PWA:
 // fetch its web manifest and register its same-origin service worker (/sw.js).
+// style-src-attr admits one style attribute by its hash and nothing else:
+// WebKit (Safari) gives the button slot of every native <select>'s own
+// user-agent shadow tree style="text-overflow:inherit" before it joins that
+// tree, so the page's CSP is applied to it, and without the hash each page with
+// a native <select> (the connect page's language picker, the console's
+// NativeSelect) logs a refusal (#467). The attribute only hands the select's
+// text-overflow to its button text and no select here sets one, so it renders
+// the same either way; the hash only quiets the console. Any other style
+// attribute is still refused, 'unsafe-hashes' sits on no script directive (so
+// no event handler or javascript: URL is admitted), and a browser without
+// style-src-attr falls back to style-src 'self'.
+// It is a WebKit regression, fixed upstream by styling the slot from the UA
+// style sheet (bugs.webkit.org 327212, 324283@main): drop the directive once
+// the Safari releases without that fix are out of use.
 const contentSecurityPolicy = "default-src 'self'; img-src 'self' data:; " +
-	"style-src 'self'; script-src 'self'; connect-src 'self'; " +
+	"style-src 'self'; style-src-attr 'unsafe-hashes' " + webkitSelectStyleHash + "; " +
+	"script-src 'self'; connect-src 'self'; " +
 	"manifest-src 'self'; worker-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+
+// webkitSelectStyleHash is the CSP source for the exact attribute value
+// "text-overflow:inherit" (TestCSPWebKitSelectStyleHash pins it).
+const webkitSelectStyleHash = "'sha256-3oFxofzq3N//6J8H86e9ul4WT2OkJrtonB66gn/TLJw='"
 
 // ContentSecurityPolicy is the strict same-origin CSP applied to the admin console
 // and the baked-in connect pages. Exported so the api package can apply the identical policy
