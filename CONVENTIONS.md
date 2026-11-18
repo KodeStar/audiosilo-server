@@ -1534,15 +1534,22 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   at the start (after `KeyPaths`, recorded in `server_state('path_rekey')` only when no path failed; the
   start that first runs it applies `0084`, so `backup.BeforeUpgrade` copied the database just before), and
   `RekeyLibrary` after every scan run that finished ok or partial (`launcher.rekeyAfterScan`, the
-  scanner's `OnRunFinished`; candidates only in the tables clients write). Books libraries only. Per path,
+  scanner's `OnRunFinished`, under the server's context so a stop ends it between paths; candidates
+  only in the tables clients write). Books libraries only. Per path,
   `rekeyTarget`: another spelling of an indexed book (`spelling`: every table), a file of a folder book
   (`file`: all but favourites, a track row's heart stays on the track), a folder inside a book (`folder`:
   the book-level rows only, lists, ratings and the reader's place, read at `BookPathAt`; a disc's timeline
-  rows keep their key); anything else stays (navigation folders, orphans, colliding keys). One writer
-  transaction a path, all or nothing: re-check the path is still no book and the target still one, read
+  rows keep their key); anything else stays (navigation folders, orphans, colliding keys). A path in
+  another spelling than the index's moves the rows its reason leaves to that spelling (`rekeyMoves`: a
+  track's heart, a disc folder's timeline rows, a navigation folder's favourite; each its own length),
+  so none stays where every read now passes by. One writer
+  transaction a path, all or nothing: re-check the path is still no book and the target still one
+  holding it (`bookStillHolds`), read
   every row (`rekeyTables`, the twin of `carryListeningState`'s list: add a table to both), the guards
-  (`scope`: every listener with a row reaches the book, `UserScopes`; `timeline`, `file` only: a progress
-  row whose length is a later track's and not the book's, a tripwire), each row whole into `path_rekeys`
+  (`scope`: every listener with a row reaches where it goes, `UserScopes`; `timeline`, `file` only: a
+  progress row whose length is a later part's and not the book's: a track's, a tripwire, or a later
+  disc's of a joined book, a disc's own place an old player saved on its track before the join, which
+  carried only the disc folder's rows), each row whole into `path_rekeys`
   (`row_json`, cascades with the user and library, never on the wire), then `carryState` (the move's
   rules: `mergeNewest`, a list entry or favourite once, the newer rating or reader's place). A guard or a
   failure leaves the path whole for the next run; a re-run finds nothing to move. No undo command: the

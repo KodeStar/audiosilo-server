@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 )
 
 // The re-key (server#210). A listener's rows a client stored before the book
@@ -26,15 +27,17 @@ const rekeyStateKey = "path_rekey"
 // The reasons a path's rows move, as path_rekeys.reason records them.
 const (
 	// rekeySpelling: another Unicode spelling of an indexed book's path; every
-	// row moves, favourites included.
+	// row moves, favourites included. Also the rows another spelling of a
+	// track or folder keeps (rekeyMoves): they move to its index spelling.
 	rekeySpelling = "spelling"
 	// rekeyFile: a file of a folder book (any spelling); every row but the
-	// favourites moves (a track row's heart stays on the track, server#210).
+	// favourites moves (a track row's heart stays on the track, in the index's
+	// spelling, server#210).
 	rekeyFile = "file"
 	// rekeyFolder: a folder inside a book (a disc folder of a joined book); only
 	// the rows about the book as a whole move (lists, ratings, the reader's
-	// place: read at BookPathAt), the timeline rows keep their own key (a disc
-	// download plays the disc's own timeline).
+	// place: read at BookPathAt), the timeline rows keep their own key, in the
+	// index's spelling (a disc download plays the disc's own timeline).
 	rekeyFolder = "folder"
 )
 
@@ -217,6 +220,11 @@ func (c *Catalog) rekeyLibrary(ctx context.Context, libraryID int64, primaryOnly
 	slices.Sort(paths)
 	reach := map[int64][]Scope{} // each listener's access, read once a run (ownersReach)
 	for _, p := range paths {
+		// A run stopped part way (the server stopping) leaves the rest for the
+		// next one, rather than a failure a path.
+		if err := ctx.Err(); err != nil {
+			return rep, err
+		}
 		if cands[p] == carryFavs && !normSensitive(p) {
 			continue // favourites move only to another spelling, and p has none
 		}
@@ -225,11 +233,16 @@ func (c *Catalog) rekeyLibrary(ctx context.Context, libraryID int64, primaryOnly
 			rep.Failed = append(rep.Failed, RekeyPath{LibraryID: libraryID, Path: p, Why: err.Error()})
 			continue
 		}
-		if rekeySet(reason)&cands[p] == 0 {
-			continue // nothing its reason moves (no target, or a track's favourites only)
+		moves := rekeyMoves(p, reason, spelled, target)
+		var set carrySet
+		for _, mv := range moves {
+			set |= mv.set
 		}
-		rows, guard, err := c.rekeyPath(ctx, libraryID, p, spelled, target, reason, reach)
-		at := RekeyPath{LibraryID: libraryID, Path: p, Target: target}
+		if set&cands[p] == 0 {
+			continue // nothing its moves carry (no target, or a track's favourites only)
+		}
+		rows, guard, err := c.rekeyPath(ctx, libraryID, p, spelled, target, reason, moves, reach)
+		at := RekeyPath{LibraryID: libraryID, Path: p, Target: moves[0].to}
 		switch {
 		case err != nil:
 			at.Why = err.Error()
@@ -238,11 +251,36 @@ func (c *Catalog) rekeyLibrary(ctx context.Context, libraryID int64, primaryOnly
 			at.Why = guard
 			rep.Skipped = append(rep.Skipped, at)
 		case rows > 0:
-			rep.moved(reason, 1)
+			rep.moved(moves[0].reason, 1)
 			rep.Rows += rows
 		}
 	}
 	return rep, nil
+}
+
+// rekeyMove is one of a path's moves: its rows in the carry groups set go to
+// the path to, logged with reason.
+type rekeyMove struct {
+	reason, to string
+	set        carrySet
+}
+
+// rekeyMoves are p's moves: the rows reason moves (rekeySet) to the book at
+// target, and, for p in another spelling than the index's (spelled), every
+// other row to spelled, the same file or folder in the index's spelling (a
+// track row's heart, a disc folder's timeline rows, a navigation folder's
+// favourite), so no row stays on a spelling every read now passes by. None
+// when p is no book's and has no other spelling.
+func rekeyMoves(p, reason, spelled, target string) []rekeyMove {
+	var out []rekeyMove
+	set := rekeySet(reason)
+	if set != 0 {
+		out = append(out, rekeyMove{reason: reason, to: target, set: set})
+	}
+	if rest := carryAll &^ set; spelled != p && rest != 0 {
+		out = append(out, rekeyMove{reason: rekeySpelling, to: spelled, set: rest})
+	}
+	return out
 }
 
 // rekeySet is the carry groups a reason moves ("" moves none).
@@ -301,7 +339,8 @@ func (c *Catalog) rekeyCandidates(ctx context.Context, libraryID int64, primaryO
 // spelling, is the book (file); a folder inside a book is the book for its
 // book-level rows (folder). reason is "" when p is none of them (a navigation
 // folder, an orphan, a path two books' keys collide on: Spelling never guesses).
-// spelled is p in the index's spelling (Spelling).
+// spelled is p in the index's spelling (Spelling), where the rows reason
+// doesn't move go (rekeyMoves).
 func (c *Catalog) rekeyTarget(ctx context.Context, libraryID int64, p string) (reason, spelled, target string, err error) {
 	if spelled, _, err = c.Spelling(ctx, libraryID, p, nil); err != nil { // each owner's reach is the scope guard's
 		return "", "", "", err
@@ -334,17 +373,17 @@ type rekeyRow struct {
 	cols  map[string]any
 }
 
-// rekeyPath moves p's rows (spelled: p in the index's spelling) in the tables
-// reason moves (rekeySet) to the book at target in one transaction, all or
-// nothing: every row is copied
-// into path_rekeys first, then carried as a move carries it (carryState:
-// progress by mergeNewest, a list entry or favourite once, a rating or
-// reader's place the newer). It checks again, inside the transaction, that
-// from is still no book and to still one (a scan may have run since the
-// candidates were read), and returns the rows moved, or the guard that left
-// them (nothing written). reach caches each listener's access for ownersReach.
-func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, target, reason string, reach map[int64][]Scope) (int, string, error) {
-	set := rekeySet(reason)
+// rekeyPath makes p's moves (rekeyMoves; spelled: p in the index's spelling)
+// in one transaction, all or nothing: every row is copied into path_rekeys
+// first, then carried as a move carries it (carryState: progress by
+// mergeNewest, a list entry or favourite once, a rating or reader's place the
+// newer). It checks again, inside the transaction, that p is still no book and
+// that the book at target is still one holding spelled (a scan may have run
+// since the candidates were read), and returns the rows moved, or the guard
+// that left them (nothing written). reach caches each listener's access for
+// ownersReach.
+func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, target, reason string, moves []rekeyMove,
+	reach map[int64][]Scope) (int, string, error) {
 	moved, guard := 0, ""
 	err := c.db.WithTx(ctx, "RekeyPathState", func(tx *sql.Tx) error {
 		if _, err := bookIDByPath(ctx, tx, libraryID, p); err == nil {
@@ -353,64 +392,103 @@ func (c *Catalog) rekeyPath(ctx context.Context, libraryID int64, p, spelled, ta
 			return err
 		}
 		var total float64
-		if err := tx.QueryRowContext(ctx, `SELECT duration FROM books WHERE library_id = ? AND rel_path = ?`,
-			libraryID, target).Scan(&total); errors.Is(err, sql.ErrNoRows) {
-			return nil // removed since
-		} else if err != nil {
-			return err
-		}
-		var rows []rekeyRow
-		for _, t := range rekeyTables {
-			if t.set&set == 0 {
-				continue
+		if reason != "" {
+			if ok, err := bookStillHolds(ctx, tx, libraryID, target, spelled, reason, &total); err != nil || !ok {
+				return err // removed or re-read since
 			}
-			got, err := readRekeyRows(ctx, tx, t, libraryID, p)
-			if err != nil {
-				return err
+		}
+		type step struct {
+			rekeyMove
+			rows []rekeyRow
+		}
+		steps := make([]step, 0, len(moves))
+		n := 0
+		for _, mv := range moves {
+			var rows []rekeyRow
+			for _, t := range rekeyTables {
+				if t.set&mv.set == 0 {
+					continue
+				}
+				got, err := readRekeyRows(ctx, tx, t, libraryID, p)
+				if err != nil {
+					return err
+				}
+				rows = append(rows, got...)
 			}
-			rows = append(rows, got...)
-		}
-		if len(rows) == 0 {
-			return nil
-		}
-		// A guard returns before anything is written: the commit is a rollback's.
-		if ok, err := c.ownersReach(ctx, tx, rows, Ref{LibraryID: libraryID, Path: target}, reach); err != nil {
-			return err
-		} else if !ok {
-			guard = RekeyGuardScope
-			return nil
-		}
-		if reason == rekeyFile {
-			if tripped, err := fileRelative(ctx, tx, libraryID, spelled, target, rows); err != nil {
+			// A guard returns before anything is written: the commit is a rollback's.
+			if ok, err := c.ownersReach(ctx, tx, rows, Ref{LibraryID: libraryID, Path: mv.to}, reach); err != nil {
 				return err
-			} else if tripped {
-				guard = RekeyGuardTimeline
+			} else if !ok {
+				guard = RekeyGuardScope
 				return nil
 			}
+			if mv.reason == rekeyFile {
+				if tripped, err := fileRelative(ctx, tx, libraryID, spelled, target, rows); err != nil {
+					return err
+				} else if tripped {
+					guard = RekeyGuardTimeline
+					return nil
+				}
+			}
+			steps = append(steps, step{mv, rows})
+			n += len(rows)
+		}
+		if n == 0 {
+			return nil
 		}
 		at := c.stamp()
-		for _, r := range rows {
-			js, err := json.Marshal(r.cols)
-			if err != nil {
-				return fmt.Errorf("log a %s row: %w", r.table, err)
+		for _, st := range steps {
+			for _, r := range st.rows {
+				js, err := json.Marshal(r.cols)
+				if err != nil {
+					return fmt.Errorf("log a %s row: %w", r.table, err)
+				}
+				if _, err := tx.ExecContext(ctx,
+					`INSERT INTO path_rekeys(at, reason, user_id, library_id, table_name, from_path, to_path, row_json)
+					 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+					at, st.reason, r.owner, libraryID, r.table, p, st.to, string(js)); err != nil {
+					return err
+				}
 			}
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO path_rekeys(at, reason, user_id, library_id, table_name, from_path, to_path, row_json)
-				 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-				at, reason, r.owner, libraryID, r.table, p, target, string(js)); err != nil {
+			// A respelling (to another spelling of p, the same file or folder)
+			// keeps each row's own length: total is the book's.
+			length := total
+			if st.to != target {
+				length = 0
+			}
+			if err := carryState(ctx, tx, libraryID, JoinPart{Path: p, Last: true}, st.to, length, mergeNewest, st.set); err != nil {
 				return err
 			}
 		}
-		if err := carryState(ctx, tx, libraryID, JoinPart{Path: p, Last: true}, target, total, mergeNewest, set); err != nil {
-			return err
-		}
-		moved = len(rows)
+		moved = n
 		return nil
 	})
 	if err != nil {
 		return 0, "", err
 	}
 	return moved, guard, nil
+}
+
+// bookStillHolds reports whether the book at target is still indexed and, for
+// reason, still holds spelled: as one of its files (file) or a folder of them
+// (folder); the book itself for spelling. total is set to its length.
+func bookStillHolds(ctx context.Context, tx *sql.Tx, libraryID int64, target, spelled, reason string, total *float64) (bool, error) {
+	held, args := `1`, []any{libraryID, target}
+	switch reason {
+	case rekeyFile:
+		held = `EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id AND f.rel_path = ?)`
+		args = append([]any{spelled}, args...)
+	case rekeyFolder:
+		held = `EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id AND f.rel_path LIKE ? ESCAPE '\')`
+		args = append([]any{escapeLike(spelled) + "/%"}, args...)
+	}
+	var ok bool
+	err := tx.QueryRowContext(ctx, `SELECT b.duration, `+held+` FROM books b WHERE b.library_id = ? AND b.rel_path = ?`,
+		args...).Scan(total, &ok)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return ok, err
 }
 
 // readRekeyRows reads every row of t on p, each column by name.
@@ -478,34 +556,63 @@ func (c *Catalog) ownersReach(ctx context.Context, tx *sql.Tx, rows []rekeyRow, 
 }
 
 // fileRelative is the timeline guard: whether a progress row in rows, on a
-// track of book (file: its spelling in the index), reads as a place in that track rather
-// than the book: its length is the track's (within timelineSlack) and not the
-// book's, on a track other than the book's first. A player always saved the
-// whole book's place, so this should never hold; it stays as a tripwire.
+// track of book (file: its spelling in the index), reads as a place in a part
+// of the book rather than the book: its length is the part's (within
+// timelineSlack) and not the book's, for a part that doesn't start the book.
+// A part is the track, or the folder inside the book holding it (a disc of a
+// joined book, its own book before the join: a player then saved the disc's
+// place on its track, which the join, carrying only the disc folder's rows,
+// left there). A player always saved the whole book's place, so the track's
+// should never hold; it stays as a tripwire.
 func fileRelative(ctx context.Context, tx *sql.Tx, libraryID int64, file, book string, rows []rekeyRow) (bool, error) {
 	var (
+		bookID           int64
 		fileLen, bookLen float64
 		first            bool
 	)
 	err := tx.QueryRowContext(ctx,
-		`SELECT f.duration, b.duration,
+		`SELECT b.id, f.duration, b.duration,
 		        f.id = (SELECT id FROM book_files WHERE book_id = b.id ORDER BY seq, id LIMIT 1)
 		   FROM books b JOIN book_files f ON f.book_id = b.id
 		  WHERE b.library_id = ? AND b.rel_path = ? AND f.rel_path = ?`,
-		libraryID, book, file).Scan(&fileLen, &bookLen, &first)
+		libraryID, book, file).Scan(&bookID, &fileLen, &bookLen, &first)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
-	if err != nil || first || fileLen <= 0 {
+	if err != nil || first {
 		return false, err
+	}
+	parts := []float64{fileLen}
+	if rest := strings.TrimPrefix(file, book+"/"); rest != file {
+		if i := strings.IndexByte(rest, '/'); i > 0 {
+			var (
+				discLen   float64
+				discFirst bool
+			)
+			if err := tx.QueryRowContext(ctx,
+				`SELECT COALESCE(SUM(duration), 0),
+				        COALESCE((SELECT rel_path FROM book_files WHERE book_id = ?1 ORDER BY seq, id LIMIT 1), '') LIKE ?2 ESCAPE '\'
+				   FROM book_files WHERE book_id = ?1 AND rel_path LIKE ?2 ESCAPE '\'`,
+				bookID, escapeLike(book+"/"+rest[:i])+"/%").Scan(&discLen, &discFirst); err != nil {
+				return false, err
+			}
+			if !discFirst {
+				parts = append(parts, discLen)
+			}
+		}
 	}
 	for _, r := range rows {
 		if r.table != "progress" {
 			continue
 		}
 		d, ok := r.cols["duration"].(float64) // REAL NOT NULL: always a float
-		if ok && math.Abs(d-fileLen) <= timelineSlack && math.Abs(d-bookLen) > timelineSlack {
-			return true, nil
+		if !ok || math.Abs(d-bookLen) <= timelineSlack {
+			continue
+		}
+		for _, n := range parts {
+			if n > 0 && math.Abs(d-n) <= timelineSlack {
+				return true, nil
+			}
 		}
 	}
 	return false, nil

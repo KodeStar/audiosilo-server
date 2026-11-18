@@ -352,11 +352,11 @@ func TestRekeyPathState(t *testing.T) {
 		t.Errorf("skipped = %+v, want track 3 by scope, track 2 by timeline", rep.Skipped)
 	}
 
-	// The moves, by table: what stays and where the rest went.
-	stays := map[at]bool{
-		{"favourites", rkTrack1}:  true, // a track row's heart stays (file)
-		{"favourites", rkTrack1D}: true,
-	}
+	// The moves, by table: what stays and where the rest went. A track row's
+	// heart stays on the track (file), in the index's spelling: adm's, on track 1
+	// in the other spelling, joins ann's on track 1.
+	stays := map[at]bool{{"favourites", rkTrack1}: true}
+	gains := map[at]int{{"favourites", rkTrack1}: 1}
 	for _, table := range rekeyedTables {
 		if i := slices.IndexFunc(rekeyTables, func(rt rekeyTable) bool { return rt.name == table }); rekeyTables[i].set != carryBookLevel {
 			stays[at{table, rkDisc1}] = true // a disc's timeline and its heart (folder)
@@ -364,7 +364,7 @@ func TestRekeyPathState(t *testing.T) {
 	}
 	for k, rows := range before {
 		got := f.rowCount(t, k.table, f.lib, k.path)
-		if want := map[bool]int{true: len(rows), false: 0}[stays[k]]; got != want {
+		if want := map[bool]int{true: len(rows), false: 0}[stays[k]] + gains[k]; got != want {
 			t.Errorf("%s at %+q: %d rows left, want %d", k.table, k.path, got, want)
 		}
 	}
@@ -507,6 +507,69 @@ func TestRekeyScopeGuardAllowsReachableBook(t *testing.T) {
 	}
 	if f.rowCount(t, "progress", f.lib, rkAmelie) != 1 || f.rowCount(t, "progress", f.lib, rkTrack3) != 1 {
 		t.Error("rows not where the guard leaves them")
+	}
+}
+
+// TestRekeyRespellsWhatStays: the rows a path in another spelling keeps (a
+// disc folder's timeline rows, a navigation folder's favourite) move to the
+// index's spelling of that path, keeping their own length, while its book-level
+// rows go to the book; and a later disc's track holding the disc's own place
+// (its length the disc's: the disc was its own book before the join) is left
+// where it is, as a row on the book's timeline from the same disc moves.
+func TestRekeyRespellsWhatStays(t *testing.T) {
+	t.Parallel()
+	f := newRekeyFixture(t)
+	const (
+		discs   = "Disques \u00c9t\u00e9" // NFC: joined from two discs
+		disc1   = discs + "/CD 1"
+		disc1D  = "Disques E\u0301te\u0301/CD 1" // disc 1 decomposed
+		disc2   = discs + "/CD 2"
+		nav     = "\u00c9crivains"  // a navigation folder, NFC
+		navD    = "E\u0301crivains" // the same, decomposed
+		discLen = 60.0
+	)
+	upsert(t, f.c, &Book{LibraryID: f.lib, RelPath: discs, IsFolder: true, Title: "Disques", Duration: 140,
+		Files: []BookFile{{RelPath: disc1 + "/01.mp3", Duration: 40}, {RelPath: disc1 + "/02.mp3", Seq: 1, Duration: 40},
+			{RelPath: disc2 + "/01.mp3", Seq: 2, Duration: 30}, {RelPath: disc2 + "/02.mp3", Seq: 3, Duration: 30}}})
+	upsert(t, f.c, &Book{LibraryID: f.lib, RelPath: nav + "/Livre", IsFolder: true, Title: "Livre",
+		Files: []BookFile{{RelPath: nav + "/Livre/01.mp3"}}})
+	f.exec(t, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, updated_at) VALUES(?, ?, ?, 20, 80, ?)`,
+		f.eve, f.lib, disc1D, rkUpdated1)
+	f.exec(t, `INSERT INTO ratings(user_id, library_id, rel_path, rating, note, created_at, updated_at) VALUES(?, ?, ?, 4, '', ?, ?)`,
+		f.eve, f.lib, disc1D, rkUpdated1, rkUpdated1)
+	f.exec(t, `INSERT INTO favourites(user_id, library_id, rel_path, created_at) VALUES(?, ?, ?, ?)`, f.adm, f.lib, navD, rkUpdated1)
+	// bob's place on disc 2's second track is the disc's (length 60): kept.
+	// ann's on disc 2's first track is the joined book's (length 140): moved.
+	f.exec(t, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, updated_at) VALUES(?, ?, ?, 45, ?, ?)`,
+		f.bob, f.lib, disc2+"/02.mp3", discLen, rkUpdated1)
+	f.exec(t, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, updated_at) VALUES(?, ?, ?, 95, 140, ?)`,
+		f.ann, f.lib, disc2+"/01.mp3", rkUpdated1)
+
+	rep, err := f.c.RekeyLibrary(f.ctx, f.lib)
+	if err != nil || len(rep.Failed) != 0 {
+		t.Fatalf("re-key: %+v %v", rep, err)
+	}
+	if len(rep.Skipped) != 1 || rep.Skipped[0].Path != disc2+"/02.mp3" || rep.Skipped[0].Why != RekeyGuardTimeline {
+		t.Errorf("skipped = %+v, want disc 2's second track by the timeline guard", rep.Skipped)
+	}
+	if p, _ := f.c.GetProgress(f.ctx, f.eve, Ref{LibraryID: f.lib, Path: disc1}); p == nil || p.Position != 20 || p.Duration != 80 {
+		t.Errorf("eve's disc progress = %+v, want 20 of 80 on the disc in the index's spelling", p)
+	}
+	for _, k := range []struct {
+		table, path string
+		want        int
+	}{
+		{"progress", disc1D, 0}, {"ratings", disc1D, 0}, {"ratings", discs, 1},
+		{"favourites", navD, 0}, {"favourites", nav, 1},
+		{"progress", disc2 + "/02.mp3", 1}, {"progress", disc2 + "/01.mp3", 0}, {"progress", discs, 1},
+	} {
+		if got := f.rowCount(t, k.table, f.lib, k.path); got != k.want {
+			t.Errorf("%s at %+q: %d rows, want %d", k.table, k.path, got, k.want)
+		}
+	}
+	var logged int
+	if err := f.c.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM path_rekeys`).Scan(&logged); err != nil || logged != rep.Rows || logged != 4 {
+		t.Errorf("path_rekeys holds %d rows (%v), the report %d, want 4", logged, err, rep.Rows)
 	}
 }
 
