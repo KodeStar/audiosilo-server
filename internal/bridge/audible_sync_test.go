@@ -131,7 +131,7 @@ func TestAudibleSyncClaimFailsUnspent(t *testing.T) {
 	}
 }
 
-// A claimed audible.sync whose stored params name no account can never be
+// A claimed audible.sync whose stored params can't be read can never be
 // filled: it is not put back unspent (every claim would take it again) but
 // left claimed, so its lease spends the attempt and MaxAttempts ends it.
 func TestAudibleSyncClaimUnreadableParamsSpent(t *testing.T) {

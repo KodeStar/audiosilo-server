@@ -16,8 +16,9 @@
 -- place as it was keeps the device it names). The triggers' own update sets
 -- neither position nor finished, so it never fires them again
 -- (progress_change_seq_update moves the row's change_seq, which offers the
--- place to Audible: a guarded write draws two counter numbers, and a gap is
--- harmless, a number is never reused).
+-- place to Audible: a guarded write draws two counter numbers, the Audible
+-- route's own three with its re-stamp, and a gap is harmless, a number is
+-- never reused).
 CREATE TRIGGER progress_audible_place_insert AFTER INSERT ON progress
 WHEN NEW.device_id GLOB 'audible:*'
 BEGIN
