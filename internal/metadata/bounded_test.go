@@ -155,7 +155,7 @@ func TestNamesListed(t *testing.T) {
 		{"Author/book", nil, false},
 		{"Author/Gone", nil, false},
 		{"Gone/Book", nil, false},
-		{"author/Book", func(name string) bool { return name != "author" }, true},
+		{"Author/book", func(name string) bool { return name != "book" }, true},
 	} {
 		got, err := NamesListed(ctx, root, tc.rel, tc.need, list)
 		if err != nil || got != tc.want {
