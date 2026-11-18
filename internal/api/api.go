@@ -150,6 +150,9 @@ type API struct {
 	// so a test on a disk that tells case apart can list a folder as one that
 	// ignores it would.
 	readDir func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)
+	// listed is readDir's names kept a few seconds (dirNames), which
+	// onDiskAsGiven reads them through.
+	listed *dirNames
 
 	// setupToken, when non-empty, enables the first-run web setup wizard (GET/POST
 	// /setup): the wizard creates the first admin + a library. It is a one-time
@@ -324,6 +327,9 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		opml:           newOPMLTransfers(),
 		lists:          newListCache(),
 	}
+	a.listed = newDirNames(func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+		return a.readDir(ctx, dir, timeout) // a field a test may swap
+	})
 	if cfg.DataDir != "" {
 		if rm, err := media.NewRemuxer(filepath.Join(cfg.DataDir, "cache", "remux"), log); err != nil {
 			log.Warn("remux cache unavailable: Matroska is served as stored", "err", err)

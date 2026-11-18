@@ -1,6 +1,7 @@
 package api
 
 import (
+	"container/list"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -229,29 +231,91 @@ func TestCaseVariantDiskLookFails(t *testing.T) {
 	}
 }
 
-// TestCaseVariantMissingReadsNoListing: a path no file answers to is missing
-// after one lstat, with no folder listed, on the stream and /fs (a client
-// asking for missing paths in a loop costs no listing of the library's root).
-func TestCaseVariantMissingReadsNoListing(t *testing.T) {
+// TestCaseVariantCostsWhatMissingDoes (security): on the stream and /fs, a
+// case variant of a folder the disk has and a path with nothing there take the
+// same steps, the same listings in the same order (onDiskAsGiven, no lstat
+// that would answer the missing one sooner), so how long the check takes never
+// tells a rule spelled in another case (hal) or a variant inside a rule (ida)
+// that the folder is there. A path the index holds reads no listing, and a
+// folder is read once while dirNames keeps it: a client asking for missing
+// paths in a loop reads the root once.
+func TestCaseVariantCostsWhatMissingDoes(t *testing.T) {
 	t.Parallel()
 	c := newCaseEnv(t)
-	var listed []string
+	c.foldCase(t, map[string]string{pcLowAuthor: pcAuthor, pcBookVariant: pcBook})
+	inner := c.api.readDir
+	var (
+		mu     sync.Mutex
+		listed []string
+	)
 	c.api.readDir = func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
-		listed = append(listed, dir)
-		return metadata.ReadDirNamesBounded(ctx, dir, timeout)
+		mu.Lock()
+		listed = append(listed, strings.TrimPrefix(dir, c.lib.Root))
+		mu.Unlock()
+		return inner(ctx, dir, timeout)
 	}
-	for _, path := range []string{bookURL(c.lib.ID, "stream", pcMissingT), bookURL(c.lib.ID, "fs", pcMissing)} {
-		if resp, body := c.do(t, "GET", path, c.samTok, ""); resp.StatusCode != http.StatusNotFound {
-			t.Errorf("GET %s = %d %s, want 404", path, resp.StatusCode, body)
+	steps := func(tok, u string, want int) []string {
+		t.Helper()
+		c.api.listed.forget()
+		mu.Lock()
+		listed = nil
+		mu.Unlock()
+		if resp, body := c.do(t, "GET", u, tok, ""); resp.StatusCode != want {
+			t.Errorf("GET %s = %d %s, want %d", u, resp.StatusCode, body, want)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(listed)
+	}
+	for _, k := range []struct {
+		tok, endpoint, variant, missing string
+	}{
+		{c.halTok, "stream", pcLowTrack, pcLowMissingT},
+		{c.halTok, "fs", pcLowBook, pcLowMissing},
+		{c.halTok, "fs", pcLowAuthor, pcLowMissing},
+		{c.idaTok, "stream", pcBookVarT, pcMissingT},
+		{c.idaTok, "fs", pcBookVariant, pcMissing},
+	} {
+		v := steps(k.tok, bookURL(c.lib.ID, k.endpoint, k.variant), http.StatusNotFound)
+		m := steps(k.tok, bookURL(c.lib.ID, k.endpoint, k.missing), http.StatusNotFound)
+		if len(v) == 0 || !slices.Equal(v, m) {
+			t.Errorf("%s: the variant %+q listed %q, the missing %+q %q; want the same listings", k.endpoint, k.variant, v, k.missing, m)
 		}
 	}
-	if len(listed) != 0 {
-		t.Errorf("missing paths listed %q, want no listing", listed)
+	if got := steps(c.samTok, bookURL(c.lib.ID, "stream", pcTrack), http.StatusOK); len(got) != 0 {
+		t.Errorf("an indexed track listed %q, want no listing", got)
 	}
 	// Allowed: a folder no scan has reached is listed as the disk spells it.
-	if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "fs", pcUnindexed), c.samTok, ""); resp.StatusCode != http.StatusOK || len(listed) == 0 {
-		t.Errorf("fs of an unindexed folder = %d %s after %d listings, want 200 after its names were listed", resp.StatusCode, body, len(listed))
+	if got := steps(c.samTok, bookURL(c.lib.ID, "fs", pcUnindexed), http.StatusOK); len(got) == 0 {
+		t.Error("an unindexed folder was answered with no listing")
 	}
+	c.api.listed.forget()
+	mu.Lock()
+	listed = nil
+	mu.Unlock()
+	for range 20 {
+		for _, p := range []string{pcMissingT, pcLowMissingT} {
+			c.do(t, "GET", bookURL(c.lib.ID, "stream", p), c.samTok, "")
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	counts := map[string]int{}
+	for _, d := range listed {
+		counts[d]++
+	}
+	if counts[""] != 1 || len(listed) != 2 {
+		t.Errorf("40 requests for missing paths listed %q, want the root and the author folder once each", listed)
+	}
+}
+
+// forget drops every kept folder, so the next request reads its own.
+func (c *dirNames) forget() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.order.Init()
+	c.byDir = map[string]*list.Element{}
+	c.size = 0
 }
 
 // TestCaseVariantRoutes (security, a disk that ignores case only): every

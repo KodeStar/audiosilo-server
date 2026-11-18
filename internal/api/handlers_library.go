@@ -2,10 +2,8 @@ package api
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1095,30 +1093,25 @@ func (a *API) audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Lib
 // onDiskAsGiven reports whether rel (cleaned, scope-checked) is on the
 // library's disk as given, byte for byte: a path the index holds as given
 // (catalog.IndexHolds, the scan read it from the listings), else each of its
-// names in its folder's listing (metadata.NamesListed, a.readDir, each listing
-// bounded by wait). A path no file answers to at all is no more there as given:
-// one bounded lstat says so, with no listing read (a request for a missing
-// path costs what it did before the check). Share rules match byte for byte, so a rule spelled in
-// another case than the disk's names nothing there, like a rule naming a
-// missing folder; but a disk that ignores case (macOS's, a Windows or SMB
-// share) opens "émile zola/x.m4b" as "Émile Zola/x.m4b", a book that rule
-// never named. A route that opens rel itself (the stream, /fs) answers a path
-// that isn't there as given as missing. err is a failed index lookup, a
-// listing given up on (metadata.GaveUp) or ctx's.
+// names in its folder's listing (metadata.NamesListed, from the root down,
+// through a.listed, each listing bounded by wait). Share rules match byte for
+// byte, so a rule spelled in another case than the disk's names nothing there,
+// like a rule naming a missing folder; but a disk that ignores case (macOS's, a
+// Windows or SMB share) opens "émile zola/x.m4b" as "Émile Zola/x.m4b", a book
+// that rule never named. A route that opens rel itself (the stream, /fs)
+// answers a path that isn't there as given as missing. A missing path and a
+// case variant take the same steps (no lstat first, which would answer the
+// missing one sooner): the same listings, up to the first name not listed,
+// each kept a few seconds (dirNames), so how long the check takes never tells
+// a rule spelled in another case that the folder is there, and a client
+// asking for missing paths in a loop reads a folder once in dirNamesTTL. err
+// is a failed index lookup, a listing given up on (metadata.GaveUp) or ctx's.
 func (a *API) onDiskAsGiven(ctx context.Context, lib *catalog.Library, rel string, wait func() time.Duration) (bool, error) {
 	if held, err := a.cat.IndexHolds(ctx, lib.ID, rel); err != nil || held {
 		return held, err
 	}
-	if _, err := metadata.LstatBounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(rel)), wait()); err != nil {
-		if metadata.Unanswered(ctx, err) {
-			return false, cmp.Or(err, ctx.Err())
-		}
-		if errors.Is(err, fs.ErrNotExist) {
-			return false, nil
-		}
-	}
 	return metadata.NamesListed(ctx, lib.Root, rel, nil, func(ctx context.Context, dir string) ([]string, error) {
-		return a.readDir(ctx, dir, wait())
+		return a.listed.names(ctx, dir, wait())
 	})
 }
 
