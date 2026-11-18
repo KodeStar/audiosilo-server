@@ -525,4 +525,10 @@ func TestFetchStatusFollowsTheJobState(t *testing.T) {
 	if st := status(); st.State != "unavailable" || st.Error == nil || st.Error.Code != "bridge_unavailable" {
 		t.Fatalf("held, Bridge offline: %+v", st)
 	}
+	// The module's switch doesn't hide that: off as well, the held fetch still
+	// says its Bridge left, not fetching.
+	q.ModuleOn = func(string) bool { return false }
+	if st := status(); st.State != "unavailable" || st.Error == nil || st.Error.Code != "bridge_unavailable" {
+		t.Fatalf("held, Bridge offline, module off: %+v", st)
+	}
 }

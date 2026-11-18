@@ -50,6 +50,16 @@ func (s *Service) fetchRefusal(h *Heartbeat, lib int64, noNew bool) error {
 		return ErrFetchDemo
 	case s.ModuleOn != nil && !s.ModuleOn(ModulePodcasts):
 		return ErrFetchModuleOff
+	default:
+		return s.heldFetchRefusal(h, lib)
+	}
+}
+
+// heldFetchRefusal is what refuses a fetch the Bridge already holds: the
+// Bridge's own state alone. It carries on with the module off, which holds
+// only queued work (server#179).
+func (s *Service) heldFetchRefusal(h *Heartbeat, lib int64) error {
+	switch {
 	case h == nil || !h.Online(s.now()) || !h.Offers(KindPodcastFetch):
 		return ErrKindUnavailable
 	case !h.Writable(lib):
@@ -189,11 +199,9 @@ func ReadyFetchStatus(f *feed.Fetch) FetchStatus {
 	return FetchStatus{State: "ready", BytesReceived: f.Bytes, BytesTotal: &f.Bytes}
 }
 
-// UnavailableFetchStatus overlays a known scheduling refusal on a summary. A
-// fetch the Bridge holds carries on with the module off (only a queued one is
-// held): it stays fetching, not unavailable (server#179).
+// UnavailableFetchStatus overlays a known scheduling refusal on a summary.
 func UnavailableFetchStatus(st FetchStatus, refusal error) FetchStatus {
-	if refusal == nil || st.State == "ready" || (st.State == "fetching" && errors.Is(refusal, ErrFetchModuleOff)) {
+	if refusal == nil || st.State == "ready" {
 		return st
 	}
 	code := "bridge_unavailable"
@@ -244,6 +252,13 @@ func (s *Service) podcastFetchStatuses(ctx context.Context, lib int64, paths []s
 		return nil, err
 	}
 	refusal := s.fetchRefusal(h, lib, false)
+	// A fetch the Bridge holds carries on with the module off (only a queued
+	// one is held): it stays fetching unless the Bridge itself left or can't
+	// write (server#179).
+	held := refusal
+	if errors.Is(refusal, ErrFetchModuleOff) {
+		held = s.heldFetchRefusal(h, lib)
+	}
 	raw, _ := json.Marshal(paths)
 	rows, err := s.db.QueryContext(ctx, `SELECT b.rel_path,e.present,e.fetch_json,j.id,j.state,j.progress,j.result,f.error_code,f.failures
  FROM podcast_episodes e JOIN books b ON b.id=e.book_id
@@ -288,7 +303,11 @@ func (s *Service) podcastFetchStatuses(ctx context.Context, lib int64, paths []s
 			}
 			st.Error = FetchErrorFor(c)
 		}
-		out[path] = UnavailableFetchStatus(st, refusal)
+		if st.State == "fetching" {
+			out[path] = UnavailableFetchStatus(st, held)
+		} else {
+			out[path] = UnavailableFetchStatus(st, refusal)
+		}
 	}
 	return out, rows.Err()
 }

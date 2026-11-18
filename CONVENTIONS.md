@@ -3327,7 +3327,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   per-path broadcast registrations and a final descriptor recheck. Disconnection releases the waiter
   without cancelling the job. The summary is the job's actual state: a fetch the Bridge holds says
   `fetching` even when the budget runs out before the last read, and with the module off (it carries
-  on; only a queued one is held, `unavailable`). An identity change between the pin read and the
+  on; only a queued one is held, `unavailable`; a Bridge that left or can't write makes a held one
+  `unavailable` either way, `heldFetchRefusal`). An identity change between the pin read and the
   queue is retried once with the current pin (`podcast.EnsureFetch`, shared by the stream, the
   player's POST and the admin's fetch); one whose previous identity's fetch is still stopping is a
   retryable 503 on the stream (`writePodcastIdentityBusy`: `Retry-After: 2`, the code
