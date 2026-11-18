@@ -497,3 +497,25 @@ func TestSyncChainOverlapsAcrossShifts(t *testing.T) {
 		}
 	}
 }
+
+// The overlap is measured from the chain's last real end: a span applied
+// inside it leaves that end where it was (as a finish does), so a device's
+// spans each dated a little before the last cannot walk the place back 2 s at
+// a time. The move 1.5 s before the chain's end applies (fe#216); one 1.5 s
+// before that move, 3 s before the chain's end, is older; the device's next
+// span after the chain's end applies as ever.
+func TestSyncChainOverlapKeepsItsEnd(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	wantResult(t, f.syncOne(t, "watch", f.listen("resume", 1000, 1100, 10*time.Second, base(0))), statusApplied, "")
+	seen := func() *int64 { return base(f.progress(t).Version) }
+	wantResult(t, f.syncOne(t, "watch", f.listen("jump", 3000, 3000, 11500*time.Millisecond, seen())), statusApplied, "")
+	wantResult(t, f.syncOne(t, "watch", f.listen("jump", 2000, 2000, 13*time.Second, seen())), statusNotApplied, reasonOlder)
+	if p := f.progress(t); p.Position != 3000 {
+		t.Fatalf("after a move 3 s before the chain's end: %+v", p)
+	}
+	wantResult(t, f.syncOne(t, "watch", f.listen("resume", 3000, 3003, 5*time.Second, seen())), statusApplied, "")
+	if p := f.progress(t); p.Position != 3003 {
+		t.Fatalf("after the next span: %+v", p)
+	}
+}

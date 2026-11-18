@@ -629,8 +629,10 @@ type syncRow struct {
 	otherDeviceID sql.NullString
 	otherVersion  sql.NullInt64
 	// spanAt is the end of the span the row's device last applied (or of a
-	// finish or unfinish of its own after it), null unless recorded at the row's
-	// current version (0062): that device's chain (chainOf).
+	// finish or unfinish of its own after it, or the later end its chain had
+	// when one was applied inside the overlap before it: resolveListen), null
+	// unless recorded at the row's current version (0062): that device's chain
+	// (chainOf).
 	spanAt sql.NullString
 	// stayVersion is the version a Stay wrote (0080), null when none holds the
 	// row: the Stay's own device writing again keeps it, every other writer
@@ -951,7 +953,14 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 	if stored != nil && stored.otherVersion.Valid && sent != nil && *sent >= stored.otherVersion.Int64 {
 		offer = clearOffer
 	}
-	if err := s.writePlace(ctx, p, in.Version, offer, rowAt); err != nil {
+	// The chain never moves back (as finish keeps it): a span applied inside the
+	// overlap before the chain's end leaves that end, so the device's next span
+	// is measured from its last real end, not 2 s further back each time.
+	spanAt := formatSessionTime(p.ended)
+	if chained {
+		spanAt = laterStamp(spanAt, chainAt)
+	}
+	if err := s.writeChainedPlace(ctx, p, in.Version, offer, rowAt, spanAt); err != nil {
 		return SyncResult{}, err
 	}
 	return SyncResult{Status: statusApplied}, nil
@@ -977,9 +986,16 @@ const (
 // device's (the Stay's own device writing again) and dropped when another
 // device's place replaces it, unless offer is holdStay.
 func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64, offer placeOffer, updatedAt string) error {
+	return s.writeChainedPlace(ctx, p, version, offer, updatedAt, formatSessionTime(p.ended))
+}
+
+// writeChainedPlace is writePlace with the chain's end given (spanAt): the
+// span's own end, or the later end of the chain it was applied on
+// (resolveListen).
+func (s *syncRun) writeChainedPlace(ctx context.Context, p syncPrepared, version int64, offer placeOffer,
+	updatedAt, spanAt string) error {
 	key := p.target.Key
 	clear, stay := offer != keepOffer, offer == holdStay
-	spanAt := formatSessionTime(p.ended)
 	if _, err := s.tx.ExecContext(ctx,
 		`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed,
 		     version, device_id, device_name, updated_at, started_at, span_at, span_version)
