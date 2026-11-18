@@ -3999,7 +3999,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `oidcFlow.intents`, so tags never take the flow states' places; a full memory drops it) and joined to the token in the done cookie (`<token>.<tag>`),
   so the finish echoes it as `intent` once, only for the sign-in that flow completed: the player gives a
   grown-up's pass through kids mode back only on its own tag, never for the start URL typed later with
-  a provider session still live (audiosilo#202); `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes; a callback with no cookie
+  a provider session still live (audiosilo#202; a trip that ends on `/connect#oidc=<reason>` has
+  `connect.js` drop the player's held intent, sessionStorage `audiosilo.oidcIntent`, so its unspent
+  tag can't be completed from the history); `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes; a callback with no cookie
   charges nothing, since any page can make a visitor's browser send those): the flow cookie
   (HttpOnly, SameSite=Lax; on an https public_url `__Host-audiosilo_oidc`, Path `/`, Secure, no
   Domain, so neither a sibling subdomain nor a plain-http answer can plant one; on plain http

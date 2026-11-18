@@ -152,10 +152,18 @@ function oidcMessage(reason) {
 
 // The result of a single sign-on (/api/v1/auth/oidc/callback sends the browser
 // here with #oidc=<reason> when it signed no one in): say why, then drop the
-// fragment so a reload doesn't say it again.
+// fragment so a reload doesn't say it again. The web player's intent held in
+// this tab for the trip (its sessionStorage, same origin) goes too: the trip
+// ended here, so its tag must not be left for the start URL sent again from
+// the history to complete and have echoed (audiosilo#202).
 (function () {
   const m = /(?:^|[#&])oidc=([a-z_]+)/.exec(location.hash);
   if (!m) return;
+  try {
+    sessionStorage.removeItem("audiosilo.oidcIntent");
+  } catch {
+    // Refused storage holds nothing.
+  }
   history.replaceState(null, "", location.pathname + location.search);
   const text = oidcMessage(m[1]);
   if (text) showError(text);
