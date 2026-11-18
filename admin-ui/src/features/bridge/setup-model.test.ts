@@ -257,6 +257,7 @@ describe('credentialShare and githubSignInState (bridge#79, bridge#25)', () => {
     expect(credentialShare({ agent_credential: 'group' })).toBe('group');
     expect(credentialShare({ agent_credential: 'world' })).toBe('world');
     expect(credentialShare({ agent_credential: 'group_required' })).toBe('group_required');
+    expect(credentialShare({ agent_credential: 'failed' })).toBe('failed');
     expect(credentialShare({})).toBeUndefined();
     expect(credentialShare({ agent_credential: 'later_mode' })).toBeUndefined();
     expect(credentialShare({ agent_credential: 'constructor' })).toBeUndefined();

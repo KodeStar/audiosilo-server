@@ -467,6 +467,22 @@ describe('Settings > Bridge setup', () => {
     expect(within(card).queryByText('Not set')).toBeNull();
   });
 
+  it('says a failed hand-off failed, not that it is kept to the group (bridge#79)', async () => {
+    const s = status();
+    s.setup = { ...s.setup!, agent_credential: 'failed' };
+    s.setup.items = s.setup.items.map((i) =>
+      i.id === 'agent' ? { ...i, done: false, required: false } : i,
+    );
+    mockFetch(routes({ 'GET /admin/bridge': { body: s } }));
+    renderApp(SETTINGS);
+    await screen.findByText('Everything required is done');
+    const card = setupCard();
+    const failed = within(card).getByText(/^Failed: the Bridge couldn't give the agent/);
+    expect(failed.querySelector('.dot')).toHaveAttribute('data-tone', 'warn');
+    expect(within(card).queryByText("Kept to the Bridge's group")).toBeNull();
+    expect(within(card).getByText('Set')).toBeInTheDocument();
+  });
+
   it('shows no hand-off row for a Bridge that reports none', async () => {
     mockFetch(routes());
     renderApp(SETTINGS);

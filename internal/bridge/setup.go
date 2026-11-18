@@ -35,7 +35,8 @@ type Setup struct {
 	// AgentCredential is how the Bridge hands its agent credential to the
 	// agent container (bridge#79): "group" (the Bridge's group alone),
 	// "world" (every user on the staging volume until the agent takes it) or
-	// "group_required" (agent.require_group can't be met, so the agent waits);
+	// "group_required" (agent.require_group can't be met, so the agent waits)
+	// or "failed" (the Bridge couldn't give it to the agent container);
 	// "" with no hand-off in play, or from an older Bridge. Kept like
 	// GitHubState.
 	AgentCredential string `json:"agent_credential,omitempty"`

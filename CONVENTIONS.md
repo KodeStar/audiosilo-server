@@ -2934,7 +2934,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   worker, so the console links the Bridge's Workers tab; from an older Bridge the ASR step's detail text says
   so, bridge#28; `github_state`: `unrefreshed`, a sign-in whose refresh failed, still signed in and waiting for
   GitHub, or `refused`, sign in again, bridge#25; `agent_credential`: how the agent credential reaches the agent
-  container, `group`, `world` or `group_required`, bridge#79; both kept when id-shaped, a later value too, and
+  container, `group`, `world`, `group_required` or `failed`, bridge#79; both kept when id-shaped, a later value too, and
   the console's Setup card words only the ones it knows, `setup-model.ts`), the
   Bridge's onboarding checklist, read leniently like `estimates` (an unknown key ignored, a block that
   doesn't decode dropped, never the heartbeat) and bounded (at most 16 items, an item with a bad

@@ -127,6 +127,7 @@ export const CREDENTIAL_SHARE_KEY = {
   group: 'bridge.setup.credentialShareGroup',
   world: 'bridge.setup.credentialShareWorld',
   group_required: 'bridge.setup.credentialShareGroupRequired',
+  failed: 'bridge.setup.credentialShareFailed',
 } as const;
 
 export type CredentialShare = keyof typeof CREDENTIAL_SHARE_KEY;

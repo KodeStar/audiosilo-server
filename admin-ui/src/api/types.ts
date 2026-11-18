@@ -2783,8 +2783,9 @@ export interface BridgeSetup {
   /**
    * How the Bridge hands its agent credential to the agent container
    * (bridge#79): `group` (the Bridge's group alone), `world` (every user on the
-   * staging volume until the agent takes it) or `group_required`
-   * (agent.require_group can't be met); absent with no hand-off, or from an
+   * staging volume until the agent takes it), `group_required`
+   * (agent.require_group can't be met) or `failed` (the Bridge couldn't give
+   * it to the agent; its agent step says why); absent with no hand-off, or from an
    * older Bridge. A later value may come.
    */
   agent_credential?: string;

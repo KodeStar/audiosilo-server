@@ -3122,6 +3122,7 @@
   "bridge.setup.credentialShareGroup": "Kept to the Bridge's group",
   "bridge.setup.credentialShareWorld": "Readable by every user on the staging volume until the agent takes it: add the Bridge's group to the agent container or, if it already has it, see the Bridge's log",
   "bridge.setup.credentialShareGroupRequired": "Held back: agent.require_group is on and the Bridge's group can't be used (see the Bridge's Accounts tab)",
+  "bridge.setup.credentialShareFailed": "Failed: the Bridge couldn't give the agent its credential (the agent step and the Bridge's Accounts tab say why)",
   "bridge.setup.githubUnrefreshed": "Sign-in couldn't be refreshed: the Bridge keeps trying",
   "bridge.setup.githubRefused": "GitHub refused the sign-in: sign in again on the Bridge",
   "bridge.setup.contributing": "Contributing",
