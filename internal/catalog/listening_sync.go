@@ -54,7 +54,7 @@ const (
 	reasonResumeBehind = "resume_behind"
 	// reasonBehind: a furthest-only batch's (SyncBatch.FurthestOnly) place not
 	// ahead of the stored one (or from before a restart or a held Stay), or its
-	// unfinish, and any batch's finish made at or before a held Stay
+	// unfinish, and another device's finish made at or before a held Stay
 	// (beforeStay): never applied, never offered.
 	reasonBehind = "behind"
 	// SyncInvalid, SyncNoAccess and SyncNotFound are also a SyncTarget's
@@ -1003,8 +1003,12 @@ func (s *syncRun) staysWin(p syncPrepared, stored *syncRow) bool {
 // late the Bridge brings it. The row's time is never before the Stay's, so a
 // span after it needs no lookup. A Stay the log no longer holds (pruned at
 // SyncRetention) is older than any place a batch may carry (syncRejectAge).
+// Never the Stay's own device's finish: a device's events arrive in the order
+// it made them, so its finish after its Stay was made after it, though the two
+// batches' shifts (or a Stay span that ran to the book's end, stamped with its
+// finish) may date it at or before the Stay.
 func (s *syncRun) beforeStay(ctx context.Context, p syncPrepared, stored *syncRow) (bool, error) {
-	if !stored.stayVersion.Valid {
+	if !stored.stayVersion.Valid || stored.deviceID == s.b.DeviceID {
 		return false, nil
 	}
 	if t, ok := ParseStamp(stored.updatedAt); ok && p.ended.After(t) {
@@ -1141,10 +1145,10 @@ func (s *syncRun) setOther(ctx context.Context, key Ref, place *ListeningOtherPl
 // except an unfinish of a row that isn't finished, which changes neither the
 // place nor the finish (a device that saw the book finished, late), so it
 // leaves a Stay's hold to hold that device's backlog. A finish made at or
-// before the Stay that holds the row is "behind" (beforeStay), any device's:
-// the Stay is the listener's later word (server#415; an offline finish
-// arriving after it ended the hold), and an Audible one is a place at the
-// book's end, which the Bridge sends as both a listen and a finish. A finish is
+// before the Stay that holds the row is "behind" (beforeStay), any other
+// device's: the Stay is the listener's later word (server#415; an offline
+// finish arriving after it ended the hold), and an Audible one is a place at
+// the book's end, which the Bridge sends as both a listen and a finish. A finish is
 // compared with the last finish-state change as finishChange dates it.
 func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error) {
 	key := p.target.Key

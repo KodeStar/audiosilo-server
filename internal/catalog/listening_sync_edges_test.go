@@ -28,6 +28,18 @@ func TestSyncFinishBeforeAStay(t *testing.T) {
 	if p := f.progress(t); !p.Finished || f.stayVersion(t, f.book) != 0 {
 		t.Fatalf("a finish after the Stay: %+v stay %d", p, f.stayVersion(t, f.book))
 	}
+
+	// The Stay's own device's finish was made after its Stay (its events arrive
+	// in order), though its batch's shift dates it a second before the Stay's
+	// end, or the Stay's span ran to the book's end and is stamped with it.
+	for _, ago := range []time.Duration{4*time.Minute + time.Second, 4 * time.Minute} {
+		g := stayFixture(t, 5*time.Minute)
+		g.phoneStays(t)
+		wantResult(t, g.syncOne(t, "phone", g.finishEvent(EventFinish, ago)), statusApplied, "")
+		if p := g.progress(t); !p.Finished {
+			t.Fatalf("the Stay's own device's finish %v ago: %+v", ago, p)
+		}
+	}
 }
 
 // finishSentAt is a batch of device's finish made at made (with base b), sent

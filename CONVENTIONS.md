@@ -4206,8 +4206,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (server#415); never past the token's own applied finish or unfinish (it saw that one, whatever its base says: on a
   clock running behind, a restart then Mark finished would be "older"); an unfinish is never dated back (a restart
   just after a finish). A `finish` made at or before the
-  Stay that holds the row is `not_applied` `behind` (`beforeStay`, any device's, server#415: the Stay is the later
-  word).
+  Stay that holds the row is `not_applied` `behind` (`beforeStay`, any other device's, server#415: the Stay is the
+  later word; never the Stay's own device's, whose events arrive in the order it made them, so its finish came after
+  its Stay however the two batches' shifts date them).
   A `finish` (applied, `older` or `behind`, not a furthest-only batch's) marks the token's session on the book finished
   when its last span ended within `SessionGap` before it (`finishSession`, server#284), opening none; a span landing
   after the token's applied finish, ending at most `SessionGap` before it (or up to `maxFinishTransit` after it: the
