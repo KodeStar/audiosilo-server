@@ -702,8 +702,8 @@ func (m *Metadata) PartsTitle(pathTitle string, other *Metadata) string {
 // past its album: what each adds after the album and a separator (": ", " - "),
 // brackets left out, up to the separator where they part ("The Great Hunt" of
 // "The Wheel of Time: The Great Hunt - The Wheel" and "... - The Dragon"), ""
-// when they share none or only a track marker ("Part 1" of "Album: Part 1 -
-// Chapter 2").
+// when they share none or only a track or volume marker ("Part 1" of "Album:
+// Part 1 - Chapter 2", "Book 1" of "Album: Book 1 - Chapter 2").
 func partsName(album, first, last string) string {
 	a := cleanTag(album)
 	f, okF := cutAlbum(cleanTag(first), a)
@@ -713,7 +713,7 @@ func partsName(album, first, last string) string {
 	}
 	fs, ls := nameSep.Split(f, -1), nameSep.Split(l, -1)
 	n := 0
-	for n < len(fs) && n < len(ls) && strings.EqualFold(fs[n], ls[n]) {
+	for n < len(fs) && n < len(ls) && sameName(fs[n], ls[n]) {
 		n++
 	}
 	if n == 0 {
@@ -723,7 +723,7 @@ func partsName(album, first, last string) string {
 	if n < len(fs) {
 		name = f[:nameSep.FindAllStringIndex(f, n)[n-1][0]]
 	}
-	if trackTailName(name) {
+	if trackTailName(name) || volumeMarker(name) {
 		return ""
 	}
 	return name
@@ -734,8 +734,11 @@ func partsName(album, first, last string) string {
 // doesn't lead with them.
 func cutAlbum(title, album string) (string, bool) {
 	rest, ok := afterName(title, album)
+	if !ok {
+		return "", false
+	}
 	sep := nameSep.FindStringIndex(rest)
-	if !ok || sep == nil || sep[0] != 0 {
+	if sep == nil || sep[0] != 0 {
 		return "", false
 	}
 	return rest[sep[1]:], true
