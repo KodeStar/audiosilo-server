@@ -45,6 +45,11 @@ type SetupItem struct {
 	// LibraryIDs are the server libraries the step is about (the libraries
 	// step: the ones still to fix); omitted for none.
 	LibraryIDs []int64 `json:"library_ids,omitempty"`
+	// NeedsWorker: the step waits for an ASR worker (the asr step while the
+	// engine's transcription waits for one), so it is fixed on the Bridge's
+	// Workers tab (bridge#28). An older Bridge sends none: the console then
+	// reads its detail text as before.
+	NeedsWorker bool `json:"needs_worker,omitempty"`
 }
 
 // Bounds on a setup block.

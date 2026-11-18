@@ -331,6 +331,111 @@ func TestUpdateHeld(t *testing.T) {
 	}
 }
 
+// A job cancelled while its claim held it (an admin's cancel of a parked job,
+// which ends it at once) answers that claim's next report with
+// ErrCancelledWhileHeld, still ErrNotHeld for an older Bridge (bridge#35). Any
+// other claim's report, and a report on a job that ended otherwise, is plain
+// ErrNotHeld.
+func TestUpdateHeldCancelledWhileHeld(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	job := q.verify(t, "A", 0)
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateNeedsAttention), Error: ptr("waiting")}); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := q.Cancel(ctx, job.ID); err != nil || j.State != StateCancelled {
+		t.Fatalf("cancel parked = %+v, %v", j, err)
+	}
+	_, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateRunning)})
+	if !errors.Is(err, ErrCancelledWhileHeld) || !errors.Is(err, ErrNotHeld) {
+		t.Fatalf("the holding claim's report: %v, want ErrCancelledWhileHeld (and ErrNotHeld)", err)
+	}
+	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 2, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) ||
+		errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("another claim's report: %v, want plain ErrNotHeld", err)
+	}
+
+	done := q.verify(t, "B", 0)
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.UpdateHeld(ctx, done.ID, Update{Attempt: 1, State: ptr(StateDone)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.UpdateHeld(ctx, done.ID, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) ||
+		errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("a report after done: %v, want plain ErrNotHeld", err)
+	}
+
+	// A working job whose cancel was asked for ends cancelled when its lease
+	// runs out (the Bridge was away): its late report hears the reason, from
+	// the report that finds the lease lapsed too.
+	away := q.verify(t, "C", 0)
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := q.Cancel(ctx, away.ID); err != nil || j.State != StateClaimed {
+		t.Fatalf("cancel working = %+v, %v", j, err)
+	}
+	q.advance(Lease + time.Second)
+	for range 2 {
+		if _, err := q.UpdateHeld(ctx, away.ID, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrCancelledWhileHeld) {
+			t.Fatalf("a report after the lease of a cancel asked for: %v, want ErrCancelledWhileHeld", err)
+		}
+		if j, _ := q.Job(ctx, away.ID); j.State != StateCancelled {
+			t.Fatalf("lapsed cancel = %s, want cancelled", j.State)
+		}
+	}
+
+	// A claim that lost the job to a lapsed lease hears it too once the job is
+	// cancelled while queued again: no later claim ran it.
+	lost := q.verify(t, "D", 0)
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	q.advance(Lease + time.Second)
+	if _, err := q.UpdateHeld(ctx, lost.ID, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) ||
+		errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("a report on a job queued again: %v, want plain ErrNotHeld", err)
+	}
+	if j, err := q.Cancel(ctx, lost.ID); err != nil || j.State != StateCancelled {
+		t.Fatalf("cancel queued again = %+v, %v", j, err)
+	}
+	if _, err := q.UpdateHeld(ctx, lost.ID, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("the lost claim's report: %v, want ErrCancelledWhileHeld", err)
+	}
+
+	// A working job the server ends at once (its book moved onto another open
+	// job of its kind) is cancelled under its claim as well.
+	moved := q.verify(t, "F", 0)
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	q.verify(t, "G", 0)
+	if err := q.db.WithTx(ctx, "move", func(tx *sql.Tx) error {
+		return MoveJobs(ctx, tx, q.lib, "F", "G", *q.now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.UpdateHeld(ctx, moved.ID, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("a report after the move's cancel: %v, want ErrCancelledWhileHeld", err)
+	}
+
+	// A job cancelled before any claim took it was never held: no reason.
+	never := q.verify(t, "E", 0)
+	if _, err := q.Cancel(ctx, never.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.UpdateHeld(ctx, never.ID, Update{State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) ||
+		errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("a report on a job cancelled unclaimed: %v, want plain ErrNotHeld", err)
+	}
+}
+
 func TestCancel(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)

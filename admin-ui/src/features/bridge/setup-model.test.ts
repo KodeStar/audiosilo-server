@@ -90,26 +90,35 @@ describe('the setup checklist', () => {
 
   it('links a step to the Bridge page tab that fixes it, only for an http(s) page', () => {
     const ui = 'http://192.168.1.20:8090/';
-    expect(setupItemLink(ui, 'agent')).toBe('http://192.168.1.20:8090/#/accounts');
-    expect(setupItemLink(ui, 'github')).toBe('http://192.168.1.20:8090/#/accounts');
-    expect(setupItemLink(ui, 'audible')).toBe('http://192.168.1.20:8090/#/accounts');
-    expect(setupItemLink(ui, 'libraries')).toBe('http://192.168.1.20:8090/#/libraries');
-    expect(setupItemLink(ui, 'budget')).toBe('http://192.168.1.20:8090/#/settings');
+    expect(setupItemLink(ui, { id: 'agent' })).toBe('http://192.168.1.20:8090/#/accounts');
+    expect(setupItemLink(ui, { id: 'github' })).toBe('http://192.168.1.20:8090/#/accounts');
+    expect(setupItemLink(ui, { id: 'audible' })).toBe('http://192.168.1.20:8090/#/accounts');
+    expect(setupItemLink(ui, { id: 'libraries' })).toBe('http://192.168.1.20:8090/#/libraries');
+    expect(setupItemLink(ui, { id: 'budget' })).toBe('http://192.168.1.20:8090/#/settings');
     // The ASR step goes to Settings, or to Workers while it waits for a worker.
-    expect(setupItemLink(ui, 'asr')).toBe('http://192.168.1.20:8090/#/settings');
-    expect(setupItemLink(ui, 'asr', 'local')).toBe('http://192.168.1.20:8090/#/settings');
-    expect(setupItemLink(ui, 'asr', 'waiting for an ASR worker')).toBe(
-      'http://192.168.1.20:8090/#/workers',
-    );
-    // Only the ASR step reads the detail.
-    expect(setupItemLink(ui, 'budget', 'waiting for an ASR worker')).toBe(
+    expect(setupItemLink(ui, { id: 'asr' })).toBe('http://192.168.1.20:8090/#/settings');
+    expect(setupItemLink(ui, { id: 'asr', detail: 'local' })).toBe(
       'http://192.168.1.20:8090/#/settings',
     );
-    expect(setupItemLink(ui, 'paired')).toBeUndefined();
-    expect(setupItemLink(ui, 'audible_login')).toBeUndefined();
+    expect(setupItemLink(ui, { id: 'asr', detail: 'waiting for an ASR worker' })).toBe(
+      'http://192.168.1.20:8090/#/workers',
+    );
+    // A Bridge's needs_worker flag links Workers whatever the detail says.
+    expect(setupItemLink(ui, { id: 'asr', detail: 'en attente', needs_worker: true })).toBe(
+      'http://192.168.1.20:8090/#/workers',
+    );
+    expect(setupItemLink(ui, { id: 'asr', detail: 'local', needs_worker: false })).toBe(
+      'http://192.168.1.20:8090/#/settings',
+    );
+    // Only the ASR step reads the detail.
+    expect(setupItemLink(ui, { id: 'budget', detail: 'waiting for an ASR worker' })).toBe(
+      'http://192.168.1.20:8090/#/settings',
+    );
+    expect(setupItemLink(ui, { id: 'paired' })).toBeUndefined();
+    expect(setupItemLink(ui, { id: 'audible_login' })).toBeUndefined();
     // An id the Bridge may send that names an Object.prototype member links nowhere.
-    expect(setupItemLink(ui, 'constructor')).toBeUndefined();
-    expect(setupItemLink(undefined, 'agent')).toBeUndefined();
+    expect(setupItemLink(ui, { id: 'constructor' })).toBeUndefined();
+    expect(setupItemLink(undefined, { id: 'agent' })).toBeUndefined();
     expect(bridgeTabLink('javascript:alert(1)', 'accounts')).toBeUndefined();
   });
 });
@@ -120,6 +129,9 @@ describe('a Bridge waiting for an ASR worker (BRIDGE-10)', () => {
 
   it('waits with the ASR step waiting for a worker and none connected', () => {
     expect(waitsForWorker(status({ setup: setup([waiting]) }))).toBe(true);
+    // The flag, from a Bridge that sends it, whatever its detail says.
+    const flagged = { ...item('asr', false), detail: 'other words', needs_worker: true };
+    expect(waitsForWorker(status({ setup: setup([flagged]) }))).toBe(true);
   });
 
   it('does not with a worker connected, local ASR, another ASR problem, or offline', () => {

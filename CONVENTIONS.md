@@ -2906,11 +2906,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   libraries[{id, name, root}], accepts}` (`accepts: ["setup"]`, `bridge.HeartbeatAccepts`: the optional
   top-level blocks this server reads, since the strict decode refuses an unknown field; the Bridge sends
   one only after a reply listed it, and drops them all and resends once on a 400). **Setup** (Phase 2b,
-  `bridge/setup.go`): `setup {items[{id, done, required, detail?, library_ids?}], can_contribute,
-  github_login?}`, the Bridge's onboarding checklist, read leniently like `estimates` (an unknown key
-  ignored, a block that doesn't decode dropped, never the heartbeat) and bounded (at most 16 items, an
-  item with a bad (`^[a-z][a-z0-9_]{0,31}$`) or repeated id left out, an unknown id kept, `detail` cleaned
-  to 256 bytes, library ids positive and once each, a login not GitHub's shape dropped); `GET /admin/bridge`
+  `bridge/setup.go`): `setup {items[{id, done, required, detail?, library_ids?, needs_worker?}],
+  can_contribute, github_login?}` (`needs_worker`: the step waits for an ASR worker, so the console links
+  the Bridge's Workers tab; from an older Bridge the ASR step's detail text says so, bridge#28), the
+  Bridge's onboarding checklist, read leniently like `estimates` (an unknown key ignored, a block that
+  doesn't decode dropped, never the heartbeat) and bounded (at most 16 items, an item with a bad
+  (`^[a-z][a-z0-9_]{0,31}$`) or repeated id left out, an unknown id kept, `detail` cleaned to 256 bytes,
+  library ids positive and once each, a login not GitHub's shape dropped); `GET /admin/bridge`
   carries it (omitted when absent), `GET /server` never does. `Status.CanContribute()` is the setup
   block's `can_contribute` when one was sent, else `estimates.sidecars.can_contribute` (the Bridge sends
   both); the `contribute` feature, the estimate's `can_contribute` (`Status.EstimateSidecars`; the
@@ -2960,7 +2962,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`Service.held`, the claims' own rule: a queued job whose module is off); kinds asked in name order), and
   `Service.Blocker` names the open job that refuses a new job of a kind now). States queued -> claimed -> running -> done | failed | needs_attention | cancelled; the Bridge PARKS
   a job it keeps running (`needs_attention`, the park's code in `progress.park.code`, its message in
-  `error`) and unparks it (back to `running`) under the same claim: a held state, so its reports still
+  `error`, and without the code in `progress.park.message` from a Bridge that sends it, bridge#28: its own
+  page reads that, the server keeps it with the progress and the console doesn't read it) and unparks it (back to `running`) under the same claim: a held state, so its reports still
   land, but a parked job's lease is dropped (only claimed and running leases expire) and a running
   report renews it. A report that keeps a parked job parked and names no park (absent, null, or with
   no code, as `ParkCode` reads it) keeps the stored one (`carryPark`; the stored progress whole when the
@@ -2977,8 +2980,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   answers without the writer, so an idle paired Bridge's polls leave the content generation alone (as
   do its heartbeats and its lease and progress job reports: see Content generation, server#258). `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
   error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
-  library: 409 `not_held`), renews the lease and answers the job, whose `cancel_requested` asks the Bridge
-  to stop.
+  library: 409 `not_held`; with `reason: "cancelled"` when the job ended cancelled with no later claim than
+  this one, `ErrCancelledWhileHeld`, so the Bridge records it cancelled, not lost, bridge#35), renews the lease and
+  answers the job, whose `cancel_requested` asks the Bridge to stop.
   Claim responses retain the request deadline but bypass response buffering and flush before return;
   a wait the deadline ends still answers 503 `request timed out`, as the buffered timeout did.
   A claim ended before its reply was written, a failed 200 write, or a Bridge that left before the
@@ -4311,7 +4315,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the account paused: no library), 403 `user_unavailable` (the person disabled, a kid or a demo since:
   `ErrAudibleSyncUser`), 404 `unknown_account` (none, a bad id, or its person deleted: the account cascades). **Here to Audible**: `GET /bridge/progress?account=&since=&limit=` (default 200,
   at most 500; the same 403s and 404, 400 `invalid_request` for no account, a bad limit or cursor) answers
-  `{rows:[{library_id, path, asin, position, duration, finished, updated_at, device_id, version}], next, more}`:
+  `{rows:[{library_id, path, asin, position, duration, finished, updated_at, device_id, version}], next, more,
+  server_time}` (`server_time`: the server's clock, which the Bridge's baseline reads `updated_at` against, bridge#50):
   the person's progress rows on the synced titles' books inside their scopes, one per title (two titles on one book
   are two rows), rows whose `device_id` is the account's left out (no echo), a row whose own title's `runtime_s` disagrees
   with the book's length left out (`audibleRuntimeAgrees`, the listening route's `duration_mismatch` checked per
