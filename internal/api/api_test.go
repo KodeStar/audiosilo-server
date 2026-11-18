@@ -1328,7 +1328,7 @@ func TestAdminClearsRecovery(t *testing.T) {
 	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
 	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
 
-	if _, err := e.auth.GenerateRecoveryCode(ctx, member.ID); err != nil {
+	if _, err := e.auth.GenerateRecoveryCode(ctx, member.ID, e.credentialID(t, memberTok)); err != nil {
 		t.Fatal(err)
 	}
 	if _, hasRec := e.meFlags(t, memberTok); !hasRec {

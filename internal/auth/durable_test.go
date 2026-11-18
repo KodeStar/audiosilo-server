@@ -49,7 +49,7 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 		},
 		"API key delete": func() func() error {
 			u := user()
-			_, meta, err := s.IssueAPIToken(ctx, u.ID, 0, "key")
+			_, meta, err := s.IssueAPIToken(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"), "key")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -122,17 +122,18 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 		},
 		"recovery code cleared": func() func() error {
 			u := user()
-			if _, err := s.GenerateRecoveryCode(ctx, u.ID); err != nil {
+			if _, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone")); err != nil {
 				t.Fatal(err)
 			}
 			return func() error { return s.ClearRecoveryCode(ctx, u.ID) }
 		},
 		"recovery code replaced": func() func() error {
 			u := user()
-			if _, err := s.GenerateRecoveryCode(ctx, u.ID); err != nil {
+			phone := mustSessionID(t, s, ctx, u.ID, "phone")
+			if _, err := s.GenerateRecoveryCode(ctx, u.ID, phone); err != nil {
 				t.Fatal(err)
 			}
-			return func() error { _, err := s.GenerateRecoveryCode(ctx, u.ID); return err }
+			return func() error { _, err := s.GenerateRecoveryCode(ctx, u.ID, phone); return err }
 		},
 		"invite superseded by a new one": func() func() error {
 			u := user()

@@ -491,7 +491,8 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 // any device via the connect screen without an admin - the recovery path for
 // password-less accounts. Reuses the redeem flow (it is just an auth code).
 // Rate-limited and refused for demo accounts so a throwaway session can't mint a
-// durable login.
+// durable login; a session signed out since the middleware checked it mints
+// nothing (401, writeSessionEnded).
 func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return
@@ -500,8 +501,8 @@ func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	if full == nil {
 		return
 	}
-	code, err := a.auth.GenerateRecoveryCode(r.Context(), full.ID)
-	if writeKidRefusal(w, err) {
+	code, err := a.auth.GenerateRecoveryCode(r.Context(), full.ID, credentialFrom(r.Context()).ID)
+	if writeKidRefusal(w, err) || writeSessionEnded(w, err) {
 		return
 	}
 	if err != nil {
@@ -546,8 +547,8 @@ func denyAPIKey(w http.ResponseWriter, r *http.Request) bool {
 // writeSessionEnded answers 401, as the auth middleware does, for a credential
 // mint that auth refused inside its own write because the request's session was
 // signed out after the middleware checked it (auth.ErrInvalidToken from
-// auth.madeOn or auth.signedIn: a password change, sign-out or Sign out
-// everywhere committed in between), and reports whether it did.
+// auth.madeOn, every mint a session asks for: a password change, sign-out or
+// Sign out everywhere committed in between), and reports whether it did.
 func writeSessionEnded(w http.ResponseWriter, err error) bool {
 	if !errors.Is(err, auth.ErrInvalidToken) {
 		return false

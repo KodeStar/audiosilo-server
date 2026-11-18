@@ -84,7 +84,7 @@ func mintEveryKind(t *testing.T, s *Service, ctx context.Context, name string) e
 	if k.castLaptop, _, err = s.IssueCastToken(ctx, admin.ID, laptopID, 3, "Author/Book"); err != nil {
 		t.Fatal(err)
 	}
-	if k.key, _, err = s.IssueAPIToken(ctx, admin.ID, 0, "script"); err != nil {
+	if k.key, _, err = s.IssueAPIToken(ctx, admin.ID, k.phoneID, "script"); err != nil {
 		t.Fatal(err)
 	}
 	k.feed = mustFeed(t, s, ctx, admin.ID, k.phoneID)
@@ -92,7 +92,7 @@ func mintEveryKind(t *testing.T, s *Service, ctx context.Context, name string) e
 	if k.pairing, err = s.IssueOwnPairingToken(ctx, admin.ID, k.phoneID, 10*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if k.recovery, err = s.GenerateRecoveryCode(ctx, admin.ID); err != nil {
+	if k.recovery, err = s.GenerateRecoveryCode(ctx, admin.ID, k.phoneID); err != nil {
 		t.Fatal(err)
 	}
 	// Every cacheable lookup warm: an end has to beat the cache.
@@ -589,12 +589,14 @@ func TestMintFromAnEndedSessionRefused(t *testing.T) {
 	mustFeed(t, s, ctx, gus.ID, own)
 }
 
-// Security-critical (server#444): a member's sign-in, a member's pairing code,
-// a member added and signed in on the device, and the person's own pairing code
-// read the device they are asked from inside the mint's write: one signed out
-// since the request's check, another person's, or an account disabled since,
-// is ErrInvalidToken and nothing is made. Allowed: each from the owner's device
-// still signed in, and again once the account is enabled.
+// Security-critical (server#444): every credential a session asks for (a
+// member's sign-in, a member's pairing code, a member added and signed in on
+// the device, and the person's own pairing code, API key, calendar link,
+// recovery code, cast token and editor token) reads the device it is asked from
+// inside the mint's write: one signed out since the request's check, another
+// person's, or an account disabled since, is ErrInvalidToken and nothing is
+// made. Allowed: each from the owner's device still signed in, and again once
+// the account is enabled.
 func TestMintsReadTheAskingDeviceInTheWrite(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -615,13 +617,20 @@ func TestMintsReadTheAskingDeviceInTheWrite(t *testing.T) {
 				SignInHere: true, DeviceName: "here", OnToken: d}, testPolicy)
 			return err
 		},
-		"own pairing": func(d int64) error { _, err := s.IssueOwnPairingToken(ctx, adam.ID, d, time.Minute); return err },
+		"own pairing":   func(d int64) error { _, err := s.IssueOwnPairingToken(ctx, adam.ID, d, time.Minute); return err },
+		"API key":       func(d int64) error { _, _, err := s.IssueAPIToken(ctx, adam.ID, d, "dash"); return err },
+		"calendar link": func(d int64) error { _, _, err := s.IssueFeedToken(ctx, adam.ID, d); return err },
+		"recovery code": func(d int64) error { _, err := s.GenerateRecoveryCode(ctx, adam.ID, d); return err },
+		"cast token":    func(d int64) error { _, _, err := s.IssueCastToken(ctx, adam.ID, d, 3, "Author/Book"); return err },
+		"editor token":  func(d int64) error { _, _, err := s.IssueEditorToken(ctx, adam.ID, d, 3, "Author/Book"); return err },
 	}
+	// tokens: the members', adam's own but his sessions, and his recovery code.
 	counts := func() (tokens, members int) {
 		t.Helper()
 		if err := s.db.QueryRowContext(ctx, `SELECT
-			(SELECT COUNT(*) FROM tokens WHERE user_id IN (SELECT id FROM users WHERE managed_by = ?1) OR (user_id = ?1 AND kind = ?2)),
-			(SELECT COUNT(*) FROM users WHERE managed_by = ?1)`, adam.ID, KindPairing).Scan(&tokens, &members); err != nil {
+			(SELECT COUNT(*) FROM tokens WHERE user_id IN (SELECT id FROM users WHERE managed_by = ?1) OR (user_id = ?1 AND kind <> ?2))
+			+ (SELECT COUNT(*) FROM auth_codes WHERE user_id = ?1),
+			(SELECT COUNT(*) FROM users WHERE managed_by = ?1)`, adam.ID, KindSession).Scan(&tokens, &members); err != nil {
 			t.Fatal(err)
 		}
 		return tokens, members
@@ -650,10 +659,14 @@ func TestMintsReadTheAskingDeviceInTheWrite(t *testing.T) {
 	if err := s.UpdateUser(ctx, adam.ID, UserChanges{Disabled: new(false)}); err != nil {
 		t.Fatal(err)
 	}
+	tokens, _ := counts()
 	for name, mint := range mints {
 		if err := mint(phone); err != nil {
 			t.Errorf("%s from the signed-in phone = %v", name, err)
 		}
+	}
+	if nt, _ := counts(); nt != tokens+len(mints) {
+		t.Errorf("the mints from the signed-in phone made %d credentials, want one each (%d)", nt-tokens, len(mints))
 	}
 }
 

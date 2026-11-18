@@ -466,47 +466,31 @@ func (s *Service) insertToken(ctx context.Context, ex sqlExecer, userID int64, h
 
 // madeOn is the device userID's token session was made on (its
 // created_on_token_id: a household member's sign-in on their owner's device),
-// for a credential minted from it to record; NULL for any other session, an
-// unknown one or another person's. A session signed out since the request
-// authenticated with it is ErrInvalidToken, read inside the mint's own
-// transaction as IssueSession reads the password: an owner's password change or
-// Sign out everywhere that committed in between (endSessions) has already
-// passed over the credential this would make, which would outlive the sign-in
-// it was made from.
+// for a credential minted from it to record; NULL for any other session. It is
+// ErrInvalidToken unless session is userID's token, still signed in and its
+// account enabled, read inside the mint's own transaction as IssueSession reads
+// the password (server#444): the request's check ran before it, and a sign-out,
+// Sign out everywhere, password change or disable that committed in between
+// (endSessions) has already passed over the credential the mint would make,
+// which would outlive the change that should have refused it. Every credential
+// a session asks for is minted behind this one read (signedIn, where the
+// device is not recorded).
 func madeOn(ctx context.Context, tx *sql.Tx, userID, session int64) (sql.NullInt64, error) {
-	var (
-		on      sql.NullInt64
-		revoked bool
-	)
-	err := tx.QueryRowContext(ctx, `SELECT created_on_token_id, revoked FROM tokens WHERE id = ? AND user_id = ?`,
-		session, userID).Scan(&on, &revoked)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return on, nil
-	case err != nil:
-		return on, err
-	case revoked:
+	var on sql.NullInt64
+	err := tx.QueryRowContext(ctx,
+		`SELECT t.created_on_token_id FROM tokens t JOIN users u ON u.id = t.user_id
+		  WHERE t.id = ? AND t.user_id = ? AND t.revoked = 0 AND u.disabled = 0`, session, userID).Scan(&on)
+	if errors.Is(err, sql.ErrNoRows) {
 		return on, ErrInvalidToken
 	}
-	return on, nil
+	return on, err
 }
 
-// signedIn is ErrInvalidToken unless session is userID's token, still signed in
-// and its account enabled, read inside the mint's own transaction (server#444):
-// the request's check ran before it, and a sign-out, Sign out everywhere,
-// password change or disable that committed in between has already passed over
-// the credential the mint would make (endSessions ends a person's open pairing
-// codes and their members' sign-ins made on their devices), which would outlive
-// the change that should have refused it. Stricter than madeOn: the token must
-// be there.
+// signedIn is madeOn's check alone: ErrInvalidToken unless session is userID's
+// token, still signed in and its account enabled, for a mint that records no
+// device (a pairing code, a member's sign-in, a recovery code, a cast token).
 func signedIn(ctx context.Context, tx *sql.Tx, userID, session int64) error {
-	var one int
-	err := tx.QueryRowContext(ctx,
-		`SELECT 1 FROM tokens t JOIN users u ON u.id = t.user_id
-		  WHERE t.id = ? AND t.user_id = ? AND t.revoked = 0 AND u.disabled = 0`, session, userID).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrInvalidToken
-	}
+	_, err := madeOn(ctx, tx, userID, session)
 	return err
 }
 
@@ -817,7 +801,8 @@ func scanAPIToken(row interface{ Scan(...any) error }) (APIToken, error) {
 // there as they end that sign-in (endSessions, server#361), and so do the
 // device revoke's alsoMembers and leaveOwners. A kid's is refused inside the
 // write (ErrKidAccount, refuseKid), and so is one from a session signed out
-// since the request's check (ErrInvalidToken, madeOn).
+// since the request's check, another person's or a disabled account's
+// (ErrInvalidToken, madeOn).
 func (s *Service) IssueAPIToken(ctx context.Context, userID, session int64, label string) (string, APIToken, error) {
 	secret, hash, err := generateToken()
 	if err != nil {
@@ -1066,8 +1051,13 @@ func (s *Service) RotateAuthCode(ctx context.Context, id int64) (Minted, error) 
 // re-authenticate after signing out or losing a device. It atomically replaces
 // any existing recovery code for the user (so there is always at most one) and is
 // returned once. Recovery codes never expire and have no use cap; they redeem
-// through the same path as invites.
-func (s *Service) GenerateRecoveryCode(ctx context.Context, userID int64) (string, error) {
+// through the same path as invites. session is the token the request
+// authenticated with: one signed out since the request's check, or an account
+// disabled since, is ErrInvalidToken, read inside the write (signedIn), so a
+// code minted as a password change or Sign out everywhere commits is never one
+// that change missed (endSessions deletes the person's recovery code, and this
+// one never expires).
+func (s *Service) GenerateRecoveryCode(ctx context.Context, userID, session int64) (string, error) {
 	code, hash, err := generateAuthCode()
 	if err != nil {
 		return "", err
@@ -1075,6 +1065,9 @@ func (s *Service) GenerateRecoveryCode(ctx context.Context, userID int64) (strin
 	if err := s.db.WithDurableTx(ctx, "GenerateRecoveryCode", func(tx *sql.Tx) error {
 		if err := refuseKid(ctx, tx, userID); err != nil {
 			return err // a kid holds no recovery code
+		}
+		if err := signedIn(ctx, tx, userID, session); err != nil {
+			return err
 		}
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM auth_codes WHERE user_id = ? AND kind = ?`, userID, CodeRecovery); err != nil {

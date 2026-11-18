@@ -171,10 +171,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   calendar feed link the member made from such a session (D5, server#361: `IssueAPIToken` and
   `IssueFeedToken` record the session's device, `auth.madeOn`, which refuses a mint from a session signed
   out since the request's check, `ErrInvalidToken`, a 401: the pass has already run; a key made before
-  v2.7.0 recorded none and stays), and every member's open pairing code (the mints that make one, and a
-  member's sign-in on the person's device, `POST /auth/pair`, `POST /me/household/members[/{id}/session|pair]`,
-  read the asking session in their own write, `auth.signedIn`: signed out, another person's or a disabled
-  account is the same 401, server#444); a member's own paired device stays, with what was
+  v2.7.0 recorded none and stays), and every member's open pairing code. Every credential a session asks
+  for reads the asking session in its own write (server#444: `auth.madeOn`, and `auth.signedIn` where no
+  device is recorded; signed out, another person's or a disabled account is the same 401,
+  `writeSessionEnded`): a pairing code and a member's sign-in on the person's device (`POST /auth/pair`,
+  `POST /me/household/members[/{id}/session|pair]`), an API key, the calendar link, a recovery code
+  (`POST /auth/recovery`: it never expires, and one minted after the pass would outlive it) and a cast or
+  editor token (`POST /cast/token`: dead as minted otherwise). A member's own paired device stays, with what was
   made on it, and `signed_out` counts the person's sessions only. The person's own API keys stay (listed
   and revoked on their own: the device lists, `/auth/tokens`), and so
   do their calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`; the console has no

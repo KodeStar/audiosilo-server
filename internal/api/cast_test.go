@@ -588,6 +588,42 @@ func TestCastTokenNotABook(t *testing.T) {
 	}
 }
 
+// Security-critical (server#444): a cast token, or the chapter editor's, asked
+// from a session signed out after the middleware passed it
+// (signOutBehindTheCache) is refused inside the mint's write: 401, as the
+// middleware answers an ended session, and no token is made. Allowed: the same
+// mint from a session still signed in.
+func TestCastMintFromAnEndedSessionIs401(t *testing.T) {
+	t.Parallel()
+	c := newCastEnv(t)
+	ctx := context.Background()
+	casts := func() (n int) {
+		t.Helper()
+		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE kind = ?`, auth.KindCast).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	for _, editor := range []bool{false, true} {
+		ended, err := c.auth.IssueToken(ctx, c.sam, auth.KindSession, "tablet", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signOutBehindTheCache(t, c.testEnv, ended)
+		body, _ := json.Marshal(map[string]any{"library_id": c.lib, "path": cradleBook, "editor": editor})
+		before := casts()
+		if resp, b := c.do(t, "POST", "/api/v1/cast/token", ended, string(body)); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("mint (editor %v) from an ended session = %d %s, want 401", editor, resp.StatusCode, b)
+		}
+		if n := casts(); n != before {
+			t.Errorf("mint (editor %v) from an ended session made %d tokens", editor, n-before)
+		}
+		if resp, b := c.do(t, "POST", "/api/v1/cast/token", c.samTok, string(body)); resp.StatusCode != http.StatusCreated {
+			t.Errorf("mint (editor %v) from a signed-in session = %d %s, want 201", editor, resp.StatusCode, b)
+		}
+	}
+}
+
 // server#446: a response a cast token authenticated keeps the token in use
 // while it runs and as it ends (keepCastInUse), so a receiver reading one long
 // file never looks idle to the cap, nor lets its expiry run out. Allowed: the

@@ -23,7 +23,8 @@ import (
 // <audio> streams the book the same way, sends "editor": true for an editor token
 // (auth.IssueEditorToken: a shorter life and a cap apart from the person's cast
 // tokens, so editing never ends a cast); it allows no more than a cast token, so
-// any caller may ask for one.
+// any caller may ask for one. A session signed out since the middleware checked
+// it mints nothing (401, writeSessionEnded).
 func (a *API) handleMintCastToken(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return
@@ -58,6 +59,9 @@ func (a *API) handleMintCastToken(w http.ResponseWriter, r *http.Request) {
 		issue, failed = a.auth.IssueEditorToken, "could not open the book's audio for the chapter editor"
 	}
 	token, expires, err := issue(r.Context(), u.ID, credentialFrom(r.Context()).ID, lib.ID, book.RelPath)
+	if writeSessionEnded(w, err) {
+		return
+	}
 	if err != nil {
 		a.log.Warn("mint cast token failed", "user", u.ID, "editor", body.Editor, "err", err)
 		writeError(w, http.StatusInternalServerError, failed)

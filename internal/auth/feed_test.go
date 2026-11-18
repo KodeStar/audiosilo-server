@@ -28,7 +28,7 @@ func TestFeedTokenOnlyOnTheFeed(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
 	sam := mustUser(t, s, ctx, "sam", "sam-password", RoleUser)
-	feed, created, err := s.IssueFeedToken(ctx, sam.ID, 0)
+	feed, created, err := s.IssueFeedToken(ctx, sam.ID, mustSessionID(t, s, ctx, sam.ID, "phone"))
 	if err != nil || feed == "" || created == "" {
 		t.Fatalf("mint = %q %q %v", feed, created, err)
 	}
@@ -50,7 +50,7 @@ func TestFeedTokenOnlyOnTheFeed(t *testing.T) {
 	}
 	// And no other credential of the person's is a feed token.
 	sess, _ := s.IssueToken(ctx, sam.ID, KindSession, "phone", 0)
-	key, _, _ := s.IssueAPIToken(ctx, sam.ID, 0, "cron")
+	key, _, _ := s.IssueAPIToken(ctx, sam.ID, mustSessionID(t, s, ctx, sam.ID, "phone"), "cron")
 	pairing, _ := s.IssueToken(ctx, sam.ID, KindPairing, "", 10*time.Minute)
 	for name, secret := range map[string]string{"session": sess, "api key": key, "pairing": pairing} {
 		if _, _, err := s.ResolveRequest(ctx, secret, Presence{}, KindFeed); !errors.Is(err, ErrInvalidToken) {
@@ -71,19 +71,19 @@ func TestFeedTokenLifecycle(t *testing.T) {
 	if st, err := s.FeedTokenStatus(ctx, sam.ID); err != nil || st.Active || st.CreatedAt != "" {
 		t.Fatalf("status before = %+v %v", st, err)
 	}
-	first, created, err := s.IssueFeedToken(ctx, sam.ID, 0)
+	first, created, err := s.IssueFeedToken(ctx, sam.ID, mustSessionID(t, s, ctx, sam.ID, "phone"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if st, err := s.FeedTokenStatus(ctx, sam.ID); err != nil || !st.Active || st.CreatedAt != created {
 		t.Fatalf("status after = %+v %v (created %s)", st, err, created)
 	}
-	bobFeed := mustFeed(t, s, ctx, bob.ID, 0)
+	bobFeed := mustFeed(t, s, ctx, bob.ID, mustSessionID(t, s, ctx, bob.ID, "phone"))
 	// Resolve once so a cached row would be the thing a reset has to beat.
 	if _, _, err := s.ResolveRequest(ctx, first, Presence{}, KindFeed); err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := s.IssueFeedToken(ctx, sam.ID, 0)
+	second, _, err := s.IssueFeedToken(ctx, sam.ID, mustSessionID(t, s, ctx, sam.ID, "phone"))
 	if err != nil || second == first {
 		t.Fatalf("re-mint = %q %v", second, err)
 	}
@@ -149,7 +149,7 @@ func TestFeedTokenEndedWithTheAccount(t *testing.T) {
 	s, ctx := newTestService(t)
 	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
 	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
-	feed := mustFeed(t, s, ctx, ellis.ID, 0)
+	feed := mustFeed(t, s, ctx, ellis.ID, mustSessionID(t, s, ctx, ellis.ID, "phone"))
 	kid := MemberKid
 	if _, _, err := s.UpdateMember(ctx, adam.ID, ellis.ID, MemberUpdate{Kind: &kid}); err != nil {
 		t.Fatal(err)
@@ -157,13 +157,13 @@ func TestFeedTokenEndedWithTheAccount(t *testing.T) {
 	if _, _, err := s.ResolveRequest(ctx, feed, Presence{}, KindFeed); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("a kid's old feed token = %v, want ErrInvalidToken", err)
 	}
-	if _, _, err := s.IssueFeedToken(ctx, ellis.ID, 0); !errors.Is(err, ErrKidAccount) {
+	if _, _, err := s.IssueFeedToken(ctx, ellis.ID, mustSessionID(t, s, ctx, ellis.ID, "phone")); !errors.Is(err, ErrKidAccount) {
 		t.Fatalf("a kid's mint = %v, want ErrKidAccount", err)
 	}
 
 	// The admin's switch to a kid (UpdateUser) too.
 	bea := mustUser(t, s, ctx, "bea", "bea-password", RoleUser)
-	beaFeed := mustFeed(t, s, ctx, bea.ID, 0)
+	beaFeed := mustFeed(t, s, ctx, bea.ID, mustSessionID(t, s, ctx, bea.ID, "phone"))
 	if err := s.UpdateUser(ctx, bea.ID, UserChanges{Password: new(string), Household: &HouseholdChange{Owner: adam.ID, Kind: MemberKid, Access: MemberAll}}); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestFeedTokenEndedWithTheAccount(t *testing.T) {
 
 	// Disabled: refused while disabled.
 	cal := mustUser(t, s, ctx, "cal", "cal-password", RoleUser)
-	calFeed := mustFeed(t, s, ctx, cal.ID, 0)
+	calFeed := mustFeed(t, s, ctx, cal.ID, mustSessionID(t, s, ctx, cal.ID, "phone"))
 	yes := true
 	if err := s.UpdateUser(ctx, cal.ID, UserChanges{Disabled: &yes}); err != nil {
 		t.Fatal(err)
@@ -270,11 +270,11 @@ func TestFeedTokenCreatedAtDistinct(t *testing.T) {
 	s, ctx, now := newTestServiceWithClock(t)
 	*now = time.Date(2026, 10, 30, 12, 0, 0, 123_000_000, time.UTC)
 	sam := mustUser(t, s, ctx, "sam", "sam-password", RoleUser)
-	_, first, err := s.IssueFeedToken(ctx, sam.ID, 0)
+	_, first, err := s.IssueFeedToken(ctx, sam.ID, mustSessionID(t, s, ctx, sam.ID, "phone"))
 	if err != nil || first != "2026-10-30T12:00:00.123Z" {
 		t.Fatalf("first created_at = %q %v", first, err)
 	}
-	_, second, err := s.IssueFeedToken(ctx, sam.ID, 0)
+	_, second, err := s.IssueFeedToken(ctx, sam.ID, mustSessionID(t, s, ctx, sam.ID, "phone"))
 	if err != nil || second != "2026-10-30T12:00:00.124Z" {
 		t.Fatalf("a reset in the same millisecond = %q %v, want the next millisecond", second, err)
 	}
@@ -282,7 +282,7 @@ func TestFeedTokenCreatedAtDistinct(t *testing.T) {
 		t.Fatalf("status created_at = %q %v, want %q", st.CreatedAt, err, second)
 	}
 	*now = now.Add(time.Second)
-	if _, third, _ := s.IssueFeedToken(ctx, sam.ID, 0); third != "2026-10-30T12:00:01.123Z" {
+	if _, third, _ := s.IssueFeedToken(ctx, sam.ID, mustSessionID(t, s, ctx, sam.ID, "phone")); third != "2026-10-30T12:00:01.123Z" {
 		t.Fatalf("a later reset = %q", third)
 	}
 }
@@ -294,13 +294,13 @@ func TestFeedTokenCreatedAtAfterWholeSecondStamp(t *testing.T) {
 	s, ctx, now := newTestServiceWithClock(t)
 	*now = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	sam := mustUser(t, s, ctx, "sam", "sam-password", RoleUser)
-	if _, _, err := s.IssueFeedToken(ctx, sam.ID, 0); err != nil {
+	if _, _, err := s.IssueFeedToken(ctx, sam.ID, mustSessionID(t, s, ctx, sam.ID, "phone")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE tokens SET created_at = '2026-10-30T12:00:00Z' WHERE kind = ?`, KindFeed); err != nil {
 		t.Fatal(err)
 	}
-	if _, got, err := s.IssueFeedToken(ctx, sam.ID, 0); err != nil || got != "2026-10-30T12:00:00.001Z" {
+	if _, got, err := s.IssueFeedToken(ctx, sam.ID, mustSessionID(t, s, ctx, sam.ID, "phone")); err != nil || got != "2026-10-30T12:00:00.001Z" {
 		t.Fatalf("a reset after a whole-second stamp = %q %v", got, err)
 	}
 }

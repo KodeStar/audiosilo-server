@@ -591,7 +591,7 @@ func TestRecoveryPairingTokenTTL(t *testing.T) {
 	t.Parallel()
 	s, ctx, now := newTestServiceWithClock(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
-	code, err := s.GenerateRecoveryCode(ctx, u.ID)
+	code, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -692,7 +692,7 @@ func TestRotateRefusesRecoveryCode(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
-	if _, err := s.GenerateRecoveryCode(ctx, u.ID); err != nil {
+	if _, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone")); err != nil {
 		t.Fatal(err)
 	}
 	// The recovery row exists but is not an invite; rotate must not touch it.
@@ -749,7 +749,7 @@ func TestRecoveryRedeemReturnsOwner(t *testing.T) {
 	if _, err := s.CreateUser(ctx, "bob", "", RoleUser); err != nil {
 		t.Fatal(err)
 	}
-	code, err := s.GenerateRecoveryCode(ctx, alice.ID)
+	code, err := s.GenerateRecoveryCode(ctx, alice.ID, mustSessionID(t, s, ctx, alice.ID, "phone"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -781,7 +781,7 @@ func TestRedeemDisabledRejectedWithoutBurningUse(t *testing.T) {
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	invite, _ := s.CreateAuthCode(ctx, u.ID, "invite", 1, 0)
-	recovery, err := s.GenerateRecoveryCode(ctx, u.ID)
+	recovery, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -825,7 +825,7 @@ func TestRecoveryCodeLifecycle(t *testing.T) {
 	if got, _ := s.GetUser(ctx, u.ID); got.HasRecovery {
 		t.Fatal("fresh user should have no recovery code")
 	}
-	code, err := s.GenerateRecoveryCode(ctx, u.ID)
+	code, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -846,7 +846,7 @@ func TestRecoveryCodeLifecycle(t *testing.T) {
 	// Regenerating replaces the old one: the old code fails, and any pairing
 	// token minted from it dies via the delete cascade.
 	oldTok := pairThrough(t, s, ctx, code)
-	fresh, _ := s.GenerateRecoveryCode(ctx, u.ID)
+	fresh, _ := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"))
 	if _, err := s.ResolveAuthCode(ctx, code); err != ErrInvalidCode {
 		t.Fatalf("old recovery code after regen = %v, want ErrInvalidCode", err)
 	}
@@ -886,7 +886,7 @@ func TestAPITokenLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secret, meta, err := s.IssueAPIToken(ctx, user.ID, 0, "cron job")
+	secret, meta, err := s.IssueAPIToken(ctx, user.ID, mustSessionID(t, s, ctx, user.ID, "phone"), "cron job")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -947,7 +947,7 @@ func TestRevokeTokenByIDScoping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, meta, err := s.IssueAPIToken(ctx, owner.ID, 0, "key")
+	_, meta, err := s.IssueAPIToken(ctx, owner.ID, mustSessionID(t, s, ctx, owner.ID, "phone"), "key")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -991,7 +991,7 @@ func TestListInvites(t *testing.T) {
 	if _, err := s.CreateInvite(ctx, maya.ID, "invite", 1, 24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GenerateRecoveryCode(ctx, sam.ID); err != nil {
+	if _, err := s.GenerateRecoveryCode(ctx, sam.ID, mustSessionID(t, s, ctx, sam.ID, "phone")); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.ListInvites(ctx)
@@ -1046,7 +1046,7 @@ func TestConsumePairingKind(t *testing.T) {
 	if _, kind, err := s.ConsumePairing(ctx, pairThrough(t, s, ctx, invite)); err != nil || kind != CodeInvite {
 		t.Fatalf("invite: kind %q, %v", kind, err)
 	}
-	recovery, err := s.GenerateRecoveryCode(ctx, u.ID)
+	recovery, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"))
 	if err != nil {
 		t.Fatal(err)
 	}

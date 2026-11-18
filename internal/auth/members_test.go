@@ -229,9 +229,9 @@ func TestMembers_KindChangeClearsCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, _ := s.IssueToken(ctx, ellis.ID, KindSession, "Ellis's phone", 0)
-	key, _, _ := s.IssueAPIToken(ctx, ellis.ID, 0, "dash")
+	key, _, _ := s.IssueAPIToken(ctx, ellis.ID, mustSessionID(t, s, ctx, ellis.ID, "phone"), "dash")
 	pairing, _ := s.IssueToken(ctx, ellis.ID, KindPairing, "", 10*time.Minute)
-	if _, err := s.GenerateRecoveryCode(ctx, ellis.ID); err != nil {
+	if _, err := s.GenerateRecoveryCode(ctx, ellis.ID, mustSessionID(t, s, ctx, ellis.ID, "phone")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -449,7 +449,7 @@ func TestMembers_AdminAssign(t *testing.T) {
 	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
 	demo, _ := s.CreateDemoUser(ctx, "demo_1")
 	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
-	key, _, _ := s.IssueAPIToken(ctx, bob.ID, 0, "dash")
+	key, _, _ := s.IssueAPIToken(ctx, bob.ID, mustSessionID(t, s, ctx, bob.ID, "phone"), "dash")
 
 	for name, c := range map[string]struct {
 		id, owner int64
@@ -631,8 +631,14 @@ func TestMembers_KidRefusedInTheWrite(t *testing.T) {
 	evie := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll})
 	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
 	mint := map[string]func(id int64) error{
-		"API key":       func(id int64) error { _, _, err := s.IssueAPIToken(ctx, id, 0, "dash"); return err },
-		"recovery code": func(id int64) error { _, err := s.GenerateRecoveryCode(ctx, id); return err },
+		"API key": func(id int64) error {
+			_, _, err := s.IssueAPIToken(ctx, id, mustSessionID(t, s, ctx, id, "phone"), "dash")
+			return err
+		},
+		"recovery code": func(id int64) error {
+			_, err := s.GenerateRecoveryCode(ctx, id, mustSessionID(t, s, ctx, id, "phone"))
+			return err
+		},
 		"own pairing": func(id int64) error {
 			_, err := s.IssueOwnPairingToken(ctx, id, mustSessionID(t, s, ctx, id, "tablet"), time.Minute)
 			return err

@@ -198,7 +198,11 @@ func (s *Service) PruneCastTokens(ctx context.Context) error {
 // IssueCastToken mints a cast token for userID on the book at (libraryID,
 // bookPath), on behalf of parentTokenID (the caller's own token, whose sign-out
 // ends it), and returns the secret (shown once) and its expiry (fixed-width
-// millisecond UTC). The caller has checked the person may see the book. In the
+// millisecond UTC). The caller has checked the person may see the book. A
+// parent signed out since the request's check, another person's, or a disabled
+// account is ErrInvalidToken, read inside the write (signedIn): the token
+// would be dead as minted (castGrantOf), and the caller is told so rather than
+// handed it. In the
 // same transaction it deletes every dead cast token (pruneCastTokensSQL) and
 // keeps only the maxCastTokens most recently used the sending token minted, and
 // the person's maxCastTokensPerPerson most recently used (editor tokens apart,
@@ -228,6 +232,9 @@ func (s *Service) issueCastToken(ctx context.Context, use castUse, userID, paren
 	// must name the same instant.
 	expires := s.now().UTC().Add(use.ttl).Truncate(time.Second)
 	err = s.db.WithTx(ctx, "IssueCastToken", func(tx *sql.Tx) error {
+		if err := signedIn(ctx, tx, userID, parentTokenID); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, pruneCastTokensSQL, s.ts()); err != nil {
 			return err
 		}
