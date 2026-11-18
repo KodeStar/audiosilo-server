@@ -450,49 +450,88 @@ func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 			return
 		}
 		if cred := credentialFrom(ctx); cred.Kind == auth.KindCast {
-			defer a.keepCastInUse(ctx, cred.ID)()
+			defer a.keepCastInUse(cred.ID)()
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})}
+}
+
+// castKeepTimeout bounds one keep of a cast token (keepCast). A stream's end
+// waits for its keep, and media runs outside requestTimeout, so a writer held
+// by a stuck write must not hold a finished stream's handler, and its
+// connection, with it; a keep cut short is only retried at the next interval.
+const castKeepTimeout = 5 * time.Second
+
+// castKeepRun is one cast token's keep while responses it authenticated run
+// (keepCastInUse): refs is how many (guarded by API.castKeepMu), done is closed
+// when the last ends, and finished once its goroutine has returned.
+type castKeepRun struct {
+	refs           int
+	done, finished chan struct{}
 }
 
 // keepCastInUse keeps cast token id in use while the response it authenticated
 // runs (server#446): the request touched it as it started (auth's resolve), but a
 // receiver can read one long file in a single response for hours, and a token
 // that looks idle that long is the first a sender's re-mint at the cap drops,
-// and its expiry runs out mid-book. It touches the token every castKeepEvery
-// (auth.KeepCastToken: last_seen and the sliding expiry) and returns the func
-// that stops it, which touches it once more when the response outlived one
-// interval, so the token's last use is the response's end. On a context the
-// client's leaving doesn't end: the touch at the end follows exactly that.
-func (a *API) keepCastInUse(ctx context.Context, id int64) (stop func()) {
-	ctx = context.WithoutCancel(ctx)
-	keep := func() {
-		if err := a.auth.KeepCastToken(ctx, id); err != nil {
-			a.log.Warn("keeping a cast token in use failed", "token", id, "err", err)
+// and its expiry runs out mid-book. One goroutine per token, however many of
+// its responses run at once (castKeepRuns), touches it every castKeepEvery
+// (keepCast), so concurrent streams never multiply the writes. It returns the
+// func that ends this response's part, which touches the token once more when
+// the response outlived one interval, so the token's last use is the
+// response's end.
+func (a *API) keepCastInUse(id int64) (stop func()) {
+	start := time.Now()
+	a.castKeepMu.Lock()
+	run := a.castKeepRuns[id]
+	if run == nil {
+		run = &castKeepRun{done: make(chan struct{}), finished: make(chan struct{})}
+		if a.castKeepRuns == nil {
+			a.castKeepRuns = make(map[int64]*castKeepRun)
+		}
+		a.castKeepRuns[id] = run
+		go func() {
+			defer close(run.finished)
+			tick := time.NewTicker(a.castKeepEvery)
+			defer tick.Stop()
+			for {
+				select {
+				case <-run.done:
+					return
+				case <-tick.C:
+					a.keepCast(id)
+				}
+			}
+		}()
+	}
+	run.refs++
+	a.castKeepMu.Unlock()
+	return func() {
+		a.castKeepMu.Lock()
+		run.refs--
+		last := run.refs == 0
+		if last {
+			delete(a.castKeepRuns, id)
+			close(run.done)
+		}
+		a.castKeepMu.Unlock()
+		if last {
+			<-run.finished // a keep in flight lands first; bounded (castKeepTimeout)
+		}
+		if time.Since(start) >= a.castKeepEvery {
+			a.keepCast(id)
 		}
 	}
-	start := time.Now()
-	done, finished := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(finished)
-		tick := time.NewTicker(a.castKeepEvery)
-		defer tick.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-tick.C:
-				keep()
-			}
-		}
-	}()
-	return func() {
-		close(done)
-		<-finished
-		if time.Since(start) >= a.castKeepEvery {
-			keep()
-		}
+}
+
+// keepCast is one keep of cast token id (auth.KeepCastToken: last_seen and the
+// sliding expiry), on the server's lifetime rather than a request's, which the
+// client's leaving ends, and bounded by castKeepTimeout.
+func (a *API) keepCast(id int64) {
+	ctx, cancel := context.WithTimeout(a.baseCtx, castKeepTimeout)
+	defer cancel()
+	if err := a.auth.KeepCastToken(ctx, id); err != nil && a.baseCtx.Err() == nil { // not the server stopping
+		a.log.Warn("keeping a cast token in use failed", "token", id, "err", err)
 	}
 }
 

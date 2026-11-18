@@ -169,6 +169,10 @@ type API struct {
 	// the token in use while it runs (keepCastInUse): auth.CastTouchInterval,
 	// shorter in tests.
 	castKeepEvery time.Duration
+	// castKeepRuns are the cast tokens responses are keeping in use, by token
+	// id (keepCastInUse), guarded by castKeepMu.
+	castKeepMu   sync.Mutex
+	castKeepRuns map[int64]*castKeepRun
 
 	// transcodeSem bounds the number of concurrent ffmpeg transcodes. Each transcode
 	// is a long-lived process pinning roughly a core; without a cap a single client

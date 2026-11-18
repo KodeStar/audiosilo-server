@@ -640,3 +640,33 @@ func TestLongResponseKeepsTheCastTokenInUse(t *testing.T) {
 		t.Fatalf("a session's last_seen at the start, during and at the end = %q %q %q, want the start's alone", start, later, end)
 	}
 }
+
+// server#446: however many responses one cast token authenticates at once, one
+// run keeps it in use (keepCastInUse), so concurrent streams never multiply the
+// writes; it ends with the last of them, and another token's is its own.
+func TestCastKeepIsOnePerToken(t *testing.T) {
+	t.Parallel()
+	a := &API{castKeepEvery: time.Hour}
+	runs := func() (n int, refs map[int64]int) {
+		a.castKeepMu.Lock()
+		defer a.castKeepMu.Unlock()
+		refs = map[int64]int{}
+		for id, r := range a.castKeepRuns {
+			refs[id] = r.refs
+		}
+		return len(a.castKeepRuns), refs
+	}
+	first, second, other := a.keepCastInUse(7), a.keepCastInUse(7), a.keepCastInUse(8)
+	if n, refs := runs(); n != 2 || refs[7] != 2 || refs[8] != 1 {
+		t.Fatalf("runs = %d %v, want one per token, token 7's held by both its responses", n, refs)
+	}
+	first()
+	if n, refs := runs(); n != 2 || refs[7] != 1 {
+		t.Fatalf("after one of token 7's responses ended: runs = %d %v, want its run kept for the other", n, refs)
+	}
+	second()
+	other()
+	if n, _ := runs(); n != 0 {
+		t.Fatalf("after every response ended: %d runs left", n)
+	}
+}
