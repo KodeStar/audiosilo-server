@@ -1,5 +1,5 @@
 import type { BridgeJob } from '@/api/types';
-import { feedCodeText } from '@/lib/server-events';
+import { feedCodeText, httpStatusOf } from '@/lib/server-events';
 import { text } from './bridge-model';
 
 // A failed podcast job worded the server's way, not the Bridge's: the codes
@@ -7,7 +7,7 @@ import { text } from './bridge-model';
 // job's Details (its result's message).
 
 /** The codes of a podcast.fetch the server words (bridge.fetchMessages; each has a `bridge.podcastCode.<code>`). */
-export const PODCAST_FETCH_CODES = [
+export const PODCAST_FETCH_CODES: ReadonlySet<string> = new Set([
   'dns',
   'network',
   'timeout',
@@ -36,10 +36,15 @@ export const PODCAST_FETCH_CODES = [
   'fetch_failed',
   'bridge_lost',
   'redirect_loop',
-] as const;
+]);
 
 /** The codes of a podcast.poll that aren't the feed's (notify words none) but read the same as a fetch's. */
-const POLL_OWN_CODES = ['bridge_lost', 'library_not_writable', 'not_podcast_library', 'module_off'];
+const POLL_OWN_CODES = new Set([
+  'bridge_lost',
+  'library_not_writable',
+  'not_podcast_library',
+  'module_off',
+]);
 
 export interface PodcastReason {
   key: string;
@@ -61,13 +66,12 @@ export function podcastJobReason(
   if (job.state !== 'failed') return undefined;
   const code = text(job.result?.code) ?? 'bridge_lost';
   if (job.kind === 'podcast.poll') {
-    if (POLL_OWN_CODES.includes(code)) return { key: `bridge.podcastCode.${code}` };
+    if (POLL_OWN_CODES.has(code)) return { key: `bridge.podcastCode.${code}` };
     return feedCodeText(code);
   }
   if (code === 'http_310') return { key: 'bridge.podcastCode.redirect_loop' }; // an older Bridge's redirect loop
-  if ((PODCAST_FETCH_CODES as readonly string[]).includes(code))
-    return { key: `bridge.podcastCode.${code}` };
-  const http = /^http_([1-5]\d{2})$/.exec(code);
-  if (http) return { key: 'bridge.podcastCode.http', values: { status: http[1] } };
+  if (PODCAST_FETCH_CODES.has(code)) return { key: `bridge.podcastCode.${code}` };
+  const status = httpStatusOf(code);
+  if (status) return { key: 'bridge.podcastCode.http', values: { status } };
   return undefined;
 }

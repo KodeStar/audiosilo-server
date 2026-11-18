@@ -321,11 +321,16 @@ const FEED_CODES = new Set([
   'http_310', // an older Bridge's redirect loop, not an HTTP status
 ]);
 
+/** The HTTP status of a podcast job's `http_<status>` code, else undefined. */
+export function httpStatusOf(code: string): string | undefined {
+  return /^http_([1-5]\d{2})$/.exec(code)?.[1];
+}
+
 /** A failed poll's code as a sentence, an HTTP status as such, else undefined (a code notify doesn't word). */
 export function feedCodeText(code: string): EventText['body'] {
   if (FEED_CODES.has(code)) return { key: `events.podcast_feed_failing.code.${code}` };
-  const http = /^http_([1-5]\d{2})$/.exec(code);
-  if (http) return { key: 'events.podcast_feed_failing.http', values: { status: http[1] } };
+  const status = httpStatusOf(code);
+  if (status) return { key: 'events.podcast_feed_failing.http', values: { status } };
   return undefined;
 }
 
