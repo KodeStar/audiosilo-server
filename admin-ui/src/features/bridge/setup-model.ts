@@ -143,10 +143,15 @@ export function credentialShare(
 }
 
 /**
- * Whether the agent credential is set, as the agent step says; undefined when
- * the checklist has no agent step (nothing to say).
+ * Whether the agent credential is set: a hand-off reported is one set on the
+ * Bridge, even while the agent step waits on it (held back by
+ * agent.require_group, say); else as the agent step says. Undefined when the
+ * checklist has no agent step and no hand-off (nothing to say).
  */
-export function agentCredentialSet(setup: Pick<BridgeSetup, 'items'>): boolean | undefined {
+export function agentCredentialSet(
+  setup: Pick<BridgeSetup, 'items' | 'agent_credential'>,
+): boolean | undefined {
+  if (credentialShare(setup) !== undefined) return true;
   return setup.items.find((i) => i.id === 'agent')?.done;
 }
 

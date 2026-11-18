@@ -346,9 +346,7 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
   const complete = done === total;
   const offline = presence(status) === 'offline';
   const share = credentialShare(setup);
-  // A hand-off reported is a credential set on the Bridge, even while the agent
-  // step waits on it (held back by agent.require_group, say).
-  const agent = share === undefined ? agentCredentialSet(setup) : true;
+  const agent = agentCredentialSet(setup);
   const accounts = bridgeTabLink(status.ui_url, ACCOUNTS_TAB);
   // Ready on the Bridge's side, but nothing is offered while the module is off (BRIDGE-07).
   const modules = useSettings().data?.modules;

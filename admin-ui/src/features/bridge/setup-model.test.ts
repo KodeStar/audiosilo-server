@@ -92,6 +92,17 @@ describe('the setup checklist', () => {
     expect(agentCredentialSet(setup([item('paired', true)]))).toBeUndefined();
   });
 
+  it('reads a reported hand-off as a credential set, whatever the agent step says (bridge#79)', () => {
+    const held = { agent_credential: 'group_required' };
+    expect(agentCredentialSet(setup([item('agent', false, false)], held))).toBe(true);
+    expect(agentCredentialSet(setup([item('paired', true)], { agent_credential: 'world' }))).toBe(
+      true,
+    );
+    // A mode this console doesn't know says nothing: the agent step answers.
+    const later = { agent_credential: 'later_mode' };
+    expect(agentCredentialSet(setup([item('agent', false)], later))).toBe(false);
+  });
+
   it('links a step to the Bridge page tab that fixes it, only for an http(s) page', () => {
     const ui = 'http://192.168.1.20:8090/';
     expect(setupItemLink(ui, { id: 'agent' })).toBe('http://192.168.1.20:8090/#/accounts');
@@ -227,6 +238,13 @@ describe('githubStep and billingKnown', () => {
     expect(billingKnown({ setup: setup([item('agent', false)]), estimates: est(true) })).toBe(
       false,
     );
+    // A credential held back (agent.require_group) is still one to pay with (bridge#79).
+    expect(
+      billingKnown({
+        setup: setup([item('agent', false, false)], { agent_credential: 'group_required' }),
+        estimates: est(false),
+      }),
+    ).toBe(true);
     // A Bridge without the agent step: its agent being ready says so.
     expect(billingKnown({ setup: setup([item('asr', true)]), estimates: est(true) })).toBe(true);
     expect(billingKnown({ setup: undefined, estimates: est(false) })).toBe(false);
