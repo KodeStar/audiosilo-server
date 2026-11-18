@@ -339,7 +339,7 @@ func transcodeOpened(t *testing.T, ffprobe, src string, start float64) float64 {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	TranscodeOpened(rec, httptest.NewRequest(http.MethodGet, "/", nil), f, "ffmpeg", start, nil)
+	TranscodeOpened(rec, httptest.NewRequest(http.MethodGet, "/", nil), f, "ffmpeg", start, 0, nil)
 	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
 		t.Fatalf("transcode = %d with %d bytes", rec.Code, rec.Body.Len())
 	}

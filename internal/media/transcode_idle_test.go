@@ -120,9 +120,10 @@ func TestTranscodeIdleEndsFFmpeg(t *testing.T) {
 	}
 }
 
-// TestCopyIdleNoneKeepsUnreadStream: with no idle time (a Cast receiver's,
-// which asks for nothing again on resume) an unread stream is never ended for
-// it, only by the client going away.
+// TestCopyIdleNoneKeepsUnreadStream: with no idle time (every client's but
+// the chapter editor's: a web player's track loaded and never played, a Cast
+// receiver's paused stream) an unread stream is never ended for it, only by
+// the client going away.
 func TestCopyIdleNoneKeepsUnreadStream(t *testing.T) {
 	t.Parallel()
 	srv, done := idleServer(t, func() io.Reader { return endless{} }, 0)

@@ -815,8 +815,15 @@ export const api = {
       'GET',
       `/admin/series${bookQuery({ library_id: libraryId })}`,
     ),
-  adminBook: (libraryId: number, path: string) =>
-    request<AdminBookDetail>('GET', `/admin/libraries/${libraryId}/book${pathQuery(path)}`),
+  /**
+   * The book page. `warm` (the chapter editor's ask, and only its) has the server
+   * start the remuxes of its MP3-in-.mka files not made yet; a plain read starts none.
+   */
+  adminBook: (libraryId: number, path: string, warm = false) =>
+    request<AdminBookDetail>(
+      'GET',
+      `/admin/libraries/${libraryId}/book${pathQuery(path)}${warm ? '&warm=1' : ''}`,
+    ),
   /** Sets or reverts overrides; answers with the updated book page. */
   editBook: (libraryId: number, path: string, edit: BookEditRequest) =>
     request<AdminBookDetail>('PATCH', `/admin/libraries/${libraryId}/book${pathQuery(path)}`, edit),

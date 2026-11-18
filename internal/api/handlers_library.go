@@ -911,8 +911,24 @@ func (a *API) remuxing(lib *catalog.Library) bool {
 // answering none is warmed and the rest are not looked at (answering false).
 // abs holds each rel's path, "" for one not joined.
 func (a *API) warmRemuxes(ctx context.Context, lib *catalog.Library, rels []string) (abs []string, answering bool) {
+	abs, answering = a.joinRemuxes(ctx, lib, rels)
+	if answering {
+		var paths []string
+		for _, p := range abs {
+			if p != "" {
+				paths = append(paths, p)
+			}
+		}
+		a.remux.WarmAll(a.baseCtx, a.ffmpeg, paths)
+	}
+	return abs, answering
+}
+
+// joinRemuxes is warmRemuxes' joins without the warm: abs holds each rel's
+// path under lib's root, "" for one not joined, and answering is false (the
+// rest not looked at) once a join went unanswered.
+func (a *API) joinRemuxes(ctx context.Context, lib *catalog.Library, rels []string) (abs []string, answering bool) {
 	abs = make([]string, len(rels))
-	var paths []string
 	for i, rel := range rels {
 		p, err := library.SafeJoinBounded(ctx, lib.Root, rel, a.fileWait)
 		if metadata.Unanswered(ctx, err) {
@@ -920,10 +936,8 @@ func (a *API) warmRemuxes(ctx context.Context, lib *catalog.Library, rels []stri
 		}
 		if err == nil {
 			abs[i] = p
-			paths = append(paths, p)
 		}
 	}
-	a.remux.WarmAll(a.baseCtx, a.ffmpeg, paths)
 	return abs, true
 }
 
@@ -1185,14 +1199,16 @@ func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloa
 }
 
 // transcodeIdleFor is how long r's transcode waits for its client to read
-// before it ends: media.TranscodeIdle, except for a Cast receiver's (a cast
-// token not the console's chapter editor's), which never asks for its stream
-// again on resume, so a pause ended it for good (the sender only says play).
+// before it ends: media.TranscodeIdle for the console's chapter editor (its
+// cast token, auth.Credential.Editor), which asks for its stream again after a
+// 10 s pause; 0 (no idle end) for every other client. The web player does not
+// ask again for a transcode it loaded but never played, so it would stall
+// after a long wait, and a Cast receiver asks for nothing again on resume.
 func transcodeIdleFor(r *http.Request) time.Duration {
-	if c := credentialFrom(r.Context()); c.Kind == auth.KindCast && !c.Editor {
-		return 0
+	if c := credentialFrom(r.Context()); c.Kind == auth.KindCast && c.Editor {
+		return media.TranscodeIdle
 	}
-	return media.TranscodeIdle
+	return 0
 }
 
 // serveRemuxed answers with abs's remuxed MP3 (media.NewRemuxer) with Range and

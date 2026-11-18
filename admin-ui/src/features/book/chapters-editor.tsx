@@ -159,6 +159,16 @@ export function ChaptersEditor({
     () => new Set((detail.files ?? []).filter((f) => f.remux_cached === false).map((f) => f.path)),
     [detail.files],
   );
+  // Opened with a copy still to come: the server is asked to start the book's
+  // (a view of the page starts none, so browsing the console pushes no
+  // listener's copy out of the cache). The answer is let go: the player reads
+  // the page again for the one it waits for (Scrubber).
+  const warmed = useRef(false);
+  useEffect(() => {
+    if (warmed.current || remuxWaiting.size === 0) return;
+    warmed.current = true;
+    api.adminBook(b.library_id, b.path, true).catch(() => {});
+  }, [remuxWaiting, b.library_id, b.path]);
 
   return (
     <div className="flex flex-col gap-3.5">
@@ -479,7 +489,7 @@ const BUSY_TRIES = 3;
 
 /**
  * How often the book page is read again while the chosen file's remux is not
- * made yet (its GET starts the copy), to play that copy once it is.
+ * made yet (its warm GET starts the copy), to play that copy once it is.
  */
 const REMUX_POLL_MS = 5000;
 
@@ -685,7 +695,7 @@ function Scrubber({
   // A cold remux's copy is made (the page says so) and the audio does not
   // play, nor waits to be asked for again to play (busy): the file plays as
   // that copy from here on, from the playhead (a switch while it plays would
-  // cut it off). Until then the page is read again now and then: its GET
+  // cut it off). Until then the page is read again now and then: its warm GET
   // starts the copy, and says when it is made. Each read waits for the last,
   // and one that fails is let go: it is the page's own query only once read,
   // so a failed read never takes the page (and the editor's draft) down.
@@ -705,7 +715,7 @@ function Scrubber({
       if (reading) return;
       reading = true;
       api
-        .adminBook(libraryId, bookPath)
+        .adminBook(libraryId, bookPath, true)
         .then((d) => {
           if (live) qc.setQueryData(keys.book(libraryId, bookPath), d);
         })

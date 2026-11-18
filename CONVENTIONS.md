@@ -1441,12 +1441,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`media.TranscodeOpened`, server#181) is ffmpeg's stdin read seekably as `fd:` (input seek, and a
   non-faststart m4a demuxes) when the ffmpeg lists the fd input protocol (`inputFor`: probed once
   per ffmpeg path, `-protocols`, 5 s, asked again after a probe that couldn't run), else the old
-  `pipe:0` with an output seek. A HEAD gets the transcode's headers without an ffmpeg run. A transcode its
-  client has read nothing of for 10 minutes (`media.TranscodeIdle`: each write gets a write deadline, `copyIdle`) is
-  ended with its ffmpeg, freeing its slot: a paused `<audio>` keeps its connection open while it reads nothing.
-  The web player asks for a transcode again after a 30 s pause (`TRANSCODE_STALE_PAUSE_MS`), the console's
-  chapter editor after 10 s. A Cast receiver's (a cast token not the editor's, `auth.Credential.Editor`) gets no
-  idle end (`transcodeIdleFor`): its sender only says play on resume, asking for nothing again. The scanner records each
+  `pipe:0` with an output seek. A HEAD gets the transcode's headers without an ffmpeg run. The console's chapter
+  editor's transcode (its cast token, `auth.Credential.Editor`) that it has read nothing of for 10 minutes
+  (`media.TranscodeIdle`: each write gets a write deadline, `copyIdle`) is ended with its ffmpeg, freeing its slot:
+  a paused `<audio>` keeps its connection open while it reads nothing, and the editor asks for its stream again
+  after a 10 s pause. Every other client's transcode gets no idle end (`transcodeIdleFor`): the web player asks
+  again only after a pause of 30 s once played (`TRANSCODE_STALE_PAUSE_MS`), not for a track loaded and never
+  played, and a Cast receiver asks for nothing again on resume. The scanner records each
   book's audio `codec` (ffprobe `codec_name`, `0008` migration); `item`/`chapters`
   expose `direct_playable` (`Book.PlaysInBrowsers`: `media.DirectPlayable` of the book's format and
   codec, and every file's container) so a client knows when to
@@ -4598,8 +4599,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   slot. An MP3 in .mka (`direct_playable` true) whose remux is not cached yet would be answered with a live
   transcode from the file's start (`serveRemuxed`), which can't be seeked: the book page says per such file
   whether its copy is made (`files[].remux_cached`, `adminRemuxes`; absent on every other file, and on one the remux
-  refused, which is then not `direct_playable`) and its GET warms
-  the copies not made (`media.FileCache.WarmAll`, as `/item` does), so the editor plays a cold one as a transcode
+  refused, which is then not `direct_playable`); its GET with `warm=1`, which only the editor sends (once as it
+  opens with a copy still to come, and on each re-read), warms the copies not made (`media.FileCache.WarmAll`, as
+  `/item` does), while a view of the page, a save's reply or any other answer with the page warms nothing, so
+  browsing the console pushes no listener's copy out of the cache. The editor plays a cold one as a transcode
   from the playhead, reads the page again every 5 s (`REMUX_POLL_MS`, one read at a time, a failed one let go so it
   never takes the page and its draft down) while that file is chosen and its copy still to come, and plays the
   copy from the playhead once it is made and the audio is not playing (never by the `<audio>`'s duration, which

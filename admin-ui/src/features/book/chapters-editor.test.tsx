@@ -484,6 +484,27 @@ describe('the chapter editor', () => {
     return d;
   };
 
+  it('asks the server to warm the remuxes only as the editor opens with a copy to come', async () => {
+    const warms = (calls: MockRequest[]) =>
+      calls.filter((c) => c.path === '/admin/libraries/1/book' && c.query.get('warm') === '1');
+    const calls = mockFetch(routes(mkaDetail(false)));
+    renderApp(URL);
+    // A view of the page starts no copy.
+    await screen.findByRole('button', { name: 'Edit chapters' });
+    expect(calls.some((c) => c.path === '/admin/libraries/1/book')).toBe(true);
+    expect(warms(calls)).toHaveLength(0);
+    await openEditor();
+    await waitFor(() => expect(warms(calls)).toHaveLength(1));
+  });
+
+  it('asks for no warm when every copy is made', async () => {
+    const calls = mockFetch(routes(mkaDetail(true)));
+    renderApp(URL);
+    await openEditor();
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    expect(calls.filter((c) => c.query.get('warm') === '1')).toHaveLength(0);
+  });
+
   it('transcodes an MP3 in .mka from the playhead until the page says its remux is made', async () => {
     // The server would answer a cold remux with a live transcode from the
     // file's start, which can't be seeked: the page says it is cold, whatever
@@ -510,6 +531,9 @@ describe('the chapter editor', () => {
       const before = reads();
       act(() => vi.advanceTimersByTime(5000));
       await waitFor(() => expect(reads()).toBe(before + 1));
+      // Each such read asks the server to warm the copy.
+      const last = calls.filter((c) => c.path === '/admin/libraries/1/book').at(-1);
+      expect(last?.query.get('warm')).toBe('1');
       expect(query().get('transcode')).toBe('1');
 
       // Made while it plays: it plays on as the transcode.

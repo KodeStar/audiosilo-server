@@ -725,10 +725,12 @@ func TestCastKeepIsOnePerToken(t *testing.T) {
 	}
 }
 
-// TestTranscodeIdleForCastReceiver: a Cast receiver's transcode never ends for
-// want of reads (its sender only says play on resume, asking nothing again),
-// while the chapter editor's cast token, a session's and an API key's do.
-func TestTranscodeIdleForCastReceiver(t *testing.T) {
+// TestTranscodeIdleForEditorOnly: only the chapter editor's transcode (its
+// cast token) ends for want of reads, as it asks for its stream again after a
+// pause. A session's (the web player does not ask again for a track it loaded
+// and never played), an API key's and a Cast receiver's (its sender only says
+// play on resume) never do.
+func TestTranscodeIdleForEditorOnly(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name string
@@ -737,8 +739,9 @@ func TestTranscodeIdleForCastReceiver(t *testing.T) {
 	}{
 		{"receiver", auth.Credential{Kind: auth.KindCast}, 0},
 		{"editor", auth.Credential{Kind: auth.KindCast, Editor: true}, media.TranscodeIdle},
-		{"session", auth.Credential{Kind: auth.KindSession}, media.TranscodeIdle},
-		{"api key", auth.Credential{Kind: auth.KindAPI}, media.TranscodeIdle},
+		{"session", auth.Credential{Kind: auth.KindSession}, 0},
+		{"api key", auth.Credential{Kind: auth.KindAPI}, 0},
+		{"no credential", auth.Credential{}, 0},
 	} {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		r = r.WithContext(withCredential(r.Context(), &auth.User{}, c.cred))
