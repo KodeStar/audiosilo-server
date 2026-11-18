@@ -4354,7 +4354,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   is its offset now + the seconds in it, clamped to its length; else the sent seconds); then each event in
   corrected-time order: an id already stored for the user is `duplicate` (a replay whose answer was lost: when it
   is the newest link of the device's chain on the row, `span_at` at the row's version equal to its stored `ended_at`
-  (a finish or unfinish: `finish_changed_at`, a late one keeping the chain's later end), the device's later base-0
+  (a span applied inside the overlap, which keeps the chain's later end: up to 2 s after it; a finish or unfinish:
+  `finish_changed_at`, a late one keeping the chain's later end; `endsChain`), the device's later base-0
   events chain on it; a replay of a span that kept the stored place, or one an edit or
   another writer has since overtaken, seeds nothing); a listen runs `ResolvePlace`
   (whole-book seconds as the progression; in-batch chaining: base 0 on a book this batch wrote resolves on

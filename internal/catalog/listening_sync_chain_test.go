@@ -454,6 +454,45 @@ func TestSyncReplayOfALateFinishChains(t *testing.T) {
 	}
 }
 
+// A replay of a span applied inside the overlap before the chain's end (which
+// it kept, as a late finish does) still seeds the chain: the span wrote the
+// row's version, so the base-0 span after it applies as it did in the same
+// POST rather than diverging from the device's own place.
+func TestSyncReplayOfAnOverlapSpanChains(t *testing.T) {
+	t.Parallel()
+	for _, replay := range []bool{false, true} {
+		f := newSyncFixture(t)
+		wantResult(t, f.syncOne(t, "watch", f.listen("resume", 1000, 1100, 10*time.Second, base(0))), statusApplied, "")
+		move := f.listen("jump", 3000, 3000, 11500*time.Millisecond, base(f.progress(t).Version))
+		if replay {
+			wantResult(t, f.syncOne(t, "watch", move), statusApplied, "") // stored; its answer lost
+		}
+		r := f.sync(t, f.batch(t, "watch", move, f.listen("moved_back", 400, 500, 5*time.Second, base(0)))).Results
+		if back := r[1]; back.Status != statusApplied || f.progress(t).Position != 500 {
+			t.Fatalf("replay %v: %+v, row at %v; want applied at 500", replay, back, f.progress(t).Position)
+		}
+	}
+}
+
+// A replay of a span inside the overlap that did not apply (the backstop's
+// resume_behind) wrote nothing, so it seeds no chain: the base-0 span after it
+// diverges as it would without the replay, the device's further place kept.
+func TestSyncReplayOfAnOverlapSpanNotAppliedDoesNotChain(t *testing.T) {
+	t.Parallel()
+	for _, replay := range []bool{false, true} {
+		f := newSyncFixture(t)
+		wantResult(t, f.syncOne(t, "watch", f.listen("resume", 5000, 5100, 10*time.Second, base(0))), statusApplied, "")
+		behind := f.listen("resume", 100, 200, 11*time.Second, base(f.progress(t).Version))
+		if replay {
+			wantResult(t, f.syncOne(t, "watch", behind), statusNotApplied, reasonResumeBehind)
+		}
+		r := f.sync(t, f.batch(t, "watch", behind, f.listen("moved_back", 400, 500, 5*time.Second, base(0)))).Results
+		if back := r[1]; back.Status != statusDiverged || back.Kept != "stored" || f.progress(t).Position != 5100 {
+			t.Fatalf("replay %v: %+v, row at %v; want diverged, 5100 kept", replay, back, f.progress(t).Position)
+		}
+	}
+}
+
 // fe#216: each POST is dated by its own sent_at shift, which carries the
 // request's time on the way, so a device's bare move (a span of no length: a
 // seek while paused) posted after its last span can land dated up to its

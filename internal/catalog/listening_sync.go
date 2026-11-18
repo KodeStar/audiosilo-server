@@ -585,15 +585,37 @@ type syncRun struct {
 	// chain: continues): a base-0 span resolves on it.
 	written map[Ref]int64
 	// stored is the batch's event ids already in the log (a replay: duplicate),
-	// each with the end it was stored with (ended_at, corrected then).
-	stored map[string]string
+	// each with the end it was stored with (ended_at, corrected then) and its
+	// status.
+	stored map[string]storedEvent
+}
+
+// storedEvent is a logged event a replay names: its end (ended_at) and status.
+type storedEvent struct{ ended, status string }
+
+// endsChain reports whether a replayed event of kind (e, as logged) is the
+// newest link of its device's chain ending at at: it ended there; or, a listen
+// that applied inside the overlap before the chain's end (resolveListen keeps
+// that end), up to historyJoinOverlap before it; or, a finish or unfinish, by
+// the row's finish_changed_at (a late one keeps the chain's later end).
+func (e storedEvent) endsChain(kind, at string, finishChangedAt sql.NullString) bool {
+	switch {
+	case at == e.ended:
+		return true
+	case kind != EventListen:
+		return finishChangedAt.String == e.ended
+	case e.status != statusApplied:
+		return false
+	}
+	end, last := parseSessionTime(e.ended), parseSessionTime(at)
+	return !last.Before(end) && !last.After(end.Add(historyJoinOverlap))
 }
 
 // storedEventIDs is which of the prepared events' ids the user's log already
-// holds, each with its stored ended_at, read in one statement (a batch is at
-// most MaxSyncEvents ids).
-func storedEventIDs(ctx context.Context, tx *sql.Tx, userID int64, prepared []syncPrepared) (map[string]string, error) {
-	out := map[string]string{}
+// holds, each with its stored ended_at and status, read in one statement (a
+// batch is at most MaxSyncEvents ids).
+func storedEventIDs(ctx context.Context, tx *sql.Tx, userID int64, prepared []syncPrepared) (map[string]storedEvent, error) {
+	out := map[string]storedEvent{}
 	if len(prepared) == 0 {
 		return out, nil
 	}
@@ -602,15 +624,18 @@ func storedEventIDs(ctx context.Context, tx *sql.Tx, userID int64, prepared []sy
 	for _, p := range prepared {
 		args = append(args, p.ev.ID)
 	}
-	type storedEvent struct{ id, ended string }
-	evs, err := queryRows(ctx, tx, func(rows *sql.Rows, e *storedEvent) error { return rows.Scan(&e.id, &e.ended) },
-		`SELECT event_id, ended_at FROM listening_events WHERE user_id = ? AND event_id IN (`+placeholders(len(prepared))+`)`,
-		args...)
+	type logged struct {
+		id string
+		storedEvent
+	}
+	evs, err := queryRows(ctx, tx, func(rows *sql.Rows, e *logged) error { return rows.Scan(&e.id, &e.ended, &e.status) },
+		`SELECT event_id, ended_at, status FROM listening_events WHERE user_id = ? AND event_id IN (`+
+			placeholders(len(prepared))+`)`, args...)
 	if err != nil {
 		return nil, err
 	}
 	for _, e := range evs {
-		out[e.id] = e.ended
+		out[e.id] = e.storedEvent
 	}
 	return out, nil
 }
@@ -664,22 +689,20 @@ func (s *syncRun) row(ctx context.Context, key Ref) (*syncRow, error) {
 // apply runs one prepared event: the dedupe, then its kind's rule, then its
 // row in the log.
 func (s *syncRun) apply(ctx context.Context, p syncPrepared) (SyncResult, error) {
-	if ended, replay := s.stored[p.ev.ID]; replay {
+	if logged, replay := s.stored[p.ev.ID]; replay {
 		// A replay (the post that stored it lost its answer, so the device sends
 		// it again ahead of what it recorded since): when it is the newest link
-		// of this device's chain on the row (chainOf, ending at its end: no edit,
-		// PUT or other writer since, and it wrote the row, not a span that
-		// diverged and kept the stored place; a finish or unfinish by its
-		// finish_changed_at, as a late one keeps the chain's later end), the
-		// device's later events on base 0 chain on it, as they would have in
-		// that post.
+		// of this device's chain on the row (chainOf, ending at its end or, a
+		// span applied inside the overlap, within it: endsChain; no edit, PUT or
+		// other writer since, and it wrote the row, not a span that diverged and
+		// kept the stored place), the device's later events on base 0 chain on
+		// it, as they would have in that post.
 		if _, ok := s.written[p.target.Key]; !ok {
 			stored, err := s.row(ctx, p.target.Key)
 			if err != nil {
 				return SyncResult{}, err
 			}
-			if at, chained := s.chainOf(stored); chained &&
-				(at == ended || p.ev.Kind != EventListen && stored.finishChangedAt.String == ended) {
+			if at, chained := s.chainOf(stored); chained && logged.endsChain(p.ev.Kind, at, stored.finishChangedAt) {
 				s.written[p.target.Key] = stored.version
 			}
 		}
