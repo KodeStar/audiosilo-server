@@ -108,6 +108,30 @@ func TestTranscodeAskStartNoNumber(t *testing.T) {
 	}
 }
 
+// TestTranscodeTakenOverKeepsItsPanic: a request whose slot was taken over
+// that panics of its own goes on panicking with its own value, which net/http
+// logs, not with the abort, which it does not.
+func TestTranscodeTakenOverKeepsItsPanic(t *testing.T) {
+	t.Parallel()
+	a := slotAPI(1, 1)
+	ask := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka"}
+	first, _ := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+	if h, _ := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask); h == nil {
+		t.Fatal("the repeat ask got no slot")
+	}
+	got := func() (p any) {
+		defer func() { p = recover() }()
+		defer a.endTranscode(first)
+		panic("its own")
+	}()
+	if got != "its own" {
+		t.Fatalf("panicked with %v, want its own panic", got)
+	}
+	if len(a.transcodeSem) != 1 {
+		t.Fatal("the taken-over request's end let go of its successor's slot")
+	}
+}
+
 // TestTranscodeOtherAsksCountSeparately: an ask that differs in token (another
 // user's, or another device's), start, file or download takes a slot of its
 // own, refused with none free, and never ends the holder's transcode.
@@ -261,12 +285,17 @@ func TestStreamTranscodeRepeatAsk(t *testing.T) {
 		t.Fatal("the taken-over stream ended cleanly: a player would take it for the file's end")
 	}
 
-	if got := status("GET", at, theirs); got != http.StatusServiceUnavailable {
-		t.Fatalf("another user's same ask = %d, want 503", got)
+	// Opened, not read: a 200 would stream until the test timed out.
+	refused := func(name, path, token string) {
+		t.Helper()
+		resp := open("GET", path, token)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("%s = %d, want 503", name, resp.StatusCode)
+		}
 	}
-	if got := status("GET", stream+"&t=40", mine); got != http.StatusServiceUnavailable {
-		t.Fatalf("another start = %d, want 503", got)
-	}
+	refused("another user's same ask", at, theirs)
+	refused("another start", stream+"&t=40", mine)
 	ran := countRuns()
 	if got := status("HEAD", at, mine); got != http.StatusOK {
 		t.Fatalf("HEAD of the held ask = %d, want 200", got)
@@ -289,5 +318,8 @@ func TestStreamTranscodeRepeatAsk(t *testing.T) {
 	}
 	if got := status("HEAD", at, theirs); got != http.StatusOK {
 		t.Fatalf("HEAD with the slot free = %d, want 200", got)
+	}
+	if len(e.api.transcodeSem) != cap(e.api.transcodeSem)-1 || len(e.api.transcodeHolds) != 0 {
+		t.Fatal("a HEAD with the slot free took it")
 	}
 }

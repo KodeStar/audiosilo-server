@@ -21,15 +21,17 @@ type transcodeAsk struct {
 	download bool
 }
 
+// keyed reports whether a GET of the ask is in transcodeHolds, for a same ask
+// to take over: one with a token (the slot is another's once the map holds
+// another hold for its ask).
+func (k transcodeAsk) keyed() bool { return k.token != 0 }
+
 // transcodeHold is one transcode slot an ask holds, or a HEAD's answer that
 // one is free (end nil: it holds none).
 type transcodeHold struct {
 	ask transcodeAsk
 	// end ends the holder's request (and its ffmpeg with it).
 	end context.CancelFunc
-	// keyed: in transcodeHolds, for a same ask to take over (the slot is
-	// another's once the map holds another hold for its ask).
-	keyed bool
 }
 
 // transcodeAskOf is r's ask for the transcode of rel in library lib. A start
@@ -64,7 +66,7 @@ func (a *API) takeTranscodeSlot(r *http.Request, ask transcodeAsk) (*transcodeHo
 		}
 		return &transcodeHold{ask: ask}, r
 	}
-	keyed := ask.token != 0
+	keyed := ask.keyed()
 	a.transcodeMu.Lock()
 	defer a.transcodeMu.Unlock()
 	prev := a.transcodeHolds[ask]
@@ -76,7 +78,7 @@ func (a *API) takeTranscodeSlot(r *http.Request, ask transcodeAsk) (*transcodeHo
 		}
 	}
 	ctx, end := context.WithCancel(r.Context())
-	h := &transcodeHold{ask: ask, end: end, keyed: keyed}
+	h := &transcodeHold{ask: ask, end: end}
 	if keyed {
 		if prev != nil {
 			prev.end()
@@ -92,7 +94,7 @@ func (a *API) takeTranscodeSlot(r *http.Request, ask transcodeAsk) (*transcodeHo
 func (a *API) transcodeSlotFree(ask transcodeAsk) bool {
 	a.transcodeMu.Lock()
 	defer a.transcodeMu.Unlock()
-	if ask.token != 0 && a.transcodeHolds[ask] != nil {
+	if ask.keyed() && a.transcodeHolds[ask] != nil {
 		return true
 	}
 	return len(a.transcodeSem) < cap(a.transcodeSem)
@@ -102,22 +104,28 @@ func (a *API) transcodeSlotFree(ask transcodeAsk) bool {
 // a HEAD's hold of none, holds nothing). One a later same ask took over is
 // that ask's now: the request is aborted instead (http.ErrAbortHandler), so
 // its client sees a broken stream, never one that ended (which a player would
-// take for the file's end).
+// take for the file's end). Deferred by the request's handler: a panic of
+// its own goes on as it was, never hidden behind the abort (which net/http
+// does not log).
 func (a *API) endTranscode(h *transcodeHold) {
 	if h == nil || h.end == nil {
 		return
 	}
 	h.end()
+	keyed := h.ask.keyed()
 	a.transcodeMu.Lock()
-	taken := h.keyed && a.transcodeHolds[h.ask] != h
+	taken := keyed && a.transcodeHolds[h.ask] != h
 	if !taken {
-		if h.keyed {
+		if keyed {
 			delete(a.transcodeHolds, h.ask)
 		}
 		<-a.transcodeSem
 	}
 	a.transcodeMu.Unlock()
 	if taken {
+		if p := recover(); p != nil {
+			panic(p)
+		}
 		panic(http.ErrAbortHandler)
 	}
 }
