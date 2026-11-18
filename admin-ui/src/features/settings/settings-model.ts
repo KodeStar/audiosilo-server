@@ -70,6 +70,7 @@ type ReadOnlyFact =
   | 'max_members_min'
   | 'max_members_max'
   | 'upcoming_status'
+  | 'upcoming_window_days'
   | 'report_status'
   | 'client_secret_set'
   | 'scopes_default'
