@@ -6,16 +6,16 @@ import (
 	"testing"
 )
 
-// TestMigration0083KeepsTheAnnouncedCode: a feed already announced failing
+// TestMigration0086KeepsTheAnnouncedCode: a feed already announced failing
 // takes its last failed check's code as the code it was announced with, and
 // a feed sitting at `gone` is marked announced with it whatever its flag (it
 // ended before the upgrade), so a `gone` told before isn't told again
 // (server#403); another feed not announced has none. Every show starts with
 // no feed.json read stamp.
-func TestMigration0083KeepsTheAnnouncedCode(t *testing.T) {
+func TestMigration0086KeepsTheAnnouncedCode(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	dsn, exec, closeRaw := openBefore(t, "0083")
+	dsn, exec, closeRaw := openBefore(t, "0086")
 	exec(`INSERT INTO libraries(id, name, root, created_at, kind) VALUES(1, 'Pods', '/p', 't', 'podcasts')`)
 	exec(`INSERT INTO podcast_shows(library_id,show_path,show_id,title,author,description,link,language,show_type,explicit,private,feed_url,feed_host,feed_url_sha256,podcast_guid,cover_path,episode_count,latest_published,feed_sig,indexed_at)
 		VALUES(1,'Show','0123456789abcdef','Title','','','','','episodic',0,0,'','','','','',0,NULL,'s','t')`)

@@ -3954,7 +3954,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   episode ids, so the scheduled scan and the Bridge's rescan can't both announce them; a scan that read
   feed.json before the Bridge's rescan read and indexed a newer one doesn't fold it over that index,
   whatever either's `show_id`: the folds are ordered by when this server read the file (`feed.File.ReadAt`,
-  kept to the nanosecond as `podcast_shows.feed_read_at`, `0083`; `staleFeed`), never by the Bridge's
+  kept to the nanosecond as `podcast_shows.feed_read_at`, `0086`; `staleFeed`), never by the Bridge's
   whole-second `updated_at`, so a later read is always folded (a feed.json restored from a backup, the
   same second's next write), as is any read while the stamp is ahead of the clock (the clock set back)),
   `podcast_feed_failing` and `podcast_feed_recovered` (`catalog.FoldPodcastJob`, `podcast.poll` only,
@@ -3973,7 +3973,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `feed_secret_missing` is announced at once without counting (and sets the show's
   `status.secret_missing` until a check succeeds, so a client can say "follow it again by its address";
   server#219); once announced, a later `gone` or lost secret (each stops the feed for good) is announced
-  again when the notice said another code (`podcast_feed_state.failing_code`, `0083`, whose backfill gives an
+  again when the notice said another code (`podcast_feed_state.failing_code`, `0086`, whose backfill gives an
   announced feed its last code and marks every feed sitting at `gone` announced with it); a feed at `gone`
   stays there whatever a later check fails with (`error_code` and the empty `next_poll_at` keep the
   scheduled polls stopped: only a success brings it back); another failure
