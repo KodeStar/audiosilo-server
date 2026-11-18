@@ -431,7 +431,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// Books found unchanged whose ebook is new, changed or gone (or never looked
 	// for: indexed before 0056): recorded without a re-index (SetEbooks).
 	ebookBackfill := map[string]catalog.EbookReading{}
-	// Books found unchanged whose revision 1 or 2 snapshot needs no read
+	// Books found unchanged whose revision 1 to 4 snapshot needs no read
 	// (Signature.RevStamp): stamped with today's revision (StampScannedRev), so
 	// later scans don't test them again.
 	var revBackfill []string
@@ -1013,7 +1013,7 @@ func readNames(b *catalog.Book, md *metadata.Metadata) *metadata.Metadata {
 	}
 	title := md.Title
 	if len(b.Files) > 1 {
-		title = md.PartsTitle()
+		title = md.PartsTitle(metadata.PathTitle(b.RelPath, b.IsFolder))
 	}
 	n.Title = chooseTitle(title, n.Title)
 	if strings.TrimSpace(md.Author) != "" {

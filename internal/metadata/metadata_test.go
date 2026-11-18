@@ -353,21 +353,25 @@ func TestBookTitle(t *testing.T) {
 
 // TestPartsTitle: a book of several files takes the album over a title tag
 // that extends it (the first file's: a chapter's name), and keeps a title the
-// album gave, or one with no album to give way to.
+// album gave, one with no album to give way to, or a tag that names the book's
+// own folder.
 func TestPartsTitle(t *testing.T) {
-	cases := []struct{ name, album, title, want string }{
-		{"chapter tail gives way", "Frankenstein; or, The Modern Prometheus", "Frankenstein; or, The Modern Prometheus - Letters 1-4", "Frankenstein; or, The Modern Prometheus"},
-		{"book tail gives way too", "The Odyssey", "The Odyssey: Book 01", "The Odyssey"},
-		{"underscore tail gives way", "The Diary of a Nobody", "The Diary of a Nobody_Ch00", "The Diary of a Nobody"},
-		{"album already chosen", "Pride and Prejudice", "Chapters 21-22", "Pride and Prejudice"},
-		{"no album", "", "The Essays of Francis Bacon 01", "The Essays of Francis Bacon 01"},
-		{"no title tag", "Main Street", "", "Main Street"},
+	cases := []struct{ name, album, title, path, want string }{
+		{"chapter tail gives way", "Frankenstein; or, The Modern Prometheus", "Frankenstein; or, The Modern Prometheus - Letters 1-4", "Frankenstein", "Frankenstein; or, The Modern Prometheus"},
+		{"book tail gives way too", "The Odyssey", "The Odyssey: Book 01", "The Odyssey", "The Odyssey"},
+		{"underscore tail gives way", "The Diary of a Nobody", "The Diary of a Nobody_Ch00", "The Diary of a Nobody", "The Diary of a Nobody"},
+		{"album already chosen", "Pride and Prejudice", "Chapters 21-22", "Pride and Prejudice", "Pride and Prejudice"},
+		{"no album", "", "The Essays of Francis Bacon 01", "Essays", "The Essays of Francis Bacon 01"},
+		{"no title tag", "Main Street", "", "Main Street", "Main Street"},
+		// A box set's album beside each book's own title: the tail names the folder.
+		{"tail names the folder", "The Expanse Box Set", "The Expanse Box Set: Leviathan Wakes", "Leviathan Wakes", "The Expanse Box Set: Leviathan Wakes"},
+		{"whole tag names the folder", "Portal to Nova Roma", "Portal to Nova Roma: Paris", "Portal to Nova Roma - Paris", "Portal to Nova Roma: Paris"},
 	}
 	for _, tc := range cases {
 		var m Metadata
 		m.setTitle(tc.album, tc.title)
-		if got := m.PartsTitle(); got != tc.want {
-			t.Errorf("%s: PartsTitle(%q, %q) = %q, want %q", tc.name, tc.album, tc.title, got, tc.want)
+		if got := m.PartsTitle(tc.path); got != tc.want {
+			t.Errorf("%s: PartsTitle(%q, %q, %q) = %q, want %q", tc.name, tc.album, tc.title, tc.path, got, tc.want)
 		}
 	}
 }

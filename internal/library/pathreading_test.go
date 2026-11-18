@@ -225,7 +225,8 @@ func TestScanTitleNotSeries(t *testing.T) {
 // A book of several files takes its album over its first file's title tag
 // that extends it (metadata.PartsTitle, server#272): each file's tag names that
 // file ("Frankenstein; ... - Letters 1-4"). A book of one file keeps the title
-// tag ("Portal to Nova Roma: Paris"). One read before revision 5 is put right
+// tag ("Portal to Nova Roma: Paris"), and so does one whose tag names its
+// folder ("The Expanse Box Set: Leviathan Wakes" in "Leviathan Wakes"). One read before revision 5 is put right
 // by the next scan from one read of its first file's tags, with no re-index;
 // a book of one file needs no read and is stamped.
 func TestScanPartsTitle(t *testing.T) {
@@ -246,12 +247,17 @@ func TestScanPartsTitle(t *testing.T) {
 	silence(t, root, parts+"/01.mp3", 1, "album="+album, "title="+album+" - Letters 1-4", "artist=Mary Shelley")
 	silence(t, root, parts+"/02.mp3", 1, "album="+album, "title="+album+" - Chapters 1-4", "artist=Mary Shelley")
 	silence(t, root, single+"/Paris.mp3", 1, "album=Portal to Nova Roma", "title=Portal to Nova Roma: Paris", "artist=Dennis E. Taylor")
+	// A box set's album, each book's files titled with the book: the tag names
+	// the book's folder, so it stays.
+	const boxed, boxTitle = "James S. A. Corey/Leviathan Wakes", "The Expanse Box Set: Leviathan Wakes"
+	silence(t, root, boxed+"/01.mp3", 1, "album=The Expanse Box Set", "title="+boxTitle, "artist=James S. A. Corey")
+	silence(t, root, boxed+"/02.mp3", 1, "album=The Expanse Box Set", "title="+boxTitle, "artist=James S. A. Corey")
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
 	s := NewScanner(cat, ffprobe, slog.Default())
 	if _, err := s.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{parts: album, single: "Portal to Nova Roma: Paris"}
+	want := map[string]string{parts: album, single: "Portal to Nova Roma: Paris", boxed: boxTitle}
 	check := func(when string) {
 		t.Helper()
 		for rel, title := range want {

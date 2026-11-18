@@ -1806,7 +1806,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   **A book of several files' title** (`@rev` 5, server#272): `bookTitle` prefers a title tag that
   extends the album with a tail that isn't a track marker, which for a book of several files is its
   first file's own name ("Frankenstein; or, The Modern Prometheus - Letters 1-4", "The Odyssey: Book
-  01"), so `readNames` takes `metadata.PartsTitle` for one (the album when the title is such a tag;
+  01"), so `readNames` takes `metadata.PartsTitle` for one (the album when the title is such a tag,
+  unless the tag, whole or in what it adds to the album, names the book's folder, `PathTitle`: a box
+  set's "The Expanse Box Set: Leviathan Wakes" in the folder "Leviathan Wakes" keeps it;
   `TitleNotSeries` then applies as for any album). A book of one file keeps the title tag ("Portal to
   Nova Roma: Paris"). Corpus check: the LibriVox perf library (120 books) and the testbed libraries
   renamed four books, each to its album (Frankenstein, The Odyssey, The Diary of a Nobody, The Secret

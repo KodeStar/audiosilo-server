@@ -675,13 +675,17 @@ func bookTitle(album, title string) string {
 // (bookTitle took "Frankenstein; or, The Modern Prometheus - Letters 1-4" over
 // "Frankenstein; or, The Modern Prometheus"), since each file of such a book
 // names itself in its title tag, a chapter's name rather than the book's
-// (server#272); Title otherwise. An album that names only the book's series
-// then gives way as TitleNotSeries says.
-func (m *Metadata) PartsTitle() string {
-	if m.AlbumTag != "" && m.Title == m.TitleTag {
-		return m.AlbumTag
+// (server#272); Title otherwise. A title tag that names the book's own folder
+// (pathTitle, PathTitle's reading of it), whole or in what it adds to the album,
+// is the book's, which every file carries alike: a box set's "The Expanse Box
+// Set: Leviathan Wakes" in the folder "Leviathan Wakes" keeps it. An album that
+// names only the book's series then gives way as TitleNotSeries says.
+func (m *Metadata) PartsTitle(pathTitle string) string {
+	if m.AlbumTag == "" || m.Title != m.TitleTag ||
+		sameName(m.TitleTag, pathTitle) || sameName(albumTail(m.AlbumTag, m.TitleTag), pathTitle) {
+		return m.Title
 	}
-	return m.Title
+	return m.AlbumTag
 }
 
 // albumTail is what a title tag adds to the album when it extends it at a word
