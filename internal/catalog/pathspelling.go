@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path"
+	"slices"
 	"strings"
 
 	unorm "golang.org/x/text/unicode/norm"
@@ -98,7 +99,8 @@ func (c *Catalog) KeyPaths(ctx context.Context) (int, error) {
 // alone, never the disk:
 //
 //  1. a path with no other Unicode spelling (every ASCII path) is p, no lookup;
-//  2. a book at p exactly is p;
+//  2. a book at p exactly, or a file of or folder inside a book (bookHolding),
+//     is p;
 //  3. the one book whose path is p in NFC (rel_path or path_key);
 //  4. a file of the innermost folder book above p, or a folder inside one (a
 //     disc folder of a joined book), whose path is p in NFC: that file's
@@ -117,6 +119,11 @@ func (c *Catalog) Spelling(ctx context.Context, libraryID int64, p string) (stri
 	}
 	if _, err := bookIDByPath(ctx, c.db, libraryID, p); !errors.Is(err, ErrNotFound) {
 		return p, err // the book at p, or a failed lookup
+	}
+	// A track or disc folder spelled as the index has it (every seek of a
+	// stream asks): one lookup, not the reads of steps 3 and 4.
+	if _, _, err := c.bookHolding(ctx, libraryID, p, false); !errors.Is(err, ErrNotFound) {
+		return p, err
 	}
 	k := unorm.NFC.String(p)
 	books, err := c.booksKeyed(ctx, libraryID, []string{k}, false)
@@ -173,14 +180,11 @@ func (c *Catalog) booksKeyed(ctx context.Context, libraryID int64, keys []string
 		args...)
 }
 
-// spellingInBook is Spelling's step 4: p (key k) as a file of, or a folder
-// inside, the innermost folder book above it that holds one. found is false
-// when no book above p holds a path reading as p.
+// spellingInBook is Spelling's step 4: p (key k, and held as given by no book:
+// step 2) as a file of, or a folder inside, the innermost folder book above it
+// that holds one. found is false when no book above p holds a path reading as p.
 func (c *Catalog) spellingInBook(ctx context.Context, libraryID int64, p, k string) (string, bool, error) {
-	var keys []string
-	for d := path.Dir(k); d != "." && d != "/"; d = path.Dir(d) {
-		keys = append(keys, d)
-	}
+	keys := ancestors(k)
 	if len(keys) == 0 {
 		return "", false, nil
 	}
@@ -208,9 +212,6 @@ func (c *Catalog) spellingInBook(ctx context.Context, libraryID int64, p, k stri
 		}
 		match := ""
 		for _, f := range files {
-			if f == p || strings.HasPrefix(f, p+"/") {
-				return p, true, nil // the index has p as given
-			}
 			var s string
 			switch fk := unorm.NFC.String(f); {
 			case fk == k:
@@ -237,29 +238,18 @@ func (c *Catalog) spellingInBook(ctx context.Context, libraryID int64, p, k stri
 const maxFolderSpellings = 32
 
 // folderSpelling is Spelling's step 5: p as a folder holding indexed books,
-// each of its names in the spelling given, NFC or NFD. p when the index holds
-// books below p as given, or below none or several of the other spellings.
+// each of its names in the spelling given, NFC or NFD (one FoldersHoldingBooks
+// read). p when the index holds books below p as given, or below none or
+// several of the other spellings.
 func (c *Catalog) folderSpelling(ctx context.Context, libraryID int64, p string) (string, error) {
-	holds := func(s string) (bool, error) {
-		var ok bool
-		err := c.db.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM books WHERE library_id = ? AND rel_path >= ? AND rel_path < ?)`,
-			libraryID, s+"/", s+"0").Scan(&ok) // '0' sorts just after '/'
-		return ok, err
-	}
-	if ok, err := holds(p); ok || err != nil {
+	spellings := folderSpellings(p)
+	holding, err := c.FoldersHoldingBooks(ctx, libraryID, spellings)
+	if err != nil || holding[p] {
 		return p, err
 	}
 	found := ""
-	for _, s := range folderSpellings(p) {
-		if s == p {
-			continue
-		}
-		ok, err := holds(s)
-		if err != nil {
-			return "", err
-		}
-		if !ok {
+	for _, s := range spellings {
+		if !holding[s] {
 			continue
 		}
 		if found != "" {
@@ -304,15 +294,21 @@ func folderSpellings(p string) []string {
 
 // distinct is ss without repeats, in order.
 func distinct(ss ...string) []string {
-	out := ss[:0:0]
+	out := make([]string, 0, len(ss))
 	for _, s := range ss {
-		dup := false
-		for _, o := range out {
-			dup = dup || o == s
-		}
-		if !dup {
+		if !slices.Contains(out, s) {
 			out = append(out, s)
 		}
+	}
+	return out
+}
+
+// ancestors is every folder above the library-relative path p, innermost
+// first ("a/b/c" -> "a/b", "a").
+func ancestors(p string) []string {
+	var out []string
+	for d := path.Dir(p); d != "." && d != "/"; d = path.Dir(d) {
+		out = append(out, d)
 	}
 	return out
 }

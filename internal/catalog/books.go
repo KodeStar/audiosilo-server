@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"maps"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -1058,7 +1057,7 @@ func (c *Catalog) GetBookHolding(ctx context.Context, libraryID int64, relPath s
 // folder of a joined book) is not held.
 func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath string, fileOnly bool) (int64, string, error) {
 	args := []any{libraryID}
-	for d := path.Dir(relPath); d != "." && d != "/"; d = path.Dir(d) {
+	for _, d := range ancestors(relPath) {
 		args = append(args, d)
 	}
 	if len(args) == 1 {

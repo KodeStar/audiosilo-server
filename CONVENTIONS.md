@@ -1117,10 +1117,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   server inserted after a rollback) and every row when `pathKeysVersion` (`"1/" + norm.Version`)
   differs from `server_state('path_keys')`. `Catalog.Spelling(lib, p)` is the index's spelling of a
   cleaned path, from the index alone: a path with no other spelling (`normSensitive`: NFC and NFD
-  both) is `p` with no query; then a book at `p` exactly; the one book whose NFC path is `NFC(p)`
+  both) is `p` with no query; then a book at `p` exactly, or a file of or folder inside one
+  (`bookHolding`, so a track spelled as indexed costs one lookup); the one book whose NFC path is `NFC(p)`
   (`rel_path` or `path_key`, the partial index); a file of, or a folder inside (a disc folder), the
   innermost folder book above it, its files compared by NFC, a folder cut to `p`'s depth; a folder
-  holding books, each name as given, NFC or NFD (at most `maxFolderSpellings` combinations). Two
+  holding books, each name as given, NFC or NFD (at most `maxFolderSpellings` combinations, one
+  `FoldersHoldingBooks` read). Two
   indexed paths that both read as `p` (an NFC and an NFD folder side by side on a byte-exact disk)
   leave `p` as given: it never guesses. Never the disk, never an on-demand index. Applied by
   `scopedPath` / `scopedPathIn` (`spelledPathInScope`: cap, library, clean, spelling, scope, hidden),
