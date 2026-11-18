@@ -326,6 +326,30 @@ func TestAudibleSyncClaimUnreadableParamsFailed(t *testing.T) {
 	}
 }
 
+// A queued audible.sync whose stored params are not JSON (a damaged row) runs
+// with the next request's (a promoting kind's queued job takes the newest
+// params): the queue's answer carries them, no longer flagged unreadable, and
+// the claim hands the job out rather than ending it.
+func TestAudibleSyncEnqueueReplacesUnreadableParams(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	q.beat(t, KindVerify, KindAudibleSync)
+	job, _, err := q.Enqueue(ctx, AudibleSync("acct0001", -10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.damageParams(t, job.ID)
+	again, created, err := q.Enqueue(ctx, AudibleSync("acct0001", -10))
+	if err != nil || created || again.ID != job.ID || again.ParamsUnreadable || string(again.Params) != `{"account":"acct0001"}` {
+		t.Fatalf("queued again = %+v, %v, %v; want the open sync with the new params, unflagged", again, created, err)
+	}
+	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got == nil || got.ID != job.ID ||
+		got.State != StateClaimed {
+		t.Fatalf("claim = %+v, %v; want the repaired sync handed out", got, err)
+	}
+}
+
 // AudibleRefusalCode reads audible_refused from a failed sync's result code or
 // its error's prefix; nothing from a done or cancelled one, or another error.
 func TestAudibleRefusalCode(t *testing.T) {

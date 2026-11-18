@@ -3221,7 +3221,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`json_valid` first, in a CASE), so one damaged row never fails a whole query (a NULL it reads is
   passed by, `IS NOT NULL` where a `NOT IN` would keep it: `CancelOrphanAudibleJobs`). Its column and
   path are written into the statement as they are, so they are string constants by their type
-  (`sqlLiteral`: no other package can pass it a string read at run time).
+  (`sqlLiteral`: no other package can pass it a string read at run time). A queued job of a promoting kind
+  takes the next request's params in place of ones that can't be read, and is no longer flagged.
   `GET /bridge/libraries/{id}/book[?path=]` gives an INDEXED book's files with the size and mtime the
   server sees now (a single-file book, which has no file rows, is listed as its own file; no path: the
   first whole book of the library's first five by title, the mapping check's sample; 404 `no_book`; never an

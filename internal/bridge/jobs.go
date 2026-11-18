@@ -829,7 +829,9 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 					if n, err := res.RowsAffected(); err != nil {
 						return err
 					} else if n > 0 {
-						job.Params, job.UpdatedAt = j.Params, now
+						// Params that couldn't be read (a damaged row) are
+						// replaced with them: the job is no longer flagged.
+						job.Params, job.UpdatedAt, job.ParamsUnreadable = j.Params, now, false
 					}
 				}
 				return nil
