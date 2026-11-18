@@ -234,13 +234,26 @@ func TestSubscribePrivacyConflict(t *testing.T) {
 }
 
 // An adopt-only subscribe returns the open request or ErrNoNewRequest, and
-// queues nothing either way.
+// queues nothing either way; with nothing open it never waits for the
+// subscribe lock (server#219).
 func TestSubscribeAdoptOnly(t *testing.T) {
 	q := podcastQueue(t)
 	ctx := context.Background()
-	if _, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/a.xml", AdoptOnly: true}); !errors.Is(err, ErrNoNewRequest) {
-		t.Fatalf("nothing open = %v", err)
+	q.secretFlowMu.Lock()
+	refused := make(chan error, 1)
+	go func() {
+		_, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/a.xml", AdoptOnly: true})
+		refused <- err
+	}()
+	select {
+	case err := <-refused:
+		if !errors.Is(err, ErrNoNewRequest) {
+			t.Fatalf("nothing open = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("an adopt-only subscribe with nothing open waited for the subscribe lock")
 	}
+	q.secretFlowMu.Unlock()
 	var n int
 	if err := q.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("queued %d %v", n, err)

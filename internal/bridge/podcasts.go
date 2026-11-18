@@ -227,9 +227,24 @@ func (s *Service) Subscribe(ctx context.Context, r SubscribeRequest) (*Job, bool
 	if err != nil {
 		return nil, false, err
 	}
+	nj := NewJob{Kind: KindPodcastSubscribe, LibraryID: &lib, Params: raw, RequestedBy: user, Priority: PriorityListener, feedRedacted: feed.RedactURL(norm), adoptOnly: r.AdoptOnly}
+	if r.AdoptOnly {
+		// An OPML row past the upload's new requests only adopts an open one:
+		// with none open it is refused at once, without the lock or Enqueue's
+		// writer transaction (server#219). One opened since this read is
+		// adopted by the next upload.
+		var open bool
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL+`)`, jobKey(nj)).Scan(&open); err != nil {
+			return nil, false, err
+		}
+		if !open {
+			return nil, false, ErrNoNewRequest
+		}
+	}
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
-	j, created, err := s.Enqueue(ctx, NewJob{Kind: KindPodcastSubscribe, LibraryID: &lib, Params: raw, RequestedBy: user, Priority: PriorityListener, feedRedacted: feed.RedactURL(norm), adoptOnly: r.AdoptOnly})
+	j, created, err := s.Enqueue(ctx, nj)
 	if err == nil && private {
 		if s.beforeSecretHeld != nil {
 			s.beforeSecretHeld(j)
