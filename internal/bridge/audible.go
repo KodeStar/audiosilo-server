@@ -445,9 +445,12 @@ func failureCode(j Job, codes []string) string {
 // titles its params name and posts the ones ahead of this server's for the
 // account's person (POST /bridge/audible/accounts/{account}/listening,
 // furthest only); the other direction is the Bridge's push loop over GET
-// /bridge/progress, not a job. Params AudibleSyncParams; the server queues it
-// (internal, quiet) every AudibleSyncEvery per synced account, one open per
-// account (audibleAccountSuffix).
+// /bridge/progress, not a job. The server queues it (internal, quiet) every
+// AudibleSyncEvery per synced account, one open per account
+// (audibleAccountSuffix), its params only {account} (AudibleSyncQueued); the
+// claim answers the titles to sync as they are then (AudibleSyncParams,
+// Service.AudibleSyncParams), so the queue never stores thousands of titles
+// every quarter of an hour.
 const KindAudibleSync = "audible.sync"
 
 // AudibleSyncEvery is how often the scheduler queues a synced account's
@@ -479,56 +482,53 @@ type AudibleSyncTitle struct {
 	RuntimeS  int64  `json:"runtime_s"`
 }
 
-// AudibleSyncParams are audible.sync's params, built by the server when it
-// queues the job: the account and every title to sync (matched to a book on
-// this server, not marked "Not this book" or "Don't sync this book", not gone
-// from the account), by ASIN.
+// AudibleSyncParams are audible.sync's params as the Bridge's claim gets them
+// (AudibleSyncClaim): the account and every title to sync (matched to a book
+// on this server, not marked "Not this book" or "Don't sync this book", not
+// gone from the account), by ASIN, read at the claim.
 type AudibleSyncParams struct {
 	Account string             `json:"account"`
 	Titles  []AudibleSyncTitle `json:"titles"`
 }
 
+// AudibleSyncQueued are audible.sync's params as queued: the account alone
+// (server#303). The titles are the claim's (AudibleSyncClaim).
+type AudibleSyncQueued struct {
+	Account string `json:"account"`
+}
+
 const (
-	// maxAudibleSyncParamsBytes bounds audible.sync's params: thousands of
-	// titles (about 120 bytes each); AudibleSync leaves out the last titles of
-	// a list that would be longer.
+	// maxAudibleSyncParamsBytes bounds the params a claim answers: thousands
+	// of titles (about 120 bytes each); AudibleSyncClaim leaves out the last
+	// titles of a list that would be longer.
 	maxAudibleSyncParamsBytes = 1 << 20
 )
 
-// audibleSyncParams checks audible.sync's params strictly: an account id, and
-// titles each with an ASIN, a library and a clean book path (once each ASIN).
+// audibleSyncParams checks audible.sync's queued params strictly: an account
+// id, nothing else (titles are the claim's).
 func audibleSyncParams(raw json.RawMessage) (json.RawMessage, error) {
-	var p AudibleSyncParams
+	var p AudibleSyncQueued
 	if err := decodeStrict(raw, &p); err != nil {
 		return nil, invalid("params: %v", err)
 	}
 	if !AudibleAccountPattern.MatchString(p.Account) {
 		return nil, invalid("account must match %s", AudibleAccountPattern)
 	}
-	if p.Titles == nil {
-		p.Titles = []AudibleSyncTitle{}
-	}
-	seen := make(map[string]bool, len(p.Titles))
-	for _, t := range p.Titles {
-		switch {
-		case !asinPattern.MatchString(t.ASIN) || seen[t.ASIN]:
-			return nil, invalid("titles: each asin must be an ASIN, once")
-		case t.LibraryID <= 0:
-			return nil, invalid("titles: library_id is required")
-		case t.Path == "" || len(t.Path) > relpath.MaxBytes || (t.Path != "." && relpath.Clean(t.Path) != t.Path):
-			return nil, invalid("titles: path must be a clean book path")
-		case t.RuntimeS < 0:
-			return nil, invalid("titles: runtime_s must not be negative")
-		}
-		seen[t.ASIN] = true
-	}
 	return json.Marshal(p)
 }
 
-// AudibleSync is the NewJob that syncs account's titles (in the order given),
-// leaving out the last ones when their params would pass
-// maxAudibleSyncParamsBytes (dropped reports how many).
-func AudibleSync(account string, titles []AudibleSyncTitle, priority int) (job NewJob, dropped int) {
+// AudibleSync is the NewJob that syncs account's titles: the titles are read
+// when the Bridge claims it (Service.AudibleSyncParams).
+func AudibleSync(account string, priority int) NewJob {
+	raw, _ := json.Marshal(AudibleSyncQueued{Account: account})
+	return NewJob{Kind: KindAudibleSync, Params: raw, Priority: priority}
+}
+
+// AudibleSyncClaim is the params a claim of account's audible.sync answers:
+// the account and its titles (in the order given), leaving out the last ones
+// when the params would pass maxAudibleSyncParamsBytes (dropped reports how
+// many).
+func AudibleSyncClaim(account string, titles []AudibleSyncTitle) (params json.RawMessage, dropped int) {
 	if titles == nil {
 		titles = []AudibleSyncTitle{}
 	}
@@ -538,7 +538,26 @@ func AudibleSync(account string, titles []AudibleSyncTitle, priority int) (job N
 		keep = keep[:len(keep)*9/10]
 		raw, _ = json.Marshal(AudibleSyncParams{Account: account, Titles: keep})
 	}
-	return NewJob{Kind: KindAudibleSync, Params: raw, Priority: priority}, len(titles) - len(keep)
+	return raw, len(titles) - len(keep)
+}
+
+// fillAudibleSync gives a claimed audible.sync the params its claim answers
+// (AudibleSyncParams: the account's titles now; the job stores the account
+// alone). One that can't be read goes back to the queue unspent
+// (ReleaseUnsentClaim), so the next claim takes it again.
+func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
+	account, err := AudibleAccountOf(*j)
+	var params json.RawMessage
+	if err == nil {
+		params, err = s.AudibleSyncParams(ctx, account)
+	}
+	if err != nil {
+		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer stop()
+		return nil, errors.Join(err, s.ReleaseUnsentClaim(cleanup, j))
+	}
+	j.Params = params
+	return j, nil
 }
 
 // AudibleAccountOf reads an audible.sync's or audible.poll's account (both
@@ -580,6 +599,5 @@ func AudibleSynced(j Job) bool {
 // CancelAudibleSyncs cancels account's open sync inside tx (removed or paused,
 // as CancelAudiblePolls).
 func CancelAudibleSyncs(ctx context.Context, tx *sql.Tx, account, reason string, now time.Time) error {
-	job, _ := AudibleSync(account, nil, 0)
-	return cancelOpenTx(ctx, tx, jobKey(job), at(now), reason)
+	return cancelOpenTx(ctx, tx, jobKey(AudibleSync(account, 0)), at(now), reason)
 }

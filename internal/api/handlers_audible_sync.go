@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -194,4 +195,21 @@ func (a *API) handleBridgeProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	writeNoStore(w, http.StatusOK, map[string]any{"rows": rows, "next": next, "more": more,
 		"server_time": time.Now().UTC().Format(time.RFC3339)})
+}
+
+// audibleSyncClaim is the params a claim of account's audible.sync answers
+// (bridge.Service.AudibleSyncParams): the account's titles to sync as they are
+// now (server#303: the queued job names the account alone), the last ones
+// left out past the params' bound, which is logged.
+func (a *API) audibleSyncClaim(ctx context.Context, account string) (json.RawMessage, error) {
+	titles, err := a.cat.AudibleSyncTitles(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	params, dropped := bridge.AudibleSyncClaim(account, titles)
+	if dropped > 0 {
+		a.log.Warn("audible: an account's sync leaves out titles past the params' bound", "account", account,
+			"dropped", dropped)
+	}
+	return params, nil
 }

@@ -109,12 +109,22 @@ func (c *Catalog) AudibleSyncFor(ctx context.Context, account string) (*AudibleS
 }
 
 // AudibleSyncTitles are account's titles that take part in its sync
-// (syncTitleSQL), by ASIN: audible.sync's params.
+// (syncTitleSQL), by ASIN: the titles a claim of its audible.sync answers
+// (bridge.Service.AudibleSyncParams).
 func (c *Catalog) AudibleSyncTitles(ctx context.Context, account string) ([]bridge.AudibleSyncTitle, error) {
 	return queryRows(ctx, c.db, func(rows *sql.Rows, t *bridge.AudibleSyncTitle) error {
 		return rows.Scan(&t.ASIN, &t.LibraryID, &t.Path, &t.RuntimeS)
 	}, `SELECT t.asin, t.match_library_id, t.match_path, t.runtime_s FROM audible_titles t
 		 WHERE t.account = ? AND `+syncTitleSQL+` ORDER BY t.asin`, account)
+}
+
+// HasAudibleSyncTitles reports whether any of account's titles takes part in
+// its sync (syncTitleSQL): the scheduler queues no audible.sync without one.
+func (c *Catalog) HasAudibleSyncTitles(ctx context.Context, account string) (bool, error) {
+	var has bool
+	err := c.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM audible_titles t WHERE t.account = ? AND `+syncTitleSQL+`)`,
+		account).Scan(&has)
+	return has, err
 }
 
 // AudibleSyncBooks are the books account's sync may write (its titles'

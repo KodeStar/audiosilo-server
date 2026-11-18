@@ -748,6 +748,9 @@ func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string
 			j.Params, err = json.Marshal(p)
 		}
 	}
+	if j.Kind == KindAudibleSync && s.AudibleSyncParams != nil {
+		return s.fillAudibleSync(ctx, j)
+	}
 	return j, err
 }
 

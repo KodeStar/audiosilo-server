@@ -4591,14 +4591,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   unreleased ASIN; released, it syncs, the re-match trigger offering its book's place again, `0071`). **Audible to
   here**: `audible/scheduler.go` `queueSyncs` (while the Bridge offers the kind) queues one `audible.sync` per
   `DueAudibleSyncs` account (sync on, not paused, `refused_at` NULL, `bridgeUserSQL`, `sync_queued_at` older than
-  `bridge.AudibleSyncEvery`, 15 min) at priority -10, none for an account with no synced title; params
-  `{account, titles:[{asin, library_id, path, runtime_s}]}` (strict, `audibleSyncParams`; ASIN once each, a clean
-  book path or `.`; at most 1 MiB, `AudibleSync` drops the last titles past it), internal, quiet, `ModuleFor`
-  audible, deduped per account, `promotes` (a queued one takes the newest titles), only the newest ended kept
+  `bridge.AudibleSyncEvery`, 15 min) at priority -10, none for an account with no synced title
+  (`HasAudibleSyncTitles`); queued params `{account}` alone (strict, `audibleSyncParams`, `bridge.AudibleSync`;
+  server#303: the queue no longer stores every title four times an hour), and the claim answers
+  `{account, titles:[{asin, library_id, path, runtime_s}]}` as the titles are then (`bridge.Service.AudibleSyncParams`,
+  wired to `api.audibleSyncClaim` over `AudibleSyncTitles`; at most 1 MiB, `AudibleSyncClaim` leaves out the last
+  titles past it and the server logs it; a claim whose titles can't be read hands nothing out and puts the job back
+  unspent, `ReleaseUnsentClaim`; the job as stored keeps `{account}`, as a private feed URL is injected at claim),
+  internal, quiet, `ModuleFor` audible, deduped per account, `promotes`, only the newest ended kept
   (`pruneAudibleEnded`). A console change to which titles sync (`PATCH .../titles/...` `{rejected}` or `{no_sync}`)
   or turning sync on queues the account's sync at once (`audible.SyncNow`, `catalog.AudibleSyncQueueable`: the same
-  rule bar the 15 min, an online Bridge offering the kind; a title change queues even an empty title list, so the
-  Bridge drops a left-out title now; a sync the Bridge already runs keeps its titles). Ended (`OnEnded`, `FoldAudibleSync`): a sync that read Audible's places sets
+  rule bar the 15 min, an online Bridge offering the kind; a title change queues one even with no title left, so the
+  Bridge drops a left-out title now; an open one not claimed yet syncs the newest set; a sync the Bridge already
+  runs keeps the titles its claim gave it). Ended (`OnEnded`, `FoldAudibleSync`): a sync that read Audible's places sets
   `last_sync_at` (`bridge.AudibleSynced`: done, its result neither `waiting` nor `sync_off`, the Bridge's result
   fields, hand-mirrored); a sync or a poll (bridge#40: the console's accounts card then asks for a sign-in on
   the Bridge instead of showing it checked) failed with code `audible_refused` (result `code`, or an `audible_refused:` error prefix,
