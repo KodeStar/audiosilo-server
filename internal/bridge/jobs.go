@@ -230,6 +230,10 @@ var kinds = map[string]kindSpec{
 // scans the table).
 const claimedStatesSQL = `('claimed', 'running')`
 
+// workingStatesSQL is OpenStatesSQL less needs_attention: the open jobs not
+// parked.
+const workingStatesSQL = `('queued', 'claimed', 'running')`
+
 // held reports whether a queued job of kind with params waits for a managed
 // module that is off (ModuleFor; with no ModuleOn wired every module counts as
 // on): no claim hands it out (nextQueued), and it refuses no new job that
@@ -630,6 +634,15 @@ func (st Status) Writable(id int64) bool {
 	return l != nil && l.Mapped && l.Writable
 }
 
+// checkNewJob is every check a new job passes before its key is looked up:
+// checkNew, then the library's kind (checkLibraryKind).
+func (s *Service) checkNewJob(ctx context.Context, j *NewJob) error {
+	if err := checkNew(j); err != nil {
+		return err
+	}
+	return s.checkLibraryKind(ctx, *j)
+}
+
 // checkNew validates a request against the kind: known, its params well formed
 // (normalised in place), a library when the kind needs one and a path only when
 // it allows one.
@@ -679,16 +692,20 @@ func checkNew(j *NewJob) error {
 // ErrContributeOpen, ErrReadalongOpen); the open job of its own kind is still returned either way.
 // The caller has resolved the library and the book (j.Path is the book's
 // indexed path) and checked the job's module is on (ModuleFor).
-func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
+func (s *Service) Enqueue(ctx context.Context, j NewJob) (*Job, bool, error) {
 	if j.Kind == KindPodcastFetch && j.fetch == nil {
 		return s.EnsurePodcastFetch(ctx, j, FetchOptions{Retry: true})
 	}
-	if err := checkNew(&j); err != nil {
+	if err := s.checkNewJob(ctx, &j); err != nil {
 		return nil, false, err
 	}
-	if err := s.checkLibraryKind(ctx, j); err != nil {
-		return nil, false, err
-	}
+	return s.enqueueChecked(ctx, j)
+}
+
+// enqueueChecked is Enqueue for a job checkNewJob has already passed (params
+// normalised): Subscribe checks an adopt-only request before it looks for the
+// open one, and the check isn't made twice.
+func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
 	var h *Heartbeat
 	if j.fetch == nil {
 		if h, err = s.LastHeartbeat(ctx); err != nil {
@@ -819,7 +836,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			}
 		}
 		if j.Kind == KindPodcastSubscribe {
-			if err := checkOpenRequests(ctx, tx, KindPodcastSubscribe, j.RequestedBy, ErrTooManyRequests); err != nil {
+			if err := checkOpenRequests(ctx, tx, KindPodcastSubscribe, j.RequestedBy, OpenStatesSQL, ErrTooManyRequests); err != nil {
 				return err
 			}
 		}
@@ -1259,11 +1276,12 @@ func (s *Service) leaseLapsed(ctx context.Context, now string) (bool, error) {
 // maxOpenRequests caps one requester's open jobs of a capped kind.
 const maxOpenRequests = 5
 
-// checkOpenRequests answers over when by already has maxOpenRequests open jobs
-// of kind, inside the insertion's writer transaction.
-func checkOpenRequests(ctx context.Context, tx *sql.Tx, kind string, by int64, over error) error {
+// checkOpenRequests answers over when by already has maxOpenRequests jobs of
+// kind in states (an SQL list: OpenStatesSQL, or workingStatesSQL to leave
+// parked ones out), inside the insertion's writer transaction.
+func checkOpenRequests(ctx context.Context, tx *sql.Tx, kind string, by int64, states string, over error) error {
 	var n int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE kind=? AND requested_by=? AND state IN `+OpenStatesSQL, kind, by).Scan(&n); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE kind=? AND requested_by=? AND state IN `+states, kind, by).Scan(&n); err != nil {
 		return err
 	}
 	if n >= maxOpenRequests {

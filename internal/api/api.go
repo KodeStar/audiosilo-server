@@ -862,6 +862,9 @@ func (a *API) Handler() http.Handler {
 	// else (requireBridge).
 	mux.Handle("PUT /api/v1/bridge/status", a.requireBridge(a.handleBridgeStatus))
 	mux.Handle("GET /api/v1/bridge/libraries/{id}/book", a.requireBridge(a.handleBridgeBook))
+	// A HEAD claim is 405 before anything runs: Go's GET pattern would serve
+	// it, leasing a job whose body is never sent (server#179).
+	mux.HandleFunc("HEAD "+bridgeClaimPath, headNotAllowed)
 	mux.Handle("GET "+bridgeClaimPath, a.requireBridge(a.handleBridgeClaim))
 	mux.Handle("PATCH /api/v1/bridge/jobs/{id}", a.requireBridge(a.handleBridgeUpdate))
 	mux.Handle("POST /api/v1/bridge/rescan", a.requireBridge(a.handleBridgeRescan))

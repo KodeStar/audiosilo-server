@@ -27,6 +27,15 @@ func TestURLVectors(t *testing.T) {
 			t.Errorf("accepted %q", bad)
 		}
 	}
+	// A host is at most MaxHostLen characters (the trailing dot of a rooted
+	// name aside), as a podcast.subscribe's params take it.
+	longest := strings.Repeat("a", MaxHostLen-len(".example")) + ".example"
+	if norm, err := NormalizeFeedURL("https://" + longest + "./feed.xml"); err != nil || norm != "https://"+longest+"/feed.xml" {
+		t.Errorf("refused a host of MaxHostLen: %s %v", norm, err)
+	}
+	if _, err := NormalizeFeedURL("https://a" + longest + "/feed.xml"); !errors.Is(err, ErrInvalidFeedURL) {
+		t.Error("accepted a host past MaxHostLen")
+	}
 	for _, tc := range []struct {
 		in, norm, redacted string
 		private            bool

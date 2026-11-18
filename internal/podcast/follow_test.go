@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -374,6 +375,8 @@ func TestImportRowErrors(t *testing.T) {
 		{"not writable", func(_ *Follower, q *fakeQueue) { q.err = bridge.ErrLibraryNotWritable }, RowUnavailable, "library_not_writable"},
 		{"open cap", func(_ *Follower, q *fakeQueue) { q.err = bridge.ErrTooManyRequests }, RowLimited, "too_many_requests"},
 		{"privacy", func(_ *Follower, q *fakeQueue) { q.err = bridge.ErrPrivacyConflict }, RowFailed, "privacy_conflict"},
+		// The queue's params check (an adopt-only row's too: server#219).
+		{"invalid params", func(_ *Follower, q *fakeQueue) { q.err = fmt.Errorf("%w: invalid subscribe params", bridge.ErrInvalid) }, RowInvalid, "invalid_feed_url"},
 		{"unexpected", func(_ *Follower, q *fakeQueue) { q.err = errors.New("disk on fire") }, RowFailed, "subscribe_failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

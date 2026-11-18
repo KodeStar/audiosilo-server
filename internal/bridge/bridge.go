@@ -30,8 +30,9 @@ type Service struct {
 	// beforeSecretHeld, tests only, runs in Subscribe between the job's
 	// commit and storing its private URL.
 	beforeSecretHeld func(*Job)
-	// OnEnded hears every committed terminal transition. It must return at once;
-	// wake background work rather than re-entering the queue here.
+	// OnEnded hears every committed terminal transition, on a context with a
+	// budget of its own (foldContext). It must return at once; wake background
+	// work rather than re-entering the queue here.
 	OnEnded func(ctx context.Context, job Job)
 
 	// OnTransition, when set (at wiring, before the first request), hears about
@@ -60,6 +61,14 @@ type Service struct {
 	hb     *Heartbeat
 	hbRead time.Time
 	hbGen  uint64
+
+	// offlineSince is when expireOfflineSubscribes first saw no online Bridge
+	// for podcast.subscribe (its clock), zero while it last saw one: the
+	// silence must last OnlineWindow on this clock before a request fails, so
+	// a server restart, a host waking from sleep or a wall clock that jumped
+	// fails none before the Bridge's next heartbeat.
+	offlineMu    sync.Mutex
+	offlineSince time.Time
 }
 
 // New returns a Service. now may be nil to use time.Now.
@@ -78,11 +87,41 @@ func (s *Service) ts() string { return s.now().UTC().Format(time.RFC3339) }
 func at(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
 // committedContext ignores a disconnected caller while retaining the operation's
-// absolute deadline, so outcome folding cannot extend a bounded media request.
+// absolute deadline, so a notification (OnTransition) cannot extend a bounded
+// media request.
 func committedContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	detached := context.WithoutCancel(ctx)
 	if deadline, ok := ctx.Deadline(); ok {
 		return context.WithDeadline(detached, deadline)
 	}
 	return detached, func() {}
+}
+
+// minFoldBudget is the least time each OnEnded fold gets of its own
+// (foldContext), whatever the caller's deadline has left, and maxFoldOverrun how
+// far past that deadline the folds of one caller may run in all.
+const (
+	minFoldBudget  = 5 * time.Second
+	maxFoldOverrun = 2 * minFoldBudget
+)
+
+// foldContext is one OnEnded fold's context: the caller's deadline as
+// committedContext keeps it, but never less than minFoldBudget from now, so a
+// slow fold, or a stream's short budget spent before an unrelated job's end was
+// settled, can't leave the next fold no time (server#219). The floor stops at
+// maxFoldOverrun past the caller's deadline, so a settle that ends many jobs
+// holds its request that much longer at most; a fold that misses it is
+// recovered by the scheduler's sweep (EndedPodcasts). Without a caller deadline
+// it is unbounded, as committedContext's.
+func foldContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if deadline, ok := ctx.Deadline(); ok {
+		floor := time.Now().Add(minFoldBudget)
+		if limit := deadline.Add(maxFoldOverrun); limit.Before(floor) {
+			floor = limit
+		}
+		if deadline.Before(floor) {
+			return context.WithDeadline(context.WithoutCancel(ctx), floor)
+		}
+	}
+	return committedContext(ctx)
 }

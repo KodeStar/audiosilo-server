@@ -12,7 +12,13 @@ import (
 
 var ErrInvalidFeedURL = errors.New("invalid_feed_url")
 
-// NormalizeFeedURL preserves credential, escaped path and query bytes.
+// MaxHostLen is the longest feed host accepted: a DNS name's limit, and what a
+// podcast.subscribe's params may carry (bridge's subscribeParams).
+const MaxHostLen = 253
+
+// NormalizeFeedURL preserves credential, escaped path and query bytes. A host
+// past MaxHostLen is invalid here, so a follow says so whatever the Bridge's
+// state, before any lookup or queue.
 func NormalizeFeedURL(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if len(s) > 2048 {
@@ -27,7 +33,7 @@ func NormalizeFeedURL(s string) (string, error) {
 		return "", ErrInvalidFeedURL
 	}
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	if host == "" || strings.ContainsFunc(host, unicode.IsSpace) {
+	if host == "" || len(host) > MaxHostLen || strings.ContainsFunc(host, unicode.IsSpace) {
 		return "", ErrInvalidFeedURL
 	}
 	port := u.Port()

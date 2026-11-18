@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"path"
@@ -10,6 +9,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/podcast"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
@@ -127,8 +127,12 @@ func (a *API) handlePodcastFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost && !ready {
-		raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
-		_, _, err = a.bridge.EnsurePodcastFetch(r.Context(), bridge.NewJob{LibraryID: &lib.ID, Path: &rel, Params: raw, Priority: bridge.PriorityPlaying, RequestedBy: userFrom(r.Context()).ID}, bridge.FetchOptions{Retry: true})
+		// An identity the feed changed since the pin was read is asked for as
+		// it is now (podcast.EnsureFetch, the stream's rule); 409
+		// identity_changed only while its previous identity's fetch is still
+		// stopping, which a shipped player reads as "ask again".
+		_, _, err = podcast.EnsureFetch(r.Context(), a.cat, a.bridge, lib.ID, rel, pin,
+			bridge.NewJob{Priority: bridge.PriorityPlaying, RequestedBy: userFrom(r.Context()).ID}, bridge.FetchOptions{Retry: true})
 		if !a.podcastQueueError(w, err) {
 			return
 		}

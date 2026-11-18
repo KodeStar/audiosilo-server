@@ -50,6 +50,16 @@ func (s *Service) fetchRefusal(h *Heartbeat, lib int64, noNew bool) error {
 		return ErrFetchDemo
 	case s.ModuleOn != nil && !s.ModuleOn(ModulePodcasts):
 		return ErrFetchModuleOff
+	default:
+		return s.heldFetchRefusal(h, lib)
+	}
+}
+
+// heldFetchRefusal is what refuses a fetch the Bridge already holds: the
+// Bridge's own state alone. It carries on with the module off, which holds
+// only queued work (server#179).
+func (s *Service) heldFetchRefusal(h *Heartbeat, lib int64) error {
+	switch {
 	case h == nil || !h.Online(s.now()) || !h.Offers(KindPodcastFetch):
 		return ErrKindUnavailable
 	case !h.Writable(lib):
@@ -96,7 +106,9 @@ func fetchCooling(ctx context.Context, tx *sql.Tx, j NewJob, now time.Time) (boo
 }
 
 // checkFetchLimit shares the insertion's writer transaction, after open-intent
-// dedupe. The creator owns the quota even when another listener promotes it.
+// dedupe. The creator owns the quota even when another listener promotes it. A
+// parked fetch (needs_attention: the Bridge waits on something no listener can
+// change) holds none of it (server#179).
 func checkFetchLimit(ctx context.Context, tx *sql.Tx, by int64) error {
 	if by == 0 { // Scheduled work has no requester.
 		return nil
@@ -108,7 +120,7 @@ func checkFetchLimit(ctx context.Context, tx *sql.Tx, by int64) error {
 	if admin {
 		return nil
 	}
-	return checkOpenRequests(ctx, tx, KindPodcastFetch, by, ErrFetchLimit)
+	return checkOpenRequests(ctx, tx, KindPodcastFetch, by, workingStatesSQL, ErrFetchLimit)
 }
 
 // FetchStatus is the public summary, deliberately excluding job internals.
@@ -240,6 +252,13 @@ func (s *Service) podcastFetchStatuses(ctx context.Context, lib int64, paths []s
 		return nil, err
 	}
 	refusal := s.fetchRefusal(h, lib, false)
+	// A fetch the Bridge holds carries on with the module off (only a queued
+	// one is held): it stays fetching unless the Bridge itself left or can't
+	// write (server#179).
+	held := refusal
+	if errors.Is(refusal, ErrFetchModuleOff) {
+		held = s.heldFetchRefusal(h, lib)
+	}
 	raw, _ := json.Marshal(paths)
 	rows, err := s.db.QueryContext(ctx, `SELECT b.rel_path,e.present,e.fetch_json,j.id,j.state,j.progress,j.result,f.error_code,f.failures
  FROM podcast_episodes e JOIN books b ON b.id=e.book_id
@@ -265,25 +284,8 @@ func (s *Service) podcastFetchStatuses(ctx context.Context, lib int64, paths []s
 		switch {
 		case pinReady && present && feed.ValidFetch(f) && f.DeletedAt == "":
 			st = ReadyFetchStatus(f)
-		case state.String == StateQueued:
-			st.State = "queued"
-			st.RequestID = &id.Int64
-			st.RetryAfterSeconds = 2
-		case state.String == StateClaimed || state.String == StateRunning || state.String == StateNeedsAttention:
-			st.State = "fetching"
-			st.RequestID = &id.Int64
-			st.RetryAfterSeconds = 2
-			var p struct {
-				Received int64  `json:"bytes_received"`
-				Total    *int64 `json:"bytes_total"`
-			}
-			if json.Unmarshal([]byte(progress.String), &p) == nil {
-				st.BytesReceived = max(p.Received, 0)
-				if p.Total != nil && *p.Total >= 0 {
-					st.BytesTotal = p.Total
-					st.BytesReceived = min(st.BytesReceived, *p.Total)
-				}
-			}
+		case IsOpenState(state.String):
+			st = OpenFetchStatus(Job{ID: id.Int64, State: state.String, Progress: json.RawMessage(progress.String)})
 		case state.String == StateFailed || failures.Int64 > 0:
 			st.State = "failed"
 			if state.String == StateFailed {
@@ -301,9 +303,36 @@ func (s *Service) podcastFetchStatuses(ctx context.Context, lib int64, paths []s
 			}
 			st.Error = FetchErrorFor(c)
 		}
-		out[path] = UnavailableFetchStatus(st, refusal)
+		if st.State == "fetching" {
+			out[path] = UnavailableFetchStatus(st, held)
+		} else {
+			out[path] = UnavailableFetchStatus(st, refusal)
+		}
 	}
 	return out, rows.Err()
+}
+
+// OpenFetchStatus is the summary of j, an open podcast.fetch: queued until a
+// claim hands it out, then fetching (claimed, running or parked) with the
+// bytes its progress reports.
+func OpenFetchStatus(j Job) FetchStatus {
+	st := FetchStatus{State: "queued", RequestID: &j.ID, RetryAfterSeconds: 2}
+	if j.State == StateQueued {
+		return st
+	}
+	st.State = "fetching"
+	var p struct {
+		Received int64  `json:"bytes_received"`
+		Total    *int64 `json:"bytes_total"`
+	}
+	if json.Unmarshal(j.Progress, &p) == nil {
+		st.BytesReceived = max(p.Received, 0)
+		if p.Total != nil && *p.Total >= 0 {
+			st.BytesTotal = p.Total
+			st.BytesReceived = min(st.BytesReceived, *p.Total)
+		}
+	}
+	return st
 }
 
 type fetchKey struct {

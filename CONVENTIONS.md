@@ -3232,7 +3232,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   chapters. `/fs` lists indexed titles (serial shows oldest first). Episodes order by published, season,
   episode number, path (`episodeKeyCols`: undated as '', no season 0, no number -1, so an undated
   serial follows its numbers) for episode pages and their cursor (an older four-value cursor is 400),
-  `/fs`, `/next`, the Keep window and the fetch candidates (these put undated episodes last).
+  `/fs`, `/next`, the Keep window and the fetch candidates (Archive, oldest first, so fetches an
+  undated episode first as the list shows it; Keep N's newest N leave undated ones last; server#179).
   Artwork belongs to the show.
   A library kind this server does not know (`catalog.KnownKind`; a newer server's, left by a
   rollback) is never scanned as books: `Scan` fails with `library.ErrUnknownKind` and a targeted index
@@ -3313,7 +3314,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   expose the terminal failure. Existing work can be promoted offline or with an unwritable mapping,
   never by a demo stream (`FetchOptions.NoNew`: it watches the open fetch at its priority, and one of a
   replaced identity it leaves open, answered as any demo refusal).
-  Each non-admin, including kids, may create at most five open fetch intents across libraries.
+  Each non-admin, including kids, may create at most five open fetch intents across libraries
+  (a parked one, `needs_attention`, holds no slot: the Bridge waits on something the listener can't
+  change; server#179).
   The same writer transaction checks the creator's count before insertion; promotion preserves
   ownership and existing open work still wins at the cap. Admins and requester-free scheduled
   work are exempt. Refusal is an unavailable fetch status with retry_after_seconds 2 and safe
@@ -3322,7 +3325,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   409 `fetch_limit`. Prefetch silently skips capped new work.
   Absent streams wait within one two-second absolute budget, including DB work, with bounded
   per-path broadcast registrations and a final descriptor recheck. Disconnection releases the waiter
-  without cancelling the job. Pending media answers 503 with `podcast_fetching`,
+  without cancelling the job. The summary is the job's actual state: a fetch the Bridge holds says
+  `fetching` even when the budget runs out before the last read, and with the module off (it carries
+  on; only a queued one is held, `unavailable`; a Bridge that left or can't write makes a held one
+  `unavailable` either way, `heldFetchRefusal`). An identity change between the pin read and the
+  queue is retried once with the current pin (`podcast.EnsureFetch`, shared by the stream, the
+  player's POST and the admin's fetch); one whose previous identity's fetch is still stopping is a
+  retryable 503 on the stream (`writePodcastIdentityBusy`: `Retry-After: 2`, the code
+  `identity_changed` and the body of the 409 it replaces, no `fetch` summary). The code is the
+  contract with shipped players: their stream probe reads `identity_changed` on any status as "drop
+  the cached item and episode lists, offer Try again", where a `fetch` summary (`unavailable` or
+  `failed`) stops them without that, and a download's wait asks again after a 5xx. The POST still
+  answers the shipped 409 `identity_changed` until that fetch has stopped (server#179). Pending media answers 503 with `podcast_fetching`,
   `podcast_fetch_unavailable` or `podcast_fetch_failed`, `Retry-After: 2`, `Cache-Control: no-store`
   and a public `fetch` summary. Kids with read access may fetch; demo accounts cannot start disk work.
   Core player `GET /libraries/{id}/podcasts/fetch?path=` observes only; strict POST `{path}` retries
@@ -3337,8 +3351,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the same intent. No player UI or released-client gate change is included.
   Heartbeat replies advertise `claim_min_priority`; negotiated `GET /bridge/jobs/next` accepts a
   signed int32 `min_priority`, filtered in the general claim transaction before attempts or leases
-  change. Omission preserves ordinary claims. Bridge worker reservation/claim refresh is owned by
-  the companion repo.
+  change. Omission preserves ordinary claims. A `HEAD` claim is 405 before anything runs (Go's GET
+  pattern would lease a job whose body is never sent; server#179). Bridge worker reservation/claim
+  refresh is owned by the companion repo.
   Bridge-token-only retention lookup and strict POST `retention/check` return a no-store aggregate
   from one DB snapshot plus current stream marks. Only enabled, non-demo, matching-ID followers
   with current episode access count, including private follow proof and household grants with
@@ -3363,10 +3378,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`GET /podcasts/discovery/providers|search`, `GET /podcasts/discovery/artwork?id=`) and
   `internal/podcast` follows by URL for both `POST /podcasts/follow`'s `feed_url` and every row of
   `POST /podcasts/opml/import?library_id=` (`Follower.Follow`: module, whole grant, URL stable under a
-  second `NormalizeFeedURL` (else `invalid_feed_url`, 400 on the single follow), known show by hash,
+  second `NormalizeFeedURL`, its host at most 253 characters (`feed.MaxHostLen`; else
+  `invalid_feed_url`, 400 on the single follow, whatever the Bridge's state), known show by hash,
   else an online Bridge offering `podcast.subscribe`; the single follow keeps its 200/202 envelopes).
   An open subscribe for the same URL at the other privacy is `bridge.ErrPrivacyConflict` (409
-  `privacy_conflict`, an `error` row), checked inside the dedupe transaction. Search, providers, the
+  `privacy_conflict`, an `error` row), checked inside the dedupe transaction. A request the queue's
+  params check refuses (`bridge.ErrInvalid`: a backstop, the normalization refuses the same URLs) is
+  `invalid_feed_url` too (400, an `invalid` row), an adopt-only row's included: `Subscribe` checks
+  every request once (`checkNewJob`, then `enqueueChecked`) before an adopt-only one looks for an open
+  request (server#219). A queued follow request fails `request_expired` once no online Bridge runs
+  `podcast.subscribe` (`expireOfflineSubscribes`, on the player's request poll and the scheduler's
+  sweep, when the silence has lasted `OnlineWindow` since a sweep first saw it: a server restart, a
+  host waking from sleep or a jumped clock fails none before the next beat), so an OPML import's
+  waves never wait on a Bridge that left: the next wave answers `unavailable` (server#179). Search, providers, the
   artwork and the import are module User routes plus the client gate (`callerOf(ctx).Podcasts`, 403
   `no_library_access`); the artwork takes the media auth (session/API `?token=`, the media rate limit);
   `GET /podcasts/opml/export` needs only `requireAuth` + `notDemo` + the client gate, module off or
