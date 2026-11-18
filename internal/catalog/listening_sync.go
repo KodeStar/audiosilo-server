@@ -32,8 +32,10 @@ const (
 	EventFinish   = "finish"
 	EventUnfinish = "unfinish"
 	eventPut      = "put"
-	// eventReset is a progress row deleted (an import's undo, logProgressReset):
-	// a Stay made before it is a plain jump (resetSince).
+	// eventReset is a progress row deleted (an import's undo, logProgressReset),
+	// its base_version the version the row had: a Stay made before it, or on a
+	// base no higher than that version, is a plain jump (resetSince), and a sync
+	// that writes the row again starts above it (firstVersion).
 	eventReset = "reset"
 )
 
@@ -744,8 +746,13 @@ func (s *syncRun) finishedAfter(ctx context.Context, p syncPrepared, stored *syn
 // or offers), the row's time never moving back, its speed and its offered
 // place kept. No listening is recorded.
 func (s *syncRun) furthestListen(ctx context.Context, p syncPrepared, stored *syncRow, at string) (SyncResult, error) {
-	version := int64(1)
-	if stored != nil {
+	var version int64
+	if stored == nil {
+		var err error
+		if version, err = s.firstVersion(ctx, p.target.Key); err != nil {
+			return SyncResult{}, err
+		}
+	} else {
 		beforeRestart := stored.finishChangedAt.Valid && !p.ended.After(parseSessionTime(stored.finishChangedAt.String))
 		if stored.finished || beforeRestart || p.to <= stored.position+furthestSlack {
 			return SyncResult{Status: statusNotApplied, Reason: reasonBehind}, nil
@@ -819,9 +826,14 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 			return SyncResult{Status: statusApplied}, nil
 		}
 	}
-	in := Place{Progression: p.to, DeviceID: s.b.DeviceID, UpdatedAt: mine.UpdatedAt, Version: 1}
+	in := Place{Progression: p.to, DeviceID: s.b.DeviceID, UpdatedAt: mine.UpdatedAt}
 	var storedPlace *Place
-	if stored != nil {
+	if stored == nil {
+		var err error
+		if in.Version, err = s.firstVersion(ctx, key); err != nil {
+			return SyncResult{}, err
+		}
+	} else {
 		in.Version = stored.version + 1
 		storedPlace = &Place{Progression: stored.position, DeviceID: stored.deviceID,
 			UpdatedAt: stored.updatedAt, Version: stored.version}
@@ -996,21 +1008,44 @@ func (s *syncRun) beforeStay(ctx context.Context, p syncPrepared, stored *syncRo
 	return stayed.Valid && !p.ended.After(parseSessionTime(stayed.String)), nil
 }
 
-// resetSince reports whether the user's row on the book was deleted (an
+// resetSince reports whether Stay span p's base (sent, staysWin) may name a
+// version of a row that is gone: the user's row on the book was deleted (an
 // import's undo taking back a row it made: logged as a "reset" event,
-// logProgressReset) at or after Stay span p ended. The Stay's base then names
-// a version of the row that is gone, and versions start again from 1 on the
-// next write, so the base can't say what it saw (server#415): it is a plain
-// jump. The log keeps a reset longer than any event may be dated
+// logProgressReset) at or after the span ended, or had reached the base's
+// version when it was (a Stay answering an offer shown before the undo, sent
+// after it on that stale base). The base then can't say what the Stay saw
+// (server#415): it is a plain jump. A sync writing the row again starts above
+// the deleted row's version (firstVersion), so a Stay on a version written
+// since still wins. The log keeps a reset longer than any event may be dated
 // (SyncRetention over syncRejectAge).
 func (s *syncRun) resetSince(ctx context.Context, p syncPrepared) (bool, error) {
-	key := p.target.Key
-	var ok bool
-	err := s.tx.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM listening_events
-		  WHERE library_id = ? AND rel_path = ? AND user_id = ? AND kind = ? AND ended_at >= ?)`,
-		key.LibraryID, key.Path, s.b.UserID, eventReset, formatSessionTime(p.ended)).Scan(&ok)
-	return ok, err
+	version, at, ok, err := s.lastReset(ctx, p.target.Key)
+	if err != nil || !ok {
+		return false, err
+	}
+	return *p.ev.BaseVersion <= version || at >= formatSessionTime(p.ended), nil
+}
+
+// lastReset reads the user's resets of the book's row in the log (eventReset):
+// the highest version a deleted row had, and when the newest reset was (fixed
+// width); ok is false for none.
+func (s *syncRun) lastReset(ctx context.Context, key Ref) (version int64, at string, ok bool, err error) {
+	var v sql.NullInt64
+	var a sql.NullString
+	err = s.tx.QueryRowContext(ctx,
+		`SELECT MAX(base_version), MAX(ended_at) FROM listening_events
+		  WHERE library_id = ? AND rel_path = ? AND user_id = ? AND kind = ?`,
+		key.LibraryID, key.Path, s.b.UserID, eventReset).Scan(&v, &a)
+	return v.Int64, a.String, a.Valid, err
+}
+
+// firstVersion is the version a sync gives a row it creates: 1, or one above
+// the highest version a deleted row on the book had (lastReset), so a base a
+// device acknowledged before the reset never names a version of the new row
+// (ResolvePlace, heldByStay and staysWin read it as seen).
+func (s *syncRun) firstVersion(ctx context.Context, key Ref) (int64, error) {
+	version, _, _, err := s.lastReset(ctx, key)
+	return version + 1, err
 }
 
 // heldByStay reports whether another device's Stay holds the row against this
@@ -1130,16 +1165,20 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		if p.target.Book != nil {
 			duration = p.target.Book.Duration
 		}
+		first, err := s.firstVersion(ctx, key)
+		if err != nil {
+			return SyncResult{}, err
+		}
 		if _, err := s.tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed,
 			     version, device_id, device_name, updated_at, started_at, finished_at, finish_changed_at,
 			     span_at, span_version, edit_version)
-			 VALUES(?,?,?,?,?,1,1,1,?,?,?,?,?,?,?,1,1)`,
-			s.b.UserID, key.LibraryID, key.Path, duration, duration, s.b.DeviceID, s.b.DeviceName, at, day, day,
+			 VALUES(?1,?2,?3,?4,?5,1,1,?6,?7,?8,?9,?10,?11,?12,?13,?6,?6)`,
+			s.b.UserID, key.LibraryID, key.Path, duration, duration, first, s.b.DeviceID, s.b.DeviceName, at, day, day,
 			at, at); err != nil {
 			return SyncResult{}, err
 		}
-		s.written[key] = 1
+		s.written[key] = first
 		return SyncResult{Status: statusApplied}, nil
 	}
 	// The row's time never moves back (a later save elsewhere stays later).
@@ -1369,13 +1408,15 @@ func putEvent(userID int64, in Progress, tokenID int64, at, received string) eve
 		duration: in.Duration, started: at, ended: at, received: received}
 }
 
-// logProgressReset records, inside tx, that userID's progress row on ref was
-// deleted at now (an import's undo of a row it made), as a "reset" event in
-// the log: a Stay made before it no longer wins (resetSince).
-func logProgressReset(ctx context.Context, tx *sql.Tx, userID int64, ref Ref, now time.Time) error {
+// logProgressReset records, inside tx, that userID's progress row on ref, at
+// version, was deleted at now (an import's undo of a row it made), as a
+// "reset" event in the log (version as its base_version): a Stay made before
+// it, or on a base up to version, no longer wins (resetSince), and a sync
+// writing the row again starts above version (firstVersion).
+func logProgressReset(ctx context.Context, tx *sql.Tx, userID int64, ref Ref, version int64, now time.Time) error {
 	at := formatSessionTime(now)
 	return insertEvent(ctx, tx, eventRow{userID: userID, id: localEventID("reset-"), kind: eventReset,
-		ref: ref, speed: 1, started: at, ended: at, status: statusApplied, received: at})
+		ref: ref, speed: 1, started: at, ended: at, base: &version, status: statusApplied, received: at})
 }
 
 // PruneListeningEvents deletes the stored events that ended before cutoff, a

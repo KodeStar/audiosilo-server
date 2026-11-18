@@ -144,9 +144,10 @@ func TestSyncStayOnTheVersionAMoveCarried(t *testing.T) {
 }
 
 // server#415: an import's undo that deletes the row it made loses its
-// versions (the next write starts again at 1), so a Stay made before the undo
-// whose base names one of them is a plain jump. A Stay made after the undo, on
-// the new row's version, wins.
+// versions, so a Stay whose base names one of them is a plain jump: one made
+// before the undo, and one made after it on an offer shown before it (a stale
+// base). A sync writing the row again starts above them, so a Stay made after
+// the undo on the new row's version wins.
 func TestSyncStayBeforeAnImportUndo(t *testing.T) {
 	t.Parallel()
 	setup := func(t *testing.T) *syncFixture {
@@ -164,18 +165,29 @@ func TestSyncStayBeforeAnImportUndo(t *testing.T) {
 		}
 		f.clock = f.clock.Add(2 * time.Minute)
 		wantResult(t, f.syncOne(t, "tablet", f.listen("resume", 5000, 5060, time.Minute, base(0))), statusApplied, "")
+		if p := f.progress(t); p.Version != 2 {
+			t.Fatalf("setup: the row written after the undo is at version %d, want 2 (above the deleted row's 1)", p.Version)
+		}
 		return f
 	}
-	// Made 3 minutes ago (before the undo), on the deleted row's version 1.
-	f := setup(t)
-	f.syncOne(t, "phone", f.stay(21000, 3*time.Minute, base(1)))
-	if p := f.progress(t); p.DeviceID != "tablet" || f.stayVersion(t, f.book) != 0 {
-		t.Fatalf("a Stay from before the undo: %+v stay %d", p, f.stayVersion(t, f.book))
+	// Made 3 minutes ago (before the undo), and made now on an offer shown
+	// before it, each on the deleted row's version 1: a jump that never saw the
+	// tablet's row (diverged: the further place applies, the tablet's offered),
+	// holding nothing.
+	for _, ago := range []time.Duration{3 * time.Minute, 0} {
+		f := setup(t)
+		res := f.syncOne(t, "phone", f.stay(21000, ago, base(1)))
+		if res.Status != statusDiverged || res.Kept != "event" || res.OtherPlace == nil || res.OtherPlace.DeviceID != "tablet" {
+			t.Fatalf("a Stay %v ago on the deleted row's version: %+v, want a diverged jump", ago, res)
+		}
+		if got := f.stayVersion(t, f.book); got != 0 {
+			t.Fatalf("a Stay %v ago on the deleted row's version holds the row (stay_version %d)", ago, got)
+		}
 	}
-	// Allowed: made now, on the new row's version 1.
+	// Allowed: made now, on the new row's version 2.
 	g := setup(t)
-	wantResult(t, g.syncOne(t, "phone", g.stay(21000, 0, base(1))), statusApplied, "")
-	if p := g.progress(t); p.DeviceID != "phone" || g.stayVersion(t, g.book) != 2 {
+	wantResult(t, g.syncOne(t, "phone", g.stay(21000, 0, base(2))), statusApplied, "")
+	if p := g.progress(t); p.DeviceID != "phone" || g.stayVersion(t, g.book) != 3 {
 		t.Fatalf("a Stay after the undo: %+v stay %d", p, g.stayVersion(t, g.book))
 	}
 }

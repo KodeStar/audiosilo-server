@@ -4263,8 +4263,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   so it keeps the hold and records no `edit_version`; nor a finish made at or before the Stay, which is `behind`).
   A move or join that carries a row alone keeps its version (an import's undo still finds it) and records its
   `edit_version` one above it, so a Stay on that version is a jump too (`carryProgress`, server#415). An import's undo
-  that deletes the row it made (versions start again from 1) logs a `reset` event (`logProgressReset`, kind
-  `reset`, never a client's), and a Stay that ended at or before it is a jump (`resetSince`).
+  that deletes the row it made logs a `reset` event with the row's version as its `base_version` (`logProgressReset`,
+  kind `reset`, never a client's): a Stay that ended at or before it, or whose base is at most that version (an offer
+  shown before the undo, answered after it), is a jump (`resetSince`), and a sync that writes the row again starts
+  one above that version (`firstVersion`), so a base acknowledged before the undo never names a version of the new
+  row (ResolvePlace, `heldByStay` and `staysWin` would read it as seen). A PUT, PATCH or import that creates the row
+  again still starts at its own version.
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
   multi-file mp3 parts share one shape: each chapter carries `file_path` (the
   library-relative file to stream via `/stream?path=`), in-file `start`/`end`, and

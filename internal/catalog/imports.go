@@ -992,9 +992,10 @@ func (c *Catalog) undoImport(ctx context.Context, tx *sql.Tx, id int64, replacin
 				userID, pr.ref.LibraryID, pr.ref.Path); err != nil {
 				return nil, err
 			}
-			// Its versions start again from 1: a Stay on one of the row's goes
-			// as a jump (resetSince).
-			if err := logProgressReset(ctx, tx, userID, pr.ref, now); err != nil {
+			// Its versions are gone: a Stay on one of them goes as a jump
+			// (resetSince), and a sync writing the row again starts above them
+			// (firstVersion).
+			if err := logProgressReset(ctx, tx, userID, pr.ref, pr.wrote.Version, now); err != nil {
 				return nil, err
 			}
 			continue
