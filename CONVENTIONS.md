@@ -3951,8 +3951,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   outage announce nothing; up to 5 titles, newest first; `dedup_key` the library, show id and a hash of the new
   episode ids, so the scheduled scan and the Bridge's rescan can't both announce them; a scan that read an
   older feed.json (its `updated_at`, kept as `podcast_shows.feed_updated_at`, `0083`) before the Bridge's
-  rescan indexed a newer one doesn't fold it over that index, while a feed.json restored from a backup,
-  read after it, is indexed),
+  rescan indexed a newer one doesn't fold it over that index, whatever either's `show_id`, while a
+  feed.json restored from a backup, read after it, is indexed),
   `podcast_feed_failing` and `podcast_feed_recovered` (`catalog.FoldPodcastJob`, `podcast.poll` only,
   idempotent through `podcast_folded`; `0076` adds `podcast_feed_state.feed_failures`,
   `feed_network_failures` and `failing_announced`, while `failures` still drives the backoff: a failure

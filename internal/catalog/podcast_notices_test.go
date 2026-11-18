@@ -755,4 +755,23 @@ func TestPodcastStaleFeedFoldRefused(t *testing.T) {
 	if changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", &restored, nil, false); err != nil || !changed || count() != want-1 {
 		t.Fatalf("a restored feed.json: changed %v, %v, %d episodes, want %d", changed, err, count(), want-1)
 	}
+
+	// The show followed again by a new address (another show_id at the
+	// path): a scan that read the old feed.json before the replacement was
+	// indexed doesn't put the old show back.
+	scanRead = *older
+	scanRead.ReadAt = now.Add(time.Minute)
+	now = now.Add(2 * time.Minute)
+	replaced := *newer
+	replaced.ShowID, replaced.UpdatedAt = "b000000000000001", "2026-11-17T02:00:00Z"
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "replaced", "", "", &replaced, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", &scanRead, nil, false); err != nil || changed {
+		t.Fatalf("a stale fold of the replaced show: changed %v, %v", changed, err)
+	}
+	if err := c.db.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=?`, lib.ID).Scan(&id); err != nil || id != replaced.ShowID {
+		t.Fatalf("show_id %q (%v), want the replacement's %q", id, err, replaced.ShowID)
+	}
 }

@@ -116,10 +116,12 @@ func stringOrNil(s string) any {
 //
 // f.ReadAt is when the show's feed.json was read (zero: no check). A
 // feed.json older than the one indexed (its updated_at, the Bridge's stamp of
-// each change), read before that index was written, is not folded over it: a scan that read the file just before the Bridge rewrote it and
-// asked for its own rescan would otherwise commit after that rescan and put the
-// show back as it was (server#403). A feed.json restored from an older backup
-// is still indexed, as nothing indexed it after it was read.
+// each change), read before that index was written, is not folded over it,
+// whatever either's show identity: a scan that read the file just before the
+// Bridge rewrote it and asked for its own rescan would otherwise commit after
+// that rescan and put the show back as it was (server#403). A feed.json
+// restored from an older backup is still indexed, as nothing indexed it after
+// it was read.
 //
 // It records the SetPodcastNotice listener's event for the episodes new to a
 // show indexed before under the same identity, in the same transaction, and
@@ -153,11 +155,14 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 		if err == nil && old == sig && !force {
 			return nil
 		}
-		// News is told only of a show indexed before as this same show.
-		announce := err == nil && oldShowID == f.ShowID
-		if announce && staleFeed(f.UpdatedAt, oldUpdated, oldIndexed, f.ReadAt) {
+		// Whatever its identity: a show replaced at the path (followed again
+		// by a new address) must not be put back by a scan that read the
+		// old feed.json before the replacement was indexed.
+		if err == nil && staleFeed(f.UpdatedAt, oldUpdated, oldIndexed, f.ReadAt) {
 			return nil
 		}
+		// News is told only of a show indexed before as this same show.
+		announce := err == nil && oldShowID == f.ShowID
 		type oldEpisode struct {
 			book                  int64
 			path, guid, episodeID string
@@ -169,12 +174,15 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 		// An index missing some of the episodes it listed (an older server's
 		// scan removed their rows) can't tell which are new.
 		announce = announce && len(oldEpisodes) >= oldCount
-		// The episodes indexed before, by path, GUID and id.
+		// The episodes indexed before, by path, GUID and id (read only for
+		// news).
 		paths, guids, ids := map[string]bool{}, map[string]bool{}, map[string]bool{}
-		for _, o := range oldEpisodes {
-			paths[o.path], ids[o.episodeID] = true, true
-			if o.guid != "" {
-				guids[o.guid] = true
+		if announce {
+			for _, o := range oldEpisodes {
+				paths[o.path], ids[o.episodeID] = true, true
+				if o.guid != "" {
+					guids[o.guid] = true
+				}
 			}
 		}
 		// A latest episode dated ahead of the clock (a mistyped date in the
