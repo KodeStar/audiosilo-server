@@ -82,16 +82,13 @@ type castUse struct {
 	// editor is cast_grants.editor: 1 for the chapter editor's token.
 	editor int
 	ttl    time.Duration
-	// maxLife bounds how far use moves its expiry, from its mint (castExpiry);
-	// 0 is a fixed life of ttl.
-	maxLife time.Duration
 	// keep is how many of this use one sending token keeps, perPerson how many
 	// the person keeps over all their sending tokens.
 	keep, perPerson int
 }
 
 var (
-	useCast   = castUse{editor: 0, ttl: castTokenTTL, maxLife: castTokenMaxLife, keep: maxCastTokens, perPerson: maxCastTokensPerPerson}
+	useCast   = castUse{editor: 0, ttl: castTokenTTL, keep: maxCastTokens, perPerson: maxCastTokensPerPerson}
 	useEditor = castUse{editor: 1, ttl: editorTokenTTL, keep: maxEditorTokens, perPerson: maxEditorTokens}
 )
 
@@ -289,16 +286,12 @@ func (s *Service) castStamp() string { return s.now().UTC().Format(millisUTC) }
 // mint time that doesn't parse. The touch never shortens an expiry, nor moves
 // one already past (touchRowSQL).
 func (s *Service) castExpiry(g castGrant) string {
-	use := useCast
-	if g.editor {
-		use = useEditor
-	}
 	minted, err := time.Parse(time.RFC3339, g.mintedAt)
-	if use.maxLife == 0 || err != nil {
+	if g.editor || err != nil {
 		return ""
 	}
-	to := s.now().UTC().Add(use.ttl)
-	if limit := minted.UTC().Add(use.maxLife); to.After(limit) {
+	to := s.now().UTC().Add(castTokenTTL)
+	if limit := minted.UTC().Add(castTokenMaxLife); to.After(limit) {
 		to = limit
 	}
 	return to.Truncate(time.Second).Format(time.RFC3339)
@@ -310,19 +303,16 @@ func (s *Service) castExpiry(g castGrant) string {
 // (trimCastTokensSQL) and let its expiry run out mid-book. The api calls it
 // every CastTouchInterval while such a response runs, and once as it ends. It
 // moves last_seen and the expiry (castExpiry) as a request's touch does; a
-// token signed out or deleted since is left as it is. The grant read and the
-// touch are separate statements: what the read takes (the token's use and mint
-// time) never changes, and the touch moves no expiry already past.
+// token deleted or signed out since, or whose sender is (castGrantOf), is left
+// as it is. The grant read and the touch are separate statements: what the read
+// takes (the token's use and mint time) never changes, and the touch moves no
+// expiry already past nor a revoked token (touchRowSQL).
 func (s *Service) KeepCastToken(ctx context.Context, id int64) error {
-	var g castGrant
-	err := s.db.QueryRowContext(ctx,
-		`SELECT g.editor, t.created_at FROM tokens t JOIN cast_grants g ON g.token_id = t.id
-		  WHERE t.id = ? AND t.kind = '`+KindCast+`' AND t.revoked = 0`, id).Scan(&g.editor, &g.mintedAt)
-	if errors.Is(err, sql.ErrNoRows) {
+	row := tokenRow{id: id}
+	if err := s.castGrantOf(ctx, &row); errors.Is(err, ErrInvalidToken) {
 		return nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return err
 	}
-	return s.touch(ctx, id, KindCast, Presence{}, s.castExpiry(g))
+	return s.touch(ctx, id, KindCast, Presence{}, s.castExpiry(row.grant))
 }

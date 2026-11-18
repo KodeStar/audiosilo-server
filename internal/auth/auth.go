@@ -500,19 +500,14 @@ func madeOn(ctx context.Context, tx *sql.Tx, userID, session int64) (sql.NullInt
 // the change that should have refused it. Stricter than madeOn: the token must
 // be there.
 func signedIn(ctx context.Context, tx *sql.Tx, userID, session int64) error {
-	var ok bool
+	var one int
 	err := tx.QueryRowContext(ctx,
-		`SELECT t.revoked = 0 AND u.disabled = 0 FROM tokens t JOIN users u ON u.id = t.user_id
-		  WHERE t.id = ? AND t.user_id = ?`, session, userID).Scan(&ok)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return ErrInvalidToken
-	case err != nil:
-		return err
-	case !ok:
+		`SELECT 1 FROM tokens t JOIN users u ON u.id = t.user_id
+		  WHERE t.id = ? AND t.user_id = ? AND t.revoked = 0 AND u.disabled = 0`, session, userID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrInvalidToken
 	}
-	return nil
+	return err
 }
 
 // insertTokenOn is insertToken recording createdOn, the owner's token a household
@@ -603,13 +598,13 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 // never writes back the stale app; and a cast token's sliding expiry (?7, ""
 // for none: castExpiry), which never shortens it and never revives one already
 // past (?8, now as s.ts() writes it; expires_at is RFC3339 UTC, so it compares
-// as text).
+// as text). A token signed out since its read is left as it is.
 const touchRowSQL = `UPDATE tokens SET last_seen = ?1, last_ip = COALESCE(NULLIF(?2, ''), last_ip),
         client_app = CASE WHEN ?3 = '' THEN client_app ELSE ?3 END,
         client_version = CASE WHEN ?3 = '' THEN client_version ELSE ?4 END,
         client_platform = CASE WHEN ?3 = '' THEN client_platform ELSE ?5 END,
         expires_at = CASE WHEN ?7 <> '' AND expires_at > ?8 THEN MAX(expires_at, ?7) ELSE expires_at END
-  WHERE id = ?6`
+  WHERE id = ?6 AND revoked = 0`
 
 // touch writes token id's touch (touchRowSQL), of kind, as p reports the
 // request and moving a cast token's expiry to slideTo ("" leaves it). It is
