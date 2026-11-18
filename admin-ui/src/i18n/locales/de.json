@@ -2322,6 +2322,7 @@
   "events.podcast_feed_failing.code.blocked_address": "Die Bridge kontaktiert die Adresse dieses Feeds grundsätzlich nicht.",
   "events.podcast_feed_failing.code.invalid_feed_url": "Die Adresse des Feeds ist ungültig.",
   "events.podcast_feed_failing.code.http_310": "Die Adresse des Feeds leitet zu oft weiter.",
+  "events.podcast_feed_failing.code.redirect_loop": "Die Adresse des Feeds leitet zu oft weiter.",
   "events.podcast_feed_failing.http": "Der Feed hat mit HTTP {{status}} geantwortet.",
   "events.podcast_feed_failing.failed": "Die Bridge konnte den Feed nicht prüfen.",
   "events.podcast_feed_recovered.title": "Podcast-Feed funktioniert wieder: {{show}}",

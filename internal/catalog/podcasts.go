@@ -114,16 +114,28 @@ func stringOrNil(s string) any {
 // IndexPodcastShow commits a show's entire derived index together. It never
 // deduplicates GUIDs or touches durable follows and listening state.
 //
-// It tells the SetPodcastNotice listener, after the commit, about the episodes
-// new to a show indexed before under the same identity: an episode whose path
-// wasn't indexed and that was published after the show's latest episode then
-// (the latest not dated ahead of the clock, so one mistyped date hides nothing).
-// So a show's first index, a forced rescan of a feed already indexed, a rebuilt
-// index and a show whose missing episodes are indexed again announce nothing
-// (the Bridge's forced rescan after a poll that grew the feed does announce).
-func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, cover, coverVersion string, f *feed.File, present map[string]PodcastFile, force bool) (bool, error) {
+// readAt is when the caller began reading the show's feed.json (zero: no
+// check). A feed.json older than the one indexed (its updated_at, the Bridge's
+// stamp of each change), read before that index was written, is not folded
+// over it: a scan that read the file just before the Bridge rewrote it and
+// asked for its own rescan would otherwise commit after that rescan and put the
+// show back as it was (server#403). A feed.json restored from an older backup
+// is still indexed, as nothing indexed it after it was read.
+//
+// It records the SetPodcastNotice listener's event for the episodes new to a
+// show indexed before under the same identity, in the same transaction, and
+// delivers it after the commit: an episode not indexed before (by path, GUID or
+// id), not dated before the show's latest episode then (the latest not dated
+// ahead of the clock, so one mistyped date hides nothing; one with the same
+// date or none counts) and first seen by the Bridge within NewEpisodeWindow. So
+// a show's first index, a forced rescan of a feed already indexed, a rebuilt
+// index, a show whose missing episodes are indexed again, and an index restored
+// from an old backup or written after a long outage (episodes the Bridge found
+// days ago) announce nothing (the Bridge's forced rescan after a poll that grew
+// the feed does announce).
+func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, cover, coverVersion string, f *feed.File, present map[string]PodcastFile, force bool, readAt time.Time) (bool, error) {
 	changed := false
-	var notice *PodcastNotice
+	var event *ServerEvent
 	err := c.db.WithTx(ctx, "IndexPodcastShow", func(tx *sql.Tx) error {
 		var kind, library string
 		if err := tx.QueryRowContext(ctx, `SELECT kind,name FROM libraries WHERE id=?`, lib).Scan(&kind, &library); err != nil {
@@ -132,13 +144,17 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 		if kind != KindPodcasts {
 			return ErrInvalidKind
 		}
-		var old, oldShowID string
+		var old, oldShowID, oldUpdated, oldIndexed string
 		var oldLatest sql.NullString
-		err := tx.QueryRowContext(ctx, `SELECT feed_sig,show_id,latest_published FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, show).Scan(&old, &oldShowID, &oldLatest)
+		var oldCount int
+		err := tx.QueryRowContext(ctx, `SELECT feed_sig,show_id,latest_published,episode_count,feed_updated_at,indexed_at FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, show).Scan(&old, &oldShowID, &oldLatest, &oldCount, &oldUpdated, &oldIndexed)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		if err == nil && old == sig && !force {
+			return nil
+		}
+		if err == nil && oldShowID == f.ShowID && staleFeed(f.UpdatedAt, oldUpdated, oldIndexed, readAt) {
 			return nil
 		}
 		// News is told only of a show indexed before as this same show.
@@ -147,11 +163,22 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 		if err != nil {
 			return err
 		}
-		var indexed map[string]bool
+		// An index missing some of the episodes it listed (an older server's
+		// scan removed their rows) can't tell which are new.
+		announce = announce && len(oldBooks) >= oldCount
+		var indexed, known map[string]bool
 		if announce {
 			indexed = make(map[string]bool, len(oldBooks))
 			for _, b := range oldBooks {
 				indexed[b.RelPath] = true
+			}
+			ids, err := queryRows(ctx, tx, func(r *sql.Rows, v *[2]string) error { return r.Scan(&v[0], &v[1]) }, `SELECT guid,episode_id FROM podcast_episodes WHERE library_id=? AND show_path=?`, lib, show)
+			if err != nil {
+				return err
+			}
+			known = make(map[string]bool, 2*len(ids))
+			for _, v := range ids {
+				known["g:"+v[0]], known["i:"+v[1]] = true, true
 			}
 		}
 		// A latest episode dated ahead of the clock (a mistyped date in the
@@ -167,6 +194,7 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 				newerThan = past.String
 			}
 		}
+		recentFrom := c.now().Add(-NewEpisodeWindow)
 		var news []feed.Episode
 		latest := ""
 		for _, e := range f.Episodes {
@@ -174,8 +202,8 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 				latest = e.Published
 			}
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO podcast_shows(library_id,show_path,show_id,title,author,description,link,language,show_type,explicit,private,feed_url,feed_host,feed_url_sha256,podcast_guid,cover_path,episode_count,latest_published,feed_sig,indexed_at)
-   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(library_id,show_path) DO UPDATE SET show_id=excluded.show_id,title=excluded.title,author=excluded.author,description=excluded.description,link=excluded.link,language=excluded.language,show_type=excluded.show_type,explicit=excluded.explicit,private=excluded.private,feed_url=excluded.feed_url,feed_host=excluded.feed_host,feed_url_sha256=excluded.feed_url_sha256,podcast_guid=excluded.podcast_guid,cover_path=excluded.cover_path,episode_count=excluded.episode_count,latest_published=excluded.latest_published,feed_sig=excluded.feed_sig,indexed_at=excluded.indexed_at`, lib, show, f.ShowID, f.Show.Title, f.Show.Author, f.Show.Description, f.Show.Link, f.Show.Language, f.Show.Type, f.Show.Explicit, f.Private, f.FeedURL, f.FeedHost, f.FeedURLSHA256, f.Show.PodcastGUID, cover, len(f.Episodes), stringOrNil(latest), sig, c.ts())
+		_, err = tx.ExecContext(ctx, `INSERT INTO podcast_shows(library_id,show_path,show_id,title,author,description,link,language,show_type,explicit,private,feed_url,feed_host,feed_url_sha256,podcast_guid,cover_path,episode_count,latest_published,feed_sig,indexed_at,feed_updated_at)
+   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(library_id,show_path) DO UPDATE SET show_id=excluded.show_id,title=excluded.title,author=excluded.author,description=excluded.description,link=excluded.link,language=excluded.language,show_type=excluded.show_type,explicit=excluded.explicit,private=excluded.private,feed_url=excluded.feed_url,feed_host=excluded.feed_host,feed_url_sha256=excluded.feed_url_sha256,podcast_guid=excluded.podcast_guid,cover_path=excluded.cover_path,episode_count=excluded.episode_count,latest_published=excluded.latest_published,feed_sig=excluded.feed_sig,indexed_at=excluded.indexed_at,feed_updated_at=excluded.feed_updated_at`, lib, show, f.ShowID, f.Show.Title, f.Show.Author, f.Show.Description, f.Show.Link, f.Show.Language, f.Show.Type, f.Show.Explicit, f.Private, f.FeedURL, f.FeedHost, f.FeedURLSHA256, f.Show.PodcastGUID, cover, len(f.Episodes), stringOrNil(latest), sig, c.ts(), f.UpdatedAt)
 		if err != nil {
 			return err
 		}
@@ -196,7 +224,8 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 				continue
 			}
 			keep[e.Path] = true
-			if announce && !indexed[e.Path] && e.RemovedAt == "" && e.Published > newerThan {
+			if announce && !indexed[e.Path] && !known["i:"+e.ID] && (e.GUID == "" || !known["g:"+e.GUID]) && e.RemovedAt == "" &&
+				(e.Published == "" || e.Published >= newerThan) && seenSince(e, recentFrom) {
 				news = append(news, e)
 			}
 			info, exists := present[path.Base(e.Path)]
@@ -272,8 +301,8 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 			}
 		}
 		changed = true
-		notice = newEpisodesNotice(lib, library, show, f, news)
-		return nil
+		event, err = c.recordPodcastNotice(ctx, tx, newEpisodesNotice(lib, library, show, f, news))
+		return err
 	})
 	if notify := c.podcastChanged.Load(); err == nil && changed && notify != nil {
 		for _, ep := range f.Episodes {
@@ -281,9 +310,32 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 		}
 	}
 	if err == nil {
-		c.tellPodcastNotice(ctx, notice)
+		c.deliverPodcastNotice(ctx, event)
 	}
 	return changed, err
+}
+
+// staleFeed reports whether a feed.json updated at updated (its updated_at)
+// and read from readAt is older than the one indexed at indexedAt, updated at
+// indexedUpdated, and that index was written after the read began: folding it
+// would put the show back. An unstamped side, or no readAt, is never stale.
+func staleFeed(updated, indexedUpdated, indexedAt string, readAt time.Time) bool {
+	if readAt.IsZero() || updated == "" || indexedUpdated == "" || updated >= indexedUpdated {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339Nano, indexedAt)
+	return err == nil && at.After(readAt)
+}
+
+// seenSince reports whether the Bridge first saw episode e at or after from
+// (its first_seen, else its published date; one with neither may be new).
+func seenSince(e feed.Episode, from time.Time) bool {
+	seen := cmp.Or(e.FirstSeen, e.Published)
+	if seen == "" {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339, seen)
+	return err != nil || !t.Before(from)
 }
 
 func (c *Catalog) PodcastSignatures(ctx context.Context, lib int64) (map[string]string, error) {
@@ -731,9 +783,10 @@ type PodcastFeedState struct {
 }
 
 // PollParams are a podcast.poll's params for this state: its conditional-GET
-// validators.
-func (s PodcastFeedState) PollParams() json.RawMessage {
-	raw, _ := json.Marshal(bridge.PollParams{ShowID: s.ShowID, ETag: s.ETag, LastModified: s.LastModified}) // two strings: never fails
+// validators, and whether the scheduler queued it (a follower's Check now
+// isn't).
+func (s PodcastFeedState) PollParams(scheduled bool) json.RawMessage {
+	raw, _ := json.Marshal(bridge.PollParams{ShowID: s.ShowID, ETag: s.ETag, LastModified: s.LastModified, Scheduled: scheduled}) // strings and a bool: never fails
 	return raw
 }
 
@@ -756,14 +809,14 @@ func (c *Catalog) PodcastNotWritable(ctx context.Context, ref Ref) error {
 // FoldPodcastJob is idempotent even if an unfollow happens before the recovery
 // sweep. Durable follow and status writes share the folded marker's transaction.
 // A podcast.poll's fold also keeps the feed's run of failures for the admin's
-// notifications (feedRun.next) and tells the SetPodcastNotice listener, after
-// the commit, that the feed is failing or back; a job folded before tells
-// nothing again.
+// notifications (feedRun.next) and records, in the same transaction, the
+// SetPodcastNotice listener's event that the feed is failing or back, which is
+// delivered after the commit; a job folded before tells nothing again.
 func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 	if !bridge.IsPodcast(j.Kind) || j.LibraryID == nil || !slices.Contains([]string{bridge.StateDone, bridge.StateFailed, bridge.StateCancelled}, j.State) {
 		return nil
 	}
-	var notice *PodcastNotice
+	var event *ServerEvent
 	err := c.db.WithTx(ctx, "FoldPodcastJob", func(tx *sql.Tx) error {
 		now := c.now().UTC()
 		stamp := now.Format(time.RFC3339)
@@ -799,10 +852,11 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			return nil
 		}
 		var expected string
+		var scheduled bool
 		if j.Kind == bridge.KindPodcastPoll {
 			var p bridge.PollParams
 			_ = json.Unmarshal(j.Params, &p)
-			expected = p.ShowID
+			expected, scheduled = p.ShowID, p.Scheduled
 		} else {
 			var p bridge.SubscribeParams
 			_ = json.Unmarshal(j.Params, &p)
@@ -834,24 +888,33 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		}
 		var failures int
 		var run feedRun
-		var due sql.NullString // the next scheduled poll, as stored
-		err = tx.QueryRowContext(ctx, `SELECT failures,feed_failures,feed_network_failures,failing_announced,next_poll_at FROM podcast_feed_state WHERE library_id=? AND show_path=? AND show_id=?`, *j.LibraryID, show, expected).Scan(&failures, &run.failures, &run.network, &run.announced, &due)
+		var due, checked sql.NullString // the next scheduled poll and the last check, as stored
+		err = tx.QueryRowContext(ctx, `SELECT failures,feed_failures,feed_network_failures,failing_announced,failing_code,next_poll_at,last_checked_at FROM podcast_feed_state WHERE library_id=? AND show_path=? AND show_id=?`, *j.LibraryID, show, expected).Scan(&failures, &run.failures, &run.network, &run.announced, &run.code, &due, &checked)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		// Only a poll's outcome moves the run: a subscribe tells nothing of a
-		// feed already followed. A poll a follower asked for (Check now) has
-		// a requester; the scheduler's has none.
+		// feed already followed. The scheduler marks its polls (Scheduled); a
+		// follower's Check now is unmarked.
 		if j.Kind == bridge.KindPodcastPoll {
+			p := poll{scheduled: scheduled}
+			if j.State == bridge.StateFailed && scheduled && bridge.NetworkFailure(result.Code) {
+				if p.reachable, err = bridgeReachedFeeds(ctx, tx, *j.LibraryID, show, checked.String); err != nil {
+					return err
+				}
+			}
 			var news string
-			if run, news = run.next(j.State, result.Code, j.RequestedBy == nil); news != "" {
-				notice = &PodcastNotice{Kind: news, Library: library, LibraryID: *j.LibraryID, ShowPath: show, ShowID: expected, Show: title, Private: private}
+			if run, news = run.next(j.State, result.Code, p); news != "" {
+				notice := &PodcastNotice{Kind: news, Library: library, LibraryID: *j.LibraryID, ShowPath: show, ShowID: expected, Show: title, Private: private}
 				if news == PodcastFeedFailing {
 					notice.Code = result.Code
 					// A lost secret isn't the feed's failure: no run to count.
 					if bridge.FeedFailure(result.Code) {
 						notice.Failures = run.failures
 					}
+				}
+				if event, err = c.recordPodcastNotice(ctx, tx, notice); err != nil {
+					return err
 				}
 			}
 		}
@@ -864,7 +927,7 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 					*v = ""
 				}
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,failures,next_poll_at,feed_failures,feed_network_failures,failing_announced) VALUES(?,?,?,?,?,?,?,?,'','',0,?,?,?,?) ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET etag=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.etag ELSE excluded.etag END,last_modified=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.last_modified ELSE excluded.last_modified END,last_checked_at=excluded.last_checked_at,last_success_at=excluded.last_success_at,last_status=excluded.last_status,error_code='',error='',secret_missing=0,failures=0,next_poll_at=excluded.next_poll_at,feed_failures=excluded.feed_failures,feed_network_failures=excluded.feed_network_failures,failing_announced=excluded.failing_announced`, *j.LibraryID, show, expected, result.ETag, result.LastModified, stamp, stamp, result.Status, now.Add(time.Duration(min(max(result.NextPollSeconds, 900), 86400))*time.Second).Format(time.RFC3339), run.failures, run.network, run.announced)
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,failures,next_poll_at,feed_failures,feed_network_failures,failing_announced,failing_code) VALUES(?,?,?,?,?,?,?,?,'','',0,?,?,?,?,?) ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET etag=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.etag ELSE excluded.etag END,last_modified=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.last_modified ELSE excluded.last_modified END,last_checked_at=excluded.last_checked_at,last_success_at=excluded.last_success_at,last_status=excluded.last_status,error_code='',error='',secret_missing=0,failures=0,next_poll_at=excluded.next_poll_at,feed_failures=excluded.feed_failures,feed_network_failures=excluded.feed_network_failures,failing_announced=excluded.failing_announced,failing_code=excluded.failing_code`, *j.LibraryID, show, expected, result.ETag, result.LastModified, stamp, stamp, result.Status, now.Add(time.Duration(min(max(result.NextPollSeconds, 900), 86400))*time.Second).Format(time.RFC3339), run.failures, run.network, run.announced, run.code)
 		} else {
 			seconds := 1800 << min(failures, 6)
 			if result.RetryAfterSeconds != nil {
@@ -877,7 +940,7 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			// they were too: backing them off would space the polls that do
 			// count a day apart, and the failing notice with them. A
 			// Retry-After still holds them off.
-			if j.Kind == bridge.KindPodcastPoll && uncountedCheck(result.Code, j.RequestedBy == nil) && due.Valid {
+			if j.Kind == bridge.KindPodcastPoll && uncountedCheck(result.Code, scheduled) && due.Valid {
 				backoff = failures
 				if result.RetryAfterSeconds == nil || due.String > at {
 					at = due.String
@@ -887,7 +950,7 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			if result.Code == "gone" {
 				next = nil
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,last_checked_at,last_status,error_code,error,secret_missing,failures,next_poll_at,feed_failures,feed_network_failures,failing_announced) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET last_checked_at=excluded.last_checked_at,last_status=excluded.last_status,error_code=excluded.error_code,error=excluded.error,secret_missing=MAX(podcast_feed_state.secret_missing,excluded.secret_missing),failures=excluded.failures,next_poll_at=excluded.next_poll_at,feed_failures=excluded.feed_failures,feed_network_failures=excluded.feed_network_failures,failing_announced=excluded.failing_announced`, *j.LibraryID, show, expected, stamp, result.Status, result.Code, result.Message, result.Code == "feed_secret_missing", backoff, next, run.failures, run.network, run.announced)
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,last_checked_at,last_status,error_code,error,secret_missing,failures,next_poll_at,feed_failures,feed_network_failures,failing_announced,failing_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET last_checked_at=excluded.last_checked_at,last_status=excluded.last_status,error_code=excluded.error_code,error=excluded.error,secret_missing=MAX(podcast_feed_state.secret_missing,excluded.secret_missing),failures=excluded.failures,next_poll_at=excluded.next_poll_at,feed_failures=excluded.feed_failures,feed_network_failures=excluded.feed_network_failures,failing_announced=excluded.failing_announced,failing_code=excluded.failing_code`, *j.LibraryID, show, expected, stamp, result.Status, result.Code, result.Message, result.Code == "feed_secret_missing", backoff, next, run.failures, run.network, run.announced, run.code)
 		}
 		if err != nil {
 			return err
@@ -896,9 +959,21 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		return err
 	})
 	if err == nil {
-		c.tellPodcastNotice(ctx, notice)
+		c.deliverPodcastNotice(ctx, event)
 	}
 	return err
+}
+
+// bridgeReachedFeeds reports whether a scheduled poll's network-class failure
+// of show can be this feed's own: the paired Bridge reached another feed since
+// the show's previous check (since, as stored; "" for none), or checked no
+// other feed since, so nothing says its internet is down. A Bridge that lost
+// its internet fails every show, and none of them counts (server#403).
+func bridgeReachedFeeds(ctx context.Context, tx *sql.Tx, lib int64, show, since string) (bool, error) {
+	var reached, checked bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM podcast_feed_state WHERE NOT (library_id=?1 AND show_path=?2) AND last_success_at>?3),
+		EXISTS(SELECT 1 FROM podcast_feed_state WHERE NOT (library_id=?1 AND show_path=?2) AND last_checked_at>?3)`, lib, show, since).Scan(&reached, &checked)
+	return reached || !checked, err
 }
 
 func durationFromFeed(p *int) float64 {

@@ -100,6 +100,10 @@ type PollParams struct {
 	ShowID       string `json:"show_id,omitempty"`
 	ETag         string `json:"etag,omitempty"`
 	LastModified string `json:"last_modified,omitempty"`
+	// Scheduled marks the scheduler's poll (server#403): only its failures
+	// count toward the admin's failing-feed notice, never a follower's Check
+	// now. Additive: a Bridge reads the params leniently and ignores it.
+	Scheduled bool `json:"scheduled,omitempty"`
 }
 
 // PodcastOutcome is a podcast job's result (plan 2.9), as the fold and a

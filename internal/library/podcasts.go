@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -114,6 +115,7 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 		return 0, false, ErrNotIndexable
 	}
 	filename := filepath.Join(dir, "feed.json")
+	readAt := time.Now() // before the file is read: IndexPodcastShow's staleness check
 	info, err := os.Lstat(filename)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, false, ErrNotIndexable
@@ -198,7 +200,7 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 		}
 		present[base] = file
 	}
-	changed, err := s.cat.IndexPodcastShow(ctx, lib.ID, show, sig, cover, version, f, present, force)
+	changed, err := s.cat.IndexPodcastShow(ctx, lib.ID, show, sig, cover, version, f, present, force, readAt)
 	return len(f.Episodes), changed, err
 }
 

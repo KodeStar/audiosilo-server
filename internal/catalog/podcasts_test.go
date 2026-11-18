@@ -57,7 +57,7 @@ func TestPodcastScopesAndAggregates(t *testing.T) {
 	f.Private = true
 	f.FeedURL = ""
 	f.Show.Link = ""
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	who := Caller{ID: user, Admin: true, Podcasts: true}
@@ -115,7 +115,7 @@ func TestPodcastMetadataSourceKeepsEpisodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, source := range []string{MetadataFromPath, MetadataFromTags} {
@@ -141,7 +141,7 @@ func TestPodcastPruneNamedShows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.PrunePodcastShows(ctx, lib.ID, []string{"Gone Show"}); err != nil {
@@ -173,7 +173,7 @@ func TestPodcastEpisodesOutOfBookFigures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.SaveProgress(ctx, user, Progress{Ref: Ref{LibraryID: lib.ID, Path: f.Episodes[0].Path},
@@ -207,7 +207,7 @@ func TestPodcastFolding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	job := bridge.Job{ID: 1, Kind: bridge.KindPodcastSubscribe, LibraryID: &lib.ID, State: bridge.StateDone, RequestedBy: &bridge.Requester{ID: user}, Params: json.RawMessage(`{}`), Result: json.RawMessage(`{"show_path":"Example Show","show_id":"a1b2c3d4e5f60718","status":200,"etag":"abc","next_poll_seconds":1}`)}
@@ -228,7 +228,7 @@ func TestPodcastFolding(t *testing.T) {
 	}
 	job.Kind = bridge.KindPodcastPoll
 	job.RequestedBy = nil // the scheduler's polls: a follower's Check now backs nothing off
-	job.Params = json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`)
+	job.Params = json.RawMessage(`{"show_id":"a1b2c3d4e5f60718","scheduled":true}`)
 	show := "Example Show"
 	job.Path = &show
 	for i, code := range []string{"timeout", "timeout", "gone"} {
@@ -295,7 +295,7 @@ func TestPodcastFoldingOddOutcomes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	show := "Example Show"
@@ -310,7 +310,7 @@ func TestPodcastFoldingOddOutcomes(t *testing.T) {
 		t.Fatalf("state %+v %v", st, err)
 	}
 	var p bridge.PollParams
-	if err := json.Unmarshal(st.PollParams(), &p); err != nil || len(p.ETag) > bridge.MaxPollValidator {
-		t.Fatalf("params %s %v", st.PollParams(), err)
+	if err := json.Unmarshal(st.PollParams(true), &p); err != nil || len(p.ETag) > bridge.MaxPollValidator {
+		t.Fatalf("params %s %v", st.PollParams(true), err)
 	}
 }

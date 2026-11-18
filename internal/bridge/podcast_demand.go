@@ -167,7 +167,8 @@ var fetchMessages = map[string]string{
 	"blocked_address":      "The episode address is blocked.",
 	"fetch_failed":         "The episode could not be fetched.",
 	"bridge_lost":          "The Bridge stopped reporting.",
-	"http_310":             "The episode address redirects too many times.", // the Bridge's redirect loop, not a status
+	"redirect_loop":        "The episode address redirects too many times.", // the Bridge's redirect loop (server#403)
+	"http_310":             "The episode address redirects too many times.", // an older Bridge's redirect loop, not a status
 }
 
 // HTTPStatus is the status of a podcast job's `http_NNN` failure code (1xx to

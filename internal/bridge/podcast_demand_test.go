@@ -421,8 +421,10 @@ func TestPodcastFetchErrorsKeepSafeCodes(t *testing.T) {
 		}
 	}
 	// server#403: the Bridge's redirect loop is worded as one, not "HTTP 310".
-	if err := FetchErrorFor("http_310"); err.Code != "http_310" || err.Message != "The episode address redirects too many times." {
-		t.Fatalf("redirect loop %+v", err)
+	for _, code := range []string{"http_310", "redirect_loop"} { // an older Bridge's code, then its own
+		if err := FetchErrorFor(code); err.Code != code || err.Message != "The episode address redirects too many times." {
+			t.Fatalf("redirect loop %+v", err)
+		}
 	}
 }
 

@@ -42,7 +42,7 @@ func TestPodcastSchedulerBoundsFairnessAndPolicies(t *testing.T) {
 			f.Episodes[j].Path = path.Join(show, path.Base(f.Episodes[j].Path))
 			f.Episodes[j].Fetch = nil
 		}
-		if _, err = cat.IndexPodcastShow(ctx, lib.ID, show, "s", "", "", f, nil, true); err != nil {
+		if _, err = cat.IndexPodcastShow(ctx, lib.ID, show, "s", "", "", f, nil, true, time.Time{}); err != nil {
 			t.Fatal(err)
 		}
 		if i != 7 {

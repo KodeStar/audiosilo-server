@@ -32,7 +32,7 @@ func TestSchedulerDueAndWritableBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cat.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+	if _, err := cat.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	deps := modules.Deps{Log: slog.Default(), Catalog: cat, Bridge: queue}
@@ -73,6 +73,12 @@ func TestSchedulerDueAndWritableBackoff(t *testing.T) {
 	jobs, _, err = queue.List(ctx, bridge.Filter{Kind: bridge.KindPodcastPoll})
 	if err != nil || len(jobs) != 1 || jobs[0].Priority != -10 || jobs[0].RequestedBy != nil {
 		t.Fatalf("scheduled %+v %v", jobs, err)
+	}
+	// Marked as the scheduler's, which only its failures count toward the
+	// failing-feed notice (server#403).
+	var p bridge.PollParams
+	if err := json.Unmarshal(jobs[0].Params, &p); err != nil || !p.Scheduled || p.ShowID != f.ShowID {
+		t.Fatalf("scheduled params %s %v", jobs[0].Params, err)
 	}
 	if err := SchedulerTick(ctx, deps); err != nil {
 		t.Fatal(err)
@@ -127,7 +133,7 @@ func TestSchedulerPassesOverAFailingShow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := cat.IndexPodcastShow(ctx, lib.ID, show, "s", "", "", f, nil, false); err != nil {
+		if _, err := cat.IndexPodcastShow(ctx, lib.ID, show, "s", "", "", f, nil, false, time.Time{}); err != nil {
 			t.Fatal(err)
 		}
 		if err := cat.FollowPodcast(ctx, 1, lib.ID, show, f.ShowID); err != nil {

@@ -26,7 +26,7 @@ func indexedFetchFixture(t *testing.T) (*Catalog, context.Context, *Library, *fe
 		t.Fatal(err)
 	}
 	present := map[string]PodcastFile{path.Base(f.Episodes[0].Path): {Size: f.Episodes[0].Fetch.Bytes}}
-	if _, err = c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "s", "", "", f, present, true); err != nil {
+	if _, err = c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "s", "", "", f, present, true, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	return c, ctx, lib, f
@@ -77,7 +77,7 @@ func TestPodcastRetentionSharedVectors(t *testing.T) {
 				f.Episodes[0].Published = "2020-01-01T00:00:00Z"
 			}
 			f.Episodes[0].Fetch.FetchedAt = v.FetchedAt
-			if _, err = c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "changed", "", "", f, map[string]PodcastFile{path.Base(ep.Path): {Size: ep.Fetch.Bytes}}, true); err != nil {
+			if _, err = c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "changed", "", "", f, map[string]PodcastFile{path.Base(ep.Path): {Size: ep.Fetch.Bytes}}, true, time.Time{}); err != nil {
 				t.Fatal(err)
 			}
 			for i := range v.Followers {
@@ -182,7 +182,7 @@ func TestPodcastPolicyReplacementMoveAndCascade(t *testing.T) {
 	}
 	old := f.ShowID
 	f.ShowID = "0123456789abcdef"
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "new", "", "", f, nil, true); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "new", "", "", f, nil, true, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := c.PodcastPolicy(ctx, lib.ID, "Fixture Show", f.ShowID)
@@ -269,7 +269,7 @@ func TestPodcastRetentionWireGolden(t *testing.T) {
 	c.now = func() time.Time { return now }
 	f.Episodes[0].Published = "2020-01-01T00:00:00Z"
 	f.Episodes = append(f.Episodes, feed.Episode{ID: "1111111111111111", Path: "Fixture Show/newer.mp3", Title: "Newer", Published: "2026-10-21T07:00:00Z"})
-	if _, err = c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "golden", "", "", f, map[string]PodcastFile{path.Base(f.Episodes[0].Path): {Size: f.Episodes[0].Fetch.Bytes}}, true); err != nil {
+	if _, err = c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "golden", "", "", f, map[string]PodcastFile{path.Base(f.Episodes[0].Path): {Size: f.Episodes[0].Fetch.Bytes}}, true, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"a", "b"} {
@@ -309,7 +309,7 @@ func TestPodcastRetentionWireGolden(t *testing.T) {
 func TestPodcastRetentionPrivateHouseholdAccess(t *testing.T) {
 	c, ctx, lib, f := indexedFetchFixture(t)
 	f.Private = true
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "private", "", "", f, map[string]PodcastFile{path.Base(f.Episodes[0].Path): {Size: f.Episodes[0].Fetch.Bytes}}, true); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "private", "", "", f, map[string]PodcastFile{path.Base(f.Episodes[0].Path): {Size: f.Episodes[0].Fetch.Bytes}}, true, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	c.now = func() time.Time { return time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC) }

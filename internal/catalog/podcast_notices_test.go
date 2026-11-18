@@ -12,12 +12,21 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
-// noticeLog collects what the SetPodcastNotice listener is told.
-type noticeLog struct{ got []PodcastNotice }
+// noticeLog collects the notices the SetPodcastNotice listener delivers (each
+// recorded as an event whose data index the notices built).
+type noticeLog struct{ built, got []PodcastNotice }
 
 func listenNotices(c *Catalog) *noticeLog {
 	l := &noticeLog{}
-	c.SetPodcastNotice(func(_ context.Context, n PodcastNotice) { l.got = append(l.got, n) })
+	c.SetPodcastNotice(&PodcastListener{
+		Event: func(n PodcastNotice) (string, map[string]any, string) {
+			l.built = append(l.built, n)
+			return "podcast_" + n.Kind, map[string]any{"n": len(l.built) - 1}, ""
+		},
+		Deliver: func(_ context.Context, ev ServerEvent) {
+			l.got = append(l.got, l.built[int(ev.Data["n"].(float64))])
+		},
+	})
 	return l
 }
 
@@ -52,8 +61,10 @@ func withEpisode(f *feed.File, id, file, title, published string) *feed.File {
 // missing rows and a replaced show at the path tell nothing.
 func TestPodcastNewEpisodesNotice(t *testing.T) {
 	c, ctx := newTestCatalog(t)
-	// Past every date below: an episode ahead of the clock is its own test.
-	c.now = func() time.Time { return time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC) }
+	// Just past the episodes each step adds (the Bridge's rescan follows its
+	// poll): an episode ahead of the clock is its own test.
+	now := time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
 	log := listenNotices(c)
 	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
 	if err != nil {
@@ -63,7 +74,7 @@ func TestPodcastNewEpisodesNotice(t *testing.T) {
 	f := podcastFixture(t)
 	index := func(sig string, f *feed.File, force bool) {
 		t.Helper()
-		if _, err := c.IndexPodcastShow(ctx, lib.ID, show, sig, "", "", f, nil, force); err != nil {
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, show, sig, "", "", f, nil, force, time.Time{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -81,6 +92,7 @@ func TestPodcastNewEpisodesNotice(t *testing.T) {
 	// An episode older than the show's latest (a back catalogue the feed
 	// opened up) isn't news.
 	grown = withEpisode(grown, "3333333333333333", "2026-01-01-3333333333.mp3", "Old Bonus", "2026-01-01T00:00:00Z")
+	grown.Episodes[0].FirstSeen = "2026-10-27T22:00:00Z" // first seen with the others
 	index("s2", grown, false)
 	got := log.take()
 	if len(got) != 1 {
@@ -127,6 +139,7 @@ func TestPodcastNewEpisodesNotice(t *testing.T) {
 	}
 
 	// More than five new episodes name the newest five.
+	now = time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC)
 	more := other
 	for i := range 7 {
 		d := string(rune('1' + i))
@@ -161,7 +174,7 @@ func TestPodcastNewEpisodesAfterFutureDate(t *testing.T) {
 	}
 	index := func(sig string, f *feed.File) []PodcastNotice {
 		t.Helper()
-		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", sig, "", "", f, nil, false); err != nil {
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", sig, "", "", f, nil, false, time.Time{}); err != nil {
 			t.Fatal(err)
 		}
 		return log.take()
@@ -173,7 +186,7 @@ func TestPodcastNewEpisodesAfterFutureDate(t *testing.T) {
 		t.Fatalf("the future-dated episode: %+v", got)
 	}
 	// The next real episode is news; a back catalogue episode still isn't.
-	f = withEpisode(f, "2222222222222222", "2026-11-10-2222222222.mp3", "Episode Four", "2026-11-10T21:00:00Z")
+	f = withEpisode(f, "2222222222222222", "2026-11-14-2222222222.mp3", "Episode Four", "2026-11-14T21:00:00Z")
 	f = withEpisode(f, "3333333333333333", "2026-01-01-3333333333.mp3", "Old Bonus", "2026-01-01T00:00:00Z")
 	if got := index("s3", f); len(got) != 1 || !slices.Equal(got[0].Titles, []string{"Episode Four"}) {
 		t.Fatalf("after a future-dated episode: %+v", got)
@@ -190,7 +203,7 @@ func TestPodcastNewEpisodesAfterFutureDate(t *testing.T) {
 func pollJob(lib int64, id int64, state, code string) bridge.Job {
 	show := "Example Show"
 	j := bridge.Job{ID: id, Kind: bridge.KindPodcastPoll, LibraryID: &lib, Path: &show, State: state,
-		Params: json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`), Result: json.RawMessage(`{"status":200,"next_poll_seconds":900}`)}
+		Params: json.RawMessage(`{"show_id":"a1b2c3d4e5f60718","scheduled":true}`), Result: json.RawMessage(`{"status":200,"next_poll_seconds":900}`)}
 	if state == bridge.StateFailed {
 		j.Result = json.RawMessage(`{"code":"` + code + `","message":"https://user:pw@feeds.example.com/private.xml?token=SECRET failed"}`)
 	}
@@ -209,7 +222,7 @@ func TestPodcastFeedNotices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", podcastFixture(t), nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", podcastFixture(t), nil, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	next := int64(0)
@@ -255,7 +268,13 @@ func TestPodcastFeedNotices(t *testing.T) {
 	}
 	quiet(log.take(), "a refold")
 	quiet(fold(bridge.StateFailed, "timeout"), "a failure after the announcement")
-	quiet(fold(bridge.StateFailed, "gone"), "gone after the announcement")
+	quiet(fold(bridge.StateFailed, "http_500"), "another code after the announcement")
+	// gone and a lost secret stop the feed for good: each is told once more
+	// after the announcement said another code (server#403), once.
+	failing(fold(bridge.StateFailed, "gone"), "gone", 6)
+	quiet(fold(bridge.StateFailed, "gone"), "gone again")
+	failing(fold(bridge.StateFailed, "feed_secret_missing"), "feed_secret_missing", 0)
+	quiet(fold(bridge.StateFailed, "feed_secret_missing"), "the secret still missing")
 	recovered(fold(bridge.StateDone, ""))
 	quiet(fold(bridge.StateDone, ""), "a second success")
 	if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, next, bridge.StateDone, "")); err != nil {
@@ -338,7 +357,7 @@ func TestPodcastFeedNotices(t *testing.T) {
 		t.Helper()
 		next++
 		j := pollJob(lib.ID, next, state, code)
-		j.RequestedBy = &bridge.Requester{ID: 7, Username: "follower"}
+		j.RequestedBy, j.Params = &bridge.Requester{ID: 7, Username: "follower"}, json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`)
 		if err := c.FoldPodcastJob(ctx, j); err != nil {
 			t.Fatal(err)
 		}
@@ -366,7 +385,7 @@ func TestPodcastFeedNotices(t *testing.T) {
 		t.Helper()
 		next++
 		j := pollJob(lib.ID, next, bridge.StateFailed, "http_429")
-		j.RequestedBy = &bridge.Requester{ID: 7, Username: "follower"}
+		j.RequestedBy, j.Params = &bridge.Requester{ID: 7, Username: "follower"}, json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`)
 		j.Result = json.RawMessage(fmt.Sprintf(`{"code":"http_429","retry_after_seconds":%d}`, seconds))
 		if err := c.FoldPodcastJob(ctx, j); err != nil {
 			t.Fatal(err)
@@ -409,7 +428,7 @@ func TestFeedRunDue(t *testing.T) {
 // A private show's notices say so (notify words them without its names).
 func TestPodcastNoticesMarkPrivateShows(t *testing.T) {
 	c, ctx := newTestCatalog(t)
-	c.now = func() time.Time { return time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC) }
+	c.now = func() time.Time { return time.Date(2026, 12, 2, 0, 0, 0, 0, time.UTC) }
 	log := listenNotices(c)
 	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
 	if err != nil {
@@ -417,10 +436,10 @@ func TestPodcastNoticesMarkPrivateShows(t *testing.T) {
 	}
 	f := podcastFixture(t)
 	f.Private = true
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s1", "", "", f, nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s1", "", "", f, nil, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s2", "", "", withEpisode(f, "1111111111111111", "new.mp3", "New", "2026-12-01T00:00:00Z"), nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s2", "", "", withEpisode(f, "1111111111111111", "new.mp3", "New", "2026-12-01T00:00:00Z"), nil, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	for i, state := range []string{bridge.StateFailed, bridge.StateDone} {
@@ -436,5 +455,294 @@ func TestPodcastNoticesMarkPrivateShows(t *testing.T) {
 		if !n.Private {
 			t.Fatalf("a private show's %s notice is not marked private", n.Kind)
 		}
+	}
+}
+
+// podcastShowsLib is a podcasts library holding the fixture indexed as "Example
+// Show" and, with others, more shows of their own identity (folders "Show 1"..).
+func podcastShowsLib(t *testing.T, c *Catalog, ctx context.Context, others int) *Library {
+	t.Helper()
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", podcastFixture(t), nil, false, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range others {
+		f := podcastFixture(t)
+		f.ShowID = fmt.Sprintf("b%015d", i+1)
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, fmt.Sprintf("Show %d", i+1), "s", "", "", f, nil, false, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return lib
+}
+
+// showPoll is a scheduled podcast.poll of the n-th other show (0: the
+// fixture's "Example Show") ending in state with code.
+func showPoll(lib, id int64, n int, state, code string) bridge.Job {
+	j := pollJob(lib, id, state, code)
+	if n > 0 {
+		show := fmt.Sprintf("Show %d", n)
+		j.Path, j.Params = &show, json.RawMessage(fmt.Sprintf(`{"show_id":"b%015d","scheduled":true}`, n))
+	}
+	return j
+}
+
+// A network-class failure counts only while the Bridge reaches other feeds
+// (server#403): a Bridge that lost its internet fails every show and
+// announces none of them however long it lasts, while a feed failing alone
+// among shows the Bridge still reaches is announced at its sixth. A lone show
+// (no other feed to judge the Bridge by) counts as before.
+func TestPodcastNetworkFailuresJudgedAcrossTheBridge(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	now := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	log := listenNotices(c)
+	lib := podcastShowsLib(t, c, ctx, 2)
+	id := int64(0)
+	fold := func(n int, state, code string) {
+		t.Helper()
+		id++
+		now = now.Add(10 * time.Minute)
+		if err := c.FoldPodcastJob(ctx, showPoll(lib.ID, id, n, state, code)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Every show checks fine, then the Bridge's internet goes: twenty rounds
+	// of every show failing announce nothing.
+	for n := range 3 {
+		fold(n, bridge.StateDone, "")
+	}
+	for range 20 {
+		for n, code := range []string{"timeout", "dns", "network"} {
+			fold(n, bridge.StateFailed, code)
+		}
+	}
+	if got := log.take(); len(got) != 0 {
+		t.Fatalf("a Bridge outage told %+v", got)
+	}
+	var run int
+	if err := c.db.QueryRowContext(ctx, `SELECT feed_failures FROM podcast_feed_state WHERE library_id=? AND show_path='Example Show'`, lib.ID).Scan(&run); err != nil || run > 1 {
+		t.Fatalf("an outage counted %d failures (%v), want at most the first", run, err)
+	}
+	// The internet is back: the other shows check fine, this one doesn't.
+	for range 6 {
+		fold(1, bridge.StateDone, "")
+		fold(2, bridge.StateDone, "")
+		fold(0, bridge.StateFailed, "timeout")
+	}
+	got := log.take()
+	if len(got) != 1 || got[0].Kind != PodcastFeedFailing || got[0].ShowPath != "Example Show" || got[0].Code != "timeout" || got[0].Failures != NetworkFailingAfter {
+		t.Fatalf("a feed failing among reachable ones told %+v, want failing timeout after %d", got, NetworkFailingAfter)
+	}
+
+	// A lone show: nothing to judge the Bridge by, so each failure counts.
+	c2, ctx2 := newTestCatalog(t)
+	log2 := listenNotices(c2)
+	lone := podcastShowsLib(t, c2, ctx2, 0)
+	for i := range NetworkFailingAfter {
+		if err := c2.FoldPodcastJob(ctx2, showPoll(lone.ID, int64(i+1), 0, bridge.StateFailed, "timeout")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := log2.take(); len(got) != 1 || got[0].Failures != NetworkFailingAfter {
+		t.Fatalf("a lone show told %+v", got)
+	}
+}
+
+// Only the scheduler's polls count (bridge.PollParams.Scheduled): a Check now
+// stays uncounted even once its requester is gone (requested_by is then NULL,
+// which used to read as the scheduler's).
+func TestPodcastCheckNowWithoutRequesterIsNotCounted(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	log := listenNotices(c)
+	lib := podcastShowsLib(t, c, ctx, 0)
+	for i := range 5 {
+		j := pollJob(lib.ID, int64(i+1), bridge.StateFailed, "http_500")
+		j.Params = json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`) // a Check now, its requester deleted
+		if err := c.FoldPodcastJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := log.take(); len(got) != 0 {
+		t.Fatalf("Check now failures told %+v", got)
+	}
+	for i := range FeedFailingAfter {
+		if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, int64(10+i), bridge.StateFailed, "http_500")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := log.take(); len(got) != 1 || got[0].Failures != FeedFailingAfter {
+		t.Fatalf("scheduled failures told %+v, want failing after %d", got, FeedFailingAfter)
+	}
+}
+
+// The failing notice's event is recorded in the fold's own transaction: a
+// record that fails leaves failing_announced unset (the fold fails and is
+// tried again), so the next fold announces it, once, and never says "back"
+// for a notice that was never recorded.
+func TestPodcastFailingRecordedWithTheFlag(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib := podcastShowsLib(t, c, ctx, 0)
+	var delivered []ServerEvent
+	broken := true
+	c.SetPodcastNotice(&PodcastListener{
+		Event: func(n PodcastNotice) (string, map[string]any, string) {
+			if broken {
+				return "podcast_" + n.Kind, map[string]any{"bad": make(chan int)}, "" // can't be recorded
+			}
+			return "podcast_" + n.Kind, map[string]any{"code": n.Code}, ""
+		},
+		Deliver: func(_ context.Context, ev ServerEvent) { delivered = append(delivered, ev) },
+	})
+	announced := func() (bool, string) {
+		t.Helper()
+		var a bool
+		var code string
+		if err := c.db.QueryRowContext(ctx, `SELECT failing_announced,failing_code FROM podcast_feed_state WHERE library_id=?`, lib.ID).Scan(&a, &code); err != nil {
+			t.Fatal(err)
+		}
+		return a, code
+	}
+	if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, 1, bridge.StateDone, "")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, 2, bridge.StateFailed, "gone")); err == nil {
+		t.Fatal("a fold whose event could not be recorded succeeded")
+	}
+	if a, code := announced(); a || code != "" || len(delivered) != 0 {
+		t.Fatalf("after a failed record: announced %v %q, delivered %v", a, code, delivered)
+	}
+	broken = false
+	if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, 2, bridge.StateFailed, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	if a, code := announced(); !a || code != "gone" || len(delivered) != 1 || delivered[0].Data["code"] != "gone" {
+		t.Fatalf("the retried fold: announced %v %q, delivered %+v", a, code, delivered)
+	}
+	if events, _, err := c.ListServerEvents(ctx, 0, 10, ""); err != nil || len(events) != 1 || events[0].ID != delivered[0].ID {
+		t.Fatalf("feed = %+v, %v; want the delivered event only", events, err)
+	}
+}
+
+// An event already in the feed under its dedup key is neither recorded nor
+// delivered again, checked in the write's transaction.
+func TestPodcastNoticeDedupInTheTransaction(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib := podcastShowsLib(t, c, ctx, 0)
+	var delivered int
+	c.SetPodcastNotice(&PodcastListener{
+		Event:   func(PodcastNotice) (string, map[string]any, string) { return "podcast_x", nil, "same" },
+		Deliver: func(context.Context, ServerEvent) { delivered++ },
+	})
+	for i, state := range []string{bridge.StateFailed, bridge.StateDone} {
+		if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, int64(i+1), state, "gone")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if events, _, _ := c.ListServerEvents(ctx, 0, 10, ""); len(events) != 1 || delivered != 1 {
+		t.Fatalf("%d events, %d delivered; want one of each", len(events), delivered)
+	}
+}
+
+// New episodes are known by GUID and id, not only by date: a twin with the
+// same date-only pubDate as the latest, or an episode with no date, is news;
+// a known episode at a new path is not. Episodes the Bridge first saw days ago
+// (an index restored from an older backup, or catching up after an outage)
+// are not news either.
+func TestPodcastNewEpisodesByGUID(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	log := listenNotices(c)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := now.Add(-time.Hour).Format(time.RFC3339)
+	ep := func(f *feed.File, id, title, published string) *feed.File {
+		g := withEpisode(f, id, id+".mp3", title, published)
+		g.Episodes[0].FirstSeen = seen
+		return g
+	}
+	sig := 0
+	index := func(f *feed.File) []PodcastNotice {
+		t.Helper()
+		sig++
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", fmt.Sprint(sig), "", "", f, nil, false, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+		return log.take()
+	}
+	titles := func(got []PodcastNotice) []string {
+		if len(got) != 1 {
+			return nil
+		}
+		return got[0].Titles
+	}
+	f := ep(podcastFixture(t), "1111111111111111", "Monday", "2026-11-16T00:00:00Z")
+	index(f)
+	f = ep(f, "2222222222222222", "Monday Twin", "2026-11-16T00:00:00Z")
+	if got := index(f); !slices.Equal(titles(got), []string{"Monday Twin"}) {
+		t.Fatalf("a same-date twin: %+v", got)
+	}
+	f = ep(f, "3333333333333333", "Undated", "")
+	if got := index(f); !slices.Equal(titles(got), []string{"Undated"}) {
+		t.Fatalf("an undated episode: %+v", got)
+	}
+	// The Bridge renamed a known episode's file: the same GUID is no news.
+	moved := *f
+	moved.Episodes = slices.Clone(f.Episodes)
+	moved.Episodes[0].Path, moved.Episodes[0].ID = "Example Show/undated-renamed.mp3", "3333333333333334"
+	if got := index(&moved); len(got) != 0 {
+		t.Fatalf("a known GUID at a new path told %+v", got)
+	}
+	// Found days ago: a restored index or a long outage.
+	old := withEpisode(&moved, "4444444444444444", "4444444444444444.mp3", "Found Days Ago", "2026-11-17T00:00:00Z")
+	old.Episodes[0].FirstSeen = now.Add(-NewEpisodeWindow - time.Hour).Format(time.RFC3339)
+	if got := index(old); len(got) != 0 {
+		t.Fatalf("an episode first seen days ago told %+v", got)
+	}
+}
+
+// A scan that read an older feed.json before the Bridge's rescan indexed a
+// newer one doesn't fold it over that index; one read after it (a feed.json
+// restored from a backup) is indexed.
+func TestPodcastStaleFeedFoldRefused(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := podcastFixture(t)
+	newer := withEpisode(older, "1111111111111111", "new.mp3", "New", "2026-11-17T00:00:00Z")
+	newer.UpdatedAt = "2026-11-17T01:00:00Z"
+	count := func() int {
+		t.Helper()
+		var n int
+		if err := c.db.QueryRowContext(ctx, `SELECT episode_count FROM podcast_shows WHERE library_id=?`, lib.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", older, nil, false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	scanRead := time.Now() // the scan reads the old feed.json...
+	time.Sleep(time.Millisecond)
+	// ...the Bridge writes a newer one and its rescan indexes it...
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "new", "", "", newer, nil, true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	want := count()
+	// ...then the scan commits what it read.
+	if changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", older, nil, false, scanRead); err != nil || changed || count() != want {
+		t.Fatalf("a stale fold: changed %v, %v, %d episodes, want %d", changed, err, count(), want)
+	}
+	// A feed.json restored from an older backup, read after that index.
+	if changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", older, nil, false, time.Now()); err != nil || !changed || count() != want-1 {
+		t.Fatalf("a restored feed.json: changed %v, %v, %d episodes, want %d", changed, err, count(), want-1)
 	}
 }

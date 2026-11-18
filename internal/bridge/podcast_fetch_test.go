@@ -16,7 +16,7 @@ func fetchQueue(t *testing.T) *testQueue {
 	// One statement an Exec: the native engine binds a multi-statement Exec's
 	// arguments across its statements (see SQLite in CONVENTIONS.md).
 	for _, stmt := range []string{
-		`INSERT INTO podcast_shows VALUES(?1,'Show','0123456789abcdef','Title','','','','','episodic',0,0,'','','','','',1,NULL,'s','t')`,
+		`INSERT INTO podcast_shows(library_id,show_path,show_id,title,author,description,link,language,show_type,explicit,private,feed_url,feed_host,feed_url_sha256,podcast_guid,cover_path,episode_count,latest_published,feed_sig,indexed_at) VALUES(?1,'Show','0123456789abcdef','Title','','','','','episodic',0,0,'','','','','',1,NULL,'s','t')`,
 		`INSERT INTO books(library_id,rel_path,title,indexed_at) VALUES(?1,'Show/episode.mp3','Episode','t')`,
 		`INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source) SELECT id,library_id,'Show','fedcba9876543210','','full',0,0,0,0,'','none' FROM books WHERE library_id=?1 AND rel_path='Show/episode.mp3'`,
 	} {

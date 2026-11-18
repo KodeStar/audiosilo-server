@@ -186,7 +186,7 @@ func TestPodcastFetchLimitAcrossLibraries(t *testing.T) {
 	}
 	other := *q
 	other.lib, _ = r.LastInsertId()
-	if _, err = q.db.ExecContext(ctx, `INSERT INTO podcast_shows VALUES(?1,'Show','0123456789abcdef','Title','','','','','episodic',0,0,'','','','','',1,NULL,'s','t')`, other.lib); err != nil {
+	if _, err = q.db.ExecContext(ctx, `INSERT INTO podcast_shows(library_id,show_path,show_id,title,author,description,link,language,show_type,explicit,private,feed_url,feed_host,feed_url_sha256,podcast_guid,cover_path,episode_count,latest_published,feed_sig,indexed_at) VALUES(?1,'Show','0123456789abcdef','Title','','','','','episodic',0,0,'','','','','',1,NULL,'s','t')`, other.lib); err != nil {
 		t.Fatal(err)
 	}
 	if err = q.SaveHeartbeat(ctx, q.token, Status{Kinds: []string{KindPodcastFetch}, Libraries: []LibraryStatus{{LibraryID: q.lib, Mapped: true, Writable: true}, {LibraryID: other.lib, Mapped: true, Writable: true}}}); err != nil {

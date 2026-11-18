@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
@@ -44,7 +45,7 @@ func newGateEnv(t *testing.T) gateEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, e.pods.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, e.pods.ID, "Example Show", "s", "", "", f, nil, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, ep := range f.Episodes {

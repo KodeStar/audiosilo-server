@@ -87,7 +87,7 @@ func queuePoll(ctx context.Context, d modules.Deps, r catalog.Ref) error {
 	if err != nil {
 		return err
 	}
-	_, _, err = d.Bridge.Enqueue(ctx, bridge.NewJob{Kind: bridge.KindPodcastPoll, LibraryID: &r.LibraryID, Path: &r.Path, Params: st.PollParams(), Priority: bridge.PriorityScheduled})
+	_, _, err = d.Bridge.Enqueue(ctx, bridge.NewJob{Kind: bridge.KindPodcastPoll, LibraryID: &r.LibraryID, Path: &r.Path, Params: st.PollParams(true), Priority: bridge.PriorityScheduled})
 	if errors.Is(err, bridge.ErrLibraryNotWritable) {
 		err = d.Catalog.PodcastNotWritable(ctx, r)
 	}

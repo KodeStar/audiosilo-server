@@ -2487,6 +2487,7 @@
   "events.podcast_feed_failing.code.blocked_address": "A Bridge recusa-se a contactar o endereço do feed.",
   "events.podcast_feed_failing.code.invalid_feed_url": "O endereço do feed não é válido.",
   "events.podcast_feed_failing.code.http_310": "O endereço do feed redireciona demasiadas vezes.",
+  "events.podcast_feed_failing.code.redirect_loop": "O endereço do feed redireciona demasiadas vezes.",
   "events.podcast_feed_failing.http": "O feed respondeu com HTTP {{status}}.",
   "events.podcast_feed_failing.failed": "A Bridge não conseguiu verificar o feed.",
   "events.podcast_feed_recovered.title": "Feed de podcast de volta: {{show}}",

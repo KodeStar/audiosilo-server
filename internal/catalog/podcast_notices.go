@@ -3,6 +3,7 @@ package catalog
 import (
 	"cmp"
 	"slices"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
@@ -24,6 +25,13 @@ const (
 	FeedFailingAfter    = 3
 	NetworkFailingAfter = 6
 )
+
+// NewEpisodeWindow is how recently the Bridge must have first seen an episode
+// for its index to announce it (IndexPodcastShow): the Bridge's rescan follows
+// its poll within minutes, while episodes first seen days ago are an index
+// restored from an older backup, or catching up after a long outage, and
+// were news then, not now.
+const NewEpisodeWindow = 72 * time.Hour
 
 // maxNoticeTitles bounds PodcastNotice.Titles.
 const maxNoticeTitles = 5
@@ -72,12 +80,13 @@ func newEpisodesNotice(lib int64, library, show string, f *feed.File, news []fee
 }
 
 // feedRun is a show's run of failed polls as the notifications count it
-// (podcast_feed_state.feed_failures, feed_network_failures and
-// failing_announced).
+// (podcast_feed_state.feed_failures, feed_network_failures, failing_announced
+// and failing_code).
 type feedRun struct {
 	failures  int // the feed's own failures in a row
 	network   int // of which network-class (bridge.NetworkFailure)
 	announced bool
+	code      string // the code the failing notice was last told with
 }
 
 // due reports whether the run has failed long enough to announce. Each kind of
@@ -92,16 +101,30 @@ func (r feedRun) due() bool {
 	return other*NetworkFailingAfter+r.network*FeedFailingAfter >= FeedFailingAfter*NetworkFailingAfter
 }
 
+// poll is how a podcast.poll that failed is read against the run.
+type poll struct {
+	// scheduled: the scheduler's poll (bridge.PollParams.Scheduled), not a
+	// follower's Check now.
+	scheduled bool
+	// reachable: the Bridge reached another feed since this show's previous
+	// check, or checked none (bridgeReachedFeeds), so a network-class failure
+	// is this feed's, not the Bridge's own internet.
+	reachable bool
+}
+
 // next is the run after a podcast.poll that ended in state with code, and the
 // notice kind it raises ("" for none): a success after an announcement is
 // recovered; the feed's own failure counts, announced once the run is due or,
 // for `gone`, at once; a lost private-feed secret is announced at once without
 // counting; any other failure (the Bridge's, the library's) leaves the run as
-// it was. Only a scheduled poll's failure counts (scheduled): a follower's
-// Check now, once a minute, would otherwise announce a feed failing in three
-// minutes (server#403); its `gone` and lost secret are still announced at once,
-// since polling stops on them.
-func (r feedRun) next(state, code string, scheduled bool) (feedRun, string) {
+// it was. Once announced, `gone` or a lost secret (each stops the feed for
+// good) is announced again when the notice said another code. Only a
+// scheduled poll's failure counts: a follower's Check now, once a minute,
+// would otherwise announce a feed failing in three minutes (server#403); its
+// `gone` and lost secret are still announced at once, since polling stops on
+// them. A network-class failure counts only while the Bridge reaches other
+// feeds (p.reachable): an outage at the Bridge fails every show at once.
+func (r feedRun) next(state, code string, p poll) (feedRun, string) {
 	switch {
 	case state == bridge.StateDone:
 		if r.announced {
@@ -111,25 +134,32 @@ func (r feedRun) next(state, code string, scheduled bool) (feedRun, string) {
 	case state != bridge.StateFailed:
 		return r, ""
 	case code == "feed_secret_missing":
-		if r.announced {
-			return r, ""
-		}
-		r.announced = true
-		return r, PodcastFeedFailing
-	case uncountedCheck(code, scheduled):
+		return r.announce(code, true)
+	case uncountedCheck(code, p.scheduled):
 		return r, ""
 	case bridge.FeedFailure(code):
+		if bridge.NetworkFailure(code) && !p.reachable {
+			return r, ""
+		}
 		r.failures++
 		if bridge.NetworkFailure(code) {
 			r.network++
 		}
-		if r.announced || !r.due() && code != "gone" {
-			return r, ""
-		}
-		r.announced = true
-		return r, PodcastFeedFailing
+		return r.announce(code, r.due() || code == "gone")
 	}
 	return r, ""
+}
+
+// announce is the run once a failure with code is told when due: a run not
+// announced yet is, and one already announced only for a code that stops the
+// feed (`gone`, a lost secret) and that it wasn't told with.
+func (r feedRun) announce(code string, due bool) (feedRun, string) {
+	stops := code == "gone" || code == "feed_secret_missing"
+	if !due || r.announced && (!stops || r.code == code) {
+		return r, ""
+	}
+	r.announced, r.code = true, code
+	return r, PodcastFeedFailing
 }
 
 // uncountedCheck reports whether a failed poll with code is a follower's Check

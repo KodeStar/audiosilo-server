@@ -335,7 +335,7 @@ type Catalog struct {
 	podcastChanged atomic.Pointer[func(int64, string)]
 	// podcastNotice hears a podcast show's news for the admin's notifications
 	// (SetPodcastNotice): atomic for the same reason.
-	podcastNotice atomic.Pointer[func(context.Context, PodcastNotice)]
+	podcastNotice atomic.Pointer[PodcastListener]
 	// onChange hears that a book's index row was written (OnBookChange): the
 	// listeners, replaced whole (copy-on-write) by each registration.
 	onChange          atomic.Pointer[[]func()]
@@ -398,23 +398,59 @@ func (c *Catalog) SetPodcastChanged(f func(lib int64, path string)) {
 	c.podcastChanged.Store(&f)
 }
 
-// SetPodcastNotice sets the one listener told a podcast show's news after the
-// write that found it commits (notify.Service.PodcastNotice): new episodes
-// (IndexPodcastShow) and a feed failing or back (FoldPodcastJob). f runs on
-// the writer's goroutine once its transaction has committed; nil clears it.
-// Safe while the catalog is in use.
-func (c *Catalog) SetPodcastNotice(f func(context.Context, PodcastNotice)) {
-	if f == nil {
-		c.podcastNotice.Store(nil)
-		return
-	}
-	c.podcastNotice.Store(&f)
+// PodcastListener hears a podcast show's news for the admin's notifications
+// (notify.PodcastEvent and notify.Service.Deliver): new episodes
+// (IndexPodcastShow) and a feed failing or back (FoldPodcastJob).
+type PodcastListener struct {
+	// Event is the feed event a notice is recorded as: its kind ("" records
+	// none), data and dedup key (an event of that kind and key already in the
+	// feed records nothing again). It runs inside the write's transaction, so
+	// it only builds values.
+	Event func(PodcastNotice) (kind string, data map[string]any, dedup string)
+	// Deliver sends a recorded event on (the destinations), once the write's
+	// transaction has committed.
+	Deliver func(context.Context, ServerEvent)
 }
 
-// tellPodcastNotice hands n to the SetPodcastNotice listener, if any.
-func (c *Catalog) tellPodcastNotice(ctx context.Context, n *PodcastNotice) {
-	if f := c.podcastNotice.Load(); n != nil && f != nil {
-		(*f)(ctx, *n)
+// SetPodcastNotice sets the one listener of a podcast show's news; nil clears
+// it. The event is recorded in the same transaction as the write that found the
+// news (a failing feed's failing_announced with it, so a crash between the two
+// can neither lose the notice nor tell "back" for one never sent), then
+// delivered on the writer's goroutine after the commit. Safe while the
+// catalog is in use.
+func (c *Catalog) SetPodcastNotice(l *PodcastListener) {
+	c.podcastNotice.Store(l)
+}
+
+// recordPodcastNotice records n (nil for none) as the listener's event in tx,
+// and returns the event to deliver once tx commits (nil for none: no
+// listener, no event, or one already recorded under its dedup key).
+func (c *Catalog) recordPodcastNotice(ctx context.Context, tx *sql.Tx, n *PodcastNotice) (*ServerEvent, error) {
+	l := c.podcastNotice.Load()
+	if n == nil || l == nil || l.Event == nil {
+		return nil, nil
+	}
+	kind, data, dedup := l.Event(*n)
+	if kind == "" {
+		return nil, nil
+	}
+	if dedup != "" {
+		var seen bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM server_events WHERE kind=? AND dedup_key=?)`, kind, dedup).Scan(&seen); err != nil || seen {
+			return nil, err
+		}
+	}
+	ev, err := c.recordServerEvent(ctx, tx, kind, data, dedup)
+	if err != nil {
+		return nil, err
+	}
+	return &ev, nil
+}
+
+// deliverPodcastNotice hands a recorded event to the listener, if any.
+func (c *Catalog) deliverPodcastNotice(ctx context.Context, ev *ServerEvent) {
+	if l := c.podcastNotice.Load(); ev != nil && l != nil && l.Deliver != nil {
+		l.Deliver(ctx, *ev)
 	}
 }
 

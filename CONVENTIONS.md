@@ -3938,30 +3938,44 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `agent_unavailable` whatever their `retry_at`, and counts a park whose code changes in place as news;
   a failure by an expired last lease is reported too, once its transaction commits; the job's `error`,
   the Bridge's own text that can name its folders, is the bell's `detail`, never sent out), and podcasts
-  (server#232, admin only, through `catalog.SetPodcastNotice` after the write commits, `notify.PodcastNotice`):
+  (server#232, admin only, through `catalog.SetPodcastNotice`: the event (`notify.PodcastEvent`) is recorded
+  in the same transaction as the write that found the news, its dedup key checked there too, and delivered
+  after the commit (`notify.Service.Deliver`), so a crash can't lose a notice whose flag committed, server#403):
   `podcast_episodes_new`, one per show per index (`catalog.IndexPodcastShow`: episodes new to a show indexed
-  before under the same `show_id`, a path not indexed and published after the show's previous
-  `latest_published` (or, when that is dated ahead of the clock, after its newest indexed episode that
-  isn't, so one mistyped date hides nothing), so a first index, a forced rescan of a feed already indexed, a rebuilt index or missing rows indexed again
-  announce nothing; up to 5 titles, newest first; `dedup_key` the library, show id and a hash of the new
-  episode ids, so the scheduled scan and the Bridge's rescan can't both announce them),
+  before under the same `show_id`, its rows all there: a path, GUID and episode id not indexed, not
+  published before the show's previous `latest_published` (the same date, a date-only twin, or no date is
+  news; when that latest is dated ahead of the clock, the newest indexed episode that isn't stands in, so
+  one mistyped date hides nothing), and first seen by the Bridge (`first_seen`) within
+  `catalog.NewEpisodeWindow` (72 h), so a first index, a forced rescan of a feed already indexed, a rebuilt
+  index, missing rows indexed again, and an index restored from an older backup or written after a long
+  outage announce nothing; up to 5 titles, newest first; `dedup_key` the library, show id and a hash of the new
+  episode ids, so the scheduled scan and the Bridge's rescan can't both announce them; a scan that read an
+  older feed.json (its `updated_at`, kept as `podcast_shows.feed_updated_at`, `0083`) before the Bridge's
+  rescan indexed a newer one doesn't fold it over that index, while a feed.json restored from a backup,
+  read after it, is indexed),
   `podcast_feed_failing` and `podcast_feed_recovered` (`catalog.FoldPodcastJob`, `podcast.poll` only,
   idempotent through `podcast_folded`; `0076` adds `podcast_feed_state.feed_failures`,
   `feed_network_failures` and `failing_announced`, while `failures` still drives the backoff: a failure
   whose code is the feed's (`bridge.FeedFailure`, not `notFeedFailures`) counts, announced once at the
   third in a row (`catalog.FeedFailingAfter`) or at once for `gone`; network-class codes
   (`bridge.NetworkFailure`: `dns`, `network`, `timeout`, `tls`, what every show fails with while the
-  Bridge's internet is down) need six (`catalog.NetworkFailingAfter`), and a mixed run is announced
+  Bridge's internet is down) need six (`catalog.NetworkFailingAfter`) and count only when the Bridge
+  reached another feed since the show's previous check, or checked none (`bridgeReachedFeeds`, server#403:
+  an outage counts at most one per show, a lone show as before), and a mixed run is announced
   once the two shares add up to one (`feedRun.due`: two answers and two timeouts, say);
   `feed_secret_missing` is announced at once without counting (and sets the show's
   `status.secret_missing` until a check succeeds, so a client can say "follow it again by its address";
-  server#219); another failure (`bridge_lost`, an
-  unwritable library) neither counts nor resets; a follower's Check now (a poll with a requester) counts
-  nothing toward the run and leaves the scheduled polls' backoff as it was (`uncountedCheck`; a later
+  server#219); once announced, a later `gone` or lost secret (each stops the feed for good) is announced
+  again when the notice said another code (`podcast_feed_state.failing_code`, `0083`); another failure
+  (`bridge_lost`, `write_failed`, an
+  unwritable library) neither counts nor resets; only the scheduler's polls count (`bridge.PollParams.Scheduled`,
+  set by `podcast.SchedulerTick`; a Bridge reads the params leniently): a follower's Check now counts
+  nothing toward the run, even once its requester is deleted, and leaves the scheduled polls' backoff as it was (`uncountedCheck`; a later
   Retry-After still holds them off), server#403, though its `gone` is still announced at once; a successful poll resets the run and, after an
   announcement, raises recovered once; a job for a replaced show changes nothing). Their
   data are the library and its id, `show_id`, `show` (the title, else its folder), `show_path`, `count`
-  and `titles`, or `code` (one the messages word, `http_310` the Bridge's redirect loop among them, or an
+  and `titles`, or `code` (one the messages word, `redirect_loop` the Bridge's redirect loop among them
+  (`http_310` from an older Bridge), or an
   `http_NNN` status, else `failed`) and `failures`
   (0 for a lost secret): never the error's text, the feed URL or its host. A private show is hidden from
   admins who don't follow it, so its notices carry `private: true` instead of `show`, `show_path` and

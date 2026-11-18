@@ -164,6 +164,22 @@ type ServerEvent struct {
 // RecordServerEvent appends an event, stamped now, and returns it. dedupKey, when
 // not empty, is what ServerEventSeen looks for.
 func (c *Catalog) RecordServerEvent(ctx context.Context, kind string, data map[string]any, dedupKey string) (ServerEvent, error) {
+	return c.recordServerEvent(ctx, userStateExec{c.db}, kind, data, dedupKey)
+}
+
+// userStateExec runs a statement as a write of user state only
+// (store.DB.ExecUserState).
+type userStateExec struct{ db catalogDB }
+
+func (u userStateExec) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	return u.db.ExecUserState(ctx, q, args...)
+}
+
+// recordServerEvent is RecordServerEvent through exec (a transaction's, so
+// the event commits with the write that raised it).
+func (c *Catalog) recordServerEvent(ctx context.Context, exec interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, kind string, data map[string]any, dedupKey string) (ServerEvent, error) {
 	if data == nil {
 		data = map[string]any{}
 	}
@@ -172,7 +188,7 @@ func (c *Catalog) RecordServerEvent(ctx context.Context, kind string, data map[s
 		return ServerEvent{}, err
 	}
 	at := formatSessionTime(c.now())
-	res, err := c.db.ExecUserState(ctx,
+	res, err := exec.ExecContext(ctx,
 		`INSERT INTO server_events(at, kind, data, dedup_key) VALUES(?,?,?,?)`, at, kind, string(b), dedupKey)
 	if err != nil {
 		return ServerEvent{}, err
