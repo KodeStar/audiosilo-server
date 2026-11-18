@@ -525,15 +525,20 @@ function Scrubber({
   // A replaced <audio> (another file, a transcode asked again) or a closed
   // editor lets go of its stream: a detached element goes on loading until it
   // is collected, and a transcode's ffmpeg holds one of the server's few
-  // transcode slots until its connection closes.
+  // transcode slots until its connection closes. Only once it has left the
+  // page (after the commit): StrictMode runs a ref's cleanup once on mount
+  // too, the element still in place, and a src taken off then is never put back.
   const attach = useCallback((el: HTMLAudioElement | null) => {
     audio.current = el;
     if (!el) return;
     return () => {
       if (audio.current === el) audio.current = null;
-      el.pause();
-      el.removeAttribute('src');
-      el.load();
+      queueMicrotask(() => {
+        if (el.isConnected) return;
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+      });
     };
   }, []);
 

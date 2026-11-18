@@ -283,6 +283,17 @@ describe('the chapter editor', () => {
     await waitFor(() => expect(Number(srcOf().get('t'))).toBe(2999));
   });
 
+  it('keeps the audio’s source under StrictMode, which runs a ref’s cleanup on mount', async () => {
+    mockFetch(routes(bookDetail()));
+    const { container } = renderApp(URL, { strict: true });
+    const user = await openEditor();
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    // Past the microtask a real removal lets go of its stream in.
+    await Promise.resolve();
+    expect(container.querySelector('audio')!.getAttribute('src')).toContain('token=media-tok');
+  });
+
   it('plays the stored file when the server can’t transcode', async () => {
     const d = bookDetail();
     d.files = d.files.map((f) => ({ ...f, format: 'mka', codec: 'opus', direct_playable: false }));
