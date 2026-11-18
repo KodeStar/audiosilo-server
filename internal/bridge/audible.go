@@ -556,13 +556,51 @@ func AudibleSyncClaim(account string, titles []AudibleSyncTitle) (params json.Ra
 	return raw, bad, good - len(keep)
 }
 
+// maxUnspentSyncFills is how many claims in a row may put an account's
+// audible.sync back unspent because its titles couldn't be read
+// (fillAudibleSync).
+const maxUnspentSyncFills = 3
+
+// syncFill counts the claims in a row that failed to read the titles of one
+// audible.sync (job).
+type syncFill struct {
+	job    int64
+	failed int
+}
+
+// syncFillFailed counts a claim of account's audible.sync job that couldn't
+// read its titles and returns how many in a row have now (a newer job of the
+// account starts again at one).
+func (s *Service) syncFillFailed(account string, job int64) int {
+	s.syncFillMu.Lock()
+	defer s.syncFillMu.Unlock()
+	f := s.syncFills[account]
+	if f.job != job {
+		f = syncFill{job: job}
+	}
+	f.failed++
+	s.syncFills[account] = f
+	return f.failed
+}
+
+// syncFillOK forgets account's failed claims: its titles were read.
+func (s *Service) syncFillOK(account string) {
+	s.syncFillMu.Lock()
+	defer s.syncFillMu.Unlock()
+	delete(s.syncFills, account)
+}
+
 // fillAudibleSync gives a claimed audible.sync the params its claim answers
 // (ClaimAudibleSync: the account's titles now; the job stores the account
 // alone). One whose titles can't be read goes back to the queue unspent
-// (ReleaseUnsentClaim), so the next claim takes it again. One whose own params
-// can't be read (not the JSON its queueing stored) never will: it stays claimed
-// and undelivered, so its lease runs out and spends the attempt, and
-// MaxAttempts fails it rather than every claim taking it again.
+// (ReleaseUnsentClaim), so the next claim takes it again, but only
+// maxUnspentSyncFills claims in a row: while the read keeps failing (a
+// database fault), every claim would take the job again, never spend it, and
+// hand out nothing behind it. From then on it stays claimed and undelivered,
+// as one whose own params can't be read (not the JSON its queueing stored)
+// does from the first: its lease runs out and spends the attempt, MaxAttempts
+// fails it, and the claims meanwhile hand out the jobs behind it. A claim cut
+// short (the Bridge left, the server is stopping) counts as no failure.
 func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 	account, err := AudibleAccountOf(*j)
 	if err != nil {
@@ -570,8 +608,12 @@ func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 	}
 	params, err := s.ClaimAudibleSync(ctx, account)
 	if err != nil {
+		if ctx.Err() == nil && s.syncFillFailed(account, j.ID) > maxUnspentSyncFills {
+			return nil, fmt.Errorf("audible.sync %d: titles: %w", j.ID, err)
+		}
 		return nil, errors.Join(err, s.ReleaseUnsentClaim(ctx, j))
 	}
+	s.syncFillOK(account)
 	j.Params = params
 	return j, nil
 }

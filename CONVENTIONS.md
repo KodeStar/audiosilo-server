@@ -4602,7 +4602,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   titles past it, and any title the Bridge's strict `ParseParams` would refuse the whole list for (not an ASIN, no
   library, a path that is not a clean book path, a negative runtime, an ASIN twice: the checks the queued params
   had), and the server logs both; a claim whose titles can't be read hands nothing out and puts the job back
-  unspent, `ReleaseUnsentClaim`; the job as stored keeps `{account}`, as a private feed URL is injected at claim),
+  unspent, `ReleaseUnsentClaim`, for an account's sync at most `maxUnspentSyncFills`, 3, claims in a row: the next
+  failing claim leaves it claimed and undelivered, so its lease spends the attempt, `MaxAttempts` ends it and the
+  jobs behind it are handed out meanwhile; the job as stored keeps `{account}`, as a private feed URL is injected at claim),
   internal, quiet, `ModuleFor` audible, deduped per account, `promotes`, only the newest ended kept
   (`pruneAudibleEnded`). A console change to which titles sync (`PATCH .../titles/...` `{rejected}` or `{no_sync}`)
   or turning sync on queues the account's sync at once (`audible.SyncNow`, `catalog.AudibleSyncQueueable`: the same

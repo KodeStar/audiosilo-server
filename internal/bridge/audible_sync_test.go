@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/relpath"
 )
@@ -176,6 +177,83 @@ func TestAudibleSyncClaimFailsUnspent(t *testing.T) {
 	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got == nil || got.ID != job.ID ||
 		got.Attempts != 1 || string(got.Params) != `{"account":"acct0001","titles":[]}` {
 		t.Fatalf("claim after = %+v, %v", got, err)
+	}
+}
+
+// While the titles keep failing to read (a database fault), a sync is put back
+// unspent only maxUnspentSyncFills claims in a row: the next failing claim
+// leaves it claimed and undelivered, so the claim after it hands out the job
+// behind it, each lapsed lease spends an attempt and MaxAttempts ends it.
+func TestAudibleSyncClaimFailsSpentInTheEnd(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	q.beat(t, KindVerify, KindAudibleSync)
+	failing := errors.New("disk I/O error")
+	q.ClaimAudibleSync = func(_ context.Context, account string) (json.RawMessage, error) {
+		if account == "acct0001" {
+			return nil, failing
+		}
+		raw, _, _ := AudibleSyncClaim(account, nil)
+		return raw, nil
+	}
+	job, _, err := q.Enqueue(ctx, AudibleSync("acct0001", -10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	behind, _, err := q.Enqueue(ctx, AudibleSync("acct0002", -20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := func(what, state string, attempts int) {
+		t.Helper()
+		if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); !errors.Is(err, failing) || got != nil {
+			t.Fatalf("%s: claim = %+v, %v; want the error and no job", what, got, err)
+		}
+		if stored, err := q.Job(ctx, job.ID); err != nil || stored.State != state || stored.Attempts != attempts {
+			t.Fatalf("%s: job = %+v, %v; want %s after %d attempts", what, stored, err, state, attempts)
+		}
+	}
+	for range maxUnspentSyncFills {
+		failed("a failed fill", StateQueued, 0)
+	}
+	failed("one more", StateClaimed, 1)
+	// The job behind it is no longer held up.
+	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got == nil || got.ID != behind.ID {
+		t.Fatalf("the claim after = %+v, %v; want the sync behind it", got, err)
+	}
+	if _, err := q.UpdateHeld(ctx, behind.ID, Update{Attempt: 1, State: ptr(StateDone)}); err != nil {
+		t.Fatal(err)
+	}
+	// Each lapsed lease puts it back spent, and the next failing claim spends
+	// another attempt at once, until MaxAttempts ends it.
+	for attempt := 2; attempt <= MaxAttempts; attempt++ {
+		q.advance(Lease + time.Second)
+		failed("after a lapsed lease", StateClaimed, attempt)
+	}
+	q.advance(Lease + time.Second)
+	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got != nil {
+		t.Fatalf("the last claim = %+v, %v; want nothing left", got, err)
+	}
+	if stored, err := q.Job(ctx, job.ID); err != nil || stored.State != StateFailed {
+		t.Fatalf("in the end = %+v, %v; want it failed", stored, err)
+	}
+
+	// A read that works again forgets the failures: the account's next sync is
+	// put back unspent anew.
+	q.ClaimAudibleSync = func(_ context.Context, account string) (json.RawMessage, error) {
+		raw, _, _ := AudibleSyncClaim(account, nil)
+		return raw, nil
+	}
+	next, _, err := q.Enqueue(ctx, AudibleSync("acct0001", -10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got == nil || got.ID != next.ID {
+		t.Fatalf("the next sync's claim = %+v, %v", got, err)
+	}
+	if n := len(q.syncFills); n != 0 {
+		t.Fatalf("%d accounts still counted after a read that worked", n)
 	}
 }
 

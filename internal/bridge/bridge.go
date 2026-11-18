@@ -60,6 +60,10 @@ type Service struct {
 	// stores the account alone (server#303); with none wired a claim answers
 	// the params as queued.
 	ClaimAudibleSync func(ctx context.Context, account string) (json.RawMessage, error)
+	// syncFills counts, per Audible account, the claims in a row that failed
+	// to read its audible.sync's titles (fillAudibleSync), under syncFillMu.
+	syncFillMu sync.Mutex
+	syncFills  map[string]syncFill
 
 	// hb caches the last heartbeat as read (status.go), so GET /server, which
 	// every client calls often, reads the database at most every heartbeatTTL.
@@ -84,7 +88,8 @@ func New(db *store.DB, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{db: db, now: now, wake: newSignal(), ended: newSignal(), privateURLs: map[int64]string{}}
+	return &Service{db: db, now: now, wake: newSignal(), ended: newSignal(), privateURLs: map[int64]string{},
+		syncFills: map[string]syncFill{}}
 }
 
 // ts is now as the bridge tables store times: RFC3339 UTC, whole seconds, so
