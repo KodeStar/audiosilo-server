@@ -1911,7 +1911,11 @@ export interface AdminFile {
   codec: string;
   size: number;
   bitrate: number;
-  /** media.DirectPlayable for the file: false for one no browser plays as stored (Opus or FLAC in .mka, ALAC, AC-3). */
+  /**
+   * Whether a browser plays the file's stream as it is served: false for one none
+   * plays as stored (Opus or FLAC in .mka, ALAC, AC-3); an MP3 in .mka is true
+   * while the server remuxes them.
+   */
   direct_playable: boolean;
 }
 
