@@ -1017,3 +1017,69 @@ func TestRekeyStoppedIsNoFailure(t *testing.T) {
 		t.Fatalf("the next run: %+v %v, want the bookmark moved", rep, err)
 	}
 }
+
+// A re-key carries an Audible account's place as a move does (moveCarry): the
+// row under another spelling of a synced book is the same book's, so an
+// unchanged place that wins the merge (mergeNewest: the newer save) stays the
+// account's, never offered back to Audible over a rewind made in its app since.
+// A newer place of the listener's own already on the book wins whole, with its
+// device; and an Audible place already on the book that wins over a carried
+// older save keeps the account's device (its place is unchanged).
+func TestRekeyCarriesAnAudiblePlace(t *testing.T) {
+	t.Parallel()
+	const audible, name = "audible:acct0001", "Audible (US)"
+	for _, tc := range []struct {
+		name       string
+		carried    string // the row under the decomposed spelling: its device
+		carriedAt  string
+		have       string // the row already on the book: its device ("" none)
+		haveAt     string
+		wantDevice string
+		wantPos    float64
+	}{
+		{name: "onto no row", carried: audible, carriedAt: rkUpdated1, wantDevice: audible, wantPos: 80},
+		{name: "onto an older save", carried: audible, carriedAt: rkUpdated2, have: "phone", haveAt: rkUpdated1,
+			wantDevice: audible, wantPos: 80},
+		{name: "onto a newer save of the listener's", carried: audible, carriedAt: rkUpdated1, have: "phone",
+			haveAt: rkUpdated2, wantDevice: "phone", wantPos: 200},
+		{name: "an older save onto Audible's newer place", carried: "phone", carriedAt: rkUpdated1, have: audible,
+			haveAt: rkUpdated2, wantDevice: audible, wantPos: 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newRekeyFixture(t)
+			// Inserted with its device as a plain one, then named the Audible
+			// route's way (the guard, 0085, takes it off an inserted row).
+			row := func(p, device string, pos float64, at string) {
+				t.Helper()
+				f.exec(t, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, version, device_id, device_name, updated_at)
+					VALUES(?, ?, ?, ?, ?, 3, 'dev', 'Phone', ?)`, f.ann, f.lib, p, pos, rkBookLen, at)
+				dn := "Phone"
+				if device == audible {
+					dn = name
+				}
+				f.exec(t, `UPDATE progress SET device_id = ?, device_name = ? WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
+					device, dn, f.ann, f.lib, p)
+			}
+			row(rkBookNFD, tc.carried, 80, tc.carriedAt)
+			if tc.have != "" {
+				row(rkBook, tc.have, 200, tc.haveAt)
+			}
+			if rep, err := f.c.RekeyLibrary(f.ctx, f.lib); err != nil || rep.Rows != 1 {
+				t.Fatalf("re-key: %+v %v, want the row moved", rep, err)
+			}
+			var device string
+			var pos float64
+			if err := f.c.db.QueryRowContext(f.ctx, `SELECT device_id, position FROM progress
+			    WHERE user_id = ? AND library_id = ? AND rel_path = ?`, f.ann, f.lib, rkBook).Scan(&device, &pos); err != nil {
+				t.Fatal(err)
+			}
+			if device != tc.wantDevice || pos != tc.wantPos {
+				t.Fatalf("row on the book = %q at %v, want %q at %v", device, pos, tc.wantDevice, tc.wantPos)
+			}
+			if n := f.rowCount(t, "progress", f.lib, rkBookNFD); n != 0 {
+				t.Fatalf("%d rows left under the other spelling", n)
+			}
+		})
+	}
+}
