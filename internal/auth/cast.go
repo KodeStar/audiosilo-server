@@ -147,26 +147,28 @@ func (g castGrant) covers(m bookMedia) bool {
 
 // castGrantOf reads the grant of row, a cast token that passed lookupToken's
 // shared checks: its book, and its parent (the sender's token that minted it)
-// as the device it acts for. A token without a grant, or whose parent is gone,
-// signed out or expired, is ErrInvalidToken.
+// as the device it acts for. A token without a grant, whose parent is gone,
+// signed out or expired, or whose account is disabled (lookupToken refused that
+// already; KeepCastToken relies on it here) is ErrInvalidToken.
 func (s *Service) castGrantOf(ctx context.Context, row *tokenRow) error {
 	var (
-		parentRevoked bool
-		parentExpires sql.NullString
+		parentRevoked, disabled bool
+		parentExpires           sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT g.library_id, g.rel_path, g.editor, c.created_at, g.parent_token_id, p.revoked, p.expires_at
+		`SELECT g.library_id, g.rel_path, g.editor, c.created_at, g.parent_token_id, p.revoked, p.expires_at, u.disabled
 		   FROM cast_grants g JOIN tokens p ON p.id = g.parent_token_id JOIN tokens c ON c.id = g.token_id
+		        JOIN users u ON u.id = c.user_id
 		  WHERE g.token_id = ?`, row.id).
 		Scan(&row.grant.libraryID, &row.grant.path, &row.grant.editor, &row.grant.mintedAt, &row.deviceID,
-			&parentRevoked, &parentExpires)
+			&parentRevoked, &parentExpires, &disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrInvalidToken
 	}
 	if err != nil {
 		return err
 	}
-	if parentRevoked || s.pastExpiry(parentExpires) {
+	if parentRevoked || disabled || s.pastExpiry(parentExpires) {
 		return ErrInvalidToken
 	}
 	return nil
@@ -303,8 +305,9 @@ func (s *Service) castExpiry(g castGrant) string {
 // (trimCastTokensSQL) and let its expiry run out mid-book. The api calls it
 // every CastTouchInterval while such a response runs, and once as it ends. It
 // moves last_seen and the expiry (castExpiry) as a request's touch does; a
-// token deleted or signed out since, or whose sender is (castGrantOf), is left
-// as it is. The grant read and the touch are separate statements: what the read
+// token deleted or signed out since, whose sender is, or whose account is
+// disabled (castGrantOf: a suspended token's expiry stays where the suspension
+// found it), is left as it is. The grant read and the touch are separate statements: what the read
 // takes (the token's use and mint time) never changes, and the touch moves no
 // expiry already past nor a revoked token (touchRowSQL).
 func (s *Service) KeepCastToken(ctx context.Context, id int64) error {

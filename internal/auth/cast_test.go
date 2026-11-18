@@ -679,6 +679,71 @@ func TestCastTokenExpirySlidesWhileInUse(t *testing.T) {
 	use("the kept token a day after its last use", kept, false)
 }
 
+// Security-critical (server#446): a keep moves the expiry of a cast token whose
+// sender is still signed in and whose account is enabled, and of no other: a
+// suspended account's token keeps the expiry its suspension found, and one whose
+// sender signed out is never moved. Allowed: a keep while both hold.
+func TestKeepCastTokenOnlyWhileItsSenderAndAccountHold(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	start := *now
+	at := func(d time.Duration) { *now = start.Add(d) }
+	sam, _, phone := castSender(t, s, ctx, "sam")
+	mint := func() int64 {
+		t.Helper()
+		sec, _, err := s.IssueCastToken(ctx, sam.ID, phone, 3, "Author/Book")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return castTokenID(t, s, ctx, sec)
+	}
+	expiry := func(id int64) string {
+		t.Helper()
+		var e string
+		if err := s.db.QueryRowContext(ctx, `SELECT expires_at FROM tokens WHERE id = ?`, id).Scan(&e); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	keep := func(id int64) {
+		t.Helper()
+		if err := s.KeepCastToken(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tok := mint()
+
+	at(time.Hour)
+	before := expiry(tok)
+	keep(tok)
+	if after := expiry(tok); after <= before {
+		t.Fatalf("a keep while the sender and account hold left the expiry %q -> %q", before, after)
+	}
+
+	at(2 * time.Hour)
+	if err := s.UpdateUser(ctx, sam.ID, UserChanges{Disabled: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	before = expiry(tok)
+	keep(tok)
+	if after := expiry(tok); after != before {
+		t.Fatalf("a keep while the account is disabled moved the expiry %q -> %q", before, after)
+	}
+	if err := s.UpdateUser(ctx, sam.ID, UserChanges{Disabled: new(false)}); err != nil {
+		t.Fatal(err)
+	}
+
+	at(3 * time.Hour)
+	if err := s.RevokeOwnDevice(ctx, sam.ID, phone); err != nil {
+		t.Fatal(err)
+	}
+	before = expiry(tok)
+	keep(tok)
+	if after := expiry(tok); after != before {
+		t.Fatalf("a keep after the sender signed out moved the expiry %q -> %q", before, after)
+	}
+}
+
 // server#446: a request touches a cast token at most once a CastTouchInterval
 // (other tokens once a touchInterval), and in milliseconds, so a token a
 // receiver reads from never ranks behind one minted seconds before its last
