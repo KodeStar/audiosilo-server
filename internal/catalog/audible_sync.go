@@ -340,11 +340,14 @@ func (c *Catalog) MarkAudibleSyncQueued(ctx context.Context, account string) err
 // console's accounts card asks for a sign-in again (bridge#40), until the
 // Bridge maps the account again or polls it whole (PutAudibleTitles: Audible
 // answered the account), unless the refusal ended after the job was claimed
-// (refusal_ended_at, server#303: a fresh sign-in while it ran; its claimed_at
-// is whole seconds, so a refusal ended in the claim's own second still marks
-// it, as before). Any other ending changes nothing (the next one is due as
-// usual; audible_sign_in, Audible refusing the sign-in for now, among them). A
-// user-state write.
+// (refusal_ended_at, server#303: a fresh sign-in while it ran) or the job was
+// asked to stop (cancel_requested: a sign-in while it worked asks that,
+// PutAudibleAccount, exact where refusal_ended_at's whole seconds can't say
+// which came first in the claim's own second, server#359; a sync turned off,
+// an account removed or paused, or an admin's cancel: the next job marks a
+// refusal that stands). Any other ending changes nothing (the next one is due
+// as usual; audible_sign_in, Audible refusing the sign-in for now, among
+// them). A user-state write.
 func (c *Catalog) FoldAudibleSync(ctx context.Context, job bridge.Job) error {
 	account, err := bridge.AudibleAccountOf(job)
 	if err != nil {
@@ -353,7 +356,7 @@ func (c *Catalog) FoldAudibleSync(ctx context.Context, job bridge.Job) error {
 	switch {
 	case job.Kind == bridge.KindAudibleSync && bridge.AudibleSynced(job):
 		_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET last_sync_at = ? WHERE account = ?`, c.ts(), account)
-	case bridge.AudibleRefusalCode(job) == bridge.SyncAudibleRefused:
+	case bridge.AudibleRefusalCode(job) == bridge.SyncAudibleRefused && !job.CancelRequested:
 		var ended sql.NullString
 		err = c.db.QueryRowContext(ctx, `SELECT refusal_ended_at FROM audible_accounts WHERE account = ?`, account).Scan(&ended)
 		if errors.Is(err, sql.ErrNoRows) {

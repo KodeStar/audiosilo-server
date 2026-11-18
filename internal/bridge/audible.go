@@ -105,6 +105,10 @@ const (
 	// CancelAudibleSyncOff: the console turned the account's sync off (an open
 	// audible.sync, Phase 4c).
 	CancelAudibleSyncOff = "sync with Audible was turned off for the account"
+	// CancelAudibleSignedIn: the account was signed in (or mapped) again while
+	// the Bridge worked on its sync, whose answer from Audible is then from
+	// before it (server#359).
+	CancelAudibleSignedIn = "the Audible account was signed in again"
 )
 
 // CancelAudiblePolls cancels account's open poll inside tx, reason one of
@@ -582,4 +586,14 @@ func AudibleSynced(j Job) bool {
 func CancelAudibleSyncs(ctx context.Context, tx *sql.Tx, account, reason string, now time.Time) error {
 	job, _ := AudibleSync(account, nil, 0)
 	return cancelOpenTx(ctx, tx, jobKey(job), at(now), reason)
+}
+
+// CancelWorkingAudibleSync asks the Bridge, inside tx, to stop account's sync
+// it holds (claimed or running), with CancelAudibleSignedIn: a sign-in landed
+// while it worked, so a refusal it brings back is the old sign-in's (the
+// account's fold marks no refusal for a job asked to stop). A queued one stays:
+// claimed after the sign-in, it uses the new one.
+func CancelWorkingAudibleSync(ctx context.Context, tx *sql.Tx, account string, now time.Time) error {
+	job, _ := AudibleSync(account, nil, 0)
+	return requestCancelTx(ctx, tx, jobKey(job), at(now), CancelAudibleSignedIn)
 }

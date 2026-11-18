@@ -539,7 +539,7 @@ export function parkHint(
  * (internal/bridge/jobs.go: the kinds' `cancelsOpen`, CancelMoved and
  * CancelReplacedRequest; internal/bridge/audible.go: an Audible poll's
  * CancelAudibleRemoved and CancelAudiblePaused, an Audible sync's
- * CancelAudibleSyncOff; also on a working job it asked
+ * CancelAudibleSyncOff and CancelAudibleSignedIn; also on a working job it asked
  * to stop, kept through the Bridge's reports): shown as a sentence. Any other
  * error on a cancelled job is the park's or the Bridge's own text (a
  * supervisor's, say), never shown (BRIDGE-02). The server's
@@ -556,6 +556,7 @@ const SERVER_CANCEL_REASONS: readonly string[] = [
   'the Audible account was removed',
   "the Audible account's library was deleted",
   'sync with Audible was turned off for the account',
+  'the Audible account was signed in again',
 ];
 
 /**
