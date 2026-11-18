@@ -219,6 +219,21 @@ func TestSpellingScope(t *testing.T) {
 	if _, outside, err := c.Spelling(ctx, lib, "Rien/Ic\u00ed", nfdRule); err != nil || outside {
 		t.Errorf("Spelling of a path nothing reads as = outside %v %v", outside, err)
 	}
+
+	// A path the scope refuses as given is spelled with no look at the disk,
+	// whether an indexed path out of its reach reads as it or nothing does:
+	// how long the answer takes never tells which. Allowed: one the scope
+	// admits as given gets its look.
+	var looked atomic.Int64
+	c.spellLooked = func() { looked.Add(1) }
+	for _, p := range []string{nfdEmile, nfdEmile + "/02.mp3", "Rien/Ic\u00ed"} {
+		if got, _, err := c.Spelling(ctx, lib, p, none); err != nil || got != p || looked.Load() != 0 {
+			t.Errorf("Spelling(%+q) with no grant = %+q %v after %d looks, want it as given, unlooked at", p, got, err, looked.Load())
+		}
+	}
+	if _, outside, err := c.Spelling(ctx, lib, nfdEmile, nfdRule); err != nil || !outside || looked.Load() != 1 {
+		t.Errorf("Spelling under an NFD rule = outside %v %v after %d looks, want outside after one", outside, err, looked.Load())
+	}
 }
 
 // TestOwnEntry: p is an entry of its own when each of its names is in its

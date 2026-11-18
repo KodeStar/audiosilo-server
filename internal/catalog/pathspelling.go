@@ -206,7 +206,9 @@ func (c *Catalog) keyPathsIn(ctx context.Context, after int64, all bool) (int, i
 // The one look at the disk: p is never read as another spelling, nor reported
 // outside, when it is an entry of its own there (ownEntry: a disk that keeps
 // an NFC and an NFD name apart, with p's not indexed yet), so a folder no scan
-// has reached is never taken for the indexed one beside it.
+// has reached is never taken for the indexed one beside it. No look is made for
+// a p allow refuses as given that only refused paths read as: outside is then
+// reported unlooked at, and means nothing to a caller that refuses p.
 func (c *Catalog) Spelling(ctx context.Context, libraryID int64, p string, allow func(string) bool) (spelled string, outside bool, err error) {
 	return c.spelling(ctx, libraryID, p, allow, nil)
 }
@@ -234,6 +236,13 @@ func (c *Catalog) spelling(ctx context.Context, libraryID int64, p string, allow
 		}
 		return s, false, nil
 	case len(refused) > 0:
+		// A p allow refuses as given is its caller's to refuse whatever the
+		// disk has (outside only matters for one allow admits): no look, so
+		// how long the answer takes never tells them a path they can't reach
+		// is indexed in another spelling.
+		if !allow(p) {
+			return p, true, nil
+		}
 		return p, !own(), nil
 	}
 	return p, false, nil
