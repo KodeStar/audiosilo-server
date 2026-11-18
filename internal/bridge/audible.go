@@ -449,7 +449,7 @@ func failureCode(j Job, codes []string) string {
 // AudibleSyncEvery per synced account, one open per account
 // (audibleAccountSuffix), its params only {account} (AudibleSyncQueued); the
 // claim answers the titles to sync as they are then (AudibleSyncParams,
-// Service.AudibleSyncParams), so the queue never stores thousands of titles
+// Service.ClaimAudibleSync), so the queue never stores thousands of titles
 // every quarter of an hour.
 const KindAudibleSync = "audible.sync"
 
@@ -518,7 +518,7 @@ func audibleSyncParams(raw json.RawMessage) (json.RawMessage, error) {
 }
 
 // AudibleSync is the NewJob that syncs account's titles: the titles are read
-// when the Bridge claims it (Service.AudibleSyncParams).
+// when the Bridge claims it (Service.ClaimAudibleSync).
 func AudibleSync(account string, priority int) NewJob {
 	raw, _ := json.Marshal(AudibleSyncQueued{Account: account})
 	return NewJob{Kind: KindAudibleSync, Params: raw, Priority: priority}
@@ -542,14 +542,14 @@ func AudibleSyncClaim(account string, titles []AudibleSyncTitle) (params json.Ra
 }
 
 // fillAudibleSync gives a claimed audible.sync the params its claim answers
-// (AudibleSyncParams: the account's titles now; the job stores the account
+// (ClaimAudibleSync: the account's titles now; the job stores the account
 // alone). One that can't be read goes back to the queue unspent
 // (ReleaseUnsentClaim), so the next claim takes it again.
 func (s *Service) fillAudibleSync(ctx context.Context, j *Job) (*Job, error) {
 	account, err := AudibleAccountOf(*j)
 	var params json.RawMessage
 	if err == nil {
-		params, err = s.AudibleSyncParams(ctx, account)
+		params, err = s.ClaimAudibleSync(ctx, account)
 	}
 	if err != nil {
 		return nil, errors.Join(err, s.ReleaseUnsentClaim(ctx, j))

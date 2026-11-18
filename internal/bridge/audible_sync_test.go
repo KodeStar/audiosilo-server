@@ -52,7 +52,7 @@ func TestAudibleSyncClaim(t *testing.T) {
 
 // server#303: a queued audible.sync stores the account alone, whatever the
 // size of its title list, and the claim answers the titles as they are then
-// (Service.AudibleSyncParams), in the claim's shape; the job as stored keeps
+// (Service.ClaimAudibleSync), in the claim's shape; the job as stored keeps
 // the small params. One open sync per account (a request for it is the open
 // one), the newest ended one kept beside it.
 func TestAudibleSyncQueued(t *testing.T) {
@@ -62,7 +62,7 @@ func TestAudibleSyncQueued(t *testing.T) {
 	q.beat(t, KindVerify, KindAudibleSync)
 	titles := []AudibleSyncTitle{{ASIN: "B000000001", LibraryID: q.lib, Path: "A/B", RuntimeS: 36000}}
 	var asked []string
-	q.AudibleSyncParams = func(_ context.Context, account string) (json.RawMessage, error) {
+	q.ClaimAudibleSync = func(_ context.Context, account string) (json.RawMessage, error) {
 		asked = append(asked, account)
 		raw, _ := AudibleSyncClaim(account, titles)
 		return raw, nil
@@ -110,7 +110,7 @@ func TestAudibleSyncClaimFailsUnspent(t *testing.T) {
 	ctx := context.Background()
 	q.beat(t, KindVerify, KindAudibleSync)
 	failing := errors.New("database is locked")
-	q.AudibleSyncParams = func(context.Context, string) (json.RawMessage, error) { return nil, failing }
+	q.ClaimAudibleSync = func(context.Context, string) (json.RawMessage, error) { return nil, failing }
 	job, _, err := q.Enqueue(ctx, AudibleSync("acct0001", -10))
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestAudibleSyncClaimFailsUnspent(t *testing.T) {
 	if stored, err := q.Job(ctx, job.ID); err != nil || stored.State != StateQueued || stored.Attempts != 0 {
 		t.Fatalf("after a failed fill = %+v, %v; want it queued, unspent", stored, err)
 	}
-	q.AudibleSyncParams = func(_ context.Context, account string) (json.RawMessage, error) {
+	q.ClaimAudibleSync = func(_ context.Context, account string) (json.RawMessage, error) {
 		raw, _ := AudibleSyncClaim(account, nil)
 		return raw, nil
 	}

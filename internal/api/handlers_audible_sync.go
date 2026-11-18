@@ -198,7 +198,7 @@ func (a *API) handleBridgeProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 // audibleSyncClaim is the params a claim of account's audible.sync answers
-// (bridge.Service.AudibleSyncParams): the account's titles to sync as they are
+// (bridge.Service.ClaimAudibleSync): the account's titles to sync as they are
 // now (server#303: the queued job names the account alone), the last ones
 // left out past the params' bound, which is logged.
 func (a *API) audibleSyncClaim(ctx context.Context, account string) (json.RawMessage, error) {

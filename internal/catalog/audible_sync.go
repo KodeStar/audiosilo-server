@@ -110,7 +110,7 @@ func (c *Catalog) AudibleSyncFor(ctx context.Context, account string) (*AudibleS
 
 // AudibleSyncTitles are account's titles that take part in its sync
 // (syncTitleSQL), by ASIN: the titles a claim of its audible.sync answers
-// (bridge.Service.AudibleSyncParams).
+// (bridge.Service.ClaimAudibleSync).
 func (c *Catalog) AudibleSyncTitles(ctx context.Context, account string) ([]bridge.AudibleSyncTitle, error) {
 	return queryRows(ctx, c.db, func(rows *sql.Rows, t *bridge.AudibleSyncTitle) error {
 		return rows.Scan(&t.ASIN, &t.LibraryID, &t.Path, &t.RuntimeS)

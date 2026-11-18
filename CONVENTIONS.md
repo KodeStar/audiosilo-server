@@ -4596,7 +4596,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `bridge.AudibleSyncEvery`, 15 min) at priority -10, none for an account with no synced title
   (`HasAudibleSyncTitles`); queued params `{account}` alone (strict, `audibleSyncParams`, `bridge.AudibleSync`;
   server#303: the queue no longer stores every title four times an hour), and the claim answers
-  `{account, titles:[{asin, library_id, path, runtime_s}]}` as the titles are then (`bridge.Service.AudibleSyncParams`,
+  `{account, titles:[{asin, library_id, path, runtime_s}]}` as the titles are then (`bridge.Service.ClaimAudibleSync`,
   wired to `api.audibleSyncClaim` over `AudibleSyncTitles`; at most 1 MiB, `AudibleSyncClaim` leaves out the last
   titles past it and the server logs it; a claim whose titles can't be read hands nothing out and puts the job back
   unspent, `ReleaseUnsentClaim`; the job as stored keeps `{account}`, as a private feed URL is injected at claim),

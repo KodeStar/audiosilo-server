@@ -54,12 +54,12 @@ type Service struct {
 	// follows the Bridge's heartbeat.
 	ModuleOn func(id string) bool
 
-	// AudibleSyncParams, when set (at wiring, before the first request), is
+	// ClaimAudibleSync, when set (at wiring, before the first request), is
 	// the params a claim of an account's audible.sync answers: the account and
 	// its titles to sync as they are now (AudibleSyncClaim). The queued job
 	// stores the account alone (server#303); with none wired a claim answers
 	// the params as queued.
-	AudibleSyncParams func(ctx context.Context, account string) (json.RawMessage, error)
+	ClaimAudibleSync func(ctx context.Context, account string) (json.RawMessage, error)
 
 	// hb caches the last heartbeat as read (status.go), so GET /server, which
 	// every client calls often, reads the database at most every heartbeatTTL.

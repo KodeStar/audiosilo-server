@@ -95,7 +95,7 @@ func queuePolls(ctx context.Context, d modules.Deps, now time.Time) error {
 // catalog.DueAudibleSyncs, every bridge.AudibleSyncEvery per account with sync
 // on, not paused or refused); an account with no synced title queues nothing
 // until its next turn. The job names the account alone: the Bridge's claim
-// reads its titles as they are then (bridge.Service.AudibleSyncParams).
+// reads its titles as they are then (bridge.Service.ClaimAudibleSync).
 func queueSyncs(ctx context.Context, d modules.Deps, now time.Time) error {
 	due, err := d.Catalog.DueAudibleSyncs(ctx, now, maxPerTick)
 	if err != nil {

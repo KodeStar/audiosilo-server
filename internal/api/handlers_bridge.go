@@ -43,7 +43,7 @@ func (a *API) SetBridge(b *bridge.Service) {
 		a.log.Warn("expire private podcast requests failed", "err", err)
 	}
 	b.OnTransition = func(ctx context.Context, job bridge.Job, _ string) { a.notifyBridgeJob(ctx, &job) }
-	b.AudibleSyncParams = a.audibleSyncClaim
+	b.ClaimAudibleSync = a.audibleSyncClaim
 	b.OnEnded = func(ctx context.Context, job bridge.Job) {
 		if bridge.IsPodcast(job.Kind) {
 			if err := a.cat.FoldPodcastJob(ctx, job); err != nil {

@@ -734,7 +734,7 @@ func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job,
 // audible.sync its titles (fillAudibleSync) outside the podcast secrets' lock.
 func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
 	j, err := s.claimSecret(ctx, token, kinds, minPriority)
-	if err == nil && j != nil && j.Kind == KindAudibleSync && s.AudibleSyncParams != nil {
+	if err == nil && j != nil && j.Kind == KindAudibleSync && s.ClaimAudibleSync != nil {
 		return s.fillAudibleSync(ctx, j)
 	}
 	return j, err
