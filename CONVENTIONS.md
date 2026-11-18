@@ -3210,6 +3210,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   can announce it. `List` returns its
   own `next_before` (it reads one row past the page). Cancel (`POST
   /admin/bridge/jobs/{id}/cancel`) ends a queued or parked job at once, else sets `cancel_requested`.
+  A job of any kind whose stored params can't be read (a damaged row, not JSON) ends at its first claim,
+  "The server could not read this job's options." (an audible.sync or a podcast.subscribe names what it
+  lost), and the claim goes on to the job behind it (`claimPriority`, `endUnfillableClaim`: one warning
+  with its kind, never an empty 200 the Bridge would take again); console and listener responses
+  (`RedactedJob`) answer such params as null with `params_unreadable` (progress and result as null),
+  logged once per row per process (`logUnreadableJobs`).
   `GET /bridge/libraries/{id}/book[?path=]` gives an INDEXED book's files with the size and mtime the
   server sees now (a single-file book, which has no file rows, is listed as its own file; no path: the
   first whole book of the library's first five by title, the mapping check's sample; 404 `no_book`; never an
@@ -3462,8 +3468,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   requester's account, `requested_by` NULL: `lostPrivateRequests`, server#179), and deleting a library keeps only
   the URLs of open subscribes (`bridge.PruneSecrets`, under Subscribe's lock, run to the end). A subscribe
   whose stored params can't be read (a damaged row; `lostPrivateRequests` passes it by) ends at its first
-  claim, "The server could not read which feed this subscription is for.", and the claim goes on to the job
-  behind it (`claimPriority`, `endUnfillableClaim`: one warning, never a 500), as audible.sync's does. Podcast
+  claim, "The server could not read which feed this subscription is for.", as any job's does (see the job
+  queue above). Podcast
   errors, progress and results are redacted before storage; their notifications carry codes and show names
   only (see Backups, audit log, notifications: `podcast_feed_failing`). The module scheduler
   folds ended outcomes idempotently, wakes on job endings and sweeps every minute, then queues

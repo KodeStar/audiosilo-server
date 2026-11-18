@@ -445,7 +445,8 @@ type Job struct {
 	FinishedAt      *string    `json:"finished_at"`
 	// ParamsUnreadable marks a job whose stored params are not JSON (a damaged
 	// row), answered as params null by console and listener responses
-	// (RedactedJob), so one such row never blanks a whole job list.
+	// (RedactedJob), so one such row never blanks a whole job list; a claim
+	// ends such a job (claimPriority).
 	ParamsUnreadable bool `json:"params_unreadable,omitempty"`
 }
 
@@ -1321,7 +1322,8 @@ func (s *Service) failUnsentClaim(ctx context.Context, claim *Job, reason string
 }
 
 // endUnfillableClaim ends claim, a job no claim could fill now (an
-// audible.sync, fillAudibleSync, or a podcast.subscribe, claimPriority), with
+// audible.sync, fillAudibleSync, or any job whose params can't be read,
+// claimPriority), with
 // reason (failUnsentClaim) and logs its read error (readErr) at warn with msg
 // and attrs, once it has ended. A settle that fails leaves the claim to its
 // lease and answers both errors, so the claim's own error reports them.

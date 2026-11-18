@@ -811,7 +811,7 @@ func TestBridgeTokenCheckFailureIsNotUnauthorized(t *testing.T) {
 // console's job list or its detail (encoding the raw params failed after the
 // 200, an empty body): the job is answered with params null and
 // params_unreadable, its neighbours as they are, and the log names the row once
-// however often the console polls.
+// however often the console polls. A claim ends it rather than answering it.
 func TestAdminBridgeJobsUnreadableParams(t *testing.T) {
 	t.Parallel()
 	e, logs := newTestEnv(t), &syncBuffer{}
@@ -850,5 +850,17 @@ func TestAdminBridgeJobsUnreadableParams(t *testing.T) {
 	}
 	if n := strings.Count(logs.String(), "stored params are not JSON"); n != 1 {
 		t.Fatalf("logged %d times, want once:\n%s", n, logs.String())
+	}
+	// The Bridge's claim never answers it (an empty 200 it would take again):
+	// the claim ends it and hands out the job behind it.
+	resp, body := b.do(t, "GET", "/api/v1/bridge/jobs/next?wait=0", b.bridgeTok, "")
+	var claimed job
+	decodeInto(t, body, &claimed)
+	if resp.StatusCode != http.StatusOK || claimed.ID != fine.ID {
+		t.Fatalf("claim = %d %s, want the job behind the damaged one", resp.StatusCode, body)
+	}
+	if stored, err := b.api.bridge.Job(context.Background(), damaged.ID); err != nil || stored.State != bridge.StateFailed ||
+		stored.Error != "The server could not read this job's options." {
+		t.Fatalf("damaged job = %+v, %v; want it ended at its claim", stored, err)
 	}
 }

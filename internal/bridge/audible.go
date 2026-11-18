@@ -567,7 +567,7 @@ const syncTitlesUnread = "The server could not read this account's titles."
 
 // syncParamsUnread is the error of an audible.sync ended because the params
 // stored when it was queued can't be read, so no claim could ever fill it
-// (fillAudibleSync).
+// (claimPriority when they aren't JSON, fillAudibleSync when they name no account).
 const syncParamsUnread = "The server could not read which Audible account this sync is for."
 
 // syncFill counts the claims in a row that failed to read the titles of one
