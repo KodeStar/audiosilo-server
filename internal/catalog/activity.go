@@ -871,7 +871,7 @@ func (c *Catalog) finishedIn(ctx context.Context, userID int64, from, to time.Ti
 func (c *Catalog) activityFunnel(ctx context.Context, out *Activity, from, to time.Time) error {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT position, duration, finished FROM progress WHERE updated_at >= ? AND updated_at < ? AND `+progressInBookLibrary,
-		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339))
+		formatSessionTime(from), formatSessionTime(to)) // updated_at's own form (server#224)
 	if err != nil {
 		return err
 	}

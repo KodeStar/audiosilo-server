@@ -117,10 +117,10 @@ func TestJoinDurableState(t *testing.T) {
 		version  int64
 	}{
 		// Disc 1's save is the newer, but a join keeps the furthest (unlike a move).
-		{"furthest disc wins over the newer save", ann, 130, false, "2026-01-02T10:00:00Z", 4},
-		{"a finished disc is its end", bob, 100, false, "2026-01-03T10:00:00Z", 3},
-		{"the last disc finished finishes the book", cat, 450, true, "2026-01-04T10:00:00Z", 3},
-		{"the joined book's own progress counts", dan, 260, false, "2026-01-06T10:00:00Z", 4},
+		{"furthest disc wins over the newer save", ann, 130, false, "2026-01-02T10:00:00.000Z", 4},
+		{"a finished disc is its end", bob, 100, false, "2026-01-03T10:00:00.000Z", 3},
+		{"the last disc finished finishes the book", cat, 450, true, "2026-01-04T10:00:00.000Z", 3},
+		{"the joined book's own progress counts", dan, 260, false, "2026-01-06T10:00:00.000Z", 4},
 	} {
 		p, err := c.GetProgress(ctx, tc.user, ref(into))
 		if err != nil || p == nil {

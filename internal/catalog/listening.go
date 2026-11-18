@@ -170,10 +170,17 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 // behaves exactly as before (last-write-wins, finished included).
 func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, in Progress) (*Progress, error) {
 	// Distrust an unparseable or far-future client timestamp (see
-	// plausibleUpdatedAt) and substitute server time.
-	if !plausibleUpdatedAt(in.UpdatedAt, c.now()) {
-		in.UpdatedAt = c.ts()
+	// plausibleUpdatedAt) and substitute server time. Either is stored as
+	// fixed-width UTC milliseconds (formatSessionTime), as every other progress
+	// write stamps it, so a text compare of updated_at (the Activity funnel's
+	// period bounds, a move's merge) orders a save sent with an offset or
+	// another precision rightly (server#224).
+	now := c.now()
+	saved, err := time.Parse(time.RFC3339, in.UpdatedAt)
+	if err != nil || !plausibleUpdatedAt(in.UpdatedAt, now) {
+		saved = now
 	}
+	in.UpdatedAt = formatSessionTime(saved)
 	if in.PlaybackSpeed <= 0 {
 		in.PlaybackSpeed = 1.0
 	}
@@ -183,14 +190,10 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 	// the save's own time (already checked by plausibleUpdatedAt), so a finish
 	// replayed from an offline queue is dated when it happened, normalized to
 	// RFC3339 UTC to the second (fixed width, so they compare as strings).
-	now := c.now()
-	stamp := now.UTC().Format(time.RFC3339)
-	if t, err := time.Parse(time.RFC3339, in.UpdatedAt); err == nil {
-		stamp = t.UTC().Format(time.RFC3339)
-	}
+	stamp := saved.UTC().Format(time.RFC3339)
 	at := finishChangeStamp(in.UpdatedAt, now) // the event's time, and finish_changed_at's
 	var out *Progress
-	err := c.db.WithUserStateTx(ctx, "SaveProgress", func(tx *sql.Tx) error {
+	err = c.db.WithUserStateTx(ctx, "SaveProgress", func(tx *sql.Tx) error {
 		existing, err := getProgress(ctx, tx, userID, in.Ref)
 		if err != nil {
 			return err

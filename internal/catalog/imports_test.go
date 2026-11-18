@@ -372,7 +372,7 @@ func TestReimportReplaces(t *testing.T) {
 func TestReimportRestoresProgressExactly(t *testing.T) {
 	t.Parallel()
 	f := newImportFixture(t)
-	own := day(2, 12).Format(time.RFC3339)
+	own := FormatStamp(day(2, 12)) // as a save stores it
 	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.other, Position: 600, Duration: 3600,
 		UpdatedAt: own}); err != nil {
 		t.Fatal(err)
