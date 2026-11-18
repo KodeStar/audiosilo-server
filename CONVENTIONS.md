@@ -3969,7 +3969,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `feed_secret_missing` is announced at once without counting (and sets the show's
   `status.secret_missing` until a check succeeds, so a client can say "follow it again by its address";
   server#219); once announced, a later `gone` or lost secret (each stops the feed for good) is announced
-  again when the notice said another code (`podcast_feed_state.failing_code`, `0083`); a feed at `gone`
+  again when the notice said another code (`podcast_feed_state.failing_code`, `0083`, whose backfill gives an
+  announced feed its last code and marks every feed sitting at `gone` announced with it); a feed at `gone`
   stays there whatever a later check fails with (`error_code` and the empty `next_poll_at` keep the
   scheduled polls stopped: only a success brings it back); another failure
   (`bridge_lost`, `write_failed`, an
