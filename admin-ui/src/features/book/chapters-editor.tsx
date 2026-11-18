@@ -25,6 +25,7 @@ import { LeaveGuard } from '@/components/leave-guard';
 import { Button } from '@/components/ui/button';
 import { FormError } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import { refKey } from '@/lib/book-route';
 import { errorMessage } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -163,10 +164,11 @@ export function ChaptersEditor({
   // (a view of the page starts none, so browsing the console pushes no
   // listener's copy out of the cache). A good answer becomes the page unless
   // the page changed meanwhile (a save's reply is newer); a failed one is let go.
-  const warmed = useRef(false);
+  const warmed = useRef<string>(undefined);
   useEffect(() => {
-    if (warmed.current || remuxWaiting.size === 0) return;
-    warmed.current = true;
+    const book = refKey(b);
+    if (warmed.current === book || remuxWaiting.size === 0) return;
+    warmed.current = book;
     const key = keys.book(b.library_id, b.path);
     const asked = qc.getQueryState(key)?.dataUpdatedAt;
     api
@@ -175,7 +177,7 @@ export function ChaptersEditor({
         if (qc.getQueryState(key)?.dataUpdatedAt === asked) qc.setQueryData(key, d);
       })
       .catch(() => {});
-  }, [remuxWaiting, b.library_id, b.path, qc]);
+  }, [remuxWaiting, b, qc]);
 
   return (
     <div className="flex flex-col gap-3.5">
