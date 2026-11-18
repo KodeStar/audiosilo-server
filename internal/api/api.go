@@ -192,7 +192,7 @@ type API struct {
 	transcodeSem chan struct{}
 	// transcodeHolds are the slots held by asks with a token, by ask, so a
 	// repeat ask takes its earlier one's slot over (transcode_slots.go);
-	// guarded by transcodeMu, nil until the first.
+	// guarded by transcodeMu.
 	transcodeMu    sync.Mutex
 	transcodeHolds map[transcodeAsk]*transcodeHold
 	// remux is the cache of Matroska files holding MP3 copied into plain MP3
@@ -316,6 +316,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		mediaLimiter:   newBucketLimiter(limits.Media),
 		castKeepEvery:  auth.CastTouchInterval,
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
+		transcodeHolds: make(map[transcodeAsk]*transcodeHold),
 		remuxWait:      remuxColdWait,
 		remuxLongWait:  remuxDownloadWait,
 		renditionWait:  remuxDownloadWait,

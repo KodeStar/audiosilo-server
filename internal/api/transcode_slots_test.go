@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func slotRequest(method string, cred auth.Credential) *http.Request {
 
 // slotAPI is an API with n transcode slots, every one but free taken.
 func slotAPI(n, free int) *API {
-	a := &API{transcodeSem: make(chan struct{}, n)}
+	a := &API{transcodeSem: make(chan struct{}, n), transcodeHolds: make(map[transcodeAsk]*transcodeHold)}
 	for range n - free {
 		a.transcodeSem <- struct{}{}
 	}
@@ -122,19 +123,28 @@ func TestTranscodeOtherAsksCountSeparately(t *testing.T) {
 	}
 }
 
-// TestTranscodeUnkeyedAsksNeverTakeOver: a HEAD (it starts no ffmpeg) and an
-// ask with no token take a free slot only: they never end a same ask's
-// transcode, and are refused with none free.
+// TestTranscodeUnkeyedAsksNeverTakeOver: a HEAD (it starts no ffmpeg) takes
+// no slot, told only whether a GET would get one, and an ask with no token
+// takes a free slot only: neither ends a same ask's transcode, and the
+// tokenless ask is refused with none free.
 func TestTranscodeUnkeyedAsksNeverTakeOver(t *testing.T) {
 	t.Parallel()
 	ask := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka"}
 	a := slotAPI(1, 1)
 	_, r := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
-	if h, _ := a.takeTranscodeSlot(slotRequest(http.MethodHead, auth.Credential{ID: 7}), ask); h != nil {
-		t.Fatal("a HEAD took over a slot")
+	head, _ := a.takeTranscodeSlot(slotRequest(http.MethodHead, auth.Credential{ID: 7}), ask)
+	if head == nil {
+		t.Fatal("a HEAD of the held ask was told busy: a GET would take its slot over")
 	}
 	if r.Context().Err() != nil {
 		t.Fatal("a HEAD ended the holder's transcode")
+	}
+	if endTaken(a, head) || len(a.transcodeSem) != 1 || len(a.transcodeHolds) != 1 {
+		t.Fatal("a HEAD's end let go of a slot it never held")
+	}
+	other := transcodeAsk{token: 8, lib: 1, rel: "Book/01.mka"}
+	if h, _ := a.takeTranscodeSlot(slotRequest(http.MethodHead, auth.Credential{ID: 8}), other); h != nil {
+		t.Fatal("a HEAD of another ask was told a slot is free with none")
 	}
 	b := slotAPI(1, 1)
 	none := transcodeAsk{lib: 1, rel: "Book/01.mka"}
@@ -164,7 +174,12 @@ func TestStreamTranscodeRepeatAsk(t *testing.T) {
 	runs := filepath.Join(dir, "runs")
 	ffmpeg := filepath.Join(dir, "ffmpeg")
 	script := "#!/bin/sh\necho run >> '" + runs + "'\nexec cat /dev/zero\n"
-	if err := os.WriteFile(ffmpeg, []byte(script), 0o755); err != nil {
+	// Written under ForkLock: a parallel test's fork must not inherit its open
+	// write descriptor, or exec fails with ETXTBSY (golang/go#22315).
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(ffmpeg, []byte(script), 0o755)
+	syscall.ForkLock.RUnlock()
+	if err != nil {
 		t.Fatal(err)
 	}
 	e.api.ffmpeg = ffmpeg
@@ -195,9 +210,8 @@ func TestStreamTranscodeRepeatAsk(t *testing.T) {
 		return resp
 	}
 	status := func(method, path, token string) int {
-		resp := open(method, path, token)
-		_ = resp.Body.Close()
-		return resp.StatusCode
+		t.Helper()
+		return e.status(t, method, path, token, "")
 	}
 	readSome := func(name string, resp *http.Response) {
 		t.Helper()

@@ -21,40 +21,44 @@ type transcodeAsk struct {
 	download bool
 }
 
-// transcodeHold is one transcode slot an ask holds.
+// transcodeHold is one transcode slot an ask holds, or a HEAD's answer that
+// one is free (end nil: it holds none).
 type transcodeHold struct {
 	ask transcodeAsk
 	// end ends the holder's request (and its ffmpeg with it).
 	end context.CancelFunc
-	// keyed: in transcodeHolds, for a same ask to take over. takenOver: a
-	// same ask took the slot. Both guarded by transcodeMu.
-	keyed, takenOver bool
-}
-
-// transcodeStart is r's ?t= start in seconds (0 when absent or not a number).
-func transcodeStart(r *http.Request) float64 {
-	start, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
-	return start
+	// keyed: in transcodeHolds, for a same ask to take over (the slot is
+	// another's once the map holds another hold for its ask).
+	keyed bool
 }
 
 // transcodeAskOf is r's ask for the transcode of rel in library lib.
 func transcodeAskOf(r *http.Request, lib int64, rel string) transcodeAsk {
+	q := r.URL.Query()
+	start, _ := strconv.ParseFloat(q.Get("t"), 64)
 	return transcodeAsk{
 		token:    credentialFrom(r.Context()).ID,
 		lib:      lib,
 		rel:      rel,
-		start:    transcodeStart(r),
-		download: r.URL.Query().Get("download") == "1",
+		start:    start,
+		download: q.Get("download") == "1",
 	}
 }
 
 // takeTranscodeSlot takes a transcode slot for ask: the one a same ask holds
 // (ending that ask's request, whose slot it now is), else a free one. It
-// returns nil when every slot is busy, else the hold and r with a context a
-// later takeover ends. A HEAD, which starts no ffmpeg, and an ask with no
-// token take a free slot only, and are never taken over.
+// returns nil when no slot is free for it, else the hold and r with a context
+// a later takeover ends. An ask with no token takes a free slot only, and is
+// never taken over. A HEAD, which starts no ffmpeg, takes none: it gets a
+// hold of no slot when a GET would get one (transcodeSlotFree).
 func (a *API) takeTranscodeSlot(r *http.Request, ask transcodeAsk) (*transcodeHold, *http.Request) {
-	keyed := ask.token != 0 && r.Method != http.MethodHead
+	if r.Method == http.MethodHead {
+		if !a.transcodeSlotFree(ask) {
+			return nil, r
+		}
+		return &transcodeHold{ask: ask}, r
+	}
+	keyed := ask.token != 0
 	a.transcodeMu.Lock()
 	defer a.transcodeMu.Unlock()
 	prev := a.transcodeHolds[ask]
@@ -69,11 +73,7 @@ func (a *API) takeTranscodeSlot(r *http.Request, ask transcodeAsk) (*transcodeHo
 	h := &transcodeHold{ask: ask, end: end, keyed: keyed}
 	if keyed {
 		if prev != nil {
-			prev.takenOver = true
 			prev.end()
-		}
-		if a.transcodeHolds == nil {
-			a.transcodeHolds = make(map[transcodeAsk]*transcodeHold)
 		}
 		a.transcodeHolds[ask] = h
 	}
@@ -92,14 +92,18 @@ func (a *API) transcodeSlotFree(ask transcodeAsk) bool {
 	return len(a.transcodeSem) < cap(a.transcodeSem)
 }
 
-// endTranscode lets go of h's slot, once its request is done with it. One a
-// later same ask took over is that ask's now: the request is aborted instead
-// (http.ErrAbortHandler), so its client sees a broken stream, never one that
-// ended (which a player would take for the file's end).
+// endTranscode lets go of h's slot, once its request is done with it (nil, or
+// a HEAD's hold of none, holds nothing). One a later same ask took over is
+// that ask's now: the request is aborted instead (http.ErrAbortHandler), so
+// its client sees a broken stream, never one that ended (which a player would
+// take for the file's end).
 func (a *API) endTranscode(h *transcodeHold) {
+	if h == nil || h.end == nil {
+		return
+	}
 	h.end()
 	a.transcodeMu.Lock()
-	taken := h.takenOver
+	taken := h.keyed && a.transcodeHolds[h.ask] != h
 	if !taken {
 		if h.keyed {
 			delete(a.transcodeHolds, h.ask)
