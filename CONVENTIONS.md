@@ -1537,7 +1537,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestIndexPathMovesEveryListenersFolderFavourite`).
 - **The re-key (server#210, `catalog/rekey.go`, `0084`)**: rows a client stored under a path no book
   has, but the book path rule now reads at a book, move there: `RekeyPathState` once per `pathKeysVersion`
-  at the start (after `KeyPaths`, with a progress line every 5 s, `launcher.startProgress`; recorded in
+  at the start (after `KeyPaths` and the config's libraries' sync, before the scanner starts, with a progress line every 5 s, `launcher.startProgress`; recorded in
   `server_state('path_rekey')` once it has been over every path, with the paths whose move failed in
   `server_state('path_rekey_failed')`, so a later start tries only those again, each named in a
   `path_rekey retried` line, and one path that keeps failing never costs every start the whole run; a

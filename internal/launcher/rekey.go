@@ -67,17 +67,22 @@ func rekeyAtStart(ctx context.Context, cat *catalog.Catalog, answers func(catalo
 // one probe timeout for them all, and an empty folder with books indexed under
 // it, an unmounted share, does not answer), made on the first question only (a
 // start with nothing to re-key asks none). With the libraries or the books'
-// counts unread, none answers: the re-key waits for the next start.
-func rootAnswers(ctx context.Context, cat *catalog.Catalog, scanner *library.Scanner) func(catalog.Library) bool {
+// counts unread (logged), none answers: the re-key waits for the next start.
+// Only the books libraries' folders are looked at (the re-key's).
+func rootAnswers(ctx context.Context, cat *catalog.Catalog, scanner *library.Scanner,
+	log *slog.Logger) func(catalog.Library) bool {
 	roots := sync.OnceValue(func() map[int64]bool {
 		libs, err := cat.ListLibraries(ctx)
 		if err != nil {
+			log.Warn("re-keying listening state: reading the libraries failed", "err", err)
 			return nil
 		}
 		counts, err := cat.CountBooksByLibrary(ctx)
 		if err != nil {
+			log.Warn("re-keying listening state: counting the libraries' books failed", "err", err)
 			return nil
 		}
+		libs = slices.DeleteFunc(libs, func(l catalog.Library) bool { return l.Kind != catalog.KindBooks })
 		return scanner.RootsAvailable(libs, counts)
 	})
 	return func(lib catalog.Library) bool { return roots()[lib.ID] }

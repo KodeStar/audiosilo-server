@@ -182,7 +182,7 @@ func TestRekeyAtStartSkipsUnansweringRoot(t *testing.T) {
 	}
 	var out bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&out, nil))
-	rekeyAtStart(ctx, cat, rootAnswers(ctx, cat, library.NewScanner(cat, "", discardLog())), log)
+	rekeyAtStart(ctx, cat, rootAnswers(ctx, cat, library.NewScanner(cat, "", discardLog()), log), log)
 	if got := out.String(); !strings.Contains(got, "path_rekey skipped a library") || marks(track) != 1 {
 		t.Fatalf("with the folder not answering, %d bookmarks left on the track; logged:\n%s", marks(track), got)
 	}
@@ -191,7 +191,7 @@ func TestRekeyAtStartSkipsUnansweringRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A new start, a new scanner (its root checks are cached a while).
-	rekeyAtStart(ctx, cat, rootAnswers(ctx, cat, library.NewScanner(cat, "", discardLog())), log)
+	rekeyAtStart(ctx, cat, rootAnswers(ctx, cat, library.NewScanner(cat, "", discardLog()), log), log)
 	if got := out.String(); !strings.Contains(got, "path_rekey retried a library") || marks(book) != 1 || marks(track) != 0 {
 		t.Fatalf("with the folder back, %d bookmarks on the book; logged:\n%s", marks(book), got)
 	}
