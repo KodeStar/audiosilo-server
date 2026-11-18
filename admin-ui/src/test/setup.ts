@@ -37,6 +37,10 @@ globalThis.PointerEvent ??= class PointerEvent extends MouseEvent {
   }
 } as unknown as typeof PointerEvent;
 window.scrollTo = () => {};
+// jsdom plays no media: an <audio> let go of (the chapter editor's) is paused
+// and loaded again with no source, which it only logs as not implemented.
+HTMLMediaElement.prototype.load = function () {};
+HTMLMediaElement.prototype.pause = function () {};
 window.matchMedia ??= ((query: string) => ({
   matches: false,
   media: query,

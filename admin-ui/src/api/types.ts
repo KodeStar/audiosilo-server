@@ -1911,7 +1911,7 @@ export interface AdminFile {
   codec: string;
   size: number;
   bitrate: number;
-  /** media.DirectPlayable for the file: false for one no browser plays as stored (Opus or FLAC in .mka). */
+  /** media.DirectPlayable for the file: false for one no browser plays as stored (Opus or FLAC in .mka, ALAC, AC-3). */
   direct_playable: boolean;
 }
 

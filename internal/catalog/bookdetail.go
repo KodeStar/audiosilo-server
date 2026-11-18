@@ -93,8 +93,8 @@ type AdminFile struct {
 	Bitrate  int64   `json:"bitrate"`
 	// DirectPlayable is media.DirectPlayable for the file (the API adds an
 	// MP3 in .mka while it remuxes them): false for one a browser can't play
-	// as stored (Opus or FLAC in .mka), which the console's chapter editor
-	// plays through ?transcode=1.
+	// as stored (Opus or FLAC in .mka, ALAC, AC-3), which the console's
+	// chapter editor plays through ?transcode=1.
 	DirectPlayable bool `json:"direct_playable"`
 }
 

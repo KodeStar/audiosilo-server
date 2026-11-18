@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -443,13 +443,21 @@ const PREVIEW_MS = 5000;
 const RESTREAM_MS = 250;
 
 /**
+ * How far before a file's end a transcode is ever asked for (seconds): one asked
+ * for at the very end leaves ffmpeg no audio to send, which the <audio> reads as
+ * an error (the player's TRANSCODE_TAIL_S).
+ */
+const TRANSCODE_TAIL_S = 1;
+
+/**
  * The editor's player: the chosen row's file, streamed with a book media token
  * (never the session's), at the row's start. Nudges by a second or a tenth, plays
  * five seconds from the start, and sets the row's start (or adds a chapter) at
  * the playhead. Times shown are whole-book. A file no browser plays as stored
- * (Opus or FLAC in .mka) is transcoded when the server can (server#410): the
- * stream starts where the playhead is, so a move of it asks again from there (a
- * transcode can't be seeked), the audio's own clock counting from that start.
+ * (direct_playable false: Opus or FLAC in .mka, ALAC, AC-3) is transcoded when
+ * the server can (server#410): the stream starts where the playhead is, so a move
+ * of it asks again from there (a transcode can't be seeked), the audio's own
+ * clock counting from that start.
  */
 function Scrubber({
   libraryId,
@@ -491,20 +499,46 @@ function Scrubber({
   const target = row ? toFileTime(spans, row.start) : undefined;
   const span = target?.span;
   const offset = target?.offset ?? 0;
+  const length = span ? span.end - span.start : 0;
   const transcoded = !!span && !span.playable && canTranscode;
   // A transcode's start: the row's, until the playhead moves (for this row:
-  // `at`); `n` makes each move a new <audio>, even to the same start.
+  // `at`, or `kept`, the start just set at the playhead, where it already
+  // plays); `n` makes each move a new <audio>, even to the same start. Never in
+  // the file's last second (TRANSCODE_TAIL_S).
   const at = span ? `${span.path}@${offset}` : '';
-  const [stream, setStream] = useState<{ at: string; from: number; n: number; play: boolean }>();
-  const moved = transcoded && stream?.at === at ? stream : undefined;
-  const from = transcoded ? (moved?.from ?? offset) : 0;
+  const [stream, setStream] = useState<{
+    at: string;
+    kept?: string;
+    from: number;
+    n: number;
+    play: boolean;
+  }>();
+  const moved = transcoded && (stream?.at === at || stream?.kept === at) ? stream : undefined;
+  const from = transcoded
+    ? Math.min(moved?.from ?? offset, roundMs(Math.max(0, length - TRANSCODE_TAIL_S)))
+    : 0;
   const src =
     token.data && span
       ? streamUrl(libraryId, span.path, token.data, transcoded ? from : undefined)
       : undefined;
 
+  // A replaced <audio> (another file, a transcode asked again) or a closed
+  // editor lets go of its stream: a detached element goes on loading until it
+  // is collected, and a transcode's ffmpeg holds one of the server's few
+  // transcode slots until its connection closes.
+  const attach = useCallback((el: HTMLAudioElement | null) => {
+    audio.current = el;
+    if (!el) return;
+    return () => {
+      if (audio.current === el) audio.current = null;
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
+    };
+  }, []);
+
   // A chosen row (or a moved one) puts the playhead at its start. A transcode
-  // starts there: its <audio> is a new one (keyed by its start).
+  // starts there: its stream is asked for from there (src).
   useEffect(() => {
     const a = audio.current;
     if (!a || !src) return;
@@ -526,7 +560,6 @@ function Scrubber({
     [],
   );
 
-  const length = span ? span.end - span.start : 0;
   // Where the audio is, in seconds into the file.
   const now = () => from + (audio.current?.currentTime ?? 0);
   const seek = (s: number) => {
@@ -541,6 +574,8 @@ function Scrubber({
     setPos(to);
     clearTimeout(restream.current);
     restream.current = setTimeout(() => {
+      // Asked for: the seek waits no more (its stream may be the same URL).
+      pending.current = null;
       setStream({ at, from: to, n: (stream?.n ?? 0) + 1, play: !a.paused || previewing.current });
     }, RESTREAM_MS);
   };
@@ -574,6 +609,19 @@ function Scrubber({
     const head = pending.current ?? (audio.current ? now() : pos);
     return toBookTime(span, Math.min(head, length));
   };
+  // A start set (or a chapter added) at the playhead is where a transcode
+  // already plays: it plays on from there (`kept`), not asked for again from
+  // the same moment. Not while a seek waits to be asked for: the stream is from
+  // before it.
+  const atHead = (then: (at: number) => void) => {
+    const t = here();
+    const to = toFileTime(spans, t);
+    if (transcoded && span && to?.span === span && pending.current === null) {
+      const kept = `${span.path}@${to.offset}`;
+      setStream({ at, kept, from, n: moved?.n ?? 0, play: moved?.play ?? false });
+    }
+    then(t);
+  };
   const unavailable = failed || token.isError;
   // The controls wait for a file to play and give up with it.
   const off = !src || unavailable;
@@ -596,8 +644,8 @@ function Scrubber({
       </div>
       {src ? (
         <audio
-          key={transcoded ? `${at}#${moved?.n ?? 0}` : undefined}
-          ref={audio}
+          key={transcoded ? `${span?.path}#${moved?.n ?? 0}` : undefined}
+          ref={attach}
           src={src}
           preload="metadata"
           autoPlay={moved?.play}
@@ -606,12 +654,20 @@ function Scrubber({
           onLoadedMetadata={(e) => {
             setFailed(false);
             reminted.current = false;
-            // A transcode starts where the seek (or the row) asked.
-            if (transcoded) setPos(from);
-            else if (pending.current !== null) e.currentTarget.currentTime = pending.current;
+            // A transcode starts where the seek (or the row) asked; a seek made
+            // since it was asked for waits for its own.
+            if (transcoded) {
+              if (pending.current === null) setPos(from);
+              return;
+            }
+            if (pending.current !== null) e.currentTarget.currentTime = pending.current;
             pending.current = null;
           }}
-          onTimeUpdate={(e) => setPos(from + e.currentTarget.currentTime)}
+          // While a transcode waits to be asked for again, the audio playing on
+          // is not the playhead.
+          onTimeUpdate={(e) => {
+            if (!transcoded || pending.current === null) setPos(from + e.currentTarget.currentTime);
+          }}
           onSeeked={(e) => setPos(from + e.currentTarget.currentTime)}
           onPlay={() => setPlaying(true)}
           onPlaying={() => {
@@ -682,11 +738,11 @@ function Scrubber({
           size="sm"
           disabled={off || !row || row.fixed}
           aria-label={t('book.chapters.edit.setHereLabel', { n })}
-          onClick={() => onSetHere(here())}
+          onClick={() => atHead(onSetHere)}
         >
           {t('book.chapters.edit.setHere')}
         </Button>
-        <Button variant="outline" size="sm" disabled={off} onClick={() => onAddHere(here())}>
+        <Button variant="outline" size="sm" disabled={off} onClick={() => atHead(onAddHere)}>
           <Plus aria-hidden="true" />
           {t('book.chapters.edit.addHere')}
         </Button>

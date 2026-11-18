@@ -267,10 +267,20 @@ describe('the chapter editor', () => {
     // A seek asks for the stream again from there, on a new <audio>.
     await waitFor(() => expect(Number(srcOf().get('t'))).toBe(row + 3.5));
     expect(container.querySelector('audio')).not.toBe(audio);
+    // The replaced one lets go of its stream (its ffmpeg holds a transcode slot).
+    expect(audio.getAttribute('src')).toBeNull();
+    const moved = container.querySelector('audio');
     await user.click(screen.getByRole('button', { name: 'Start chapter 2 at the playhead' }));
     expect(screen.getByRole('textbox', { name: 'Start of chapter 2' })).toHaveValue(
       formatStamp(row + 3.5),
     );
+    // The new start is where the transcode plays: it plays on, not asked for again.
+    expect(container.querySelector('audio')).toBe(moved);
+    expect(Number(srcOf().get('t'))).toBe(row + 3.5);
+
+    // The file's end is never asked for: ffmpeg would have no audio to send.
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '3000' } });
+    await waitFor(() => expect(Number(srcOf().get('t'))).toBe(2999));
   });
 
   it('plays the stored file when the server can’t transcode', async () => {

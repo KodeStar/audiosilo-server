@@ -4573,9 +4573,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   [{path, size, duration_ms}]}`, always); `chapter_source` and the player's `chapters_source` may be `"edited"` (an
   old app shows ordinary chapters). The editor's player streams the chosen row's file with an editor token
   (`POST /cast/token` with `"editor": true`, Cast tokens above), never the session token; a file the book page's
-  `files[].direct_playable` (`media.DirectPlayable`) says no browser plays as stored (Opus or FLAC in .mka) is
-  played through `?transcode=1&t=` when the server has ffmpeg (`capabilities.transcode`), each move of the
-  playhead asking again from there on a new `<audio>` (server#410); the console offers no
+  `files[].direct_playable` (`media.DirectPlayable`) says no browser plays as stored (Opus or FLAC in .mka, ALAC,
+  AC-3) is played through `?transcode=1&t=` when the server has ffmpeg (`capabilities.transcode`), each move of the
+  playhead asking again from there on a new `<audio>` (never from the file's last second, which would leave ffmpeg
+  no audio; a start set at the playhead plays on), the one replaced let go of (its src removed), so its ffmpeg
+  frees its transcode slot (server#410); the console offers no
   Edit chapters in a podcast library (`ChaptersCard` reads the library's kind). A `chapters.detect` job for a book
   whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, `catalog.DetectRefused` from
   the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list
