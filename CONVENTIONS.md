@@ -3993,7 +3993,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`user_identities`: UNIQUE(issuer, subject) and UNIQUE(user_id, issuer), `link_method`
   auto_email|admin|created). The flow (`GET /auth/oidc/start?return=web|admin`, `return` an enum,
   anything else 400; an optional `intent` tag, the web player's own random value for its trip (22 to
-  128 base64url, `validIntent`; a bad one dropped, never a 400), sealed into the flow (`Flow.Intent`), kept
+  128 base64url, `validIntent`; a bad one dropped, never a 400, and so is one the flow cookie the browser
+  still holds carries: a trip abandoned at the provider, its start URL sent again from the history), sealed into the flow (`Flow.Intent`), kept
   through the hop, spent at the callback by the first flow the provider completes for it (a `Replay` of its own,
   `oidcFlow.intents`, so tags never take the flow states' places; a full memory drops it) and joined to the token in the done cookie (`<token>.<tag>`),
   so the finish echoes it as `intent` once, only for the sign-in that flow completed: the player gives a

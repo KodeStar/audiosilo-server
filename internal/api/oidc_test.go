@@ -107,10 +107,11 @@ func (e *oidcEnv) start(t *testing.T, ret string) (*http.Cookie, string) {
 	return e.startQuery(t, "return="+ret)
 }
 
-// startQuery is start with /start's whole query.
-func (e *oidcEnv) startQuery(t *testing.T, query string) (*http.Cookie, string) {
+// startQuery is start with /start's whole query, and the cookies the browser
+// holds.
+func (e *oidcEnv) startQuery(t *testing.T, query string, cookies ...*http.Cookie) (*http.Cookie, string) {
 	t.Helper()
-	resp := e.get(t, oidcStartPath+"?"+query, oidcHost)
+	resp := e.get(t, oidcStartPath+"?"+query, oidcHost, cookies...)
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("start: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
@@ -506,9 +507,9 @@ func TestOIDCIntent(t *testing.T) {
 	e := newOIDCEnv(t, oidcAlice, nil)
 	e.mustUser(t, "alice", "alice@example.org")
 	tag := strings.Repeat("ab12", 16) // the player's 64 hex
-	finishTagged := func(t *testing.T, query string) map[string]any {
+	finishTagged := func(t *testing.T, query string, held ...*http.Cookie) map[string]any {
 		t.Helper()
-		cookie, path := e.startQuery(t, query)
+		cookie, path := e.startQuery(t, query, held...)
 		loc, done := e.callbackDone(t, path, cookie)
 		if loc != oidcPublic+oidcDoneWeb || done == nil {
 			t.Fatalf("landed on %q (cookie %v)", loc, done)
@@ -534,6 +535,18 @@ func TestOIDCIntent(t *testing.T) {
 	if out := finishTagged(t, "return=web&intent="+tag); out["intent"] != nil {
 		t.Fatalf("a reused tag was echoed %v", out["intent"])
 	}
+	// Denied: a trip abandoned at the provider, its start URL sent again from
+	// the history while the browser still holds its flow cookie: untagged.
+	again := strings.Repeat("7a", 32)
+	abandoned, _ := e.startQuery(t, "return=web&intent="+again)
+	if out := finishTagged(t, "return=web&intent="+again, abandoned); out["intent"] != nil {
+		t.Fatalf("an abandoned trip's start sent again was echoed %v", out["intent"])
+	}
+	// Allowed: a new trip's tag beside another trip's flow cookie.
+	fresh := strings.Repeat("8b", 32)
+	if out := finishTagged(t, "return=web&intent="+fresh, abandoned); out["intent"] != fresh {
+		t.Fatalf("a new trip beside an old flow cookie: intent %v", out["intent"])
+	}
 	// Two trips in flight: the one completed echoes its own, never the other's.
 	other := strings.Repeat("cd34", 16)
 	_, _ = e.startQuery(t, "return=web&intent="+strings.Repeat("ef56", 16))
@@ -554,6 +567,26 @@ func TestOIDCIntent(t *testing.T) {
 	resp = e.get(t, oidcStartPath+"?return=web&intent=bad%26hop%3D1", "evil.example")
 	if resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?hop=1&return=web" {
 		t.Fatalf("hop with a bad tag: %q", resp.Header.Get("Location"))
+	}
+}
+
+// TestOIDCIntentPending: a tagged trip that ends waiting for an admin spends
+// its tag, so once the account is there, the same start URL sent again
+// (the history) signs in untagged.
+func TestOIDCIntentPending(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	tag := strings.Repeat("c3", 32)
+	cookie, path := e.startQuery(t, "return=web&intent="+tag)
+	wantResult(t, e.callback(t, path, cookie), oidcPending)
+	e.mustUser(t, "alice", "alice@example.org")
+	cookie, path = e.startQuery(t, "return=web&intent="+tag)
+	loc, done := e.callbackDone(t, path, cookie)
+	if loc != oidcPublic+oidcDoneWeb || done == nil {
+		t.Fatalf("landed on %q (cookie %v)", loc, done)
+	}
+	if resp, out := e.finish(t, done, "web"); resp.StatusCode != 200 || out["intent"] != nil {
+		t.Fatalf("after a pending trip: %d intent %v", resp.StatusCode, out["intent"])
 	}
 }
 

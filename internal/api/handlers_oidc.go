@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -282,25 +283,18 @@ func (a *API) oidcCookieValue(r *http.Request, name string) string {
 	return ""
 }
 
-// validIntent reports whether s can be a player's intent tag: 22 to 128
-// base64url characters (the player sends 64 hex). Anything else is dropped,
-// never an error: the sign-in runs, untagged.
-func validIntent(s string) bool {
-	if len(s) < 22 || len(s) > 128 {
-		return false
-	}
-	for _, c := range []byte(s) {
-		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_'
-		if !ok {
-			return false
-		}
-	}
-	return true
-}
+// intentPattern is a player's intent tag: 22 to 128 base64url characters (the
+// player sends 64 hex).
+var intentPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{22,128}$`)
+
+// validIntent reports whether s can be a player's intent tag (intentPattern).
+// Anything else is dropped, never an error: the sign-in runs, untagged.
+func validIntent(s string) bool { return intentPattern.MatchString(s) }
 
 // handleOIDCStart begins a sign-in (public): ?return=web|admin (400 for
 // anything else) and an optional ?intent= tag (validIntent; a bad one is
-// dropped), sealed into the flow. Off or misconfigured: /connect#oidc=off|unavailable. On
+// dropped, and so is one the flow cookie the browser still holds carries: that
+// trip's start sent again), sealed into the flow. Off or misconfigured: /connect#oidc=off|unavailable. On
 // another host than public_url's, or over plain HTTP for an https public_url,
 // it first sends the browser to this route on public_url (once: ?hop=1), so
 // the flow cookie is set where the provider returns (the tag goes along). Then
@@ -313,9 +307,10 @@ func validIntent(s string) bool {
 // asked again after 5 s): one gone down lands on #oidc=unavailable rather
 // than the browser being sent to it.
 func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
 	// Never the request's own value from here on: the enum's constant.
 	var ret string
-	switch r.URL.Query().Get("return") {
+	switch query.Get("return") {
 	case oidcReturnWeb:
 		ret = oidcReturnWeb
 	case oidcReturnAdmin:
@@ -342,18 +337,26 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	// too: a browser drops a Secure cookie set over plain HTTP, and the flow
 	// would end on "expired". Behind a proxy the scheme isn't ours to know.
 	plain := public.Scheme == "https" && r.TLS == nil && !proxied(r)
-	intent := r.URL.Query().Get("intent")
+	intent := query.Get("intent")
 	if !validIntent(intent) {
 		intent = ""
 	}
-	if (plain || !sameHost(public, r.Host)) && r.URL.Query().Get("hop") == "" {
-		q := url.Values{"return": {ret}, "hop": {"1"}}
+	if (plain || !sameHost(public, r.Host)) && query.Get("hop") == "" {
+		hop := url.Values{"return": {ret}, "hop": {"1"}}
 		if intent != "" {
-			q.Set("intent", intent)
+			hop.Set("intent", intent)
 		}
 		noStore(w)
-		http.Redirect(w, r, a.oidcBase()+oidcStartPath+"?"+q.Encode(), http.StatusFound)
+		http.Redirect(w, r, a.oidcBase()+oidcStartPath+"?"+hop.Encode(), http.StatusFound)
 		return
+	}
+	// The same trip's start sent again (its address from the history, the trip
+	// abandoned at the provider, so its flow cookie is still held and its tag
+	// unspent): the new flow goes untagged, never the abandoned trip's tag.
+	if intent != "" {
+		if prev, err := a.oidc.sealer.Open(a.oidcCookieValue(r, oidcCookie)); err == nil && prev.Intent == intent {
+			intent = ""
+		}
 	}
 	// 32 random bytes each, base64url.
 	f := oidc.Flow{State: oauth2.GenerateVerifier(), Nonce: oauth2.GenerateVerifier(),
