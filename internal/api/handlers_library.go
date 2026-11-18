@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -480,13 +481,29 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	// A folder asked for in another Unicode spelling is listed in the index's
 	// (spelledIn), so the listing's path and its entries' are the paths the
 	// index, and so annotateWithBooks, has. One whose index spelling the caller
-	// can't see is missing, never listed from the disk in the spelling given.
+	// can't see is missing, never listed from the disk in the spelling given;
+	// so is one the disk doesn't spell as given (onDiskAsGiven: a case variant,
+	// on a disk that ignores case, of a folder the caller's rule never named).
 	dir := r.URL.Query().Get("path")
 	if rel := catalog.CleanRelPath(dir); rel != "" {
 		spelled, missing, err := a.spelledIn(r.Context(), lib.ID, allow, rel)
 		if err != nil {
 			a.writeCatalogError(w, err, "resolve path spelling failed", "Could not list the folder.", "library", lib.ID)
 			return
+		}
+		if !missing {
+			given, err := a.onDiskAsGiven(r.Context(), lib, spelled, func() time.Duration { return a.fileWait })
+			switch {
+			case metadata.GaveUp(err):
+				writeShareNotAnswering(w)
+				return
+			case r.Context().Err() != nil:
+				return // the client left: no one to answer
+			case err != nil:
+				a.writeCatalogError(w, err, "check a folder's path failed", "Could not list the folder.", "library", lib.ID)
+				return
+			}
+			missing = !given
 		}
 		if missing {
 			writeError(w, http.StatusNotFound, "directory not found")
@@ -947,7 +964,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	abs, ok := audioFile(w, r, lib, rel, refused, deadline)
+	abs, ok := a.audioFile(w, r, lib, rel, refused, deadline)
 	if !ok {
 		return
 	}
@@ -1011,10 +1028,12 @@ func lookAtSource(w http.ResponseWriter, r *http.Request, abs string, deadline t
 // .env/backup); BrowseFS hides those from listings, and cover art has its own
 // endpoint, so serving them here would be an avenue to exfiltrate arbitrary
 // in-scope files by guessing paths. A refused rel (spelledPath: another
-// spelling of a book outside the caller's scope) is joined and checked the
-// same, then its path is one no file has (noFile), so every form of the stream
-// answers as for a missing file and none opens the refused book's file.
-func audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, refused bool, deadline time.Time) (string, bool) {
+// spelling of a book outside the caller's scope), and one the disk doesn't
+// spell as given (onDiskAsGiven: a case variant, on a disk that ignores case,
+// of a file a share rule spelled that way never named), is joined and checked
+// the same, then its path is one no file has (noFile), so every form of the
+// stream answers as for a missing file and none opens the file it would find.
+func (a *API) audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, refused bool, deadline time.Time) (string, bool) {
 	if !metadata.IsAudio(rel) {
 		writeError(w, http.StatusNotFound, "not an audio file")
 		return "", false
@@ -1028,10 +1047,44 @@ func audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return "", false
 	}
+	if !refused {
+		given, err := a.onDiskAsGiven(r.Context(), lib, rel, func() time.Duration { return waitLeft(deadline) })
+		switch {
+		case metadata.GaveUp(err):
+			writeShareNotAnswering(w)
+			return "", false
+		case r.Context().Err() != nil:
+			return "", false // the client left: no one to answer
+		case err != nil:
+			a.writeCatalogError(w, err, "check a stream's path failed", "Could not load the file.", "library", lib.ID)
+			return "", false
+		}
+		refused = !given
+	}
 	if refused {
 		abs = noFile(abs)
 	}
 	return abs, true
+}
+
+// onDiskAsGiven reports whether rel (cleaned, scope-checked) is on the
+// library's disk as given, byte for byte: a path the index holds as given
+// (catalog.IndexHolds, the scan read it from the listings), else each of its
+// names in its folder's listing (metadata.NamesListed, a.readDir, each listing
+// bounded by wait). Share rules match byte for byte, so a rule spelled in
+// another case than the disk's names nothing there, like a rule naming a
+// missing folder; but a disk that ignores case (macOS's, a Windows or SMB
+// share) opens "émile zola/x.m4b" as "Émile Zola/x.m4b", a book that rule
+// never named. A route that opens rel itself (the stream, /fs) answers a path
+// that isn't there as given as missing. err is a failed index lookup, a
+// listing given up on (metadata.GaveUp) or ctx's.
+func (a *API) onDiskAsGiven(ctx context.Context, lib *catalog.Library, rel string, wait func() time.Duration) (bool, error) {
+	if held, err := a.cat.IndexHolds(ctx, lib.ID, rel); err != nil || held {
+		return held, err
+	}
+	return metadata.NamesListed(ctx, lib.Root, rel, nil, func(ctx context.Context, dir string) ([]fs.DirEntry, error) {
+		return a.readDir(ctx, dir, wait())
+	})
 }
 
 // noFile is abs as a path no file has: a NUL byte is in no file name, so every

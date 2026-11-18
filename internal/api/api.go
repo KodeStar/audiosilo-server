@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/metamirror"
 	"github.com/kodestar/audiosilo-server/internal/modules"
 	"github.com/kodestar/audiosilo-server/internal/podcast"
@@ -144,6 +146,10 @@ type API struct {
 	// mountHints is GET /admin/setup's mount hint reader, library.MountHints;
 	// a field so tests can see when it is read.
 	mountHints func(exclude ...string) []string
+	// readDir is the listing the stream and /fs check a path's spelling
+	// against (onDiskAsGiven), metadata.ReadDirBounded; a field so a test on a
+	// disk that tells case apart can list a folder as one that ignores it would.
+	readDir func(ctx context.Context, dir string, timeout time.Duration) ([]fs.DirEntry, error)
 
 	// setupToken, when non-empty, enables the first-run web setup wizard (GET/POST
 	// /setup): the wizard creates the first admin + a library. It is a one-time
@@ -287,6 +293,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		baseCtx:           context.Background(),
 		timeoutDur:        requestTimeout,
 		mountHints:        library.MountHints,
+		readDir:           metadata.ReadDirBounded,
 		dirs:              library.NewDirLister(library.ListDirs, dirListSlots, dirListTimeout),
 		loginLimiter:      newLimiter(10, 15*time.Minute),
 		oidcLimiter:       newLimiter(10, 15*time.Minute),

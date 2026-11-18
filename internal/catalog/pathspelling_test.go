@@ -786,3 +786,36 @@ func TestSpellLooks(t *testing.T) {
 		t.Error("a look was allowed after the allowance's time")
 	}
 }
+
+// TestIndexHolds: a book's path, a folder holding books and a file of a folder
+// book are held as given, byte for byte; their case variants, another Unicode
+// spelling, a file the book doesn't have and a disc folder (no book of its own,
+// left to the listings) are not.
+func TestIndexHolds(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib := seedSpellings(t, c)
+	for _, tc := range []struct {
+		p    string
+		want bool
+	}{
+		{nfcEmile, true},
+		{"Émile Zola", true},
+		{nfcEmile + "/02.mp3", true},
+		{"Auteurs", true},
+		{nestedIn + "/01.m4b", true},
+		{"émile zola/Germinal", false},
+		{"Émile Zola/germinal", false},
+		{nfcEmile + "/02.MP3", false},
+		{"auteurs", false},
+		{nfdEmile, false},
+		{nfcEmile + "/03.mp3", false},
+		{joinedEte + "/CD 1", false},
+		{"Rien", false},
+	} {
+		got, err := c.IndexHolds(ctx, lib, tc.p)
+		if err != nil || got != tc.want {
+			t.Errorf("IndexHolds(%+q) = %v %v, want %v", tc.p, got, err, tc.want)
+		}
+	}
+}

@@ -74,7 +74,7 @@ func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalo
 	if !a.renditionKindAllowed(w, lib, kind) {
 		return
 	}
-	abs, ok := audioFile(w, r, lib, rel, refused, deadline)
+	abs, ok := a.audioFile(w, r, lib, rel, refused, deadline)
 	if !ok {
 		return
 	}

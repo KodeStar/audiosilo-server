@@ -369,17 +369,26 @@ func (c *Catalog) ownEntry(ctx context.Context, libraryID int64, p string, other
 // ignores the spelling lists the name as it was written, so another spelling
 // that finds it is not. A listing that fails or is given up on counts as not.
 func spelledOnDisk(ctx context.Context, root, p string) bool {
-	dir := root
-	for _, name := range strings.Split(p, "/") {
-		if HasOtherSpelling(name) {
-			entries, err := metadata.ReadDirBounded(ctx, dir, spellLookWait)
-			if err != nil || !slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == name }) {
-				return false
-			}
-		}
-		dir = filepath.Join(dir, name)
+	listed, err := metadata.NamesListed(ctx, root, p, HasOtherSpelling, func(ctx context.Context, dir string) ([]fs.DirEntry, error) {
+		return metadata.ReadDirBounded(ctx, dir, spellLookWait)
+	})
+	return listed && err == nil
+}
+
+// IndexHolds reports whether the index holds p (a cleaned library-relative
+// path) byte for byte: a book's path, a folder holding books, or a file of a
+// folder book. The scan spells every one of them as its folder lists it, so
+// the disk has p as given, as of the last read: a route that opens p itself
+// looks at the listings (metadata.NamesListed) only for a path it doesn't hold.
+func (c *Catalog) IndexHolds(ctx context.Context, libraryID int64, p string) (bool, error) {
+	holding, err := c.FoldersHoldingBooks(ctx, libraryID, []string{p})
+	if err != nil || holding[p] {
+		return holding[p], err
 	}
-	return true
+	if _, _, err := c.bookHolding(ctx, libraryID, p, true); !errors.Is(err, ErrNotFound) {
+		return err == nil, err
+	}
+	return false, nil
 }
 
 // spellMatch gathers the indexed paths one of Spelling's steps finds reading

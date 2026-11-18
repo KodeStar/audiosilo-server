@@ -999,7 +999,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   recorded) is a look given up on too, 503 `share_not_answering`. The on-demand index takes a path only in its on-disk
   spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a
   case-insensitive filesystem a case variant opens the same folder, and indexing it would add a
-  duplicate book everyone sees, so it is a 404. `stream` serves an
+  duplicate book everyone sees, so it is a 404; the stream and `/fs` take a path only as the disk spells
+  it too (Path spelling, case). `stream` serves an
   audio file path directly, or transcodes it with `?transcode=1` (see below), or with
   `?rendition=watch` serves its watch rendition whatever else the query says (see Watch renditions). The
   `/fs` view lists **audio files and directories only** (non-audio like `.jpg`/
@@ -1170,6 +1171,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ignores the spelling, macOS's or a share's, the refused book's file), opens none: `audioFile`
   joins it as usual, then names no file (`noFile`), so its download, transcode, remux and rendition
   forms each answer as for a missing file; `/fs` "directory not found". A failed lookup is a 500 (a timed-out one a 503), never the spelling given.
+  Case is no spelling: share rules and paths compare byte for byte, case included, so a rule spelled in
+  another case than the disk's names nothing there, as a rule naming a missing folder does. A disk that
+  ignores case (macOS's, a Windows or SMB share) still opens such a path as the folder it has, so the two
+  routes that open the path given, the stream in every form (`audioFile`) and `/fs`, take it only when the
+  disk has it as given (`onDiskAsGiven`: a path the index holds byte for byte, `catalog.IndexHolds`, else
+  each name in its folder's listing, `metadata.NamesListed` through `API.readDir`), else answer as for a
+  missing path (a listing given up on: 503 `share_not_answering`); every other route reads the index,
+  which holds the disk's spelling only. `TestCaseVariantRoutes` compares every route on a temp dir that
+  ignores case; `TestCaseVariantDiskRoutes` covers the stream and `/fs` on any disk (`readDir` lists as
+  one that ignores case would).
   Unchanged on purpose: `CleanRelPath` and share rules stay byte-exact; the on-demand index takes
   only the on-disk spelling (`dirPresent`), so another spelling of an unindexed book stays 404; the
   admin's folder-override route, the admin's edit of a person's progress (`exactPath`: the row

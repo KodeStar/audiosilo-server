@@ -1,11 +1,15 @@
 package metadata
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -134,4 +138,29 @@ func LstatBounded(ctx context.Context, path string, timeout time.Duration) (fs.F
 // ReadDirBounded is os.ReadDir of path as a Bounded call.
 func ReadDirBounded(ctx context.Context, path string, timeout time.Duration) ([]fs.DirEntry, error) {
 	return bounded(ctx, path, timeout, true, func() ([]fs.DirEntry, error) { return os.ReadDir(path) }, nil)
+}
+
+// NamesListed reports whether each name of rel (a slash path under root) that
+// need admits (nil: every name) is in its folder's listing as given, byte for
+// byte, each listing read by readDir. A disk that ignores case (macOS's, a
+// Windows or SMB share) or the Unicode spelling finds a name written another
+// way, but lists it only as it is stored, so a name it finds but doesn't list
+// is not there as given. A listing that fails is false; err is a listing given
+// up on (GaveUp) or ctx's, the answer then unknown.
+func NamesListed(ctx context.Context, root, rel string, need func(name string) bool,
+	readDir func(ctx context.Context, dir string) ([]fs.DirEntry, error)) (bool, error) {
+	dir := root
+	for name := range strings.SplitSeq(rel, "/") {
+		if need == nil || need(name) {
+			entries, err := readDir(ctx, dir)
+			if Unanswered(ctx, err) {
+				return false, cmp.Or(err, ctx.Err())
+			}
+			if err != nil || !slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == name }) {
+				return false, nil
+			}
+		}
+		dir = filepath.Join(dir, name)
+	}
+	return true, nil
 }
