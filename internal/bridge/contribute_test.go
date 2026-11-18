@@ -91,6 +91,35 @@ func TestSetupIsLenientAndBounded(t *testing.T) {
 	}
 }
 
+// github_state and agent_credential (bridge#25, #79) are kept as the Bridge
+// sends them, a value this server doesn't know too (a later Bridge's), and
+// dropped when not a step id's shape; absent from an older Bridge, and never
+// sent empty (allowed: known and unknown values; denied: malformed ones).
+func TestSetupStates(t *testing.T) {
+	t.Parallel()
+	st := decodeHeartbeat(t, `{"setup":{"items":[],"github_login":"octocat","github_state":"unrefreshed",`+
+		`"agent_credential":"world"}}`)
+	if s := st.Setup; s.GitHubState != "unrefreshed" || s.AgentCredential != "world" || s.GitHubLogin != "octocat" {
+		t.Fatalf("setup = %+v", s)
+	}
+	st = decodeHeartbeat(t, `{"setup":{"items":[],"github_state":"later_state","agent_credential":"group_required"}}`)
+	if s := st.Setup; s.GitHubState != "later_state" || s.AgentCredential != "group_required" {
+		t.Fatalf("setup = %+v", s)
+	}
+	st = decodeHeartbeat(t, `{"setup":{"items":[],"github_state":"Refused!","agent_credential":"<b>group</b>"}}`)
+	if s := st.Setup; s.GitHubState != "" || s.AgentCredential != "" {
+		t.Fatalf("malformed kept: %+v", s)
+	}
+	b, _ := json.Marshal(decodeHeartbeat(t, `{"setup":{"items":[]}}`).Setup)
+	if bytes.Contains(b, []byte("github_state")) || bytes.Contains(b, []byte("agent_credential")) {
+		t.Fatalf("an older Bridge's block gains fields: %s", b)
+	}
+	// A value of the wrong type drops the block, as any other key does.
+	if st := decodeHeartbeat(t, `{"setup":{"items":[],"agent_credential":1}}`); st.Setup != nil {
+		t.Fatalf("kept %+v", st.Setup)
+	}
+}
+
 // can_contribute: the setup block's when the Bridge sent one (either way),
 // else the estimates' (Phase 2a), else false; the contribute feature follows.
 func TestCanContributePrecedence(t *testing.T) {

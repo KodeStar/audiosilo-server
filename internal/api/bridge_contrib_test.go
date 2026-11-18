@@ -26,7 +26,8 @@ import (
 func setupBlock(can bool) string {
 	return fmt.Sprintf(`{"items":[{"id":"paired","done":true,"required":true},
 		{"id":"libraries","done":false,"required":true,"detail":"1 of 2 libraries writable","library_ids":[3]},
-		{"id":"github","done":%t,"required":false}],"can_contribute":%t,"github_login":"octocat"}`, can, can)
+		{"id":"github","done":%t,"required":false}],"can_contribute":%t,"github_login":"octocat",
+		"github_state":"unrefreshed","agent_credential":"world"}`, can, can)
 }
 
 // beatKinds sends a heartbeat offering kinds, the env's library mapped and
@@ -76,6 +77,7 @@ func TestBridgeHeartbeatSetup(t *testing.T) {
 	_, body := b.do(t, "GET", "/api/v1/admin/bridge", b.adminTok, "")
 	decodeInto(t, body, &admin)
 	if admin.Setup == nil || admin.Setup.CanContribute || admin.Setup.GitHubLogin != "octocat" || len(admin.Setup.Items) != 3 ||
+		admin.Setup.GitHubState != "unrefreshed" || admin.Setup.AgentCredential != "world" ||
 		!slices.Equal(admin.Setup.Items[1].LibraryIDs, []int64{3}) || slices.Contains(admin.Features, bridge.FeatureContribute) {
 		t.Fatalf("admin bridge (setup no): %s", body)
 	}
@@ -86,7 +88,8 @@ func TestBridgeHeartbeatSetup(t *testing.T) {
 		t.Fatalf("estimate (setup no): %s", body)
 	}
 	for _, tok := range []string{"", b.userTok, b.adminTok} {
-		if _, body := b.do(t, "GET", "/api/v1/server", tok, ""); strings.Contains(body, "octocat") || strings.Contains(body, "setup") {
+		if _, body := b.do(t, "GET", "/api/v1/server", tok, ""); strings.Contains(body, "octocat") || strings.Contains(body, "setup") ||
+			strings.Contains(body, "unrefreshed") || strings.Contains(body, "agent_credential") {
 			t.Fatalf("GET /server shows the setup: %s", body)
 		}
 	}

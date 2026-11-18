@@ -2930,8 +2930,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   top-level blocks this server reads, since the strict decode refuses an unknown field; the Bridge sends
   one only after a reply listed it, and drops them all and resends once on a 400). **Setup** (Phase 2b,
   `bridge/setup.go`): `setup {items[{id, done, required, detail?, library_ids?, needs_worker?}],
-  can_contribute, github_login?}` (`needs_worker`: the step waits for an ASR worker, so the console links
-  the Bridge's Workers tab; from an older Bridge the ASR step's detail text says so, bridge#28), the
+  can_contribute, github_login?, github_state?, agent_credential?}` (`needs_worker`: the step waits for an ASR
+  worker, so the console links the Bridge's Workers tab; from an older Bridge the ASR step's detail text says
+  so, bridge#28; `github_state`: `unrefreshed`, a sign-in whose refresh failed, still signed in and waiting for
+  GitHub, or `refused`, sign in again, bridge#25; `agent_credential`: how the agent credential reaches the agent
+  container, `group`, `world` or `group_required`, bridge#79; both kept when id-shaped, a later value too, and
+  the console's Setup card words only the ones it knows, `setup-model.ts`), the
   Bridge's onboarding checklist, read leniently like `estimates` (an unknown key ignored, a block that
   doesn't decode dropped, never the heartbeat) and bounded (at most 16 items, an item with a bad
   (`^[a-z][a-z0-9_]{0,31}$`) or repeated id left out, an unknown id kept, `detail` cleaned to 256 bytes,
