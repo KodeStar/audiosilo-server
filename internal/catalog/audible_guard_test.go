@@ -140,8 +140,7 @@ func TestAudibleDeviceGuard(t *testing.T) {
 	}
 	// So does a join's later part, further on the joined book's timeline.
 	exec(`DELETE FROM progress WHERE user_id = ? AND rel_path = ?`, f.user, folder)
-	exec(`INSERT INTO progress(user_id, library_id, rel_path, position, duration, version, device_id, device_name, updated_at)
-	      VALUES(?, ?, ?, 1000, 36000, 1, 'phone', 'Phone', '2026-11-03T08:00:00.000Z')`, f.user, f.lib.ID, again)
+	f.savePlace(t, again, 1000, f.clock.Add(-time.Hour))
 	audibles(again)
 	if err := f.c.JoinDurableState(f.ctx, f.lib.ID, folder, []JoinPart{{Path: again, Offset: 3600, Last: true}},
 		0); err != nil {
