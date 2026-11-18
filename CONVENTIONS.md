@@ -4100,6 +4100,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Among them, first, is the one cookie a build before the per-flow names set (`oidcDoneLegacy`,
   `[__Host-]audiosilo_oidc_done`), so a sign-in caught across the upgrade finishes; that read goes
   in v2.8.0.
+  On a plain-http public_url, where anyone on the network can plant a cookie, a done cookie whose
+  tail after the token can be no tag (`doneParts`: the callback sets a token alone or with a checked
+  tag) counts as not held, by its flow or among those held: never picked, never cleared; on https
+  such a tail finishes untagged.
   `intent` is the tag the player expects: a string, the empty one too, that isn't
   the tag the sign-in's flow carried, or any string for an untagged sign-in, is a 403 code
   `oidc_intent_mismatch` before `ConsumeOIDC`: no session, the token unspent and left to expire,

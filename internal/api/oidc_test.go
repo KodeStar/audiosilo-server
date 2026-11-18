@@ -2275,6 +2275,66 @@ func TestOIDCFinishLegacyDoneCookie(t *testing.T) {
 	}
 }
 
+// TestOIDCFinishPlantedCookieSkipped: on a plain-http public_url, where anyone
+// on the network can set a cookie, a done cookie whose tail after the token
+// can be no tag (the callback sets a token alone, or with a tag it checked) is
+// none of ours: never picked, by its flow or among those held, and never
+// cleared; the token in it stays unspent. On https only the callback sets one,
+// and such a tail finishes untagged (TestOIDCFinishCookieTag).
+func TestOIDCFinishPlantedCookieSkipped(t *testing.T) {
+	t.Parallel()
+	e := newTestEnvWith(t, func(c *config.Config) {
+		c.PublicURL = "http://audiosilo.test"
+		c.Auth.OIDC = config.OIDCConfig{Enabled: true, Issuer: "https://idp.example", ClientID: "audiosilo"}
+	})
+	bob := e.mustUser(t, "bob", "")
+	mint := func(t *testing.T) string {
+		t.Helper()
+		tok, err := e.auth.IssueToken(context.Background(), bob.ID, auth.KindOIDC, "", oidcDoneTTL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+	const otherFlow = "BBBBBBBBBBBBBBBB"
+	tag := strings.Repeat("ab12", 16)
+	for name, tail := range map[string]string{
+		"too short":          ".short",
+		"empty":              ".",
+		"a second separator": "." + tag + ".x",
+	} {
+		planted := &http.Cookie{Name: oidcDoneCookie + someFlow, Value: mint(t) + tail}
+		// Denied: by its flow, with or without an expectation of its tail.
+		for _, body := range []string{`{"flow":"` + someFlow + `"}`, `{"flow":"` + someFlow + `","intent":"` + strings.TrimPrefix(tail, ".") + `"}`, ``} {
+			resp, out := e.finishWith(t, body, planted)
+			if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCNoSignIn || len(resp.Cookies()) != 0 {
+				t.Fatalf("%s, body %q: %d %v %v", name, body, resp.StatusCode, out, resp.Header.Values("Set-Cookie"))
+			}
+		}
+		// Among those held it is passed over, though sent first: a finish with
+		// no flow takes the callback's own, and clears only that.
+		real := &http.Cookie{Name: oidcDoneCookie + otherFlow, Value: mint(t)}
+		resp, out := e.finishWith(t, ``, planted, real)
+		if resp.StatusCode != http.StatusOK || out["token"] == "" {
+			t.Fatalf("%s beside a sign-in: %d %v", name, resp.StatusCode, out)
+		}
+		if c := resp.Cookies(); len(c) != 1 || c[0].Name != real.Name || c[0].MaxAge >= 0 {
+			t.Fatalf("%s beside a sign-in, cleared: %v", name, resp.Header.Values("Set-Cookie"))
+		}
+		// The planted cookie's token was never tried.
+		token, _, _ := strings.Cut(planted.Value, oidcIntentSep)
+		if u, _, err := e.auth.ConsumeOIDC(context.Background(), token, ""); err != nil || u.ID != bob.ID {
+			t.Fatalf("%s: its token was spent: %v", name, err)
+		}
+	}
+	// Allowed: the callback's own shapes, a token alone and with a tag.
+	resp, out := e.finishWith(t, `{"flow":"`+someFlow+`","intent":"`+tag+`"}`,
+		&http.Cookie{Name: oidcDoneCookie + someFlow, Value: mint(t) + oidcIntentSep + tag})
+	if resp.StatusCode != http.StatusOK || out["intent"] != tag {
+		t.Fatalf("a tagged sign-in on plain http: %d %v", resp.StatusCode, out)
+	}
+}
+
 // TestOIDCDoneCookiesCapped: finished sign-ins no page has finished yet are
 // held up to oidcMaxFlows, as flows are: the callback deletes the oldest
 // beyond it (on https each rides on every request to the origin). Allowed: the

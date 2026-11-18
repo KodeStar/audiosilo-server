@@ -883,6 +883,12 @@ func doneParts(value string) (token, tag string, wellFormed bool) {
 // A finish that names no flow is also what a page makes that a build before
 // the per-flow names landed, so that build's one cookie (oidcDoneLegacy)
 // counts among those held, first: it is the oldest.
+//
+// On a plain-http public_url, where anyone on the network can plant a cookie
+// (no __Host- prefix without Secure), one whose value is not wellFormed
+// (doneParts) is no cookie of the callback's and counts as not held: never
+// picked, so never cleared. On https only the callback sets one, and a tail
+// that is no tag just finishes untagged.
 func (a *API) heldDone(r *http.Request, flow string, intent *string) (own heldCookie, disowned bool) {
 	var held []heldCookie
 	if flow != "" {
@@ -891,7 +897,11 @@ func (a *API) heldDone(r *http.Request, flow string, intent *string) (own heldCo
 		held = append(held, heldCookie{name: oidcDoneLegacy, value: a.oidcCookieValue(r, oidcDoneLegacy)})
 		held = append(held, a.heldCookies(r, oidcDoneCookie, validFlowKey)...)
 	}
-	held = slices.DeleteFunc(held, func(h heldCookie) bool { return h.value == "" })
+	_, _, secure := a.oidcCookieName(oidcDoneCookie)
+	held = slices.DeleteFunc(held, func(h heldCookie) bool {
+		_, _, wellFormed := doneParts(h.value)
+		return h.value == "" || (!secure && !wellFormed)
+	})
 	switch {
 	case len(held) == 0:
 		return heldCookie{}, false
