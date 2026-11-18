@@ -1399,7 +1399,8 @@ func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, str
 
 // userColumns selects the user fields plus a derived last-activity timestamp
 // (the newest tokens.last_seen across the account's tokens). ResolveRequest bumps
-// it on authenticated requests (at most once a minute per token), so this
+// it on authenticated requests (at most once a minute per token, a cast token's
+// every CastTouchInterval and in milliseconds), so this
 // reflects last use, not just sign-in, without a dedicated column. The household
 // member columns follow (memberColumns, then the admin's switch, the typed name
 // and how many members the person has: idx_users_managed_by). Read FROM
@@ -1518,8 +1519,9 @@ func (s *Service) CountDemoUsers(ctx context.Context) (int, error) {
 // activity (or, lacking any, their creation time) is older than cutoff. Their
 // child rows (progress, bookmarks, notes, history, tokens, share grants) cascade
 // via ON DELETE CASCADE. Returns the number of accounts deleted. Timestamps are
-// stored as RFC3339 UTC, so the lexical comparison is chronological (a feed
-// token's millisUTC created_at would not be, but a demo account never has one).
+// stored as RFC3339 UTC, so the lexical comparison is chronological, but for a
+// demo account's cast token (it may cast), whose created_at and last_seen are
+// millisUTC (castStamp): that misorders only within the cutoff's second.
 func (s *Service) ReapIdleDemoUsers(ctx context.Context, cutoff time.Time) (int64, error) {
 	cut := cutoff.UTC().Format(time.RFC3339)
 	res, err := s.db.ExecContext(ctx,

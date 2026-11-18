@@ -907,7 +907,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   duplicate copies by how many people have progress on them, so the Health summary and its
   duplicates key on both generations, and a listener starting a book leaves the lists warm;
   server#263) and, for
-  `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
+  `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`, `expires_at`: a cast token's
+  sliding expiry, server#446),
   `bridge_status` (`heartbeat_at`, `status`), `bridge_jobs` (`lease_until`, `updated_at`,
   `progress`), `match_runs` (`done`), `unknown_asin_reports` (`checked_at`, `sent_at`: Health's `unknown_asin` reads
   the rest) and `upcoming_owned` (`checked_at`: the list books' `work_id` reads the
@@ -931,7 +932,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   read only by `/me/upcoming` and the job), the token touch in
   `auth.Service.resolve` (which then drops that token's cached row, so the next request reads
   its new last-seen and address; a lookup that read the row before the touch never caches it
-  after: `store.GenMap.PutMarked`), the Bridge's heartbeat (`bridge.SaveHeartbeat`, whatever
+  after: `store.GenMap.PutMarked`) and `auth.Service.KeepCastToken` (a cast token, never cached), the Bridge's heartbeat (`bridge.SaveHeartbeat`, whatever
   its status: with an ASR worker attached every beat's differs, `workers[].last_seen`; GET
   /server's `bridge` block reads it through `bridge.Service.LastHeartbeat`'s own cache, not the
   generation; a pairing or an unpair is content) and its job reports (`bridge.UpdateHeld`: a
@@ -954,7 +955,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `sent_at` free), and its offline libraries' listener counts are computed per request
   into the key; `Catalog.libs` reads `libraries` only; the token cache (`auth/tokencache.go`)
   reads `tokens` and `users` (owner join), and the touch is the only user-state change to
-  either, dropped from the cache by the touching request (its rows are also read again once a minute
+  either (`KeepCastToken`'s is a cast token's, which the cache never holds), dropped from the cache by the touching request (its rows are also read again once a minute
   old, `maxCachedTokenAge`: the generation never sees another process's write, which `reset-admin`
   beside a running server is). A new cache whose answer reads a
   user-state table needs a key of its own, or that table out of the list.
@@ -2842,7 +2843,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   is playing (server#216), and the person's `maxCastTokensPerPerson` (100) most recently used over all their
   devices (`trimCastTokensSQL`: by `last_seen`, which each cover or stream request bumps at most once a
   `CastTouchInterval` (10 s) and a long response keeps current while it runs and at its end
-  (`api.keepCastInUse` -> `auth.KeepCastToken`, server#446), else `created_at`, so a sender re-minting drops
+  (`api.keepCastInUse` -> `auth.KeepCastToken`, server#446: one goroutine per token however many of its
+  responses run, each keep bounded by `castKeepTimeout`; a disabled account's token is not moved), else `created_at`, so a sender re-minting drops
   an idle token before the one its receiver is reading; the token just minted always stays, even after the
   clock steps back). The console's chapter editor streams a book the same way and sends
   `"editor": true` (console-only, additive; a player never sends it): `auth.IssueEditorToken` mints the same
