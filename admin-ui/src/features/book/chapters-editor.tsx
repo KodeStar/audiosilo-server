@@ -797,8 +797,8 @@ function Scrubber({
   // the book has for it is still this file, not the start of the next.
   const here = () => {
     if (!span) return 0;
-    const head = pending.current ?? (audio.current ? now() : pos);
-    return toBookTime(span, Math.min(head, length));
+    const inFile = pending.current ?? (audio.current ? now() : pos);
+    return toBookTime(span, Math.min(inFile, length));
   };
   // A start set (or a chapter added) at the playhead is where a transcode
   // already plays: it plays on from there (`kept`), not asked for again from
