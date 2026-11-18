@@ -481,36 +481,21 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	// A folder asked for in another Unicode spelling is listed in the index's
 	// (spelledIn), so the listing's path and its entries' are the paths the
 	// index, and so annotateWithBooks, has. One whose index spelling the caller
-	// can't see is missing, never listed from the disk in the spelling given;
-	// so is one the disk doesn't spell as given (onDiskAsGiven: a case variant,
-	// on a disk that ignores case, of a folder the caller's rule never named).
+	// can't see is missing, never listed from the disk in the spelling given.
 	dir := r.URL.Query().Get("path")
-	if rel := catalog.CleanRelPath(dir); rel != "" {
+	rel := catalog.CleanRelPath(dir)
+	if rel != "" {
 		spelled, missing, err := a.spelledIn(r.Context(), lib.ID, allow, rel)
 		if err != nil {
 			a.writeCatalogError(w, err, "resolve path spelling failed", "Could not list the folder.", "library", lib.ID)
 			return
-		}
-		if !missing {
-			given, err := a.onDiskAsGiven(r.Context(), lib, spelled, func() time.Duration { return a.fileWait })
-			switch {
-			case metadata.GaveUp(err):
-				writeShareNotAnswering(w)
-				return
-			case r.Context().Err() != nil:
-				return // the client left: no one to answer
-			case err != nil:
-				a.writeCatalogError(w, err, "check a folder's path failed", "Could not list the folder.", "library", lib.ID)
-				return
-			}
-			missing = !given
 		}
 		if missing {
 			writeError(w, http.StatusNotFound, "directory not found")
 			return
 		}
 		if spelled != rel {
-			dir = spelled
+			dir, rel = spelled, spelled
 		}
 	}
 	ignore := library.ParseIgnore(lib.IgnorePatterns)
@@ -523,6 +508,25 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusNotFound, "directory not found")
 		return
+	}
+	// Nor is one the disk doesn't spell as given (onDiskAsGiven: a case
+	// variant, on a disk that ignores case, of a folder the caller's rule
+	// never named): looked at once BrowseFS has refused a path out of the root.
+	if rel != "" {
+		given, err := a.onDiskAsGiven(r.Context(), lib, rel, func() time.Duration { return a.fileWait })
+		switch {
+		case metadata.GaveUp(err):
+			writeShareNotAnswering(w)
+			return
+		case r.Context().Err() != nil:
+			return // the client left: no one to answer
+		case err != nil:
+			a.writeCatalogError(w, err, "check a folder's path failed", "Could not list the folder.", "library", lib.ID)
+			return
+		case !given:
+			writeError(w, http.StatusNotFound, "directory not found")
+			return
+		}
 	}
 	a.annotateWithBooks(r, lib, scope, ignore, listing)
 	writeJSON(w, http.StatusOK, listing)
