@@ -486,6 +486,22 @@ func TestNetworkFailure(t *testing.T) {
 	}
 }
 
+// FeedAnswered is the Bridge having reached the feed's host: its answer, not a
+// network-class failure, an address refused before any connection, or a
+// failure that isn't the feed's.
+func TestFeedAnswered(t *testing.T) {
+	for _, code := range []string{"http_500", "http_404", "gone", "not_a_feed", "not_a_podcast", "too_large", "redirect_loop", "http_310"} {
+		if !FeedAnswered(code) {
+			t.Errorf("%s is not counted as an answer", code)
+		}
+	}
+	for _, code := range []string{"", "dns", "network", "timeout", "tls", "invalid_feed_url", "blocked_address", "bridge_lost", "write_failed", "feed_secret_missing"} {
+		if FeedAnswered(code) {
+			t.Errorf("%q is counted as an answer", code)
+		}
+	}
+}
+
 // An adopt-only subscribe that could never be queued says why (server#219):
 // its params and library are checked before it looks for an open request, so
 // an OPML row with a bad URL is invalid, never limited.

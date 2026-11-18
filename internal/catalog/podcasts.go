@@ -967,7 +967,7 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 // bridgeReachedFeeds reports whether a scheduled poll's network-class failure
 // of show can be this feed's own: the paired Bridge reached another feed since
 // the show's previous check (since, as stored; "" for none), by a success or
-// an answer from it (feedAnswered: a feed failing with an HTTP error was
+// an answer from it (bridge.FeedAnswered: a feed failing with an HTTP error was
 // reached all the same), or failed to reach none since, so nothing says its
 // internet is down. A Bridge that lost its internet fails every show, and none
 // of them counts (server#403). A check that failed at the Bridge (bridge_lost,
@@ -975,14 +975,14 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 func bridgeReachedFeeds(ctx context.Context, tx *sql.Tx, lib int64, show, since string) (bool, error) {
 	type check struct{ code, success string }
 	checks, err := queryRows(ctx, tx, func(r *sql.Rows, c *check) error { return r.Scan(&c.code, &c.success) },
-		`SELECT error_code,COALESCE(last_success_at,'') FROM podcast_feed_state WHERE NOT (library_id=?1 AND show_path=?2) AND last_checked_at>?3`, lib, show, since)
+		`SELECT error_code,COALESCE(last_success_at,'') FROM podcast_feed_state WHERE NOT (library_id=?1 AND show_path=?2) AND last_checked_at>=?3`, lib, show, since)
 	if err != nil {
 		return false, err
 	}
 	unreached := false
 	for _, c := range checks {
 		switch {
-		case c.success > since, feedAnswered(c.code):
+		case c.success != "" && c.success >= since, bridge.FeedAnswered(c.code):
 			return true, nil
 		case bridge.NetworkFailure(c.code):
 			unreached = true
@@ -991,16 +991,15 @@ func bridgeReachedFeeds(ctx context.Context, tx *sql.Tx, lib int64, show, since 
 	return !unreached, nil
 }
 
-// feedAnswered reports whether a failed poll's code says the Bridge reached
-// the feed: the feed's own failure, not network-class, and not one refused
-// before any connection (an invalid or blocked address).
-func feedAnswered(code string) bool {
-	return bridge.FeedFailure(code) && !bridge.NetworkFailure(code) && code != "invalid_feed_url" && code != "blocked_address"
-}
-
 func durationFromFeed(p *int) float64 {
 	if p == nil {
 		return 0
 	}
+//
+// "Since" includes the previous check's own second: the stamps are whole
+// seconds, and the polls of a round can share one (the Bridge runs several
+// side by side, and a scheduler pass folds every ended job in a row:
+// podcast.SchedulerTick). Read strictly after it, the round's first show would
+// see none of the others' checks and count through an outage.
 	return float64(*p)
 }

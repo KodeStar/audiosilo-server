@@ -594,6 +594,66 @@ func TestPodcastNetworkFailuresJudgedAcrossTheBridge(t *testing.T) {
 }
 
 // Only the scheduler's polls count (bridge.PollParams.Scheduled): a Check now
+// A round's polls can be folded within one second (the stamps are whole
+// seconds): the round's first show still sees the others' checks of the round
+// before, and an outage counts at most its first failure. A feed failing alone
+// in such a round, the others answering in its second, counts.
+func TestPodcastOutageFoldedInOnePass(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	now := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	log := listenNotices(c)
+	lib := podcastShowsLib(t, c, ctx, 2)
+	id := int64(0)
+	round := func(state string, codes ...string) {
+		t.Helper()
+		now = now.Add(30 * time.Minute)
+		for n, code := range codes {
+			id++
+			if err := c.FoldPodcastJob(ctx, showPoll(lib.ID, id, n, state, code)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	failures := func(show string) int {
+		t.Helper()
+		var n int
+		if err := c.db.QueryRowContext(ctx, `SELECT feed_failures FROM podcast_feed_state WHERE library_id=? AND show_path=?`, lib.ID, show).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	round(bridge.StateDone, "", "", "")
+	for range 20 {
+		round(bridge.StateFailed, "timeout", "dns", "network")
+	}
+	if got := log.take(); len(got) != 0 {
+		t.Fatalf("an outage folded a round at a time told %+v", got)
+	}
+	for _, show := range []string{"Example Show", "Show 1", "Show 2"} {
+		if n := failures(show); n > 1 {
+			t.Fatalf("an outage counted %d failures of %s, want at most the first", n, show)
+		}
+	}
+	round(bridge.StateDone, "", "", "")
+	for range NetworkFailingAfter {
+		now = now.Add(30 * time.Minute)
+		for n, state := range []string{bridge.StateFailed, bridge.StateDone, bridge.StateDone} {
+			id++
+			code := ""
+			if state == bridge.StateFailed {
+				code = "timeout"
+			}
+			if err := c.FoldPodcastJob(ctx, showPoll(lib.ID, id, n, state, code)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if got := log.take(); len(got) != 1 || got[0].ShowPath != "Example Show" || got[0].Failures != NetworkFailingAfter {
+		t.Fatalf("a feed failing alone in its round told %+v, want failing after %d", got, NetworkFailingAfter)
+	}
+}
+
 // stays uncounted even once its requester is gone (requested_by is then NULL,
 // which used to read as the scheduler's).
 func TestPodcastCheckNowWithoutRequesterIsNotCounted(t *testing.T) {

@@ -313,6 +313,19 @@ func NetworkFailure(code string) bool {
 	return slices.Contains(networkFailures, code)
 }
 
+// unsentFailures are the feed failure codes the Bridge raises before it
+// connects to anything: the address refused as written, or as resolved.
+var unsentFailures = []string{"invalid_feed_url", "blocked_address"}
+
+// FeedAnswered reports whether a failed podcast job's code says the Bridge
+// reached the feed: the feed's own failure (FeedFailure), not network-class
+// and not refused before any connection (unsentFailures). An HTTP error, a
+// redirect loop or a body that is no feed all came from the feed's host, so
+// the Bridge's internet was up (catalog.FoldPodcastJob's outage check).
+func FeedAnswered(code string) bool {
+	return FeedFailure(code) && !NetworkFailure(code) && !slices.Contains(unsentFailures, code)
+}
+
 // RecentSubscribeFailure is user's last podcast.subscribe for norm in lib when
 // it failed within the last `within` (the Service's clock), else nil: an OPML
 // import passes such a feed over instead of queueing it again. A failure that
