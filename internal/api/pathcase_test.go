@@ -1,7 +1,6 @@
 package api
 
 import (
-	"container/list"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -113,7 +112,7 @@ func ignoresCase(t *testing.T, dir string) bool {
 // foldCase makes the library's disk answer to each of variants (a path in
 // another case than the disk's) as one that ignores case would, when the temp
 // dir doesn't already: a link at the variant to the folder the disk has (the
-// open finds it), kept out of the listings the API reads (a.readDir), which on
+// open finds it), kept out of the listings the API reads (a.listed.read), which on
 // such a disk name only the stored spelling. Links made after the scan, so
 // none is indexed.
 func (c *caseEnv) foldCase(t *testing.T, variants map[string]string) {
@@ -129,7 +128,7 @@ func (c *caseEnv) foldCase(t *testing.T, variants map[string]string) {
 		}
 		hidden[at] = true
 	}
-	c.api.readDir = func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+	c.api.listed.read = func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
 		names, err := metadata.ReadDirNamesBounded(ctx, dir, timeout)
 		return slices.DeleteFunc(names, func(name string) bool { return hidden[filepath.Join(dir, name)] }), err
 	}
@@ -217,7 +216,7 @@ func TestCaseVariantDiskRoutes(t *testing.T) {
 func TestCaseVariantDiskLookFails(t *testing.T) {
 	t.Parallel()
 	c := newCaseEnv(t)
-	c.api.readDir = func(context.Context, string, time.Duration) ([]string, error) {
+	c.api.listed.read = func(context.Context, string, time.Duration) ([]string, error) {
 		return nil, metadata.ErrNotAnswered
 	}
 	for _, path := range []string{bookURL(c.lib.ID, "stream", pcUnindexedT), bookURL(c.lib.ID, "fs", pcUnindexed)} {
@@ -243,23 +242,26 @@ func TestCaseVariantCostsWhatMissingDoes(t *testing.T) {
 	t.Parallel()
 	c := newCaseEnv(t)
 	c.foldCase(t, map[string]string{pcLowAuthor: pcAuthor, pcBookVariant: pcBook})
-	inner := c.api.readDir
+	inner := c.api.listed.read
 	var (
 		mu     sync.Mutex
 		listed []string
 	)
-	c.api.readDir = func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+	c.api.listed.read = func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
 		mu.Lock()
 		listed = append(listed, strings.TrimPrefix(dir, c.lib.Root))
 		mu.Unlock()
 		return inner(ctx, dir, timeout)
 	}
-	steps := func(tok, u string, want int) []string {
-		t.Helper()
-		c.api.listed.forget()
+	reset := func() { // a fresh cache, so each request reads its own listings
+		c.api.listed = newDirNames(c.api.listed.read)
 		mu.Lock()
 		listed = nil
 		mu.Unlock()
+	}
+	steps := func(tok, u string, want int) []string {
+		t.Helper()
+		reset()
 		if resp, body := c.do(t, "GET", u, tok, ""); resp.StatusCode != want {
 			t.Errorf("GET %s = %d %s, want %d", u, resp.StatusCode, body, want)
 		}
@@ -289,10 +291,7 @@ func TestCaseVariantCostsWhatMissingDoes(t *testing.T) {
 	if got := steps(c.samTok, bookURL(c.lib.ID, "fs", pcUnindexed), http.StatusOK); len(got) == 0 {
 		t.Error("an unindexed folder was answered with no listing")
 	}
-	c.api.listed.forget()
-	mu.Lock()
-	listed = nil
-	mu.Unlock()
+	reset()
 	for range 20 {
 		for _, p := range []string{pcMissingT, pcLowMissingT} {
 			c.do(t, "GET", bookURL(c.lib.ID, "stream", p), c.samTok, "")
@@ -307,15 +306,6 @@ func TestCaseVariantCostsWhatMissingDoes(t *testing.T) {
 	if counts[""] != 1 || len(listed) != 2 {
 		t.Errorf("40 requests for missing paths listed %q, want the root and the author folder once each", listed)
 	}
-}
-
-// forget drops every kept folder, so the next request reads its own.
-func (c *dirNames) forget() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.order.Init()
-	c.byDir = map[string]*list.Element{}
-	c.size = 0
 }
 
 // TestCaseVariantRoutes (security, a disk that ignores case only): every

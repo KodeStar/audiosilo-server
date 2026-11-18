@@ -14,7 +14,7 @@ import (
 )
 
 // fakeDirs is a dirNames read that counts its reads per folder and answers
-// each folder's names (want) or err, after gate when gate is set.
+// each folder's names or err, after gate when gate is set.
 type fakeDirs struct {
 	mu    sync.Mutex
 	reads map[string]int

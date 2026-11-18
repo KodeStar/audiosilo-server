@@ -1182,7 +1182,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ignores case (macOS's, a Windows or SMB share) still opens such a path as the folder it has, so the two
   routes that open the path given, the stream in every form (`audioFile`) and `/fs`, take it only when the
   disk has it as given (`onDiskAsGiven`: a path the index holds byte for byte, `catalog.IndexHolds`, else
-  each name in its folder's listing, `metadata.NamesListed` from the root down through `API.readDir`, names
+  each name in its folder's listing, `metadata.NamesListed` from the root down through `API.listed`, names
   only), else answer as for a missing path (a listing given up on: 503 `share_not_answering`). A missing
   path and a case variant take the same steps (no lstat first: the same listings up to the first name not
   listed), and the listings are kept a few seconds (`dirNames`: `dirNamesTTL` 3 s from the read, at most
@@ -1192,7 +1192,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`TestCaseVariantCostsWhatMissingDoes`). `/fs` looks before it reads the folder (after, for a path that
   climbs out of the root, so it keeps its 400). Every other route reads the index,
   which holds the disk's spelling only. `TestCaseVariantRoutes` compares every route on a temp dir that
-  ignores case; `TestCaseVariantDiskRoutes` covers the stream and `/fs` on any disk (`readDir` lists as
+  ignores case; `TestCaseVariantDiskRoutes` covers the stream and `/fs` on any disk (`listed.read` lists as
   one that ignores case would).
   Unchanged on purpose: `CleanRelPath` and share rules stay byte-exact; the on-demand index takes
   only the on-disk spelling (`dirPresent`), so another spelling of an unindexed book stays 404; the

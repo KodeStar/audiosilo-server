@@ -53,8 +53,7 @@ type dirListing struct {
 	ready chan struct{}
 	names []string
 	err   error
-	cost  int  // its names' bytes (dirNameCost each beside them)
-	kept  bool // counted in size: read, and kept under the bound
+	cost  int // its names' bytes (dirNameCost each beside them), set once kept
 }
 
 func newDirNames(read func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) *dirNames {
@@ -80,17 +79,18 @@ func (c *dirNames) names(ctx context.Context, dir string, timeout time.Duration)
 	c.mu.Unlock()
 
 	l.names, l.err = c.read(ctx, dir, timeout)
+	cost := 0
 	for _, n := range l.names {
-		l.cost += len(n) + dirNameCost
+		cost += len(n) + dirNameCost
 	}
 	close(l.ready)
 	c.mu.Lock()
 	if el, ok := c.byDir[dir]; ok && el.Value == l {
-		if l.err != nil || l.cost > c.cap {
+		if l.err != nil || cost > c.cap {
 			c.drop(el)
 		} else {
-			l.kept = true
-			c.size += l.cost
+			l.cost = cost
+			c.size += cost
 			c.trim()
 		}
 	}
@@ -102,7 +102,7 @@ func (c *dirNames) names(ctx context.Context, dir string, timeout time.Duration)
 // that one failed (its client may have left; its error says nothing of this
 // request's), within timeout in all.
 func (c *dirNames) await(ctx context.Context, l *dirListing, timeout time.Duration) ([]string, error) {
-	deadline := c.now().Add(timeout)
+	deadline := time.Now().Add(timeout)
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 	select {
@@ -110,7 +110,7 @@ func (c *dirNames) await(ctx context.Context, l *dirListing, timeout time.Durati
 		if l.err == nil {
 			return l.names, nil
 		}
-		return c.read(ctx, l.dir, max(deadline.Sub(c.now()), time.Nanosecond))
+		return c.read(ctx, l.dir, max(time.Until(deadline), time.Nanosecond))
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-t.C:
@@ -138,7 +138,5 @@ func (c *dirNames) trim() {
 func (c *dirNames) drop(el *list.Element) {
 	l := c.order.Remove(el).(*dirListing)
 	delete(c.byDir, l.dir)
-	if l.kept { // else in flight (its read finds itself gone) or never kept
-		c.size -= l.cost
-	}
+	c.size -= l.cost // 0 while in flight (its read finds itself gone)
 }

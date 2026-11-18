@@ -145,13 +145,10 @@ type API struct {
 	// mountHints is GET /admin/setup's mount hint reader, library.MountHints;
 	// a field so tests can see when it is read.
 	mountHints func(exclude ...string) []string
-	// readDir is the listing (its names) the stream and /fs check a path's
-	// spelling against (onDiskAsGiven), metadata.ReadDirNamesBounded; a field
-	// so a test on a disk that tells case apart can list a folder as one that
-	// ignores it would.
-	readDir func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)
-	// listed is readDir's names kept a few seconds (dirNames), which
-	// onDiskAsGiven reads them through.
+	// listed is the listings (their names) the stream and /fs check a path's
+	// spelling against (onDiskAsGiven), metadata.ReadDirNamesBounded's kept a
+	// few seconds (dirNames); its read is a field so a test on a disk that
+	// tells case apart can list a folder as one that ignores it would.
 	listed *dirNames
 
 	// setupToken, when non-empty, enables the first-run web setup wizard (GET/POST
@@ -300,7 +297,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		baseCtx:           context.Background(),
 		timeoutDur:        requestTimeout,
 		mountHints:        library.MountHints,
-		readDir:           metadata.ReadDirNamesBounded,
+		listed:            newDirNames(metadata.ReadDirNamesBounded),
 		dirs:              library.NewDirLister(library.ListDirs, dirListSlots, dirListTimeout),
 		loginLimiter:      newLimiter(10, 15*time.Minute),
 		oidcLimiter:       newLimiter(10, 15*time.Minute),
@@ -327,9 +324,6 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		opml:           newOPMLTransfers(),
 		lists:          newListCache(),
 	}
-	a.listed = newDirNames(func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
-		return a.readDir(ctx, dir, timeout) // a field a test may swap
-	})
 	if cfg.DataDir != "" {
 		if rm, err := media.NewRemuxer(filepath.Join(cfg.DataDir, "cache", "remux"), log); err != nil {
 			log.Warn("remux cache unavailable: Matroska is served as stored", "err", err)
