@@ -87,7 +87,8 @@ export function fileSpans(files: AdminFile[], bookPath: string, basis: ChapterBa
       start: start / 1000,
       end: at / 1000,
       playable: f.direct_playable,
-      remuxed: f.direct_playable && /\.mka$/i.test(f.path),
+      // media.Remuxable's rule; direct_playable says the server's remux is on.
+      remuxed: f.direct_playable && /^mka$/i.test(f.format) && /^mp3$/i.test(f.codec),
     };
   });
 }

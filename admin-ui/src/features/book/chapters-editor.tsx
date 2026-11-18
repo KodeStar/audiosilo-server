@@ -529,11 +529,11 @@ function Scrubber({
   const [waiting, setWaiting] = useState(false);
   const again = useRef<ReturnType<typeof setTimeout>>(undefined);
   const probe = useRef<AbortController>(undefined);
-  const stopRetry = () => {
+  const stopRetry = useCallback(() => {
     clearTimeout(again.current);
     probe.current?.abort();
     setWaiting(false);
-  };
+  }, []);
   // An MP3 in .mka (remuxed) the server answered with a live transcode: its
   // remux is still being made. Another file forgets it, so coming back finds
   // the copy made since.
@@ -596,13 +596,12 @@ function Scrubber({
   // until it plays, so its row's controls come back here, not at a load.
   useEffect(() => {
     clearTimeout(restream.current);
+    clearTimeout(hold.current);
     previewing.current = false;
-    clearTimeout(again.current);
-    probe.current?.abort();
-    setWaiting(false);
+    stopRetry();
     busy.current = 0;
     if (transcoded) setFailed(false);
-  }, [at, transcoded]);
+  }, [at, transcoded, stopRetry]);
 
   // A chosen row (or a moved one) puts the playhead at its start. A transcode
   // starts there: its stream is asked for from there (src), and nothing loads
@@ -650,6 +649,9 @@ function Scrubber({
 
   // Where the audio is, in seconds into the file.
   const now = () => from + (audio.current?.currentTime ?? 0);
+  // Where a transcode asked for again starts: a seek waiting to be asked for,
+  // else where the audio is; never past the file's end.
+  const head = () => roundMs(Math.min(pending.current ?? now(), length));
   const seek = (s: number) => {
     const a = audio.current;
     if (!a) return;
@@ -696,7 +698,7 @@ function Scrubber({
       void token.refetch();
       return;
     }
-    const place = roundMs(Math.min(pending.current ?? now(), length));
+    const place = head();
     const play = !a.paused || previewing.current;
     pending.current = null;
     setMinting(true);
@@ -746,7 +748,7 @@ function Scrubber({
     letGo.current = () => {
       const a = audio.current;
       if (!a || !transcoded || !a.paused || a.currentTime <= 0 || pending.current !== null) return;
-      ask(roundMs(Math.min(now(), length)), false);
+      ask(head(), false);
     };
   });
   const pausedHold = () => {
@@ -761,7 +763,7 @@ function Scrubber({
     const to = pending.current ?? offset;
     pending.current = null;
     setLive(span.path);
-    setStream({ at, from: to, n: (stream?.n ?? 0) + 1, play: !a.paused });
+    ask(to, !a.paused);
     return true;
   };
   const playFive = () => {
@@ -775,10 +777,14 @@ function Scrubber({
       seek(offset);
       return;
     }
-    if (!transcoded) a.currentTime = offset;
-    else if (a.error) a.load();
+    if (transcoded) {
+      if (a.error) a.load();
+      void a.play().catch(() => {});
+      return;
+    }
+    a.currentTime = offset;
     void a.play().catch(() => {});
-    if (!transcoded) preview.current = setTimeout(() => a.pause(), PREVIEW_MS);
+    preview.current = setTimeout(() => a.pause(), PREVIEW_MS);
   };
   // The playhead: the seek a file still loading waits for, else where the audio is.
   // Never past the file's end: audio that plays on a little longer than the length
