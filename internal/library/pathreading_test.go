@@ -232,10 +232,9 @@ func TestScanTitleNotSeries(t *testing.T) {
 // in a folder naming neither). Where the files' tags differ, the name they
 // share past the album is the book's ("The Great Hunt" of "The Wheel of Time:
 // The Great Hunt - The Wheel"), and only tags that share none give the album.
-// One read before revision 5 is put right
-// by the next scan from one read of its first file's tags, and of its last's
-// where the title turns on them, with no re-index; a book of one file needs no
-// read and is stamped.
+// One read before revision 5 is put right by the next scan from one read of
+// its first file's tags, and of its last's where the title turns on them, with
+// no re-index; a book of one file needs no read and is stamped.
 func TestScanPartsTitle(t *testing.T) {
 	t.Parallel()
 	if os.Getuid() == 0 {
@@ -304,13 +303,11 @@ func TestScanPartsTitle(t *testing.T) {
 	check("first scan")
 
 	// The snapshots of revision 4: the first file's title tag as the title.
-	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$.title', ?, '$."@rev"', '4'), title = ?
-		WHERE rel_path = ?`, album+" - Letters 1-4", album+" - Letters 1-4", parts); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$.title', ?, '$."@rev"', '4'), title = ?
-		WHERE rel_path = ?`, huntTitle+"The Wheel", huntTitle+"The Wheel", hunt); err != nil {
-		t.Fatal(err)
+	for rel, title := range map[string]string{parts: album + " - Letters 1-4", hunt: huntTitle + "The Wheel"} {
+		if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$.title', ?, '$."@rev"', '4'), title = ?
+			WHERE rel_path = ?`, title, title, rel); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@rev"', '4') WHERE rel_path IN (?, ?)`, single, shared); err != nil {
 		t.Fatal(err)

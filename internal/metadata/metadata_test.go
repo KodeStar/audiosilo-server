@@ -381,6 +381,8 @@ func TestPartsTitle(t *testing.T) {
 		// the files share is the book's.
 		{"shared name, chapter tails", "The Wheel of Time", "The Wheel of Time: The Great Hunt - The Wheel", "Book 2", "The Wheel of Time: The Great Hunt - The Dragon", "The Great Hunt"},
 		{"shared name, bracketed parts", "Portal to Nova Roma", "Portal to Nova Roma: Paris (Part 1)", "Book 2", "Portal to Nova Roma: Paris (Part 2)", "Paris"},
+		{"shared name, bracketed album", "Portal to Nova Roma (Unabridged)", "Portal to Nova Roma: Paris (Part 1)", "Book 2", "Portal to Nova Roma: Paris (Part 2)", "Paris"},
+		{"shared name, album in another case", "THE WHEEL OF TIME", "The Wheel of Time: The Great Hunt - The Wheel", "Book 2", "The Wheel of Time: The Great Hunt - The Dragon", "The Great Hunt"},
 		{"shared name, part tails", "Portal to Nova Roma", "Portal to Nova Roma: Athens - Part 1", "Nova Roma 4", "Portal to Nova Roma: Athens - Part 2", "Athens"},
 		{"shared name of two parts", "Cosmere", "Cosmere: Mistborn - The Final Empire - Chapter 1", "Book 1", "Cosmere: Mistborn - The Final Empire - Chapter 38", "Mistborn - The Final Empire"},
 		{"shared subtitle, generic folder", "Sapiens", "Sapiens: A Brief History (Part 1)", "Book 2", "Sapiens: A Brief History (Part 2)", "A Brief History"},

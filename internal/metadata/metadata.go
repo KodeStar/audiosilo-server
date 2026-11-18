@@ -671,31 +671,20 @@ func bookTitle(album, title string) string {
 }
 
 // PartsTitle is the title of a book of several files whose tags gave m (its
-// first file's): Title, unless Title is a title tag that extends the album
-// (bookTitle took "Frankenstein; or, The Modern Prometheus - Letters 1-4" over
-// "Frankenstein; or, The Modern Prometheus"), since each file of such a book may
-// name itself in its title tag, a chapter's name rather than the book's
-// (server#272). Such a tag is kept when it names the book's own folder
-// (pathTitle, PathTitle's reading of it), whole or in what it adds to the album
-// (a box set's "The Expanse Box Set: Leviathan Wakes" in the folder "Leviathan
-// Wakes"), or when another of the book's files, other (the scan reads its
-// last's, and only when PartNamed says the title turns on it), carries the same
-// one ("Harry Potter and the Philosopher's Stone" on every file of an album
-// "Harry Potter", in a folder "HP1"). Where other's tag differs, the name the
-// two share past the album is the book's (partsName: "The Great Hunt" of "The
-// Wheel of Time: The Great Hunt - The Wheel" and "... - The Dragon", "Paris" of
-// "Portal to Nova Roma: Paris (Part 1)" and "(Part 2)"), the album being its
-// series, unless the folder names the album; then the tag with its bracketed
-// part markers left out, when that is all they differ by ("Sapiens: A Brief
-// History (Part 1)" and "(Part 2)"). Only tags that share nothing past the
-// album, each file's own chapter, give the album. With other unread (nil) the
-// folder alone says. An album that names only the book's series then gives way
-// as TitleNotSeries says.
+// first file's) and maybe its last file's, other (nil for unread; the scan
+// reads it only when PartNamed says the title turns on it). A title tag that
+// extends the album may name its file, a chapter rather than the book
+// (server#272), so where PartNamed holds the title is, in order: the tag, when
+// other carries the same one; the name the two share past the album
+// (partsName), unless the folder (pathTitle) names the album; the tag without
+// its bracketed part markers, when that is all they differ by; else the album.
+// With other unread the folder alone says, so the album. An album that names
+// only the book's series then gives way as TitleNotSeries says.
 func (m *Metadata) PartsTitle(pathTitle string, other *Metadata) string {
-	switch {
-	case !m.PartNamed(pathTitle) || (other != nil && strings.EqualFold(m.TitleTag, other.TitleTag)):
+	if !m.PartNamed(pathTitle) || (other != nil && strings.EqualFold(m.TitleTag, other.TitleTag)) {
 		return m.Title
-	case other == nil:
+	}
+	if other == nil {
 		return m.AlbumTag
 	}
 	if !sameName(m.AlbumTag, pathTitle) {
@@ -711,8 +700,10 @@ func (m *Metadata) PartsTitle(pathTitle string, other *Metadata) string {
 
 // partsName is the name two title tags of one book's files (first, last) share
 // past its album: what each adds after the album and a separator (": ", " - "),
-// brackets left out, up to the separator where they part, "" when they share
-// none or only a track marker ("Part 1" of "Album: Part 1 - Chapter 2").
+// brackets left out, up to the separator where they part ("The Great Hunt" of
+// "The Wheel of Time: The Great Hunt - The Wheel" and "... - The Dragon"), ""
+// when they share none or only a track marker ("Part 1" of "Album: Part 1 -
+// Chapter 2").
 func partsName(album, first, last string) string {
 	a := cleanTag(album)
 	f, okF := cutAlbum(cleanTag(first), a)
@@ -725,11 +716,11 @@ func partsName(album, first, last string) string {
 	for n < len(fs) && n < len(ls) && strings.EqualFold(fs[n], ls[n]) {
 		n++
 	}
-	name := f
-	switch {
-	case n == 0:
+	if n == 0 {
 		return ""
-	case n < len(fs):
+	}
+	name := f
+	if n < len(fs) {
 		name = f[:nameSep.FindAllStringIndex(f, n)[n-1][0]]
 	}
 	if trackTailName(name) {
@@ -738,17 +729,16 @@ func partsName(album, first, last string) string {
 	return name
 }
 
-// cutAlbum is title with its leading album and the separator after it cut
-// off; false when title doesn't lead with them.
+// cutAlbum is title with its leading album (afterName's reading of a name at
+// the start of a title) and the separator after it cut off; false when title
+// doesn't lead with them.
 func cutAlbum(title, album string) (string, bool) {
-	if album == "" || len(title) <= len(album) || !strings.EqualFold(title[:len(album)], album) {
+	rest, ok := afterName(title, album)
+	sep := nameSep.FindStringIndex(rest)
+	if !ok || sep == nil || sep[0] != 0 {
 		return "", false
 	}
-	sep := nameSep.FindStringIndex(title[len(album):])
-	if sep == nil || sep[0] != 0 {
-		return "", false
-	}
-	return title[len(album)+sep[1]:], true
+	return rest[sep[1]:], true
 }
 
 // nameSep is a separator between the names a title tag strings together: a
