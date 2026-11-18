@@ -180,14 +180,15 @@ func (c *Catalog) keyPathsIn(ctx context.Context, after int64, all bool) (int, i
 // From the index (indexSpelling), but for one look at the disk (below):
 //
 //  1. a path with no other Unicode spelling (every ASCII path) is p, no lookup;
-//  2. a book at p exactly, or a file of or folder inside a book (bookHolding),
-//     is p;
+//  2. a book at p exactly, a file of or folder inside a book (bookHolding), or
+//     a folder holding books (a navigation folder), is p: what the index has as
+//     given is never read as another spelling, whatever else reads as it;
 //  3. the one book whose path is p in NFC (rel_path or path_key);
 //  4. a file of the innermost folder book above p, or a folder inside one (a
 //     disc folder of a joined book), whose path is p in NFC: that file's
 //     spelling, cut to p's depth for a folder;
-//  5. a folder holding books (a navigation folder) whose path is p with each
-//     name in its given, NFC or NFD spelling: that spelling.
+//  5. a folder holding books whose path is p with each name in its given, NFC
+//     or NFD spelling: that spelling.
 //
 // allow is the caller's scope (nil: every path): a spelling it refuses counts
 // as none, so the answer never depends on what lies outside it (a third
@@ -236,6 +237,14 @@ func (c *Catalog) indexSpelling(ctx context.Context, libraryID int64, p string, 
 	// A track or disc folder spelled as the index has it (every seek of a
 	// stream asks): one lookup, not the reads of steps 3 and 4.
 	if _, _, err := c.bookHolding(ctx, libraryID, p, false); !errors.Is(err, ErrNotFound) {
+		return p, nil, err
+	}
+	// A navigation folder spelled as the index has it, before any other
+	// spelling is looked for: a book of another spelling beside it (a disk
+	// that keeps the two apart) must not take its place, and ownEntry's look
+	// at the disk (a share not mounted at the start, when the re-key asks)
+	// may not be there to keep it.
+	if holding, err := c.FoldersHoldingBooks(ctx, libraryID, []string{p}); err != nil || holding[p] {
 		return p, nil, err
 	}
 	k := unorm.NFC.String(p)
@@ -435,16 +444,14 @@ func (c *Catalog) spellingInBook(ctx context.Context, libraryID int64, p, k stri
 // names have more combinations tries only p, its NFC and its NFD form.
 const maxFolderSpellings = 32
 
-// folderSpelling is Spelling's step 5: p as a folder holding indexed books,
-// each of its names in the spelling given, NFC or NFD (one FoldersHoldingBooks
-// read), the one m admits. p when the index holds books below p as given (m.out
-// then cleared: p is there itself), or below none or several of the other
-// spellings it admits.
+// folderSpelling is Spelling's step 5: p (no folder holding books as given:
+// step 2) as a folder holding indexed books, each of its names in the spelling
+// given, NFC or NFD (one FoldersHoldingBooks read), the one m admits. p when
+// the index holds books below none or several of the other spellings it admits.
 func (c *Catalog) folderSpelling(ctx context.Context, libraryID int64, p string, m *spellMatch) (string, error) {
-	spellings := folderSpellings(p)
+	spellings := folderSpellings(p)[1:] // p itself is first
 	holding, err := c.FoldersHoldingBooks(ctx, libraryID, spellings)
-	if err != nil || holding[p] {
-		m.out = nil
+	if err != nil {
 		return p, err
 	}
 	m.next()

@@ -108,6 +108,49 @@ func TestSpelling(t *testing.T) {
 	}
 }
 
+// TestSpellingNavigationFolderBesideBook: a navigation folder the index holds
+// as given stays as given when a book of the other spelling lies beside it (a
+// disk that keeps the two apart), from the index alone: with no disk to look
+// at (a share not mounted at the start), neither a request for the folder nor
+// the re-key of a favourite on it takes the book for it.
+func TestSpellingNavigationFolderBesideBook(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: filepath.Join(t.TempDir(), "not-mounted")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		nav  = "\u00c9crivain"  // NFC: holds a book
+		book = "E\u0301crivain" // NFD: a book itself
+	)
+	upsert(t, c, &Book{LibraryID: lib.ID, RelPath: nav + "/Livre", IsFolder: true, Title: "Livre",
+		Files: []BookFile{{RelPath: nav + "/Livre/01.mp3"}}})
+	upsert(t, c, &Book{LibraryID: lib.ID, RelPath: book, IsFolder: true, Title: "Book",
+		Files: []BookFile{{RelPath: book + "/01.mp3"}}})
+	if got, outside, err := c.Spelling(ctx, lib.ID, nav, nil); err != nil || got != nav || outside {
+		t.Errorf("Spelling(%+q) = %+q outside=%v %v, want it as given", nav, got, outside, err)
+	}
+	res, err := c.db.ExecContext(ctx, `INSERT INTO users(username, password_hash, role, created_at, updated_at)
+		VALUES('adm','x','admin','t','t')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adm, _ := res.LastInsertId()
+	if _, err := c.db.ExecContext(ctx, `INSERT INTO favourites(user_id, library_id, rel_path, created_at) VALUES(?, ?, ?, 't')`,
+		adm, lib.ID, nav); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := c.RekeyLibrary(ctx, lib.ID)
+	if err != nil || len(rep.Moved) != 0 || len(rep.Skipped) != 0 || len(rep.Failed) != 0 {
+		t.Errorf("re-key = %+v %v, want nothing moved or kept by a guard", rep, err)
+	}
+	var at string
+	if err := c.db.QueryRowContext(ctx, `SELECT rel_path FROM favourites WHERE user_id = ?`, adm).Scan(&at); err != nil || at != nav {
+		t.Errorf("the folder's favourite is at %+q (%v), want %+q", at, err, nav)
+	}
+}
+
 // TestSpellingScope (server#210, security): a spelling the caller's scope
 // refuses counts as none. With an NFC and an NFD folder side by side and a
 // grant on the NFC one only, a third spelling reads as the NFC one, as a book,

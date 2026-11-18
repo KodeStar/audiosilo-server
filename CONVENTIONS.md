@@ -1127,9 +1127,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   progress line every 5 s: a start stopped part way keeps what it keyed (the NULL rows are what is
   left; a re-key of every book records its last id in `server_state('path_keys_resume')`), and the
   version is stored once every book is keyed. `Catalog.Spelling(lib, p)` is the index's spelling of a
-  cleaned path, from the index alone: a path with no other spelling (`normSensitive`: NFC and NFD
+  cleaned path, from the index alone: a path with no other spelling (`HasOtherSpelling`: NFC and NFD
   both) is `p` with no query; then a book at `p` exactly, or a file of or folder inside one
-  (`bookHolding`, so a track spelled as indexed costs one lookup); the one book whose NFC path is `NFC(p)`
+  (`bookHolding`, so a track spelled as indexed costs one lookup), or a folder holding books as given (a
+  navigation folder: what the index has as given is never read as another spelling, so a book of the other
+  spelling beside it never takes its place, even with no disk to look at); the one book whose NFC path is `NFC(p)`
   (`rel_path` or `path_key`, the partial index); a file of, or a folder inside (a disc folder), the
   innermost folder book above it, its files compared by NFC, a folder cut to `p`'s depth; a folder
   holding books, each name as given, NFC or NFD (at most `maxFolderSpellings` combinations, one
