@@ -161,8 +161,9 @@ function oidcMessage(reason) {
   if (!m) return;
   try {
     sessionStorage.removeItem("audiosilo.oidcIntent");
-  } catch {
-    // Refused storage holds nothing.
+  } catch (_) {
+    // Refused storage holds nothing. (A named binding: this page's scripts
+    // keep to syntax every browser that runs the rest of them parses.)
   }
   history.replaceState(null, "", location.pathname + location.search);
   const text = oidcMessage(m[1]);
