@@ -536,12 +536,8 @@ export function parkHint(
 
 /**
  * The reasons the server writes on a job it cancels itself, in plain words
- * (internal/bridge/jobs.go: the kinds' `cancelsOpen`, CancelMoved,
- * CancelReplacedRequest, CancelModuleOff, and a chapter detection's
- * CancelChaptersEdited and CancelChaptersChosen; internal/bridge/audible.go: an Audible poll's
- * CancelAudibleRemoved and CancelAudiblePaused, an Audible sync's
- * CancelAudibleSyncOff; also on a working job it asked
- * to stop, kept through the Bridge's reports): shown as a sentence. Any other
+ * (internal/bridge/jobs.go `cancelReasons`; also on a working job it asked to
+ * stop, kept through the Bridge's reports): shown as a sentence. Any other
  * error on a cancelled job is the park's or the Bridge's own text (a
  * supervisor's, say), never shown (BRIDGE-02). The server's
  * TestCancelReasonsMatchConsole (internal/bridge) fails when the two lists differ.

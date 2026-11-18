@@ -1754,10 +1754,7 @@ const (
 )
 
 // IsCancelReason reports whether text is one of the server's own cancel
-// reasons: the kinds' cancelsOpen, CancelMoved, CancelReplacedRequest,
-// CancelModuleOff, a chapter detection's (CancelChaptersEdited,
-// CancelChaptersChosen) or an Audible account's job's (CancelAudibleRemoved,
-// CancelAudiblePaused, CancelAudibleSyncOff).
+// reasons (cancelReasons).
 func IsCancelReason(text string) bool {
 	return slices.Contains(cancelReasons(), text)
 }
