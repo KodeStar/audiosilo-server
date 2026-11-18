@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -338,16 +339,19 @@ func TestMetaGeneratedInvalidAttachmentIgnored(t *testing.T) {
 }
 
 // TestItemGenerated: a book with generated characters or recaps says so on the
-// player's book JSON (generated: true), so the player asks /meta for it even
-// without an ASIN or ISBN; a book with only the provenance file, or nothing,
-// leaves the field off.
+// player's book JSON (generated: true, and which parts in generated_parts), so
+// the player asks /meta for it even without an ASIN or ISBN; a book with only
+// the provenance file, or nothing, leaves both fields off.
 func TestItemGenerated(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
 	root := copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b", cradlePart)
 	for dir, files := range map[string]map[string]string{
-		mistbornBook: {"characters.json": `{"characters":[{"id":"vin","name":"Vin","reveal":{"chapter":1}}]}`},
-		cradleBook:   {"bridge.json": `{"generator":"audiosilo-bridge","job_id":3}`},
+		mistbornBook: {
+			"characters.json":  `{"characters":[{"id":"vin","name":"Vin","reveal":{"chapter":1}}]}`,
+			"description.json": fmt.Sprintf(`{"work":"w","text":%q}`, testDescriptionText),
+		},
+		cradleBook: {"bridge.json": `{"generator":"audiosilo-bridge","job_id":3}`},
 	} {
 		at := filepath.Join(root, filepath.FromSlash(dir), ".audiosilo")
 		if err := os.MkdirAll(at, 0o755); err != nil {
@@ -372,6 +376,10 @@ func TestItemGenerated(t *testing.T) {
 		}
 		if got := strings.Contains(body, `"generated":true`); got != want || (!want && strings.Contains(body, `"generated"`)) {
 			t.Errorf("item %s: generated %v, want %v: %s", path, got, want, body)
+		}
+		if got := strings.Contains(body, `"generated_parts":["characters","description"]`); got != want ||
+			(!want && strings.Contains(body, `"generated_parts"`)) {
+			t.Errorf("item %s: generated_parts %v, want %v: %s", path, got, want, body)
 		}
 	}
 }

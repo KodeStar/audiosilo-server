@@ -670,6 +670,94 @@ func bookTitle(album, title string) string {
 	return a
 }
 
+// PartsTitle is the title of a book of several files whose tags gave m (its
+// first file's) and maybe its last file's, other (nil for unread; the scan
+// reads it only when PartNamed says the title turns on it). A title tag that
+// extends the album may name its file, a chapter rather than the book
+// (server#272), so where PartNamed holds the title is, in order: the tag, when
+// other carries the same one; the name the two share past the album
+// (partsName), unless the folder (pathTitle) names the album; the tag without
+// its bracketed part markers, when that is all they differ by; else the album.
+// With other unread the folder alone says, so the album. An album that names
+// only the book's series then gives way as TitleNotSeries says.
+func (m *Metadata) PartsTitle(pathTitle string, other *Metadata) string {
+	if !m.PartNamed(pathTitle) || (other != nil && strings.EqualFold(m.TitleTag, other.TitleTag)) {
+		return m.Title
+	}
+	if other == nil {
+		return m.AlbumTag
+	}
+	if !sameName(m.AlbumTag, pathTitle) {
+		if name := partsName(m.AlbumTag, m.TitleTag, other.TitleTag); name != "" {
+			return name
+		}
+	}
+	if canonTag(m.TitleTag) == canonTag(other.TitleTag) {
+		return cleanTag(m.TitleTag)
+	}
+	return m.AlbumTag
+}
+
+// partsName is the name two title tags of one book's files (first, last) share
+// past its album: what each adds after the album and a separator (": ", " - "),
+// brackets left out, up to the separator where they part ("The Great Hunt" of
+// "The Wheel of Time: The Great Hunt - The Wheel" and "... - The Dragon"), ""
+// when they share none or only a track or volume marker ("Part 1" of "Album:
+// Part 1 - Chapter 2", "Book 1" of "Album: Book 1 - Chapter 2").
+func partsName(album, first, last string) string {
+	a := cleanTag(album)
+	f, okF := cutAlbum(cleanTag(first), a)
+	l, okL := cutAlbum(cleanTag(last), a)
+	if !okF || !okL {
+		return ""
+	}
+	fs, ls := nameSep.Split(f, -1), nameSep.Split(l, -1)
+	n := 0
+	for n < len(fs) && n < len(ls) && sameName(fs[n], ls[n]) {
+		n++
+	}
+	if n == 0 {
+		return ""
+	}
+	name := f
+	if n < len(fs) {
+		name = f[:nameSep.FindAllStringIndex(f, n)[n-1][0]]
+	}
+	if trackTailName(name) || volumeMarker(name) {
+		return ""
+	}
+	return name
+}
+
+// cutAlbum is title with its leading album (afterName's reading of a name at
+// the start of a title) and the separator after it cut off; false when title
+// doesn't lead with them.
+func cutAlbum(title, album string) (string, bool) {
+	rest, ok := afterName(title, album)
+	if !ok {
+		return "", false
+	}
+	sep := nameSep.FindStringIndex(rest)
+	if sep == nil || sep[0] != 0 {
+		return "", false
+	}
+	return rest[sep[1]:], true
+}
+
+// nameSep is a separator between the names a title tag strings together: a
+// colon, or a spaced dash or bar ("Series: Book - Chapter").
+var nameSep = regexp.MustCompile(`(?:\s*:|\s+[-–—|])\s+`)
+
+// PartNamed reports whether m's title may name its file, not the book of
+// several files it is the first of: a title tag bookTitle took over the album
+// it extends, which doesn't name the book's folder (pathTitle) as PartsTitle
+// reads it. Only then does the book's title turn on another file's tags, so
+// only then is one worth reading. Nil reads as no tags.
+func (m *Metadata) PartNamed(pathTitle string) bool {
+	return m != nil && m.AlbumTag != "" && m.Title == m.TitleTag && m.TitleTag != m.AlbumTag &&
+		!sameName(m.TitleTag, pathTitle) && !sameName(albumTail(m.AlbumTag, m.TitleTag), pathTitle)
+}
+
 // albumTail is what a title tag adds to the album when it extends it at a word
 // boundary (both canonTag'd, the joining punctuation trimmed), "" when it
 // doesn't.
@@ -706,8 +794,12 @@ func startsAlnum(s string) bool {
 
 // canonTag lowercases a tag and strips bracketed groups ("(Unabridged)") so an
 // edition suffix doesn't hide an album-is-prefix-of-title relationship.
-func canonTag(s string) string {
-	return strings.ToLower(strings.Join(strings.Fields(bracketed.ReplaceAllString(s, " ")), " "))
+func canonTag(s string) string { return strings.ToLower(cleanTag(s)) }
+
+// cleanTag is a tag with its bracketed groups stripped and its spaces
+// collapsed: canonTag's reading with the case kept.
+func cleanTag(s string) string {
+	return strings.Join(strings.Fields(bracketed.ReplaceAllString(s, " ")), " ")
 }
 
 // bracketed strips parenthetical/bracketed groups for canonTag.

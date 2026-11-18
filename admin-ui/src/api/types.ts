@@ -584,6 +584,11 @@ export interface AdminSettings {
     available: boolean;
     /** The daily upcoming-releases check (config upcoming.enabled; absent from an older server). */
     upcoming?: boolean;
+    /**
+     * How many days after its release a book still counts as new (config upcoming.window_days as
+     * running; read-only; absent from an older server, which counts 90).
+     */
+    upcoming_window_days?: number;
     /** The check's last run (read-only; absent from an older server or without the service). */
     upcoming_status?: UpcomingStatus;
     /**

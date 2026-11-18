@@ -716,6 +716,125 @@ func TestClaimHoldsJobsOfAnOffModule(t *testing.T) {
 	}
 }
 
+// A claimed job that only files to the community (sidecars.contribute,
+// meta.correct) is asked to stop at the Bridge's next report once the
+// Contributions module is off, with the server's reason, which its end keeps
+// (server#218), and a parked one once it reports working again; with the
+// module on, for a job that needs no module, and for a parked job's report
+// that leaves it parked, the report changes nothing.
+func TestUpdateHeldStopsAShareOfAnOffModule(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	q := newTestQueue(t)
+	q.beatSetup(t, true, true, KindSidecars, KindContribute, KindCorrect)
+	on := true
+	q.ModuleOn = func(id string) bool { return id != ModuleContributions || on }
+	community, _, err := q.contribute("", ptr("Author/One"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, _, err := q.sidecars("", ptr("Author/Two"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parked, _, err := q.contribute("", ptr("Author/Three"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	correction, _, err := q.correct(goodCorrection, ptr("Author/Four"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		if j, err := q.claim(ctx, q.token, []string{KindSidecars, KindContribute, KindCorrect}); err != nil || j == nil {
+			t.Fatalf("claim = %+v, %v", j, err)
+		}
+	}
+	running := func(id int64) *Job {
+		t.Helper()
+		j, err := q.UpdateHeld(ctx, id, Update{Attempt: 1, State: ptr(StateRunning), Error: ptr("")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+	if j := running(community.ID); j.CancelRequested || j.Error != "" {
+		t.Fatalf("module on: %+v, want working on", j)
+	}
+	if _, err := q.UpdateHeld(ctx, parked.ID, Update{Attempt: 1, State: ptr(StateNeedsAttention), Error: ptr("needs a look")}); err != nil {
+		t.Fatal(err)
+	}
+	on = false
+	// A parked job's report while it stays parked asks nothing of it; its
+	// report of working again does.
+	if j, err := q.UpdateHeld(ctx, parked.ID, Update{Attempt: 1, Progress: json.RawMessage(`{"step":"waiting"}`)}); err != nil ||
+		j.CancelRequested || j.State != StateNeedsAttention {
+		t.Fatalf("parked, module off: %+v, %v; want parked, not asked to stop", j, err)
+	}
+	if j := running(parked.ID); !j.CancelRequested || j.Error != CancelModuleOff {
+		t.Fatalf("parked job working again, module off: %+v, want asked to stop with %q", j, CancelModuleOff)
+	}
+	if j := running(local.ID); j.CancelRequested || j.Error != "" {
+		t.Fatalf("a job needing no module: %+v, want working on", j)
+	}
+	if j := running(correction.ID); !j.CancelRequested || j.Error != CancelModuleOff {
+		t.Fatalf("a correction, module off: %+v, want asked to stop with %q", j, CancelModuleOff)
+	}
+	j := running(community.ID)
+	if !j.CancelRequested || j.Error != CancelModuleOff || j.State != StateRunning {
+		t.Fatalf("module off: %+v, want asked to stop with %q", j, CancelModuleOff)
+	}
+	if !IsCancelReason(j.Error) {
+		t.Fatalf("%q is not a server cancel reason", j.Error)
+	}
+	j, err = q.UpdateHeld(ctx, community.ID, Update{Attempt: 1, State: ptr(StateCancelled), Error: ptr("stopped")})
+	if err != nil || j.State != StateCancelled || j.Error != CancelModuleOff {
+		t.Fatalf("its end = %+v, %v; want cancelled with the server's reason", j, err)
+	}
+}
+
+// A job the Bridge holds that does more than file to the community carries on
+// with its module off (queued, it would be held): a generate job that
+// contributes, whose stop would throw away what it is writing, finishes with
+// its own result, and a podcast or Audible job a claim handed out is never
+// asked to stop.
+func TestUpdateHeldLeavesOtherJobsOfAnOffModule(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	q := newTestQueue(t)
+	q.beatSetup(t, true, true, KindSidecars, KindAudiblePoll)
+	on := true
+	q.ModuleOn = func(string) bool { return on }
+	generate, _, err := q.sidecars(`{"contribute":"issue"}`, ptr("Author/One"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	poll, _, err := q.Enqueue(ctx, AudiblePoll("acct0001", "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if j, err := q.claim(ctx, q.token, []string{KindSidecars, KindAudiblePoll}); err != nil || j == nil {
+			t.Fatalf("claim = %+v, %v", j, err)
+		}
+	}
+	on = false
+	if !q.held(generate.Kind, generate.Params) || !q.held(poll.Kind, poll.Params) {
+		t.Fatal("queued, both jobs would be held")
+	}
+	for name, id := range map[string]int64{"generate and share": generate.ID, "audible poll": poll.ID} {
+		j, err := q.UpdateHeld(ctx, id, Update{Attempt: 1, State: ptr(StateRunning), Error: ptr("")})
+		if err != nil || j.CancelRequested || j.Error != "" || j.State != StateRunning {
+			t.Fatalf("%s, module off: %+v, %v; want working on", name, j, err)
+		}
+	}
+	result := json.RawMessage(`{"characters":3,"contributed":{"characters":"https://github.com/o/r/issues/1"}}`)
+	j, err := q.UpdateHeld(ctx, generate.ID, Update{Attempt: 1, State: ptr(StateDone), Result: result, Error: ptr("")})
+	if err != nil || j.State != StateDone || j.CancelRequested || j.Error != "" || string(j.Result) != string(result) {
+		t.Fatalf("generate and share's end = %+v, %v; want done with its result", j, err)
+	}
+}
+
 // ModuleFor: the community kinds need contributions, and so does a generate
 // job only when it contributes.
 func TestModuleFor(t *testing.T) {

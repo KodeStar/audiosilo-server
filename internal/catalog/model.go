@@ -171,8 +171,10 @@ type Book struct {
 	// for a book with an ASIN/ISBN or this; omitted otherwise.
 	Generated bool `json:"generated,omitempty"`
 	// GeneratedParts is which of those parts its signature names (sigParts), so
-	// /meta reads only parts the book has.
-	GeneratedParts metadata.AttachmentParts `json:"-"`
+	// /meta reads only parts the book has; on the wire as generated_parts, a
+	// list of "characters", "recaps" and "description" beside the bool (which
+	// older players read), omitted with none (server#218).
+	GeneratedParts metadata.AttachmentParts `json:"generated_parts,omitzero"`
 	// ScanError is what went wrong reading the book's files when it was last indexed
 	// (a code; "" = nothing), in which file (library-relative) and the tool's
 	// message. SuspectParts is how many separate books its parts look like (0 = one;

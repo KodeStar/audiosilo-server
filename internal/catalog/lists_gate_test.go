@@ -140,6 +140,17 @@ func TestSetQueueOldClientKeepsPodcastEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPaths(t, "leading episode", queuePaths(t, e.c, e.user, e.every), e.eps[2], "B", "A")
+
+	// A reorder that would shuffle the episodes after the books still leaves
+	// the leading one first (server#219); the rest go to the end.
+	if err := e.c.SetQueue(e.ctx, e.user, nil, e.newScopes, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.queue(t, e.ep(0), e.book("A"), e.ep(1), e.book("C"), e.ep(2))
+	if err := e.c.SetQueue(e.ctx, e.user, []Ref{e.book("C"), e.book("A")}, e.oldScopes, e.gated(t, e.old)); err != nil {
+		t.Fatal(err)
+	}
+	wantPaths(t, "leading episode through a shuffle", queuePaths(t, e.c, e.user, e.every), e.eps[0], "C", "A", e.eps[1], e.eps[2])
 }
 
 // A podcast-seeing player's replace still deletes what it leaves out.

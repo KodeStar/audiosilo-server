@@ -659,7 +659,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   per run (`upcoming.Announce`: up to 5 titles as "Title (Series #position)", `upcoming.Release.Label`,
   the count of all, dedupe key a digest of the run's work ids). Config `upcoming.enabled` (live,
   `AUDIOSILO_UPCOMING_ENABLED`, console Settings > Metadata, setting id `metadata.upcoming`) and `upcoming.window_days` (1-365, default
-  90, restart, `AUDIOSILO_UPCOMING_WINDOW_DAYS`; 0 or anything outside refuses to load). The route is 404
+  90, restart, `AUDIOSILO_UPCOMING_WINDOW_DAYS`; 0 or anything outside refuses to load; `GET /admin/settings`
+  carries the running one read-only as `metadata.upcoming_window_days`, which the Series cards mark "New"
+  by, server#279). The route is 404
   `metadata_off`, then 404 `upcoming_off`. `MetaSeriesWork.release_date` (additive, omitted when unknown)
   feeds the console's dated gaps on the Series cards. **The calendar feed (U3, security-critical)**: `GET
   /me/upcoming/calendar` -> `{"active", "created_at"?}` (requireAuth, notKid; an API key may read it; the
@@ -1642,7 +1644,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   stopped answering: its lstat and read are `metadata.Bounded` calls, see In-process probe) is
   left as it was by the backfill and by a re-index (`ABSReading.Unread`: `UpsertBook` keeps the stored
   `abs_sig` and `abs_file` with no `abs_indexed_at`, so the book keeps its ABS values and the next scan
-  reads it again; server#213); both log a warning. Known gap: a position read from an ABS title (`titlePosition`) shows as `tag`.
+  reads it again; server#213); both log a warning. A position read from the title (`titlePosition`) takes the
+  title's source: `abs` when the file gave the title, the path's or a tag's otherwise (server#213).
   **Bridge attachments** (`metadata/attachments.go`, `library/attachments.go`, `catalog/attachments.go`,
   migrations `0048`, `0050`, `0051`, `0058`; BRIDGE-PLAN.md Phases 1a, 1c, 1d and 3c): the Bridge writes a book's generated `characters.json`,
   `recaps.json`, `description.json`, `chapters.json` (chapters found in the narration), `bridge.json` (provenance) and
@@ -1682,8 +1685,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book's attachments, never its audio (the Bridge's `POST /bridge/rescan` mode `attachments`). The
   player's `Book.generated` (list, search, item, recent, the next book) is true when the signature names
   a characters, recaps or description file (`sigParts`, an allow-list: bridge.json, chapters.json and any name a later
-  server adds are none; `Book.GeneratedParts`, off the wire, says which; the narrow column, no join), so the player asks `/meta`
-  for a book with no ASIN/ISBN too. Derived from the files: rebuildable, never carried by a move.
+  server adds are none; the narrow column, no join), so the player asks `/meta`
+  for a book with no ASIN/ISBN too. `Book.GeneratedParts` says which, on the wire as `generated_parts`
+  (`["characters","recaps","description"]`, those it has, in that order; omitted with none, beside the bool
+  older players read; server#218). Derived from the files: rebuildable, never carried by a move.
   **Series ranges** (an omnibus of books 1-3): the `series_index` field may hold a range,
   canonical `"1-3"` (input `1 - 3` and the en dash too; `metadata.ParseSeriesRange`: 0 < start <
   end <= 100000, a span of at most `metadata.MaxSeriesSpan` = 100, since the slots a range covers
@@ -1798,20 +1803,38 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   as they do now (a series tag carrying its position, `metadata.SplitSeriesTag`; a title in any
   script not generic, `IsGenericTitle`; the MP4 `\xa9nrt` item and a narrator tag over composer)
   still holds the old reading; the snapshot carries the narrator too, so a backfill rewrites it.
-  **Backfill of revisions 2 to 4**: a snapshot older than today's that a newer revision may read
+  **A book of several files' title** (`@rev` 5, server#272): `bookTitle` prefers a title tag that
+  extends the album with a tail that isn't a track marker, which for a book of several files is its
+  first file's own name ("Frankenstein; or, The Modern Prometheus - Letters 1-4", "The Odyssey: Book
+  01"), so `readNames` takes `metadata.PartsTitle` for one: the album when the title is such a tag,
+  unless the tag is one the book's files carry alike, which is the book's. Two things say so: the tag,
+  whole or in what it adds to the album, names the book's folder (`PathTitle`: a box set's "The Expanse
+  Box Set: Leviathan Wakes" in the folder "Leviathan Wakes"), or the book's last file has the same title
+  tag (any case; the series as the album and "Harry Potter and the Philosopher's Stone" on every file,
+  in a folder "HP1" or "Book 1", which would otherwise title every book of the series "Harry Potter").
+  The last file's tags are looked at only when the title turns on them (`Metadata.PartNamed`, the
+  scanner's `partNamed`): a scan has them from the book's own read (`buildMultiFileChapters`), the
+  backfill and the setup preview read that one file more, and a backfill that can't read it leaves the
+  names for the next scan, never the album on a guess. `TitleNotSeries` then applies as for any album.
+  A book of one file keeps the title tag ("Portal to Nova Roma: Paris"). Corpus check: the LibriVox perf library (120 books) and the testbed libraries
+  renamed four books, each to its album (Frankenstein, The Odyssey, The Diary of a Nobody, The Secret
+  Agent's `secret_agent`), and nothing else.
+  **Backfill of revisions 2 to 5**: a snapshot older than today's that a newer revision may read
   otherwise (`Signature.NamesCheck`, `namesCheck` by `revNumber`: before revision 2 a title
   `metadata.MaybeSeriesTitle` flags, over the snapshot's title and series; before revision 3 a leaf
   `metadata.PathLeafSeries` reads; before revision 4 `tagReadingMayDiffer`: an MP4, a narrator, a
-  series `SplitSeriesTag` splits, a non-ASCII letter in the title or path)
+  series `SplitSeriesTag` splits, a non-ASCII letter in the title or path; before revision 5 a book
+  of several files, which `Signatures` counts in `book_files` only for a folder book's older snapshot,
+  and whose last file is read too where its title turns on it, `partNamed`)
   is read once by the next scan with the PathRead read and rewritten by `SetPathReading` (which
   skips only a snapshot already at `scannedRev`), no re-index and no migration (a
   `PathFromSnapshot` one waits for that read too, so an unreadable file never records today's
   revision with its names unread). The reads run `readSlots` wide (`tagRead`, batched
   `tagReadsPerSlot` per slot, applied before each backfill flush; one a Stop cuts short is dropped
   for the next scan), so a large revision-4 backfill (every narrated book) costs one parallel tag
-  read each, once. A current `@rev` 1 to 3 snapshot it doesn't flag
+  read each, once. A current `@rev` 1 to 4 snapshot it doesn't flag
   (`Signature.RevStamp`: its stamp the row's `indexed_at`) is stamped at today's revision by that
-  scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 to 3,
+  scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 to 4,
   `revOlderOwn`), so later scans don't test it again (`MaybeSeriesTitle` is about 2 µs a row); a
   snapshot of no revision stays until its next re-index or path reading. A stamped book is never
   tested again, so a later change that makes the reading change more books (`TitleNotSeries` more
@@ -3119,7 +3142,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it, and `Enqueue` refuses one 409 `cannot_contribute` unless `Status.CanContribute()`. While the module
   is off a queued one is **held** (`bridge.Service.ModuleOn`, wired by `SetBridge`): claims pass over it
   (`nextQueued`) until the module is on again, so turning it off leaves its queued jobs at rest (one a
-  lapsed lease requeued included); a job the Bridge holds (claimed, running or parked) carries on.
+  lapsed lease requeued included). A job the Bridge already holds carries on, but for one of the two kinds
+  that only file (`sidecars.contribute`, `meta.correct`: `Service.stopsShare`, the kind's own module), which
+  write nothing: a claimed or running one is asked to stop at the Bridge's next report (`UpdateHeld` sets
+  `cancel_requested` with the server's reason `CancelModuleOff`, "its module was turned off", in the
+  console's `SERVER_CANCEL_REASONS`; server#218), a parked one when it reports working again. A claimed
+  `sidecars.generate` job with `contribute: "issue"` is never asked: the Bridge would drop the characters
+  and recaps it is writing, and it files them itself at its end, a step the server has no part in. A
+  podcast or Audible job a claim handed out carries on with its module off too.
   `sidecars.contribute` (family `sidecars`; "Share with the community" after a local run: the Bridge files
   what its engine book holds): a book `path`, params strict `{work_id?, dimensions?}` (`dimensions` from
   `characters`, `recaps`, each once, stored in that order; absent or empty = both; no `work_id` takes the
@@ -3229,7 +3259,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   A whole-list replace (`PUT /me/queue`, `PUT /me/collections/{id}/items`) from a caller the gate
   hides podcasts from keeps the stored entries only the gate hides (`catalog.GatedScopes`: their
   podcast scopes as a podcast-seeing client would get them, passed as `keep`), each after the listed
-  entry it followed, or all after the list in stored order when the new order would shuffle them; they
+  entry it followed, or, when the new order would shuffle them, those before any listed entry first and
+  the rest after the list, in stored order (`withKept`, server#219); they
   count toward the cap as an add's hidden rows do (oldest evicted). Entries hidden for another reason
   (a revoked share, an unfollowed private show) and every replace from a podcast-seeing caller keep
   the delete rule, so a 2.1.x device reordering Up next can't drop a 2.2.0 player's episodes.
@@ -3710,7 +3741,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`bridge.NetworkFailure`: `dns`, `network`, `timeout`, `tls`, what every show fails with while the
   Bridge's internet is down) need six (`catalog.NetworkFailingAfter`), and a mixed run is announced
   once the two shares add up to one (`feedRun.due`: two answers and two timeouts, say);
-  `feed_secret_missing` is announced at once without counting; another failure (`bridge_lost`, an
+  `feed_secret_missing` is announced at once without counting (and sets the show's
+  `status.secret_missing` until a check succeeds, so a client can say "follow it again by its address";
+  server#219); another failure (`bridge_lost`, an
   unwritable library) neither counts nor resets; a follower's Check now (a poll with a requester) counts
   nothing toward the run and leaves the scheduled polls' backoff as it was (`uncountedCheck`; a later
   Retry-After still holds them off), server#403, though its `gone` is still announced at once; a successful poll resets the run and, after an

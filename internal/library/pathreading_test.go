@@ -1,6 +1,7 @@
 package library
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -193,7 +194,7 @@ func TestScanTitleNotSeries(t *testing.T) {
 	// for its series (read, unchanged) by their readings, and the one whose title
 	// isn't a series, never read, stamped (StampScannedRev), so no later scan
 	// tests it again.
-	wantRevs := []string{edited + "=4", vall + "=4", first + "=4", tufo + "=4", carl + "=4"}
+	wantRevs := []string{edited + "=5", vall + "=5", first + "=5", tufo + "=5", carl + "=5"}
 	slices.Sort(wantRevs)
 	if !slices.Equal(revs, wantRevs) {
 		t.Errorf("revisions = %v, want %v", revs, wantRevs)
@@ -220,6 +221,157 @@ func TestScanTitleNotSeries(t *testing.T) {
 	}
 	want[edited] = "Emergence"
 	check("after clearing the edit")
+}
+
+// A book of several files takes its album over its first file's title tag
+// that extends it (metadata.PartsTitle, server#272): each file's tag names that
+// file ("Frankenstein; ... - Letters 1-4"). A book of one file keeps the title
+// tag ("Portal to Nova Roma: Paris"), and so does one whose tag names its
+// folder ("The Expanse Box Set: Leviathan Wakes" in "Leviathan Wakes") or is on
+// its last file too (the series as the album, the book's title on every file,
+// in a folder naming neither). Where the files' tags differ, the name they
+// share past the album is the book's ("The Great Hunt" of "The Wheel of Time:
+// The Great Hunt - The Wheel"), and only tags that share none give the album.
+// One read before revision 5 is put right by the next scan from one read of
+// its first file's tags, and of its last's where the title turns on them, with
+// no re-index; a book of one file needs no read and is stamped.
+func TestScanPartsTitle(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root reads unreadable files")
+	}
+	ctx := t.Context()
+	ffprobe := lookFFprobe(t)
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	const (
+		parts  = "Mary Shelley/Frankenstein"
+		single = "Dennis E. Taylor/Paris"
+		album  = "Frankenstein; or, The Modern Prometheus"
+	)
+	silence(t, root, parts+"/01.mp3", 1, "album="+album, "title="+album+" - Letters 1-4", "artist=Mary Shelley")
+	silence(t, root, parts+"/02.mp3", 1, "album="+album, "title="+album+" - Chapters 1-4", "artist=Mary Shelley")
+	silence(t, root, single+"/Paris.mp3", 1, "album=Portal to Nova Roma", "title=Portal to Nova Roma: Paris", "artist=Dennis E. Taylor")
+	// A box set's album, each book's files titled with the book: the tag names
+	// the book's folder, so it stays.
+	const boxed, boxTitle = "James S. A. Corey/Leviathan Wakes", "The Expanse Box Set: Leviathan Wakes"
+	silence(t, root, boxed+"/01.mp3", 1, "album=The Expanse Box Set", "title="+boxTitle, "artist=James S. A. Corey")
+	silence(t, root, boxed+"/02.mp3", 1, "album=The Expanse Box Set", "title="+boxTitle, "artist=James S. A. Corey")
+	// The series as the album and the book's title on every file, in a folder
+	// that names neither: the last file's tag says the first's is the book's.
+	const shared, sharedTitle = "J.K. Rowling/HP1", "Harry Potter and the Philosopher's Stone"
+	for _, f := range []string{"/01.mp3", "/02.mp3", "/03.mp3"} {
+		silence(t, root, shared+f, 1, "album=Harry Potter", "title="+sharedTitle, "artist=J.K. Rowling")
+	}
+	// The series as the album and each file titled "<album>: <book> <part or
+	// chapter>" in a folder that names neither: the name the files share.
+	const hunt, nova, athens = "Robert Jordan/Book 2", "Pat Writer/Book 2", "Pat Writer/Nova Roma 4"
+	const wot, huntTitle = "The Wheel of Time", "The Wheel of Time: The Great Hunt - "
+	for i, ch := range []string{"The Wheel", "The Flame", "The Dragon"} {
+		silence(t, root, fmt.Sprintf("%s/%02d.mp3", hunt, i+1), 1, "album="+wot, "title="+huntTitle+ch, "artist=Robert Jordan")
+	}
+	for i, part := range []string{"1", "2"} {
+		silence(t, root, fmt.Sprintf("%s/%02d.mp3", nova, i+1), 1, "album=Portal to Nova Roma", "title=Portal to Nova Roma: Paris (Part "+part+")", "artist=Pat Writer")
+		silence(t, root, fmt.Sprintf("%s/%02d.mp3", athens, i+1), 1, "album=Portal to Nova Roma", "title=Portal to Nova Roma: Athens - Part "+part, "artist=Pat Writer")
+	}
+	// Each file's title only its chapter past the album: the album, which a
+	// series tag naming it then gives way to the folder (TitleNotSeries).
+	const eye, eyeSeries = "Robert Jordan/The Eye of the World", "Robert Jordan 2/The Eye of the World"
+	for i, ch := range []string{"Ravens", "An Empty Road", "The Peddler"} {
+		silence(t, root, fmt.Sprintf("%s/%02d.mp3", eye, i+1), 1, "album="+wot, "title="+wot+" - "+ch, "artist=Robert Jordan")
+		silence(t, root, fmt.Sprintf("%s/%02d.mp3", eyeSeries, i+1), 1, "album="+wot, "title="+wot+" - "+ch, "artist=Robert Jordan", "series="+wot)
+	}
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, ffprobe, slog.Default())
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		parts: album, single: "Portal to Nova Roma: Paris", boxed: boxTitle, shared: sharedTitle,
+		hunt: "The Great Hunt", nova: "Paris", athens: "Athens", eye: wot, eyeSeries: "The Eye of the World",
+	}
+	check := func(when string) {
+		t.Helper()
+		for rel, title := range want {
+			b, err := cat.GetBookByPath(ctx, lib.ID, rel)
+			if err != nil || b.Title != title {
+				t.Errorf("%s: %s = %+v (err %v), want title %q", when, rel, b, err, title)
+			}
+		}
+	}
+	check("first scan")
+
+	// The snapshots of revision 4: the first file's title tag as the title.
+	for rel, title := range map[string]string{parts: album + " - Letters 1-4", hunt: huntTitle + "The Wheel"} {
+		if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$.title', ?, '$."@rev"', '4'), title = ?
+			WHERE rel_path = ?`, title, title, rel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@rev"', '4') WHERE rel_path IN (?, ?)`, single, shared); err != nil {
+		t.Fatal(err)
+	}
+	sigs, err := cat.Signatures(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sigs[parts].NamesCheck || !sigs[shared].NamesCheck || sigs[single].NamesCheck || !sigs[single].RevStamp {
+		t.Fatalf("signatures: several files %+v and %+v, one file %+v; want the first two read, the other stamped",
+			sigs[parts], sigs[shared], sigs[single])
+	}
+	// The book of one file is never read: unreadable, it keeps its reading.
+	f := filepath.Join(root, filepath.FromSlash(single+"/Paris.mp3"))
+	if err := os.Chmod(f, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(f, 0o644) })
+	res, err := s.Scan(ctx, *lib)
+	if err != nil || res.Updated != 0 {
+		t.Fatalf("rescan = %+v (err %v), want the title backfilled, nothing re-indexed", res.ScanCounts, err)
+	}
+	check("after the backfill")
+	var stale int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books
+		WHERE json_extract(scanned, '$."@rev"') IS NOT '5'`).Scan(&stale); err != nil || stale != 0 {
+		t.Fatalf("snapshots before today's revision after the backfill = %d (err %v), want 0", stale, err)
+	}
+
+	// A title that turns on the last file's tags waits for them: with that file
+	// unreadable the snapshot keeps its revision for the next scan, never the
+	// album recorded on a guess.
+	rev := func() (r string) {
+		t.Helper()
+		if err := db.QueryRowContext(ctx, `SELECT json_extract(scanned, '$."@rev"') FROM books WHERE rel_path = ?`, shared).Scan(&r); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@rev"', '4') WHERE rel_path = ?`, shared); err != nil {
+		t.Fatal(err)
+	}
+	last := filepath.Join(root, filepath.FromSlash(shared+"/03.mp3"))
+	if err := os.Chmod(last, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(last, 0o644) })
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	check("last file unreadable")
+	if got := rev(); got != "4" {
+		t.Fatalf("revision with the last file unreadable = %q, want 4 (left for the next scan)", got)
+	}
+	if err := os.Chmod(last, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	check("last file readable again")
+	if got := rev(); got != "5" {
+		t.Fatalf("revision once the last file is read = %q, want 5", got)
+	}
 }
 
 // A book one folder deep whose snapshot alone would settle its path reading
@@ -277,7 +429,7 @@ func TestScanNamesCheckWaitsForRead(t *testing.T) {
 	if _, err := s.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	reading("readable again", "From The Ashes", "4")
+	reading("readable again", "From The Ashes", "5")
 }
 
 // A leaf named "Author; Series; Book NN[; Title]" states the book's series and
@@ -372,7 +524,7 @@ func TestScanLeafStatesSeries(t *testing.T) {
 	check("after the backfill")
 	var stale int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books
-		WHERE json_extract(scanned, '$."@rev"') IS NOT '4'`).Scan(&stale); err != nil || stale != 0 {
+		WHERE json_extract(scanned, '$."@rev"') IS NOT '5'`).Scan(&stale); err != nil || stale != 0 {
 		t.Fatalf("snapshots before today's revision after the backfill = %d (err %v), want 0", stale, err)
 	}
 	sigs, err := cat.Signatures(ctx, lib.ID)
@@ -461,7 +613,7 @@ func TestScanTagReadingRevision(t *testing.T) {
 	}
 	var stale int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books
-		WHERE json_extract(scanned, '$."@rev"') IS NOT '4'`).Scan(&stale); err != nil || stale != 0 {
+		WHERE json_extract(scanned, '$."@rev"') IS NOT '5'`).Scan(&stale); err != nil || stale != 0 {
 		t.Fatalf("snapshots before today's revision after the backfill = %d (err %v), want 0", stale, err)
 	}
 	if sigs, err = cat.Signatures(ctx, lib.ID); err != nil {

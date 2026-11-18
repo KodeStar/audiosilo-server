@@ -611,6 +611,7 @@ describe('settings', () => {
       metadata: {
         ...base.metadata,
         upcoming: true,
+        upcoming_window_days: 90,
         upcoming_status: {
           last_run_at: ranAt,
           last_success_at: ranAt,
@@ -628,6 +629,8 @@ describe('settings', () => {
     expect(screen.getByTestId('upcoming-run')).toHaveTextContent(
       'Last checked 2 hr. ago: 12 series, 5 books coming or missing',
     );
+    // The window is read-only, from the server's config.
+    expect(screen.getByTestId('upcoming-window')).toHaveTextContent('90 days');
     await userEvent.setup().click(toggle);
     expect(await screen.findByText('Upcoming releases check is off')).toBeInTheDocument();
     expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
@@ -635,6 +638,7 @@ describe('settings', () => {
     });
     expect(toggle).not.toBeChecked();
     expect(screen.queryByTestId('upcoming-run')).not.toBeInTheDocument();
+    expect(screen.getByTestId('upcoming-window')).toBeInTheDocument();
   });
 
   it('says when the upcoming releases check has not run or failed', async () => {
@@ -657,6 +661,8 @@ describe('settings', () => {
     expect(await screen.findByTestId('upcoming-run')).toHaveTextContent(
       /^Last check failed .+: metadata service unreachable$/,
     );
+    // An older server sends no window: no line for it.
+    expect(screen.queryByTestId('upcoming-window')).toBeNull();
   });
 
   it('says a check that has not run yet runs once switched on, or after the start', async () => {

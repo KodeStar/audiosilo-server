@@ -156,7 +156,9 @@ type kindSpec struct {
 	// api answers 404 module_off while it is off (ModuleFor), and a queued one
 	// is held meanwhile (Service.ModuleOn). A job that needs ModuleContributions
 	// files to the community, so it also needs a Bridge that can
-	// (ErrCannotContribute).
+	// (ErrCannotContribute), and one of a kind that only files (the kind's own
+	// module is ModuleContributions) is asked to stop at its next report once
+	// the module is off (Service.stopsShare).
 	module string
 	// maxParams bounds the params as sent, in bytes (0: defaultParamsBytes).
 	maxParams int
@@ -235,6 +237,19 @@ const claimedStatesSQL = `('claimed', 'running')`
 func (s *Service) held(kind string, params json.RawMessage) bool {
 	m := ModuleFor(kind, params)
 	return m != "" && s.ModuleOn != nil && !s.ModuleOn(m)
+}
+
+// stopsShare reports whether a job of kind the Bridge works on is asked to
+// stop (UpdateHeld, CancelModuleOff): one of a kind that only files to the
+// community (sidecars.contribute, meta.correct: the kind's own module is
+// ModuleContributions) while the Contributions module is off. Such a job
+// writes nothing, so its stop loses no work. Every other job a claim handed
+// out carries on with its module off: a podcast or Audible job, and a
+// sidecars.generate job that contributes, whose stop would throw away the
+// characters and recaps it is writing (it files them itself at its end; the
+// server has no part in that step to refuse).
+func (s *Service) stopsShare(kind string) bool {
+	return kinds[kind].module == ModuleContributions && s.ModuleOn != nil && !s.ModuleOn(ModuleContributions)
 }
 
 // blocker is the open job that refuses a new job of kind for the book
@@ -1413,8 +1428,9 @@ func checkUpdate(u *Update) error {
 // this claim (u.Attempt) in a state the Bridge reports from, and the new state
 // one it may report; a claimed or running job's lease is renewed, a parked
 // one's dropped, a finished one's ended. It returns the job as stored, whose
-// CancelRequested tells the Bridge an admin asked it to stop. A move into a
-// state an admin hears about is reported (OnTransition) once it commits.
+// CancelRequested tells the Bridge an admin, or the server (a share whose
+// module was turned off: stopsShare), asked it to stop. A move into a state an
+// admin hears about is reported (OnTransition) once it commits.
 func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, error) {
 	if err := checkUpdate(&u); err != nil {
 		return nil, err
@@ -1470,6 +1486,17 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		var lease, finished any
 		switch state {
 		case StateClaimed, StateRunning:
+			// A job that only files to the community stops sharing once the
+			// Contributions module is off: it is asked to stop at this report,
+			// with the server's reason, as a cancel an admin asked for is
+			// (server#218). Any other job the Bridge holds carries on.
+			if !cur.CancelRequested && s.stopsShare(cur.Kind) {
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE bridge_jobs SET cancel_requested = 1, error = ? WHERE id = ?`, CancelModuleOff, id); err != nil {
+					return err
+				}
+				cur.CancelRequested, cur.Error = true, CancelModuleOff
+			}
 			until := s.now().Add(Lease)
 			// Even a fieldless acknowledgement in the claim's second must
 			// distinguish its renewed lease from an undelivered response.
@@ -1693,12 +1720,15 @@ const (
 	// CancelReplacedRequest: a podcast request for a newer identity of the
 	// same work replaced the open one (Enqueue).
 	CancelReplacedRequest = "a newer request replaced it"
+	// CancelModuleOff: the Contributions module was turned off while the
+	// Bridge worked on a job that only files to the community (stopsShare).
+	CancelModuleOff = "its module was turned off"
 )
 
 // IsCancelReason reports whether text is one of the server's own cancel
-// reasons: the kinds' cancelsOpen, CancelMoved, CancelReplacedRequest or an
-// Audible account's job's (CancelAudibleRemoved, CancelAudiblePaused,
-// CancelAudibleSyncOff).
+// reasons: the kinds' cancelsOpen, CancelMoved, CancelReplacedRequest,
+// CancelModuleOff or an Audible account's job's (CancelAudibleRemoved,
+// CancelAudiblePaused, CancelAudibleSyncOff).
 func IsCancelReason(text string) bool {
 	return slices.Contains(cancelReasons(), text)
 }
@@ -1707,7 +1737,7 @@ func IsCancelReason(text string) bool {
 // copy (SERVER_CANCEL_REASONS) is checked against (TestCancelReasonsMatchConsole).
 // The kinds are fixed at init, so it is built once.
 var cancelReasons = sync.OnceValue(func() []string {
-	out := []string{CancelMoved, CancelReplacedRequest, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff}
+	out := []string{CancelMoved, CancelReplacedRequest, CancelModuleOff, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff}
 	for _, spec := range kinds {
 		out = slices.AppendSeq(out, maps.Values(spec.cancelsOpen))
 	}

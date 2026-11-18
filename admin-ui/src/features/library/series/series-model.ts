@@ -198,7 +198,10 @@ export function railEntries(rail: MetaSeries): RailEntry[] {
   return out.sort((a, b) => a.position - b.position);
 }
 
-/** How long after its release a missing entry is still new (the server's upcoming.window_days default). */
+/**
+ * How long after its release a missing entry is still new when the server doesn't say
+ * (settings' metadata.upcoming_window_days; its upcoming.window_days default).
+ */
 export const NEW_RELEASE_DAYS = 90;
 
 /** A release date's parts: year, month and day, the last two 0 when the date stops before them. */

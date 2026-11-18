@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -129,5 +130,37 @@ func TestAdminSettingsPersisted(t *testing.T) {
 	}
 	if loaded.Metadata.Enabled {
 		t.Fatalf("metadata.enabled not persisted as false: %+v", loaded.Metadata)
+	}
+}
+
+// metadata.upcoming_window_days (server#279): the window the upcoming job
+// counts a release as new by, as the server runs (the default without one), so
+// the console's series shelf marks "new" as the job does. Read-only: a save
+// naming it is refused.
+func TestSettingsUpcomingWindowDays(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		set  int
+		want int
+	}{{"default", 0, config.DefaultUpcomingWindowDays}, {"configured", 30, 30}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newTestEnvWith(t, func(c *config.Config) { c.Upcoming.WindowDays = tc.set })
+			adminTok, _ := opsTokens(t, e)
+			resp, body := e.do(t, "GET", "/api/v1/admin/settings", adminTok, "")
+			var s struct {
+				Metadata struct {
+					WindowDays *int `json:"upcoming_window_days"`
+				} `json:"metadata"`
+			}
+			if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &s) != nil || s.Metadata.WindowDays == nil ||
+				*s.Metadata.WindowDays != tc.want {
+				t.Fatalf("GET /admin/settings = %d %s, want metadata.upcoming_window_days %d", resp.StatusCode, body, tc.want)
+			}
+			if resp, body := e.do(t, "PATCH", "/api/v1/admin/settings", adminTok, `{"metadata":{"upcoming_window_days":7}}`); resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("saving the read-only window = %d %s, want 400", resp.StatusCode, body)
+			}
+		})
 	}
 }

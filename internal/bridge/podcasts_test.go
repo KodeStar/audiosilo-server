@@ -103,6 +103,29 @@ func TestSubscribeBoundAndKindGuards(t *testing.T) {
 		t.Fatalf("podcast guard %v", err)
 	}
 }
+
+// A podcast job a claim handed out carries on with the Podcasts module off:
+// only a queued one is held.
+func TestClaimedPodcastJobCarriesOnWithTheModuleOff(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	j, _, err := q.Enqueue(ctx, NewJob{Kind: KindPodcastPoll, LibraryID: &q.lib, Path: ptr("Show"), Params: json.RawMessage(`{}`), RequestedBy: q.admin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || claimed == nil || claimed.ID != j.ID {
+		t.Fatalf("claim %v %v", claimed, err)
+	}
+	q.ModuleOn = func(string) bool { return false }
+	got, err := q.UpdateHeld(ctx, j.ID, Update{Attempt: 1, State: ptr(StateRunning)})
+	if err != nil || got.CancelRequested || got.Error != "" || got.State != StateRunning {
+		t.Fatalf("module off: %+v, %v; want working on", got, err)
+	}
+	if got, err = q.UpdateHeld(ctx, j.ID, Update{Attempt: 1, State: ptr(StateDone)}); err != nil || got.State != StateDone {
+		t.Fatalf("its end = %+v, %v; want done", got, err)
+	}
+}
+
 func TestPodcastEndedAndPollPruning(t *testing.T) {
 	q := podcastQueue(t)
 	ctx := context.Background()
@@ -234,13 +257,26 @@ func TestSubscribePrivacyConflict(t *testing.T) {
 }
 
 // An adopt-only subscribe returns the open request or ErrNoNewRequest, and
-// queues nothing either way.
+// queues nothing either way; with nothing open it never waits for the
+// subscribe lock (server#219).
 func TestSubscribeAdoptOnly(t *testing.T) {
 	q := podcastQueue(t)
 	ctx := context.Background()
-	if _, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/a.xml", AdoptOnly: true}); !errors.Is(err, ErrNoNewRequest) {
-		t.Fatalf("nothing open = %v", err)
+	q.secretFlowMu.Lock()
+	refused := make(chan error, 1)
+	go func() {
+		_, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/a.xml", AdoptOnly: true})
+		refused <- err
+	}()
+	select {
+	case err := <-refused:
+		if !errors.Is(err, ErrNoNewRequest) {
+			t.Fatalf("nothing open = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("an adopt-only subscribe with nothing open waited for the subscribe lock")
 	}
+	q.secretFlowMu.Unlock()
 	var n int
 	if err := q.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("queued %d %v", n, err)

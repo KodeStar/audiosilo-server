@@ -33,7 +33,7 @@ import { StatusText } from '@/components/status-text';
 import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
-import { formatDate, formatNumber, formatRecent } from '@/lib/format';
+import { counted, formatDate, formatNumber, formatRecent } from '@/lib/format';
 import { regionOptions } from '@/lib/regions';
 import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
@@ -474,6 +474,19 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
               name="upcoming"
               runText={<UpcomingRunText status={m.upcoming_status} />}
             />
+          ) : null}
+          {m.upcoming_window_days !== undefined && m.available ? (
+            <SettingRow
+              title={t('settings.metadata.upcomingWindow')}
+              description={t('settings.metadata.upcomingWindowBody')}
+            >
+              <span data-testid="upcoming-window">
+                {t(
+                  'settings.metadata.upcomingWindowDays',
+                  counted(m.upcoming_window_days, i18n.resolvedLanguage ?? 'en'),
+                )}
+              </span>
+            </SettingRow>
           ) : null}
           {m.report_unknown !== undefined && m.available ? (
             <JobRow

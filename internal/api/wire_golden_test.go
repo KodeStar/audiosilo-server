@@ -452,7 +452,7 @@ func wireOK(t *testing.T, e *testEnv, method, path, tok, body string) string {
 
 // wireMainEnv: a copy of the fixture library with Cradle dressed in every
 // optional field a seed can cheaply give it (an Audiobookshelf metadata.json, an
-// ebook and its read-along map), scanned; a listener (sam) granted it with a
+// ebook and its read-along map, generated characters), scanned; a listener (sam) granted it with a
 // place and a bookmark; a household member of the admin's; watch renditions on;
 // and a second library holding a book the mock metaserve matches. A field a
 // golden should guard has to appear here: an omitempty one left unset is absent
@@ -493,6 +493,9 @@ func newWireMainEnv(t *testing.T) *wireMainEnv {
 	scanFixture(t, e, lib)
 	writeMap(t, root, cradleBook+"/.audiosilo/readalong.json",
 		readalongMapJSON(t, sha256Hex(epub), bookAudio(t, e.cat, lib.ID, cradleBook)))
+	// Generated characters: Book.generated and generated_parts (server#218).
+	writeMap(t, root, cradleBook+"/.audiosilo/characters.json",
+		[]byte(`{"characters":[{"id":"lindon","name":"Lindon","reveal":{"chapter":1}}]}`))
 	scanFixture(t, e, lib)
 
 	sam, samTok := newUserWithSession(t, e, "sam", false)

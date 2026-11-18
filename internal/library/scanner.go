@@ -431,7 +431,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// Books found unchanged whose ebook is new, changed or gone (or never looked
 	// for: indexed before 0056): recorded without a re-index (SetEbooks).
 	ebookBackfill := map[string]catalog.EbookReading{}
-	// Books found unchanged whose revision 1 or 2 snapshot needs no read
+	// Books found unchanged whose revision 1 to 4 snapshot needs no read
 	// (Signature.RevStamp): stamped with today's revision (StampScannedRev), so
 	// later scans don't test them again.
 	var revBackfill []string
@@ -452,8 +452,17 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			return
 		}
 		pool.Each(ctx, slots.size(), tagReads, func() bool { return ctx.Err() == nil }, func(r **tagRead) {
-			if md := slots.extract(ctx, (*r).primary, s.ffprobePath); ctx.Err() == nil {
-				(*r).md = md // one a Stop may have cut short is dropped, for the next scan
+			md := slots.extract(ctx, (*r).primary, s.ffprobePath)
+			if ctx.Err() != nil {
+				return // one a Stop may have cut short is dropped, for the next scan
+			}
+			(*r).md = md
+			// A book of several files whose title turns on another file's tags
+			// (partNamed): its last file's, read beside the first.
+			if b := (*r).book; (*r).names && partNamed(b, md) {
+				if last := slots.extract(ctx, absOf(lib, lastPath(b)), s.ffprobePath); ctx.Err() == nil {
+					(*r).last = last
+				}
 			}
 		})
 		for _, r := range tagReads {
@@ -472,8 +481,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			if old.GenresUnchecked {
 				genresBackfill[b.RelPath] = md.Genres
 			}
-			if r.names && (md.ProbeErr == nil || old.ScanError == problemProbe) {
-				pathBackfill[b.RelPath] = readNames(b, md)
+			// A title that turns on the last file's tags waits for them too:
+			// unread now (stopped, unopenable, cut short), the next scan reads both.
+			if r.names && (md.ProbeErr == nil || old.ScanError == problemProbe) && (!partNamed(b, md) || tagsRead(r.last)) {
+				pathBackfill[b.RelPath] = readNames(b, md, r.last)
 			}
 		}
 		clear(tagReads)
@@ -1001,15 +1012,23 @@ const pathFlushEvery = 500
 // (metadata.DeriveFromPath, the series and position a leaf named "Author;
 // Series; Book NN[; Title]" states included) as the baseline, then md's tags,
 // which are authoritative when present (an unreadable file's md carries none;
-// nil reads the same), except an album tag that only names the book's series,
-// which gives way to the book's own title (metadata.TitleNotSeries), and md's
-// narrator. So the leaf's series fills only a series the tags leave out.
-func readNames(b *catalog.Book, md *metadata.Metadata) *metadata.Metadata {
+// nil reads the same), except a book of several files' first title tag that
+// names that file (metadata.PartsTitle: the album instead, unless the book's
+// folder or last, its last file's tags, nil for unread, says the tag is the
+// book's, or the two tags share a name past the album), and an album tag that
+// only names the book's series, which gives way to the book's own title
+// (metadata.TitleNotSeries), and md's narrator. So the leaf's series fills
+// only a series the tags leave out.
+func readNames(b *catalog.Book, md, last *metadata.Metadata) *metadata.Metadata {
 	n := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
 	if md == nil {
 		return n
 	}
-	n.Title = chooseTitle(md.Title, n.Title)
+	title := md.Title
+	if len(b.Files) > 1 {
+		title = md.PartsTitle(metadata.PathTitle(b.RelPath, b.IsFolder), last)
+	}
+	n.Title = chooseTitle(title, n.Title)
 	if strings.TrimSpace(md.Author) != "" {
 		n.Author = md.Author
 	}
@@ -1024,12 +1043,31 @@ func readNames(b *catalog.Book, md *metadata.Metadata) *metadata.Metadata {
 	return n
 }
 
+// partNamed reports whether book b's title turns on the tags of another of its
+// files (metadata.PartNamed): a book of several files whose first file's tags,
+// md, title it with a tag that may name that file. A scan then reads its last
+// file's (lastPath) for readNames.
+func partNamed(b *catalog.Book, md *metadata.Metadata) bool {
+	return len(b.Files) > 1 && md.PartNamed(metadata.PathTitle(b.RelPath, b.IsFolder))
+}
+
+// lastPath is the last of a book of several files' files, whose tags tell
+// whether the first file's title tag is the book's (partNamed).
+func lastPath(b *catalog.Book) string { return b.Files[len(b.Files)-1].RelPath }
+
+// tagsRead reports whether md is a file's tags as read: not left unread by a
+// Stop (nil), an open that failed or a read cut short.
+func tagsRead(md *metadata.Metadata) bool {
+	return md != nil && md.OpenErr == nil && !md.TagsUnread()
+}
+
 // setNames sets b's title, author, series and position (readNames), its
 // narrator and its tag hints (the ASIN, ISBN and language the tags give, never
-// its identifiers) from md, its primary file's tags (nil for none): the names a
-// scan reads, which enrich and the setup preview (Preview) share.
-func setNames(b *catalog.Book, md *metadata.Metadata) {
-	n := readNames(b, md)
+// its identifiers) from md, its primary file's tags (nil for none), and last,
+// its last file's where its title turns on them (partNamed; nil for unread):
+// the names a scan reads, which enrich and the setup preview (Preview) share.
+func setNames(b *catalog.Book, md, last *metadata.Metadata) {
+	n := readNames(b, md, last)
 	b.Title, b.Author, b.Series, b.SeriesIndex, b.SeriesIndexEnd = n.Title, n.Author, n.Series, n.SeriesIndex, n.SeriesIndexEnd
 	if md != nil {
 		b.Narrator = n.Narrator
@@ -1085,7 +1123,7 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// estimate) leaves the book's length revision unstamped, so the next scan
 	// reads it again; a folder book's other parts count too.
 	b.LengthUncounted = md.LengthUncounted()
-	setNames(b, md)
+	setNames(b, md, nil)
 	if md != nil {
 		b.Released = md.Released
 		b.Genres = md.Genres
@@ -1150,7 +1188,12 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// Normalize chapters so single-file and multi-file books look the same to a
 	// client (see metadata.Chapter).
 	if b.IsFolder {
-		s.buildMultiFileChapters(ctx, lib, b, md, slots)
+		last := s.buildMultiFileChapters(ctx, lib, b, md, slots)
+		if partNamed(b, md) {
+			// Named again now its last file's tags are read: a title tag the
+			// first file shares with it is the book's (metadata.PartsTitle).
+			setNames(b, md, last)
+		}
 	} else {
 		none := 0
 		b.SuspectParts = &none
@@ -1204,7 +1247,7 @@ func (s *Scanner) keepLeft(ctx context.Context, lib catalog.Library, b *catalog.
 	if b.AddedAt == "" {
 		stampAddedAt(ctx, lib, b, s.probeTimeout)
 	}
-	setNames(b, nil)
+	setNames(b, nil, nil)
 	if b.IsFolder {
 		b.ABS = catalog.ABSReading{Unread: true}
 	}
@@ -1409,8 +1452,9 @@ func singleFileChapters(md *metadata.Metadata, relPath string) []metadata.Chapte
 // a single chaptered m4b and a folder of split mp3s render identically.
 // first is the reading of its first part (enrich's of the primary file), so that
 // file is read once; the others are read with slots (readFiles), then the
-// chapters are built from them in file order.
-func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Library, b *catalog.Book, first *metadata.Metadata, slots *readSlots) {
+// chapters are built from them in file order. It returns the reading of the
+// book's last part (first's for a book of one; nil when a Stop left it unread).
+func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Library, b *catalog.Book, first *metadata.Metadata, slots *readSlots) *metadata.Metadata {
 	var cum float64
 	idx := 0
 	parts := make([]partFacts, 0, len(b.Files))
@@ -1479,6 +1523,10 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 	b.LengthOnly = b.ReadCutShort && !tagsUnread
 	n := suspectParts(parts)
 	b.SuspectParts = &n
+	if len(mds) == 0 {
+		return first
+	}
+	return mds[len(mds)-1]
 }
 
 // partTitle derives a chapter title from a part's filename, stripping the
@@ -2341,6 +2389,9 @@ type tagRead struct {
 	primary string // its absolute path
 	names   bool   // the names are read too (PathRead, Signature.NamesCheck)
 	md      *metadata.Metadata
+	// last is the reading of the book's last file, read when the names are and
+	// the title turns on it (partNamed); nil otherwise, or left unread by a Stop.
+	last *metadata.Metadata
 }
 
 // tagReadsPerSlot is how many backfill reads a scan gathers per read slot
