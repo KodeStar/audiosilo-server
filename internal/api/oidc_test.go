@@ -2136,6 +2136,20 @@ func TestOIDCFinishWithoutFlow(t *testing.T) {
 	if resp, out := b.finish(t, e, "", "web"); resp.StatusCode != http.StatusOK || out["token"] == "" || out["intent"] != nil || b.doneCount() != 0 {
 		t.Fatalf("no flow, no tag: %d %v, %d held", resp.StatusCode, out, b.doneCount())
 	}
+	// A page that expects no tag takes the untagged sign-in, even when another
+	// tab's tagged trip came back first, and leaves that trip for its page.
+	other := strings.Repeat("ef56", 16)
+	tagged = b.start(t, e, "return=web&intent="+other)
+	untagged = b.start(t, e, "return=web")
+	b.callback(t, e, tagged)
+	b.callback(t, e, untagged)
+	if resp, out := b.finish(t, e, "", "web"); resp.StatusCode != http.StatusOK || out["intent"] != nil || b.doneCount() != 1 {
+		t.Fatalf("no tag expected, a tagged trip held first: %d %v, %d held", resp.StatusCode, out, b.doneCount())
+	}
+	resp, out = e.finishWith(t, `{"intent":"`+other+`"}`, b.cookies...)
+	if resp.StatusCode != http.StatusOK || out["intent"] != other {
+		t.Fatalf("the tagged trip's own finish after: %d %v", resp.StatusCode, out)
+	}
 }
 
 // pathBrowser is a browser in front of a proxy that serves the server under

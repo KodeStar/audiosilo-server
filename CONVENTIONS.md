@@ -4088,7 +4088,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   That page calls **`POST /auth/oidc/finish`** (public, optional `{device_name, intent, flow}`, per-IP
   `oidcLimiter`; `flow` is the key its landing named: the finish takes that flow's done cookie only
   (a malformed one a 400), so each tab finishes its own; without it, a page from before the key,
-  `heldDone` takes the one whose tag is the `intent` expected, else the first held; `intent` is the tag the player expects: a string, the empty one too, that isn't
+  `heldDone` takes the one whose tag is the `intent` expected (none without one, so an untagged sign-in before another tab's tagged trip), else the first held; `intent` is the tag the player expects: a string, the empty one too, that isn't
   the tag the sign-in's flow carried, or any string for an untagged sign-in, is a 403 code
   `oidc_intent_mismatch` before `ConsumeOIDC`: no session, the token unspent and left to expire,
   nothing charged, the cookie cleared, so the sign-in the player disowned can't be finished without

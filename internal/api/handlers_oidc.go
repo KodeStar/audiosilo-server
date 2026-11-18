@@ -844,8 +844,10 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 // heldDone is the finished sign-in a finish is for: the done cookie of flow
 // (the key the landing page was given) when the finish names one, else (a
 // page from before the key) the first held whose tag is the one expected
-// (intent, when given), else the first held. The zero value when the browser
-// holds none. Its value is the token, and the tag after oidcIntentSep.
+// (intent; none when not given, so a page that expects no tag takes an
+// untagged sign-in before another tab's tagged trip), else the first held.
+// The zero value when the browser holds none. Its value is the token, and the
+// tag after oidcIntentSep.
 func (a *API) heldDone(r *http.Request, flow string, intent *string) heldCookie {
 	if flow != "" {
 		if v := a.oidcCookieValue(r, oidcDoneCookie+flow); v != "" {
@@ -853,15 +855,16 @@ func (a *API) heldDone(r *http.Request, flow string, intent *string) heldCookie 
 		}
 		return heldCookie{}
 	}
+	want := ""
+	if intent != nil {
+		want = *intent
+	}
 	var first heldCookie
 	for _, h := range a.heldCookies(r, oidcDoneCookie, validFlowKey) {
 		if h.value == "" {
 			continue
 		}
-		if intent == nil {
-			return h
-		}
-		if _, tag, _ := strings.Cut(h.value, oidcIntentSep); subtle.ConstantTimeCompare([]byte(tag), []byte(*intent)) == 1 {
+		if _, tag, _ := strings.Cut(h.value, oidcIntentSep); subtle.ConstantTimeCompare([]byte(tag), []byte(want)) == 1 {
 			return h
 		}
 		if first.name == "" {
