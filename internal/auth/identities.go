@@ -246,7 +246,7 @@ func (s *Service) ConsumeOIDC(ctx context.Context, secret string) (*User, error)
 	if err != nil {
 		return nil, err
 	}
-	if u.IsMember() || u.IsDemo {
+	if !u.SSOAllowed() {
 		return nil, ErrInvalidToken
 	}
 	if err := s.spendOnce(ctx, "ConsumeOIDC", hash, KindOIDC, s.ts()); err != nil {
@@ -518,7 +518,7 @@ func (s *Service) LinkPending(ctx context.Context, id, userID, by int64) (Pendin
 		if u, err = getUser(ctx, tx, userID); err != nil {
 			return err
 		}
-		if u.IsMember() || u.IsDemo {
+		if !u.SSOAllowed() {
 			return ErrNotLinkable
 		}
 		return insertIdentity(ctx, tx, userID, p.claims(), LinkAdmin, &by, s.ts())
@@ -688,7 +688,10 @@ func (s *Service) SSOAccounts(ctx context.Context) (map[int64]bool, error) {
 		}
 		out[id] = true
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // HasSSO reports whether account id holds an identity from the single sign-on

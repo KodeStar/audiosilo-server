@@ -60,9 +60,9 @@ func (a *API) toAdminUser(u *auth.User, sso bool) adminUser {
 }
 
 // ssoShown reports whether u's console object can name a single sign-on: one
-// runs, and u is an account it signs in (auth.ConsumeOIDC).
+// runs, and u is an account it signs in (auth.User.SSOAllowed).
 func (a *API) ssoShown(u *auth.User) bool {
-	return a.oidc != nil && !u.IsMember() && !u.IsDemo
+	return a.oidc != nil && u.SSOAllowed()
 }
 
 // adminUserOf is toAdminUser reading whether u signs in with the single
