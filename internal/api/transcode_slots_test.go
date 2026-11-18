@@ -84,6 +84,30 @@ func TestTranscodeRepeatAskTakesOverSlot(t *testing.T) {
 	}
 }
 
+// TestTranscodeAskStartNoNumber: a ?t= that is no positive number (NaN, a
+// negative) is the ask from 0, as the transcode plays it: a NaN key would never
+// be found again, so its end would neither let go of its slot nor stay
+// unaborted, and a few such asks would take every slot for good.
+func TestTranscodeAskStartNoNumber(t *testing.T) {
+	t.Parallel()
+	for _, start := range []string{"NaN", "-5", "0", ""} {
+		r := slotRequest(http.MethodGet, auth.Credential{ID: 7})
+		r.URL.RawQuery = url.Values{"t": {start}}.Encode()
+		ask := transcodeAskOf(r, 1, "Book/01.mka")
+		if ask.start != 0 {
+			t.Fatalf("t=%q: start %v, want 0", start, ask.start)
+		}
+		a := slotAPI(1, 1)
+		h, _ := a.takeTranscodeSlot(r, ask)
+		if h == nil {
+			t.Fatalf("t=%q: no slot with one free", start)
+		}
+		if endTaken(a, h) || len(a.transcodeSem) != 0 || len(a.transcodeHolds) != 0 {
+			t.Fatalf("t=%q: its end left %d slots taken, %d holds", start, len(a.transcodeSem), len(a.transcodeHolds))
+		}
+	}
+}
+
 // TestTranscodeOtherAsksCountSeparately: an ask that differs in token (another
 // user's, or another device's), start, file or download takes a slot of its
 // own, refused with none free, and never ends the holder's transcode.

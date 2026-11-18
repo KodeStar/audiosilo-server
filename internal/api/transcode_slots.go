@@ -32,10 +32,16 @@ type transcodeHold struct {
 	keyed bool
 }
 
-// transcodeAskOf is r's ask for the transcode of rel in library lib.
+// transcodeAskOf is r's ask for the transcode of rel in library lib. A start
+// that is no positive number (none, a negative, NaN) is 0, as the transcode
+// plays it (media's transcodeArgs): a NaN key never equals itself, so its hold
+// would never be found again, its slot never let go.
 func transcodeAskOf(r *http.Request, lib int64, rel string) transcodeAsk {
 	q := r.URL.Query()
 	start, _ := strconv.ParseFloat(q.Get("t"), 64)
+	if !(start > 0) {
+		start = 0
+	}
 	return transcodeAsk{
 		token:    credentialFrom(r.Context()).ID,
 		lib:      lib,
