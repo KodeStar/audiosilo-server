@@ -2774,6 +2774,21 @@ export interface BridgeSetup {
   can_contribute: boolean;
   /** The GitHub account signed in on the Bridge; absent when none. */
   github_login?: string;
+  /**
+   * Why the Bridge's GitHub sign-in can't be used now (bridge#25): `unrefreshed`
+   * (still signed in, waiting for GitHub to refresh it) or `refused` (sign in
+   * again); absent otherwise, or from an older Bridge. A later value may come.
+   */
+  github_state?: string;
+  /**
+   * How the Bridge hands its agent credential to the agent container
+   * (bridge#79): `group` (the Bridge's group alone), `world` (every user on the
+   * staging volume until the agent takes it), `group_required`
+   * (agent.require_group can't be met) or `failed` (the Bridge couldn't give
+   * it to the agent; its agent step says why); absent with no hand-off, or from an
+   * older Bridge. A later value may come.
+   */
+  agent_credential?: string;
 }
 
 /** The heartbeat's `estimates` (PUT /bridge/status), per job family. */

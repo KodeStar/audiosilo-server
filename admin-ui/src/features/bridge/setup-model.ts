@@ -109,11 +109,72 @@ export function setupComplete(setup: Pick<BridgeSetup, 'items'>): boolean {
 }
 
 /**
- * Whether the agent credential is set, as the agent step says; undefined when
- * the checklist has no agent step (nothing to say).
+ * `value` when it is one of `known`'s own keys (so a later value, or one like
+ * `constructor`, is none), else undefined.
  */
-export function agentCredentialSet(setup: Pick<BridgeSetup, 'items'>): boolean | undefined {
+function knownKey<K extends string>(
+  known: Readonly<Record<K, string>>,
+  value: string | undefined,
+): K | undefined {
+  return value !== undefined && Object.hasOwn(known, value) ? (value as K) : undefined;
+}
+
+/**
+ * The Setup card's words for each way the Bridge hands its agent credential to
+ * the agent container (bridge#79); the one list of the modes this console knows.
+ */
+export const CREDENTIAL_SHARE_KEY = {
+  group: 'bridge.setup.credentialShareGroup',
+  world: 'bridge.setup.credentialShareWorld',
+  group_required: 'bridge.setup.credentialShareGroupRequired',
+  failed: 'bridge.setup.credentialShareFailed',
+} as const;
+
+export type CredentialShare = keyof typeof CREDENTIAL_SHARE_KEY;
+
+/**
+ * The agent credential's hand-off, when the Bridge reports one this console
+ * words; undefined with none (the agent container's own credential, an older
+ * Bridge) or a value it doesn't know.
+ */
+export function credentialShare(
+  setup: Pick<BridgeSetup, 'agent_credential'>,
+): CredentialShare | undefined {
+  return knownKey(CREDENTIAL_SHARE_KEY, setup.agent_credential);
+}
+
+/**
+ * Whether the agent credential is set: a hand-off reported is one set on the
+ * Bridge, even while the agent step waits on it (held back by
+ * agent.require_group, say); else as the agent step says. Undefined when the
+ * checklist has no agent step and no hand-off (nothing to say).
+ */
+export function agentCredentialSet(
+  setup: Pick<BridgeSetup, 'items' | 'agent_credential'>,
+): boolean | undefined {
+  if (credentialShare(setup) !== undefined) return true;
   return setup.items.find((i) => i.id === 'agent')?.done;
+}
+
+/**
+ * The Setup card's words for why a GitHub sign-in on the Bridge can't be used
+ * now (bridge#25); the one list of the states this console knows.
+ */
+export const GITHUB_SIGN_IN_KEY = {
+  unrefreshed: 'bridge.setup.githubUnrefreshed',
+  refused: 'bridge.setup.githubRefused',
+} as const;
+
+export type GitHubSignInState = keyof typeof GITHUB_SIGN_IN_KEY;
+
+/**
+ * The GitHub sign-in's trouble, when the Bridge reports one this console
+ * words; undefined otherwise (it works, there is none, or an older Bridge).
+ */
+export function githubSignInState(
+  setup: Pick<BridgeSetup, 'github_state'>,
+): GitHubSignInState | undefined {
+  return knownKey(GITHUB_SIGN_IN_KEY, setup.github_state);
 }
 
 /** The checklist's GitHub step, when it has one. */

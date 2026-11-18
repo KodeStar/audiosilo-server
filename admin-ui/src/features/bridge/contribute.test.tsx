@@ -438,6 +438,91 @@ describe('Settings > Bridge setup', () => {
     expect(within(card).queryByText('Ready')).toBeNull();
   });
 
+  it('says how the agent credential is handed over, when the Bridge reports it (bridge#79)', async () => {
+    const s = status();
+    s.setup = { ...s.setup!, agent_credential: 'world' };
+    mockFetch(routes({ 'GET /admin/bridge': { body: s } }));
+    renderApp(SETTINGS);
+    await screen.findByText('Everything required is done');
+    const card = setupCard();
+    expect(within(card).getByText('Credential hand-off')).toBeInTheDocument();
+    expect(
+      within(card).getByText(/^Readable by every user on the staging volume/),
+    ).toBeInTheDocument();
+  });
+
+  it('reads a credential held back by agent.require_group as set, not as none (bridge#79)', async () => {
+    const s = status();
+    s.setup = { ...s.setup!, agent_credential: 'group_required' };
+    // The agent step is optional (bridge#36) and not done while the credential is held back.
+    s.setup.items = s.setup.items.map((i) =>
+      i.id === 'agent' ? { ...i, done: false, required: false } : i,
+    );
+    mockFetch(routes({ 'GET /admin/bridge': { body: s } }));
+    renderApp(SETTINGS);
+    await screen.findByText('Everything required is done');
+    const card = setupCard();
+    expect(within(card).getByText(/^Held back: agent.require_group is on/)).toBeInTheDocument();
+    expect(within(card).getByText('Set')).toBeInTheDocument();
+    expect(within(card).queryByText('Not set')).toBeNull();
+  });
+
+  it('says a failed hand-off failed, not that it is kept to the group (bridge#79)', async () => {
+    const s = status();
+    s.setup = { ...s.setup!, agent_credential: 'failed' };
+    s.setup.items = s.setup.items.map((i) =>
+      i.id === 'agent' ? { ...i, done: false, required: false } : i,
+    );
+    mockFetch(routes({ 'GET /admin/bridge': { body: s } }));
+    renderApp(SETTINGS);
+    await screen.findByText('Everything required is done');
+    const card = setupCard();
+    const failed = within(card).getByText(/^Failed: the Bridge couldn't give the agent/);
+    expect(failed.querySelector('.dot')).toHaveAttribute('data-tone', 'warn');
+    expect(within(card).queryByText("Kept to the Bridge's group")).toBeNull();
+    expect(within(card).getByText('Set')).toBeInTheDocument();
+  });
+
+  it('shows no hand-off row for a Bridge that reports none', async () => {
+    mockFetch(routes());
+    renderApp(SETTINGS);
+    await screen.findByText('Everything required is done');
+    expect(within(setupCard()).queryByText('Credential hand-off')).toBeNull();
+  });
+
+  it("says a GitHub sign-in that couldn't be refreshed is still there, waiting (bridge#25)", async () => {
+    const s = status();
+    s.setup = { ...s.setup!, can_contribute: false, github_state: 'unrefreshed' };
+    s.setup.items = s.setup.items.map((i) => (i.id === 'github' ? { ...i, done: false } : i));
+    mockFetch(routes({ 'GET /admin/bridge': { body: s } }));
+    renderApp(SETTINGS);
+    await screen.findByText('Everything required is done');
+    const card = setupCard();
+    expect(within(card).getByText('octocat')).toBeInTheDocument();
+    expect(
+      within(card).getByText("Sign-in couldn't be refreshed: the Bridge keeps trying"),
+    ).toBeInTheDocument();
+    expect(within(card).queryByText('Not signed in')).toBeNull();
+  });
+
+  it('says GitHub refused the sign-in rather than none (bridge#25)', async () => {
+    const s = status();
+    s.setup = {
+      ...s.setup!,
+      can_contribute: false,
+      github_login: undefined,
+      github_state: 'refused',
+    };
+    mockFetch(routes({ 'GET /admin/bridge': { body: s } }));
+    renderApp(SETTINGS);
+    await screen.findByText('Everything required is done');
+    const card = setupCard();
+    expect(
+      within(card).getByText('GitHub refused the sign-in: sign in again on the Bridge'),
+    ).toBeInTheDocument();
+    expect(within(card).queryByText('Not signed in')).toBeNull();
+  });
+
   it('shows no setup card for an older Bridge that sends no checklist', async () => {
     mockFetch(routes({ 'GET /admin/bridge': { body: status({ setup: undefined }) } }));
     renderApp(SETTINGS);

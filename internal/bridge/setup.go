@@ -26,6 +26,20 @@ type Setup struct {
 	// GitHubLogin is the GitHub account the Bridge files as ("" when signed
 	// out). Admin-only: GET /admin/bridge carries it, GET /server never does.
 	GitHubLogin string `json:"github_login,omitempty"`
+	// GitHubState is why the Bridge's GitHub sign-in can't be used now
+	// (bridge#25): "unrefreshed" (still signed in, GitHubLogin kept, waiting
+	// for GitHub to refresh it) or "refused" (sign in again); "" otherwise.
+	// An older Bridge sends none. A value of the wrong shape is dropped; one
+	// this console doesn't know is kept and shown as nothing.
+	GitHubState string `json:"github_state,omitempty"`
+	// AgentCredential is how the Bridge hands its agent credential to the
+	// agent container (bridge#79): "group" (the Bridge's group alone),
+	// "world" (every user on the staging volume until the agent takes it) or
+	// "group_required" (agent.require_group can't be met, so the agent waits)
+	// or "failed" (the Bridge couldn't give it to the agent container);
+	// "" with no hand-off in play, or from an older Bridge. Kept like
+	// GitHubState.
+	AgentCredential string `json:"agent_credential,omitempty"`
 
 	// dropped marks a block that didn't decode, which Validate removes (a
 	// custom decoder can't set the pointer that holds it to nil).
@@ -85,7 +99,8 @@ func (s *Setup) UnmarshalJSON(b []byte) error {
 // decode, else s bounded in place: at most maxSetupItems items, each with a
 // well-formed id listed once (an item that isn't is left out), its detail
 // cleaned to printable bounded text, its library ids positive, once each and at
-// most maxLibraries; a login that isn't GitHub's shape is dropped.
+// most maxLibraries; a login that isn't GitHub's shape is dropped, and so is a
+// github_state or agent_credential that isn't a step id's shape.
 func (s *Setup) validate() *Setup {
 	if s == nil || s.dropped {
 		return nil
@@ -112,6 +127,12 @@ func (s *Setup) validate() *Setup {
 	s.Items = items
 	if !githubLoginPattern.MatchString(s.GitHubLogin) {
 		s.GitHubLogin = ""
+	}
+	if !setupIDPattern.MatchString(s.GitHubState) {
+		s.GitHubState = ""
+	}
+	if !setupIDPattern.MatchString(s.AgentCredential) {
+		s.AgentCredential = ""
 	}
 	return s
 }

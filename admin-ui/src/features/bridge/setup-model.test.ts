@@ -4,7 +4,11 @@ import en from '@/i18n/locales/en.json';
 import {
   agentCredentialSet,
   billingKnown,
+  CREDENTIAL_SHARE_KEY,
+  credentialShare,
   generateNeed,
+  GITHUB_SIGN_IN_KEY,
+  githubSignInState,
   githubStep,
   KNOWN_SETUP_ITEMS,
   setupComplete,
@@ -86,6 +90,17 @@ describe('the setup checklist', () => {
     expect(agentCredentialSet(setup([item('agent', true)]))).toBe(true);
     expect(agentCredentialSet(setup([item('agent', false)]))).toBe(false);
     expect(agentCredentialSet(setup([item('paired', true)]))).toBeUndefined();
+  });
+
+  it('reads a reported hand-off as a credential set, whatever the agent step says (bridge#79)', () => {
+    const held = { agent_credential: 'group_required' };
+    expect(agentCredentialSet(setup([item('agent', false, false)], held))).toBe(true);
+    expect(agentCredentialSet(setup([item('paired', true)], { agent_credential: 'world' }))).toBe(
+      true,
+    );
+    // A mode this console doesn't know says nothing: the agent step answers.
+    const later = { agent_credential: 'later_mode' };
+    expect(agentCredentialSet(setup([item('agent', false)], later))).toBe(false);
   });
 
   it('links a step to the Bridge page tab that fixes it, only for an http(s) page', () => {
@@ -223,9 +238,45 @@ describe('githubStep and billingKnown', () => {
     expect(billingKnown({ setup: setup([item('agent', false)]), estimates: est(true) })).toBe(
       false,
     );
+    // A credential held back (agent.require_group) is still one to pay with (bridge#79).
+    expect(
+      billingKnown({
+        setup: setup([item('agent', false, false)], { agent_credential: 'group_required' }),
+        estimates: est(false),
+      }),
+    ).toBe(true);
     // A Bridge without the agent step: its agent being ready says so.
     expect(billingKnown({ setup: setup([item('asr', true)]), estimates: est(true) })).toBe(true);
     expect(billingKnown({ setup: undefined, estimates: est(false) })).toBe(false);
     expect(billingKnown({ setup: undefined, estimates: undefined })).toBe(false);
+  });
+});
+
+describe('credentialShare and githubSignInState (bridge#79, bridge#25)', () => {
+  it('words the hand-off modes it knows, and nothing for none or a later one', () => {
+    expect(credentialShare({ agent_credential: 'group' })).toBe('group');
+    expect(credentialShare({ agent_credential: 'world' })).toBe('world');
+    expect(credentialShare({ agent_credential: 'group_required' })).toBe('group_required');
+    expect(credentialShare({ agent_credential: 'failed' })).toBe('failed');
+    expect(credentialShare({})).toBeUndefined();
+    expect(credentialShare({ agent_credential: 'later_mode' })).toBeUndefined();
+    expect(credentialShare({ agent_credential: 'constructor' })).toBeUndefined();
+  });
+
+  it("tells a sign-in's trouble apart, and nothing for none or a later state", () => {
+    expect(githubSignInState({ github_state: 'unrefreshed' })).toBe('unrefreshed');
+    expect(githubSignInState({ github_state: 'refused' })).toBe('refused');
+    expect(githubSignInState({})).toBeUndefined();
+    expect(githubSignInState({ github_state: 'later_state' })).toBeUndefined();
+    expect(githubSignInState({ github_state: 'constructor' })).toBeUndefined();
+  });
+
+  it('has English words for every mode and state it knows', () => {
+    for (const key of [
+      ...Object.values(CREDENTIAL_SHARE_KEY),
+      ...Object.values(GITHUB_SIGN_IN_KEY),
+    ]) {
+      expect(strings[key]).toBeTruthy();
+    }
   });
 });
