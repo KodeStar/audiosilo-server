@@ -1,12 +1,12 @@
 package media
 
 import (
-	"encoding/binary"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -89,10 +89,13 @@ func TestCopyIdleKeepsReadStream(t *testing.T) {
 // handler returns and lets go of its slot.
 func TestTranscodeIdleEndsFFmpeg(t *testing.T) {
 	t.Parallel()
-	if !HasFFmpeg("ffmpeg") {
-		t.Skip("ffmpeg not available; transcoding requires it")
+	needFFmpeg(t)
+	// Half an hour of silence: its MP3 overfills the socket's buffers.
+	src := filepath.Join(t.TempDir(), "long.wav")
+	if out, err := exec.Command("ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi",
+		"-i", "anullsrc=r=8000:cl=mono:d=1800", "-c:a", "pcm_u8", "-y", src).CombinedOutput(); err != nil {
+		t.Fatalf("ffmpeg could not write a WAV: %v\n%s", err, out)
 	}
-	src := longWAV(t, 30*60)
 	returned := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer close(returned)
@@ -112,38 +115,4 @@ func TestTranscodeIdleEndsFFmpeg(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("an unread transcode held its handler (and ffmpeg) on")
 	}
-}
-
-// longWAV writes seconds of silence as an 8 kHz mono 8-bit WAV: long enough
-// that its MP3 overfills the socket's buffers, quick to write.
-func longWAV(t *testing.T, seconds int) string {
-	t.Helper()
-	const rate = 8000
-	n := uint32(rate * seconds)
-	path := filepath.Join(t.TempDir(), "long.wav")
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	head := []any{
-		[4]byte{'R', 'I', 'F', 'F'}, 36 + n, [4]byte{'W', 'A', 'V', 'E'},
-		[4]byte{'f', 'm', 't', ' '}, uint32(16), uint16(1), uint16(1), uint32(rate), uint32(rate), uint16(1), uint16(8),
-		[4]byte{'d', 'a', 't', 'a'}, n,
-	}
-	for _, v := range head {
-		if err := binary.Write(f, binary.LittleEndian, v); err != nil {
-			t.Fatal(err)
-		}
-	}
-	silence := make([]byte, rate)
-	for i := range silence {
-		silence[i] = 128 // 8-bit PCM is unsigned
-	}
-	for range seconds {
-		if _, err := f.Write(silence); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return path
 }

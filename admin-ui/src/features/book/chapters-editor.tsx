@@ -566,7 +566,7 @@ function Scrubber({
   const remuxCold = !!span?.remuxed && !remuxReady.has(span.path);
   const [remux, setRemux] = useState<{ path?: string; cold: boolean }>({ cold: false });
   if (remux.path !== span?.path) setRemux({ path: span?.path, cold: remuxCold });
-  const cold = remux.path === span?.path && remux.cold;
+  const cold = remux.cold;
   const carry = useRef<number | null>(null);
   const offset = target?.offset ?? 0;
   const length = span ? span.end - span.start : 0;
