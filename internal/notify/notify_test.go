@@ -967,7 +967,7 @@ func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Private, f.FeedURL, f.FeedHost = true, secretURL, "private.feeds.example.net"
-	if _, err := cat.IndexPodcastShow(ctx, lib.ID, "Example Show", "s1", "", "", f, nil, false, time.Time{}); err != nil {
+	if _, err := cat.IndexPodcastShow(ctx, lib.ID, "Example Show", "s1", "", "", f, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	show := "Example Show"
@@ -992,7 +992,7 @@ func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 	grown.Episodes = append([]feed.Episode{{ID: "1111111111111111", GUID: "x", Path: "Example Show/2026-10-26-1111111111.mp3",
 		Title: "Episode Four", Published: "2026-10-26T21:00:00Z", FirstSeen: time.Now().UTC().Format(time.RFC3339), EpisodeType: "full",
 		Enclosure: feed.Enclosure{URL: secretURL + "&ep=4"}}}, f.Episodes...)
-	if _, err := cat.IndexPodcastShow(ctx, lib.ID, "Example Show", "s2", "", "", &grown, nil, false, time.Time{}); err != nil {
+	if _, err := cat.IndexPodcastShow(ctx, lib.ID, "Example Show", "s2", "", "", &grown, nil, false); err != nil {
 		t.Fatal(err)
 	}
 

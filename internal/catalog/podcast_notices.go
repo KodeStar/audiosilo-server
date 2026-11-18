@@ -138,11 +138,12 @@ func (r feedRun) next(state, code string, p poll) (feedRun, string) {
 	case uncountedCheck(code, p.scheduled):
 		return r, ""
 	case bridge.FeedFailure(code):
-		if bridge.NetworkFailure(code) && !p.reachable {
+		network := bridge.NetworkFailure(code)
+		if network && !p.reachable {
 			return r, ""
 		}
 		r.failures++
-		if bridge.NetworkFailure(code) {
+		if network {
 			r.network++
 		}
 		return r.announce(code, r.due() || code == "gone")

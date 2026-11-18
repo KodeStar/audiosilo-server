@@ -114,10 +114,9 @@ func stringOrNil(s string) any {
 // IndexPodcastShow commits a show's entire derived index together. It never
 // deduplicates GUIDs or touches durable follows and listening state.
 //
-// readAt is when the caller began reading the show's feed.json (zero: no
-// check). A feed.json older than the one indexed (its updated_at, the Bridge's
-// stamp of each change), read before that index was written, is not folded
-// over it: a scan that read the file just before the Bridge rewrote it and
+// f.ReadAt is when the show's feed.json was read (zero: no check). A
+// feed.json older than the one indexed (its updated_at, the Bridge's stamp of
+// each change), read before that index was written, is not folded over it: a scan that read the file just before the Bridge rewrote it and
 // asked for its own rescan would otherwise commit after that rescan and put the
 // show back as it was (server#403). A feed.json restored from an older backup
 // is still indexed, as nothing indexed it after it was read.
@@ -133,7 +132,7 @@ func stringOrNil(s string) any {
 // from an old backup or written after a long outage (episodes the Bridge found
 // days ago) announce nothing (the Bridge's forced rescan after a poll that grew
 // the feed does announce).
-func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, cover, coverVersion string, f *feed.File, present map[string]PodcastFile, force bool, readAt time.Time) (bool, error) {
+func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, cover, coverVersion string, f *feed.File, present map[string]PodcastFile, force bool) (bool, error) {
 	changed := false
 	var event *ServerEvent
 	err := c.db.WithTx(ctx, "IndexPodcastShow", func(tx *sql.Tx) error {
@@ -154,31 +153,28 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 		if err == nil && old == sig && !force {
 			return nil
 		}
-		if err == nil && oldShowID == f.ShowID && staleFeed(f.UpdatedAt, oldUpdated, oldIndexed, readAt) {
-			return nil
-		}
 		// News is told only of a show indexed before as this same show.
 		announce := err == nil && oldShowID == f.ShowID
-		oldBooks, err := queryRows(ctx, tx, func(r *sql.Rows, b *Book) error { return r.Scan(&b.ID, &b.RelPath) }, `SELECT b.id,b.rel_path FROM books b JOIN podcast_episodes e ON e.book_id=b.id WHERE e.library_id=? AND e.show_path=?`, lib, show)
+		if announce && staleFeed(f.UpdatedAt, oldUpdated, oldIndexed, f.ReadAt) {
+			return nil
+		}
+		type oldEpisode struct {
+			book                  int64
+			path, guid, episodeID string
+		}
+		oldEpisodes, err := queryRows(ctx, tx, func(r *sql.Rows, o *oldEpisode) error { return r.Scan(&o.book, &o.path, &o.guid, &o.episodeID) }, `SELECT b.id,b.rel_path,e.guid,e.episode_id FROM books b JOIN podcast_episodes e ON e.book_id=b.id WHERE e.library_id=? AND e.show_path=?`, lib, show)
 		if err != nil {
 			return err
 		}
 		// An index missing some of the episodes it listed (an older server's
 		// scan removed their rows) can't tell which are new.
-		announce = announce && len(oldBooks) >= oldCount
-		var indexed, known map[string]bool
-		if announce {
-			indexed = make(map[string]bool, len(oldBooks))
-			for _, b := range oldBooks {
-				indexed[b.RelPath] = true
-			}
-			ids, err := queryRows(ctx, tx, func(r *sql.Rows, v *[2]string) error { return r.Scan(&v[0], &v[1]) }, `SELECT guid,episode_id FROM podcast_episodes WHERE library_id=? AND show_path=?`, lib, show)
-			if err != nil {
-				return err
-			}
-			known = make(map[string]bool, 2*len(ids))
-			for _, v := range ids {
-				known["g:"+v[0]], known["i:"+v[1]] = true, true
+		announce = announce && len(oldEpisodes) >= oldCount
+		// The episodes indexed before, by path, GUID and id.
+		paths, guids, ids := map[string]bool{}, map[string]bool{}, map[string]bool{}
+		for _, o := range oldEpisodes {
+			paths[o.path], ids[o.episodeID] = true, true
+			if o.guid != "" {
+				guids[o.guid] = true
 			}
 		}
 		// A latest episode dated ahead of the clock (a mistyped date in the
@@ -194,7 +190,7 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 				newerThan = past.String
 			}
 		}
-		recentFrom := c.now().Add(-NewEpisodeWindow)
+		recentFrom := c.now().Add(-NewEpisodeWindow).UTC().Format(time.RFC3339)
 		var news []feed.Episode
 		latest := ""
 		for _, e := range f.Episodes {
@@ -224,7 +220,7 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 				continue
 			}
 			keep[e.Path] = true
-			if announce && !indexed[e.Path] && !known["i:"+e.ID] && (e.GUID == "" || !known["g:"+e.GUID]) && e.RemovedAt == "" &&
+			if announce && !paths[e.Path] && !ids[e.ID] && !guids[e.GUID] && e.RemovedAt == "" &&
 				(e.Published == "" || e.Published >= newerThan) && seenSince(e, recentFrom) {
 				news = append(news, e)
 			}
@@ -293,9 +289,9 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 		}
 		// The episodes indexed before (their ids stay as the upserts above
 		// keep them) that the feed no longer lists.
-		for _, b := range oldBooks {
-			if !keep[b.RelPath] {
-				if err := deleteBook(ctx, tx, b.ID); err != nil {
+		for _, o := range oldEpisodes {
+			if !keep[o.path] {
+				if err := deleteBook(ctx, tx, o.book); err != nil {
 					return err
 				}
 			}
@@ -323,19 +319,15 @@ func staleFeed(updated, indexedUpdated, indexedAt string, readAt time.Time) bool
 	if readAt.IsZero() || updated == "" || indexedUpdated == "" || updated >= indexedUpdated {
 		return false
 	}
-	at, err := time.Parse(time.RFC3339Nano, indexedAt)
-	return err == nil && at.After(readAt)
+	return parseSessionTime(indexedAt).After(readAt)
 }
 
 // seenSince reports whether the Bridge first saw episode e at or after from
-// (its first_seen, else its published date; one with neither may be new).
-func seenSince(e feed.Episode, from time.Time) bool {
+// (its first_seen, else its published date; one with neither may be new). The
+// stamps compare as text: feed.ReadFile writes each as UTC RFC 3339 or "".
+func seenSince(e feed.Episode, from string) bool {
 	seen := cmp.Or(e.FirstSeen, e.Published)
-	if seen == "" {
-		return true
-	}
-	t, err := time.Parse(time.RFC3339, seen)
-	return err != nil || !t.Before(from)
+	return seen == "" || seen >= from
 }
 
 func (c *Catalog) PodcastSignatures(ctx context.Context, lib int64) (map[string]string, error) {

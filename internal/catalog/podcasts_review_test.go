@@ -3,7 +3,6 @@ package catalog
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
@@ -23,7 +22,7 @@ func TestPodcastSecretMissingSurvivesOtherOutcomes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, true, time.Time{}); err != nil {
+			if _, err = c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, true); err != nil {
 				t.Fatal(err)
 			}
 			show := "Example Show"
@@ -90,7 +89,7 @@ func TestPodcastSubscribeFollowsReportedIdentity(t *testing.T) {
 	f.Private = true
 	oldID := f.ShowID
 	f.ShowID = "0123456789abcdef"
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "replacement", "", "", f, nil, true, time.Time{}); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "replacement", "", "", f, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	job := bridge.Job{ID: 1, Kind: bridge.KindPodcastSubscribe, LibraryID: &lib.ID, State: bridge.StateDone,

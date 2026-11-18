@@ -74,7 +74,7 @@ func TestPodcastNewEpisodesNotice(t *testing.T) {
 	f := podcastFixture(t)
 	index := func(sig string, f *feed.File, force bool) {
 		t.Helper()
-		if _, err := c.IndexPodcastShow(ctx, lib.ID, show, sig, "", "", f, nil, force, time.Time{}); err != nil {
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, show, sig, "", "", f, nil, force); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -174,7 +174,7 @@ func TestPodcastNewEpisodesAfterFutureDate(t *testing.T) {
 	}
 	index := func(sig string, f *feed.File) []PodcastNotice {
 		t.Helper()
-		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", sig, "", "", f, nil, false, time.Time{}); err != nil {
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", sig, "", "", f, nil, false); err != nil {
 			t.Fatal(err)
 		}
 		return log.take()
@@ -210,6 +210,14 @@ func pollJob(lib int64, id int64, state, code string) bridge.Job {
 	return j
 }
 
+// followerPoll is pollJob as a follower's Check now (unscheduled), asked by
+// by (nil: a requester since deleted).
+func followerPoll(lib, id int64, state, code string, by *bridge.Requester) bridge.Job {
+	j := pollJob(lib, id, state, code)
+	j.RequestedBy, j.Params = by, json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`)
+	return j
+}
+
 // A feed is announced failing at its third failure in a row, once (its
 // sixth when every failure is network-class, a mix when the shares add up);
 // `gone` and a lost secret at once; the Bridge's own failures neither count
@@ -222,7 +230,7 @@ func TestPodcastFeedNotices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", podcastFixture(t), nil, false, time.Time{}); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", podcastFixture(t), nil, false); err != nil {
 		t.Fatal(err)
 	}
 	next := int64(0)
@@ -356,8 +364,7 @@ func TestPodcastFeedNotices(t *testing.T) {
 	checkNow := func(state, code string) []PodcastNotice {
 		t.Helper()
 		next++
-		j := pollJob(lib.ID, next, state, code)
-		j.RequestedBy, j.Params = &bridge.Requester{ID: 7, Username: "follower"}, json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`)
+		j := followerPoll(lib.ID, next, state, code, &bridge.Requester{ID: 7, Username: "follower"})
 		if err := c.FoldPodcastJob(ctx, j); err != nil {
 			t.Fatal(err)
 		}
@@ -384,8 +391,7 @@ func TestPodcastFeedNotices(t *testing.T) {
 	retryAfter := func(seconds int) {
 		t.Helper()
 		next++
-		j := pollJob(lib.ID, next, bridge.StateFailed, "http_429")
-		j.RequestedBy, j.Params = &bridge.Requester{ID: 7, Username: "follower"}, json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`)
+		j := followerPoll(lib.ID, next, bridge.StateFailed, "http_429", &bridge.Requester{ID: 7, Username: "follower"})
 		j.Result = json.RawMessage(fmt.Sprintf(`{"code":"http_429","retry_after_seconds":%d}`, seconds))
 		if err := c.FoldPodcastJob(ctx, j); err != nil {
 			t.Fatal(err)
@@ -436,10 +442,10 @@ func TestPodcastNoticesMarkPrivateShows(t *testing.T) {
 	}
 	f := podcastFixture(t)
 	f.Private = true
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s1", "", "", f, nil, false, time.Time{}); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s1", "", "", f, nil, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s2", "", "", withEpisode(f, "1111111111111111", "new.mp3", "New", "2026-12-01T00:00:00Z"), nil, false, time.Time{}); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s2", "", "", withEpisode(f, "1111111111111111", "new.mp3", "New", "2026-12-01T00:00:00Z"), nil, false); err != nil {
 		t.Fatal(err)
 	}
 	for i, state := range []string{bridge.StateFailed, bridge.StateDone} {
@@ -466,13 +472,13 @@ func podcastShowsLib(t *testing.T, c *Catalog, ctx context.Context, others int) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", podcastFixture(t), nil, false, time.Time{}); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", podcastFixture(t), nil, false); err != nil {
 		t.Fatal(err)
 	}
 	for i := range others {
 		f := podcastFixture(t)
 		f.ShowID = fmt.Sprintf("b%015d", i+1)
-		if _, err := c.IndexPodcastShow(ctx, lib.ID, fmt.Sprintf("Show %d", i+1), "s", "", "", f, nil, false, time.Time{}); err != nil {
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, fmt.Sprintf("Show %d", i+1), "s", "", "", f, nil, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -560,9 +566,7 @@ func TestPodcastCheckNowWithoutRequesterIsNotCounted(t *testing.T) {
 	log := listenNotices(c)
 	lib := podcastShowsLib(t, c, ctx, 0)
 	for i := range 5 {
-		j := pollJob(lib.ID, int64(i+1), bridge.StateFailed, "http_500")
-		j.Params = json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`) // a Check now, its requester deleted
-		if err := c.FoldPodcastJob(ctx, j); err != nil {
+		if err := c.FoldPodcastJob(ctx, followerPoll(lib.ID, int64(i+1), bridge.StateFailed, "http_500", nil)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -671,7 +675,7 @@ func TestPodcastNewEpisodesByGUID(t *testing.T) {
 	index := func(f *feed.File) []PodcastNotice {
 		t.Helper()
 		sig++
-		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", fmt.Sprint(sig), "", "", f, nil, false, time.Time{}); err != nil {
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", fmt.Sprint(sig), "", "", f, nil, false); err != nil {
 			t.Fatal(err)
 		}
 		return log.take()
@@ -727,22 +731,28 @@ func TestPodcastStaleFeedFoldRefused(t *testing.T) {
 		}
 		return n
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", older, nil, false, time.Now()); err != nil {
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", older, nil, false); err != nil {
 		t.Fatal(err)
 	}
-	scanRead := time.Now() // the scan reads the old feed.json...
-	time.Sleep(time.Millisecond)
+	// The scan reads the old feed.json...
+	scanRead := *older
+	scanRead.ReadAt = now.Add(time.Minute)
 	// ...the Bridge writes a newer one and its rescan indexes it...
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "new", "", "", newer, nil, true, time.Now()); err != nil {
+	now = now.Add(2 * time.Minute)
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "new", "", "", newer, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	want := count()
 	// ...then the scan commits what it read.
-	if changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", older, nil, false, scanRead); err != nil || changed || count() != want {
+	if changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", &scanRead, nil, false); err != nil || changed || count() != want {
 		t.Fatalf("a stale fold: changed %v, %v, %d episodes, want %d", changed, err, count(), want)
 	}
 	// A feed.json restored from an older backup, read after that index.
-	if changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", older, nil, false, time.Now()); err != nil || !changed || count() != want-1 {
+	restored := *older
+	restored.ReadAt = now.Add(time.Minute)
+	if changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "old", "", "", &restored, nil, false); err != nil || !changed || count() != want-1 {
 		t.Fatalf("a restored feed.json: changed %v, %v, %d episodes, want %d", changed, err, count(), want-1)
 	}
 }

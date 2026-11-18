@@ -427,20 +427,20 @@ func (c *Catalog) SetPodcastNotice(l *PodcastListener) {
 // listener, no event, or one already recorded under its dedup key).
 func (c *Catalog) recordPodcastNotice(ctx context.Context, tx *sql.Tx, n *PodcastNotice) (*ServerEvent, error) {
 	l := c.podcastNotice.Load()
-	if n == nil || l == nil || l.Event == nil {
+	if n == nil || l == nil {
 		return nil, nil
 	}
 	kind, data, dedup := l.Event(*n)
 	if kind == "" {
 		return nil, nil
 	}
+	s := c.onSnapshot(tx)
 	if dedup != "" {
-		var seen bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM server_events WHERE kind=? AND dedup_key=?)`, kind, dedup).Scan(&seen); err != nil || seen {
+		if seen, err := s.ServerEventSeen(ctx, kind, dedup); err != nil || seen {
 			return nil, err
 		}
 	}
-	ev, err := c.recordServerEvent(ctx, tx, kind, data, dedup)
+	ev, err := s.RecordServerEvent(ctx, kind, data, dedup)
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +449,7 @@ func (c *Catalog) recordPodcastNotice(ctx context.Context, tx *sql.Tx, n *Podcas
 
 // deliverPodcastNotice hands a recorded event to the listener, if any.
 func (c *Catalog) deliverPodcastNotice(ctx context.Context, ev *ServerEvent) {
-	if l := c.podcastNotice.Load(); ev != nil && l != nil && l.Deliver != nil {
+	if l := c.podcastNotice.Load(); ev != nil && l != nil {
 		l.Deliver(ctx, *ev)
 	}
 }

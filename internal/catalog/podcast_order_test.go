@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
@@ -52,7 +51,7 @@ func undatedSerial(t *testing.T) (*Catalog, *Library, []string, *feed.File) {
 	for _, i := range []int{6, 2, 3, 1, 0, 8, 4, 7, 5, 9} {
 		f.Episodes = append(f.Episodes, eps[i])
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "s", "", "", f, nil, true, time.Time{}); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "s", "", "", f, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	return c, lib, paths, f
@@ -153,7 +152,7 @@ func TestPodcastKeepWindowUndatedSerial(t *testing.T) {
 		f.Episodes[i].Fetch = &fetch
 		present[path.Base(f.Episodes[i].Path)] = PodcastFile{Size: fetch.Bytes}
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "fetched", "", "", f, present, true, time.Time{}); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "fetched", "", "", f, present, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.SetPodcastPolicy(ctx, lib.ID, "Fixture Show", f.ShowID, &Policy{Mode: "keep", Keep: 3, Days: 7}); err != nil {
@@ -182,7 +181,7 @@ func TestPodcastFetchOrderMixedDates(t *testing.T) {
 		f.Episodes[i].Published = day
 		f.Episodes[i].Season, f.Episodes[i].Episode = nil, nil
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "mixed", "", "", f, nil, true, time.Time{}); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "mixed", "", "", f, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	var oldest []string
