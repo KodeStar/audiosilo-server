@@ -718,8 +718,9 @@ func TestClaimHoldsJobsOfAnOffModule(t *testing.T) {
 
 // A claimed job whose managed module is turned off is asked to stop at the
 // Bridge's next report, with the server's reason, which its end keeps
-// (server#218); with the module on, and for a job that needs no module, the
-// report changes nothing.
+// (server#218), and a parked one once it reports working again; with the
+// module on, for a job that needs no module, and for a parked job's report
+// that leaves it parked, the report changes nothing.
 func TestUpdateHeldStopsAJobOfAnOffModule(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -735,7 +736,11 @@ func TestUpdateHeldStopsAJobOfAnOffModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
+	parked, _, err := q.contribute("", ptr("Author/Three"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
 		if j, err := q.claim(ctx, q.token, []string{KindSidecars, KindContribute}); err != nil || j == nil {
 			t.Fatalf("claim = %+v, %v", j, err)
 		}
@@ -751,7 +756,19 @@ func TestUpdateHeldStopsAJobOfAnOffModule(t *testing.T) {
 	if j := running(community.ID); j.CancelRequested || j.Error != "" {
 		t.Fatalf("module on: %+v, want working on", j)
 	}
+	if _, err := q.UpdateHeld(ctx, parked.ID, Update{Attempt: 1, State: ptr(StateNeedsAttention), Error: ptr("needs a look")}); err != nil {
+		t.Fatal(err)
+	}
 	on = false
+	// A parked job's report while it stays parked asks nothing of it; its
+	// report of working again does.
+	if j, err := q.UpdateHeld(ctx, parked.ID, Update{Attempt: 1, Progress: json.RawMessage(`{"step":"waiting"}`)}); err != nil ||
+		j.CancelRequested || j.State != StateNeedsAttention {
+		t.Fatalf("parked, module off: %+v, %v; want parked, not asked to stop", j, err)
+	}
+	if j := running(parked.ID); !j.CancelRequested || j.Error != CancelModuleOff {
+		t.Fatalf("parked job working again, module off: %+v, want asked to stop with %q", j, CancelModuleOff)
+	}
 	if j := running(local.ID); j.CancelRequested || j.Error != "" {
 		t.Fatalf("a job needing no module: %+v, want working on", j)
 	}

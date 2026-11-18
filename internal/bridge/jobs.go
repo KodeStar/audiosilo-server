@@ -229,10 +229,10 @@ var kinds = map[string]kindSpec{
 // scans the table).
 const claimedStatesSQL = `('claimed', 'running')`
 
-// held reports whether a queued job of kind with params waits for a managed
-// module that is off (ModuleFor; with no ModuleOn wired every module counts as
-// on): no claim hands it out (nextQueued), and it refuses no new job that
-// cancels it (givesWay).
+// held reports whether a job of kind with params waits for a managed module
+// that is off (ModuleFor; with no ModuleOn wired every module counts as on): no
+// claim hands a queued one out (nextQueued), it refuses no new job that cancels
+// it (givesWay), and a claimed or running one is asked to stop (UpdateHeld).
 func (s *Service) held(kind string, params json.RawMessage) bool {
 	m := ModuleFor(kind, params)
 	return m != "" && s.ModuleOn != nil && !s.ModuleOn(m)
@@ -1414,7 +1414,8 @@ func checkUpdate(u *Update) error {
 // this claim (u.Attempt) in a state the Bridge reports from, and the new state
 // one it may report; a claimed or running job's lease is renewed, a parked
 // one's dropped, a finished one's ended. It returns the job as stored, whose
-// CancelRequested tells the Bridge an admin asked it to stop. A move into a
+// CancelRequested tells the Bridge an admin, or the server (its module turned
+// off: CancelModuleOff), asked it to stop. A move into a
 // state an admin hears about is reported (OnTransition) once it commits.
 func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, error) {
 	if err := checkUpdate(&u); err != nil {
