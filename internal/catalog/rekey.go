@@ -65,60 +65,63 @@ type rekeyTable struct {
 	// primary: a table a client writes directly; the scan-end run looks only at
 	// these (the derived tables follow in the carry).
 	primary bool
-	// cands lists the paths with rows and no indexed book (?1: the library).
+	// cands lists the paths with rows and no indexed book (?1: the library),
+	// each once.
 	cands string
 	// rows reads every row on a path (?1 library, ?2 path), its listener first
 	// (a collection item's: the collection's owner), then every column.
 	rows string
 }
 
-// rekeyNoBook is the candidate reads' condition: the library's rows (alias t)
-// at a path no book is indexed at exactly.
-const rekeyNoBook = ` WHERE t.library_id = ?1 AND NOT EXISTS (
-    SELECT 1 FROM books b WHERE b.library_id = t.library_id AND b.rel_path = t.rel_path)`
+// rekeyNoBook ends a candidate read: of the library's distinct paths in a
+// table (alias t, read first from the table's path index, so the books lookup
+// is one a path, not one a row: a listener's history holds thousands of rows a
+// book), those no book is indexed at exactly.
+const rekeyNoBook = ` WHERE NOT EXISTS (
+    SELECT 1 FROM books b WHERE b.library_id = ?1 AND b.rel_path = t.rel_path)`
 
 // rekeyTables is every table carryListeningState carries (add a table there ->
 // add it here, so a moved row is never missing from the log).
 var rekeyTables = []rekeyTable{
 	{"progress", carryTimeline, true,
-		`SELECT DISTINCT t.rel_path FROM progress t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM progress WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT user_id, * FROM progress WHERE library_id = ?1 AND rel_path = ?2`},
 	{"bookmarks", carryTimeline, true,
-		`SELECT DISTINCT t.rel_path FROM bookmarks t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM bookmarks WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT user_id, * FROM bookmarks WHERE library_id = ?1 AND rel_path = ?2`},
 	{"notes", carryTimeline, true,
-		`SELECT DISTINCT t.rel_path FROM notes t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM notes WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT user_id, * FROM notes WHERE library_id = ?1 AND rel_path = ?2`},
 	{"listening_history", carryTimeline, true,
-		`SELECT DISTINCT t.rel_path FROM listening_history t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM listening_history WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT user_id, * FROM listening_history WHERE library_id = ?1 AND rel_path = ?2`},
 	{"listening_sessions", carryTimeline, false,
-		`SELECT DISTINCT t.rel_path FROM listening_sessions t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM listening_sessions WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT user_id, * FROM listening_sessions WHERE library_id = ?1 AND rel_path = ?2`},
 	{"listening_daily", carryTimeline, false,
-		`SELECT DISTINCT t.rel_path FROM listening_daily t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM listening_daily WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT user_id, * FROM listening_daily WHERE library_id = ?1 AND rel_path = ?2`},
 	{"listening_events", carryTimeline, false,
-		`SELECT DISTINCT t.rel_path FROM listening_events t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM listening_events WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT user_id, * FROM listening_events WHERE library_id = ?1 AND rel_path = ?2`},
 	{"import_progress_prior", carryTimeline, false,
-		`SELECT DISTINCT t.rel_path FROM import_progress_prior t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM import_progress_prior WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT user_id, * FROM import_progress_prior WHERE library_id = ?1 AND rel_path = ?2`},
 	{"up_next", carryBookLevel, true,
-		`SELECT DISTINCT t.rel_path FROM up_next t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM up_next WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT user_id, * FROM up_next WHERE library_id = ?1 AND rel_path = ?2`},
 	{"collection_items", carryBookLevel, true,
-		`SELECT DISTINCT t.rel_path FROM collection_items t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM collection_items WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT c.user_id, i.* FROM collection_items i JOIN collections c ON c.id = i.collection_id
 		  WHERE i.library_id = ?1 AND i.rel_path = ?2`},
 	{"ratings", carryBookLevel, true,
-		`SELECT DISTINCT t.rel_path FROM ratings t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM ratings WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT user_id, * FROM ratings WHERE library_id = ?1 AND rel_path = ?2`},
 	{"reading_progress", carryBookLevel, true,
-		`SELECT DISTINCT t.rel_path FROM reading_progress t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM reading_progress WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT user_id, * FROM reading_progress WHERE library_id = ?1 AND rel_path = ?2`},
 	{"favourites", carryFavs, true,
-		`SELECT DISTINCT t.rel_path FROM favourites t` + rekeyNoBook,
+		`SELECT t.rel_path FROM (SELECT DISTINCT rel_path FROM favourites WHERE library_id = ?1) t` + rekeyNoBook,
 		`SELECT user_id, * FROM favourites WHERE library_id = ?1 AND rel_path = ?2`},
 }
 
