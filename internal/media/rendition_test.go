@@ -254,27 +254,27 @@ func TestRenditionQueueAndStatus(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	src := srcFile(t, "a.mp3")
-	if st, _ := m.Status(src); st != CacheMissing || runs.Load() != 0 {
+	if st, _, _ := m.Status(src); st != CacheMissing || runs.Load() != 0 {
 		t.Fatalf("status = %s after %d runs, want missing and none", st, runs.Load())
 	}
-	if st, _ := m.Queue(ctx, "ffmpeg", src); st != CachePending {
+	if st, _, _ := m.Queue(ctx, "ffmpeg", src); st != CachePending {
 		t.Fatalf("queue = %s, want pending", st)
 	}
-	if st, _ := m.Status(src); st != CachePending {
+	if st, _, _ := m.Status(src); st != CachePending {
 		t.Fatalf("status while encoding = %s, want pending", st)
 	}
-	if st, _ := m.Queue(ctx, "ffmpeg", src); st != CachePending {
+	if st, _, _ := m.Queue(ctx, "ffmpeg", src); st != CachePending {
 		t.Fatalf("queue again = %s, want pending (one flight)", st)
 	}
 	close(gate)
 	m.Wait()
-	if st, n := m.Status(src); st != CacheReady || n != int64(len("m4a copy")) {
+	if st, n, _ := m.Status(src); st != CacheReady || n != int64(len("m4a copy")) {
 		t.Fatalf("status after = %s %d, want ready with its size", st, n)
 	}
-	if st, n := m.Queue(ctx, "ffmpeg", src); st != CacheReady || n != int64(len("m4a copy")) || runs.Load() != 1 {
+	if st, n, _ := m.Queue(ctx, "ffmpeg", src); st != CacheReady || n != int64(len("m4a copy")) || runs.Load() != 1 {
 		t.Fatalf("queue of a ready file = %s %d after %d runs, want ready and one run", st, n, runs.Load())
 	}
-	if st, _ := m.Status(filepath.Join(t.TempDir(), "gone.mp3")); st != CacheFailed {
+	if st, _, _ := m.Status(filepath.Join(t.TempDir(), "gone.mp3")); st != CacheFailed {
 		t.Fatalf("status of no file = %s, want failed", st)
 	}
 
@@ -284,13 +284,13 @@ func TestRenditionQueueAndStatus(t *testing.T) {
 	bad := srcFile(t, "bad.mp3")
 	refusing.Queue(ctx, "ffmpeg", bad)
 	refusing.Wait()
-	if st, _ := refusing.Status(bad); st != CacheFailed {
+	if st, _, _ := refusing.Status(bad); st != CacheFailed {
 		t.Fatalf("status of a refused file = %s, want failed", st)
 	}
 	if _, _, err := refusing.Open(ctx, ctx, "ffmpeg", bad); !errors.Is(err, ErrRefused) {
 		t.Fatalf("open of a refused file = %v, want ErrRefused", err)
 	}
-	if st, _ := refusing.Queue(ctx, "ffmpeg", bad); st != CacheFailed || refusedRuns.Load() != 1 {
+	if st, _, _ := refusing.Queue(ctx, "ffmpeg", bad); st != CacheFailed || refusedRuns.Load() != 1 {
 		t.Fatalf("queue of a refused file = %s after %d runs, want failed and no new run", st, refusedRuns.Load())
 	}
 
@@ -302,7 +302,7 @@ func TestRenditionQueueAndStatus(t *testing.T) {
 	flaky := srcFile(t, "flaky.mp3")
 	partway.Queue(ctx, "ffmpeg", flaky)
 	partway.Wait()
-	if st, _ := partway.Status(flaky); st != CacheMissing {
+	if st, _, _ := partway.Status(flaky); st != CacheMissing {
 		t.Fatalf("status after a failure partway = %s, want missing", st)
 	}
 	partway.Queue(ctx, "ffmpeg", flaky)
@@ -324,7 +324,7 @@ func TestRenditionQueueBounded(t *testing.T) {
 	ctx := context.Background()
 	var states []CacheState
 	for _, name := range []string{"1.mp3", "2.mp3", "3.mp3"} {
-		st, _ := m.Queue(ctx, "ffmpeg", srcFile(t, name))
+		st, _, _ := m.Queue(ctx, "ffmpeg", srcFile(t, name))
 		states = append(states, st)
 	}
 	if want := []CacheState{CachePending, CachePending, CacheMissing}; !slices.Equal(states, want) {
@@ -353,7 +353,7 @@ func TestRenditionNoAudioRefused(t *testing.T) {
 	if _, _, err := m.Open(ctx, ctx, ffmpeg, src); !errors.Is(err, ErrRefused) || errors.Is(err, ErrNoSource) {
 		t.Fatalf("open = %v, want ffmpeg's refusal", err)
 	}
-	if st, _ := m.Status(src); st != CacheFailed {
+	if st, _, _ := m.Status(src); st != CacheFailed {
 		t.Fatalf("status = %s, want failed (remembered)", st)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
@@ -527,17 +527,17 @@ func TestRenditionShortRemembered(t *testing.T) {
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Fatalf("cache holds %d files, want none", len(entries))
 	}
-	if st, _ := m.Status(src); st != CacheFailed {
+	if st, _, _ := m.Status(src); st != CacheFailed {
 		t.Fatalf("status = %s, want failed (remembered)", st)
 	}
 	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || runs.Load() != 1 {
 		t.Fatalf("open again = %v after %d runs, want the remembered refusal and no new encode", err, runs.Load())
 	}
-	if st, _ := m.Queue(ctx, "ffmpeg", src); st != CacheFailed || runs.Load() != 1 {
+	if st, _, _ := m.Queue(ctx, "ffmpeg", src); st != CacheFailed || runs.Load() != 1 {
 		t.Fatalf("queue = %s after %d runs, want failed and no new encode", st, runs.Load())
 	}
 	clock = clock.Add(cacheRefusalTTL)
-	if st, _ := m.Status(src); st != CacheMissing {
+	if st, _, _ := m.Status(src); st != CacheMissing {
 		t.Fatalf("status after the memory expired = %s, want missing", st)
 	}
 	cut.Store(false)
@@ -592,8 +592,16 @@ func TestRefusalExpires(t *testing.T) {
 			t.Fatalf("%s: a missing file refused for %v", name, left)
 		}
 		clock = clock.Add(cacheRefusalTTL - time.Second)
-		if st, _ := m.Status(src); st != CacheFailed || m.RefusedFor(src) != time.Second {
-			t.Fatalf("%s: status before the TTL = %s, %v left, want failed for a second more", name, st, m.RefusedFor(src))
+		if st, _, left := m.Status(src); st != CacheFailed || left != time.Second {
+			t.Fatalf("%s: status before the TTL = %s, %v left, want failed for a second more", name, st, left)
+		}
+		// Queue answers the refusal with its hint, read with the state (server#359).
+		if st, _, left := m.Queue(ctx, "ffmpeg", src); st != CacheFailed || left != time.Second || runs.Load() != 1 {
+			t.Fatalf("%s: queue before the TTL = %s, %v left after %d runs, want failed for a second more",
+				name, st, left, runs.Load())
+		}
+		if _, _, left := m.Status(src + ".gone"); left != 0 {
+			t.Fatalf("%s: a missing file's status has %v left, want no hint", name, left)
 		}
 		// Open finds the expired refusal itself (RefusedFor would forget it
 		// first), tries again and remembers the new one, which RefusedFor
@@ -625,7 +633,7 @@ func TestRefusalExpires(t *testing.T) {
 	}
 	m.failed["live"] = clock.Add(time.Minute)
 	m.rememberLocked("new")
-	if len(m.failed) != 2 || !m.refusedLocked("live") || !m.refusedLocked("new") {
+	if len(m.failed) != 2 || m.refusalLeftLocked("live") <= 0 || m.refusalLeftLocked("new") <= 0 {
 		t.Fatalf("after the sweep: %d remembered, want live and new", len(m.failed))
 	}
 }

@@ -177,15 +177,14 @@ func (a *API) renditionsOfBook(w http.ResponseWriter, r *http.Request, prepare b
 			return
 		}
 		if abs != "" {
+			var left time.Duration
 			if prepare {
-				out.State, out.Bytes = a.renditions.Queue(a.baseCtx, a.ffmpeg, abs)
+				out.State, out.Bytes, left = a.renditions.Queue(a.baseCtx, a.ffmpeg, abs)
 			} else {
-				out.State, out.Bytes = a.renditions.Status(abs)
+				out.State, out.Bytes, left = a.renditions.Status(abs)
 			}
-			if out.State == media.CacheFailed {
-				if left := a.renditions.RefusedFor(abs); left > 0 {
-					out.RetryAfter = retrySeconds(left)
-				}
+			if left > 0 {
+				out.RetryAfter = retrySeconds(left)
 			}
 		}
 		files = append(files, out)

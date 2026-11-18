@@ -333,8 +333,8 @@ func (m *FileCache) begin(runCtx context.Context, ffmpegPath, key, abs string, i
 	if f, ok := m.hit(key); ok {
 		return f, nil, nil
 	}
-	if m.refusedLocked(key) {
-		return nil, nil, ErrRefused
+	if left := m.refusalLeftLocked(key); left > 0 {
+		return nil, nil, refusal{left}
 	}
 	fl, waiting := m.inflight[key]
 	if !waiting && start && (m.spec.queueMax == 0 || len(m.inflight) < m.spec.queueMax) {
@@ -362,41 +362,60 @@ const (
 	CacheMissing CacheState = "missing"
 )
 
-// Status is where abs's copy stands, and its size when ready, without starting
-// a run or marking the copy used.
-func (m *FileCache) Status(abs string) (CacheState, int64) {
+// refusal is begin's ErrRefused with how long the remembered refusal has
+// left, read under the lock that found it.
+type refusal struct{ left time.Duration }
+
+func (refusal) Error() string        { return ErrRefused.Error() }
+func (refusal) Is(target error) bool { return target == ErrRefused }
+
+// refusalLeft is a refusal's time left, 0 for any other error.
+func refusalLeft(err error) time.Duration {
+	var r refusal
+	if errors.As(err, &r) {
+		return r.left
+	}
+	return 0
+}
+
+// Status is where abs's copy stands, its size when ready, and for a file
+// ffmpeg refused how long that refusal has left (refusedFor, > 0 only then:
+// the hint a client is given to ask again), read under the same lock as the
+// state, so a refusal expiring meanwhile can't leave a failed state with no
+// hint (server#359). It neither starts a run nor marks the copy used.
+func (m *FileCache) Status(abs string) (state CacheState, size int64, refusedFor time.Duration) {
 	info, err := Source(context.Background(), abs, sourceWait)
 	if err != nil {
-		return CacheFailed, 0
+		return CacheFailed, 0, 0
 	}
 	key := m.key(abs, info)
 	// A key in flight or refused has no copy (a run renames its copy into
 	// place before it leaves inflight), so the cache file is stat'ed once,
 	// outside the lock.
 	m.mu.Lock()
-	refused := m.refusedLocked(key)
+	left := m.refusalLeftLocked(key)
 	_, running := m.inflight[key]
 	m.mu.Unlock()
 	switch {
-	case refused:
-		return CacheFailed, 0
+	case left > 0:
+		return CacheFailed, 0, left
 	case running:
-		return CachePending, 0
+		return CachePending, 0, 0
 	}
 	if fi, err := os.Stat(m.cachePath(key)); err == nil {
-		return CacheReady, fi.Size()
+		return CacheReady, fi.Size(), 0
 	}
-	return CacheMissing, 0
+	return CacheMissing, 0, 0
 }
 
 // Queue starts making abs's copy under runCtx unless it is cached, refused or
 // under way, and returns where it stands then (as Status). It never waits for
 // the run. A cache with no queueMax, or as many runs in flight, starts nothing:
 // the file stays missing for the caller to ask again.
-func (m *FileCache) Queue(runCtx context.Context, ffmpegPath, abs string) (CacheState, int64) {
+func (m *FileCache) Queue(runCtx context.Context, ffmpegPath, abs string) (state CacheState, size int64, refusedFor time.Duration) {
 	info, err := Source(runCtx, abs, sourceWait)
 	if err != nil {
-		return CacheFailed, 0
+		return CacheFailed, 0, 0
 	}
 	key := m.key(abs, info)
 	f, fl, err := m.begin(runCtx, ffmpegPath, key, abs, info, m.spec.queueMax > 0)
@@ -404,15 +423,15 @@ func (m *FileCache) Queue(runCtx context.Context, ffmpegPath, abs string) (Cache
 	case f != nil:
 		defer f.Close()
 		if fi, err := f.Stat(); err == nil {
-			return CacheReady, fi.Size()
+			return CacheReady, fi.Size(), 0
 		}
-		return CacheReady, 0
+		return CacheReady, 0, 0
 	case err != nil:
-		return CacheFailed, 0
+		return CacheFailed, 0, refusalLeft(err)
 	case fl != nil:
-		return CachePending, 0
+		return CachePending, 0, 0
 	}
-	return CacheMissing, 0
+	return CacheMissing, 0, 0
 }
 
 // WarmAll makes the copies of paths in the background under runCtx, one
@@ -455,7 +474,7 @@ func (m *FileCache) WarmAll(runCtx context.Context, ffmpegPath string, paths []s
 			if _, err := Source(runCtx, abs, sourceWait); metadata.GaveUp(err) {
 				return
 			}
-			if st, _ := m.Status(abs); st == CacheReady {
+			if st, _, _ := m.Status(abs); st == CacheReady {
 				continue
 			}
 			if f, _, err := m.Open(runCtx, runCtx, ffmpegPath, abs); err == nil {
@@ -494,10 +513,6 @@ func (m *FileCache) lead(runCtx context.Context, ffmpegPath, key, abs string, in
 	m.mu.Unlock()
 	close(fl.done)
 }
-
-// refusedLocked reports whether key's refusal is remembered and not expired,
-// forgetting an expired one. The caller holds mu.
-func (m *FileCache) refusedLocked(key string) bool { return m.refusalLeftLocked(key) > 0 }
 
 // refusalLeftLocked is how long key's remembered refusal has left, 0 for
 // none, forgetting an expired one. The caller holds mu.
