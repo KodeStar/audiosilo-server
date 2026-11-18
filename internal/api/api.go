@@ -166,8 +166,8 @@ type API struct {
 	tokenLimiter   *rateLimiter // authenticated API rate, per credential (see requireAuth)
 	mediaLimiter   *rateLimiter // authenticated media rate, per credential (see requireMediaAuth)
 	// castKeepEvery is how often a response a cast token authenticated keeps
-	// the token in use while it runs (keepCastInUse): auth.CastTouchInterval,
-	// shorter in tests.
+	// the token in use while it runs (keepCastInUse): auth.CastTouchInterval
+	// (also what 0 means), shorter in tests.
 	castKeepEvery time.Duration
 	// castKeepRuns are the cast tokens responses are keeping in use, by token
 	// id (keepCastInUse), guarded by castKeepMu.

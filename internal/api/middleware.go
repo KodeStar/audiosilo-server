@@ -481,6 +481,12 @@ type castKeepRun struct {
 // the response outlived one interval, so the token's last use is the
 // response's end.
 func (a *API) keepCastInUse(id int64) (stop func()) {
+	// An API built without New has no pace: a ticker of 0 would panic, in a
+	// goroutine nothing recovers.
+	every := a.castKeepEvery
+	if every <= 0 {
+		every = auth.CastTouchInterval
+	}
 	start := time.Now()
 	a.castKeepMu.Lock()
 	run := a.castKeepRuns[id]
@@ -492,7 +498,7 @@ func (a *API) keepCastInUse(id int64) (stop func()) {
 		a.castKeepRuns[id] = run
 		go func() {
 			defer close(run.finished)
-			tick := time.NewTicker(a.castKeepEvery)
+			tick := time.NewTicker(every)
 			defer tick.Stop()
 			for {
 				select {
@@ -518,7 +524,7 @@ func (a *API) keepCastInUse(id int64) (stop func()) {
 		if last {
 			<-run.finished // a keep in flight lands first; bounded (castKeepTimeout)
 		}
-		if time.Since(start) >= a.castKeepEvery {
+		if time.Since(start) >= every {
 			a.keepCast(id)
 		}
 	}

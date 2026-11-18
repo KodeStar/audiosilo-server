@@ -669,4 +669,17 @@ func TestCastKeepIsOnePerToken(t *testing.T) {
 	if n, _ := runs(); n != 0 {
 		t.Fatalf("after every response ended: %d runs left", n)
 	}
+	// An API built without New has no pace of its own: it keeps at auth's, and
+	// its run starts and ends like any other (a ticker of 0 would panic).
+	bare := &API{}
+	stop := bare.keepCastInUse(7)
+	bare.castKeepMu.Lock()
+	run := bare.castKeepRuns[7]
+	bare.castKeepMu.Unlock()
+	stop()
+	select {
+	case <-run.finished:
+	default:
+		t.Fatal("a bare API's keep had not finished when its response ended")
+	}
 }
