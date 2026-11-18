@@ -139,24 +139,37 @@ func TestSpellingContentRoutesDenied(t *testing.T) {
 		t.Errorf("kid item of a hidden path = %d, want 403", status)
 	}
 	// vari's rule is the NFD author folder: the NFD book path is inside it, the
-	// indexed NFC book is not. It reads as a path with nothing there, on the
-	// routes that open the file on disk too (a disk that ignores the spelling,
-	// macOS's or a share's, would open the NFC book's files by the NFD path).
-	for _, tc := range []struct{ endpoint, path, missing string }{
-		{"item", spNFDBook, spNFDAuthor + "/Nana"},
-		{"chapters", spNFDBook, spNFDAuthor + "/Nana"},
-		{"cover", spNFDBook, spNFDAuthor + "/Nana"},
-		{"next", spNFDBook, spNFDAuthor + "/Nana"},
-		{"stream", spNFDTrack, spNFDAuthor + "/Nana/01.mp3"},
-		{"ebook", spNFDBook, spNFDAuthor + "/Nana"},
-		{"readalong", spNFDBook, spNFDAuthor + "/Nana"},
-		{"meta", spNFDBook, spNFDAuthor + "/Nana"},
-	} {
-		missing, _ := s.get(t, s.vTok, tc.endpoint, tc.missing)
-		status, body := s.get(t, s.vTok, tc.endpoint, tc.path)
-		if status != missing || status == http.StatusOK {
-			t.Errorf("vari %s %+q = %d %.120s, want %d as for a path with nothing there", tc.endpoint, tc.path, status, body, missing)
+	// indexed NFC book is not. It reads as a path with nothing there, answer for
+	// answer (status, body, type), on the routes that open the file on disk too
+	// (a disk that ignores the spelling, macOS's or a share's, would open the
+	// NFC book's files by the NFD path) and on the listener's own state.
+	missingBook, missingTrack := spNFDAuthor+"/Nana", spNFDAuthor+"/Nana/01.mp3"
+	same := func(what, path, missing string) {
+		t.Helper()
+		want, wantBody := s.do(t, "GET", missing, s.vTok, "")
+		got, body := s.do(t, "GET", path, s.vTok, "")
+		if got.StatusCode != want.StatusCode || body != wantBody || got.Header.Get("Content-Type") != want.Header.Get("Content-Type") {
+			t.Errorf("vari %s = %d %.120s (%s), want %d %.120s (%s) as for a path with nothing there", what,
+				got.StatusCode, body, got.Header.Get("Content-Type"), want.StatusCode, wantBody, want.Header.Get("Content-Type"))
 		}
+	}
+	for _, tc := range []struct{ endpoint, path, missing string }{
+		{"item", spNFDBook, missingBook},
+		{"chapters", spNFDBook, missingBook},
+		{"cover", spNFDBook, missingBook},
+		{"next", spNFDBook, missingBook},
+		{"stream", spNFDTrack, missingTrack},
+		{"ebook", spNFDBook, missingBook},
+		{"readalong", spNFDBook, missingBook},
+		{"meta", spNFDBook, missingBook},
+		{"progress", spNFDBook, missingBook},
+		{"bookmarks", spNFDBook, missingBook},
+		{"notes", spNFDBook, missingBook},
+		{"history", spNFDBook, missingBook},
+		{"rating", spNFDBook, missingBook},
+		{"reading-progress", spNFDBook, missingBook},
+	} {
+		same(tc.endpoint+" "+tc.path, bookURL(s.lib.ID, tc.endpoint, tc.path), bookURL(s.lib.ID, tc.endpoint, tc.missing))
 		if status, _ := s.get(t, s.vTok, tc.endpoint, unorm.NFC.String(tc.path)); status != http.StatusForbidden {
 			t.Errorf("vari %s %+q = %d, want 403", tc.endpoint, unorm.NFC.String(tc.path), status)
 		}
@@ -164,15 +177,10 @@ func TestSpellingContentRoutesDenied(t *testing.T) {
 	// The stream's other forms open the file too: a download, a transcode, a
 	// rendition. And /fs lists the disk: the NFD folder is not listed from it.
 	for _, extra := range []string{"&download=1", "&transcode=1", "&original=1", "&rendition=watch"} {
-		resp, body := s.do(t, "GET", bookURL(s.lib.ID, "stream", spNFDTrack)+extra, s.vTok, "")
-		if status := resp.StatusCode; status/100 == 2 {
-			t.Errorf("vari stream %+q%s = %d %.120s, want no file", spNFDTrack, extra, status, body)
-		}
+		same("stream"+extra, bookURL(s.lib.ID, "stream", spNFDTrack)+extra, bookURL(s.lib.ID, "stream", missingTrack)+extra)
 	}
 	for _, p := range []string{spNFDBook, spNFDAuthor} {
-		if status, body := s.get(t, s.vTok, "fs", p); status != http.StatusNotFound {
-			t.Errorf("vari fs %+q = %d %.200s, want 404", p, status, body)
-		}
+		same("fs "+p, bookURL(s.lib.ID, "fs", p), bookURL(s.lib.ID, "fs", missingBook))
 	}
 	// Over the cap is still 400 before any lookup.
 	long := spNFDBook + "/" + string(make([]byte, catalog.MaxPathBytes))

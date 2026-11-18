@@ -1154,11 +1154,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a list replace's, per ref; a list remove and the re-key every spelling), so a rule naming another
   spelling byte for byte never learns, from a 403 where a missing path reads 404, that an indexed
   path it can't reach is there. When such a rule admits the path as given but the only indexed
-  paths reading as it lie outside the scope (`Spelling`'s `outside`), every route answers 404 "not
-  found" (`spelledPathInScope`; `/fs` "directory not found"), the ones that open the file
-  included (stream with download, transcode, remux and rendition, cover, ebook, readalong): on a
-  disk that ignores the spelling (macOS, SMB) the path as given would open the refused book's
-  files (`TestSpellingContentRoutesDenied`). A failed lookup is a 500 (a timed-out one a 503), never the spelling given.
+  paths reading as it lie outside the scope (`Spelling`'s `outside`), every route answers exactly
+  as for a path with nothing there (status, body, type; `TestSpellingContentRoutesDenied` compares
+  them): the path as given (`spelledPath`), so the catalog's routes read nothing at it (the
+  on-demand index takes only the on-disk spelling) and the listener's own state reads and stores
+  at it, while the stream, the one route that opens the file at the path itself (on a disk that
+  ignores the spelling, macOS's or a share's, the refused book's file), opens none: `audioFile`
+  joins it as usual, then names no file (`noFile`), so its download, transcode, remux and rendition
+  forms each answer as for a missing file; `/fs` "directory not found". A failed lookup is a 500 (a timed-out one a 503), never the spelling given.
   Unchanged on purpose: `CleanRelPath` and share rules stay byte-exact; the on-demand index takes
   only the on-disk spelling (`dirPresent`), so another spelling of an unindexed book stays 404; the
   admin's folder-override route, the admin's edit of a person's progress (`exactPath`: the row
