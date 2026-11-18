@@ -153,11 +153,12 @@ type kindSpec struct {
 	// same book (cancelOpenTx, the value its error), in the same transaction.
 	cancelsOpen map[string]string
 	// module is the managed module a job of the kind needs ("" for none): the
-	// api answers 404 module_off while it is off (ModuleFor), a queued one is
-	// held meanwhile (Service.ModuleOn), and a claimed one is asked to stop at
-	// its next report (UpdateHeld, CancelModuleOff). A job that needs ModuleContributions
+	// api answers 404 module_off while it is off (ModuleFor), and a queued one
+	// is held meanwhile (Service.ModuleOn). A job that needs ModuleContributions
 	// files to the community, so it also needs a Bridge that can
-	// (ErrCannotContribute).
+	// (ErrCannotContribute), and one of a kind that only files (the kind's own
+	// module is ModuleContributions) is asked to stop at its next report once
+	// the module is off (Service.stopsShare).
 	module string
 	// maxParams bounds the params as sent, in bytes (0: defaultParamsBytes).
 	maxParams int
@@ -229,13 +230,26 @@ var kinds = map[string]kindSpec{
 // scans the table).
 const claimedStatesSQL = `('claimed', 'running')`
 
-// held reports whether a job of kind with params waits for a managed module
-// that is off (ModuleFor; with no ModuleOn wired every module counts as on): no
-// claim hands a queued one out (nextQueued), it refuses no new job that cancels
-// it (givesWay), and a claimed or running one is asked to stop (UpdateHeld).
+// held reports whether a queued job of kind with params waits for a managed
+// module that is off (ModuleFor; with no ModuleOn wired every module counts as
+// on): no claim hands it out (nextQueued), and it refuses no new job that
+// cancels it (givesWay).
 func (s *Service) held(kind string, params json.RawMessage) bool {
 	m := ModuleFor(kind, params)
 	return m != "" && s.ModuleOn != nil && !s.ModuleOn(m)
+}
+
+// stopsShare reports whether a job of kind the Bridge works on is asked to
+// stop (UpdateHeld, CancelModuleOff): one of a kind that only files to the
+// community (sidecars.contribute, meta.correct: the kind's own module is
+// ModuleContributions) while the Contributions module is off. Such a job
+// writes nothing, so its stop loses no work. Every other job a claim handed
+// out carries on with its module off: a podcast or Audible job, and a
+// sidecars.generate job that contributes, whose stop would throw away the
+// characters and recaps it is writing (it files them itself at its end; the
+// server has no part in that step to refuse).
+func (s *Service) stopsShare(kind string) bool {
+	return kinds[kind].module == ModuleContributions && s.ModuleOn != nil && !s.ModuleOn(ModuleContributions)
 }
 
 // blocker is the open job that refuses a new job of kind for the book
@@ -1414,9 +1428,9 @@ func checkUpdate(u *Update) error {
 // this claim (u.Attempt) in a state the Bridge reports from, and the new state
 // one it may report; a claimed or running job's lease is renewed, a parked
 // one's dropped, a finished one's ended. It returns the job as stored, whose
-// CancelRequested tells the Bridge an admin, or the server (its module turned
-// off: CancelModuleOff), asked it to stop. A move into a
-// state an admin hears about is reported (OnTransition) once it commits.
+// CancelRequested tells the Bridge an admin, or the server (a share whose
+// module was turned off: stopsShare), asked it to stop. A move into a state an
+// admin hears about is reported (OnTransition) once it commits.
 func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, error) {
 	if err := checkUpdate(&u); err != nil {
 		return nil, err
@@ -1472,11 +1486,11 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		var lease, finished any
 		switch state {
 		case StateClaimed, StateRunning:
-			// A job its managed module needs keeps working only while the module
-			// is on: a queued one is held (nextQueued), and one already claimed
-			// is asked to stop at this report, with the server's reason, as a
-			// cancel an admin asked for is (server#218).
-			if !cur.CancelRequested && s.held(cur.Kind, cur.Params) {
+			// A job that only files to the community stops sharing once the
+			// Contributions module is off: it is asked to stop at this report,
+			// with the server's reason, as a cancel an admin asked for is
+			// (server#218). Any other job the Bridge holds carries on.
+			if !cur.CancelRequested && s.stopsShare(cur.Kind) {
 				if _, err := tx.ExecContext(ctx,
 					`UPDATE bridge_jobs SET cancel_requested = 1, error = ? WHERE id = ?`, CancelModuleOff, id); err != nil {
 					return err
@@ -1706,8 +1720,8 @@ const (
 	// CancelReplacedRequest: a podcast request for a newer identity of the
 	// same work replaced the open one (Enqueue).
 	CancelReplacedRequest = "a newer request replaced it"
-	// CancelModuleOff: the managed module the job needs was turned off while
-	// the Bridge worked on it (UpdateHeld).
+	// CancelModuleOff: the Contributions module was turned off while the
+	// Bridge worked on a job that only files to the community (stopsShare).
 	CancelModuleOff = "its module was turned off"
 )
 

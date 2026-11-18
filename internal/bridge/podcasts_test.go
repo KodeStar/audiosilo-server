@@ -103,6 +103,29 @@ func TestSubscribeBoundAndKindGuards(t *testing.T) {
 		t.Fatalf("podcast guard %v", err)
 	}
 }
+
+// A podcast job a claim handed out carries on with the Podcasts module off:
+// only a queued one is held.
+func TestClaimedPodcastJobCarriesOnWithTheModuleOff(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	j, _, err := q.Enqueue(ctx, NewJob{Kind: KindPodcastPoll, LibraryID: &q.lib, Path: ptr("Show"), Params: json.RawMessage(`{}`), RequestedBy: q.admin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || claimed == nil || claimed.ID != j.ID {
+		t.Fatalf("claim %v %v", claimed, err)
+	}
+	q.ModuleOn = func(string) bool { return false }
+	got, err := q.UpdateHeld(ctx, j.ID, Update{Attempt: 1, State: ptr(StateRunning)})
+	if err != nil || got.CancelRequested || got.Error != "" || got.State != StateRunning {
+		t.Fatalf("module off: %+v, %v; want working on", got, err)
+	}
+	if got, err = q.UpdateHeld(ctx, j.ID, Update{Attempt: 1, State: ptr(StateDone)}); err != nil || got.State != StateDone {
+		t.Fatalf("its end = %+v, %v; want done", got, err)
+	}
+}
+
 func TestPodcastEndedAndPollPruning(t *testing.T) {
 	q := podcastQueue(t)
 	ctx := context.Background()

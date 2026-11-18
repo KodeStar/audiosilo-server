@@ -45,10 +45,11 @@ type Service struct {
 	// is held: no claim hands it out until the module is on again, so turning
 	// one off leaves its queued jobs at rest, and it refuses no new job that
 	// cancels it (givesWay: a generate job replaces a held share). A job the
-	// Bridge holds is asked to stop at its next report as claimed or running
-	// (UpdateHeld, CancelModuleOff), a parked one once it reports working
-	// again. It is the toggle alone, never the capability flag, which follows
-	// the Bridge's heartbeat.
+	// Bridge holds (claimed, running or parked) carries on, but for one that
+	// only files to the community, asked to stop at its next report as claimed
+	// or running (stopsShare, CancelModuleOff), a parked one once it reports
+	// working again. It is the toggle alone, never the capability flag, which
+	// follows the Bridge's heartbeat.
 	ModuleOn func(id string) bool
 
 	// hb caches the last heartbeat as read (status.go), so GET /server, which
