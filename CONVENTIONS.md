@@ -3215,7 +3215,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   lost), and the claim goes on to the job behind it (`claimPriority`, `endUnfillableClaim`: one warning
   with its kind, never an empty 200 the Bridge would take again); console and listener responses
   (`RedactedJob`) answer such params as null with `params_unreadable` (progress and result as null),
-  logged once per row per process (`logUnreadableJobs`).
+  logged once per row per process (`logUnreadableJobs`). SQL that reads a field of a job's params goes
+  through `bridge.ParamSQL` (`json_valid` first, in a CASE), so one damaged row never fails a whole query.
   `GET /bridge/libraries/{id}/book[?path=]` gives an INDEXED book's files with the size and mtime the
   server sees now (a single-file book, which has no file rows, is listed as its own file; no path: the
   first whole book of the library's first five by title, the mapping check's sample; 404 `no_book`; never an

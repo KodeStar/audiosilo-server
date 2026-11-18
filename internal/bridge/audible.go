@@ -116,7 +116,7 @@ func CancelAudiblePolls(ctx context.Context, tx *sql.Tx, account, reason string,
 // poll: at once when queued or parked, else at the Bridge's next report.
 func CancelAudibleImports(ctx context.Context, tx *sql.Tx, account, reason string, now time.Time) error {
 	keys, err := queryColumn[string](ctx, tx, `SELECT dedupe_key FROM bridge_jobs WHERE kind = ? AND state IN `+OpenStatesSQL+`
-		AND json_extract(params, '$.account') = ?`, KindAudibleImport, account)
+		AND `+ParamSQL("params", "$.account")+` = ?`, KindAudibleImport, account)
 	if err != nil {
 		return err
 	}

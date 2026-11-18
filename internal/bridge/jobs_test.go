@@ -879,3 +879,21 @@ func TestClaimUnreadableParamsFailed(t *testing.T) {
 		t.Fatalf("claim = %+v, %v; want none", got, err)
 	}
 }
+
+// ParamSQL reads a job's param as NULL from a row whose params are not JSON,
+// where json_extract alone fails the whole statement.
+func TestParamSQLPassesDamagedRows(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	damaged := q.verify(t, "Author/Damaged", 0)
+	q.verify(t, "Author/Fine", 0)
+	q.damageParams(t, damaged.ID)
+	var n int
+	if err := q.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE json_extract(params, '$.x') IS NULL`).Scan(&n); err == nil {
+		t.Fatal("json_extract read a damaged row; the guard is no longer needed")
+	}
+	if err := q.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE `+ParamSQL("params", "$.x")+` IS NULL`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("guarded read = %d, %v; want both rows, no error", n, err)
+	}
+}

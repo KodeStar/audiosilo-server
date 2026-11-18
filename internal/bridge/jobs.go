@@ -34,6 +34,14 @@ const (
 // migration 0047's partial index names the same four).
 const OpenStatesSQL = `('queued', 'claimed', 'running', 'needs_attention')`
 
+// ParamSQL is SQL reading path ('$.account') from col, a bridge_jobs params
+// column, as NULL when the stored params are not JSON (a damaged row):
+// json_extract on one fails the whole statement, and SQLite does not
+// short-circuit a json_valid beside it in an AND.
+func ParamSQL(col, path string) string {
+	return "CASE WHEN json_valid(" + col + ") THEN json_extract(" + col + ",'" + path + "') END"
+}
+
 // IsOpenState reports whether state is one of OpenStatesSQL's.
 func IsOpenState(state string) bool {
 	switch state {

@@ -515,15 +515,14 @@ func (s *Service) offlineLasted(offline bool) bool {
 // server doesn't hold (it restarted since they were asked for), or whose
 // requester's account was deleted since (requested_by is set NULL: a private
 // feed is that person's credential, never followed for nobody), read through q.
-// One whose params can't be read is passed by (json_valid first, in a CASE so
-// json_extract never reads it): its claim ends it (claimPriority), where a
+// One whose params can't be read is passed by (ParamSQL): its claim ends it (claimPriority), where a
 // malformed row here would fail every claim.
 func (s *Service) lostPrivateRequests(ctx context.Context, q rowsQuerier) ([]int64, error) {
 	type request struct {
 		id       int64
 		orphaned bool
 	}
-	rows, err := q.QueryContext(ctx, `SELECT id, requested_by IS NULL FROM bridge_jobs WHERE kind=? AND state=? AND CASE WHEN json_valid(params) THEN json_extract(params,'$.private') END=1`, KindPodcastSubscribe, StateQueued)
+	rows, err := q.QueryContext(ctx, `SELECT id, requested_by IS NULL FROM bridge_jobs WHERE kind=? AND state=? AND `+ParamSQL("params", "$.private")+`=1`, KindPodcastSubscribe, StateQueued)
 	if err != nil {
 		return nil, err
 	}

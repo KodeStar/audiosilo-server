@@ -386,9 +386,9 @@ func (c *Catalog) CancelOrphanAudibleJobs(ctx context.Context) (int, error) {
 	err := c.db.WithTx(ctx, "CancelOrphanAudibleJobs", func(tx *sql.Tx) error {
 		var err error
 		gone, err = queryRows(ctx, tx, func(rows *sql.Rows, account *string) error { return rows.Scan(account) },
-			`SELECT DISTINCT json_extract(params, '$.account') FROM bridge_jobs
+			`SELECT DISTINCT `+bridge.ParamSQL("params", "$.account")+` FROM bridge_jobs
 			  WHERE kind IN (?, ?, ?) AND state IN `+bridge.OpenStatesSQL+` AND cancel_requested = 0
-			    AND json_extract(params, '$.account') NOT IN (SELECT account FROM audible_accounts)`,
+			    AND `+bridge.ParamSQL("params", "$.account")+` NOT IN (SELECT account FROM audible_accounts)`,
 			bridge.KindAudiblePoll, bridge.KindAudibleImport, bridge.KindAudibleSync)
 		if err != nil {
 			return err

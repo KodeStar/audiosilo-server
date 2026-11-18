@@ -51,6 +51,15 @@ func TestLibrivoxFetchJobs(t *testing.T) {
 		t.Fatalf("features = %v", got)
 	}
 
+	// An open fetch whose stored params are not JSON (a damaged row) is passed
+	// by, never failing the read of the others (ParamSQL).
+	third := p
+	third.LibrivoxID = 194
+	damaged, _, err := q.Enqueue(ctx, LibrivoxFetch(third, q.admin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.damageParams(t, damaged.ID)
 	open, err := q.OpenLibrivoxFetches(ctx, []int{192, 193, 194})
 	if err != nil || len(open) != 2 || open[192].ID != first.ID || open[193].ID != second.ID {
 		t.Fatalf("open = %+v, %v", open, err)

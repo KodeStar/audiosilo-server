@@ -87,7 +87,7 @@ func fetchCooling(ctx context.Context, tx *sql.Tx, j NewJob, now time.Time) (boo
 	var state string
 	var finished sql.NullString
 	var id int64
-	err = tx.QueryRowContext(ctx, `SELECT id,state,finished_at FROM bridge_jobs WHERE kind='podcast.fetch' AND library_id=? AND rel_path=? AND json_extract(params,'$.show_id')=? AND json_extract(params,'$.episode_id')=? ORDER BY id DESC LIMIT 1`, j.LibraryID, j.Path, p.ShowID, p.EpisodeID).Scan(&id, &state, &finished)
+	err = tx.QueryRowContext(ctx, `SELECT id,state,finished_at FROM bridge_jobs WHERE kind='podcast.fetch' AND library_id=? AND rel_path=? AND `+ParamSQL("params", "$.show_id")+`=? AND `+ParamSQL("params", "$.episode_id")+`=? ORDER BY id DESC LIMIT 1`, j.LibraryID, j.Path, p.ShowID, p.EpisodeID).Scan(&id, &state, &finished)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -268,7 +268,7 @@ func (s *Service) podcastFetchStatuses(ctx context.Context, lib int64, paths []s
  FROM podcast_episodes e JOIN books b ON b.id=e.book_id
  JOIN podcast_shows s ON s.library_id=e.library_id AND s.show_path=e.show_path
  LEFT JOIN podcast_fetch_state f ON f.library_id=b.library_id AND f.rel_path=b.rel_path AND f.show_id=s.show_id
- LEFT JOIN bridge_jobs j ON j.id=(SELECT x.id FROM bridge_jobs x WHERE x.kind='podcast.fetch' AND x.library_id=b.library_id AND x.rel_path=b.rel_path AND json_extract(x.params,'$.show_id')=s.show_id AND json_extract(x.params,'$.episode_id')=e.episode_id ORDER BY x.id DESC LIMIT 1)
+ LEFT JOIN bridge_jobs j ON j.id=(SELECT x.id FROM bridge_jobs x WHERE x.kind='podcast.fetch' AND x.library_id=b.library_id AND x.rel_path=b.rel_path AND `+ParamSQL("x.params", "$.show_id")+`=s.show_id AND `+ParamSQL("x.params", "$.episode_id")+`=e.episode_id ORDER BY x.id DESC LIMIT 1)
  WHERE b.library_id=? AND b.rel_path IN (SELECT value FROM json_each(?))`, lib, string(raw))
 	if err != nil {
 		return nil, err
