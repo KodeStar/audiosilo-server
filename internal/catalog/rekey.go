@@ -334,23 +334,27 @@ func (c *Catalog) rekeyRetries(ctx context.Context, answers func(Library) bool) 
 	)
 	byLib := map[int64]map[string]carrySet{}
 	whole := map[int64]bool{}
+	seen := map[int64]bool{}
 	// usable is the library to retry id in, false when it is gone (so are its
-	// rows) or its folder does not answer (then it is unreached).
+	// rows) or its folder does not answer (then it is unreached); read once a
+	// library.
 	usable := func(id int64) (bool, error) {
+		if ok, known := seen[id]; known {
+			return ok, nil
+		}
 		lib, err := c.GetLibrary(ctx, id)
 		if errors.Is(err, ErrNotFound) || (err == nil && lib.Kind != KindBooks) {
+			seen[id] = false
 			return false, nil
 		}
 		if err != nil {
 			return false, err
 		}
-		if !answers(*lib) {
-			if !slices.Contains(unreached, id) {
-				unreached = append(unreached, id)
-			}
-			return false, nil
+		seen[id] = answers(*lib)
+		if !seen[id] {
+			unreached = append(unreached, id)
 		}
-		return true, nil
+		return seen[id], nil
 	}
 	for _, id := range libs {
 		if ok, err := usable(id); err != nil {
@@ -362,12 +366,12 @@ func (c *Catalog) rekeyRetries(ctx context.Context, answers func(Library) bool) 
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		byLib[id], whole[id] = cands, true
+		whole[id] = true
 		todo = append(todo, rekeyWork{id, cands})
 		retried = append(retried, Ref{LibraryID: id})
 	}
 	for _, r := range failed {
-		if whole[r.LibraryID] || slices.Contains(unreached, r.LibraryID) {
+		if whole[r.LibraryID] {
 			continue // run with its library's every path
 		}
 		if ok, err := usable(r.LibraryID); err != nil {
