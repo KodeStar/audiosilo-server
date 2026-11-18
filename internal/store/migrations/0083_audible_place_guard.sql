@@ -10,11 +10,14 @@
 -- route (catalog.SyncListening, a furthest-only batch) names its device again
 -- in a statement of its own right after writing its place (ownAudiblePlace),
 -- which sets only device_id and device_name, so it fires neither trigger. A
--- carried (moved or joined) row loses the device too: the feed then offers
--- Audible its own place once, which the Bridge drops as the place it last
--- heard. The triggers' own update sets neither position nor finished, so it
--- never fires them again (progress_change_seq_update moves the row's
--- change_seq, which offers the place to Audible).
+-- carried (moved or joined) row the carry inserts, or whose place it moves,
+-- loses the device too: the feed then offers Audible its own place once, which
+-- the Bridge drops as the place it last heard (a merge that leaves the row's
+-- place as it was keeps the device it names). The triggers' own update sets
+-- neither position nor finished, so it never fires them again
+-- (progress_change_seq_update moves the row's change_seq, which offers the
+-- place to Audible: a guarded write draws two counter numbers, and a gap is
+-- harmless, a number is never reused).
 CREATE TRIGGER progress_audible_place_insert AFTER INSERT ON progress
 WHEN NEW.device_id GLOB 'audible:*'
 BEGIN
