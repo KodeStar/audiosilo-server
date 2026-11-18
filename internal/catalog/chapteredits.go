@@ -132,17 +132,18 @@ func msSums(n int, length func(int) int64) []int64 {
 // snapToFiles moves the chapter start (starts, milliseconds) within
 // fileStartSnapMS of each file's start onto it, and reports which starts are
 // files' starts now (fixed, by index) and whether every file starts a chapter.
-// fileStarts are the files' starts (fileStartsMS without the end), end where
-// the last one ends. Each file takes the nearest start in reach that no file
+// bounds are the files' starts and, last, where the last one ends (as
+// fileStartsMS gives them). Each file takes the nearest start in reach that no file
 // before it took, so a file shorter than twice fileStartSnapMS never takes the
 // chapter of the file before or after it. A file of no length (one the scan
 // read no length for) starts where the next one does, and the one chapter
 // there starts both, as the console's editor has it; one at the end, after
 // the book's audio, starts none (no chapter starts at the end).
-func snapToFiles(starts, fileStarts []int64, end int64) (fixed []bool, ok bool) {
+func snapToFiles(starts, bounds []int64) (fixed []bool, ok bool) {
 	fixed = make([]bool, len(starts))
+	end := bounds[len(bounds)-1]
 	var prev int64
-	for k, fs := range fileStarts {
+	for k, fs := range bounds[:len(bounds)-1] {
 		if fs >= end {
 			break
 		}
@@ -205,7 +206,7 @@ func checkChapterEdit(chapters []EditedChapter, files []BookFile) ([]metadata.Ch
 		}
 		entries[i].Title = title
 	}
-	fixed, ok := snapToFiles(starts, fileStarts[:len(files)], end)
+	fixed, ok := snapToFiles(starts, fileStarts)
 	if !ok {
 		return refuse(ChapterEditFileStart)
 	}
@@ -253,7 +254,7 @@ func placeOnFiles(entries []metadata.ChapterListEntry, files []BookFile, listed 
 	for i, e := range entries {
 		starts[i] = e.StartMS
 	}
-	if _, ok := snapToFiles(starts, at[:n], at[n]); !ok {
+	if _, ok := snapToFiles(starts, at); !ok {
 		return nil
 	}
 	out := make([]metadata.Chapter, len(entries))

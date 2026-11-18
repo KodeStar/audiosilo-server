@@ -444,27 +444,23 @@ func replaceChapters(ctx context.Context, tx *sql.Tx, bookID int64, chs []metada
 	return nil
 }
 
-// DetectRefused is why a chapters.detect job for the book at (libID, path)
-// would find a list never used: bridge.ErrChaptersChosen when an admin chose
-// its chapter source, bridge.ErrChaptersEdited while an edit of its chapters
-// applies (a dormant one, made on other files, is none: the book's chapters
-// come from the next source, a found list among them); nil when neither.
-// ErrNotFound when no book is indexed at the path.
-func (c *Catalog) DetectRefused(ctx context.Context, libID int64, path string) error {
-	path = CleanRelPath(path)
+// DetectRefused is why a chapters.detect job for book would find a list never
+// used: bridge.ErrChaptersChosen when an admin chose its chapter source,
+// bridge.ErrChaptersEdited while an edit of its chapters applies (a dormant
+// one, made on other files, is none: the book's chapters come from the next
+// source, a found list among them); nil when neither. book is as the caller
+// just read it (GetBookByPath), so only the choice is read here.
+func (c *Catalog) DetectRefused(ctx context.Context, book *Book) error {
 	var chosen bool
-	var source string
-	err := c.db.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM chapter_choices WHERE library_id = ?1 AND path = ?2), chapters_source
-		   FROM books WHERE library_id = ?1 AND rel_path = ?2`, libID, path).Scan(&chosen, &source)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return ErrNotFound
-	case err != nil:
+	if err := c.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM chapter_choices WHERE library_id = ? AND path = ?)`,
+		book.LibraryID, book.RelPath).Scan(&chosen); err != nil {
 		return err
+	}
+	switch {
 	case chosen:
 		return bridge.ErrChaptersChosen
-	case source == ChaptersFromEdited:
+	case book.ChaptersSource == ChaptersFromEdited:
 		return bridge.ErrChaptersEdited
 	}
 	return nil

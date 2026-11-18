@@ -943,12 +943,7 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if nj.Kind == bridge.KindDetectChapters {
-			if err := a.cat.DetectRefused(r.Context(), book.LibraryID, book.RelPath); err != nil {
-				if errors.Is(err, bridge.ErrChaptersChosen) || errors.Is(err, bridge.ErrChaptersEdited) {
-					a.writeBridgeError(w, err, "bridge queue failed")
-				} else {
-					a.writeBookError(w, err, "bridge queue failed", "could not read the book's chapters")
-				}
+			if !a.writeBridgeError(w, a.cat.DetectRefused(r.Context(), book), "bridge queue failed") {
 				return
 			}
 		}

@@ -114,27 +114,27 @@ func TestPlaceOnFiles(t *testing.T) {
 // its own is no fit.
 func TestSnapToFilesShortFile(t *testing.T) {
 	t.Parallel()
-	fileStarts := []int64{0, 1000, 1040} // the second file is 40 ms long
+	bounds := []int64{0, 1000, 1040, 2000} // the second file is 40 ms long
 	starts := []int64{0, 1002, 1039}
-	if fixed, ok := snapToFiles(starts, fileStarts, 2000); !ok || !slices.Equal(starts, []int64{0, 1000, 1040}) ||
+	if fixed, ok := snapToFiles(starts, bounds); !ok || !slices.Equal(starts, []int64{0, 1000, 1040}) ||
 		!slices.Equal(fixed, []bool{true, true, true}) {
 		t.Fatalf("each file its own chapter = %v, want [0 1000 1040]", starts)
 	}
 	// The 40 ms file has no chapter: the one before it is no stand-in.
 	starts = []int64{0, 1000}
-	if _, ok := snapToFiles(starts, fileStarts, 2000); ok {
+	if _, ok := snapToFiles(starts, bounds); ok {
 		t.Fatalf("a file with no chapter fitted: %v", starts)
 	}
 	// Nearest wins, not first: 990 is the second file's, 1035 the third's.
 	starts = []int64{0, 990, 1035}
-	if _, ok := snapToFiles(starts, []int64{0, 1000, 1030}, 2000); !ok || !slices.Equal(starts, []int64{0, 1000, 1030}) {
+	if _, ok := snapToFiles(starts, []int64{0, 1000, 1030, 2000}); !ok || !slices.Equal(starts, []int64{0, 1000, 1030}) {
 		t.Fatalf("nearest start = %v, want [0 1000 1030]", starts)
 	}
 	// A file of no length (one the scan read no length for) starts where the
 	// next file does: the one chapter there starts both, as in the console's
 	// editor (validateDraft), and it is placed in the file with the audio.
 	starts = []int64{0, 1003}
-	if _, ok := snapToFiles(starts, []int64{0, 1000, 1000}, 1500); !ok || !slices.Equal(starts, []int64{0, 1000}) {
+	if _, ok := snapToFiles(starts, []int64{0, 1000, 1000, 1500}); !ok || !slices.Equal(starts, []int64{0, 1000}) {
 		t.Fatalf("a file of no length = %v, want [0 1000]", starts)
 	}
 	files := []BookFile{{RelPath: "A/1.mp3", Duration: 1000}, {RelPath: "A/2.mp3"}, {RelPath: "A/3.mp3", Duration: 500}}
@@ -611,16 +611,13 @@ func TestDetectRefused(t *testing.T) {
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "A/Book"
 	upsert(t, c, twoFiles(lib.ID, p))
-	if err := c.DetectRefused(ctx, lib.ID, p); err != nil {
+	if err := c.DetectRefused(ctx, mustBook(t, c, ctx, lib.ID, p)); err != nil {
 		t.Fatalf("no choice, no edit: %v", err)
-	}
-	if err := c.DetectRefused(ctx, lib.ID, "No/Book"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("no book: %v, want ErrNotFound", err)
 	}
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{ChapterSource: ChaptersFromCommunity}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.DetectRefused(ctx, lib.ID, p); !errors.Is(err, bridge.ErrChaptersChosen) {
+	if err := c.DetectRefused(ctx, mustBook(t, c, ctx, lib.ID, p)); !errors.Is(err, bridge.ErrChaptersChosen) {
 		t.Fatalf("a choice: %v, want ErrChaptersChosen", err)
 	}
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{ChapterSource: ChapterSourceAuto}); err != nil {
@@ -629,13 +626,13 @@ func TestDetectRefused(t *testing.T) {
 	if err := c.SaveChapterEdit(ctx, lib.ID, p, basisNow(t, c, lib.ID, p), fourChapters, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.DetectRefused(ctx, lib.ID, p); !errors.Is(err, bridge.ErrChaptersEdited) {
+	if err := c.DetectRefused(ctx, mustBook(t, c, ctx, lib.ID, p)); !errors.Is(err, bridge.ErrChaptersEdited) {
 		t.Fatalf("an applied edit: %v, want ErrChaptersEdited", err)
 	}
 	other := twoFiles(lib.ID, p)
 	other.Files[1].Size = 21
 	upsert(t, c, other)
-	if err := c.DetectRefused(ctx, lib.ID, p); err != nil {
+	if err := c.DetectRefused(ctx, mustBook(t, c, ctx, lib.ID, p)); err != nil {
 		t.Fatalf("a dormant edit: %v", err)
 	}
 }
