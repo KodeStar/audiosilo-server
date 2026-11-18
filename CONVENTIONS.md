@@ -4019,10 +4019,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   single-use token of its own kind** (`auth.KindOIDC`, minted in `OIDCSignIn`'s transaction) that is **never in a URL**
   (a link carrying one would sign whoever follows it in as its owner: a login CSRF), only in the
   done cookie (`__Host-audiosilo_oidc_done` or `audiosilo_oidc_done`, named and placed as the flow
-  cookie, Max-Age 60), and a 303 to `/admin/#oidc=done` (or, for a console flow, the console page it
+  cookie, but on plain http never under public_url's path: the console and the web player call the
+  finish on their origin's own `/api/v1`; Max-Age 60), and a 303 to `/admin/#oidc=done` (or, for a console flow, the console page it
   started from: `/start`'s optional `next`, sealed as `Flow.Next`, kept through the hop, `validNext`:
   a path under `/admin/` with an optional query, printable ASCII, no fragment, backslash, empty, `.`
-  or `..` segment (`%2e` counts as a dot), at most 1024 bytes, anything else dropped for the start
+  or `..` segment (`%2e` counts as a dot), at most 512 bytes, anything else dropped for the start
   page; appended to public_url, so never another origin; the console's `oidcStartHref` sends the
   page asked for, server#406) or
   `/web/connect?oidc=1` (the player's button is 235c; `/web/connect?token=` stays QR pairing's).

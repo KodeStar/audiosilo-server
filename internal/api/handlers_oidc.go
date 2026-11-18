@@ -62,8 +62,8 @@ const (
 	// oidcDoneCookie holds a finished sign-in's token (auth.KindOIDC) until
 	// the page it lands on trades it at oidcFinishPath.
 	oidcDoneCookie = "audiosilo_oidc_done"
-	// oidcCookiePath is the flow's cookies' path on a plain-http public_url,
-	// under public_url's own path (oidcCookieName).
+	// oidcCookiePath is the flow's cookies' path on a plain-http public_url, a
+	// flow's under public_url's own path (oidcCookieName).
 	oidcCookiePath = "/api/v1/auth/oidc/"
 	// hostCookiePrefix makes a browser take the cookie only when it is Secure,
 	// set by this origin itself (no Domain) for Path=/: a sibling subdomain
@@ -268,16 +268,19 @@ func sameHost(public *url.URL, host string) bool {
 // plain http can plant one: a planted flow or done cookie would sign the
 // browser in as the attacker (a login CSRF). On plain http no prefix can be
 // had (it needs Secure), so a network attacker can plant one there; the
-// cookies keep the flow's path then: oidcCookiePath under public_url's own
-// path (a proxy serving the server at /audiosilo/ has the browser ask for
-// /audiosilo/api/v1/auth/oidc/..., server#406).
+// cookies keep the flow's path then, oidcCookiePath, each where it is read: a
+// flow's under public_url's own path, where the provider sends the callback
+// (a proxy serving the server at /audiosilo/ has the browser ask for
+// /audiosilo/api/v1/auth/oidc/callback, server#406); the done cookie's not,
+// as the console and the web player call the finish on their origin's own
+// /api/v1.
 func (a *API) oidcCookieName(name string) (cookie, path string, secure bool) {
 	base := a.oidcBase()
 	if strings.HasPrefix(strings.ToLower(base), "https:") {
 		return hostCookiePrefix + name, "/", true
 	}
 	prefix := ""
-	if u, err := url.Parse(base); err == nil {
+	if u, err := url.Parse(base); err == nil && strings.HasPrefix(name, oidcCookie) {
 		prefix = strings.TrimRight(u.EscapedPath(), "/")
 	}
 	return name, prefix + oidcCookiePath, false
@@ -347,8 +350,11 @@ func (a *API) heldFlows(r *http.Request) []heldFlow {
 	return out
 }
 
-// oidcNextMax bounds a console deep link carried through a sign-in.
-const oidcNextMax = 1024
+// oidcNextMax bounds a console deep link carried through a sign-in: with the
+// rest of the flow each sealed flow cookie stays under about 1.3 KB, so the
+// oidcMaxFlows a page elsewhere can start in this browser keep its requests'
+// Cookie header well under a proxy's 8 KB limit.
+const oidcNextMax = 512
 
 // oidcConsolePath is where the console's pages live: a deep link is under it.
 const oidcConsolePath = "/admin/"

@@ -36,6 +36,31 @@ func TestSealerRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSealerKeepsDeepLinkSmall: a deep link of & < > (each &, six bytes,
+// as JSON escapes them for HTML) still seals into a cookie a browser keeps
+// (4 KB, name included), and opens as sent.
+func TestSealerKeepsDeepLinkSmall(t *testing.T) {
+	t.Parallel()
+	s, err := NewSealer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := "/admin/x?" + strings.Repeat("&<>", 338)
+	in := Flow{State: strings.Repeat("s", 43), Nonce: strings.Repeat("n", 43), Verifier: strings.Repeat("v", 43),
+		RedirectURI: "https://audiosilo.example.org/api/v1/auth/oidc/callback", Return: "admin",
+		Intent: strings.Repeat("i", 128), Next: next}
+	v, err := s.Seal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v) > 3000 {
+		t.Fatalf("a 1 KB deep link sealed into %d bytes", len(v))
+	}
+	if got, err := s.Open(v); err != nil || got.Next != next {
+		t.Fatalf("Open = %q, %v", got.Next, err)
+	}
+}
+
 func TestSealerRefusesTampering(t *testing.T) {
 	t.Parallel()
 	s, _ := NewSealer(nil)

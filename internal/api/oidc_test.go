@@ -348,6 +348,14 @@ func TestOIDCCookieSecureAnyCase(t *testing.T) {
 			t.Errorf("public_url %s: %+v, want %+v", base, c, w)
 		}
 	}
+	// The done cookie stays where the finish is called: the console and the
+	// web player ask their origin's own /api/v1, never under the prefix.
+	e := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = "http://audiosilo.test/audiosilo/" })
+	rec := httptest.NewRecorder()
+	e.api.setOIDCCookie(rec, oidcDoneCookie, "v", 60)
+	if c := rec.Result().Cookies(); len(c) != 1 || c[0].Name != oidcDoneCookie || c[0].Path != oidcCookiePath {
+		t.Errorf("the done cookie under a prefix: %+v", c)
+	}
 }
 
 // TestOIDCStart: return is an enum, every redirect is built from public_url,
