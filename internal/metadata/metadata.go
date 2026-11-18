@@ -675,17 +675,31 @@ func bookTitle(album, title string) string {
 // (bookTitle took "Frankenstein; or, The Modern Prometheus - Letters 1-4" over
 // "Frankenstein; or, The Modern Prometheus"), since each file of such a book
 // names itself in its title tag, a chapter's name rather than the book's
-// (server#272); Title otherwise. A title tag that names the book's own folder
-// (pathTitle, PathTitle's reading of it), whole or in what it adds to the album,
-// is the book's, which every file carries alike: a box set's "The Expanse Box
-// Set: Leviathan Wakes" in the folder "Leviathan Wakes" keeps it. An album that
-// names only the book's series then gives way as TitleNotSeries says.
-func (m *Metadata) PartsTitle(pathTitle string) string {
-	if m.AlbumTag == "" || m.Title != m.TitleTag ||
-		sameName(m.TitleTag, pathTitle) || sameName(albumTail(m.AlbumTag, m.TitleTag), pathTitle) {
+// (server#272); Title otherwise. A title tag the book's files carry alike is
+// the book's, and is kept. Two things say so: the tag names the book's own
+// folder (pathTitle, PathTitle's reading of it), whole or in what it adds to
+// the album (a box set's "The Expanse Box Set: Leviathan Wakes" in the folder
+// "Leviathan Wakes"), or another of the book's files, other (the scan reads its
+// last's, and only when PartNamed says the title turns on it), has the same
+// one ("Harry Potter and the Philosopher's Stone" on every file of an album
+// "Harry Potter", in a folder "HP1"). With other unread (nil) the folder alone
+// says. An album that names only the book's series then gives way as
+// TitleNotSeries says.
+func (m *Metadata) PartsTitle(pathTitle string, other *Metadata) string {
+	if !m.PartNamed(pathTitle) || (other != nil && strings.EqualFold(m.TitleTag, other.TitleTag)) {
 		return m.Title
 	}
 	return m.AlbumTag
+}
+
+// PartNamed reports whether m's title may name its file, not the book of
+// several files it is the first of: a title tag bookTitle took over the album
+// it extends, which doesn't name the book's folder (pathTitle) as PartsTitle
+// reads it. Only then does the book's title turn on another file's tags, so
+// only then is one worth reading. Nil reads as no tags.
+func (m *Metadata) PartNamed(pathTitle string) bool {
+	return m != nil && m.AlbumTag != "" && m.Title == m.TitleTag && m.TitleTag != m.AlbumTag &&
+		!sameName(m.TitleTag, pathTitle) && !sameName(albumTail(m.AlbumTag, m.TitleTag), pathTitle)
 }
 
 // albumTail is what a title tag adds to the album when it extends it at a word

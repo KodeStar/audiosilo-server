@@ -1806,11 +1806,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   **A book of several files' title** (`@rev` 5, server#272): `bookTitle` prefers a title tag that
   extends the album with a tail that isn't a track marker, which for a book of several files is its
   first file's own name ("Frankenstein; or, The Modern Prometheus - Letters 1-4", "The Odyssey: Book
-  01"), so `readNames` takes `metadata.PartsTitle` for one (the album when the title is such a tag,
-  unless the tag, whole or in what it adds to the album, names the book's folder, `PathTitle`: a box
-  set's "The Expanse Box Set: Leviathan Wakes" in the folder "Leviathan Wakes" keeps it;
-  `TitleNotSeries` then applies as for any album). A book of one file keeps the title tag ("Portal to
-  Nova Roma: Paris"). Corpus check: the LibriVox perf library (120 books) and the testbed libraries
+  01"), so `readNames` takes `metadata.PartsTitle` for one: the album when the title is such a tag,
+  unless the tag is one the book's files carry alike, which is the book's. Two things say so: the tag,
+  whole or in what it adds to the album, names the book's folder (`PathTitle`: a box set's "The Expanse
+  Box Set: Leviathan Wakes" in the folder "Leviathan Wakes"), or the book's last file has the same title
+  tag (any case; the series as the album and "Harry Potter and the Philosopher's Stone" on every file,
+  in a folder "HP1" or "Book 1", which would otherwise title every book of the series "Harry Potter").
+  The last file's tags are looked at only when the title turns on them (`Metadata.PartNamed`, the
+  scanner's `partNamed`): a scan has them from the book's own read (`buildMultiFileChapters`), the
+  backfill and the setup preview read that one file more, and a backfill that can't read it leaves the
+  names for the next scan, never the album on a guess. `TitleNotSeries` then applies as for any album.
+  A book of one file keeps the title tag ("Portal to Nova Roma: Paris"). Corpus check: the LibriVox perf library (120 books) and the testbed libraries
   renamed four books, each to its album (Frankenstein, The Odyssey, The Diary of a Nobody, The Secret
   Agent's `secret_agent`), and nothing else.
   **Backfill of revisions 2 to 5**: a snapshot older than today's that a newer revision may read
@@ -1818,7 +1824,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `metadata.MaybeSeriesTitle` flags, over the snapshot's title and series; before revision 3 a leaf
   `metadata.PathLeafSeries` reads; before revision 4 `tagReadingMayDiffer`: an MP4, a narrator, a
   series `SplitSeriesTag` splits, a non-ASCII letter in the title or path; before revision 5 a book
-  of several files, which `Signatures` counts in `book_files` only for a folder book's older snapshot)
+  of several files, which `Signatures` counts in `book_files` only for a folder book's older snapshot,
+  and whose last file is read too where its title turns on it, `partNamed`)
   is read once by the next scan with the PathRead read and rewritten by `SetPathReading` (which
   skips only a snapshot already at `scannedRev`), no re-index and no migration (a
   `PathFromSnapshot` one waits for that read too, so an unreadable file never records today's

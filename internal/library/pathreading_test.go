@@ -226,9 +226,12 @@ func TestScanTitleNotSeries(t *testing.T) {
 // that extends it (metadata.PartsTitle, server#272): each file's tag names that
 // file ("Frankenstein; ... - Letters 1-4"). A book of one file keeps the title
 // tag ("Portal to Nova Roma: Paris"), and so does one whose tag names its
-// folder ("The Expanse Box Set: Leviathan Wakes" in "Leviathan Wakes"). One read before revision 5 is put right
-// by the next scan from one read of its first file's tags, with no re-index;
-// a book of one file needs no read and is stamped.
+// folder ("The Expanse Box Set: Leviathan Wakes" in "Leviathan Wakes") or is on
+// its last file too (the series as the album, the book's title on every file,
+// in a folder naming neither). One read before revision 5 is put right
+// by the next scan from one read of its first file's tags, and of its last's
+// where the title turns on them, with no re-index; a book of one file needs no
+// read and is stamped.
 func TestScanPartsTitle(t *testing.T) {
 	t.Parallel()
 	if os.Getuid() == 0 {
@@ -252,12 +255,18 @@ func TestScanPartsTitle(t *testing.T) {
 	const boxed, boxTitle = "James S. A. Corey/Leviathan Wakes", "The Expanse Box Set: Leviathan Wakes"
 	silence(t, root, boxed+"/01.mp3", 1, "album=The Expanse Box Set", "title="+boxTitle, "artist=James S. A. Corey")
 	silence(t, root, boxed+"/02.mp3", 1, "album=The Expanse Box Set", "title="+boxTitle, "artist=James S. A. Corey")
+	// The series as the album and the book's title on every file, in a folder
+	// that names neither: the last file's tag says the first's is the book's.
+	const shared, sharedTitle = "J.K. Rowling/HP1", "Harry Potter and the Philosopher's Stone"
+	for _, f := range []string{"/01.mp3", "/02.mp3", "/03.mp3"} {
+		silence(t, root, shared+f, 1, "album=Harry Potter", "title="+sharedTitle, "artist=J.K. Rowling")
+	}
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
 	s := NewScanner(cat, ffprobe, slog.Default())
 	if _, err := s.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{parts: album, single: "Portal to Nova Roma: Paris", boxed: boxTitle}
+	want := map[string]string{parts: album, single: "Portal to Nova Roma: Paris", boxed: boxTitle, shared: sharedTitle}
 	check := func(when string) {
 		t.Helper()
 		for rel, title := range want {
@@ -274,15 +283,16 @@ func TestScanPartsTitle(t *testing.T) {
 		WHERE rel_path = ?`, album+" - Letters 1-4", album+" - Letters 1-4", parts); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@rev"', '4') WHERE rel_path = ?`, single); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@rev"', '4') WHERE rel_path IN (?, ?)`, single, shared); err != nil {
 		t.Fatal(err)
 	}
 	sigs, err := cat.Signatures(ctx, lib.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sigs[parts].NamesCheck || sigs[single].NamesCheck || !sigs[single].RevStamp {
-		t.Fatalf("signatures: several files %+v, one file %+v; want the first read, the other stamped", sigs[parts], sigs[single])
+	if !sigs[parts].NamesCheck || !sigs[shared].NamesCheck || sigs[single].NamesCheck || !sigs[single].RevStamp {
+		t.Fatalf("signatures: several files %+v and %+v, one file %+v; want the first two read, the other stamped",
+			sigs[parts], sigs[shared], sigs[single])
 	}
 	// The book of one file is never read: unreadable, it keeps its reading.
 	f := filepath.Join(root, filepath.FromSlash(single+"/Paris.mp3"))
@@ -299,6 +309,42 @@ func TestScanPartsTitle(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books
 		WHERE json_extract(scanned, '$."@rev"') IS NOT '5'`).Scan(&stale); err != nil || stale != 0 {
 		t.Fatalf("snapshots before today's revision after the backfill = %d (err %v), want 0", stale, err)
+	}
+
+	// A title that turns on the last file's tags waits for them: with that file
+	// unreadable the snapshot keeps its revision for the next scan, never the
+	// album recorded on a guess.
+	rev := func() (r string) {
+		t.Helper()
+		if err := db.QueryRowContext(ctx, `SELECT json_extract(scanned, '$."@rev"') FROM books WHERE rel_path = ?`, shared).Scan(&r); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@rev"', '4') WHERE rel_path = ?`, shared); err != nil {
+		t.Fatal(err)
+	}
+	last := filepath.Join(root, filepath.FromSlash(shared+"/03.mp3"))
+	if err := os.Chmod(last, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(last, 0o644) })
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	check("last file unreadable")
+	if got := rev(); got != "4" {
+		t.Fatalf("revision with the last file unreadable = %q, want 4 (left for the next scan)", got)
+	}
+	if err := os.Chmod(last, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	check("last file readable again")
+	if got := rev(); got != "5" {
+		t.Fatalf("revision once the last file is read = %q, want 5", got)
 	}
 }
 

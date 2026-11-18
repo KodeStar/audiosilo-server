@@ -238,8 +238,12 @@ func (s *Scanner) previewSample(ctx context.Context, lib catalog.Library, b *cat
 	md, _ := metadata.ExtractContext(ctx, absOf(lib, primaryPath(b)), s.ffprobePath)
 	own := PreviewBlanks{Tags: blanks(tagNames(md)), Path: blanks(namesOf(metadata.FromPathLayout(b.RelPath, b.IsFolder)))}
 	folders := *b
-	setNames(&folders, nil)
-	setNames(b, md)
+	setNames(&folders, nil, nil)
+	var last *metadata.Metadata
+	if partNamed(b, md) {
+		last, _ = metadata.ExtractContext(ctx, absOf(lib, lastPath(b)), s.ffprobePath)
+	}
+	setNames(b, md, last)
 	if b.IsFolder {
 		b.ABS.File, _ = s.readABS(ctx, lib, b.RelPath, b.ABS.Sig, nil)
 		folders.ABS.File = b.ABS.File
