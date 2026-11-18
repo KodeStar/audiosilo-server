@@ -1134,15 +1134,17 @@ func (c *Catalog) keyedFolders(ctx context.Context, libraryID int64, k string) (
 		return ancestors(k), nil
 	}
 	// path_key != '' names the partial index's own condition, so it is used.
-	const below = `SELECT EXISTS (SELECT 1 FROM books WHERE library_id = ?1 AND rel_path > ?2 || '/' AND rel_path < ?2 || '0')
-	                   OR EXISTS (SELECT 1 FROM books WHERE library_id = ?1 AND path_key > ?2 || '/' AND path_key < ?2 || '0'
+	// ?2 and ?3 are belowRange's bounds.
+	const below = `SELECT EXISTS (SELECT 1 FROM books WHERE library_id = ?1 AND rel_path >= ?2 AND rel_path < ?3)
+	                   OR EXISTS (SELECT 1 FROM books WHERE library_id = ?1 AND path_key >= ?2 AND path_key < ?3
 	                                AND path_key != '')`
 	var out []string
 	for end := strings.IndexByte(k, '/'); end > 0; {
 		d := k[:end]
 		out = append(out, d)
 		var more bool
-		if err := c.db.QueryRowContext(ctx, below, libraryID, d).Scan(&more); err != nil {
+		lo, hi := belowRange(d)
+		if err := c.db.QueryRowContext(ctx, below, libraryID, lo, hi).Scan(&more); err != nil {
 			return nil, err
 		}
 		next := strings.IndexByte(k[end+1:], '/')
