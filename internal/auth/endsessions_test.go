@@ -36,6 +36,28 @@ func mustSession(t *testing.T, s *Service, ctx context.Context, userID int64, de
 	return tok, cred.ID
 }
 
+// plantSessionOn writes a session for member recording on as the device it was
+// made on, past MemberSession's checks: the bad data a few tests plant (another
+// owner's member on a device, which MemberSession refuses).
+func plantSessionOn(t *testing.T, s *Service, ctx context.Context, member, on int64) string {
+	t.Helper()
+	secret, hash, err := generateToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.insertTokenOn(ctx, s.db, member, hash, KindSession, "here", nil, nil, "", on, s.ts()); err != nil {
+		t.Fatal(err)
+	}
+	return secret
+}
+
+// mustSessionID is mustSession's token id alone.
+func mustSessionID(t *testing.T, s *Service, ctx context.Context, userID int64, device string) int64 {
+	t.Helper()
+	_, id := mustSession(t, s, ctx, userID, device)
+	return id
+}
+
 // wantLive asserts err is nil when live, ErrInvalidToken when not.
 func wantLive(t *testing.T, what string, live bool, err error) {
 	t.Helper()
@@ -62,15 +84,15 @@ func mintEveryKind(t *testing.T, s *Service, ctx context.Context, name string) e
 	if k.castLaptop, _, err = s.IssueCastToken(ctx, admin.ID, laptopID, 3, "Author/Book"); err != nil {
 		t.Fatal(err)
 	}
-	if k.key, _, err = s.IssueAPIToken(ctx, admin.ID, 0, "script"); err != nil {
+	if k.key, _, err = s.IssueAPIToken(ctx, admin.ID, k.phoneID, "script"); err != nil {
 		t.Fatal(err)
 	}
 	k.feed = mustFeed(t, s, ctx, admin.ID, k.phoneID)
 	// The ways back in a session can make without the password.
-	if k.pairing, err = s.IssueOwnPairingToken(ctx, admin.ID, 10*time.Minute); err != nil {
+	if k.pairing, err = s.IssueOwnPairingToken(ctx, admin.ID, k.phoneID, 10*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if k.recovery, err = s.GenerateRecoveryCode(ctx, admin.ID); err != nil {
+	if k.recovery, err = s.GenerateRecoveryCode(ctx, admin.ID, k.phoneID); err != nil {
 		t.Fatal(err)
 	}
 	// Every cacheable lookup warm: an end has to beat the cache.
@@ -317,12 +339,13 @@ func mintHouseholdSignIns(t *testing.T, s *Service, ctx context.Context) househo
 	if h.ownDevice, err = s.IssueToken(ctx, evie.ID, KindSession, "kid's tablet", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, h.pairing, err = s.MemberPairing(ctx, owner.ID, evie.ID, 10*time.Minute); err != nil {
+	if _, h.pairing, err = s.MemberPairing(ctx, owner.ID, evie.ID, phone, 10*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	kit := mustMember(t, s, ctx, neighbour.ID, NewMember{Name: "Kit", Kind: MemberKid, Access: MemberAll})
-	h.neighbourOnLaptop = sessionOn(neighbour.ID, kit.ID, laptop)
-	if _, h.neighbourPC, err = s.MemberPairing(ctx, neighbour.ID, kit.ID, 10*time.Minute); err != nil {
+	h.neighbourOnLaptop = plantSessionOn(t, s, ctx, kit.ID, laptop)
+	warm(t, s, h.neighbourOnLaptop, KindSession)
+	if _, h.neighbourPC, err = s.MemberPairing(ctx, neighbour.ID, kit.ID, mustSessionID(t, s, ctx, neighbour.ID, "nina's phone"), 10*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	return h
@@ -566,6 +589,87 @@ func TestMintFromAnEndedSessionRefused(t *testing.T) {
 	mustFeed(t, s, ctx, gus.ID, own)
 }
 
+// Security-critical (server#444): every credential a session asks for (a
+// member's sign-in, a member's pairing code, a member added and signed in on
+// the device, and the person's own pairing code, API key, calendar link,
+// recovery code, cast token and editor token) reads the device it is asked from
+// inside the mint's write: one signed out since the request's check, another
+// person's, or an account disabled since, is ErrInvalidToken and nothing is
+// made. Allowed: each from the owner's device still signed in, and again once
+// the account is enabled.
+func TestMintsReadTheAskingDeviceInTheWrite(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	_, phone := mustSession(t, s, ctx, adam.ID, "phone")
+	_, laptop := mustSession(t, s, ctx, adam.ID, "laptop")
+	_, bobs := mustSession(t, s, ctx, bob.ID, "bob's phone")
+	gus := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Gus", Kind: MemberGrownup, Access: MemberAll})
+	if err := s.RevokeOwnDevice(ctx, adam.ID, laptop); err != nil {
+		t.Fatal(err)
+	}
+	mints := map[string]func(device int64) error{
+		"member session": func(d int64) error { _, _, err := s.MemberSession(ctx, adam.ID, gus.ID, "here", d); return err },
+		"member pairing": func(d int64) error { _, _, err := s.MemberPairing(ctx, adam.ID, gus.ID, d, time.Minute); return err },
+		"member signed in here": func(d int64) error {
+			_, _, _, err := s.CreateMember(ctx, adam.ID, NewMember{Name: "Ida", Kind: MemberKid, Access: MemberAll,
+				SignInHere: true, DeviceName: "here", OnToken: d}, testPolicy)
+			return err
+		},
+		"own pairing":   func(d int64) error { _, err := s.IssueOwnPairingToken(ctx, adam.ID, d, time.Minute); return err },
+		"API key":       func(d int64) error { _, _, err := s.IssueAPIToken(ctx, adam.ID, d, "dash"); return err },
+		"calendar link": func(d int64) error { _, _, err := s.IssueFeedToken(ctx, adam.ID, d); return err },
+		"recovery code": func(d int64) error { _, err := s.GenerateRecoveryCode(ctx, adam.ID, d); return err },
+		"cast token":    func(d int64) error { _, _, err := s.IssueCastToken(ctx, adam.ID, d, 3, "Author/Book"); return err },
+		"editor token":  func(d int64) error { _, _, err := s.IssueEditorToken(ctx, adam.ID, d, 3, "Author/Book"); return err },
+	}
+	// tokens: the members', adam's own but his sessions, and his recovery code.
+	counts := func() (tokens, members int) {
+		t.Helper()
+		if err := s.db.QueryRowContext(ctx, `SELECT
+			(SELECT COUNT(*) FROM tokens WHERE user_id IN (SELECT id FROM users WHERE managed_by = ?1) OR (user_id = ?1 AND kind <> ?2))
+			+ (SELECT COUNT(*) FROM auth_codes WHERE user_id = ?1),
+			(SELECT COUNT(*) FROM users WHERE managed_by = ?1)`, adam.ID, KindSession).Scan(&tokens, &members); err != nil {
+			t.Fatal(err)
+		}
+		return tokens, members
+	}
+	// Adding a member from a disabled account was ErrNotAllowed already
+	// (checkOwner, read in the same write).
+	refused := func(why string, device int64) {
+		t.Helper()
+		tokens, members := counts()
+		for name, mint := range mints {
+			err := mint(device)
+			if !errors.Is(err, ErrInvalidToken) && (name != "member signed in here" || !errors.Is(err, ErrNotAllowed)) {
+				t.Errorf("%s %s = %v, want ErrInvalidToken", name, why, err)
+			}
+		}
+		if nt, nm := counts(); nt != tokens || nm != members {
+			t.Errorf("mints %s made %d tokens and %d members", why, nt-tokens, nm-members)
+		}
+	}
+	refused("from a device signed out since", laptop)
+	refused("from another person's device", bobs)
+	if err := s.UpdateUser(ctx, adam.ID, UserChanges{Disabled: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	refused("from a disabled account", phone)
+	if err := s.UpdateUser(ctx, adam.ID, UserChanges{Disabled: new(false)}); err != nil {
+		t.Fatal(err)
+	}
+	tokens, _ := counts()
+	for name, mint := range mints {
+		if err := mint(phone); err != nil {
+			t.Errorf("%s from the signed-in phone = %v", name, err)
+		}
+	}
+	if nt, _ := counts(); nt != tokens+len(mints) {
+		t.Errorf("the mints from the signed-in phone made %d credentials, want one each (%d)", nt-tokens, len(mints))
+	}
+}
+
 // Security-critical (D5): signing a device out with its members ends a
 // member's calendar link made there, as it ends their sign-in and API key made
 // there (and as the owner's password change does). Denied: a link ended by the
@@ -585,13 +689,11 @@ func TestDeviceRevokeWithMembersEndsALinkMadeThere(t *testing.T) {
 		t.Helper()
 		return mustMember(t, s, ctx, of.ID, NewMember{Name: name, Kind: MemberGrownup, Access: MemberAll})
 	}
-	// A member's link minted from a sign-in on device on, with that sign-in's id.
-	linkOn := func(of *User, m Member, on int64) (string, int64) {
+	// A member's link minted from a sign-in on device on, with that sign-in's id
+	// (planted: Kit's on adam's laptop is bad data MemberSession refuses).
+	linkOn := func(m Member, on int64) (string, int64) {
 		t.Helper()
-		tok, _, err := s.MemberSession(ctx, of.ID, m.ID, "here", on)
-		if err != nil {
-			t.Fatal(err)
-		}
+		tok := plantSessionOn(t, s, ctx, m.ID, on)
 		_, cred, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
 		if err != nil {
 			t.Fatal(err)
@@ -599,13 +701,13 @@ func TestDeviceRevokeWithMembersEndsALinkMadeThere(t *testing.T) {
 		return mustFeed(t, s, ctx, m.ID, cred.ID), cred.ID
 	}
 	gus, hal, ivy := member(owner, "Gus"), member(owner, "Hal"), member(owner, "Ivy")
-	gusLink, _ := linkOn(owner, gus, laptop)
-	halLink, _ := linkOn(owner, hal, phone)
-	ivyLink, ivyThere := linkOn(owner, ivy, laptop)
+	gusLink, _ := linkOn(gus, laptop)
+	halLink, _ := linkOn(hal, phone)
+	ivyLink, ivyThere := linkOn(ivy, laptop)
 	if err := s.RevokeOwnDevice(ctx, ivy.ID, ivyThere); err != nil {
 		t.Fatal(err)
 	}
-	kitLink, _ := linkOn(bob, member(bob, "Kit"), laptop)
+	kitLink, _ := linkOn(member(bob, "Kit"), laptop)
 	ownLink := mustFeed(t, s, ctx, owner.ID, laptop)
 	live := func(what, link string, want bool) {
 		t.Helper()

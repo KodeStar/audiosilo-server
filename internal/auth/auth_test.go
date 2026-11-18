@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -306,6 +307,26 @@ func TestExpiredTokenRejected(t *testing.T) {
 	}
 }
 
+// TestTokenEndsAtItsExpiry: a token is valid up to the second before its
+// expires_at and refused from that second on, as the SQL checks read it (a
+// touch slides a cast token only while expires_at > now: touchRowSQL), so the
+// lookup never accepts a token its touch would leave expiring.
+func TestTokenEndsAtItsExpiry(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	*now = now.Truncate(time.Second)
+	u, _ := s.CreateUser(ctx, "u", "pw-pw-pw-pw", RoleUser)
+	secret, _ := s.IssueToken(ctx, u.ID, KindPairing, "", time.Minute)
+	*now = now.Add(time.Minute - time.Second)
+	if _, err := s.ResolveToken(ctx, secret, KindPairing); err != nil {
+		t.Fatalf("a second before its expiry: %v", err)
+	}
+	*now = now.Add(time.Second)
+	if _, err := s.ResolveToken(ctx, secret, KindPairing); err != ErrInvalidToken {
+		t.Fatalf("at its expiry: %v, want ErrInvalidToken", err)
+	}
+}
+
 func TestOptionalPasswordForNonAdmins(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -591,7 +612,7 @@ func TestRecoveryPairingTokenTTL(t *testing.T) {
 	t.Parallel()
 	s, ctx, now := newTestServiceWithClock(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
-	code, err := s.GenerateRecoveryCode(ctx, u.ID)
+	code, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -692,7 +713,7 @@ func TestRotateRefusesRecoveryCode(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
-	if _, err := s.GenerateRecoveryCode(ctx, u.ID); err != nil {
+	if _, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone")); err != nil {
 		t.Fatal(err)
 	}
 	// The recovery row exists but is not an invite; rotate must not touch it.
@@ -749,7 +770,7 @@ func TestRecoveryRedeemReturnsOwner(t *testing.T) {
 	if _, err := s.CreateUser(ctx, "bob", "", RoleUser); err != nil {
 		t.Fatal(err)
 	}
-	code, err := s.GenerateRecoveryCode(ctx, alice.ID)
+	code, err := s.GenerateRecoveryCode(ctx, alice.ID, mustSessionID(t, s, ctx, alice.ID, "phone"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -781,7 +802,7 @@ func TestRedeemDisabledRejectedWithoutBurningUse(t *testing.T) {
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	invite, _ := s.CreateAuthCode(ctx, u.ID, "invite", 1, 0)
-	recovery, err := s.GenerateRecoveryCode(ctx, u.ID)
+	recovery, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -825,7 +846,7 @@ func TestRecoveryCodeLifecycle(t *testing.T) {
 	if got, _ := s.GetUser(ctx, u.ID); got.HasRecovery {
 		t.Fatal("fresh user should have no recovery code")
 	}
-	code, err := s.GenerateRecoveryCode(ctx, u.ID)
+	code, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -846,7 +867,7 @@ func TestRecoveryCodeLifecycle(t *testing.T) {
 	// Regenerating replaces the old one: the old code fails, and any pairing
 	// token minted from it dies via the delete cascade.
 	oldTok := pairThrough(t, s, ctx, code)
-	fresh, _ := s.GenerateRecoveryCode(ctx, u.ID)
+	fresh, _ := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"))
 	if _, err := s.ResolveAuthCode(ctx, code); err != ErrInvalidCode {
 		t.Fatalf("old recovery code after regen = %v, want ErrInvalidCode", err)
 	}
@@ -886,7 +907,7 @@ func TestAPITokenLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secret, meta, err := s.IssueAPIToken(ctx, user.ID, 0, "cron job")
+	secret, meta, err := s.IssueAPIToken(ctx, user.ID, mustSessionID(t, s, ctx, user.ID, "phone"), "cron job")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -947,7 +968,7 @@ func TestRevokeTokenByIDScoping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, meta, err := s.IssueAPIToken(ctx, owner.ID, 0, "key")
+	_, meta, err := s.IssueAPIToken(ctx, owner.ID, mustSessionID(t, s, ctx, owner.ID, "phone"), "key")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -991,7 +1012,7 @@ func TestListInvites(t *testing.T) {
 	if _, err := s.CreateInvite(ctx, maya.ID, "invite", 1, 24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GenerateRecoveryCode(ctx, sam.ID); err != nil {
+	if _, err := s.GenerateRecoveryCode(ctx, sam.ID, mustSessionID(t, s, ctx, sam.ID, "phone")); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.ListInvites(ctx)
@@ -1043,32 +1064,159 @@ func TestConsumePairingKind(t *testing.T) {
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	invite, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, 0)
-	if _, kind, err := s.ConsumePairing(ctx, pairThrough(t, s, ctx, invite)); err != nil || kind != CodeInvite {
+	if _, _, kind, err := s.ConsumePairing(ctx, pairThrough(t, s, ctx, invite), ""); err != nil || kind != CodeInvite {
 		t.Fatalf("invite: kind %q, %v", kind, err)
 	}
-	recovery, err := s.GenerateRecoveryCode(ctx, u.ID)
+	recovery, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, kind, err := s.ConsumePairing(ctx, pairThrough(t, s, ctx, recovery)); err != nil || kind != CodeRecovery {
+	if _, _, kind, err := s.ConsumePairing(ctx, pairThrough(t, s, ctx, recovery), ""); err != nil || kind != CodeRecovery {
 		t.Fatalf("recovery: kind %q, %v", kind, err)
 	}
 	unlinked, err := s.IssueToken(ctx, u.ID, KindPairing, "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, kind, err := s.ConsumePairing(ctx, unlinked); err != nil || kind != "" {
+	if _, _, kind, err := s.ConsumePairing(ctx, unlinked, ""); err != nil || kind != "" {
 		t.Fatalf("unlinked: kind %q, %v", kind, err)
 	}
-	if _, kind, err := s.ConsumePairing(ctx, "bogus"); err == nil || kind != "" {
+	if _, _, kind, err := s.ConsumePairing(ctx, "bogus", ""); err == nil || kind != "" {
 		t.Fatalf("bogus: kind %q, %v", kind, err)
 	}
 }
 
 // consumePairing is ConsumePairing without the code kind, which most tests don't need.
 func consumePairing(s *Service, ctx context.Context, secret string) (*User, error) {
-	u, _, err := s.ConsumePairing(ctx, secret)
+	u, _, _, err := s.ConsumePairing(ctx, secret, "")
 	return u, err
+}
+
+// TestExchangeRacingASignOut: a Sign out everywhere, a password change or a
+// disabled account that commits after an exchange or a single sign-on's finish
+// has read its token (beforeSpend) leaves no session: the spend reads the token
+// again inside the transaction that mints the session (exchangeSession), so the
+// session is never one the change passed over. Allowed: the same exchanges with
+// nothing changed in between each answer a working session.
+func TestExchangeRacingASignOut(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	exchanges := map[string]func(u *User) func(string) (string, error){
+		"unlinked pairing token": func(u *User) func(string) (string, error) {
+			tok, err := s.IssueToken(ctx, u.ID, KindPairing, "", time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return func(device string) (string, error) {
+				_, session, _, err := s.ConsumePairing(ctx, tok, device)
+				return session, err
+			}
+		},
+		"recovery code's pairing token": func(u *User) func(string) (string, error) {
+			code, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "first"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			tok := pairThrough(t, s, ctx, code)
+			return func(device string) (string, error) {
+				_, session, _, err := s.ConsumePairing(ctx, tok, device)
+				return session, err
+			}
+		},
+		"invite's pairing token": func(u *User) func(string) (string, error) {
+			code, err := s.CreateAuthCode(ctx, u.ID, "invite", 5, time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tok := pairThrough(t, s, ctx, code)
+			return func(device string) (string, error) {
+				_, session, _, err := s.ConsumePairing(ctx, tok, device)
+				return session, err
+			}
+		},
+		"single sign-on": func(u *User) func(string) (string, error) {
+			tok, err := s.IssueToken(ctx, u.ID, KindOIDC, "", time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return func(device string) (string, error) {
+				_, session, err := s.ConsumeOIDC(ctx, tok, device)
+				return session, err
+			}
+		},
+	}
+	changes := map[string]func(u *User) error{
+		"sign out everywhere": func(u *User) error { _, err := s.SignOutEverywhere(ctx, u.ID, 0); return err },
+		"password change":     func(u *User) error { return s.UpdateUser(ctx, u.ID, UserChanges{Password: new("another-password")}) },
+		"account disabled":    func(u *User) error { return s.UpdateUser(ctx, u.ID, UserChanges{Disabled: new(true)}) },
+	}
+	// An invite is the admin's, not a way back in the person's sign-out ends
+	// (endSessions): only disabling the account stops it.
+	ends := func(exchange, change string) bool {
+		return exchange != "invite's pairing token" || change == "account disabled"
+	}
+	liveSessions := func(u *User) int {
+		var n int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM tokens WHERE user_id = ? AND kind = ? AND revoked = 0`, u.ID, KindSession).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	n := 0
+	for exName, exchange := range exchanges {
+		for chName, change := range changes {
+			n++
+			u := mustUser(t, s, ctx, fmt.Sprintf("racer%d", n), "a-password", RoleUser)
+			run := exchange(u)
+			before := liveSessions(u)
+			raced := false
+			s.beforeSpend = func() {
+				raced = true
+				if err := change(u); err != nil {
+					t.Errorf("%s: %v", chName, err)
+				}
+			}
+			session, err := run("phone")
+			s.beforeSpend = nil
+			if !raced {
+				t.Fatalf("%s / %s: the change never ran between the read and the spend", exName, chName)
+			}
+			if chName == "account disabled" {
+				if err := s.UpdateUser(ctx, u.ID, UserChanges{Disabled: new(false)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !ends(exName, chName) {
+				if err != nil || session == "" {
+					t.Errorf("%s / %s: %v, want the session (an invite outlives the sign-out)", exName, chName, err)
+				}
+				continue
+			}
+			if !errors.Is(err, ErrInvalidToken) || session != "" {
+				t.Errorf("%s / %s: session %q, %v, want ErrInvalidToken and none", exName, chName, session, err)
+			}
+			want := 0
+			if chName == "account disabled" {
+				want = before // disabling ends nothing; it only made no new one
+			}
+			if got := liveSessions(u); got != want {
+				t.Errorf("%s / %s: %d live sessions after, want %d", exName, chName, got, want)
+			}
+		}
+	}
+	// Allowed: nothing in between, a working session each.
+	for exName, exchange := range exchanges {
+		n++
+		u := mustUser(t, s, ctx, fmt.Sprintf("racer%d", n), "a-password", RoleUser)
+		session, err := exchange(u)("phone")
+		if err != nil {
+			t.Fatalf("%s: %v", exName, err)
+		}
+		if got, err := s.ResolveToken(ctx, session, KindSession); err != nil || got.ID != u.ID {
+			t.Fatalf("%s: the session doesn't sign in: %v", exName, err)
+		}
+	}
 }
 
 // TestPruneSingleUseTokens (R-33): the daily retention deletes the pairing tokens

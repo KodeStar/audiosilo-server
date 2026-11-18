@@ -49,7 +49,7 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 		},
 		"API key delete": func() func() error {
 			u := user()
-			_, meta, err := s.IssueAPIToken(ctx, u.ID, 0, "key")
+			_, meta, err := s.IssueAPIToken(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone"), "key")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -67,7 +67,7 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 		"member device sign-out": func() func() error {
 			owner := user()
 			m := member(owner)
-			if _, _, err := s.MemberSession(ctx, owner.ID, m.ID, "tablet", 0); err != nil {
+			if _, _, err := s.MemberSession(ctx, owner.ID, m.ID, "tablet", mustSessionID(t, s, ctx, owner.ID, "tablet")); err != nil {
 				t.Fatal(err)
 			}
 			d, err := s.MemberDevices(ctx, owner.ID, m.ID)
@@ -122,17 +122,18 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 		},
 		"recovery code cleared": func() func() error {
 			u := user()
-			if _, err := s.GenerateRecoveryCode(ctx, u.ID); err != nil {
+			if _, err := s.GenerateRecoveryCode(ctx, u.ID, mustSessionID(t, s, ctx, u.ID, "phone")); err != nil {
 				t.Fatal(err)
 			}
 			return func() error { return s.ClearRecoveryCode(ctx, u.ID) }
 		},
 		"recovery code replaced": func() func() error {
 			u := user()
-			if _, err := s.GenerateRecoveryCode(ctx, u.ID); err != nil {
+			phone := mustSessionID(t, s, ctx, u.ID, "phone")
+			if _, err := s.GenerateRecoveryCode(ctx, u.ID, phone); err != nil {
 				t.Fatal(err)
 			}
-			return func() error { _, err := s.GenerateRecoveryCode(ctx, u.ID); return err }
+			return func() error { _, err := s.GenerateRecoveryCode(ctx, u.ID, phone); return err }
 		},
 		"invite superseded by a new one": func() func() error {
 			u := user()
@@ -147,7 +148,7 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			return func() error { _, _, err := s.ConsumePairing(ctx, tok); return err }
+			return func() error { _, err := consumePairing(s, ctx, tok); return err }
 		},
 		"invite use claimed by a pairing": func() func() error {
 			u := user()
@@ -163,7 +164,7 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			return func() error { _, _, err := s.ConsumePairing(ctx, tok); return err }
+			return func() error { _, err := consumePairing(s, ctx, tok); return err }
 		},
 		"Bridge pairing code replaced": func() func() error {
 			admin := mustUser(t, s, ctx, "coder", "admin-password", RoleAdmin)

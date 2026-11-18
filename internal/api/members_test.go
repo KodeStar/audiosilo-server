@@ -317,7 +317,7 @@ func TestMembers_Create_Denied(t *testing.T) {
 	if status, b := m.add(t, demoTok, kid); status != http.StatusForbidden || codeOf(b) != "demo_account" {
 		t.Errorf("demo = %d %s", status, b)
 	}
-	key, _, err := m.auth.IssueAPIToken(ctx, m.adam, 0, "script")
+	key, _, err := m.auth.IssueAPIToken(ctx, m.adam, m.credentialID(t, m.adamTok), "script")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2226,5 +2226,59 @@ func TestMembers_DeleteListedMembersOnly(t *testing.T) {
 	}
 	if u, err := m.auth.GetUser(context.Background(), kit.ID); err != nil || u.ManagedBy != nil {
 		t.Errorf("Kit, unlisted, after bob's delete = %+v, %v; want an independent account", u, err)
+	}
+}
+
+// Security-critical (server#444): a member's sign-in, a member's pairing code,
+// a member added and signed in here, and the owner's own pairing code and
+// recovery code are each
+// refused inside the mint's write once the owner's device is signed out after
+// the middleware passed it (signOutBehindTheCache): 401, as the middleware
+// answers an ended session, and nothing is made. Allowed: each from a device
+// still signed in.
+func TestMembers_MintFromAnEndedDeviceIs401(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	ctx := context.Background()
+	gus := m.mustAdd(t, m.adamTok, `{"name":"Gus","kind":"grownup","access":"all"}`).Member
+	mints := []struct {
+		name, method, path, body string
+		ok                       int
+	}{
+		{"member session", "POST", memberURL(gus.ID, "session"), "", http.StatusCreated},
+		{"member pairing", "POST", memberURL(gus.ID, "pair"), "", http.StatusOK},
+		{"member signed in here", "POST", "/api/v1/me/household/members", `{"name":"Ida","kind":"kid","access":"all","sign_in_here":true}`, http.StatusCreated},
+		{"own pairing", "POST", "/api/v1/auth/pair", "", http.StatusOK},
+		{"own recovery code", "POST", "/api/v1/auth/recovery", "", http.StatusCreated},
+	}
+	// tokens: the members', the owner's pairing codes and his recovery code.
+	counts := func() (tokens, members int) {
+		t.Helper()
+		if err := m.db.QueryRowContext(ctx, `SELECT
+			(SELECT COUNT(*) FROM tokens WHERE user_id IN (SELECT id FROM users WHERE managed_by = ?1) OR (user_id = ?1 AND kind = ?2))
+			+ (SELECT COUNT(*) FROM auth_codes WHERE user_id = ?1 AND kind = ?3),
+			(SELECT COUNT(*) FROM users WHERE managed_by = ?1)`, m.adam, auth.KindPairing, auth.CodeRecovery).Scan(&tokens, &members); err != nil {
+			t.Fatal(err)
+		}
+		return tokens, members
+	}
+	for i, c := range mints {
+		// Denied: from a device signed out after the middleware's check.
+		ended, err := m.auth.IssueToken(ctx, m.adam, auth.KindSession, fmt.Sprintf("adam's tablet %d", i), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signOutBehindTheCache(t, m.testEnv, ended)
+		tokens, members := counts()
+		if resp, b := m.do(t, c.method, c.path, ended, c.body); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s from an ended device = %d %s, want 401", c.name, resp.StatusCode, b)
+		}
+		if nt, nm := counts(); nt != tokens || nm != members {
+			t.Errorf("%s from an ended device made %d tokens and %d members", c.name, nt-tokens, nm-members)
+		}
+		// Allowed: the same mint from the owner's phone, still signed in.
+		if resp, b := m.do(t, c.method, c.path, m.adamTok, strings.ReplaceAll(c.body, "Ida", fmt.Sprintf("Ida %d", i))); resp.StatusCode != c.ok {
+			t.Errorf("%s from a signed-in device = %d %s, want %d", c.name, resp.StatusCode, b, c.ok)
+		}
 	}
 }

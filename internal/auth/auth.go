@@ -216,6 +216,10 @@ type Service struct {
 	// it is off or can't run; unset, none): only an identity from it is an
 	// admin's way into the console (decision 5). SetSSOIssuer.
 	ssoIssuer atomic.Pointer[func() string]
+	// beforeSpend is nil but in tests: it runs between a single-use token's
+	// read and the transaction that spends it and mints its session
+	// (exchangeSession), where a test commits a sign-out.
+	beforeSpend func()
 }
 
 // SetSSOIssuer says which provider's identities count as an admin's way into
@@ -371,13 +375,20 @@ func (s *Service) IssueToken(ctx context.Context, userID int64, kind, deviceName
 }
 
 // IssueOwnPairingToken is IssueToken(KindPairing) for the signed-in person's own
-// new device (/auth/pair), refused for a kid inside the write (refuseKid). The
-// owner's pairing for a member's device (MemberPairing) and the demo's don't
-// come here: a kid's own device is paired that way.
-func (s *Service) IssueOwnPairingToken(ctx context.Context, userID int64, ttl time.Duration) (string, error) {
+// new device (/auth/pair), from session (the token the request authenticated
+// with). Refused inside the write: for a kid (refuseKid), and with
+// ErrInvalidToken once session is signed out or the account disabled (signedIn),
+// so a code minted as Sign out everywhere or a password change commits is never
+// one that change missed. The owner's pairing for a member's device
+// (MemberPairing) and the demo's don't come here: a kid's own device is paired
+// that way.
+func (s *Service) IssueOwnPairingToken(ctx context.Context, userID, session int64, ttl time.Duration) (string, error) {
 	var secret string
 	err := s.db.WithTx(ctx, "IssueOwnPairingToken", func(tx *sql.Tx) error {
 		if err := refuseKid(ctx, tx, userID); err != nil {
+			return err
+		}
+		if err := signedIn(ctx, tx, userID, session); err != nil {
 			return err
 		}
 		var err error
@@ -459,29 +470,32 @@ func (s *Service) insertToken(ctx context.Context, ex sqlExecer, userID int64, h
 
 // madeOn is the device userID's token session was made on (its
 // created_on_token_id: a household member's sign-in on their owner's device),
-// for a credential minted from it to record; NULL for any other session, an
-// unknown one or another person's. A session signed out since the request
-// authenticated with it is ErrInvalidToken, read inside the mint's own
-// transaction as IssueSession reads the password: an owner's password change or
-// Sign out everywhere that committed in between (endSessions) has already
-// passed over the credential this would make, which would outlive the sign-in
-// it was made from.
+// for a credential minted from it to record; NULL for any other session. It is
+// ErrInvalidToken unless session is userID's token, still signed in and its
+// account enabled, read inside the mint's own transaction as IssueSession reads
+// the password (server#444): the request's check ran before it, and a sign-out,
+// Sign out everywhere, password change or disable that committed in between
+// (endSessions) has already passed over the credential the mint would make,
+// which would outlive the change that should have refused it. Every credential
+// a session asks for is minted behind this one read (signedIn, where the
+// device is not recorded).
 func madeOn(ctx context.Context, tx *sql.Tx, userID, session int64) (sql.NullInt64, error) {
-	var (
-		on      sql.NullInt64
-		revoked bool
-	)
-	err := tx.QueryRowContext(ctx, `SELECT created_on_token_id, revoked FROM tokens WHERE id = ? AND user_id = ?`,
-		session, userID).Scan(&on, &revoked)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return on, nil
-	case err != nil:
-		return on, err
-	case revoked:
+	var on sql.NullInt64
+	err := tx.QueryRowContext(ctx,
+		`SELECT t.created_on_token_id FROM tokens t JOIN users u ON u.id = t.user_id
+		  WHERE t.id = ? AND t.user_id = ? AND t.revoked = 0 AND u.disabled = 0`, session, userID).Scan(&on)
+	if errors.Is(err, sql.ErrNoRows) {
 		return on, ErrInvalidToken
 	}
-	return on, nil
+	return on, err
+}
+
+// signedIn is madeOn's check alone: ErrInvalidToken unless session is userID's
+// token, still signed in and its account enabled, for a mint that records no
+// device (a pairing code, a member's sign-in, a recovery code, a cast token).
+func signedIn(ctx context.Context, tx *sql.Tx, userID, session int64) error {
+	_, err := madeOn(ctx, tx, userID, session)
+	return err
 }
 
 // insertTokenOn is insertToken recording createdOn, the owner's token a household
@@ -551,23 +565,48 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	if neverTouched(row.kind) || !s.needsTouch(row, p) {
 		return u, cred, nil
 	}
-	// The app is written only when this request named one, decided in SQL rather
-	// than from the value read above: a request without the header racing one with
-	// it (covers loading beside an API call) must not write back the stale app.
-	// The touch is user state: it leaves the content generation, and so every
-	// cache keyed on it, where it was (store.DB.ExecUserState), and drops the
-	// token's own cached row, whose last_seen, address and app it changed, so
-	// the next request reads them again (needsTouch); a lookup that read the row
-	// before the touch committed puts nothing after the drop (lookupToken's mark).
+	// The touch drops the token's own cached row, whose last_seen, address and
+	// app it changed, so the next request reads them again (needsTouch); a
+	// lookup that read the row before the touch committed puts nothing after the
+	// drop (lookupToken's mark). A cast token's use also moves its expiry
+	// (castExpiry; "" for every other kind).
 	defer s.tokens.Delete(hash)
-	_, _ = s.db.ExecUserState(ctx,
-		`UPDATE tokens SET last_seen = ?1, last_ip = COALESCE(NULLIF(?2, ''), last_ip),
-		        client_app = CASE WHEN ?3 = '' THEN client_app ELSE ?3 END,
-		        client_version = CASE WHEN ?3 = '' THEN client_version ELSE ?4 END,
-		        client_platform = CASE WHEN ?3 = '' THEN client_platform ELSE ?5 END
-		  WHERE id = ?6`,
-		s.ts(), p.IP, p.Client.App, p.Client.Version, p.Client.Platform, row.id)
+	slideTo := ""
+	if row.kind == KindCast {
+		slideTo = s.castExpiry(row.grant)
+	}
+	_ = s.touch(ctx, row.id, row.kind, p, slideTo)
 	return u, cred, nil
+}
+
+// touchRowSQL is a token's touch: last_seen (?1), the address when the
+// request had one (?2) and the app only when the request named one (?3-?5),
+// decided in SQL rather than from the value read before it, so a request
+// without the header racing one with it (covers loading beside an API call)
+// never writes back the stale app; and a cast token's sliding expiry (?7, ""
+// for none: castExpiry), which never shortens it and never revives one already
+// past (?8, now as s.ts() writes it; expires_at is RFC3339 UTC, so it compares
+// as text). A token signed out since its read is left as it is.
+const touchRowSQL = `UPDATE tokens SET last_seen = ?1, last_ip = COALESCE(NULLIF(?2, ''), last_ip),
+        client_app = CASE WHEN ?3 = '' THEN client_app ELSE ?3 END,
+        client_version = CASE WHEN ?3 = '' THEN client_version ELSE ?4 END,
+        client_platform = CASE WHEN ?3 = '' THEN client_platform ELSE ?5 END,
+        expires_at = CASE WHEN ?7 <> '' AND expires_at > ?8 THEN MAX(expires_at, ?7) ELSE expires_at END
+  WHERE id = ?6 AND revoked = 0`
+
+// touch writes token id's touch (touchRowSQL), of kind, as p reports the
+// request and moving a cast token's expiry to slideTo ("" leaves it). It is
+// user state: it leaves the content generation, and so every cache keyed on
+// it, where it was (store.DB.ExecUserState); a caller holding the token's
+// cached row drops it. A cast token's last_seen is in milliseconds (castStamp).
+func (s *Service) touch(ctx context.Context, id int64, kind string, p Presence, slideTo string) error {
+	stamp := s.ts()
+	if kind == KindCast {
+		stamp = s.castStamp()
+	}
+	_, err := s.db.ExecUserState(ctx, touchRowSQL,
+		stamp, p.IP, p.Client.App, p.Client.Version, p.Client.Platform, id, slideTo, s.ts())
+	return err
 }
 
 // checkToken is whether hash (hashSecret's) is a valid token of one of kinds, writing
@@ -590,8 +629,9 @@ func (s *Service) checkToken(ctx context.Context, hash string, media *bookMedia,
 }
 
 // needsTouch reports whether a request must write its token's row: last_seen is
-// unset, unreadable, ahead of the clock or touchInterval old, or the request
-// reports an address or an app the row doesn't hold.
+// unset, unreadable, ahead of the clock or touchInterval old (a cast token's
+// CastTouchInterval: the cap ranks them by it), or the request reports an
+// address or an app the row doesn't hold.
 func (s *Service) needsTouch(row tokenRow, p Presence) bool {
 	if (p.IP != "" && p.IP != row.lastIP) || (p.Client.App != "" && p.Client != row.client) || !row.lastSeen.Valid {
 		return true
@@ -600,8 +640,12 @@ func (s *Service) needsTouch(row tokenRow, p Presence) bool {
 	if err != nil {
 		return true
 	}
+	every := touchInterval
+	if row.kind == KindCast {
+		every = CastTouchInterval
+	}
 	age := s.now().Sub(seen)
-	return age < 0 || age >= touchInterval
+	return age < 0 || age >= every
 }
 
 // tokenRow is what lookupToken reads about a valid token besides its user.
@@ -761,7 +805,8 @@ func scanAPIToken(row interface{ Scan(...any) error }) (APIToken, error) {
 // there as they end that sign-in (endSessions, server#361), and so do the
 // device revoke's alsoMembers and leaveOwners. A kid's is refused inside the
 // write (ErrKidAccount, refuseKid), and so is one from a session signed out
-// since the request's check (ErrInvalidToken, madeOn).
+// since the request's check, another person's or a disabled account's
+// (ErrInvalidToken, madeOn).
 func (s *Service) IssueAPIToken(ctx context.Context, userID, session int64, label string) (string, APIToken, error) {
 	secret, hash, err := generateToken()
 	if err != nil {
@@ -844,15 +889,17 @@ func (s *Service) expiresAt(ttl time.Duration) any {
 	return s.now().Add(ttl).UTC().Format(time.RFC3339)
 }
 
-// pastExpiry reports whether an RFC3339 expiry stamp is in the past - the
+// pastExpiry reports whether an RFC3339 expiry stamp is reached - the
 // read-side twin of expiresAt. NULL (no expiry) and unparsable stamps count as
-// not expired.
+// not expired. A stamp ends its credential at that second, as the SQL checks
+// read it (valid while expires_at > s.ts(): touchRowSQL, spendableSQL, a code's
+// claim), so a token this answers for is one the touch still slides.
 func (s *Service) pastExpiry(expires sql.NullString) bool {
 	if !expires.Valid {
 		return false
 	}
 	t, err := time.Parse(time.RFC3339, expires.String)
-	return err == nil && s.now().After(t)
+	return err == nil && !s.now().Before(t)
 }
 
 // insertAuthCode writes one auth_codes row. Shared by invite and recovery mints
@@ -1010,8 +1057,13 @@ func (s *Service) RotateAuthCode(ctx context.Context, id int64) (Minted, error) 
 // re-authenticate after signing out or losing a device. It atomically replaces
 // any existing recovery code for the user (so there is always at most one) and is
 // returned once. Recovery codes never expire and have no use cap; they redeem
-// through the same path as invites.
-func (s *Service) GenerateRecoveryCode(ctx context.Context, userID int64) (string, error) {
+// through the same path as invites. session is the token the request
+// authenticated with: one signed out since the request's check, or an account
+// disabled since, is ErrInvalidToken, read inside the write (signedIn), so a
+// code minted as a password change or Sign out everywhere commits is never one
+// that change missed (endSessions deletes the person's recovery code, and this
+// one never expires).
+func (s *Service) GenerateRecoveryCode(ctx context.Context, userID, session int64) (string, error) {
 	code, hash, err := generateAuthCode()
 	if err != nil {
 		return "", err
@@ -1019,6 +1071,9 @@ func (s *Service) GenerateRecoveryCode(ctx context.Context, userID int64) (strin
 	if err := s.db.WithDurableTx(ctx, "GenerateRecoveryCode", func(tx *sql.Tx) error {
 		if err := refuseKid(ctx, tx, userID); err != nil {
 			return err // a kid holds no recovery code
+		}
+		if err := signedIn(ctx, tx, userID, session); err != nil {
+			return err
 		}
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM auth_codes WHERE user_id = ? AND kind = ?`, userID, CodeRecovery); err != nil {
@@ -1261,12 +1316,27 @@ func (s *Service) PruneSingleUseTokens(ctx context.Context) (int64, error) {
 	return res.RowsAffected()
 }
 
-// spendOnce revokes the unrevoked token hash of kind, at now: the one use of a
-// single-use token. The revoke-if-not-revoked write means two racing callers
-// cannot both win; the loser gets ErrInvalidToken.
-func (s *Service) spendOnce(ctx context.Context, op, hash, kind, now string) error {
-	res, err := s.db.ExecDurable(ctx, op,
-		`UPDATE tokens SET revoked = 1, last_seen = ? WHERE token_hash = ? AND kind = ? AND revoked = 0`, now, hash, kind)
+// spendableSQL is a single-use token's validity read again inside the
+// transaction that spends it (exchangeSession), over tokens: token ?1 of kind
+// ?2, unrevoked, unexpired at ?3 (s.ts(); expires_at is RFC3339 UTC, so it
+// compares as text) and its account enabled. lookupToken read the same before
+// the transaction; a Sign out everywhere, a password change (endSessions), a
+// household joined (leaveOwners) or an account disabled that committed since
+// is caught here.
+const spendableSQL = `token_hash = ?1 AND kind = ?2 AND revoked = 0 AND (expires_at IS NULL OR expires_at > ?3)
+	AND user_id IN (SELECT id FROM users WHERE disabled = 0)`
+
+// spendToken marks the token hash of kind used inside tx, at now, while it is
+// still spendable (spendableSQL), revoking it when revoke (a single-use token's
+// one use; a linked pairing token stays, its code governing it). Two racing
+// callers cannot both revoke it, nor one racing a sign-out spend it; the loser
+// gets ErrInvalidToken.
+func spendToken(ctx context.Context, tx *sql.Tx, hash, kind, now string, revoke bool) error {
+	set := `last_seen = ?3`
+	if revoke {
+		set = `revoked = 1, ` + set
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE tokens SET `+set+` WHERE `+spendableSQL, hash, kind, now)
 	if err != nil {
 		return err
 	}
@@ -1276,74 +1346,122 @@ func (s *Service) spendOnce(ctx context.Context, op, hash, kind, now string) err
 	return nil
 }
 
-// ConsumePairing validates a pairing token and consumes it, returning the
-// bound user. An UNLINKED token (minted by /auth/pair, the demo flow, or
-// pre-migration) is atomically revoked - strictly single-use, and the
-// revoke-if-not-revoked write means two racing exchanges cannot both win. A
-// LINKED token instead atomically claims one use on its parent code - folding
-// the cap check, the code-expiry check, and the first-claim redeemed_at stamp
-// into one UPDATE - and is NOT revoked: the code's cap and expiry govern how
-// many more devices may pair with it. A disabled user is rejected before any
-// use is consumed. It also returns the kind of code the token came from
-// (CodeInvite or CodeRecovery; "" for an unlinked token), so the server can report
-// an invite being used.
-func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, string, error) {
+// exchangeSession is the device's session for userID, minted in the one
+// durable transaction that spends the single-use token it is exchanged for
+// (spend, at the transaction's now), with the account as that transaction reads
+// it. A Sign out everywhere, a password change or a disabled account either
+// committed before it, and spend (spendableSQL) refuses the token, or commits
+// after it and ends the session with the rest (endSessions; a disabled
+// account's tokens are refused): never a session that change missed, as two
+// writes left one between the spend and the mint. admit (nil: any account
+// spendableSQL lets through) is asked of the account as the transaction reads
+// it, a refusal ErrInvalidToken with nothing spent. Nothing is read after the
+// commit, so a spent token always has its session answered.
+func (s *Service) exchangeSession(ctx context.Context, op string, userID int64, deviceName string, spend func(tx *sql.Tx, now string) error, admit func(*User) bool) (*User, string, error) {
+	if s.beforeSpend != nil {
+		s.beforeSpend()
+	}
+	var (
+		u       *User
+		session string
+	)
+	err := s.db.WithDurableTx(ctx, op, func(tx *sql.Tx) error {
+		if err := spend(tx, s.ts()); err != nil {
+			return err
+		}
+		var err error
+		if u, err = getUser(ctx, tx, userID); err != nil {
+			return err
+		}
+		if admit != nil && !admit(u) {
+			return ErrInvalidToken
+		}
+		session, err = s.issueToken(ctx, tx, userID, KindSession, deviceName, 0)
+		return err
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return u, session, nil
+}
+
+// Refused reports whether err is ConsumePairing's or ConsumeOIDC's refusal of
+// the token presented (unknown, spent, expired, signed out, or its invite used
+// up or expired), as opposed to a failure to answer it (the database).
+func Refused(err error) bool {
+	return errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrCodeExhausted) || errors.Is(err, ErrCodeExpired)
+}
+
+// ConsumePairing validates a pairing token, consumes it and mints the device's
+// session (named deviceName) in the same transaction (exchangeSession),
+// returning the account and the session's secret. An UNLINKED token (minted
+// by /auth/pair, the demo flow, or pre-migration) is revoked: strictly
+// single-use, and two racing exchanges cannot both win. A LINKED token instead
+// claims one use on its parent code, folding the cap check, the code-expiry
+// check, and the first-claim redeemed_at stamp into one UPDATE, and is NOT
+// revoked: the code's cap and expiry govern how many more devices may pair
+// with it. A disabled user, or a token signed out (a Sign out everywhere, a
+// password change) since the read, is rejected before any use is consumed. It
+// also returns the kind of code the token came from (CodeInvite or
+// CodeRecovery; "" for an unlinked token), so the server can report an invite
+// being used.
+func (s *Service) ConsumePairing(ctx context.Context, secret, deviceName string) (u *User, session, codeKind string, err error) {
 	hash := hashSecret(secret)
 	u, row, err := s.lookupToken(ctx, hash, KindPairing)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	codeID := row.codeID
-	now := s.ts()
-	if !codeID.Valid {
-		if err := s.spendOnce(ctx, "ConsumePairing", hash, KindPairing, now); err != nil {
-			return nil, "", err
+	u, session, err = s.exchangeSession(ctx, "ConsumePairing", u.ID, deviceName, func(tx *sql.Tx, now string) error {
+		if err := spendToken(ctx, tx, hash, KindPairing, now, !codeID.Valid); err != nil || !codeID.Valid {
+			return err
 		}
-		return u, "", nil
-	}
-	// Both stamps are RFC3339 UTC, so the lexical expires_at comparison is
-	// chronological (same convention as supersedeActiveInvites).
-	res, err := s.db.ExecDurable(ctx, "ConsumePairing",
-		`UPDATE auth_codes SET uses = uses + 1, redeemed_at = COALESCE(redeemed_at, ?)
-		   WHERE id = ? AND (max_uses = 0 OR uses < max_uses)
-		     AND (expires_at IS NULL OR expires_at > ?)`, now, codeID.Int64, now)
+		// Both stamps are RFC3339 UTC, so the lexical expires_at comparison is
+		// chronological (same convention as supersedeActiveInvites).
+		err := tx.QueryRowContext(ctx,
+			`UPDATE auth_codes SET uses = uses + 1, redeemed_at = COALESCE(redeemed_at, ?1)
+			   WHERE id = ?2 AND (max_uses = 0 OR uses < max_uses)
+			     AND (expires_at IS NULL OR expires_at > ?1)
+			 RETURNING kind`, now, codeID.Int64).Scan(&codeKind)
+		if errors.Is(err, sql.ErrNoRows) {
+			return s.claimRefused(ctx, tx, codeID.Int64)
+		}
+		return err
+	}, nil)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		// Read-only classification so the transport can tell the user why: the
-		// invite being gone means the token is orphaned (treat as invalid).
-		var (
-			maxUses, uses int
-			cexp          sql.NullString
-		)
-		cerr := s.db.QueryRowContext(ctx,
-			`SELECT max_uses, uses, expires_at FROM auth_codes WHERE id = ?`, codeID.Int64).
-			Scan(&maxUses, &uses, &cexp)
-		if errors.Is(cerr, sql.ErrNoRows) {
-			return nil, "", ErrInvalidToken
-		}
-		if cerr != nil {
-			return nil, "", cerr
-		}
-		if serr := s.codeState(maxUses, uses, cexp); serr != nil {
-			return nil, "", serr
-		}
-		// Unreachable unless the SQL and Go liveness checks disagree; report the
-		// claim failure as exhaustion rather than inventing a new state.
-		return nil, "", ErrCodeExhausted
+	return u, session, codeKind, nil
+}
+
+// claimRefused says why ConsumePairing's claim on code id was refused, read in
+// its transaction tx so the transport can tell the user why: the invite being
+// gone means the token is orphaned (treat as invalid).
+func (s *Service) claimRefused(ctx context.Context, tx *sql.Tx, id int64) error {
+	var (
+		maxUses, uses int
+		cexp          sql.NullString
+	)
+	err := tx.QueryRowContext(ctx, `SELECT max_uses, uses, expires_at FROM auth_codes WHERE id = ?`, id).
+		Scan(&maxUses, &uses, &cexp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidToken
 	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE tokens SET last_seen = ? WHERE token_hash = ?`, now, hash)
-	var kind string
-	if err := s.db.QueryRowContext(ctx, `SELECT kind FROM auth_codes WHERE id = ?`, codeID.Int64).Scan(&kind); err != nil {
-		kind = "" // the pairing stands; only the report loses its kind
+	if err != nil {
+		return err
 	}
-	return u, kind, nil
+	if err := s.codeState(maxUses, uses, cexp); err != nil {
+		return err
+	}
+	// Unreachable unless the SQL and Go liveness checks disagree; report the
+	// claim failure as exhaustion rather than inventing a new state.
+	return ErrCodeExhausted
 }
 
 // userColumns selects the user fields plus a derived last-activity timestamp
 // (the newest tokens.last_seen across the account's tokens). ResolveRequest bumps
-// it on authenticated requests (at most once a minute per token), so this
+// it on authenticated requests (at most once a minute per token, a cast token's
+// every CastTouchInterval and in milliseconds), so this
 // reflects last use, not just sign-in, without a dedicated column. The household
 // member columns follow (memberColumns, then the admin's switch, the typed name
 // and how many members the person has: idx_users_managed_by). Read FROM
@@ -1462,8 +1580,9 @@ func (s *Service) CountDemoUsers(ctx context.Context) (int, error) {
 // activity (or, lacking any, their creation time) is older than cutoff. Their
 // child rows (progress, bookmarks, notes, history, tokens, share grants) cascade
 // via ON DELETE CASCADE. Returns the number of accounts deleted. Timestamps are
-// stored as RFC3339 UTC, so the lexical comparison is chronological (a feed
-// token's millisUTC created_at would not be, but a demo account never has one).
+// stored as RFC3339 UTC, so the lexical comparison is chronological, but for a
+// demo account's cast token (it may cast), whose created_at and last_seen are
+// millisUTC (castStamp): that misorders only within the cutoff's second.
 func (s *Service) ReapIdleDemoUsers(ctx context.Context, cutoff time.Time) (int64, error) {
 	cut := cutoff.UTC().Format(time.RFC3339)
 	res, err := s.db.ExecContext(ctx,

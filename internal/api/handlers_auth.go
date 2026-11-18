@@ -234,8 +234,11 @@ func writeInviteError(w http.ResponseWriter, err error, fallback string) {
 // linked to an auth code stays valid afterwards - governed by the code's
 // remaining uses and expiry - so one QR can pair several devices; an unlinked
 // token (/auth/pair, demo) is single-use and revoked here. Exchange shares the
-// redeem limiter since it is now the claim point (a session-issuance failure
-// after a successful claim burns a use, same failure shape redeem had).
+// redeem limiter since it is now the claim point. The claim (or the revoke)
+// and the session are one transaction (auth.ConsumePairing): a failure to
+// write the session burns no use and answers 500, uncharged (only a token
+// the lookup found valid reaches that write; a guess is charged unless the
+// database fails to answer its lookup, a 500 that tells it nothing).
 func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	if !allowAttempt(w, a.redeemLimiter, ip) {
@@ -249,34 +252,28 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "pairing_token is required")
 		return
 	}
-	u, codeKind, err := a.auth.ConsumePairing(r.Context(), req.PairingToken)
-	if err != nil {
+	u, session, codeKind, err := a.auth.ConsumePairing(r.Context(), req.PairingToken, req.DeviceName)
+	switch {
+	case auth.Refused(err):
 		a.redeemLimiter.Fail(ip)
 		writeInviteError(w, err, "invalid or expired pairing token")
 		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "could not issue session")
+		return
 	}
 	a.redeemLimiter.Reset(ip)
-	if out := a.pairedSession(w, r, u.ID, req.DeviceName, codeKind == auth.CodeInvite); out != nil {
-		writeJSON(w, http.StatusOK, out)
-	}
+	writeJSON(w, http.StatusOK, a.pairedSession(r, u, session, req.DeviceName, codeKind == auth.CodeInvite))
 }
 
 // pairedSession answers a consumed pairing token (exchange) or single sign-on
-// token (finish): a session for the device, the sign-in reported, and the
-// session envelope for the caller to write (nil once an error is written).
-func (a *API) pairedSession(w http.ResponseWriter, r *http.Request, userID int64, deviceName string, invite bool) map[string]any {
-	session, err := a.auth.IssueToken(r.Context(), userID, auth.KindSession, deviceName, 0)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not issue session")
-		return nil
-	}
-	full, err := a.auth.GetUser(r.Context(), userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load account")
-		return nil
-	}
-	a.reportSignIn(r, full, deviceName, invite)
-	return a.sessionEnvelope(r, session, full)
+// token (finish): u and session the account and the device's session, read and
+// minted with the spend (ConsumePairing, ConsumeOIDC: one transaction, so a
+// sign-out everywhere committing beside it never leaves one it missed), the
+// sign-in reported, and the session envelope for the caller to write.
+func (a *API) pairedSession(r *http.Request, u *auth.User, session, deviceName string, invite bool) map[string]any {
+	a.reportSignIn(r, u, deviceName, invite)
+	return a.sessionEnvelope(r, session, u)
 }
 
 // sessionEnvelope is the answer to a sign-in (exchange, login, demo): the session
@@ -359,7 +356,8 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 // UNLINKED (no parent auth code): single-use and at most 10 minutes, since the
 // user is present and can mint another with a tap. An optional JSON body
 // {ttl_seconds} asks for a shorter life (pairTTL; never a longer one); no body
-// is the full 10 minutes, and a malformed one is 400.
+// is the full 10 minutes, and a malformed one is 400. A session signed out
+// since the middleware checked it mints nothing (401, writeSessionEnded).
 func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return
@@ -374,8 +372,8 @@ func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
-	token, err := a.auth.IssueOwnPairingToken(r.Context(), u.ID, pairTTL(body.TTLSeconds))
-	if writeKidRefusal(w, err) {
+	token, err := a.auth.IssueOwnPairingToken(r.Context(), u.ID, credentialFrom(r.Context()).ID, pairTTL(body.TTLSeconds))
+	if writeKidRefusal(w, err) || writeSessionEnded(w, err) {
 		return
 	}
 	if err != nil {
@@ -490,7 +488,8 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 // any device via the connect screen without an admin - the recovery path for
 // password-less accounts. Reuses the redeem flow (it is just an auth code).
 // Rate-limited and refused for demo accounts so a throwaway session can't mint a
-// durable login.
+// durable login; a session signed out since the middleware checked it mints
+// nothing (401, writeSessionEnded).
 func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return
@@ -499,8 +498,8 @@ func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	if full == nil {
 		return
 	}
-	code, err := a.auth.GenerateRecoveryCode(r.Context(), full.ID)
-	if writeKidRefusal(w, err) {
+	code, err := a.auth.GenerateRecoveryCode(r.Context(), full.ID, credentialFrom(r.Context()).ID)
+	if writeKidRefusal(w, err) || writeSessionEnded(w, err) {
 		return
 	}
 	if err != nil {
@@ -545,8 +544,8 @@ func denyAPIKey(w http.ResponseWriter, r *http.Request) bool {
 // writeSessionEnded answers 401, as the auth middleware does, for a credential
 // mint that auth refused inside its own write because the request's session was
 // signed out after the middleware checked it (auth.ErrInvalidToken from
-// auth.madeOn: a password change or Sign out everywhere committed in between),
-// and reports whether it did.
+// auth.madeOn, every mint a session asks for: a password change, sign-out or
+// Sign out everywhere committed in between), and reports whether it did.
 func writeSessionEnded(w http.ResponseWriter, err error) bool {
 	if !errors.Is(err, auth.ErrInvalidToken) {
 		return false

@@ -26,10 +26,11 @@ func mintSamKinds(t *testing.T, c *castEnv) samKinds {
 	}
 	k := samKinds{phone: c.samTok, laptop: laptop,
 		castPhone: c.castToken(t, cradleBook), castLaptop: c.castTokenFrom(t, laptop, cradleBook)}
-	if k.key, _, err = c.auth.IssueAPIToken(ctx, c.sam, 0, "script"); err != nil {
+	phone := c.credentialID(t, c.samTok)
+	if k.key, _, err = c.auth.IssueAPIToken(ctx, c.sam, phone, "script"); err != nil {
 		t.Fatal(err)
 	}
-	if k.feed, _, err = c.auth.IssueFeedToken(ctx, c.sam, 0); err != nil {
+	if k.feed, _, err = c.auth.IssueFeedToken(ctx, c.sam, phone); err != nil {
 		t.Fatal(err)
 	}
 	// Every credential used once: the token cache holds the ones it can.

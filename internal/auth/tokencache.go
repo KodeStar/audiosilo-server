@@ -24,9 +24,11 @@ const maxCachedTokenAge = time.Minute
 // deleted account, a changed role or membership, a password set) is an ordinary
 // write, which moves the generation, so the next request reads the row again: a
 // revoked token is refused on the very next request. A token's own touch
-// (last_seen, address, app) is the one user-state write to the table: it leaves
-// the generation, so listening never empties the cache, and drops that token's
-// row (resolve), the only one it changed; a lookup that read the row before the
+// (last_seen, address, app, and a cast token's sliding expiry: resolve, and
+// KeepCastToken for a cast token, which is never held here) is the one
+// user-state write to the table: it leaves the generation, so listening never
+// empties the cache, and drops that token's row (resolve), the only one it
+// changed; a lookup that read the row before the
 // touch and puts it after the drop is dropped too (GenMap.PutMarked, with the
 // mark lookupToken takes before its read). Expiry, which needs no write, is checked
 // on every hit, and so is the row's age (maxCachedTokenAge: the one write the

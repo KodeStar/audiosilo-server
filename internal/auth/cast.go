@@ -23,16 +23,20 @@ import (
 //   - media only: only ResolveCastRequest accepts it, which the api calls only
 //     for the ?token= of GET /libraries/{id}/cover and /stream with no
 //     Authorization header; ResolveRequest never does;
-//   - short-lived: castTokenTTL, and each device keeps at most maxCastTokens
+//   - short-lived: castTokenTTL from its last use, never more than
+//     castTokenMaxLife after its mint (castExpiry: a receiver reading a long book
+//     keeps its token past the first castTokenTTL, server#446), and each device
+//     keeps at most maxCastTokens
 //     (counted by the sending token, cast_grants.parent_token_id, so a run of
 //     casts on one device never ends the cast another device is playing), with
 //     maxCastTokensPerPerson over all of a person's devices; past a cap the
 //     least recently used go (trimCastTokensSQL), so a sender re-minting drops
-//     an idle token before the one its receiver is reading; the console's
-//     chapter editor, whose <audio> streams a book the same way, mints an editor
-//     token (IssueEditorToken, cast_grants.editor): the same token with a shorter
-//     life and a cap of its own, so editing many books never drops a token a
-//     receiver is playing with;
+//     an idle token before the one its receiver is reading (a long response
+//     keeps its token's use current while it runs: KeepCastToken); the
+//     console's chapter editor, whose <audio> streams a book the same way, mints
+//     an editor token (IssueEditorToken, cast_grants.editor): the same token with
+//     a shorter, fixed life and a cap of its own, so editing many books never
+//     drops a token a receiver is playing with;
 //   - its sender's: it dies with the token that minted it (signed out, expired
 //     or deleted), and its user must exist and be enabled at every request; the
 //     media handlers check the person's CURRENT scope as for any request.
@@ -43,9 +47,19 @@ import (
 // receiver's address nor the book it played outlives it.
 
 const (
-	// castTokenTTL is how long a cast token works: a long audiobook in one
-	// sitting, not a durable credential.
+	// castTokenTTL is how long a cast token works after its mint, and after each
+	// use (castExpiry): a long audiobook in one sitting, not a durable
+	// credential.
 	castTokenTTL = 24 * time.Hour
+	// castTokenMaxLife is the most a cast token in use lives, from its mint: a
+	// book that plays on over a long weekend, not a durable credential either.
+	castTokenMaxLife = 72 * time.Hour
+	// CastTouchInterval is how stale a cast token's last_seen may be while it is
+	// in use: a request touches it at most this often (needsTouch; other tokens
+	// wait touchInterval), and the api keeps a long response's token current at
+	// this pace (KeepCastToken). The cap ranks tokens by it, so a token a
+	// receiver is reading never looks older than one minted a few seconds ago.
+	CastTouchInterval = 10 * time.Second
 	// maxCastTokens is how many cast tokens one sending device (the token that
 	// mints them) keeps; a mint past it drops that device's least recently used.
 	maxCastTokens = 20
@@ -82,13 +96,15 @@ var (
 // (?1) cast tokens of one use (?2, cast_grants.editor), among those one sending
 // token minted (?4) or, with ?4 = 0, all of them. Recent use is the token's
 // last_seen, which every cover or stream request it authenticates bumps
-// (resolve, at most once a touchInterval), else its mint time (created_at; both
-// RFC3339 UTC in whole seconds, s.ts(), so they compare as text), the newer
-// mint first on a tie: a receiver playing a book keeps its token while a sender
-// re-mints, and a token minted and never used goes first. The token the mint
-// just made (?5) is kept whatever the times say: after the clock steps back,
-// the others' times are ahead of its mint, and the mint must never hand out a
-// token it has already deleted.
+// (resolve, at most once a CastTouchInterval) and a long response keeps current
+// while it runs (KeepCastToken), else its mint time (created_at; both
+// fixed-width millisecond UTC, millisUTC, so they compare as text; a token
+// minted before server#446 has whole seconds, which only misorders it within its
+// second), the newer mint first on a tie: a receiver playing a book keeps its
+// token while a sender re-mints, and a token minted and never used goes first.
+// The token the mint just made (?5) is kept whatever the times say: after the
+// clock steps back, the others' times are ahead of its mint, and the mint must
+// never hand out a token it has already deleted.
 const trimCastTokensSQL = `DELETE FROM tokens WHERE id IN
   (SELECT t.id FROM tokens t JOIN cast_grants g ON g.token_id = t.id
     WHERE t.kind = '` + KindCast + `' AND t.user_id = ?1 AND g.editor = ?2
@@ -106,6 +122,10 @@ type castGrant struct {
 	libraryID sql.NullInt64
 	// path is the book's library-relative path, as catalog.CleanRelPath leaves it.
 	path string
+	// editor and mintedAt (the token's created_at) are its use and mint, which
+	// set how far a use moves its expiry (castExpiry).
+	editor   bool
+	mintedAt string
 }
 
 // bookMedia names the media a request reads: a library and a clean path in it
@@ -127,25 +147,28 @@ func (g castGrant) covers(m bookMedia) bool {
 
 // castGrantOf reads the grant of row, a cast token that passed lookupToken's
 // shared checks: its book, and its parent (the sender's token that minted it)
-// as the device it acts for. A token without a grant, or whose parent is gone,
-// signed out or expired, is ErrInvalidToken.
+// as the device it acts for. A token without a grant, whose parent is gone,
+// signed out or expired, or whose account is disabled (lookupToken refused that
+// already; KeepCastToken relies on it here) is ErrInvalidToken.
 func (s *Service) castGrantOf(ctx context.Context, row *tokenRow) error {
 	var (
-		parentRevoked bool
-		parentExpires sql.NullString
+		parentRevoked, disabled bool
+		parentExpires           sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT g.library_id, g.rel_path, g.parent_token_id, p.revoked, p.expires_at
-		   FROM cast_grants g JOIN tokens p ON p.id = g.parent_token_id
+		`SELECT g.library_id, g.rel_path, g.editor, c.created_at, g.parent_token_id, p.revoked, p.expires_at, u.disabled
+		   FROM cast_grants g JOIN tokens p ON p.id = g.parent_token_id JOIN tokens c ON c.id = g.token_id
+		        JOIN users u ON u.id = c.user_id
 		  WHERE g.token_id = ?`, row.id).
-		Scan(&row.grant.libraryID, &row.grant.path, &row.deviceID, &parentRevoked, &parentExpires)
+		Scan(&row.grant.libraryID, &row.grant.path, &row.grant.editor, &row.grant.mintedAt, &row.deviceID,
+			&parentRevoked, &parentExpires, &disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrInvalidToken
 	}
 	if err != nil {
 		return err
 	}
-	if parentRevoked || s.pastExpiry(parentExpires) {
+	if parentRevoked || disabled || s.pastExpiry(parentExpires) {
 		return ErrInvalidToken
 	}
 	return nil
@@ -175,7 +198,11 @@ func (s *Service) PruneCastTokens(ctx context.Context) error {
 // IssueCastToken mints a cast token for userID on the book at (libraryID,
 // bookPath), on behalf of parentTokenID (the caller's own token, whose sign-out
 // ends it), and returns the secret (shown once) and its expiry (fixed-width
-// millisecond UTC). The caller has checked the person may see the book. In the
+// millisecond UTC). The caller has checked the person may see the book. A
+// parent signed out since the request's check, another person's, or a disabled
+// account is ErrInvalidToken, read inside the write (signedIn): the token
+// would be dead as minted (castGrantOf), and the caller is told so rather than
+// handed it. In the
 // same transaction it deletes every dead cast token (pruneCastTokensSQL) and
 // keeps only the maxCastTokens most recently used the sending token minted, and
 // the person's maxCastTokensPerPerson most recently used (editor tokens apart,
@@ -205,10 +232,14 @@ func (s *Service) issueCastToken(ctx context.Context, use castUse, userID, paren
 	// must name the same instant.
 	expires := s.now().UTC().Add(use.ttl).Truncate(time.Second)
 	err = s.db.WithTx(ctx, "IssueCastToken", func(tx *sql.Tx) error {
+		if err := signedIn(ctx, tx, userID, parentTokenID); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, pruneCastTokensSQL, s.ts()); err != nil {
 			return err
 		}
-		res, err := s.insertToken(ctx, tx, userID, hash, KindCast, "", expires.Format(time.RFC3339), nil, "")
+		res, err := s.insertTokenOn(ctx, tx, userID, hash, KindCast, "", expires.Format(time.RFC3339), nil, "", nil,
+			s.castStamp())
 		if err != nil {
 			return err
 		}
@@ -249,4 +280,49 @@ func (s *Service) issueCastToken(ctx context.Context, use castUse, userID, paren
 // ?token= of a book's cover or stream with no Authorization header.
 func (s *Service) ResolveCastRequest(ctx context.Context, secret string, p Presence, libraryID int64, path string, kinds ...string) (*User, Credential, error) {
 	return s.resolve(ctx, secret, p, &bookMedia{libraryID, relpath.Clean(path)}, kinds)
+}
+
+// castStamp is a cast token's created_at and last_seen: millisecond UTC
+// (millisUTC), so the cap's least-recently-used rank (trimCastTokensSQL) tells
+// apart uses within a second.
+func (s *Service) castStamp() string { return s.now().UTC().Format(millisUTC) }
+
+// castExpiry is the expiry a use of a cast token with grant g moves it to
+// (server#446): castTokenTTL from now, never past castTokenMaxLife after its
+// mint, so a receiver reading a long book keeps its token as long as it plays
+// (up to that bound) and an idle one ends as before. "" leaves the expiry: an
+// editor token (a fixed editorTokenTTL; the console mints one per sitting) or a
+// mint time that doesn't parse. The touch never shortens an expiry, nor moves
+// one already past (touchRowSQL).
+func (s *Service) castExpiry(g castGrant) string {
+	minted, err := time.Parse(time.RFC3339, g.mintedAt)
+	if g.editor || err != nil {
+		return ""
+	}
+	to := s.now().UTC().Add(castTokenTTL)
+	if limit := minted.UTC().Add(castTokenMaxLife); to.After(limit) {
+		to = limit
+	}
+	return to.Truncate(time.Second).Format(time.RFC3339)
+}
+
+// KeepCastToken records that cast token id is still in use by a response it
+// authenticated (server#446): a request touches its token only as it starts
+// (resolve), so a long single-file stream would look idle to the cap
+// (trimCastTokensSQL) and let its expiry run out mid-book. The api calls it
+// every CastTouchInterval while such a response runs, and once as it ends. It
+// moves last_seen and the expiry (castExpiry) as a request's touch does; a
+// token deleted or signed out since, whose sender is, or whose account is
+// disabled (castGrantOf: a suspended token's expiry stays where the suspension
+// found it), is left as it is. The grant read and the touch are separate statements: what the read
+// takes (the token's use and mint time) never changes, and the touch moves no
+// expiry already past nor a revoked token (touchRowSQL).
+func (s *Service) KeepCastToken(ctx context.Context, id int64) error {
+	row := tokenRow{id: id}
+	if err := s.castGrantOf(ctx, &row); errors.Is(err, ErrInvalidToken) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return s.touch(ctx, id, KindCast, Presence{}, s.castExpiry(row.grant))
 }

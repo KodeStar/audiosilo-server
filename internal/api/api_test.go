@@ -44,6 +44,16 @@ type testEnv struct {
 	db       *store.DB
 }
 
+// credentialID is the id of tok, a token as the auth middleware resolves it.
+func (e *testEnv) credentialID(t *testing.T, tok string) int64 {
+	t.Helper()
+	_, cred, err := e.auth.ResolveRequest(context.Background(), tok, auth.Presence{}, auth.KindSession, auth.KindAPI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cred.ID
+}
+
 func newTestEnv(t *testing.T) *testEnv {
 	return newTestEnvWith(t, nil)
 }
@@ -692,6 +702,44 @@ func TestExchangeExpiredInvite(t *testing.T) {
 	}
 }
 
+// TestExchangeSessionWriteFailureSpendsNothing: the claim (or the revoke) and
+// the session are one transaction, so a session that can't be written answers
+// 500 and leaves the pairing token unspent and the invite's one use unclaimed;
+// allowed: the same tokens exchange once the write works again.
+func TestExchangeSessionWriteFailureSpendsNothing(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
+	code, err := e.auth.CreateAuthCode(ctx, member.ID, "invite", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, invited, _ := e.redeemCode(t, code)
+	unlinked, err := e.auth.IssueToken(ctx, member.ID, auth.KindPairing, "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.ExecContext(ctx, `CREATE TRIGGER no_sessions BEFORE INSERT ON tokens WHEN NEW.kind = 'session'
+		BEGIN SELECT RAISE(ABORT, 'no sessions'); END`); err != nil {
+		t.Fatal(err)
+	}
+	tokens := map[string]string{"invite": invited, "unlinked": unlinked}
+	for name, tok := range tokens {
+		if status, body := e.exchangeToken(t, tok, "d"); status != http.StatusInternalServerError {
+			t.Fatalf("%s with no session written = %d %s, want 500", name, status, body)
+		}
+	}
+	if _, err := e.db.ExecContext(ctx, `DROP TRIGGER no_sessions`); err != nil {
+		t.Fatal(err)
+	}
+	for name, tok := range tokens {
+		if status, body := e.exchangeToken(t, tok, "d"); status != http.StatusOK {
+			t.Fatalf("%s once the write works = %d %s, want 200", name, status, body)
+		}
+	}
+}
+
 // TestMultipleRedeemsShareCap: opening the invite link more than once mints
 // distinct pairing tokens that all draw on the SAME invite budget - the cap
 // binds across tokens, not per token.
@@ -1318,7 +1366,7 @@ func TestAdminClearsRecovery(t *testing.T) {
 	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
 	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
 
-	if _, err := e.auth.GenerateRecoveryCode(ctx, member.ID); err != nil {
+	if _, err := e.auth.GenerateRecoveryCode(ctx, member.ID, e.credentialID(t, memberTok)); err != nil {
 		t.Fatal(err)
 	}
 	if _, hasRec := e.meFlags(t, memberTok); !hasRec {

@@ -127,7 +127,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `ConsumePairing` path. **Redeem validates without consuming** (opening an
   invite link costs nothing); **exchange claims the use** - `ConsumePairing`
   folds the cap check, the code-expiry check and the first-claim `redeemed_at`
-  stamp into one atomic UPDATE, and rejects a disabled/deleted user first, so a
+  stamp into one atomic UPDATE, in the transaction that mints the device's session,
+  and rejects a disabled/deleted user or a signed-out token first, so a
   rejected attempt never burns a use or marks an invite accepted (`uses` counts
   devices that actually paired). Linked pairing tokens die with their code: delete/
   supersede/recovery-regeneration cascade (`ON DELETE CASCADE`), rotate revokes
@@ -171,7 +172,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   calendar feed link the member made from such a session (D5, server#361: `IssueAPIToken` and
   `IssueFeedToken` record the session's device, `auth.madeOn`, which refuses a mint from a session signed
   out since the request's check, `ErrInvalidToken`, a 401: the pass has already run; a key made before
-  v2.7.0 recorded none and stays), and every member's open pairing code; a member's own paired device stays, with what was
+  v2.7.0 recorded none and stays), and every member's open pairing code. Every credential a session asks
+  for reads the asking session in its own write (server#444: `auth.madeOn`, and `auth.signedIn` where no
+  device is recorded; signed out, another person's or a disabled account is the same 401,
+  `writeSessionEnded`): a pairing code and a member's sign-in on the person's device (`POST /auth/pair`,
+  `POST /me/household/members[/{id}/session|pair]`), an API key, the calendar link, a recovery code
+  (`POST /auth/recovery`: it never expires, and one minted after the pass would outlive it) and a cast or
+  editor token (`POST /cast/token`: dead as minted otherwise). A member's own paired device stays, with what was
   made on it, and `signed_out` counts the person's sessions only. The person's own API keys stay (listed
   and revoked on their own: the device lists, `/auth/tokens`), and so
   do their calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`; the console has no
@@ -180,8 +187,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   write moves the content generation, so the token cache refuses an ended token on the very next
   request, media `?token=` included. A password sign-in racing the change gets no session:
   `IssueSession` writes it only while the hash `Authenticate` verified is still the account's and the
-  account enabled, in its writer transaction, else `ErrInvalidCreds` (401). A shipped app takes its
-  existing 401 path (signed out, pair again).
+  account enabled, in its writer transaction, else `ErrInvalidCreds` (401). An exchange or a single
+  sign-on's finish racing it gets none either: `ConsumePairing` and `ConsumeOIDC` spend the token and
+  mint the session in one durable transaction (`auth.exchangeSession`), the spend reading the token
+  again there (unrevoked, unexpired, its account enabled: `spendableSQL`), so a change that committed
+  after the token's read refuses it (401) and one that commits after the mint ends the session with the
+  rest. A shipped app takes its existing 401 path (signed out, pair again).
 - **Personal API keys (`tokens.kind='api'`)**: user-minted, **non-expiring** bearer
   tokens for headless integrations, owner-scoped mint/list/revoke via
   `POST`/`GET`/`DELETE /auth/tokens` (`IssueAPIToken`/`ListAPITokens`/
@@ -904,7 +915,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   duplicate copies by how many people have progress on them, so the Health summary and its
   duplicates key on both generations, and a listener starting a book leaves the lists warm;
   server#263) and, for
-  `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
+  `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`, `expires_at`: a cast token's
+  sliding expiry, server#446),
   `bridge_status` (`heartbeat_at`, `status`), `bridge_jobs` (`lease_until`, `updated_at`,
   `progress`), `match_runs` (`done`), `unknown_asin_reports` (`checked_at`, `sent_at`: Health's `unknown_asin` reads
   the rest) and `upcoming_owned` (`checked_at`: the list books' `work_id` reads the
@@ -928,7 +940,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   read only by `/me/upcoming` and the job), the token touch in
   `auth.Service.resolve` (which then drops that token's cached row, so the next request reads
   its new last-seen and address; a lookup that read the row before the touch never caches it
-  after: `store.GenMap.PutMarked`), the Bridge's heartbeat (`bridge.SaveHeartbeat`, whatever
+  after: `store.GenMap.PutMarked`) and `auth.Service.KeepCastToken` (a cast token, never cached), the Bridge's heartbeat (`bridge.SaveHeartbeat`, whatever
   its status: with an ASR worker attached every beat's differs, `workers[].last_seen`; GET
   /server's `bridge` block reads it through `bridge.Service.LastHeartbeat`'s own cache, not the
   generation; a pairing or an unpair is content) and its job reports (`bridge.UpdateHeld`: a
@@ -951,7 +963,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `sent_at` free), and its offline libraries' listener counts are computed per request
   into the key; `Catalog.libs` reads `libraries` only; the token cache (`auth/tokencache.go`)
   reads `tokens` and `users` (owner join), and the touch is the only user-state change to
-  either, dropped from the cache by the touching request (its rows are also read again once a minute
+  either (`KeepCastToken`'s is a cast token's, which the cache never holds), dropped from the cache by the touching request (its rows are also read again once a minute
   old, `maxCachedTokenAge`: the generation never sees another process's write, which `reset-admin`
   beside a running server is). A new cache whose answer reads a
   user-state table needs a key of its own, or that table out of the list.
@@ -2829,16 +2841,22 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   file of it); demo accounts may mint (they can play); an API key may not (403, `denyAPIKey`'s
   containment: a key never mints another credential, even a cast token, which would die with it). A cast token is a
   `tokens` row of kind `cast` (`auth.IssueCastToken`: SHA-256 hash only, `expires_at` 24 h in whole
-  seconds, `castTokenTTL`) plus a `cast_grants` row (the book, and `parent_token_id`: the caller's
+  seconds, `castTokenTTL`, which each use moves to 24 h from then, never past `castTokenMaxLife`, 72 h
+  after the mint: `castExpiry`, server#446, so a receiver reading a long book keeps its token; the
+  answer's `expires_at` is when it ends unused, which the player's renewal reads; `created_at` and
+  `last_seen` in milliseconds, `millisUTC`) plus a `cast_grants` row (the book, and `parent_token_id`: the caller's
   own token); one transaction deletes every dead cast token (`pruneCastTokensSQL`: expired, or no
   grant, or its parent gone, signed out or expired) and keeps the `maxCastTokens` (20) most recently used
   the sending token minted, so a run of casts on one device never ends the cast another device of the person
   is playing (server#216), and the person's `maxCastTokensPerPerson` (100) most recently used over all their
   devices (`trimCastTokensSQL`: by `last_seen`, which each cover or stream request bumps at most once a
-  `touchInterval`, else `created_at`, so a sender re-minting drops an idle token before the one its receiver
-  is reading; the token just minted always stays, even after the clock steps back). The console's chapter editor streams a book the same way and sends
+  `CastTouchInterval` (10 s) and a long response keeps current while it runs and at its end
+  (`api.keepCastInUse` -> `auth.KeepCastToken`, server#446: one goroutine per token however many of its
+  responses run, each keep bounded by `castKeepTimeout`; a disabled account's token is not moved), else `created_at`, so a sender re-minting drops
+  an idle token before the one its receiver is reading; the token just minted always stays, even after the
+  clock steps back). The console's chapter editor streams a book the same way and sends
   `"editor": true` (console-only, additive; a player never sends it): `auth.IssueEditorToken` mints the same
-  token with `cast_grants.editor = 1` (`0078`), a 4 h life (`editorTokenTTL`) and a cap of its own
+  token with `cast_grants.editor = 1` (`0078`), a fixed 4 h life (`editorTokenTTL`, no slide) and a cap of its own
   (`maxEditorTokens`, 5), each cap counting only its own use, so editing many books never drops a token a
   receiver is playing with; it allows no more than a cast token, so any caller may ask. The daily retention (`internal/launcher.retention`) runs the same prune
   (`auth.PruneCastTokens`), so a dead token's row (the receiver's `last_ip`) and grant (which book
@@ -2850,7 +2868,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   expiry is checked on each hit): **signing out the device that
   minted it** (logout, My devices, the console's sign-out of that device or Sign out everywhere, a
   password change or reset that ends that session) **ends it**, as do the account's delete or
-  disabling, its scope and the 24 h. **Acceptance**: `ResolveRequest` never accepts a cast token;
+  disabling, its scope and its expiry. **Acceptance**: `ResolveRequest` never accepts a cast token;
   `auth.ResolveCastRequest(secret, presence, libraryID, path, kinds...)` does, only when its
   grant covers the path (`castGrant.covers`: same library, the book's path itself or below it on a
   segment boundary via `relpath.Within`, `Book` never reaches `Book 2`; an empty path on either side
@@ -3951,7 +3969,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   person > Sign-in, not offered for a household member. A user's **last activity** is
   derived from `MAX(tokens.last_seen)` (bumped by authenticated requests in
   `ResolveRequest`, at most once a minute per token unless the request's address or
-  app changed: `touchInterval`) - there is no `last_login` column; don't add one.
+  app changed: `touchInterval`; a cast token's every `CastTouchInterval`, in milliseconds) - there is no
+  `last_login` column; don't add one.
 - **Single sign-on, Sign in with OpenID Connect (server#235, capability `oidc`, `internal/oidc`,
   `auth/identities.go`, `api/handlers_oidc.go`, `0077`)**: config `auth.oidc.*` (`config/oidc.go`,
   settings section `signin`): the provider fields (enabled, name, issuer, client_id, scopes, claims

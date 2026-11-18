@@ -51,7 +51,7 @@ func TestBridgeTokenOnlyOnBridgeRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, _, err := s.IssueAPIToken(ctx, admin.ID, 0, "cron")
+	key, _, err := s.IssueAPIToken(ctx, admin.ID, mustSessionID(t, s, ctx, admin.ID, "phone"), "cron")
 	if err != nil {
 		t.Fatal(err)
 	}

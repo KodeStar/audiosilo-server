@@ -530,6 +530,39 @@ func TestUpcomingFeedEndsWithTheAccount(t *testing.T) {
 	}
 }
 
+// Security-critical (server#444): a calendar link asked from a session signed
+// out after the middleware passed it (signOutBehindTheCache) is refused inside
+// the mint's write: 401, as the middleware answers an ended session, and the
+// link made while signed in stays the person's one link. Allowed: a new link
+// from a session still signed in, which replaces it.
+func TestUpcomingCalendarMintFromAnEndedSessionIs401(t *testing.T) {
+	t.Parallel()
+	u := newCalendarEnv(t)
+	ctx := context.Background()
+	id, tok := newUserWithSession(t, u.testEnv, "reader", false)
+	_, first := mintFeed(t, u.testEnv, tok)
+	ended, err := u.auth.IssueToken(ctx, id, auth.KindSession, "tablet", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signOutBehindTheCache(t, u.testEnv, ended)
+	if resp, b := u.do(t, "POST", calendarPath, ended, ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("mint from an ended session = %d %s, want 401", resp.StatusCode, b)
+	}
+	var feeds int
+	if err := u.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE kind = ? AND user_id = ?`,
+		auth.KindFeed, id).Scan(&feeds); err != nil || feeds != 1 {
+		t.Fatalf("the reader's feed tokens = %d, %v; want only the one made while signed in", feeds, err)
+	}
+	if r, _ := u.do(t, "GET", feedURL(first), "", ""); r.StatusCode != http.StatusOK {
+		t.Fatalf("the earlier link after the refused mint = %d, want 200", r.StatusCode)
+	}
+	_, second := mintFeed(t, u.testEnv, tok)
+	if r, _ := u.do(t, "GET", feedURL(second), "", ""); r.StatusCode != http.StatusOK {
+		t.Fatalf("the link from the signed-in session = %d, want 200", r.StatusCode)
+	}
+}
+
 // The Upcoming cover's URL is the work's, stable while its art changes: it is
 // revalidated (private, no-cache), and new art is a new ETag and a new fetch.
 func TestUpcomingCoverRevalidatesChangedURL(t *testing.T) {

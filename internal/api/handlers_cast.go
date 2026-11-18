@@ -14,14 +14,17 @@ import (
 // handleMintCastToken answers POST /cast/token {library_id, path} with 201
 // {token, expires_at}: a cast token for the book at path (a part path resolves to
 // its book, whose path the token then covers), ending with the caller's own
-// token. The caller must be allowed the book (400/403/404 as the media routes
+// token. expires_at is when it ends if no receiver uses it: each use moves it
+// on, up to a bound from the mint (auth's castExpiry), so a player renewing
+// before it is never early, only cautious. The caller must be allowed the book (400/403/404 as the media routes
 // answer); a podcast episode is 403 not_a_book. Demo accounts may cast (they can play); an API key may not
 // (denyAPIKey's containment rule: a key never mints another credential, even a
 // cast token, which would die with it). The console's chapter editor, whose
 // <audio> streams the book the same way, sends "editor": true for an editor token
 // (auth.IssueEditorToken: a shorter life and a cap apart from the person's cast
 // tokens, so editing never ends a cast); it allows no more than a cast token, so
-// any caller may ask for one.
+// any caller may ask for one. A session signed out since the middleware checked
+// it mints nothing (401, writeSessionEnded).
 func (a *API) handleMintCastToken(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return
@@ -56,6 +59,9 @@ func (a *API) handleMintCastToken(w http.ResponseWriter, r *http.Request) {
 		issue, failed = a.auth.IssueEditorToken, "could not open the book's audio for the chapter editor"
 	}
 	token, expires, err := issue(r.Context(), u.ID, credentialFrom(r.Context()).ID, lib.ID, book.RelPath)
+	if writeSessionEnded(w, err) {
+		return
+	}
 	if err != nil {
 		a.log.Warn("mint cast token failed", "user", u.ID, "editor", body.Editor, "err", err)
 		writeError(w, http.StatusInternalServerError, failed)

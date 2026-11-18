@@ -688,7 +688,7 @@ func TestOIDCFinishExpectedIntent(t *testing.T) {
 			t.Fatalf("%s: the cookie kept: %v", name, resp.Header.Values("Set-Cookie"))
 		}
 		token, _, _ := strings.Cut(done.Value, oidcIntentSep)
-		if u, err := e.auth.ConsumeOIDC(context.Background(), token); err != nil || u.Username != "alice" {
+		if u, _, err := e.auth.ConsumeOIDC(context.Background(), token, ""); err != nil || u.Username != "alice" {
 			t.Fatalf("%s: the refused finish spent the token: %v", name, err)
 		}
 	}
@@ -922,7 +922,7 @@ func TestOIDCFinishOnlySignInTokens(t *testing.T) {
 	e := newOIDCEnv(t, oidcAlice, nil)
 	alice := e.mustUser(t, "alice", "alice@example.org")
 	_, qr, _ := e.redeemCode(t, e.authCode)
-	own, err := e.auth.IssueOwnPairingToken(context.Background(), alice.ID, time.Minute)
+	own, err := e.auth.IssueOwnPairingToken(context.Background(), alice.ID, e.credentialID(t, e.session(t, alice.ID)), time.Minute)
 	if err != nil || qr == "" {
 		t.Fatalf("tokens: %q %v", qr, err)
 	}
@@ -1031,7 +1031,7 @@ func TestOIDCFinishRefusedWhileOff(t *testing.T) {
 		if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired || out["token"] != nil {
 			t.Fatalf("%s: %d %v", name, resp.StatusCode, out)
 		}
-		if u, err := e.auth.ConsumeOIDC(context.Background(), tok); err != nil || u.ID != alice.ID {
+		if u, _, err := e.auth.ConsumeOIDC(context.Background(), tok, ""); err != nil || u.ID != alice.ID {
 			t.Fatalf("%s: the refused finish spent the token: %v", name, err)
 		}
 	}

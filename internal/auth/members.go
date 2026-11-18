@@ -148,7 +148,8 @@ type ShareFunc func(tx *sql.Tx, memberID int64) error
 type NewMember struct {
 	Name, Kind, Access string
 	// SignInHere also signs the member in on the owner's device: a session named
-	// DeviceName recording OnToken (the owner's token) as created_on_token_id.
+	// DeviceName recording OnToken (the owner's token, still signed in:
+	// memberSessionTx) as created_on_token_id.
 	SignInHere bool
 	DeviceName string
 	OnToken    int64
@@ -522,7 +523,7 @@ func (s *Service) CreateMember(ctx context.Context, owner int64, in NewMember, p
 			}
 		}
 		if in.SignInHere {
-			if secret, err = s.memberSessionTx(ctx, tx, id, in.DeviceName, in.OnToken); err != nil {
+			if secret, err = s.memberSessionTx(ctx, tx, owner, id, in.DeviceName, in.OnToken); err != nil {
 				return err
 			}
 			if u, err = getUser(ctx, tx, id); err != nil {
@@ -538,18 +539,20 @@ func (s *Service) CreateMember(ctx context.Context, owner int64, in NewMember, p
 	return m, secret, u, nil
 }
 
-// memberSessionTx issues a session for member, named deviceName and recording
-// onToken (0: none) as the device it was made on.
-func (s *Service) memberSessionTx(ctx context.Context, ex sqlExecer, member int64, deviceName string, onToken int64) (string, error) {
+// memberSessionTx issues a session for owner's member, named deviceName and
+// recording onToken (the owner's token the request authenticated with) as the
+// device it was made on. A device signed out since the request's check, or an
+// owner disabled since, is ErrInvalidToken (signedIn, server#444): the sign-out
+// ended the members' sign-ins made there, and this one would outlive it.
+func (s *Service) memberSessionTx(ctx context.Context, tx *sql.Tx, owner, member int64, deviceName string, onToken int64) (string, error) {
+	if err := signedIn(ctx, tx, owner, onToken); err != nil {
+		return "", err
+	}
 	secret, hash, err := generateToken()
 	if err != nil {
 		return "", err
 	}
-	var on any
-	if onToken > 0 {
-		on = onToken
-	}
-	if _, err := s.insertTokenOn(ctx, ex, member, hash, KindSession, deviceName, nil, nil, "", on, s.ts()); err != nil {
+	if _, err := s.insertTokenOn(ctx, tx, member, hash, KindSession, deviceName, nil, nil, "", onToken, s.ts()); err != nil {
 		return "", err
 	}
 	return secret, nil
@@ -558,7 +561,11 @@ func (s *Service) memberSessionTx(ctx context.Context, ex sqlExecer, member int6
 // MemberSession signs owner's member id in on the owner's device: a session
 // named deviceName recording onToken (the owner's token). It returns the secret
 // and the member's account (for the session envelope). A member the admin
-// disabled is ErrMemberDisabled: no token of theirs would work.
+// disabled is ErrMemberDisabled: no token of theirs would work. The member, the
+// owner's device and the write are read in one transaction, so a member
+// removed, re-kinded or disabled, or an owner's device signed out, since the
+// request's check makes no session (ErrNotMember, ErrMemberDisabled,
+// ErrInvalidToken).
 func (s *Service) MemberSession(ctx context.Context, owner, id int64, deviceName string, onToken int64) (string, *User, error) {
 	var (
 		secret string
@@ -572,7 +579,7 @@ func (s *Service) MemberSession(ctx context.Context, owner, id int64, deviceName
 		if m.Disabled {
 			return ErrMemberDisabled
 		}
-		if secret, err = s.memberSessionTx(ctx, tx, id, deviceName, onToken); err != nil {
+		if secret, err = s.memberSessionTx(ctx, tx, owner, id, deviceName, onToken); err != nil {
 			return err
 		}
 		u, err = getUser(ctx, tx, id)
@@ -586,9 +593,13 @@ func (s *Service) MemberSession(ctx context.Context, owner, id int64, deviceName
 
 // MemberPairing mints a pairing token for owner's member id, for the member's
 // own device: unlinked, single use, valid for ttl (the transport's /auth/pair
-// lifetime). It returns the member with the token. A member the admin disabled
-// is ErrMemberDisabled, as MemberSession.
-func (s *Service) MemberPairing(ctx context.Context, owner, id int64, ttl time.Duration) (Member, string, error) {
+// lifetime), asked from session (the owner's token the request authenticated
+// with). It returns the member with the token. A member the admin disabled is
+// ErrMemberDisabled and a session signed out since the request's check
+// ErrInvalidToken, both read in the write's transaction, as MemberSession: the
+// owner's Sign out everywhere ends every member's open pairing code
+// (endSessions), and one minted after it would outlive it.
+func (s *Service) MemberPairing(ctx context.Context, owner, id, session int64, ttl time.Duration) (Member, string, error) {
 	var (
 		m     Member
 		token string
@@ -600,6 +611,9 @@ func (s *Service) MemberPairing(ctx context.Context, owner, id int64, ttl time.D
 		}
 		if m.Disabled {
 			return ErrMemberDisabled
+		}
+		if err := signedIn(ctx, tx, owner, session); err != nil {
+			return err
 		}
 		token, err = s.issueToken(ctx, tx, id, KindPairing, "", ttl)
 		return err

@@ -80,8 +80,8 @@ func TestListDevicesAndRevoke(t *testing.T) {
 	s, ctx, now := newTestServiceWithClock(t)
 	sam, _ := s.CreateUser(ctx, "sam", "", RoleUser)
 	jo, _ := s.CreateUser(ctx, "jo", "", RoleUser)
-	phone, _ := s.IssueToken(ctx, sam.ID, KindSession, "phone", 0)
-	_, key, _ := s.IssueAPIToken(ctx, sam.ID, 0, "dashboard")
+	phone, phoneID := mustSession(t, s, ctx, sam.ID, "phone")
+	_, key, _ := s.IssueAPIToken(ctx, sam.ID, phoneID, "dashboard")
 	s.IssueToken(ctx, sam.ID, KindPairing, "", 0)                   // not a device
 	s.IssueToken(ctx, sam.ID, KindSession, "expiring", time.Minute) // expires below
 	gone, _ := s.IssueToken(ctx, sam.ID, KindSession, "gone", 0)

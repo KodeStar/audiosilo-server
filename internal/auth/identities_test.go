@@ -565,7 +565,7 @@ func TestUnlinkIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumeOIDC(ctx, done); err != nil {
+	if _, _, err := s.ConsumeOIDC(ctx, done, ""); err != nil {
 		t.Fatal(err)
 	}
 	open, err := s.IssueToken(ctx, sso.ID, KindOIDC, "", time.Minute)
@@ -575,7 +575,7 @@ func TestUnlinkIdentity(t *testing.T) {
 	if got, err := s.UnlinkIdentity(ctx, sso.ID, ids[0].ID); err != nil || got.Subject != "sub-sso" {
 		t.Fatalf("unlink with a password: %+v %v", got, err)
 	}
-	if _, err := s.ConsumeOIDC(ctx, open); !errors.Is(err, ErrInvalidToken) {
+	if _, _, err := s.ConsumeOIDC(ctx, open, ""); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("a sign-in survived its identity's unlink: %v", err)
 	}
 }
@@ -733,7 +733,7 @@ func TestConsumeOIDC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pair, err := s.IssueOwnPairingToken(ctx, alice.ID, time.Minute)
+	pair, err := s.IssueOwnPairingToken(ctx, alice.ID, mustSessionID(t, s, ctx, alice.ID, "laptop"), time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -743,25 +743,25 @@ func TestConsumeOIDC(t *testing.T) {
 	}
 	// Denied: another kind's token, which stays as it was.
 	for name, tok := range map[string]string{"pairing": pair, "session": sess, "unknown": "guess"} {
-		if _, err := s.ConsumeOIDC(ctx, tok); !errors.Is(err, ErrInvalidToken) {
+		if _, _, err := s.ConsumeOIDC(ctx, tok, ""); !errors.Is(err, ErrInvalidToken) {
 			t.Fatalf("%s token finished a sign-in: %v", name, err)
 		}
 	}
-	if u, _, err := s.ConsumePairing(ctx, pair); err != nil || u.ID != alice.ID {
+	if u, err := consumePairing(s, ctx, pair); err != nil || u.ID != alice.ID {
 		t.Fatalf("the refused pairing token was spent: %v", err)
 	}
 	if _, err := s.ResolveToken(ctx, sess, KindSession); err != nil {
 		t.Fatalf("the refused session was ended: %v", err)
 	}
 	// Denied: the sign-in's token at an exchange; it stays unspent too.
-	if _, _, err := s.ConsumePairing(ctx, sso); !errors.Is(err, ErrInvalidToken) {
+	if _, err := consumePairing(s, ctx, sso); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("an exchange took a sign-in's token: %v", err)
 	}
 	// Allowed: once.
-	if u, err := s.ConsumeOIDC(ctx, sso); err != nil || u.ID != alice.ID {
+	if u, _, err := s.ConsumeOIDC(ctx, sso, ""); err != nil || u.ID != alice.ID {
 		t.Fatalf("finish: %v %v", u, err)
 	}
-	if _, err := s.ConsumeOIDC(ctx, sso); !errors.Is(err, ErrInvalidToken) {
+	if _, _, err := s.ConsumeOIDC(ctx, sso, ""); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("a second finish: %v", err)
 	}
 	// A sign-out everywhere ends one in flight.
@@ -772,7 +772,7 @@ func TestConsumeOIDC(t *testing.T) {
 	if _, err := s.SignOutEverywhere(ctx, alice.ID, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumeOIDC(ctx, open); !errors.Is(err, ErrInvalidToken) {
+	if _, _, err := s.ConsumeOIDC(ctx, open, ""); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("a sign-in survived a sign-out everywhere: %v", err)
 	}
 	if _, err := s.PruneSingleUseTokens(ctx); err != nil {
@@ -795,7 +795,7 @@ func TestOIDCSignInMintsToken(t *testing.T) {
 		t.Fatalf("create: %+v %v", res, err)
 	}
 	// Allowed: the token finishes the sign-in, once.
-	if u, err := s.ConsumeOIDC(ctx, res.Token); err != nil || u.ID != res.User.ID {
+	if u, _, err := s.ConsumeOIDC(ctx, res.Token, ""); err != nil || u.ID != res.User.ID {
 		t.Fatalf("finish: %v %v", u, err)
 	}
 	// Denied: a sign-out everywhere once the sign-in decided ends its token.
@@ -806,7 +806,7 @@ func TestOIDCSignInMintsToken(t *testing.T) {
 	if _, err := s.SignOutEverywhere(ctx, res.User.ID, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumeOIDC(ctx, res.Token); !errors.Is(err, ErrInvalidToken) {
+	if _, _, err := s.ConsumeOIDC(ctx, res.Token, ""); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("a sign-in's token survived a sign-out everywhere: %v", err)
 	}
 	// Never a token that wouldn't expire.
@@ -824,6 +824,37 @@ func TestOIDCSignInMintsToken(t *testing.T) {
 // is ended when its account becomes a member (the callback refuses members),
 // a grown-up or a kid, as an open pairing token is. Allowed: an account left
 // independent still finishes.
+// TestConsumeOIDCAsksTheAccountInItsTransaction: the finish asks SSOAllowed
+// again of the account its transaction reads, so an account that became one
+// single sign-on never signs in (here a demo account, which nothing revokes a
+// token for) after the token's read gets no session and the token stays
+// unspent. Allowed: once it is an ordinary account again, the same token
+// finishes.
+func TestConsumeOIDCAsksTheAccountInItsTransaction(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	u := mustUser(t, s, ctx, "turns", "", RoleUser)
+	tok, err := s.IssueToken(ctx, u.ID, KindOIDC, "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDemo := func(demo bool) {
+		if _, err := s.db.ExecContext(ctx, `UPDATE users SET is_demo = ? WHERE id = ?`, demo, u.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.beforeSpend = func() { setDemo(true) }
+	_, session, err := s.ConsumeOIDC(ctx, tok, "phone")
+	s.beforeSpend = nil
+	if !errors.Is(err, ErrInvalidToken) || session != "" {
+		t.Fatalf("a demo account finished a sign-in: %q %v", session, err)
+	}
+	setDemo(false)
+	if got, session, err := s.ConsumeOIDC(ctx, tok, "phone"); err != nil || got.ID != u.ID || session == "" {
+		t.Fatalf("the refused finish spent the token: %v", err)
+	}
+}
+
 func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -837,7 +868,7 @@ func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
 		if err := s.UpdateUser(ctx, u.ID, UserChanges{Household: &HouseholdChange{Owner: adam.ID, Kind: kind, Access: MemberAll}}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.ConsumeOIDC(ctx, tok); !errors.Is(err, ErrInvalidToken) {
+		if _, _, err := s.ConsumeOIDC(ctx, tok, ""); !errors.Is(err, ErrInvalidToken) {
 			t.Fatalf("a %s member finished a sign-in started before joining: %v", kind, err)
 		}
 	}
@@ -849,7 +880,7 @@ func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
 	if err := s.UpdateUser(ctx, stays.ID, UserChanges{Household: &HouseholdChange{}}); err != nil {
 		t.Fatal(err)
 	}
-	if u, err := s.ConsumeOIDC(ctx, tok); err != nil || u.ID != stays.ID {
+	if u, _, err := s.ConsumeOIDC(ctx, tok, ""); err != nil || u.ID != stays.ID {
 		t.Fatalf("an independent account's sign-in was ended: %v", err)
 	}
 	// Denied: a token minted after the account joined (the callback decided
@@ -862,7 +893,7 @@ func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumeOIDC(ctx, tok); !errors.Is(err, ErrInvalidToken) {
+	if _, _, err := s.ConsumeOIDC(ctx, tok, ""); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("a member finished a sign-in minted after joining: %v", err)
 	}
 }

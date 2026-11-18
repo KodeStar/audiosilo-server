@@ -693,7 +693,10 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 // token the callback left in its cookie (auth.KindOIDC, never a pairing
 // token: one planted in that cookie, an invite's QR or a person's own
 // /auth/pair, would sign the browser in as someone else, and is refused and
-// left unspent), consumed once, then the answer POST /auth/exchange gives
+// left unspent), consumed once with the device's session minted in the same
+// transaction (auth.ConsumeOIDC: a 500, uncharged, when the session can't be
+// written, the token left unspent to expire, the cookie cleared as for every
+// other answer, so the person signs in again), then the answer POST /auth/exchange gives
 // (the session envelope; the new device reported as there), with "intent":
 // the tag the flow carried (handleOIDCStart), only when it did. A tag rides
 // only with the token it was set beside, so it is echoed once. Optional body
@@ -753,17 +756,18 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusForbidden, codeOIDCIntentMismatch, "this single sign-on isn't the one this page started: sign in again")
 		return
 	}
-	u, err := a.auth.ConsumeOIDC(r.Context(), token)
-	if err != nil {
+	u, session, err := a.auth.ConsumeOIDC(r.Context(), token, req.DeviceName)
+	switch {
+	case auth.Refused(err):
 		a.oidcLimiter.Fail(ip)
 		writeErrorCode(w, http.StatusUnauthorized, codeOIDCSignInExpired, "the single sign-on has expired or was used: sign in again")
 		return
-	}
-	a.oidcLimiter.Reset(ip)
-	out := a.pairedSession(w, r, u.ID, req.DeviceName, false)
-	if out == nil {
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "could not issue session")
 		return
 	}
+	a.oidcLimiter.Reset(ip)
+	out := a.pairedSession(r, u, session, req.DeviceName, false)
 	if intent != "" {
 		out["intent"] = intent
 	}

@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -583,5 +585,141 @@ func TestCastTokenNotABook(t *testing.T) {
 	status, out = mint(books, cradleBook)
 	if status != http.StatusCreated || strings.Contains(out, `"code"`) || !strings.Contains(out, `"token"`) {
 		t.Fatalf("book %d %s", status, out)
+	}
+}
+
+// Security-critical (server#444): a cast token, or the chapter editor's, asked
+// from a session signed out after the middleware passed it
+// (signOutBehindTheCache) is refused inside the mint's write: 401, as the
+// middleware answers an ended session, and no token is made. Allowed: the same
+// mint from a session still signed in.
+func TestCastMintFromAnEndedSessionIs401(t *testing.T) {
+	t.Parallel()
+	c := newCastEnv(t)
+	ctx := context.Background()
+	casts := func() (n int) {
+		t.Helper()
+		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE kind = ?`, auth.KindCast).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	for _, editor := range []bool{false, true} {
+		ended, err := c.auth.IssueToken(ctx, c.sam, auth.KindSession, "tablet", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signOutBehindTheCache(t, c.testEnv, ended)
+		body, _ := json.Marshal(map[string]any{"library_id": c.lib, "path": cradleBook, "editor": editor})
+		before := casts()
+		if resp, b := c.do(t, "POST", "/api/v1/cast/token", ended, string(body)); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("mint (editor %v) from an ended session = %d %s, want 401", editor, resp.StatusCode, b)
+		}
+		if n := casts(); n != before {
+			t.Errorf("mint (editor %v) from an ended session made %d tokens", editor, n-before)
+		}
+		if resp, b := c.do(t, "POST", "/api/v1/cast/token", c.samTok, string(body)); resp.StatusCode != http.StatusCreated {
+			t.Errorf("mint (editor %v) from a signed-in session = %d %s, want 201", editor, resp.StatusCode, b)
+		}
+	}
+}
+
+// server#446: a response a cast token authenticated keeps the token in use
+// while it runs and as it ends (keepCastInUse), so a receiver reading one long
+// file never looks idle to the cap, nor lets its expiry run out. Allowed: the
+// cast token's last_seen moves during a long response and again at its end.
+// Denied: a session's long response is touched only as it starts.
+func TestLongResponseKeepsTheCastTokenInUse(t *testing.T) {
+	t.Parallel()
+	c := newCastEnv(t)
+	c.api.castKeepEvery = 20 * time.Millisecond
+	ctx := context.Background()
+	cast := c.castToken(t, cradleBook)
+	lastSeen := func(kind string) string {
+		t.Helper()
+		var seen string
+		if err := c.db.QueryRowContext(ctx, `SELECT COALESCE(last_seen, '') FROM tokens
+			WHERE kind = ? AND user_id = ? ORDER BY id DESC LIMIT 1`, kind, c.sam).Scan(&seen); err != nil {
+			t.Fatal(err)
+		}
+		return seen
+	}
+	long := func(tok, kind string) (start, later, end string) {
+		t.Helper()
+		h := c.api.mediaAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			start = lastSeen(kind)
+			// A few intervals, or as long as a loaded writer takes to land a
+			// keep (a cast token's last_seen moving ends the wait early).
+			for deadline := time.Now().Add(10 * time.Second); ; {
+				time.Sleep(5 * c.api.castKeepEvery)
+				if later = lastSeen(kind); later != start || kind != auth.KindCast || time.Now().After(deadline) {
+					break
+				}
+			}
+			// The keep at the end stamps a later millisecond than the one read
+			// above: this wait is in step with the keeps, so the two would
+			// otherwise tie about one run in five.
+			time.Sleep(c.api.castKeepEvery / 4)
+			w.WriteHeader(http.StatusOK)
+		}), bookMediaKinds)
+		req := httptest.NewRequest("GET", mediaURL(c.lib, "stream", cradlePart, tok), nil)
+		req.SetPathValue("id", strconv.FormatInt(c.lib, 10))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("long %s response = %d %s", kind, rec.Code, rec.Body)
+		}
+		return start, later, lastSeen(kind)
+	}
+	start, later, end := long(cast, auth.KindCast)
+	if start == "" || later <= start || end <= later {
+		t.Fatalf("the cast token's last_seen at the start, during and at the end = %q %q %q, want each later", start, later, end)
+	}
+	start, later, end = long(c.samTok, auth.KindSession)
+	if start == "" || later != start || end != start {
+		t.Fatalf("a session's last_seen at the start, during and at the end = %q %q %q, want the start's alone", start, later, end)
+	}
+}
+
+// server#446: however many responses one cast token authenticates at once, one
+// run keeps it in use (keepCastInUse), so concurrent streams never multiply the
+// writes; it ends with the last of them, and another token's is its own.
+func TestCastKeepIsOnePerToken(t *testing.T) {
+	t.Parallel()
+	a := &API{castKeepEvery: time.Hour}
+	runs := func() (n int, refs map[int64]int) {
+		a.castKeepMu.Lock()
+		defer a.castKeepMu.Unlock()
+		refs = map[int64]int{}
+		for id, r := range a.castKeepRuns {
+			refs[id] = r.refs
+		}
+		return len(a.castKeepRuns), refs
+	}
+	first, second, other := a.keepCastInUse(7), a.keepCastInUse(7), a.keepCastInUse(8)
+	if n, refs := runs(); n != 2 || refs[7] != 2 || refs[8] != 1 {
+		t.Fatalf("runs = %d %v, want one per token, token 7's held by both its responses", n, refs)
+	}
+	first()
+	if n, refs := runs(); n != 2 || refs[7] != 1 {
+		t.Fatalf("after one of token 7's responses ended: runs = %d %v, want its run kept for the other", n, refs)
+	}
+	second()
+	other()
+	if n, _ := runs(); n != 0 {
+		t.Fatalf("after every response ended: %d runs left", n)
+	}
+	// An API built without New has no pace of its own: it keeps at auth's, and
+	// its run starts and ends like any other (a ticker of 0 would panic).
+	bare := &API{}
+	stop := bare.keepCastInUse(7)
+	bare.castKeepMu.Lock()
+	run := bare.castKeepRuns[7]
+	bare.castKeepMu.Unlock()
+	stop()
+	select {
+	case <-run.finished:
+	default:
+		t.Fatal("a bare API's keep had not finished when its response ended")
 	}
 }

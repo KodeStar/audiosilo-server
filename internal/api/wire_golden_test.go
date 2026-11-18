@@ -408,7 +408,7 @@ func wireCases(t *testing.T) []wireCase {
 		{name: "auth-redeem", route: "POST /api/v1/auth/redeem", body: call(m.testEnv, "POST", "/api/v1/auth/redeem", "",
 			`{"code":"`+m.authCode+`"}`)},
 		{name: "auth-exchange", route: "POST /api/v1/auth/exchange (a household member's pairing)", body: func(t *testing.T) string {
-			_, pairing, err := m.auth.MemberPairing(context.Background(), m.adminID, m.member, time.Minute)
+			_, pairing, err := m.auth.MemberPairing(context.Background(), m.adminID, m.member, m.credentialID(t, m.adminTok), time.Minute)
 			if err != nil {
 				t.Fatal(err)
 			}
