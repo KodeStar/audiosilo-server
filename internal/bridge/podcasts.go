@@ -427,16 +427,15 @@ const offlineRequestMessage = "The Bridge went offline before it took up the fol
 // Bridge runs podcast.subscribe (its heartbeat lapsed, it was unpaired, or it
 // stopped offering the kind), so a request never waits on a Bridge that left:
 // an OPML import's next wave then answers its rows unavailable instead of
-// waiting on them (server#179). A Bridge has OnlineWindow from the Service's
-// start to call in, so a server restart fails none. Run by the player's poll of
-// its requests (SubscribeRequests) and the scheduler's sweep (EndedPodcasts).
+// waiting on them (server#179). The silence must have lasted OnlineWindow since
+// a sweep first saw it (offlineLasted), so a server restart, a host waking from
+// sleep or a wall clock that jumped fails none before the Bridge's next beat.
+// Run by the player's poll of its requests (SubscribeRequests) and the
+// scheduler's sweep (EndedPodcasts).
 func (s *Service) expireOfflineSubscribes(ctx context.Context) error {
-	if s.now().Sub(s.started) < OnlineWindow {
-		return nil
-	}
 	offline := func(h *Heartbeat) bool { return !h.Online(s.now()) || !h.Offers(KindPodcastSubscribe) }
 	h, err := s.LastHeartbeat(ctx)
-	if err != nil || !offline(h) {
+	if err != nil || !s.offlineLasted(offline(h)) {
 		return err
 	}
 	// The reader pool first (idx_bridge_jobs_queue): the writer only when
@@ -469,6 +468,23 @@ func (s *Service) expireOfflineSubscribes(ctx context.Context) error {
 		s.report(ctx, &j, StateQueued, "")
 	}
 	return nil
+}
+
+// offlineLasted records one sighting of the Bridge (offline or not) and reports
+// whether it has been offline at every sighting for OnlineWindow, counted on the
+// Service's clock from the first.
+func (s *Service) offlineLasted(offline bool) bool {
+	s.offlineMu.Lock()
+	defer s.offlineMu.Unlock()
+	if !offline {
+		s.offlineSince = time.Time{}
+		return false
+	}
+	now := s.now()
+	if s.offlineSince.IsZero() {
+		s.offlineSince = now
+	}
+	return now.Sub(s.offlineSince) >= OnlineWindow
 }
 
 // lostPrivateRequests is the queued private subscriptions whose feed URL this

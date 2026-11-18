@@ -3380,8 +3380,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   an `invalid` row), an adopt-only row's included: its params are checked before it looks for an open
   request (server#219). A queued follow request fails `request_expired` once no online Bridge runs
   `podcast.subscribe` (`expireOfflineSubscribes`, on the player's request poll and the scheduler's
-  sweep; a Bridge gets `OnlineWindow` after the server starts), so an OPML import's waves never wait
-  on a Bridge that left: the next wave answers `unavailable` (server#179). Search, providers, the
+  sweep, when the silence has lasted `OnlineWindow` since a sweep first saw it: a server restart, a
+  host waking from sleep or a jumped clock fails none before the next beat), so an OPML import's
+  waves never wait on a Bridge that left: the next wave answers `unavailable` (server#179). Search, providers, the
   artwork and the import are module User routes plus the client gate (`callerOf(ctx).Podcasts`, 403
   `no_library_access`); the artwork takes the media auth (session/API `?token=`, the media rate limit);
   `GET /podcasts/opml/export` needs only `requireAuth` + `notDemo` + the client gate, module off or

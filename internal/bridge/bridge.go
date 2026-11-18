@@ -62,10 +62,13 @@ type Service struct {
 	hbRead time.Time
 	hbGen  uint64
 
-	// started is when the Service was made (its clock): a Bridge gets
-	// OnlineWindow from then to call in before its silence counts as offline
-	// (expireOfflineSubscribes), so a server restart fails no follow request.
-	started time.Time
+	// offlineSince is when expireOfflineSubscribes first saw no online Bridge
+	// for podcast.subscribe (its clock), zero while it last saw one: the
+	// silence must last OnlineWindow on this clock before a request fails, so
+	// a server restart, a host waking from sleep or a wall clock that jumped
+	// fails none before the Bridge's next heartbeat.
+	offlineMu    sync.Mutex
+	offlineSince time.Time
 }
 
 // New returns a Service. now may be nil to use time.Now.
@@ -73,7 +76,7 @@ func New(db *store.DB, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{db: db, now: now, wake: newSignal(), ended: newSignal(), privateURLs: map[int64]string{}, started: now()}
+	return &Service{db: db, now: now, wake: newSignal(), ended: newSignal(), privateURLs: map[int64]string{}}
 }
 
 // ts is now as the bridge tables store times: RFC3339 UTC, whole seconds, so

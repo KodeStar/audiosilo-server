@@ -515,8 +515,8 @@ func TestSubscribeAdoptOnlyChecksParamsFirst(t *testing.T) {
 // online Bridge runs podcast.subscribe, the queued requests fail as
 // request_expired when the player reads them (or the scheduler sweeps), so an
 // OPML import's next wave answers unavailable. A held one is left to its
-// lease; an online Bridge, and a Bridge given OnlineWindow after the server
-// started, keep every request.
+// lease; an online Bridge keeps every request, and a silence first seen less
+// than OnlineWindow ago (a server just started, a clock that jumped) fails none.
 func TestOfflineBridgeExpiresQueuedSubscribes(t *testing.T) {
 	q := podcastQueue(t)
 	ctx := context.Background()
@@ -547,18 +547,39 @@ func TestOfflineBridgeExpiresQueuedSubscribes(t *testing.T) {
 	if _, err := q.SubscribeRequests(ctx, q.admin); err != nil || stateOf(waiting.ID) != StateQueued {
 		t.Fatalf("online Bridge: %s %v", stateOf(waiting.ID), err)
 	}
+	// The held request's Bridge reports within its lease (a requeued one is
+	// queued again, and fails with the rest).
+	extendHeld := func() {
+		t.Helper()
+		if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET lease_until=? WHERE id=?`, at(q.now.Add(Lease)), held.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Denied: a clock that jumped (or a host that slept) past the Bridge's
+	// heartbeat fails nothing before its next beat.
+	q.advance(time.Hour)
+	extendHeld()
+	if _, err := q.SubscribeRequests(ctx, q.admin); err != nil || stateOf(waiting.ID) != StateQueued {
+		t.Fatalf("clock jumped: %s %v", stateOf(waiting.ID), err)
+	}
+	q.beatLibrary(t, true, true, KindPodcastSubscribe)
+	if _, err := q.SubscribeRequests(ctx, q.admin); err != nil || stateOf(waiting.ID) != StateQueued {
+		t.Fatalf("beat after the jump: %s %v", stateOf(waiting.ID), err)
+	}
 	// Denied: a server that just started gives the Bridge OnlineWindow to call in.
 	q.advance(OnlineWindow + time.Second)
+	extendHeld()
 	restarted := New(q.db, func() time.Time { return *q.now })
-	// The held request's Bridge reported within its lease (a requeued one is
-	// queued again, and fails with the rest).
-	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET lease_until=? WHERE id=?`, at(q.now.Add(Lease)), held.ID); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := restarted.SubscribeRequests(ctx, q.admin); err != nil || stateOf(waiting.ID) != StateQueued {
 		t.Fatalf("just started: %s %v", stateOf(waiting.ID), err)
 	}
-	// Allowed: the heartbeat lapsed on a server up for longer.
+	// Denied: the first sweep to see the heartbeat lapsed only notes it.
+	if _, err := q.SubscribeRequests(ctx, q.admin); err != nil || stateOf(waiting.ID) != StateQueued {
+		t.Fatalf("first seen offline: %s %v", stateOf(waiting.ID), err)
+	}
+	// Allowed: offline at every sighting for OnlineWindow.
+	q.advance(OnlineWindow)
+	extendHeld()
 	q.OnEnded = func(_ context.Context, j Job) {
 		if j.State != StateFailed {
 			t.Errorf("ended %d as %s", j.ID, j.State)
@@ -598,6 +619,11 @@ func TestOfflineBridgeExpiresQueuedSubscribes(t *testing.T) {
 	if _, err := q.EndedPodcasts(ctx); err != nil || stateOf(again.ID) != StateQueued {
 		t.Fatalf("back online: %s %v", stateOf(again.ID), err)
 	}
+	q.beatLibrary(t, true, true, KindPodcastPoll)
+	if _, err := q.EndedPodcasts(ctx); err != nil || stateOf(again.ID) != StateQueued {
+		t.Fatalf("first seen without the kind: %s %v", stateOf(again.ID), err)
+	}
+	q.advance(OnlineWindow)
 	q.beatLibrary(t, true, true, KindPodcastPoll)
 	if _, err := q.EndedPodcasts(ctx); err != nil || stateOf(again.ID) != StateFailed {
 		t.Fatalf("no subscribe kind: %s %v", stateOf(again.ID), err)
