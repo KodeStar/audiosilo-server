@@ -138,7 +138,9 @@ type FetchError struct {
 	Message string `json:"message"`
 }
 
-// fetchMessages is our own copy for every safe fetch error code.
+// fetchMessages is our own copy for every safe fetch error code. The console's
+// job list words a failed fetch with the same sentences (bridge.podcastCode.<code>
+// in admin-ui's en.json, PODCAST_FETCH_CODES): change both together.
 var fetchMessages = map[string]string{
 	"dns":                  "The episode host could not be resolved.",
 	"network":              "The episode could not be reached.",

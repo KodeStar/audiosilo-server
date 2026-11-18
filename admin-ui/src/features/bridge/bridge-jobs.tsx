@@ -30,6 +30,7 @@ import {
 } from './bridge-model';
 import { isBookKind, isServerCancelReason } from './generate-model';
 import { CancelledStatus, GenerateStatus } from './generate-status';
+import { podcastJobReason } from './podcast-reason';
 import { useBridgeJobs } from './use-bridge';
 
 /**
@@ -166,8 +167,9 @@ function JobRow({
   const show = podcastSubject(job);
   const project = librivoxProject(job);
   const projectTitle = librivoxTitle(job);
-  // An Audible or LibriVox job's known failure code, worded (the Bridge's own text otherwise).
-  const reason = audibleJobReason(job) ?? fetchReason(job);
+  // An Audible, LibriVox or podcast job's known failure code, worded (the Bridge's own text otherwise).
+  const keyed = audibleJobReason(job) ?? fetchReason(job);
+  const reason = podcastJobReason(job) ?? (keyed ? { key: keyed } : undefined);
   const details = hasContent(job.result) || hasContent(job.params);
 
   const meta = [
@@ -307,7 +309,7 @@ function JobRow({
         <CancelledStatus job={job} />
       ) : job.error ? (
         <p className="text-[12.5px] text-destructive [overflow-wrap:anywhere]">
-          {reason ? t(reason) : job.error}
+          {reason ? t(reason.key, reason.values) : job.error}
         </p>
       ) : null}
       {summary ? <ResultLine summary={summary} lang={lang} /> : null}

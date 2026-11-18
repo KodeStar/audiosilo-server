@@ -3982,7 +3982,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   set by `podcast.SchedulerTick`; a Bridge reads the params leniently): a follower's Check now counts
   nothing toward the run, even once its requester is deleted (the console's job list then says "Asked by a deleted
   account", not "Scheduled by the server": `serverScheduled` reads a poll by that mark, else the scheduler's
-  priority for one queued before it), and leaves the scheduled polls' backoff as it was (`uncountedCheck`; a later
+  priority for one queued before it; a failed fetch's or poll's known code reads in the server's words there,
+  `podcastJobReason` mirroring `bridge.fetchMessages` and the notice's feed sentences, the Bridge's text in
+  Details), and leaves the scheduled polls' backoff as it was (`uncountedCheck`; a later
   Retry-After still holds them off), server#403, though its `gone` is still announced at once; a successful poll resets the run and, after an
   announcement, raises recovered once; a job for a replaced show changes nothing). Their
   data are the library and its id, `show_id`, `show` (the title, else its folder), `show_path`, `count`
