@@ -794,35 +794,36 @@ func (c *Catalog) SplitFolders(ctx context.Context, libraryID int64, folders []s
 // EXISTS: joined by an OR in one, SQLite (no ANALYZE statistics here) seeks on
 // library_id alone and reads the library's books for every folder. The folders
 // are bound as they are, not as JSON, which would turn a name that isn't valid
-// UTF-8 into another (see pathsJSONFilterSQL).
+// UTF-8 into another (see pathsJSONFilterSQL). They are read foldersChunk a
+// query, so any number of them (the re-key's every candidate's) stays under
+// SQLite's limit on bound variables.
 func (c *Catalog) FoldersHoldingBooks(ctx context.Context, libraryID int64, folders []string) (map[string]bool, error) {
 	out := map[string]bool{}
-	if len(folders) == 0 {
-		return out, nil
-	}
-	args := make([]any, 0, len(folders)+2)
-	for _, f := range folders {
-		args = append(args, f)
-	}
-	args = append(args, libraryID, libraryID)
-	rows, err := c.db.QueryContext(ctx, `WITH f(path) AS (VALUES `+strings.Repeat("(?),", len(folders)-1)+`(?))
-		SELECT DISTINCT path FROM f
-		 WHERE EXISTS (SELECT 1 FROM books b WHERE b.library_id = ? AND b.rel_path = f.path)
-		    OR EXISTS (SELECT 1 FROM books b WHERE b.library_id = ?
-		                 AND b.rel_path > f.path || '/' AND b.rel_path < f.path || '0')`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
+	for start := 0; start < len(folders); start += foldersChunk {
+		part := folders[start:min(start+foldersChunk, len(folders))]
+		args := make([]any, 0, len(part)+2)
+		for _, f := range part {
+			args = append(args, f)
+		}
+		args = append(args, libraryID, libraryID)
+		found, err := queryRows(ctx, c.db, func(r *sql.Rows, p *string) error { return r.Scan(p) },
+			`WITH f(path) AS (VALUES `+strings.Repeat("(?),", len(part)-1)+`(?))
+			SELECT DISTINCT path FROM f
+			 WHERE EXISTS (SELECT 1 FROM books b WHERE b.library_id = ? AND b.rel_path = f.path)
+			    OR EXISTS (SELECT 1 FROM books b WHERE b.library_id = ?
+			                 AND b.rel_path > f.path || '/' AND b.rel_path < f.path || '0')`, args...)
+		if err != nil {
 			return nil, err
 		}
-		out[p] = true
+		for _, p := range found {
+			out[p] = true
+		}
 	}
-	return out, rows.Err()
+	return out, nil
 }
+
+// foldersChunk is how many folders one of FoldersHoldingBooks' queries binds.
+const foldersChunk = 500
 
 // DeleteBooksNotIn removes books in a library whose rel_path is not in keep and
 // returns their paths. Used by the scanner to prune vanished files (the paths go
