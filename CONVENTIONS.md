@@ -974,7 +974,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **Path-addressed API**: content endpoints are `GET /libraries/{id}/{item,
   chapters,cover,stream}?path=` and `{GET,PUT} .../progress?path=` etc. The path
   is the handle (a query param, to avoid encoded-slash issues). Every one resolved through
-  `pathInScope` (`authorizedPath`/`authorizedScope`/`scopedPath*`; not the browse, the list-remove, the podcast or
+  `pathInScope` (`authorizedPath`/`authorizedScope`/`scopedPath*`, which take it through `spelledPathInScope`: see
+  Path spelling; not the browse, the list-remove, the podcast or
   the admin folder-override route, which takes its path on its own) checks it first: over `catalog.MaxPathBytes` (4096 bytes as sent) is 400 `path is too
   long`, before it is cleaned, looked up or stored (server#289). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
@@ -1098,6 +1099,34 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `catalog.Readalong`) is on `GET /libraries/{id}/item` and the console's book detail only, never a
   list row, omitted with no ebook or no valid map (`api.readalongOf`, from the indexed head; a failure
   is logged and reads as none; its digest checked the same way, so an ebook edit shows before any scan).
+- **Path spelling (server#210, `catalog/pathspelling.go`, `0083`)**: a name with an accent has two
+  Unicode spellings, NFC (precomposed) and NFD (decomposed); a disk keeps either and a hand-typed or
+  shared link may carry the other. The index keeps every path as the disk spells it and compares by
+  NFC: `books.path_key` is `''` when `rel_path` is NFC (every ASCII path), else `NFC(rel_path)`, NULL
+  until keyed. Both book inserts write it (the scan's upsert, the podcast episode insert); `KeyPaths`
+  at the start (after `KeySeries`, a failure stops the start) keys every NULL row (a book an older
+  server inserted after a rollback) and every row when `pathKeysVersion` (`"1/" + norm.Version`)
+  differs from `server_state('path_keys')`. `Catalog.Spelling(lib, p)` is the index's spelling of a
+  cleaned path, from the index alone: a path with no other spelling (`normSensitive`: NFC and NFD
+  both) is `p` with no query; then a book at `p` exactly; the one book whose NFC path is `NFC(p)`
+  (`rel_path` or `path_key`, the partial index); a file of, or a folder inside (a disc folder), the
+  innermost folder book above it, its files compared by NFC, a folder cut to `p`'s depth; a folder
+  holding books, each name as given, NFC or NFD (at most `maxFolderSpellings` combinations). Two
+  indexed paths that both read as `p` (an NFC and an NFD folder side by side on a byte-exact disk)
+  leave `p` as given: it never guesses. Never the disk, never an on-demand index. Applied by
+  `scopedPath` / `scopedPathIn` (`spelledPathInScope`: cap, library, clean, spelling, scope, hidden),
+  so every route on them (item, chapters, cover, stream, meta, next, ebook, readalong,
+  reading-progress, progress, sync events, bookmarks, notes, history, favourites, ratings, list adds,
+  `POST /cast/token`) reads and stores the index's spelling; by `listRemoveRef`; and by `/fs`
+  (`handleBrowseFS` lists the folder in the index's spelling, so the listing's paths match the books
+  `annotateWithBooks` finds). `spelledIn` keeps the index's spelling only when the caller's scope
+  (for `/fs`, `VisibleInBrowse`) allows it, else the path as given: a rule naming another spelling
+  byte for byte never learns, from a 403 where a missing path reads 404, that an indexed path it
+  can't reach is there. A failed lookup is a 500 (a timed-out one a 503), never the spelling given.
+  Unchanged on purpose: `CleanRelPath` and share rules stay byte-exact; the on-demand index takes
+  only the on-disk spelling (`dirPresent`), so another spelling of an unindexed book stays 404; the
+  admin's folder-override route and the Bridge's routes (`pathInScope` itself, the Audible sync's
+  `userPathResolver`) take the index's paths and match exactly.
 - **Recognized audio** is `metadata.AudioExtensions` (`IsAudio`), including `.mp4`
   (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`. `.mka` (Matroska audio, #161)
   has its chapters read by ffprobe; stored, it is `audio/x-matroska` (also sniffed from its EBML

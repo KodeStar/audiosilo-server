@@ -351,7 +351,9 @@ books by it; see Community metadata lookup (Other recordings) in CONVENTIONS.md)
 `progress.stay_version` (the version a sync `stay` span wrote: while set, another device's span on a base below it
 never moves the place; cleared by every other writer) and `progress.edit_version` (the version of the row's last
 explicit write that is not listening: a PATCH, an import's apply or undo, a move or join, a sync finish or unfinish;
-a Stay on a base below it is a plain jump); see Listening sync (Stay wins) in CONVENTIONS.md.
+a Stay on a base below it is a plain jump); see Listening sync (Stay wins) in CONVENTIONS.md. `0083` (server#210) adds
+`books.path_key` (the book's path in NFC, `''` when already NFC, NULL until `catalog.KeyPaths` keys it at the start;
+derived, never on the wire) and its two partial indexes; see Path spelling in CONVENTIONS.md.
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -396,6 +398,7 @@ keep this index in step (one line per topic).
   - Content generation (`store/userstate.go`: user-state writes, the per-cache audit)
   - Path safety
   - Path-addressed API
+  - Path spelling (server#210, `catalog/pathspelling.go`, `0083`: `books.path_key`, `KeyPaths`, `Spelling`, where it is applied, what stays exact)
   - Recognized audio
   - In-process probe (server#261, `metadata/fastprobe*.go`: ffprobe's answer read in Go, ffprobe the fallback)
   - Transcoding

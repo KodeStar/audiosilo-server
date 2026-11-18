@@ -143,6 +143,15 @@ func Run(ctx context.Context, opts Options) error {
 	} else if n > 0 {
 		log.Info("keyed the books' series", "books", n)
 	}
+	// Every book's path in NFC (books.path_key, server#210), keyed for the books
+	// that have none and again when the Unicode tables change, before a request
+	// in another spelling of a path is answered (catalog.Spelling reads only the
+	// keys). A failure stops the start, as KeySeries' does.
+	if n, err := cat.KeyPaths(ctx); err != nil {
+		return fmt.Errorf("keying the books' paths: %w", err)
+	} else if n > 0 {
+		log.Info("keyed the books' paths", "books", n)
+	}
 	// The search index's rows written before Chinese and Japanese text was set
 	// apart a character a token (or with older Unicode tables) are rewritten
 	// once, so a search finds a word inside such a title.

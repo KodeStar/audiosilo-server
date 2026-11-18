@@ -230,7 +230,7 @@ func (a *API) scopedPath(r *http.Request, libraryID int64, rawPath string) (*cat
 	if status != 0 {
 		return nil, "", scope, status, msg
 	}
-	return pathInScope(lib, scope, rawPath)
+	return a.spelledPathInScope(r.Context(), lib, scope, rawPath)
 }
 
 // scopedPathIn is scopedPath with the caller's scopes already loaded
@@ -251,7 +251,7 @@ func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID in
 	if status != 0 {
 		return nil, "", scope, status, msg
 	}
-	return pathInScope(lib, scope, rawPath)
+	return a.spelledPathInScope(r.Context(), lib, scope, rawPath)
 }
 
 // msgPathTooLong is the 400 for a path over catalog.MaxPathBytes, on every
@@ -273,20 +273,74 @@ func pathTooLong(w http.ResponseWriter, rawPath string) bool {
 }
 
 // pathInScope cleans rawPath and checks scope allows it (400 empty or over
-// catalog.MaxPathBytes, 403 outside, 404 through a hidden folder).
+// catalog.MaxPathBytes, 403 outside, 404 through a hidden folder), taking the
+// path in the spelling given: the Bridge's routes, which send the index's own
+// paths. A player's route takes it through spelledPathInScope.
 func pathInScope(lib *catalog.Library, scope catalog.Scope, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
+	rel, status, msg := cleanedPath(rawPath)
+	if status != 0 {
+		return nil, "", scope, status, msg
+	}
+	return relInScope(lib, scope, rel)
+}
+
+// spelledPathInScope is pathInScope with the cleaned path in the index's
+// spelling (spelledIn: another Unicode spelling of an indexed path the caller's
+// scope allows reads as the index's), before the scope and hidden checks, so
+// those judge the path that is read. A failed lookup is a 500 (a timed-out one
+// a 503), never the path as given.
+func (a *API) spelledPathInScope(ctx context.Context, lib *catalog.Library, scope catalog.Scope, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
+	rel, status, msg := cleanedPath(rawPath)
+	if status != 0 {
+		return nil, "", scope, status, msg
+	}
+	rel, err := a.spelledIn(ctx, lib.ID, scope.Allows, rel)
+	if err != nil {
+		a.log.Warn("resolve path spelling failed", "library", lib.ID, "err", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", scope, http.StatusServiceUnavailable, "request timed out"
+		}
+		return nil, "", scope, http.StatusInternalServerError, "could not resolve the path"
+	}
+	return relInScope(lib, scope, rel)
+}
+
+// spelledIn is rel in the index's spelling (catalog.Spelling) when allow (the
+// caller's scope) allows that spelling, else rel as given: a spelling outside
+// the caller's access is never taken, so its answer (a 403 where rel would read
+// as missing) can't tell them an indexed path they can't reach is there.
+func (a *API) spelledIn(ctx context.Context, libraryID int64, allow func(string) bool, rel string) (string, error) {
+	spelled, err := a.cat.Spelling(ctx, libraryID, rel)
+	if err != nil {
+		return "", err
+	}
+	if spelled != rel && allow != nil && !allow(spelled) {
+		return rel, nil
+	}
+	return spelled, nil
+}
+
+// cleanedPath is rawPath cleaned (catalog.CleanRelPath), or the 400 for one over
+// catalog.MaxPathBytes or one that cleans away to nothing.
+func cleanedPath(rawPath string) (string, int, string) {
 	// A path no file can have is refused before it is cleaned, looked up (a
 	// book's ancestors are walked) or stored (server#289).
 	if len(rawPath) > catalog.MaxPathBytes {
-		return nil, "", scope, http.StatusBadRequest, msgPathTooLong
+		return "", http.StatusBadRequest, msgPathTooLong
 	}
 	// Normalize before the scope check so ".." can't smuggle an out-of-scope path
 	// past a subtree grant (see catalog.CleanRelPath). An input that cleans away
 	// to nothing ("", ".", "/", "Author/..") addresses no content.
 	rel := catalog.CleanRelPath(rawPath)
 	if rel == "" {
-		return nil, "", scope, http.StatusBadRequest, "path is required"
+		return "", http.StatusBadRequest, "path is required"
 	}
+	return rel, 0, ""
+}
+
+// relInScope checks scope allows rel, a cleaned path (403 outside, 404 through
+// a hidden folder).
+func relInScope(lib *catalog.Library, scope catalog.Scope, rel string) (*catalog.Library, string, catalog.Scope, int, string) {
 	if !scope.Allows(rel) {
 		return nil, "", scope, http.StatusForbidden, msgNoPathAccess
 	}
@@ -381,8 +435,22 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	if !scope.AllowAll {
 		allow = scope.VisibleInBrowse
 	}
+	// A folder asked for in another Unicode spelling is listed in the index's
+	// (spelledIn), so the listing's path and its entries' are the paths the
+	// index, and so annotateWithBooks, has.
+	dir := r.URL.Query().Get("path")
+	if rel := catalog.CleanRelPath(dir); rel != "" {
+		spelled, err := a.spelledIn(r.Context(), lib.ID, allow, rel)
+		if err != nil {
+			a.writeCatalogError(w, err, "resolve path spelling failed", "Could not list the folder.", "library", lib.ID)
+			return
+		}
+		if spelled != rel {
+			dir = spelled
+		}
+	}
 	ignore := library.ParseIgnore(lib.IgnorePatterns)
-	listing, err := library.BrowseFS(lib.Root, r.URL.Query().Get("path"),
+	listing, err := library.BrowseFS(lib.Root, dir,
 		queryInt(r, "offset", 0), queryInt(r, "limit", 200), allow, ignore)
 	if errors.Is(err, library.ErrOutsideRoot) {
 		writeError(w, http.StatusBadRequest, "invalid path")

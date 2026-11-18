@@ -160,8 +160,8 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     released, released_checked, genres_checked, tag_asin, tag_isbn, tag_language, hints_checked,
 		     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
 		     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at,
-		     file_order, file_order_indexed_at, ebook_path, ebook_sig, ebook_size, duration_rev, duration_rev_indexed_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,1,?,?,'','',?,?,?,?,?,?,?,?,?,?,CASE WHEN ? THEN 0 ELSE `+durationRev+` END,?)
+		     file_order, file_order_indexed_at, ebook_path, ebook_sig, ebook_size, duration_rev, duration_rev_indexed_at, path_key)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,1,?,?,'','',?,?,?,?,?,?,?,?,?,?,CASE WHEN ? THEN 0 ELSE `+durationRev+` END,?,?)
 		 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 		     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 		     series=excluded.series, series_index=excluded.series_index,
@@ -195,7 +195,10 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     ebook_path=CASE WHEN ? THEN books.ebook_path ELSE excluded.ebook_path END,
 		     ebook_sig=CASE WHEN ? THEN books.ebook_sig ELSE excluded.ebook_sig END,
 		     ebook_size=CASE WHEN ? THEN books.ebook_size ELSE excluded.ebook_size END,
-		     duration_rev=excluded.duration_rev, duration_rev_indexed_at=excluded.duration_rev_indexed_at
+		     duration_rev=excluded.duration_rev, duration_rev_indexed_at=excluded.duration_rev_indexed_at,
+		     -- rel_path never changes here: this only keys a row an older server
+		     -- inserted after a rollback (KeyPaths).
+		     path_key=excluded.path_key
 		     -- added_at intentionally not updated: it records first-seen, so a
 		     -- re-index of an existing book keeps its original added date.
 		 RETURNING id`,
@@ -206,7 +209,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 		b.Released, b.TagASIN, b.TagISBN, b.TagLanguage, string(scannedChapters), chaptersHash(string(scannedChapters)),
 		absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
-		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.LengthUncounted, indexedAt, b.ABS.Unread, b.ABS.Unread, b.EbookFile.Unread,
+		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.LengthUncounted, indexedAt, pathKey(b.RelPath), b.ABS.Unread, b.ABS.Unread, b.EbookFile.Unread,
 		b.EbookFile.Unread, b.EbookFile.Unread).Scan(&id); err != nil {
 		return 0, err
 	}
