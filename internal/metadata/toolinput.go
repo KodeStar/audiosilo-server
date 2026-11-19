@@ -40,7 +40,10 @@ const InputFormats = "mov,mp4,m4a,3gp,3g2,mj2,mp3,matroska,webm,ogg,flac,wav,aac
 // InputFormats for a library file: before the input for ffprobe, before its
 // -i for ffmpeg (an input option). The tool fails ("Format not on
 // whitelist") on a file of any other format, nothing it names opened. Every
-// run of either on a library file passes them.
+// run handed a library file by ToolInput passes them (runFFprobe,
+// media.DetectSilences), and a new run on a library file should; media's
+// descriptor inputs (fd:, pipe:0) are held by -protocol_whitelist instead,
+// and its transcode of a library file by path is held by neither yet.
 func InputFormatArgs() []string { return []string{"-format_whitelist", InputFormats} }
 
 // SweepToolInputs removes the private folders ToolInput made for a tool's

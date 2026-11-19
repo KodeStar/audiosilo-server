@@ -1362,8 +1362,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `indexBook`) go through the root too, so a name swapped for a link out of it after the walk's or the join's
   check is never followed: the audio read, tags and the in-process probe (`metadata.ExtractTimeout` and
   `ExtractTags`, given the library's root), the fingerprint (`metadata.Fingerprint`), the files beside the
-  audio (`metadata.ReadABSFile`, the `.audiosilo/` attachments and the read-along map: `readRegularFileInfo`
-  looks and opens through the root, then `os.SameFile`), a problem's recheck (`sideAnswers`), a book's own
+  audio (`metadata.ReadABSFile`, the `.audiosilo/` attachments, a podcast episode's chapters among them
+  (`podcastChapters`, given the library's root, never the show's folder: `TestPodcastChaptersReadThroughTheLibraryRoot`),
+  and the read-along map: `readRegularFileInfo` looks and opens through the root, then `os.SameFile`), a problem's recheck (`sideAnswers`), a book's own
   stat (`statLook`, `metadata.StatBelowBounded`), `LookArt`'s stat (`artStat`, `metadata.StatBelow`) and the
   Bridge's file stats (`statBookFiles`' `bridgeStatLook`). These open through `metadata.BelowFolder`: the
   file's folder is opened once through the root and kept open a moment (`belowFolders`: 2 s idle, 30 s at
@@ -1377,8 +1378,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Windows no folder is kept past its read (`openOnly`: an open folder there blocks renaming the folders above
   it, `TestFolderCacheOpenOnlyKeepsNothing`). Every kept folder is let go at once when a library is removed
   or its root (or ignore patterns) change, and as the server stops (`metadata.CloseFolders`: an unmount never
-  meets a folder held for a next read, only the read in progress; `TestLibraryGoneKeepsNoFolderOpen`,
-  `TestCloseFoldersLetsEveryFolderGo`). A name its
+  meets a folder held for a next read, only the reads in progress, a stopped scan's last ones included;
+  `TestLibraryGoneKeepsNoFolderOpen`, `TestCloseFoldersLetsEveryFolderGo`). A read that finds another has
+  kept the folder while it opened its own reads through its own, never the kept one unlooked at
+  (`TestFolderCacheNeverTakesAKeptFolderUnlookedAt`). A name its
   folder can't open (a link to a folder beside it, an absolute target) is opened through the root's kept
   folder, then resolved as `Below` does (an lstat's up to its last name only, so `LstatBelow` is always the
   link's own: `TestLstatBelowIsTheLinksOwn`). An external tool is handed the file
@@ -1391,12 +1394,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and the very file opened (`os.SameFile`) through a second handle held until the tool is done: opened
   without delete sharing, it keeps the file from being renamed or replaced meanwhile (the os.Root open
   shares deletion), and a folder along it can't be renamed while a file in it is open there. The tool reads
-  the file as an audio container only: every run on a library file passes `metadata.InputFormatArgs()`
+  the file as an audio container only: both runs pass `metadata.InputFormatArgs()`
   (`-format_whitelist` `metadata.InputFormats`: mov/mp4, mp3, matroska/webm, ogg, flac, wav, aac; before the
   input for ffprobe, before `-i` for ffmpeg), since FFmpeg picks a demuxer by the file's bytes and one shaped
   like a playlist (concat, hls, dash, sdp) under an audio name would have it open the files it lists
   (`TestProbeReadsNoPlaylist`, `TestDetectSilencesReadsNoPlaylist`); a new ffprobe or ffmpeg run on a library
-  file passes them too. A start removes the private folders an earlier run left in the temporary folder
+  file passes them too. The runs fed a descriptor as stdin (a podcast episode's transcode, the remux, the
+  rendition) are held by `-protocol_whitelist` instead, and the transcode of a library file by its path is
+  held by neither yet. A start removes the private folders an earlier run left in the temporary folder
   (`metadata.SweepToolInputs`: `audiosilo-input-*`, the server's user's, 0700, over an hour old, holding only
   the link; `TestSweepInputDirsRemovesOnlyItsOwn`). A test's
   ffprobe stand-in reads the path from `AUDIOSILO_TEST_INPUT`
@@ -1406,8 +1411,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestLookArtStatsThroughTheRootAfterASwap`, `TestBridgeBookFilesStatThroughTheRoot`,
   `TestProberHandsFFmpegTheFileItOpened`, `TestBelowFolderNeverLeavesTheRoot`, `TestToolInputIsTheOpenedFile`).
   Still a check and then a look by path: a transcode (ffmpeg opens the path), a remux's or a rendition's
-  source (`media.FileCache`, `media.Source`), and the looks (listings, lstats) that only decide what a scan
-  reads. The scan takes no link out of the root
+  source (`media.FileCache`, `media.Source`), a podcast show's `feed.json` and a library's `library.json`
+  (`metadata.ReadRegularFile`: an lstat, an open and `os.SameFile`, all by path), and the looks (listings,
+  lstats) that only decide what a scan reads. The scan takes no link out of the root
   either, by the same rule (`linkOut`: `SafeJoin` of each link the walk lists, looked at once the walk ends,
   width at a time, `linksInRoot`; a plain file never looked at again): a file or folder link out in a book
   folder is never a part, nor a cover (`coverLook.find`, which looks at a cover's own entry before any stat,
@@ -5523,7 +5529,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `same_root` names a library already at exactly the root (a warning; create allows it). It walks as a
   scan discovers (`discoverAuto`, no overrides, a `walkCap` of 5,000 folders and 10 s: `capped`), reads
   (four at a time, under the preview's 15 s overall: none starts after it, one running then is ended with
-  its ffprobe via `metadata.ExtractContext` and left out, fewer samples, `capped` untouched) 8 samples spread evenly over the path-sorted books as a scan reads names (`setNames`: tags over
+  its ffprobe via `metadata.ExtractTimeout`'s ctx and left out, fewer samples, `capped` untouched) 8 samples spread evenly over the path-sorted books as a scan reads names (`setNames`: tags over
   `DeriveFromPath`, `readABS`; no fingerprint, chapters or covers), and names each both ways with
   `catalog.ResolveScanned` (the stored book's own `bookLayers.scannedFields`, so preview and library never
   disagree): `tags` as a tags-first library shows it, `path` from the folders alone (the names a scan reads

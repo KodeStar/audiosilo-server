@@ -249,9 +249,10 @@ func (c *folderCache) closeAll() {
 // CloseFolders closes the folders kept open for reads below the libraries'
 // roots (BelowFolder), every library's: called when a library is removed or
 // its root changes, and when the server stops, so a folder kept for the next
-// read never holds a share that is being unmounted (EBUSY) past the read in
+// read never holds a share that is being unmounted (EBUSY) past the reads in
 // progress. A read under way keeps its folder until it ends; a later read
-// opens its folder again.
+// (a scan being stopped still has some) opens its folder again, kept
+// folderIdle as ever.
 func CloseFolders() { belowFolders.closeAll() }
 
 // FoldersKeptForTests is how many folders are kept open under root (as
