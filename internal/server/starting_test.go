@@ -268,6 +268,12 @@ func TestPrefersHTML(t *testing.T) {
 		{[]string{"text/html", "application/json;q=0.5"}, true},
 		{[]string{"application/json, text/html"}, false},
 		{[]string{"text/html ; q = 0.9, application/json;q=0.1"}, true},
+		// JSON's quality is the most specific range's that names it.
+		{[]string{"text/html;q=0.1, */*"}, false},
+		{[]string{"text/html;q=0.5, application/*"}, false},
+		{[]string{"text/html, application/*;q=0.5, */*"}, true},
+		{[]string{"text/html;q=0.9, application/json;q=0.5, */*"}, true},
+		{[]string{"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"}, true},
 	} {
 		if got := prefersHTML(tc.accept); got != tc.want {
 			t.Errorf("prefersHTML(%q) = %v, want %v", tc.accept, got, tc.want)

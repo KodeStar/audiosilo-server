@@ -138,11 +138,13 @@ var startingPageCSP = func() string {
 
 // prefersHTML reports whether an Accept header (its values, as Header.Values
 // gives them) asks for an HTML page before JSON: text/html or
-// application/xhtml+xml listed with a quality above zero and above
-// application/json's. A browser's navigation does; fetch's default */*, a JSON
-// Accept and no Accept at all do not.
+// application/xhtml+xml listed with a quality above zero and above JSON's, which
+// is application/json's, else application/*'s, else */*'s (the most specific
+// range that names it). A browser's navigation does; fetch's default */*, a
+// JSON Accept, "text/html;q=0.1, */*" and no Accept at all do not.
 func prefersHTML(accept []string) bool {
-	html, jsonQ := 0.0, 0.0
+	html := 0.0
+	jsonQ, appQ, anyQ := -1.0, -1.0, -1.0 // -1: not listed
 	for _, value := range accept {
 		for mediaType, q := range spa.Qualities(value) {
 			switch mediaType {
@@ -150,7 +152,16 @@ func prefersHTML(accept []string) bool {
 				html = max(html, q)
 			case "application/json":
 				jsonQ = max(jsonQ, q)
+			case "application/*":
+				appQ = max(appQ, q)
+			case "*/*":
+				anyQ = max(anyQ, q)
 			}
+		}
+	}
+	for _, q := range []float64{appQ, anyQ} {
+		if jsonQ < 0 {
+			jsonQ = q
 		}
 	}
 	return html > 0 && html > jsonQ
