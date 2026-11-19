@@ -80,7 +80,7 @@ func TestScanSkipsOverLongPaths(t *testing.T) {
 	// to come.
 	other := t.TempDir()
 	writeFile(t, other, "Only/02 - a long name.m4b", audio)
-	if hasAudio(filepath.Join(other, "Only"), "Only", nil) {
+	if hasAudio(ctx, filepath.Join(other, "Only"), "Only", nil) {
 		t.Fatal("hasAudio counts an audio file past the cap")
 	}
 }
