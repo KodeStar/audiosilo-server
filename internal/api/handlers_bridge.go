@@ -5,15 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
-	"os"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/podcast"
@@ -300,7 +302,7 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 	p := catalog.CleanRelPath(raw)
 	if p != "" {
 		if book, err = a.cat.GetBookByPath(r.Context(), lib.ID, p); err == nil {
-			files, _ = statBookFiles(lib, book)
+			files, _ = a.statBookFiles(r.Context(), lib, book, time.Now().Add(a.fileWait))
 		}
 	} else {
 		book, files, err = a.sampleBook(r.Context(), lib)
@@ -380,10 +382,39 @@ func orEmpty(ss []string) []string {
 	return ss
 }
 
+// bridgeStatLook is statBookFiles' stat of a file: a test injects a share's
+// errors through it.
+var bridgeStatLook = metadata.StatBounded
+
+// filesState is what statBookFiles learned of a book's files on the server's
+// disk.
+type filesState int
+
+const (
+	// filesWhole: every file answered its stat.
+	filesWhole filesState = iota
+	// filesUnknown: a file's stat was given up on, failed as a share does
+	// that a retry may get past (metadata.TransientFault) or for good (a
+	// permission): whether it is there can't be told now, so none is
+	// reported gone.
+	filesUnknown
+	// filesGone: a file is not there (ENOENT, or ENOTDIR: a folder above it
+	// replaced), and none was unknown.
+	filesGone
+)
+
 // statBookFiles is a book's files with the size and modification time the
-// server sees now (the indexed size when a file can't be read), and whether
-// every one is there.
-func statBookFiles(lib *catalog.Library, book *catalog.Book) ([]bridgeFile, bool) {
+// server sees now (the indexed size, and no modification time, when a file
+// can't be read: the wire's shape whatever the disk does), and what it
+// learned of them. Only a file not there (ENOENT, ENOTDIR) is gone: a share
+// that stopped answering, or one that fails a stat as a share does (EIO,
+// ESTALE, a permission), says nothing about whether the file is there
+// (filesUnknown), so a hiccup never tells the Bridge a book went missing. The
+// looks are metadata.Bounded calls; once one is given up on, or fails as a share that may come back does, the
+// rest keep their indexed values unlooked at (each would wait out its time on
+// the same share). The looks are bounded by deadline together (a.fileWait
+// from the request's start: the mapping check's sample shares one).
+func (a *API) statBookFiles(ctx context.Context, lib *catalog.Library, book *catalog.Book, deadline time.Time) ([]bridgeFile, filesState) {
 	indexed := book.Files
 	if len(indexed) == 0 {
 		// A single-file book (a loose file at the root, a folder of one book per
@@ -391,28 +422,30 @@ func statBookFiles(lib *catalog.Library, book *catalog.Book) ([]bridgeFile, bool
 		indexed = []catalog.BookFile{{RelPath: book.RelPath, Size: book.Size, Duration: book.Duration}}
 	}
 	files := make([]bridgeFile, 0, len(indexed))
-	present := true
+	state, stopped := filesWhole, false
 	for _, f := range indexed {
-		bf := bridgeFile{Path: f.RelPath, Size: f.Size, Duration: f.Duration}
-		info, err := os.Stat(filepathOf(lib, f.RelPath))
-		if err == nil {
-			bf.Size, bf.ModTime = info.Size(), info.ModTime().Unix()
-		} else {
-			present = false
+		files = append(files, bridgeFile{Path: f.RelPath, Size: f.Size, Duration: f.Duration})
+		if stopped {
+			continue // the share stopped answering: the indexed values
 		}
-		files = append(files, bf)
+		abs, err := library.SafeJoinBounded(ctx, lib.Root, f.RelPath, metadata.WaitLeft(deadline))
+		var info fs.FileInfo
+		if err == nil {
+			info, err = bridgeStatLook(ctx, abs, metadata.WaitLeft(deadline))
+		}
+		switch {
+		case err == nil:
+			files[len(files)-1].Size, files[len(files)-1].ModTime = info.Size(), info.ModTime().Unix()
+		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, library.ErrOutsideRoot):
+			if state == filesWhole {
+				state = filesGone
+			}
+		default:
+			state = filesUnknown
+			stopped = metadata.Unanswered(ctx, err) || metadata.TransientFault(err)
+		}
 	}
-	return files, present
-}
-
-// filepathOf is a library-relative path on the server's disk ("" when it would
-// leave the library, which then fails its stat).
-func filepathOf(lib *catalog.Library, rel string) string {
-	full, err := library.SafeJoin(lib.Root, rel)
-	if err != nil {
-		return ""
-	}
-	return full
+	return files, state
 }
 
 // sampleBooks is how many books the mapping check's sample is chosen from.
@@ -420,8 +453,10 @@ const sampleBooks = 5
 
 // sampleBook is the mapping check's sample: the first of the library's first
 // books (by title) whose files are all on the server's disk, so one book deleted
-// before a scan prunes it doesn't make the whole library look unmapped; the
-// first book when none is whole.
+// before a scan prunes it doesn't make the whole library look unmapped; when
+// none is whole, the first whose files can't be told now (a share that stopped
+// answering: never taken as gone), else the first book. The books' looks share
+// a.fileWait (statBookFiles).
 func (a *API) sampleBook(ctx context.Context, lib *catalog.Library) (*catalog.Book, []bridgeFile, error) {
 	if lib.Kind == catalog.KindPodcasts {
 		return nil, nil, catalog.ErrNotFound
@@ -430,10 +465,12 @@ func (a *API) sampleBook(ctx context.Context, lib *catalog.Library) (*catalog.Bo
 	if err != nil {
 		return nil, nil, err
 	}
-	var (
-		first      *catalog.Book
-		firstFiles []bridgeFile
-	)
+	type sample struct {
+		book  *catalog.Book
+		files []bridgeFile
+	}
+	deadline := time.Now().Add(a.fileWait)
+	var unknown, gone *sample
 	for _, b := range page.Books {
 		book, err := a.cat.GetBookByPath(ctx, lib.ID, b.RelPath)
 		if errors.Is(err, catalog.ErrNotFound) {
@@ -442,18 +479,20 @@ func (a *API) sampleBook(ctx context.Context, lib *catalog.Library) (*catalog.Bo
 		if err != nil {
 			return nil, nil, err
 		}
-		files, present := statBookFiles(lib, book)
-		if present {
+		files, state := a.statBookFiles(ctx, lib, book, deadline)
+		switch {
+		case state == filesWhole:
 			return book, files, nil
-		}
-		if first == nil {
-			first, firstFiles = book, files
+		case state == filesUnknown && unknown == nil:
+			unknown = &sample{book, files}
+		case state == filesGone && gone == nil:
+			gone = &sample{book, files}
 		}
 	}
-	if first == nil {
-		return nil, nil, catalog.ErrNotFound
+	if first := cmp.Or(unknown, gone); first != nil {
+		return first.book, first.files, nil
 	}
-	return first, firstFiles, nil
+	return nil, nil, catalog.ErrNotFound
 }
 
 // handleBridgeClaim serves GET /bridge/jobs/next?wait=<seconds>&kind=...: the

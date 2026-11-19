@@ -50,7 +50,12 @@ func Unanswered(ctx context.Context, err error) bool {
 // network mount that dropped), a permission (EACCES, EPERM: a share refusing a
 // look it allowed the listing) among them. Such a look says nothing about
 // whether the file is there: its caller keeps what it knows, as for a look
-// given up on (AsGaveUp), never reads it as "none".
+// given up on (AsGaveUp), never reads it as "none". A limit of the server's
+// own (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY) is one too, for that reason
+// alone: a scan keeps the book as stored. Broad on purpose, it decides what is
+// kept, never how a route answers: only a TransientFault is a share that
+// stopped answering (503 share_not_answering); every other fault is the
+// lasting answer (a 404) or the route's own error.
 func ShareFault(err error) bool {
 	return err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) &&
 		!errors.Is(err, syscall.ENAMETOOLONG) && !GaveUp(err) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)

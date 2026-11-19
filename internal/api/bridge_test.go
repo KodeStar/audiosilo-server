@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -343,6 +345,76 @@ func TestBridgeSampleBookSkipsAMissingBook(t *testing.T) {
 	}
 	if next := sample(); next == first || next == "" {
 		t.Fatalf("the sample after %q's files went = %q, want another book", first, next)
+	}
+}
+
+// A share hiccup never tells the Bridge a book's files are gone (server data
+// loss guard): a file whose stat fails as a share that may come back does
+// (EIO, ESTALE), or for good (a permission), keeps its indexed size with no
+// modification time, the wire's shape for a file not read, and the mapping
+// check's sample takes such a book (its files can't be told now) over one
+// whose files are gone (ENOENT), which it takes only when no other is left.
+// Not parallel: it swaps bridgeStatLook.
+func TestBridgeBookFilesOnAShareFault(t *testing.T) {
+	b := newBridgeEnv(t)
+	root := copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b",
+		"Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b")
+	if _, err := b.db.ExecContext(context.Background(), `UPDATE libraries SET root = ? WHERE id = ?`, root, b.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		Path  string
+		Files []bridgeFile
+	}
+	get := func(path string) answer {
+		t.Helper()
+		u := fmt.Sprintf("/api/v1/bridge/libraries/%d/book", b.lib.ID)
+		if path != "" {
+			u += "?path=" + url.QueryEscape(path)
+		}
+		resp, body := b.do(t, "GET", u, b.bridgeTok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", u, resp.StatusCode, body)
+		}
+		var out answer
+		decodeInto(t, body, &out)
+		return out
+	}
+	first := get("")
+	if len(first.Files) == 0 || first.Files[0].ModTime == 0 {
+		t.Fatalf("the sample with every file answering = %+v, want its files read", first)
+	}
+	was := bridgeStatLook
+	t.Cleanup(func() { bridgeStatLook = was })
+	under := func(p, book string) bool {
+		return strings.HasPrefix(p, filepath.Join(root, filepath.FromSlash(book))+string(filepath.Separator)) ||
+			p == filepath.Join(root, filepath.FromSlash(book))
+	}
+	for _, errno := range []syscall.Errno{syscall.EIO, syscall.ESTALE, syscall.EACCES} {
+		// The first book's files gone, every other's stat failing with errno.
+		bridgeStatLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+			if under(p, first.Path) {
+				return nil, &fs.PathError{Op: "stat", Path: p, Err: syscall.ENOENT}
+			}
+			return nil, &fs.PathError{Op: "stat", Path: p, Err: errno}
+		}
+		got := get("")
+		if got.Path == first.Path || got.Path == "" {
+			t.Errorf("the sample with %q gone and the rest %v = %q, want a book whose files can't be told, never the gone one", first.Path, errno, got.Path)
+			continue
+		}
+		for _, f := range append(got.Files, get(got.Path).Files...) {
+			if f.ModTime != 0 || f.Size == 0 {
+				t.Errorf("a file whose stat failed %v = %+v, want its indexed size and no modification time", errno, f)
+			}
+		}
+	}
+	// Every book gone: the first is still the sample, as before.
+	bridgeStatLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+		return nil, &fs.PathError{Op: "stat", Path: p, Err: syscall.ENOENT}
+	}
+	if got := get(""); got.Path != first.Path {
+		t.Errorf("the sample with every book gone = %q, want the first, %q", got.Path, first.Path)
 	}
 }
 
