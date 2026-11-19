@@ -356,7 +356,9 @@ func cleanText(v string, max int, lines bool) string {
 	for cut > 0 && !utf8.RuneStart(v[cut]) {
 		cut--
 	}
-	return v[:cut]
+	// A copy: the cut text is kept (the cached heartbeat), and a slice of v
+	// would hold all of it, up to a heartbeat's whole body.
+	return strings.Clone(v[:cut])
 }
 
 // ErrNotPaired is a call from a Bridge that is no longer the paired one: its
