@@ -36,8 +36,9 @@ type MetaCacheEntry struct {
 	// Payload is the cached answer's JSON; empty for a cached "no match".
 	Payload []byte
 	Expires time.Time
-	// StoredAt is when the row was written (stored_at), what retention keeps
-	// the newest by.
+	// StoredAt is when the row was written (stored_at): what retention keeps
+	// the newest by, and what internal/meta dates the answer by
+	// (meta.StoredEntry.StoredAt), so nothing but a new answer may move it.
 	StoredAt time.Time
 }
 
