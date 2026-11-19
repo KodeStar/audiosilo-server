@@ -228,3 +228,19 @@ func TestScanKeepsABookWhoseLinkDidNotAnswer(t *testing.T) {
 		t.Errorf("the scan read through the link whose look failed: %v", bad)
 	}
 }
+
+// The browse view's pending-book check (hasAudio) counts only the audio a scan
+// indexes: a folder of only a link out of the root is no book to come, a
+// folder with a link inside it is.
+func TestHasAudioSkipsLinksOutOfTheRoot(t *testing.T) {
+	t.Parallel()
+	e := newLinkOutEnv(t)
+	e.link(t, filepath.Join(e.outside, "secret.m4b"), "Author/Only Out/01.m4b")
+	e.link(t, filepath.Join("..", "..", "Shared", "in.m4b"), "Author/Only In/01.m4b")
+	if hasAudio(e.ctx, e.root, "Author/Only Out", nil) {
+		t.Error("hasAudio counts a link out of the root")
+	}
+	if !hasAudio(e.ctx, e.root, "Author/Only In", nil) {
+		t.Error("hasAudio misses a link inside the root")
+	}
+}
