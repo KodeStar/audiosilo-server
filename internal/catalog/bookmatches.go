@@ -197,28 +197,6 @@ type WorkSource struct {
 // reader that weighs the key against the metadata cache (the Bridge's
 // estimate and book facts).
 func (c *Catalog) WorkSources(ctx context.Context, refs []Ref) (map[Ref]WorkSource, error) {
-	return c.workSources(ctx, refs, ownedExpr("b", "checked_at"))
-}
-
-// MatchWorkIDs is each of refs' recorded match's work (WorkSource.MatchWorkID),
-// only for the indexed books with one: WorkSources without the resolution's
-// time, for a reader that only tells a match from a resolution (/meta's
-// placement, meta.LocalBook.Matched).
-func (c *Catalog) MatchWorkIDs(ctx context.Context, refs []Ref) (map[Ref]string, error) {
-	sources, err := c.workSources(ctx, refs, "NULL")
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[Ref]string, len(sources))
-	for ref, s := range sources {
-		out[ref] = s.MatchWorkID
-	}
-	return out, nil
-}
-
-// workSources reads WorkSources with resolved as the SQL of book b's
-// ResolvedAt (NULL to leave it out, and the books it alone would bring in).
-func (c *Catalog) workSources(ctx context.Context, refs []Ref, resolved string) (map[Ref]WorkSource, error) {
 	out := map[Ref]WorkSource{}
 	type row struct {
 		path string
@@ -230,7 +208,7 @@ func (c *Catalog) workSources(ctx context.Context, refs []Ref, resolved string) 
 			rows, err := queryRows(ctx, c.db, func(r *sql.Rows, m *row) error { return r.Scan(&m.path, &m.MatchWorkID, &m.ResolvedAt) },
 				`SELECT path, matched, resolved FROM (
 				   SELECT b.rel_path AS path, COALESCE(`+matchWorkIDExpr("b")+`, '') AS matched,
-				          COALESCE(`+resolved+`, '') AS resolved
+				          COALESCE(`+ownedExpr("b", "checked_at")+`, '') AS resolved
 				     FROM books b WHERE b.library_id = ? AND b.rel_path IN (`+placeholders(len(chunk))+`))
 				  WHERE matched <> '' OR resolved <> ''`,
 				slices.Concat([]any{lib}, anyOf(chunk))...)
@@ -239,6 +217,33 @@ func (c *Catalog) workSources(ctx context.Context, refs []Ref, resolved string) 
 			}
 			for _, m := range rows {
 				out[Ref{LibraryID: lib, Path: m.path}] = m.WorkSource
+			}
+		}
+	}
+	return out, nil
+}
+
+// MatchWorkIDs is each of refs' recorded match's work (WorkSource.MatchWorkID),
+// only for the indexed books with one: WorkSources without the resolution, for
+// a reader that only tells a match from a resolution (/meta's placement,
+// meta.LocalBook.Matched).
+func (c *Catalog) MatchWorkIDs(ctx context.Context, refs []Ref) (map[Ref]string, error) {
+	out := map[Ref]string{}
+	type row struct{ path, work string }
+	_, byLib := GroupRefs(refs)
+	for lib, paths := range byLib {
+		for chunk := range slices.Chunk(paths, 500) {
+			rows, err := queryRows(ctx, c.db, func(r *sql.Rows, m *row) error { return r.Scan(&m.path, &m.work) },
+				`SELECT path, matched FROM (
+				   SELECT b.rel_path AS path, `+matchWorkIDExpr("b")+` AS matched
+				     FROM books b WHERE b.library_id = ? AND b.rel_path IN (`+placeholders(len(chunk))+`))
+				  WHERE matched IS NOT NULL`,
+				slices.Concat([]any{lib}, anyOf(chunk))...)
+			if err != nil {
+				return nil, err
+			}
+			for _, m := range rows {
+				out[Ref{LibraryID: lib, Path: m.path}] = m.work
 			}
 		}
 	}

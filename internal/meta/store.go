@@ -48,9 +48,9 @@ type StoredEntry struct {
 	Payload []byte
 	// Expires is when the entry stops being fresh (the memory TTL's expiry).
 	Expires time.Time
-	// StoredAt is when the entry was written (meta_cache.stored_at): when its
-	// answer was had, whatever TTL it was saved for. A row without one (zero)
-	// reads as older than any other answer.
+	// StoredAt is when the entry was written (meta_cache.stored_at, set on
+	// every row since the table's first migration): when its answer was had,
+	// whatever TTL it was saved for.
 	StoredAt time.Time
 }
 
@@ -85,10 +85,11 @@ func (s *Service) SetStore(st Store) { s.store = st }
 
 // readStored is the read-through step after a memory miss: key's persisted row
 // as a *T (nil for a persisted "no match"), its freshness deadline, when it was
-// written (StoredEntry.StoredAt) and whether it is still within its deadline. A row past it is not served while the upstream answers; a
-// positive one is the fallback when the upstream fails. No store or row, a row of
-// another format version or source, and a payload that does not decode all read
-// as (nil, zero, zero, false).
+// written (StoredEntry.StoredAt) and whether it is still within its deadline. A
+// row past it is not served while the upstream answers; a positive one is the
+// fallback when the upstream fails. No store or row, a row of another format
+// version or source, and a payload that does not decode all read as (nil, zero,
+// zero, false).
 func readStored[T any](ctx context.Context, s *Service, key string) (value *T, expires, at time.Time, fresh bool) {
 	if s.store == nil {
 		return nil, time.Time{}, time.Time{}, false
