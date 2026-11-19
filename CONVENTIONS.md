@@ -942,7 +942,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the rest) and `upcoming_owned` (`checked_at`: the list books' `work_id` reads the
   rest, server#241), which columns an UPDATE may change by value (the hook reads a row only up to
   the rule's last watched column, `watchedChanged`, so a freed column after them, the
-  heartbeat's up to 2 MiB `status` (server#445), is never copied; S263-HOOK). Anything else on a listed table
+  heartbeat's `status` (as large as the server's libraries make it, server#445), is never copied; S263-HOOK). Anything else on a listed table
   moves the generation; a table the list doesn't name is a misfiling (logged; a panic in a
   test binary), and a rule's table or column a newer server's schema lacks (a rollback) only
   makes more writes content. Durability (`WithDurableTx`) is orthogonal. The user-state
@@ -3179,7 +3179,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `monthly_budget_usd`, `month_spent_usd`; read LENIENTLY, an unknown key ignored and a block that doesn't
   decode or is out of its bounds dropped, never refusing the heartbeat, since a refused heartbeat takes
   the Bridge offline; bounded and checked: `family.name` kinds, library ids, and `ui_url` http(s)
-  only since the console links it, are refused otherwise; free text is cleaned to printable bounded text,
+  only since the console links it, are refused otherwise; a body up to `bridge.MaxStatusBytes` (2 MiB) and
+  4096 mappings, a longer list cut, never refused (server#445), and only the mappings of libraries the
+  server has are stored (`Status.KeepLibraries`, the row written without HTML escaping), so the row a
+  heartbeat rewrites stays the size of the server's own libraries; free text is cleaned to printable bounded text,
   `cleanText`, never refused, as is a job report's `error` (line breaks kept): it is partly the outside
   world's, and a refused report is retried for ever while its job is re-run; one row, never a history)
   answers `{server_time,
@@ -3203,7 +3206,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   handler also needs the contributions module on) and the `cannot_contribute` refusal all read it. **Capability**: `capabilities.bridge` is true only while the last
   heartbeat is under `bridge.OnlineWindow` (2 min) old (`bridge.Service` caches the parsed heartbeat for
   `heartbeatTTL`, 5 s, so `GET /server` mostly reads no database; `Forget` drops it on a pairing or an
-  unpair, and a read that began before a save or a `Forget` never replaces its answer: `hbGen`), with a
+  unpair, a read that began before a save or a `Forget` never replaces its answer: `hbGen`, and callers that
+  miss the cache at once share one read of the row, `heartbeatRead`), with a
   top-level `bridge: {version, features}`
   beside it for a signed-in caller only (a session or an API key of any role but a demo account's,
   `api.signedIn` over `auth.Peek`, which records nothing on the token, so the public route never waits on

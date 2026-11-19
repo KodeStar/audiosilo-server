@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -46,6 +47,16 @@ func TestBridgeHeartbeatManyLibraries(t *testing.T) {
 		}
 		if !got.Online || len(got.Libraries) != 1 || got.Libraries[0].Mapping == nil || !got.Libraries[0].Mapping.Mapped {
 			t.Fatalf("after %d libraries: online %v, libraries %+v", n, got.Online, got.Libraries)
+		}
+		// Only the mapping of the library the server has is stored: the row a
+		// heartbeat rewrites, and GET /server reads, stays small whatever the
+		// Bridge lists.
+		var stored string
+		if err := b.db.QueryRowContext(context.Background(), `SELECT status FROM bridge_status WHERE id = 1`).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if len(stored) > 1024 || strings.Count(stored, `"library_id"`) != 1 {
+			t.Fatalf("after %d libraries the stored status is %d bytes: %.300s", n, len(stored), stored)
 		}
 	}
 }

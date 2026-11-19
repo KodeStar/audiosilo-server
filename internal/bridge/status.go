@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -215,6 +216,21 @@ func (st Status) Library(id int64) *LibraryStatus {
 	return nil
 }
 
+// KeepLibraries leaves st only the mappings of libraries the server has
+// (known), in a list of their own: the rest are never read (the console and the
+// jobs ask by a library of the server's), so storing them would let a heartbeat
+// fill the stored row, and each read of it, with up to maxLibraries mappings
+// of libraries that don't exist (server#445).
+func (st *Status) KeepLibraries(known func(id int64) bool) {
+	kept := make([]LibraryStatus, 0, min(len(st.Libraries), 16))
+	for _, l := range st.Libraries {
+		if known(l.LibraryID) {
+			kept = append(kept, l)
+		}
+	}
+	st.Libraries = kept
+}
+
 // Limits on a heartbeat: its body is the Bridge's, so the server bounds what it
 // stores and later shows in the console. A Bridge reports every library the
 // server lists, so the libraries' bounds hold a server with thousands
@@ -351,10 +367,15 @@ var ErrNotPaired = errors.New("no bridge is paired")
 // heartbeat that was authenticated before a pairing or an unpair never lands on
 // the pairing that replaced it.
 func (s *Service) SaveHeartbeat(ctx context.Context, token int64, st Status) error {
-	body, err := json.Marshal(st)
-	if err != nil {
+	// Without HTML escaping: the row is only ever read back as JSON, and a
+	// status full of "<" would be stored at six times its size.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(st); err != nil {
 		return err
 	}
+	body := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 	now := s.now()
 	gen := s.heartbeatGen() // before the write: a Forget after it wins (remember)
 	// A heartbeat is user state (server#258): a paired Bridge beats twice a
@@ -423,24 +444,74 @@ func (s *Service) Forget() {
 	s.hb, s.hbRead = nil, time.Time{}
 }
 
+// heartbeatRead is a database read of the heartbeat under way, begun while the
+// cache was at generation gen: the callers that miss the cache meanwhile wait
+// for it (LastHeartbeat) rather than each reading and parsing the row.
+type heartbeatRead struct {
+	done chan struct{} // closed once the read ended
+	gen  uint64
+	// h is what it read, when ok (set before done closes); a read that failed
+	// (its request ended, the database) answers no one but its own caller.
+	h  *Heartbeat
+	ok bool
+}
+
 // LastHeartbeat returns the paired Bridge's last heartbeat, or nil when no
 // Bridge is paired (auth.BridgeLiveSQL: a live bridge token of an enabled
 // admin) or none has beaten since it paired. The result is shared: never
-// change it.
+// change it. Callers that miss the cache at once share one read of the row
+// (GET /server is every client's, and the row can be large); when that read
+// fails, each still waiting reads again, one at a time.
 func (s *Service) LastHeartbeat(ctx context.Context) (*Heartbeat, error) {
-	s.hbMu.Lock()
-	if !s.hbRead.IsZero() && s.now().Sub(s.hbRead) < heartbeatTTL {
-		h := s.hb
+	for {
+		s.hbMu.Lock()
+		if !s.hbRead.IsZero() && s.now().Sub(s.hbRead) < heartbeatTTL {
+			h := s.hb
+			s.hbMu.Unlock()
+			return h, nil
+		}
+		// A read begun before a save or a Forget is not this caller's answer:
+		// it may have seen the row as it was before.
+		if f := s.hbReading; f != nil && f.gen == s.hbGen {
+			s.hbMu.Unlock()
+			select {
+			case <-f.done:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if f.ok {
+				return f.h, nil
+			}
+			continue
+		}
+		f := &heartbeatRead{done: make(chan struct{}), gen: s.hbGen}
+		s.hbReading = f
 		s.hbMu.Unlock()
-		return h, nil
+		return s.leadHeartbeatRead(ctx, f)
 	}
-	gen := s.hbGen
-	s.hbMu.Unlock()
-	h, err := readHeartbeat(ctx, s.db)
-	if err != nil {
+}
+
+// leadHeartbeatRead reads the heartbeat for f, the read this caller began, and
+// ends f with the outcome for those waiting on it (also when the read panics:
+// a waiter then reads for itself).
+func (s *Service) leadHeartbeatRead(ctx context.Context, f *heartbeatRead) (h *Heartbeat, err error) {
+	defer func() {
+		s.hbMu.Lock()
+		if s.hbReading == f {
+			s.hbReading = nil
+		}
+		s.hbMu.Unlock()
+		close(f.done)
+	}()
+	read := s.readHeartbeat
+	if read == nil {
+		read = func(ctx context.Context) (*Heartbeat, error) { return readHeartbeat(ctx, s.db) }
+	}
+	if h, err = read(ctx); err != nil {
 		return nil, err
 	}
-	s.keep(gen, h)
+	s.keep(f.gen, h)
+	f.h, f.ok = h, true
 	return h, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -117,5 +118,142 @@ func TestStatusValidateCutsLibraries(t *testing.T) {
 	}
 	if n := len(st.Libraries); n != maxLibraries || st.Libraries[n-1].LibraryID != maxLibraries {
 		t.Fatalf("kept %d libraries, last %d; want the first %d", n, st.Libraries[n-1].LibraryID, maxLibraries)
+	}
+}
+
+// A heartbeat is stored without the mappings of libraries the server doesn't
+// have, and as plain JSON (no HTML escaping, which would store a "<" as six
+// bytes): what a Bridge sends can't grow the stored row past its own body.
+func TestHeartbeatStoredSmall(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	st := Status{Version: "0.6.0", Kinds: []string{KindVerify}}
+	for i := range maxLibraries {
+		id := int64(100000 + i)
+		if i == 7 {
+			id = q.lib
+		}
+		st.Libraries = append(st.Libraries, LibraryStatus{LibraryID: id, MountPath: "/media/<books> & more", Mapped: true})
+	}
+	if err := st.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	st.KeepLibraries(func(id int64) bool { return id == q.lib })
+	if len(st.Libraries) != 1 || cap(st.Libraries) >= maxLibraries || st.Libraries[0].LibraryID != q.lib {
+		t.Fatalf("kept %d mappings (cap %d), want the server's one in a list of its own", len(st.Libraries), cap(st.Libraries))
+	}
+	if err := q.SaveHeartbeat(ctx, q.token, st); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := q.db.QueryRowContext(ctx, `SELECT status FROM bridge_status WHERE id = 1`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stored, `"mount_path":"/media/<books> & more"`) || strings.Contains(stored, "100000") || strings.HasSuffix(stored, "\n") {
+		t.Fatalf("stored status = %s", stored)
+	}
+	q.Forget()
+	if h, err := q.LastHeartbeat(ctx); err != nil || h == nil || h.Library(q.lib) == nil || h.Library(q.lib).MountPath != "/media/<books> & more" {
+		t.Fatalf("read back = %+v, %v", h, err)
+	}
+	// None kept is a list, not null.
+	st.KeepLibraries(func(int64) bool { return false })
+	if st.Libraries == nil || len(st.Libraries) != 0 {
+		t.Fatalf("no mapping kept = %#v, want an empty list", st.Libraries)
+	}
+}
+
+// Callers that miss the heartbeat cache at once share one read of the row;
+// when that read fails (its request ended), one of those waiting reads again
+// and the others share that.
+func TestLastHeartbeatSharesOneRead(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	q.advance(heartbeatTTL) // the heartbeat newTestQueue saved is no longer fresh
+	var (
+		mu      sync.Mutex
+		reads   int
+		entered = make(chan struct{}, 16)
+		release = make(chan struct{})
+	)
+	q.readHeartbeat = func(ctx context.Context) (*Heartbeat, error) {
+		mu.Lock()
+		reads++
+		mu.Unlock()
+		entered <- struct{}{}
+		select {
+		case <-release:
+			return readHeartbeat(ctx, q.db)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return reads
+	}
+	// The first caller's request ends mid-read: it alone gets its error.
+	leaderCtx, cancel := context.WithCancel(context.Background())
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := q.LastHeartbeat(leaderCtx)
+		leaderErr <- err
+	}()
+	<-entered
+	const waiters = 8
+	type answer struct {
+		h   *Heartbeat
+		err error
+	}
+	answers := make(chan answer, waiters)
+	for range waiters {
+		go func() {
+			h, err := q.LastHeartbeat(context.Background())
+			answers <- answer{h, err}
+		}()
+	}
+	time.Sleep(50 * time.Millisecond) // let them reach the read under way
+	if n := count(); n != 1 {
+		t.Fatalf("%d reads with one under way, want the others waiting on it", n)
+	}
+	cancel()
+	if err := <-leaderErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the cancelled caller's read = %v, want its context's error", err)
+	}
+	<-entered // one waiter reads again
+	close(release)
+	var first *Heartbeat
+	for range waiters {
+		a := <-answers
+		if a.err != nil || a.h == nil || !a.h.Offers(KindVerify) {
+			t.Fatalf("a waiter's heartbeat = %+v, %v", a.h, a.err)
+		}
+		if first == nil {
+			first = a.h
+		} else if a.h != first {
+			t.Fatal("the waiters got different reads")
+		}
+	}
+	if n := count(); n != 2 {
+		t.Fatalf("%d reads, want the cancelled one and one more", n)
+	}
+	// A caller that ends while waiting leaves with its own error.
+	q.advance(heartbeatTTL)
+	release = make(chan struct{})
+	go func() {
+		_, err := q.LastHeartbeat(context.Background())
+		leaderErr <- err
+	}()
+	<-entered
+	gone, stop := context.WithCancel(context.Background())
+	stop()
+	if _, err := q.LastHeartbeat(gone); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a waiter whose request ended = %v, want its context's error", err)
+	}
+	close(release)
+	if err := <-leaderErr; err != nil {
+		t.Fatalf("the read it left = %v", err)
 	}
 }
