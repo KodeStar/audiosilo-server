@@ -118,6 +118,128 @@ func TestBelowFolderOpensAReplacedFolderAgain(t *testing.T) {
 	}
 }
 
+// TestBelowFolderReadsTheFolderAtItsPathNow: a kept folder renamed away and
+// another made at its path (the Bridge swapping a book's folder, an admin's
+// rename) is never read through the old handle: the read answers for the
+// folder at the path now, and with none there, not there. Allowed: the old
+// folder read at its new path.
+func TestBelowFolderReadsTheFolderAtItsPathNow(t *testing.T) {
+	t.Parallel()
+	root, _ := belowFixture(t)
+	book := filepath.Join(root, "Book")
+	file := filepath.Join(book, "01.mp3")
+	if got, err := readBelowFolder(t, root, file); err != nil || got != "inside" {
+		t.Fatalf("first read: %q, %v", got, err)
+	}
+	if err := os.Rename(book, filepath.Join(root, "Old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(book, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readBelowFolder(t, root, file); err != nil || got != "new" {
+		t.Errorf("after the folder was replaced: %q, %v; want the new folder's file", got, err)
+	}
+	if info, err := StatBelow(root, file); err != nil || info.Size() != int64(len("new")) {
+		t.Errorf("stat after the folder was replaced: %v, %v; want the new folder's file", info, err)
+	}
+	if got, err := readBelowFolder(t, root, filepath.Join(root, "Old", "01.mp3")); err != nil || got != "inside" {
+		t.Errorf("the old folder at its new path: %q, %v", got, err)
+	}
+	if err := os.Rename(book, filepath.Join(root, "Gone")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readBelowFolder(t, root, file); !NotExist(err) {
+		t.Errorf("a folder renamed away: read %q, %v; want not there", got, err)
+	}
+}
+
+// TestFolderCacheOpenOnlyKeepsNothing: a cache that keeps no folder past its
+// read (Windows, where an open folder blocks renaming the folders above it)
+// closes each one when its read puts it back.
+func TestFolderCacheOpenOnlyKeepsNothing(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "Book"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &folderCache{m: map[folderKey]*keptFolder{}, openOnly: true}
+	f, err := c.get(root, "Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.put(f)
+	if n := len(c.m); n != 0 {
+		t.Errorf("%d folders kept, want none", n)
+	}
+	if _, err := f.r.Stat("."); err == nil {
+		t.Error("the folder read through is still open")
+	}
+}
+
+// keptNow is the folder belowFolders keeps for rel under root, nil for none.
+func keptNow(root, rel string) *keptFolder {
+	belowFolders.mu.Lock()
+	defer belowFolders.mu.Unlock()
+	return belowFolders.m[folderKey{root, rel}]
+}
+
+// TestBelowFolderKeepsItsFoldersForANameNotThere: a name not there, looked
+// for again and again through a kept folder still at its path (an episode
+// with no chapters file), is answered there, neither that folder nor the
+// root's let go, so the next look opens neither again. Allowed: the name
+// made since is found. Not parallel: it reads the shared folder cache.
+func TestBelowFolderKeepsItsFoldersForANameNotThere(t *testing.T) {
+	root, _ := belowFixture(t)
+	book := filepath.Join(root, "Book")
+	if _, err := StatBelow(root, filepath.Join(book, "01.mp3")); err != nil {
+		t.Fatal(err)
+	}
+	kept, top := keptNow(root, "Book"), keptNow(root, ".")
+	if kept == nil || top == nil {
+		t.Fatalf("the folders read through are not kept: %v, %v", kept, top)
+	}
+	for range 3 {
+		if info, err := LstatBelow(root, filepath.Join(book, "none.json")); !NotExist(err) {
+			t.Fatalf("a name not there: %v, %v", info, err)
+		}
+	}
+	if keptNow(root, "Book") != kept || keptNow(root, ".") != top {
+		t.Error("a name not there let a folder still at its path go")
+	}
+	if err := os.WriteFile(filepath.Join(book, "none.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LstatBelow(root, filepath.Join(book, "none.json")); err != nil {
+		t.Errorf("the name made since: %v", err)
+	}
+}
+
+// TestLstatBelowIsTheLinksOwn: an lstat of a link reached through a folder
+// os.Root refuses (an absolute target inside the root, which Below resolves)
+// answers for the link itself, never for the file it leads to, as os.Lstat
+// does.
+func TestLstatBelowIsTheLinksOwn(t *testing.T) {
+	t.Parallel()
+	root, _ := belowFixture(t)
+	if err := os.Symlink("01.mp3", filepath.Join(root, "Book", "link.mp3")); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(root, "Book"), filepath.Join(root, "Abs")); err != nil {
+		t.Fatal(err)
+	}
+	info, err := LstatBelow(root, filepath.Join(root, "Abs", "link.mp3"))
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("lstat through an absolute link inside the root: %v, %v; want the link itself", info, err)
+	}
+	if info, err := StatBelow(root, filepath.Join(root, "Abs", "link.mp3")); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("stat through an absolute link inside the root: %v, %v; want the file it leads to", info, err)
+	}
+}
+
 // TestToolInputWithNoTempFolder (Unix): with no temporary folder to make its
 // link in (a read-only one), a tool is handed the descriptor's own name and
 // still reads the file opened. Not parallel: it sets TMPDIR.
@@ -158,9 +280,9 @@ func TestFolderCacheIsBounded(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(root, rel), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		f, fresh, err := c.get(root, rel)
-		if err != nil || !fresh {
-			t.Fatalf("%s: %v, fresh %v", rel, err, fresh)
+		f, err := c.get(root, rel)
+		if err != nil {
+			t.Fatalf("%s: %v", rel, err)
 		}
 		if i == 0 {
 			first = f
@@ -177,10 +299,10 @@ func TestFolderCacheIsBounded(t *testing.T) {
 		t.Error("the folder let go of is still open")
 	}
 	last := fmt.Sprintf("d%02d", maxFolders+4)
-	a, _, _ := c.get(root, last)
-	b, fresh, _ := c.get(root, last)
-	if a != b || fresh {
-		t.Errorf("a kept folder opened again (fresh %v)", fresh)
+	a, _ := c.get(root, last)
+	b, _ := c.get(root, last)
+	if a != b {
+		t.Error("a kept folder opened again")
 	}
 	c.put(a)
 	c.put(b)

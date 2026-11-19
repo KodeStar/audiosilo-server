@@ -30,6 +30,13 @@ import (
 // since is refused as before. A path holding a NUL (the API's noFile: a path
 // no file has) fails at once, the disk not reached, as a plain open's does.
 func Below[T any](root, path string, open func(r *os.Root, rel string) (T, error)) (T, error) {
+	return below(root, path, true, open)
+}
+
+// below is Below, path resolved for its second open up to its last name only
+// unless followLast: an lstat's (LstatBelow) answers for the link at path
+// itself, never for what it leads to.
+func below[T any](root, path string, followLast bool, open func(r *os.Root, rel string) (T, error)) (T, error) {
 	var zero T
 	rootAbs, rel, resolved, err := underRoot(root, path)
 	if err != nil {
@@ -49,7 +56,16 @@ func Below[T any](root, path string, open func(r *os.Root, rel string) (T, error
 			return zero, err
 		}
 	}
-	real, rerr := filepath.EvalSymlinks(path)
+	// path as underRoot read it (absolute: a relative one resolved alone
+	// would never compare with the resolved root).
+	abs := filepath.Join(rootAbs, rel)
+	var real string
+	var rerr error
+	if followLast || rel == "." {
+		real, rerr = filepath.EvalSymlinks(abs)
+	} else if real, rerr = filepath.EvalSymlinks(filepath.Dir(abs)); rerr == nil {
+		real = filepath.Join(real, filepath.Base(abs))
+	}
 	if rerr != nil {
 		return zero, err
 	}

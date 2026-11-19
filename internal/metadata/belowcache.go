@@ -2,10 +2,13 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -15,16 +18,17 @@ import (
 // along every path. So the folder a read opens a file in is kept open a
 // moment (belowFolders), opened through the root once, and each file in it
 // is one openat through it (BelowFolder): what a plain open of the path cost.
+// A kept folder is looked at again on each use (folderCache.current: a stat
+// of it and one of its path), so a folder renamed away and another made at
+// its path is never read through the old handle.
 
 // folderIdle is how long a folder opened for reads below a library's root is
 // kept open unused: a scan reads a book's files, and the next book's beside
-// them, within it, and a folder renamed or replaced meanwhile is opened again
-// once it has been idle that long.
+// them, within it.
 const folderIdle = 2 * time.Second
 
 // folderMaxAge is how long a folder is kept open however busy it is: past
-// it the next read opens it again, so a folder kept in use for a whole scan
-// (a library's root) still follows a remount or a rename within that time.
+// it the next read opens it again, the handle never older than that.
 const folderMaxAge = 30 * time.Second
 
 // maxFolders bounds how many folders are kept open at once, across every
@@ -54,46 +58,56 @@ type folderCache struct {
 	mu      sync.Mutex
 	m       map[folderKey]*keptFolder
 	sweeper *time.Timer
+	// openOnly: no folder is kept past its read. On Windows an open folder
+	// keeps the folders above it from being renamed (a user's, or the
+	// Bridge's, rename on the share would fail), so none is kept there.
+	openOnly bool
 }
 
 // belowFolders are the folders the scan's reads keep open (BelowFolder).
-var belowFolders = &folderCache{m: map[folderKey]*keptFolder{}}
+var belowFolders = &folderCache{m: map[folderKey]*keptFolder{}, openOnly: runtime.GOOS == "windows"}
 
-// get is the folder rel under root, held for a read (put it back with put):
-// one kept, or opened now through root (the root's own kept one), and kept.
-// fresh reports that it was opened by this call, so it is the folder at rel
-// now; a kept one may be one renamed or replaced since it was opened.
-func (c *folderCache) get(root, rel string) (f *keptFolder, fresh bool, err error) {
+// get is the folder at rel under root now, held for a read (put it back with
+// put): one kept that is still the folder at its path (current), or opened
+// now through root (the root's own kept one), and kept.
+func (c *folderCache) get(root, rel string) (*keptFolder, error) {
 	key := folderKey{root, rel}
 	c.mu.Lock()
-	if f = c.m[key]; f != nil && time.Since(f.opened) < folderMaxAge {
+	if f := c.m[key]; f != nil && time.Since(f.opened) < folderMaxAge {
 		f.refs++
 		c.mu.Unlock()
-		return f, false, nil
+		if current(f) {
+			return f, nil
+		}
+		// Renamed away, replaced, or remounted since it was opened.
+		c.drop(f)
+		c.put(f)
+	} else {
+		c.mu.Unlock()
 	}
-	c.mu.Unlock()
 	var r *os.Root
+	var err error
 	if rel == "." {
 		r, err = os.OpenRoot(root)
 	} else {
 		var top *keptFolder
-		if top, _, err = c.get(root, "."); err != nil {
-			return nil, false, err
+		if top, err = c.get(root, "."); err != nil {
+			return nil, err
 		}
 		r, err = top.r.OpenRoot(rel)
 		c.put(top)
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	f = &keptFolder{key: key, r: r, refs: 1, opened: time.Now()}
+	f := &keptFolder{key: key, r: r, refs: 1, opened: time.Now()}
 	c.mu.Lock()
 	if have := c.m[key]; have != nil && time.Since(have.opened) < folderMaxAge {
 		// Another read opened it meanwhile: that one is kept, this one closed.
 		have.refs++
 		c.mu.Unlock()
 		_ = r.Close()
-		return have, true, nil
+		return have, nil
 	}
 	var closing []*keptFolder
 	if old := c.m[key]; old != nil {
@@ -104,15 +118,15 @@ func (c *folderCache) get(root, rel string) (f *keptFolder, fresh bool, err erro
 		}
 	}
 	closing = append(closing, c.makeRoomLocked()...)
-	if len(c.m) < maxFolders {
+	if !c.openOnly && len(c.m) < maxFolders {
 		c.m[key] = f
 		c.sweepLocked()
 	} else {
-		f.gone = true // every kept folder in use: this one is its read's alone
+		f.gone = true // every kept folder in use, or none kept: this one is its read's alone
 	}
 	c.mu.Unlock()
 	closeFolders(closing)
-	return f, true, nil
+	return f, nil
 }
 
 // put hands back a folder get held, closing it when it is no longer kept and
@@ -127,6 +141,26 @@ func (c *folderCache) put(f *keptFolder) {
 		_ = f.r.Close()
 	}
 }
+
+// current reports whether f, a kept folder its caller holds, is still the
+// folder at its path: the folder the handle is (a stat through it) and the
+// one its path names now (os.Stat) are one (os.SameFile). The path's look
+// only compares: nothing is read through it, so a link along it can't lead a
+// read anywhere; a folder renamed away, another made at its path, or a
+// remount there, is opened again.
+func current(f *keptFolder) bool {
+	was, err := f.r.Stat(".")
+	if err != nil {
+		return false
+	}
+	now, err := os.Stat(filepath.Join(f.key.root, f.key.rel))
+	return err == nil && os.SameFile(was, now)
+}
+
+// staleHandle reports whether err, a read's through a kept folder, says the
+// folder's handle itself is dead (ESTALE: an NFS folder removed or made again
+// on the server): no later read through it would answer either.
+func staleHandle(err error) bool { return errors.Is(err, syscall.ESTALE) }
 
 // drop stops keeping f (a read through it failed: it may be a folder renamed
 // or replaced since it was opened), closed once no read holds it.
@@ -196,46 +230,52 @@ func closeFolders(folders []*keptFolder) {
 // BelowFolder is Below for the scan's reads: open runs on path's name
 // through its folder, kept open a moment (belowFolders) and opened through
 // root, so a book's files cost one openat each. The open can't leave root
-// either way: a kept folder is the one opened below root (a link swapped in
-// for it since is never followed), and a link swapped in for the name is
-// refused as Below refuses it. A name the folder can't open (a link to a
-// folder beside it, which the folder's own root refuses) is opened through
-// the root's kept folder, the whole path under it, and failing that, the
-// path resolved as Below does (Below itself answers: a link with an absolute
-// target). A kept folder in which the name is not there may be one renamed
-// or replaced since it was opened: it is kept no longer, and the root's
-// folder, then Below, answer for the path now.
+// either way: a kept folder is the one opened below root and still at its
+// path (folderCache.current), and a link swapped in for the name is refused
+// as Below refuses it. A name not there is the answer (an episode with no
+// chapters file costs one look, the folders kept). A name the folder can't
+// open (a link to a folder beside it, which the folder's own root refuses)
+// is opened through the root's kept folder, the whole path under it, and
+// failing that, the path resolved as Below does (Below itself answers: a
+// link with an absolute target). A folder whose handle went stale (ESTALE)
+// is kept no longer.
 func BelowFolder[T any](root, path string, open func(r *os.Root, rel string) (T, error)) (T, error) {
+	return belowFolder(root, path, true, open)
+}
+
+// belowFolder is BelowFolder, its last fallback (below) resolving path's
+// last name too when followLast (an open's, a stat's), else only the folder
+// it is in (an lstat's).
+func belowFolder[T any](root, path string, followLast bool, open func(r *os.Root, rel string) (T, error)) (T, error) {
 	var zero T
 	rootAbs, rel, _, err := underRoot(root, path)
 	if err != nil {
 		return zero, err
 	}
-	dir, name := filepath.Dir(rel), filepath.Base(rel)
-	if f, fresh, err := belowFolders.get(rootAbs, dir); err == nil {
-		v, oerr := open(f.r, name)
-		gone := NotExist(oerr)
-		if gone && !fresh {
+	// try opens name through the folder dir: answered for a file opened or a
+	// name not there, else (refused, a fault) for the next way to answer.
+	try := func(dir, name string) (v T, answered bool, err error) {
+		f, err := belowFolders.get(rootAbs, dir)
+		if err != nil {
+			return zero, false, err
+		}
+		v, err = open(f.r, name)
+		if staleHandle(err) {
 			belowFolders.drop(f)
 		}
 		belowFolders.put(f)
-		if oerr == nil || (gone && fresh) {
-			return v, oerr
-		}
+		return v, err == nil || NotExist(err), err
+	}
+	dir, name := filepath.Dir(rel), filepath.Base(rel)
+	if v, ok, err := try(dir, name); ok {
+		return v, err
 	}
 	if dir != "." {
-		if top, _, err := belowFolders.get(rootAbs, "."); err == nil {
-			v, oerr := open(top.r, rel)
-			if NotExist(oerr) {
-				belowFolders.drop(top) // the root may have been remounted: opened again next time
-			}
-			belowFolders.put(top)
-			if oerr == nil {
-				return v, nil
-			}
+		if v, ok, err := try(".", rel); ok {
+			return v, err
 		}
 	}
-	return Below(root, path, open)
+	return below(root, path, followLast, open)
 }
 
 // openBelow opens the file at path, under root, for reading with openFlags
@@ -268,9 +308,11 @@ func StatBelow(root, path string) (fs.FileInfo, error) {
 	return BelowFolder(root, path, func(r *os.Root, rel string) (fs.FileInfo, error) { return r.Stat(rel) })
 }
 
-// LstatBelow is StatBelow, a link at path itself not followed (os.Lstat).
+// LstatBelow is StatBelow, a link at path itself not followed (os.Lstat),
+// on every route: a path through a link os.Root refuses is resolved up to
+// its last name only, so the answer is still the link's own.
 func LstatBelow(root, path string) (fs.FileInfo, error) {
-	return BelowFolder(root, path, func(r *os.Root, rel string) (fs.FileInfo, error) { return r.Lstat(rel) })
+	return belowFolder(root, path, false, func(r *os.Root, rel string) (fs.FileInfo, error) { return r.Lstat(rel) })
 }
 
 // StatBelowBounded is StatBelow as a Bounded look (StatBounded's).

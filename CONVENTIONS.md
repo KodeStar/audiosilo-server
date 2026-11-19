@@ -1369,15 +1369,26 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   file's folder is opened once through the root and kept open a moment (`belowFolders`: 2 s idle, 30 s at
   most, 64 folders), so a book's files cost one `openat` each, what the plain open of the path cost (the
   in-process probe's speed, SCAN-SPIKE, is kept: `BenchmarkOpenBelowFolder`); a kept folder swapped for a
-  link since is never followed (it answers with its own files), one in which a name is gone is opened again
-  (a folder replaced), and a name its folder can't open (a link to a folder beside it, an absolute target) is
-  opened through the root's kept folder, then resolved as `Below` does. An external tool is handed the file
+  link since is never followed, and a kept folder is looked at again on each use (`folderCache.current`: a stat
+  of the handle and one of its path, `os.SameFile`), so one renamed away, replaced or remounted is opened again,
+  never read through the old handle (`TestBelowFolderReadsTheFolderAtItsPathNow`); a name not there is the
+  answer, both folders kept (an episode with no chapters file costs one look,
+  `TestBelowFolderKeepsItsFoldersForANameNotThere`), a folder whose handle went stale (ESTALE) is let go. On
+  Windows no folder is kept past its read (`openOnly`: an open folder there blocks renaming the folders above
+  it, `TestFolderCacheOpenOnlyKeepsNothing`). A name its
+  folder can't open (a link to a folder beside it, an absolute target) is opened through the root's kept
+  folder, then resolved as `Below` does (an lstat's up to its last name only, so `LstatBelow` is always the
+  link's own: `TestLstatBelowIsTheLinksOwn`). An external tool is handed the file
   opened so, never its path (`metadata.ToolInput`): ffprobe's fallback run (`runFFprobe`) and the chapter
   check's ffmpeg (`media.DetectSilences`, given the library's root). On Unix the tool inherits the descriptor
   and is named a link to its own `/dev/fd/3` in a private folder, named for the file's extension (ffmpeg
-  guesses a format by it; `TestProbeMatchesLiveFFprobe` holds parity); on Windows it is given the path
-  resolved, checked to be under the root and the very file opened (`os.SameFile`), which can't be renamed
-  while it is open there. A test's ffprobe stand-in reads the path from `AUDIOSILO_TEST_INPUT`
+  guesses a format by it; `TestProbeMatchesLiveFFprobe` holds parity), or, with no temporary folder it may
+  write to (a read-only container), `/dev/fd/3` itself, its format guessed from its bytes
+  (`TestToolInputWithNoTempFolder`); on Windows it is given the path resolved, checked to be under the root
+  and the very file opened (`os.SameFile`) through a second handle held until the tool is done: opened
+  without delete sharing, it keeps the file from being renamed or replaced meanwhile (the os.Root open
+  shares deletion), and a folder along it can't be renamed while a file in it is open there. A test's
+  ffprobe stand-in reads the path from `AUDIOSILO_TEST_INPUT`
   (`metadata.TestInputEnv`, set in a test binary only) (`TestIndexPathReadsThroughTheRootAfterASwap`,
   `TestScanReadsThroughTheRootAfterASwap`, `TestFFprobeReadsTheFileTheScanOpened`,
   `TestAttachmentsReadThroughTheRootAfterASwap`, `TestReadalongMapReadThroughTheRootAfterASwap`,
