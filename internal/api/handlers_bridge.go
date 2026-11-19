@@ -342,24 +342,30 @@ type bridgeBook struct {
 	Ebook *catalog.Ebook `json:"ebook,omitempty"`
 }
 
-// bridgeBookFacts is book's bridgeBook. The work id is the book's own
-// (Book.WorkID: its recorded match, so a book matched in the console with no
-// ASIN or ISBN has one, server#375, else the upcoming job's resolution), else
-// the metadata cache's for its identifiers (meta.Service.CachedWorkID), never
-// an upstream call: the Bridge asks this for every job, and a book nobody has
-// looked up yet simply has none.
+// bridgeBookFacts is book's bridgeBook. The work id is the one /meta and the
+// estimate ask about (meta.Service.CachedWork over coverageBooks): its
+// recorded match (so a book matched in the console with no ASIN or ISBN has
+// one, server#375), else its identifiers' cached answer, else the upcoming
+// job's resolution of them, which can be a month older. Never an upstream
+// call: the Bridge asks this for every job, and a book nobody has looked up
+// yet simply has none, as has one whose match can't be read right now.
 func (a *API) bridgeBookFacts(ctx context.Context, book *catalog.Book) bridgeBook {
 	out := bridgeBook{
 		Title: book.Title, Authors: orEmpty(names.Split(book.Author)), Narrators: orEmpty(names.Split(book.Narrator)),
 		Series: book.Series, SeriesIndex: catalog.FormatSeriesRange(book.SeriesIndex, book.SeriesIndexEnd),
 		ASIN: book.ASIN, ISBN: book.ISBN, Duration: book.Duration, Ebook: book.Ebook,
 	}
-	if a.metadataOn() {
-		out.WorkID = book.WorkID
-		if out.WorkID == "" {
-			out.WorkID, _ = a.meta.CachedWorkID(ctx, book.ASIN, book.ISBN)
-		}
+	if !a.metadataOn() {
+		return out
 	}
+	ids, err := a.coverageBooks(ctx, []*catalog.Book{book})
+	if err != nil {
+		if ctx.Err() == nil {
+			a.log.Warn("read the book's match for the bridge book facts failed", "err", err, "library", book.LibraryID, "path", book.RelPath)
+		}
+		return out
+	}
+	out.WorkID = a.meta.CachedWork(ctx, ids[0])
 	return out
 }
 

@@ -66,10 +66,34 @@ type CoverageBook struct {
 	Matched    bool
 }
 
+// workOf is the work b is asked about by (/meta's work rule, api.bookEnrichment),
+// given its identifiers' cached work (cached, "" for none: no identifier, a
+// miss, a cached "no match" or failure): its recorded match's work (Matched),
+// else cached, else the work the upcoming job resolved (WorkID), else "". The
+// upcoming job's resolution is of those same identifiers and can be a month
+// older than their cached answer, so it never wins over that one.
+func (b CoverageBook) workOf(cached string) string {
+	switch {
+	case b.Matched && b.WorkID != "":
+		return b.WorkID
+	case cached != "":
+		return cached
+	}
+	return b.WorkID
+}
+
+// CachedWork is the work b is asked about by, from the cache alone, never the
+// upstream (workOf over CachedWorkID): Coverages' order, for a caller that
+// needs only the id (the Bridge's book facts). "" when none is known.
+func (s *Service) CachedWork(ctx context.Context, b CoverageBook) string {
+	cached, _ := s.CachedWorkID(ctx, b.ASIN, b.ISBN)
+	return b.workOf(cached)
+}
+
 // Coverages answers Coverage for many books at once (the Bridge's estimate: a
 // series batch's brief answers, a book's earlier books), each in input order,
 // without a full Enrich per book, by /meta's own work rule (api.bookEnrichment),
-// so the estimate never prices content /meta would not show:
+// so the estimate never prices content /meta would not show (workOf's order):
 //  1. a recorded match's work (Matched): the identifiers' cached enrichment
 //     when it is of that work, else the work fetched by id; a work upstream
 //     no longer has leaves the identifiers' cached enrichment standing, as on
@@ -97,15 +121,20 @@ func (s *Service) Coverages(ctx context.Context, books []CoverageBook) []Coverag
 	standing := make([]*Enrichment, len(books))
 	for i, b := range books {
 		env := s.CachedEnrichment(ctx, b.ASIN, b.ISBN)
-		switch {
-		case b.WorkID != "" && b.Matched && !env.OfWork(b.WorkID):
-			works[b.WorkID], standing[i] = append(works[b.WorkID], i), env
-		case env != nil:
-			out[i] = coverageOf(env)
-		case b.WorkID != "":
-			works[b.WorkID] = append(works[b.WorkID], i)
-		default:
+		cached := ""
+		if env != nil && env.Work != nil {
+			cached = env.Work.ID
+		}
+		switch id := b.workOf(cached); {
+		case id == "":
 			ask, at = append(ask, BookIDs{ASIN: b.ASIN, ISBN: b.ISBN}), append(at, i)
+		case env.OfWork(id):
+			out[i] = coverageOf(env)
+		default:
+			works[id] = append(works[id], i)
+			if b.Matched {
+				standing[i] = env
+			}
 		}
 	}
 	if len(ask) > 0 {

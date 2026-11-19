@@ -752,31 +752,35 @@ func TestBridgeEstimateMatchOnly(t *testing.T) {
 	if brief := b.briefEstimate(t, lib.ID, "Mars/2"); brief.Has.Community.Recaps || brief.Has.CommunityUnknown {
 		t.Fatalf("no identifier, no match = %+v, want nothing", brief.Has)
 	}
-	facts := func(path string) string {
-		t.Helper()
-		resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book?path=%s", lib.ID, url.QueryEscape(path)), b.bridgeTok, "")
-		var out struct {
-			Book bridgeBook `json:"book"`
-		}
-		decodeInto(t, body, &out)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("book facts %s: %d %s", path, resp.StatusCode, body)
-		}
-		return out.Book.WorkID
-	}
-	if got := facts("Mars/3"); got != "the-martian" {
+	if got := b.factsWorkID(t, lib.ID, "Mars/3"); got != "the-martian" {
 		t.Fatalf("match-only book facts work_id = %q, want the-martian", got)
 	}
-	if got := facts("Mars/2"); got != "" {
+	if got := b.factsWorkID(t, lib.ID, "Mars/2"); got != "" {
 		t.Fatalf("unmatched book facts work_id = %q, want none", got)
 	}
+}
+
+// factsWorkID is the work id of the Bridge's book facts for the book at path.
+func (b *bridgeEnv) factsWorkID(t *testing.T, libraryID int64, path string) string {
+	t.Helper()
+	resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book?path=%s", libraryID, url.QueryEscape(path)), b.bridgeTok, "")
+	var out struct {
+		Book bridgeBook `json:"book"`
+	}
+	decodeInto(t, body, &out)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("book facts %s: %d %s", path, resp.StatusCode, body)
+	}
+	return out.Book.WorkID
 }
 
 // The estimate reads a book's community content by /meta's work rule. A work
 // id the upcoming job resolved from the book's identifiers, since merged away
 // upstream, never answers for them: the identifiers' cached answer does (what
 // /meta shows), not "none", which would price a generation /meta then hides.
-// The same holds for a recorded match whose work upstream no longer has.
+// The same holds for a recorded match whose work upstream no longer has. The
+// Bridge's book facts name the work by the same order: the identifiers'
+// cached answer over the stale resolution, a recorded match over both.
 func TestBridgeEstimateStaleWork(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnvOn(t, newMetaEnv(t, true, 0))
@@ -811,10 +815,16 @@ func TestBridgeEstimateStaleWork(t *testing.T) {
 		}
 	}
 	has("a stale resolved work")
+	if got := b.factsWorkID(t, lib.ID, path); got != "the-martian" {
+		t.Fatalf("book facts work_id over a stale resolution = %q, want the identifiers' the-martian", got)
+	}
 	if err := b.cat.EditBook(ctx, lib.ID, path, catalog.BookEdit{
 		Match: &catalog.MatchAnchor{WorkID: "gone-upstream"}, Source: catalog.SourceCommunity,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	has("a match gone upstream")
+	if got := b.factsWorkID(t, lib.ID, path); got != "gone-upstream" {
+		t.Fatalf("book facts work_id of a matched book = %q, want its match gone-upstream", got)
+	}
 }

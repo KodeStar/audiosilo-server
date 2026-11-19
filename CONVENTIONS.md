@@ -2385,7 +2385,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `catalog.MatchedWorks`, fetched by id, the identifiers' cached envelope standing when upstream no longer
   has that work; else the identifiers' cached envelope; only then the work the upcoming job resolved, which
   can be a month stale and never answers "none" over a cached envelope) and the Bridge's book facts
-  (`work_id`) read the book's work key, the match first (server#375). `/meta` and `/next`'s community rail read the row when the book
+  (`work_id`, the same order by `meta.Service.CachedWork`, both through `CoverageBook.workOf`) read the
+  book's work key, the match first (server#375). `/meta` and `/next`'s community rail read the row when the book
   has no identifier, its lookup is a not-found or fails, or the row names another work than its
   identifiers' (`bookEnrichment`, `meta.Service.EnrichMatch`, see Community metadata lookup). Path-keyed state: a move carries it with the book's edits as one
   set, a join copies the first part's, a rescan or rebuild keeps it, `ClearCommunityMatches` drops it
@@ -3367,8 +3368,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   answers its own shape, below; any other kind is a
   400); 409 `kind_unavailable`. With a `path`, `GET /bridge/libraries/{id}/book` also answers a `book` block
   (title, authors and narrators split by `names.Split`, series, `series_index`, asin, isbn, duration,
-  `work_id`, the book's own work key (`Book.WorkID`: its recorded match first), else the metadata
-  cache's alone, `CachedWorkID`, and Phase 3c's `ebook {path, size}`, omitted
+  `work_id`, by the estimate's order (`meta.Service.CachedWork`: its recorded match, else its identifiers'
+  cached answer, `CachedWorkID`, else the upcoming job's resolution; cache only, "" when none or the match
+  can't be read), and Phase 3c's `ebook {path, size}`, omitted
   with none), never on the sample-book answer; each `files[]` entry carries its indexed `duration`
   (Phase 3c, additive; a single-file book's is the book's).
   Settings > Bridge in `admin-ui` (`features/bridge/`: the topic shows the heartbeat's estimates and
