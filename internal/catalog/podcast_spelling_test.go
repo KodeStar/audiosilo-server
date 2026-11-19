@@ -30,6 +30,7 @@ func TestPodcastShowSpelling(t *testing.T) {
 		{"no show reads as it", "Zoë Show", "Zoë Show", nil},
 		{"never case", "CAFÉ SHOW", "CAFÉ SHOW", nil},
 		{"refused by the scope", nfc, nfc, refuse},
+		{"as indexed, refused by the scope", nfd, nfd, refuse},
 		{"admitted by the scope", nfc, nfd, func(s string) bool { return s == nfd }},
 	} {
 		if got, err := c.PodcastShowSpelling(ctx, lib.ID, tc.p, tc.allow); err != nil || got != tc.want {
@@ -50,6 +51,22 @@ func TestPodcastShowSpelling(t *testing.T) {
 	indexShowAt(t, c, ctx, own.ID, nfd, "")
 	if got, err := c.PodcastShowSpelling(ctx, own.ID, nfc, nil); err != nil || got != nfc {
 		t.Errorf("own entry: %+q %v", got, err)
+	}
+
+	// A show at the path given that the scope refuses counts as none: the
+	// answer is the one a caller who can't see it gets with it gone.
+	indexShowAt(t, c, ctx, lib.ID, nfc, "3333333333333333")
+	for _, tc := range []struct {
+		name, want string
+		allow      func(string) bool
+	}{
+		{"both seen", nfc, nil},
+		{"only the other seen", nfd, func(s string) bool { return s == nfd }},
+		{"neither seen", nfc, refuse},
+	} {
+		if got, err := c.PodcastShowSpelling(ctx, lib.ID, nfc, tc.allow); err != nil || got != tc.want {
+			t.Errorf("a show at the path given, %s: %+q %v, want %+q", tc.name, got, err, tc.want)
+		}
 	}
 
 	// Two shows that both read as a third spelling leave it as given.

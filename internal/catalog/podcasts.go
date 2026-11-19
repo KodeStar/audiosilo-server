@@ -604,18 +604,26 @@ func (c *Catalog) PodcastShow(ctx context.Context, lib int64, p string, user int
 // by Spelling's rule for a book (server#210) over podcast_shows: the one show
 // whose NFC form is p's that allow admits (nil: every one), so a show folder
 // renamed by hand to its other spelling (server#495) is still found by the
-// old one. p as given when a show is indexed there, when none or two read as
-// it (it never guesses), and when p is an entry of its own on the disk
-// (ownEntry: a folder in that spelling no scan has indexed yet). Only Unicode
-// form, never case, as for a book.
+// old one. p as given when a show allow admits is indexed there, when none or
+// two read as it (it never guesses), and when p is an entry of its own on the
+// disk (ownEntry: a folder in that spelling no scan has indexed yet). Only
+// Unicode form, never case, as for a book.
+//
+// A p allow refuses is looked for as a path with no show is, whether or not a
+// show is indexed there: such a show counts as none, as every spelling allow
+// refuses does (the same reads, a look at the disk only when a show it admits
+// reads as p), so neither the answer nor how long it takes tells a caller a
+// show they can't see from none. The caller still checks its scope on p.
 func (c *Catalog) PodcastShowSpelling(ctx context.Context, lib int64, p string, allow func(string) bool) (string, error) {
 	if !HasOtherSpelling(p) {
 		return p, nil
 	}
-	var one int
-	err := c.db.QueryRowContext(ctx, `SELECT 1 FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, p).Scan(&one)
-	if !errors.Is(err, sql.ErrNoRows) {
-		return p, err // the show at p, or a failed lookup
+	if allow == nil || allow(p) {
+		var one int
+		err := c.db.QueryRowContext(ctx, `SELECT 1 FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, p).Scan(&one)
+		if !errors.Is(err, sql.ErrNoRows) {
+			return p, err // the show at p, or a failed lookup
+		}
 	}
 	// A library's shows are one row per top-level folder, read only on a
 	// miss of a name with another spelling: no key column to keep.

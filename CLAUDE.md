@@ -412,7 +412,7 @@ keep this index in step (one line per topic).
   - Content generation (`store/userstate.go`: user-state writes, the per-cache audit)
   - Path safety
   - Path-addressed API
-  - Path spelling (server#210, `catalog/pathspelling.go`, `0083`: `books.path_key`, `KeyPaths`, `Spelling`, where it is applied, what stays exact)
+  - Path spelling (server#210, `catalog/pathspelling.go`, `0083`: `books.path_key`, `KeyPaths`, `Spelling`, where it is applied, what stays exact; a podcast show's path: `PodcastShowSpelling`)
   - Recognized audio
   - In-process probe (server#261, `metadata/fastprobe*.go`: ffprobe's answer read in Go, ffprobe the fallback)
   - Share faults (server#360, SRV-MEDIA: transient vs lasting vs the server's own limits, `metadata.TransientFault`, what each answers)

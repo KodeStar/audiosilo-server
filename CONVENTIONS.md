@@ -1269,7 +1269,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   else the one show whose NFC form is the path's that the caller's scope admits (`VisibleInBrowse`;
   `spelledPath`'s `Allows`; the console and the Bridge every show), never two, never case, never a path
   that is an entry of its own on disk (`ownEntry`); no key column (one row per top-level folder,
-  read only on a miss of a name with another spelling). An unfollow also drops the caller's own follow at
+  read only on a miss of a name with another spelling). A path the scope refuses is looked for as one
+  with no show is, whether or not a show is indexed there (the same reads, a look at the disk only for
+  a show the scope admits), so the time an answer takes never tells a show the caller can't see from
+  none, and such a show counts as none (`TestPodcastShowSpelling`). An unfollow also drops the caller's own follow at
   the path as given (one kept past its show's row). So an older client or a saved link naming a show
   folder renamed by hand to its other spelling still reaches it, and a private show it doesn't follow
   stays 404 `show_not_found` (`TestPodcastShowRoutesMeetTheOtherSpelling`,
