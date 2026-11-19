@@ -2596,7 +2596,8 @@ type indexFlight struct {
 	// one that is slow (waitFlight).
 	progress *metadata.Progress
 	// stuck is set once a waiter found the read had not moved on for a whole
-	// look's time (the probe's): no later waiter waits on it.
+	// look's time (the probe's): no later waiter waits on it, but for a
+	// scan's read that has returned since (waitFlight).
 	stuck atomic.Bool
 }
 
@@ -2723,9 +2724,11 @@ func (s *Scanner) startFlight(ctx context.Context, key bookKey, scan *bookRead) 
 // other once a look's time (lookTimeout) has passed with it not returned and
 // not moved on (indexFlight.progress: a slow read that answers is waited on);
 // one that has not moved on for the probe's time is marked stuck. A scan's
-// read that has returned is waited on until the scan writes its book.
+// read that has returned is waited on until the scan writes its book, one
+// marked stuck before it returned (it waited that long for a read slot) too.
 func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
-	if f.stuck.Load() || (f.scan != nil && f.scan.left.Load()) {
+	returned := f.scan != nil && f.scan.finished()
+	if (f.stuck.Load() && !returned) || (f.scan != nil && f.scan.left.Load()) {
 		return errReadLeft
 	}
 	look := s.lookTimeout(ctx)

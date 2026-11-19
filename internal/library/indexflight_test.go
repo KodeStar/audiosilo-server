@@ -425,6 +425,15 @@ func TestWaitFlightBoundsOnlyTheRead(t *testing.T) {
 	if err := s.waitFlight(t.Context(), written); err != nil {
 		t.Errorf("a scan's read waiting for its write: %v, want it waited for", err)
 	}
+
+	// One marked stuck before it returned (it waited that long for a read
+	// slot) is waited on for its write all the same.
+	late := flight(true)
+	late.stuck.Store(true)
+	time.AfterFunc(2*s.probeTimeout, func() { close(late.done) })
+	if err := s.waitFlight(t.Context(), late); err != nil {
+		t.Errorf("a scan's read marked stuck, then returned: %v, want it waited for", err)
+	}
 }
 
 // TestWaitFlightWaitsOnAReadThatMovesOn: a wait on another's read gives up on
