@@ -39,24 +39,17 @@ var ErrNoReadalong = errors.New("library: no read-along map")
 // answers is hashed for as long as ctx lives (a scan's: to the end).
 func EbookDigest(ctx context.Context, root, rel string, noLink bool, wait time.Duration) (sha, sig string, err error) {
 	at := filepath.Join(root, filepath.FromSlash(rel))
-	type opened struct {
-		f    *os.File
-		info fs.FileInfo
-	}
-	o, err := metadata.Bounded(ctx, at, wait, func() (opened, error) {
-		f, info, err := OpenEbook(root, rel, noLink)
-		return opened{f, info}, err
-	}, func(o opened) { _ = o.f.Close() })
+	f, info, err := OpenEbookBounded(ctx, root, rel, noLink, wait)
 	if err != nil {
 		return "", "", err
 	}
 	// A read given up on may still return later, into its buffer: the hash
 	// stops there, and the file is closed once that read has returned.
-	defer func() { _ = o.f.Close() }()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	buf := make([]byte, digestReadSize)
 	for {
-		n, err := metadata.Bounded(ctx, at, wait, func() (int, error) { return o.f.Read(buf) }, nil)
+		n, err := metadata.Bounded(ctx, at, wait, func() (int, error) { return f.Read(buf) }, nil)
 		h.Write(buf[:n])
 		if errors.Is(err, io.EOF) {
 			break
@@ -65,7 +58,7 @@ func EbookDigest(ctx context.Context, root, rel string, noLink bool, wait time.D
 			return "", "", err
 		}
 	}
-	return hex.EncodeToString(h.Sum(nil)), catalog.EbookSig(path.Base(rel), o.info), nil
+	return hex.EncodeToString(h.Sum(nil)), catalog.EbookSig(path.Base(rel), info), nil
 }
 
 // digestReadSize is how much of an ebook EbookDigest reads at a time (each

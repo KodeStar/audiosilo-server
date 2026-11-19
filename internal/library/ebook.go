@@ -289,6 +289,22 @@ func OpenEbook(root, rel string, noLink bool) (*os.File, fs.FileInfo, error) {
 	return openEbook(root, rel, noLink, openEbookFile)
 }
 
+// OpenEbookBounded is OpenEbook as one metadata.Bounded call (ctx, at most
+// timeout, counted on the ebook's mount): its looks and open, on a share that
+// stopped answering, are given up on (metadata.GaveUp) rather than holding the
+// caller, a file opened after that closed.
+func OpenEbookBounded(ctx context.Context, root, rel string, noLink bool, timeout time.Duration) (*os.File, fs.FileInfo, error) {
+	type opened struct {
+		f    *os.File
+		info fs.FileInfo
+	}
+	o, err := metadata.Bounded(ctx, filepath.Join(root, filepath.FromSlash(rel)), timeout, func() (opened, error) {
+		f, info, err := OpenEbook(root, rel, noLink)
+		return opened{f, info}, err
+	}, func(o opened) { _ = o.f.Close() })
+	return o.f, o.info, err
+}
+
 // openEbook is OpenEbook opening the file it found with open (a test's swaps the
 // file as it is opened).
 func openEbook(root, rel string, noLink bool, open func(full string) (*os.File, error)) (*os.File, fs.FileInfo, error) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // The reader (Bridge Phase 3b, capability "ebooks"): a book's ebook, served to
@@ -29,8 +30,11 @@ const ebookCSP = "sandbox; default-src 'none'"
 // leads to; a folder book's never a link): a book with none, a path that names
 // anything but a book (a track, the epub itself, a folder above), a podcast, or
 // a file gone or changed into anything else since the scan is 404; a book
-// outside the caller's scope is 403; a file that can't be read right now is 500,
-// logged.
+// outside the caller's scope is 403. The open is a metadata.Bounded call
+// (streamWait, as the stream's looks): on a share that stopped answering, or
+// one failing as a share does that a retry may get past (EIO, ESTALE), it is a
+// 503 share_not_answering with Retry-After; any other file that can't be read
+// right now is 500, logged.
 func (a *API) handleEbook(w http.ResponseWriter, r *http.Request) {
 	// The bytes outlive the request timeout (isLibraryMedia), but the lookup
 	// before them is bounded like any request: a book indexed on demand waits for
@@ -53,10 +57,15 @@ func (a *API) handleEbook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, msgNoEbook)
 		return
 	}
-	f, info, err := library.OpenEbook(lib.Root, book.Ebook.Path, book.IsFolder)
+	f, info, err := library.OpenEbookBounded(r.Context(), lib.Root, book.Ebook.Path, book.IsFolder, a.streamWait)
 	switch {
 	case errors.Is(err, library.ErrNoEbook), errors.Is(err, fs.ErrNotExist):
 		writeError(w, http.StatusNotFound, msgNoEbook)
+		return
+	case metadata.GaveUp(err) || metadata.TransientFault(err):
+		if r.Context().Err() == nil {
+			writeShareNotAnswering(w)
+		}
 		return
 	case err != nil:
 		a.log.Warn("open ebook failed", "library", lib.ID, "path", book.Ebook.Path, "err", err)
