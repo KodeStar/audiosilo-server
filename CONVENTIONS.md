@@ -1646,7 +1646,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   descriptor opened through the library's root (`fileInput`: `fd:` on its stdin, seekable; without the fd
   protocol, an ffmpeg older than 6.1, the child's descriptor 3 as `/dev/fd/3` on Unix, seekable too, so an
   input `-ss` and an MP4 whose index sits at its end still work, or the re-checked resolved path elsewhere;
-  `TestTranscodeSeeksTheDescriptor`), the input's protocol the only one it may open (`-protocol_whitelist`);
+  `TestTranscodeSeeksTheDescriptor`), the input's protocol the only one it may open (`-protocol_whitelist`:
+  through `fd:` no other file, through `/dev/fd/3` or a path the `file` protocol, so a library file that probes
+  as a playlist reaches no network but may name other local files, as when ffmpeg was handed the path; a HEAD
+  runs no ffmpeg, its probe included);
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
   re-request). Direct serving + Range stays the default. With `&download=1` it is an attachment named
   `<stem>.mp3` (every audio download's `Content-Disposition`, and the library export's, is `media.SetAttachment`'s: a name past printable ASCII

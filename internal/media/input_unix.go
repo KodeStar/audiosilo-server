@@ -10,7 +10,9 @@ import "os"
 // file, never a path in the library, and seeks it (an input -ss; an MP4 whose
 // index sits at its end demuxes, which pipe:0 can't). The file protocol is the
 // only one ffmpeg may open (-protocol_whitelist): a crafted file that probes
-// as a playlist reaches no network, as before when ffmpeg was handed the path.
+// as a playlist reaches no network, but may name other local files, as when
+// ffmpeg was handed the path (fd: and pipe:0 open none, which is why a
+// podcast episode, publisher bytes, never takes /dev/fd/3).
 func descriptorInput(f *os.File) (inputSpec, error) {
 	return inputSpec{proto: "file", url: "/dev/fd/3", file: f}, nil
 }
