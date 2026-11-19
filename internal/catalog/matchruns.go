@@ -740,8 +740,11 @@ func clearCommunity(ctx context.Context, tx *sql.Tx, pick clearPick) (books, cov
 			books++
 		}
 	}
+	// A book whose values went, and one whose match alone did: the match is
+	// part of its community chapter basis (chapterBasisExpr), so its check is
+	// stale and leaves its chapters.
 	rebuilt := map[Ref]bool{}
-	for _, ref := range fields {
+	for _, ref := range slices.Concat(fields, anchors) {
 		if ids[ref] == 0 || rebuilt[ref] {
 			continue
 		}
@@ -757,6 +760,5 @@ func clearCommunity(ctx context.Context, tx *sql.Tx, pick clearPick) (books, cov
 			return 0, 0, err
 		}
 	}
-	// A recorded match's row is all there is: nothing to rebuild.
 	return books, len(coverRefs), nil
 }

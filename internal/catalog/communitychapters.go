@@ -38,7 +38,9 @@ const ChapterSourceAuto = "auto"
 // Community chapter statuses beyond chapteralign's (see community_chapters).
 const (
 	// CommunityNoMatch: the community has no recording for the book's
-	// identifiers.
+	// identifiers, or, for a book whose recorded match names another work
+	// than they do, none for that match (it names no recording, or one its
+	// work doesn't list): chaptercheck's chapters.
 	CommunityNoMatch = "no_match"
 	// CommunityUnavailable: the recording has no chapter list.
 	CommunityUnavailable = "unavailable"
@@ -54,7 +56,10 @@ const (
 // with a recorded match (book_matches) adds its work and recording, which the
 // check follows over the identifiers (ChapterInputs.Match), so a match made,
 // changed or unlinked since makes the check stale; a book without one keeps
-// the basis it had before matches counted.
+// the basis it had before matches counted. A match that names the recording
+// the check already came from changes nothing a check would find, so the
+// check is carried over it (checkIsOf, stampChapterBasis; migration 0090 for
+// the checks made before matches counted) rather than fitted again.
 const chapterBasisExpr = `(b.asin || '|' || b.isbn || '|' || CAST(ROUND(b.duration * 1000) AS INTEGER)
 	|| '|' || b.chapters_hash
 	|| '|' || COALESCE((SELECT group_concat(substr(rel_path, length(b.rel_path) + 2), char(31)) FROM
@@ -67,6 +72,37 @@ const chapterBasisExpr = `(b.asin || '|' || b.isbn || '|' || CAST(ROUND(b.durati
 func chaptersHash(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:8])
+}
+
+// checkIsOf reports whether the community chapter check of the book at ref is
+// of the book as it is now (its basis is the book's) and came from recording
+// recordingID of work workID. A match about to name that recording changes
+// nothing a check would find: the match's recording, which its work lists, is
+// that same one (chaptercheck's chapters). writeAnchor asks before it writes and stamps the check with the
+// basis after (stampChapterBasis), so the commonest match, a book's ASIN's own
+// recording accepted in the console, doesn't take the book's community
+// chapters away until they are fitted again.
+func checkIsOf(ctx context.Context, tx *sql.Tx, ref Ref, workID, recordingID string) (bool, error) {
+	var is bool
+	err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM community_chapters cc
+		     JOIN books b ON b.library_id = cc.library_id AND b.rel_path = cc.path
+		    WHERE cc.library_id = +?1 AND cc.path = +?2 AND cc.recording_id <> ''
+		      AND cc.work_id = +?3 AND cc.recording_id = +?4 AND cc.basis = `+chapterBasisExpr+`)`,
+		ref.LibraryID, ref.Path, workID, recordingID).Scan(&is)
+	return is, err
+}
+
+// stampChapterBasis makes the community chapter check of the book at ref one
+// of the book as it is now: its basis becomes the book's. Only for an indexed
+// book's check known to still hold (checkIsOf before a match write;
+// useChapters' snapshot of the rows a current check read).
+func stampChapterBasis(ctx context.Context, tx *sql.Tx, ref Ref) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE community_chapters SET basis = (SELECT `+chapterBasisExpr+` FROM books b
+		     WHERE b.library_id = ?1 AND b.rel_path = ?2)
+		  WHERE library_id = ?1 AND path = ?2`, ref.LibraryID, ref.Path)
+	return err
 }
 
 // bookRelative and libraryRelative turn a chapter's file between library-relative
@@ -137,7 +173,8 @@ func (c *Catalog) DueChapterChecks(ctx context.Context, staleBefore string, limi
 }
 
 // ChapterInputs is what a community chapter check fits: the book's identifiers
-// and its recorded match (nil for none), which names the recording over them,
+// and its recorded match (nil for none), which names the recording over them
+// (chaptercheck's chapters),
 // its files in play order (one for a single-file book) and the scan's own
 // chapters, with the basis to record.
 type ChapterInputs struct {
@@ -157,13 +194,14 @@ func (c *Catalog) ChapterInputs(ctx context.Context, libraryID int64, path strin
 	b := Book{RelPath: path}
 	var snapshot string
 	// The match in the same statement as the basis, so the check records the
-	// basis of the match it follows.
+	// basis of the match it follows (a join: its parameters as +?, see SQLite
+	// in CONVENTIONS.md).
 	var work, recording, how, setAt sql.NullString
 	err := c.db.QueryRowContext(ctx,
 		`SELECT b.id, b.asin, b.isbn, b.duration, b.size, b.is_folder, b.scanned_chapters, `+chapterBasisExpr+`,
 		        bm.work_id, bm.recording_id, bm.how, bm.set_at
 		   FROM books b LEFT JOIN book_matches bm ON bm.library_id = b.library_id AND bm.path = b.rel_path
-		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, path).
+		  WHERE b.library_id = +? AND b.rel_path = +?`, libraryID, path).
 		Scan(&b.ID, &in.ASIN, &in.ISBN, &b.Duration, &b.Size, &b.IsFolder, &snapshot, &in.Basis,
 			&work, &recording, &how, &setAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -439,10 +477,7 @@ func useChapters(ctx context.Context, tx *sql.Tx, r *chapterRow, source, key str
 		source, key, snapshot, chaptersHash(snapshot), r.book.ID); err != nil || !legacy || !r.checkCurrent {
 		return err
 	}
-	_, err := tx.ExecContext(ctx,
-		`UPDATE community_chapters SET basis = (SELECT `+chapterBasisExpr+` FROM books b WHERE b.id = ?)
-		  WHERE library_id = ? AND path = ?`, r.book.ID, r.book.LibraryID, r.book.RelPath)
-	return err
+	return stampChapterBasis(ctx, tx, Ref{LibraryID: r.book.LibraryID, Path: r.book.RelPath})
 }
 
 // replaceChapters swaps a book's chapter rows for chs (their titles as scanned).

@@ -4843,11 +4843,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `community_chapters` (path-keyed cache, no FK, moved by `MoveDurableState`; `basis` =
   asin|isbn|duration ms|`books.chapters_hash` (the scan's chapters)|the files in
   play order relative to the book ('' for a single-file book), then, only for a book with a recorded
-  match, `\x1e` + its work/recording, so a match made, changed or unlinked makes it stale; a different one makes
+  match, `\x1e` + its work/recording, so a match made, changed or unlinked makes it stale, except a
+  match naming the very recording the check came from, which carries the check over
+  (`writeAnchor`'s `checkIsOf`; migration `0090` did the same once for the checks made before
+  matches counted, where the match names the check's recording, or none and the check's work, so an
+  upgrade fits no library again);
+  a different one makes
   it due; a month makes it stale; a check whose basis isn't the book's current one is
   never applied, and the admin page marks it `stale`, so a rescan of other audio,
   re-tagged chapters, files renamed in place or a removed match never brings back
-  chapters fitted to the old files. The fit stores its files relative to the book
+  chapters fitted to the old files (every write of a match rebuilds the book, `refreshEffective`,
+  an anchor alone and `clearCommunity`'s books whose match went included). The fit stores its files relative to the book
   too, so a moved book (the same audio) keeps its check and its chapters; `list_hash` names the community list, so a background recheck
   finding the same list for the same audio only renews `checked_at`, while a check
   asked for fits again). A pass the service keeps failing (5 in a row) waits for the
