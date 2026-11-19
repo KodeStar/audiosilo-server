@@ -21,7 +21,7 @@ func TestCoverages(t *testing.T) {
 	svc := NewService(srv.URL, nil)
 	ctx := context.Background()
 
-	got := svc.Coverages(ctx, []BookIDs{{ASIN: "B00FLIJJSY"}, {}})
+	got := svc.Coverages(ctx, []CoverageBook{{ASIN: "B00FLIJJSY"}, {}})
 	// The mock's work carries a core description, which counts (TestCoverageDescription).
 	if want := []Coverage{{Characters: true, Recaps: true, Description: true, Known: true}, {Known: true}}; !slices.Equal(got, want) {
 		t.Fatalf("Coverages = %+v, want %+v", got, want)
@@ -29,7 +29,7 @@ func TestCoverages(t *testing.T) {
 	if m.lookupHits.Load() != 1 || m.workHits.Load() != 1 || m.seriesHits.Load() != 0 {
 		t.Fatalf("upstream: %d lookups, %d works, %d series; want 1, 1, 0", m.lookupHits.Load(), m.workHits.Load(), m.seriesHits.Load())
 	}
-	if again := svc.Coverages(ctx, []BookIDs{{ASIN: " b00flijjsy "}}); !again[0].Known || !again[0].Recaps ||
+	if again := svc.Coverages(ctx, []CoverageBook{{ASIN: " b00flijjsy "}}); !again[0].Known || !again[0].Recaps ||
 		m.lookupHits.Load() != 1 || m.workHits.Load() != 1 {
 		t.Fatalf("asked again: %+v after %d lookups, %d works", again, m.lookupHits.Load(), m.workHits.Load())
 	}
@@ -37,7 +37,7 @@ func TestCoverages(t *testing.T) {
 	down := &mockMeta{lookupCode: http.StatusServiceUnavailable}
 	dsrv := httptest.NewServer(down.handler())
 	defer dsrv.Close()
-	if got := NewService(dsrv.URL, nil).Coverages(ctx, []BookIDs{{ASIN: "B00FLIJJSY"}}); got[0] != (Coverage{}) {
+	if got := NewService(dsrv.URL, nil).Coverages(ctx, []CoverageBook{{ASIN: "B00FLIJJSY"}}); got[0] != (Coverage{}) {
 		t.Fatalf("a failed lookup = %+v, want unknown", got[0])
 	}
 }
@@ -122,5 +122,38 @@ func TestCoverageDescription(t *testing.T) {
 	}
 	if c := coverageOf(&Enrichment{Work: &MetaWork{Description: "  "}}); c.Description || !c.Known {
 		t.Errorf("with a blank core description = %+v", c)
+	}
+}
+
+// TestCoveragesKnownWork (server#375): a book whose work the catalog knows (a
+// console match, with no ASIN or ISBN at all) is answered by that work, fetched
+// by id with no lookup; a cached enrichment of its identifiers answers only
+// when it is of that work.
+func TestCoveragesKnownWork(t *testing.T) {
+	t.Parallel()
+	m := fullMock()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	svc := NewService(srv.URL, nil)
+	ctx := context.Background()
+
+	got := svc.Coverages(ctx, []CoverageBook{{WorkID: "the-martian"}})
+	if want := (Coverage{Characters: true, Recaps: true, Description: true, Known: true}); got[0] != want {
+		t.Fatalf("match-only book = %+v, want %+v", got[0], want)
+	}
+	if m.lookupHits.Load() != 0 || m.workHits.Load() != 1 {
+		t.Fatalf("upstream: %d lookups, %d works; want 0, 1", m.lookupHits.Load(), m.workHits.Load())
+	}
+	// The identifiers' cached enrichment is of another work than the match:
+	// the match's work answers (here unknown upstream: nothing, known).
+	gone := &mockMeta{workCode: http.StatusNotFound}
+	gsrv := httptest.NewServer(gone.handler())
+	defer gsrv.Close()
+	gsvc := NewService(gsrv.URL, nil)
+	cachePut(gsvc.cache, nsASIN.key("B0OTHER"), &Enrichment{Matched: true, Work: &MetaWork{ID: "other",
+		Characters: []MetaCharacter{{Name: "X"}}}}, positiveTTL)
+	got = gsvc.Coverages(ctx, []CoverageBook{{ASIN: "B0OTHER", WorkID: "rematched"}, {ASIN: "B0OTHER", WorkID: "other"}})
+	if got[0] != (Coverage{Known: true}) || !got[1].Characters {
+		t.Fatalf("rematched = %+v, cached work = %+v", got[0], got[1])
 	}
 }

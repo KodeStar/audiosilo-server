@@ -570,7 +570,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`match.Recordings`, the same rule as `local_others`, after the
   scope filter, so a copy the caller cannot open never stands in for one they can); its own
   library first, then title, then narrator, the first copy in that order kept; at most 20
-  after the copies are dropped; metadata on only).
+  after the copies are dropped; the book's own copies that teach the rule nothing are left out in
+  SQL, `notCopyOfSQL`; metadata on only).
   **Next book** (`next_book` capability): `GET /libraries/{id}/next?path=`
   (`handlers_next.go`, `authorizedScope` + `bookForPath` like `item`) answers
   `{source, next?, book?, work?}`; `source` names the step that produced `next`
@@ -2367,9 +2368,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`b.asin <> '' OR b.isbn <> '' OR EXISTS(book_matches by its key)`) is the list's `matched` and its
   facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire
   name stays), the series' naming and a refresh's `MatchedBooks`. What needs an identifier tests
-  asin/isbn itself and stays identifier-only: community chapters, the unknown-ASIN report, upcoming,
-  a repick (`CommunityASINBooks`), the Bridge's estimate and the console's chapter check,
-  Series rail and Suggest corrections. `/meta` and `/next`'s community rail read the row when the book
+  asin/isbn itself and stays identifier-only: community chapters, the unknown-ASIN report,
+  a repick (`CommunityASINBooks`) and the console's chapter check,
+  Series rail and Suggest corrections. Upcoming (a matched book is its work: it holds its slot and
+  is a copy, `UpcomingBook.MatchWorkID`, `UpcomingOwnedWorks` by `workIDExpr`), the Bridge's estimate
+  (`meta.CoverageBook.WorkID`, its work fetched by id) and the Bridge's book facts (`work_id`) read the
+  book's work key, the match first (server#375). `/meta` and `/next`'s community rail read the row when the book
   has no identifier, its lookup is a not-found or fails, or the row names another work than its
   identifiers' (`bookEnrichment`, `meta.Service.EnrichMatch`, see Community metadata lookup). Path-keyed state: a move carries it with the book's edits as one
   set, a join copies the first part's, a rescan or rebuild keeps it, `ClearCommunityMatches` drops it
@@ -3351,7 +3355,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   answers its own shape, below; any other kind is a
   400); 409 `kind_unavailable`. With a `path`, `GET /bridge/libraries/{id}/book` also answers a `book` block
   (title, authors and narrators split by `names.Split`, series, `series_index`, asin, isbn, duration,
-  `work_id` from the metadata cache alone, `CachedWorkID`, and Phase 3c's `ebook {path, size}`, omitted
+  `work_id`, the book's own work key (`Book.WorkID`: its recorded match first), else the metadata
+  cache's alone, `CachedWorkID`, and Phase 3c's `ebook {path, size}`, omitted
   with none), never on the sample-book answer; each `files[]` entry carries its indexed `duration`
   (Phase 3c, additive; a single-file book's is the book's).
   Settings > Bridge in `admin-ui` (`features/bridge/`: the topic shows the heartbeat's estimates and

@@ -555,7 +555,8 @@ func distinct[T any](xs []T, key func(T) string) []string {
 }
 
 // resolveWorks returns each book's community work id ("" for none or not yet
-// known) and the books whose work this run found new or changed. A book whose
+// known: its recorded match, else its identifiers') and the books whose
+// identifiers' work this run found new or changed. A book whose
 // identifiers have no answer yet (a new book, or its identifiers changed) takes
 // the cache's work id, else a lookup; a full run looks again at answers a month
 // old (a work merged upstream, a match the catalogue gained), up to maxRechecks,
@@ -632,6 +633,15 @@ func (r *Runner) resolveWorks(ctx context.Context, books []catalog.UpcomingBook,
 	}
 	if err := r.cat.SaveUpcomingOwned(ctx, saved, drop); err != nil {
 		return nil, nil, fmt.Errorf("saving the resolved books: %w", err)
+	}
+	// A recorded match is the book's work whatever its identifiers resolved to
+	// (workIDExpr's rule), and the only one a book matched in the console with
+	// no ASIN or ISBN has (server#375): its series is read by it and it holds
+	// its slot. Its identifiers' answer is stored still, for when the match goes.
+	for _, b := range books {
+		if b.MatchWorkID != "" {
+			works[b.Ref] = b.MatchWorkID
+		}
 	}
 	return works, changed, nil
 }

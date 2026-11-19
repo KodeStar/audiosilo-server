@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -463,5 +464,105 @@ func TestUpcomingOwnedWorksIDKey(t *testing.T) {
 		if err != nil || !maps.Equal(got, want) {
 			t.Fatalf("%s: owned = %v, %v, want %v (a retagged book holds no stale work)", name, got, err, want)
 		}
+	}
+}
+
+// TestUpcomingOwnedWorksMatch (server#375): a book is the work its work key
+// names, so one matched in the console with no ASIN or ISBN holds its match's
+// work, and one whose match names another work than its identifiers resolved
+// to holds the match's alone. The pair: a caller whose grant misses the
+// matched book holds none of it.
+func TestUpcomingOwnedWorksMatch(t *testing.T) {
+	t.Parallel()
+	f := newRecordingsFixture(t)
+	// Abridged/One (other library) has no identifier and a recorded match to
+	// w-one; Rematched/Two's ASIN resolved to w-one but its match names w-two.
+	ids := []string{"w-one", "w-two"}
+	got, err := f.c.UpcomingOwnedWorks(f.ctx, nil, true, ids)
+	if err != nil || !maps.Equal(got, map[string]bool{"w-one": true, "w-two": true}) {
+		t.Fatalf("all: owned = %v, %v", got, err)
+	}
+	// Allowed: the other library alone holds w-one through the match-only book.
+	other := []Scope{{LibraryID: f.other.ID, Paths: []string{"Abridged"}}}
+	if got, err = f.c.UpcomingOwnedWorks(f.ctx, other, false, ids); err != nil || !maps.Equal(got, map[string]bool{"w-one": true}) {
+		t.Fatalf("match-only book: owned = %v, %v, want w-one", got, err)
+	}
+	// Rematched/Two alone holds its match's work, not its ASIN's.
+	rematched := []Scope{{LibraryID: f.main.ID, Paths: []string{"Rematched"}}}
+	if got, err = f.c.UpcomingOwnedWorks(f.ctx, rematched, false, ids); err != nil || !maps.Equal(got, map[string]bool{"w-two": true}) {
+		t.Fatalf("rematched book: owned = %v, %v, want w-two", got, err)
+	}
+	// Denied: a grant missing the match-only book holds nothing of it.
+	if got, err = f.c.UpcomingOwnedWorks(f.ctx, []Scope{{LibraryID: f.other.ID, Paths: []string{"Copy"}}}, false, []string{"w-two"}); err != nil || len(got) != 0 {
+		t.Fatalf("outside the grant: owned = %v, %v", got, err)
+	}
+}
+
+// TestOtherRecordingsSkipsOwnCopies (server#413): the book's own copies that
+// teach the copy rule nothing are left out by the query itself, so hundreds of
+// them are never read; a copy carrying another ISBN is still read, and an
+// ISBN-only book sharing that ISBN stays a copy, as match.Recordings has it.
+func TestOtherRecordingsSkipsOwnCopies(t *testing.T) {
+	t.Parallel()
+	f := newRecordingsFixture(t)
+	var owned []UpcomingOwned
+	add := func(path, asin, isbn string) {
+		t.Helper()
+		b := Book{LibraryID: f.other.ID, RelPath: path, Title: "One", Narrator: "R. C. Bray", ASIN: asin, ISBN: isbn,
+			AddedAt: "2024-01-01T00:00:00Z"}
+		if _, err := f.c.UpsertBook(f.ctx, &b); err != nil {
+			t.Fatal(err)
+		}
+		owned = append(owned, UpcomingOwned{Ref: Ref{LibraryID: f.other.ID, Path: path}, IDKey: meta.IDKey(asin, isbn),
+			WorkID: "w-one", CheckedAt: "now"})
+	}
+	// Bray/One is B0BRAY with no ISBN: Copy/One (b0bray) is its copy already.
+	add("A copy with an ISBN/One", " B0BRAY", "978-0-00-000009-9") // its ISBN marks the next one
+	add("Z print/One", "", "9780000000099")                        // a copy through that ISBN
+	if err := f.c.SaveUpcomingOwned(f.ctx, owned, nil); err != nil {
+		t.Fatal(err)
+	}
+	me := f.book(t, f.main.ID, "Bray/One")
+	q, args := otherRecordingsQuery(f.all(), me)
+	rows, err := queryRows(f.ctx, f.c.db, scanBookRow, q, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := relPaths(rows)
+	if slices.Contains(read, "Copy/One") || !slices.Contains(read, "A copy with an ISBN/One") {
+		t.Fatalf("query read %q: want no Copy/One, the copy with an ISBN kept", read)
+	}
+	got, err := f.c.OtherRecordings(f.ctx, f.all(), me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Kemper/One", "Private/One", "Abridged/One"}; !reflect.DeepEqual(relPaths(got), want) {
+		t.Fatalf("other recordings = %q, want %q", relPaths(got), want)
+	}
+}
+
+// TestWorkBooks (server#412): every book of the works asked whatever its
+// series, by its work key (a recorded match naming another work is not one),
+// books libraries only, in library order then path; the pair: a member's grant
+// keeps the rest out.
+func TestWorkBooks(t *testing.T) {
+	t.Parallel()
+	f := newRecordingsFixture(t)
+	got, err := f.c.WorkBooks(f.ctx, f.all(), []string{"w-one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Bray/One", "Kemper/One", "Private/One", "Abridged/One", "Copy/One"}; !reflect.DeepEqual(relPaths(got), want) {
+		t.Fatalf("allowed = %q, want %q", relPaths(got), want)
+	}
+	member := []Scope{{LibraryID: f.main.ID, Paths: []string{"Kemper", "Rematched"}}}
+	if got, err = f.c.WorkBooks(f.ctx, member, []string{"w-one", "w-two"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Kemper/One", "Rematched/Two"}; !reflect.DeepEqual(relPaths(got), want) {
+		t.Fatalf("denied = %q, want %q", relPaths(got), want)
+	}
+	if got, err = f.c.WorkBooks(f.ctx, nil, []string{"w-one"}); err != nil || len(got) != 0 {
+		t.Fatalf("no scopes = %q, %v", relPaths(got), err)
 	}
 }

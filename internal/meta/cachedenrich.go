@@ -55,48 +55,66 @@ func coverageOf(e *Enrichment) Coverage {
 	return Coverage{Characters: !f.Characters, Recaps: !f.Recaps, Description: !f.Description || core, Known: true}
 }
 
+// CoverageBook is one book Coverages answers for: its identifiers, and its
+// community work when the catalog knows it (Book.WorkID: a recorded match
+// first, the work a book matched in the console with no ASIN or ISBN has,
+// server#375), "" when not.
+type CoverageBook struct {
+	ASIN, ISBN string
+	WorkID     string
+}
+
 // Coverages answers Coverage for many books at once (the Bridge's estimate: a
 // series batch's brief answers, a book's earlier books), each in input order,
-// without a full Enrich per book: a cached enrichment answers (fresh or stale,
-// as CachedEnrichment), and the rest take the console's bounded path, their
-// lookups batched by WorkIDs (under lookupSem, inside composeBudget) and each
-// work then fetched by id (cached per work, under workSem), never a series
-// rail. A book with no identifier, or no match upstream, carries nothing (known).
-func (s *Service) Coverages(ctx context.Context, books []BookIDs) []Coverage {
+// without a full Enrich per book: a cached enrichment of the book's identifiers
+// answers (fresh or stale, as CachedEnrichment) when it is of the book's known
+// work (any, when none is known); else a known work is fetched by id, and the
+// rest take the console's bounded path, their lookups batched by WorkIDs (under
+// lookupSem, inside composeBudget) and each work then fetched by id (cached per
+// work, under workSem), never a series rail. A book with no identifier and no
+// known work, or no match upstream, carries nothing (known).
+func (s *Service) Coverages(ctx context.Context, books []CoverageBook) []Coverage {
 	out := make([]Coverage, len(books))
 	var (
 		ask []BookIDs
 		at  []int
 	)
+	works := map[int]string{} // book index -> the work to fetch by id
 	for i, b := range books {
-		if env := s.CachedEnrichment(ctx, b.ASIN, b.ISBN); env != nil {
+		if env := s.CachedEnrichment(ctx, b.ASIN, b.ISBN); env != nil &&
+			(b.WorkID == "" || (env.Work != nil && env.Work.ID == b.WorkID)) {
 			out[i] = coverageOf(env)
 			continue
 		}
-		ask, at = append(ask, b), append(at, i)
+		if b.WorkID != "" {
+			works[i] = b.WorkID
+			continue
+		}
+		ask, at = append(ask, BookIDs{ASIN: b.ASIN, ISBN: b.ISBN}), append(at, i)
 	}
-	if len(ask) == 0 {
-		return out
+	if len(ask) > 0 {
+		for j, id := range s.WorkIDs(ctx, ask) {
+			switch {
+			case id.Failed: // unknown: left as the zero Coverage
+			case id.ID == "":
+				out[at[j]] = Coverage{Known: true}
+			default:
+				works[at[j]] = id.ID
+			}
+		}
 	}
 	var wg sync.WaitGroup
-	for j, id := range s.WorkIDs(ctx, ask) {
-		i := at[j]
-		switch {
-		case id.Failed: // unknown: left as the zero Coverage
-		case id.ID == "":
-			out[i] = Coverage{Known: true}
-		default:
-			// Each goroutine writes only its own book's entry.
-			wg.Go(func() {
-				w, err := s.Work(ctx, id.ID)
-				switch {
-				case errors.Is(err, ErrNotFound):
-					out[i] = Coverage{Known: true}
-				case err == nil:
-					out[i] = coverageOf(&Enrichment{Work: w})
-				}
-			})
-		}
+	for i, id := range works {
+		// Each goroutine writes only its own book's entry.
+		wg.Go(func() {
+			w, err := s.Work(ctx, id)
+			switch {
+			case errors.Is(err, ErrNotFound):
+				out[i] = Coverage{Known: true}
+			case err == nil:
+				out[i] = coverageOf(&Enrichment{Work: w})
+			}
+		})
 	}
 	wg.Wait()
 	return out

@@ -706,3 +706,68 @@ func TestBridgeEstimateNeedsAnAdmin(t *testing.T) {
 		t.Fatalf("allowed: the admin: %d %s", resp.StatusCode, body)
 	}
 }
+
+// A book matched in the console with no ASIN or ISBN (server#375) is asked
+// about by its match: the estimate reads its work's characters and recaps (not
+// "none", which would price a generation /meta then hides), an earlier book so
+// matched is not offered, and the Bridge's book facts carry its work id. A book
+// with neither an identifier nor a match still has nothing.
+func TestBridgeEstimateMatchOnly(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnvOn(t, newMetaEnv(t, true, 0))
+	ctx := context.Background()
+	lib, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Series", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bk := range []catalog.Book{
+		{RelPath: "Mars/1", Series: "Mars", SeriesIndex: 1},
+		{RelPath: "Mars/2", Series: "Mars", SeriesIndex: 2},
+		{RelPath: "Mars/3", Series: "Mars", SeriesIndex: 3},
+	} {
+		bk.LibraryID, bk.Title, bk.AddedAt = lib.ID, bk.RelPath, "2020-01-01"
+		if _, err := b.cat.UpsertBook(ctx, &bk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{"Mars/1", "Mars/3"} {
+		if err := b.cat.EditBook(ctx, lib.ID, p, catalog.BookEdit{
+			Match: &catalog.MatchAnchor{WorkID: "the-martian"}, Source: catalog.SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.beatWith(t, true, true, sidecarsEstimates)
+	resp, est, body := b.estimate(t, b.adminTok, lib.ID, "Mars/3")
+	if resp.StatusCode != http.StatusOK || !est.Has.Community.Characters || !est.Has.Community.Recaps || est.Has.CommunityUnknown {
+		t.Fatalf("match-only book: %d %s", resp.StatusCode, body)
+	}
+	var earlier []string
+	for _, e := range est.Earlier {
+		earlier = append(earlier, e.Path)
+	}
+	if want := []string{"Mars/2"}; !slices.Equal(earlier, want) {
+		t.Fatalf("earlier = %v, want %v", earlier, want)
+	}
+	if brief := b.briefEstimate(t, lib.ID, "Mars/2"); brief.Has.Community.Recaps || brief.Has.CommunityUnknown {
+		t.Fatalf("no identifier, no match = %+v, want nothing", brief.Has)
+	}
+	facts := func(path string) string {
+		t.Helper()
+		resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book?path=%s", lib.ID, url.QueryEscape(path)), b.bridgeTok, "")
+		var out struct {
+			Book bridgeBook `json:"book"`
+		}
+		decodeInto(t, body, &out)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("book facts %s: %d %s", path, resp.StatusCode, body)
+		}
+		return out.Book.WorkID
+	}
+	if got := facts("Mars/3"); got != "the-martian" {
+		t.Fatalf("match-only book facts work_id = %q, want the-martian", got)
+	}
+	if got := facts("Mars/2"); got != "" {
+		t.Fatalf("unmatched book facts work_id = %q, want none", got)
+	}
+}

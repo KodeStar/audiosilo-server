@@ -325,8 +325,7 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 // bridgeBook is a book's facts for a Bridge job (GET /bridge/libraries/{id}/book
 // with a path): the effective values, its credits split as the server reads
 // them (names.Split), its series position as stored ("" for none), its
-// community work id when the metadata cache knows it ("" otherwise) and its
-// ebook.
+// community work id when known (bridgeBookFacts; "" otherwise) and its ebook.
 type bridgeBook struct {
 	Title       string   `json:"title"`
 	Authors     []string `json:"authors"`
@@ -343,9 +342,12 @@ type bridgeBook struct {
 	Ebook *catalog.Ebook `json:"ebook,omitempty"`
 }
 
-// bridgeBookFacts is book's bridgeBook. The work id comes from the metadata
-// cache alone (meta.Service.CachedWorkID), never an upstream call: the Bridge
-// asks this for every job, and a book nobody has looked up yet simply has none.
+// bridgeBookFacts is book's bridgeBook. The work id is the book's own
+// (Book.WorkID: its recorded match, so a book matched in the console with no
+// ASIN or ISBN has one, server#375, else the upcoming job's resolution), else
+// the metadata cache's for its identifiers (meta.Service.CachedWorkID), never
+// an upstream call: the Bridge asks this for every job, and a book nobody has
+// looked up yet simply has none.
 func (a *API) bridgeBookFacts(ctx context.Context, book *catalog.Book) bridgeBook {
 	out := bridgeBook{
 		Title: book.Title, Authors: orEmpty(names.Split(book.Author)), Narrators: orEmpty(names.Split(book.Narrator)),
@@ -353,7 +355,10 @@ func (a *API) bridgeBookFacts(ctx context.Context, book *catalog.Book) bridgeBoo
 		ASIN: book.ASIN, ISBN: book.ISBN, Duration: book.Duration, Ebook: book.Ebook,
 	}
 	if a.metadataOn() {
-		out.WorkID, _ = a.meta.CachedWorkID(ctx, book.ASIN, book.ISBN)
+		out.WorkID = book.WorkID
+		if out.WorkID == "" {
+			out.WorkID, _ = a.meta.CachedWorkID(ctx, book.ASIN, book.ISBN)
+		}
 	}
 	return out
 }

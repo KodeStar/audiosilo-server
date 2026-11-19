@@ -172,16 +172,25 @@ func (a *API) openOrBlocker(ctx context.Context, kind string, libraryID int64, p
 // (meta.Service.Coverages: its cached enrichment, else the console's bounded
 // lookup, never a full Enrich per book, which a series batch would multiply),
 // and whether that couldn't be had right now (unknown, logged: never to be read
-// as "none"). Metadata off, no identifier or no match is nothing.
+// as "none"). The book's work is its own when known (Book.WorkID: its recorded
+// match first, so a book matched in the console with no ASIN or ISBN is asked
+// about by its match, server#375), else its identifiers'. Metadata off, no
+// identifier and no work, or no match is nothing.
 func (a *API) communityContent(ctx context.Context, book *catalog.Book) (has hasContent, unknown bool) {
-	if !a.metadataOn() || (book.ASIN == "" && book.ISBN == "") {
+	if !a.metadataOn() || (book.ASIN == "" && book.ISBN == "" && book.WorkID == "") {
 		return hasContent{}, false
 	}
-	c := a.meta.Coverages(ctx, []meta.BookIDs{{ASIN: book.ASIN, ISBN: book.ISBN}})[0]
+	c := a.meta.Coverages(ctx, []meta.CoverageBook{coverageBook(book)})[0]
 	if !c.Known && ctx.Err() == nil {
 		a.log.Warn("community lookup for the bridge estimate failed", "library", book.LibraryID, "path", book.RelPath)
 	}
 	return hasContent{Characters: c.Characters, Recaps: c.Recaps, Description: c.Description}, !c.Known
+}
+
+// coverageBook is what meta.Service.Coverages asks about book by: its
+// identifiers and its work key.
+func coverageBook(book *catalog.Book) meta.CoverageBook {
+	return meta.CoverageBook{ASIN: book.ASIN, ISBN: book.ISBN, WorkID: book.WorkID}
 }
 
 // localContent is what the book's generated attachments carry (a stored file is
@@ -211,9 +220,9 @@ func (a *API) earlierWithoutRecaps(ctx context.Context, book *catalog.Book, st b
 		checked += len(chunk)
 		var cov []meta.Coverage
 		if a.metadataOn() {
-			ids := make([]meta.BookIDs, len(chunk))
-			for i, m := range chunk {
-				ids[i] = meta.BookIDs{ASIN: m.ASIN, ISBN: m.ISBN}
+			ids := make([]meta.CoverageBook, len(chunk))
+			for i := range chunk {
+				ids[i] = coverageBook(&chunk[i].Book)
 			}
 			cov = a.meta.Coverages(ctx, ids)
 		}
