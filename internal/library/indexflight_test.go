@@ -435,7 +435,9 @@ func TestWaitFlightBoundsOnlyTheRead(t *testing.T) {
 // waiter gives up on it at once.
 func TestWaitFlightWaitsOnAReadThatMovesOn(t *testing.T) {
 	t.Parallel()
-	s := &Scanner{probeTimeout: 60 * time.Millisecond}
+	// A look's time well past the read's progress tick, so a loaded test
+	// machine's late tick is still progress within it.
+	s := &Scanner{probeTimeout: 250 * time.Millisecond}
 	f := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
 	stop := make(chan struct{})
 	go func() { // the read: progress every 20 ms, for five looks' time
