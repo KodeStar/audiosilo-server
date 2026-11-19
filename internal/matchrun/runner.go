@@ -474,14 +474,17 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 		return item, err
 	}
 	m := judge(cands, q, b.Duration, o.Region)
-	if len(cands) > 0 && !identifierAgrees(&cands[0]) && (q.BookASIN != "" || q.BookISBN != "") {
+	if o.Mode == catalog.MatchModeMatch && len(cands) > 0 && !identifierAgrees(&cands[0]) &&
+		(q.BookASIN != "" || q.BookISBN != "") {
 		// The hint names another book (a wrong volume's ASIN, server#352), and
 		// metaserve answers one work per request, so the right one is lost
 		// behind it: asked again by the book's own facts alone. What that finds,
 		// when it is another work worth a look, is the item, held for review
 		// however confident (the book still carries an identifier naming
 		// something else); else, or when that ask fails, the hint's work
-		// stays held.
+		// stays held. Not an unknown_asin run's book: its ASIN is its own, no
+		// hint, and one the community knows now is never applied over
+		// (asinKnownSince), so a second ask would be spent for nothing.
 		bare := q
 		bare.BookASIN, bare.BookISBN = "", ""
 		again, err := r.matcher.Candidates(ctx, bare)

@@ -235,3 +235,34 @@ func TestMatchAsksAgainPastAWrongIdentifier(t *testing.T) {
 		}
 	}
 }
+
+// TestUnknownASINRunAsksItsOwnASINOnce: an unknown_asin run asks by the book's
+// own ASIN, no hint, so a record that ASIN names now is not asked again
+// without it, whatever the title says (the apply passes such a book by:
+// asinKnownSince); the item stays the ASIN's work, held as before.
+func TestUnknownASINRunAsksItsOwnASINOnce(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/Own", "Own", "B0NOPE0007", nil)
+	if err := e.cat.SaveASINChecks(ctx, []catalog.ASINCheck{{ASIN: "B0NOPE0007", Unknown: true}}, "2026-11-01T00:00:00.000Z"); err != nil {
+		t.Fatal(err)
+	}
+	e.matcher.answer = func(q meta.MatchQuery) []meta.MatchCandidate {
+		if q.BookASIN == "" {
+			return []meta.MatchCandidate{cand("title-work", 97, "")}
+		}
+		c := cand("wrong-volume", 100, "")
+		title := 0.4
+		c.Reasons = &meta.MatchReasons{Identifier: "asin", Title: &title, Series: "conflict"}
+		return []meta.MatchCandidate{c}
+	}
+	run := e.start(t, catalog.MatchModeUnknownASIN, "uk")
+	items := e.items(t, run, catalog.OutcomeReview)
+	if len(items) != 1 || items[0].Proposal.WorkID != "wrong-volume" || items[0].Detail != DetailIdentifierDisagrees {
+		t.Fatalf("items = %+v, want the ASIN's work held as identifier_disagrees", items)
+	}
+	if n := len(e.matcher.queries); n != 1 {
+		t.Errorf("asked %d times, want once", n)
+	}
+}

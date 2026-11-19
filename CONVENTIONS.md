@@ -2773,8 +2773,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `IdentifierTitleSame` (0.9; none judged, a title that is only the series' name and number, is held),
   as the same title at another position is the series numbered another way (The Witcher counting its
   story collections, Halo, a chronological order). Else review, detail `identifier_disagrees`, and
-  the run asks again without the hint (server#352: metaserve answers one work per request, so a wrong
-  volume's ASIN hid the right work): another work that query finds, not `none` by Classify, is the
+  a match run asks again without the hint (server#352: metaserve answers one work per request, so a wrong
+  volume's ASIN hid the right work; never an unknown_asin run, whose ASIN is the book's own and is
+  never applied over once known, `asinKnownSince`): another work that query finds, not `none` by Classify, is the
   item instead, held for review however confident, detail `identifier_elsewhere` (the book still
   carries an identifier naming something else); the same work, nothing worth a look or a failed ask
   keeps the hint's work held. A review item records every reason it is held for, in this order:
