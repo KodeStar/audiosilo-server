@@ -2394,7 +2394,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`meta.Service.Coverages` by `/meta`'s rule: a recorded match's work first, `CoverageBook.Matched` from
   `catalog.WorkSources`, fetched by id, the identifiers' cached envelope standing when upstream no longer
   has that work; else the newer of the identifiers' cached answer (memory's envelope or lookup, else the
-  stored row, `cachedAnswerOf`, dated by its expiry less its TTL) and the work the upcoming job resolved
+  stored row, `cachedAnswerOf`, dated when it was had: `cacheEntry.at`, a stored row's expiry less its TTL,
+  which a stale row held through an outage keeps, `cacheHoldStale`) and the work the upcoming job resolved
   (`upcoming_owned.checked_at`, `CoverageBook.ResolvedAt`), so a stored row older than the job's monthly
   recheck never wins after a restart, nor a month-old resolution over a lookup since) and the Bridge's book facts
   (`work_id`, the same order by `meta.Service.CachedWork`, both through `CoverageBook.workOf`) read the

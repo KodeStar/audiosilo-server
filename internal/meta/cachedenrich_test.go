@@ -159,6 +159,40 @@ func TestCachedWorkNewestWins(t *testing.T) {
 	}
 }
 
+// An upstream failure serves a stale stored answer from memory for a while
+// (the outage fallback): it keeps its row's age, so an upcoming recheck since
+// that row still names the work, though the fallback was put in memory now.
+func TestCachedWorkStaleFallbackKeepsItsAge(t *testing.T) {
+	t.Parallel()
+	m := fullMock()
+	m.lookupCode = http.StatusInternalServerError
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	store := newMemStore()
+	store.put(StoredEntry{Key: nsASIN.key("B00FLIJJSY"), Version: storeVersion, Source: srv.URL,
+		Payload: []byte(`{"matched":true,"work":{"id":"old-work"}}`), Expires: now.Add(-5*24*time.Hour + positiveTTL)})
+	svc := NewService(srv.URL, func() time.Time { return now })
+	svc.SetStore(store)
+	ctx := context.Background()
+
+	if env, err := svc.Enrich(ctx, "B00FLIJJSY", ""); err != nil || env.Work.ID != "old-work" {
+		t.Fatalf("outage fallback = %+v, %v; want the stored old-work", env, err)
+	}
+	if _, hit, _ := cacheGet[Enrichment](svc.cache, nsASIN.key("B00FLIJJSY")); !hit {
+		t.Fatal("the fallback isn't held in memory")
+	}
+	recheck := CoverageBook{ASIN: "B00FLIJJSY", WorkID: "the-martian", ResolvedAt: now.Add(-2 * 24 * time.Hour)}
+	if got := svc.CachedWork(ctx, recheck); got != "the-martian" {
+		t.Fatalf("book facts over a held stale row = %q, want the newer recheck's the-martian", got)
+	}
+	// A recheck before the row was written leaves the row the newer answer.
+	recheck.ResolvedAt = now.Add(-10 * 24 * time.Hour)
+	if got := svc.CachedWork(ctx, recheck); got != "old-work" {
+		t.Fatalf("book facts over an older recheck = %q, want old-work", got)
+	}
+}
+
 // A Coverage says whether the community work has a description the player shows
 // before a generated one (the Bridge's estimate: a generated description is
 // offered only without one): its community description or its core one.

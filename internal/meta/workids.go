@@ -100,18 +100,19 @@ func (s *Service) WorkIDs(ctx context.Context, books []BookIDs) []WorkID {
 // neither holds an answer. A cached enrichment failure is not an answer: it may
 // have come from the work or series fetch rather than the lookup, so the lookup
 // entry (or a lookup of its own) decides. env is the enrichment when it is what
-// answered with a match (cachedAnswerOf's), until the answering entry's expiry.
-func (s *Service) cachedWorkID(key string) (w WorkID, env *Enrichment, until time.Time, hit bool) {
-	if e, until, hit, err := cacheGetUntil[Enrichment](s.cache, key); hit {
+// answered with a match (cachedAnswerOf's), at when the answering entry's answer
+// was had (cacheEntry.at).
+func (s *Service) cachedWorkID(key string) (w WorkID, env *Enrichment, at time.Time, hit bool) {
+	if e, at, hit, err := cacheGetAt[Enrichment](s.cache, key); hit {
 		switch {
 		case err == nil && e.Work != nil && e.Work.ID != "":
-			return WorkID{ID: e.Work.ID}, e, until, true
+			return WorkID{ID: e.Work.ID}, e, at, true
 		case errors.Is(err, ErrNotFound):
-			return WorkID{}, nil, until, true
+			return WorkID{}, nil, at, true
 		}
 	}
-	if l, until, hit, err := cacheGetUntil[upstreamLookup](s.cache, nsLookup.key(key)); hit {
-		return workIDOf(l, err), nil, until, true
+	if l, at, hit, err := cacheGetAt[upstreamLookup](s.cache, nsLookup.key(key)); hit {
+		return workIDOf(l, err), nil, at, true
 	}
 	return WorkID{}, nil, time.Time{}, false
 }
