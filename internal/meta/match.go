@@ -862,7 +862,9 @@ func (s *Service) searchHits(ctx context.Context, q MatchQuery, text, asin, isbn
 				by := "isbn"
 				if asin != "" {
 					by = "asin"
-					s.foundASIN(ctx, asin)
+					if lookup.Work.ID != "" { // as Service.lookup reads a work found
+						s.foundASIN(ctx, asin)
+					}
 				}
 				lookupHit = &matchHit{id: lookup.Work.ID, recordingID: lookup.RecordingID, cover: deref(lookup.Work.CoverURL),
 					score: 100, reasons: &MatchReasons{Identifier: by}}
