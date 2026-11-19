@@ -96,11 +96,12 @@ type Service struct {
 	announced   map[int64]announcedPark
 }
 
-// announcedPark is the park code announced for a job and the claim (attempt)
-// it was announced on.
+// announcedPark is the park code announced for a job, the claim (attempt) it
+// was announced on, and when.
 type announcedPark struct {
 	attempt int
 	code    string
+	at      time.Time
 }
 
 // New returns a Service. now may be nil to use time.Now.

@@ -1761,24 +1761,29 @@ func (j *Job) Notable(from, fromCode string) bool {
 	return false
 }
 
+// reannounceAfter is how long a park announced once stays quiet while the
+// Bridge keeps parking the job again for the same reason (parkNews): a later,
+// separate outage on the same claim is not silent for ever.
+const reannounceAfter = 6 * time.Hour
+
 // parkNews reports whether a Notable move is still news once the parks
-// already announced are counted: a park is announced once per outage, so a
-// Bridge that resumes a parked job on a timer (its retry_at) and parks it again
-// with the same code (contrib_unavailable while GitHub is down, a credential
-// still refused) is announced on the first park only, not every ten minutes.
-// A park is news again once its code changes to another that isn't transient
-// (a transient park in between changes nothing), or on a new claim (the job
-// was queued again); a job that ends is forgotten (forgetPark). Any other
-// Notable move (done, failed) is always news. The console still shows the
-// job's park as it stands; only the announcement is held back.
+// already announced are counted. A Bridge that resumes a parked job on a timer
+// (its retry_at) and parks it again with the same code (contrib_unavailable
+// while GitHub is down) is announced once per outage, not every ten minutes:
+// a park is news again when its code changes to another that isn't transient
+// (a transient park in between changes nothing), on a new claim, or once
+// reannounceAfter has passed since it was last announced. Any other Notable
+// move (done, failed) is always news. The console shows the park either way.
 func (s *Service) parkNews(j *Job) bool {
 	if j.State != StateNeedsAttention {
 		return true
 	}
-	seen := announcedPark{attempt: j.Attempts, code: j.ParkCode()}
+	now := s.now()
+	seen := announcedPark{attempt: j.Attempts, code: j.ParkCode(), at: now}
 	s.announcedMu.Lock()
 	defer s.announcedMu.Unlock()
-	if s.announced[j.ID] == seen {
+	if last, ok := s.announced[j.ID]; ok && last.attempt == seen.attempt && last.code == seen.code &&
+		now.Sub(last.at) < reannounceAfter {
 		return false
 	}
 	s.announced[j.ID] = seen

@@ -266,8 +266,8 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 // A park the Bridge retries on a timer (GitHub down for a signed-in Bridge, a
 // credential still refused) is announced once per outage, not on every retry
 // that parks again: news again when its code changes to another that isn't
-// transient, or on a new claim. Another job's park is its own news, and a job
-// that ends is forgotten.
+// transient, on a new claim, or six hours after it was last announced. Another
+// job's park is its own news, and a job that ends is forgotten.
 func TestReparkAnnouncedOncePerOutage(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
@@ -316,6 +316,13 @@ func TestReparkAnnouncedOncePerOutage(t *testing.T) {
 	repark(job.ID, 1, "agent_credential_refused")
 	repark(job.ID, 1, "agent_credential_refused")
 	repark(job.ID, 1, "contrib_unavailable")
+	// Six hours after its last announcement the same park is news again,
+	// once: a later outage on the same claim is not silent for ever.
+	q.advance(reannounceAfter - time.Minute)
+	repark(job.ID, 1, "contrib_unavailable")
+	q.advance(time.Minute)
+	repark(job.ID, 1, "contrib_unavailable")
+	repark(job.ID, 1, "contrib_unavailable")
 	// The Bridge stops reporting on a run: the job is queued again, and its
 	// next claim parking for the same reason is news.
 	step(job.ID, 1, StateRunning, running)
@@ -334,6 +341,7 @@ func TestReparkAnnouncedOncePerOutage(t *testing.T) {
 		"running>needs_attention:contrib_unavailable",
 		"running>needs_attention:contrib_unavailable",
 		"running>needs_attention:agent_credential_refused",
+		"running>needs_attention:contrib_unavailable",
 		"running>needs_attention:contrib_unavailable",
 		"running>needs_attention:contrib_unavailable",
 		"running>done:",
