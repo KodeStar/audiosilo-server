@@ -24,7 +24,6 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/metamirror"
 	"github.com/kodestar/audiosilo-server/internal/mirrortest"
 	"github.com/kodestar/audiosilo-server/internal/store"
-	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // A server started in remote mode deletes the copy mirror mode left; one with
@@ -111,14 +110,7 @@ metadata:
 	}()
 	t.Cleanup(func() {
 		stop()
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Errorf("Run: %v", err)
-			}
-		case <-time.After(startWait):
-			t.Error("Run did not stop")
-		}
+		waitRun(t, done)
 	})
 	base := "http://" + addr + "/api/v1"
 	waitFor(t, "the server", func() bool {
@@ -224,18 +216,6 @@ func freeAddr(t *testing.T) string {
 	addr := l.Addr().String()
 	_ = l.Close()
 	return addr
-}
-
-// startWait is how long a test waits for a start (or a stop) of Run, a scan
-// or a sweep it set going: a whole start (migrations from scratch, the first
-// admin's hash) takes seconds under -race alone, more on a loaded machine.
-// It only ends a test that has already failed.
-var startWait = testwait.Scaled(15 * time.Second)
-
-// waitFor polls cond for up to startWait.
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	mirrortest.Eventually(t, what, startWait, cond)
 }
 
 // call sends one API request, checks its status and decodes its answer into out

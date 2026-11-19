@@ -279,16 +279,10 @@ func TestDemoReaperSweepsThenExits(t *testing.T) {
 	}()
 
 	// The startup sweep should remove the idle demo user.
-	deadline := time.Now().Add(startWait)
-	for {
-		if _, err := authSvc.GetUser(ctx, demo.ID); err != nil {
-			break // reaped
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("demoReaper startup sweep did not reap the idle demo user")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitFor(t, "the startup sweep to reap the idle demo user", func() bool {
+		_, err := authSvc.GetUser(ctx, demo.ID)
+		return err != nil
+	})
 
 	cancel()
 	select {
@@ -503,12 +497,5 @@ func TestRunStartsWithAReadOnlyConfig(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	})
 	stop()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Run: %v", err)
-		}
-	case <-time.After(startWait):
-		t.Fatal("Run did not stop")
-	}
+	waitRun(t, done)
 }
