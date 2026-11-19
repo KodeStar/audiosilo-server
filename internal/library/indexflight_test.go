@@ -98,8 +98,15 @@ func TestIndexPathLeaderCancelled(t *testing.T) {
 	waitJoined(t, s, lib, "A/Book", 1)
 	cancel()
 
-	if a := <-lead; !errors.Is(a.err, context.Canceled) {
-		t.Errorf("leader: %+v, %v, want context.Canceled", a.b, a.err)
+	// The read is held: a leader that waited on it past its request would never
+	// answer, so it is given a deadline rather than left to hang the run.
+	select {
+	case a := <-lead:
+		if !errors.Is(a.err, context.Canceled) {
+			t.Errorf("leader: %+v, %v, want context.Canceled", a.b, a.err)
+		}
+	case <-time.After(testwait.Scaled(20 * time.Second)):
+		t.Error("the leader still waited on the read after its request ended")
 	}
 	release()
 	if a := <-wait; a.err != nil || a.b == nil || a.b.RelPath != "A/Book" {
@@ -152,13 +159,23 @@ func TestIndexMovedSharesTheFlight(t *testing.T) {
 		t.Errorf("the book was probed %d times; one read probes %d", got, once)
 	}
 
-	// The other way round: IndexMoved reads after the on-demand read ends.
+	// The other way round: IndexMoved reads after the on-demand read ends. The
+	// on-demand read's ffprobe runs are held until IndexMoved has found it
+	// under way, or a quick read could end before IndexMoved asks.
+	release = hold()
+	read := make(chan error, 1)
 	go func() {
 		_, err := s.IndexPath(ctx, lib, "A/Twin/01.mp3")
-		moved <- err
+		read <- err
 	}()
 	waitFlight(t, s, lib, "A/Twin", true)
-	if _, err := s.IndexMoved(ctx, lib, "A/Twin", ""); err != nil {
+	go func() {
+		_, err := s.IndexMoved(ctx, lib, "A/Twin", "")
+		moved <- err
+	}()
+	waitJoined(t, s, lib, "A/Twin", 1)
+	release()
+	if err := <-read; err != nil {
 		t.Fatal(err)
 	}
 	if err := <-moved; err != nil {
@@ -270,11 +287,7 @@ func TestIndexPathEndsWithTheServer(t *testing.T) {
 		done <- err
 	}()
 	waitFlight(t, s, lib, "A/Book", true)
-	for deadline := time.Now().Add(10 * time.Second); count() == 0; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the stand-in ffprobe never ran")
-		}
-	}
+	testwait.Eventually(t, "the stand-in ffprobe to run", 10*time.Second, func() bool { return count() > 0 })
 	cancel() // the request goes; the read goes on
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("IndexPath: %v, want context.Canceled", err)
