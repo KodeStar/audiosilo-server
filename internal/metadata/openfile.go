@@ -27,8 +27,16 @@ var (
 // good. ok is false when ctx ended first: fn is left to finish (or not) on its
 // own goroutine, counted in stuck until it does, and drop (when not nil) is
 // handed what it then returns, a file to close. With ctx ended already fn is
-// not run (ok false, nothing counted).
+// not run (ok false, nothing counted). A call that returns in time is progress
+// on ctx's read (WithProgress).
 func await[T any](ctx context.Context, stuck *stuckReads, fn func() T, drop func(T)) (v T, ok bool) {
+	return awaitUntil(ctx, nil, stuck, fn, drop)
+}
+
+// awaitUntil is await, given up on too once expire fires (nil: never), so a
+// caller bounding one call by a time needs no context of its own for it (a
+// look per audio file in a no-change scan: Bounded).
+func awaitUntil[T any](ctx context.Context, expire <-chan time.Time, stuck *stuckReads, fn func() T, drop func(T)) (v T, ok bool) {
 	if ctx.Err() != nil {
 		return v, false
 	}
@@ -47,17 +55,20 @@ func await[T any](ctx context.Context, stuck *stuckReads, fn func() T, drop func
 	}()
 	select {
 	case v = <-done:
+		noteProgress(ctx)
 		return v, true
 	case <-ctx.Done():
-		// Counted before it is marked, so the goroutine's release always
-		// follows; a call that returned meanwhile was never abandoned.
-		stuck.n.Add(1)
-		if state.CompareAndSwap(readRunning, readAbandoned) {
-			return v, false
-		}
-		stuck.release()
-		return <-done, true
+	case <-expire:
 	}
+	// Counted before it is marked, so the goroutine's release always follows;
+	// a call that returned meanwhile was never abandoned.
+	stuck.n.Add(1)
+	if state.CompareAndSwap(readRunning, readAbandoned) {
+		return v, false
+	}
+	stuck.release()
+	noteProgress(ctx)
+	return <-done, true
 }
 
 // An await's call: still running, abandoned by its waiter, or returned.

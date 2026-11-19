@@ -1,0 +1,113 @@
+package library
+
+import (
+	"context"
+	"io/fs"
+	"log/slog"
+	"path/filepath"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
+)
+
+// failLooks makes readDirLook and statLook fail at the paths in fail, each
+// with its errno, until the test ends. Not for parallel tests.
+func failLooks(t *testing.T, fail map[string]syscall.Errno) {
+	t.Helper()
+	wasDir, wasStat := readDirLook, statLook
+	t.Cleanup(func() { readDirLook, statLook = wasDir, wasStat })
+	readDirLook = func(ctx context.Context, p string, timeout time.Duration) ([]fs.DirEntry, error) {
+		if errno, ok := fail[p]; ok {
+			return nil, &fs.PathError{Op: "open", Path: p, Err: errno}
+		}
+		return wasDir(ctx, p, timeout)
+	}
+	statLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+		if errno, ok := fail[p]; ok {
+			return nil, &fs.PathError{Op: "stat", Path: p, Err: errno}
+		}
+		return wasStat(ctx, p, timeout)
+	}
+}
+
+// bookOnDisk reads the share-fault rule on its own looks and resolveBook's
+// (server#360): a book's folder listing or stat failing as a share does (EIO,
+// ENOTCONN: unknown for now; a permission: present, its state kept) is never
+// the book gone, as a listing read as empty once made it; only the path gone
+// (ENOENT, or ENOTDIR: a folder above it replaced by a file) is. Not
+// parallel: it swaps the looks.
+func TestBookOnDiskReadsAShareFaultAsNoAnswer(t *testing.T) {
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "Loose.mp3", make([]byte, 1<<10))
+	writeFile(t, root, "Author/Book/01.mp3", make([]byte, 1<<10))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, "", slog.Default())
+	book := filepath.Join(root, "Author", "Book")
+	for _, c := range []struct {
+		name, rel, at string
+		errno         syscall.Errno
+		want          onDisk
+	}{
+		{"the library folder's listing EIO", "Loose.mp3", root, syscall.EIO, diskUnknown},
+		{"the library folder's listing ENOTCONN", "Loose.mp3", root, syscall.ENOTCONN, diskUnknown},
+		{"the library folder's listing EACCES", "Loose.mp3", root, syscall.EACCES, diskPresent},
+		{"the library folder's listing ENOENT", "Loose.mp3", root, syscall.ENOENT, diskGone},
+		{"its own listing EIO", "Author/Book", book, syscall.EIO, diskUnknown},
+		{"its own stat EPERM", "Author/Book", book, syscall.EPERM, diskPresent},
+		{"its own stat ENOTDIR", "Author/Book", book, syscall.ENOTDIR, diskGone},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			failLooks(t, map[string]syscall.Errno{c.at: c.errno})
+			if got := s.bookOnDisk(ctx, *lib, c.rel); got != c.want {
+				t.Errorf("bookOnDisk(%s) with %s = %v, want %v", c.rel, c.name, got, c.want)
+			}
+		})
+	}
+	if got := s.bookOnDisk(ctx, *lib, "Loose.mp3"); got != diskPresent {
+		t.Errorf("bookOnDisk with every look answering = %v, want present", got)
+	}
+}
+
+// A disc folder whose listing fails as a share does (EIO) in a scan's walk is
+// as unknown as one that didn't answer: the run is partial and the disc set it
+// is a disc of is not worked out from the discs that listed, so the disc that
+// did keeps its split parent rather than reading as a book of its own. The
+// path is recorded unreadable. Not parallel: it swaps the looks.
+func TestAScanKeepsADiscSetWhoseDiscFailsToList(t *testing.T) {
+	cat, ctx := newHealthCatalog(t)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio := testAudio(t)
+	writeFile(t, root, "A/Book/CD1/01.m4b", audio)
+	writeFile(t, root, "A/Book/CD2/01.m4b", audio)
+	writeFile(t, root, "A/Other/01.m4b", audio)
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, "", slog.Default())
+	if res := scanWithin(t, s, *lib, 20*time.Second); res.Books != 3 {
+		t.Fatalf("%d books, want both discs and the other book", res.Books)
+	}
+	want := map[string]string{"A/Book/CD1": "A/Book", "A/Book/CD2": "A/Book"}
+	if got := splitParents(t, cat, lib.ID); len(got) != 2 || got["A/Book/CD1"] != "A/Book" {
+		t.Fatalf("split parents %v, want %v", got, want)
+	}
+
+	failLooks(t, map[string]syscall.Errno{filepath.Join(root, "A", "Book", "CD2"): syscall.EIO})
+	res := scanWithin(t, s, *lib, 20*time.Second)
+	if !res.Partial || res.Removed != 0 {
+		t.Errorf("scan with a disc's listing EIO: partial %v, removed %d; want a partial run, none removed", res.Partial, res.Removed)
+	}
+	if got := splitParents(t, cat, lib.ID); got["A/Book/CD1"] != "A/Book" || got["A/Book/CD2"] != "A/Book" {
+		t.Errorf("split parents after a disc's listing failed %v, want %v kept", got, want)
+	}
+}

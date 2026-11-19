@@ -62,7 +62,7 @@ type walker struct {
 // list is os.ReadDir of path as a metadata.Bounded call (the walk's ctx and
 // timeout).
 func (w walker) list(path string) *listing {
-	entries, err := metadata.ReadDirBounded(w.ctx, path, w.timeout)
+	entries, err := readDirLook(w.ctx, path, w.timeout)
 	return &listing{entries: entries, err: err}
 }
 

@@ -1801,7 +1801,11 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			log.Warn("skipping unreadable path during discovery",
 				"library", lib.Name, "path", absOf(lib, rel), "err", walkErr)
 			rl.unreadable(rel, walkErr)
-			if metadata.GaveUp(walkErr) {
+			// A folder that wouldn't list as a share fails (metadata.ShareFault:
+			// EIO, a permission) is as unknown as one that didn't answer: a disc
+			// set it may be a disc of can't be built from the rest
+			// (dropUnanswered). One gone since its parent listed it holds nothing.
+			if walkErr = metadata.AsGaveUp(walkErr); metadata.GaveUp(walkErr) {
 				side.unanswered[rel] = walkErr
 			}
 			return nil
@@ -1886,7 +1890,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 // with the preview's slot for the mount held meanwhile). Each lstat is a
 // metadata.Bounded call (ctx, at most timeout): unanswered is the folders with
 // one given up on, each with that error (a share that stopped answering), or
-// with one whose lstat failed as a share does (shareFault), its error made a
+// with one whose lstat failed as a share does (metadata.ShareFault), its error made a
 // look given up on: the file listed a moment ago says nothing about whether it
 // is there, so its book is kept as stored rather than built without it.
 func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, timeout time.Duration) (gone int, unanswered map[string]error, err error) {
@@ -1918,9 +1922,7 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, time
 			return
 		}
 		info, err := lstatAudio(ctx, f.f.abs, timeout) // the entry's Info, bounded
-		if shareFault(err) {
-			err = gaveUpOn{err}
-		}
+		err = metadata.AsGaveUp(err)
 		switch {
 		case metadata.GaveUp(err):
 			mu.Lock()
@@ -1936,25 +1938,19 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, time
 	return int(missing.Load()), unanswered, ctx.Err()
 }
 
-// lstatAudio is statAudio's look at each audio file (a test injects a share's
-// errors through it).
-var lstatAudio = metadata.LstatBounded
-
-// shareFault reports whether err, an lstat's of a file its folder listed, is
-// how a share fails rather than an answer about the file: any error but the
-// file gone (ENOENT, ENOTDIR: a folder above it replaced), a look given up on
-// already (metadata.GaveUp) or ctx's. EIO or ESTALE (a soft-mounted NFS share
-// whose server stopped answering, or a handle it lost), ENOTCONN or ETIMEDOUT
-// (a FUSE pool or a network mount that dropped), a permission (EACCES, EPERM:
-// a share refusing a look it allowed the listing) among them.
-func shareFault(err error) bool {
-	return err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) &&
-		!metadata.GaveUp(err) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
-}
+// lstatAudio is statAudio's look at each audio file, readDirLook the walk's
+// and a book's own folder listings (walker.list, audioEntries, bookOnDisk) and
+// statLook a book's own stat (resolveBook, bookOnDisk): a test injects a
+// share's errors through them.
+var (
+	lstatAudio  = metadata.LstatBounded
+	readDirLook = metadata.ReadDirBounded
+	statLook    = metadata.StatBounded
+)
 
 // transientFault reports whether err is a share's fault that trying again may
 // get past: EIO, ESTALE, ENOTCONN, ETIMEDOUT or EHOSTDOWN. Not a permission,
-// which stays until an admin changes it, nor any other shareFault (a link
+// which stays until an admin changes it, nor any other metadata.ShareFault (a link
 // loop, a name the share refuses), which a retry would only meet again.
 func transientFault(err error) bool {
 	for _, errno := range []syscall.Errno{syscall.EIO, syscall.ESTALE, syscall.ENOTCONN, syscall.ETIMEDOUT, syscall.EHOSTDOWN} {
@@ -1964,15 +1960,6 @@ func transientFault(err error) bool {
 	}
 	return false
 }
-
-// gaveUpOn is a shareFault's error made a look given up on (metadata.GaveUp
-// reports it), keeping the share's own message (a permission is not "did not
-// answer in time" in a run's log).
-type gaveUpOn struct{ err error }
-
-func (e gaveUpOn) Error() string        { return e.err.Error() }
-func (e gaveUpOn) Unwrap() error        { return e.err }
-func (e gaveUpOn) Is(target error) bool { return target == metadata.ErrNotAnswered }
 
 // statEntry is a directory entry whose Info statAudio has read, keeping only
 // what a book is built from (folderBook, fileBook: the size and mtime), not the
@@ -2146,7 +2133,11 @@ type audioFile struct {
 // listing is a metadata.Bounded call (ctx, at most timeout): err is one given
 // up on (metadata.GaveUp) or ctx's.
 func audioEntries(ctx context.Context, root, absDir string, ignore *Ignore, timeout time.Duration) ([]audioFile, error) {
-	entries, err := metadata.ReadDirBounded(ctx, absDir, timeout)
+	// A listing failing as a share does (metadata.ShareFault) is a look given
+	// up on, as one that did not answer: never "no audio", which reads as the
+	// book gone (bookOnDisk). A folder gone (ENOENT, ENOTDIR) holds none.
+	entries, err := readDirLook(ctx, absDir, timeout)
+	err = metadata.AsGaveUp(err)
 	if metadata.Unanswered(ctx, err) {
 		return nil, cmp.Or(err, ctx.Err()) // never "no audio" for a listing ctx ended on
 	}
@@ -2804,7 +2795,11 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 		return nil, err
 	}
 	abs := absOf(lib, relPath)
-	info, err := metadata.StatBounded(ctx, abs, look)
+	// A stat failing as a share does (metadata.ShareFault: EIO, a permission)
+	// says nothing about whether the book is there: a look given up on, never
+	// "no book" (bookOnDisk would read that as gone).
+	info, err := statLook(ctx, abs, look)
+	err = metadata.AsGaveUp(err)
 	if metadata.Unanswered(ctx, err) {
 		return nil, cmp.Or(err, ctx.Err()) // ctx may have ended as the stat answered
 	}
@@ -3075,35 +3070,42 @@ const (
 // can't check keeps its state where it is. Its looks are metadata.Bounded
 // calls (ctx, at most lookTimeout): one given up on (a share that stopped
 // answering), or failed as a share does but for a permission (transientFault),
-// is diskUnknown, which no caller takes as gone either.
+// is diskUnknown, which no caller takes as gone either; one refused for good
+// (a permission) is present. Only a path gone (ENOENT, ENOTDIR) is diskGone
+// (metadata.ShareFault's rule).
 func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel string) onDisk {
-	// A path that can't be stat'ed, a folder that can't be listed, or an audio
-	// file's lstat refused (a permission, a link loop), can't be checked: resolveBook would
-	// read it as no book (it wraps a failed stat as ErrNotIndexable, and lists
-	// an unreadable folder as empty), so it counts as present here.
+	// A path whose stat or listing fails as a share does (metadata.ShareFault)
+	// can't be checked: a fault a retry may get past (transientFault: EIO,
+	// ESTALE) is diskUnknown, any other (a permission, a link loop) present,
+	// its state kept where it is. Only the path gone (ENOENT, or ENOTDIR: a
+	// folder above it replaced by a file) is gone. resolveBook reads the same
+	// faults on its own looks as looks given up on.
 	abs := absOf(lib, rel)
 	look := s.lookTimeout(ctx)
-	info, err := metadata.StatBounded(ctx, abs, look)
+	info, err := statLook(ctx, abs, look)
 	if err == nil && info.IsDir() {
-		_, err = metadata.ReadDirBounded(ctx, abs, look)
+		_, err = readDirLook(ctx, abs, look)
 	}
 	switch {
 	case err == nil:
 	case metadata.Unanswered(ctx, err), transientFault(err):
 		return diskUnknown
-	case errors.Is(err, fs.ErrNotExist):
+	case !metadata.ShareFault(err):
 		return diskGone
 	default:
 		return diskPresent
 	}
 	b, err := s.resolveBook(ctx, lib, rel, nil)
-	var fault gaveUpOn
 	switch {
 	case errors.Is(err, ErrNotIndexable), err == nil && b.RelPath != rel:
 		return diskGone
-	case errors.As(err, &fault) && !transientFault(fault.err):
-		return diskPresent // an audio file's lstat refused for good (statAudio's shareFault)
-	case err != nil && metadata.Unanswered(ctx, err):
+	case err == nil:
+		return diskPresent
+	}
+	if cause, faulted := metadata.Faulted(err); faulted && !transientFault(cause) {
+		return diskPresent // a look refused for good (a permission): it can't be checked
+	}
+	if metadata.Unanswered(ctx, err) {
 		return diskUnknown
 	}
 	return diskPresent
@@ -3355,7 +3357,7 @@ func renamedFolders(ctx context.Context, lib catalog.Library, moved map[string]s
 // only in case ("WIth" -> "With"), or of any folder under one so renamed, so when
 // the path still answers, each name along it must be in its parent's listing
 // (listed caches the listings). It errs toward present: a folder it can't check
-// keeps its favourites. Its lstat and listings are metadata.Bounded calls (ctx,
+// (a look failed as a share does, metadata.ShareFault) keeps its favourites. Its lstat and listings are metadata.Bounded calls (ctx,
 // at most timeout each): err is one given up on (metadata.GaveUp) or ctx's, the
 // answer then present.
 func dirPresent(ctx context.Context, lib catalog.Library, rel string, listed map[string]map[string]bool, timeout time.Duration) (bool, error) {
@@ -3363,7 +3365,9 @@ func dirPresent(ctx context.Context, lib catalog.Library, rel string, listed map
 		if metadata.Unanswered(ctx, err) {
 			return true, err
 		}
-		return !errors.Is(err, fs.ErrNotExist), nil
+		// Gone (ENOENT, or ENOTDIR: a folder above it replaced), else a look a
+		// share failed (metadata.ShareFault), which can't be checked.
+		return metadata.ShareFault(err), nil
 	}
 	for dir := rel; dir != "."; dir = path.Dir(dir) {
 		parent := path.Dir(dir)
