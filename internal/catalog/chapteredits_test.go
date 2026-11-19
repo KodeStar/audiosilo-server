@@ -634,7 +634,7 @@ func TestChapterEditCancelsDetect(t *testing.T) {
 	}
 }
 
-// DetectRefused names a chosen source and an applied edit, and lets a
+// detectRefused names a chosen source and an applied edit, and lets a
 // detection through with neither or with a dormant edit.
 func TestDetectRefused(t *testing.T) {
 	t.Parallel()
@@ -642,13 +642,13 @@ func TestDetectRefused(t *testing.T) {
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "A/Book"
 	upsert(t, c, twoFiles(lib.ID, p))
-	if err := c.DetectRefused(ctx, mustBook(t, c, ctx, lib.ID, p)); err != nil {
+	if err := detectRefused(ctx, c.db, lib.ID, p); err != nil {
 		t.Fatalf("no choice, no edit: %v", err)
 	}
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{ChapterSource: ChaptersFromCommunity}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.DetectRefused(ctx, mustBook(t, c, ctx, lib.ID, p)); !errors.Is(err, bridge.ErrChaptersChosen) {
+	if err := detectRefused(ctx, c.db, lib.ID, p); !errors.Is(err, bridge.ErrChaptersChosen) {
 		t.Fatalf("a choice: %v, want ErrChaptersChosen", err)
 	}
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{ChapterSource: ChapterSourceAuto}); err != nil {
@@ -657,13 +657,13 @@ func TestDetectRefused(t *testing.T) {
 	if err := c.SaveChapterEdit(ctx, lib.ID, p, basisNow(t, c, lib.ID, p), fourChapters, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.DetectRefused(ctx, mustBook(t, c, ctx, lib.ID, p)); !errors.Is(err, bridge.ErrChaptersEdited) {
+	if err := detectRefused(ctx, c.db, lib.ID, p); !errors.Is(err, bridge.ErrChaptersEdited) {
 		t.Fatalf("an applied edit: %v, want ErrChaptersEdited", err)
 	}
 	other := twoFiles(lib.ID, p)
 	other.Files[1].Size = 21
 	upsert(t, c, other)
-	if err := c.DetectRefused(ctx, mustBook(t, c, ctx, lib.ID, p)); err != nil {
+	if err := detectRefused(ctx, c.db, lib.ID, p); err != nil {
 		t.Fatalf("a dormant edit: %v", err)
 	}
 }

@@ -943,9 +943,9 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if nj.Kind == bridge.KindDetectChapters {
-			if !a.writeBridgeError(w, a.cat.DetectRefused(r.Context(), book), "bridge queue failed") {
-				return
-			}
+			// Checked in the enqueue's transaction: an edit or a chapter
+			// choice saved since the book was read above refuses it too.
+			nj.Check = catalog.DetectRefusal(book.LibraryID, book.RelPath)
 		}
 	case nj.LibraryID != nil:
 		if _, ok := a.libraryFor(w, r, *nj.LibraryID, "bridge queue failed"); !ok {

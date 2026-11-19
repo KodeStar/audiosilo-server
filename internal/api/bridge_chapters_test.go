@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -420,5 +421,70 @@ func TestBridgeDetectFinishedSaysWhereTheChaptersGo(t *testing.T) {
 	}
 	if got := evs[0].Data["chapters_source"]; got != catalog.ChaptersFromFiles {
 		t.Fatalf("chapters_source = %v, want files", got)
+	}
+}
+
+// TestBridgeDetectRefusalInTheEnqueue (server#471): the queue handler's
+// refusal of a detect job is read in the enqueue's transaction
+// (catalog.DetectRefusal as bridge.NewJob.Check), not from the book as the
+// request read it, so an edit or a chapter choice saved between the two
+// can't let a job through. The book is read first, as the handler does, then
+// the edit lands. Denied: the job is refused 409 chapters_edited, and with a
+// choice chapters_chosen, with nothing queued. Allowed: with neither, the
+// same job is queued.
+func TestBridgeDetectRefusalInTheEnqueue(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beatDetect(t, true)
+	ctx := context.Background()
+	book, err := b.cat.GetBookByPath(ctx, b.lib.ID, mistbornBook)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detect := func() bridge.NewJob {
+		return bridge.NewJob{Kind: bridge.KindDetectChapters, LibraryID: &book.LibraryID, Path: &book.RelPath,
+			Params: json.RawMessage(`{}`), Check: catalog.DetectRefusal(book.LibraryID, book.RelPath)}
+	}
+	noneOpen := func(what string) {
+		t.Helper()
+		if j, err := b.api.bridge.OpenJob(ctx, bridge.KindDetectChapters, book.LibraryID, book.RelPath); err != nil || j != nil {
+			t.Fatalf("%s: open detect job %+v, %v; want none", what, j, err)
+		}
+	}
+	_, body := b.do(t, "GET", b.adminBook(mistbornBook), b.adminTok, "")
+	var page struct {
+		Basis json.RawMessage `json:"chapter_basis"`
+	}
+	decodeInto(t, body, &page)
+	editURL := strings.Replace(b.adminBook(mistbornBook), "/book?", "/book/chapters?", 1)
+	edit := `{"basis":` + string(page.Basis) + `,"chapters":[{"start":0,"title":"The whole book"}]}`
+	if resp, body := b.do(t, "PUT", editURL, b.adminTok, edit); resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit: %d %s", resp.StatusCode, body)
+	}
+	if book.ChaptersSource == catalog.ChaptersFromEdited {
+		t.Fatal("the book as read already holds the edit: no gap to test")
+	}
+	// Denied: the edit saved after the read.
+	if _, _, err := b.api.bridge.Enqueue(ctx, detect()); !errors.Is(err, bridge.ErrChaptersEdited) {
+		t.Fatalf("detect after a late edit: %v, want ErrChaptersEdited", err)
+	}
+	noneOpen("a late edit")
+	if resp, body := b.do(t, "DELETE", editURL, b.adminTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("revert: %d %s", resp.StatusCode, body)
+	}
+	// Denied: a choice saved after the read.
+	if resp, body := b.do(t, "PATCH", b.adminBook(mistbornBook), b.adminTok, `{"chapter_source":"files"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("choose: %d %s", resp.StatusCode, body)
+	}
+	if _, _, err := b.api.bridge.Enqueue(ctx, detect()); !errors.Is(err, bridge.ErrChaptersChosen) {
+		t.Fatalf("detect after a late choice: %v, want ErrChaptersChosen", err)
+	}
+	noneOpen("a late choice")
+	if resp, body := b.do(t, "PATCH", b.adminBook(mistbornBook), b.adminTok, `{"chapter_source":"auto"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("back to automatic: %d %s", resp.StatusCode, body)
+	}
+	// Allowed: neither.
+	if j, created, err := b.api.bridge.Enqueue(ctx, detect()); err != nil || !created || j.Kind != bridge.KindDetectChapters {
+		t.Fatalf("detect with neither: %+v, %v, %v; want queued", j, created, err)
 	}
 }

@@ -3196,7 +3196,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `sidecars.generate` job is open for the book (that run finds them itself), 409 `describe_open`
   (`ErrDescribeOpen`) while a `sidecars.describe` job is (both rewrite the book's bridge.json on the Bridge;
   a describe is refused 409 `detect_open` while a detect job is open, the other way round), and 409
-  `chapters_chosen` (`ErrChaptersChosen`, answered by `catalog.DetectRefused`, the queue handler's one check)
+  `chapters_chosen` (`ErrChaptersChosen`, answered by `catalog.DetectRefusal`, the queue handler's one check, run in
+  `Enqueue`'s transaction as `NewJob.Check` so a choice or an edit saved meanwhile can't let one through, server#471)
   for a book whose chapter source an admin chose (files or community: a found list stands in only with no
   choice, so it would never be used), and 409 `chapters_edited` (`ErrChaptersEdited`) for a book whose edited
   chapters apply (Edited chapters); making such a choice or saving an edit cancels the book's detect job in
@@ -4717,7 +4718,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   asks again from where it was, playing if it was; a mint that fails says it can't play, asking nothing with the
   old token); the console offers no
   Edit chapters in a podcast library (`ChaptersCard` reads the library's kind). A `chapters.detect` job for a book
-  whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, `catalog.DetectRefused` from
+  whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, `catalog.DetectRefusal` from
   the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list
   would sit under the edit, never used; saving an edit cancels a queued or parked one (`bridge.CancelChaptersEdited`;
   a claimed or running one finishes, its list a fallback: `bridge.CancelWaitingBookJob`). Only the console queues detect jobs (the player never does): Health's Detect

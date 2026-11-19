@@ -597,10 +597,15 @@ type NewJob struct {
 	Kind      string
 	LibraryID *int64
 	// Path is the book's indexed path (nil: the job is about the library itself).
-	Path         *string
-	Params       json.RawMessage
-	RequestedBy  int64
-	Priority     int
+	Path        *string
+	Params      json.RawMessage
+	RequestedBy int64
+	Priority    int
+	// Check, when set, refuses the job with its error, run first in Enqueue's
+	// transaction (before the open job of the kind is looked up), so a write
+	// that would refuse it can't land between the caller's own look and the
+	// insert: chapters.detect's catalog.DetectRefusal (server#471).
+	Check        func(context.Context, *sql.Tx) error
 	feedRedacted string
 	fetch        *FetchOptions
 	// adoptOnly: only an open job with the same dedupe key is returned;
@@ -655,14 +660,14 @@ var ErrDescribeOpen = errors.New("a description job is open for the book")
 // ErrChaptersChosen is a chapters.detect job for a book whose chapter source
 // an admin chose (the files' or the community's): the chapters it would find
 // stand in only when none was chosen, so they would never be used (a 409
-// chapters_chosen). catalog.DetectRefused answers it, as the catalog holds
+// chapters_chosen). catalog.DetectRefusal answers it, as the catalog holds
 // the choice; making one cancels a queued or parked job (CancelChaptersChosen).
 var ErrChaptersChosen = errors.New("an admin chose the book's chapter source")
 
 // ErrChaptersEdited is a chapters.detect job for a book whose chapters an
 // admin edited, while the edit applies (catalog.ChaptersFromEdited): an edit
 // stands over every other source, so a found list would sit dormant under it
-// (a 409 chapters_edited). catalog.DetectRefused answers it, as the catalog
+// (a 409 chapters_edited). catalog.DetectRefusal answers it, as the catalog
 // holds the edit; saving one cancels a queued or parked job (CancelChaptersEdited).
 var ErrChaptersEdited = errors.New("an admin edited the book's chapters")
 
@@ -778,6 +783,11 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 		var err error
 		if exp, err = expireTx(ctx, tx, now); err != nil {
 			return err
+		}
+		if j.Check != nil {
+			if err := j.Check(ctx, tx); err != nil {
+				return err
+			}
 		}
 		var id int64
 		err = tx.QueryRowContext(ctx,
