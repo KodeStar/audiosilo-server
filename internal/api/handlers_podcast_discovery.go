@@ -352,6 +352,11 @@ func (a *API) opmlImportContext(r *http.Request) (context.Context, context.Cance
 	} else {
 		ctx, cancel = context.WithTimeout(ctx, a.opmlImportDur)
 	}
+	// AfterFunc ends it from a goroutine of its own, so an import admitted
+	// while the server is already stopping is ended here, before a row acts.
+	if a.baseCtx.Err() != nil {
+		cancel()
+	}
 	stop := context.AfterFunc(a.baseCtx, cancel)
 	return ctx, func() { stop(); cancel() }
 }
