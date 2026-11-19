@@ -112,7 +112,10 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
     />
   );
 
-  if (list.isError) {
+  // Only with no rows to show: a re-read that fails (the list is read again
+  // while a detection is open, and on focus) keeps the rows it had, and the
+  // next one puts them right.
+  if (list.isError && !list.data) {
     return (
       <>
         <QueryError

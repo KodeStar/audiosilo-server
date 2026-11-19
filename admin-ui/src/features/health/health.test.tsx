@@ -698,6 +698,30 @@ describe('library health', () => {
       expect(within(gate).getByRole('button', { name: 'Detect chapters' })).toBeInTheDocument();
     });
 
+    it('keeps the rows when reading the list again fails', async () => {
+      let down = false;
+      mockFetch(
+        detectRoutes({
+          'GET /admin/books': (req) =>
+            down
+              ? { status: 503, body: { error: 'starting' } }
+              : { body: { books: req.query.get('issue') === 'no_chapters' ? plain : [] } },
+        }),
+      );
+      const { queryClient } = renderApp('/health?issue=no_chapters');
+      expect(await screen.findByRole('link', { name: 'The Black Gate' })).toBeInTheDocument();
+      down = true;
+      await queryClient.refetchQueries({ queryKey: ['admin', 'books', 'list'] });
+      await waitFor(() =>
+        expect(
+          queryClient.getQueryCache().findAll({ queryKey: ['admin', 'books', 'list'] })[0]?.state
+            .status,
+        ).toBe('error'),
+      );
+      expect(screen.getByRole('link', { name: 'The Black Gate' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Past Tense' })).toBeInTheDocument();
+    });
+
     it('reads the list again once a detection is queued, so its row says so (BRIDGE-08)', async () => {
       let queued = false;
       mockFetch(
