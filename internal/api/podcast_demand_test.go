@@ -431,6 +431,36 @@ func TestPodcastEnqueueTimeCountsAgainstWait(t *testing.T) {
 	}
 }
 
+// TestPodcastWaitEndsOnARefusedEpisode: a stream waiting on a fetch whose
+// episode the share then refuses for good (its show folder, chmod 000) is the
+// 404 episode_not_found at once, not a wait that ends as 503 podcast_fetching:
+// the fetch would meet the same refusal. Not parallel only for the chmod: the
+// folder is this test's own.
+func TestPodcastWaitEndsOnARefusedEpisode(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a folder whatever its mode")
+	}
+	b, f := podcastStorageEnv(t)
+	ep := f.Episodes[0].Path
+	dir := filepath.Join(b.lib.Root, "Fixture Show")
+	if err := os.Remove(filepath.Join(b.lib.Root, ep)); err != nil {
+		t.Fatal(err) // indexed as present: the stream's first open finds it gone
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	immediatePodcastWait(b)
+	after := b.api.podcastDemand.After
+	b.api.podcastDemand.After = func(d time.Duration) (<-chan time.Time, func()) {
+		if err := os.Chmod(dir, 0); err != nil {
+			t.Error(err)
+		}
+		return after(d)
+	}
+	w := getPodcastStream(b, podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(ep)))
+	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "episode_not_found") {
+		t.Fatalf("a wait whose episode the share then refuses = %d %s, want 404 episode_not_found", w.Code, w.Body)
+	}
+}
+
 func TestPodcastFinalPresenceCheckWithoutWake(t *testing.T) {
 	b, f := podcastStorageEnv(t)
 	ready := f.Episodes[0].Path
