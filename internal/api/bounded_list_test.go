@@ -263,8 +263,8 @@ func TestDecodeBoundedMapCountsFirst(t *testing.T) {
 // titles call carry stop at their caps as they are read: each body holds one
 // entry past the cap, and that entry doesn't decode, so the route gives its
 // cap's answer only when the decode stopped before it (decoded whole, the
-// bad entry would make it a plain 400). One entry fewer is not refused for
-// its length.
+// bad entry would make it a plain 400). With one entry fewer the decode
+// reaches the bad entry, so a list at its cap is not refused for its length.
 func TestEditAndTitleListsStopAtTheirCaps(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
@@ -326,14 +326,11 @@ func TestEditAndTitleListsStopAtTheirCaps(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, tc.want) {
 			t.Errorf("%s past its cap of %d: %d %.300s, want 400 %s", tc.name, tc.max, resp.StatusCode, out, tc.want)
 		}
-		// At the cap the list is read whole, so the bad entry is reached.
+		// At the cap the list is read whole, so the bad entry is reached:
+		// the list is not refused for its length.
 		resp, out = b.do(t, tc.method, tc.route, tc.tok, tc.body(tc.max-1, tc.bad))
 		if resp.StatusCode != http.StatusBadRequest || strings.Contains(out, tc.want) {
 			t.Errorf("%s at its cap of %d: %d %.300s, want a plain 400", tc.name, tc.max, resp.StatusCode, out)
-		}
-		// A list at the cap is not refused for its length.
-		if resp, out = b.do(t, tc.method, tc.route, tc.tok, tc.body(tc.max, "")); strings.Contains(out, tc.want) {
-			t.Errorf("%s at its cap of %d: %d %.300s, refused for its length", tc.name, tc.max, resp.StatusCode, out)
 		}
 	}
 }

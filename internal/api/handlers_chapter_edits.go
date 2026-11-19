@@ -26,7 +26,8 @@ const maxChapterEditBody = 4 << 20
 // edit anyway).
 type chapterEditRequest struct {
 	Basis *struct {
-		Files chapterBasisFiles `json:"files"`
+		catalog.ChapterBasis
+		Files chapterBasisFiles `json:"files"` // over ChapterBasis.Files
 	} `json:"basis"`
 	Chapters editedChapters `json:"chapters"`
 }
@@ -71,7 +72,8 @@ func (a *API) handleAdminEditChapters(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	basis := catalog.ChapterBasis{Files: req.Basis.Files}
+	basis := req.Basis.ChapterBasis
+	basis.Files = req.Basis.Files
 	err := a.cat.SaveChapterEdit(r.Context(), lib.ID, p, basis, req.Chapters, userFrom(r.Context()).ID)
 	if err != nil {
 		a.writeBookError(w, err, "edit chapters failed", "could not save the chapters", "library", lib.ID, "path", p)

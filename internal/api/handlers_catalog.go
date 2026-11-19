@@ -427,9 +427,10 @@ type editRequest struct {
 // cap is errEditTooLong.
 const (
 	// maxEditFields caps the fields an edit sets, reverts, or adds labels to
-	// or removes them from (there are 15).
+	// or removes them from (catalog.OverrideFields).
 	maxEditFields = 64
-	// maxEditLabels caps the labels one field's list adds or removes.
+	// maxEditLabels caps the labels one field's list adds or removes: a
+	// boundedList's.
 	maxEditLabels = maxBulkBooks
 	// maxEditChapters caps the chapter titles an edit sets and the chapters it
 	// reverts (a book's chapters from its files may be more than the
@@ -466,21 +467,12 @@ func (m *editFieldValues) UnmarshalJSON(data []byte) (err error) {
 	return editErr(err)
 }
 
-// editLabelList is one field's labels an edit adds or removes, at most
-// maxEditLabels.
-type editLabelList []string
-
-func (l *editLabelList) UnmarshalJSON(data []byte) (err error) {
-	*l, err = decodeBounded[string](bytes.NewReader(data), maxEditLabels)
-	return editErr(err)
-}
-
 // editLabels is the labels an edit adds or removes, by field: at most
 // maxEditFields fields, each list at most maxEditLabels.
 type editLabels map[string][]string
 
 func (m *editLabels) UnmarshalJSON(data []byte) error {
-	lists, err := decodeBoundedMap[string, editLabelList](data, maxEditFields)
+	lists, err := decodeBoundedMap[string, boundedList[string]](data, maxEditFields)
 	if err != nil {
 		return editErr(err)
 	}
