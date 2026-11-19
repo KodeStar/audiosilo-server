@@ -356,7 +356,10 @@ func importParams(acct *AudibleAccount, asin, dest string) bridge.AudibleImportP
 // ErrUnknownTitle; ErrAudiblePaused for a paused account; ErrAudibleMatched
 // for a title on this server (unless marked "Not this book");
 // ErrAudibleImportOpen while its backup is open (or a request is pending);
-// ErrAudibleNotAvailable for an unavailable or gone title.
+// ErrAudibleNotAvailable for an unavailable or gone title; a
+// bridge.ErrAudibleDestPath or ErrAudibleTemplate for a stored destination or
+// template that no longer validates (saved before a rule tightened), a
+// preorder's too: its request would be refused by the queue at every poll.
 func (c *Catalog) RequestAudibleBackup(ctx context.Context, account, asin string) (*bridge.AudibleImportParams, bool, error) {
 	acct, err := c.AudibleAccount(ctx, account)
 	if err != nil {
@@ -370,6 +373,12 @@ func (c *Catalog) RequestAudibleBackup(ctx context.Context, account, asin string
 		return nil, false, ErrAudiblePaused
 	}
 	if err := t.backupRefusal(); err != nil {
+		return nil, false, err
+	}
+	if err := bridge.CheckAudibleDestPath(t.DestPath); err != nil {
+		return nil, false, err
+	}
+	if err := bridge.CheckAudibleTemplate(acct.Template); err != nil {
 		return nil, false, err
 	}
 	if t.State == AudiblePreorder {

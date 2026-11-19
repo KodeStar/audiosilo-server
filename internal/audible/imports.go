@@ -59,7 +59,8 @@ func (q Queues) Backup(ctx context.Context, account, asin string, requestedBy in
 // stored destination no longer validates (one saved before a rule tightened:
 // bridge.CheckAudibleDestPath) is skipped and counted in skipped, so it
 // doesn't stop the batch; only that title-level reason is skipped, so an
-// account-level one (its template) still comes back as the queue's refusal.
+// account-level one (its template, a bridge.ErrAudibleTemplate) refuses the
+// batch, checked before the titles' destinations.
 // A refusal of the queue (a Bridge that can't take them: none will be taken)
 // stops it at the title refused, with the titles before it queued; any other
 // failure queues none.
@@ -67,6 +68,13 @@ func (q Queues) BackupAll(ctx context.Context, account string, requestedBy int64
 	all, err := q.Catalog.AudibleBackupAll(ctx, account)
 	if err != nil {
 		return 0, 0, err
+	}
+	// The template is the account's, so every title's: checked first, it
+	// refuses the batch even when each title is skipped for its destination.
+	if len(all) > 0 {
+		if err := bridge.CheckAudibleTemplate(all[0].Template); err != nil {
+			return 0, 0, err
+		}
 	}
 	valid := all[:0]
 	jobs := make([]bridge.NewJob, 0, len(all))

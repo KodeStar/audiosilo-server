@@ -512,7 +512,8 @@ func TestAudibleBackupAllInvalidTemplateRefuses(t *testing.T) {
 	t.Parallel()
 	b := backupEnv(t,
 		title("B000000001", "A first", "available", 0, ""),
-		title("B000000002", "B second", "available", 0, ""))
+		title("B000000002", "B second", "available", 0, ""),
+		title("B000000003", "C soon", "preorder", 0, ""))
 	if _, err := b.db.ExecContext(context.Background(),
 		`UPDATE audible_accounts SET template = '.hidden/{Title}' WHERE account = ?`, testAccount); err != nil {
 		t.Fatal(err)
@@ -521,15 +522,27 @@ func TestAudibleBackupAllInvalidTemplateRefuses(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_template" || reasonOf(out) != "account" {
 		t.Fatalf("backup-all with an invalid template: %d %q", resp.StatusCode, out)
 	}
-	// One title's Back up refuses the same way.
-	resp, out = b.do(t, "POST", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001/backup", b.adminTok, "")
-	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_template" || reasonOf(out) != "account" {
-		t.Fatalf("backup with an invalid template: %d %q", resp.StatusCode, out)
-	}
-	for _, asin := range []string{"B000000001", "B000000002"} {
-		if x := b.audibleTitle(t, asin); x.ImportJobID != nil {
-			t.Fatalf("%s queued under an invalid template", asin)
+	// One title's Back up refuses the same way, a preorder's request too (the
+	// queue would refuse it at every poll).
+	for _, asin := range []string{"B000000001", "B000000003"} {
+		resp, out = b.do(t, "POST", backupPath(asin), b.adminTok, "")
+		if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_template" || reasonOf(out) != "account" {
+			t.Fatalf("backup of %s with an invalid template: %d %q", asin, resp.StatusCode, out)
 		}
+	}
+	for _, asin := range []string{"B000000001", "B000000002", "B000000003"} {
+		if x := b.audibleTitle(t, asin); x.ImportJobID != nil || x.Import != nil {
+			t.Fatalf("%s queued or requested under an invalid template", asin)
+		}
+	}
+	// Every title skipped for its destination: the template still refuses.
+	if _, err := b.db.ExecContext(context.Background(),
+		`UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE account = ?`, testAccount); err != nil {
+		t.Fatal(err)
+	}
+	resp, out = b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, "")
+	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_template" {
+		t.Fatalf("backup-all with an invalid template and every destination: %d %q", resp.StatusCode, out)
 	}
 }
 
@@ -540,9 +553,10 @@ func TestAudibleBackupInvalidDestination(t *testing.T) {
 	t.Parallel()
 	b := backupEnv(t,
 		title("B000000001", "A first", "available", 0, ""),
-		title("B000000002", "B second", "available", 0, ""))
+		title("B000000002", "B second", "available", 0, ""),
+		title("B000000003", "C soon", "preorder", 0, ""))
 	if _, err := b.db.ExecContext(context.Background(),
-		`UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE asin = 'B000000001'`); err != nil {
+		`UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE asin IN ('B000000001', 'B000000003')`); err != nil {
 		t.Fatal(err)
 	}
 	resp, out := b.do(t, "POST", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001/backup", b.adminTok, "")
@@ -551,6 +565,14 @@ func TestAudibleBackupInvalidDestination(t *testing.T) {
 	}
 	if resp, out := b.do(t, "POST", "/api/v1/admin/audible/titles/"+testAccount+"/B000000002/backup", b.adminTok, ""); resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("backup with a valid destination: %d %q", resp.StatusCode, out)
+	}
+	// A preorder's request is refused the same way, not stored to fail at every poll.
+	resp, out = b.do(t, "POST", backupPath("B000000003"), b.adminTok, "")
+	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_dest_path" || reasonOf(out) != "title" {
+		t.Fatalf("preorder backup with an invalid destination: %d %q", resp.StatusCode, out)
+	}
+	if x := b.audibleTitle(t, "B000000003"); x.Import != nil {
+		t.Fatalf("a preorder's request stored with an invalid destination: %+v", x.Import)
 	}
 }
 
