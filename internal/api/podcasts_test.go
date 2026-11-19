@@ -827,3 +827,42 @@ func TestNextForEpisodes(t *testing.T) {
 		t.Fatal("a hidden podcast library answered /next")
 	}
 }
+
+// A show folder renamed by hand, taken in by the Bridge: its rescan of the new
+// folder moves the show there, so the player lists one show, still followed,
+// and Check now asks for it at the new folder (SRV-PODCAST-RENAME). The old
+// folder's path answers as any gone show does.
+func TestPodcastRenamedFolderKeepsItsFollow(t *testing.T) {
+	b, uid, f := podcastEnv(t, false)
+	h := podcastHeaders()
+	ctx := context.Background()
+	if err := b.cat.FollowPodcast(ctx, uid, b.lib.ID, "Example Show", f.ShowID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(b.lib.Root, "Example Show"), filepath.Join(b.lib.Root, "Renamed")); err != nil {
+		t.Fatal(err)
+	}
+	for i := range f.Episodes {
+		f.Episodes[i].Path = "Renamed/" + strings.TrimPrefix(f.Episodes[i].Path, "Example Show/")
+	}
+	if err := os.WriteFile(filepath.Join(b.lib.Root, "Renamed", "feed.json"), []byte(mustJSON(t, f)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := b.do(t, "POST", "/api/v1/bridge/rescan", b.bridgeTok, fmt.Sprintf(`{"library_id":%d,"path":"Renamed"}`, b.lib.ID))
+	if resp.StatusCode != 200 {
+		t.Fatalf("rescan %d %s", resp.StatusCode, out)
+	}
+	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "podcasts"), b.userTok, "", h)
+	if resp.StatusCode != 200 || strings.Count(out, `"path":`) != 1 || !strings.Contains(out, `"path":"Renamed"`) || !strings.Contains(out, `"following":true`) {
+		t.Fatalf("shows %d %s", resp.StatusCode, out)
+	}
+	check := func(show string, status int, code string) {
+		t.Helper()
+		resp, out := b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, show), h)
+		if resp.StatusCode != status || !strings.Contains(out, code) {
+			t.Fatalf("check %s: %d %s", show, resp.StatusCode, out)
+		}
+	}
+	check("Renamed", 202, `"state":"queued"`)
+	check("Example Show", 404, "show_not_found")
+}

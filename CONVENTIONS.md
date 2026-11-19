@@ -3668,7 +3668,23 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   validator over a poll's 512-byte cap is dropped. Successful cadence clamps to 15 minutes..24 hours; failures back
   off, `gone` stops automatic checks. Secret loss is retained separately from the latest error:
   only a successful subscribe or poll clears it, so a follow by URL can still restore it after
-  another failure. Follows and feed status survive index pruning. The Bridge's
+  another failure. Follows and feed status survive index pruning. A show folder renamed by hand
+  keeps its feed.json, so its `show_id` turns up at the new folder: every scan (before its prune) and
+  every Bridge rescan (that show's identities only) finds an identity indexed at one path with rows or
+  state at another (`catalog.PodcastIdentityPaths`), and the scanner (`library.movePodcastShows`)
+  reads each path's feed.json: when exactly one listed folder holds the identity, the index knows it
+  there, and every other path is known not to (gone, no feed.json, invalid, another show's),
+  `catalog.MovePodcastShows` moves, in one transaction, every listener's follow (one already at the
+  new folder keeps the earlier date), the feed state (the later check wins), the policy (the newer
+  edit wins), the episodes' fetch backoffs and the listening state on the folder and each episode file
+  (`carryListeningState`, a move's rule), then drops the old row and its episodes. A copy (two folders
+  holding it), an unreadable path (an I/O error, a newer feed.json version) or a holder not indexed yet
+  moves nothing. A folder whose row names the moving show while it holds another (names swapped by
+  hand) is indexed again first, so both move in one call (follows and folder state through a hidden
+  placeholder path). On a case-insensitive file system only the spelling the root lists is the folder.
+  A poll's or fetch's fold whose queued folder (episode) no longer holds its identity folds at the
+  outcome's `show_path` (`path`) when that holds it; a copy keeps its own outcome. Bridge jobs and
+  grants stay where they were. The Bridge's
   marker route validates `.audiosilo/library.json` without symlinks (4 KiB, version, id, nonce),
   and podcast rescans accept only shows or indexed episodes. Admins cannot enqueue podcast kinds;
   default job lists omit polls. Shared fixtures live in `internal/podcast/testdata` and the byte-identical

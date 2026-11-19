@@ -1,0 +1,224 @@
+package catalog
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"path"
+
+	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
+)
+
+// A show folder renamed by hand keeps its feed.json, so its show identity
+// (show_id) turns up at the new folder while the follows, feed state, policy
+// and listening state stay keyed to the old one (path is the identity). The
+// scanner finds such an identity (PodcastIdentityPaths), looks at the disk to
+// tell a rename from a copy, and moves the state (MovePodcastShows).
+
+// PodcastIdentityPath is one path holding a show identity's index row or its
+// durable state (a follow, feed state, a retention policy).
+type PodcastIdentityPath struct {
+	Path string
+	// Indexed: the path's index row (podcast_shows) is this identity's.
+	Indexed bool
+}
+
+// PodcastIdentityPaths are lib's show identities found at more than one path,
+// each with its paths in path order. Only an identity indexed at one path at
+// least counts: one indexed nowhere has no folder to move to. With at not "",
+// only the identities with a row or state at that path (a targeted rescan's
+// show) are read.
+func (c *Catalog) PodcastIdentityPaths(ctx context.Context, lib int64, at string) (map[string][]PodcastIdentityPath, error) {
+	type row struct {
+		id string
+		p  PodcastIdentityPath
+	}
+	rows, err := queryRows(ctx, c.db, func(r *sql.Rows, v *row) error { return r.Scan(&v.id, &v.p.Path, &v.p.Indexed) },
+		`WITH ids(show_path,show_id) AS (
+		   SELECT show_path,show_id FROM podcast_shows WHERE library_id=?1
+		   UNION SELECT show_path,show_id FROM podcast_follows WHERE library_id=?1
+		   UNION SELECT show_path,show_id FROM podcast_feed_state WHERE library_id=?1
+		   UNION SELECT show_path,show_id FROM podcast_policies WHERE library_id=?1)
+		 SELECT i.show_id,i.show_path,EXISTS(SELECT 1 FROM podcast_shows s WHERE s.library_id=?1 AND s.show_path=i.show_path AND s.show_id=i.show_id)
+		   FROM ids i
+		  WHERE i.show_id IN (SELECT show_id FROM ids GROUP BY show_id HAVING COUNT(*)>1)
+		    AND i.show_id IN (SELECT show_id FROM podcast_shows WHERE library_id=?1)
+		    AND (?2='' OR i.show_id IN (SELECT show_id FROM ids WHERE show_path=?2))
+		  ORDER BY i.show_id,i.show_path`, lib, at)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]PodcastIdentityPath{}
+	for _, r := range rows {
+		out[r.id] = append(out[r.id], r.p)
+	}
+	return out, nil
+}
+
+// PodcastMove carries a show identity's state from the folders that no
+// longer hold it (From) to the one folder that does (To).
+type PodcastMove struct {
+	ShowID string
+	From   []string
+	To     string
+}
+
+// MovePodcastShows applies moves in one transaction and answers how many it
+// applied. A move applies only while To's index row is ShowID's (else it is
+// passed over: the folder changed since the caller looked). Of a From path it
+// moves only ShowID's rows:
+//
+//   - every listener's follow (one at To already for the same identity keeps
+//     the earlier date; a follow at To of another identity, which To no longer
+//     holds, is replaced);
+//   - the feed state (the later check wins a clash) and the retention policy
+//     (the newer edit wins), both keyed by identity;
+//   - the episodes' fetch backoffs (podcast_fetch_state);
+//   - the listening state on the show folder (a show-folder heart) and on each
+//     episode, From/<file> to To/<file> (carryListeningState, a move's rule),
+//     for the files listed at To and at From's own index row;
+//   - From's index row and episodes, dropped when the row is ShowID's.
+//
+// Follows and the show folder's listening state go through a placeholder path
+// first, so two shows whose folder names were swapped by hand trade places in
+// one call. Bridge jobs stay where they were queued: the Bridge finds a renamed
+// folder by identity, and an outcome naming the new folder folds there
+// (FoldPodcastJob).
+func (c *Catalog) MovePodcastShows(ctx context.Context, lib int64, moves []PodcastMove) (int, error) {
+	applied := 0
+	err := c.db.WithTx(ctx, "MovePodcastShows", func(tx *sql.Tx) error {
+		applied = 0
+		live := make([]bool, len(moves))
+		for i, m := range moves {
+			var id string
+			err := tx.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, m.To).Scan(&id)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if id != m.ShowID || !feed.ShowPath(m.To) {
+				continue
+			}
+			live[i] = true
+			hold := movePlaceholder(i)
+			for _, from := range m.From {
+				if from == m.To || !feed.ShowPath(from) {
+					continue
+				}
+				if err := liftShowRows(ctx, tx, lib, m.ShowID, from, hold); err != nil {
+					return err
+				}
+			}
+		}
+		for i, m := range moves {
+			if !live[i] {
+				continue
+			}
+			for _, from := range m.From {
+				if from == m.To || !feed.ShowPath(from) {
+					continue
+				}
+				if err := moveShowState(ctx, tx, lib, m.ShowID, from, m.To); err != nil {
+					return err
+				}
+			}
+			if err := placeShowRows(ctx, tx, lib, movePlaceholder(i), m.To); err != nil {
+				return err
+			}
+			applied++
+		}
+		return nil
+	})
+	return applied, err
+}
+
+// movePlaceholder is where MovePodcastShows holds move i's follows and show
+// folder state between its two passes: a hidden name, which no show folder can
+// have (feed.ShowPath), inside the transaction only.
+func movePlaceholder(i int) string { return fmt.Sprintf(".podcast-move-%d", i) }
+
+// liftShowRows moves id's follows at from, and the listening state on the
+// folder itself, to hold.
+func liftShowRows(ctx context.Context, tx *sql.Tx, lib int64, id, from, hold string) error {
+	// A listener following at two of a move's From paths keeps one follow.
+	for _, q := range []string{
+		`UPDATE OR IGNORE podcast_follows SET show_path=?3 WHERE library_id=?1 AND show_path=?2 AND show_id=?4`,
+		`DELETE FROM podcast_follows WHERE library_id=?1 AND show_path=?2 AND show_id=?4`,
+	} {
+		if _, err := tx.ExecContext(ctx, q, lib, from, hold, id); err != nil {
+			return err
+		}
+	}
+	return carryListeningState(ctx, tx, lib, JoinPart{Path: from, Last: true}, hold, 0, moveCarry)
+}
+
+// placeShowRows moves what liftShowRows held to the show's folder.
+func placeShowRows(ctx context.Context, tx *sql.Tx, lib int64, hold, to string) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at)
+		 SELECT user_id,library_id,?3,show_id,created_at FROM podcast_follows WHERE library_id=?1 AND show_path=?2
+		 ON CONFLICT(user_id,library_id,show_path) DO UPDATE SET show_id=excluded.show_id,created_at=excluded.created_at
+		  WHERE podcast_follows.show_id<>excluded.show_id OR excluded.created_at<podcast_follows.created_at`, lib, hold, to); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM podcast_follows WHERE library_id=? AND show_path=?`, lib, hold); err != nil {
+		return err
+	}
+	return carryListeningState(ctx, tx, lib, JoinPart{Path: hold, Last: true}, to, 0, moveCarry)
+}
+
+// moveShowState moves id's feed state, policy, fetch backoffs and episodes'
+// listening state from from to to, and drops from's index row when it is id's.
+func moveShowState(ctx context.Context, tx *sql.Tx, lib int64, id, from, to string) error {
+	for _, q := range []string{
+		`INSERT INTO podcast_feed_state(library_id,show_path,show_id,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,secret_missing,failures,next_poll_at,feed_failures,feed_network_failures,failing_announced,failing_code)
+		 SELECT library_id,?3,show_id,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,secret_missing,failures,next_poll_at,feed_failures,feed_network_failures,failing_announced,failing_code
+		   FROM podcast_feed_state WHERE library_id=?1 AND show_path=?2 AND show_id=?4
+		 ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET etag=excluded.etag,last_modified=excluded.last_modified,
+		     last_checked_at=excluded.last_checked_at,last_success_at=excluded.last_success_at,last_status=excluded.last_status,
+		     error_code=excluded.error_code,error=excluded.error,secret_missing=excluded.secret_missing,failures=excluded.failures,
+		     next_poll_at=excluded.next_poll_at,feed_failures=excluded.feed_failures,feed_network_failures=excluded.feed_network_failures,
+		     failing_announced=excluded.failing_announced,failing_code=excluded.failing_code
+		  WHERE COALESCE(excluded.last_checked_at,'')>COALESCE(podcast_feed_state.last_checked_at,'')`,
+		`DELETE FROM podcast_feed_state WHERE library_id=?1 AND show_path=?2 AND show_id=?4`,
+		`INSERT INTO podcast_policies(library_id,show_path,show_id,mode,keep,days,updated_at)
+		 SELECT library_id,?3,show_id,mode,keep,days,updated_at FROM podcast_policies WHERE library_id=?1 AND show_path=?2 AND show_id=?4
+		 ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET mode=excluded.mode,keep=excluded.keep,days=excluded.days,updated_at=excluded.updated_at
+		  WHERE excluded.updated_at>podcast_policies.updated_at`,
+		`DELETE FROM podcast_policies WHERE library_id=?1 AND show_path=?2 AND show_id=?4`,
+		`UPDATE OR IGNORE podcast_fetch_state SET rel_path=?3||substr(rel_path,length(?2)+1)
+		  WHERE library_id=?1 AND show_id=?4 AND substr(rel_path,1,length(?2)+1)=?2||'/'`,
+		`DELETE FROM podcast_fetch_state WHERE library_id=?1 AND show_id=?4 AND substr(rel_path,1,length(?2)+1)=?2||'/'`,
+	} {
+		if _, err := tx.ExecContext(ctx, q, lib, from, to, id); err != nil {
+			return err
+		}
+	}
+	// The episode files: those listed at to, and those of from's own row while
+	// it is still id's (to's feed.json may not list them yet: one renamed by
+	// hand names the old folder until the Bridge takes it in).
+	var held string
+	if err := tx.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, from).Scan(&held); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	stale := held == id
+	files, err := queryRows(ctx, tx, func(r *sql.Rows, p *string) error { return r.Scan(p) },
+		`SELECT b.rel_path FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=?1 AND (e.show_path=?2 OR ?3 AND e.show_path=?4)`, lib, to, stale, from)
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, f := range files {
+		base := path.Base(f)
+		if seen[base] {
+			continue
+		}
+		seen[base] = true
+		if err := carryListeningState(ctx, tx, lib, JoinPart{Path: from + "/" + base, Last: true}, to+"/"+base, 0, moveCarry); err != nil {
+			return fmt.Errorf("move episode listening state: %w", err)
+		}
+	}
+	if !stale {
+		return nil
+	}
+	return pruneShow(ctx, tx, lib, from)
+}

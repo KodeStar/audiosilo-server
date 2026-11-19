@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -65,6 +66,10 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 		}
 	}
 	res.Partial = partial
+	// Before the prune: a folder renamed by hand leaves its show's row at the
+	// old name until then, and the move takes that row's episodes' listening
+	// state along.
+	s.movePodcastShows(ctx, lib, "")
 	if !partial {
 		var gone []string
 		for show := range old {
@@ -100,7 +105,162 @@ func (s *Scanner) IndexPodcastPath(ctx context.Context, lib catalog.Library, p s
 		return "", 0, ErrNotIndexable
 	}
 	n, _, err := s.indexPodcastShow(ctx, lib, show, true)
+	if err == nil {
+		s.movePodcastShows(ctx, lib, show)
+	}
 	return show, n, err
+}
+
+// movePodcastShows moves the durable state of a show folder renamed by hand
+// (follows, feed state, retention policy, listening state) to the folder that
+// holds the show now, and drops the old folder's row. The index finds the
+// show at both paths by its show_id (catalog.PodcastIdentityPaths); the disk
+// tells a rename from a copy: an identity moves only when exactly one of its
+// paths holds it (its feed.json names it) and every other one is known not
+// to (gone, no feed.json, not a show, or another show's). A copy, both
+// folders holding the show, moves and merges nothing, nor does a path that
+// can't be read. With at not "" (a targeted rescan), only the identities at
+// that path are looked at. A folder whose row names the moving show while it
+// holds another (two folder names swapped by hand) is indexed again first, so
+// both shows move in one call. Failures are logged: the next scan or rescan
+// looks again.
+func (s *Scanner) movePodcastShows(ctx context.Context, lib catalog.Library, at string) {
+	for pass := 0; pass < 2; pass++ {
+		found, err := s.cat.PodcastIdentityPaths(ctx, lib.ID, at)
+		if err != nil {
+			s.log.Warn("podcasts: looking for renamed show folders failed", "library", lib.ID, "err", err)
+			return
+		}
+		var moves []catalog.PodcastMove
+		var listed map[string]bool // the root's folder names, read once when needed
+		reindexed := false
+	identities:
+		for id, paths := range found {
+			held := map[string]string{}
+			var holders []catalog.PodcastIdentityPath
+			for _, p := range paths {
+				now, ok := podcastHeldID(lib.Root, p.Path)
+				if !ok {
+					continue identities
+				}
+				held[p.Path] = now
+				if now == id {
+					holders = append(holders, p)
+				}
+			}
+			if len(holders) > 1 {
+				// On a case-insensitive or normalizing file system the old
+				// spelling of a folder renamed only in case or form still
+				// opens it: only the name the root lists is the folder.
+				if listed == nil {
+					if listed, err = podcastFolderNames(lib.Root); err != nil {
+						s.log.Warn("podcasts: looking for renamed show folders failed", "library", lib.ID, "err", err)
+						return
+					}
+				}
+				holders = slices.DeleteFunc(holders, func(p catalog.PodcastIdentityPath) bool {
+					if listed[p.Path] {
+						return false
+					}
+					held[p.Path] = ""
+					return true
+				})
+			}
+			// Exactly one folder holds the show, and the index knows it there:
+			// more is a copy, none or an unindexed one is left to a later look.
+			if len(holders) != 1 || !holders[0].Indexed {
+				continue
+			}
+			holder := holders[0].Path
+			m := catalog.PodcastMove{ShowID: id, To: holder}
+			for _, p := range paths {
+				if p.Path == holder {
+					continue
+				}
+				if p.Indexed && held[p.Path] != "" && pass == 0 {
+					// Its row names this show, its folder another: index it
+					// as that one, then look again.
+					if _, _, err := s.indexPodcastShow(ctx, lib, p.Path, true); err != nil {
+						s.log.Warn("podcasts: re-indexing a show folder renamed by hand failed", "library", lib.ID, "err", err)
+						continue identities
+					}
+					reindexed = true
+				}
+				m.From = append(m.From, p.Path)
+			}
+			moves = append(moves, m)
+		}
+		if reindexed {
+			continue
+		}
+		if len(moves) == 0 {
+			return
+		}
+		n, err := s.cat.MovePodcastShows(ctx, lib.ID, moves)
+		if err != nil {
+			s.log.Warn("podcasts: moving a renamed show folder's state failed", "library", lib.ID, "err", err)
+			return
+		}
+		if n > 0 {
+			s.log.Info("podcasts: moved the state of show folders renamed by hand", "library", lib.ID, "shows", n)
+		}
+		return
+	}
+}
+
+// podcastFolderNames are the names of the folders root lists, as listed.
+func podcastFolderNames(root string) (map[string]bool, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			out[e.Name()] = true
+		}
+	}
+	return out, nil
+}
+
+// podcastHeldID is the show identity folder show of root holds now: its
+// feed.json's show_id, "" when the folder or its feed.json is gone, or it is
+// no valid show. ok is false when that can't be told (a read error, a
+// feed.json of a newer version).
+func podcastHeldID(root, show string) (id string, ok bool) {
+	dir, err := ContentJoin(root, show)
+	if err != nil {
+		return "", true
+	}
+	fi, err := os.Lstat(filepath.Join(root, show))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", true
+	}
+	if err != nil {
+		return "", false
+	}
+	if !fi.IsDir() {
+		return "", true
+	}
+	filename := filepath.Join(dir, "feed.json")
+	info, err := os.Lstat(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", true
+	}
+	if err != nil {
+		return "", false
+	}
+	if !info.Mode().IsRegular() {
+		return "", true
+	}
+	f, err := feed.ReadFile(filename, show, nil)
+	switch {
+	case errors.Is(err, feed.ErrInvalidFeed):
+		return "", true
+	case err != nil:
+		return "", false
+	}
+	return f.ShowID, true
 }
 func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, show string, force bool) (int, bool, error) {
 	dir, err := ContentJoin(lib.Root, show)
