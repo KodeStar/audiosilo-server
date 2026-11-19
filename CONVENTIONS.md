@@ -352,9 +352,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   work doesn't list is no recording, never the first (`pickRecording`'s `matched`: a stale or
   mismatched row never lends the book another recording's narrators or cover, server#375), no lookup), cached
   exactly as `Enrich` (shared `enrich`) under its own key space `m:<work id>/<recording id>` (each part
-  `url.PathEscape`d); the row is read only when `Book.WorkID` (the recorded work first) differs
-  from the identifiers' work, and a recorded work upstream lacks (or can't answer) leaves the
-  identifiers' answer standing. When the cache already knows the identifiers' work (`CachedWorkID`)
+  `url.PathEscape`d); a recorded work upstream lacks (or can't answer) leaves the
+  identifiers' answer standing. **The matched recording within one work** (server#375): a row of the
+  identifiers' own work still names the recording, the admin's choice among the work's, so `/meta`
+  answers the match's envelope when the row names another recording than the identifiers do and the
+  work lists it; a row naming no recording, or one the work doesn't list, leaves the identifiers'
+  answer (their recording is of the matched work, never a guess). The row is read for every book
+  with a `Book.WorkID`. A book's community chapters go by the same rule (`chaptercheck`'s
+  `chapters`), so the two never describe two recordings: change them together. When the cache already knows the identifiers' work (`CachedWorkID`)
   and it isn't `Book.WorkID`, the match is composed first and the identifiers only when it fails;
   the two composes of one request share 20 s (`metaComposeShare`, `meta.WithSharedBudget`: each
   keeps its own budget but ends with the shared one, cached as the upstream's failure; server#447). Degradation: disabled ->
@@ -2458,7 +2463,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`work_id`, the same order by `meta.Service.CachedWork`, both through `CoverageBook.workOf`) read the
   book's work key, the match first (server#375). `/meta` and `/next`'s community rail read the row when the book
   has no identifier, its lookup is a not-found or fails, or the row names another work than its
-  identifiers' (`bookEnrichment`, `meta.Service.EnrichMatch`, see Community metadata lookup). Path-keyed state: a move carries it with the book's edits as one
+  identifiers', or another recording of their work that the work lists (`bookEnrichment`, `meta.Service.EnrichMatch`, see Community metadata lookup). Path-keyed state: a move carries it with the book's edits as one
   set, a join copies the first part's, a rescan or rebuild keeps it, `ClearCommunityMatches` drops it
   (counted in `books`); the book page carries it as `community_match {work_id, recording_id, how,
   matched_at, web_url}` (omitted when none), a review's change as `match` (the console lists it when no

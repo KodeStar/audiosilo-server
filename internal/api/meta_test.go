@@ -845,6 +845,32 @@ func TestMetaRecordedMatch(t *testing.T) {
 			t.Fatalf("another recording's cover = %d %s, want 404", resp.StatusCode, body)
 		}
 	})
+	t.Run("another recording of the ASIN's work", func(t *testing.T) {
+		t.Parallel()
+		// The ASIN names rec1 of the work; the admin's match names rec2 of
+		// the same work, and is the recording /meta answers (server#375), as
+		// the book's community chapters do (chaptercheck). A match naming no
+		// recording, or one the work doesn't list, leaves the ASIN's.
+		two := strings.Replace(martianWorkBody, `"chapter_count":12}]`,
+			`"chapter_count":12},{"id":"rec2","narrators":[{"id":"wil-wheaton","name":"Wil Wheaton"}],"runtime_min":653,"cover_url":"https://c/2.jpg","chapter_count":26}]`, 1)
+		if two == martianWorkBody {
+			t.Fatal("fixture replace did not apply")
+		}
+		for recording, want := range map[string]string{
+			"rec2":  `"recording":{"id":"rec2","narrators":[{"id":"wil-wheaton","name":"Wil Wheaton"}]`,
+			"rec1":  `"recording":{"id":"rec1","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}]`,
+			"":      `"recording":{"id":"rec1"`,
+			"stale": `"recording":{"id":"rec1"`,
+		} {
+			e := newMetaEnvMock(t, true, &mockMetaserve{work: two})
+			libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
+			anchorMatch(t, e, libID, "Andy Weir/The Martian", "the-martian", recording)
+			body := get(t, e, libID, "Andy Weir/The Martian")
+			if !strings.Contains(body, `"matched":true,"work":{"id":"the-martian"`) || !strings.Contains(body, want) {
+				t.Errorf("matched to recording %q: meta = %s, want %s", recording, body, want)
+			}
+		}
+	})
 	t.Run("a recorded work upstream lacks keeps the ASIN's", func(t *testing.T) {
 		t.Parallel()
 		e := newMetaEnvMock(t, true, &mockMetaserve{})
