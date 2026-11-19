@@ -549,7 +549,11 @@ func TestBudgetStartsAfterAnotherDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() { _, _ = p.AuthURL(context.Background(), flow(), scopes) }() // discovers, slowly
-	for idp.Calls("discovery") < 2 {                                       // the discovery is under way
+	deadline := time.Now().Add(testwait.Scaled(10 * time.Second))
+	for idp.Calls("discovery") < 2 { // the discovery is under way
+		if time.Now().After(deadline) {
+			t.Fatal("the other use's discovery never began")
+		}
 		time.Sleep(time.Millisecond)
 	}
 	if _, err := p.Exchange(context.Background(), code, f, false); err != nil {
