@@ -314,7 +314,7 @@ export function useBackups() {
     toast.add({
       title: t('audible.backupAll.done', { count: queued, name: accountName(t, account) }),
       description: skipped > 0 ? t('audible.backupAll.skipped', { count: skipped }) : undefined,
-      type: 'success',
+      type: skipped > 0 ? 'warning' : 'success',
     });
     settle(undefined);
   };
