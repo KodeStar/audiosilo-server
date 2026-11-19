@@ -1041,7 +1041,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`selectionBodyMax`); past it is the route's 400 `too_large`, as more entries are: such a list is a
   `boundedList`, read one entry at a time and refused at the first past 1000 (`errTooManyEntries`), so a body
   of a million `{}` is never decoded whole (`POST /admin/books/works`, <= 100, keeps the 1 MiB and answers
-  the same). A share's name is at most 200 characters
+  the same). A route whose list has a lower cap of its own keeps its body's
+  size, counts its own after the decode and gives that cap's answer for `errTooManyEntries` too, never
+  `writeDecodeError`'s "at most 1000": a whole-list replace (`PUT /me/queue`, `PUT /me/collections/{id}/items`:
+  400 `too many items`, `listReplace`), a batch of listening events (400 `too_many_events`,
+  `decodeSyncEnvelope`), who a collection is shared with (`user_ids`, the 50-user 400) and a household
+  member's `collection_ids` (400 `invalid_collections`, `writeMemberDecodeError`). A new route that counts a list of small entries takes it as a `boundedList`. A share's name is at most 200 characters
   (`catalog.MaxShareName`, 400 `invalid_name` on a create or rename; a grant share's "Library: <name>" cuts
   the library's name to fit, `wholeLibraryShareName`), its description at most the 1 MiB a
   rename's body carries (`maxShareDescription`, 400 `too_large` on a create). A scan never indexes a path past the cap

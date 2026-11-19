@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
@@ -69,6 +70,17 @@ func TestDecodeBoundedStopsAtTheCap(t *testing.T) {
 		if (err == nil) != tc.ok || len(req.Books) != tc.n || (tc.want != nil && !errors.Is(err, tc.want)) {
 			t.Errorf("%s: %d entries, %v", name, len(req.Books), err)
 		}
+	}
+
+	// null is no list and [] an empty one, as a plain slice reads them, also
+	// behind a pointer (a whole-list replace tells "name no list" from "empty it").
+	var plain struct {
+		Null, Empty       boundedList[catalog.Ref]
+		NullPtr, EmptyPtr *boundedList[catalog.Ref]
+	}
+	if err := json.Unmarshal([]byte(`{"Null":null,"Empty":[],"NullPtr":null,"EmptyPtr":[]}`), &plain); err != nil ||
+		plain.Null != nil || plain.Empty == nil || plain.NullPtr != nil || plain.EmptyPtr == nil || len(*plain.EmptyPtr) != 0 {
+		t.Errorf("null and []: %+v, %v", plain, err)
 	}
 }
 
@@ -152,5 +164,36 @@ func TestSelectionRoutesTakeLongPaths(t *testing.T) {
 	} {
 		resp, out := e.do(t, tc.method, tc.route, adminTok, tc.body)
 		wantCode(t, tc.method+" "+tc.route+" with a body past its bound", resp, out, http.StatusBadRequest, codeTooLarge)
+	}
+}
+
+// A route whose list has a cap of its own, under maxBulkBooks, gives that
+// cap's answer however far past it the list is: just past it (counted after
+// the decode) and past maxBulkBooks (where the decode stops reading).
+func TestListRoutesKeepTheirOwnCap(t *testing.T) {
+	t.Parallel()
+	e := newMetaEnv(t, true, 0)
+	adminTok, _, _ := adminAndMember(t, e)
+	list := func(entry string, n int) string {
+		return "[" + strings.TrimSuffix(strings.Repeat(entry+",", n), ",") + "]"
+	}
+	ref := `{"library_id":1,"path":"p"}`
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, tc := range []struct {
+		method, route, body string // body takes the list at %s
+		entry               string
+		max                 int
+		want                string
+	}{
+		{"PUT", "/api/v1/me/queue", `{"items":%s}`, ref, catalog.MaxQueue, `"error":"too many items"`},
+		{"POST", "/api/v1/me/listening/sync", `{"device_id":"d","sent_at":"` + now + `","events":%s}`, `{}`, catalog.MaxSyncEvents,
+			`"code":"too_many_events"`},
+	} {
+		for _, n := range []int{tc.max + 1, maxBulkBooks + 1} {
+			resp, out := e.do(t, tc.method, tc.route, adminTok, fmt.Sprintf(tc.body, list(tc.entry, n)))
+			if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, tc.want) {
+				t.Errorf("%s %s with %d entries = %d %.200s, want 400 %s", tc.method, tc.route, n, resp.StatusCode, out, tc.want)
+			}
+		}
 	}
 }

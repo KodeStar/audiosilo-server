@@ -20,10 +20,10 @@ import (
 // (catalog.DecodeSyncEvents), so a malformed event is that event's "invalid",
 // never the batch's 400.
 type listeningSyncRequest struct {
-	DeviceID    string            `json:"device_id"`
-	SentAt      *string           `json:"sent_at"`
-	ClockOffset *float64          `json:"clock_offset"`
-	Events      []json.RawMessage `json:"events"`
+	DeviceID    string                       `json:"device_id"`
+	SentAt      *string                      `json:"sent_at"`
+	ClockOffset *float64                     `json:"clock_offset"`
+	Events      boundedList[json.RawMessage] `json:"events"`
 }
 
 // syncPathReasons are the scope check's answers that reject an event rather
@@ -117,18 +117,28 @@ func decodeSyncEnvelope(w http.ResponseWriter, r *http.Request, dst any) bool {
 		writeErrorCode(w, http.StatusRequestEntityTooLarge, codeTooLarge, "a batch is at most 1 MiB")
 		return false
 	}
+	if errors.Is(err, errTooManyEntries) {
+		writeTooManySyncEvents(w)
+		return false
+	}
 	writeError(w, http.StatusBadRequest, "invalid request")
 	return false
 }
 
 // tooManySyncEvents answers 400 too_many_events for a batch past
-// catalog.MaxSyncEvents (true).
+// catalog.MaxSyncEvents (true). The envelope's events are a boundedList, so a
+// body of half a million tiny events is refused, with the same answer, at the
+// first past maxBulkBooks (decodeSyncEnvelope), not decoded and then counted.
 func tooManySyncEvents(w http.ResponseWriter, events []json.RawMessage) bool {
 	if len(events) <= catalog.MaxSyncEvents {
 		return false
 	}
-	writeErrorCode(w, http.StatusBadRequest, "too_many_events", "a batch carries at most 500 events")
+	writeTooManySyncEvents(w)
 	return true
+}
+
+func writeTooManySyncEvents(w http.ResponseWriter) {
+	writeErrorCode(w, http.StatusBadRequest, "too_many_events", "a batch carries at most 500 events")
 }
 
 // syncResolver checks one event's (library_id, path) against the scopes of the

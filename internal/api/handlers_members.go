@@ -171,9 +171,21 @@ func (a *API) writeMemberError(w http.ResponseWriter, err error, op, generic str
 	}
 }
 
+// writeMemberDecodeError answers a member's body that didn't decode: 400, and
+// for a collection_ids longer than a boundedList takes, what a list naming a
+// collection that isn't the caller's own is (catalog.ErrInvalidCollections:
+// an account owns catalog.MaxCollections at most, so such a list does).
+func writeMemberDecodeError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errTooManyEntries) {
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidCollections, catalog.ErrInvalidCollections.Error())
+		return
+	}
+	writeError(w, http.StatusBadRequest, "invalid request")
+}
+
 // shareWith is the auth.ShareFunc making ids the owner's collections shared with
 // a member (nil when the request named none).
-func (a *API) shareWith(ctx context.Context, owner int64, ids *[]int64) auth.ShareFunc {
+func (a *API) shareWith(ctx context.Context, owner int64, ids *boundedList[int64]) auth.ShareFunc {
 	if ids == nil {
 		return nil
 	}
@@ -274,14 +286,14 @@ func (a *API) handleCreateMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name          string   `json:"name"`
-		Kind          string   `json:"kind"`
-		Access        string   `json:"access"`
-		SignInHere    bool     `json:"sign_in_here"`
-		CollectionIDs *[]int64 `json:"collection_ids"`
+		Name          string              `json:"name"`
+		Kind          string              `json:"kind"`
+		Access        string              `json:"access"`
+		SignInHere    bool                `json:"sign_in_here"`
+		CollectionIDs *boundedList[int64] `json:"collection_ids"`
 	}
 	if err := decodeJSON(r, &in, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+		writeMemberDecodeError(w, err)
 		return
 	}
 	cred := credentialFrom(r.Context())
@@ -433,13 +445,13 @@ func (a *API) handleUpdateMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name          *string  `json:"name"`
-		Kind          *string  `json:"kind"`
-		Access        *string  `json:"access"`
-		CollectionIDs *[]int64 `json:"collection_ids"`
+		Name          *string             `json:"name"`
+		Kind          *string             `json:"kind"`
+		Access        *string             `json:"access"`
+		CollectionIDs *boundedList[int64] `json:"collection_ids"`
 	}
 	if err := decodeJSON(r, &in, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+		writeMemberDecodeError(w, err)
 		return
 	}
 	if in.Name == nil && in.Kind == nil && in.Access == nil && in.CollectionIDs == nil {

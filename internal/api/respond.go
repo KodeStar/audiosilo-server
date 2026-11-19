@@ -276,7 +276,7 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeErrorCode(w, http.StatusConflict, codeCollectionsFull,
 			fmt.Sprintf("you can have at most %d collections", catalog.MaxCollections))
 	case errors.Is(err, catalog.ErrTooManyItems):
-		writeError(w, http.StatusBadRequest, "too many items")
+		writeError(w, http.StatusBadRequest, msgTooManyItems)
 	case errors.Is(err, catalog.ErrInvalidName):
 		writeError(w, http.StatusBadRequest,
 			fmt.Sprintf("the name must be 1 to %d characters, with no control characters", catalog.MaxCollectionName))
@@ -340,18 +340,26 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) b
 	if err == nil {
 		return true
 	}
+	writeDecodeError(w, err)
+	return false
+}
+
+// writeDecodeError answers a body that didn't decode (decodeBody): 400
+// too_large for one past its size or with a list past maxBulkBooks, else 400
+// invalid request. A route whose list has a lower cap of its own answers
+// errTooManyEntries as it answers that cap, before this.
+func writeDecodeError(w http.ResponseWriter, err error) {
 	if tooBig := (*http.MaxBytesError)(nil); errors.As(err, &tooBig) {
 		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
 			fmt.Sprintf("the request is larger than %d bytes", tooBig.Limit))
-		return false
+		return
 	}
 	if errors.Is(err, errTooManyEntries) {
 		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
 			fmt.Sprintf("too many paths in one request (at most %d)", maxBulkBooks))
-		return false
+		return
 	}
 	writeError(w, http.StatusBadRequest, "invalid request")
-	return false
 }
 
 // errTooManyEntries is a boundedList longer than maxBulkBooks: decodeBody
@@ -364,9 +372,20 @@ var errTooManyEntries = fmt.Errorf("a list holds more than %d entries", maxBulkB
 // already read, bounded by its route's size): a body bounded to take
 // that many paths at the cap (selectionBodyMax) holds over a million empty
 // objects, each a value once decoded, so a count taken after the decode would
-// come too late. null reads as no list. An entry takes no unknown field, as
-// decodeJSON's body doesn't (the outer decoder's rule doesn't reach in here).
+// come too late. null reads as no list, [] as an empty one (a pointer to a
+// boundedList tells them apart, as one to a slice does). An entry takes no
+// unknown field, as decodeJSON's body doesn't (the outer decoder's rule doesn't
+// reach in here). The cap is the same for every list: a route that takes fewer
+// (the works and covers of a selection, a queue, a batch of listening events,
+// who a collection is shared with) counts its own after the decode, and
+// answers errTooManyEntries the same way.
 type boundedList[T any] []T
+
+// Every list with a cap of its own fits a boundedList (a constant below zero
+// doesn't compile): one raised past maxBulkBooks would be refused before its
+// route could count it.
+const _ = uint(maxBulkBooks - max(catalog.MaxCollectionItems, catalog.MaxQueue, catalog.MaxSyncEvents,
+	catalog.MaxCollectionShares, catalog.MaxCollections, maxWorkBooks, maxCoverBatch, maxCommunityCovers))
 
 func (l *boundedList[T]) UnmarshalJSON(data []byte) error {
 	list, err := decodeBounded[T](bytes.NewReader(data), maxBulkBooks)
@@ -389,7 +408,7 @@ func decodeBounded[T any](r io.Reader, limit int) ([]T, error) {
 	if tok != json.Delim('[') {
 		return nil, errors.New("not a list")
 	}
-	var list []T
+	list := []T{}
 	for dec.More() {
 		if len(list) == limit {
 			return nil, errTooManyEntries
