@@ -69,15 +69,18 @@ const HOLD_REASONS = [
   'identifier_elsewhere',
   'dramatization_only',
   'length_differs',
-];
+] as const;
+
+/** One of them: what the review has wording for (the row's HOLD_TEXT). */
+export type HoldReason = (typeof HOLD_REASONS)[number];
 
 /**
  * Every reason a review item is held for: the run records them all (server#352),
  * `holds` when there is more than one, else its detail alone.
  */
-export function holdReasons(item: Pick<MatchRunItem, 'detail' | 'holds'>): string[] {
+export function holdReasons(item: Pick<MatchRunItem, 'detail' | 'holds'>): HoldReason[] {
   const all = item.holds ?? (item.detail ? [item.detail] : []);
-  return all.filter((d) => HOLD_REASONS.includes(d));
+  return all.filter((d): d is HoldReason => (HOLD_REASONS as readonly string[]).includes(d));
 }
 
 /**

@@ -90,6 +90,7 @@ import {
   togglePickRange,
   withId,
   withoutId,
+  type HoldReason,
   type Picks,
 } from './bulk-match-model';
 
@@ -812,7 +813,7 @@ function ItemList({
 }
 
 /** What a review item says for each reason it is held for: first, then among others. */
-const HOLD_TEXT: Record<string, readonly [string, string]> = {
+const HOLD_TEXT: Record<HoldReason, readonly [string, string]> = {
   identifier_disagrees: [
     'health.bulkMatch.item.identifierDisagrees',
     'health.bulkMatch.item.identifierDisagrees',
