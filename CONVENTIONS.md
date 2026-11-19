@@ -1544,7 +1544,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   cover version, `stampAddedAt`'s statx and lstat (a birth time before 1980 is none, `birthKnown`, the
   mtime standing in; `0087` redates the rows a scan stamped before 1980 to the book's mtime, else
   to when it was last indexed), `problemCleared`'s look), the backfill's embedded cover read
-  (`media.EmbeddedCover`), and in the API `/item`'s look at the book's ebook (`RefreshEbook`, given
+  (`media.EmbeddedCoverBelow`, through the library's root), and in the API `/item`'s look at the book's ebook (`RefreshEbook`, given
   `API.fileWait` and answering with the stored ebook past it: the probe's time is the request's own),
   every cover (full, thumbnail, a
   show's: `serveArt`, `coverArt`, `readSidecar`) and every look a stream makes at its file (SRV-15c: the
@@ -2269,7 +2269,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `API.resolvePending`), which the console's toast reports as finishing in the background.
   `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
   NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
-  with a tag read (`media.EmbeddedCover`, no ffprobe). A `scanned` snapshot carries `@rev` (`scannedRevKey`), the path baseline's revision: one
+  with a tag read (`media.EmbeddedCoverBelow`, no ffprobe). A `scanned` snapshot carries `@rev` (`scannedRevKey`), the path baseline's revision: one
   without it (any older server's) was read when a lone folder above the book was its series.
   `Signatures` classifies such a book one folder deep (`pathCheckExpr`): settled by the snapshot
   alone (a tag's series and no author, missing or 0016's "": the folder is the author; the folder

@@ -9,7 +9,7 @@ import (
 )
 
 // ReadTags is dhowden's tag.ReadFrom over f, from its start, with an ID3v2 tag
-// read buffered (tagReader): the tag reads outside Extract (media.EmbeddedCover)
+// read buffered (tagReader): the tag reads outside Extract (media.EmbeddedCoverBelow)
 // go through it. Extract reads the tags through the in-process probe's block
 // cache (fastprobe.go), which hands dhowden the same bytes, as buffered.
 func ReadTags(f *os.File) (tag.Metadata, error) {

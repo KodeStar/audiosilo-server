@@ -202,7 +202,7 @@ func TestHasFFmpeg(t *testing.T) {
 	}
 }
 
-func TestEmbeddedCover(t *testing.T) {
+func TestEmbeddedCoverBelow(t *testing.T) {
 	t.Parallel()
 	t.Run("file without embedded art reports ok=false", func(t *testing.T) {
 		// None of the committed fixtures carry embedded art; the plain m4b below is
@@ -211,14 +211,15 @@ func TestEmbeddedCover(t *testing.T) {
 		if _, err := os.Stat(src); err != nil {
 			t.Skipf("fixture missing: %v", err)
 		}
-		if data, _, err := EmbeddedCover(t.Context(), src, time.Minute); data != nil || err != nil {
-			t.Fatalf("EmbeddedCover of a fixture that has none = %d bytes, %v; want no art, no error", len(data), err)
+		if data, _, err := EmbeddedCoverBelow(t.Context(), filepath.Dir(src), src, time.Minute); data != nil || err != nil {
+			t.Fatalf("EmbeddedCoverBelow of a fixture that has none = %d bytes, %v; want no art, no error", len(data), err)
 		}
 	})
 
 	t.Run("missing file is an error, no art", func(t *testing.T) {
-		if data, _, err := EmbeddedCover(t.Context(), filepath.Join(t.TempDir(), "nope.m4b"), time.Minute); data != nil || !errors.Is(err, fs.ErrNotExist) {
-			t.Fatalf("EmbeddedCover of a missing file = %d bytes, %v; want no art and its error", len(data), err)
+		dir := t.TempDir()
+		if data, _, err := EmbeddedCoverBelow(t.Context(), dir, filepath.Join(dir, "nope.m4b"), time.Minute); data != nil || !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("EmbeddedCoverBelow of a missing file = %d bytes, %v; want no art and its error", len(data), err)
 		}
 	})
 
@@ -242,15 +243,15 @@ func TestEmbeddedCover(t *testing.T) {
 			t.Skipf("ffmpeg could not build an art-bearing fixture: %v\n%s", err, out)
 		}
 
-		data, mime, err := EmbeddedCover(t.Context(), path, time.Minute)
+		data, mime, err := EmbeddedCoverBelow(t.Context(), filepath.Dir(path), path, time.Minute)
 		if err != nil {
-			t.Fatalf("EmbeddedCover: %v, want the art of a fixture with embedded art", err)
+			t.Fatalf("EmbeddedCoverBelow: %v, want the art of a fixture with embedded art", err)
 		}
 		if len(data) == 0 {
-			t.Fatal("EmbeddedCover returned empty data for a fixture with embedded art")
+			t.Fatal("EmbeddedCoverBelow returned empty data for a fixture with embedded art")
 		}
 		if mime == "" {
-			t.Fatal("EmbeddedCover returned empty mime for a fixture with embedded art")
+			t.Fatal("EmbeddedCoverBelow returned empty mime for a fixture with embedded art")
 		}
 	})
 }

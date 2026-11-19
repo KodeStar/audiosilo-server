@@ -725,34 +725,25 @@ func coverMIME(data []byte) (string, bool) {
 	return mime, coverImageTypes[mime]
 }
 
-// EmbeddedCover returns embedded cover art from absPath with its sniffed image
-// type (see coverMIME): nil data and no error when the file holds none (art
-// that isn't an image is no art, and so is a file whose tags don't read). An
-// error is a file that couldn't be opened or read right now: its open and tag
-// read are one metadata.Bounded call (ctx, at most timeout, the per-mount cap
-// of a scan's reads), so a share that stopped answering costs at most timeout
-// (metadata.GaveUp), never a caller held for good; a FIFO is turned away at
-// once (metadata.OpenRegular), never waited on for a writer.
-func EmbeddedCover(ctx context.Context, absPath string, timeout time.Duration) (data []byte, mime string, err error) {
-	return embeddedCover(ctx, absPath, timeout, func() (*os.File, os.FileInfo, error) { return metadata.OpenRegular(absPath) })
-}
-
-// EmbeddedCoverBelow is EmbeddedCover of absPath, a file a request named
-// that its caller joined and checked under the library root root, opened
-// through root (metadata.OpenRegularBelow): the open can't leave the library
-// whatever changed on disk since the check.
+// EmbeddedCoverBelow returns embedded cover art from absPath, a file its
+// caller joined and checked under the library root root (a request's, or the
+// scan's cover backfill), with its sniffed image type (see coverMIME): nil
+// data and no error when the file holds none (art that isn't an image is no
+// art, and so is a file whose tags don't read). The file is opened through
+// root (metadata.OpenRegularBelow): the open can't leave the library whatever
+// changed on disk since the check. An error is a file that couldn't be opened
+// or read right now: its open and tag read are one metadata.Bounded call
+// (ctx, at most timeout, the per-mount cap of a scan's reads), so a share
+// that stopped answering costs at most timeout (metadata.GaveUp), never a
+// caller held for good; a FIFO is turned away at once, never waited on for a
+// writer.
 func EmbeddedCoverBelow(ctx context.Context, root, absPath string, timeout time.Duration) (data []byte, mime string, err error) {
-	return embeddedCover(ctx, absPath, timeout, func() (*os.File, os.FileInfo, error) { return metadata.OpenRegularBelow(root, absPath) })
-}
-
-// embeddedCover is EmbeddedCover with the file's open.
-func embeddedCover(ctx context.Context, absPath string, timeout time.Duration, open func() (*os.File, os.FileInfo, error)) (data []byte, mime string, err error) {
 	type art struct {
 		data []byte
 		mime string
 	}
 	a, err := metadata.Bounded(ctx, absPath, timeout, func() (art, error) {
-		f, _, err := open()
+		f, _, err := metadata.OpenRegularBelow(root, absPath)
 		if err != nil {
 			return art{}, err
 		}
