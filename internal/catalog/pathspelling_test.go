@@ -19,6 +19,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // Path spellings built from explicit code points (never pasted): NFC is the
@@ -704,6 +705,8 @@ func TestListableRefsBounded(t *testing.T) {
 	for i := range 1000 {
 		refs = append(refs, ref(fmt.Sprintf("Plain/%04d/", i)+strings.Repeat("a/", 2000)+"x"))
 	}
+	db := &countingDB{catalogDB: c.db}
+	c.db = db
 	start := time.Now()
 	got, err := c.listableRefs(ctx, refs, all)
 	if err != nil {
@@ -712,7 +715,14 @@ func TestListableRefsBounded(t *testing.T) {
 	if want := []Ref{ref("Plain/Series/Book 2"), ref("Plain/Series")}; !slices.Equal(got, want) {
 		t.Fatalf("listable = %+v, want %+v", got, want)
 	}
-	if took := time.Since(start); took > 10*time.Second {
+	// Every folder bound would be about 4 MB a ref; the index's depth is a few
+	// of them, plus the path itself (as TestBookHoldingBounded). The count holds
+	// on any machine; the time only in a plain build, as -race on a loaded
+	// machine takes longer than that for the bounded read too.
+	if per := db.bound.Load() / int64(len(refs)); per > 64<<10 {
+		t.Fatalf("a deep ref bound %d bytes of folders", per)
+	}
+	if took := time.Since(start); !testwait.Race && took > 10*time.Second {
 		t.Fatalf("a thousand deep refs took %v", took)
 	}
 }
