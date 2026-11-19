@@ -195,6 +195,11 @@ func TestPathCapWhereThePathEnters(t *testing.T) {
 	if resp, raw := e.do(t, "POST", "/api/v1/me/queue", tok, ref(atCap)); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("queue add at the cap = %d %s, want 404", resp.StatusCode, raw)
 	}
+	// However the client escaped it: six bytes for each of the path's.
+	escaped := fmt.Sprintf(`{"library_id":%d,"path":"%s"}`, lib.ID, strings.Repeat(`\u0026`, catalog.MaxPathBytes))
+	if resp, raw := e.do(t, "POST", "/api/v1/me/queue", tok, escaped); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("queue add at the cap, every byte escaped = %d %s, want 404", resp.StatusCode, raw)
+	}
 	padded := fmt.Sprintf(`{"library_id":%d,"path":%q%s}`, lib.ID, mistbornBook, strings.Repeat(" ", pathBodyMax))
 	if resp, raw := e.do(t, "POST", "/api/v1/me/queue", tok, padded); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("queue add past the body bound = %d %s, want 400", resp.StatusCode, raw)

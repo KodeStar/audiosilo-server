@@ -287,9 +287,11 @@ func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID in
 const msgPathTooLong = "path is too long"
 
 // pathBodyMax bounds a body that names a path or two and little else (a list
-// add, the Bridge's rescan with its from): two paths at the cap fit with room
-// for JSON's escapes, so they get the route's answer, not a 400 for the body.
-const pathBodyMax = 4 * catalog.MaxPathBytes
+// add, the Bridge's rescan with its from): two paths at the cap fit however the
+// client escaped them (JSON spends up to six bytes on one: Go's encoder writes
+// "&" as \u0026, others every non-ASCII character as \uXXXX), with room for the
+// rest, so they get the route's answer, not a 400 for the body.
+const pathBodyMax = 2*6*catalog.MaxPathBytes + 1024
 
 // pathTooLong answers 400 msgPathTooLong for a raw path no file can have
 // (true), before it is cleaned, looked up (a library, a book's ancestors) or
