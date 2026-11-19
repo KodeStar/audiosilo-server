@@ -84,22 +84,29 @@ func (s *Service) WithWorkIDs(ctx context.Context, requested MetaLocal, books []
 }
 
 // Contested is the books (with their work ids, WithWorkIDs) the pick has to
-// choose between, each once, in books' order: the books of a group of
-// PlaceLocal's (newPlacer: a work id, or with no work id a series' numbered
-// books, match.SeriesKey) that holds two or more. requested and its copies are
-// in none (requested is placed by its work's entry alone). Only these need
-// Started (pickRank's second test), so the caller's progress is read for them
-// alone, and not at all for the usual envelope, one book a work (server#413).
+// choose between, each once, in books' order: two or more books of one of
+// PlaceLocal's groups (newPlacer): of a work id, or with no work id the books
+// of a series (match.SeriesKey) starting at one position, the only ones
+// place chooses between. requested and its copies are in none (requested is
+// placed by its work's entry alone). Only these need Started (pickRank's
+// second test), so the caller's progress is read for them alone, and not at
+// all for the usual envelope, one book a work or a position (server#413).
 func Contested(currentWork string, requested MetaLocal, books []LocalBook) []MetaLocal {
 	p := newPlacer(currentWork, requested, books)
 	contested := map[MetaLocal]bool{}
-	for _, groups := range []map[string][]LocalBook{p.byWork, p.byIndex} {
-		for _, g := range groups {
-			// One book alone leaves no choice (byIndex lists a book once per
-			// position it holds in the series).
-			if slices.ContainsFunc(g[1:], func(b LocalBook) bool { return b.MetaLocal != g[0].MetaLocal }) {
-				for _, b := range g {
-					contested[b.MetaLocal] = true
+	for _, g := range p.byWork {
+		if len(g) > 1 { // each book once: one alone leaves no choice
+			for _, b := range g {
+				contested[b.MetaLocal] = true
+			}
+		}
+	}
+	for _, g := range p.byIndex {
+		// A book is listed once per position it holds in the series.
+		for i, a := range g {
+			for _, b := range g[i+1:] {
+				if SamePosition(a.SeriesIndex, b.SeriesIndex) && a.MetaLocal != b.MetaLocal {
+					contested[a.MetaLocal], contested[b.MetaLocal] = true, true
 				}
 			}
 		}

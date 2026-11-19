@@ -610,6 +610,7 @@ func TestContested(t *testing.T) {
 		mine(1, "S/2", "S", 2, "two"),
 		mine(1, "S/2", "Other", 4, "two"), // one book in two series
 		mine(1, "S/3", "S", 3, ""),
+		mine(1, "S/4", "S", 4, ""), // another position of the series: no choice
 	}
 	if got := Contested("one", requested, one); len(got) != 0 {
 		t.Fatalf("one book a work: contested %v, want none", got)
