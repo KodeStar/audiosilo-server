@@ -312,7 +312,7 @@ func TestPodcastStreamMarksCoverEveryMediaBranch(t *testing.T) {
 	b, f := podcastStorageEnv(t)
 	ep := f.Episodes[0]
 	req := catalog.RetentionRequest{ShowID: f.ShowID, Path: ep.Path, Generation: ep.Fetch.Generation, SHA256: ep.Fetch.SHA256, Bytes: ep.Fetch.Bytes}
-	for _, suffix := range []string{"", "&download=1", "&transcode=1", "&transcode=1&t=1"} {
+	for _, suffix := range []string{"", "&download=1", "&transcode=1", "&transcode=1&t=1", "&transcode=1&download=1"} {
 		t.Run(suffix, func(t *testing.T) {
 			if strings.HasPrefix(suffix, "&transcode=1") && !media.HasFFmpeg("ffmpeg") {
 				t.Skip("ffmpeg not installed")
@@ -335,6 +335,10 @@ func TestPodcastStreamMarksCoverEveryMediaBranch(t *testing.T) {
 			}
 			if strings.HasPrefix(suffix, "&transcode=1") && (w.Header().Get("ETag") != "" || w.Header().Get("Accept-Ranges") != "none") {
 				t.Fatal("transformed source validator")
+			}
+			// A download is an attachment named for the episode, transcoded or not.
+			if want := strings.Contains(suffix, "download=1"); want != strings.HasPrefix(w.Header().Get("Content-Disposition"), "attachment; filename=") {
+				t.Fatalf("Content-Disposition %q, want an attachment: %v", w.Header().Get("Content-Disposition"), want)
 			}
 			check, err := b.cat.PodcastRetentionCheck(context.Background(), b.lib.ID, req)
 			if err != nil || check.ActiveStream {

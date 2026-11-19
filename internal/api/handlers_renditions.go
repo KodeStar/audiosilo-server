@@ -111,7 +111,7 @@ func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalo
 		}
 		return
 	}
-	serveCopy(w, r, f, etag, copyName(abs, a.renditions.Ext()), r.URL.Query().Get("download") == "1")
+	serveCopy(w, r, f, etag, media.StemName(abs, a.renditions.Ext()), r.URL.Query().Get("download") == "1")
 }
 
 // renditionFile is one audio file of a book in a renditions answer: its path

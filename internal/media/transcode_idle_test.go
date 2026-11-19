@@ -24,7 +24,7 @@ func idleServer(t *testing.T, src func() io.Reader, idle time.Duration) (*httpte
 	t.Helper()
 	done := make(chan error, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeTranscodeHeader(w)
+		writeTranscodeHeader(w, "")
 		done <- copyIdle(w, src(), idle)
 	}))
 	t.Cleanup(srv.Close)
@@ -104,7 +104,7 @@ func TestTranscodeIdleEndsFFmpeg(t *testing.T) {
 	returned := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer close(returned)
-		transcodeInput(w, r, inputSpec{url: src}, "ffmpeg", 0, 300*time.Millisecond, nil)
+		transcodeInput(w, r, inputSpec{url: src}, "ffmpeg", 0, false, 300*time.Millisecond, nil)
 	}))
 	t.Cleanup(srv.Close)
 	resp, err := http.Get(srv.URL)
@@ -187,7 +187,7 @@ func TestTranscodeReportsItsEnd(t *testing.T) {
 	endless := fakeFFmpeg(t, "exec cat /dev/zero")
 
 	rec := httptest.NewRecorder()
-	if ended, err := Transcode(rec, httptest.NewRequest(http.MethodGet, "/", nil), src, short, 0, time.Minute, 0, nil); err != nil || !ended {
+	if ended, err := Transcode(rec, httptest.NewRequest(http.MethodGet, "/", nil), src, short, 0, false, time.Minute, 0, nil); err != nil || !ended {
 		t.Fatalf("a whole stream: ended %v, %v, want true", ended, err)
 	}
 	if rec.Body.String() != "mp3 bytes" {
@@ -199,7 +199,7 @@ func TestTranscodeReportsItsEnd(t *testing.T) {
 	cut := cancelOnWrite{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
 	done := make(chan bool, 1)
 	go func() {
-		ended, _ := Transcode(cut, httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx), src, endless, 0, time.Minute, 0, nil)
+		ended, _ := Transcode(cut, httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx), src, endless, 0, false, time.Minute, 0, nil)
 		done <- ended
 	}()
 	select {
@@ -211,7 +211,7 @@ func TestTranscodeReportsItsEnd(t *testing.T) {
 		t.Fatal("a stream whose request ended went on")
 	}
 
-	if ended, _ := Transcode(httptest.NewRecorder(), httptest.NewRequest(http.MethodHead, "/", nil), src, short, 0, time.Minute, 0, nil); ended {
+	if ended, _ := Transcode(httptest.NewRecorder(), httptest.NewRequest(http.MethodHead, "/", nil), src, short, 0, false, time.Minute, 0, nil); ended {
 		t.Fatal("a HEAD said it streamed to the end")
 	}
 }

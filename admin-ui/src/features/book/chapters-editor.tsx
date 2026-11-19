@@ -858,8 +858,12 @@ function Scrubber({
     clearTimeout(preview.current);
     previewing.current = false;
     stopRetry();
-    if (!a.paused && !broken.current) {
+    // During a busy stream's wait the button stops it: no automatic ask again
+    // (as a pause then plays nothing), and Play later asks at once, with its
+    // own tries. Paused, a stalled stream lets go of its slot (Safari).
+    if (waiting || (!a.paused && !broken.current)) {
       wanted.current = false;
+      if (waiting) busy.current = 0;
       a.pause();
       return;
     }
@@ -1005,6 +1009,15 @@ function Scrubber({
     if (!a) return;
     clearTimeout(preview.current);
     previewing.current = transcoded;
+    // During a busy stream's wait, or the look at a failed load before it,
+    // this asks at once: the wait's own ask again (or the look's answer, which
+    // starts that wait or mints a token) would load the element over the
+    // preview. A stalled stream's look goes on: it is the one played here.
+    // Pressed during the wait, it is an ask of its own, with its own tries, as
+    // Play after the wait was stopped is (toggle): asked before the server's
+    // Retry-After has passed, it would else spend the row's last try.
+    if (waiting || broken.current) stopRetry();
+    if (waiting) busy.current = 0;
     // A transcode already asked for from the row's start and not played yet
     // plays at once, in this click; else it is asked for from there.
     if (transcoded && (from !== offset || pending.current !== null || a.currentTime > 0)) {
@@ -1160,10 +1173,16 @@ function Scrubber({
           variant="outline"
           size="icon-sm"
           disabled={off}
-          aria-label={playing ? t('book.chapters.edit.pause') : t('book.chapters.edit.play')}
+          aria-label={
+            waiting
+              ? t('book.chapters.edit.stopWaiting')
+              : playing
+                ? t('book.chapters.edit.pause')
+                : t('book.chapters.edit.play')
+          }
           onClick={toggle}
         >
-          {playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
+          {playing || waiting ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
         </Button>
         {(
           [

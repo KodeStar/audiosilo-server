@@ -980,9 +980,10 @@ const remuxDownloadWait = 45 * time.Second
 
 // handleStream serves an audio file by path. By default it streams the file with
 // Range support (?download=1 forces a download). With ?transcode=1 it re-encodes
-// to MP3 via ffmpeg for codecs browsers can't decode; ?t=<seconds> starts that
-// transcode mid-file (transcoded output is not byte-seekable, so seeking is by
-// re-requesting). An .mka holding MP3 is served, at this same URL, as its
+// to MP3 via ffmpeg for codecs browsers can't decode (with ?download=1 an
+// attachment named <stem>.mp3); ?t=<seconds> starts that transcode mid-file
+// (transcoded output is not byte-seekable, so seeking is by re-requesting).
+// An .mka holding MP3 is served, at this same URL, as its
 // lossless remux to plain MP3 (server#174: no browser and no iOS player opens
 // Matroska) while ffmpeg is configured, unless ?original=1 asks for the stored
 // bytes; one ffmpeg can't remux (another codec inside) is served as stored, and
@@ -1023,7 +1024,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.URL.Query().Get("transcode") == "1" {
-		a.serveTranscode(w, r, lib.ID, rel, abs, "", deadline)
+		a.serveTranscode(w, r, lib.ID, rel, abs, deadline)
 		return
 	}
 	download := r.URL.Query().Get("download") == "1"
@@ -1173,12 +1174,6 @@ func (a *API) fsGiven(w http.ResponseWriter, r *http.Request, lib *catalog.Libra
 // one (audioFile).
 func noFile(abs string) string { return abs + "\x00" }
 
-// copyName is the download name of abs's cached copy: its stem with the
-// copy's extension.
-func copyName(abs, ext string) string {
-	return strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)) + ext
-}
-
 // serveCopy answers with a cached copy f (media.FileCache.Open) and closes it:
 // Range and the copy's strong etag, download an attachment named name. No
 // Last-Modified: the copy's mtime is the cache's LRU clock (moved on a hit), so
@@ -1192,41 +1187,40 @@ func serveCopy(w http.ResponseWriter, r *http.Request, f *os.File, etag, name st
 }
 
 // serveTranscode answers with the live MP3 transcode of the library file abs
-// (rel in library lib) from ?t=, in one of the transcode slots; a non-empty
-// downloadName makes it an attachment of that name.
-func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, rel, abs, downloadName string, deadline time.Time) {
+// (rel in library lib) from ?t=, in one of the transcode slots.
+func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, deadline time.Time) {
 	h, r := a.beginTranscode(w, r, lib, rel)
 	if h == nil {
 		return
 	}
 	defer a.endTranscode(h)
-	a.transcodeHeld(w, r, h, abs, downloadName, deadline)
+	a.transcodeHeld(w, r, h, abs, deadline)
 }
 
 // transcodeHeld is serveTranscode once h is taken (the caller ends it): the
 // transcode from h's start, written through h's writer, h.ended set once it
-// ran to its end. Its look at abs given up on at the stream's deadline is a
-// 503 share_not_answering.
-func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, h *transcodeHold, abs, downloadName string, deadline time.Time) {
-	if downloadName != "" {
-		media.SetAttachment(w.Header(), downloadName)
-	}
-	ended, err := media.Transcode(h.writer(w), r, abs, a.ffmpeg, h.ask.start, waitLeft(deadline), transcodeIdleFor(r), a.log)
+// ran to its end; with ?download=1 an attachment named <stem>.mp3. Its look
+// at abs given up on at the stream's deadline is a 503 share_not_answering.
+func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, h *transcodeHold, abs string, deadline time.Time) {
+	ended, err := media.Transcode(h.writer(w), r, abs, a.ffmpeg, h.ask.start, h.ask.download, waitLeft(deadline), transcodeIdleFor(r, h.ask), a.log)
 	h.ended = ended
 	if err != nil {
-		w.Header().Del("Content-Disposition")
 		writeShareNotAnswering(w)
 	}
 }
 
-// transcodeIdleFor is how long r's transcode waits for its client to read
-// before it ends: media.TranscodeIdle for the console's chapter editor (its
-// cast token, auth.Credential.Editor), which asks for its stream again after a
-// 10 s pause; 0 (no idle end) for every other client. The web player does not
-// ask again for a transcode it loaded but never played, so it would stall
+// transcodeIdleFor is how long r's transcode of ask waits for its client to
+// read before it ends: media.TranscodeIdle for the console's chapter editor
+// (its cast token, auth.Credential.Editor), which asks for its stream again
+// after a 10 s pause, and for a download (ask.download, the very flag
+// tokenHoldToTake spares a hold by: no other ask takes its slot over), so a
+// client that stopped reading it (a paused browser download; a transcode
+// resumes by no Range, so its save starts again anyway) would hold it for
+// good; 0 (no idle end) for every other client's stream. The web player does
+// not ask again for a transcode it loaded but never played, so it would stall
 // after a long wait, and a Cast receiver asks for nothing again on resume.
-func transcodeIdleFor(r *http.Request) time.Duration {
-	if c := credentialFrom(r.Context()); c.Kind == auth.KindCast && c.Editor {
+func transcodeIdleFor(r *http.Request, ask transcodeAsk) time.Duration {
+	if c := credentialFrom(r.Context()); c.Kind == auth.KindCast && c.Editor || ask.download {
 		return media.TranscodeIdle
 	}
 	return 0
@@ -1265,7 +1259,6 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		defer cancel()
 		f, etag, err = a.remux.Open(wait, a.baseCtx, a.ffmpeg, abs)
 	}
-	name := copyName(abs, a.remux.Ext())
 	var held *transcodeHold // a transcode slot taken while the remux runs on
 	// Still remuxing when the wait ran out (it goes on): not a failure to warn of.
 	running := r.Context().Err() == nil && errors.Is(err, media.ErrPending)
@@ -1305,26 +1298,22 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		case !errors.Is(err, media.ErrUnavailable):
 			a.log.Warn("remux failed: transcoding Matroska instead", "path", abs, "err", err)
 		}
-		downloadName := ""
-		if download {
-			downloadName = name
-		}
 		if held != nil {
 			a.noteTranscode(r, lib, rel)
-			a.transcodeHeld(w, r, held, abs, downloadName, deadline)
+			a.transcodeHeld(w, r, held, abs, deadline)
 			return true, deadline
 		}
-		a.serveTranscode(w, r, lib, rel, abs, downloadName, deadline)
+		a.serveTranscode(w, r, lib, rel, abs, deadline)
 		return true, deadline
 	}
-	serveCopy(w, r, f, etag, name, download)
+	serveCopy(w, r, f, etag, media.StemName(abs, a.remux.Ext()), download)
 	return true, deadline
 }
 
 // beginTranscode admits one ?transcode=1 request for the file at rel: 503 when
 // ffmpeg isn't configured or no slot is free for it (Retry-After 5), else its
 // hold (takeTranscodeSlot: a repeat ask takes its earlier one's over, a token
-// past its cap its oldest's), for
+// past its cap one of its streams', never a download's), for
 // endTranscode once served, and r with the slot's context (a takeover ends
 // it), the device's session marked transcoded (noteTranscode). A HEAD takes
 // no slot and is answered as a GET would be, the 503 included, with no ffmpeg

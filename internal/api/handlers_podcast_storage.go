@@ -278,7 +278,7 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 			return
 		}
 		defer a.endTranscode(h)
-		h.ended = media.TranscodeOpened(h.writer(w), r, f, a.ffmpeg, h.ask.start, transcodeIdleFor(r), a.log)
+		h.ended = media.TranscodeOpened(h.writer(w), r, f, a.ffmpeg, h.ask.start, h.ask.download, transcodeIdleFor(r, h.ask), a.log)
 		return
 	}
 	w.Header().Set("ETag", fmt.Sprintf(`"podcast-g%d-%s"`, pin.Generation, pin.SHA256))

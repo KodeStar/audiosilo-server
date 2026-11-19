@@ -192,7 +192,8 @@ type API struct {
 	transcodeSem chan struct{}
 	// transcodeHolds are the slots held by asks with a token, by ask, so a
 	// repeat ask takes its earlier one's slot over, and a token's ask past
-	// maxTranscodesPerToken its oldest's (transcode_slots.go); transcodeSeq
+	// maxTranscodesPerToken one of its streams' (tokenHoldToTake, never a
+	// download; transcode_slots.go); transcodeSeq
 	// numbers the holds in the order they were taken. Both guarded by
 	// transcodeMu.
 	transcodeMu    sync.Mutex
@@ -421,7 +422,9 @@ const maxConcurrentTranscodes = 4
 
 // maxTranscodesPerToken caps the transcode slots one token holds at once, so
 // one client (a demo visitor included) can't hold every slot with asks that
-// differ only in ?t=: its next ask takes its own oldest slot over instead.
+// differ only in ?t=: its next ask takes over one of its own streams' slots
+// instead (the same file's earliest, else its oldest; never a download's),
+// or is busy when the token holds only downloads.
 const maxTranscodesPerToken = 2
 
 // EnableSetup turns on the first-run setup wizard, guarded by token (a one-time

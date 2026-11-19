@@ -42,6 +42,16 @@ func takeSlot(a *API, method string, ask transcodeAsk) (*transcodeHold, *http.Re
 	return a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(method, auth.Credential{ID: ask.token}), ask)
 }
 
+// mustTakeSlot is takeSlot for a GET that must get a slot.
+func mustTakeSlot(t *testing.T, a *API, ask transcodeAsk) (*transcodeHold, *http.Request) {
+	t.Helper()
+	h, r := takeSlot(a, http.MethodGet, ask)
+	if h == nil {
+		t.Fatalf("%+v got no slot", ask)
+	}
+	return h, r
+}
+
 // endTaken is endTranscode for a hold taken over: it reports whether it aborted.
 func endTaken(a *API, h *transcodeHold) (aborted bool) {
 	defer func() {
@@ -441,11 +451,7 @@ func TestTranscodeTokenCapTakesOverItsOldest(t *testing.T) {
 	a := slotAPI(maxConcurrentTranscodes, maxConcurrentTranscodes)
 	take := func(token int64, start float64) (*transcodeHold, *http.Request) {
 		t.Helper()
-		h, r := takeSlot(a, http.MethodGet, transcodeAsk{token: token, lib: 1, rel: "Book/01.mka", start: start})
-		if h == nil {
-			t.Fatalf("token %d at t=%v got no slot", token, start)
-		}
-		return h, r
+		return mustTakeSlot(t, a, transcodeAsk{token: token, lib: 1, rel: "Book/01.mka", start: start})
 	}
 	// Another token's two slots, taken first: the oldest of all.
 	_, theirs1 := take(8, 0)
@@ -515,6 +521,152 @@ func TestTranscodeGlobalCapAcrossTokens(t *testing.T) {
 	}
 	if len(a.transcodeSem) != maxConcurrentTranscodes || len(a.transcodeHolds) != maxConcurrentTranscodes {
 		t.Fatal("a refused ask changed the slots held")
+	}
+}
+
+// TestTranscodeTokenCapSparesItsDownload: a token at its cap whose oldest
+// hold is a running download takes over its stream instead (a download is
+// never ended by another ask: its saved file would be cut short); a token at
+// its cap with only downloads is busy (503 with Retry-After, its HEAD told
+// busy) even with slots free, and a repeat of a download's own ask still takes
+// that download over.
+func TestTranscodeTokenCapSparesItsDownload(t *testing.T) {
+	t.Parallel()
+	a := slotAPI(maxConcurrentTranscodes, maxConcurrentTranscodes)
+	dl := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka", download: true}
+	_, dlReq := mustTakeSlot(t, a, dl)
+	stream, streamReq := mustTakeSlot(t, a, transcodeAsk{token: 7, lib: 1, rel: "Book/02.mka", start: 10})
+	seek := transcodeAsk{token: 7, lib: 1, rel: "Book/03.mka", start: 20}
+	if free, _ := a.transcodeSlotFree(seek); !free {
+		t.Fatal("a HEAD of the token's third ask was told busy: a GET would take its stream over")
+	}
+	third, _ := mustTakeSlot(t, a, seek)
+	if dlReq.Context().Err() != nil {
+		t.Fatal("the token's third ask ended its running download")
+	}
+	if streamReq.Context().Err() == nil || !stream.taken.Load() {
+		t.Fatal("the token's third ask did not take its stream over")
+	}
+	if !endTaken(a, stream) || len(a.transcodeSem) != 2 {
+		t.Fatalf("after the takeover: %d slots taken, want 2", len(a.transcodeSem))
+	}
+	if endTaken(a, third) {
+		t.Fatal("the third ask was aborted at its own end")
+	}
+
+	// Two downloads: the token's next ask is busy though slots are free.
+	dl2 := transcodeAsk{token: 7, lib: 1, rel: "Book/02.mka", download: true}
+	_, dl2Req := mustTakeSlot(t, a, dl2)
+	if free, running := a.transcodeSlotFree(seek); free || running != nil {
+		t.Fatal("a HEAD of a token holding only downloads at its cap was told a slot is free")
+	}
+	a.ffmpeg = "ffmpeg" // beginTranscode's check only: nothing runs
+	rec := httptest.NewRecorder()
+	if h, _ := a.beginTranscode(rec, slotRequest(http.MethodGet, auth.Credential{ID: 7}), 1, "Book/03.mka"); h != nil {
+		t.Fatal("a token holding only downloads at its cap got a slot")
+	}
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" {
+		t.Fatalf("the refused ask = %d with Retry-After %q, want 503 and 5", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	if dlReq.Context().Err() != nil || dl2Req.Context().Err() != nil {
+		t.Fatal("a refused ask ended a download")
+	}
+	if len(a.transcodeSem) != 2 || len(a.transcodeHolds) != 2 {
+		t.Fatal("a refused ask changed the slots held")
+	}
+
+	// A repeat of a download's own ask (a client retrying it) takes it over.
+	again, _ := mustTakeSlot(t, a, dl)
+	if dlReq.Context().Err() == nil {
+		t.Fatal("a repeat of the download's own ask did not take its slot over")
+	}
+	if a.transcodeHolds[dl] != again || len(a.transcodeSem) != 2 {
+		t.Fatal("the repeat download ask does not hold the download's slot")
+	}
+}
+
+// TestTranscodeTokenCapPrefersSameFile: a token at its cap asking for a file
+// it streams already (a seek in one tab) takes over that file's earlier ask,
+// not its oldest overall (another tab's stream on the same token, which plays
+// on); a HEAD of the ask says the same (holdToTake), and with no hold on the
+// file the oldest is taken.
+func TestTranscodeTokenCapPrefersSameFile(t *testing.T) {
+	t.Parallel()
+	a := slotAPI(maxConcurrentTranscodes, maxConcurrentTranscodes)
+	take := func(rel string, start float64) (*transcodeHold, *http.Request) {
+		t.Helper()
+		return mustTakeSlot(t, a, transcodeAsk{token: 7, lib: 1, rel: rel, start: start})
+	}
+	otherTab, otherReq := take("Book/01.mka", 0)
+	thisTab, thisReq := take("Book/05.mka", 0)
+	seek := transcodeAsk{token: 7, lib: 1, rel: "Book/05.mka", start: 30}
+	a.transcodeMu.Lock()
+	picked, refused := a.holdToTake(seek)
+	a.transcodeMu.Unlock()
+	if picked != thisTab || refused {
+		t.Fatal("holdToTake (a HEAD's answer) did not pick the same file's earlier ask")
+	}
+	if free, running := a.transcodeSlotFree(seek); !free || running != nil {
+		t.Fatal("a HEAD of the seek was told busy, or of a running GET of another ask")
+	}
+	seeked, _ := take("Book/05.mka", 30)
+	if thisReq.Context().Err() == nil || !thisTab.taken.Load() {
+		t.Fatal("the seek did not take over the same file's earlier ask")
+	}
+	if otherReq.Context().Err() != nil || otherTab.taken.Load() {
+		t.Fatal("the seek ended the token's oldest stream, another file's")
+	}
+	if !endTaken(a, thisTab) {
+		t.Fatal("the taken-over stream was not aborted")
+	}
+
+	// Neither of the token's holds is on this file: its oldest is taken.
+	_, _ = take("Book/09.mka", 0)
+	if otherReq.Context().Err() == nil {
+		t.Fatal("an ask for a file the token streams nowhere did not take over its oldest")
+	}
+	if seeked.taken.Load() {
+		t.Fatal("an ask for another file took over the newer hold")
+	}
+}
+
+// TestStreamTranscodeDownloadNamed: ?transcode=1&download=1 is an attachment
+// named for the file with the transcode's extension, as a plain download is
+// named for the file (a GET and a HEAD); without download=1 it is none.
+func TestStreamTranscodeDownloadNamed(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	e.api.ffmpeg, _ = standInFFmpeg(t)
+	tok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	stream := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + "/stream?transcode=1&path=" +
+		url.QueryEscape("Will Wight/Cradle/01 - Unsouled.m4b")
+	client := &http.Client{Transport: &http.Transport{}, Timeout: 30 * time.Second}
+	t.Cleanup(client.CloseIdleConnections)
+	disposition := func(method, path string) string {
+		t.Helper()
+		req, _ := http.NewRequest(method, e.srv.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close() // opened, not read: the stand-in streams until killed
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s %s = %d, want 200", method, path, resp.StatusCode)
+		}
+		return resp.Header.Get("Content-Disposition")
+	}
+	want := `attachment; filename="01 - Unsouled.mp3"`
+	for _, method := range []string{"GET", "HEAD"} {
+		if got := disposition(method, stream+"&download=1"); got != want {
+			t.Fatalf("%s of a transcoded download: Content-Disposition %q, want %q", method, got, want)
+		}
+	}
+	if got := disposition("HEAD", stream); got != "" {
+		t.Fatalf("a transcoded stream (no download): Content-Disposition %q, want none", got)
 	}
 }
 

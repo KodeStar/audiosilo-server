@@ -181,10 +181,62 @@ func ServeOpened(w http.ResponseWriter, r *http.Request, f *os.File, download bo
 	ServeOpenedAs(w, r, f, filepath.Base(f.Name()), info.ModTime(), download)
 }
 
-// SetAttachment makes the response a download saved as name (strconv.Quote
-// gives the quoted-string form browsers expect).
+// SetAttachment makes the response a download saved as name: its
+// quoted-string filename (strconv.Quote, which escapes only `"` and `\` in
+// printable ASCII) and, for a name with any other byte, an ASCII stand-in
+// there (an underscore for each other rune) with the name itself as RFC 6266's
+// filename* (RFC 8187's UTF-8 percent-encoding), which browsers prefer: a
+// quoted-string has no escape for a rune past ASCII (Quote's \u3000, an
+// ideographic space, is saved as "u3000"), and raw UTF-8 in one is no
+// standard's.
 func SetAttachment(h http.Header, name string) {
-	h.Set("Content-Disposition", "attachment; filename="+strconv.Quote(name))
+	const disposition = "attachment; filename="
+	if printableASCII(name) {
+		h.Set("Content-Disposition", disposition+strconv.Quote(name))
+		return
+	}
+	fallback := strings.Map(func(r rune) rune {
+		if r < ' ' || r > '~' {
+			return '_'
+		}
+		return r
+	}, name)
+	h.Set("Content-Disposition", disposition+strconv.Quote(fallback)+
+		"; filename*=UTF-8''"+extValue(strings.ToValidUTF8(name, "\uFFFD")))
+}
+
+// printableASCII reports whether s is printable ASCII only.
+func printableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < ' ' || s[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+// extValue is s as RFC 8187's value-chars: its attr-chars as they are, every
+// other byte percent-encoded.
+func extValue(s string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("!#$&+-.^_`|~", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hex[c>>4])
+		b.WriteByte(hex[c&0xF])
+	}
+	return b.String()
+}
+
+// StemName is the download name of a copy made from the file at path (a
+// remux, a rendition, a transcode): its file name with ext for its extension.
+func StemName(path, ext string) string {
+	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)) + ext
 }
 
 // ServeOpenedAs serves the open file f with Range under the name name (the
@@ -218,13 +270,16 @@ func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 // output is not byte-seekable (no Range / Content-Length); a client seeks by
 // re-requesting with a new startSec. The ffmpeg process is bound to the request
 // context, so a client disconnect kills it, and so does a client that has read
-// nothing for idle (TranscodeIdle: the chapter editor's paused stream; 0 never
-// ends a stream for that). log may be nil. Its look at the
-// file is a metadata.Bounded stat (the request's context, at most wait), as
-// ServeFile's open: one given up on (metadata.GaveUp) is returned with nothing
-// written, for the caller to answer; every other outcome is answered here and
-// returns nil. ended reports a stream that ran to its end (transcodeInput).
-func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath string, startSec float64, wait, idle time.Duration, log *slog.Logger) (ended bool, err error) {
+// nothing for idle (TranscodeIdle: the chapter editor's paused stream, a
+// download its client stopped reading; 0 never ends a stream for that). log
+// may be nil. Its look at the file is a metadata.Bounded stat (the request's
+// context, at most wait), as ServeFile's open: one given up on
+// (metadata.GaveUp) is returned with nothing written, for the caller to
+// answer; every other outcome is answered here and returns nil. ended reports
+// a stream that ran to its end (transcodeInput).
+// download makes the stream an attachment named for the file (its stem with
+// the MP3 extension), set only on the stream's own answer, never an error's.
+func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath string, startSec float64, download bool, wait, idle time.Duration, log *slog.Logger) (ended bool, err error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -235,16 +290,16 @@ func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath strin
 		http.Error(w, "not found", http.StatusNotFound)
 		return false, nil
 	}
-	return transcodeInput(w, r, inputSpec{url: absPath}, ffmpegPath, startSec, idle, log), nil
+	return transcodeInput(w, r, inputSpec{url: absPath}, ffmpegPath, startSec, download, idle, log), nil
 }
 
 // TranscodeOpened transcodes an already verified descriptor (a podcast
 // episode's committed generation) without reopening its path: f is ffmpeg's
 // stdin, read seekably through the fd: protocol when this ffmpeg has it (so
 // -ss is a fast input seek and a file whose index sits at its end, a
-// non-faststart m4a, demuxes), else as the old non-seekable pipe:0. idle and
-// ended are Transcode's.
-func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegPath string, startSec float64, idle time.Duration, log *slog.Logger) (ended bool) {
+// non-faststart m4a, demuxes), else as the old non-seekable pipe:0. download,
+// idle and ended are Transcode's (the attachment named for f's name).
+func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegPath string, startSec float64, download bool, idle time.Duration, log *slog.Logger) (ended bool) {
 	// The child shares this descriptor's offset: start it at the top.
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		http.Error(w, "transcode failed", http.StatusInternalServerError)
@@ -252,7 +307,7 @@ func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegP
 	}
 	in := inputFor(ffmpegPath)
 	in.file = f
-	return transcodeInput(w, r, in, ffmpegPath, startSec, idle, log)
+	return transcodeInput(w, r, in, ffmpegPath, startSec, download, idle, log)
 }
 
 // inputSpec is how ffmpeg reads its input: a path (proto ""), or the
@@ -361,9 +416,11 @@ func transcodeArgs(in inputSpec, startSec float64) []string {
 // of the server's few transcode slots and an ffmpeg, for as long as the page
 // stays open. A playing client reads every few seconds (a browser buffers a
 // few minutes of it at most). The api applies it only to the console's
-// chapter editor, which asks for its stream again after a 10 s pause; the web
-// player does not ask again for a track it loaded and never played, and a
-// Cast receiver asks for nothing again on resume, so theirs get no idle end
+// chapter editor, which asks for its stream again after a 10 s pause, and to
+// a download (?download=1), whose slot no other ask takes over and whose
+// client reads as fast as it can until it is paused or gone; the web player
+// does not ask again for a track it loaded and never played, and a Cast
+// receiver asks for nothing again on resume, so their streams get no idle end
 // (the api's transcodeIdleFor).
 const TranscodeIdle = 10 * time.Minute
 
@@ -378,14 +435,22 @@ const transcodeWaitDelay = 5 * time.Second
 // written, while the request's context was live. One cut short (the context
 // ended, so ffmpeg was killed, which ends its output too; a write that
 // failed) did not, and neither did a HEAD or a failure to start.
-func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpegPath string, startSec float64, idle time.Duration, log *slog.Logger) (ended bool) {
+func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpegPath string, startSec float64, download bool, idle time.Duration, log *slog.Logger) (ended bool) {
 	if log == nil {
 		log = slog.Default()
+	}
+	logPath := in.url
+	if in.file != nil {
+		logPath = in.file.Name()
+	}
+	name := ""
+	if download {
+		name = StemName(logPath, transcodeExt)
 	}
 	if r.Method == http.MethodHead {
 		// net/http discards a HEAD's body: answer its headers without running
 		// ffmpeg over the whole file for nothing.
-		writeTranscodeHeader(w)
+		writeTranscodeHeader(w, name)
 		return false
 	}
 	// Ended with the request, and at once when the copy fails (copyIdle's
@@ -394,13 +459,11 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 	// left for cmd.Wait to wait on.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	logPath := in.url
 	cmd := exec.CommandContext(ctx, ffmpegPath, transcodeArgs(in, startSec)...)
 	// Once ctx ends (ffmpeg killed), Wait gives its output pipes this long to
 	// close before it closes them itself: ffmpeg is always reaped.
 	cmd.WaitDelay = transcodeWaitDelay
 	if in.file != nil {
-		logPath = in.file.Name()
 		cmd.Stdin = in.file
 	}
 	stdout, err := cmd.StdoutPipe()
@@ -414,7 +477,7 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 		http.Error(w, "transcode failed", http.StatusInternalServerError)
 		return false
 	}
-	writeTranscodeHeader(w) // before the body
+	writeTranscodeHeader(w, name) // before the body
 	out := &endWatch{r: stdout, ctx: ctx}
 	err = copyIdle(w, out, idle)
 	if err != nil {
@@ -485,9 +548,17 @@ func (d deadlineWriter) Write(p []byte) (int, error) {
 	return d.w.Write(p)
 }
 
+// transcodeExt is a transcode's file extension (it is MP3), for a download's
+// name.
+const transcodeExt = ".mp3"
+
 // writeTranscodeHeader sends a transcode's status and headers: MP3, never
-// cached, and no Accept-Ranges since the stream is not byte-seekable.
-func writeTranscodeHeader(w http.ResponseWriter) {
+// cached, and no Accept-Ranges since the stream is not byte-seekable; a
+// non-empty downloadName makes it an attachment of that name.
+func writeTranscodeHeader(w http.ResponseWriter, downloadName string) {
+	if downloadName != "" {
+		SetAttachment(w.Header(), downloadName)
+	}
 	w.Header().Set("Content-Type", "audio/mpeg")
 	w.Header().Set("Accept-Ranges", "none")
 	w.Header().Set("Cache-Control", "no-store")

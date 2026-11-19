@@ -35,7 +35,8 @@ var errTranscodeTaken = errors.New("transcode slot taken over")
 // needing another, so with one slot free the asks don't shut each other out.
 // A token is one user's, so a takeover never ends another user's transcode.
 // A token holds at most maxTranscodesPerToken slots: its next ask takes over
-// its own oldest one's, never another token's.
+// one of its own (tokenHoldToTake), never another token's, and never a
+// download (only a repeat of the download's own ask takes that over).
 type transcodeAsk struct {
 	token    int64
 	lib      int64
@@ -135,9 +136,10 @@ func transcodeAskOf(r *http.Request, lib int64, rel string) transcodeAsk {
 
 // takeTranscodeSlot takes a transcode slot for ask, answered on w: the one a
 // same ask holds, else, when ask's token holds maxTranscodesPerToken already,
-// the one its oldest ask holds (ending that request, whose slot it now is:
-// takeOver), else a free one. It returns nil when no slot is free for it,
-// else the hold and r with a context a later takeover ends. An ask with no
+// one of its streams' (tokenHoldToTake, ending that request, whose slot it now
+// is: takeOver), else a free one. It returns nil when no slot is free for it
+// (none free, or the token at its cap with only downloads to take over), else
+// the hold and r with a context a later takeover ends. An ask with no
 // token takes a free slot only, and is never taken over. A HEAD, which starts
 // no ffmpeg, takes none: it gets a hold of no slot when a GET would get one
 // (transcodeSlotFree), naming the same ask's GET that runs, if one does.
@@ -151,7 +153,10 @@ func (a *API) takeTranscodeSlot(w http.ResponseWriter, r *http.Request, ask tran
 	}
 	a.transcodeMu.Lock()
 	defer a.transcodeMu.Unlock()
-	prev := a.holdToTake(ask)
+	prev, refused := a.holdToTake(ask)
+	if refused {
+		return nil, r
+	}
 	if prev == nil {
 		select {
 		case a.transcodeSem <- struct{}{}:
@@ -174,36 +179,56 @@ func (a *API) takeTranscodeSlot(w http.ResponseWriter, r *http.Request, ask tran
 }
 
 // holdToTake is the hold ask's GET would take over: the one a same ask
-// holds, else its token's oldest when the token is at its cap; nil for an
-// ask with no token or with neither. The caller holds transcodeMu.
-func (a *API) holdToTake(ask transcodeAsk) *transcodeHold {
+// holds, else, when its token is at its cap, the one tokenHoldToTake picks;
+// nil for an ask with no token or under its token's cap (a free slot, if one
+// is). refused is a token at its cap whose holds are all downloads, which no
+// other ask ends: the GET is busy (503) whatever slots are free. A HEAD's
+// answer (transcodeSlotFree) comes from here too, so it says what a GET would
+// do. The caller holds transcodeMu.
+func (a *API) holdToTake(ask transcodeAsk) (h *transcodeHold, refused bool) {
 	if !ask.keyed() {
-		return nil
+		return nil, false
 	}
-	if h := a.transcodeHolds[ask]; h != nil {
-		return h
+	if same := a.transcodeHolds[ask]; same != nil {
+		return same, false
 	}
-	return a.tokenOldestAtCap(ask.token)
+	return a.tokenHoldToTake(ask)
 }
 
-// tokenOldestAtCap is the oldest hold of token's when it holds
-// maxTranscodesPerToken slots, else nil. The caller holds transcodeMu.
-func (a *API) tokenOldestAtCap(token int64) *transcodeHold {
-	var oldest *transcodeHold
+// tokenHoldToTake is, when ask's token holds maxTranscodesPerToken slots, the
+// one of its holds ask takes over: never a download (its saved file would be
+// cut short), and of the rest the same file's earliest ask (a seek in this
+// tab, so another tab's stream of another file on the same token plays on;
+// two tabs on one file are told apart by nothing here), else the oldest.
+// refused when every hold of the token's is a download; nil and not refused
+// under the cap. The caller holds transcodeMu.
+func (a *API) tokenHoldToTake(ask transcodeAsk) (take *transcodeHold, refused bool) {
+	var oldest, sameFile *transcodeHold
 	n := 0
-	for ask, h := range a.transcodeHolds {
-		if ask.token != token {
+	for held, h := range a.transcodeHolds {
+		if held.token != ask.token {
 			continue
 		}
 		n++
+		if held.download {
+			continue
+		}
 		if oldest == nil || h.seq < oldest.seq {
 			oldest = h
 		}
+		if held.lib == ask.lib && held.rel == ask.rel && (sameFile == nil || h.seq < sameFile.seq) {
+			sameFile = h
+		}
 	}
-	if n < maxTranscodesPerToken {
-		return nil
+	switch {
+	case n < maxTranscodesPerToken:
+		return nil, false
+	case sameFile != nil:
+		return sameFile, false
+	case oldest != nil:
+		return oldest, false
 	}
-	return oldest
+	return nil, true
 }
 
 // takeOver ends h's request, its slot another ask's now: its writer refuses
@@ -220,13 +245,17 @@ func (h *transcodeHold) takeOver() {
 }
 
 // transcodeSlotFree reports whether ask would get a slot now (a free one, one
-// a same ask holds, running, or its token's oldest at the token's cap),
-// taking none: a HEAD's answer, so a client can ask whether its transcode
-// would run without starting one.
+// a same ask holds, running, or the one its token at its cap would take
+// over: holdToTake), taking none: a HEAD's answer, so a client can ask
+// whether its transcode would run without starting one.
 func (a *API) transcodeSlotFree(ask transcodeAsk) (free bool, running *transcodeHold) {
 	a.transcodeMu.Lock()
 	defer a.transcodeMu.Unlock()
-	if h := a.holdToTake(ask); h != nil {
+	h, refused := a.holdToTake(ask)
+	if refused {
+		return false, nil
+	}
+	if h != nil {
 		if h.ask == ask {
 			return true, h
 		}

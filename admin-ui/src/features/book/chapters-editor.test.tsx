@@ -820,17 +820,84 @@ describe('the chapter editor', () => {
       expect(load).not.toHaveBeenCalled();
     });
 
-    it('asks at once when Play is pressed during the wait, and not again after it', async () => {
+    it('stops the wait when its button is pressed, and asks at once on Play after', async () => {
       const { user, audio, looks } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
+      fireEvent.play(audio);
       fireEvent.error(audio);
       await waitFor(() => expect(looks()).toHaveLength(1));
-      // Past the look's answer, into the wait.
+      // Past the look's answer, into the wait: the button stops it, no Play.
       await screen.findByText('The server is busy. Trying again in a moment.');
-      await user.click(screen.getByRole('button', { name: 'Play' }));
-      expect(play).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('button', { name: 'Play' })).not.toBeInTheDocument();
+      const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause');
+      await user.click(screen.getByRole('button', { name: 'Stop trying again' }));
+      expect(pause).toHaveBeenCalledTimes(1);
       expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
+      // The wait ran out with nothing asked again.
       await new Promise((r) => setTimeout(r, 300));
+      expect(load).not.toHaveBeenCalled();
+      expect(play).not.toHaveBeenCalled();
+      // Play asks again at once.
+      await user.click(screen.getByRole('button', { name: 'Play' }));
+      expect(load).toHaveBeenCalledTimes(1);
       expect(play).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks at once on Play 5 s during the wait, and the wait asks nothing after', async () => {
+      const { user, audio } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
+      fireEvent.play(audio);
+      fireEvent.error(audio);
+      await screen.findByText('The server is busy. Trying again in a moment.');
+      await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
+      expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+      // The wait's own ask again would load the element over the preview.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks at once on Play 5 s during the look at a failed load, whose late answer starts no wait', async () => {
+      let answer!: (reply: MockReply) => void;
+      const { user, audio, looks } = await listen(
+        () => new Promise<MockReply>((resolve) => (answer = resolve)),
+      );
+      fireEvent.play(audio);
+      fireEvent.error(audio);
+      await waitFor(() => expect(looks()).toHaveLength(1));
+      await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+      // The look was the failed load's: its busy answer waits for nothing and
+      // asks nothing again over the preview.
+      answer({ ...busy, headers: { 'Retry-After': '0.05' } });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives Play 5 s during the wait its own tries', async () => {
+      let n = 0;
+      const { user, audio } = await listen(() => ({
+        ...busy,
+        headers: { 'Retry-After': ++n < 3 ? '0.02' : '5' },
+      }));
+      fireEvent.play(audio);
+      fireEvent.error(audio);
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+      fireEvent.error(audio);
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+      // The third wait, the row's last try: busy once more after it gives up.
+      fireEvent.error(audio);
+      await screen.findByText('The server is busy. Trying again in a moment.');
+      await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
+      expect(play).toHaveBeenCalledTimes(3);
+      // Busy again, asked before the wait was over: waited for, not given up on.
+      fireEvent.error(audio);
+      await screen.findByText('The server is busy. Trying again in a moment.');
+      expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Stop trying again' }));
     });
 
     it('loads again on Play after a failed load that left the audio unpaused', async () => {
@@ -841,6 +908,7 @@ describe('the chapter editor', () => {
       expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
       fireEvent.error(audio);
       await screen.findByText('The server is busy. Trying again in a moment.');
+      await user.click(screen.getByRole('button', { name: 'Stop trying again' }));
       const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause');
       await user.click(screen.getByRole('button', { name: 'Play' }));
       expect(pause).not.toHaveBeenCalled();
@@ -975,7 +1043,8 @@ describe('the chapter editor', () => {
         await screen.findByText('The server is busy. Trying again in a moment.'),
       ).toBeInTheDocument();
       expect(looks()).toHaveLength(1);
-      expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+      // The wait can be stopped meanwhile.
+      expect(screen.getByRole('button', { name: 'Stop trying again' })).toBeEnabled();
       await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
       expect(load).toHaveBeenCalledTimes(1);
       expect(play.mock.contexts[0]).toBe(audio);

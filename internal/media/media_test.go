@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -164,7 +165,7 @@ func TestTranscode(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	ended, err := Transcode(rec, req, src, "ffmpeg", 0, time.Minute, TranscodeIdle, nil)
+	ended, err := Transcode(rec, req, src, "ffmpeg", 0, false, time.Minute, TranscodeIdle, nil)
 	if err != nil || !ended {
 		t.Fatalf("Transcode = %v, %v, want a stream that ran to its end", ended, err)
 	}
@@ -340,7 +341,7 @@ func transcodeOpened(t *testing.T, ffprobe, src string, start float64) float64 {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	TranscodeOpened(rec, httptest.NewRequest(http.MethodGet, "/", nil), f, "ffmpeg", start, 0, nil)
+	TranscodeOpened(rec, httptest.NewRequest(http.MethodGet, "/", nil), f, "ffmpeg", start, false, 0, nil)
 	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
 		t.Fatalf("transcode = %d with %d bytes", rec.Code, rec.Body.Len())
 	}
@@ -398,12 +399,73 @@ func TestTranscodeHEAD(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	// No ffmpeg at this path: a run would fail with a 500.
-	if ended, err := Transcode(rec, httptest.NewRequest(http.MethodHead, "/", nil), src, filepath.Join(t.TempDir(), "no-ffmpeg"), 0, time.Minute, TranscodeIdle, nil); err != nil || ended {
+	if ended, err := Transcode(rec, httptest.NewRequest(http.MethodHead, "/", nil), src, filepath.Join(t.TempDir(), "no-ffmpeg"), 0, false, time.Minute, TranscodeIdle, nil); err != nil || ended {
 		t.Fatalf("Transcode = %v, %v, want no error and no stream (a HEAD)", ended, err)
 	}
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "audio/mpeg" ||
 		rec.Header().Get("Accept-Ranges") != "none" || rec.Body.Len() != 0 {
 		t.Fatalf("HEAD = %d %v (%d bytes), want the transcode's headers and no run", rec.Code, rec.Header(), rec.Body.Len())
+	}
+}
+
+// TestSetAttachment: a printable ASCII name is one quoted-string filename (a
+// quote and a backslash escaped); any other name is an ASCII stand-in there
+// with the name itself as filename*, UTF-8 percent-encoded, so a rune past
+// ASCII, a control character or a byte that is no UTF-8 is never saved as
+// Quote's escape text ("u3000") nor reaches the header raw.
+func TestSetAttachment(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, header, saved string }{
+		{"01 - Book.mp3", `attachment; filename="01 - Book.mp3"`, "01 - Book.mp3"},
+		{`a "b" \c.mp3`, `attachment; filename="a \"b\" \\c.mp3"`, `a "b" \c.mp3`},
+		{"Émile Zola.mp3", `attachment; filename="_mile Zola.mp3"; filename*=UTF-8''%C3%89mile%20Zola.mp3`, "Émile Zola.mp3"},
+		{"本\u3000一.mp3", `attachment; filename="___.mp3"; filename*=UTF-8''%E6%9C%AC%E3%80%80%E4%B8%80.mp3`, "本\u3000一.mp3"},
+		{"a\r\nb;c.mp3", `attachment; filename="a__b;c.mp3"; filename*=UTF-8''a%0D%0Ab%3Bc.mp3`, "a\r\nb;c.mp3"},
+		{"caf\xe9.mp3", `attachment; filename="caf_.mp3"; filename*=UTF-8''caf%EF%BF%BD.mp3`, "caf\uFFFD.mp3"},
+	} {
+		h := http.Header{}
+		SetAttachment(h, c.name)
+		got := h.Get("Content-Disposition")
+		if got != c.header {
+			t.Errorf("%q: Content-Disposition %q, want %q", c.name, got, c.header)
+			continue
+		}
+		disposition, params, err := mime.ParseMediaType(got)
+		if err != nil || disposition != "attachment" || params["filename"] != c.saved {
+			t.Errorf("%q: parsed as %q %q (%v), want attachment %q", c.name, disposition, params["filename"], err, c.saved)
+		}
+	}
+}
+
+// TestTranscodeDownloadAttachment: a download's transcode is an attachment
+// named for the file with the MP3 extension (its HEAD too), its error answers
+// are none (a missing file's 404, a failed start's 500), and a stream is none.
+func TestTranscodeDownloadAttachment(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "01 - \"Book\".m4b")
+	if err := os.WriteFile(src, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	noFFmpeg := filepath.Join(dir, "no-ffmpeg")
+	for _, c := range []struct {
+		name, method, path string
+		download           bool
+		code               int
+		want               string
+	}{
+		{"HEAD download", http.MethodHead, src, true, http.StatusOK, `attachment; filename="01 - \"Book\".mp3"`},
+		{"HEAD stream", http.MethodHead, src, false, http.StatusOK, ""},
+		{"missing file", http.MethodGet, filepath.Join(dir, "gone.m4b"), true, http.StatusNotFound, ""},
+		{"failed start", http.MethodGet, src, true, http.StatusInternalServerError, ""},
+	} {
+		rec := httptest.NewRecorder()
+		if _, err := Transcode(rec, httptest.NewRequest(c.method, "/", nil), c.path, noFFmpeg, 0, c.download, time.Minute, 0, nil); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if rec.Code != c.code || rec.Header().Get("Content-Disposition") != c.want {
+			t.Fatalf("%s = %d with Content-Disposition %q, want %d and %q", c.name, rec.Code, rec.Header().Get("Content-Disposition"), c.code, c.want)
+		}
 	}
 }
 

@@ -310,13 +310,16 @@ export interface TranscodeLook {
  * play-now or a 503 with a Retry-After (a token that ran out, a file gone, no
  * ffmpeg) or none. Asked with a HEAD, which the server answers as it would the
  * GET without starting a transcode (an ffmpeg, holding one of its few slots).
+ * Never from the HTTP cache: Chromium answers a look at the URL its <audio> is
+ * fetching only once that fetch lets go of the cache entry (20 s late, seen
+ * live), so the look bypasses the cache with 'no-store'.
  */
 export async function lookAtTranscode(
   url: string,
   signal?: AbortSignal,
 ): Promise<TranscodeLook | undefined> {
   try {
-    const res = await fetch(url, { method: 'HEAD', signal });
+    const res = await fetch(url, { method: 'HEAD', cache: 'no-store', signal });
     if (res.ok) {
       const sent = res.headers.get(TRANSCODE_SENT_HEADER);
       const n = sent === null ? NaN : Number(sent);
