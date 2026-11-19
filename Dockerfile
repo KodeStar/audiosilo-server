@@ -114,8 +114,9 @@ EXPOSE 8080
 # liveness probe or an autoheal sidecar restarts it (see the README). The
 # server listens before it opens the database and answers "starting" (healthy)
 # through a first start's or an upgrade's migrations, until the start has run
-# thirty minutes (a stuck start: unhealthy); the ten-minute start period is a
-# margin on top.
+# thirty minutes (a stuck start: unhealthy). The ten-minute start period only
+# covers the moments before it listens: Docker ends it at the first check that
+# passes, the first "starting" answer included.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10m --retries=3 \
     CMD ["docker-entrypoint.sh", "healthcheck"]
 ENTRYPOINT ["docker-entrypoint.sh"]
