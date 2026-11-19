@@ -40,6 +40,7 @@ import type {
   ClearedMatches,
   CoverThumb,
   Device,
+  EndedKeys,
   DuplicatePage,
   IssueKind,
   SeriesSpellingGroup,
@@ -776,6 +777,11 @@ export const api = {
    */
   signOutEverywhere: (id: number) =>
     request<{ signed_out: number }>('POST', `/admin/users/${id}/sign-out`),
+  /**
+   * Ends a person's API keys and their calendar link (server#285); their sessions stay.
+   * Answers what it ended.
+   */
+  endKeys: (id: number) => request<EndedKeys>('POST', `/admin/users/${id}/end-keys`),
   /** Settings > Sign-in: the single sign-on as it runs, and its provider's discovery. */
   oidcStatus: () => request<OIDCStatus>('GET', '/admin/oidc/status'),
   /** People > Waiting sign-ins: the single sign-ons no account took. */

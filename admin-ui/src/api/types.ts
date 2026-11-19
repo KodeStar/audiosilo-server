@@ -1579,6 +1579,14 @@ export interface UserDetail {
   owner_is_admin?: boolean;
   /** The person's linked single sign-ons (absent before server#235). */
   identities?: OIDCIdentity[] | null;
+  /** Whether the person has a calendar feed link, and since when (absent before server#285). */
+  calendar_link?: { active: boolean; created_at?: string };
+}
+
+/** POST /admin/users/{id}/end-keys (server#285): what it ended. */
+export interface EndedKeys {
+  api_keys: number;
+  calendar_link: boolean;
 }
 
 /**

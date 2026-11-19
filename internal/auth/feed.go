@@ -21,7 +21,8 @@ import (
 //     another household when the link was made on another owner's device
 //     (leaveOwners, as it ends the sign-in made there), a member's link made on
 //     their owner's device by the owner's password change or Sign out
-//     everywhere (endSessions) or the account's deletion (the FK cascade); a
+//     everywhere (endSessions), the admin's End API keys and calendar link
+//     (EndKeys) or the account's deletion (the FK cascade); a
 //     disabled account's is refused by lookupToken like
 //     every token;
 //   - stored as its SHA-256 hash only, shown once;

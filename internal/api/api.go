@@ -814,6 +814,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/users/{id}/authcode", a.requireAdmin(http.HandlerFunc(a.handleCreateAuthCode)))
 	mux.Handle("DELETE /api/v1/admin/users/{id}/recovery", a.requireAdmin(http.HandlerFunc(a.handleAdminClearRecovery)))
 	mux.Handle("POST /api/v1/admin/users/{id}/sign-out", a.requireAdmin(http.HandlerFunc(a.handleSignOutEverywhere)))
+	mux.Handle("POST /api/v1/admin/users/{id}/end-keys", a.requireAdmin(http.HandlerFunc(a.handleEndKeys)))
 	mux.Handle("DELETE /api/v1/admin/users/{id}/identities/{identity_id}", a.requireAdmin(http.HandlerFunc(a.handleUnlinkIdentity)))
 	// Single sign-on: the provider's status and the sign-ins waiting for an admin.
 	mux.Handle("GET /api/v1/admin/oidc/status", a.requireAdmin(http.HandlerFunc(a.handleOIDCStatus)))

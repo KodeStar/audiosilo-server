@@ -1,9 +1,11 @@
+import type { TFunction } from 'i18next';
 import { sortLive } from '@/features/activity/live-model';
 import { isHomeHost, isIPHost, isLoopbackHost } from '@/features/setup/setup-model';
 import type {
   AdminSettings,
   AuthCode,
   Device,
+  EndedKeys,
   Library,
   ListeningRow,
   ListeningSession,
@@ -151,6 +153,24 @@ export function currentBook(
 /** The signed-in devices (sessions) among a list, without the API keys. */
 export function signedIn(devices: readonly Device[]): Device[] {
   return devices.filter((d) => d.kind === 'session');
+}
+
+/** What End API keys would end (server#285): the words of its button and title. */
+export type EndKeysWhat = 'keys' | 'link' | 'both';
+
+export function endKeysWhat(keys: number, link: boolean): EndKeysWhat {
+  if (!link) return 'keys';
+  return keys ? 'both' : 'link';
+}
+
+/** The toast after End API keys: what the server says it ended. */
+export function endedKeysToast(t: TFunction, ended: EndedKeys, name: string): string {
+  if (ended.api_keys && ended.calendar_link) {
+    return t('user.devices.endedKeys.both', { count: ended.api_keys, name });
+  }
+  if (ended.api_keys) return t('user.devices.endedKeys.keys', { count: ended.api_keys, name });
+  if (ended.calendar_link) return t('user.devices.endedKeys.link', { name });
+  return t('user.devices.endedKeys.none', { name });
 }
 
 /** Each person's paired devices (sessions, not API keys), by user id; undefined while loading. */

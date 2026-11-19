@@ -149,8 +149,10 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 // handleGetUserDetail returns one account plus everything the admin console
 // needs to manage it: the libraries it can reach (a household member's derived
 // access included), the shares granted to it, its issued auth codes (metadata
-// only - the plaintext codes are never stored), its own household members and,
-// for a member on "collections", the owner's collections shared with it. A
+// only - the plaintext codes are never stored), its own household members,
+// whether it has a calendar feed link (calendar_link: {active, created_at},
+// never the secret) and, for a member on "collections", the owner's
+// collections shared with it. A
 // member's detail also carries what their owner reaches (owner_libraries,
 // owner_is_admin), so the console's Access tab needs no second detail.
 func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +204,12 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load household members")
 		return
 	}
+	feed, err := a.auth.FeedTokenStatus(r.Context(), id)
+	if err != nil {
+		a.log.Warn("calendar link status failed", "user", id, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not load the calendar link")
+		return
+	}
 	active, sso := a.oidcIssuer(), false
 	ids := make([]adminIdentity, len(identities))
 	for i, ident := range identities {
@@ -218,6 +226,7 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 		"members":              own,
 		"member_collections":   shared,
 		"identities":           ids,
+		"calendar_link":        feed,
 	}
 	if u.IsMember() {
 		ownerLibs, ownerAdmin := []catalog.Library{}, false
@@ -709,6 +718,33 @@ func (a *API) handleSignOutEverywhere(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit(r, "user.sign_out_everywhere", a.userName(r, id), map[string]any{"signed_out": n})
 	writeJSON(w, http.StatusOK, map[string]int64{"signed_out": n})
+}
+
+// handleEndKeys ends a person's API keys and their calendar feed link (the
+// console's "End API keys and calendar link" on People > a person > Devices,
+// server#285): every live key revoked and the link deleted in one write, so
+// neither works on the next request. Their sessions stay (Sign out everywhere
+// is the other lever). Answers {"api_keys": n, "calendar_link": bool}, what it
+// ended; audit user.end_keys with the same.
+func (a *API) handleEndKeys(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	ended, err := a.auth.EndKeys(r.Context(), id)
+	if errors.Is(err, auth.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		a.log.Warn("end keys failed", "err", err, "user", id)
+		writeError(w, http.StatusInternalServerError, "could not end the keys")
+		return
+	}
+	a.audit(r, "user.end_keys", a.userName(r, id),
+		map[string]any{"api_keys": ended.APIKeys, "calendar_link": ended.CalendarLink})
+	writeJSON(w, http.StatusOK, ended)
 }
 
 // adminLibrary is a library as the admin console lists it: the stored fields

@@ -190,7 +190,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   their own, keeps the device it was done on), in the same durable transaction (`endSessions`). The
   admin's **Sign out everywhere** (`POST /admin/users/{id}/sign-out`, `auth.SignOutEverywhere`,
   answers `{"signed_out": n}`, audit `user.sign_out_everywhere`) does the same without a password
-  change, and forgets the person's browsers. With the sessions go the ways back in a session can make
+  change, and forgets the person's browsers. The self-service change answers the same way (200
+  `{"signed_out": n}`, server#285, `auth.ChangePassword`; a server before v2.7.0 answered 204): the
+  caller's own other sessions it ended, 0 for a first password, never the members' sign-ins it ended
+  with them (nothing about another person), so the player names it without reading its devices. With the sessions go the ways back in a session can make
   without the password, which the person can neither see nor revoke: their open pairing codes
   (unlinked `pairing` tokens, `POST /auth/pair`), a single sign-on not yet finished (`oidc` tokens)
   and their recovery code (its linked pairing tokens
@@ -209,8 +212,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   editor token (`POST /cast/token`: dead as minted otherwise). A member's own paired device stays, with what was
   made on it, and `signed_out` counts the person's sessions only. The person's own API keys stay (listed
   and revoked on their own: the device lists, `/auth/tokens`), and so
-  do their calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`; the console has no
-  lever for it) and Bridge tokens (the Bridge's); an invite is the admin's (listed and revoked in the
+  do their calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`) and Bridge tokens
+  (the Bridge's). The admin's lever for the first two is **End API keys and calendar link**
+  (`POST /admin/users/{id}/end-keys`, `auth.EndKeys`, server#285: every live key revoked and the feed
+  row deleted in one durable write, sessions kept; answers `{"api_keys": n, "calendar_link": bool}`,
+  audit `user.end_keys`; `GET /admin/users/{id}` says whether there is a link, `calendar_link
+  {active, created_at}`, never the secret); an invite is the admin's (listed and revoked in the
   console). A cast token needs no write (its parent is checked on every request, `castGrant`). The
   write moves the content generation, so the token cache refuses an ended token on the very next
   request, media `?token=` included. A password sign-in racing the change gets no session:

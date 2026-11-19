@@ -397,7 +397,7 @@ keep this index in step (one line per topic).
   - Home and away addresses (`addresses` capability)
   - Home HTTP (`tls.home_http`, security-relevant)
   - Invite vs recovery (`auth_codes.kind`)
-  - Password ends sessions (server#281: change, reset, Sign out everywhere; sessions, pairing codes, recovery code)
+  - Password ends sessions (server#281: change, reset, Sign out everywhere; sessions, pairing codes, recovery code; the change's `signed_out` answer and the admin's End API keys and calendar link, server#285)
   - Personal API keys (`tokens.kind='api'`)
   - Single sign-on, Sign in with OpenID Connect (server#235, `internal/oidc`, `auth/identities.go`, `0077`: config `auth.oidc` and settings `signin`, the secret, public_url, Decide, pending sign-ins, the flow and its cookies, finish, role sync, the admin routes)
   - Web player at `/web`

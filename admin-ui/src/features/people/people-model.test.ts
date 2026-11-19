@@ -1,6 +1,9 @@
 import type { AuthCode, Device, ListeningRow, ListeningSession, Share } from '@/api/types';
+import i18n from '@/i18n';
 import {
   currentBook,
+  endedKeysToast,
+  endKeysWhat,
   dateInputValue,
   datesEdit,
   datesProblem,
@@ -189,6 +192,30 @@ describe('progress dates', () => {
       started_at: null,
       finished_at: '2026-09-21',
     });
+  });
+});
+
+describe('end API keys (server#285)', () => {
+  it('names what there is to end', () => {
+    expect(endKeysWhat(2, false)).toBe('keys');
+    expect(endKeysWhat(0, true)).toBe('link');
+    expect(endKeysWhat(1, true)).toBe('both');
+  });
+
+  it('says what the server ended, not what the page thought there was', () => {
+    const t = i18n.t;
+    expect(endedKeysToast(t, { api_keys: 2, calendar_link: true }, 'sam')).toBe(
+      "Ended sam's 2 API keys and calendar link",
+    );
+    expect(endedKeysToast(t, { api_keys: 1, calendar_link: false }, 'sam')).toBe(
+      "Ended sam's API key",
+    );
+    expect(endedKeysToast(t, { api_keys: 0, calendar_link: true }, 'sam')).toBe(
+      "Ended sam's calendar link",
+    );
+    expect(endedKeysToast(t, { api_keys: 0, calendar_link: false }, 'sam')).toBe(
+      'sam had no API keys or calendar link left to end',
+    );
   });
 });
 
