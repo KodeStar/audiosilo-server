@@ -403,6 +403,29 @@ func TestHealthcheckNoConfig(t *testing.T) {
 	}
 }
 
+// writeOffConfig writes data's config.yaml for a plain-HTTP start on addr,
+// with extra appended.
+func writeOffConfig(t *testing.T, data, addr, extra string) {
+	t.Helper()
+	cfgYAML := fmt.Sprintf("bind: %q\ntls:\n  mode: \"off\"\nupdate_check: false\n%s", addr, extra)
+	if err := os.WriteFile(config.Path(data), []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// waitRun waits for a stopped Run's result, which must be nil.
+func waitRun(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not stop")
+	}
+}
+
 // A real start answers the healthcheck, and setup.skip finishes the console's
 // first-run flow at start (server#184) while a start without it leaves the
 // flow to the console.
@@ -410,10 +433,7 @@ func TestRunHealthcheckAndSetupSkip(t *testing.T) {
 	for _, skip := range []bool{true, false} {
 		data := t.TempDir()
 		addr := freeAddr(t)
-		cfgYAML := fmt.Sprintf("bind: %q\ntls:\n  mode: \"off\"\nupdate_check: false\nsetup:\n  skip: %t\n", addr, skip)
-		if err := os.WriteFile(config.Path(data), []byte(cfgYAML), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeOffConfig(t, data, addr, fmt.Sprintf("setup:\n  skip: %t\n", skip))
 		ctx, stop := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func() { done <- Run(ctx, Options{DataDir: data, Log: discardLog()}) }()
@@ -422,14 +442,7 @@ func TestRunHealthcheckAndSetupSkip(t *testing.T) {
 			return Healthcheck(ctx, data, &out) == nil && strings.HasPrefix(out.String(), "ok: ")
 		})
 		stop()
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Fatalf("Run: %v", err)
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("Run did not stop")
-		}
+		waitRun(t, done)
 		db, err := store.Open(context.Background(), filepath.Join(data, "audiosilo.db"))
 		if err != nil {
 			t.Fatal(err)
@@ -449,10 +462,7 @@ func TestRunHealthcheckAndSetupSkip(t *testing.T) {
 func TestRunAnswersStartingBeforeTheDatabase(t *testing.T) {
 	data := t.TempDir()
 	addr := freeAddr(t)
-	cfgYAML := fmt.Sprintf("bind: %q\ntls:\n  mode: \"off\"\nupdate_check: false\n", addr)
-	if err := os.WriteFile(config.Path(data), []byte(cfgYAML), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeOffConfig(t, data, addr, "")
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	reached, release := make(chan struct{}), make(chan struct{})
@@ -495,14 +505,7 @@ func TestRunAnswersStartingBeforeTheDatabase(t *testing.T) {
 		return Healthcheck(ctx, data, &out) == nil && strings.HasPrefix(out.String(), "ok: ")
 	})
 	stop()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Run: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("Run did not stop")
-	}
+	waitRun(t, done)
 }
 
 // A port another process holds stops the start before the database opens, and
@@ -514,10 +517,7 @@ func TestRunPortTakenStopsBeforeTheDatabase(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = taken.Close() })
 	data := t.TempDir()
-	cfgYAML := fmt.Sprintf("bind: %q\ntls:\n  mode: \"off\"\nupdate_check: false\n", taken.Addr().String())
-	if err := os.WriteFile(config.Path(data), []byte(cfgYAML), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeOffConfig(t, data, taken.Addr().String(), "")
 	reached := false
 	err = Run(context.Background(), Options{DataDir: data, Log: discardLog(), listening: func() { reached = true }})
 	if err == nil || !strings.Contains(err.Error(), "address already in use") && !strings.Contains(err.Error(), "bind") {

@@ -614,12 +614,9 @@ func (s *Service) touch(ctx context.Context, id int64, kind string, p Presence, 
 	if kind == KindCast {
 		stamp = s.castStamp()
 	}
-	var memberKind any // NULL: no household member
-	if readAs != nil {
-		memberKind = *readAs
-	}
+	// readAs nil binds NULL: no household member.
 	_, err := s.db.ExecUserState(ctx, touchRowSQL,
-		stamp, p.IP, p.Client.App, p.Client.Version, p.Client.Platform, id, slideTo, s.ts(), memberKind)
+		stamp, p.IP, p.Client.App, p.Client.Version, p.Client.Platform, id, slideTo, s.ts(), readAs)
 	return err
 }
 

@@ -105,13 +105,13 @@ func loadSettled(dataDir string) (*config.Config, error) {
 		after, _ := os.Stat(path)
 		settled := statErr == nil && after != nil && before.Size() > 0 &&
 			before.Size() == after.Size() && before.ModTime().Equal(after.ModTime())
-		if (settled || i == configReads) && err != nil {
-			return nil, fmt.Errorf("reading the config: %w", err)
-		}
 		if firstRun {
 			return nil, fmt.Errorf("no %s: no server has started from %s", path, dataDir)
 		}
 		if settled || i == configReads {
+			if err != nil {
+				return nil, fmt.Errorf("reading the config: %w", err)
+			}
 			return cfg, nil
 		}
 		time.Sleep(configSettle)

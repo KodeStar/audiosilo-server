@@ -202,7 +202,7 @@ func (a *API) probeHealth(ctx context.Context) error {
 	p := &a.health
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if age := time.Since(p.at); !p.at.IsZero() && age >= 0 && age < healthReuse {
+	if time.Since(p.at) < healthReuse {
 		return p.err
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), healthTimeout)
