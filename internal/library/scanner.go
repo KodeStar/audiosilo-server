@@ -336,13 +336,26 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	if _, answered := s.roots.check(lib.Root); !answered {
 		return res, fmt.Errorf("%w: %q is not responding", ErrLibraryUnavailable, lib.Root)
 	}
-	if info, statErr := os.Stat(lib.Root); statErr != nil || !info.IsDir() {
-		return res, fmt.Errorf("%w: %q: %v", ErrLibraryUnavailable, lib.Root, statErr)
+	// The probe answering says little of the next look (a share can stop between
+	// them), so the stat and the read check are bounded as well.
+	if info, statErr := metadata.StatBounded(ctx, lib.Root, s.probeTimeout); statErr != nil || !info.IsDir() {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
+		if statErr == nil {
+			statErr = errors.New("not a folder")
+		}
+		return res, fmt.Errorf("%w: %q: %w", ErrLibraryUnavailable, lib.Root, statErr)
 	}
 	// A root the server may reach but not list (a folder another user owns, as on
 	// a NAS share) would read as an empty library: stop, naming the folder, the
 	// server's user and the fix (server#368).
-	if err := fsaccess.CheckRead(lib.Root); err != nil {
+	if _, err := metadata.Bounded(ctx, lib.Root, s.probeTimeout, func() (struct{}, error) {
+		return struct{}{}, fsaccess.CheckRead(lib.Root)
+	}, nil); err != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			return res, cerr
+		}
 		return res, fmt.Errorf("%w: %w", ErrLibraryUnavailable, err)
 	}
 
@@ -1588,8 +1601,15 @@ func partTitle(relPath string) string {
 // into its books' ebook candidates (ebooksOfWalk) and a setup preview ignores.
 func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string]string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap, width int, timeout time.Duration) (books []*catalog.Book, epubs map[string][]fs.DirEntry, hadErrors bool, err error) {
 	walkRoot := lib.Root
-	if resolved, rerr := filepath.EvalSymlinks(lib.Root); rerr == nil {
+	if resolved, rerr := metadata.EvalSymlinksBounded(ctx, lib.Root, timeout); rerr == nil {
 		walkRoot = resolved
+	} else if metadata.GaveUp(rerr) || ctx.Err() != nil {
+		// A root that won't resolve in time won't list either: no walk at all,
+		// rather than one that starts at a link and finds nothing.
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, nil, true, cerr
+		}
+		return nil, nil, true, fmt.Errorf("%w: %q: %w", ErrLibraryUnavailable, lib.Root, rerr)
 	}
 	dirs, side, hadErrors, err := audioDirs(ctx, lib, walkRoot, "", ignore, log, rl, limit, width, timeout)
 	if err != nil && !errors.Is(err, errWalkCapped) {
