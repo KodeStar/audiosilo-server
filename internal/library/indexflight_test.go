@@ -96,6 +96,9 @@ func TestIndexPathLeaderCancelled(t *testing.T) {
 		wait <- answer{b, err}
 	}()
 	waitJoined(t, s, lib, "A/Book", 1)
+	// The read is probing (held), so a read ended with the leader's request
+	// would have probed in vain and the waiter would read the book again.
+	testwait.Eventually(t, "the read's ffprobe to run", 10*time.Second, func() bool { return count() > once })
 	cancel()
 
 	// The read is held: a leader that waited on it past its request would never
