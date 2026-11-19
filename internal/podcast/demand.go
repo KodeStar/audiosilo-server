@@ -116,7 +116,10 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 			release()
 			return f, fetch, bridge.ReadyFetchStatus(fetch), nil
 		}
-		if !errors.Is(openErr, library.ErrNotIndexable) && !errors.Is(openErr, catalog.ErrNotFound) && budget.Err() == nil {
+		// An episode the share refuses for good (ErrNotIndexable too) is no
+		// episode on its way: its fetch would meet the same refusal.
+		if errors.Is(openErr, library.ErrEpisodeRefused) ||
+			!errors.Is(openErr, library.ErrNotIndexable) && !errors.Is(openErr, catalog.ErrNotFound) && budget.Err() == nil {
 			release()
 			return nil, nil, status, openErr
 		}
@@ -142,6 +145,9 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 			f, fetch, err = library.OpenPodcastBounded(budget, d.Catalog, lib, rel, wait)
 			if err == nil {
 				return f, fetch, bridge.ReadyFetchStatus(fetch), nil
+			}
+			if errors.Is(err, library.ErrEpisodeRefused) {
+				return nil, nil, status, err
 			}
 			return nil, nil, status, nil
 		}

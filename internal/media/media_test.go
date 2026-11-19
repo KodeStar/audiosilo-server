@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -159,13 +160,16 @@ func TestTranscode(t *testing.T) {
 		t.Skip("ffmpeg not available; transcoding requires it")
 	}
 	// A fixture m4b (AAC) is fine input - we only assert it re-encodes to MP3.
-	src := filepath.Join("..", "..", "testdata", "library", "Will Wight", "Cradle", "01 - Unsouled.m4b")
+	src, err := filepath.Abs(filepath.Join("..", "..", "testdata", "library", "Will Wight", "Cradle", "01 - Unsouled.m4b"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(src); err != nil {
 		t.Skipf("fixture missing: %v", err)
 	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	ended, err := Transcode(rec, req, src, "ffmpeg", 0, false, time.Minute, TranscodeIdle, nil)
+	ended, err := Transcode(rec, req, filepath.Dir(src), src, "ffmpeg", 0, false, time.Minute, TranscodeIdle, nil)
 	if err != nil || !ended {
 		t.Fatalf("Transcode = %v, %v, want a stream that ran to its end", ended, err)
 	}
@@ -298,11 +302,14 @@ func TestTranscodeArgs(t *testing.T) {
 		in   inputSpec
 		want []string
 	}{
-		// A path and the seekable descriptor seek on the input side.
-		{"path", inputSpec{url: "/b/x.m4b"}, []string{"-nostdin", "-loglevel", "error", "-ss", "8.500", "-i", "/b/x.m4b"}},
-		{"fd", fdInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "fd", "-ss", "8.500", "-i", "fd:"}},
+		// The seekable inputs (a descriptor, /dev/fd/3, a re-checked path)
+		// seek on the input side, each the only protocol ffmpeg may open, an
+		// audio container the only input.
+		{"fd", fdInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "fd", "-format_whitelist", audioDemuxers, "-ss", "8.500", "-i", "fd:"}},
+		{"dev fd", inputSpec{proto: "file", url: "/dev/fd/3"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-format_whitelist", audioDemuxers, "-ss", "8.500", "-i", "/dev/fd/3"}},
+		{"path", inputSpec{proto: "file", url: "file:/b/x.m4b"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-format_whitelist", audioDemuxers, "-ss", "8.500", "-i", "file:/b/x.m4b"}},
 		// A pipe can't seek: -ss after -i decodes up to it.
-		{"pipe", pipeInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "pipe", "-i", "pipe:0", "-ss", "8.500"}},
+		{"pipe", pipeInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "pipe", "-format_whitelist", audioDemuxers, "-i", "pipe:0", "-ss", "8.500"}},
 	} {
 		if got := transcodeArgs(tc.in, 8.5); !slices.Equal(got, append(tc.want, tail...)) {
 			t.Errorf("%s: transcodeArgs = %q\nwant %q", tc.name, got, append(tc.want, tail...))
@@ -352,14 +359,23 @@ func transcodeOpened(t *testing.T, ffprobe, src string, start float64) float64 {
 	return ffprobeOf(t, ffprobe, out).duration(t)
 }
 
-// nonFaststartM4A writes a 10-second AAC .m4a whose moov box follows its mdat
-// (ffmpeg's default without +faststart), which only a seekable input demuxes.
+// nonFaststartM4A is writeNonFaststartM4A's file for a test of TranscodeOpened,
+// which seeks only through fd: (it skips for an ffmpeg without it).
 func nonFaststartM4A(t *testing.T) string {
 	t.Helper()
 	needFFmpeg(t)
 	if inputFor("ffmpeg") != fdInput {
 		t.Skip("this ffmpeg has no fd: input protocol (older than 6.1)")
 	}
+	return writeNonFaststartM4A(t)
+}
+
+// writeNonFaststartM4A writes a 10-second AAC .m4a whose moov box follows its
+// mdat (ffmpeg's default without +faststart), which only a seekable input
+// demuxes.
+func writeNonFaststartM4A(t *testing.T) string {
+	t.Helper()
+	needFFmpeg(t)
 	src := filepath.Join(t.TempDir(), "episode.m4a")
 	if out, err := exec.Command("ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "sine=f=440:d=10",
 		"-c:a", "aac", "-b:a", "64k", "-y", src).CombinedOutput(); err != nil {
@@ -399,7 +415,7 @@ func TestTranscodeHEAD(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	// No ffmpeg at this path: a run would fail with a 500.
-	if ended, err := Transcode(rec, httptest.NewRequest(http.MethodHead, "/", nil), src, filepath.Join(t.TempDir(), "no-ffmpeg"), 0, false, time.Minute, TranscodeIdle, nil); err != nil || ended {
+	if ended, err := Transcode(rec, httptest.NewRequest(http.MethodHead, "/", nil), filepath.Dir(src), src, filepath.Join(t.TempDir(), "no-ffmpeg"), 0, false, time.Minute, TranscodeIdle, nil); err != nil || ended {
 		t.Fatalf("Transcode = %v, %v, want no error and no stream (a HEAD)", ended, err)
 	}
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "audio/mpeg" ||
@@ -460,7 +476,7 @@ func TestTranscodeDownloadAttachment(t *testing.T) {
 		{"failed start", http.MethodGet, src, true, http.StatusInternalServerError, ""},
 	} {
 		rec := httptest.NewRecorder()
-		if _, err := Transcode(rec, httptest.NewRequest(c.method, "/", nil), c.path, noFFmpeg, 0, c.download, time.Minute, 0, nil); err != nil {
+		if _, err := Transcode(rec, httptest.NewRequest(c.method, "/", nil), dir, c.path, noFFmpeg, 0, c.download, time.Minute, 0, nil); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		if rec.Code != c.code || rec.Header().Get("Content-Disposition") != c.want {
@@ -469,15 +485,88 @@ func TestTranscodeDownloadAttachment(t *testing.T) {
 	}
 }
 
-// TestInputForRetriesAFailedProbe: a probe that couldn't run is no answer to
-// keep, so the path is asked again next time.
+// probeCountingFFmpeg is a stand-in ffmpeg that counts its runs and runs
+// script for each (sh), and the count so far.
+func probeCountingFFmpeg(t *testing.T, script string) (path string, runs func() int) {
+	t.Helper()
+	dir := t.TempDir()
+	count := filepath.Join(dir, "runs")
+	path = filepath.Join(dir, "ffmpeg")
+	syscall.ForkLock.RLock() // as fakeFFmpeg: no parallel fork inherits the write descriptor
+	err := os.WriteFile(path, []byte("#!/bin/sh\necho x >> '"+count+"'\n"+script+"\n"), 0o755)
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path, func() int {
+		b, _ := os.ReadFile(count)
+		return strings.Count(string(b), "x")
+	}
+}
+
+// TestInputForRetriesAFailedProbe: a probe that failed stands as no fd: for
+// fdProbeRetry, so the transcodes and seeks in between run no probe of their
+// own, and is asked again once that has passed.
 func TestInputForRetriesAFailedProbe(t *testing.T) {
 	t.Parallel()
-	missing := filepath.Join(t.TempDir(), "no-ffmpeg")
-	if in := inputFor(missing); in != pipeInput {
-		t.Fatalf("inputFor(missing) = %+v, want pipe:0", in)
+	failing, probes := probeCountingFFmpeg(t, "exit 1")
+	for range 3 {
+		if in := inputFor(failing); in != pipeInput {
+			t.Fatalf("inputFor(an ffmpeg that fails its probe) = %+v, want pipe:0", in)
+		}
 	}
-	if _, kept := fdSupport.Load(missing); kept {
-		t.Fatal("a probe that couldn't run was kept")
+	if n := probes(); n != 1 {
+		t.Fatalf("%d probes for 3 asks within fdProbeRetry, want 1", n)
+	}
+	v, _ := fdSupport.Load(failing)
+	v.(*fdProbe).at = time.Now().Add(-fdProbeRetry)
+	inputFor(failing) // drops the stale answer
+	inputFor(failing)
+	if n := probes(); n != 2 {
+		t.Fatalf("%d probes once fdProbeRetry passed, want 2", n)
+	}
+}
+
+// TestTranscodeHeadRunsNoFFmpeg: a HEAD is answered with no ffmpeg run, its
+// input's protocols probe included, a library file's (Transcode) and an
+// opened episode's (TranscodeOpened) alike.
+func TestTranscodeHeadRunsNoFFmpeg(t *testing.T) {
+	t.Parallel()
+	ffmpeg, runs := probeCountingFFmpeg(t, "exit 1")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.m4b")
+	if err := os.WriteFile(src, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	if _, err := Transcode(rec, httptest.NewRequest(http.MethodHead, "/", nil), dir, src, ffmpeg, 0, false, time.Minute, 0, nil); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("HEAD = %d (%v), want 200", rec.Code, err)
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	rec = httptest.NewRecorder()
+	if TranscodeOpened(rec, httptest.NewRequest(http.MethodHead, "/", nil), f, ffmpeg, 0, false, 0, nil); rec.Code != http.StatusOK {
+		t.Fatalf("HEAD of an opened file = %d, want 200", rec.Code)
+	}
+	if n := runs(); n != 0 {
+		t.Fatalf("a HEAD ran ffmpeg %d times, want none", n)
+	}
+}
+
+// TestInputForAsksAgainAfterASlowProbe: a probe that ran out of time (a busy
+// host) is no answer to keep, so the next ask probes again and a cache run
+// gets fd: once the binary answers. Not parallel: it shortens fdProbeTimeout.
+func TestInputForAsksAgainAfterASlowProbe(t *testing.T) {
+	was := fdProbeTimeout
+	t.Cleanup(func() { fdProbeTimeout = was })
+	fdProbeTimeout = time.Second
+	slow, probes := probeCountingFFmpeg(t, "exec sleep 5")
+	inputFor(slow)
+	inputFor(slow)
+	if n := probes(); n != 2 {
+		t.Fatalf("%d probes for 2 asks after a timed-out probe, want 2", n)
 	}
 }

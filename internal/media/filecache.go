@@ -239,18 +239,21 @@ func (m *FileCache) cachePath(key string) string { return filepath.Join(m.dir, k
 // Ext is the copies' file extension (".mp3", ".m4a"), for a download's name.
 func (m *FileCache) Ext() string { return m.spec.ext }
 
-// Source stats abs, the file a copy is made of, as a metadata.Bounded call
-// (ctx, at most wait; none when wait is 0): ErrRefused joined with ErrNoSource
-// when there is no regular file there (the stored file's answer, a 404, is the
-// right one); a stat given up on (metadata.GaveUp: a share that stopped
-// answering) or ctx's error as it is. A request looks with it before asking
-// the cache for the copy (Open, Status, Queue, RefusedFor), whose own stat of
+// Source stats abs, the file a copy is made of under the library root root
+// (its caller joined and checked it there), as a metadata.Bounded look (ctx,
+// at most wait; none when wait is 0) through root (metadata.Below), so a link
+// out of the library swapped in since the check is never followed: ErrRefused
+// joined with ErrNoSource when there is no regular file there (the stored
+// file's answer, a 404, is the right one), such a link among them; a stat
+// given up on (metadata.GaveUp: a share that stopped answering, a transient
+// fault among them: transientGaveUp) or ctx's error as it is, never the file
+// gone. A request looks with it before asking the cache for the copy (Open, Status, Queue, RefusedFor), whose own stat of
 // the source then answers at once, as the share just did; that stat is given
 // sourceWait all the same, so one on a share that stopped answering since is
 // given up on rather than holding one of its mount's slots for good.
-func Source(ctx context.Context, abs string, wait time.Duration) (os.FileInfo, error) {
-	info, err := metadata.StatBounded(ctx, abs, wait)
-	switch {
+func Source(ctx context.Context, root, abs string, wait time.Duration) (os.FileInfo, error) {
+	info, err := statBelow(ctx, root, abs, wait)
+	switch err = transientGaveUp(err); {
 	case metadata.GaveUp(err) || (err != nil && ctx.Err() != nil):
 		return nil, err
 	case err != nil:
@@ -261,6 +264,14 @@ func Source(ctx context.Context, abs string, wait time.Duration) (os.FileInfo, e
 	return info, nil
 }
 
+// statBelow is Source's stat of abs through root: metadata.Below's, a
+// Bounded look, a test's to inject a share's errors.
+var statBelow = func(ctx context.Context, root, abs string, wait time.Duration) (fs.FileInfo, error) {
+	return metadata.LookBounded(ctx, abs, wait, func() (fs.FileInfo, error) {
+		return metadata.Below(root, abs, func(r *os.Root, rel string) (fs.FileInfo, error) { return r.Stat(rel) })
+	})
+}
+
 // sourceWait bounds a cache's own stat of a source (Open, Status, Queue,
 // RefusedFor, a warm's look): a scan's look time, never a run's (the spec's
 // timeout, half an hour and more), as no metadata.Bounded call is left with
@@ -268,7 +279,9 @@ func Source(ctx context.Context, abs string, wait time.Duration) (os.FileInfo, e
 // good, uncounted).
 const sourceWait = metadata.ProbeTimeout
 
-// Open returns the cached copy of abs (the caller has SafeJoined it) and its
+// Open returns the cached copy of abs (the caller has SafeJoined it under the
+// library root root, through which the source is looked at and opened:
+// Source, make) and its
 // strong ETag (the spec's), the copy's one validator: it is served with no
 // Last-Modified (the copy's mtime is the cache's LRU clock, moved on a hit), so
 // a validator a client kept for the stored file never matches it. The caller
@@ -276,17 +289,18 @@ const sourceWait = metadata.ProbeTimeout
 // bounded by the spec's timeout) while this call waits on ctx: a
 // request that leaves, or stops waiting, doesn't stop the run the others wait
 // for. The errors are ErrRefused (with ErrNoSource when abs is no regular
-// file), ErrPending wrapping ctx's error when ctx ended first, or one that says
+// file, or one the run's open is refused for good: openFault), ErrPending
+// wrapping ctx's error when ctx ended first, or one that says
 // the copy can't be had now: ErrUnavailable (also for a cold key while the
 // spec's queueMax runs are in flight), runCtx's, or a failure to read abs, run
 // ffmpeg or write the cache.
-func (m *FileCache) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os.File, string, error) {
-	info, err := openSource(ctx, abs)
+func (m *FileCache) Open(ctx, runCtx context.Context, ffmpegPath, root, abs string) (*os.File, string, error) {
+	info, err := openSource(ctx, root, abs)
 	if err != nil {
 		return nil, "", err
 	}
 	key := m.key(abs, info)
-	f, fl, err := m.begin(runCtx, ffmpegPath, key, abs, info, true)
+	f, fl, err := m.begin(runCtx, ffmpegPath, key, root, abs, info, true)
 	if f != nil || err != nil {
 		return m.opened(key, f, err)
 	}
@@ -313,13 +327,13 @@ func (m *FileCache) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*
 // and its ETag when it is cached (marked used), Open's errors for a source
 // that is no regular file or a known refusal, else ErrUnavailable, with no
 // run started and none waited for.
-func (m *FileCache) Cached(ctx context.Context, abs string) (*os.File, string, error) {
-	info, err := openSource(ctx, abs)
+func (m *FileCache) Cached(ctx context.Context, root, abs string) (*os.File, string, error) {
+	info, err := openSource(ctx, root, abs)
 	if err != nil {
 		return nil, "", err
 	}
 	key := m.key(abs, info)
-	f, _, err := m.begin(ctx, "", key, abs, info, false)
+	f, _, err := m.begin(ctx, "", key, root, abs, info, false)
 	if f == nil && err == nil {
 		return nil, "", ErrUnavailable
 	}
@@ -328,8 +342,8 @@ func (m *FileCache) Cached(ctx context.Context, abs string) (*os.File, string, e
 
 // openSource is Open's and Cached's look at abs (Source): ErrPending wrapping
 // ctx's error when ctx ended first.
-func openSource(ctx context.Context, abs string) (os.FileInfo, error) {
-	info, err := Source(ctx, abs, sourceWait)
+func openSource(ctx context.Context, root, abs string) (os.FileInfo, error) {
+	info, err := Source(ctx, root, abs, sourceWait)
 	if err != nil && ctx.Err() != nil {
 		return nil, fmt.Errorf("%w: %w", ErrPending, ctx.Err())
 	}
@@ -353,7 +367,7 @@ func (m *FileCache) opened(key string, f *os.File, err error) (*os.File, string,
 // from): the copy when cached (marked used), else ErrRefused for a known
 // refusal, else the flight making it, started under runCtx when there is none,
 // start allows it and the spec's queueMax isn't reached (else a nil flight).
-func (m *FileCache) begin(runCtx context.Context, ffmpegPath, key, abs string, info os.FileInfo, start bool) (*os.File, *cacheFlight, error) {
+func (m *FileCache) begin(runCtx context.Context, ffmpegPath, key, root, abs string, info os.FileInfo, start bool) (*os.File, *cacheFlight, error) {
 	// A hit needs no lock (players send many Range requests). A miss is checked
 	// again under mu, so a leader that renamed its copy into place and left
 	// inflight in between is never missed.
@@ -373,7 +387,7 @@ func (m *FileCache) begin(runCtx context.Context, ffmpegPath, key, abs string, i
 		fl = &cacheFlight{done: make(chan struct{})}
 		m.inflight[key] = fl
 		m.running.Add(1)
-		go m.lead(runCtx, ffmpegPath, key, abs, info, fl)
+		go m.lead(runCtx, ffmpegPath, key, root, abs, info, fl)
 	}
 	return nil, fl, nil
 }
@@ -417,8 +431,8 @@ func RefusalLeft(err error) time.Duration {
 // the hint a client is given to ask again), read under the same lock as the
 // state, so a refusal expiring meanwhile can't leave a failed state with no
 // hint (server#359). It neither starts a run nor marks the copy used.
-func (m *FileCache) Status(abs string) (state CacheState, size int64, refusedFor time.Duration) {
-	info, err := Source(context.Background(), abs, sourceWait)
+func (m *FileCache) Status(root, abs string) (state CacheState, size int64, refusedFor time.Duration) {
+	info, err := Source(context.Background(), root, abs, sourceWait)
 	if err != nil {
 		return CacheFailed, 0, 0
 	}
@@ -446,13 +460,13 @@ func (m *FileCache) Status(abs string) (state CacheState, size int64, refusedFor
 // under way, and returns where it stands then (as Status). It never waits for
 // the run. A cache with no queueMax, or as many runs in flight, starts nothing:
 // the file stays missing for the caller to ask again.
-func (m *FileCache) Queue(runCtx context.Context, ffmpegPath, abs string) (state CacheState, size int64, refusedFor time.Duration) {
-	info, err := Source(runCtx, abs, sourceWait)
+func (m *FileCache) Queue(runCtx context.Context, ffmpegPath, root, abs string) (state CacheState, size int64, refusedFor time.Duration) {
+	info, err := Source(runCtx, root, abs, sourceWait)
 	if err != nil {
 		return CacheFailed, 0, 0
 	}
 	key := m.key(abs, info)
-	f, fl, err := m.begin(runCtx, ffmpegPath, key, abs, info, m.spec.queueMax > 0)
+	f, fl, err := m.begin(runCtx, ffmpegPath, key, root, abs, info, m.spec.queueMax > 0)
 	switch {
 	case f != nil:
 		defer f.Close()
@@ -468,13 +482,13 @@ func (m *FileCache) Queue(runCtx context.Context, ffmpegPath, abs string) (state
 	return CacheMissing, 0, 0
 }
 
-// WarmAll makes the copies of paths in the background under runCtx, one
+// WarmAll makes the copies of paths (files under the library root root) in the background under runCtx, one
 // after another and one warm at a time (so warms hold at most one of the
 // slots), each skipped when its copy is cached (not marked used: a book looked
 // at is not one played), it is known to be refused, or it is under way already
 // (it is then waited for). It returns at once, and does nothing when the same
 // paths are being warmed already or cacheWarmQueue warms are.
-func (m *FileCache) WarmAll(runCtx context.Context, ffmpegPath string, paths []string) {
+func (m *FileCache) WarmAll(runCtx context.Context, ffmpegPath, root string, paths []string) {
 	if len(paths) == 0 {
 		return
 	}
@@ -505,13 +519,13 @@ func (m *FileCache) WarmAll(runCtx context.Context, ffmpegPath string, paths []s
 			// Looked at under a look's time first: a share that stopped
 			// answering holds no warm (nor its slot) for good, and the rest of
 			// the book, on the same share, waits for the stream that asks.
-			if _, err := Source(runCtx, abs, sourceWait); metadata.GaveUp(err) {
+			if _, err := Source(runCtx, root, abs, sourceWait); metadata.GaveUp(err) {
 				return
 			}
-			if st, _, _ := m.Status(abs); st == CacheReady {
+			if st, _, _ := m.Status(root, abs); st == CacheReady {
 				continue
 			}
-			if f, _, err := m.Open(runCtx, runCtx, ffmpegPath, abs); err == nil {
+			if f, _, err := m.Open(runCtx, runCtx, ffmpegPath, root, abs); err == nil {
 				f.Close()
 			}
 		}
@@ -535,11 +549,13 @@ func (m *FileCache) hit(key string) (*os.File, bool) {
 
 // lead runs key's copy of abs (info is what the key was made from) and
 // settles fl for every waiter.
-func (m *FileCache) lead(runCtx context.Context, ffmpegPath, key, abs string, info os.FileInfo, fl *cacheFlight) {
+func (m *FileCache) lead(runCtx context.Context, ffmpegPath, key, root, abs string, info os.FileInfo, fl *cacheFlight) {
 	defer m.running.Done()
-	err := m.make(runCtx, ffmpegPath, key, abs, info)
+	err := m.make(runCtx, ffmpegPath, key, root, abs, info)
 	m.mu.Lock()
-	if errors.Is(err, ErrRefused) {
+	// ffmpeg's refusal of the file, never a source that could not be opened
+	// (openFault): the next look at that one answers for itself.
+	if errors.Is(err, ErrRefused) && !errors.Is(err, ErrNoSource) {
 		m.rememberLocked(key)
 	}
 	delete(m.inflight, key)
@@ -567,8 +583,8 @@ func (m *FileCache) refusalLeftLocked(key string) time.Duration {
 // left (its copy is tried again once it expires, or as soon as the file
 // changes), 0 when there is none: the hint a client is given to ask again
 // (Retry-After, a renditions answer's retry_after_seconds).
-func (m *FileCache) RefusedFor(abs string) time.Duration {
-	info, err := Source(context.Background(), abs, sourceWait)
+func (m *FileCache) RefusedFor(root, abs string) time.Duration {
+	info, err := Source(context.Background(), root, abs, sourceWait)
 	if err != nil {
 		return 0
 	}
@@ -602,7 +618,7 @@ func (m *FileCache) rememberLocked(key string) {
 // make writes key's copy: a temporary .part file, synced and renamed into
 // place once ffmpeg succeeds on a source that didn't change meanwhile, then a
 // sweep that keeps it.
-func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, info os.FileInfo) error {
+func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, root, abs string, info os.FileInfo) error {
 	select {
 	case m.sem <- struct{}{}:
 		defer func() { <-m.sem }()
@@ -640,10 +656,13 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 	// open held it, and every run queued behind it, for good. It has that
 	// bound of its own (runCtx, not the run's timeout): an open that answers
 	// leaves a run past its time to be refused as one (timedOut), not failed
-	// as the server going away.
-	src, _, err := metadata.OpenRegularBounded(runCtx, abs, m.openWait)
+	// as the server going away. It is opened through the library's root
+	// (openBelow, as a stream's), so a link out of the library swapped in since
+	// the look is refused, never followed; ffmpeg reads the descriptor, never
+	// the path (fd: or pipe:0).
+	src, _, err := openBelow(runCtx, root, abs, m.openWait)
 	if err != nil {
-		return err
+		return openFault(err)
 	}
 	defer src.Close()
 	if !unchanged(src, info) {
@@ -689,6 +708,21 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 	}
 	m.evict(key)
 	return nil
+}
+
+// openFault is a run's failed open of its source (err) as its callers read
+// it: no source (ErrRefused joined with ErrNoSource, Source's for a look that
+// says so: the stored file's answer, a 404) when the file went, is no regular
+// file any more, or the share refuses it for good (metadata.LastingFault: a
+// permission on a file whose stat answered), so a rendition is not answered
+// 503 and asked again for a file a retry would only be refused again; any
+// other err as it is (a share that stopped answering, a transient fault: the
+// copy can't be made now). lead remembers none of them.
+func openFault(err error) error {
+	if metadata.LastingFault(err) || metadata.NotExist(err) || errors.Is(err, metadata.ErrNotRegular) {
+		return fmt.Errorf("%w: %w: %v", ErrRefused, ErrNoSource, err)
+	}
+	return err
 }
 
 // timedOut reports whether a run's own timeout (ctx, the spec's) ended it,

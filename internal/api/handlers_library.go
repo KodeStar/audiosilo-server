@@ -1030,7 +1030,7 @@ func (a *API) warmRemuxes(ctx context.Context, lib *catalog.Library, rels []stri
 				paths = append(paths, p)
 			}
 		}
-		a.remux.WarmAll(a.baseCtx, a.ffmpeg, paths)
+		a.remux.WarmAll(a.baseCtx, a.ffmpeg, lib.Root, paths)
 	}
 	return abs, answering
 }
@@ -1113,13 +1113,13 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.URL.Query().Get("transcode") == "1" {
-		a.serveTranscode(w, r, lib.ID, rel, abs, deadline)
+		a.serveTranscode(w, r, lib, rel, abs, deadline)
 		return
 	}
 	download := r.URL.Query().Get("download") == "1"
 	if a.remuxOn() && strings.EqualFold(filepath.Ext(rel), ".mka") && r.URL.Query().Get("original") != "1" {
 		var served bool
-		if served, deadline = a.serveRemuxed(w, r, lib.ID, rel, abs, download, deadline); served {
+		if served, deadline = a.serveRemuxed(w, r, lib, rel, abs, download, deadline); served {
 			return
 		}
 	}
@@ -1139,12 +1139,13 @@ func (a *API) afterWait(deadline time.Time) time.Time {
 	return deadline
 }
 
-// lookAtSource is media.Source's look at abs, the copy a remux or rendition
-// makes from, bounded by the stream's deadline: answered when the request went
-// away or the look was given up on (a 503 share_not_answering written), else
-// the look's error (no regular file there).
-func lookAtSource(w http.ResponseWriter, r *http.Request, abs string, deadline time.Time) (answered bool, err error) {
-	_, err = media.Source(r.Context(), abs, metadata.WaitLeft(deadline))
+// lookAtSource is media.Source's look at abs under root, the copy a remux or
+// rendition makes from, bounded by the stream's deadline: answered when the
+// request went away or the look was given up on or failed as a share does
+// that a retry may get past (a 503 share_not_answering written), else the
+// look's error (no regular file there).
+func lookAtSource(w http.ResponseWriter, r *http.Request, root, abs string, deadline time.Time) (answered bool, err error) {
+	_, err = media.Source(r.Context(), root, abs, metadata.WaitLeft(deadline))
 	switch {
 	case r.Context().Err() != nil:
 		return true, err
@@ -1274,21 +1275,23 @@ func serveCopy(w http.ResponseWriter, r *http.Request, f *os.File, etag, name st
 
 // serveTranscode answers with the live MP3 transcode of the library file abs
 // (rel in library lib) from ?t=, in one of the transcode slots.
-func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, deadline time.Time) {
-	h, r := a.beginTranscode(w, r, lib, rel)
+func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel, abs string, deadline time.Time) {
+	h, r := a.beginTranscode(w, r, lib.ID, rel)
 	if h == nil {
 		return
 	}
 	defer a.endTranscode(h)
-	a.transcodeHeld(w, r, h, abs, deadline)
+	a.transcodeHeld(w, r, h, lib.Root, abs, deadline)
 }
 
 // transcodeHeld is serveTranscode once h is taken (the caller ends it): the
 // transcode from h's start, written through h's writer, h.ended set once it
-// ran to its end; with ?download=1 an attachment named <stem>.mp3. Its look
-// at abs given up on at the stream's deadline is a 503 share_not_answering.
-func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, h *transcodeHold, abs string, deadline time.Time) {
-	ended, err := media.Transcode(h.writer(w), r, abs, a.ffmpeg, h.ask.start, h.ask.download, metadata.WaitLeft(deadline), transcodeIdleFor(r, h.ask), a.log)
+// ran to its end; with ?download=1 an attachment named <stem>.mp3. Its open of
+// abs (through root, the library's: media.Transcode) given up on at the
+// stream's deadline, or failing as a share does that a retry may get past, is
+// a 503 share_not_answering.
+func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, h *transcodeHold, root, abs string, deadline time.Time) {
+	ended, err := media.Transcode(h.writer(w), r, root, abs, a.ffmpeg, h.ask.start, h.ask.download, metadata.WaitLeft(deadline), transcodeIdleFor(r, h.ask), a.log)
 	h.ended = ended
 	if err != nil {
 		writeShareNotAnswering(w)
@@ -1329,8 +1332,8 @@ func transcodeIdleFor(r *http.Request, ask transcodeAsk) time.Duration {
 // the request went away while waiting. Its look at abs (media.Source) given up
 // on at the stream's deadline is a 503 share_not_answering. A HEAD starts no
 // remux and waits for none: the cached copy's headers, else the transcode's.
-func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, download bool, deadline time.Time) (served bool, left time.Time) {
-	answered, err := lookAtSource(w, r, abs, deadline)
+func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel, abs string, download bool, deadline time.Time) (served bool, left time.Time) {
+	answered, err := lookAtSource(w, r, lib.Root, abs, deadline)
 	if answered || err != nil {
 		return answered, deadline // err: no regular file there, the stored file's answer (a 404)
 	}
@@ -1339,25 +1342,25 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 	if r.Method == http.MethodHead {
 		// A HEAD starts no remux: the copy when it is cached, else the
 		// transcode's answer (no ffmpeg run), as a GET would be answered now.
-		f, etag, err = a.remux.Cached(r.Context(), abs)
+		f, etag, err = a.remux.Cached(r.Context(), lib.Root, abs)
 	} else {
 		wait, cancel := context.WithTimeout(r.Context(), a.remuxWait)
 		defer cancel()
-		f, etag, err = a.remux.Open(wait, a.baseCtx, a.ffmpeg, abs)
+		f, etag, err = a.remux.Open(wait, a.baseCtx, a.ffmpeg, lib.Root, abs)
 	}
 	var held *transcodeHold // a transcode slot taken while the remux runs on
 	// Still remuxing when the wait ran out (it goes on): not a failure to warn of.
 	running := r.Context().Err() == nil && errors.Is(err, media.ErrPending)
 	if running {
 		if !download {
-			held, r = a.takeTranscodeSlot(w, r, transcodeAskOf(r, lib, rel))
+			held, r = a.takeTranscodeSlot(w, r, transcodeAskOf(r, lib.ID, rel))
 		}
 		if held == nil {
 			// A download, or no slot free: wait for the remux, up to
 			// remuxDownloadWait, then transcode after all.
 			long, cancelLong := context.WithTimeout(r.Context(), a.remuxLongWait)
 			defer cancelLong()
-			f, etag, err = a.remux.Open(long, a.baseCtx, a.ffmpeg, abs)
+			f, etag, err = a.remux.Open(long, a.baseCtx, a.ffmpeg, lib.Root, abs)
 			// A remux that failed by its own timeout is a failure, not this wait.
 			running = r.Context().Err() == nil && errors.Is(err, media.ErrPending)
 		} else {
@@ -1385,8 +1388,8 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 			a.log.Warn("remux failed: transcoding Matroska instead", "path", abs, "err", err)
 		}
 		if held != nil {
-			a.noteTranscode(r, lib, rel)
-			a.transcodeHeld(w, r, held, abs, deadline)
+			a.noteTranscode(r, lib.ID, rel)
+			a.transcodeHeld(w, r, held, lib.Root, abs, deadline)
 			return true, deadline
 		}
 		a.serveTranscode(w, r, lib, rel, abs, deadline)

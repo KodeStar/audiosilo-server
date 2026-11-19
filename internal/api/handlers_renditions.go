@@ -78,12 +78,12 @@ func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalo
 	if !ok {
 		return
 	}
-	if answered, _ := lookAtSource(w, r, abs, deadline); answered {
+	if answered, _ := lookAtSource(w, r, lib.Root, abs, deadline); answered {
 		return
 	}
 	wait, cancel := context.WithTimeout(r.Context(), a.renditionWait)
 	defer cancel()
-	f, etag, err := a.renditions.Open(wait, a.baseCtx, a.ffmpeg, abs)
+	f, etag, err := a.renditions.Open(wait, a.baseCtx, a.ffmpeg, lib.Root, abs)
 	if err != nil {
 		switch {
 		case r.Context().Err() != nil:
@@ -95,7 +95,7 @@ func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalo
 			// again: Retry-After says when (server#289).
 			left := media.RefusalLeft(err)
 			if left == 0 {
-				left = a.renditions.RefusedFor(abs) // a run that just refused
+				left = a.renditions.RefusedFor(lib.Root, abs) // a run that just refused
 			}
 			setRetryAfter(w, left)
 			writeErrorCode(w, http.StatusUnprocessableEntity, codeRenditionFailed, "this file can't be encoded")
@@ -175,7 +175,7 @@ func (a *API) renditionsOfBook(w http.ResponseWriter, r *http.Request, prepare b
 		out := renditionFile{Path: f.RelPath, State: media.CacheFailed}
 		abs, err := library.SafeJoinBounded(r.Context(), lib.Root, f.RelPath, a.fileWait)
 		if err == nil {
-			_, err = media.Source(r.Context(), abs, a.fileWait)
+			_, err = media.Source(r.Context(), lib.Root, abs, a.fileWait)
 		}
 		if metadata.GaveUp(err) {
 			writeShareNotAnswering(w)
@@ -184,9 +184,9 @@ func (a *API) renditionsOfBook(w http.ResponseWriter, r *http.Request, prepare b
 		if abs != "" {
 			var left time.Duration
 			if prepare {
-				out.State, out.Bytes, left = a.renditions.Queue(a.baseCtx, a.ffmpeg, abs)
+				out.State, out.Bytes, left = a.renditions.Queue(a.baseCtx, a.ffmpeg, lib.Root, abs)
 			} else {
-				out.State, out.Bytes, left = a.renditions.Status(abs)
+				out.State, out.Bytes, left = a.renditions.Status(lib.Root, abs)
 			}
 			if left > 0 {
 				out.RetryAfter = retrySeconds(left)

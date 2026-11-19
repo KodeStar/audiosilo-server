@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -530,15 +531,29 @@ func TestStreamLinkOutOfRootOnAHeldShare(t *testing.T) {
 }
 
 // TestStreamOpensThroughTheRootAfterASwap (security): the stream's open can't
-// leave the library even when the path changes after its check. With the
-// file's open held, its folder is swapped for a link to a folder out of the
-// library holding a file of the same name; once the open goes on it answers
-// as a missing file, never with that file's bytes (a plain open of the
-// checked path follows the link). Allowed: the same request before the swap
-// streams the file. Not parallel: metadata.HoldReadsForTests swaps the mount
-// lookup.
+// leave the library even when the path changes after its check, as stored or
+// transcoded (ffmpeg reads the descriptor opened through the root, never the
+// path: media.Transcode). With the file's open held, its folder is swapped for
+// a link to a folder out of the library holding a file of the same name; once
+// the open goes on it answers as a missing file, never with that file's bytes
+// (a plain open of the checked path follows the link, and so did ffmpeg's own
+// open of it). Allowed: the same request before the swap streams the file.
+// Not parallel: metadata.HoldReadsForTests swaps the mount lookup.
 func TestStreamOpensThroughTheRootAfterASwap(t *testing.T) {
+	forms := []string{""}
+	if media.HasFFmpeg("ffmpeg") {
+		forms = append(forms, "&transcode=1")
+	}
+	for _, form := range forms {
+		t.Run("stream"+form, func(t *testing.T) { streamAfterASwap(t, form) })
+	}
+}
+
+// streamAfterASwap is TestStreamOpensThroughTheRootAfterASwap for one form of
+// the stream (form: its query past the path).
+func streamAfterASwap(t *testing.T, form string) {
 	c := newCaseEnv(t)
+	c.api.ffmpeg = "ffmpeg"
 	root, err := filepath.EvalSymlinks(c.lib.Root)
 	if err != nil {
 		t.Fatal(err)
@@ -550,9 +565,11 @@ func TestStreamOpensThroughTheRootAfterASwap(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(outside, "01.mp3"), []byte("a file out of the library"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	at := bookURL(c.lib.ID, "stream", pcUnindexedT)
-	if resp, body := c.do(t, "GET", at, c.samTok, ""); resp.StatusCode != http.StatusOK || !strings.HasPrefix(body, "placeholder ") {
-		t.Fatalf("stream before the swap = %d %.80q, want the file", resp.StatusCode, body)
+	at := bookURL(c.lib.ID, "stream", pcUnindexedT) + form
+	// Before the swap: the file as stored, or a transcode of it (a placeholder
+	// ffmpeg can't decode: a 200 with whatever it wrote).
+	if resp, body := c.do(t, "GET", at, c.samTok, ""); resp.StatusCode != http.StatusOK || form == "" && !strings.HasPrefix(body, "placeholder ") {
+		t.Fatalf("stream%s before the swap = %d %.80q, want the file", form, resp.StatusCode, body)
 	}
 	// The path's check (its listings and lstats) answers; the open waits.
 	release := metadata.HoldReadsForTests(filepath.Join(root, filepath.FromSlash(pcUnindexedT)))
@@ -577,8 +594,8 @@ func TestStreamOpensThroughTheRootAfterASwap(t *testing.T) {
 	release()
 	got := <-done
 	if got.status != http.StatusNotFound || strings.Contains(got.body, "out of the library") {
-		t.Errorf("stream after its folder was swapped for a link out of the library = %d %.80q, want a 404 and none of that file",
-			got.status, got.body)
+		t.Errorf("stream%s after its folder was swapped for a link out of the library = %d %.80q, want a 404 and none of that file",
+			form, got.status, got.body)
 	}
 }
 

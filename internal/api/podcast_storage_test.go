@@ -348,6 +348,19 @@ func TestPodcastStreamMarksCoverEveryMediaBranch(t *testing.T) {
 	}
 }
 
+// getPodcastStream is the admin's GET of stream (an episode's stream route)
+// from a client that sees podcasts, answered in process.
+func getPodcastStream(b *bridgeEnv, stream string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", stream, nil)
+	r.Header.Set("Authorization", "Bearer "+b.adminTok)
+	for k, v := range podcastHeaders() {
+		r.Header.Set(k, v)
+	}
+	b.api.Handler().ServeHTTP(w, r)
+	return w
+}
+
 // An episode's open on a share that stopped answering (OpenPodcast's checks
 // and open, SRV-15c) is given up on at the stream's bound: a 503
 // share_not_answering with Retry-After, not a handler held for good; once the
@@ -359,14 +372,7 @@ func TestPodcastStreamOnAHeldShareAnswers(t *testing.T) {
 	u := podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(f.Episodes[0].Path))
 	release := metadata.HoldOpensForTests(filepath.Join(b.lib.Root, "Fixture Show"))
 	t.Cleanup(release)
-	get := func() *httptest.ResponseRecorder {
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest("GET", u, nil)
-		r.Header.Set("Authorization", "Bearer "+b.adminTok)
-		r.Header.Set(auth.ClientHeader, "AudioSilo/dev (web)") // a client that sees podcasts
-		b.api.Handler().ServeHTTP(w, r)
-		return w
-	}
+	get := func() *httptest.ResponseRecorder { return getPodcastStream(b, u) }
 	start := time.Now()
 	if w := get(); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), codeShareNotAnswering) || w.Header().Get("Retry-After") != "30" {
 		t.Errorf("an episode on a held share = %d %s, want 503 %s", w.Code, w.Body, codeShareNotAnswering)
@@ -378,6 +384,133 @@ func TestPodcastStreamOnAHeldShareAnswers(t *testing.T) {
 	b.api.streamWait = 10 * time.Second
 	if w := get(); w.Code != http.StatusOK || w.Body.Len() == 0 {
 		t.Errorf("the episode once the share answers = %d %s, want it streamed", w.Code, w.Body)
+	}
+}
+
+// TestPodcastStreamRefusedFolderIs404 (seen live): an episode whose show
+// folder the share refuses for good (chmod 000: a permission, a lasting
+// fault) is the 404 an episode gone is on the stream, and no fetch is asked
+// of the Bridge, which would meet the same refusal (it was a fetch, and with
+// a feed's episode ids it couldn't queue, a 500); a listener's fetch status
+// reads it absent, as for any episode not there. Allowed: the folder
+// readable again, the episode streams; an episode file gone is still fetched
+// again. Not parallel only for the chmod: the folder is this test's own.
+func TestPodcastStreamRefusedFolderIs404(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a folder whatever its mode")
+	}
+	b, f := podcastStorageEnv(t)
+	dir := filepath.Join(b.lib.Root, "Fixture Show")
+	ep := f.Episodes[0]
+	stream := podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(ep.Path))
+	get := func() *httptest.ResponseRecorder { return getPodcastStream(b, stream) }
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if w := get(); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "episode_not_found") {
+		t.Errorf("an episode in a folder refused for good = %d %s, want 404 episode_not_found", w.Code, w.Body)
+	}
+	resp, out := b.doHeaders(t, "GET", fetchRoute(b.lib.ID, ep.Path), b.userTok, "", podcastHeaders())
+	if resp.StatusCode != http.StatusOK || !strings.Contains(out, `"state":"absent"`) {
+		t.Errorf("a listener's fetch status of that episode = %d %s, want 200 absent", resp.StatusCode, out)
+	}
+	if n := podcastFetches(t, b); n != 0 {
+		t.Errorf("%d fetches asked of the Bridge for an episode the share refuses, want none", n)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if w := get(); w.Code != http.StatusOK || w.Body.Len() == 0 {
+		t.Errorf("the episode once its folder reads = %d %s, want it streamed", w.Code, w.Body)
+	}
+	if err := os.Remove(filepath.Join(b.lib.Root, filepath.FromSlash(ep.Path))); err != nil {
+		t.Fatal(err)
+	}
+	if w := get(); w.Code == http.StatusNotFound || podcastFetches(t, b) == 0 {
+		t.Errorf("an episode file gone = %d %s with %d fetches, want it fetched again", w.Code, w.Body, podcastFetches(t, b))
+	}
+}
+
+// podcastFetches is how many episode fetches have been asked of the Bridge.
+func podcastFetches(t *testing.T, b *bridgeEnv) (n int) {
+	t.Helper()
+	if err := b.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM bridge_jobs WHERE kind = ?`, bridge.KindPodcastFetch).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// refusedEpisode is podcastStorageEnv with its first episode's file refused to
+// the server for good (chmod 000, restored at cleanup), checked to be the
+// stream's 404 episode_not_found with no fetch queued: ep is its path, stream
+// its stream route. A test that calls it is not parallel, for the chmod.
+func refusedEpisode(t *testing.T) (b *bridgeEnv, ep, stream string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file whatever its mode")
+	}
+	b, f := podcastStorageEnv(t)
+	ep = f.Episodes[0].Path
+	file := filepath.Join(b.lib.Root, filepath.FromSlash(ep))
+	if err := os.Chmod(file, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(file, 0o644) })
+	stream = podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(ep))
+	if w := getPodcastStream(b, stream); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "episode_not_found") || podcastFetches(t, b) != 0 {
+		t.Fatalf("the stream of an episode whose file is refused for good = %d %s with %d fetches, want 404 episode_not_found and none",
+			w.Code, w.Body, podcastFetches(t, b))
+	}
+	return b, ep, stream
+}
+
+// TestPodcastAdminDownloadFetchesARefusedEpisode: an episode whose file the
+// share refuses the server for good (chmod 000) is the stream's 404 with no
+// fetch queued, but an admin's download of it is asked of the Bridge all the
+// same (202, one fetch), which writes a new file in its place; the stream
+// after it is still the 404 and queues none of its own. Denied the fetch: the
+// stream, before and after.
+func TestPodcastAdminDownloadFetchesARefusedEpisode(t *testing.T) {
+	b, ep, stream := refusedEpisode(t)
+	resp, out := b.do(t, "POST", fmt.Sprintf("/api/v1/admin/libraries/%d/podcasts/fetch", b.lib.ID), b.adminTok, fmt.Sprintf(`{"path":%q}`, ep))
+	if resp.StatusCode != http.StatusAccepted || podcastFetches(t, b) != 1 {
+		t.Fatalf("an admin's download of that episode = %d %s with %d fetches, want 202 and its fetch", resp.StatusCode, out, podcastFetches(t, b))
+	}
+	if w := getPodcastStream(b, stream); w.Code != http.StatusNotFound || podcastFetches(t, b) != 1 {
+		t.Errorf("the stream after that download = %d %s with %d fetches, want 404 and none of its own", w.Code, w.Body, podcastFetches(t, b))
+	}
+}
+
+// TestPodcastListenerFetchQueuesARefusedEpisode: a listener's fetch routes
+// read an episode whose file the share refuses for good (chmod 000) as absent
+// (shipped players use them, CROSS-REPO.md section 15): GET answers it absent
+// (200, nothing queued) and POST queues its fetch (202, one job), while
+// the stream is the 404 and queues none, before and after.
+func TestPodcastListenerFetchQueuesARefusedEpisode(t *testing.T) {
+	b, ep, stream := refusedEpisode(t)
+	fetchState := func(method string, want int) string {
+		t.Helper()
+		resp, out := b.doHeaders(t, method, fetchRoute(b.lib.ID, ep), b.userTok, fetchBody(ep), podcastHeaders())
+		var got struct {
+			Fetch *bridge.FetchStatus `json:"fetch"`
+		}
+		if resp.StatusCode != want || json.Unmarshal([]byte(out), &got) != nil || got.Fetch == nil {
+			t.Fatalf("a listener's %s fetch of that episode = %d %s, want %d and its fetch status", method, resp.StatusCode, out, want)
+		}
+		return got.Fetch.State
+	}
+	if st := fetchState("GET", http.StatusOK); st != "absent" || podcastFetches(t, b) != 0 {
+		t.Fatalf("a listener's GET of that episode = state %q with %d fetches, want absent and none queued", st, podcastFetches(t, b))
+	}
+	if st := fetchState("POST", http.StatusAccepted); st != "queued" || podcastFetches(t, b) != 1 {
+		t.Fatalf("a listener's POST of that episode = state %q with %d fetches, want its fetch queued", st, podcastFetches(t, b))
+	}
+	if st := fetchState("GET", http.StatusOK); st != "queued" {
+		t.Errorf("a listener's GET after that POST = state %q, want queued", st)
+	}
+	if w := getPodcastStream(b, stream); w.Code != http.StatusNotFound || podcastFetches(t, b) != 1 {
+		t.Errorf("the stream after that fetch = %d %s with %d fetches, want 404 and none of its own", w.Code, w.Body, podcastFetches(t, b))
 	}
 }
 

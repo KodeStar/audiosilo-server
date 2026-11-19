@@ -108,6 +108,13 @@ func (a *API) handleAdminPodcastRetention(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 200, map[string]any{"retention": policy})
 	}
 }
+
+// handleAdminPodcastFetch is POST /admin/libraries/{id}/podcasts/fetch: an
+// admin's download of the episode at path, 200 downloaded when its committed
+// generation opens, else its fetch asked of the Bridge (202). An episode the
+// share refuses the server for good (library.ErrEpisodeRefused: a file whose
+// permissions a copy or a restore left wrong) is fetched too: podcastPresent
+// reads it as absent.
 func (a *API) handleAdminPodcastFetch(w http.ResponseWriter, r *http.Request) {
 	lib, ok := a.podcastStorageLibrary(w, r)
 	if !ok {
@@ -189,8 +196,9 @@ func (a *API) handleBridgePodcastRetentionCheck(w http.ResponseWriter, r *http.R
 }
 func (a *API) writePodcastStorageError(w http.ResponseWriter, err error) {
 	switch {
-	// bridge.ErrNotFound: a fetch's target left the index (checkPodcastTarget).
-	case errors.Is(err, catalog.ErrNotFound), errors.Is(err, bridge.ErrNotFound):
+	// bridge.ErrNotFound: a fetch's target left the index (checkPodcastTarget);
+	// library.ErrEpisodeRefused: the share refuses the episode for good.
+	case errors.Is(err, catalog.ErrNotFound), errors.Is(err, bridge.ErrNotFound), errors.Is(err, library.ErrEpisodeRefused):
 		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 	case writeLibraryKindError(w, err):
 	default:
@@ -215,7 +223,10 @@ func writePodcastIdentityBusy(w http.ResponseWriter) {
 // servePodcastStream answers GET /stream for the episode at rel in podcast
 // library lib: its committed generation opened (library.OpenPodcast, its checks
 // and open one metadata.Bounded call up to the stream's deadline: given up on,
-// a 503 share_not_answering), else fetched on demand through the Bridge.
+// or failing as a share does that a retry may get past, a 503
+// share_not_answering; refused for good, library.ErrEpisodeRefused, the 404 an
+// episode gone is, never a fetch that would meet the same refusal), else
+// fetched on demand through the Bridge.
 func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, deadline time.Time) {
 	release := a.cat.MarkPodcastStream(catalog.Ref{LibraryID: lib.ID, Path: rel})
 	defer release()
@@ -224,7 +235,7 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 		writeShareNotAnswering(w)
 		return
 	}
-	if errors.Is(err, catalog.ErrNotFound) {
+	if errors.Is(err, catalog.ErrNotFound) || errors.Is(err, library.ErrEpisodeRefused) {
 		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 		return
 	}

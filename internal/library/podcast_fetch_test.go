@@ -573,8 +573,9 @@ func setFeedTime(t testing.TB, filename string, at time.Time) {
 // that a retry may get past (EIO, ESTALE) is a look given up on (the stream's
 // 503 share_not_answering), never the episode absent (ErrNotIndexable), which
 // would ask the Bridge to fetch an episode the library holds. Denied the 503:
-// a permission, and the file gone, stay ErrNotIndexable. Allowed: with every
-// look answering the episode opens. Not parallel: it swaps podcastLstat.
+// a permission is ErrEpisodeRefused (the stream's 404, no fetch), the file
+// gone ErrNotIndexable and no refusal. Allowed: with every look answering the
+// episode opens. Not parallel: it swaps podcastLstat.
 func TestOpenPodcastReadsAShareFault(t *testing.T) {
 	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
 	ep := f.Episodes[0]
@@ -609,6 +610,9 @@ func TestOpenPodcastReadsAShareFault(t *testing.T) {
 			}
 			if !c.gaveUp && !errors.Is(err, ErrNotIndexable) {
 				t.Errorf("%s failing %v: %v, want ErrNotIndexable", at, c.errno, err)
+			}
+			if refused := errors.Is(err, ErrEpisodeRefused); refused != (c.errno == syscall.EACCES) {
+				t.Errorf("%s failing %v: %v, refused for good %v, want it only for the permission", at, c.errno, err, refused)
 			}
 		}
 	}

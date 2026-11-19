@@ -1281,9 +1281,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a listing or `Lstat` of the join given up on, or failing as a share does that a retry may get past
   (`metadata.TransientFault`, the share-fault rule below), is a 503 `share_not_answering` with `Retry-After`, the
   stream, `/fs` and `/item`'s on-demand index alike, and any other fault (a lasting refusal, a limit of the
-  server's own) the missing path's 404. For a path the index holds (no listing made), the stream and `/fs` give
-  the 503 only for a look given up on (a hang past its bound); a stat, open or listing that fails, EIO
-  included, is the 404 they always had. A missing path and a
+  server's own) the missing path's 404. For a path the index holds (no listing made), the stream's join and `/fs`
+  give the 503 only for a look given up on (a hang past its bound); a stat or listing that fails, EIO
+  included, is the 404 they always had. The stream's open of the file itself (`media.ServeFile`,
+  `media.Transcode`, a copy's look at its source, `media.Source`) follows the share-fault rule whatever the
+  index holds: a transient fault is the 503, a lasting one the 404 (`TestOpenFaultsAnswerByKind`,
+  `TestSourceTransientFaultIsUnanswered`), a copy's run included, whose open of a source that stats but is
+  refused for good is no source (`openFault`: a rendition's 404, not a 503 `rendition_error` asked again for
+  good; never remembered as ffmpeg's refusal, `TestFileCacheRunOpenFaultsByKind`). A missing path and a
   case variant take the same steps (the same listings and `Lstat`s up to the first name not listed, none
   past it), and the listings are kept a few seconds (`metadata.DirNames`, one per server,
   `Catalog.DirNames`, which `Spelling`'s `ownEntry` reads too: `dirNamesTTL` 3 s from the read's start, at
@@ -1329,10 +1334,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   refuses a link a join allows, one that stays in the root by an absolute target or by climbing above it
   and back, so `Below` opens the resolved path through the root then
   (`TestOpenRegularBelowNeverLeavesTheRoot`, `TestReadDirBelowNeverLeavesTheRoot`,
-  `TestStreamOpensThroughTheRootAfterASwap`). The reader's ebook and a podcast episode check the open file
+  `TestStreamOpensThroughTheRootAfterASwap`). So does a transcode, whose ffmpeg reads the descriptor opened
+  there, never the path (`media.Transcode`, `fileInput`: ffmpeg's stdin as `fd:`, else on Unix the child's
+  descriptor 3 read as `/dev/fd/3`, else the resolved path re-checked as the file opened, `recheckedInput`, a
+  bounded look;
+  `TestTranscodeOpensThroughTheRoot`), and a remux's or a rendition's source: its look (`media.Source`, a stat
+  through the root) and its run's open (`FileCache.make`), whose descriptor ffmpeg reads
+  (`TestFileCacheSourceThroughTheRoot`). The reader's ebook and a podcast episode check the open file
   against the path again instead (`OpenEbook`, `OpenPodcast`: `os.SameFile`). Still a check and then a look
-  by path: a transcode (ffmpeg opens the path), a remux's or a rendition's source (`media.FileCache`,
-  `media.Source`), an asked book's read (`resolveBook`, the probes), the Bridge's file stats
+  by path: an asked book's read (`resolveBook`, the probes), the Bridge's file stats
   (`statBookFiles`), `LookArt`'s stat and the looks under `.audiosilo/`. The scan takes no link out of the root
   either, by the same rule (`linkOut`: `SafeJoin` of each link the walk lists, looked at once the walk ends,
   width at a time, `linksInRoot`; a plain file never looked at again): a file or folder link out in a book
@@ -1498,7 +1508,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   show's: `serveArt`, `coverArt`, `readSidecar`) and every look a stream makes at its file (SRV-15c: the
   path's join, `library.SafeJoinBounded`; its open and stat, `media.ServeFile`, through the library's root
   (`metadata.OpenRegularBelow`) and a regular file only, so a FIFO is a 404 at once, never an open held and counted on its mount; a
-  transcode's stat, `media.Transcode`; a remux's or rendition's look at its source, `media.Source`; a
+  transcode's open, `media.Transcode`, the same; a remux's or rendition's look at its source, `media.Source`; a
   podcast episode's checks and open, `library.OpenPodcastBounded`, the download's presence check and an
   on-demand fetch's waits too), `/fs`'s join, listing and page of file info (`library.BrowseFS`, `ListDir`,
   the next-in-folder read's too), and the renditions listing's and `/item`'s
@@ -1635,7 +1645,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   dev diff/timing tool. A test whose ffprobe is a stand-in script on valid files calls
   `metadata.ForceFFprobeForTests(path)` (`library`'s `stubProbe` does).
 - **Transcoding**: `GET /libraries/{id}/stream?path=…&transcode=1` pipes the file
-  through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
+  through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode, ffmpeg reading the
+  descriptor opened through the library's root (`fileInput`: `fd:` on its stdin, seekable; without the fd
+  protocol, an ffmpeg older than 6.1, the child's descriptor 3 as `/dev/fd/3` on Unix, seekable too, so an
+  input `-ss` and an MP4 whose index sits at its end still work, or the re-checked resolved path elsewhere;
+  `TestTranscodeSeeksTheDescriptor`), the input's protocol the only one it may open (`-protocol_whitelist`:
+  through `fd:` no other file; through `/dev/fd/3` or a path the `file` protocol, which opens any local file),
+  and an audio container the only input (`-format_whitelist` `audioDemuxers`, on every input whose demuxer
+  ffmpeg guesses: the transcode's, a podcast episode's and the watch rendition's; the remux names its own): a
+  file that probes as a manifest or a playlist, DASH, HLS or ffconcat, is refused, where through the `file`
+  protocol ffmpeg opened the files it names and transcoded them to whoever could stream it
+  (`TestTranscodeOpensNoOtherInput`; a new container is added to the list and to
+  `TestAllowListReadsEveryLibraryFormat`); a HEAD
+  runs no ffmpeg, its probe included, a podcast episode's too;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
   re-request). Direct serving + Range stays the default. With `&download=1` it is an attachment named
   `<stem>.mp3` (every audio download's `Content-Disposition`, and the library export's, is `media.SetAttachment`'s: a name past printable ASCII
@@ -1644,8 +1666,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   an error's answer; a podcast episode's too), as a plain download is named for its file. A podcast episode's verified descriptor
   (`media.TranscodeOpened`, server#181) is ffmpeg's stdin read seekably as `fd:` (input seek, and a
   non-faststart m4a demuxes) when the ffmpeg lists the fd input protocol (`inputFor`: probed once
-  per ffmpeg path, `-protocols`, 5 s, asked again after a probe that couldn't run), else the old
-  `pipe:0` with an output seek. Each transcode holds one of the 4 `transcodeSem` slots (503 + `Retry-After: 5`
+  per ffmpeg path, `-protocols`, 5 s, so a transcode or a seek runs none of its own; one that ran out of time is
+  asked again by the next request, one that failed stands as no fd: for a minute, `fdProbeRetry`), else the old
+  `pipe:0` with an output seek (never `/dev/fd/3`: the file protocol it needs would let publisher bytes that
+  probe as a playlist open other local files). Each transcode holds one of the 4 `transcodeSem` slots (503 + `Retry-After: 5`
   with none free), keyed by its ask (`transcodeAsk`, `transcode_slots.go`: the credential's token id, the file, the
   `?t=` start, `download=1`): a repeat GET of the same ask takes over the slot the earlier one holds, ending that
   request's ffmpeg and aborting its response (`http.ErrAbortHandler`, a broken stream, never one that ended),
@@ -1767,14 +1791,23 @@ every session. CLAUDE.md keeps a one-line index of these topics.
     for a share that dropped, `transient_windows.go`: ERROR_NETNAME_DELETED, ERROR_BAD_NETPATH, ERROR_SEM_TIMEOUT,
     ERROR_UNEXP_NET_ERR and the network's unreachable, refused or aborted): a share that stopped answering and may come back, as is a
     look given up on (`metadata.GaveUp`, a hang past its bound). A route answers 503 `share_not_answering` with
-    `Retry-After` 30; nothing reads it as the file gone (a podcast episode is not fetched again, `podcastLookErr`;
+    `Retry-After` 30, the stream's open included (`media.ServeFile`, `media.Transcode`, `media.Source`); nothing
+    reads it as the file gone (a podcast episode is not fetched again, `podcastLookErr`;
     the Bridge's book files keep their indexed size, `statBookFiles`, each file's look given `fileWait`
     and all ending at the request's wait cap, `TestBridgeBookFilesEachGetALooksTime`).
   - **Lasting** (`metadata.LastingFault`: a permission, EACCES or EPERM, `fs.ErrPermission`; the device gone, ENXIO; a
     link loop, ELOOP; a name the share refuses, EINVAL, Windows' ERROR_INVALID_NAME): a retry would only meet it
     again. A route answers the lasting answer it had (a 404; a route's own 422 stays), the reader's ebook and
     read-along map among them (`TestEbookLastingFaultIs404`, `TestReadalongLastingFaultIs404`), and the book stays
-    indexed.
+    indexed. A podcast episode the share refuses so (its show folder, `feed.json`, publish barrier or file) is
+    `library.ErrEpisodeRefused`: the stream's 404 `episode_not_found`, never a fetch asked of the Bridge by it,
+    which would meet the same refusal (`TestPodcastStreamRefusedFolderIs404`). A fetch asked for by name reads
+    it as absent (shipped players use these routes, CROSS-REPO §15): a
+    listener's `GET /libraries/{id}/podcasts/fetch` answers its fetch status and `POST` queues it (202), an
+    admin's download (`POST /admin/libraries/{id}/podcasts/fetch`) too. A refused file is mended so (the Bridge
+    writes a new one in its place: `TestPodcastAdminDownloadFetchesARefusedEpisode`,
+    `TestPodcastListenerFetchQueuesARefusedEpisode`); a refused show folder, `feed.json` or barrier is not, the
+    new file sitting behind the same refusal (`TestPodcastStreamRefusedFolderIs404` checks its fetch status).
   - **The server's own limits** (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY) and any error on neither list: no share's
     fault, never a 503 `share_not_answering`; a route answers it as it did before the rule (an asked read's
     `lookRefused` 404, a stream's missing file, a 500 where the route logs one).

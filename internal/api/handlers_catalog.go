@@ -363,7 +363,7 @@ func (a *API) adminRemuxes(ctx context.Context, lib *catalog.Library, files []ca
 		st := media.CacheMissing
 		// No look on a share that stopped answering: each would wait out its own bound.
 		if answering && abs[k] != "" {
-			st, _, _ = a.remux.Status(abs[k])
+			st, _, _ = a.remux.Status(lib.Root, abs[k])
 		}
 		if st == media.CacheFailed {
 			continue

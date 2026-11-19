@@ -146,14 +146,16 @@ func audioContentType(ext string) string {
 // Its open and stat are one metadata.Bounded call (the request's context, at
 // most wait, the per-mount cap of a scan's reads): a file on a share that
 // stopped answering is given up on, never a handler held for good (the reads
-// that follow are the client's to wait for). That error (metadata.GaveUp) is
-// returned with nothing written, for the caller to answer; every other outcome
-// is answered here and returns nil. Only a regular file is served
+// that follow are the client's to wait for). That error, or a transient one
+// (openLibraryFile: metadata.GaveUp either way), is returned with nothing
+// written, for the caller to answer (a 503 share_not_answering); every other
+// outcome is answered here and returns nil, a lasting refusal (a permission)
+// the 404 a file gone is. Only a regular file is served
 // (metadata.OpenRegular): a FIFO named as audio is a 404 at once, never an open
 // waiting for a writer, given up on and counted on its mount for good. A 404
 // carries no Cache-Control a caller set for the file it expected.
 func ServeFile(w http.ResponseWriter, r *http.Request, root, absPath string, download bool, wait time.Duration) error {
-	f, info, err := metadata.OpenRegularBelowBounded(r.Context(), root, absPath, wait)
+	f, info, err := openLibraryFile(r.Context(), root, absPath, wait)
 	switch {
 	case metadata.GaveUp(err):
 		return err
@@ -166,6 +168,31 @@ func ServeFile(w http.ResponseWriter, r *http.Request, root, absPath string, dow
 	// Named as asked for: a link's file opens under its own name.
 	ServeOpenedAs(w, r, f, filepath.Base(absPath), info.ModTime(), download)
 	return nil
+}
+
+// openBelow is the open of a library file a request named (ServeFile,
+// Transcode, a file cache's run): metadata.OpenRegularBelowBounded, a test's
+// to inject a share's errors.
+var openBelow = metadata.OpenRegularBelowBounded
+
+// openLibraryFile is openBelow with an open that failed as a share does that a
+// retry may get past made one given up on (transientGaveUp), so its caller
+// tells a share that did not answer (a 503 share_not_answering) from the file
+// gone with metadata.GaveUp alone.
+func openLibraryFile(ctx context.Context, root, abs string, wait time.Duration) (*os.File, os.FileInfo, error) {
+	f, info, err := openBelow(ctx, root, abs, wait)
+	return f, info, transientGaveUp(err)
+}
+
+// transientGaveUp is err made a look given up on (metadata.AsGaveUp) when it
+// is a share's fault a retry may get past (metadata.TransientFault: EIO,
+// ESTALE), which a route answers 503 share_not_answering, never as the file
+// gone; else err as it is (a lasting refusal, a permission, is the 404).
+func transientGaveUp(err error) error {
+	if metadata.TransientFault(err) {
+		return metadata.AsGaveUp(err)
+	}
+	return err
 }
 
 // ServeOpened serves an already verified descriptor without reopening its path.
@@ -263,41 +290,67 @@ func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 	http.ServeContent(w, r, name, modTime, f)
 }
 
-// Transcode streams absPath re-encoded to MP3 via ffmpeg, starting startSec into
+// Transcode streams absPath, a file its caller joined and checked under the
+// library root root, re-encoded to MP3 via ffmpeg, starting startSec into
 // the file. It is the fallback for codecs browsers can't decode natively. The
 // output is not byte-seekable (no Range / Content-Length); a client seeks by
 // re-requesting with a new startSec. The ffmpeg process is bound to the request
 // context, so a client disconnect kills it, and so does a client that has read
 // nothing for idle (TranscodeIdle: the chapter editor's paused stream, a
 // download its client stopped reading; 0 never ends a stream for that). log
-// may be nil. Its look at the file is a metadata.Bounded stat (the request's
-// context, at most wait), as ServeFile's open: one given up on
-// (metadata.GaveUp) is returned with nothing written, for the caller to
-// answer; every other outcome is answered here and returns nil. ended reports
-// a stream that ran to its end (transcodeInput).
+// may be nil. The file is opened through root as ServeFile opens it
+// (metadata.OpenRegularBelow, one metadata.Bounded call: the request's
+// context, at most wait) and ffmpeg reads that descriptor (fileInput), never
+// the path: a name along it swapped for a link out of the library after the
+// caller's check is refused (a 404), never followed by ffmpeg's own open. An
+// open given up on (openLibraryFile), or the path's re-check where ffmpeg is
+// handed one (fileInput), is returned with nothing written, for the caller to
+// answer (ServeFile's rule);
+// every other outcome is answered here and returns nil. ended reports a
+// stream that ran to its end (transcodeInput).
 // download makes the stream an attachment named for the file (its stem with
 // the MP3 extension), set only on the stream's own answer, never an error's.
-func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath string, startSec float64, download bool, wait, idle time.Duration, log *slog.Logger) (ended bool, err error) {
-	if log == nil {
-		log = slog.Default()
-	}
-	switch _, err := metadata.StatBounded(r.Context(), absPath, wait); {
+func Transcode(w http.ResponseWriter, r *http.Request, root, absPath, ffmpegPath string, startSec float64, download bool, wait, idle time.Duration, log *slog.Logger) (ended bool, err error) {
+	f, _, err := openLibraryFile(r.Context(), root, absPath, wait)
+	switch {
 	case metadata.GaveUp(err):
 		return false, err
 	case err != nil:
 		http.Error(w, "not found", http.StatusNotFound)
 		return false, nil
 	}
-	return transcodeInput(w, r, inputSpec{url: absPath}, ffmpegPath, startSec, download, idle, log), nil
+	defer f.Close()
+	if r.Method == http.MethodHead {
+		// Answered with no ffmpeg run (transcodeInput): no probe for the input
+		// either.
+		return transcodeInput(w, r, inputSpec{}, absPath, ffmpegPath, startSec, download, idle, log), nil
+	}
+	in, err := fileInput(r.Context(), ffmpegPath, f, wait)
+	switch {
+	case metadata.GaveUp(err):
+		return false, err // the re-check's looks, on a share that stopped answering
+	case err != nil:
+		// The path no longer leads to the file opened (fileInput's re-check
+		// where ffmpeg is handed a path): as a file gone.
+		http.Error(w, "not found", http.StatusNotFound)
+		return false, nil
+	}
+	return transcodeInput(w, r, in, absPath, ffmpegPath, startSec, download, idle, log), nil
 }
 
 // TranscodeOpened transcodes an already verified descriptor (a podcast
 // episode's committed generation) without reopening its path: f is ffmpeg's
 // stdin, read seekably through the fd: protocol when this ffmpeg has it (so
 // -ss is a fast input seek and a file whose index sits at its end, a
-// non-faststart m4a, demuxes), else as the old non-seekable pipe:0. download,
-// idle and ended are Transcode's (the attachment named for f's name).
+// non-faststart m4a, demuxes), else as the old non-seekable pipe:0 (never a
+// path: publisher bytes that probe as a playlist may open no other file).
+// download, idle and ended are Transcode's (the attachment named for f's
+// name).
 func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegPath string, startSec float64, download bool, idle time.Duration, log *slog.Logger) (ended bool) {
+	if r.Method == http.MethodHead {
+		// As Transcode's: no ffmpeg run, so no probe for the input either.
+		return transcodeInput(w, r, inputSpec{}, f.Name(), ffmpegPath, startSec, download, idle, log)
+	}
 	// The child shares this descriptor's offset: start it at the top.
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		http.Error(w, "transcode failed", http.StatusInternalServerError)
@@ -305,12 +358,61 @@ func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegP
 	}
 	in := inputFor(ffmpegPath)
 	in.file = f
-	return transcodeInput(w, r, in, ffmpegPath, startSec, download, idle, log)
+	return transcodeInput(w, r, in, f.Name(), ffmpegPath, startSec, download, idle, log)
 }
 
-// inputSpec is how ffmpeg reads its input: a path (proto ""), or the
-// descriptor file handed over as its stdin through the fd: protocol (seekable)
-// or pipe:0 (not seekable, for an ffmpeg older than 6.1).
+// fileInput is how ffmpeg reads f, a library file opened below its root
+// (Transcode), without resolving its path again: f as its stdin through the
+// fd: protocol when this ffmpeg has it (inputFor), else descriptorInput (the
+// platform's: on Unix f handed over as the child's descriptor 3, read
+// seekably as /dev/fd/3, where pipe:0 could neither seek nor demux an MP4
+// whose index sits at its end; elsewhere the resolved path, re-checked as
+// the file opened, its looks a metadata.Bounded call: ctx, at most wait). An
+// error is a path that no longer leads to f, or those looks given up on
+// (metadata.GaveUp).
+func fileInput(ctx context.Context, ffmpegPath string, f *os.File, wait time.Duration) (inputSpec, error) {
+	if in := inputFor(ffmpegPath); in == fdInput {
+		in.file = f
+		return in, nil
+	}
+	return descriptorInput(ctx, f, wait)
+}
+
+// recheckedInput is f's resolved path for an ffmpeg that can be handed no
+// descriptor it can seek (no fd: protocol, no /dev/fd): the path with every
+// link resolved (filepath.EvalSymlinks), so ffmpeg follows none, and only
+// when it names f itself (os.SameFile with the open file, which was opened
+// through the library's root). What is left is the moment between this check
+// and ffmpeg's open. The input may be a file only (-protocol_whitelist), and
+// an audio container only (transcodeArgs: audioDemuxers).
+func recheckedInput(f *os.File) (inputSpec, error) {
+	opened, err := f.Stat()
+	if err != nil {
+		return inputSpec{}, err
+	}
+	real, err := filepath.EvalSymlinks(f.Name())
+	if err != nil {
+		return inputSpec{}, err
+	}
+	now, err := os.Stat(real)
+	if err != nil {
+		return inputSpec{}, err
+	}
+	if !os.SameFile(opened, now) {
+		return inputSpec{}, errNotOpened
+	}
+	return inputSpec{proto: "file", url: "file:" + real}, nil
+}
+
+// errNotOpened is recheckedInput's for a path that leads to another file than
+// the one opened.
+var errNotOpened = errors.New("media: the path no longer leads to the file opened")
+
+// inputSpec is how ffmpeg reads its input: the descriptor file handed over as
+// its stdin through the fd: protocol (seekable) or pipe:0 (not seekable, for
+// an ffmpeg older than 6.1), or as its descriptor 3 read by the file protocol
+// as /dev/fd/3 (seekable, Unix: setInput); or a file's path (recheckedInput,
+// no file). proto is the one protocol ffmpeg may open (-protocol_whitelist).
 type inputSpec struct {
 	proto, url string
 	file       *os.File
@@ -323,14 +425,26 @@ var (
 
 // fdSupport remembers, per ffmpeg path, whether its input protocols include
 // fd (an *fdProbe), so each binary is asked once per process, however many
-// first requests arrive together. A probe that couldn't run (its 5 s timeout,
-// a failed start) is no answer: it is dropped, and the next request asks again.
+// first requests arrive together, and no transcode or seek (each ?t= starts
+// one) runs a probe of its own. A probe that couldn't run is no answer: one
+// that ran past fdProbeTimeout (a busy host, a cold binary) is dropped, and
+// the next request asks again, so a slow start never stands as "no fd:" (the
+// caches' pipe:0, which can't demux an MP4 whose index sits at its end); one
+// that failed (no such binary, an exit status) stands for fdProbeRetry, so an
+// ffmpeg that won't answer is not asked again by every request.
 var fdSupport sync.Map
 
-// fdProbe is one ffmpeg binary's answer, settled once by probeFD.
+// fdProbeRetry is how long a probe that failed stands as "no fd:".
+const fdProbeRetry = time.Minute
+
+// fdProbeTimeout bounds one probe; a variable for a test.
+var fdProbeTimeout = 5 * time.Second
+
+// fdProbe is one ffmpeg binary's answer, settled once by probeFD at at.
 type fdProbe struct {
-	once    sync.Once
-	fd, ran bool
+	once              sync.Once
+	fd, ran, timedOut bool
+	at                time.Time
 }
 
 // inputFor is the stdin input spec for ffmpegPath: fd: when that ffmpeg lists
@@ -338,8 +452,8 @@ type fdProbe struct {
 func inputFor(ffmpegPath string) inputSpec {
 	v, _ := fdSupport.LoadOrStore(ffmpegPath, &fdProbe{})
 	p := v.(*fdProbe)
-	p.once.Do(func() { p.fd, p.ran = probeFD(ffmpegPath) })
-	if !p.ran {
+	p.once.Do(func() { p.fd, p.ran, p.timedOut = probeFD(ffmpegPath); p.at = time.Now() })
+	if !p.ran && (p.timedOut || time.Since(p.at) >= fdProbeRetry) {
 		fdSupport.CompareAndDelete(ffmpegPath, p)
 	}
 	if p.fd {
@@ -348,16 +462,17 @@ func inputFor(ffmpegPath string) inputSpec {
 	return pipeInput
 }
 
-// probeFD asks ffmpegPath for its protocols (5 s at most) and reports whether
-// the Input section lists fd, and whether the probe ran at all.
-func probeFD(ffmpegPath string) (fd, ran bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// probeFD asks ffmpegPath for its protocols (fdProbeTimeout at most) and
+// reports whether the Input section lists fd, whether the probe ran at all,
+// and, when it didn't, whether it ran out of time.
+func probeFD(ffmpegPath string) (fd, ran, timedOut bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), fdProbeTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, ffmpegPath, "-hide_banner", "-protocols").Output()
 	if err != nil {
-		return false, false
+		return false, false, ctx.Err() != nil
 	}
-	return listsInputProtocol(string(out), "fd"), true
+	return listsInputProtocol(string(out), "fd"), true, false
 }
 
 // listsInputProtocol reports whether ffmpeg -protocols output lists name in its
@@ -379,17 +494,31 @@ func listsInputProtocol(out, name string) bool {
 	return false
 }
 
+// audioDemuxers are the demuxers ffmpeg may read a library file or a podcast
+// episode with, its -format_whitelist on every input whose demuxer it guesses
+// (transcodeArgs, renditionArgs; the remux names its own, -f matroska): the
+// containers the library's extensions name (metadata.AudioExtensions: MP4 as
+// mov, MP3, FLAC, Ogg, Matroska) and the plain audio files one of them may be
+// under another's name (ADTS AAC, WAV and the like). Each reads its one input
+// and opens no other. Without the list a file that probes as a manifest or a
+// playlist (DASH, HLS, ffconcat) had ffmpeg open what it names: through the
+// file protocol (/dev/fd/3, a re-checked path: an ffmpeg older than 6.1),
+// which opens any local file, another library's audio, transcoded to whoever
+// could stream the crafted one. fd: and pipe:0 leave such a demuxer nothing to
+// open (-protocol_whitelist); the list is on them all the same, so no input
+// rests on the protocol alone.
+const audioDemuxers = "mov,mp3,flac,ogg,matroska,aac,wav,w64,aiff,asf,ac3,eac3,ape,wv,caf,amr"
+
 // transcodeArgs is the ffmpeg command line that re-encodes in to MP3 on
-// stdout from startSec. A path or the seekable fd: input seeks on the input
-// side (-ss before -i: ffmpeg jumps near startSec before decoding); pipe:0
-// can't seek, so there -ss follows -i and decodes up to it. A descriptor input
-// is the only thing ffmpeg may open (-protocol_whitelist): publisher bytes that
-// probe as a playlist may not open secondary local files.
+// stdout from startSec. A seekable input (fd:, /dev/fd/3, a path) seeks on the
+// input side (-ss before -i: ffmpeg jumps near startSec before decoding);
+// pipe:0 can't seek, so there -ss follows -i and decodes up to it. The input's
+// protocol is the only one ffmpeg may open (-protocol_whitelist): never the
+// network, and through fd: or pipe:0 no other file either. The input may only
+// be an audio container (-format_whitelist, audioDemuxers), never a manifest
+// or a playlist naming other inputs, which the file protocol would open.
 func transcodeArgs(in inputSpec, startSec float64) []string {
-	args := []string{"-nostdin", "-loglevel", "error"}
-	if in.proto != "" {
-		args = append(args, "-protocol_whitelist", in.proto)
-	}
+	args := []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", in.proto, "-format_whitelist", audioDemuxers}
 	var seek []string
 	if startSec > 0 {
 		seek = []string{"-ss", strconv.FormatFloat(startSec, 'f', 3, 64)}
@@ -427,19 +556,28 @@ const TranscodeIdle = 10 * time.Minute
 // handler, or the process unreaped.
 const transcodeWaitDelay = 5 * time.Second
 
+// setInput hands in's descriptor to cmd: its descriptor 3 when ffmpeg reads it
+// through the file protocol (/dev/fd/3, descriptorInput), else its stdin.
+func setInput(cmd *exec.Cmd, in inputSpec) {
+	switch {
+	case in.file == nil:
+	case in.proto == "file":
+		cmd.ExtraFiles = []*os.File{in.file}
+	default:
+		cmd.Stdin = in.file
+	}
+}
+
 // transcodeInput runs ffmpeg over in from startSec and streams its MP3 to w,
-// ending it (and ffmpeg) when the client has read nothing for idle. It reports
+// ending it (and ffmpeg) when the client has read nothing for idle; logPath
+// names the file in its log lines and a download's name. It reports
 // whether the stream ran to its end: ffmpeg's output came to its end, all of it
 // written, while the request's context was live. One cut short (the context
 // ended, so ffmpeg was killed, which ends its output too; a write that
 // failed) did not, and neither did a HEAD or a failure to start.
-func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpegPath string, startSec float64, download bool, idle time.Duration, log *slog.Logger) (ended bool) {
+func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, logPath, ffmpegPath string, startSec float64, download bool, idle time.Duration, log *slog.Logger) (ended bool) {
 	if log == nil {
 		log = slog.Default()
-	}
-	logPath := in.url
-	if in.file != nil {
-		logPath = in.file.Name()
 	}
 	name := ""
 	if download {
@@ -461,9 +599,7 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 	// Once ctx ends (ffmpeg killed), Wait gives its output pipes this long to
 	// close before it closes them itself: ffmpeg is always reaped.
 	cmd.WaitDelay = transcodeWaitDelay
-	if in.file != nil {
-		cmd.Stdin = in.file
-	}
+	setInput(cmd, in)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		http.Error(w, "transcode failed", http.StatusInternalServerError)
