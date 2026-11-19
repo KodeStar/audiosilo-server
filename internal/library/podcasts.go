@@ -68,9 +68,11 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 	res.Partial = partial
 	// Before the prune: a folder renamed by hand leaves its show's row at the
 	// old name until then, and the move takes that row's episodes' listening
-	// state along.
-	s.movePodcastShows(ctx, lib, "")
+	// state along. A partial scan moves nothing, as it prunes nothing: the
+	// folder it could not read may be where another show renamed by hand is
+	// now, and a move to that show's old name would replace its follows.
 	if !partial {
+		s.movePodcastShows(ctx, lib, "")
 		var gone []string
 		for show := range old {
 			if !keep[show] {
@@ -117,13 +119,15 @@ func (s *Scanner) IndexPodcastPath(ctx context.Context, lib catalog.Library, p s
 // show at both paths by its show_id (catalog.PodcastIdentityPaths); the disk
 // tells a rename from a copy: an identity moves only when exactly one of its
 // paths holds it (its feed.json names it) and every other one is known not
-// to (gone, no feed.json, not a show, or another show's). A copy, both
+// to (gone, no feed.json, not a folder, or another show's). A copy, both
 // folders holding the show, moves and merges nothing, nor does a path that
-// can't be read. With at not "" (a targeted rescan), only the identities at
-// that path are looked at. A folder whose row names the moving show while it
-// holds another (two folder names swapped by hand) is indexed again first, so
-// both shows move in one call. Failures are logged: the next scan or rescan
-// looks again.
+// can't be read or whose feed.json is invalid (podcastHeldID). With at not ""
+// (a targeted rescan), only the identities at that path are looked at. A
+// folder whose row names the moving show while it holds another (two folder
+// names swapped by hand) is indexed again first, so both shows move in one
+// call. Nothing moves either while a folder that may hold another show can't
+// be read (a partial scan; a rescan's indexNewPodcastFolders). Failures are
+// logged: the next scan or rescan looks again.
 func (s *Scanner) movePodcastShows(ctx context.Context, lib catalog.Library, at string) {
 	// The root's folder names, read when first needed (fresh, not a scan's
 	// listing from before its indexing: a copy made since is a folder too).
@@ -169,7 +173,8 @@ func (s *Scanner) settledPodcastMoves(ctx context.Context, lib catalog.Library, 
 }
 
 // indexNewPodcastFolders indexes the show folders the root lists that have no
-// index row yet, and answers how many it indexed.
+// index row yet, and answers how many it indexed. One that can't be read is an
+// error (no move on this look): it may be the folder the other show is in.
 func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Library, listed *map[string]bool) (int, error) {
 	known, err := s.cat.PodcastSignatures(ctx, lib.ID)
 	if err != nil {
@@ -185,8 +190,11 @@ func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Librar
 		if _, ok := known[name]; ok || !feed.ShowPath(name) {
 			continue
 		}
-		if _, _, err := s.indexPodcastShow(ctx, lib, name, false); err == nil {
+		switch _, _, err := s.indexPodcastShow(ctx, lib, name, false); {
+		case err == nil:
 			n++
+		case !errors.Is(err, ErrNotIndexable):
+			return n, err
 		}
 	}
 	return n, nil

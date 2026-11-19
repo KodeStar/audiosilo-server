@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -433,4 +434,45 @@ func TestPodcastRescanOfAChainsFarEndTakesItsFolderHeart(t *testing.T) {
 	b.checkFollowed(t, "Other")
 	b.checkOther(t, "Third")
 	hearted()
+}
+
+// Denied: a chain of renames by hand whose other folder can't be read for now
+// (the other show renamed to "Third", this one to its old name). That folder
+// may be where the other show is, and a move to its old name would put this
+// show's follow over the other's for a listener following both: nothing moves,
+// on a scan (partial, as it prunes nothing) or on the Bridge's rescan, until
+// the folder reads again and both move in one call.
+func TestPodcastRenameChainWaitsOnAnUnreadableFolder(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a file the server's user can't read")
+	}
+	for _, rescan := range []bool{false, true} {
+		b := newRenameBed(t)
+		named := b.addOther(t)
+		b.renameEach(t, [2]string{"Other", "Third"}, [2]string{"Example Show", "Other"})
+		b.writeShow(t, "Other", "Other")
+		third := filepath.Join(b.root, "Third", "feed.json")
+		if err := os.WriteFile(third, named("Third"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(third, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(third, 0o600) })
+		if rescan {
+			if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Other"); err != nil {
+				t.Fatal(err)
+			}
+		} else if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || !res.Partial {
+			t.Fatalf("scan %+v %v", res, err)
+		}
+		if err := os.Chmod(third, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+			t.Fatal(err)
+		}
+		b.checkFollowed(t, "Other")
+		b.checkOther(t, "Third")
+	}
 }
