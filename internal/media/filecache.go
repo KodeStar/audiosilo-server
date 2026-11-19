@@ -289,7 +289,8 @@ const sourceWait = metadata.ProbeTimeout
 // bounded by the spec's timeout) while this call waits on ctx: a
 // request that leaves, or stops waiting, doesn't stop the run the others wait
 // for. The errors are ErrRefused (with ErrNoSource when abs is no regular
-// file), ErrPending wrapping ctx's error when ctx ended first, or one that says
+// file, or one the run's open is refused for good: openFault), ErrPending
+// wrapping ctx's error when ctx ended first, or one that says
 // the copy can't be had now: ErrUnavailable (also for a cold key while the
 // spec's queueMax runs are in flight), runCtx's, or a failure to read abs, run
 // ffmpeg or write the cache.
@@ -552,7 +553,9 @@ func (m *FileCache) lead(runCtx context.Context, ffmpegPath, key, root, abs stri
 	defer m.running.Done()
 	err := m.make(runCtx, ffmpegPath, key, root, abs, info)
 	m.mu.Lock()
-	if errors.Is(err, ErrRefused) {
+	// ffmpeg's refusal of the file, never a source that could not be opened
+	// (openFault): the next look at that one answers for itself.
+	if errors.Is(err, ErrRefused) && !errors.Is(err, ErrNoSource) {
 		m.rememberLocked(key)
 	}
 	delete(m.inflight, key)
@@ -659,7 +662,7 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, root, abs stri
 	// the path (fd: or pipe:0).
 	src, _, err := openBelow(runCtx, root, abs, m.openWait)
 	if err != nil {
-		return err
+		return openFault(err)
 	}
 	defer src.Close()
 	if !unchanged(src, info) {
@@ -705,6 +708,21 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, root, abs stri
 	}
 	m.evict(key)
 	return nil
+}
+
+// openFault is a run's failed open of its source (err) as its callers read
+// it: no source (ErrRefused joined with ErrNoSource, Source's for a look that
+// says so: the stored file's answer, a 404) when the file went, is no regular
+// file any more, or the share refuses it for good (metadata.LastingFault: a
+// permission on a file whose stat answered), so a rendition is not answered
+// 503 and asked again for a file a retry would only be refused again; any
+// other err as it is (a share that stopped answering, a transient fault: the
+// copy can't be made now). lead remembers none of them.
+func openFault(err error) error {
+	if metadata.LastingFault(err) || metadata.NotExist(err) || errors.Is(err, metadata.ErrNotRegular) {
+		return fmt.Errorf("%w: %w: %v", ErrRefused, ErrNoSource, err)
+	}
+	return err
 }
 
 // timedOut reports whether a run's own timeout (ctx, the spec's) ended it,

@@ -276,3 +276,30 @@ func TestSourceTransientFaultIsUnanswered(t *testing.T) {
 		}
 	}
 }
+
+// TestFileCacheRunOpenFaultsByKind: a run whose open of its source (the look,
+// a stat, answered) the share refuses for good, or finds gone, is no source
+// (ErrNoSource: a rendition's 404, the remux's stored file, as the stream's
+// own open answers it), where it was a copy that could not be made now (a
+// rendition's 503, asked again for a file a retry is refused again); a
+// transient fault stays that, to be tried again. Neither is remembered as
+// ffmpeg's refusal, and ffmpeg runs on none. Not parallel: it swaps openBelow.
+func TestFileCacheRunOpenFaultsByKind(t *testing.T) {
+	m, runs := fakeRenditions(t, nil, func(out string) error { return os.WriteFile(out, []byte("m4a"), 0o600) })
+	src := srcFile(t, "a.mp3")
+	root := filepath.Dir(src)
+	ctx := context.Background()
+	for _, c := range shareFaults {
+		failOpens(t, c.errno)
+		_, _, err := m.Open(ctx, ctx, "ffmpeg", root, src)
+		if err == nil || errors.Is(err, ErrNoSource) == c.transient || !errors.Is(err, c.errno) && c.transient {
+			t.Errorf("Open with its run's open failing %v = %v, want no source only for a lasting fault", c.errno, err)
+		}
+		if left := m.RefusedFor(root, src); left != 0 {
+			t.Errorf("a run's open failing %v was remembered as a refusal for %v, want none", c.errno, left)
+		}
+	}
+	if n := runs.Load(); n != 0 {
+		t.Errorf("ffmpeg ran %d times on a source that could not be opened, want none", n)
+	}
+}
