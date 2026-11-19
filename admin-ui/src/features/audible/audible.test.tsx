@@ -1,11 +1,13 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, type InfiniteData } from '@tanstack/react-query';
 import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type {
   AudibleAccount,
   AudiblePlan,
   AudibleTitle,
+  AudibleTitlePage,
   BridgeJob,
   BridgeStatus,
 } from '@/api/types';
@@ -34,6 +36,7 @@ import {
   syncSummary,
   titleByline,
 } from './audible-model';
+import { storeTitle } from './use-audible';
 
 // Audible (Bridge Phase 4a): Settings > Bridge's read-only Audible accounts card
 // and Settings > Audible's titles, both shown only while the module is on.
@@ -1580,5 +1583,40 @@ describe('audible sync', () => {
     expect(
       screen.queryByRole('button', { name: "Don't sync this book: Not Here" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('storeTitle', () => {
+  it('keeps the answered row over a list read already under way', async () => {
+    const qc = new QueryClient();
+    const key = [...keys.audibleTitleLists, 'acct'];
+    const before = title({ can_backup: true });
+    const after = title({ can_backup: false, import: { job_id: 7, state: 'queued', code: '' } });
+    const other = title({ asin: 'B000000009', title: 'Other' });
+    const page = (x: AudibleTitle): AudibleTitlePage => ({ titles: [x], next: '' });
+    qc.setQueryData<InfiniteData<AudibleTitlePage>>(key, {
+      pages: [page(before)],
+      pageParams: [''],
+    });
+    const otherKey = [...keys.audibleTitleLists, 'other'];
+    const otherData = { pages: [page(other)], pageParams: [''] };
+    qc.setQueryData<InfiniteData<AudibleTitlePage>>(otherKey, otherData);
+    // The poll's read started before the answer and lands after it, with the
+    // row as it was.
+    let land!: (p: AudibleTitlePage) => void;
+    const read = qc
+      .fetchInfiniteQuery({
+        queryKey: key,
+        queryFn: () => new Promise<AudibleTitlePage>((resolve) => (land = resolve)),
+        initialPageParam: '',
+      })
+      .catch(() => undefined);
+    await storeTitle(qc, after);
+    land(page(before));
+    await read;
+    const got = qc.getQueryData<InfiniteData<AudibleTitlePage>>(key);
+    expect(got?.pages[0]?.titles[0]).toEqual(after);
+    // A list without the title is left as it was.
+    expect(qc.getQueryData(otherKey)).toBe(otherData);
   });
 });

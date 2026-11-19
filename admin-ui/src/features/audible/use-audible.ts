@@ -167,9 +167,18 @@ const titleKey = (x: Pick<AudibleTitle, 'account' | 'asin'>) => `${x.account}/${
  * place, rather than reading every page again; the lists are marked stale, so
  * one it now belongs in or has left is read again when next shown.
  */
-export function storeTitle(qc: QueryClient, x: AudibleTitle) {
+export async function storeTitle(qc: QueryClient, x: AudibleTitle) {
   const key = titleKey(x);
   const holds = (p: AudibleTitlePage) => p.titles.some((t) => titleKey(t) === key);
+  // A read of a list holding the title already under way (the poll while a
+  // backup runs) would land its row as it was before this answer, over it:
+  // it is stopped first (the next poll asks again). A list without it, a
+  // first read among them, carries on.
+  await qc.cancelQueries({
+    queryKey: keys.audibleTitleLists,
+    predicate: (q) =>
+      (q.state.data as InfiniteData<AudibleTitlePage> | undefined)?.pages.some(holds) ?? false,
+  });
   // A list (or page) without the title is left as it is: its rows don't render again.
   qc.setQueriesData<InfiniteData<AudibleTitlePage>>({ queryKey: keys.audibleTitleLists }, (data) =>
     data?.pages.some(holds)
@@ -214,7 +223,7 @@ export function useBackups() {
    * read again; then, unless `others` is false, the accounts and the jobs.
    */
   const settle = (x: AudibleTitle | undefined, others = true) => {
-    if (x) storeTitle(qc, x);
+    if (x) void storeTitle(qc, x);
     else void qc.invalidateQueries({ queryKey: keys.audibleTitleLists });
     if (others) {
       void qc.invalidateQueries({ queryKey: keys.audibleAccounts });
