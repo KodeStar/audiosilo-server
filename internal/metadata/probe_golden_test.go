@@ -34,23 +34,16 @@ func fixtureFiles(t *testing.T, dir string) []string {
 
 // countedFixtures are the fixtures that are VBR MP3s with no Xing or VBRI
 // header, whose frames the probe counts (SRV-16) where ffprobe estimates their
-// length from a bitrate, and the header-less ones at 32 kbit/s, the lowest
-// bitrate, which a VBR encoder writes silence at, so the probe counts them too
-// (server#452): the length ffmpeg decodes each to (its samples over 44.1 kHz,
-// `ffmpeg -i <f> -f s16le -ac 1 - | wc -c`).
+// length from a bitrate: the length ffmpeg decodes each to (its samples over
+// 44.1 kHz, `ffmpeg -i <f> -f s16le -ac 1 - | wc -c`). The header-less ones at
+// 32 kbit/s, the lowest bitrate, are walked whole (mp3LowRateWalk) and keep
+// the bitrate's estimate, an attached picture's 1/90000 one in craft-apic-*.
 var countedFixtures = map[string]string{
-	"craft-junk-vbr.mp3":          "5.355102",
-	"lame-vbr-noxing.mp3":         "5.328980",
-	"mp3-vbrnoxing-bare.mp3":      "5.328980",
-	"mp3-vbrnoxing-chap.mp3":      "5.328980",
-	"mp3-vbrnoxing-tags.mp3":      "5.328980",
-	"lame-cbr32-noxing.mp3":       "5.328980",
-	"lame-v1only.mp3":             "5.328980",
-	"craft-apic-cbr.mp3":          "5.328980",
-	"craft-apic-none.mp3":         "5.328980",
-	"craft-apic-unknown-type.mp3": "5.328980",
-	"craft-apic-v22.mp3":          "5.328980",
-	"craft-apic-webp.mp3":         "5.328980",
+	"craft-junk-vbr.mp3":     "5.355102",
+	"lame-vbr-noxing.mp3":    "5.328980",
+	"mp3-vbrnoxing-bare.mp3": "5.328980",
+	"mp3-vbrnoxing-chap.mp3": "5.328980",
+	"mp3-vbrnoxing-tags.mp3": "5.328980",
 }
 
 // For every release the probe knows, its answer for each fixture is that

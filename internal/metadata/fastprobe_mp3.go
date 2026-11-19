@@ -1155,18 +1155,27 @@ const (
 	mp3SampleRun    = 16
 )
 
+// mp3LowRateWalk is how much of a stream whose first frame has its MPEG
+// version's lowest bitrate mp3ConstantBitrate walks, frame by frame, for one at
+// another bitrate: a VBR encoder writes silence at that rate, so a VBR file
+// that is mostly silence samples as constant (server#452: read as 86 s for
+// 60 s of audio). 2 MiB is about 9 minutes at 32 kbit/s (35 at MPEG 2's 8):
+// speech that far in is no longer silence, and a true CBR file at that rate,
+// ~14 MB an hour, is not read whole for a length its bitrate gives.
+const mp3LowRateWalk = 2 << 20
+
 // mp3ConstantBitrate reports whether the stream at off looks constant-bitrate,
 // and its bitrate: its first 64 frames, and a run of up to mp3SampleRun frames
 // found at each of mp3SamplePoints places spread evenly over the file, all
 // share the first frame's bitrate and sample rate. A stream whose first frame
 // has the lowest bitrate of its MPEG version (32 kbit/s, 8 for MPEG 2 and 2.5)
-// is not taken for one: a VBR encoder writes silence at that rate, so a VBR
-// file that is mostly silence samples as constant (server#452: read as 86 s
-// for 60 s of audio), while a true CBR file at so low a rate is small to
-// count.
+// has every frame in its first mp3LowRateWalk bytes, or to its audio's end,
+// share them too, its frames in a row (one lost is no constant bitrate: the
+// count resyncs past it).
 func mp3ConstantBitrate(b *blockFile, off int64, fh mpaHeader) (int, bool) {
-	if fh.bitRate == mpaBitrates[fh.lsf][2][1]*1000 {
-		return 0, false
+	same := func(h uint32) bool {
+		m, _ := decodeMPA(h)
+		return m.bitRate == fh.bitRate && m.sampleRate == fh.sampleRate
 	}
 	// run reads up to n frames from at, and reports whether each it found
 	// shares the first frame's bitrate and sample rate.
@@ -1176,7 +1185,7 @@ func mp3ConstantBitrate(b *blockFile, off int64, fh mpaHeader) (int, bool) {
 			if fs <= 0 {
 				break
 			}
-			if m, _ := decodeMPA(h); m.bitRate != fh.bitRate || m.sampleRate != fh.sampleRate {
+			if !same(h) {
 				return false
 			}
 			at += int64(fs)
@@ -1206,6 +1215,16 @@ func mp3ConstantBitrate(b *blockFile, off int64, fh mpaHeader) (int, bool) {
 		}
 		if !found {
 			return 0, false
+		}
+	}
+	if fh.bitRate == mpaBitrates[fh.lsf][2][1]*1000 {
+		end := min(mp3AudioEnd(b, off), off+mp3LowRateWalk)
+		for at := off; at < end; {
+			fs, h := mp3Check(b, at)
+			if fs <= 0 || !same(h) {
+				return 0, false
+			}
+			at += int64(fs)
 		}
 	}
 	return fh.bitRate, true

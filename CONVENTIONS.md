@@ -1734,9 +1734,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   key `applyProbe` starts reading joins `probeTagKeys`. **The one departure from parity (SRV-16, server#452)**: a VBR MP3
   with no frame count in a Xing/VBRI header has its frames counted: one with no header whose first 64 frames, or a
   run of 16 frames at each of 15 places spread over the file, differ in bitrate or sample rate (`mp3ConstantBitrate`,
-  the runs in the blocks it reads there anyway), or whose first frame has its MPEG version's lowest bitrate (32
-  kbit/s, 8 for MPEG 2: a VBR encoder's silence, so a file mostly silence samples as CBR, 86 s read for 60 s; a true
-  CBR file that low is small to count), and one whose Xing header gives bytes but no frames (less the decoder's
+  the runs in the blocks it reads there anyway), or, where the first frame has its MPEG version's lowest bitrate (32
+  kbit/s, 8 for MPEG 2: a VBR encoder's silence, so a file mostly silence samples as CBR, 86 s read for 60 s), any frame
+  in its first 2 MiB (`mp3LowRateWalk`, about 9 minutes at 32 kbit/s, walked frame by frame; a true CBR file that low
+  keeps its estimate, read no further, never whole), and one whose Xing header gives bytes but no frames (less the decoder's
   start skip, the encoder delay and 529, when an encoder tag gives it). The count goes header to header from the
   first frame to the trailing ID3v1/APEv2 tags (`mp3Uncounted.count`, `mp3FrameCount`; each frame's samples at its
   own sample rate, `mp3Count`, a frame of another rate or MPEG version whose next frame is of its stream going on

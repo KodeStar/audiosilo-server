@@ -594,8 +594,9 @@ type Signature struct {
 // (duration_rev_indexed_at). 1 counts the frames of a VBR MP3 with no Xing or
 // VBRI header (metadata's probe, SRV-16), where earlier servers stored a
 // bitrate's estimate; 2 (server#452) counts the frames of one whose sampled
-// frames share a bitrate that is its MPEG version's lowest (a VBR encoder's
-// silence) or that the denser sampling finds varying, of one whose Xing header
+// frames share its MPEG version's lowest bitrate (a VBR encoder's silence)
+// with another bitrate in its first 2 MiB, or that the denser sampling finds
+// varying, of one whose Xing header
 // gives no frame count, and of one whose sample rate changes, each frame at
 // its own rate. An index that left one uncounted (Book.LengthUncounted)
 // writes 0, no revision. A book read before it is DurationStale

@@ -318,19 +318,35 @@ func TestWithoutFrameCountReadsNoFrames(t *testing.T) {
 
 // A header-less MP3 whose sampled frames share one bitrate keeps the
 // constant bitrate's estimate (right for true CBR), with no count: only the
-// frames sampled are read, not the file.
+// frames sampled are read, not the file. One at 32 kbit/s, the lowest, is
+// walked frame by frame for its first mp3LowRateWalk bytes only, never read
+// whole (~14 MB an hour).
 func TestHeaderlessCBRIsNotCounted(t *testing.T) {
 	t.Parallel()
-	data := bytes.Repeat(mp3Frame(9), 20000) // 8 MiB
-	p, reason, read := probeBytes(t, t.Context(), data, maxProbeTime)
-	if reason != "" || p.Counted {
-		t.Fatalf("reason %q counted %v, want the estimate", reason, p != nil && p.Counted)
-	}
-	if want := printTime(rescale(int64(len(data)), 8*14112000, 128000), 1, 14112000); math.Abs(p.Duration-want) > 1e-5 {
-		t.Errorf("duration %v, want the bitrate's %v", p.Duration, want)
-	}
-	if read > int64(len(data))/4 {
-		t.Errorf("read %d of %d bytes, want the sampled frames only", read, len(data))
+	for _, tc := range []struct {
+		name    string
+		bi      byte
+		kbps    int64
+		frames  int
+		maxRead int64
+	}{
+		{"128 kbit/s", 9, 128, 20000, 2 << 20},              // 8 MiB
+		{"32 kbit/s", 1, 32, 80000, mp3LowRateWalk + 1<<20}, // 8 MiB, ~35 min
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			data := bytes.Repeat(mp3Frame(tc.bi), tc.frames)
+			p, reason, read := probeBytes(t, t.Context(), data, maxProbeTime)
+			if reason != "" || p.Counted {
+				t.Fatalf("reason %q counted %v, want the estimate", reason, p != nil && p.Counted)
+			}
+			if want := printTime(rescale(int64(len(data)), 8*14112000, tc.kbps*1000), 1, 14112000); math.Abs(p.Duration-want) > 1e-5 {
+				t.Errorf("duration %v, want the bitrate's %v", p.Duration, want)
+			}
+			if read > tc.maxRead {
+				t.Errorf("read %d of %d bytes, want at most %d", read, len(data), tc.maxRead)
+			}
+		})
 	}
 }
 
