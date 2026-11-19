@@ -233,33 +233,57 @@ type OutboxDelivery struct {
 	Event    ServerEvent
 }
 
+// pendingDeliveries reads the deliveries still owed (state pending) whose event
+// is newer than NotifyOutboxRetention; scanDelivery reads one.
+const pendingDeliveries = `SELECT o.id, o.target_id, o.attempts, e.id, e.at, e.kind, e.data
+	FROM notify_outbox o JOIN server_events e ON e.id = o.event_id
+	WHERE o.state = 'pending' AND e.at >= ?`
+
+func scanDelivery(scan func(...any) error, d *OutboxDelivery) error {
+	var data []byte
+	if err := scan(&d.ID, &d.TargetID, &d.Attempts, &d.Event.ID, &d.Event.At, &d.Event.Kind, &data); err != nil {
+		return err
+	}
+	d.Event.Data = eventData(data)
+	return nil
+}
+
 // PendingDeliveries returns the deliveries still owed (state pending) for one
 // event, or for every event when eventID is 0 (the start's redelivery), oldest
-// first. An event older than NotifyOutboxRetention is passed over.
+// event first. An event older than NotifyOutboxRetention is passed over.
 func (c *Catalog) PendingDeliveries(ctx context.Context, eventID int64) ([]OutboxDelivery, error) {
-	q := `SELECT o.id, o.target_id, o.attempts, e.id, e.at, e.kind, e.data
-		FROM notify_outbox o JOIN server_events e ON e.id = o.event_id
-		WHERE o.state = 'pending' AND e.at >= ?`
+	q := pendingDeliveries
 	args := []any{formatSessionTime(c.now().Add(-NotifyOutboxRetention))}
 	if eventID != 0 {
 		q += ` AND o.event_id = ?`
 		args = append(args, eventID)
 	}
 	return queryRows(ctx, c.db, func(rows *sql.Rows, d *OutboxDelivery) error {
-		var data []byte
-		if err := rows.Scan(&d.ID, &d.TargetID, &d.Attempts, &d.Event.ID, &d.Event.At, &d.Event.Kind, &data); err != nil {
-			return err
-		}
-		d.Event.Data = eventData(data)
-		return nil
-	}, q+` ORDER BY o.id`, args...)
+		return scanDelivery(rows.Scan, d)
+	}, q+` ORDER BY o.event_id, o.id`, args...)
+}
+
+// NextDelivery returns the delivery a destination is owed first: its pending
+// row with the oldest event (the lowest event id, which is the order the
+// events were recorded in; never the clock's at, which can step back). False
+// when it is owed nothing. notify.Service sends a destination's notices in
+// this order, one at a time.
+func (c *Catalog) NextDelivery(ctx context.Context, targetID int64) (OutboxDelivery, bool, error) {
+	var d OutboxDelivery
+	err := scanDelivery(c.db.QueryRowContext(ctx,
+		pendingDeliveries+` AND o.target_id = ? ORDER BY o.event_id LIMIT 1`,
+		formatSessionTime(c.now().Add(-NotifyOutboxRetention)), targetID).Scan, &d)
+	if errors.Is(err, sql.ErrNoRows) {
+		return OutboxDelivery{}, false, nil
+	}
+	return d, err == nil, err
 }
 
 // ClaimDelivery counts one more attempt at a pending delivery that has had
 // attempts so far, and reports whether this caller has it: false when another
 // counted that attempt first (a stale copy) or it is no longer pending. It
 // orders the attempts; it doesn't stop a copy read after another's claim from
-// sending again (notify.Service.take does, within a run).
+// sending again (within a run, notify.Service's one lane per destination does).
 func (c *Catalog) ClaimDelivery(ctx context.Context, id int64, attempts int) (bool, error) {
 	res, err := c.db.ExecUserState(ctx,
 		`UPDATE notify_outbox SET attempts = attempts + 1 WHERE id = ? AND state = 'pending' AND attempts = ?`,

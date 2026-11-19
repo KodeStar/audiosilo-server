@@ -4184,20 +4184,28 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the API shows `notify.Redact`'s address and `has_secret`), `server_events` (the bell's feed, 90 days,
   `dedup_key` announces an event once while it is in the feed, an update once per version: the check
   and the record one step under `dedupMu`, so two emits at once announce it once,
-  server#408). `notify.Service.Emit` records the event and queues one
-  delivery per enabled subscribed destination (4 workers, queue 256, drop + log when full); a delivery is
+  server#408). `notify.Service.Emit` records the event and queues each
+  enabled subscribed destination (4 workers, queue 256, left owed + logged when full); a delivery is
   retried twice on timeout/unreachable/429/5xx (queued again after its delay, never waited out on a
   worker), three attempts in all, restarts included. Every delivery is kept in the **outbox**
   (`notify_outbox`, `0089`, server#465): `catalog.RecordServerEvent` writes one row per enabled subscribed
-  destination in the transaction that records the event, `notify.Service.Run` queues every row still
-  `pending` at the start and every 5 minutes after (`sweepEvery`; an event newer than
-  `catalog.NotifyOutboxRetention`, 7 days, which the daily retention prunes), passing over a row this run
-  has queued, under way or waiting out a retry's delay (`Service.take`, so the sweep and the event's own
-  `Deliver` send it once), and each attempt is counted on its row before it is made
+  destination in the transaction that records the event, `notify.Service.Run` queues every destination
+  with a row still `pending` at the start and every 5 minutes after (`sweepEvery`; an event newer than
+  `catalog.NotifyOutboxRetention`, 7 days, which the daily retention prunes). A destination has one
+  **lane** per run (`Service.lanes`, `open`/`idle`/`drop`): what is queued is the destination, and a worker
+  sends what it is owed one at a time, oldest event first (`Service.drain` over `catalog.NextDelivery`, by
+  event id), so a later notice waits while an earlier one is still owed, its retries included (up to 70 s
+  per notice ahead of it), and a destination never hears a feed recovered before it hears it failing; an
+  event's own `Deliver` only opens the lane, so it can't overtake an older owed row, and the sweep and
+  `Deliver` can't send one row twice. Destinations don't wait for each other. Each attempt is counted on
+  its row before it is made
   (`catalog.ClaimDelivery`, a compare-and-swap on `attempts`), then the row
   ends `delivered`, `failed` or `skipped` (the destination switched off or unsubscribed first; a deleted
   one takes its rows). So a notice owed when the server stopped goes to each destination once at the next
-  start, and the bell, the event itself, is never written again. A delivery dropped on a full queue waits
+  start (again only when it arrived as the server stopped, before its row ended: at least once, and a
+  webhook's `id` tells the two apart; a worker handed a destination once the stop began leaves its rows
+  owed, no attempt counted), and the bell, the event itself, is never written again. A destination left
+  behind by a full queue, or whose lane stopped on an outbox error, waits
   for the next sweep. It never follows a redirect, and records only a short reason
   (`timeout`, `unreachable`, `http_<status>`, `failed`), never the URL or the answer. Webhooks POST JSON
   with `X-AudioSilo-Event` and, with a secret, `X-AudioSilo-Timestamp` + `X-AudioSilo-Signature: sha256=`

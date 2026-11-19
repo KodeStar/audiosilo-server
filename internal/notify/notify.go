@@ -13,8 +13,15 @@
 // writes them with the event), so what was still owed when the server stopped
 // goes out at the next start (Run), and one a full queue left behind at the
 // next sweep, once per destination: the bell is the event itself and is never
-// written again, and a destination that had it is not sent it twice. A failing
-// one is tried maxAttempts times in all, restarts included.
+// written again, and a destination whose delivery ended is not sent it twice
+// (one that arrived as the server stopped, before its row ended, goes again at
+// the next start: a webhook's "id" tells the two apart). A failing one is tried
+// maxAttempts times in all, restarts included.
+//
+// One destination's notices go one at a time, in the order their events were
+// recorded (drain): a later one waits while an earlier one is still owed, its
+// retries included, so a destination never hears that a feed recovered before
+// it hears that it was failing. Destinations don't wait for each other.
 package notify
 
 import (
@@ -121,7 +128,7 @@ type Service struct {
 	log     *slog.Logger
 	version string
 	server  func() Server
-	queue   chan catalog.OutboxDelivery
+	queue   chan int64 // destinations with deliveries owed, each once (lanes)
 	delays  []time.Duration
 	sweep   time.Duration    // how often the outbox is read again (sweepEvery; tests)
 	now     func() time.Time // the clock (tests)
@@ -139,12 +146,14 @@ type Service struct {
 	// (server#408). Dedup emits are rare; one lock for all keys is enough.
 	dedupMu sync.Mutex
 
-	// owned: the outbox rows queued, under way or waiting out a retry's delay
-	// in this run, so the sweep and an event's own Deliver queue each once. A
-	// second copy read while the first's send is under way would claim the
-	// next attempt and send it again: ClaimDelivery only orders the attempts.
-	ownedMu sync.Mutex
-	owned   map[int64]struct{}
+	// lanes: the destinations queued, being sent to or waiting out a retry's
+	// delay in this run. A destination has one lane, so its notices go one at
+	// a time, oldest event first, and the sweep and an event's own Deliver
+	// never send a row twice (two readers of one row would: ClaimDelivery only
+	// orders the attempts). The value says more was asked of the lane while it
+	// was open (open), so it reads the outbox once more before it closes.
+	lanesMu sync.Mutex
+	lanes   map[int64]bool
 }
 
 // oidcPendingTaken is one oidc_pending notification raised: when, and the
@@ -169,11 +178,11 @@ func New(cat *catalog.Catalog, version string, server func() Server, log *slog.L
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 		log: log, version: version, server: server,
-		queue:  make(chan catalog.OutboxDelivery, queueSize),
+		queue:  make(chan int64, queueSize),
 		delays: retryDelays,
 		sweep:  sweepEvery,
 		now:    time.Now,
-		owned:  map[int64]struct{}{},
+		lanes:  map[int64]bool{},
 	}
 }
 
@@ -190,8 +199,8 @@ func (s *Service) Run(ctx context.Context) {
 				select {
 				case <-ctx.Done():
 					return
-				case d := <-s.queue:
-					s.deliver(ctx, d)
+				case target := <-s.queue:
+					s.drain(ctx, target)
 				}
 			}
 		}()
@@ -222,7 +231,8 @@ func (s *Service) emit(ctx context.Context, e Event, allow func() bool) {
 // Deliver queues an event already in the feed for the destinations its outbox
 // rows name (Emit's second half, and for an event recorded in the transaction
 // of the write that raised it: catalog.SetPodcastNotice). It never blocks on
-// sending: a full queue leaves the row owed until the next sweep.
+// sending: a full queue leaves the row owed until the next sweep. A
+// destination still owed an earlier event is sent that one first (drain).
 func (s *Service) Deliver(ctx context.Context, ev catalog.ServerEvent) {
 	if s == nil {
 		return
@@ -234,13 +244,13 @@ func (s *Service) Deliver(ctx context.Context, ev catalog.ServerEvent) {
 		return
 	}
 	for _, o := range owed {
-		if !s.take(o.ID) {
-			continue // the sweep has it
+		if !s.open(o.TargetID) {
+			continue // its lane is open, and reaches this row in its turn
 		}
 		select {
-		case s.queue <- o:
+		case s.queue <- o.TargetID:
 		default:
-			s.release(o.ID)
+			s.drop(o.TargetID)
 			s.log.Warn("notification queue full; a delivery waits for the next sweep", "target", o.TargetID, "kind", ev.Kind)
 		}
 	}
@@ -248,8 +258,7 @@ func (s *Service) Deliver(ctx context.Context, ev catalog.ServerEvent) {
 
 // redeliver queues what the outbox still owes, when Run starts (deliveries
 // the previous run recorded and never finished) and every sweepEvery after (a
-// delivery a full queue left behind). A row this run has queued already is
-// passed over (take).
+// delivery a full queue left behind, or one whose lane stopped on an error).
 func (s *Service) redeliver(ctx context.Context) {
 	tick := time.NewTicker(s.sweep)
 	defer tick.Stop()
@@ -263,7 +272,8 @@ func (s *Service) redeliver(ctx context.Context) {
 	}
 }
 
-// sweepOwed queues every row the outbox owes that this run doesn't have already.
+// sweepOwed queues every destination the outbox owes a delivery whose lane
+// isn't open already in this run.
 func (s *Service) sweepOwed(ctx context.Context) {
 	owed, err := s.cat.PendingDeliveries(ctx, 0)
 	if err != nil {
@@ -275,40 +285,64 @@ func (s *Service) sweepOwed(ctx context.Context) {
 	n := 0
 	defer func() {
 		if n > 0 {
-			s.log.Info("sending notifications still owed", "count", n)
+			s.log.Info("sending notifications still owed", "destinations", n)
 		}
 	}()
+	seen := map[int64]struct{}{}
 	for _, o := range owed {
-		if !s.take(o.ID) {
+		if _, ok := seen[o.TargetID]; ok {
+			continue
+		}
+		seen[o.TargetID] = struct{}{}
+		if !s.open(o.TargetID) {
 			continue
 		}
 		select {
 		case <-ctx.Done():
-			s.release(o.ID)
+			s.drop(o.TargetID)
 			return
-		case s.queue <- o:
+		case s.queue <- o.TargetID:
 			n++
 		}
 	}
 }
 
-// take marks an outbox row as this run's until release, and reports false
-// when it is already (queued, under way or waiting out a retry's delay).
-func (s *Service) take(id int64) bool {
-	s.ownedMu.Lock()
-	defer s.ownedMu.Unlock()
-	if _, ok := s.owned[id]; ok {
+// open opens a destination's lane and reports whether the caller is to queue
+// it: false when it is open already (queued, being sent to or waiting out a
+// retry's delay), and the lane is then told to read the outbox once more
+// before it closes, so a row recorded as it ends is not left for the sweep.
+func (s *Service) open(target int64) bool {
+	s.lanesMu.Lock()
+	defer s.lanesMu.Unlock()
+	if _, ok := s.lanes[target]; ok {
+		s.lanes[target] = true
 		return false
 	}
-	s.owned[id] = struct{}{}
+	s.lanes[target] = false
 	return true
 }
 
-// release lets a later read of the outbox queue the row again.
-func (s *Service) release(id int64) {
-	s.ownedMu.Lock()
-	defer s.ownedMu.Unlock()
-	delete(s.owned, id)
+// idle closes a destination's lane once it is owed nothing, and reports
+// whether it did: false when more was asked of it meanwhile (open), and the
+// caller reads the outbox again.
+func (s *Service) idle(target int64) bool {
+	s.lanesMu.Lock()
+	defer s.lanesMu.Unlock()
+	if s.lanes[target] {
+		s.lanes[target] = false
+		return false
+	}
+	delete(s.lanes, target)
+	return true
+}
+
+// drop closes a destination's lane with deliveries still owed (the server is
+// stopping, the outbox couldn't be read or written, the queue is full): a
+// later Deliver or the next sweep opens it again.
+func (s *Service) drop(target int64) {
+	s.lanesMu.Lock()
+	defer s.lanesMu.Unlock()
+	delete(s.lanes, target)
 }
 
 // maxAttempts is how many times a delivery is tried in all.
@@ -348,26 +382,81 @@ func (s *Service) Test(ctx context.Context, t catalog.NotifyTarget) string {
 	return reason
 }
 
-// deliver sends one message and records the outcome, or queues a retry.
+// drain sends what a destination is owed, oldest event first, one at a time: a
+// later notice is not sent while an earlier one is still owed, its retries
+// included, so what the destination hears last is what happened last (a feed
+// recovered after it was failing, never the other way round).
 //
-// A failure that may pass is queued again after its delay rather than waited out
-// here, so a destination that doesn't answer holds a worker for one attempt at a
-// time, never the others' deliveries. The attempt is counted in the outbox
-// before it is made, so a stop while it is under way leaves the row owed with
-// one fewer to go, and the bound holds across restarts. The row is this
-// run's (take) until it ends here, or its retry is queued.
-func (s *Service) deliver(ctx context.Context, d catalog.OutboxDelivery) {
-	retrying := false
-	defer func() {
-		if !retrying {
-			s.release(d.ID)
+// A failure that may pass is not waited out here: the lane stays open and a
+// timer queues the destination again after the delay, so one that doesn't
+// answer holds a worker for one attempt at a time, and only its own notices
+// wait. The lane closes when nothing more is owed; it is dropped, its rows
+// still owed, when the server stops or the outbox can't be read or written
+// (the next sweep opens it again).
+func (s *Service) drain(ctx context.Context, target int64) {
+	bg := context.WithoutCancel(ctx)
+	for {
+		if ctx.Err() != nil {
+			// The server is stopping: what is left stays owed, and no attempt is
+			// counted for a send that could only be cut short.
+			s.drop(target)
+			return
 		}
-	}()
+		d, ok, err := s.cat.NextDelivery(bg, target)
+		if err != nil {
+			s.log.Warn("loading a destination's next notification failed", "target", target, "err", err)
+			s.drop(target)
+			return
+		}
+		if !ok {
+			if s.idle(target) {
+				return
+			}
+			continue
+		}
+		switch wait, next := s.deliver(ctx, d); next {
+		case laneStop:
+			s.drop(target)
+			return
+		case laneRetry:
+			time.AfterFunc(wait, func() {
+				if ctx.Err() != nil {
+					s.drop(target)
+					return
+				}
+				select {
+				case s.queue <- target:
+				default:
+					s.drop(target)
+					s.log.Warn("notification queue full; a retry waits for the next sweep", "target", target, "kind", d.Event.Kind)
+				}
+			})
+			return
+		}
+	}
+}
+
+// What a lane does after a delivery (deliver).
+const (
+	laneNext  = iota // the row ended: the destination's next may go
+	laneRetry        // the row is owed another attempt after a delay
+	laneStop         // the row stays owed and the lane with it, for the next sweep or start
+)
+
+// deliver makes one attempt at a destination's oldest owed delivery and
+// records the outcome. It returns what its lane does next, and for laneRetry
+// the wait before the next attempt.
+//
+// The attempt is counted in the outbox before it is made, so a stop while it
+// is under way leaves the row owed with one fewer to go, and the bound holds
+// across restarts. A row that can't be ended stops the lane (laneStop) rather
+// than being read again at once.
+func (s *Service) deliver(ctx context.Context, d catalog.OutboxDelivery) (time.Duration, int) {
 	bg := context.WithoutCancel(ctx)
 	if d.Attempts >= s.maxAttempts() {
 		// Its last attempt began before a stop, which cut it short.
-		s.finish(bg, d, catalog.DeliveryFailed, "failed")
-		return
+		s.log.Info("notification not delivered", "target", d.TargetID, "kind", d.Event.Kind, "reason", "failed", "attempts", d.Attempts)
+		return 0, s.finish(bg, d, catalog.DeliveryFailed, "failed")
 	}
 	// A delivery goes where the destination is set to send now: not at all once
 	// it is deleted (its rows go with it), switched off or unsubscribed, and to
@@ -378,54 +467,42 @@ func (s *Service) deliver(ctx context.Context, d catalog.OutboxDelivery) {
 		if !errors.Is(err, catalog.ErrNotFound) {
 			s.log.Warn("loading a notification destination failed", "target", d.TargetID, "err", err)
 		}
-		return
+		return 0, laneStop
 	}
 	if !t.Enabled || !slices.Contains(t.Events, d.Event.Kind) {
-		s.finish(bg, d, catalog.DeliverySkipped, "")
-		return
+		return 0, s.finish(bg, d, catalog.DeliverySkipped, "")
 	}
 	if mine, err := s.cat.ClaimDelivery(bg, d.ID, d.Attempts); err != nil || !mine {
 		if err != nil {
 			s.log.Warn("claiming a notification delivery failed", "target", d.TargetID, "err", err)
 		}
-		return
+		return 0, laneStop
 	}
 	reason := s.send(ctx, *t, d.Event)
 	if reason != "" && ctx.Err() != nil {
-		return // cut short by the stop: the row stays owed for the next start
+		return 0, laneStop // cut short by the stop: the row stays owed for the next start
 	}
 	if reason != "" && retryable(reason) && d.Attempts < len(s.delays) {
-		next := d
-		next.Attempts++
-		retrying = true
-		time.AfterFunc(s.delays[d.Attempts], func() {
-			if ctx.Err() != nil {
-				s.release(d.ID)
-				return
-			}
-			select {
-			case s.queue <- next:
-			default:
-				s.release(d.ID)
-				s.log.Warn("notification queue full; a retry waits for the next sweep", "target", d.TargetID, "kind", d.Event.Kind)
-			}
-		})
-		return
+		return s.delays[d.Attempts], laneRetry
 	}
 	state := catalog.DeliveryDelivered
 	if reason != "" {
 		state = catalog.DeliveryFailed
 		s.log.Info("notification not delivered", "target", d.TargetID, "kind", d.Event.Kind, "reason", reason)
 	}
-	s.finish(bg, d, state, reason)
+	next := s.finish(bg, d, state, reason)
 	s.record(bg, d.TargetID, reason)
+	return 0, next
 }
 
-// finish ends a delivery's outbox row.
-func (s *Service) finish(ctx context.Context, d catalog.OutboxDelivery, state, reason string) {
+// finish ends a delivery's outbox row, and returns what its lane does next:
+// laneStop when the row couldn't be ended, so it is not read again at once.
+func (s *Service) finish(ctx context.Context, d catalog.OutboxDelivery, state, reason string) int {
 	if err := s.cat.FinishDelivery(ctx, d.ID, state, reason); err != nil {
 		s.log.Warn("ending a notification delivery failed", "target", d.TargetID, "err", err)
+		return laneStop
 	}
+	return laneNext
 }
 
 func (s *Service) record(ctx context.Context, id int64, reason string) {

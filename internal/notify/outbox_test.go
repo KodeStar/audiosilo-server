@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -235,5 +236,113 @@ func TestOwedNoticeGoesAtTheNextSweep(t *testing.T) {
 	waitOwedNone(t, cat)
 	if n := settle(dest); n != 1 {
 		t.Fatalf("sent %d times, want once", n)
+	}
+}
+
+// A destination a worker takes off the queue once the stop has begun keeps
+// its rows owed, and no attempt is counted for a send that could only be cut
+// short.
+func TestDeliveryTakenAtTheStopKeepsItsAttempts(t *testing.T) {
+	ctx := context.Background()
+	cat := catalog.New(storetest.Open(t), time.Now)
+	dest := newFakeDest(t)
+	tg := addTarget(t, cat, TargetWebhook, dest.srv.URL, "", KindScanFailed)
+	s := stoppedService(cat)
+	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
+	stopping, cancel := context.WithCancel(ctx)
+	cancel()
+	s.drain(stopping, tg.ID)
+	after, err := cat.PendingDeliveries(ctx, 0)
+	if err != nil || len(after) != 1 || after[0].Attempts != 0 || dest.count() != 0 {
+		t.Fatalf("after the stop: owed %+v (%v), sent %d; want the row owed with no attempt, nothing sent", after, err, dest.count())
+	}
+	if !s.open(tg.ID) {
+		t.Fatal("the stop left the destination's lane open: the next sweep would pass it over")
+	}
+}
+
+// scanFailed records a failed scan of the library named name, and returns the
+// event's id as a webhook's body carries it.
+func scanFailed(t *testing.T, s *Service, cat *catalog.Catalog, name string) float64 {
+	t.Helper()
+	ctx := context.Background()
+	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: name}, Status: catalog.RunFailed})
+	events, _, err := cat.ListServerEvents(ctx, 0, 1, KindScanFailed)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("the newest event = %+v, %v", events, err)
+	}
+	return float64(events[0].ID)
+}
+
+// A destination's owed notices go in the order their events were recorded, one
+// at a time: a later one waits for an earlier one's retry, so the destination
+// never hears the newer news first (a feed recovered, then that it is failing).
+func TestOwedNoticesGoInEventOrder(t *testing.T) {
+	cat := catalog.New(storetest.Open(t), time.Now)
+	var (
+		mu  sync.Mutex
+		got []float64
+	)
+	// The first request is refused (the older notice's first attempt), the rest
+	// are taken.
+	flaky := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		id, _ := body["id"].(float64)
+		mu.Lock()
+		got = append(got, id)
+		first := len(got) == 1
+		mu.Unlock()
+		if first {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(flaky.Close)
+	addTarget(t, cat, TargetWebhook, flaky.URL, "", KindScanFailed)
+	other := newFakeDest(t) // a second destination doesn't wait for the first's retry
+	addTarget(t, cat, TargetWebhook, other.srv.URL, "", KindScanFailed)
+
+	stopped := stoppedService(cat)
+	older := scanFailed(t, stopped, cat, "First")
+	newer := scanFailed(t, stopped, cat, "Second")
+
+	serviceRun(t, cat, 100*time.Millisecond, 100*time.Millisecond)
+	if seen := other.wait(t, 2); seen[0].body["id"] != older || seen[1].body["id"] != newer {
+		t.Fatalf("the other destination had %v then %v, want %v then %v", seen[0].body["id"], seen[1].body["id"], older, newer)
+	}
+	waitOwedNone(t, cat)
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []float64{older, older, newer}; !slices.Equal(got, want) {
+		t.Fatalf("the destination had events %v, want %v (the older one's retry before the newer one)", got, want)
+	}
+}
+
+// An event's own Deliver does not overtake an older notice the destination is
+// still owed (one a full queue left for the sweep): the older one goes first.
+func TestFreshNoticeWaitsForAnOlderOwedOne(t *testing.T) {
+	cat := catalog.New(storetest.Open(t), time.Now)
+	dest := newFakeDest(t)
+	addTarget(t, cat, TargetWebhook, dest.srv.URL, "", KindScanFailed)
+	s := newTestService(cat)
+	s.sweep = time.Hour // only the start's read, which finds nothing owed
+	runCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	s.Run(runCtx)
+	time.Sleep(20 * time.Millisecond)
+
+	// Recorded by a service whose queue no one reads: owed, and not queued here.
+	older := scanFailed(t, stoppedService(cat), cat, "First")
+	newer := scanFailed(t, s, cat, "Second")
+
+	seen := dest.wait(t, 2)
+	if seen[0].body["id"] != older || seen[1].body["id"] != newer {
+		t.Fatalf("the destination had %v then %v, want %v then %v", seen[0].body["id"], seen[1].body["id"], older, newer)
+	}
+	waitOwedNone(t, cat)
+	if n := settle(dest); n != 2 {
+		t.Fatalf("sent %d times, want 2", n)
 	}
 }

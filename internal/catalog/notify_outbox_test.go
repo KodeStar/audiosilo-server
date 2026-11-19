@@ -130,3 +130,52 @@ func TestNotifyOutboxPassesOverUnreadableEvents(t *testing.T) {
 		t.Fatalf("owed = %+v, %v; want none", owed, err)
 	}
 }
+
+// A destination is owed its oldest event first, whatever the others are owed,
+// and nothing once its rows have ended.
+func TestNextDeliveryIsTheOldestEventOwed(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	add := func(events ...string) int64 {
+		t.Helper()
+		tg, err := c.CreateNotifyTarget(ctx, NotifyTarget{Kind: "webhook", Name: "w", URL: "http://x", Enabled: true, Events: events})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tg.ID
+	}
+	both, late := add("scan_failed", "book_added"), add("book_added")
+	var ids []int64
+	for _, kind := range []string{"scan_failed", "book_added", "book_added"} {
+		ev, err := c.RecordServerEvent(ctx, kind, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, ev.ID)
+	}
+	next := func(target int64) int64 {
+		t.Helper()
+		d, ok, err := c.NextDelivery(ctx, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			return 0
+		}
+		if d.TargetID != target {
+			t.Fatalf("a delivery owed to %d was read for %d", d.TargetID, target)
+		}
+		if err := c.FinishDelivery(ctx, d.ID, DeliveryDelivered, ""); err != nil {
+			t.Fatal(err)
+		}
+		return d.Event.ID
+	}
+	if a, b := next(late), next(late); a != ids[1] || b != ids[2] {
+		t.Fatalf("the later destination was owed %d then %d, want %d then %d", a, b, ids[1], ids[2])
+	}
+	for i, want := range append(ids, 0) {
+		if got := next(both); got != want {
+			t.Fatalf("delivery %d to the first destination was event %d, want %d", i, got, want)
+		}
+	}
+}
