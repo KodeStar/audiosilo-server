@@ -1283,10 +1283,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`linkKind`), and another reparse point that doesn't read as one is a plain name
   (`TestJoinLinkThroughTheRootAsConfigured`, `TestResolveBelowJunction`). So a link out of the root ends the walk where it is met, nothing below it listed and its
   target never looked at: the stream answers a file through it in every form as a missing file (`noFile`),
-  `/fs` "directory not found", whatever it points to, there or not, on a mount that answers, hangs or fails
+  `/fs` "directory not found", a route that resolves a book on demand (`/item`: `indexOnDemand`) "no book at
+  that path", whatever it points to, there or not, on a mount that answers, hangs or fails
   (`TestFSLinkOutOfRootIsMissing`, `TestStreamLinkOutOfRootOnAHeldShare`,
-  `TestSafeJoinListedLinkFaultOutOfRoot`); only a path that climbs out by its names is the stream's 400
-  `invalid path`. `resolveBelow` returns such a link's own target, never joined with
+  `TestSafeJoinListedLinkFaultOutOfRoot`); the 400 `invalid path` is left to a path that climbs out by its names,
+  as `/fs` can be sent (`BrowseFS` joins the path as sent; the stream's is cleaned first, `relpath.Clean`,
+  and never climbs). `resolveBelow` returns such a link's own target, never joined with
   the names after it, so `SafeJoin` too refuses every path through it: joined, a link to a folder above
   the root (`up/<root>/Book/link/x`) read as a path back inside the root, a link out of it further down
   never looked at (`TestResolveBelowIsResolveExisting`). `/fs` looks before it reads the folder (after,

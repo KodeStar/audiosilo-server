@@ -470,6 +470,11 @@ func TestFSLinkOutOfRootIsMissing(t *testing.T) {
 			c.same(t, c.samTok, "GET", c.get("stream", form), p, "Nowhere/01.mp3")
 		}
 	}
+	// So does a route that resolves a book (/item, read on demand): the 404
+	// of a path with nothing there, never a 400 telling the link is one.
+	for _, p := range []string{"Out", "Out/present", "Out/present/01.mp3", "Gone"} {
+		c.same(t, c.samTok, "GET", c.get("item"), p, "Nowhere")
+	}
 	mu.Lock()
 	for _, d := range dirs {
 		if strings.HasPrefix(d, outside) {

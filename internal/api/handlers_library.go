@@ -491,14 +491,25 @@ func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catal
 // a folder it has would cost a stat and the folders' listings where a missing
 // path costs one failed look; here the two take the same steps, so how long
 // the 404 takes never tells a rule spelled in another case that the folder is
-// there, on any route that resolves a book (bookAt, a favourite).
+// there, on any route that resolves a book (bookAt, a favourite). A path
+// through a link out of the root (library.ErrOutsideRoot: path is cleaned, so
+// its names never climb out) is a path with nothing there too, the 404 the
+// stream and /fs answer it with, never a 400 that would tell the link is one.
 func (a *API) indexOnDemand(ctx context.Context, lib *catalog.Library, path string, allow func(string) bool) (*catalog.Book, error) {
-	if _, there, err := library.SafeJoinListed(ctx, lib.Root, path, a.fileWait, a.listed.Names); err != nil {
+	_, there, err := library.SafeJoinListed(ctx, lib.Root, path, a.fileWait, a.listed.Names)
+	switch {
+	case errors.Is(err, library.ErrOutsideRoot):
+		return nil, library.ErrNotIndexable
+	case err != nil:
 		return nil, err
-	} else if !there {
+	case !there:
 		return nil, library.ErrNotIndexable
 	}
-	return a.indexPath(a.lookCtx(ctx), *lib, path, allow)
+	b, err := a.indexPath(a.lookCtx(ctx), *lib, path, allow)
+	if errors.Is(err, library.ErrOutsideRoot) { // a link put there since the look above
+		return nil, library.ErrNotIndexable
+	}
+	return b, err
 }
 
 // lookCtx is ctx for a read of a book a request asked for (an on-demand index,
