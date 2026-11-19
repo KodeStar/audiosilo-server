@@ -192,3 +192,55 @@ func TestTagHintsWaitForAFailingProbe(t *testing.T) {
 		t.Fatalf("hints after the next scan: %d books, want the book's", n)
 	}
 }
+
+// A book whose hints wait on an ffprobe that rejects its file's data, where
+// the index had read it, is not read for them again on every scan: the same
+// bytes are rejected again (server#318). An I/O error may pass, so the book
+// read so is read again (TestTagHintsWaitForAFailingProbe). Once the book is
+// indexed again (an admin's Re-read, its files changed) it is read as ever.
+func TestTagHintsRememberARejectingProbe(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	cat, lib, db, healthy := uncheckedHints(t, "One")
+	log := filepath.Join(t.TempDir(), "log")
+	rejecting := stubProbe(t, fmt.Sprintf(`for f; do :; done; echo run >> %q
+echo "[mov @ 0x1] moov atom not found" >&2; echo "$f: Invalid data found when processing input" >&2; exit 1`, log))
+	s := NewScanner(cat, rejecting, slog.Default())
+	runs := func() int {
+		t.Helper()
+		got, err := os.ReadFile(log)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		return strings.Count(string(got), "run")
+	}
+	failed := func() bool {
+		t.Helper()
+		sigs, err := cat.Signatures(ctx, lib.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sigs["Herbert/One"].TagReadFailed
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if n := runs(); n != 1 || !failed() || countHinted(t, db) != 0 {
+		t.Fatalf("first scan: %d ffprobe runs, remembered %t, hinted %d; want one rejected read remembered, the hints waiting", n, failed(), countHinted(t, db))
+	}
+	for range 2 {
+		if _, err := s.Scan(ctx, *lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := runs(); n != 1 {
+		t.Errorf("ffprobe ran %d times over three scans, want the one: the rejection is remembered", n)
+	}
+
+	if _, err := NewScanner(cat, healthy, slog.Default()).ReindexPath(ctx, *lib, "Herbert/One"); err != nil {
+		t.Fatal(err)
+	}
+	if failed() || countHinted(t, db) != 1 {
+		t.Errorf("after a Re-read: remembered %t, hinted %d; want the book read, nothing remembered", failed(), countHinted(t, db))
+	}
+}

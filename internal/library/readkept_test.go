@@ -74,9 +74,17 @@ func TestReindexWithOnlyTagsCutShortKeepsTheLengthsRead(t *testing.T) {
 		}
 		return md
 	}
+	// Its lengths of an older revision, too (as an older server left them).
+	if _, err := db.ExecContext(ctx, `UPDATE books SET duration_rev = 0`); err != nil {
+		t.Fatal(err)
+	}
 	res, err := s.Scan(ctx, *lib)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The lengths taken are today's revision's (server#452).
+	if sigs, err := cat.Signatures(ctx, lib.ID); err != nil || sigs[book].DurationStale {
+		t.Errorf("lengths taken: stale %t, %v; want today's revision recorded", sigs[book].DurationStale, err)
 	}
 	got := read()
 	if got.title != first.title || got.mtime != first.mtime || got.problem != problemUnreadable || got.detail != tagsUnreadDetail {

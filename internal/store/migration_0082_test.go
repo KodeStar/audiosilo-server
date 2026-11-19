@@ -10,6 +10,7 @@ import (
 // own format or a part's, starts at the lengths' revision 1 with its own
 // indexed_at, so the scan never looks for its MP3 parts again; a book holding
 // an MP3 starts at 0 with none, so the next scan reads it once more (SRV-16).
+// (0091 then moves the books with no MP3 on to revision 2.)
 func TestMigration0082StartsBooksWithNoMP3AtRevision1(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -31,7 +32,7 @@ func TestMigration0082StartsBooksWithNoMP3AtRevision1(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 	got := lines(t, db, `SELECT rel_path || ' ' || duration_rev || ' ' || COALESCE(duration_rev_indexed_at, '-')
 		FROM books ORDER BY rel_path`)
-	want := []string{"Loose.m4b 1 i2", "Loose.mp3 0 -", "Mixed 0 -", "Parts 1 i4"}
+	want := []string{"Loose.m4b 2 i2", "Loose.mp3 0 -", "Mixed 0 -", "Parts 2 i4"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("revisions:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}

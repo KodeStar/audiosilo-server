@@ -130,6 +130,26 @@ func (c *Catalog) StampScannedRev(ctx context.Context, libraryID int64, paths []
 	})
 }
 
+// SetTagReadFailed records, by path, the books whose backfill read found
+// ffprobe rejecting their primary file (Signature.TagReadFailed), each with
+// the indexed_at the scan read its row at: a row indexed since (its files
+// read again) is left as it is. One transaction.
+func (c *Catalog) SetTagReadFailed(ctx context.Context, libraryID int64, indexedAt map[string]string) error {
+	if len(indexedAt) == 0 {
+		return nil
+	}
+	return c.db.WithTx(ctx, "SetTagReadFailed", func(tx *sql.Tx) error {
+		for relPath, at := range indexedAt {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE books SET tag_read_failed_at = indexed_at WHERE library_id = ? AND rel_path = ? AND indexed_at = ?`,
+				libraryID, relPath, at); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // pathReadingBatch is how many books one SetPathReading transaction rewrites, so
 // a large backfill never holds the writer for long.
 const pathReadingBatch = 250

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,5 +121,150 @@ func TestScanRereadsAnUncountedLength(t *testing.T) {
 	}
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 0 {
 		t.Errorf("fourth scan = %+v, %v; want the book left be", res, err)
+	}
+}
+
+// readCounter wraps a scanner's file reads: it counts each path's reads, and
+// cuts short (metadata.UnreadForTests) those of the paths in cut while it holds
+// them.
+type readCounter struct {
+	mu    sync.Mutex
+	reads map[string]int
+	cut   map[string]bool
+}
+
+func (c *readCounter) read(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+	c.mu.Lock()
+	c.reads[filepath.Base(p)]++
+	cut := c.cut[filepath.Base(p)]
+	c.mu.Unlock()
+	if cut {
+		return metadata.UnreadForTests(p, false)
+	}
+	return extractFile(ctx, root, p, ffprobe, timeout)
+}
+
+func (c *readCounter) count(name string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reads[name]
+}
+
+func (c *readCounter) setCut(name string, on bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cut[name] = on
+}
+
+// A book of an older length revision whose read is cut short (a part on a
+// share that stopped answering) is kept as stored, its problem recorded, and
+// read again only once that part answers (problemCleared), not every part on
+// every scan for the revision (server#452); once it answers the book is read
+// and its revision recorded, and the scan after leaves it be.
+func TestStaleCutShortBookWaitsForItsProblem(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	fixture := filepath.Join("..", "metadata", "testdata", "probe", "lame-vbr-noxing.mp3")
+	copyFixture(t, fixture, filepath.Join(root, "Author", "Book", "01.mp3"))
+	copyFixture(t, fixture, filepath.Join(root, "Author", "Book", "02.mp3"))
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewScanner(cat, "", slog.Default())
+	c := &readCounter{reads: map[string]int{}, cut: map[string]bool{}}
+	s.readFile = c.read
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Added != 1 {
+		t.Fatalf("first scan = %+v, %v", res, err)
+	}
+	stale := func() bool {
+		t.Helper()
+		sigs, err := cat.Signatures(ctx, lib.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sigs["Author/Book"].DurationStale
+	}
+
+	// As an older server left it, and its second part's reads now hang.
+	if _, err := db.ExecContext(ctx, `UPDATE books SET duration_rev = 0`); err != nil {
+		t.Fatal(err)
+	}
+	c.setCut("02.mp3", true)
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	var problem string
+	if err := db.QueryRowContext(ctx, `SELECT scan_error FROM books`).Scan(&problem); err != nil || problem != problemUnreadable {
+		t.Fatalf("problem %q, %v; want the cut-short part's", problem, err)
+	}
+	if !stale() {
+		t.Fatal("a read cut short recorded the revision")
+	}
+	first := c.count("01.mp3")
+	for range 2 {
+		if _, err := s.Scan(ctx, *lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := c.count("01.mp3"); n != first {
+		t.Errorf("the first part read %d more times while the second still hangs, want none: only the problem's part is looked at", n-first)
+	}
+
+	c.setCut("02.mp3", false)
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 1 {
+		t.Fatalf("scan once the part answers = %+v, %v; want the book read", res, err)
+	}
+	if stale() {
+		t.Error("read whole: revision not recorded")
+	}
+	first = c.count("01.mp3")
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Updated != 0 || c.count("01.mp3") != first {
+		t.Errorf("scan after = %+v, %v; want the book left be", res, err)
+	}
+}
+
+// A scan's tag backfill of a book it found unchanged (here its tag hints)
+// records no length, so it counts no frames of a header-less VBR MP3, which
+// reads the whole file (metadata.WithoutFrameCount, server#452): its read
+// gives the bitrate's estimate, where the index counted them.
+func TestTagBackfillCountsNoFrames(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db, _, lib, s := headerlessBook(t)
+	var mu sync.Mutex
+	var lengths []float64
+	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		md := extractFile(ctx, root, p, ffprobe, timeout)
+		mu.Lock()
+		lengths = append(lengths, md.Duration)
+		mu.Unlock()
+		return md
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE books SET hints_checked = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lengths) != 2 {
+		t.Fatalf("%d reads, want the index's and the backfill's", len(lengths))
+	}
+	if d := lengths[0]; d < headerlessSecs-0.001 || d > headerlessSecs+0.001 {
+		t.Errorf("the index read %v, want the frames counted, %v", d, headerlessSecs)
+	}
+	if d := lengths[1]; d <= 0 || (d > headerlessSecs-0.001 && d < headerlessSecs+0.001) {
+		t.Errorf("the backfill read %v, want the bitrate's estimate, no count", d)
+	}
+	if d := bookDuration(t, db); d < headerlessSecs-0.001 || d > headerlessSecs+0.001 {
+		t.Errorf("stored duration %v after the backfill, want the counted %v kept", d, headerlessSecs)
 	}
 }
