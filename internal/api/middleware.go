@@ -269,7 +269,10 @@ func clientIP(r *http.Request) string {
 // the general bucket, keyed by address because it runs before authentication: it
 // bounds the work done (token lookups included) for a caller nobody has
 // identified yet, and the sign-in, pairing and account routes, which a token must
-// not take out of their address's budget.
+// not take out of their address's budget. The Bridge's routes spend from a
+// bucket of their own per address (bridgeLimiter, the address bucket's rate
+// and burst): a Bridge behind the address busy players share (one host, a
+// proxy) is not refused for their requests, nor they for its (server#179).
 func (a *API) rateLimit(mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h, pattern := mux.Handler(r)
@@ -286,14 +289,28 @@ func (a *API) rateLimit(mux *http.ServeMux, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !a.ipLimiter.Allow(ip) {
-			rateLimited(w, a.ipLimiter.Wait(ip))
+		if l := a.addressLimiter(pattern); !l.Allow(ip) {
+			rateLimited(w, l.Wait(ip))
 			return
 		}
 		// Said in the context, so requireAuth never limits this request a second
 		// time, and limits per credential any request this did not limit.
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), addressChargedKey, true)))
 	})
+}
+
+// bridgeRoutes is the prefix of the Bridge's routes (its token's, and its
+// pairing's), limited per address by bridgeLimiter.
+const bridgeRoutes = "/api/v1/bridge/"
+
+// addressLimiter is the per-address bucket the route the mux picked (its
+// pattern) spends from in rateLimit: bridgeLimiter for the Bridge's routes,
+// ipLimiter for the rest.
+func (a *API) addressLimiter(pattern string) *rateLimiter {
+	if _, p, _ := strings.Cut(pattern, " "); strings.HasPrefix(p, bridgeRoutes) {
+		return a.bridgeLimiter
+	}
+	return a.ipLimiter
 }
 
 // addressCharged reports whether rateLimit spent r from its address's bucket.

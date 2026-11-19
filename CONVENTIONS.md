@@ -2994,8 +2994,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ~50000/s burst 100000, per credential id) and charges the address's bucket when that
   refuses it (the lookup was already done), except that a demo account's API and media
   requests spend from the address's bucket (`allowCredential`: anyone can mint a demo
-  session, so a per-token budget would be none); everything else (public routes, the
-  Bridge's `/api/v1/bridge/*`, and `/api/v1/auth/*` with or without a token: sign-in,
+  session, so a per-token budget would be none); the Bridge's `/api/v1/bridge/*` spends from
+  `bridgeLimiter`, a bucket per IP of its own at the address bucket's rate and burst (`addressLimiter`), so
+  a Bridge behind the address busy players share is not refused for their requests, nor they for its
+  (server#179); everything else (public routes and `/api/v1/auth/*` with or without a token: sign-in,
   pairing, password, API keys) spends from `ipLimiter` (~50/s, burst 200, per IP), but `/healthz` and
   `/api/v1/healthz` (`healthPatterns`), which spend nothing: a container's healthcheck asks from the loopback
   address an untrusted proxy on the same host shares with everyone, and one probe answers every request

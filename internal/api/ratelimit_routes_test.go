@@ -30,7 +30,7 @@ func newRouteLimitEnv(t *testing.T) *routeLimitEnv {
 	t.Helper()
 	e := newTestEnv(t)
 	now := time.Now()
-	for _, l := range []*rateLimiter{e.api.ipLimiter, e.api.tokenLimiter, e.api.mediaLimiter} {
+	for _, l := range []*rateLimiter{e.api.ipLimiter, e.api.bridgeLimiter, e.api.tokenLimiter, e.api.mediaLimiter} {
 		l.now = func() time.Time { return now }
 	}
 	re := &routeLimitEnv{testEnv: e, h: e.api.Handler()}
@@ -281,6 +281,47 @@ func TestRateLimitGeneralBurst(t *testing.T) {
 	}
 	if code := e.get("192.0.2.41", "/api/v1/server", ""); code != http.StatusOK {
 		t.Fatalf("API call from another address = %d, want 200", code)
+	}
+}
+
+// The Bridge's routes spend from a bucket of their own per address
+// (server#179): with the players' bucket of an address spent, the Bridge
+// behind it is still served (allowed), and its own bucket spent, it is refused
+// (denied, with Retry-After) while the players behind it are not.
+func TestRateLimitBridgeRoutesOwnBucket(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	e.api.ipLimiter.burst, e.api.bridgeLimiter.burst = 2, 2
+	const players, bridge = "192.0.2.50", "192.0.2.51"
+	marker := "/api/v1/bridge/libraries/1/marker"
+	for range 2 {
+		if code := e.get(players, "/api/v1/server", ""); code != http.StatusOK {
+			t.Fatalf("API call within the burst = %d, want 200", code)
+		}
+	}
+	if code := e.get(players, "/api/v1/server", ""); code != http.StatusTooManyRequests {
+		t.Fatalf("API call past the burst = %d, want 429", code)
+	}
+	for i := range 2 {
+		if code := e.get(players, marker, ""); code == http.StatusTooManyRequests {
+			t.Fatalf("Bridge call %d with the players' bucket spent = 429", i)
+		}
+	}
+	if code := e.get(players, marker, ""); code != http.StatusTooManyRequests {
+		t.Fatalf("Bridge call past its own burst = %d, want 429", code)
+	}
+
+	for range 3 {
+		_ = e.get(bridge, marker, "")
+	}
+	if code := e.get(bridge, marker, ""); code != http.StatusTooManyRequests {
+		t.Fatalf("Bridge call past its burst = %d, want 429", code)
+	}
+	if code := e.serve(bridge, http.MethodPost, "/api/v1/bridge/pair", "", "{}"); code != http.StatusTooManyRequests {
+		t.Fatalf("pairing past the Bridge's burst = %d, want 429", code)
+	}
+	if code := e.get(bridge, "/api/v1/server", ""); code != http.StatusOK {
+		t.Fatalf("API call with the Bridge's bucket spent = %d, want 200", code)
 	}
 }
 

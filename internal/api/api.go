@@ -173,6 +173,7 @@ type API struct {
 	demoLimiter    *limiter     // per-IP cap on demo account creation
 	accountLimiter *limiter     // per-IP cap on self-service password/recovery mutations
 	ipLimiter      *rateLimiter // general request rate, per IP (see rateLimit)
+	bridgeLimiter  *rateLimiter // the Bridge's routes, per IP, apart from ipLimiter (see rateLimit)
 	tokenLimiter   *rateLimiter // authenticated API rate, per credential (see requireAuth)
 	mediaLimiter   *rateLimiter // authenticated media rate, per credential (see requireMediaAuth)
 	// health is /healthz's database probe, shared by the requests within
@@ -333,6 +334,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		accountLimiter:    newLimiter(10, 15*time.Minute), // ≤10 password/recovery mutations per IP / 15 min
 		// Per IP, then per credential (config rate_limit.*).
 		ipLimiter:      newBucketLimiter(limits.Address),
+		bridgeLimiter:  newBucketLimiter(limits.Address),
 		tokenLimiter:   newBucketLimiter(limits.Token),
 		mediaLimiter:   newBucketLimiter(limits.Media),
 		castKeepEvery:  auth.CastTouchInterval,
