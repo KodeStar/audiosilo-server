@@ -899,9 +899,11 @@ func podcastShowSignature(l podcastLooks, dir string, info os.FileInfo) (string,
 
 // podcastBarrier is nil when an episode is published: no publish marker beside
 // it in the show's .audiosilo folder. A look that fails as a share does that a
-// retry may get past is a look given up on (podcastLookErr); any other answer
-// but no marker is ErrNotIndexable. lstat is its look: podcastLstat inside
-// OpenPodcast's one bounded call, a scan's bounded one (podcastLooks.lstat).
+// retry may get past is a look given up on, one refused for good
+// ErrShowRefused (podcastShowLookErr: a new download would not mend it); any
+// other answer but no marker is ErrNotIndexable. lstat is its look:
+// podcastLstat inside OpenPodcast's one bounded call, a scan's bounded one
+// (podcastLooks.lstat).
 func podcastBarrier(lstat func(string) (os.FileInfo, error), dir, base string) error {
 	side := filepath.Join(dir, metadata.AttachmentsDir)
 	st, err := lstat(side)
@@ -909,7 +911,7 @@ func podcastBarrier(lstat func(string) (os.FileInfo, error), dir, base string) e
 	case metadata.NotExist(err):
 		return nil
 	case err != nil:
-		return podcastLookErr(err)
+		return podcastShowLookErr(err)
 	case !st.IsDir():
 		return ErrNotIndexable
 	}
@@ -918,7 +920,7 @@ func podcastBarrier(lstat func(string) (os.FileInfo, error), dir, base string) e
 	case metadata.NotExist(err):
 		return nil
 	case err != nil:
-		return podcastLookErr(err)
+		return podcastShowLookErr(err)
 	}
 	return ErrNotIndexable
 }

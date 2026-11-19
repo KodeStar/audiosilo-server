@@ -575,8 +575,10 @@ func setFeedTime(t testing.TB, filename string, at time.Time) {
 // 503 share_not_answering), never the episode absent (ErrNotIndexable), which
 // would ask the Bridge to fetch an episode the library holds. Denied the 503:
 // a permission is ErrEpisodeRefused (the stream's 404, no fetch), the file
-// gone ErrNotIndexable and no refusal. Allowed: with every look answering the
-// episode opens. Not parallel: it swaps podcastLstat.
+// gone ErrNotIndexable and no refusal; a permission above the file (the
+// folder, feed.json, the barrier) is ErrShowRefused, the file's own not.
+// Allowed: with every look answering the episode opens. Not parallel: it
+// swaps podcastLstat.
 func TestOpenPodcastReadsAShareFault(t *testing.T) {
 	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
 	ep := f.Episodes[0]
@@ -614,6 +616,12 @@ func TestOpenPodcastReadsAShareFault(t *testing.T) {
 			}
 			if refused := errors.Is(err, ErrEpisodeRefused); refused != (c.errno == syscall.EACCES) {
 				t.Errorf("%s failing %v: %v, refused for good %v, want it only for the permission", at, c.errno, err, refused)
+			}
+			// Above the file (the folder, feed.json, the barrier) a refusal
+			// is the show's, which no new download mends; the file's own is
+			// not.
+			if show := errors.Is(err, ErrShowRefused); show != (c.errno == syscall.EACCES && at != audio) {
+				t.Errorf("%s failing %v: %v, the show refused %v, want it for a permission above the file only", at, c.errno, err, show)
 			}
 		}
 	}
