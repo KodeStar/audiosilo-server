@@ -15,7 +15,7 @@ import {
   type OverrideField,
   type PairToken,
 } from '@/api/types';
-import { isOpen } from '@/features/bridge/bridge-model';
+import { detectChosenNote, detectRowJob } from '@/features/health/issues-model';
 import { hasIdentifier } from '@/features/library/series/series-model';
 import { formatSeriesPosition } from '@/lib/format';
 import { checkLabels, labelsText } from '@/lib/labels';
@@ -388,21 +388,21 @@ export function fileStrip(files: AdminFile[], bookPath: string) {
   }));
 }
 
+/**
+ * How long a book with fewer than two chapters runs before Health lists it under
+ * books without chapters: catalog/issues.go's longWithoutChapters, two hours.
+ */
+const LONG_WITHOUT_CHAPTERS = 2 * 3600;
+
 /** Chapters worth a plain warning: none, or one that runs over two hours. */
 export function chapterProblem(
   chapters: AdminChapter[],
   duration: number,
 ): 'none' | 'single' | undefined {
   if (chapters.length === 0) return 'none';
-  if (chapters.length === 1 && duration > 2 * 3600) return 'single';
+  if (chapters.length === 1 && duration > LONG_WITHOUT_CHAPTERS) return 'single';
   return undefined;
 }
-
-/**
- * How long a book with fewer than two chapters runs before Health lists it under
- * books without chapters: catalog/issues.go's longWithoutChapters, two hours.
- */
-export const LONG_WITHOUT_CHAPTERS = 2 * 3600;
 
 /**
  * The Chapters card's chapter detection (BRIDGE-08), as the read-along card
@@ -422,11 +422,15 @@ export function detectCard(
 ): { job?: BridgeJob; offer: boolean } | undefined {
   const lacking =
     detail.book.duration > LONG_WITHOUT_CHAPTERS && (detail.chapters ?? []).length < 2;
-  const open = job !== undefined && isOpen(job.state);
-  const shown =
-    job && (open || job.state === 'failed' || (job.state === 'done' && lacking)) ? job : undefined;
-  const offer =
-    canDetect && lacking && !open && detail.chapter_source !== 'edited' && !detail.chapter_choice;
+  // Health's row rules (detectRowJob, detectChosenNote), with a done job shown
+  // only while the book still lacks chapters.
+  const row = detectRowJob(job);
+  const shown = row && (row.job.state !== 'done' || lacking) ? row.job : undefined;
+  const chosen = detectChosenNote('detect', {
+    chapters_source: detail.chapter_source,
+    chapter_choice: detail.chapter_choice || undefined,
+  });
+  const offer = canDetect && lacking && !row?.open && !chosen;
   return shown || offer ? { job: shown, offer } : undefined;
 }
 

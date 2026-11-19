@@ -1,4 +1,5 @@
-import type { AdminBookDetail, AdminChapter, AdminFile, BridgeJob } from '@/api/types';
+import type { AdminBookDetail, AdminChapter, AdminFile } from '@/api/types';
+import { bridgeJob } from '@/test/fixtures';
 import { bookDetail } from '@/test/library-fixtures';
 import {
   chapterProblem,
@@ -201,28 +202,6 @@ describe('chapter ribbon', () => {
   });
 });
 
-const detectJob = (over: Partial<BridgeJob> = {}): BridgeJob => ({
-  id: 1,
-  kind: 'chapters.detect',
-  library_id: 1,
-  path: 'Mosse/The Black Gate',
-  params: {},
-  state: 'queued',
-  progress: {},
-  result: {},
-  error: '',
-  requested_by: null,
-  priority: 0,
-  attempts: 0,
-  lease_until: null,
-  cancel_requested: false,
-  created_at: '2026-11-19T09:00:00Z',
-  updated_at: '2026-11-19T09:00:00Z',
-  claimed_at: null,
-  finished_at: null,
-  ...over,
-});
-
 describe('detectCard (BRIDGE-08)', () => {
   const long = (over: Partial<AdminBookDetail> = {}) => {
     const d = bookDetail(over);
@@ -243,17 +222,17 @@ describe('detectCard (BRIDGE-08)', () => {
   });
 
   it("shows the job while it's open, holding the offer back, and how it ended while chapters are still missing", () => {
-    const queued = detectJob();
+    const queued = bridgeJob();
     expect(detectCard(long(), queued, true)).toEqual({ job: queued, offer: false });
-    const parked = detectJob({ state: 'needs_attention' });
+    const parked = bridgeJob({ state: 'needs_attention' });
     expect(detectCard(long(), parked, false)).toEqual({ job: parked, offer: false });
-    const failed = detectJob({ state: 'failed', error: 'no audio' });
+    const failed = bridgeJob({ state: 'failed', error: 'no audio' });
     expect(detectCard(long(), failed, true)).toEqual({ job: failed, offer: true });
-    const done = detectJob({ state: 'done' });
+    const done = bridgeJob({ state: 'done' });
     expect(detectCard(long(), done, true)).toEqual({ job: done, offer: true });
     // Done with the chapters in place: nothing to say. Cancelled: only the offer.
     expect(detectCard(bookDetail({ book: { ...long().book } }), done, true)).toBeUndefined();
-    expect(detectCard(long(), detectJob({ state: 'cancelled' }), true)).toEqual({
+    expect(detectCard(long(), bridgeJob({ state: 'cancelled' }), true)).toEqual({
       job: undefined,
       offer: true,
     });

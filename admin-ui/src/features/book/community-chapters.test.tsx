@@ -4,7 +4,7 @@ import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type { AdminBookDetail, BridgeJob, CommunityChapters } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
-import { serverInfo } from '@/test/fixtures';
+import { bridgeJob, serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -326,26 +326,11 @@ describe('chapter detection on the book page (BRIDGE-08)', () => {
     const d = bookDetail();
     return { ...d, book: { ...d.book, duration: 5 * 3600 }, chapters: d.chapters.slice(0, 1) };
   };
-  const queued: BridgeJob = {
+  const queued = bridgeJob({
     id: 42,
-    kind: 'chapters.detect',
-    library_id: 1,
     path: BOOK_PATH,
-    params: {},
-    state: 'queued',
-    progress: {},
-    result: {},
-    error: '',
     requested_by: { id: 1, username: 'chris' },
-    priority: 0,
-    attempts: 0,
-    lease_until: null,
-    cancel_requested: false,
-    created_at: '2026-11-19T09:00:00Z',
-    updated_at: '2026-11-19T09:00:00Z',
-    claimed_at: null,
-    finished_at: null,
-  };
+  });
 
   it('offers Detect chapters, queues it, then shows the job in place of the offer', async () => {
     let jobs: BridgeJob[] = [];

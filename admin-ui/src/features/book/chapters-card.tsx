@@ -249,10 +249,7 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
             </JobActions>
           </div>
         ) : null}
-        <DetectChaptersDialog
-          books={detecting ? [b] : null}
-          onOpenChange={(open) => setDetecting(open)}
-        />
+        <DetectChaptersDialog books={detecting ? [b] : null} onOpenChange={setDetecting} />
         <CommunityChapters detail={detail} />
         {detail.chapter_source === 'generated' || sourceAction ? (
           <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
