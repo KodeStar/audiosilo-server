@@ -150,26 +150,31 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 	// edit keeping its root (a rename, a setting, config sync's every start)
 	// keeps the pairs it was stored with, and a pair stored before the check
 	// knew links, case or volume roots, or made by a link since, is the warning
-	// at start (RootOverlaps) rather than a refusal of every other edit.
-	moved := existing.Root != before.Root
+	// at start (RootOverlaps) rather than a refusal of every other edit. The
+	// links are resolved here, before the writer, for an edit that names a new
+	// root; whether the root it writes is new is read inside the transaction
+	// (below), as the source is.
 	var resolved map[string]string
-	if moved {
+	if existing.Root != before.Root {
 		if resolved, err = c.resolveRoots(ctx, *existing); err != nil {
 			return nil, false, err
 		}
 	}
 	err = c.db.WithTx(ctx, "UpdateLibrary", func(tx *sql.Tx) error {
-		if moved {
-			if _, err := checkLibraryRoot(ctx, tx, *existing, resolved); err != nil {
-				return err
-			}
-		}
-		var stored string
-		if err := tx.QueryRowContext(ctx, `SELECT metadata_source FROM libraries WHERE id = ?`, id).
-			Scan(&stored); errors.Is(err, sql.ErrNoRows) {
+		var stored, storedRoot string
+		if err := tx.QueryRowContext(ctx, `SELECT metadata_source, root FROM libraries WHERE id = ?`, id).
+			Scan(&stored, &storedRoot); errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		} else if err != nil {
 			return err
+		}
+		// Against the stored root, not the earlier read: an edit that raced
+		// this one may have moved the library since, and the root this one
+		// writes back (the one it read) is then a move too, checked as written.
+		if existing.Root != storedRoot {
+			if _, err := checkLibraryRoot(ctx, tx, *existing, resolved); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE libraries SET name = ?, root = ?, default_view = ?, scan_schedule = ?, ignore_patterns = ?,

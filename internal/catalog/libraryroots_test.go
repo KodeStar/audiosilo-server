@@ -136,3 +136,35 @@ func TestPodcastRootOverlapThroughLinks(t *testing.T) {
 		t.Errorf("a move of it to another folder inside the books: %v", err)
 	}
 }
+
+// An edit judges whether it moves the root against the root stored when it
+// writes, not the one it read: one that raced a move writes back the root it
+// read, which is a move too, so it is checked (denied when a podcast library
+// took that folder meanwhile). An edit that keeps the stored root is still not
+// checked (allowed).
+func TestUpdateLibraryChecksARootWrittenBackOverAMove(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	base := t.TempDir()
+	first, second := filepath.Join(base, "first"), filepath.Join(base, "second")
+	books, err := c.CreateLibrary(ctx, Library{Name: "Books", Root: first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := *books // what an edit read before the move below
+	if _, _, err := c.UpdateLibrary(ctx, books.ID, LibraryPatch{Root: second}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: filepath.Join(first, "Pods"), Kind: KindPodcasts}); err != nil {
+		t.Fatalf("a podcast library in the folder the books left: %v", err)
+	}
+	if _, _, err := c.UpdateLibrary(ctx, books.ID, LibraryPatch{Name: "Renamed"}); err != nil {
+		t.Fatalf("a rename keeping the stored root: %v", err)
+	}
+	// The edit that read the library before its move: the library cache hands
+	// it that read.
+	gen, _ := c.ContentGeneration()
+	c.libs.Put(gen, books.ID, read)
+	if _, _, err := c.UpdateLibrary(ctx, books.ID, LibraryPatch{Name: "Raced"}); !errors.Is(err, ErrRootOverlaps) {
+		t.Errorf("an edit writing back the root a move left, now holding a podcast library: %v", err)
+	}
+}

@@ -3852,7 +3852,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or `podcasts`). Creating or re-rooting either kind may never overlap a podcast root in either
   direction (clean absolute paths, checked under the writer, compared as written and as their links
   resolve, `resolveRoots` before the writer, under 2 s, a root not there yet through the nearest folder
-  that is, an edit keeping its root not checked at all, so a stored pair never blocks a rename or config sync; Windows and macOS fold case, macOS a name's NFC and NFD spellings too (`pathOverlaps`), and a volume's root holds every folder on it: `rootsOverlap`,
+  that is, an edit keeping its root not checked at all (kept as against the root stored when it writes, read in its transaction: one that raced a move and writes back the root it read is checked, `TestUpdateLibraryChecksARootWrittenBackOverAMove`), so a stored pair never blocks a rename or config sync; Windows and macOS fold case, macOS a name's NFC and NFD spellings too (`pathOverlaps`), and a volume's root holds every folder on it: `rootsOverlap`,
   `libraryroots.go`, server#179). Config sync logs a root clash and
   skips that entry, keeping its existing library when present, so startup continues, then warns of every
   stored pair that overlaps (`catalog.RootOverlaps`: one stored before the check knew links and case, or a
