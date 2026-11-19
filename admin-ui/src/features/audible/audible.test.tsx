@@ -936,7 +936,7 @@ describe('audible backups', () => {
     );
   });
 
-  it("says when a title's own destination is no longer valid", async () => {
+  it("says when a title's own destination is no longer valid, with no Back up", async () => {
     mockFetch(
       routes(true, {
         'GET /admin/audible/titles': {
@@ -944,7 +944,7 @@ describe('audible backups', () => {
             titles: [
               title({
                 match: null,
-                can_backup: true,
+                can_backup: false,
                 dest_path: '.hidden/A.m4b',
                 dest_invalid: true,
               }),
@@ -970,6 +970,8 @@ describe('audible backups', () => {
     expect(screen.getAllByText('Your destination is checked when the backup starts.')).toHaveLength(
       1,
     );
+    const list = screen.getByRole('list', { name: 'Audible titles' });
+    expect(within(list).getAllByRole('button', { name: 'Back up' })).toHaveLength(1);
   });
 
   it('backs everything up after saying how many and how much', async () => {

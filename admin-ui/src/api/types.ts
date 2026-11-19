@@ -3381,7 +3381,7 @@ export interface AudibleTitle {
   planned: AudiblePlan | null;
   /** For a title left unmatched as contested: the book it tied for and the account's other titles on it. */
   contested: AudibleContest | null;
-  /** Back up would queue its backup (or wait for a preorder's release); its account's pause aside. */
+  /** Back up would queue its backup (or wait for a preorder's release); its account's pause aside. False while dest_invalid. */
   can_backup: boolean;
 }
 

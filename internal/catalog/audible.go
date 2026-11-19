@@ -467,7 +467,36 @@ func (c *Catalog) AudibleAccounts(ctx context.Context) ([]AudibleAccount, error)
 	if err := counts.Err(); err != nil {
 		return nil, err
 	}
-	return out, nil
+	_ = counts.Close()
+	return out, c.dropInvalidDests(ctx, byID)
+}
+
+// dropInvalidDests takes the titles Back up everything skips for a stored
+// destination that no longer validates (audible.Queues.BackupAll's
+// bridge.CheckAudibleDestPath, which SQL can't run) out of each account's
+// BackupEstimate, so its confirm counts the backups it queues. Only a title
+// with a destination of its own can be one.
+func (c *Catalog) dropInvalidDests(ctx context.Context, byID map[string]*AudibleAccount) error {
+	rows, err := c.db.QueryContext(ctx, `SELECT t.account, t.dest_path, COALESCE(t.runtime_s, 0)
+		FROM audible_titles t WHERE t.dest_path <> '' AND `+backupAllSQL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			id, dest string
+			seconds  int64
+		)
+		if err := rows.Scan(&id, &dest, &seconds); err != nil {
+			return err
+		}
+		if a := byID[id]; a != nil && bridge.CheckAudibleDestPath(dest) != nil {
+			a.BackupEstimate.Count--
+			a.BackupEstimate.Bytes -= seconds * audibleBytesPerSecond
+		}
+	}
+	return rows.Err()
 }
 
 // AudibleSeries is a title's place in one series, as Audible names it.
@@ -573,7 +602,8 @@ type AudibleTitle struct {
 	DestPath string `json:"dest_path"`
 	// DestInvalid: a DestPath stored before a rule tightened that
 	// bridge.CheckAudibleDestPath now refuses, so its backup would be refused
-	// (Back up everything skips it): the console says to set it again.
+	// (CanBackup is false; Back up everything skips it and its estimate leaves
+	// it out): the console says to set it again.
 	DestInvalid bool   `json:"dest_invalid"`
 	FirstSeen   string `json:"first_seen"`
 	UpdatedAt   string `json:"updated_at"`
@@ -1100,8 +1130,8 @@ func scanAudibleTitle(row rowScanner, now time.Time) (*AudibleTitle, error) {
 		t.Import = &AudibleImport{JobID: &j.ID, State: j.State, Code: code, Conflict: importConflict(j, code)}
 	}
 	t.NeedsAttention = preorderOverdue(&t, pending, now)
-	t.CanBackup = t.backupRefusal() == nil
 	t.DestInvalid = bridge.CheckAudibleDestPath(t.DestPath) != nil
+	t.CanBackup = t.backupRefusal() == nil // false while DestInvalid
 	return &t, nil
 }
 

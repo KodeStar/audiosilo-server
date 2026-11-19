@@ -566,15 +566,15 @@ func TestAudibleBackupInvalidDestination(t *testing.T) {
 		`UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE asin IN ('B000000001', 'B000000003')`); err != nil {
 		t.Fatal(err)
 	}
-	// The title says so, for the console to word (dest_invalid); a valid or
-	// empty destination doesn't.
+	// The title says so, for the console to word (dest_invalid), and its Back
+	// up is off (can_backup); a valid or empty destination doesn't.
 	if _, err := b.db.ExecContext(context.Background(),
 		`UPDATE audible_titles SET dest_path = 'Author/B.m4b' WHERE asin = 'B000000002'`); err != nil {
 		t.Fatal(err)
 	}
 	for asin, invalid := range map[string]bool{"B000000001": true, "B000000002": false} {
-		if x := b.audibleTitle(t, asin); x.DestInvalid != invalid {
-			t.Fatalf("%s dest_invalid = %v, want %v", asin, x.DestInvalid, invalid)
+		if x := b.audibleTitle(t, asin); x.DestInvalid != invalid || x.CanBackup == invalid {
+			t.Fatalf("%s dest_invalid = %v, can_backup = %v, want dest_invalid %v", asin, x.DestInvalid, x.CanBackup, invalid)
 		}
 	}
 	resp, out := b.do(t, "POST", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001/backup", b.adminTok, "")

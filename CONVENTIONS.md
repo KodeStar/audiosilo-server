@@ -4025,7 +4025,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`import {job_id, state, code, conflict}`, `state` a job state or `pending`; `conflict` is what an `exists`
   failure found in the way, `file`/`book`/`audio` as a plan's, from the result's `conflict`, else the
   Bridge's message: `importConflict`). A title's `can_backup` is Back up allowed (`backupRefusal`, the
-  account's pause aside), so the console never derives it. A title going gone drops its plan, its contest,
+  account's pause aside; false while `dest_invalid`), so the console never derives it. A title going gone drops its plan, its contest,
   a pending request and its reason (a preorder's "Not released yet"). **Policy** (`AudiblePolicyImports`,
   after each final titles PUT while the module is on and a Bridge offers the kind, past the PUT's answer
   (`afterAudiblePoll`, waited for by `StopModules`; a final call served once it began waiting queues nothing, the next poll asks again); `autoImport.wants`, a
@@ -4058,7 +4058,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   its label, else "person (STORE)", else the id), an empty `template` or `dest_path` in the console's audit
   details reading "Automatic". The
   accounts list adds `template`, `policy_since` and `backup_estimate {count, bytes}` (Back up everything's
-  titles, runtime at 8000 bytes a second); titles add `import`, `needs_attention`, `planned`, `contested` (see Audible
+  titles, runtime at 8000 bytes a second, less those it skips for an invalid destination: `dropInvalidDests`); titles add `import`, `needs_attention`, `planned`, `contested` (see Audible
   unmatched titles below) and `dest_invalid` (a stored `dest_path` `CheckAudibleDestPath` now refuses). The Bridge's account
   PUT sets `policy` on create only (the console owns it after). Removing an account cancels its open
   imports. **Console**: per title Back up (off while its account is paused), Not this book (and undo) and

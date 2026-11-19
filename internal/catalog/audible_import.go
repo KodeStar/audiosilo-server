@@ -375,9 +375,6 @@ func (c *Catalog) RequestAudibleBackup(ctx context.Context, account, asin string
 	if err := t.backupRefusal(); err != nil {
 		return nil, false, err
 	}
-	if err := bridge.CheckAudibleDestPath(t.DestPath); err != nil {
-		return nil, false, err
-	}
 	if err := bridge.CheckAudibleTemplate(acct.Template); err != nil {
 		return nil, false, err
 	}
@@ -393,8 +390,10 @@ func (c *Catalog) RequestAudibleBackup(ctx context.Context, account, asin string
 // backupRefusal is why the console's Back up refuses t whatever its account:
 // ErrAudibleMatched for a title on this server (unless marked "Not this
 // book"), ErrAudibleImportOpen while its backup is open (or a request is
-// pending), ErrAudibleNotAvailable unless it is available or a preorder; nil
-// when it may be backed up (AudibleTitle.CanBackup).
+// pending), ErrAudibleNotAvailable unless it is available or a preorder,
+// bridge.ErrAudibleDestPath for a stored destination that no longer validates
+// (AudibleTitle.DestInvalid); nil when it may be backed up
+// (AudibleTitle.CanBackup).
 func (t *AudibleTitle) backupRefusal() error {
 	switch {
 	case t.Match != nil && !t.Rejected:
@@ -404,7 +403,7 @@ func (t *AudibleTitle) backupRefusal() error {
 	case t.State != AudibleAvailable && t.State != AudiblePreorder:
 		return ErrAudibleNotAvailable
 	}
-	return nil
+	return bridge.CheckAudibleDestPath(t.DestPath)
 }
 
 // AudibleBackupAll are the params of the backups "Back up everything" queues
