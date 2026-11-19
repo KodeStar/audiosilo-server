@@ -29,7 +29,7 @@ type Status struct {
 	Version string `json:"version"`
 	// Kinds are the job kinds it implements (KindVerify, ...). The server queues
 	// only kinds that are both here and known to it (Kinds).
-	Kinds []string `json:"kinds"`
+	Kinds kindList `json:"kinds"`
 	// Libraries is the Bridge's mapping of each server library to its own mount,
 	// checked on every heartbeat.
 	Libraries libraryList `json:"libraries"`
@@ -233,7 +233,7 @@ func (st *Status) KeepLibraries(known func(id int64) bool) {
 	st.Setup.keepLibraries(known)
 }
 
-// maxListRead is how many elements of a heartbeat's list of objects are read:
+// maxListRead is how many elements of a heartbeat's lists are read:
 // one more than the longest any is kept at (maxLibraries), so Validate still
 // sees a list over its bound.
 const maxListRead = maxLibraries + 1
@@ -241,7 +241,7 @@ const maxListRead = maxLibraries + 1
 // readList reads the JSON list b into at most maxListRead elements, leaving the
 // rest unread: a heartbeat's body is bounded in bytes (MaxStatusBytes), but a
 // list of empty objects takes three bytes an element and some twenty times
-// that in memory, so read whole, a body of 2 MiB would be hundreds of
+// that in memory (an empty string or a one-digit id, a few times), so read whole, a body of 2 MiB would be hundreds of
 // megabytes of structs to throw away (server#445). strict refuses a key T
 // doesn't have, as the heartbeat's own decoder does. b is one JSON value,
 // already checked (the decoder that calls an UnmarshalJSON has scanned it).
@@ -271,12 +271,18 @@ func readList[T any](b []byte, strict bool) ([]T, error) {
 	return out, nil
 }
 
-// libraryList and workerList are a heartbeat's mappings and workers, read
-// bounded (readList).
+// kindList, libraryList and workerList are a heartbeat's kinds, mappings and
+// workers, read bounded (readList).
 type (
+	kindList    []string
 	libraryList []LibraryStatus
 	workerList  []Worker
 )
+
+func (l *kindList) UnmarshalJSON(b []byte) (err error) {
+	*l, err = readList[string](b, true)
+	return err
+}
 
 func (l *libraryList) UnmarshalJSON(b []byte) (err error) {
 	*l, err = readList[LibraryStatus](b, true)

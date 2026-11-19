@@ -299,6 +299,19 @@ func TestHeartbeatListsAreReadBounded(t *testing.T) {
 	if st, _ := read(`{"workers":` + many + `}`); !errors.Is(st.Validate(), ErrInvalid) {
 		t.Fatal("a heartbeat with too many workers passed Validate")
 	}
+	// So are its kinds and a setup item's library ids, short as each is.
+	strs := "[" + strings.Repeat(`"",`, 100_000) + `""]`
+	ids := "[" + strings.Repeat("1,", 100_000) + "2]"
+	st, err = read(`{"kinds":` + strs + `,"setup":{"items":[{"id":"libraries","library_ids":` + ids + `}]}}`)
+	if err != nil || len(st.Kinds) != maxListRead || len(st.Setup.Items[0].LibraryIDs) != maxListRead {
+		t.Fatalf("read %d kinds, %d library ids, %v; want %d of each", len(st.Kinds), len(st.Setup.Items[0].LibraryIDs), err, maxListRead)
+	}
+	if !errors.Is(st.Validate(), ErrInvalid) {
+		t.Fatal("a heartbeat with too many kinds passed Validate")
+	}
+	if _, err := read(`{"kinds":[1]}`); err == nil {
+		t.Error("a kind that isn't a string was read")
+	}
 	lib := func(i int) string { return fmt.Sprintf(`{"library_id":%d,"mount_path":"/m"}`, i+1) }
 	libs := make([]string, maxLibraries+50)
 	for i := range libs {

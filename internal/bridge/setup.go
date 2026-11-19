@@ -59,7 +59,7 @@ type SetupItem struct {
 	// LibraryIDs are the server libraries the step is about (the libraries
 	// step: the ones still to fix); omitted for none. An id of no library of
 	// the server's is not stored (Status.KeepLibraries).
-	LibraryIDs []int64 `json:"library_ids,omitempty"`
+	LibraryIDs libraryIDs `json:"library_ids,omitempty"`
 	// NeedsWorker: the step waits for an ASR worker (the asr step while the
 	// engine's transcription waits for one), so it is fixed on the Bridge's
 	// Workers tab (bridge#28). An older Bridge sends none: the console then
@@ -73,6 +73,15 @@ type setupItems []SetupItem
 
 func (l *setupItems) UnmarshalJSON(b []byte) (err error) {
 	*l, err = readList[SetupItem](b, false)
+	return err
+}
+
+// libraryIDs is a setup item's library ids, read bounded too: validate keeps
+// at most maxLibraries of them.
+type libraryIDs []int64
+
+func (l *libraryIDs) UnmarshalJSON(b []byte) (err error) {
+	*l, err = readList[int64](b, false)
 	return err
 }
 
