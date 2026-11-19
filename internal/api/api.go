@@ -172,6 +172,9 @@ type API struct {
 	ipLimiter      *rateLimiter // general request rate, per IP (see rateLimit)
 	tokenLimiter   *rateLimiter // authenticated API rate, per credential (see requireAuth)
 	mediaLimiter   *rateLimiter // authenticated media rate, per credential (see requireMediaAuth)
+	// health is /healthz's database probe, shared by the requests within
+	// healthReuse of it (handleHealth): the route is outside the rate limit.
+	health healthProbe
 	// castKeepEvery is how often a response a cast token authenticated keeps
 	// the token in use while it runs (keepCastInUse): auth.CastTouchInterval
 	// (also what 0 means), shorter in tests.
@@ -589,9 +592,11 @@ func (a *API) Handler() http.Handler {
 	// Public.
 	mux.HandleFunc("GET /api/v1/server", a.handleServerInfo)
 	// Liveness/readiness probe (public): reports DB read-reachability for a
-	// container healthcheck. Both /healthz and the API-prefixed form are served.
-	mux.HandleFunc("GET /healthz", a.handleHealth)
-	mux.HandleFunc("GET /api/v1/healthz", a.handleHealth)
+	// container healthcheck. Both /healthz and the API-prefixed form are served
+	// (healthPatterns), outside the rate limit.
+	for _, p := range healthPatterns {
+		mux.HandleFunc(p, a.handleHealth)
+	}
 	mux.HandleFunc("POST /api/v1/auth/redeem", a.handleRedeem)
 	mux.HandleFunc("POST /api/v1/auth/exchange", a.handleExchange)
 	mux.HandleFunc("POST /api/v1/auth/login", a.handleLogin)

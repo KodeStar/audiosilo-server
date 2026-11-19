@@ -219,6 +219,7 @@ func clientIP(r *http.Request) string {
 // console, the web player, the connect page; web.IsStatic) are not counted: they
 // are served from memory or, for a player in web_dir, through spa.Files'
 // per-version cache, and one cold console page is forty-odd chunk requests.
+// Nor is /healthz (healthPatterns), whose probe a flood shares (healthReuse).
 // Media routes limit themselves (requireMediaAuth), and so do the authenticated
 // API routes outside /api/v1/auth/ (requireAuth, tokenKeyed), but an address
 // whose general bucket is empty is refused here already, as they would refuse it,
@@ -230,7 +231,7 @@ func clientIP(r *http.Request) string {
 func (a *API) rateLimit(mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h, pattern := mux.Handler(r)
-		if web.IsStatic(h, r) {
+		if web.IsStatic(h, r) || slices.Contains(healthPatterns, pattern) {
 			next.ServeHTTP(w, r)
 			return
 		}
