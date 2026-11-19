@@ -4182,7 +4182,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   server#408). `notify.Service.Emit` records the event and queues one
   delivery per enabled subscribed destination (4 workers, queue 256, drop + log when full); a delivery is
   retried twice on timeout/unreachable/429/5xx (queued again after its delay, never waited out on a
-  worker), never follows a redirect, and records only a short reason
+  worker), three attempts in all, restarts included. Every delivery is kept in the **outbox**
+  (`notify_outbox`, `0089`, server#465): `catalog.RecordServerEvent` writes one row per enabled subscribed
+  destination in the transaction that records the event, `notify.Service.Run` queues every row still
+  `pending` at the start (an event newer than `catalog.NotifyOutboxRetention`, 7 days, which the daily
+  retention prunes), and each attempt is counted on its row before it is made (`catalog.ClaimDelivery`,
+  which also lets only one of the start's redelivery and the event's own `Deliver` send it), then the row
+  ends `delivered`, `failed` or `skipped` (the destination switched off or unsubscribed first; a deleted
+  one takes its rows). So a notice owed when the server stopped goes to each destination once at the next
+  start, and the bell, the event itself, is never written again. A delivery dropped on a full queue waits
+  for the next start. It never follows a redirect, and records only a short reason
   (`timeout`, `unreachable`, `http_<status>`, `failed`), never the URL or the answer. Webhooks POST JSON
   with `X-AudioSilo-Event` and, with a secret, `X-AudioSilo-Timestamp` + `X-AudioSilo-Signature: sha256=`
   HMAC of `<timestamp>.<body>` (`notify.Sign`); ntfy is a JSON publish to the server root (Bearer token
@@ -4204,10 +4213,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a failure by an expired last lease is reported too, once its transaction commits; the job's `error`,
   the Bridge's own text that can name its folders, is the bell's `detail`, never sent out), and podcasts
   (server#232, admin only, through `catalog.SetPodcastNotice`: the event (`notify.PodcastEvent`) is recorded
-  in the same transaction as the write that found the news, its dedup key checked there too, and delivered
-  after the commit (`notify.Service.Deliver`), so a crash can't lose the feed's record of a notice whose flag
-  committed; the destinations aren't sent it again after a crash between the two, there being no per-event
-  delivery record, server#403):
+  in the same transaction as the write that found the news, its dedup key checked there too, with its
+  outbox rows, and delivered after the commit (`notify.Service.Deliver`), so a crash can't lose the notice
+  of a flag that committed, for the bell or the destinations (server#403, server#465)):
   `podcast_episodes_new`, one per show per index (`catalog.IndexPodcastShow`: episodes new to a show indexed
   before under the same `show_id`, its rows all there: a path, GUID and episode id not indexed, not
   published before the show's previous `latest_published` (the same date, a date-only twin, or no date is

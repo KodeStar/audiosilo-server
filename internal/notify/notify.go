@@ -8,6 +8,12 @@
 // twice on a timeout, a refused connection or a 5xx/429, and never follow a
 // redirect. A failure is recorded on the destination as a short reason; neither the
 // destination's address nor what the far end answered is ever logged or shown.
+//
+// Each event's deliveries are kept in the outbox (catalog.RecordServerEvent
+// writes them with the event), so what was still owed when the server stopped
+// goes out at the next start (Run), once per destination: the bell is the event
+// itself and is never written again, and a destination that had it is not sent
+// it twice. A failing one is tried maxAttempts times in all, restarts included.
 package notify
 
 import (
@@ -135,10 +141,12 @@ type oidcPendingTaken struct {
 	from string
 }
 
+// delivery is one outbox row on its way: the event owed to a destination.
 type delivery struct {
-	target  catalog.NotifyTarget
+	id      int64 // the outbox row
+	target  int64
 	event   catalog.ServerEvent
-	attempt int // 0 for the first
+	attempt int // the attempts begun before this one (0 for the first)
 }
 
 // New returns a service; Run delivers. server reports the server's name and
@@ -162,11 +170,13 @@ func New(cat *catalog.Catalog, version string, server func() Server, log *slog.L
 	}
 }
 
-// Run delivers queued messages until ctx ends.
+// Run delivers queued messages until ctx ends, starting with what the outbox
+// still owes from before the start.
 func (s *Service) Run(ctx context.Context) {
 	if s == nil {
 		return
 	}
+	go s.redeliver(ctx)
 	for range workers {
 		go func() {
 			for {
@@ -202,31 +212,54 @@ func (s *Service) emit(ctx context.Context, e Event, allow func() bool) {
 	s.Deliver(ctx, ev)
 }
 
-// Deliver queues an event already in the feed for every enabled destination
-// subscribed to its kind (Emit's second half, for an event recorded in the
-// transaction of the write that raised it: catalog.SetPodcastNotice). It never
-// blocks on sending.
+// Deliver queues an event already in the feed for the destinations its outbox
+// rows name (Emit's second half, and for an event recorded in the transaction
+// of the write that raised it: catalog.SetPodcastNotice). It never blocks on
+// sending: a full queue leaves the row owed until the next start.
 func (s *Service) Deliver(ctx context.Context, ev catalog.ServerEvent) {
 	if s == nil {
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
-	targets, err := s.cat.ListNotifyTargets(ctx)
+	owed, err := s.cat.PendingDeliveries(ctx, ev.ID)
 	if err != nil {
-		s.log.Warn("loading notification destinations failed", "err", err)
+		s.log.Warn("loading an event's deliveries failed", "kind", ev.Kind, "err", err)
 		return
 	}
-	for _, t := range targets {
-		if !t.Enabled || !slices.Contains(t.Events, ev.Kind) {
-			continue
-		}
+	for _, o := range owed {
 		select {
-		case s.queue <- delivery{target: t, event: ev}:
+		case s.queue <- delivery{id: o.ID, target: o.TargetID, event: ev, attempt: o.Attempts}:
 		default:
-			s.log.Warn("notification queue full; dropped a delivery", "target", t.ID, "kind", ev.Kind)
+			s.log.Warn("notification queue full; a delivery waits for the next start", "target", o.TargetID, "kind", ev.Kind)
 		}
 	}
 }
+
+// redeliver queues what the outbox still owes when Run starts: deliveries the
+// previous run recorded and never finished. One the event's own Deliver queued
+// too goes once (catalog.ClaimDelivery).
+func (s *Service) redeliver(ctx context.Context) {
+	owed, err := s.cat.PendingDeliveries(ctx, 0)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.log.Warn("loading the notifications still owed failed", "err", err)
+		}
+		return
+	}
+	if len(owed) > 0 {
+		s.log.Info("sending notifications owed from before the start", "count", len(owed))
+	}
+	for _, o := range owed {
+		select {
+		case <-ctx.Done():
+			return
+		case s.queue <- delivery{id: o.ID, target: o.TargetID, event: o.Event, attempt: o.Attempts}:
+		}
+	}
+}
+
+// maxAttempts is how many times a delivery is tried in all.
+func (s *Service) maxAttempts() int { return len(s.delays) + 1 }
 
 // recordEvent adds e to the feed unless its dedup key was seen or allow refuses it.
 // For a dedup key the check, the gate and the record are one step (dedupMu).
@@ -266,20 +299,42 @@ func (s *Service) Test(ctx context.Context, t catalog.NotifyTarget) string {
 //
 // A failure that may pass is queued again after its delay rather than waited out
 // here, so a destination that doesn't answer holds a worker for one attempt at a
-// time, never the others' deliveries.
+// time, never the others' deliveries. The attempt is counted in the outbox
+// before it is made, so a stop while it is under way leaves the row owed with
+// one fewer to go, and the bound holds across restarts.
 func (s *Service) deliver(ctx context.Context, d delivery) {
-	if d.attempt > 0 {
-		// A retry goes where the destination is set to send now: not at all once it
-		// is deleted, switched off or unsubscribed, and to its new address and secret
-		// after a change (a leaked one is rotated, not used again).
-		t, err := s.cat.GetNotifyTarget(context.WithoutCancel(ctx), d.target.ID)
-		if err != nil || !t.Enabled || !slices.Contains(t.Events, d.event.Kind) {
-			return
-		}
-		d.target = *t
+	bg := context.WithoutCancel(ctx)
+	if d.attempt >= s.maxAttempts() {
+		// Its last attempt began before a stop, which cut it short.
+		s.finish(bg, d, catalog.DeliveryFailed, "failed")
+		return
 	}
-	reason := s.send(ctx, d.target, d.event)
-	if reason != "" && retryable(reason) && d.attempt < len(s.delays) {
+	// A delivery goes where the destination is set to send now: not at all once
+	// it is deleted (its rows go with it), switched off or unsubscribed, and to
+	// its new address and secret after a change (a leaked one is rotated, not
+	// used again).
+	t, err := s.cat.GetNotifyTarget(bg, d.target)
+	if err != nil {
+		if !errors.Is(err, catalog.ErrNotFound) {
+			s.log.Warn("loading a notification destination failed", "target", d.target, "err", err)
+		}
+		return
+	}
+	if !t.Enabled || !slices.Contains(t.Events, d.event.Kind) {
+		s.finish(bg, d, catalog.DeliverySkipped, "")
+		return
+	}
+	if mine, err := s.cat.ClaimDelivery(bg, d.id, d.attempt); err != nil || !mine {
+		if err != nil {
+			s.log.Warn("claiming a notification delivery failed", "target", d.target, "err", err)
+		}
+		return
+	}
+	reason := s.send(ctx, *t, d.event)
+	if reason != "" && ctx.Err() != nil {
+		return // cut short by the stop: the row stays owed for the next start
+	}
+	if reason != "" && retryable(reason) && d.attempt+1 < s.maxAttempts() {
 		next := d
 		next.attempt++
 		time.AfterFunc(s.delays[d.attempt], func() {
@@ -289,15 +344,25 @@ func (s *Service) deliver(ctx context.Context, d delivery) {
 			select {
 			case s.queue <- next:
 			default:
-				s.log.Warn("notification queue full; dropped a retry", "target", d.target.ID, "kind", d.event.Kind)
+				s.log.Warn("notification queue full; a retry waits for the next start", "target", d.target, "kind", d.event.Kind)
 			}
 		})
 		return
 	}
+	state := catalog.DeliveryDelivered
 	if reason != "" {
-		s.log.Info("notification not delivered", "target", d.target.ID, "kind", d.event.Kind, "reason", reason)
+		state = catalog.DeliveryFailed
+		s.log.Info("notification not delivered", "target", d.target, "kind", d.event.Kind, "reason", reason)
 	}
-	s.record(ctx, d.target.ID, reason)
+	s.finish(bg, d, state, reason)
+	s.record(ctx, d.target, reason)
+}
+
+// finish ends a delivery's outbox row.
+func (s *Service) finish(ctx context.Context, d delivery, state, reason string) {
+	if err := s.cat.FinishDelivery(ctx, d.id, state, reason); err != nil {
+		s.log.Warn("recording a delivery failed", "target", d.target, "err", err)
+	}
 }
 
 func (s *Service) record(ctx context.Context, id int64, reason string) {
