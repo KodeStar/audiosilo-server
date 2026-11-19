@@ -36,7 +36,8 @@ func TestRecordingChapters(t *testing.T) {
 
 // TestMatchChapters: a recorded match's chapters are its recording's, read off
 // the work with no lookup; one naming no recording, or one the work doesn't
-// list, has none (server#375), and nothing is asked for.
+// list, has none (server#375), and nothing is asked for. A work the community
+// doesn't have (or a blank id) is ErrNoWork, which a caller tells from those.
 func TestMatchChapters(t *testing.T) {
 	m := fullMock()
 	mux := http.NewServeMux()
@@ -55,13 +56,29 @@ func TestMatchChapters(t *testing.T) {
 	if err != nil || got.WorkID != "the-martian" || got.RecordingID != "rec1" || len(got.Chapters) != 1 {
 		t.Fatalf("listed recording = %+v, %v", got, err)
 	}
-	for _, c := range [][2]string{{"the-martian", "rec-of-another-work"}, {"the-martian", ""}, {" ", "rec1"}} {
-		if got, err := s.MatchChapters(ctx, c[0], c[1]); !errors.Is(err, ErrNotFound) {
-			t.Errorf("MatchChapters(%q, %q) = %+v, %v; want ErrNotFound", c[0], c[1], got, err)
+	for _, c := range [][2]string{{"the-martian", "rec-of-another-work"}, {"the-martian", ""}} {
+		if got, err := s.MatchChapters(ctx, c[0], c[1]); !errors.Is(err, ErrNotFound) || errors.Is(err, ErrNoWork) {
+			t.Errorf("MatchChapters(%q, %q) = %+v, %v; want ErrNotFound, the work being there", c[0], c[1], got, err)
 		}
+	}
+	if got, err := s.MatchChapters(ctx, " ", "rec1"); !errors.Is(err, ErrNoWork) || !errors.Is(err, ErrNotFound) {
+		t.Errorf("a blank work = %+v, %v; want ErrNoWork", got, err)
 	}
 	if len(asked) != 1 || asked[0] != "the-martian/rec1" || m.lookupHits.Load() != 0 {
 		t.Errorf("asked %v with %d lookups, want only the listed recording's and none", asked, m.lookupHits.Load())
+	}
+
+	// The community no longer has the work: ErrNoWork, for a match naming a
+	// recording and for one naming none, while an outage is neither.
+	m.workCode = http.StatusNotFound
+	for _, rec := range []string{"rec1", ""} {
+		if got, err := s.MatchChapters(ctx, "the-martian", rec); !errors.Is(err, ErrNoWork) {
+			t.Errorf("a work the community lacks, recording %q = %+v, %v; want ErrNoWork", rec, got, err)
+		}
+	}
+	m.workCode = http.StatusInternalServerError
+	if got, err := s.MatchChapters(ctx, "the-martian", "rec1"); err == nil || errors.Is(err, ErrNotFound) {
+		t.Errorf("an outage = %+v, %v; want the service's failure", got, err)
 	}
 }
 

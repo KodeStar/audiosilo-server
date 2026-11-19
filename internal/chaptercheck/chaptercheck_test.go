@@ -22,11 +22,13 @@ import (
 )
 
 // fakeSource answers RecordingChapters from a map by ASIN, and MatchChapters
-// from one by "work/recording"; err, when set, answers every call, and failing
-// answers the ASINs it names with an error.
+// from one by "work/recording" (a work in gone is one the community doesn't
+// have); err, when set, answers every call, and failing answers the ASINs it
+// names with an error.
 type fakeSource struct {
 	byASIN  map[string]*meta.RecordingChapters
 	byMatch map[string]*meta.RecordingChapters
+	gone    map[string]bool
 	err     error
 	failing map[string]bool
 	calls   atomic.Int32
@@ -50,6 +52,9 @@ func (f *fakeSource) MatchChapters(_ context.Context, workID, recordingID string
 	f.calls.Add(1)
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.gone[workID] {
+		return nil, meta.ErrNoWork
 	}
 	if rc, ok := f.byMatch[workID+"/"+recordingID]; ok {
 		return rc, nil
@@ -152,11 +157,13 @@ func TestCheckRecordsNoMatchAndAnotherEdition(t *testing.T) {
 	}
 }
 
-// TestCheckFollowsTheRecordedMatch: a book's recorded match names the
-// recording its community chapters come from, over its ASIN's (server#375);
-// one its work doesn't list gives none, and one naming no recording takes the
-// ASIN's only when that is of its work. Each match made or changed makes the
-// book due again.
+// TestCheckFollowsTheRecordedMatch: a book's community chapters come from the
+// recording /meta answers it as (server#375). A recorded match names the
+// recording, over the ASIN's, of another work or of the ASIN's own. One with
+// no recording to fit (it names none, or one its work doesn't list) leaves
+// the ASIN's recording when that is of its work, and none otherwise. One
+// whose work the community no longer has leaves the ASIN's, as /meta does.
+// Each match made or changed makes the book due again.
 func TestCheckFollowsTheRecordedMatch(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
@@ -166,6 +173,10 @@ func TestCheckFollowsTheRecordedMatch(t *testing.T) {
 	matched := chapters(4, 900)
 	matched.WorkID, matched.RecordingID = "w2", "r2"
 	e.src.byMatch["w2/r2"] = matched
+	other := chapters(6, 600) // another recording of the ASIN's work
+	other.RecordingID = "r-other"
+	e.src.byMatch["w/r-other"] = other
+	e.src.gone = map[string]bool{"w-gone": true}
 	r := New(e.cat, e.src, "", on, nil, nil)
 	r.pass(ctx)
 
@@ -174,6 +185,10 @@ func TestCheckFollowsTheRecordedMatch(t *testing.T) {
 		{"w2", "gone", catalog.CommunityNoMatch, ""},
 		{"w", "", "fill", "r"},
 		{"w3", "", catalog.CommunityNoMatch, ""},
+		{"w", "r-other", "fill", "r-other"},
+		{"w", "r-stale", "fill", "r"},
+		{"w-gone", "r9", "fill", "r"},
+		{"w-gone", "", "fill", "r"},
 	} {
 		if err := e.cat.EditBook(ctx, e.lib.ID, path, catalog.BookEdit{
 			Match: &catalog.MatchAnchor{WorkID: c.work, RecordingID: c.recording}, Source: catalog.SourceCommunity,
@@ -192,6 +207,29 @@ func TestCheckFollowsTheRecordedMatch(t *testing.T) {
 	}
 	if due, _ := e.cat.DueChapterChecks(ctx, "2000-01-01T00:00:00Z", 10); len(due) != 0 {
 		t.Fatalf("due %+v after the last check", due)
+	}
+
+	// An unlink gives the book back to its ASIN: the match's chapters go with
+	// the write, and the next pass fits the ASIN's recording again.
+	edit := func(m catalog.MatchAnchor) {
+		t.Helper()
+		if err := e.cat.EditBook(ctx, e.lib.ID, path, catalog.BookEdit{Match: &m, Source: catalog.SourceCommunity}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	edit(catalog.MatchAnchor{WorkID: "w2", RecordingID: "r2"})
+	r.pass(ctx)
+	edit(catalog.MatchAnchor{})
+	if b, err := e.cat.GetBookByPath(ctx, e.lib.ID, path); err != nil || b.ChaptersSource == catalog.ChaptersFromCommunity {
+		t.Fatalf("unlinked: chapters from %q, %v; want the match's gone", b.ChaptersSource, err)
+	}
+	r.pass(ctx)
+	cc, err := e.cat.GetCommunityChapters(ctx, e.lib.ID, path)
+	if err != nil || cc == nil || cc.Status != "fill" || cc.RecordingID != "r" || cc.Stale {
+		t.Fatalf("unlinked: check %+v, %v; want the ASIN's recording fitted again", cc, err)
+	}
+	if b, err := e.cat.GetBookByPath(ctx, e.lib.ID, path); err != nil || b.ChaptersSource != catalog.ChaptersFromCommunity {
+		t.Fatalf("unlinked and checked: chapters from %q, %v", b.ChaptersSource, err)
 	}
 }
 

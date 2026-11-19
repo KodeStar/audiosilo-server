@@ -3,6 +3,7 @@ package meta
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/pkg/match"
@@ -48,23 +49,34 @@ func (s *Service) RecordingChapters(ctx context.Context, asin, isbn string) (*Re
 	return s.chaptersOf(ctx, l.Work.ID, l.RecordingID)
 }
 
+// ErrNoWork is MatchChapters' answer for a recorded match whose work the
+// community doesn't know (removed, or merged away): an ErrNotFound a caller
+// can tell from the work that is there and lists no such recording, since
+// /meta then answers the book by its identifiers (api.bookEnrichment) and its
+// chapters follow.
+var ErrNoWork = fmt.Errorf("%w (the matched work)", ErrNotFound)
+
 // MatchChapters is the chapter list of a book's recorded community match
 // (catalog book_matches): recording recordingID of work workID, the admin's
-// choice over what the book's identifiers name (server#375). ErrNotFound when
-// it names no recording, or one the work doesn't list (a stale match, or one
-// of another work): never the work's first, as pickRecording's matched. The
-// ids are trimmed as EnrichMatch trims them. Like RecordingChapters it caches
-// nothing.
+// choice over what the book's identifiers name (server#375). ErrNoWork when
+// the community has no such work (or workID is blank), plain ErrNotFound when
+// the work is there and the match names no recording, or one it doesn't list
+// (a stale match, or one of another work): never the work's first, as
+// pickRecording's matched. The ids are trimmed as EnrichMatch trims them. Like
+// RecordingChapters it caches nothing.
 func (s *Service) MatchChapters(ctx context.Context, workID, recordingID string) (*RecordingChapters, error) {
 	workID, recordingID = strings.TrimSpace(workID), strings.TrimSpace(recordingID)
-	if workID == "" || recordingID == "" {
-		return nil, ErrNotFound
+	if workID == "" {
+		return nil, ErrNoWork
 	}
 	detail, err := s.workDetail(ctx, workID)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, ErrNoWork
+	case err != nil:
 		return nil, err
 	}
-	if recordingIndex(detail.Recordings, recordingID) < 0 {
+	if recordingID == "" || recordingIndex(detail.Recordings, recordingID) < 0 {
 		return nil, ErrNotFound
 	}
 	return s.chaptersOf(ctx, detail.ID, recordingID)

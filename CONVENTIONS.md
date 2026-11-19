@@ -4827,9 +4827,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   EXACT community recording's chapter list (`meta.Service.RecordingChapters`: the
   lookup's `recording_id`, never `pickRecording`'s first-recording fallback; metaserve
   `works/{id}/recordings/{rid}/chapters`, 404 = none known). A recorded match (`book_matches`,
-  `ChapterInputs.Match`) names the recording over the identifiers (server#375):
-  `meta.Service.MatchChapters` (its recording, `no_match` when its work doesn't list it), or, for
-  one naming no recording, the lookup's only when it is of the match's work. The fit is anchored and
+  `ChapterInputs.Match`) names the recording over the identifiers, as on `/meta` (`api.bookEnrichment`),
+  so a book's chapters and its `/meta` never describe two recordings (server#375, `chaptercheck`'s
+  `chapters`): `meta.Service.MatchChapters`, its recording's list when its work lists it; a match
+  with no recording to fit (it names none, or one its work doesn't list) leaves the lookup's
+  recording when that is of the match's work, else `no_match`; and one whose work the community no
+  longer has (`meta.ErrNoWork`) is set aside for the lookup's, whatever its work. The fit is anchored and
   piecewise (see the package doc): local chapter starts pair with community ones by
   title (numbering stripped, word containment, one-letter typos) within
   `max(120 s, 1%)`, file boundaries and untitled starts by time within 5 s of the
