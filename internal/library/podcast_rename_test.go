@@ -228,6 +228,42 @@ func TestPodcastRenameWaitsOnAnUnreadableFolder(t *testing.T) {
 	}
 }
 
+// Denied: the show's own folder with a feed.json that is invalid for now (half
+// written, damaged, too large) beside a copy. The copy is not taken for the
+// show's one folder: nothing moves or merges into it, on its rescan or on a
+// scan, and the state is where it was once the feed.json reads again.
+func TestPodcastCopyBesideAnInvalidFeedMovesNothing(t *testing.T) {
+	b := newRenameBed(t)
+	b.writeShow(t, "Copy", "Copy")
+	if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Copy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(b.root, "Example Show", "feed.json"), b.feed[:len(b.feed)/2], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unfollowed := func() {
+		t.Helper()
+		got, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Copy", b.user)
+		if err != nil || got.Following || got.Retention.Mode != "keep" {
+			t.Fatalf("the copy took the show's state: %+v %v", got, err)
+		}
+	}
+	if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Copy"); err != nil {
+		t.Fatal(err)
+	}
+	unfollowed()
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	unfollowed()
+	b.writeShow(t, "Example Show", "Example Show")
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	unfollowed()
+	b.checkFollowed(t, "Example Show")
+}
+
 // Two folder names swapped by hand: the Bridge's rescan of one moves both
 // shows, the listener following each keeping both.
 func TestPodcastRescanSwapsTwoFolders(t *testing.T) {

@@ -307,12 +307,15 @@ func podcastFeedFiles(root, show string) (files []string, ok bool) {
 }
 
 // podcastHeldID is the show identity folder show of root holds now: its
-// feed.json's show_id, "" when the folder or its feed.json is gone, or it is
-// no valid show. ok is false when that can't be told (a read error, a
-// feed.json of a newer version).
+// feed.json's show_id, "" when the folder or its feed.json is gone or the
+// name can be no show folder's. ok is false when that can't be told: a read
+// error, a feed.json of a newer version, and one that is invalid, too large
+// or no regular file, which may be the show's own feed.json half written or
+// damaged for now (so a copy beside it is not taken for the show's one
+// folder, and nothing merges into it).
 func podcastHeldID(root, show string) (id string, ok bool) {
 	dir, err := ContentJoin(root, show)
-	if err != nil {
+	if err != nil || !feed.ShowPath(show) {
 		return "", true
 	}
 	fi, err := os.Lstat(filepath.Join(root, show))
@@ -325,10 +328,9 @@ func podcastHeldID(root, show string) (id string, ok bool) {
 	if !fi.IsDir() {
 		return "", true
 	}
-	// ReadFile reads a regular feed.json only (not a symlink: ErrInvalidFeed).
 	f, err := feed.ReadFile(filepath.Join(dir, "feed.json"), show, nil)
 	switch {
-	case errors.Is(err, os.ErrNotExist), errors.Is(err, feed.ErrInvalidFeed):
+	case errors.Is(err, os.ErrNotExist):
 		return "", true
 	case err != nil:
 		return "", false
