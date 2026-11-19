@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -119,5 +120,54 @@ func TestAdminEditBookCommunityMatch(t *testing.T) {
 	_, body = e.do(t, "GET", base+"/book?path="+escape("Andy Weir/The Martian"), adminTok, "")
 	if strings.Contains(body, "community_match") {
 		t.Fatalf("an unmatched book's page = %s", body)
+	}
+}
+
+// TestConsoleRematchRecording (server#375): the recording is the match's, never
+// the one an earlier match named. A console match to another work stores the
+// recording it names ("" for none: /meta then picks as a lookup naming none
+// would, the work's first), so the earlier work's recording is gone; the same
+// work and recording accepted again, and an edit that names no match, keep
+// the recording.
+func TestConsoleRematchRecording(t *testing.T) {
+	t.Parallel()
+	e := newMetaEnv(t, true, 0)
+	tok := adminSession(t, e)
+	libID, base := seedCatalog(t, e)
+	const path = "Andy Weir/Artemis"
+	url := base + "/book?path=" + escape(path)
+	patch := func(body string) {
+		t.Helper()
+		if resp, out := e.do(t, "PATCH", url, tok, body); resp.StatusCode != 200 {
+			t.Fatalf("PATCH %s = %d %s", body, resp.StatusCode, out)
+		}
+	}
+	recorded := func() string {
+		t.Helper()
+		m, err := e.cat.BookMatchAt(context.Background(), libID, path)
+		if err != nil || m == nil {
+			t.Fatalf("recorded match = %+v, %v", m, err)
+		}
+		return m.WorkID + "/" + m.RecordingID
+	}
+
+	patch(`{"source":"community","match":{"work_id":"artemis","recording_id":"artemis-rec"}}`)
+	// Another work with no recording named: the earlier one's goes.
+	patch(`{"source":"community","match":{"work_id":"the-martian"}}`)
+	if got := recorded(); got != "the-martian/" {
+		t.Fatalf("after a match to another work = %q, want the-martian with no recording", got)
+	}
+	if body := getGenerated(t, e, libID, path, "", tok).raw; !strings.Contains(body, `"recording":{"id":"rec1"`) || strings.Contains(body, "artemis-rec") {
+		t.Fatalf("meta = %s, want the work's first recording", body)
+	}
+
+	// Another work naming its recording; then the same work accepted again,
+	// and an edit naming no match: the recording stays.
+	patch(`{"source":"community","match":{"work_id":"artemis","recording_id":"artemis-rec"}}`)
+	patch(`{"source":"community","match":{"work_id":"the-martian","recording_id":"rec1"}}`)
+	patch(`{"source":"community","match":{"work_id":"the-martian","recording_id":"rec1"}}`)
+	patch(`{"set":{"title":"Artemis (edited)"}}`)
+	if got := recorded(); got != "the-martian/rec1" {
+		t.Fatalf("after the same work again and a plain edit = %q, want the-martian/rec1", got)
 	}
 }

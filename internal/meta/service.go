@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -399,7 +400,8 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 
 // EnrichMatch composes the enrichment of a book's recorded community match
 // (catalog book_matches): workID and the recording it names, recordingID ("" for
-// none, which picks as a lookup without one would). The work comes from
+// none, which picks as a lookup without one would; one the work doesn't list is
+// answered with no recording, pickRecording). The work comes from
 // works/{id} (workDetail; mirror mode answers it from the local copy like every
 // other request), and recordingID is treated as a lookup-named recording: it is
 // the admin's match, not a guess. Like compose's own work read it takes no
@@ -420,7 +422,7 @@ func (s *Service) EnrichMatch(ctx context.Context, workID, recordingID string) (
 		if err != nil {
 			return nil, false, err
 		}
-		env, complete := s.composeWork(cctx, detail, recordingID)
+		env, complete := s.composeWork(cctx, detail, recordingID, true)
 		return env, complete, nil
 	})
 }
@@ -578,15 +580,16 @@ func (s *Service) compose(ctx context.Context, asin, isbn string) (*Enrichment, 
 		}
 		return nil, false, err
 	}
-	env, complete := s.composeWork(ctx, detail, lookup.RecordingID)
+	env, complete := s.composeWork(ctx, detail, lookup.RecordingID, false)
 	return env, complete, nil
 }
 
 // composeWork builds the envelope of detail as recording recordingID (the one a
 // lookup named, or a recorded match's; "" for none) with its series rails.
+// matched says recordingID is a recorded match's (pickRecording's matched).
 // complete is false when a rail fetch failed.
-func (s *Service) composeWork(ctx context.Context, detail *upstreamWorkDetail, recordingID string) (*Enrichment, bool) {
-	rec := pickRecording(detail.Recordings, recordingID)
+func (s *Service) composeWork(ctx context.Context, detail *upstreamWorkDetail, recordingID string, matched bool) (*Enrichment, bool) {
+	rec := pickRecording(detail.Recordings, recordingID, matched)
 	// The rails' editions go by the recording the book is known to be: the one
 	// named (or the work's only one), never pickRecording's guess of the first,
 	// which could hand every book of the work one recording's edition.
@@ -802,19 +805,23 @@ func carriesCommunityContent(w *MetaWork) bool {
 }
 
 // pickRecording returns the recording matching recordingID, falling back to the
-// first recording when there is no match (or no id). Returns nil when the work
-// has no recordings.
-func pickRecording(recs []upstreamRecording, recordingID string) *MetaRecording {
+// first recording when there is no id, or when the work doesn't list it and it
+// is a lookup's (an upstream inconsistency). A recorded match's (matched) the
+// work doesn't list is none (nil), never another of the work's: a recording the
+// community has since moved to another work, or one an edit paired with a work
+// it isn't of (server#375), must not lend the book another recording's
+// narrators, cover or chapter count. Returns nil when the work has no
+// recordings.
+func pickRecording(recs []upstreamRecording, recordingID string, matched bool) *MetaRecording {
 	if len(recs) == 0 {
 		return nil
 	}
 	chosen := &recs[0]
 	if recordingID != "" {
-		for i := range recs {
-			if recs[i].ID == recordingID {
-				chosen = &recs[i]
-				break
-			}
+		if i := recordingIndex(recs, recordingID); i >= 0 {
+			chosen = &recs[i]
+		} else if matched {
+			return nil
 		}
 	}
 	return &MetaRecording{
@@ -828,6 +835,12 @@ func pickRecording(recs []upstreamRecording, recordingID string) *MetaRecording 
 		ChapterCount: chosen.ChapterCount,
 		Librivox:     librivoxOf(chosen),
 	}
+}
+
+// recordingIndex is the index of recording id among a work's recordings, -1
+// when the work doesn't list it (pickRecording, MatchChapters).
+func recordingIndex(recs []upstreamRecording, id string) int {
+	return slices.IndexFunc(recs, func(r upstreamRecording) bool { return r.ID == id })
 }
 
 // librivoxOf is a recording's LibriVox block: nil unless it names a LibriVox

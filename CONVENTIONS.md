@@ -348,11 +348,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   shared by `bookEnvelope` and `/next`'s `communityNext`, so both follow `/item`'s
   `catalog.workIDExpr`) through `meta.Service.EnrichMatch` (works/{id} via
   `workDetail`, `fetchWork`'s read without its `workSem` slot (the id comes from a book the server
-  holds, as `compose`'s), the recording it names treated as a lookup-named one, no lookup), cached
+  holds, as `compose`'s), the recording it names treated as a lookup-named one, except that one the
+  work doesn't list is no recording, never the first (`pickRecording`'s `matched`: a stale or
+  mismatched row never lends the book another recording's narrators or cover, server#375), no lookup), cached
   exactly as `Enrich` (shared `enrich`) under its own key space `m:<work id>/<recording id>` (each part
-  `url.PathEscape`d); the row is read only when `Book.WorkID` (the recorded work first) differs
-  from the identifiers' work, and a recorded work upstream lacks (or can't answer) leaves the
-  identifiers' answer standing. When the cache already knows the identifiers' work (`CachedWorkID`)
+  `url.PathEscape`d); a recorded work upstream lacks (or can't answer) leaves the
+  identifiers' answer standing. **The matched recording within one work** (server#375): a row of the
+  identifiers' own work still names the recording, the admin's choice among the work's, so `/meta`
+  answers the match's envelope when the row names another recording than the identifiers do and the
+  work lists it; a row naming no recording, or one the work doesn't list, leaves the identifiers'
+  answer (their recording is of the matched work, never a guess). The row is read for every book
+  with a `Book.WorkID`. A book's community chapters go by the same rule (`chaptercheck`'s
+  `chapters`), so the two never describe two recordings: change them together. When the cache already knows the identifiers' work (`CachedWorkID`)
   and it isn't `Book.WorkID`, the match is composed first and the identifiers only when it fails;
   the two composes of one request share 20 s (`metaComposeShare`, `meta.WithSharedBudget`: each
   keeps its own budget but ends with the shared one, cached as the upstream's failure; server#447). Degradation: disabled ->
@@ -2441,7 +2448,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`b.asin <> '' OR b.isbn <> '' OR EXISTS(book_matches by its key)`) is the list's `matched` and its
   facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire
   name stays), the series' naming and a refresh's `MatchedBooks`. What needs an identifier tests
-  asin/isbn itself and stays identifier-only: community chapters, the unknown-ASIN report,
+  asin/isbn itself and stays identifier-only: community chapters (due only with one, though
+  the recording they come from is then the match's, `chaptercheck`'s `chapters`), the unknown-ASIN report,
   a repick (`CommunityASINBooks`) and the console's chapter check,
   Series rail and Suggest corrections. Upcoming (a matched book is its work: it holds its slot, its own
   position's when the series doesn't list that work, and is a copy, `UpcomingBook.MatchWorkID`, `UpcomingOwnedWorks` by `workIDExpr`), the Bridge's estimate
@@ -2455,7 +2463,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`work_id`, the same order by `meta.Service.CachedWork`, both through `CoverageBook.workOf`) read the
   book's work key, the match first (server#375). `/meta` and `/next`'s community rail read the row when the book
   has no identifier, its lookup is a not-found or fails, or the row names another work than its
-  identifiers' (`bookEnrichment`, `meta.Service.EnrichMatch`, see Community metadata lookup). Path-keyed state: a move carries it with the book's edits as one
+  identifiers', or another recording of their work that the work lists (`bookEnrichment`, `meta.Service.EnrichMatch`, see Community metadata lookup). Path-keyed state: a move carries it with the book's edits as one
   set, a join copies the first part's, a rescan or rebuild keeps it, `ClearCommunityMatches` drops it
   (counted in `books`); the book page carries it as `community_match {work_id, recording_id, how,
   matched_at, web_url}` (omitted when none), a review's change as `match` (the console lists it when no
@@ -4823,7 +4831,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `catalog/communitychapters.go`): a book with an ASIN/ISBN is checked against its
   EXACT community recording's chapter list (`meta.Service.RecordingChapters`: the
   lookup's `recording_id`, never `pickRecording`'s first-recording fallback; metaserve
-  `works/{id}/recordings/{rid}/chapters`, 404 = none known). The fit is anchored and
+  `works/{id}/recordings/{rid}/chapters`, 404 = none known). A recorded match (`book_matches`,
+  `ChapterInputs.Match`) names the recording over the identifiers, as on `/meta` (`api.bookEnrichment`),
+  so a book's chapters and its `/meta` never describe two recordings (server#375, `chaptercheck`'s
+  `chapters`): `meta.Service.MatchChapters`, its recording's list when its work lists it; a match
+  with no recording to fit (it names none, or one its work doesn't list) leaves the lookup's
+  recording when that is of the match's work, else `no_match`; and one whose work the community no
+  longer has (`meta.ErrNoWork`) is set aside for the lookup's, whatever its work. The fit is anchored and
   piecewise (see the package doc): local chapter starts pair with community ones by
   title (numbering stripped, word containment, one-letter typos) within
   `max(120 s, 1%)`, file boundaries and untitled starts by time within 5 s of the
@@ -4836,11 +4850,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `4 s + drift`, starting 0.3 s before the speech. Outcome per book in
   `community_chapters` (path-keyed cache, no FK, moved by `MoveDurableState`; `basis` =
   asin|isbn|duration ms|`books.chapters_hash` (the scan's chapters)|the files in
-  play order relative to the book ('' for a single-file book), a different one makes
+  play order relative to the book ('' for a single-file book), then, only for a book with a recorded
+  match, `\x1e` + its work/recording, so a match made, changed or unlinked makes it stale, except a
+  match naming the very recording the check came from, which carries the check over
+  (`writeAnchor`'s `checkIsOf`; migration `0090` did the same once for the checks made before
+  matches counted, where the match names the check's recording, or none and the check's work, so an
+  upgrade fits no library again);
+  a different one makes
   it due; a month makes it stale; a check whose basis isn't the book's current one is
   never applied, and the admin page marks it `stale`, so a rescan of other audio,
   re-tagged chapters, files renamed in place or a removed match never brings back
-  chapters fitted to the old files. The fit stores its files relative to the book
+  chapters fitted to the old files (every write of a match rebuilds the book, `refreshEffective`,
+  an anchor alone and `clearCommunity`'s books whose match went included). The fit stores its files relative to the book
   too, so a moved book (the same audio) keeps its check and its chapters; `list_hash` names the community list, so a background recheck
   finding the same list for the same audio only renews `checked_at`, while a check
   asked for fits again). A pass the service keeps failing (5 in a row) waits for the

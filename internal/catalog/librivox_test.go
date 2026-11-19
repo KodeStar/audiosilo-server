@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
+	"github.com/kodestar/audiosilo-server/internal/chapteralign"
 )
 
 // fetchJob is a done librivox.fetch of project 192 into libID as recording
@@ -289,8 +290,20 @@ func TestFoldLibrivoxFetchAdopted(t *testing.T) {
 		if _, err := c.db.ExecContext(ctx, `DELETE FROM book_matches`); err != nil {
 			t.Fatal(err)
 		}
+		// Community chapters fitted by the folder's identifiers: the match is
+		// part of their basis (server#375), so they go with the fold's write.
+		save(t, c, fittedFill(lib.ID, path, string(chapteralign.Fill)))
+		if b := mustBook(t, c, ctx, lib.ID, path); b.ChaptersSource != ChaptersFromCommunity {
+			t.Fatalf("chapters from %q before the fold, want the community's", b.ChaptersSource)
+		}
 		if err := c.FoldLibrivoxFetch(ctx, adoptedFetch(lib.ID, path, uid, "true")); err != nil {
 			t.Fatal(err)
+		}
+		if cc, err := c.GetCommunityChapters(ctx, lib.ID, path); err != nil || cc == nil || !cc.Stale {
+			t.Fatalf("check after the fold = %+v, %v; want it stale", cc, err)
+		}
+		if b := mustBook(t, c, ctx, lib.ID, path); b.ChaptersSource == ChaptersFromCommunity {
+			t.Fatal("the identifiers' recording's chapters outlived the match")
 		}
 		if w, r, how, setBy, _, _ := matchRow(t, c, lib.ID, path); w != "johnny-crows-garden" || r != "lv192" ||
 			how != MatchHowAccepted || setBy != uid {

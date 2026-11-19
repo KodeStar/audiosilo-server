@@ -118,6 +118,9 @@ func TestMirrorAnswersLocally(t *testing.T) {
 	if err != nil || chs.WorkID != querytest.ChapteredWork || chs.RecordingID != querytest.ChapteredRecording || len(chs.Chapters) != querytest.Chapters {
 		t.Fatalf("RecordingChapters = %+v, %v", chs, err)
 	}
+	if mc, err := s.MatchChapters(ctx, querytest.ChapteredWork, querytest.ChapteredRecording); err != nil || len(mc.Chapters) != querytest.Chapters {
+		t.Fatalf("MatchChapters = %+v, %v", mc, err)
+	}
 
 	cands, err := s.Candidates(ctx, MatchQuery{Title: "Project Hail Mary", Author: "Andy Weir"})
 	if err != nil || len(cands) == 0 || cands[0].WorkID != querytest.ASINWork || cands[0].Reasons == nil {

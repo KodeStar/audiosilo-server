@@ -821,6 +821,56 @@ func TestMetaRecordedMatch(t *testing.T) {
 			t.Fatalf("unmatched book's cover = %d %s, want 404", resp.StatusCode, body)
 		}
 	})
+	t.Run("a recording the work doesn't list", func(t *testing.T) {
+		t.Parallel()
+		// A row recorded before server#375's rule, or one the community has
+		// since moved: the match's recording is not one of its work's. /meta
+		// answers the work with no recording, never the work's first one (a
+		// retail narrator and cover on a LibriVox book), and that recording's
+		// cover is not handed out.
+		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
+		e.api.fetchCover = func(context.Context, string, int64) ([]byte, error) { return nil, errors.New("no fetch in this test") }
+		libID := seedBook(t, e, "LibriVox/The Martian", "")
+		anchorMatch(t, e, libID, "LibriVox/The Martian", "the-martian", "rec-of-another-work")
+		body := get(t, e, libID, "LibriVox/The Martian")
+		if !strings.Contains(body, `"matched":true,"work":{"id":"the-martian"`) {
+			t.Fatalf("meta = %s, want the recorded work", body)
+		}
+		for _, leak := range []string{`"recording"`, `"librivox"`, "R. C. Bray"} {
+			if strings.Contains(body, leak) {
+				t.Fatalf("meta carries %s of a recording the match isn't: %s", leak, body)
+			}
+		}
+		if resp, body := e.do(t, "GET", metaCoverPath(libID, "LibriVox/The Martian", "https://c/1.jpg", ""), adminSession(t, e), ""); resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("another recording's cover = %d %s, want 404", resp.StatusCode, body)
+		}
+	})
+	t.Run("another recording of the ASIN's work", func(t *testing.T) {
+		t.Parallel()
+		// The ASIN names rec1 of the work; the admin's match names rec2 of
+		// the same work, and is the recording /meta answers (server#375), as
+		// the book's community chapters do (chaptercheck). A match naming no
+		// recording, or one the work doesn't list, leaves the ASIN's.
+		two := strings.Replace(martianWorkBody, `"chapter_count":12}]`,
+			`"chapter_count":12},{"id":"rec2","narrators":[{"id":"wil-wheaton","name":"Wil Wheaton"}],"runtime_min":653,"cover_url":"https://c/2.jpg","chapter_count":26}]`, 1)
+		if two == martianWorkBody {
+			t.Fatal("fixture replace did not apply")
+		}
+		for recording, want := range map[string]string{
+			"rec2":  `"recording":{"id":"rec2","narrators":[{"id":"wil-wheaton","name":"Wil Wheaton"}]`,
+			"rec1":  `"recording":{"id":"rec1","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}]`,
+			"":      `"recording":{"id":"rec1"`,
+			"stale": `"recording":{"id":"rec1"`,
+		} {
+			e := newMetaEnvMock(t, true, &mockMetaserve{work: two})
+			libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
+			anchorMatch(t, e, libID, "Andy Weir/The Martian", "the-martian", recording)
+			body := get(t, e, libID, "Andy Weir/The Martian")
+			if !strings.Contains(body, `"matched":true,"work":{"id":"the-martian"`) || !strings.Contains(body, want) {
+				t.Errorf("matched to recording %q: meta = %s, want %s", recording, body, want)
+			}
+		}
+	})
 	t.Run("a recorded work upstream lacks keeps the ASIN's", func(t *testing.T) {
 		t.Parallel()
 		e := newMetaEnvMock(t, true, &mockMetaserve{})

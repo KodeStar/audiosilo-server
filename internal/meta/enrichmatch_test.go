@@ -15,7 +15,9 @@ import (
 
 // TestEnrichMatch: a recorded match composes the envelope from works/{id}
 // alone (no lookup), as the recording it names, rails included; a match naming
-// no recording takes the first, as a lookup without one does.
+// no recording takes the first, as a lookup without one does; one naming a
+// recording the work doesn't list (stale, or of another work: server#375) is
+// the work with no recording, never the first one's narrators and cover.
 func TestEnrichMatch(t *testing.T) {
 	m := fullMock()
 	m.workJSON = martianLibrivox
@@ -47,6 +49,13 @@ func TestEnrichMatch(t *testing.T) {
 	env, err = svc.EnrichMatch(context.Background(), "the-martian", "")
 	if err != nil || env.Recording.ID != "rec1" {
 		t.Fatalf("no recording named = %+v, %v; want the first", env.Recording, err)
+	}
+	env, err = svc.EnrichMatch(context.Background(), "the-martian", "rec-of-another-work")
+	if err != nil || !env.Matched || env.Work == nil || env.Work.ID != "the-martian" || env.Recording != nil {
+		t.Fatalf("an unlisted recording = %+v (recording %+v), %v; want the work with no recording", env, env.Recording, err)
+	}
+	if len(env.Series) != 1 || env.Series[0].ID != "mars" {
+		t.Fatalf("an unlisted recording's rails = %+v, want the work's", env.Series)
 	}
 
 	if _, err := svc.EnrichMatch(context.Background(), " ", "rec1"); !errors.Is(err, ErrNotFound) {

@@ -86,6 +86,13 @@ func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 		if errors.Is(err, ErrMatchedSince) {
 			return nil // adopted, matched already: its match stays
 		}
+		if err != nil {
+			return err
+		}
+		// The match is part of the book's community chapter basis: an adopted
+		// book's check made by its identifiers is stale, and leaves its
+		// chapters (writeAnchor).
+		_, err = refreshOrSkip(ctx, tx, id)
 		return err
 	})
 	if err == nil {

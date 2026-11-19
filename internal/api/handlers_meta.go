@@ -199,12 +199,19 @@ const metaComposeShare = 20 * time.Second
 // download rarely carries either) or fail (an outage: the match's stored answer
 // still serves, server#375); else the identifiers' answer (meta.Service.Enrich,
 // which names the recording they are). A recorded work upstream can't answer
-// leaves the identifiers' answer standing. err is the lookup's outcome
-// (meta.ErrNotFound when nothing matches); matchErr a failure to read the
-// recorded match. The match is read only when Book.WorkID (the recorded work
-// first) differs from the identifiers' work. When the cache already knows that
-// it does, the match is composed first and the identifiers only when it fails,
-// so their answer is not composed only to be set aside (server#447).
+// leaves the identifiers' answer standing. A match of the identifiers' own
+// work still names the recording (the admin's choice among the work's,
+// server#375): the match's envelope when it names another recording than the
+// identifiers do and the work lists it, else the identifiers' (a match naming
+// no recording, or a stale one, leaves the recording the book's own
+// identifiers name). err is the lookup's outcome (meta.ErrNotFound when
+// nothing matches); matchErr a failure to read the recorded match. The match
+// is read for any book with a known work (Book.WorkID, the recorded work
+// first). When the cache already knows the identifiers' work to be another,
+// the match is composed first and the identifiers only when it fails, so their
+// answer is not composed only to be set aside (server#447). A book's community
+// chapters go by the same rule (chaptercheck's chapters), so they and this
+// answer describe one recording: a change here is a change there.
 func (a *API) bookEnrichment(ctx context.Context, book *catalog.Book) (env *meta.Enrichment, err, matchErr error) {
 	ctx = meta.WithSharedBudget(ctx, metaComposeShare)
 	// matchFirst: the cache already knows the identifiers' work to be another.
@@ -215,13 +222,26 @@ func (a *API) bookEnrichment(ctx context.Context, book *catalog.Book) (env *meta
 	}
 	if !matchFirst {
 		env, err = a.meta.Enrich(ctx, book.ASIN, book.ISBN)
-		if book.WorkID == "" || (err == nil && env.OfWork(book.WorkID)) {
+		if book.WorkID == "" {
 			return env, err, nil
 		}
 	}
 	m, matchErr := a.cat.BookMatchAt(ctx, book.LibraryID, book.RelPath)
 	if matchErr != nil {
 		return env, err, matchErr
+	}
+	if err == nil && env.OfWork(book.WorkID) {
+		// The identifiers name the book's work: their answer, unless the
+		// match names another of that work's recordings.
+		if m != nil && m.RecordingID != "" && env.OfWork(m.WorkID) && (env.Recording == nil || env.Recording.ID != m.RecordingID) {
+			// Only as that recording: a stale match answers with none
+			// (pickRecording's matched), and the identifiers' stands.
+			if menv, merr := a.meta.EnrichMatch(ctx, m.WorkID, m.RecordingID); merr == nil &&
+				menv.Recording != nil && menv.Recording.ID == m.RecordingID {
+				return menv, nil, nil
+			}
+		}
+		return env, nil, nil
 	}
 	var merr error
 	if m != nil {

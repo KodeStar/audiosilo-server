@@ -255,6 +255,91 @@ func TestCommunityChaptersStale(t *testing.T) {
 	}
 }
 
+// A recorded match is part of what a check depends on (server#375): one that
+// names the recording the check came from carries the check over, its
+// chapters untouched; one that names another, and an unlink, leave the check
+// stale and take its chapters out of the book in the same write, though the
+// match is all the edit holds. An edited list stays through all of them.
+func TestCommunityChaptersFollowTheMatch(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const p, edited = "A/Plain.m4b", "A/Edited.m4b"
+	for _, path := range []string{p, edited} {
+		if _, err := c.UpsertBook(ctx, chapterless(lib.ID, path)); err != nil {
+			t.Fatal(err)
+		}
+		save(t, c, fittedFill(lib.ID, path, string(chapteralign.Fill)))
+	}
+	own := []EditedChapter{{0, "Mine"}, {1800, "Mine too"}}
+	if err := c.SaveChapterEdit(ctx, lib.ID, edited, basisNow(t, c, lib.ID, edited), own, 0); err != nil {
+		t.Fatal(err)
+	}
+	match := func(path, work, recording string) {
+		t.Helper()
+		if err := c.EditBook(ctx, lib.ID, path, BookEdit{
+			Match: &MatchAnchor{WorkID: work, RecordingID: recording}, Source: SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(when string, stale bool, source string) {
+		t.Helper()
+		cc, err := c.GetCommunityChapters(ctx, lib.ID, p)
+		if err != nil || cc == nil || cc.Stale != stale {
+			t.Fatalf("%s: check %+v, %v; want stale=%v", when, cc, err, stale)
+		}
+		if b := mustBook(t, c, ctx, lib.ID, p); b.ChaptersSource != source || (len(b.Chapters) == 3) != (source != "") {
+			t.Fatalf("%s: chapters %q from %q, want from %q", when, titlesOf(b), b.ChaptersSource, source)
+		}
+		if b := mustBook(t, c, ctx, lib.ID, edited); b.ChaptersSource != ChaptersFromEdited ||
+			!slices.Equal(titlesOf(b), []string{"Mine", "Mine too"}) {
+			t.Fatalf("%s: the edited book's chapters %q from %q", when, titlesOf(b), b.ChaptersSource)
+		}
+	}
+	before, err := c.ChapterInputs(ctx, lib.ID, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The check's own recording (fittedFill's w/r): carried over the match.
+	match(p, "w", "r")
+	match(edited, "w", "r")
+	check("matched to the check's recording", false, ChaptersFromCommunity)
+	in, err := c.ChapterInputs(ctx, lib.ID, p)
+	if err != nil || in.Match == nil || in.Match.WorkID != "w" || in.Match.RecordingID != "r" {
+		t.Fatalf("inputs %+v, %v; want the match", in, err)
+	}
+	// The form migration 0090 writes for the checks made before matches counted.
+	if in.Basis != before.Basis+"\x1ew/r" {
+		t.Fatalf("basis %q, want %q then the match", in.Basis, before.Basis)
+	}
+
+	// Another recording of the work, another work, and none named: stale, and
+	// out of the book at once.
+	for _, m := range [][2]string{{"w", "r2"}, {"w2", "r"}, {"w", ""}} {
+		save(t, c, fittedFill(lib.ID, p, string(chapteralign.Fill)))
+		match(p, "w", "r")
+		check("back on the check's recording", false, ChaptersFromCommunity)
+		match(p, m[0], m[1])
+		match(edited, m[0], m[1])
+		check("matched to "+m[0]+"/"+m[1], true, "")
+	}
+
+	// An unlink: the check made under the match is stale too.
+	save(t, c, fittedFill(lib.ID, p, string(chapteralign.Fill)))
+	check("checked under the match", false, ChaptersFromCommunity)
+	for _, path := range []string{p, edited} {
+		if err := c.EditBook(ctx, lib.ID, path, BookEdit{Match: &MatchAnchor{}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check("unlinked", true, "")
+	if due, _ := c.DueChapterChecks(ctx, "2000-01-01T00:00:00Z", 10); len(due) != 2 {
+		t.Fatalf("due %+v, want both unlinked books", due)
+	}
+}
+
 // The admin's choice is the book's: it follows a move, and the choice alone (no
 // metadata edit) does not make the book "edited".
 func TestChapterChoiceFollowsAMove(t *testing.T) {

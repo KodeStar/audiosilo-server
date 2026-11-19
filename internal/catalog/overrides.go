@@ -1059,7 +1059,13 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		revert = slices.Concat(edit.Revert, swapRevert, labelRevert)
 	}
 	if len(set) == 0 && len(revert) == 0 && edit.ChapterSource == "" && len(edit.ChapterSet) == 0 && len(edit.ChapterRevert) == 0 {
-		return nil // nothing else for this book (a bulk add of a tag it already has, an anchor alone): its row stays as it is
+		if edit.Match != nil && edit.Match.WorkID != "" {
+			// An anchor alone: the match is part of the book's community
+			// chapter basis, so a check it leaves stale goes out of the
+			// book's chapters now (an unlink's book is clearCommunity's).
+			return refreshEffective(ctx, tx, bookID)
+		}
+		return nil // nothing else for this book (a bulk add of a tag it already has): its row stays as it is
 	}
 	for field, v := range set {
 		if _, err := tx.ExecContext(ctx,

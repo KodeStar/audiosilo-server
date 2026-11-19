@@ -126,12 +126,30 @@ var ErrMatchedSince = errors.New("the book's community match changed since it wa
 // unlink does: the job reads a match naming the work the book's identifiers
 // resolved to as standing in for nothing, so a re-match to that work would
 // leave the series resolved by the old match's until the monthly recheck.
+//
+// The match is part of the book's community chapter basis (chapterBasisExpr),
+// so writing one makes the book's check stale, except a check that already
+// came from the recording it names, which is carried over the write
+// (checkIsOf). The caller rebuilds the book (refreshEffective), which takes a
+// check left stale out of its chapters.
 func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, editor any, now string) error {
 	if was == nil || was.WorkID != "" { // an insert-only write replaces no match
 		if err := setMatchedSeriesDue(ctx, tx, oneBook(ref), a.WorkID); err != nil {
 			return err
 		}
 	}
+	holds, err := checkIsOf(ctx, tx, ref, a.WorkID, a.RecordingID)
+	if err != nil {
+		return err
+	}
+	if err := storeAnchor(ctx, tx, ref, a, was, editor, now); err != nil || !holds {
+		return err
+	}
+	return stampChapterBasis(ctx, tx, ref)
+}
+
+// storeAnchor is writeAnchor's write of the book_matches row.
+func storeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, editor any, now string) error {
 	args := []any{ref.LibraryID, ref.Path, a.WorkID, a.RecordingID, a.How, nullableID(a.RunID), editor, now,
 		a.OfferedASIN, a.OfferedISBN}
 	if was != nil && was.WorkID != "" {
