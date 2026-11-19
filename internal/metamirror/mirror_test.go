@@ -23,6 +23,7 @@ import (
 	"github.com/kodestar/audiosilo-meta/pkg/release/releasetest"
 
 	"github.com/kodestar/audiosilo-server/internal/mirrortest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -75,10 +76,11 @@ func copies(t *testing.T, dir string) []string {
 	return matches
 }
 
-// eventually polls cond for up to five seconds.
+// eventually polls cond for up to five seconds, scaled to the build (a
+// download and swap under -race on a loaded machine).
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	mirrortest.Eventually(t, what, 5*time.Second, cond)
+	mirrortest.Eventually(t, what, testwait.Scaled(5*time.Second), cond)
 }
 
 func TestMirrorDownloadsAndSwaps(t *testing.T) {
@@ -535,7 +537,7 @@ func TestMirrorStopsWhenDisabled(t *testing.T) {
 	on.Store(false)
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testwait.Scaled(5 * time.Second)):
 		t.Fatal("turning metadata off must stop the download")
 	}
 	st := m.Status()

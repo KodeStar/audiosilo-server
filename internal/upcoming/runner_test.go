@@ -14,7 +14,9 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/mirrortest"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // fakeMeta is the community service for the runner's tests: works by ASIN,
@@ -892,7 +894,7 @@ func TestRunnerSwitchedOffMidRun(t *testing.T) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(10 * time.Second):
+		case <-time.After(testwait.Scaled(10 * time.Second)):
 			return errors.New("the run was not stopped")
 		}
 	}
@@ -941,16 +943,11 @@ func runSchedule(t *testing.T, f *fixture) {
 	})
 }
 
-// eventually waits up to five seconds for cond.
+// eventually waits up to five seconds for cond, scaled to the build (a run
+// under -race on a loaded machine).
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	mirrortest.Eventually(t, what, testwait.Scaled(5*time.Second), cond)
 }
 
 // A burst of kicks (a scan adding books) makes one light run, once the kicks

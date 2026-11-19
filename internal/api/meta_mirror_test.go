@@ -22,6 +22,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/metamirror"
 	"github.com/kodestar/audiosilo-server/internal/mirrortest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // mirrorEnv is a test env in mirror mode: a real metamirror.Mirror holding the
@@ -70,7 +71,7 @@ func newMirrorEnvOver(t *testing.T, assets map[string][]byte) *mirrorEnv {
 	m.CheckNow()
 	// The copy answers (Ready) before the check that fetched it has finished;
 	// a running check reports no next one, so wait for that too.
-	mirrortest.Eventually(t, "the mirror's first check", 5*time.Second, func() bool {
+	mirrortest.Eventually(t, "the mirror's first check", testwait.Scaled(5*time.Second), func() bool {
 		return m.Ready() && !m.Status().NextCheckAt.IsZero()
 	})
 	e.api.SetMetaMirror(m)
@@ -268,7 +269,7 @@ func TestMetaMirrorRoutes(t *testing.T) {
 		t.Fatalf("the check's answer must reflect the wake, next_check_at = %v, checked_at = %v", st.NextCheckAt, st.CheckedAt)
 	}
 	// The wake reached the runner: the check runs and the next is scheduled.
-	mirrortest.Eventually(t, "the woken check", 5*time.Second, func() bool {
+	mirrortest.Eventually(t, "the woken check", testwait.Scaled(5*time.Second), func() bool {
 		s := e.mirror.Status()
 		return !s.CheckedAt.Before(before) && !s.NextCheckAt.IsZero()
 	})
@@ -334,7 +335,7 @@ func TestMetaMirrorWakesWhenMetadataTurnsOn(t *testing.T) {
 	if resp, b := e.do(t, "PATCH", "/api/v1/admin/settings", e.adminTok, `{"metadata":{"enabled":true}}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("turn on = %d %s", resp.StatusCode, b)
 	}
-	mirrortest.Eventually(t, "the due check once metadata is on", 5*time.Second, func() bool {
+	mirrortest.Eventually(t, "the due check once metadata is on", testwait.Scaled(5*time.Second), func() bool {
 		return e.mirror.Status().CheckedAt.After(checked)
 	})
 }
