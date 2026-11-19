@@ -366,8 +366,8 @@ func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegP
 // fileInput is how ffmpeg reads f, the library file at path under root,
 // opened through root (Transcode), without resolving its path again: f as
 // its stdin through the fd: protocol when this ffmpeg has it (inputFor), else
-// handed over as metadata.ToolInput hands every tool a library file (its
-// ToolInputBounded: ctx, at most wait), read by the file protocol: on Unix
+// handed over as metadata.ToolInput hands every tool a library file (ctx, at
+// most wait), read by the file protocol: on Unix
 // the child's descriptor 3 through a link named for path's extension, read
 // seekably (an input -ss; an MP4 whose index sits at its end demuxes, which
 // pipe:0 can't), never a path in the library; elsewhere path resolved,
@@ -390,10 +390,10 @@ func fileInput(ctx context.Context, ffmpegPath string, f *os.File, root, path st
 	return inputSpec{proto: "file", url: "file:" + input, extra: extra}, cleanup, nil
 }
 
-// toolInputBounded is fileInput's metadata.ToolInputBounded, a test's to
+// toolInputBounded is fileInput's metadata.ToolInput, a test's to
 // inject a share's errors: only Windows' re-check of the path looks at the
 // share, so no other platform meets them.
-var toolInputBounded = metadata.ToolInputBounded
+var toolInputBounded = metadata.ToolInput
 
 // inputSpec is how ffmpeg reads its input: the descriptor file handed over as
 // its stdin through the fd: protocol (seekable) or pipe:0 (not seekable, for

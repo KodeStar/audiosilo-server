@@ -120,7 +120,8 @@ var ffprobeKillGrace = 5 * time.Second
 
 // runFFprobe runs ffprobe on the file at path under root and returns its
 // answer. The file is opened through root (openBlockFile, bounded as a tag
-// read's open is) and handed to ffprobe opened (ToolInput), so ffprobe never
+// read's open is) and handed to ffprobe opened (ToolInput, bounded as the
+// open is), so ffprobe never
 // opens the path itself: a link swapped in along it since it was checked
 // can't lead ffprobe out of the library, and it reads the file
 // as an audio container only (InputFormatArgs), never as a playlist of other
@@ -158,9 +159,14 @@ func runFFprobe(parent context.Context, root, path, ffprobePath string, timeout 
 	case err != nil:
 		return nil, err
 	}
-	input, extra, cleanup, err := ToolInput(f, root, path)
+	input, extra, cleanup, err := ToolInput(ctx, f, root, path, timeout)
 	if err != nil {
 		_ = f.Close()
+		if GaveUp(err) {
+			// Windows' look at the path again, on a share that stopped
+			// answering since the open: as an open given up on.
+			return nil, cmp.Or(timedOut(), fmt.Errorf("%w: %w", ErrProbeTimeout, err))
+		}
 		return nil, err
 	}
 	// The run owns f and its input once it starts, and lets them go when

@@ -1424,10 +1424,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   folder can't open (a link to a folder beside it, an absolute target) is opened through the root's kept
   folder, then resolved as `Below` does (an lstat's up to its last name only, so `LstatBelow` is always the
   link's own: `TestLstatBelowIsTheLinksOwn`). An external tool is handed the file
-  opened so, never its path (`metadata.ToolInput`): ffprobe's fallback run (`runFFprobe`), the chapter
-  check's ffmpeg (`media.DetectSilences`, given the library's root) and a transcode on an ffmpeg without
-  `fd:` (`media.fileInput`, through `ToolInputBounded`: where its looks are on the share, Windows, a bounded
-  look whose late answer's handle is closed when it comes, `TestBoundedToolInputGivenUp`). On Unix the tool inherits the descriptor
+  opened so, never its path (`metadata.ToolInput`, the one entry point, always bounded where it looks at the
+  share, Windows: within the caller's time, a look whose late answer's handle is closed when it comes,
+  `TestBoundedToolInputGivenUp`, `TestToolInputBoundedWhereItLooks`): ffprobe's fallback run (`runFFprobe`,
+  within the probe's time, one given up on its `ErrProbeTimeout`), the chapter check's ffmpeg
+  (`media.DetectSilences`, given the library's root, within its window's time) and a transcode or a cached
+  copy on an ffmpeg without `fd:` (`media.fileInput`). On Unix the tool inherits the descriptor
   and is named a link to its own `/dev/fd/3` in a private folder, named for the file's extension (ffmpeg
   guesses a format by it; `TestProbeMatchesLiveFFprobe` holds parity), or, with no temporary folder it may
   write to (a read-only container), `/dev/fd/3` itself, its format guessed from its bytes

@@ -29,7 +29,7 @@ const (
 // from first, so a window costs a few seconds of decoding however long the
 // file. A pause running past either edge of the window is cut at it. The file
 // is opened through root (metadata.OpenRegularBelow) and handed to ffmpeg
-// opened (metadata.ToolInput), so ffmpeg never opens the path: a link swapped
+// opened (metadata.ToolInput, within the same time), so ffmpeg never opens the path: a link swapped
 // in along it since its check can't lead it out of the library. ffmpeg reads
 // it as an audio container only (metadata.InputFormatArgs): a file shaped like
 // a playlist is an error, the files it lists never opened.
@@ -44,7 +44,7 @@ func DetectSilences(ctx context.Context, ffmpegPath, root, absPath string, from,
 		return nil, err
 	}
 	defer f.Close()
-	input, extra, cleanup, err := metadata.ToolInput(f, root, absPath)
+	input, extra, cleanup, err := metadata.ToolInput(ctx, f, root, absPath, silenceTimeout)
 	if err != nil {
 		return nil, err
 	}

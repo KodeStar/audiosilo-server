@@ -19,23 +19,18 @@ import (
 // inherits (/dev/fd/3): the tool opens the file the server opened, wherever
 // path now leads (inputLink); with no temporary folder to make it in (a
 // read-only one), the descriptor's own name, its format guessed from its
-// bytes. On Windows, where no descriptor is inherited so, input is path
-// resolved (no link left in it), checked to be under root and, opened once
-// more and held until cleanup, to be f (os.SameFile): a folder along it
-// can't be renamed while a file in it is open there, nor the file itself
-// while that handle (no delete sharing) is, so it still names f when the
-// tool opens it.
-func ToolInput(f *os.File, root, path string) (input string, extra []*os.File, cleanup func(), err error) {
-	return toolInput(f, root, path)
-}
-
-// ToolInputBounded is ToolInput for a request's tool run (media's transcode
-// on an ffmpeg without the fd: protocol): where it looks at the share (path's
-// links resolved and the file opened once more, on Windows) it is a Bounded
-// call (ctx, at most timeout; an open, not a look), given up on (GaveUp) on a share
-// that stopped answering since the file's open, and what a late answer holds
-// let go then; on Unix it looks at nothing there, so it is ToolInput.
-func ToolInputBounded(ctx context.Context, f *os.File, root, path string, timeout time.Duration) (input string, extra []*os.File, cleanup func(), err error) {
+// bytes. It looks at nothing on the share there. On Windows, where no
+// descriptor is inherited so, input is path resolved (no link or junction
+// left in it), checked to be under root and, opened once more and held until
+// cleanup, to be f (os.SameFile): a folder along it can't be renamed while a
+// file in it is open there, nor the file itself while that handle (no delete
+// sharing) is, so it still names f when the tool opens it. Those looks are on
+// the share, so there it is a Bounded call (ctx, at most timeout; an open,
+// not a look), given up on (GaveUp) on a share that stopped answering since
+// f's open, and what a late answer holds let go then. It is the one way a
+// tool is handed a library file: the scan's probe, the silence detection, a
+// transcode and a cached copy on an ffmpeg without the fd: protocol.
+func ToolInput(ctx context.Context, f *os.File, root, path string, timeout time.Duration) (input string, extra []*os.File, cleanup func(), err error) {
 	if !toolInputLooks {
 		return toolInput(f, root, path)
 	}
