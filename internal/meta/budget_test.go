@@ -66,9 +66,11 @@ func TestRunRateLimitWaitsOutsideTheBudget(t *testing.T) {
 		}
 		return upstream.RoundTrip(r)
 	})
-	s.composeBudget = 100 * time.Millisecond
+	// The budget is for the reads alone (three requests, on a busy test host
+	// too); the pair of waits outlasts it.
+	s.composeBudget = 300 * time.Millisecond
 	s.client.sleep = func(ctx context.Context, _ time.Duration) error {
-		return sleepCtx(ctx, 80*time.Millisecond) // the pair of waits outlasts the budget
+		return sleepCtx(ctx, 200*time.Millisecond)
 	}
 
 	q := sharpeBook
@@ -135,11 +137,13 @@ func TestSeriesFactsWaiterBudgetHeld(t *testing.T) {
 	s.seriesFlights["s1"] = flight
 	s.flightMu.Unlock()
 
-	ctx, cancel := withBudget(WithPacer(context.Background(), quietPacer(1000)), 30*time.Millisecond)
+	// Long enough for the waiter to start on a busy test host.
+	const budget = 100 * time.Millisecond
+	ctx, cancel := withBudget(WithPacer(context.Background(), quietPacer(1000)), budget)
 	defer cancel()
 	got := make(chan *seriesFacts, 1)
 	go func() { got <- s.seriesFacts(ctx, "s1") }()
-	time.Sleep(120 * time.Millisecond) // four times the budget, all of it the other read's
+	time.Sleep(3 * budget) // three times the budget, all of it the other read's
 	if ctx.Err() != nil {
 		t.Fatal("the waiter's budget ran out while it waited on another worker's read")
 	}
