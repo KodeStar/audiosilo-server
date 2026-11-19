@@ -1396,6 +1396,9 @@ describe('audible sync', () => {
       until: '2026-11-19T10:00:00Z',
     });
     expect(sync('done', { titles: 4, waiting: true })).toEqual({ kind: 'waiting' });
+    expect(sync('done', { titles: 4, waiting: true, wait_until: 'soon' })).toEqual({
+      kind: 'waiting',
+    });
     expect(sync('done', { titles: 4, sync_off: true })).toEqual({ kind: 'off' });
     expect(sync('done', { titles: 4, heard: 3, applied: 1 })).toEqual({
       kind: 'counts',

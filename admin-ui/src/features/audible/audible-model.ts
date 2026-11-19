@@ -139,8 +139,14 @@ export function syncSummary(
   const r = job.result;
   if (job.kind !== 'audible.sync' || !r || (job.state !== 'done' && job.state !== 'failed'))
     return undefined;
-  if (job.state === 'done' && r.waiting === true)
-    return { kind: 'waiting', until: text(r.wait_until) };
+  if (job.state === 'done' && r.waiting === true) {
+    // A time the console can't read is none (it would format as nothing).
+    const until = text(r.wait_until);
+    return {
+      kind: 'waiting',
+      until: until && !Number.isNaN(Date.parse(until)) ? until : undefined,
+    };
+  }
   if (job.state === 'done' && r.sync_off === true) return { kind: 'off' };
   const titles = num(r.titles);
   const heard = num(r.heard);
