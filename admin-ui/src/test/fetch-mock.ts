@@ -8,6 +8,8 @@ export interface MockRequest {
   query: URLSearchParams;
   headers: Record<string, string>;
   body: unknown;
+  /** The request's cache mode (RequestInit.cache), when it set one. */
+  cache?: RequestCache;
 }
 
 export type MockReply =
@@ -40,6 +42,7 @@ export function mockFetch(routes: Record<string, MockRoute>) {
       query: url.searchParams,
       headers: (init.headers ?? {}) as Record<string, string>,
       body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
+      cache: init.cache,
     };
     calls.push(req);
     const key = `${req.method} ${req.path}`;

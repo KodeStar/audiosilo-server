@@ -309,6 +309,8 @@ describe('api client', () => {
       const calls = mockFetch({ 'HEAD /libraries/1/stream': reply });
       const got = await lookAtTranscode(url);
       expect(calls[0].method).toBe('HEAD');
+      // Past the HTTP cache, where Chromium's <audio> fetch of the URL holds the entry.
+      expect(calls[0].cache).toBe('no-store');
       return got;
     };
     expect(

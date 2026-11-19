@@ -815,6 +815,7 @@
   "book.chapters.edit.addHere": "Ajouter à la tête de lecture",
   "book.chapters.edit.unavailable": "L’audio ne s’est pas chargé, le lecteur ne peut donc pas le lire. Vous pouvez toujours saisir les temps.",
   "book.chapters.edit.busy": "Le serveur est occupé. Nouvel essai dans un instant.",
+  "book.chapters.edit.stopWaiting": "Arrêter de réessayer",
   "book.chapters.edit.source": "Chapitres modifiés sur ce serveur.",
   "book.chapters.edit.editedBy": "Modifiés par {{user}}, {{when}}.",
   "book.chapters.edit.editedAt": "Modifiés {{when}}.",

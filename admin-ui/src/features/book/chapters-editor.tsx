@@ -858,6 +858,15 @@ function Scrubber({
     clearTimeout(preview.current);
     previewing.current = false;
     stopRetry();
+    // During a busy stream's wait the button stops it: no automatic ask again
+    // (as a pause then plays nothing), and Play later asks at once, with its
+    // own tries. Paused, a stalled stream lets go of its slot (Safari).
+    if (waiting) {
+      wanted.current = false;
+      busy.current = 0;
+      a.pause();
+      return;
+    }
     if (!a.paused && !broken.current) {
       wanted.current = false;
       a.pause();
@@ -1160,10 +1169,16 @@ function Scrubber({
           variant="outline"
           size="icon-sm"
           disabled={off}
-          aria-label={playing ? t('book.chapters.edit.pause') : t('book.chapters.edit.play')}
+          aria-label={
+            waiting
+              ? t('book.chapters.edit.stopWaiting')
+              : playing
+                ? t('book.chapters.edit.pause')
+                : t('book.chapters.edit.play')
+          }
           onClick={toggle}
         >
-          {playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
+          {playing || waiting ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
         </Button>
         {(
           [

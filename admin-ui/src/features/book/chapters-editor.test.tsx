@@ -820,16 +820,25 @@ describe('the chapter editor', () => {
       expect(load).not.toHaveBeenCalled();
     });
 
-    it('asks at once when Play is pressed during the wait, and not again after it', async () => {
+    it('stops the wait when its button is pressed, and asks at once on Play after', async () => {
       const { user, audio, looks } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
+      fireEvent.play(audio);
       fireEvent.error(audio);
       await waitFor(() => expect(looks()).toHaveLength(1));
-      // Past the look's answer, into the wait.
+      // Past the look's answer, into the wait: the button stops it, no Play.
       await screen.findByText('The server is busy. Trying again in a moment.');
-      await user.click(screen.getByRole('button', { name: 'Play' }));
-      expect(play).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('button', { name: 'Play' })).not.toBeInTheDocument();
+      const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause');
+      await user.click(screen.getByRole('button', { name: 'Stop trying again' }));
+      expect(pause).toHaveBeenCalledTimes(1);
       expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
+      // The wait ran out with nothing asked again.
       await new Promise((r) => setTimeout(r, 300));
+      expect(load).not.toHaveBeenCalled();
+      expect(play).not.toHaveBeenCalled();
+      // Play asks again at once.
+      await user.click(screen.getByRole('button', { name: 'Play' }));
+      expect(load).toHaveBeenCalledTimes(1);
       expect(play).toHaveBeenCalledTimes(1);
     });
 
@@ -841,6 +850,7 @@ describe('the chapter editor', () => {
       expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
       fireEvent.error(audio);
       await screen.findByText('The server is busy. Trying again in a moment.');
+      await user.click(screen.getByRole('button', { name: 'Stop trying again' }));
       const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause');
       await user.click(screen.getByRole('button', { name: 'Play' }));
       expect(pause).not.toHaveBeenCalled();
@@ -975,7 +985,8 @@ describe('the chapter editor', () => {
         await screen.findByText('The server is busy. Trying again in a moment.'),
       ).toBeInTheDocument();
       expect(looks()).toHaveLength(1);
-      expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+      // The wait can be stopped meanwhile.
+      expect(screen.getByRole('button', { name: 'Stop trying again' })).toBeEnabled();
       await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
       expect(load).toHaveBeenCalledTimes(1);
       expect(play.mock.contexts[0]).toBe(audio);
