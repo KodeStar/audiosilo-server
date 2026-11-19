@@ -336,7 +336,12 @@ func belowFolder[T any](root, path string, followLast bool, open func(r *os.Root
 	}
 	// The path resolved, opened through the root's kept folder: the open
 	// through it failed just now, so it is not made again, nor the root
-	// opened once more (below's way, should the root not open here).
+	// opened once more (below's way, should the root not open here, or the
+	// kept handle have gone stale since its look: below's fresh root opens
+	// the path itself again).
+	if staleHandle(err) {
+		return below(root, path, followLast, open)
+	}
 	top, terr := belowFolders.get(rootAbs, ".")
 	if terr != nil {
 		return below(root, path, followLast, open)
