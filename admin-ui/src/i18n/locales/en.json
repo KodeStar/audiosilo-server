@@ -2710,6 +2710,7 @@
   "errors.invalidBackup": "This file is damaged or isn't an AudioSilo backup, so it can't be restored.",
   "errors.backupTooNew": "This backup was made by a newer AudioSilo server. Update this one first.",
   "errors.tooManyTargets": "A server can have at most 20 notification destinations.",
+  "errors.tooLarge": "That's too large for the server to take in one go. Try with less at a time.",
   "backups.weekday.mon": "Monday",
   "backups.schedule.weekly.mon": "Every Monday at {{time}}.",
   "backups.weekday.tue": "Tuesday",

@@ -2877,6 +2877,7 @@
   "errors.invalidBackup": "Este archivo está dañado o no es una copia de seguridad de AudioSilo, así que no se puede restaurar.",
   "errors.backupTooNew": "Esta copia la hizo un servidor AudioSilo más reciente. Actualiza este primero.",
   "errors.tooManyTargets": "Un servidor puede tener como máximo 20 destinos de notificaciones.",
+  "errors.tooLarge": "Es demasiado grande para que el servidor lo acepte de una vez. Prueba con menos cada vez.",
   "backups.weekday.mon": "Lunes",
   "backups.schedule.weekly.mon": "Cada lunes a las {{time}}.",
   "backups.weekday.tue": "Martes",

@@ -28,9 +28,9 @@ const BY_CODE: Record<string, string> = {
   root_overlaps: 'errors.rootOverlaps',
   // A library the config declares: its name and folder are set there.
   config_library: 'libraries.form.configLocked',
-  // The console caps bulk edits and share additions at the server's limits, so
-  // the one too_large a person can hit is a cover upload.
-  too_large: 'book.cover.tooLarge',
+  // A request past one of the server's bounds (a selection of books, a share's
+  // rules, a body). The cover upload words its own (book.cover.tooLarge).
+  too_large: 'errors.tooLarge',
   unsupported_image: 'book.cover.unsupported',
   // Any action that needs community metadata (a match, Check now) while it's off.
   metadata_off: 'errors.metadataOff',
@@ -131,14 +131,21 @@ const BY_CODE: Record<string, string> = {
   invalid_template: 'errors.invalidTemplate',
 };
 
-/** A failure as one sentence for a toast or a field. */
-export function errorMessage(err: unknown, t: TFunction = i18n.t): string {
+/**
+ * A failure as one sentence for a toast or a field. byCode words a code for one
+ * action, over the general wording (a cover upload's too_large names the image).
+ */
+export function errorMessage(
+  err: unknown,
+  t: TFunction = i18n.t,
+  byCode?: Record<string, string>,
+): string {
   if (err instanceof ApiError) {
     if (err.code && err.reason) {
       const text = t(`errors.${err.code}.${err.reason}`, { max: err.max, defaultValue: '' });
       if (text) return text;
     }
-    const key = err.code ? BY_CODE[err.code] : undefined;
+    const key = err.code ? (byCode?.[err.code] ?? BY_CODE[err.code]) : undefined;
     if (key) return t(key);
     if (err.status === 429) return t('auth.rateLimited');
     return err.message;
@@ -147,8 +154,8 @@ export function errorMessage(err: unknown, t: TFunction = i18n.t): string {
 }
 
 /** Toasts a failed action: what didn't happen, and why. */
-export function toastError(title: string, err: unknown) {
-  toast.add({ title, description: errorMessage(err), type: 'error' });
+export function toastError(title: string, err: unknown, byCode?: Record<string, string>) {
+  toast.add({ title, description: errorMessage(err, i18n.t, byCode), type: 'error' });
 }
 
 /**

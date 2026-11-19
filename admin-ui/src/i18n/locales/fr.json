@@ -2877,6 +2877,7 @@
   "errors.invalidBackup": "Ce fichier est endommagé ou n'est pas une sauvegarde AudioSilo, il ne peut donc pas être restauré.",
   "errors.backupTooNew": "Cette sauvegarde a été créée par un serveur AudioSilo plus récent. Mettez d'abord celui-ci à jour.",
   "errors.tooManyTargets": "Un serveur peut avoir au maximum 20 destinations de notification.",
+  "errors.tooLarge": "C'est trop volumineux pour que le serveur l'accepte en une fois. Essayez avec moins à la fois.",
   "backups.weekday.mon": "Lundi",
   "backups.schedule.weekly.mon": "Chaque lundi à {{time}}.",
   "backups.weekday.tue": "Mardi",

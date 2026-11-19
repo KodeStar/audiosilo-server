@@ -10,8 +10,8 @@ describe('errorMessage', () => {
     expect(errorMessage(new ApiError(409, 'reworded', 'last_admin'), t)).toMatch(
       /at least one admin/,
     );
-    expect(errorMessage(new ApiError(413, 'the image is larger than 5 MB', 'too_large'), t)).toBe(
-      'That image is larger than 5 MB. Pick a smaller one.',
+    expect(errorMessage(new ApiError(400, 'too many rules', 'too_large'), t)).toBe(
+      "That's too large for the server to take in one go. Try with less at a time.",
     );
     expect(errorMessage(new ApiError(404, 'no book', 'book_not_found'), t)).toMatch(
       /isn't in the library/,
@@ -25,6 +25,18 @@ describe('errorMessage', () => {
     expect(errorMessage(new ApiError(409, 'turn it on', 'report_off'), t)).toMatch(
       /^Help complete the community database is off/,
     );
+  });
+
+  it("words a code for one action over the general wording (a cover's too_large)", () => {
+    const tooBig = new ApiError(413, 'the image is larger than 5 MB', 'too_large');
+    expect(errorMessage(tooBig, t, { too_large: 'book.cover.tooLarge' })).toBe(
+      'That image is larger than 5 MB. Pick a smaller one.',
+    );
+    expect(errorMessage(tooBig, t)).not.toMatch(/image/);
+    // A code the action doesn't word keeps the general wording.
+    expect(
+      errorMessage(new ApiError(409, 'x', 'last_admin'), t, { too_large: 'book.cover.tooLarge' }),
+    ).toMatch(/at least one admin/);
   });
 
   it('words an Audible destination or template the server refuses (bridge#47)', () => {
