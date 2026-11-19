@@ -271,10 +271,8 @@ func boundedLooks(ctx context.Context, rootAbs string, deadline time.Time,
 			switch {
 			case err == nil:
 				return r, nil
-			case faultWithin(rootAbs, err):
+			case faultWithin(rootAbs, err) || metadata.Unanswered(ctx, err):
 				return "", unansweredLook(ctx, err)
-			case metadata.Unanswered(ctx, err):
-				return "", cmp.Or(err, ctx.Err())
 			}
 			return "", nil // a dangling link, or a fault out of the root
 		},
@@ -298,7 +296,7 @@ var evalLook = metadata.EvalSymlinksBounded
 // to tell where (no fs.PathError) is not.
 func faultWithin(rootAbs string, err error) bool {
 	var pe *fs.PathError
-	return errors.As(err, &pe) && filepath.IsAbs(pe.Path) && withinRoot(rootAbs, pe.Path)
+	return errors.As(err, &pe) && withinRoot(rootAbs, pe.Path)
 }
 
 // plainLooks are SafeJoin's: os.Lstat and filepath.EvalSymlinks, no listing.
