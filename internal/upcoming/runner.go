@@ -408,14 +408,30 @@ func (r *Runner) runOnce(ctx context.Context, full bool) (whole bool, err error)
 // whose work it found new or changed are kept (pending) for the next full
 // run's series step. r.mu is held.
 func (r *Runner) resolveOnly(ctx context.Context, full bool, now time.Time) error {
-	_, _, changed, err := r.resolveOwned(ctx, full, now)
-	n := len(r.pending)
-	for ref, c := range changed {
-		if c {
-			r.pending[ref] = true
+	books, _, changed, err := r.resolveOwned(ctx, full, now)
+	dirty := false
+	if books != nil || err == nil {
+		// A book no longer owned (removed, moved, its library gone) has no series
+		// to look at: dropped, so the stored list can't grow with them for as long
+		// as the job stays off.
+		owned := make(map[catalog.Ref]bool, len(books))
+		for _, b := range books {
+			owned[b.Ref] = true
+		}
+		for ref := range r.pending {
+			if !owned[ref] {
+				delete(r.pending, ref)
+				dirty = true
+			}
 		}
 	}
-	if len(r.pending) != n {
+	for ref, c := range changed {
+		if c && !r.pending[ref] {
+			r.pending[ref] = true
+			dirty = true
+		}
+	}
+	if dirty {
 		r.savePending(ctx)
 	}
 	return err

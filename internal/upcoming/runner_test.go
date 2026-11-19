@@ -1313,3 +1313,38 @@ func TestRunnerPendingSurvivesRestart(t *testing.T) {
 		t.Fatalf("stored pending after the full run = %+v, %v; want none", refs, err)
 	}
 }
+
+// TestRunnerPendingDropsGoneBooks: a step-1-alone run drops a pending book no
+// longer owned (removed, moved), so the stored list can't grow with them while
+// the job stays off.
+func TestRunnerPendingDropsGoneBooks(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	var resolve atomic.Bool
+	resolve.Store(true)
+	f.r.opt.Resolve = resolve.Load
+	f.expanse("2011", "2012")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	f.md.workRefs["x1"] = []meta.SeriesRef{{ID: "expanse-v2", Name: "The Expanse"}}
+	f.book(t, f.lib, "The Expanse", 1, "A9", "x1")
+	f.off.Store(true)
+	ctx := context.Background()
+	if err := f.r.RunOnce(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if refs, err := f.cat.UpcomingPending(ctx); err != nil || len(refs) != 1 {
+		t.Fatalf("stored pending = %+v, %v; want the retagged book", refs, err)
+	}
+	if err := f.cat.DeleteBookAt(ctx, f.lib.ID, "The Expanse/1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.RunOnce(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if refs, err := f.cat.UpcomingPending(ctx); err != nil || len(refs) != 0 {
+		t.Fatalf("stored pending after the book went = %+v, %v; want none", refs, err)
+	}
+}
