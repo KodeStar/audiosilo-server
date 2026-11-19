@@ -237,7 +237,7 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded","hint":"raise it"}}`},
 		{StateRunning, `{"step":"fact_pass"}`},
 		// The monthly budget resumes by itself next month, but a month is long
-		// enough to hear about.
+		// enough to hear about: it was, once, so its retry parking again is not.
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded",` + later + `}}`},
 		{StateRunning, `{"step":"fact_pass"}`},
 		// A refused credential waits on a person, whatever its retry_at says.
@@ -255,12 +255,101 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 	}
 	want := []string{
 		"needs_attention>needs_attention:budget_exceeded",
-		"running>needs_attention:budget_exceeded",
 		"running>needs_attention:agent_credential_refused",
 		"running>done:",
 	}
 	if !slices.Equal(*heard, want) {
 		t.Fatalf("heard = %v, want %v", *heard, want)
+	}
+}
+
+// A park the Bridge retries on a timer (GitHub down for a signed-in Bridge, a
+// credential still refused) is announced once per outage, not on every retry
+// that parks again: news again when its code changes to another that isn't
+// transient, or on a new claim. Another job's park is its own news, and a job
+// that ends is forgotten.
+func TestReparkAnnouncedOncePerOutage(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	heard := q.heard()
+	job := q.verify(t, "A", 0)
+	other := q.verify(t, "B", 0)
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	const retry = `"retry_at":"2026-10-15T12:10:00Z"`
+	park := func(code string) string {
+		return `{"step":"contributing","park":{"code":"` + code + `",` + retry + `}}`
+	}
+	step := func(id int64, attempt int, state, progress string) {
+		t.Helper()
+		u := Update{Attempt: attempt, State: ptr(state)}
+		if progress != "" {
+			u.Progress = json.RawMessage(progress)
+		}
+		if _, err := q.UpdateHeld(ctx, id, u); err != nil {
+			t.Fatalf("%d %s %s: %v", id, state, progress, err)
+		}
+	}
+	running := `{"step":"contributing"}`
+	step(job.ID, 1, StateRunning, running)
+	// GitHub is down: the first park is news; six retries that park again are not.
+	step(job.ID, 1, StateNeedsAttention, park("contrib_unavailable"))
+	for range 6 {
+		step(job.ID, 1, StateRunning, running)
+		step(job.ID, 1, StateNeedsAttention, park("contrib_unavailable"))
+	}
+	// Another job parked for the same reason is its own news.
+	step(other.ID, 1, StateRunning, running)
+	step(other.ID, 1, StateNeedsAttention, park("contrib_unavailable"))
+	// A transient park in between changes nothing.
+	step(job.ID, 1, StateRunning, running)
+	step(job.ID, 1, StateNeedsAttention, park("agent_rate_limited"))
+	step(job.ID, 1, StateRunning, running)
+	step(job.ID, 1, StateNeedsAttention, park("contrib_unavailable"))
+	// A new reason is news, and so is the old one coming back after it.
+	step(job.ID, 1, StateRunning, running)
+	step(job.ID, 1, StateNeedsAttention, park("agent_credential_refused"))
+	step(job.ID, 1, StateRunning, running)
+	step(job.ID, 1, StateNeedsAttention, park("agent_credential_refused"))
+	step(job.ID, 1, StateRunning, running)
+	step(job.ID, 1, StateNeedsAttention, park("contrib_unavailable"))
+	// The Bridge stops reporting on a run: the job is queued again, and its
+	// next claim parking for the same reason is news.
+	step(job.ID, 1, StateRunning, running)
+	q.advance(Lease + time.Second)
+	if j, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || j == nil || j.ID != job.ID {
+		t.Fatalf("claim = %+v, %v", j, err)
+	}
+	step(job.ID, 2, StateRunning, running)
+	step(job.ID, 2, StateNeedsAttention, park("contrib_unavailable"))
+	step(job.ID, 2, StateRunning, running)
+	step(job.ID, 2, StateNeedsAttention, park("contrib_unavailable"))
+	step(job.ID, 2, StateRunning, running)
+	step(job.ID, 2, StateDone, "")
+	if _, err := q.Cancel(ctx, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"running>needs_attention:contrib_unavailable",
+		"running>needs_attention:contrib_unavailable",
+		"running>needs_attention:agent_credential_refused",
+		"running>needs_attention:contrib_unavailable",
+		"running>needs_attention:contrib_unavailable",
+		"running>done:",
+	}
+	if !slices.Equal(*heard, want) {
+		t.Fatalf("heard = %v, want %v", *heard, want)
+	}
+	q.announcedMu.Lock()
+	left := len(q.announced)
+	q.announcedMu.Unlock()
+	if left != 0 {
+		t.Fatalf("announced parks kept for ended jobs: %d", left)
 	}
 }
 

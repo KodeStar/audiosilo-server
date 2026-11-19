@@ -1065,7 +1065,7 @@ type BridgeJob struct {
 
 // BridgeJobEnded reports a Bridge job that moved into done (bridge_job_finished)
 // or into failed or needs_attention (bridge_job_failed). The caller reports each
-// move once (bridge.Service.OnTransition). The error is the Bridge's own text (it can name a
+// move once (bridge.Service.OnTransition), and a park once per outage. The error is the Bridge's own text (it can name a
 // folder on its disk), so it is the bell's detail and is never sent out.
 func (s *Service) BridgeJobEnded(ctx context.Context, j BridgeJob) {
 	if s == nil {

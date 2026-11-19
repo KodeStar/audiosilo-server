@@ -578,6 +578,7 @@ func (s *Service) reportEnded(ctx context.Context, j *Job, from string) {
 	s.secretMu.Lock()
 	delete(s.privateURLs, j.ID)
 	s.secretMu.Unlock()
+	s.forgetPark(j.ID)
 	if IsPodcast(j.Kind) {
 		// Only podcast outcomes are folded; other kinds needn't wake the scheduler.
 		s.ended.fire()

@@ -1169,15 +1169,15 @@ func (s *Service) settle(ctx context.Context, e expiry) {
 }
 
 // report tells OnTransition about job's move out of from (fromCode: the park
-// code from named, "" for none) when it is news (Notable), on a context the
-// caller's leaving doesn't cancel: the move has committed, and the admin should
-// hear about it either way.
+// code from named, "" for none) when it is news (Notable, and a park not
+// announced already: parkNews), on a context the caller's leaving doesn't
+// cancel: the move has committed, and the admin should hear about it either way.
 func (s *Service) report(ctx context.Context, job *Job, from, fromCode string) {
 	if job.Kind == KindPodcastFetch && job.LibraryID != nil && job.Path != nil {
 		s.NotifyPodcast(*job.LibraryID, *job.Path)
 	}
 	s.reportEnded(ctx, job, from)
-	if s.OnTransition != nil && job.Notable(from, fromCode) {
+	if s.OnTransition != nil && job.Notable(from, fromCode) && s.parkNews(job) {
 		committed, cancel := committedContext(ctx)
 		defer cancel()
 		s.OnTransition(committed, *job, from)
@@ -1742,7 +1742,8 @@ var transientParks = []string{"agent_rate_limited", "agent_unavailable", "asr_wo
 // as it was (a running job's keepalive, a parked job's progress). A park that
 // changes its code in place is news when the new one isn't transient: the
 // Bridge reports a rate limit's retry that ran into the book's budget without a
-// running in between, and that park now waits for a person.
+// running in between, and that park now waits for a person. It judges the one
+// move; the Service then announces a park once per outage (parkNews).
 func (j *Job) Notable(from, fromCode string) bool {
 	if kinds[j.Kind].quiet {
 		return false
@@ -1758,6 +1759,37 @@ func (j *Job) Notable(from, fromCode string) bool {
 		return from != j.State || code != fromCode
 	}
 	return false
+}
+
+// parkNews reports whether a Notable move is still news once the parks
+// already announced are counted: a park is announced once per outage, so a
+// Bridge that resumes a parked job on a timer (its retry_at) and parks it again
+// with the same code (contrib_unavailable while GitHub is down, a credential
+// still refused) is announced on the first park only, not every ten minutes.
+// A park is news again once its code changes to another that isn't transient
+// (a transient park in between changes nothing), or on a new claim (the job
+// was queued again); a job that ends is forgotten (forgetPark). Any other
+// Notable move (done, failed) is always news. The console still shows the
+// job's park as it stands; only the announcement is held back.
+func (s *Service) parkNews(j *Job) bool {
+	if j.State != StateNeedsAttention {
+		return true
+	}
+	seen := announcedPark{attempt: j.Attempts, code: j.ParkCode()}
+	s.announcedMu.Lock()
+	defer s.announcedMu.Unlock()
+	if s.announced[j.ID] == seen {
+		return false
+	}
+	s.announced[j.ID] = seen
+	return true
+}
+
+// forgetPark drops the park announced for a job that ended (parkNews).
+func (s *Service) forgetPark(id int64) {
+	s.announcedMu.Lock()
+	delete(s.announced, id)
+	s.announcedMu.Unlock()
 }
 
 // carryPark is a parked job's new progress with the stored park kept when it
