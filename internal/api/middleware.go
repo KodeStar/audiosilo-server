@@ -140,9 +140,9 @@ const corsAllowHeaders = "Authorization, Content-Type, " + auth.ClientHeader + "
 // corsExposeHeaders are the response headers a cross-origin script may read:
 // Retry-After, which every 429 sends (the rate limits, the sign-in lockouts,
 // the OPML and discovery budgets) and some 503s (a busy transcode, an episode
-// on its way; the request timeout sends none), the OPML export's counts, and
-// what a transcode's HEAD says of the same ask's running stream, and the mark
-// on the server's own 401s (headerUnauthorized).
+// on its way; the request timeout sends none), the OPML export's counts,
+// what a transcode's HEAD says of the same ask's running stream, and the mark on
+// the server's own 401s (headerUnauthorized).
 const corsExposeHeaders = "Retry-After, " + headerOPMLExported + ", " +
 	headerOPMLOmittedPrivate + ", " + headerOPMLOmittedUnavailable + ", " + headerTranscodeSent + ", " +
 	headerUnauthorized

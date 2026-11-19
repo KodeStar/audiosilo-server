@@ -1,8 +1,12 @@
 package api
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -150,5 +154,41 @@ func TestUnauthorizedMarkCapability(t *testing.T) {
 		if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"unauthorized_mark":true`) {
 			t.Fatalf("capability unauthorized_mark missing (token %t): %d %s", tok != "", resp.StatusCode, body)
 		}
+	}
+}
+
+// rawUnauthorized is a 401 written past the writers that mark it.
+var rawUnauthorized = regexp.MustCompile(`(WriteHeader|http\.Error)\([^\n]*(http\.StatusUnauthorized|\b401\b)`)
+
+// TestNoUnmarkedUnauthorized: no server code writes a 401 with w.WriteHeader
+// or http.Error, which would leave it unmarked while GET /server promises the
+// mark (unauthorized_mark). The fakes of other services (the packages named
+// *test) answer as those services do.
+func TestNoUnmarkedUnauthorized(t *testing.T) {
+	t.Parallel()
+	err := filepath.WalkDir("..", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path != ".." && strings.HasSuffix(d.Name(), "test") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, m := range rawUnauthorized.FindAll(src, -1) {
+			t.Errorf("%s writes a 401 without the mark: %s (use writeError or writeErrorCode)", path, m)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

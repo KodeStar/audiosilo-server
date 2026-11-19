@@ -63,7 +63,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   It is set in the one place every JSON answer goes through (`jsonHeader`, plus `markUnauthorized` in
   `writeErrorCode`/`writeErrorReason`), so the middleware's (`requireAuth`, `mediaAuth`,
   `requireFeedAuth`, `requireBridge`), the sign-in, pairing, OIDC and `writeSessionEnded` 401s all have
-  it; a new 401 must go through `writeError`/`writeErrorCode`/`writeJSON`, never `w.WriteHeader`.
+  it; a new 401 must go through `writeError`/`writeErrorCode`/`writeJSON`, never `w.WriteHeader` or
+  `http.Error`, and one whose body has a `code` through `writeErrorCode`/`writeErrorReason` (a body
+  built by hand for `writeJSON` is marked `unauthorized`, whatever its code).
   `cors` exposes it (`corsExposeHeaders`). The player reads it to tell the server refusing its token
   from an auth proxy's own 401, or a proxy that rewrote the server's body; additive, the body is
   unchanged. `GET /server` says so with the capability `unauthorized_mark` (always true), so a player
@@ -73,7 +75,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   mark, on every authenticated route (`refuseToken`: `requireAuth`, `mediaAuth`, `requireBridge`;
   the address is charged for it as for a refusal). `TestUnauthorizedMarked` covers the middleware's
   and the sign-in, pairing and OIDC routes' 401s end to end, `TestUnauthorizedMarkWriters` the
-  writers every other 401 goes through, `TestUncheckedTokenIsNot401` the 503.
+  writers every other 401 goes through, `TestUncheckedTokenIsNot401` the 503, and
+  `TestNoUnmarkedUnauthorized` fails on a 401 written with `w.WriteHeader` or `http.Error`.
   A proxy that serves an error page of its own in place of the server's 401 (nginx's `error_page`
   with `proxy_intercept_errors`) drops the mark; the player then falls back to its older rules
   (the body, and whether the request carried proxy headers).

@@ -392,6 +392,7 @@ keep this index in step (one line per topic).
   - Wire goldens (`internal/api/wire_golden_test.go`, `testdata/wire/`: the player envelopes' shapes, `-update`, the player's copy)
   - Migrations are append-only
   - Secrets
+  - The server's own 401s are marked (`X-AudioSilo-Unauthorized`, capability `unauthorized_mark`; an unchecked token is a 503)
   - Connect / invite / pairing flow
   - Home and away addresses (`addresses` capability)
   - Home HTTP (`tls.home_http`, security-relevant)
