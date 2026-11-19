@@ -26,9 +26,6 @@ func TestPathCapComesFirst(t *testing.T) {
 	atCap := "Long/" + strings.Repeat("a", catalog.MaxPathBytes-len("Long/"))
 	over := atCap + "b"
 	const unknownLib = 999999
-	tooLong := func(resp *http.Response, raw string) bool {
-		return resp.StatusCode == http.StatusBadRequest && strings.Contains(raw, "path is too long")
-	}
 
 	// An unknown library: over the cap is the 400, at it the library's 404.
 	if resp, raw := s.do(t, "GET", bookURL(unknownLib, "item", over), tok, ""); !tooLong(resp, raw) {
@@ -117,9 +114,6 @@ func TestPathCapWhereThePathEnters(t *testing.T) {
 	tok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "console", 0)
 	atCap := "Long/" + strings.Repeat("a", catalog.MaxPathBytes-len("Long/"))
 	over := atCap + "b"
-	tooLong := func(resp *http.Response, raw string) bool {
-		return resp.StatusCode == http.StatusBadRequest && strings.Contains(raw, "path is too long")
-	}
 	q := url.QueryEscape
 
 	// A cast token's request: authenticate cleans and resolves ?path= before
@@ -157,13 +151,13 @@ func TestPathCapWhereThePathEnters(t *testing.T) {
 	}
 	var share struct{ ID int64 }
 	decodeInto(t, raw, &share)
-	rule := func(p string) string { return fmt.Sprintf(`{"library_id":%d,"path":%q}`, lib.ID, p) }
+	ref := func(p string) string { return fmt.Sprintf(`{"library_id":%d,"path":%q}`, lib.ID, p) }
 	paths := fmt.Sprintf("/api/v1/admin/shares/%d/paths", share.ID)
 	for _, req := range []struct{ method, url, body string }{
-		{"POST", "/api/v1/admin/shares", `{"name":"Long","paths":[` + rule(over) + `]}`},
-		{"POST", paths, rule(over)},
-		{"POST", paths, `{"rules":[` + rule(mistbornBook) + `,` + rule(over) + `]}`},
-		{"DELETE", paths, rule(over)},
+		{"POST", "/api/v1/admin/shares", `{"name":"Long","paths":[` + ref(over) + `]}`},
+		{"POST", paths, ref(over)},
+		{"POST", paths, `{"rules":[` + ref(mistbornBook) + `,` + ref(over) + `]}`},
+		{"DELETE", paths, ref(over)},
 	} {
 		if resp, raw := e.do(t, req.method, req.url, tok, req.body); !tooLong(resp, raw) {
 			t.Fatalf("%s %s over the cap = %d %s, want 400", req.method, req.url, resp.StatusCode, raw)
@@ -173,12 +167,11 @@ func TestPathCapWhereThePathEnters(t *testing.T) {
 	if err := e.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM share_paths`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("share rules after the refusals: %d, %v; want none", n, err)
 	}
-	if resp, raw := e.do(t, "POST", paths, tok, rule(atCap)); resp.StatusCode != http.StatusNoContent {
+	if resp, raw := e.do(t, "POST", paths, tok, ref(atCap)); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("share rule at the cap = %d %s, want 204", resp.StatusCode, raw)
 	}
 
 	// The console's selections of books.
-	ref := func(p string) string { return fmt.Sprintf(`{"library_id":%d,"path":%q}`, lib.ID, p) }
 	for _, req := range []struct{ url, body string }{
 		{"/api/v1/admin/books/bulk", `{"books":[` + ref(mistbornBook) + `,` + ref(over) + `],"set":{"genre":"Fantasy"}}`},
 		{"/api/v1/admin/covers", `{"books":[` + ref(over) + `],"size":96}`},
@@ -206,4 +199,9 @@ func TestPathCapWhereThePathEnters(t *testing.T) {
 	if resp, raw := e.do(t, "POST", "/api/v1/me/queue", tok, padded); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("queue add past the body bound = %d %s, want 400", resp.StatusCode, raw)
 	}
+}
+
+// tooLong reports whether a response is the path cap's 400.
+func tooLong(resp *http.Response, raw string) bool {
+	return resp.StatusCode == http.StatusBadRequest && strings.Contains(raw, msgPathTooLong)
 }

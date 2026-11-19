@@ -15,8 +15,8 @@ import (
 // Not parallel: it lowers the cap, as no disk the tests run on holds a path
 // past the real one.
 func TestScanSkipsOverLongPaths(t *testing.T) {
-	maxIndexedPath.Store(20)
-	t.Cleanup(func() { maxIndexedPath.Store(catalog.MaxPathBytes) })
+	maxIndexedPath = 20
+	t.Cleanup(func() { maxIndexedPath = catalog.MaxPathBytes })
 	cat, ctx := newHealthCatalog(t)
 	root := t.TempDir()
 	audio := testAudio(t)

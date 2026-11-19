@@ -1713,16 +1713,12 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 // catalog.MaxPathBytes, the longest any route takes (server#359). Only a
 // Windows library can hold a longer one (its paths run to 32,767 characters);
 // indexed, such a book would be listed but every route would refuse its path.
-// An atomic so a test can lower it: no disk the tests run on holds a longer
-// path.
-var maxIndexedPath = func() *atomic.Int64 {
-	var n atomic.Int64
-	n.Store(catalog.MaxPathBytes)
-	return &n
-}()
+// A variable so a (sequential) test can lower it: no disk the tests run on
+// holds a longer path.
+var maxIndexedPath = catalog.MaxPathBytes
 
 // overLong reports whether rel is past maxIndexedPath.
-func overLong(rel string) bool { return int64(len(rel)) > maxIndexedPath.Load() }
+func overLong(rel string) bool { return len(rel) > maxIndexedPath }
 
 // errPathTooLong is the scan log's reason for a folder or file skipped as
 // overLong.
@@ -1806,12 +1802,14 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 				}
 				return fs.SkipDir
 			}
-			if rel != fromRel && skipped(d, rel) {
-				return fs.SkipDir
-			}
-			if rel != fromRel && overLong(rel) {
-				noteOverLong(rel)
-				return fs.SkipDir
+			if rel != fromRel {
+				if skipped(d, rel) {
+					return fs.SkipDir
+				}
+				if overLong(rel) {
+					noteOverLong(rel)
+					return fs.SkipDir
+				}
 			}
 			if !limit.another() {
 				return errWalkCapped
