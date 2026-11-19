@@ -60,3 +60,32 @@ func TestProgressFeedID(t *testing.T) {
 		t.Fatalf("id after another restore = %q, %v; want a new one", third, err)
 	}
 }
+
+// A database that went back with no restore recorded (its change counter is
+// below the mark the launcher kept outside it) gets a new feed id; one at or
+// past the mark keeps its id.
+func TestRenewProgressFeedBehind(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE progress_change_counter SET seq = 7 WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	first, err := f.c.progressFeedID(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mark := range []int64{0, 6, 7} {
+		if end, renewed, err := f.c.RenewProgressFeedBehind(f.ctx, mark); err != nil || renewed || end != 7 {
+			t.Fatalf("mark %d: end %d, renewed %v, %v; want 7 and no renewal", mark, end, renewed, err)
+		}
+	}
+	if kept, err := f.c.progressFeedID(f.ctx); err != nil || kept != first {
+		t.Fatalf("id = %q, %v; want %q kept", kept, err, first)
+	}
+	if end, renewed, err := f.c.RenewProgressFeedBehind(f.ctx, 8); err != nil || !renewed || end != 7 {
+		t.Fatalf("mark 8: end %d, renewed %v, %v; want 7 and a renewal", end, renewed, err)
+	}
+	if second, err := f.c.progressFeedID(f.ctx); err != nil || second == "" || second == first {
+		t.Fatalf("id behind the mark = %q, %v; want a new one", second, err)
+	}
+}

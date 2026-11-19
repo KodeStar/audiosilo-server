@@ -334,31 +334,64 @@ const progressFeedRestoreKey = "progress_feed_restore"
 // feed is behind the cursors the Bridge holds (a backup carries its id). Once
 // for a restore (restore names it: when it was applied), which the database
 // records with the new id, so the launcher asks at every start and a start
-// that ended before this committed leaves it to the next (a power cut that
-// undid the commit undid the record with it); renewed is whether this call
-// made the new id.
+// that ended before this committed leaves it to the next; renewed is whether
+// this call made the new id.
 func (c *Catalog) RenewProgressFeed(ctx context.Context, restore string) (renewed bool, err error) {
 	if done, err := getServerState[string](ctx, c.db, progressFeedRestoreKey); err != nil || done == restore {
 		return false, err
 	}
-	err = c.db.WithTx(ctx, "RenewProgressFeed", func(tx *sql.Tx) error {
-		at := c.stamp()
-		if err := putServerState(ctx, tx, progressFeedKey, rand.Text(), at); err != nil {
-			return err
-		}
+	err = c.renewProgressFeed(ctx, "RenewProgressFeed", func(tx *sql.Tx, at string) error {
 		return putServerState(ctx, tx, progressFeedRestoreKey, restore, at)
 	})
 	return err == nil, err
 }
 
+// RenewProgressFeedBehind renews the progress feed when its end (end, the last
+// number the change counter gave) is below mark, the end the launcher last
+// wrote down outside the database: the database went back with no restore
+// recorded, a backup put in place by hand or commits a power cut lost, and it
+// kept its feed id. A cursor past end is refused already (progressFrom), but
+// only until the counter passes it again, after which it would page on past
+// the places written in between; with a new id it is refused for good.
+func (c *Catalog) RenewProgressFeedBehind(ctx context.Context, mark int64) (end int64, renewed bool, err error) {
+	if end, err = c.ProgressFeedEnd(ctx); err != nil || end >= mark {
+		return end, false, err
+	}
+	err = c.renewProgressFeed(ctx, "RenewProgressFeedBehind", nil)
+	return end, err == nil, err
+}
+
+// renewProgressFeed stores a new feed id, and what also (when set) writes with
+// it, in one transaction. Durable: the launcher goes on to record outside the
+// database that the renewal is made (RenewProgressFeedBehind's mark), which a
+// power cut must not leave standing over a renewal it undid.
+func (c *Catalog) renewProgressFeed(ctx context.Context, name string, also func(tx *sql.Tx, at string) error) error {
+	return c.db.WithDurableTx(ctx, name, func(tx *sql.Tx) error {
+		at := c.stamp()
+		if err := putServerState(ctx, tx, progressFeedKey, rand.Text(), at); err != nil || also == nil {
+			return err
+		}
+		return also(tx, at)
+	})
+}
+
+// ProgressFeedEnd is the progress feed's end: the last number the change
+// counter gave (progress_change_counter, migration 0066).
+func (c *Catalog) ProgressFeedEnd(ctx context.Context) (int64, error) {
+	var end int64
+	err := c.db.QueryRowContext(ctx, `SELECT seq FROM progress_change_counter WHERE id = 1`).Scan(&end)
+	return end, err
+}
+
 // progressFrom reads since as a place in this server's feed (feed, its id):
 // the start for "", else ErrInvalidCursor for a cursor that isn't one
-// (decodeProgressCursor), one from another feed, or one past the last number
-// the change counter gave. That last is a database restored from a backup by
-// hand (with its id, so the id can't tell): until the counter passes the
-// cursor again, the feed would answer nothing and the rows written since would
-// never reach Audible. A cursor from a server before 2.7.0 carries no id and
-// has only that check. The place comes back with feed as its id.
+// (decodeProgressCursor), one from another feed, or one past the feed's end
+// (ProgressFeedEnd). That last is a database that went back and kept its id
+// (RenewProgressFeedBehind renews it at the next start the launcher sees it
+// from): until the counter passes the cursor again, the feed would answer
+// nothing and the rows written since would never reach Audible. A cursor from
+// a server before 2.7.0 carries no id and has only that check. The place comes
+// back with feed as its id.
 func (c *Catalog) progressFrom(ctx context.Context, since, feed string) (progressCursor, error) {
 	from, err := decodeProgressCursor(since)
 	if err != nil || since == "" {
@@ -367,11 +400,11 @@ func (c *Catalog) progressFrom(ctx context.Context, since, feed string) (progres
 	if from.Feed != "" && from.Feed != feed {
 		return progressCursor{}, ErrInvalidCursor
 	}
-	var last int64
-	if err := c.db.QueryRowContext(ctx, `SELECT seq FROM progress_change_counter WHERE id = 1`).Scan(&last); err != nil {
+	end, err := c.ProgressFeedEnd(ctx)
+	if err != nil {
 		return progressCursor{}, err
 	}
-	if from.Seq > last {
+	if from.Seq > end {
 		return progressCursor{}, ErrInvalidCursor
 	}
 	from.Feed = feed

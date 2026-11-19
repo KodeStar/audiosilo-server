@@ -625,9 +625,21 @@ func TestBridgeProgressCursorFeed(t *testing.T) {
 	if f := s.feed(t, "&since="+url.QueryEscape(old)); len(f.Rows) != 1 {
 		t.Fatalf("an old cursor after the renewal = %+v, want it read as before", f.Rows)
 	}
-	if all := s.feed(t, ""); len(all.Rows) != 2 {
+	all := s.feed(t, "")
+	if len(all.Rows) != 2 {
 		t.Fatalf("read from the start after the renewal = %+v", all.Rows)
 	}
+
+	// Restored by hand and written to since: the counter has passed the
+	// Bridge's cursor again, so only the mark kept outside the database tells
+	// (the launcher's, at start), and the feed's new id refuses the cursor.
+	if f := s.feed(t, "&since="+url.QueryEscape(all.Next)); len(f.Rows) != 0 {
+		t.Fatalf("the end after the renewal = %+v", f.Rows)
+	}
+	if _, renewed, err := s.cat.RenewProgressFeedBehind(context.Background(), 1<<40); err != nil || !renewed {
+		t.Fatalf("renewal behind the mark = %v, %v", renewed, err)
+	}
+	s.feedRefused(t, "a cursor the counter has passed, in a database behind its mark", all.Next)
 }
 
 // The console's toggle: a new account syncs off whatever the Bridge sends, a

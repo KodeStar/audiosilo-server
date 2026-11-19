@@ -4163,7 +4163,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the backup in (removing the old -wal/-shm), writes `<data>/restore-result.json` and always removes the
   marker (a refused restore is reported once, not retried at every start); `recordRestore` logs it in the
   restored database's audit log as the server's own act, and `renewProgressFeed` renews the Bridge's progress
-  feed once for the last restore applied (see Audible sync). **Before an upgrade** (UPGRADE-01): next, still
+  feed once for the last restore applied (see Audible sync; a database put in place by hand is told by the feed's
+  mark, `<data>/progress-feed.json`). **Before an upgrade** (UPGRADE-01): next, still
   before `store.Open`, `backup.BeforeUpgrade` asks `store.PendingMigrations` (read-only; empty for no file or
   no migration recorded, so a fresh install gets no copy) and, when migrations are pending, writes a
   `before-upgrade` copy with `store.VacuumFile` plus one INFO line naming them and the copy, keeping the
@@ -5048,7 +5049,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `server_state` `progress_feed_restore`, so a start that ended between the swap and the renewal, the backup's
   migrations failing or a stop while they ran, leaves it to the next) is refused, and so is any cursor past the
   change counter (a database restored by hand keeps its id: until the counter passed the cursor again, the feed would
-  answer nothing and the places written in the gap never reach Audible). A cursor without the id (a server before 2.7.0's) has only the counter check. `ErrInvalidCursor` has one transport mapping, `writeCatalogError`'s 400
+  answer nothing and the places written in the gap never reach Audible). Once the counter has passed the cursor only
+  a record outside the database tells: the launcher's mark `<data>/progress-feed.json` (`launcher/feedmark.go`: the
+  feed's end, `catalog.ProgressFeedEnd`, written at start, every minute while it moves and at the stop, never per
+  request), and a start that finds the database behind it (a backup put in place by hand, commits a power cut lost)
+  renews the id (`RenewProgressFeedBehind`; a failed renewal leaves the mark for the next start; both renewals are
+  durable commits, made before the gate opens). A data folder put back whole takes the mark with it and is not seen.
+  A cursor without the id (a server before 2.7.0's) has only the counter check. `ErrInvalidCursor` has one transport mapping, `writeCatalogError`'s 400
   `invalid_cursor` (every route's cursor: `GET /bridge/libraries/{id}/books?after=` and the console's Audible titles
   `after` too, which answered `invalid_request` before 2.7.0). `progress.change_seq` (`0066`, `idx_progress_user_change`) is the order
   this server wrote the rows in: drawn from the one-row `progress_change_counter` (strictly increasing, never
