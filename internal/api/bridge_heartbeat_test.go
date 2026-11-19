@@ -89,3 +89,47 @@ func TestBridgeHeartbeatSavedWhenLibrariesUnreadable(t *testing.T) {
 		t.Fatalf("the beat was not saved as sent: at %s, status %.300s", at, stored)
 	}
 }
+
+// A heartbeat refused for its size (the body, a list over its bound) is 400
+// too_large, so the Bridge tells it apart from a block this server doesn't
+// read; a malformed body, or a field this server doesn't know, stays a plain
+// 400 with no code.
+func TestBridgeHeartbeatTooLarge(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	code := func(body string) (int, string) {
+		t.Helper()
+		resp, out := b.do(t, "PUT", "/api/v1/bridge/status", b.bridgeTok, body)
+		var env struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal([]byte(out), &env)
+		return resp.StatusCode, env.Code
+	}
+	kinds := make([]string, 65)
+	for i := range kinds {
+		kinds[i] = fmt.Sprintf(`"bridge.k%d"`, i)
+	}
+	workers := "[" + strings.Repeat(`{"name":"w"},`, 64) + `{"name":"w"}]`
+	for name, body := range map[string]string{
+		"body":    `{"version":"` + strings.Repeat("x", 2<<20) + `"}`,
+		"kinds":   `{"version":"0.6.0","kinds":[` + strings.Join(kinds, ",") + `]}`,
+		"workers": `{"version":"0.6.0","workers":` + workers + `}`,
+	} {
+		if status, c := code(body); status != http.StatusBadRequest || c != codeTooLarge {
+			t.Errorf("too large a %s = %d %q, want 400 %s", name, status, c, codeTooLarge)
+		}
+	}
+	for name, body := range map[string]string{
+		"malformed":     `{"version":`,
+		"unknown field": `{"version":"0.6.0","setup2":{}}`,
+		"bad kind":      `{"version":"0.6.0","kinds":["Not A Kind"]}`,
+	} {
+		if status, c := code(body); status != http.StatusBadRequest || c != "" {
+			t.Errorf("%s = %d %q, want a plain 400", name, status, c)
+		}
+	}
+	if status, c := code(b.heartbeatWith(1)); status != http.StatusOK {
+		t.Fatalf("a heartbeat in bounds = %d %q", status, c)
+	}
+}

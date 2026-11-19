@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -207,14 +208,25 @@ func (a *API) adminBridgeBook(w http.ResponseWriter, r *http.Request, libraryID 
 // server's libraries, so the Bridge maps any it hasn't yet, and accepts: the
 // optional top-level blocks this server reads (bridge.HeartbeatAccepts), which
 // the Bridge sends only after a reply lists them, since an older server refuses
-// a heartbeat with a field it doesn't know.
+// a heartbeat with a field it doesn't know. A heartbeat refused for its size (a
+// body over bridge.MaxStatusBytes, a list over its bound) is 400 too_large, so
+// the Bridge tells it apart from a block this server can't read (a plain 400).
 func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 	var st bridge.Status
 	if err := decodeJSON(r, &st, bridge.MaxStatusBytes); err != nil {
+		if tooBig := (*http.MaxBytesError)(nil); errors.As(err, &tooBig) {
+			writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+				fmt.Sprintf("the status is larger than %d bytes", bridge.MaxStatusBytes))
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid status")
 		return
 	}
 	if err := st.Validate(); err != nil {
+		if errors.Is(err, bridge.ErrTooLarge) {
+			writeErrorCode(w, http.StatusBadRequest, codeTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

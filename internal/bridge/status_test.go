@@ -31,8 +31,8 @@ func TestStatusValidate(t *testing.T) {
 		"library zero":    {Libraries: []LibraryStatus{{LibraryID: 0}}},
 	}
 	for name, st := range bad {
-		if err := st.Validate(); !errors.Is(err, ErrInvalid) {
-			t.Errorf("%s: Validate = %v, want ErrInvalid", name, err)
+		if err := st.Validate(); !errors.Is(err, ErrInvalid) || errors.Is(err, ErrTooLarge) {
+			t.Errorf("%s: Validate = %v, want ErrInvalid, not for its size", name, err)
 		}
 	}
 	// Free text is partly the outside world's (a file's name, an OS error): it is
@@ -194,7 +194,7 @@ func TestLastHeartbeatSharesOneRead(t *testing.T) {
 		entered = make(chan struct{}, 16)
 		release = make(chan struct{})
 	)
-	q.readHeartbeat = func(ctx context.Context) (*Heartbeat, error) {
+	q.readHeartbeatHook = func(ctx context.Context) (*Heartbeat, error) {
 		mu.Lock()
 		reads++
 		mu.Unlock()
@@ -295,9 +295,9 @@ func TestHeartbeatListsAreReadBounded(t *testing.T) {
 	if len(st.Libraries) != maxListRead || len(st.Workers) != maxListRead || len(st.Setup.Items) != maxListRead {
 		t.Fatalf("read %d libraries, %d workers, %d setup items; want %d of each", len(st.Libraries), len(st.Workers), len(st.Setup.Items), maxListRead)
 	}
-	// Over its bound, a list is still seen as over it.
-	if st, _ := read(`{"workers":` + many + `}`); !errors.Is(st.Validate(), ErrInvalid) {
-		t.Fatal("a heartbeat with too many workers passed Validate")
+	// Over its bound, a list is still seen as over it, and refused for its size.
+	if st, _ := read(`{"workers":` + many + `}`); !errors.Is(st.Validate(), ErrTooLarge) {
+		t.Fatal("a heartbeat with too many workers passed Validate, or not as too large")
 	}
 	// So are its kinds and a setup item's library ids, short as each is.
 	strs := "[" + strings.Repeat(`"",`, 100_000) + `""]`
@@ -306,8 +306,8 @@ func TestHeartbeatListsAreReadBounded(t *testing.T) {
 	if err != nil || len(st.Kinds) != maxListRead || len(st.Setup.Items[0].LibraryIDs) != maxListRead {
 		t.Fatalf("read %d kinds, %d library ids, %v; want %d of each", len(st.Kinds), len(st.Setup.Items[0].LibraryIDs), err, maxListRead)
 	}
-	if !errors.Is(st.Validate(), ErrInvalid) {
-		t.Fatal("a heartbeat with too many kinds passed Validate")
+	if err := st.Validate(); !errors.Is(err, ErrInvalid) || !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("a heartbeat with too many kinds: Validate = %v, want ErrInvalid and ErrTooLarge", err)
 	}
 	if _, err := read(`{"kinds":[1]}`); err == nil {
 		t.Error("a kind that isn't a string was read")
@@ -353,5 +353,35 @@ func TestHeartbeatListsAreReadBounded(t *testing.T) {
 	st, err = read(`{"setup":{"items":{"id":"paired"}}}`)
 	if err != nil || st.Validate() != nil || st.Setup != nil {
 		t.Fatalf("a setup block whose items aren't a list: %+v, %v; want it dropped", st.Setup, err)
+	}
+}
+
+// The stored heartbeat is read back leniently: a row a newer server wrote,
+// with a key this one doesn't know in a mapping, a worker or at the top (a
+// rollback), is still the Bridge's heartbeat, never read as none (offline
+// until the Bridge's next beat). The wire's decode stays strict.
+func TestStoredHeartbeatReadLeniently(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	stored := fmt.Sprintf(`{"version":"0.7.0","kinds":["bridge.verify"],"libraries":[{"library_id":%d,"mount_path":"/m","mapped":true,"newer":1}],`+
+		`"workers":[{"name":"gpu","newer":true}],"ui_url":"","newer":{"a":1}}`, q.lib)
+	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_status SET status = ? WHERE id = 1`, stored); err != nil {
+		t.Fatal(err)
+	}
+	h, err := readHeartbeat(ctx, q.db)
+	if err != nil || h == nil {
+		t.Fatalf("a stored row with keys this server doesn't know = %v, %v; want the heartbeat", h, err)
+	}
+	if h.Version != "0.7.0" || !slices.Equal([]string(h.Kinds), []string{KindVerify}) ||
+		len(h.Libraries) != 1 || !h.Libraries[0].Mapped || len(h.Workers) != 1 || h.Workers[0].Name != "gpu" {
+		t.Fatalf("read back = %+v", h.Status)
+	}
+	// On the wire, the same body is refused: the strictness is the input's.
+	dec := json.NewDecoder(strings.NewReader(stored))
+	dec.DisallowUnknownFields()
+	var st Status
+	if dec.Decode(&st) == nil {
+		t.Fatal("the wire's decode took a key it doesn't know")
 	}
 }

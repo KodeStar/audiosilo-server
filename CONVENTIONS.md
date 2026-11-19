@@ -3184,8 +3184,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   decode or is out of its bounds dropped, never refusing the heartbeat, since a refused heartbeat takes
   the Bridge offline; bounded and checked: `family.name` kinds, library ids, and `ui_url` http(s)
   only since the console links it, are refused otherwise; a body up to `bridge.MaxStatusBytes` (2 MiB) and
-  4096 mappings, a longer list cut, never refused (server#445), its lists (`kinds`, `libraries`, `workers`,
-  the setup `items` and their `library_ids`) read to a bounded length whatever the body holds (`readList`), and only the mappings of libraries the
+  4096 mappings, a longer list cut, never refused (server#445); a body past the bound, or more `kinds` or
+  `workers` than theirs (64 each, `bridge.ErrTooLarge`), is 400 `too_large`, any other refusal a plain 400, its lists (`kinds`, `libraries`, `workers`,
+  the setup `items` and their `library_ids`) read to a bounded length whatever the body holds (`readList`, strict on the wire; the stored row is read back
+  leniently, `readStoredStatus`, so a row a newer server wrote survives a rollback), and only the mappings of libraries the
   server has are stored, and of a setup item's `library_ids` only theirs (`Status.KeepLibraries`, the row written without HTML escaping; a beat whose library list can't be read is saved as sent, Validate-bounded, and answered with the fault, so a catalog read fault never shows the Bridge offline), so the row a
   heartbeat rewrites stays the size of the server's own libraries; free text is cleaned to printable bounded text,
   `cleanText`, never refused, as is a job report's `error` (line breaks kept): it is partly the outside

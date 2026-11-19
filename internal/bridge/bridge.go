@@ -82,8 +82,9 @@ type Service struct {
 	hbRead    time.Time
 	hbGen     uint64
 	hbReading *heartbeatRead
-	// readHeartbeat, when set (by a test), stands in for the database read.
-	readHeartbeat func(context.Context) (*Heartbeat, error)
+	// readHeartbeatHook, when set (by a test), stands in for the database read
+	// (readHeartbeat).
+	readHeartbeatHook func(context.Context) (*Heartbeat, error)
 
 	// offlineSince is when expireOfflineSubscribes first saw no online Bridge
 	// for podcast.subscribe (its clock), zero while it last saw one: the

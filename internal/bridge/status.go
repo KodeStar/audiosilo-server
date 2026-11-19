@@ -320,18 +320,33 @@ func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
 }
 
+// ErrTooLarge marks a heartbeat refused for its size (a list over its bound),
+// which is ErrInvalid too: the API answers it with its own code, so the Bridge
+// tells it apart from a block this server can't read.
+var ErrTooLarge = errors.New("too large")
+
+// tooLargeError is an ErrInvalid rejection that is also ErrTooLarge.
+type tooLargeError struct{ err error }
+
+func (e tooLargeError) Error() string        { return e.err.Error() }
+func (e tooLargeError) Unwrap() error        { return e.err }
+func (e tooLargeError) Is(target error) bool { return target == ErrTooLarge }
+
+func tooLarge(what string) error { return tooLargeError{invalid("%s", what)} }
+
 // Validate checks a heartbeat before it is stored: kinds are well formed and
 // listed once, libraries listed once by a positive id (past maxLibraries the
 // rest are left out, server#445), and ui_url, which the
 // console renders as a link, is an absolute http(s) URL or empty (anything else
-// is refused). An estimate out of its bounds is dropped, and so is a setup
+// is refused; more kinds or workers than their bounds are refused as
+// ErrTooLarge). An estimate out of its bounds is dropped, and so is a setup
 // block that doesn't decode (a setup item it can't keep is left out). Its free text (the version,
 // each mapping's paths and error, the workers, the estimates' backend) is
 // cleaned to printable bounded text instead (cleanText).
 func (st *Status) Validate() error {
 	st.Version = cleanText(st.Version, maxShortText, false)
 	if len(st.Kinds) > maxKinds {
-		return invalid("too many kinds")
+		return tooLarge("too many kinds")
 	}
 	for i, k := range st.Kinds {
 		if !kindPattern.MatchString(k) || slices.Contains(st.Kinds[:i], k) {
@@ -354,7 +369,7 @@ func (st *Status) Validate() error {
 		l.Error = cleanText(l.Error, maxLongText, false)
 	}
 	if len(st.Workers) > maxWorkers {
-		return invalid("too many workers")
+		return tooLarge("too many workers")
 	}
 	for i := range st.Workers {
 		w := &st.Workers[i]
@@ -564,7 +579,7 @@ func (s *Service) leadHeartbeatRead(ctx context.Context, f *heartbeatRead) (h *H
 		s.hbMu.Unlock()
 		close(f.done)
 	}()
-	read := s.readHeartbeat
+	read := s.readHeartbeatHook
 	if read == nil {
 		read = func(ctx context.Context) (*Heartbeat, error) { return readHeartbeat(ctx, s.db) }
 	}
@@ -596,12 +611,35 @@ func readHeartbeat(ctx context.Context, q interface {
 		// An unreadable stamp or body is no heartbeat.
 		if t, perr := time.Parse(time.RFC3339, stamp.String); perr == nil {
 			h = &Heartbeat{At: t}
-			if json.Unmarshal([]byte(body), &h.Status) != nil {
+			if readStoredStatus([]byte(body), &h.Status) != nil {
 				h = nil
 			}
 		}
 	}
 	return h, nil
+}
+
+// readStoredStatus reads a stored heartbeat's status into st leniently: a key
+// it doesn't know is ignored in the lists too, which the wire's decode refuses
+// (readList, strict). The row is ours, already bounded when it was saved, and
+// one a newer server wrote (before a rollback) can hold a key this one doesn't
+// know: read strictly, it would be no heartbeat, and the Bridge would show as
+// offline until its next beat.
+func readStoredStatus(body []byte, st *Status) error {
+	var stored struct {
+		Status
+		// The lists, read as plain slices: they shadow Status's bounded,
+		// strict ones.
+		Kinds     []string        `json:"kinds"`
+		Libraries []LibraryStatus `json:"libraries"`
+		Workers   []Worker        `json:"workers"`
+	}
+	if err := json.Unmarshal(body, &stored); err != nil {
+		return err
+	}
+	*st = stored.Status
+	st.Kinds, st.Libraries, st.Workers = stored.Kinds, stored.Libraries, stored.Workers
+	return nil
 }
 
 // Online returns the last heartbeat when it is recent enough to count the Bridge
