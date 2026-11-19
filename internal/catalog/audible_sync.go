@@ -328,8 +328,12 @@ func (c *Catalog) progressFeedID(ctx context.Context) (string, error) {
 // out before is refused (400 invalid_cursor) and the Bridge reads the feed
 // again from its start: the launcher's step after restoring a backup, whose
 // feed is behind the cursors the Bridge holds (a backup carries its id).
+// Durable: the restore runs once, so a renewal a power cut undid would not be
+// made again.
 func (c *Catalog) RenewProgressFeed(ctx context.Context) error {
-	return putServerState(ctx, c.db, progressFeedKey, rand.Text(), c.stamp())
+	return c.db.WithDurableTx(ctx, "RenewProgressFeed", func(tx *sql.Tx) error {
+		return putServerState(ctx, tx, progressFeedKey, rand.Text(), c.stamp())
+	})
 }
 
 // progressFrom reads since as a place in this server's feed (feed, its id):
@@ -426,7 +430,6 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 	// route's duration_mismatch, AudibleSyncBooks) is another edition or volume's, so it is never
 	// pushed to that ASIN; the Bridge needs no check of its own.
 	rows = make([]AudibleProgressRow, 0, len(got))
-	next = since
 	for _, x := range got {
 		if audibleRuntimeAgrees(x.runtimeS, x.length) {
 			rows = append(rows, x.AudibleProgressRow)
