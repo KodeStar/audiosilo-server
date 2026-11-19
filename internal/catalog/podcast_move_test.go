@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path"
@@ -314,8 +315,10 @@ func TestPodcastPollFoldFollowsARenamedFolder(t *testing.T) {
 	}
 }
 
-// The fetch fold: an outcome naming the episode in the renamed folder lands on
-// that episode once the show moved.
+// The fetch fold: a fetch queued at the old folder that the Bridge answered
+// done where the folder is now (its outcome's path; a failure carries no path)
+// lands on that episode once the show moved, clearing the backoff the move
+// carried there.
 func TestPodcastFetchFoldFollowsARenamedFolder(t *testing.T) {
 	fx := newRenameFixture(t)
 	if _, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}); err != nil {
@@ -323,16 +326,22 @@ func TestPodcastFetchFoldFollowsARenamedFolder(t *testing.T) {
 	}
 	f := showAt(t, "Renamed", "")
 	old := fx.oldEpisode
-	fetch := bridge.Job{ID: 20, Kind: bridge.KindPodcastFetch, LibraryID: &fx.lib, Path: &old, State: bridge.StateFailed,
+	fetch := bridge.Job{ID: 20, Kind: bridge.KindPodcastFetch, LibraryID: &fx.lib, Path: &old, State: bridge.StateDone,
 		Params: json.RawMessage(`{"show_id":"` + fx.id + `","episode_id":"` + f.Episodes[0].ID + `"}`),
-		Result: json.RawMessage(`{"path":"Renamed/` + fx.ep + `","show_id":"` + fx.id + `","episode_id":"` + f.Episodes[0].ID + `","code":"timeout"}`)}
+		Result: json.RawMessage(`{"path":"Renamed/` + fx.ep + `","show_id":"` + fx.id + `","episode_id":"` + f.Episodes[0].ID + `","reused":true}`)}
 	if err := fx.c.FoldPodcastJob(fx.ctx, fetch); err != nil {
 		t.Fatal(err)
 	}
 	var failures int
 	var last int64
-	if err := fx.c.db.QueryRowContext(fx.ctx, `SELECT failures,last_job_id FROM podcast_fetch_state WHERE library_id=? AND rel_path=? AND show_id=?`, fx.lib, "Renamed/"+fx.ep, fx.id).Scan(&failures, &last); err != nil || failures != 3 || last != 20 {
-		t.Fatalf("fetch state %d %d %v", failures, last, err)
+	var code string
+	var next sql.NullString
+	if err := fx.c.db.QueryRowContext(fx.ctx, `SELECT failures,last_job_id,error_code,next_attempt_at FROM podcast_fetch_state WHERE library_id=? AND rel_path=? AND show_id=?`, fx.lib, "Renamed/"+fx.ep, fx.id).Scan(&failures, &last, &code, &next); err != nil || failures != 0 || last != 20 || code != "" || next.Valid {
+		t.Fatalf("fetch state %d %d %q %v %v", failures, last, code, next, err)
+	}
+	var left int
+	if err := fx.c.db.QueryRowContext(fx.ctx, `SELECT COUNT(*) FROM podcast_fetch_state WHERE rel_path=?`, fx.oldEpisode).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("fetch state at the old folder: %d %v", left, err)
 	}
 }
 
