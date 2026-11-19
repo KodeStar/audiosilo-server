@@ -30,7 +30,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   packages so it stays unit-testable (`api` is transport-only).
   A test never holds code to a time in milliseconds: CI's shared runners take several times as long as a laptop,
   and more when busy. How a read grows is compared across sizes on the one machine (`TestSeriesKeyScale`) and
-  its shape held by its plan (`queryPlan`: `TestNextInSeriesPlan`, `TestIssueCountsPlan`).
+  its shape held by its plan (`queryPlan`: `TestNextInSeriesPlan`, `TestIssueCountsPlan`), or its work counted
+  (`countingDB`: `TestBookHoldingBounded`, `TestListableRefsBounded`). A wait for something a test set going
+  waits on the condition (or a signal: `media.FileCache.HoldRunsForTests`' held) with a generous deadline,
+  `testwait.Scaled` (four times as long under `-race`, `testwait.Race`), never a fixed sleep that assumes how
+  far the code got; a test of a time bound itself (a budget, a look's time) scales its times the same way and
+  keeps their ratios (`TestBudgetStartsAfterAnotherDiscovery`, `TestRequestWaitsOutAnotherReadsProbe`).
 - **Wire goldens (`internal/api/wire_golden_test.go`, `internal/api/testdata/wire/`, audiosilo#96, server#347)**: the
   shape of each important player envelope (`/server`, the session and pairing envelopes, `/me`, the library
   lists, `/item`, `/chapters`, progress, `/me/listening/sync`, bookmarks, `/meta`, `/me/upcoming`,
