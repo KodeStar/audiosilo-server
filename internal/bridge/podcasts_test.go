@@ -414,6 +414,39 @@ func TestRecentSubscribeFailure(t *testing.T) {
 	none("a failure that may be the stop", lostStop, q.lib)
 }
 
+// An adopt-only request (an OPML row past its new-request budget) starts no
+// job over a stopping one either: it is refused, and the stopping job is left
+// to stop (the refusal undoes its end).
+func TestSubscribeAdoptOnlyLeavesAStoppingRequest(t *testing.T) {
+	t.Parallel()
+	q := podcastQueue(t)
+	ctx := context.Background()
+	feedURL := "https://example.com/feed.xml"
+	j, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, feedURL, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || claimed == nil || claimed.ID != j.ID {
+		t.Fatalf("claim %+v %v", claimed, err)
+	}
+	if _, err := q.Cancel(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: feedURL, AdoptOnly: true}); !errors.Is(err, ErrNoNewRequest) {
+		t.Fatalf("adopt-only over a stopping request = %v, want ErrNoNewRequest", err)
+	}
+	if got, err := q.Job(ctx, j.ID); err != nil || got.State != StateClaimed || !got.CancelRequested {
+		t.Fatalf("the stopping request = %+v %v, want it still stopping", got, err)
+	}
+	again, created, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, feedURL, false, "")
+	if err != nil || !created || again.ID == j.ID {
+		t.Fatalf("a new request over it = %+v %v %v, want a new job", again, created, err)
+	}
+	if got, err := q.Job(ctx, j.ID); err != nil || got.State != StateCancelled {
+		t.Fatalf("the stopped request = %+v %v, want cancelled", got, err)
+	}
+}
+
 // R-13: deleting a library cascades its jobs away; PruneSecrets then drops the
 // private URLs held for them and keeps every other library's.
 func TestPruneSecretsAfterLibraryDelete(t *testing.T) {

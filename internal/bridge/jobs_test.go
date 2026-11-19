@@ -631,6 +631,58 @@ func TestUpdateHeldParkedAfterCancelEndsCancelled(t *testing.T) {
 	}
 }
 
+// A request matching an open job that was already asked to stop does not join
+// it (it would quietly do nothing): the stopping job ends cancelled at once,
+// its error kept, its end reported, and the request queues a job of its own,
+// since a dedupe key holds one open job. The stopped job's Bridge is told it
+// was cancelled at its next report. An open job not asked to stop is still
+// joined.
+func TestEnqueueStartsANewJobOverAStoppingOne(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	var ended []string
+	q.OnEnded = func(_ context.Context, j Job) { ended = append(ended, fmt.Sprintf("%d:%s", j.ID, j.State)) }
+	ask := func() (*Job, bool) {
+		t.Helper()
+		j, created, err := q.Enqueue(ctx, NewJob{Kind: KindVerify, LibraryID: &q.lib, Path: ptr("A"), RequestedBy: q.admin})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return j, created
+	}
+	first, _ := ask()
+	if c, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || c == nil || c.ID != first.ID {
+		t.Fatalf("claim = %+v, %v", c, err)
+	}
+	if j, created := ask(); created || j.ID != first.ID {
+		t.Fatalf("a working job = %+v, created %v; want it joined", j, created)
+	}
+	if j, err := q.Cancel(ctx, first.ID); err != nil || j.State != StateClaimed || !j.CancelRequested {
+		t.Fatalf("cancel = %+v, %v; want a request", j, err)
+	}
+	next, created := ask()
+	if !created || next.ID == first.ID || next.State != StateQueued || next.CancelRequested {
+		t.Fatalf("over a stopping job = %+v, created %v; want a new queued job", next, created)
+	}
+	old, err := q.Job(ctx, first.ID)
+	if err != nil || old.State != StateCancelled || old.FinishedAt == nil || old.LeaseUntil != nil {
+		t.Fatalf("the stopping job = %+v, %v; want cancelled and ended", old, err)
+	}
+	if want := []string{fmt.Sprintf("%d:cancelled", first.ID)}; !slices.Equal(ended, want) {
+		t.Fatalf("ended %v, want %v", ended, want)
+	}
+	if _, err := q.UpdateHeld(ctx, first.ID, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("the stopped job's report = %v, want ErrCancelledWhileHeld", err)
+	}
+	if c, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || c == nil || c.ID != next.ID {
+		t.Fatalf("claim = %+v, %v; want the new job %d", c, err, next.ID)
+	}
+	if j, created := ask(); created || j.ID != next.ID {
+		t.Fatalf("the new job = %+v, created %v; want it joined", j, created)
+	}
+}
+
 func TestListFilters(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)

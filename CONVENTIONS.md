@@ -3356,8 +3356,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   no code, as `ParkCode` reads it) keeps the stored one (`carryPark`; the stored progress whole when the
   merge would pass the progress cap), so a Bridge resuming after a restart neither blanks the reason
   nor raises a second park event. `dedupe_key`
-  (kind|library|path) returns the open job on a second press (200, else 201; the console says when that
-  job is one still stopping after a cancel, `cancel_requested`, as nothing new can be queued until it ends). `GET /bridge/jobs/next?wait=
+  (kind|library|path) returns the open job on a second press (200, else 201), unless that job is one
+  still stopping after a cancel (`cancel_requested`): a request never joins a job about to end, so the
+  stopping job ends `cancelled` at once (`endStoppingTx`, as its lapsed lease would end it: one key holds
+  one open job, migration 0047's unique index) and the request queues its own (201); the Bridge hears 409
+  `not_held` `cancelled` at its next report on the old one. `EnqueueAll` does the same; a stopping podcast
+  job of another identity still answers `identity_changed` until it has stopped. `GET /bridge/jobs/next?wait=
   &kind=[&share_off=1]` (`bridge.Service.ClaimFor`, `ClaimWith`; `share_off`: Community jobs below) long-polls (at most 25 s, woken by an enqueue; it ends with the
   server's base context, so a stop isn't held by the claim a Bridge always has waiting: 204) for the
   highest-priority oldest queued job of the

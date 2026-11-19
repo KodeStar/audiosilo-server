@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -233,13 +234,36 @@ func TestEnqueueAll(t *testing.T) {
 	if again, err := q.EnqueueAll(ctx, batch, none); again != 0 || err != nil || count() != n {
 		t.Fatalf("again = %d, %v, %d jobs", again, err, count())
 	}
+	// A job already asked to stop is not joined: it ends, and its title is
+	// queued again (Enqueue's rule).
+	stopping, err := q.claim(ctx, q.token, []string{KindAudibleImport})
+	if err != nil || stopping == nil {
+		t.Fatalf("claim = %+v, %v", stopping, err)
+	}
+	if _, err := q.Cancel(ctx, stopping.ID); err != nil {
+		t.Fatal(err)
+	}
+	at := slices.Index(ids, stopping.ID)
+	created, err = q.EnqueueAll(ctx, batch, func(_ *sql.Tx, i int, id int64) error {
+		ids[i] = id
+		return nil
+	})
+	if err != nil || created != 1 || count() != n+1 || ids[at] == stopping.ID {
+		t.Fatalf("over a stopping job = %d, %v, %d jobs, id %d (was %d)", created, err, count(), ids[at], stopping.ID)
+	}
+	if j, err := q.Job(ctx, stopping.ID); err != nil || j.State != StateCancelled || j.FinishedAt == nil {
+		t.Fatalf("the stopping job = %+v, %v; want cancelled", j, err)
+	}
+	if j, err := q.Job(ctx, ids[at]); err != nil || j.State != StateQueued {
+		t.Fatalf("its new job = %+v, %v; want queued", j, err)
+	}
 	// A bad job stops the batch there.
 	more := []NewJob{
 		AudibleImport(AudibleImportParams{Account: "acct0002", ASIN: "B000000001", LibraryID: q.lib}, q.admin, 0),
 		AudibleImport(AudibleImportParams{Account: "acct0002", ASIN: "nope", LibraryID: q.lib}, q.admin, 0),
 		AudibleImport(AudibleImportParams{Account: "acct0002", ASIN: "B000000003", LibraryID: q.lib}, q.admin, 0),
 	}
-	if created, err := q.EnqueueAll(ctx, more, none); created != 1 || !errors.Is(err, ErrInvalid) || count() != n+1 {
+	if created, err := q.EnqueueAll(ctx, more, none); created != 1 || !errors.Is(err, ErrInvalid) || count() != n+2 {
 		t.Fatalf("a bad job = %d, %v, %d jobs", created, err, count())
 	}
 	// A library that can't be read is no refusal: none queued.
@@ -247,7 +271,7 @@ func TestEnqueueAll(t *testing.T) {
 		AudibleImport(AudibleImportParams{Account: "acct0003", ASIN: "B000000001", LibraryID: q.lib}, q.admin, 0),
 		AudibleImport(AudibleImportParams{Account: "acct0003", ASIN: "B000000002", LibraryID: q.lib + 1000}, q.admin, 0),
 	}
-	if created, err := q.EnqueueAll(ctx, unread, none); created != 0 || !errors.Is(err, sql.ErrNoRows) || count() != n+1 {
+	if created, err := q.EnqueueAll(ctx, unread, none); created != 0 || !errors.Is(err, sql.ErrNoRows) || count() != n+2 {
 		t.Fatalf("an unread library = %d, %v, %d jobs", created, err, count())
 	}
 	if _, err := q.EnqueueAll(ctx, []NewJob{{Kind: KindVerify, LibraryID: &q.lib}}, none); !errors.Is(err, ErrInvalid) {
