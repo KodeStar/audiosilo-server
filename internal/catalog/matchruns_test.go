@@ -432,9 +432,10 @@ func TestLanguageCounts(t *testing.T) {
 	}
 }
 
-// An unlink sets due again (resolved_at ”) the upcoming job's rows for every
+// An unlink sets due again (an empty resolved_at) the upcoming job's rows for every
 // series the matched book is in, its main one and the ones its list names, in
-// its own library only; a series no matched book is in keeps its resolution.
+// its own library only; a series no matched book is in, or whose matched book's
+// match named its identifiers' work, keeps its resolution.
 func TestUnlinkSetsMatchedSeriesDue(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -456,6 +457,14 @@ func TestUnlinkSetsMatchedSeriesDue(t *testing.T) {
 	if err := c.EditBook(ctx, lib.ID, "gg", BookEdit{Match: &MatchAnchor{WorkID: "w"}, Source: SourceCommunity}); err != nil {
 		t.Fatal(err)
 	}
+	// Dune's match names the work its identifiers resolved to: it stood in
+	// for nothing, so its going leaves Dune's resolution standing.
+	if err := c.EditBook(ctx, lib.ID, "dune", BookEdit{Match: &MatchAnchor{WorkID: "d"}, Source: SourceCommunity}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SaveUpcomingOwned(ctx, []UpcomingOwned{{Ref: Ref{LibraryID: lib.ID, Path: "dune"}, IDKey: "a:B0DUNE", WorkID: "d", CheckedAt: "now"}}, nil); err != nil {
+		t.Fatal(err)
+	}
 	const at = "2026-11-01T00:00:00Z"
 	for _, s := range []struct {
 		lib  int64
@@ -465,8 +474,10 @@ func TestUnlinkSetsMatchedSeriesDue(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.EditBook(ctx, lib.ID, "gg", BookEdit{Match: &MatchAnchor{}, Source: SourceCommunity}); err != nil {
-		t.Fatal(err)
+	for _, p := range []string{"gg", "dune"} {
+		if err := c.EditBook(ctx, lib.ID, p, BookEdit{Match: &MatchAnchor{}, Source: SourceCommunity}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	rows, err := c.UpcomingSeriesAll(ctx)
 	if err != nil {

@@ -197,13 +197,17 @@ func (c *Catalog) SetUpcomingSeries(ctx context.Context, libraryID int64, key, n
 // each indexed book of pick with a recorded match, in tx (clearCommunity's,
 // before it removes the matches): their rows' resolved_at is emptied, which
 // reads as never resolved. The job's due rule compares a match's set_at with
-// resolved_at, and an unlink leaves no match to compare. The series' items
-// stay until that run.
+// resolved_at, and an unlink leaves no match to compare. A match naming the
+// work its book's identifiers resolved to (upcoming_owned) stood in for
+// nothing, so its going changes no series (the job's own rule when a match is
+// set): a library's Clear matches over tagged books sets none due. The
+// series' items stay until that run.
 func setMatchedSeriesDue(ctx context.Context, tx *sql.Tx, pick clearPick) error {
 	// pick.where is clearPick's own SQL, never a caller's.
-	matched := `SELECT library_id AS lib, path AS p FROM book_matches WHERE ` + pick.where
+	matched := `SELECT library_id AS lib, path AS p, work_id AS w FROM book_matches WHERE ` + pick.where
 	_, err := tx.ExecContext(ctx, `WITH x AS (`+matched+`), m AS (
-		  SELECT b.id, b.library_id, b.series_key FROM x JOIN books b ON b.library_id = x.lib AND b.rel_path = x.p)
+		  SELECT b.id, b.library_id, b.series_key FROM x JOIN books b ON b.library_id = x.lib AND b.rel_path = x.p
+		   WHERE NOT EXISTS (SELECT 1 FROM upcoming_owned o WHERE o.library_id = x.lib AND o.path = x.p AND o.work_id = x.w))
 		UPDATE upcoming_series SET resolved_at = ''
 		 WHERE resolved_at <> '' AND (library_id, series_key) IN (
 		       SELECT library_id, series_key FROM m WHERE series_key <> ''

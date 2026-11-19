@@ -643,7 +643,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (requireAuth, notKid) reads what it stored for one caller. **Layout**: `upcoming/classify.go` is the pure
   `Classify` (slots by the console's `railEntries` rule; a book with a known work holds that work's span,
   else its own position or range, as does a console-matched book whose work the series doesn't list
-  (`OwnedBook.Matched`: that volume is never missing nor announced, the match still its work); kinds in order preorder (future at the date's own precision,
+  (`OwnedBook.Matched`: that volume is never missing nor announced, the match still its work; one it lists
+  unnumbered holds nothing); kinds in order preorder (future at the date's own precision,
   `releaseIsFuture`), released (within `upcoming.window_days`, counted from the date's first day), missing
   (a whole-number interior gap below the highest held, plus the first whole non-preorder slot after it;
   never a fractional position); a work in two series is the first's); `runner.go` is the job; `list.go` the
@@ -664,7 +665,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   they answer, recorded since the series was resolved: `book_matches.set_at` against
   `upcoming_series.resolved_at`, so nothing is remembered between runs; server#375; an unlink or a
   library's Clear matches leaves no row to compare, so it empties the `resolved_at` of the series of each
-  book whose match it removes, in its own transaction: `catalog.setMatchedSeriesDue`);
+  book whose match it removes, in its own transaction, bar a match naming the work `upcoming_owned` holds
+  for the book (it stood in for nothing): `catalog.setMatchedSeriesDue`; such a series whose books then
+  have no work, a match-only book's, is resolved to none, its items dropped);
   (3) metaserve's watch feed, 50 series a request (split when full), says which series have news; (4)
   `series/{id}` is read when new, with news, or a week old (2 at a time; a 404 marks it gone, dropped after
   a week); (5) classify; (6) announce. With metadata on and `upcoming.enabled` off, a run (scheduled or
