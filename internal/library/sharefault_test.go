@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"maps"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -152,5 +154,70 @@ func TestCoverLookReadsATransientFaultAsNoAnswer(t *testing.T) {
 				t.Errorf("cover %q, given up on %v; want %q, given up on %v", got, g.err, c.want, c.givenUpOn)
 			}
 		})
+	}
+}
+
+// A caller who asks for a book (an on-demand index, an admin's Re-read, the
+// Bridge's IndexMoved) whose folder refuses the server's user for good (a
+// permission on its stat or its listing) hears there is no book to index
+// there, as before the share-fault rule, never a look given up on (the API's
+// 503 share_not_answering, which says to try again): only a fault a retry may
+// get past is one. bookOnDisk still reads the same refusal as the book
+// present (TestBookOnDiskReadsAShareFaultAsNoAnswer). Not parallel: it swaps
+// the looks.
+func TestAskedBookRefusedForGoodIsNotIndexable(t *testing.T) {
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "Author/Book/01.mp3", make([]byte, 1<<10))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, "", slog.Default())
+	book := filepath.Join(root, "Author", "Book")
+	asks := map[string]func() error{
+		"IndexPath":   func() error { _, err := s.IndexPath(ctx, *lib, "Author/Book"); return err },
+		"ReindexPath": func() error { _, err := s.ReindexPath(ctx, *lib, "Author/Book"); return err },
+		"IndexMoved":  func() error { _, err := s.IndexMoved(ctx, *lib, "Author/Book", ""); return err },
+	}
+	for _, c := range []struct {
+		name    string
+		errno   syscall.Errno
+		refused bool
+	}{
+		{"EACCES", syscall.EACCES, true},
+		{"EPERM", syscall.EPERM, true},
+		{"EIO", syscall.EIO, false},
+		{"ESTALE", syscall.ESTALE, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			// The stat and the listing both fail at the folder: the stat is
+			// met first, then (its error lifted) the listing.
+			for _, look := range []string{"stat", "listing"} {
+				fail := map[string]syscall.Errno{book: c.errno}
+				failLooks(t, fail)
+				if look == "listing" {
+					wasStat := statLook
+					statLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+						return metadata.StatBounded(ctx, p, timeout)
+					}
+					t.Cleanup(func() { statLook = wasStat })
+				}
+				for name, ask := range asks {
+					err := ask()
+					if c.refused && (!errors.Is(err, ErrNotIndexable) || metadata.GaveUp(err)) {
+						t.Errorf("%s with the folder's %s %s: %v, want ErrNotIndexable, no look given up on", name, look, c.name, err)
+					}
+					if !c.refused && !metadata.GaveUp(err) {
+						t.Errorf("%s with the folder's %s %s: %v, want a look given up on", name, look, c.name, err)
+					}
+				}
+			}
+		})
+	}
+	if _, err := s.IndexPath(ctx, *lib, "Author/Book"); err != nil {
+		t.Errorf("IndexPath with every look answering: %v", err)
 	}
 }

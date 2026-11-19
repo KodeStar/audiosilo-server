@@ -2509,7 +2509,7 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 // Each caller is checked against allow before concurrent callers for the same
 // book share one read of it (indexShared).
 func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
-	book, err := s.resolveBook(ctx, lib, relPath, allow)
+	book, err := s.resolveAsked(ctx, lib, relPath, allow)
 	if err != nil {
 		return nil, err
 	}
@@ -2527,7 +2527,7 @@ func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relP
 // (metadata.ErrNotAnswered): the caller asked for the book as it is now, and
 // the share holding it is not answering.
 func (s *Scanner) ReindexPath(ctx context.Context, lib catalog.Library, relPath string) (*catalog.Book, error) {
-	book, err := s.resolveBook(ctx, lib, relPath, nil)
+	book, err := s.resolveAsked(ctx, lib, relPath, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2964,9 +2964,46 @@ func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *cata
 	return err
 }
 
+// lookRefused is a look resolveBook made at the path its caller named (the
+// path's stat, its folder's listing) that failed with a permission: still a
+// look given up on for whoever asks whether the book is on disk (bookOnDisk:
+// present, its state kept where it is), but one that stays until an admin
+// changes the permission, where a share that stopped answering may come back.
+type lookRefused struct{ err error }
+
+func (e lookRefused) Error() string { return e.err.Error() }
+func (e lookRefused) Unwrap() error { return e.err }
+
+// refusedForGood marks err, a look given up on (metadata.AsGaveUp), as
+// lookRefused when a permission (EACCES, EPERM) is why; any other err as it is.
+func refusedForGood(err error) error {
+	if cause, faulted := metadata.Faulted(err); faulted && errors.Is(cause, fs.ErrPermission) {
+		return lookRefused{err}
+	}
+	return err
+}
+
+// resolveAsked is resolveBook for a caller who asked for the book at relPath
+// (an on-demand index, an admin's Re-read, the Bridge's IndexMoved): a book
+// folder the server's user may not look at (lookRefused) is ErrNotIndexable,
+// the answer it had before a share's faults were read as looks given up on,
+// not a look given up on (the API's 503 share_not_answering with Retry-After:
+// trying again would meet the same permission). Only a fault a share may get
+// past, or a look that did not answer, is one. Nothing is written either way.
+func (s *Scanner) resolveAsked(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
+	book, err := s.resolveBook(ctx, lib, relPath, allow)
+	var refused lookRefused
+	if errors.As(err, &refused) {
+		cause, _ := metadata.Faulted(err)
+		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, cause)
+	}
+	return book, err
+}
+
 // resolveBook is the book relPath resolves to on disk, worked out exactly as a
 // full scan would (IndexPathWithin's rules), with the signatures of its metadata
-// files, but nothing read from its audio and nothing indexed.
+// files, but nothing read from its audio and nothing indexed. A look at the
+// path itself refused for good is marked so (lookRefused).
 func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
 	if lib.Kind != catalog.KindBooks { // a podcast library, or one of a kind this server doesn't know
 		return nil, ErrNotIndexable
@@ -2992,7 +3029,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	// says nothing about whether the book is there: a look given up on, never
 	// "no book" (bookOnDisk would read that as gone).
 	info, err := statLook(ctx, abs, look)
-	err = metadata.AsGaveUp(err)
+	err = refusedForGood(metadata.AsGaveUp(err))
 	if metadata.Unanswered(ctx, err) {
 		return nil, cmp.Or(err, ctx.Err()) // ctx may have ended as the stat answered
 	}
@@ -3033,7 +3070,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	}
 	own, err := audioEntries(ctx, lib.Root, absOf(lib, dirRel), ignore, look)
 	if err != nil {
-		return nil, err
+		return nil, refusedForGood(err)
 	}
 	// Whether a folder with a `book` override is a disc set turns on its whole
 	// subtree, walked only then; the walk is the joined book's too.
@@ -3147,7 +3184,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 // detection can carry the state. A read that kept the new book as stored
 // (readOwn) is a look given up on too, its state carried already.
 func (s *Scanner) IndexMoved(ctx context.Context, lib catalog.Library, relPath, from string) (*catalog.Book, error) {
-	book, err := s.resolveBook(ctx, lib, relPath, nil)
+	book, err := s.resolveAsked(ctx, lib, relPath, nil)
 	if err != nil {
 		return nil, err
 	}

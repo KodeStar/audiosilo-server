@@ -1463,7 +1463,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   does (`metadata.ShareFault`: any error but the file gone (ENOENT, ENOTDIR) or a name too long (ENAMETOOLONG):
   EIO, ESTALE, ENOTCONN, a permission; `metadata.AsGaveUp` reads it as a look given up on, `Faulted` names its
   cause; the same rule for every look a scan makes at a book: the walk's listings, a disc folder's, `resolveBook`'s
-  stat, `bookOnDisk`'s and `dirPresent`'s; `dropUnanswered`, with
+  stat, `bookOnDisk`'s and `dirPresent`'s; a caller who asked for the book (`resolveAsked`: an on-demand index, an
+  admin's Re-read, `IndexMoved`) hears a permission on the path's stat or its folder's listing as
+  `ErrNotIndexable`, the 404 it always was and no 503 to try again (`lookRefused`; `bookOnDisk` still reads it
+  as the book present); `dropUnanswered`, with
   every disc folder directly in it or in a folder above it, so neither a book joined from a disc set nor the discs' split
   is built from the discs that answered, or from a set that is one only for want of the folder not looked at),
   is skipped for that run, which is then partial (its books kept
