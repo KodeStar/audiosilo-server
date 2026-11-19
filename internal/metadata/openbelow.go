@@ -53,6 +53,17 @@ func below[T any](root, path string, followLast bool, open func(r *os.Root, rel 
 	if err == nil || errors.Is(err, fs.ErrNotExist) {
 		return v, err
 	}
+	return openResolved(r, rootAbs, rel, resolved, followLast, err, open)
+}
+
+// openResolved is below's second open, through r, the root opened at rootAbs
+// (or a folder kept open there, BelowFolder's), after the first, of rel under
+// it, failed with err for anything but the name gone: rel resolved (up to its
+// last name only unless followLast) and, when that leads under the root
+// (resolved: underRoot's, or resolved here) by another path, opened there.
+// err when it does not.
+func openResolved[T any](r *os.Root, rootAbs, rel, resolved string, followLast bool, err error, open func(r *os.Root, rel string) (T, error)) (T, error) {
+	var zero T
 	if resolved == "" {
 		if resolved, _ = resolveLinks(rootAbs); resolved == "" {
 			return zero, err
