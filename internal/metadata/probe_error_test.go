@@ -30,7 +30,7 @@ func TestProbeErrorDropsTheList(t *testing.T) {
 }
 
 // A message ending in ffmpeg's invalid-data words, or in its invalid-argument
-// words right after a refusal by the format list, is a rejection of the file's
+// words after a refusal by the format list, is a rejection of the file's
 // data (the same ffprobe rejects the same bytes again); any other failure is not,
 // even after a line that ends in them.
 func TestProbeErrorRejected(t *testing.T) {
@@ -44,9 +44,9 @@ func TestProbeErrorRejected(t *testing.T) {
 		{"/srv/x.mp3: Input/output error\n", false},
 		{"/srv/x.mp3: Permission denied\n", false},
 		{"[ogg @ 0x1] Header processing failed: Invalid data found when processing input\n/srv/x.ogg: Input/output error\n", false},
-		// A format InputFormats leaves out, and an HLS playlist under an audio name.
+		// A format InputFormats leaves out, with or without a line between.
 		{"[concat @ 0x1] Format not on whitelist 'mov,mp3'\n/srv/x.mp3: Invalid argument\n", true},
-		{"Not detecting m3u8/hls with non standard extension and non standard mime type\n    Last message repeated 1 times\n[mp3 @ 0x1] Failed to find two consecutive MPEG audio frames.\n/srv/x.mp3: Invalid data found when processing input\n", true},
+		{"[concat @ 0x1] Format not on whitelist 'mov,mp3'\n    Last message repeated 1 times\n/srv/x.mp3: Invalid argument\n", true},
 		{"/srv/x.mp3: Invalid argument\n", false},
 		{"[concat @ 0x1] Format not on whitelist 'mov,mp3'\n/srv/x.mp3: Input/output error\n", false},
 	} {

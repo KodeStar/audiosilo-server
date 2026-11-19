@@ -56,8 +56,8 @@ var ErrProbeRejected = errors.New("ffprobe rejected the file's data")
 const invalidData = "Invalid data found when processing input"
 
 // notOnWhitelist is how ffmpeg says the format it found for an input is not on
-// its -format_whitelist (InputFormats), followed by the list in quotes; the
-// line after it, ffprobe's own, ends in invalidArgument (AVERROR(EINVAL)).
+// its -format_whitelist (InputFormats), followed by the list in quotes;
+// ffprobe's own last line then ends in invalidArgument (AVERROR(EINVAL)).
 const (
 	notOnWhitelist  = "Format not on whitelist"
 	invalidArgument = "Invalid argument"
@@ -247,7 +247,7 @@ const maxProbeMessage = 300
 // mp4 @ 0x..] moov atom not found") usually comes before the generic last line
 // ("x.m4b: Invalid data found when processing input"). Falls back to the exit
 // status. A run whose last line (ffprobe's own error, which it writes last) ends
-// in invalidData, or in invalidArgument right after a notOnWhitelist line (a
+// in invalidData, or in invalidArgument with a notOnWhitelist line before it (a
 // format InputFormats leaves out), matches ErrProbeRejected; an earlier line
 // ending so, followed by another error (a read failure, which may pass), does
 // not.
@@ -257,11 +257,11 @@ func probeError(err error) error {
 		return err
 	}
 	var parts []string
-	last, before := "", ""
+	last := ""
 	for _, l := range strings.Split(string(exit.Stderr), "\n") {
 		l = strings.TrimSpace(l)
 		if l != "" {
-			last, before = l, last
+			last = l
 		}
 		// ffprobe prefixes the input path ("/srv/books/x.m4b: Invalid data..."); the
 		// Health page shows the file separately.
@@ -283,7 +283,7 @@ func probeError(err error) error {
 	if len(msg) > maxProbeMessage {
 		msg = strings.ToValidUTF8(msg[:maxProbeMessage], "")
 	}
-	refused := strings.HasSuffix(last, invalidArgument) && strings.Contains(before, notOnWhitelist)
+	refused := strings.HasSuffix(last, invalidArgument) && strings.Contains(string(exit.Stderr), notOnWhitelist)
 	return &probeMessage{msg: msg, rejected: strings.HasSuffix(last, invalidData) || refused}
 }
 

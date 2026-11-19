@@ -1395,10 +1395,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   without delete sharing, it keeps the file from being renamed or replaced meanwhile (the os.Root open
   shares deletion), and a folder along it can't be renamed while a file in it is open there. The tool reads
   the file as an audio container only: both runs pass `metadata.InputFormatArgs()`
-  (`-format_whitelist` `metadata.InputFormats`: mov/mp4, mp3, matroska/webm, ogg, flac, wav, aac, and the
-  other audio containers a book may hold under an indexed name, w64, aiff, asf, ac3, eac3, ape, wv, caf, amr;
-  the one list for every run on a library file, the transcode's too; before the input for ffprobe, before
-  `-i` for ffmpeg), since FFmpeg picks a demuxer by the file's bytes and one shaped
+  (`-format_whitelist` `metadata.InputFormats`: the audio containers a book may be in under an indexed
+  name, none of which opens another input; the one list for every run on a library file; before the input
+  for ffprobe, before `-i` for ffmpeg), since FFmpeg picks a demuxer by the file's bytes and one shaped
   like a playlist (concat, hls, dash, sdp) under an audio name would have it open the files it lists
   (`TestProbeReadsNoPlaylist`, `TestDetectSilencesReadsNoPlaylist`); a new ffprobe or ffmpeg run on a library
   file passes them too. The runs fed a descriptor as stdin (a podcast episode's transcode, the remux, the

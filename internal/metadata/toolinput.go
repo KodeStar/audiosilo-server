@@ -39,9 +39,8 @@ func ToolInput(f *os.File, root, path string) (input string, extra []*os.File, c
 // an audio name would have the tool open the files or addresses it lists:
 // other files on the server.
 //
-// It is the one list for every run on a library file: media's transcode
-// must pass this list, not one of its own (the change that holds the
-// transcode to a list uses this one).
+// It is the one list for every run on a library file: a run held to a list
+// uses this one, not its own.
 const InputFormats = "mov,mp4,m4a,3gp,3g2,mj2,mp3,matroska,webm,ogg,flac,wav,aac,w64,aiff,asf,ac3,eac3,ape,wv,caf,amr"
 
 // InputFormatArgs is the arguments that hold ffprobe or ffmpeg to
