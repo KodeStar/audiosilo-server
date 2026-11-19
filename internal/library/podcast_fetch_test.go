@@ -847,12 +847,7 @@ func TestOpenPodcastThroughTheRootAfterASwap(t *testing.T) {
 		if p == filepath.Join(dir, "feed.json") && !swapped {
 			// The folder's look answered: now it becomes the link.
 			swapped = true
-			if err := os.Rename(dir, dir+".aside"); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink(copyDir, dir); err != nil {
-				t.Skipf("symlinks unsupported here: %v", err)
-			}
+			swapForLink(t, dir, copyDir)
 		}
 		return was(p)
 	}

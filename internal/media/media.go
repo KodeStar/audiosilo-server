@@ -383,17 +383,17 @@ func fileInput(ctx context.Context, ffmpegPath string, f *os.File, root, path st
 		in.file = f
 		return in, func() {}, nil
 	}
-	input, extra, cleanup, err := toolInputBounded(ctx, f, root, path, wait)
+	input, extra, cleanup, err := toolInput(ctx, f, root, path, wait)
 	if err != nil {
 		return inputSpec{}, nil, transientGaveUp(err)
 	}
 	return inputSpec{proto: "file", url: "file:" + input, extra: extra}, cleanup, nil
 }
 
-// toolInputBounded is fileInput's metadata.ToolInput, a test's to
+// toolInput is fileInput's metadata.ToolInput, a test's to
 // inject a share's errors: only Windows' re-check of the path looks at the
 // share, so no other platform meets them.
-var toolInputBounded = metadata.ToolInput
+var toolInput = metadata.ToolInput
 
 // inputSpec is how ffmpeg reads its input: the descriptor file handed over as
 // its stdin through the fd: protocol (seekable) or pipe:0 (not seekable: a

@@ -183,18 +183,18 @@ func TestOpenFaultsAnswerByKind(t *testing.T) {
 // re-check of the path on a share that dropped) is returned with nothing
 // written, the caller's 503 share_not_answering; a lasting refusal (a
 // permission) and the file gone are the 404. Not parallel: it swaps
-// toolInputBounded.
+// toolInput.
 func TestInputFaultsAnswerByKind(t *testing.T) {
 	root := t.TempDir()
 	abs := filepath.Join(root, "a.mp3")
 	if err := os.WriteFile(abs, []byte("audio"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ffmpeg := echoFFmpeg(t) // no fd: protocol, so the file goes through toolInputBounded
-	was := toolInputBounded
-	t.Cleanup(func() { toolInputBounded = was })
+	ffmpeg := echoFFmpeg(t) // no fd: protocol, so the file goes through toolInput
+	was := toolInput
+	t.Cleanup(func() { toolInput = was })
 	for _, c := range shareFaults {
-		toolInputBounded = func(context.Context, *os.File, string, string, time.Duration) (string, []*os.File, func(), error) {
+		toolInput = func(context.Context, *os.File, string, string, time.Duration) (string, []*os.File, func(), error) {
 			return "", nil, nil, &fs.PathError{Op: "open", Path: abs, Err: c.errno}
 		}
 		rec := httptest.NewRecorder()

@@ -459,9 +459,6 @@ type linkWalk struct {
 	hops            int
 }
 
-// isPathSep reports whether r separates the names of a path (a link's target).
-func isPathSep(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) }
-
 // followLink resolves the link at link, in the folder dir (resolved, under
 // w.rootAbs), one hop at a time: its target is read (lk.readlink) and walked
 // name by name from dir (a relative one) or the filesystem's root (an
@@ -494,10 +491,10 @@ func followLink(w *linkWalk, dir, link string, maybe bool) (string, error) {
 	case to == "":
 		return "", nil
 	}
-	cur, names := dir, strings.FieldsFunc(to, isPathSep)
+	cur, names := dir, strings.FieldsFunc(to, metadata.IsPathSep)
 	if own := filepath.VolumeName(to); own != "" || os.IsPathSeparator(to[0]) {
 		vol := cmp.Or(own, filepath.VolumeName(w.rootAbs))
-		cur, names = vol+string(filepath.Separator), strings.FieldsFunc(to[len(own):], isPathSep)
+		cur, names = vol+string(filepath.Separator), strings.FieldsFunc(to[len(own):], metadata.IsPathSep)
 		if below, ok := w.throughRootAs(vol, names); ok {
 			cur, names = w.rootAbs, below
 		}
@@ -553,7 +550,7 @@ func (w *linkWalk) throughRootAs(vol string, names []string) (below []string, ok
 	if w.rootAs == "" || w.rootAs == w.rootAbs || vol != filepath.VolumeName(w.rootAs) {
 		return nil, false
 	}
-	as := strings.FieldsFunc(w.rootAs[len(vol):], isPathSep)
+	as := strings.FieldsFunc(w.rootAs[len(vol):], metadata.IsPathSep)
 	if len(as) == 0 || len(names) < len(as) || !slices.Equal(names[:len(as)], as) {
 		return nil, false
 	}

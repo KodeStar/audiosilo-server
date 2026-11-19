@@ -143,10 +143,8 @@ func ReadRegularFile(root, path string, limit int, notRegular, tooLarge error) (
 // more (retrySwap), so every attachment, feed.json and library.json read
 // meets the rename with the new file rather than failing.
 func readRegularFileInfo(root, path string, limit int, notRegular, tooLarge error) ([]byte, fs.FileInfo, error) {
-	lstat := func(p string) (fs.FileInfo, error) { return LstatBelow(root, p) }
-	open := func(p string) (*os.File, error) { return OpenBelow(root, p) }
 	return retrySwap(func() ([]byte, fs.FileInfo, error) {
-		return readRegularFileOnce(path, lstat, open, limit, notRegular, tooLarge)
+		return readRegularFileOnce(root, path, limit, notRegular, tooLarge)
 	})
 }
 
@@ -160,18 +158,16 @@ func retrySwap(read func() ([]byte, fs.FileInfo, error)) ([]byte, fs.FileInfo, e
 	return data, info, err
 }
 
-// readRegularFileOnce is one try of readRegularFileInfo, its looks lstat and
-// open.
-func readRegularFileOnce(path string, lstat func(string) (fs.FileInfo, error), open func(string) (*os.File, error),
-	limit int, notRegular, tooLarge error) ([]byte, fs.FileInfo, error) {
-	info, err := lstat(path)
+// readRegularFileOnce is one try of readRegularFileInfo.
+func readRegularFileOnce(root, path string, limit int, notRegular, tooLarge error) ([]byte, fs.FileInfo, error) {
+	info, err := LstatBelow(root, path)
 	if err != nil {
 		return nil, nil, err
 	}
 	if !info.Mode().IsRegular() {
 		return nil, nil, notRegular
 	}
-	f, err := open(path)
+	f, err := OpenBelow(root, path)
 	if err != nil {
 		return nil, nil, err
 	}

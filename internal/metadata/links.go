@@ -110,6 +110,8 @@ func walkLinks(path string, lstat func(string) (fs.FileInfo, error), readlink fu
 }
 
 // splitNames is the names of p, a path or a link's target, in order.
-func splitNames(p string) []string {
-	return strings.FieldsFunc(p, func(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) })
-}
+func splitNames(p string) []string { return strings.FieldsFunc(p, IsPathSep) }
+
+// IsPathSep reports whether r separates the names of a path (a link's
+// target): walkLinks' rule, and the library's join's.
+func IsPathSep(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) }
