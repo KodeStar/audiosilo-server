@@ -27,7 +27,7 @@ func withBudget(ctx context.Context, d time.Duration) (context.Context, context.
 	b := &runBudget{parent: budgetOf(ctx), ends: time.Now().Add(d)}
 	b.timer = time.AfterFunc(d, func() { cancel(context.DeadlineExceeded) })
 	return context.WithValue(cctx, budgetKey{}, b), func() {
-		b.timer.Stop()
+		b.end()
 		cancel(context.Canceled)
 	}
 }
@@ -59,6 +59,17 @@ type runBudget struct {
 	left    time.Duration // what was left when its clock stopped
 	holds   int           // the reads sitting out a wait under it
 	stopped bool          // the clock was stopped (not already run out)
+	ended   bool          // its call returned: a release never restarts the clock
+}
+
+// end stops the clock for good: the call it bounds returned, so a read still
+// held under it (released after) doesn't re-arm a timer that would only keep
+// its context alive until it fires.
+func (b *runBudget) end() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ended = true
+	b.timer.Stop()
 }
 
 func budgetOf(ctx context.Context) *runBudget {
@@ -92,7 +103,7 @@ func (b *runBudget) hold() {
 func (b *runBudget) release() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.holds--; b.holds == 0 && b.stopped {
+	if b.holds--; b.holds == 0 && b.stopped && !b.ended {
 		b.stopped, b.ends = false, time.Now().Add(b.left)
 		b.timer.Reset(b.left)
 	}
