@@ -2,15 +2,23 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/covercolors"
+	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // TestColorCover: the background pass's Colorer reads the colour of a book's
@@ -158,5 +166,55 @@ func TestAdminBooksCoverColor(t *testing.T) {
 	}
 	if len(page.Books) != 1 || page.Books[0].CoverColor == nil || page.Books[0].CoverColor.Bg == "" {
 		t.Fatalf("admin books = %s, want Custom with its cover colour", body)
+	}
+}
+
+// TestColorWriteWaitDefault: the API New builds bounds a thumbnail's colour
+// write by coverColorWriteTimeout (a quarter second: the tests' env gives it
+// longer, as they read the colour back), and the bound holds: with the writer
+// held by another write, recordCoverColors gives up and returns rather than
+// holding the images back for the writer.
+func TestColorWriteWaitDefault(t *testing.T) {
+	t.Parallel()
+	if coverColorWriteTimeout != 250*time.Millisecond {
+		t.Fatalf("coverColorWriteTimeout = %v, want production's 250ms", coverColorWriteTimeout)
+	}
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	a := New(config.Default(t.TempDir()), auth.New(db, time.Now), cat, library.NewScanner(cat, "", slog.Default()), "", slog.Default())
+	if a.colorWriteWait != coverColorWriteTimeout {
+		t.Fatalf("colorWriteWait = %v, want coverColorWriteTimeout (%v)", a.colorWriteWait, coverColorWriteTimeout)
+	}
+
+	held, release := make(chan struct{}), make(chan struct{})
+	holding := make(chan error, 1)
+	go func() {
+		holding <- db.WithTx(ctx, "hold the writer", func(*sql.Tx) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	began := time.Now()
+	done := make(chan struct{})
+	go func() {
+		a.recordCoverColors(ctx, &catalog.CoverColorRecord{LibraryID: 1, Path: "Book", Art: "a"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(testwait.Scaled(10 * time.Second)):
+		t.Error("the colour write waited for the held writer past its bound")
+	}
+	took := time.Since(began)
+	close(release)
+	if err := <-holding; err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if took < coverColorWriteTimeout {
+		t.Errorf("the colour write gave up after %v, before its bound (%v)", took, coverColorWriteTimeout)
 	}
 }
