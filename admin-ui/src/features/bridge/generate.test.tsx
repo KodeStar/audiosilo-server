@@ -268,43 +268,6 @@ describe('generate characters and recaps', () => {
     ).toBeInTheDocument();
   });
 
-  it('never counts a job that is being cancelled as queued, and stops there', async () => {
-    const user = userEvent.setup();
-    const calls = mockFetch(
-      routes({
-        'GET /admin/bridge/estimate': {
-          body: estimate({
-            agent_cost_usd: null,
-            earlier: [
-              {
-                library_id: 1,
-                path: 'B/Prequel 0',
-                title: 'Prequel',
-                series_index: '0.5',
-                asr_hours: 1,
-                agent_cost_usd: null,
-              },
-            ],
-          }),
-        },
-        // The open job comes back for the earlier book, being cancelled.
-        'POST /admin/bridge/jobs': {
-          status: 200,
-          body: job({ path: 'B/Prequel 0', cancel_requested: true }),
-        },
-      }),
-    );
-    renderApp(URL);
-    await user.click(await screen.findByRole('button', { name: 'Generate characters and recaps' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Generate characters and recaps' });
-    expect(await within(dialog).findByText('No estimate yet')).toBeInTheDocument();
-    await user.click(within(dialog).getByRole('button', { name: 'Generate for 2 books' }));
-    expect(
-      await within(dialog).findByText('Characters and recaps for Prequel 0 is still stopping'),
-    ).toBeInTheDocument();
-    expect(queued(calls)).toHaveLength(1);
-  });
-
   it('offers contributing only when the Bridge can, and then queues for this server only', async () => {
     const user = userEvent.setup();
     const calls = mockFetch(

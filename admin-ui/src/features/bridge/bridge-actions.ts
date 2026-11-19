@@ -12,10 +12,10 @@ import { kindName } from './bridge-model';
 
 /**
  * Queues a job and says so: queued (and whether an offline Bridge will run it
- * later), already waiting (the open job came back instead), or still stopping
- * (the open job that came back is one being cancelled, so nothing new is queued
- * until it has stopped). A failure, kind_unavailable among them, is a toast.
- * Resolves whether it was queued (or is already waiting).
+ * later) or already waiting (the open job came back instead; one being
+ * cancelled never does: the server ends it and queues a new one). A failure,
+ * kind_unavailable among them, is a toast. Resolves whether it was queued (or
+ * is already waiting).
  */
 export async function queueJob(
   qc: QueryClient,
@@ -25,7 +25,7 @@ export async function queueJob(
   const t = i18n.t;
   const words = { what: kindName(t, req.kind), name: ctx.name };
   try {
-    const { job, created } = await api.queueBridgeJob(req);
+    const { created } = await api.queueBridgeJob(req);
     if (created) {
       toast.add({
         title: t('bridge.queue.done', words),
@@ -33,14 +33,6 @@ export async function queueJob(
         type: 'success',
       });
       return true;
-    }
-    if (job.cancel_requested) {
-      toast.add({
-        title: t('bridge.queue.stopping', words),
-        description: t('bridge.queue.stoppingBody'),
-        type: 'warning',
-      });
-      return false;
     }
     toast.add({
       title: t('bridge.queue.already', words),

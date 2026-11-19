@@ -8,7 +8,7 @@ import { errorMessage } from '@/lib/errors';
 import { formatList, formatNumber } from '@/lib/format';
 import { refKey } from '@/lib/book-route';
 import { relBaseName } from '@/lib/paths';
-import { isOpen, kindName } from './bridge-model';
+import { isOpen } from './bridge-model';
 import {
   generatePollMs,
   changesBookMeta,
@@ -163,25 +163,14 @@ export interface QueueOutcome {
 }
 
 /**
- * The open job that came back for a book is one being cancelled: it ends without
- * running, and nothing new is queued until it has stopped (as the Bridge page's
- * queueJob says).
- */
-class StillStopping extends Error {
-  constructor() {
-    super('still stopping');
-  }
-}
-
-/**
  * Queues the jobs one after another, in order (ids ascend, so the Bridge claims
  * them in that order), stopping at the first failure: the ones after it would
  * run out of order, and most failures (a library the Bridge can't write, a kind
  * it no longer offers) would refuse them all. A job already open for a book
  * comes back instead of a new one, which counts as queued, unless it is parked
- * (nothing was queued: the book is passed over as `parked`, waiting for someone)
- * or being cancelled: that book would be left without one, so the run stops
- * there. A refusal whose code is in `skip` passes the book over instead (Detect
+ * (nothing was queued: the book is passed over as `parked`, waiting for someone);
+ * one being cancelled never comes back (the server ends it and queues a new
+ * one). A refusal whose code is in `skip` passes the book over instead (Detect
  * chapters' book whose generate job is open, a generate for a book whose
  * chapters are being found); `skipNotes` words them.
  */
@@ -201,7 +190,6 @@ export async function queueInOrder(
           skipped.push({ request: req, reason: 'parked' });
           continue;
         }
-        if (!created && job.cancel_requested) throw new StillStopping();
         queued++;
       } catch (err) {
         const code = err instanceof ApiError ? err.code : undefined;
@@ -302,11 +290,6 @@ function queueError(out: QueueOutcome, t: TFunction): string {
     KIND_UNAVAILABLE[kind]
   )
     return t(KIND_UNAVAILABLE[kind]);
-  if (out.error instanceof StillStopping)
-    return t('bridge.queue.stopping', {
-      what: kindName(t, kind),
-      name: relBaseName(out.failed?.path ?? ''),
-    });
   return errorMessage(out.error, t);
 }
 
