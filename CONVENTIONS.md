@@ -1490,15 +1490,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `copyIdle`), so net/http's flush as it closes the connection never waits on that client. A stream that ran to its
   end before the takeover came (`media.Transcode` reports `ended`: ffmpeg's output came to its end while the request
   was live) is not aborted: it flushes what it still buffers under the deadline, and its kept-alive connection then
-  loses it. A HEAD runs no ffmpeg and takes no slot: it answers as a GET would now (200 when a slot is free, its ask
-  holds one or its token is at its cap, else the busy 503), with `X-AudioSilo-Transcode-Sent: <bytes>` when the same
+  loses it. A HEAD runs no ffmpeg and takes no slot: it answers as a GET would now (200 when its ask holds a slot,
+  its token is at its cap with a stream to take over, or it is under its cap with a slot free; else the busy 503,
+  a token at its cap with only downloads included), with `X-AudioSilo-Transcode-Sent: <bytes>` when the same
   ask's GET is running (what it has written so far; never another token's, exposed to CORS), the chapter editor's
   check after a failed or stalled load (`lookAtTranscode`). A HEAD of an MP3-in-MKA starts no remux either
   (`FileCache.Cached`): the cached copy's headers, else the transcode's. The console's chapter
   editor's transcode (its cast token, `auth.Credential.Editor`) that it has read nothing of for 10 minutes
   (`media.TranscodeIdle`: each write gets a write deadline, `copyIdle`) is ended with its ffmpeg, freeing its slot:
   a paused `<audio>` keeps its connection open while it reads nothing, and the editor asks for its stream again
-  after a 10 s pause. Every other client's transcode gets no idle end (`transcodeIdleFor`): the web player asks
+  after a 10 s pause. So is a download's (`?download=1`), whose slot no other ask takes over: a paused browser
+  download would hold it for good (a transcode resumes by no Range, so its save starts again anyway). Every other
+  client's stream gets no idle end (`transcodeIdleFor`): the web player asks
   again only after a pause of 30 s once played (`TRANSCODE_STALE_PAUSE_MS`), not for a track loaded and never
   played, and a Cast receiver asks for nothing again on resume. The scanner records each
   book's audio `codec` (ffprobe `codec_name`, `0008` migration); `item`/`chapters`

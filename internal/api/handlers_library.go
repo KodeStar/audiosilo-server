@@ -1212,11 +1212,15 @@ func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, h *transcode
 // transcodeIdleFor is how long r's transcode waits for its client to read
 // before it ends: media.TranscodeIdle for the console's chapter editor (its
 // cast token, auth.Credential.Editor), which asks for its stream again after a
-// 10 s pause; 0 (no idle end) for every other client. The web player does not
-// ask again for a transcode it loaded but never played, so it would stall
-// after a long wait, and a Cast receiver asks for nothing again on resume.
+// 10 s pause, and for a download (?download=1), whose slot no other ask takes
+// over (tokenHoldToTake), so a client that stopped reading it (a paused
+// browser download; a transcode resumes by no Range, so its save starts again
+// anyway) would hold it for good; 0 (no idle end) for every other client's
+// stream. The web player does not ask again for a transcode it loaded but never
+// played, so it would stall after a long wait, and a Cast receiver asks for
+// nothing again on resume.
 func transcodeIdleFor(r *http.Request) time.Duration {
-	if c := credentialFrom(r.Context()); c.Kind == auth.KindCast && c.Editor {
+	if c := credentialFrom(r.Context()); c.Kind == auth.KindCast && c.Editor || r.URL.Query().Get("download") == "1" {
 		return media.TranscodeIdle
 	}
 	return 0

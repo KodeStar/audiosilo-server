@@ -726,24 +726,26 @@ func TestCastKeepIsOnePerToken(t *testing.T) {
 }
 
 // TestTranscodeIdleForEditorOnly: only the chapter editor's transcode (its
-// cast token) ends for want of reads, as it asks for its stream again after a
-// pause. A session's (the web player does not ask again for a track it loaded
+// cast token) and a download end for want of reads: the editor asks for its
+// stream again after a pause, and no other ask takes a download's slot over.
+// A session's stream (the web player does not ask again for a track it loaded
 // and never played), an API key's and a Cast receiver's (its sender only says
 // play on resume) never do.
 func TestTranscodeIdleForEditorOnly(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		name string
-		cred auth.Credential
-		want time.Duration
+		name, target string
+		cred         auth.Credential
+		want         time.Duration
 	}{
-		{"receiver", auth.Credential{Kind: auth.KindCast}, 0},
-		{"editor", auth.Credential{Kind: auth.KindCast, Editor: true}, media.TranscodeIdle},
-		{"session", auth.Credential{Kind: auth.KindSession}, 0},
-		{"api key", auth.Credential{Kind: auth.KindAPI}, 0},
-		{"no credential", auth.Credential{}, 0},
+		{"receiver", "/", auth.Credential{Kind: auth.KindCast}, 0},
+		{"editor", "/", auth.Credential{Kind: auth.KindCast, Editor: true}, media.TranscodeIdle},
+		{"session", "/", auth.Credential{Kind: auth.KindSession}, 0},
+		{"session download", "/?transcode=1&download=1", auth.Credential{Kind: auth.KindSession}, media.TranscodeIdle},
+		{"api key", "/", auth.Credential{Kind: auth.KindAPI}, 0},
+		{"no credential", "/", auth.Credential{}, 0},
 	} {
-		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r := httptest.NewRequest(http.MethodGet, c.target, nil)
 		r = r.WithContext(withCredential(r.Context(), &auth.User{}, c.cred))
 		if got := transcodeIdleFor(r); got != c.want {
 			t.Errorf("%s: transcodeIdleFor = %v, want %v", c.name, got, c.want)
