@@ -1395,8 +1395,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   without delete sharing, it keeps the file from being renamed or replaced meanwhile (the os.Root open
   shares deletion), and a folder along it can't be renamed while a file in it is open there. The tool reads
   the file as an audio container only: both runs pass `metadata.InputFormatArgs()`
-  (`-format_whitelist` `metadata.InputFormats`: mov/mp4, mp3, matroska/webm, ogg, flac, wav, aac; before the
-  input for ffprobe, before `-i` for ffmpeg), since FFmpeg picks a demuxer by the file's bytes and one shaped
+  (`-format_whitelist` `metadata.InputFormats`: mov/mp4, mp3, matroska/webm, ogg, flac, wav, aac, and the
+  other audio containers a book may hold under an indexed name, w64, aiff, asf, ac3, eac3, ape, wv, caf, amr;
+  the one list for every run on a library file, the transcode's too; before the input for ffprobe, before
+  `-i` for ffmpeg), since FFmpeg picks a demuxer by the file's bytes and one shaped
   like a playlist (concat, hls, dash, sdp) under an audio name would have it open the files it lists
   (`TestProbeReadsNoPlaylist`, `TestDetectSilencesReadsNoPlaylist`); a new ffprobe or ffmpeg run on a library
   file passes them too. The runs fed a descriptor as stdin (a podcast episode's transcode, the remux, the
@@ -3030,7 +3032,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`problemCleared`: a fixed permission changes neither mtime nor size). A one-file book with a
   problem counts as unchanged while `problemCleared` finds the problem there (`soleFileProblem`;
   its metadata files are still read), and a file ffprobe rejected (`ErrProbeRejected`: its last
-  stderr line is ffmpeg's invalid-data words) is not probed again while its own mtime and size are
+  stderr line is ffmpeg's invalid-data words, or its invalid-argument words after "Format not on
+  whitelist", a format `InputFormats` leaves out) is not probed again while its own mtime and size are
   as they were then (`noteRejected`, by absolute path, for the server's life; any other reading of
   the file forgets it). A folder book
   whose parts are all >= 1 h with >= 2 distinct titles (tag, else file name) gets

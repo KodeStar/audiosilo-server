@@ -3,6 +3,7 @@ package metadata
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,8 +17,9 @@ import (
 // A library file is read by ffprobe as an audio container only
 // (InputFormatArgs). One shaped like a playlist under an audio name, which
 // ffprobe would otherwise read as the files it lists, is an error, and the
-// file it names is never opened; the containers the server indexes still
-// probe (duration, codec, chapters, tags).
+// file it names is never opened, and the refusal is a rejection of the file's
+// data (ErrProbeRejected: not probed again while the file is unchanged); the
+// containers the server indexes still probe (duration, codec, chapters, tags).
 func TestProbeReadsNoPlaylist(t *testing.T) {
 	t.Parallel()
 	ffprobe, err := exec.LookPath("ffprobe")
@@ -65,8 +67,8 @@ func TestProbeReadsNoPlaylist(t *testing.T) {
 	}
 	// The server's own probe, the file handed to ffprobe opened.
 	for name := range playlists {
-		if p, err := probe(context.Background(), dir, filepath.Join(dir, name), ffprobe, ProbeTimeout); err == nil {
-			t.Errorf("%s: probed as %+v, want an error", name, p)
+		if p, err := probe(context.Background(), dir, filepath.Join(dir, name), ffprobe, ProbeTimeout); !errors.Is(err, ErrProbeRejected) {
+			t.Errorf("%s: probed as %+v (%v), want a rejection", name, p, err)
 		}
 	}
 	for _, tc := range []struct {
@@ -92,6 +94,44 @@ func TestProbeReadsNoPlaylist(t *testing.T) {
 		}
 		if got := firstNonEmpty(p.Tags["album"], p.Tags["title"]); tc.title != "" && got != tc.title {
 			t.Errorf("%s: title %q, want %q", tc.file, got, tc.title)
+		}
+	}
+}
+
+// A book in another audio container under a name the server indexes (AIFF,
+// WMA's ASF, AC-3) still probes held to InputFormats, as it did before the
+// list.
+func TestProbeReadsOtherAudioContainers(t *testing.T) {
+	t.Parallel()
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("no ffprobe on PATH")
+	}
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("no ffmpeg on PATH")
+	}
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		file, format, codec string
+	}{
+		{"aiff.m4a", "aiff", "pcm_s16be"},
+		{"wma.mp3", "asf", "wmav2"},
+		{"ac3.m4b", "ac3", "ac3"},
+	} {
+		path := filepath.Join(dir, tc.file)
+		gen := exec.CommandContext(t.Context(), ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=d=2",
+			"-c:a", tc.codec, "-f", tc.format, path)
+		if out, err := gen.CombinedOutput(); err != nil {
+			t.Fatalf("%s: ffmpeg: %v: %s", tc.file, err, out)
+		}
+		p, err := probe(context.Background(), dir, path, ffprobe, ProbeTimeout)
+		if err != nil {
+			t.Errorf("%s: %v", tc.file, err)
+			continue
+		}
+		if p.Duration <= 0 || p.Codec != tc.codec {
+			t.Errorf("%s: duration %v, codec %q; want a duration and codec %q", tc.file, p.Duration, p.Codec, tc.codec)
 		}
 	}
 }

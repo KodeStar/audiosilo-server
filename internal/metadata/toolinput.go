@@ -29,12 +29,20 @@ func ToolInput(f *os.File, root, path string) (input string, extra []*os.File, c
 // with (FFmpeg's -format_whitelist, each by the name ffmpeg -demuxers gives
 // it): the containers of the files the server indexes and serves
 // (AudioExtensions: MP4 and its family, MP3, Matroska, Ogg with Opus in it,
-// FLAC) and the plain audio ones a file of theirs may hold under another
-// name (WAV, ADTS AAC). None of them opens another input. A file is read by
-// what its bytes are, not by its name, so without the list one shaped like a
-// playlist (concat, hls, dash, sdp) under an audio name would have the tool
-// open the files or addresses it lists: other files on the server.
-const InputFormats = "mov,mp4,m4a,3gp,3g2,mj2,mp3,matroska,webm,ogg,flac,wav,aac"
+// FLAC), the plain audio ones a file of theirs may hold under another name
+// (WAV, ADTS AAC), and the other audio containers a book may be in under one
+// of those names (Wave64, AIFF, WMA's ASF, AC-3, E-AC-3, Monkey's Audio,
+// WavPack, CAF, AMR), so such a book probes and plays as it did before the
+// list. None of them opens another input (mov's external data references are
+// off by default). A file is read by what its bytes are, not by its name, so
+// without the list one shaped like a playlist (concat, hls, dash, sdp) under
+// an audio name would have the tool open the files or addresses it lists:
+// other files on the server.
+//
+// It is the one list for every run on a library file: media's transcode
+// must pass this list, not one of its own (the change that holds the
+// transcode to a list uses this one).
+const InputFormats = "mov,mp4,m4a,3gp,3g2,mj2,mp3,matroska,webm,ogg,flac,wav,aac,w64,aiff,asf,ac3,eac3,ape,wv,caf,amr"
 
 // InputFormatArgs is the arguments that hold ffprobe or ffmpeg to
 // InputFormats for a library file: before the input for ffprobe, before its
