@@ -74,7 +74,7 @@ type PodcastMove struct {
 // applied. A move applies only while To's index row is ShowID's (else it is
 // passed over: the folder changed since the caller looked), and is held while
 // To carries the state of another identity that may still be on its way
-// somewhere (podcastMoveHeld): a listener's follow there of an identity
+// somewhere (unheldPodcastMoves): a listener's follow there of an identity
 // indexed elsewhere (its own move skipped: a copy, a path that can't be told)
 // and, with unread (the caller could not read every folder the root lists,
 // one of which may hold that identity now), any follow, feed state, policy or
@@ -162,10 +162,18 @@ func (c *Catalog) MovePodcastShows(ctx context.Context, lib int64, moves []Podca
 	return applied, err
 }
 
-// unheldPodcastMoves are the moves podcastMoveHeld holds none of, looked at
+// unheldPodcastMoves are the moves podcastTo.held holds none of, looked at
 // until no more is held: a held move lifts nothing from its From paths, so a
-// move to one of those may be held in turn.
+// move to one of those may be held in turn. Each To is read once (podcastTo):
+// only what is lifted changes from one look to the next.
 func unheldPodcastMoves(ctx context.Context, tx *sql.Tx, lib int64, moves []PodcastMove, unread bool) ([]PodcastMove, error) {
+	at := make([]podcastTo, len(moves))
+	for i, m := range moves {
+		var err error
+		if at[i], err = readPodcastTo(ctx, tx, lib, m, unread); err != nil {
+			return nil, err
+		}
+	}
 	for {
 		lifted := map[[2]string]bool{} // {show_id, path}
 		for _, m := range moves {
@@ -173,67 +181,79 @@ func unheldPodcastMoves(ctx context.Context, tx *sql.Tx, lib int64, moves []Podc
 				lifted[[2]string{m.ShowID, from}] = true
 			}
 		}
-		var kept []PodcastMove
-		for _, m := range moves {
-			held, err := podcastMoveHeld(ctx, tx, lib, m, lifted, unread)
-			if err != nil {
-				return nil, err
-			}
-			if !held {
-				kept = append(kept, m)
+		var keptMoves []PodcastMove
+		var keptAt []podcastTo
+		for i, m := range moves {
+			if !at[i].held(m.To, lifted, unread) {
+				keptMoves, keptAt = append(keptMoves, m), append(keptAt, at[i])
 			}
 		}
-		if len(kept) == len(moves) {
+		if len(keptMoves) == len(moves) {
 			return moves, nil
 		}
-		moves = kept
+		moves, at = keptMoves, keptAt
 	}
 }
 
-// podcastMoveHeld reports whether m waits (MovePodcastShows says when): its To
-// carries the state of another identity not lifted from To in this call (by
-// lifted, {show_id, path}).
-func podcastMoveHeld(ctx context.Context, tx *sql.Tx, lib int64, m PodcastMove, lifted map[[2]string]bool, unread bool) (bool, error) {
-	type other struct {
-		id              string
-		follow, indexed bool
-	}
-	others, err := queryRows(ctx, tx, func(r *sql.Rows, o *other) error { return r.Scan(&o.id, &o.follow, &o.indexed) },
+// podcastTo is what a move's To carries of other identities: each one with a
+// follow, feed state or policy there and, read only with unread, whether a
+// listener has a place there in a file that is not the move's show's
+// (podcastOtherPlaces).
+type podcastTo struct {
+	others []podcastOther
+	places bool
+}
+
+// podcastOther is an identity with state at a move's To: follow, a listener's
+// follow there; indexed, the identity is indexed somewhere in the library.
+type podcastOther struct {
+	id              string
+	follow, indexed bool
+}
+
+func readPodcastTo(ctx context.Context, tx *sql.Tx, lib int64, m PodcastMove, unread bool) (podcastTo, error) {
+	var to podcastTo
+	var err error
+	to.others, err = queryRows(ctx, tx, func(r *sql.Rows, o *podcastOther) error { return r.Scan(&o.id, &o.follow, &o.indexed) },
 		`WITH ids(show_id,follow) AS (
 		   SELECT show_id,1 FROM podcast_follows WHERE library_id=?1 AND show_path=?2 AND show_id<>?3
 		   UNION SELECT show_id,0 FROM podcast_feed_state WHERE library_id=?1 AND show_path=?2 AND show_id<>?3
 		   UNION SELECT show_id,0 FROM podcast_policies WHERE library_id=?1 AND show_path=?2 AND show_id<>?3)
 		 SELECT show_id,MAX(follow),EXISTS(SELECT 1 FROM podcast_shows s WHERE s.library_id=?1 AND s.show_id=ids.show_id)
 		   FROM ids GROUP BY show_id`, lib, m.To, m.ShowID)
-	if err != nil {
-		return false, err
+	if err == nil && unread {
+		to.places, err = podcastOtherPlaces(ctx, tx, lib, m)
 	}
+	return to, err
+}
+
+// held reports whether a move to to waits (MovePodcastShows says when): to
+// carries the state of another identity not lifted from to in this call (by
+// lifted, {show_id, path}).
+func (t podcastTo) held(to string, lifted map[[2]string]bool, unread bool) bool {
 	liftedHere := false
-	for _, o := range others {
-		if lifted[[2]string{o.id, m.To}] {
+	for _, o := range t.others {
+		if lifted[[2]string{o.id, to}] {
 			liftedHere = true
 			continue
 		}
 		if unread || o.follow && o.indexed {
-			return true, nil
+			return true
 		}
 	}
-	if !unread || liftedHere {
-		return false, nil
-	}
-	return podcastOtherPlaces(ctx, tx, lib, m)
+	return unread && !liftedHere && t.places
 }
 
 // podcastOtherPlaces reports whether a listener has a place in an episode file
 // in m.To that is not m's show's: neither To's index nor To's feed.json
 // (m.Files) lists it, so it is the show's that held the folder before.
 func podcastOtherPlaces(ctx context.Context, tx *sql.Tx, lib int64, m PodcastMove) (bool, error) {
-	// The places under To/: '0' sorts right after '/'.
+	lo, hi := belowRange(m.To)
 	paths, err := queryRows(ctx, tx, func(r *sql.Rows, p *string) error { return r.Scan(p) },
 		`SELECT DISTINCT p.rel_path FROM progress p
-		  WHERE p.library_id=?1 AND p.rel_path>=?2||'/' AND p.rel_path<?2||'0'
-		    AND NOT EXISTS (SELECT 1 FROM podcast_episodes e JOIN books b ON b.id=e.book_id
-		                     WHERE e.library_id=?1 AND e.show_path=?2 AND b.rel_path=p.rel_path)`, lib, m.To)
+		  WHERE p.library_id=?1 AND p.rel_path>=?3 AND p.rel_path<?4
+		    AND NOT EXISTS (SELECT 1 FROM books b JOIN podcast_episodes e ON e.book_id=b.id
+		                     WHERE b.library_id=?1 AND b.rel_path=p.rel_path AND e.show_path=?2)`, lib, m.To, lo, hi)
 	if err != nil {
 		return false, err
 	}

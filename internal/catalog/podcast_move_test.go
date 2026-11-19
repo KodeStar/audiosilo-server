@@ -427,8 +427,7 @@ func TestMovePodcastShowsWithUnreadHoldsAMoveOverAnotherShowsState(t *testing.T)
 		held bool
 	}{
 		{"follow", func(fx renameFixture) error {
-			_, err := fx.c.db.ExecContext(fx.ctx, `INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at) VALUES(?,?,'Renamed',?,'2026-01-01T00:00:00Z')`, fx.ann, fx.lib, other)
-			return err
+			return fx.c.FollowPodcast(fx.ctx, fx.ann, fx.lib, "Renamed", other)
 		}, true},
 		{"feed state", func(fx renameFixture) error {
 			_, err := fx.c.db.ExecContext(fx.ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,etag) VALUES(?,'Renamed',?,'other')`, fx.lib, other)
@@ -453,8 +452,11 @@ func TestMovePodcastShowsWithUnreadHoldsAMoveOverAnotherShowsState(t *testing.T)
 				t.Fatal(err)
 			}
 			move := []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}
-			n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, move, true)
-			if want := map[bool]int{true: 0, false: 1}[tc.held]; err != nil || n != want {
+			want := 1
+			if tc.held {
+				want = 0
+			}
+			if n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, move, true); err != nil || n != want {
 				t.Fatalf("unread move %d %v; want %d", n, err, want)
 			}
 			if !tc.held {
@@ -486,7 +488,7 @@ func TestMovePodcastShowsHoldsAMoveOverAnIndexedShowsFollow(t *testing.T) {
 		t.Fatal(err)
 	}
 	cat := seedUserNamed(t, fx.c, fx.ctx, "cat")
-	if _, err := fx.c.db.ExecContext(fx.ctx, `INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at) VALUES(?,?,'Renamed',?,'2026-01-01T00:00:00Z')`, cat, fx.lib, other); err != nil {
+	if err := fx.c.FollowPodcast(fx.ctx, cat, fx.lib, "Renamed", other); err != nil {
 		t.Fatal(err)
 	}
 	move := PodcastMove{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}
