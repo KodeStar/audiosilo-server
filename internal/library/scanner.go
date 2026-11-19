@@ -1330,10 +1330,11 @@ func LookArt(ctx context.Context, root string, src catalog.CoverSource, timeout 
 
 // artVersion is the version of src's art file (ArtFile) as the cover handler
 // names it (Art.Version). "" when that file can't be read now, its look given
-// up on after timeout included (LookArt; noted in gaveUp).
+// up on after timeout, or failed as a share does that a retry may get past,
+// included (LookArt; noted in gaveUp: transientGaveUp).
 func artVersion(ctx context.Context, root string, src catalog.CoverSource, timeout time.Duration, gaveUp *givenUp) string {
 	art, err := LookArt(ctx, root, src, timeout)
-	gaveUp.note(cmp.Or(src.CoverPath, src.AudioPath), err)
+	gaveUp.note(cmp.Or(src.CoverPath, src.AudioPath), transientGaveUp(err))
 	if err != nil {
 		return ""
 	}
@@ -1376,6 +1377,14 @@ func chooseTitle(embedded, pathDerived string) string {
 // named file is present.
 var imageExts = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true, ".gif": true}
 
+// coverImage reports whether a folder entry named name (dir: a folder) is an
+// image coverLook.find may take: no folder, not hidden, an image type. The
+// discovery walk's imageSeen asks the same, so a book it marks to read again
+// for a cover (coversOfWalk) finds one.
+func coverImage(name string, dir bool) bool {
+	return !dir && !isHidden(name) && imageExts[strings.ToLower(filepath.Ext(name))]
+}
+
 // coverLook is how enrich looks for a book's cover image (find): each stat and
 // listing a metadata.Bounded call under ctx, given up on after timeout and
 // noted in gaveUp, in a library at root.
@@ -1402,13 +1411,16 @@ func (l coverLook) find(dir string, anyImage bool) string {
 		rel, _ := filepath.Rel(l.root, p)
 		return filepath.ToSlash(rel)
 	}
+	// A look failing as a share does that a retry may get past (EIO, ENOTCONN:
+	// transientGaveUp) is a look given up on, never "no cover", which would
+	// drop the stored one.
 	for _, name := range coverNames {
 		p := filepath.Join(dir, name)
-		_, err := metadata.StatBounded(l.ctx, p, l.timeout)
+		_, err := statLook(l.ctx, p, l.timeout)
 		if err == nil {
 			return relOf(p)
 		}
-		if metadata.Unanswered(l.ctx, err) {
+		if err = transientGaveUp(err); metadata.Unanswered(l.ctx, err) {
 			l.gaveUp.note(relOf(p), err)
 			return ""
 		}
@@ -1416,15 +1428,15 @@ func (l coverLook) find(dir string, anyImage bool) string {
 	if !anyImage {
 		return ""
 	}
-	entries, err := metadata.ReadDirBounded(l.ctx, dir, l.timeout) // sorted by name
+	entries, err := readDirLook(l.ctx, dir, l.timeout) // sorted by name
 	if err != nil {
-		l.gaveUp.note(relOf(dir), err)
+		l.gaveUp.note(relOf(dir), transientGaveUp(err))
 		return ""
 	}
 	var firstImage, coverish string
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || isHidden(name) || !imageExts[strings.ToLower(filepath.Ext(name))] {
+		if !coverImage(name, e.IsDir()) {
 			continue
 		}
 		if firstImage == "" {
@@ -1972,9 +1984,9 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, time
 }
 
 // lstatAudio is statAudio's look at each audio file, readDirLook the walk's
-// and a book's own folder listings (walker.list, audioEntries, bookOnDisk) and
-// statLook a book's own stat (resolveBook, bookOnDisk): a test injects a
-// share's errors through them.
+// and a book's own folder listings (walker.list, audioEntries, bookOnDisk,
+// coverLook.find) and statLook a book's own stat (resolveBook, bookOnDisk) and
+// its cover's (coverLook.find): a test injects a share's errors through them.
 var (
 	lstatAudio  = metadata.LstatBounded
 	readDirLook = metadata.ReadDirBounded
@@ -1982,16 +1994,37 @@ var (
 )
 
 // transientFault reports whether err is a share's fault that trying again may
-// get past: EIO, ESTALE, ENOTCONN, ETIMEDOUT or EHOSTDOWN. Not a permission,
-// which stays until an admin changes it, nor any other metadata.ShareFault (a link
-// loop, a name the share refuses), which a retry would only meet again.
+// get past (transientErrnos): EIO, ESTALE, ENOTCONN, ETIMEDOUT, a host or
+// network down or unreachable, a connection reset, aborted or refused (an SMB
+// or NFS session that dropped), ENXIO (a macOS share volume gone away). Not a
+// permission, which stays until an admin changes it, nor any other
+// metadata.ShareFault (a link loop, a name the share refuses), which a retry
+// would only meet again.
 func transientFault(err error) bool {
-	for _, errno := range []syscall.Errno{syscall.EIO, syscall.ESTALE, syscall.ENOTCONN, syscall.ETIMEDOUT, syscall.EHOSTDOWN} {
+	for _, errno := range transientErrnos {
 		if errors.Is(err, errno) {
 			return true
 		}
 	}
 	return false
+}
+
+// transientErrnos are transientFault's.
+var transientErrnos = []syscall.Errno{
+	syscall.EIO, syscall.ESTALE, syscall.ENOTCONN, syscall.ETIMEDOUT,
+	syscall.EHOSTDOWN, syscall.EHOSTUNREACH, syscall.ENETDOWN, syscall.ENETUNREACH,
+	syscall.ECONNRESET, syscall.ECONNABORTED, syscall.ECONNREFUSED, syscall.ENXIO,
+}
+
+// transientGaveUp is err made a look given up on (metadata.AsGaveUp) when it
+// is a share's fault a retry may get past (transientFault), else err as it
+// is: for a look whose "none" would drop what is stored (a book's sidecar
+// cover, its art's identity: coverLook.find, artVersion).
+func transientGaveUp(err error) error {
+	if transientFault(err) {
+		return metadata.AsGaveUp(err)
+	}
+	return err
 }
 
 // statEntry is a directory entry whose Info statAudio has read, keeping only
@@ -2058,11 +2091,10 @@ const (
 )
 
 // imageSeen is what a directory entry adds to its folder's imagesSeen: an
-// image coverLook.find would take (not a folder, not hidden, an image type),
-// conventionally named or not.
+// image coverLook.find would take (coverImage), conventionally named or not.
 func imageSeen(d fs.DirEntry) imagesSeen {
 	name := d.Name()
-	if d.IsDir() || isHidden(name) || !imageExts[strings.ToLower(filepath.Ext(name))] {
+	if !coverImage(name, d.IsDir()) {
 		return 0
 	}
 	if slices.Contains(coverNames, name) {

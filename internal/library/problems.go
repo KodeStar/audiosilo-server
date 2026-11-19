@@ -121,9 +121,12 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 // small file, an EPUB's zip directory, where checkEbook reads). A stat
 // alone would not do for those: on NFS or FUSE it can answer from a cache
 // while reads still hang, and every scan would then read the whole book again
-// only to wait out the same read. Any answer counts: gone, no longer a regular
-// file or folder, or a lasting error (a permission on a share that came back);
-// the re-index decides what it is.
+// only to wait out the same read. Any lasting answer counts: gone, no longer a
+// regular file or folder, or a lasting error (a permission on a share that came
+// back); the re-index decides what it is. A fault a retry may get past
+// (transientFault: EIO, ENOTCONN) is no answer: the re-index would meet it on
+// the same look, and a cover look reading it as "no cover" would drop the
+// stored one.
 func sideAnswers(ctx context.Context, abs string, timeout time.Duration) bool {
 	// One bounded call, the stat and the look it leads to: a share that
 	// stopped answering costs timeout once, and holds one of its mount's slots.
@@ -146,9 +149,10 @@ func sideAnswers(ctx context.Context, abs string, timeout time.Duration) bool {
 		}
 		return struct{}{}, err
 	}, nil)
-	// Any answer counts (a permission on a share that came back included:
-	// the re-index records what it is), only a look given up on again doesn't.
-	return !metadata.Unanswered(ctx, err)
+	// Any lasting answer counts (a permission on a share that came back
+	// included: the re-index records what it is); a look given up on again,
+	// or a share's fault a retry may get past, doesn't.
+	return !metadata.Unanswered(ctx, err) && !transientFault(err)
 }
 
 // sideProbeBytes is how much of a file beside the audio sideAnswers reads.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -109,5 +110,47 @@ func TestAScanKeepsADiscSetWhoseDiscFailsToList(t *testing.T) {
 	}
 	if got := splitParents(t, cat, lib.ID); got["A/Book/CD1"] != "A/Book" || got["A/Book/CD2"] != "A/Book" {
 		t.Errorf("split parents after a disc's listing failed %v, want %v kept", got, want)
+	}
+}
+
+// A cover look failing as a share does that a retry may get past (EIO,
+// ENOTCONN) is a look given up on, so the read keeps the stored book and its
+// cover (givenUp.keep), never "no cover"; a permission, which stays, is an
+// answer as before. Not parallel: it swaps the looks.
+func TestCoverLookReadsATransientFaultAsNoAnswer(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "Book/cover.jpg", []byte("img"))
+	writeFile(t, root, "Book/Front.png", []byte("img"))
+	dir := filepath.Join(root, "Book")
+	gone := map[string]syscall.Errno{}
+	for _, name := range coverNames {
+		gone[filepath.Join(dir, name)] = syscall.ENOENT
+	}
+	listingFails := func(errno syscall.Errno) map[string]syscall.Errno {
+		fail := maps.Clone(gone)
+		fail[dir] = errno
+		return fail
+	}
+	for _, c := range []struct {
+		name      string
+		fail      map[string]syscall.Errno
+		want      string
+		givenUpOn bool
+	}{
+		{"cover stat EIO", map[string]syscall.Errno{filepath.Join(dir, "cover.jpg"): syscall.EIO}, "", true},
+		{"cover stat ENOTCONN", map[string]syscall.Errno{filepath.Join(dir, "cover.jpg"): syscall.ENOTCONN}, "", true},
+		{"cover stat ECONNRESET", map[string]syscall.Errno{filepath.Join(dir, "cover.jpg"): syscall.ECONNRESET}, "", true},
+		{"folder listing EIO", listingFails(syscall.EIO), "", true},
+		// An answer: the listing then picks the image, as before.
+		{"cover stat EACCES", map[string]syscall.Errno{filepath.Join(dir, "cover.jpg"): syscall.EACCES}, "Book/cover.jpg", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			failLooks(t, c.fail)
+			var g givenUp
+			got := coverLook{ctx: t.Context(), root: root, timeout: time.Minute, gaveUp: &g}.find(dir, true)
+			if got != c.want || (g.err != nil) != c.givenUpOn {
+				t.Errorf("cover %q, given up on %v; want %q, given up on %v", got, g.err, c.want, c.givenUpOn)
+			}
+		})
 	}
 }
