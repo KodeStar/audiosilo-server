@@ -17,7 +17,7 @@ import "os"
 // input is path resolved (no link left in it), checked to be under root and
 // to be f (os.SameFile) after f was opened: a folder along it can't be
 // renamed while a file in it is open there, so it still names f when the tool
-// opens it (resolvedInput).
+// opens it.
 func ToolInput(f *os.File, root, path string) (input string, extra []*os.File, cleanup func(), err error) {
 	return toolInput(f, root, path)
 }

@@ -155,9 +155,9 @@ func runFFprobe(parent context.Context, root, path, ffprobePath string, timeout 
 		cleanup()
 		_ = f.Close()
 	}
-	var owner atomic.Int32 // 0 none yet, 1 the run, 2 this call
+	var claimed atomic.Bool // by the run or by this call, whichever is first
 	defer func() {
-		if owner.CompareAndSwap(0, 2) {
+		if claimed.CompareAndSwap(false, true) {
 			release()
 		}
 	}()
@@ -183,7 +183,7 @@ func runFFprobe(parent context.Context, root, path, ffprobePath string, timeout 
 	wait, stop := graceAfter(ctx, ffprobeKillGrace)
 	defer stop()
 	r, ok := await(wait, stuck, func() ran {
-		if !owner.CompareAndSwap(0, 1) {
+		if !claimed.CompareAndSwap(false, true) {
 			return ran{err: context.Cause(wait)}
 		}
 		defer release()

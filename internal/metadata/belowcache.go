@@ -212,9 +212,6 @@ func BelowFolder[T any](root, path string, open func(r *os.Root, rel string) (T,
 		return zero, err
 	}
 	dir, name := filepath.Dir(rel), filepath.Base(rel)
-	if rel == "." {
-		name = "."
-	}
 	if f, fresh, err := belowFolders.get(rootAbs, dir); err == nil {
 		v, oerr := open(f.r, name)
 		gone := NotExist(oerr)
