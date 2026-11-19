@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -344,8 +345,64 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) b
 			fmt.Sprintf("the request is larger than %d bytes", tooBig.Limit))
 		return false
 	}
+	if errors.Is(err, errTooManyEntries) {
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+			fmt.Sprintf("too many paths in one request (at most %d)", maxBulkBooks))
+		return false
+	}
 	writeError(w, http.StatusBadRequest, "invalid request")
 	return false
+}
+
+// errTooManyEntries is a boundedList longer than maxBulkBooks: decodeBody
+// answers it 400 too_large, as a body past its size is.
+var errTooManyEntries = fmt.Errorf("a list holds more than %d entries", maxBulkBooks)
+
+// boundedList is a JSON array in a request body (a share's rules, a selection
+// of books) read one entry at a time and refused (errTooManyEntries) at the
+// first past maxBulkBooks, before the rest are decoded: a body bounded to take
+// that many paths at the cap (selectionBodyMax) holds over a million empty
+// objects, each a value once decoded, so a count taken after the decode would
+// come too late. null reads as no list. An entry takes no unknown field, as
+// decodeJSON's body doesn't (the outer decoder's rule doesn't reach in here).
+type boundedList[T any] []T
+
+func (l *boundedList[T]) UnmarshalJSON(data []byte) error {
+	list, err := decodeBounded[T](bytes.NewReader(data), maxBulkBooks)
+	if err != nil {
+		return err
+	}
+	*l = list
+	return nil
+}
+
+// decodeBounded reads a JSON array of at most limit entries from r, stopping
+// at the entry past limit (errTooManyEntries) without reading on.
+func decodeBounded[T any](r io.Reader, limit int) ([]T, error) {
+	dec := json.NewDecoder(r)
+	dec.DisallowUnknownFields()
+	tok, err := dec.Token()
+	if err != nil || tok == nil {
+		return nil, err
+	}
+	if tok != json.Delim('[') {
+		return nil, errors.New("not a list")
+	}
+	var list []T
+	for dec.More() {
+		if len(list) == limit {
+			return nil, errTooManyEntries
+		}
+		var v T
+		if err := dec.Decode(&v); err != nil {
+			return nil, err
+		}
+		list = append(list, v)
+	}
+	if _, err := dec.Token(); err != nil { // the closing ]
+		return nil, err
+	}
+	return list, nil
 }
 
 // decodeJSONOptional is decodeJSON for endpoints whose body is optional: an

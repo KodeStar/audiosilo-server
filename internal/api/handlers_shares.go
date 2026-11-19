@@ -57,15 +57,23 @@ func (a *API) handleGetShare(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleCreateShare(w http.ResponseWriter, r *http.Request) {
-	var s catalog.Share
-	if !decodeBody(w, r, &s, shareRulesBodyMax) {
+	// The share, its rules read as a boundedList: a share created with its
+	// rules writes each in one transaction, so it is bounded as a selection of
+	// books is (at most maxBulkBooks, 400 too_large past it).
+	var req struct {
+		catalog.Share
+		Paths boundedList[catalog.PathRule] `json:"paths"`
+	}
+	if !decodeBody(w, r, &req, selectionBodyMax) {
 		return
 	}
+	s := req.Share
+	s.Paths = req.Paths
 	if s.Name == "" {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if shareNameTooLong(w, s.Name) || tooManyRules(w, len(s.Paths)) {
+	if shareNameTooLong(w, s.Name) {
 		return
 	}
 	if len(s.Description) > maxShareDescription {
@@ -140,7 +148,7 @@ const maxShareName = catalog.MaxShareName
 
 // maxShareDescription is the longest share description, in bytes: what a
 // rename's body (decodeJSON's default 1 MiB) can carry, so a create, whose body
-// is bounded for its rules (shareRulesBodyMax), takes no longer one.
+// is bounded for its rules (selectionBodyMax), takes no longer one.
 const maxShareDescription = 1 << 20
 
 // shareNameTooLong answers 400 invalid_name for a share name over maxShareName
@@ -151,24 +159,6 @@ func shareNameTooLong(w http.ResponseWriter, name string) bool {
 	}
 	writeErrorCode(w, http.StatusBadRequest, codeInvalidName,
 		fmt.Sprintf("the name is at most %d characters", maxShareName))
-	return true
-}
-
-// shareRulesBodyMax bounds a body that carries a share's rules (a create, an
-// add of rules): maxBulkBooks of them with paths at catalog.MaxPathBytes, sent
-// unescaped, and room for each rule's library id and the share's other fields.
-// A longer body is 400 too_large (decodeBody), as more rules are.
-const shareRulesBodyMax = maxBulkBooks*(catalog.MaxPathBytes+64) + 64<<10
-
-// tooManyRules answers 400 too_large for more rules than one request may hold
-// (true): a share created with its rules, or rules added to one, writes each in
-// one transaction, so both are bounded as a selection of books is.
-func tooManyRules(w http.ResponseWriter, n int) bool {
-	if n <= maxBulkBooks {
-		return false
-	}
-	writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
-		fmt.Sprintf("too many paths in one request (at most %d)", maxBulkBooks))
 	return true
 }
 
@@ -185,20 +175,17 @@ func (a *API) handleAddSharePath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// One rule ({library_id, path}) or several ({"rules": [...]}, a selection of
-	// books added at once, in one transaction).
+	// books added at once, in one transaction, so at most maxBulkBooks).
 	var req struct {
 		sharePathReq
-		Rules []sharePathReq `json:"rules"`
+		Rules boundedList[sharePathReq] `json:"rules"`
 	}
-	if !decodeBody(w, r, &req, shareRulesBodyMax) {
+	if !decodeBody(w, r, &req, selectionBodyMax) {
 		return
 	}
 	rules := req.Rules
 	if len(rules) == 0 {
-		rules = []sharePathReq{req.sharePathReq}
-	}
-	if tooManyRules(w, len(rules)) {
-		return
+		rules = boundedList[sharePathReq]{req.sharePathReq}
 	}
 	add := make([]catalog.PathRule, len(rules))
 	for i, rule := range rules {

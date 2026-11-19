@@ -24,8 +24,20 @@ import (
 // in catalog (adminbooks.go, bookdetail.go, overrides.go, covers.go); match search
 // in meta.
 
-// maxBulkBooks caps one bulk edit; the console pages larger selections.
+// maxBulkBooks caps one bulk edit, and any list of paths one request carries
+// (boundedList); the console pages larger selections.
 const maxBulkBooks = 1000
+
+// selectionBodyMax bounds a body that carries up to maxBulkBooks paths (a
+// share's rules, a selection of books for a bulk edit or a Health ignore):
+// that many at catalog.MaxPathBytes, sent unescaped, with room for each one's
+// library id and the request's other fields. A longer body is 400 too_large
+// (decodeBody), as a longer list is (boundedList).
+const selectionBodyMax = maxBulkBooks*(catalog.MaxPathBytes+64) + 64<<10
+
+// bulkEditBodyMax is selectionBodyMax for a bulk edit, whose edit itself has
+// the 1 MiB a one-book edit's body carries.
+const bulkEditBodyMax = selectionBodyMax + 1<<20
 
 // maxFilterValues caps a repeatable filter (?format=, ?codec=); each value is an
 // SQL parameter, and a real library has a handful.
@@ -520,19 +532,15 @@ func (a *API) handleAdminEditBook(w http.ResponseWriter, r *http.Request) {
 // to many books in one transaction (all or nothing; chapter edits are refused).
 func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Books []catalog.Ref `json:"books"`
+		Books boundedList[catalog.Ref] `json:"books"`
 		editRequest
 	}
-	if err := decodeJSON(r, &req, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeBody(w, r, &req, bulkEditBodyMax) {
 		return
 	}
 	switch {
 	case len(req.Books) == 0:
 		writeError(w, http.StatusBadRequest, "books is required")
-		return
-	case len(req.Books) > maxBulkBooks:
-		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, "too many books in one edit (at most 1000)")
 		return
 	case req.empty():
 		writeError(w, http.StatusBadRequest, "nothing to change")
@@ -628,11 +636,12 @@ func (a *API) handleAdminBookWorks(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
 		return
 	}
+	// maxWorkBooks paths at the cap fit decodeJSON's default 1 MiB; a longer
+	// body, or a list past maxBulkBooks, is 400 too_large (decodeBody).
 	var req struct {
-		Books []catalog.Ref `json:"books"`
+		Books boundedList[catalog.Ref] `json:"books"`
 	}
-	if err := decodeJSON(r, &req, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeBody(w, r, &req, 0) {
 		return
 	}
 	switch {

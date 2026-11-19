@@ -1036,9 +1036,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   refused before a route or credential check reads it (`capPathQuery`, server#359); a path in a body is the
   route's to check (`pathTooLong`, `refsTooLong` for a selection of books, a share's rules), and a body that
   names a path or two and little else is bounded (`pathBodyMax`). A body that carries a share's rules (`POST
-  /admin/shares`, `POST /admin/shares/{id}/paths`) takes 1000 of them at the cap (`shareRulesBodyMax`); past
-  it is the route's 400 `too_large`, as more rules are, and a share's name is at most 200 characters
-  (`maxShareName`, 400 `invalid_name` on a create or rename), its description at most the 1 MiB a
+  /admin/shares`, `POST /admin/shares/{id}/paths`) or a selection of books (`POST /admin/books/bulk`, with 1 MiB
+  more for its edit, `bulkEditBodyMax`; `POST`/`DELETE /admin/issues/ignore`) takes 1000 of them at the cap
+  (`selectionBodyMax`); past it is the route's 400 `too_large`, as more entries are: such a list is a
+  `boundedList`, read one entry at a time and refused at the first past 1000 (`errTooManyEntries`), so a body
+  of a million `{}` is never decoded whole (`POST /admin/books/works`, <= 100, keeps the 1 MiB and answers
+  the same). A share's name is at most 200 characters
+  (`catalog.MaxShareName`, 400 `invalid_name` on a create or rename; a grant share's "Library: <name>" cuts
+  the library's name to fit, `wholeLibraryShareName`), its description at most the 1 MiB a
   rename's body carries (`maxShareDescription`, 400 `too_large` on a create). A scan never indexes a path past the cap
   (only a Windows library holds one): it skips the folder or file and logs it as unreadable (`overLong`), by the start of its path and its length (`loggedPath`). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
@@ -1730,7 +1735,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the share out: anything else (an admin's own share with the name, server#223, a narrowed grant, a
   rule-less share someone holds, a share marked for another library) keeps its rules and holders, and
   the grant gets a share of its own, "Library: <name> (<id>)" when the name is taken (then numbered
-  from 2, server#230), made whole and marked in one transaction that looks for the library's grant
+  from 2, server#230; `<name>` cut so the longest of these fits a share name's 200 characters,
+  `wholeLibraryShareName`), made whole and marked in one transaction that looks for the library's grant
   share again first: write transactions run one at a time, so first grants sent together share one.
   A marked grant's rules change only by granting or revoking the library: `POST`/`DELETE
   /admin/shares/{id}/paths` on one is 409 `library_grant` (`catalog.ErrLibraryGrant`, read inside the
@@ -2837,7 +2843,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `cover_color` (the Series spines) and `matched` (the `matched=` filter's rule, `catalog.matchedExpr`: an
   ASIN or ISBN, or a recorded community match, `book_matches`, see Bulk matching), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection; a share created with `paths`
-  is held to the same 1000 (`tooManyRules`, 400 `too_large`).
+  is held to the same 1000 (`boundedList`, 400 `too_large`).
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
   `api/ratelimit.go`, values from `config.rate_limit.*` read at start through
   `RateLimitConfig.Effective`: a rate or burst left at 0 is the current default and is

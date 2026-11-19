@@ -143,7 +143,7 @@ func TestShareRulesBodyBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	huge := strings.Repeat("a", shareRulesBodyMax)
+	huge := strings.Repeat("a", selectionBodyMax)
 	for route, body := range map[string]string{
 		"/api/v1/admin/shares": `{"name":"Huge","description":"` + huge + `"}`,
 		"/api/v1/admin/shares/" + strconv.FormatInt(share.ID, 10) + "/paths": `{"rules":[{"library_id":` + lib + `,"path":"` + huge + `"}]}`,

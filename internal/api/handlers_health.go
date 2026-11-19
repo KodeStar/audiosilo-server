@@ -158,8 +158,8 @@ func (a *API) handleSeriesSpellings(w http.ResponseWriter, r *http.Request) {
 
 // ignoreRequest is the body of POST/DELETE /admin/issues/ignore.
 type ignoreRequest struct {
-	Kind  string        `json:"kind"`
-	Books []catalog.Ref `json:"books"`
+	Kind  string                   `json:"kind"`
+	Books boundedList[catalog.Ref] `json:"books"`
 }
 
 // handleIgnoreIssue serves POST /admin/issues/ignore: stop showing these books
@@ -179,16 +179,12 @@ func (a *API) handleUnignoreIssue(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) applyIgnore(w http.ResponseWriter, r *http.Request, action string, apply func(ignoreRequest) error) {
 	var req ignoreRequest
-	if err := decodeJSON(r, &req, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeBody(w, r, &req, selectionBodyMax) {
 		return
 	}
 	switch {
 	case len(req.Books) == 0:
 		writeError(w, http.StatusBadRequest, "books is required")
-		return
-	case len(req.Books) > maxBulkBooks:
-		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, "too many books at once (at most 1000)")
 		return
 	case refsTooLong(w, req.Books):
 		return
