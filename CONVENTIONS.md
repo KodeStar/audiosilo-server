@@ -1720,7 +1720,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
     `lookRefused` 404, a stream's missing file, a 500 where the route logs one).
   `metadata.ShareFault` stays broad on purpose (any error but the file gone, ENOENT or ENOTDIR, or ENAMETOOLONG): it
   decides what a scan keeps (a book kept as stored, a run partial, a move not carried), never an answer. Only ENOENT
-  or ENOTDIR is ever "gone". Every look is a `metadata.Bounded` call, the reader's ebook open (`OpenEbookBounded`)
+  or ENOTDIR is ever "gone", read by `metadata.NotExist`, never `errors.Is(err, fs.ErrNotExist)` alone, where a
+  share's fault may be the error: Go reads Windows' ERROR_BAD_NETPATH (a share whose server is down, on the transient
+  list) as `fs.ErrNotExist`, so a route checks the transient fault first (`TestBadNetpathIsNoFileGone`). Every look is a `metadata.Bounded` call, the reader's ebook open (`OpenEbookBounded`)
   and a podcast scan's root listing among them.
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates

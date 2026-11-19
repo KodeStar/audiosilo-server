@@ -447,14 +447,14 @@ func podcastFolderSig(root, show string) (dir string, info os.FileInfo, sig stri
 	// Only a folder that is gone is no show's: one the server can't stat (a
 	// share that dropped, a root it may list but not search) may still be one.
 	fi, err := podcastLstat(filepath.Join(root, show))
-	if errors.Is(err, os.ErrNotExist) || err == nil && !fi.IsDir() {
+	if metadata.NotExist(err) || err == nil && !fi.IsDir() {
 		return "", nil, "", ErrNotIndexable
 	}
 	if err != nil {
 		return "", nil, "", transientGaveUp(err) // a share's hiccup: a look given up on
 	}
 	info, err = podcastLstat(filepath.Join(dir, "feed.json"))
-	if errors.Is(err, os.ErrNotExist) {
+	if metadata.NotExist(err) {
 		return "", nil, "", ErrNotIndexable
 	}
 	if err != nil {
@@ -682,7 +682,7 @@ func podcastBarrier(dir, base string) error {
 	side := filepath.Join(dir, metadata.AttachmentsDir)
 	st, err := podcastLstat(side)
 	switch {
-	case errors.Is(err, os.ErrNotExist):
+	case metadata.NotExist(err):
 		return nil
 	case err != nil:
 		return podcastLookErr(err)
@@ -691,7 +691,7 @@ func podcastBarrier(dir, base string) error {
 	}
 	_, err = podcastLstat(filepath.Join(side, stemOf(base)+".publish.json"))
 	switch {
-	case errors.Is(err, os.ErrNotExist):
+	case metadata.NotExist(err):
 		return nil
 	case err != nil:
 		return podcastLookErr(err)

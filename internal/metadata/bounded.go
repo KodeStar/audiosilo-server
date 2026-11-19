@@ -44,7 +44,7 @@ func Unanswered(ctx context.Context, err error) bool {
 // ShareFault reports whether err, a look's at a file or folder its parent
 // listed or a caller named (a stat, a listing, an open), is how a share fails
 // rather than an answer about the file: any error but the file gone (ENOENT,
-// ENOTDIR: a folder above it replaced; ENAMETOOLONG: a name no file can
+// NotExist; ENOTDIR: a folder above it replaced; ENAMETOOLONG: a name no file can
 // have), a look given up on already (GaveUp) or a context's. EIO or ESTALE (a soft-mounted NFS share whose server stopped
 // answering, or a handle it lost), ENOTCONN or ETIMEDOUT (a FUSE pool or a
 // network mount that dropped), a permission (EACCES, EPERM: a share refusing a
@@ -57,8 +57,19 @@ func Unanswered(ctx context.Context, err error) bool {
 // stopped answering (503 share_not_answering); every other fault is the
 // lasting answer (a 404) or the route's own error.
 func ShareFault(err error) bool {
-	return err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) &&
+	return err != nil && !NotExist(err) && !errors.Is(err, syscall.ENOTDIR) &&
 		!errors.Is(err, syscall.ENAMETOOLONG) && !GaveUp(err) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+// NotExist reports whether err says the file or folder is not there
+// (fs.ErrNotExist) and is no TransientFault. Go reads Windows'
+// ERROR_BAD_NETPATH, a share whose server is down, as fs.ErrNotExist, and a
+// share that dropped says nothing about whether the file is there: a look
+// whose error may be a share's asks this, never errors.Is(err,
+// fs.ErrNotExist) alone, before it reads the file as gone. Everywhere else
+// the two are the same.
+func NotExist(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) && !TransientFault(err)
 }
 
 // TransientFault reports whether err is a share's fault that trying again may

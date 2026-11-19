@@ -434,7 +434,7 @@ func (a *API) statBookFiles(ctx context.Context, lib *catalog.Library, book *cat
 			switch {
 			case err == nil:
 				bf.Size, bf.ModTime = info.Size(), info.ModTime().Unix()
-			case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, library.ErrOutsideRoot):
+			case metadata.NotExist(err) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, library.ErrOutsideRoot):
 				if state == filesWhole {
 					state = filesGone
 				}
