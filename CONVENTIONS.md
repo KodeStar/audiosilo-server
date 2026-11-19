@@ -4727,7 +4727,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   per row (`BUSY_TRIES`), with no mint, the player saying the server is busy while it waits, its Play button a
   "Stop trying again" (Pause icon) then, which ends the wait with nothing asked again (Play after asks at once,
   with fresh tries; "Play 5 s" during the wait, or during the look at the failed load before it, asks at once
-  too, that wait and look dropped (`playFive`), so neither loads the element over the preview) (a pause then is one
+  too, that wait and look dropped and, pressed during the wait, with fresh tries as well (`playFive`), so neither loads the element over the preview) (a pause then is one
   meant, though WebKit keeps the element's `error` set: only a pause with an error no error event has come for yet,
   or within `FAILED_PAUSE_MS` of that event, Chrome's own, still means to play); a transcode asked to play that has
   not started after `STALL_MS` (Safari's, with no error) is looked at the same way: one whose own GET still runs and

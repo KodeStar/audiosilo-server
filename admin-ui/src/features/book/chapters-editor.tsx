@@ -1013,7 +1013,11 @@ function Scrubber({
     // this asks at once: the wait's own ask again (or the look's answer, which
     // starts that wait or mints a token) would load the element over the
     // preview. A stalled stream's look goes on: it is the one played here.
+    // Pressed during the wait, it is an ask of its own, with its own tries, as
+    // Play after the wait was stopped is (toggle): asked before the server's
+    // Retry-After has passed, it would else spend the row's last try.
     if (waiting || broken.current) stopRetry();
+    if (waiting) busy.current = 0;
     // A transcode already asked for from the row's start and not played yet
     // plays at once, in this click; else it is asked for from there.
     if (transcoded && (from !== offset || pending.current !== null || a.currentTime > 0)) {
