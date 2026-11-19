@@ -1258,7 +1258,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `POST /cast/token`) reads and stores the index's spelling; by a list's replace and remove
   (`catalog.listableRefs`, `removalRefs`); and by `/fs`
   (`handleBrowseFS` lists the folder in the index's spelling, so the listing's paths match the books
-  `annotateWithBooks` finds). `spelledIn` passes the caller's scope (for `/fs`, `VisibleInBrowse`;
+  `annotateWithBooks` finds). A show path (the podcast routes naming a show: `/podcasts/episodes`'s
+  `show`, `POST`/`DELETE /podcasts/follow` and `/podcasts/check`'s `path`, the console's and the Bridge's
+  `/podcasts/retention`, a show's own cover) is spelled by the same rule from `podcast_shows`
+  (`Catalog.PodcastShowSpelling`, the API's `showSpelled`, server#495's follow-up): the show at the path as given,
+  else the one show whose NFC form is the path's that the caller's scope admits (`VisibleInBrowse`;
+  the cover's `Allows`; the console and the Bridge every show), never two, never case, never a path
+  that is an entry of its own on disk (`ownEntry`); no key column (one row per top-level folder,
+  read only on a miss of a name with another spelling). So an older client or a saved link naming a show
+  folder renamed by hand to its other spelling still reaches it, and a private show it doesn't follow
+  stays 404 `show_not_found` (`TestPodcastShowRoutesMeetTheOtherSpelling`,
+  `TestPodcastPrivateShowNotReachedByTheOtherSpelling`). `spelledIn` passes the caller's scope (for `/fs`, `VisibleInBrowse`;
   a list replace's, per ref; a list remove and the re-key every spelling), so a rule naming another
   spelling byte for byte never learns, from a 403 where a missing path reads 404, that an indexed
   path it can't reach is there. When such a rule admits the path as given but the only indexed

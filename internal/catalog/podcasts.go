@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	unorm "golang.org/x/text/unicode/norm"
+
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
@@ -597,6 +599,51 @@ func (c *Catalog) PodcastShow(ctx context.Context, lib int64, p string, user int
 	}
 	return &s, err
 }
+
+// PodcastShowSpelling is the index's spelling of p, a show path a client sent,
+// by Spelling's rule for a book (server#210): p itself when it has no other
+// Unicode spelling, when a show is indexed at p as given, or when no show reads
+// as it; else the one show indexed in another spelling of p (its NFC form is
+// p's) that allow admits (nil: every one). A show folder renamed to its other
+// spelling on disk (server#495) moves its row there, and an older client or a
+// saved link still names the old one. Two shows allow admits that both read as
+// p (an NFC and an NFD folder side by side on a disk that keeps them apart)
+// leave p as given, and so does a p that is an entry of its own on the disk
+// (ownEntry: a folder in that spelling no scan has indexed yet), so it never
+// guesses and a show not indexed yet is never taken for the one beside it.
+// A p left as given that the index holds as no show then finds none, so a
+// show outside allow is never reached. Only Unicode form, never case: a
+// book's path does not meet another case either.
+func (c *Catalog) PodcastShowSpelling(ctx context.Context, lib int64, p string, allow func(string) bool) (string, error) {
+	if !HasOtherSpelling(p) {
+		return p, nil
+	}
+	var one int
+	err := c.db.QueryRowContext(ctx, `SELECT 1 FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, p).Scan(&one)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return p, err // the show at p, or a failed lookup
+	}
+	// A library's shows are one row per top-level folder, read only on a
+	// miss of a name with another spelling: no key column to keep.
+	shows, err := queryRows(ctx, c.db, func(r *sql.Rows, s *string) error { return r.Scan(s) },
+		`SELECT show_path FROM podcast_shows WHERE library_id=?`, lib)
+	if err != nil {
+		return "", err
+	}
+	k := unorm.NFC.String(p)
+	m := &spellMatch{allow: allow}
+	for _, s := range shows {
+		if unorm.NFC.String(s) == k {
+			m.add(s)
+		}
+	}
+	s, found := m.one(p)
+	if !found || s == p || c.ownEntry(ctx, lib, p) {
+		return p, nil
+	}
+	return s, nil
+}
+
 func (c *Catalog) PodcastShowByHash(ctx context.Context, lib int64, hash string, user int64) (*PodcastShow, error) {
 	var p string
 	err := c.db.QueryRowContext(ctx, `SELECT show_path FROM podcast_feed_hashes WHERE library_id=? AND sha256=? ORDER BY show_path LIMIT 1`, lib, hash).Scan(&p)

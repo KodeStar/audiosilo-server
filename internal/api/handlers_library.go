@@ -1447,7 +1447,7 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lib.Kind == catalog.KindPodcasts {
-		a.servePodcastCover(w, r, lib, path)
+		a.servePodcastCover(w, r, lib, scope, path)
 		return
 	}
 
