@@ -162,7 +162,7 @@ func TestCoverLookReadsATransientFaultAsNoAnswer(t *testing.T) {
 
 // A caller who asks for a book (an on-demand index, an admin's Re-read, the
 // Bridge's IndexMoved) whose folder refuses the server's user for good (a
-// permission on its stat or its listing) hears there is no book to index
+// permission, or the device gone, on its stat or its listing) hears there is no book to index
 // there, as before the share-fault rule, never a look given up on (the API's
 // 503 share_not_answering, which says to try again): only a fault a retry may
 // get past is one. bookOnDisk still reads the same refusal as the book
@@ -192,6 +192,7 @@ func TestAskedBookRefusedForGoodIsNotIndexable(t *testing.T) {
 	}{
 		{"EACCES", syscall.EACCES, true},
 		{"EPERM", syscall.EPERM, true},
+		{"ENXIO", syscall.ENXIO, true}, // the device gone: lasting, as on main
 		{"EIO", syscall.EIO, false},
 		{"ESTALE", syscall.ESTALE, false},
 	} {

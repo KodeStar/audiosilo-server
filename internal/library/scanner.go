@@ -2985,19 +2985,22 @@ func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *cata
 }
 
 // lookRefused is a look resolveBook made at the path its caller named (the
-// path's stat, its folder's listing) that failed with a permission: still a
-// look given up on for whoever asks whether the book is on disk (bookOnDisk:
-// present, its state kept where it is), but one that stays until an admin
-// changes the permission, where a share that stopped answering may come back.
+// path's stat, its folder's listing) that failed as a share does but for good
+// (a permission, the device gone: not transientFault): still a look given up
+// on for whoever asks whether the book is on disk (bookOnDisk: present, its
+// state kept where it is), but one that stays until an admin changes the
+// permission or the disk, where a share that stopped answering may come back.
 type lookRefused struct{ err error }
 
 func (e lookRefused) Error() string { return e.err.Error() }
 func (e lookRefused) Unwrap() error { return e.err }
 
 // refusedForGood marks err, a look given up on (metadata.AsGaveUp), as
-// lookRefused when a permission (EACCES, EPERM) is why; any other err as it is.
+// lookRefused when a share's fault a retry would only meet again is why (not
+// transientFault: a permission, EACCES or EPERM, the device gone, ENXIO, as
+// bookOnDisk reads them); any other err as it is.
 func refusedForGood(err error) error {
-	if cause, faulted := metadata.Faulted(err); faulted && errors.Is(cause, fs.ErrPermission) {
+	if cause, faulted := metadata.Faulted(err); faulted && !transientFault(cause) {
 		return lookRefused{err}
 	}
 	return err
@@ -3005,11 +3008,12 @@ func refusedForGood(err error) error {
 
 // resolveAsked is resolveBook for a caller who asked for the book at relPath
 // (an on-demand index, an admin's Re-read, the Bridge's IndexMoved): a book
-// folder the server's user may not look at (lookRefused) is ErrNotIndexable,
-// the answer it had before a share's faults were read as looks given up on,
-// not a look given up on (the API's 503 share_not_answering with Retry-After:
-// trying again would meet the same permission). Only a fault a share may get
-// past, or a look that did not answer, is one. Nothing is written either way.
+// folder the server's user may not look at, or whose device is gone
+// (lookRefused), is ErrNotIndexable, the answer it had before a share's faults
+// were read as looks given up on, not a look given up on (the API's 503
+// share_not_answering with Retry-After: trying again would meet the same
+// refusal). Only a fault a share may get past (transientFault), or a look
+// that did not answer, is one. Nothing is written either way.
 func (s *Scanner) resolveAsked(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
 	book, err := s.resolveBook(ctx, lib, relPath, allow)
 	var refused lookRefused
