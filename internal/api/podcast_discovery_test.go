@@ -337,7 +337,7 @@ func TestOPMLImport(t *testing.T) {
 	}
 }
 
-// An import its bound ended (or whose client left) answers the timeout's 503,
+// An import its bound ended (or the server stopping) answers the timeout's 503,
 // never the rows it got to as if they were all; one that ran to its end
 // answers them.
 func TestOPMLImportEndedByItsBoundIs503(t *testing.T) {
