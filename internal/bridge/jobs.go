@@ -1056,6 +1056,9 @@ func (s *Service) EnqueueAll(ctx context.Context, jobs []NewJob,
 			libErr, seen := libraries[*j.LibraryID]
 			if !seen {
 				libErr = s.checkLibraryKind(ctx, j)
+				if libErr != nil && !errors.Is(libErr, ErrNotBookLibrary) && !errors.Is(libErr, ErrNotPodcastLibrary) {
+					return 0, libErr // a library that couldn't be read is no refusal
+				}
 				libraries[*j.LibraryID] = libErr
 			}
 			refused = libErr

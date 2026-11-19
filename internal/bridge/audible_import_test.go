@@ -232,6 +232,14 @@ func TestEnqueueAll(t *testing.T) {
 	if created, err := q.EnqueueAll(ctx, more, none); created != 1 || !errors.Is(err, ErrInvalid) || count() != n+1 {
 		t.Fatalf("a bad job = %d, %v, %d jobs", created, err, count())
 	}
+	// A library that can't be read is no refusal: none queued.
+	unread := []NewJob{
+		AudibleImport(AudibleImportParams{Account: "acct0003", ASIN: "B000000001", LibraryID: q.lib}, q.admin, 0),
+		AudibleImport(AudibleImportParams{Account: "acct0003", ASIN: "B000000002", LibraryID: q.lib + 1000}, q.admin, 0),
+	}
+	if created, err := q.EnqueueAll(ctx, unread, none); created != 0 || !errors.Is(err, sql.ErrNoRows) || count() != n+1 {
+		t.Fatalf("an unread library = %d, %v, %d jobs", created, err, count())
+	}
 	if _, err := q.EnqueueAll(ctx, []NewJob{{Kind: KindVerify, LibraryID: &q.lib}}, none); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("another kind: %v", err)
 	}
