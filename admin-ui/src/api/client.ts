@@ -287,29 +287,51 @@ export const streamUrl = (
   return `${API}/libraries/${libraryId}/stream?${q.toString()}`;
 };
 
+/** What the server says of a transcode its <audio> failed or stalled on. */
+export interface TranscodeLook {
+  /**
+   * How long to wait before asking for it again, in seconds: the server's
+   * Retry-After when it has no transcode slot free for it, 0 when the stream
+   * would play now.
+   */
+  wait: number;
+  /**
+   * The bytes the same stream's transcode (this token, file and start) has
+   * sent so far, when one is running (X-AudioSilo-Transcode-Sent): a count
+   * that grows between looks is a slow transcode still on its way, which
+   * asking for again would end (the new ask takes its slot over).
+   */
+  sent?: number;
+}
+
 /**
- * How long to wait before asking for a transcode again, in seconds, after its
- * <audio> failed (an <audio> can't read the answer's status): the server's
- * Retry-After when it had no transcode slot free (503 with one), 0 when the
- * stream is there after all, undefined for any other answer or none (a token
- * that ran out, a file gone, no ffmpeg). The answer's body is let go of at once:
- * a transcode it started holds a slot until then.
+ * Asks the server about a transcode after its <audio> failed or stalled (an
+ * <audio> can't read the answer's status): undefined for any answer but a
+ * play-now or a 503 with a Retry-After (a token that ran out, a file gone, no
+ * ffmpeg) or none. Asked with a HEAD, which the server answers as it would the
+ * GET without starting a transcode (an ffmpeg, holding one of its few slots).
  */
-export async function transcodeRetryAfter(
+export async function lookAtTranscode(
   url: string,
   signal?: AbortSignal,
-): Promise<number | undefined> {
+): Promise<TranscodeLook | undefined> {
   try {
-    const res = await fetch(url, { signal });
-    void res.body?.cancel().catch(() => {});
-    if (res.ok) return 0;
+    const res = await fetch(url, { method: 'HEAD', signal });
+    if (res.ok) {
+      const sent = res.headers.get(TRANSCODE_SENT_HEADER);
+      const n = sent === null ? NaN : Number(sent);
+      return Number.isFinite(n) && n >= 0 ? { wait: 0, sent: n } : { wait: 0 };
+    }
     const wait = Number(res.headers.get('Retry-After'));
     if (res.status !== 503 || !Number.isFinite(wait) || wait <= 0) return undefined;
-    return Math.min(wait, TRANSCODE_RETRY_MAX_S);
+    return { wait: Math.min(wait, TRANSCODE_RETRY_MAX_S) };
   } catch {
     return undefined;
   }
 }
+
+/** The server's word on a transcode's running stream, on a HEAD of it (lookAtTranscode). */
+const TRANSCODE_SENT_HEADER = 'X-AudioSilo-Transcode-Sent';
 
 /** The longest wait a busy transcode's Retry-After is taken at its word for (seconds). */
 const TRANSCODE_RETRY_MAX_S = 30;

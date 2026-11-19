@@ -625,6 +625,38 @@ func TestMatroskaColdRemuxTranscodes(t *testing.T) {
 	}
 }
 
+// TestMatroskaHeadStartsNoRemux: a HEAD of an MP3-in-MKA whose remux is not
+// cached starts none (and runs no ffmpeg): it is answered as the live
+// transcode a GET would get now. A GET then starts the remux, and a HEAD once
+// it is cached answers with the copy's headers.
+func TestMatroskaHeadStartsNoRemux(t *testing.T) {
+	t.Parallel()
+	m := newMKAEnv(t)
+	m.api.ffmpeg = "ffmpeg"
+	abs := filepath.Join(m.lib.Root, filepath.FromSlash(mkaFile))
+
+	resp, body := m.do(t, "HEAD", m.url("stream", mkaFile), m.token, "")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "audio/mpeg" ||
+		resp.Header.Get("Accept-Ranges") != "none" || body != "" {
+		t.Fatalf("cold HEAD = %d %q %q, want the transcode's headers", resp.StatusCode,
+			resp.Header.Get("Content-Type"), resp.Header.Get("Accept-Ranges"))
+	}
+	m.api.remux.Wait()
+	if state, _, _ := m.api.remux.Status(abs); state != media.CacheMissing || m.cachedFiles(t) != 0 {
+		t.Fatalf("after a HEAD the remux is %s with %d cached, want missing and none", state, m.cachedFiles(t))
+	}
+
+	if resp, _ := m.do(t, "GET", m.url("stream", mkaFile), m.token, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET = %d", resp.StatusCode)
+	}
+	m.api.remux.Wait()
+	resp, _ = m.do(t, "HEAD", m.url("stream", mkaFile), m.token, "")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Accept-Ranges") != "bytes" ||
+		resp.Header.Get("ETag") == "" {
+		t.Fatalf("HEAD of the cached remux = %d %v, want the copy's headers", resp.StatusCode, resp.Header)
+	}
+}
+
 // coldAnswer is a stream request's answer, read off the test's goroutine.
 type coldAnswer struct {
 	resp *http.Response

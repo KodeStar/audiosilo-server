@@ -1,6 +1,7 @@
 package media
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -141,5 +143,75 @@ func TestCopyIdleNoneKeepsUnreadStream(t *testing.T) {
 	case <-done:
 	case <-time.After(20 * time.Second):
 		t.Fatal("the stream outlived its client")
+	}
+}
+
+// fakeFFmpeg is a stand-in ffmpeg running script (sh), whatever it is asked.
+func fakeFFmpeg(t *testing.T, script string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ffmpeg")
+	// Written under ForkLock: a parallel test's fork must not inherit its open
+	// write descriptor, or exec fails with ETXTBSY (golang/go#22315).
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o755)
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// cancelOnWrite ends its request's context at its first write: a later ask
+// taking the transcode's slot over while it streams.
+type cancelOnWrite struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (c cancelOnWrite) Write(p []byte) (int, error) {
+	c.cancel()
+	return c.ResponseRecorder.Write(p)
+}
+
+// TestTranscodeReportsItsEnd: a transcode whose ffmpeg output came to its end
+// with the request live ran to its end, ended after that or not; one whose
+// request ended while it streamed (ffmpeg killed, which ends its output too)
+// did not, nor did a HEAD.
+func TestTranscodeReportsItsEnd(t *testing.T) {
+	t.Parallel()
+	src := filepath.Join(t.TempDir(), "book.m4b")
+	if err := os.WriteFile(src, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	short := fakeFFmpeg(t, "printf 'mp3 bytes'")
+	endless := fakeFFmpeg(t, "exec cat /dev/zero")
+
+	rec := httptest.NewRecorder()
+	if ended, err := Transcode(rec, httptest.NewRequest(http.MethodGet, "/", nil), src, short, 0, time.Minute, 0, nil); err != nil || !ended {
+		t.Fatalf("a whole stream: ended %v, %v, want true", ended, err)
+	}
+	if rec.Body.String() != "mp3 bytes" {
+		t.Fatalf("body = %q, want ffmpeg's output", rec.Body.String())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cut := cancelOnWrite{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	done := make(chan bool, 1)
+	go func() {
+		ended, _ := Transcode(cut, httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx), src, endless, 0, time.Minute, 0, nil)
+		done <- ended
+	}()
+	select {
+	case ended := <-done:
+		if ended {
+			t.Fatal("a stream cut short by its request's end said it ran to its end")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("a stream whose request ended went on")
+	}
+
+	if ended, _ := Transcode(httptest.NewRecorder(), httptest.NewRequest(http.MethodHead, "/", nil), src, short, 0, time.Minute, 0, nil); ended {
+		t.Fatal("a HEAD said it streamed to the end")
 	}
 }

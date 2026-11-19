@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import {
+  type SyntheticEvent,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -11,7 +19,7 @@ import {
   Trash2,
   TriangleAlert,
 } from 'lucide-react';
-import { api, streamUrl, transcodeRetryAfter } from '@/api/client';
+import { api, lookAtTranscode, streamUrl } from '@/api/client';
 import {
   invalidateIssues,
   keys,
@@ -498,12 +506,20 @@ const BUSY_TRIES = 3;
 
 /**
  * How long a transcode asked for to play may go without starting before the
- * server is asked whether it had a slot for it (busy). Safari asks for one
- * stream two or three times, each its own ffmpeg: with one slot free, the
- * first is answered and the next is a 503, and the <audio> waits on with no
- * error to say so.
+ * server is asked whether it has a slot for it (busy). Safari asks for one
+ * stream two or three times (the server lets a repeat ask take over the
+ * earlier one's slot), and when one of those asks is refused or the stream it
+ * was given is dropped, the <audio> waits on with no error to say so.
  */
 const STALL_MS = 6000;
+
+/**
+ * How soon after a failed load's error event a pause is that failure's own
+ * (ms): Chrome pauses the element as its load fails, which is no pause meant.
+ * WebKit keeps `error` set after a 503 for as long as the element waits, so a
+ * pause later than this (a headset's, a media key's) is one meant.
+ */
+const FAILED_PAUSE_MS = 250;
 
 /**
  * How often the book page is read again while the chosen file's remux is not
@@ -587,6 +603,22 @@ function Scrubber({
   // The last load failed (onError) and none has begun since: Safari may leave
   // paused false then, so Play loads it again rather than pausing nothing.
   const broken = useRef(false);
+  // The last load's error event: its error and when it came (its timeStamp).
+  // A pause with an error no event has come for yet, or within
+  // FAILED_PAUSE_MS of its event, is the failure's.
+  const erred = useRef<{ error: MediaError | null; at: number }>({ error: null, at: -Infinity });
+  // A stalled transcode the server had a slot for was loaded again (lookAtStream):
+  // stalled again, it didn't load. Each ask (a seek, a new token) gets its own.
+  const restalled = useRef(false);
+  // What the stalled transcode's stream had sent when it was last looked at,
+  // still running (lookAtStream): one that has sent more since is on its way.
+  // The count is its load's: every load is a new stream, counted from nothing.
+  const producing = useRef<number | undefined>(undefined);
+  // A new ask's stall is looked at afresh.
+  const freshStall = () => {
+    restalled.current = false;
+    producing.current = undefined;
+  };
   // A transcode the server had no slot for: how often it was asked for again,
   // the wait before the next ask (said while it lasts), and the look at the
   // answer it failed with.
@@ -653,9 +685,11 @@ function Scrubber({
   // from the stream as it is then, not as this render saw it: an ask from a
   // timer or a promise must not repeat the count of one made since (asked).
   // One <audio> plays every ask, so a busy stream's look and its wait to be
-  // asked for again were the last stream's: the new one's failure looks anew.
+  // asked for again were the last stream's: the new one's failure looks anew,
+  // and a stall of it is loaded again once (restalled) as the last one's was.
   const ask = (to: number, play: boolean) => {
     stopRetry();
+    freshStall();
     const made = seeks.current;
     setStream((s) => ({ at, from: to, n: (s?.n ?? 0) + 1, play, seeks: made }));
   };
@@ -693,6 +727,8 @@ function Scrubber({
     if (!a || a.paused || broken.current) wanted.current = false;
     stopRetry();
     busy.current = 0;
+    restalled.current = false;
+    producing.current = undefined;
     if (transcoded) setFailed(false);
   }, [at, transcoded, stopRetry]);
 
@@ -860,18 +896,48 @@ function Scrubber({
   // no fault of the token: it is asked for again after the server's
   // Retry-After, and plays then, since it was only asked for to play.
   // `stalled` is the look of one that has not failed but not started either
-  // (Safari's: STALL_MS): only a busy answer acts on it, a failed one is let be.
+  // (Safari's: STALL_MS). A busy answer is waited out as a failure's is. One
+  // whose transcode still runs and has sent more since the last look (or at
+  // the first) is a slow one on its way: looked at again after another
+  // STALL_MS, never asked for again, which would end it (the new ask takes its
+  // slot over). One the server would play now with none running, or one that
+  // sent nothing more, still stalled when the answer comes, is a failed load
+  // too: WebKit drops the stream it was given (the first of its asks for it)
+  // and waits on with none. It is loaded again once, and stalled again it
+  // didn't load. Any other answer is let be.
   const lookAtStream = (a: HTMLAudioElement, url: string, stalled: boolean) => {
     stopRetry();
     const look = new AbortController();
     probe.current = look;
-    void transcodeRetryAfter(url, look.signal).then((wait) => {
+    void lookAtTranscode(url, look.signal).then((got) => {
       if (look.signal.aborted || audio.current !== a) return;
+      const wait = got?.wait;
       if (stalled) {
-        // Paused while it was looked at (a headset's pause): nothing to ask again.
-        if (!wait || !meantToPlay(a)) return;
+        // Paused while it was looked at (a headset's pause), or started since:
+        // nothing to ask again.
+        if (wait === undefined || !meantToPlay(a)) return;
+        if (a.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return;
+        const sent = got?.sent;
+        const before = producing.current;
+        if (sent !== undefined && (before === undefined || sent > before)) {
+          producing.current = sent;
+          stall.current = setTimeout(() => stuck.current?.(), STALL_MS);
+          return;
+        }
         broken.current = true;
         setPlaying(false);
+        if (wait === 0) {
+          if (restalled.current) {
+            setFailed(true);
+            // Paused, Safari lets go of the stream (and its slot).
+            a.pause();
+            return;
+          }
+          restalled.current = true;
+          a.load();
+          void a.play().catch(() => {});
+          return;
+        }
       } else if (wait === undefined) {
         remint(a);
         return;
@@ -894,9 +960,10 @@ function Scrubber({
       }, wait * 1000);
     });
   };
-  const onError = () => {
+  const onError = (e: SyntheticEvent<HTMLAudioElement>) => {
     const a = audio.current;
     if (!a) return;
+    erred.current = { error: e.currentTarget.error, at: e.timeStamp };
     broken.current = true;
     setPlaying(false);
     if (!transcoded || !src) {
@@ -1011,8 +1078,10 @@ function Scrubber({
           // A new source (another file, or a transcode asked again) plays only
           // when told to: play() may have run before its load began (asked), so
           // the element says whether it plays, not the event.
+          // What the last stream had sent (producing) is not this load's.
           onLoadStart={(e) => {
             broken.current = false;
+            producing.current = undefined;
             setPlaying(!e.currentTarget.paused);
           }}
           onLoadedMetadata={(e) => {
@@ -1047,6 +1116,7 @@ function Scrubber({
           onPlaying={() => {
             stopRetry();
             busy.current = 0;
+            freshStall();
             broken.current = false;
             setPlaying(true);
             if (!previewing.current) return;
@@ -1055,9 +1125,18 @@ function Scrubber({
             preview.current = setTimeout(() => audio.current?.pause(), PREVIEW_MS);
           }}
           // A failed load's pause (Chrome's) is no pause: it still means to play.
+          // It comes with the failure, the error set: before its error event is
+          // handled (an error no event has come for, though a stall's look may
+          // have marked the load broken), or just after. A pause later is one
+          // meant, though WebKit keeps the error set while a busy stream waits
+          // to be asked again.
           onPause={(e) => {
             clearTimeout(stall.current);
-            if (!e.currentTarget.error) wanted.current = false;
+            const error = e.currentTarget.error;
+            const failure =
+              !!error &&
+              (error !== erred.current.error || e.timeStamp - erred.current.at < FAILED_PAUSE_MS);
+            if (!failure) wanted.current = false;
             setPlaying(false);
             if (transcoded) pausedHold();
           }}

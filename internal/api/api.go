@@ -190,6 +190,14 @@ type API struct {
 	// (or any demo visitor) opening many ?transcode=1 streams could exhaust CPU on a
 	// small self-hosted box. A full channel returns 503 rather than forking more.
 	transcodeSem chan struct{}
+	// transcodeHolds are the slots held by asks with a token, by ask, so a
+	// repeat ask takes its earlier one's slot over, and a token's ask past
+	// maxTranscodesPerToken its oldest's (transcode_slots.go); transcodeSeq
+	// numbers the holds in the order they were taken. Both guarded by
+	// transcodeMu.
+	transcodeMu    sync.Mutex
+	transcodeHolds map[transcodeAsk]*transcodeHold
+	transcodeSeq   uint64
 	// remux is the cache of Matroska files holding MP3 copied into plain MP3
 	// (server#174), served at the same stream URL while ffmpeg is configured
 	// (remuxOn). nil without a data dir.
@@ -311,6 +319,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		mediaLimiter:   newBucketLimiter(limits.Media),
 		castKeepEvery:  auth.CastTouchInterval,
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
+		transcodeHolds: make(map[transcodeAsk]*transcodeHold),
 		remuxWait:      remuxColdWait,
 		remuxLongWait:  remuxDownloadWait,
 		renditionWait:  remuxDownloadWait,
@@ -409,6 +418,11 @@ func (a *API) WaitMediaCaches() {
 
 // maxConcurrentTranscodes caps simultaneous ffmpeg transcodes across all clients.
 const maxConcurrentTranscodes = 4
+
+// maxTranscodesPerToken caps the transcode slots one token holds at once, so
+// one client (a demo visitor included) can't hold every slot with asks that
+// differ only in ?t=: its next ask takes its own oldest slot over instead.
+const maxTranscodesPerToken = 2
 
 // EnableSetup turns on the first-run setup wizard, guarded by token (a one-time
 // secret carried in the /setup URL fragment). Call before Handler(). The wizard

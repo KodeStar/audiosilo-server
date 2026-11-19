@@ -1195,22 +1195,25 @@ func serveCopy(w http.ResponseWriter, r *http.Request, f *os.File, etag, name st
 // (rel in library lib) from ?t=, in one of the transcode slots; a non-empty
 // downloadName makes it an attachment of that name.
 func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, rel, abs, downloadName string, deadline time.Time) {
-	done, start, ok := a.beginTranscode(w, r, lib, rel)
-	if !ok {
+	h, r := a.beginTranscode(w, r, lib, rel)
+	if h == nil {
 		return
 	}
-	defer done()
-	a.transcodeHeld(w, r, abs, downloadName, start, deadline)
+	defer a.endTranscode(h)
+	a.transcodeHeld(w, r, h, abs, downloadName, deadline)
 }
 
-// transcodeHeld is serveTranscode once its slot is taken (the caller releases
-// it): its look at abs given up on at the stream's deadline is a 503
-// share_not_answering.
-func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloadName string, start float64, deadline time.Time) {
+// transcodeHeld is serveTranscode once h is taken (the caller ends it): the
+// transcode from h's start, written through h's writer, h.ended set once it
+// ran to its end. Its look at abs given up on at the stream's deadline is a
+// 503 share_not_answering.
+func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, h *transcodeHold, abs, downloadName string, deadline time.Time) {
 	if downloadName != "" {
 		media.SetAttachment(w.Header(), downloadName)
 	}
-	if err := media.Transcode(w, r, abs, a.ffmpeg, start, waitLeft(deadline), transcodeIdleFor(r), a.log); err != nil {
+	ended, err := media.Transcode(h.writer(w), r, abs, a.ffmpeg, h.ask.start, waitLeft(deadline), transcodeIdleFor(r), a.log)
+	h.ended = ended
+	if err != nil {
 		w.Header().Del("Content-Disposition")
 		writeShareNotAnswering(w)
 	}
@@ -1244,21 +1247,31 @@ func transcodeIdleFor(r *http.Request) time.Duration {
 // that file's open has (afterWait: the waits for a remux that then refused the
 // file were no looks at it); true also when
 // the request went away while waiting. Its look at abs (media.Source) given up
-// on at the stream's deadline is a 503 share_not_answering.
+// on at the stream's deadline is a 503 share_not_answering. A HEAD starts no
+// remux and waits for none: the cached copy's headers, else the transcode's.
 func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, download bool, deadline time.Time) (served bool, left time.Time) {
-	if answered, err := lookAtSource(w, r, abs, deadline); answered || err != nil {
+	answered, err := lookAtSource(w, r, abs, deadline)
+	if answered || err != nil {
 		return answered, deadline // err: no regular file there, the stored file's answer (a 404)
 	}
-	wait, cancel := context.WithTimeout(r.Context(), a.remuxWait)
-	defer cancel()
-	f, etag, err := a.remux.Open(wait, a.baseCtx, a.ffmpeg, abs)
+	var f *os.File
+	var etag string
+	if r.Method == http.MethodHead {
+		// A HEAD starts no remux: the copy when it is cached, else the
+		// transcode's answer (no ffmpeg run), as a GET would be answered now.
+		f, etag, err = a.remux.Cached(r.Context(), abs)
+	} else {
+		wait, cancel := context.WithTimeout(r.Context(), a.remuxWait)
+		defer cancel()
+		f, etag, err = a.remux.Open(wait, a.baseCtx, a.ffmpeg, abs)
+	}
 	name := copyName(abs, a.remux.Ext())
-	var held func() // a transcode slot taken while the remux runs on
+	var held *transcodeHold // a transcode slot taken while the remux runs on
 	// Still remuxing when the wait ran out (it goes on): not a failure to warn of.
 	running := r.Context().Err() == nil && errors.Is(err, media.ErrPending)
 	if running {
 		if !download {
-			held = a.takeTranscodeSlot()
+			held, r = a.takeTranscodeSlot(w, r, transcodeAskOf(r, lib, rel))
 		}
 		if held == nil {
 			// A download, or no slot free: wait for the remux, up to
@@ -1269,7 +1282,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 			// A remux that failed by its own timeout is a failure, not this wait.
 			running = r.Context().Err() == nil && errors.Is(err, media.ErrPending)
 		} else {
-			defer held()
+			defer a.endTranscode(held)
 		}
 	}
 	if err != nil {
@@ -1297,7 +1310,8 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 			downloadName = name
 		}
 		if held != nil {
-			a.transcodeHeld(w, r, abs, downloadName, a.noteTranscode(r, lib, rel), deadline)
+			a.noteTranscode(r, lib, rel)
+			a.transcodeHeld(w, r, held, abs, downloadName, deadline)
 			return true, deadline
 		}
 		a.serveTranscode(w, r, lib, rel, abs, downloadName, deadline)
@@ -1308,42 +1322,43 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 }
 
 // beginTranscode admits one ?transcode=1 request for the file at rel: 503 when
-// ffmpeg isn't configured or every slot is busy (Retry-After 5), else it takes
-// a slot, marks the device's session transcoded (a cast token's is its
-// sender's) and returns the slot's release and the ?t= start in seconds.
-func (a *API) beginTranscode(w http.ResponseWriter, r *http.Request, lib int64, rel string) (done func(), start float64, ok bool) {
+// ffmpeg isn't configured or no slot is free for it (Retry-After 5), else its
+// hold (takeTranscodeSlot: a repeat ask takes its earlier one's over, a token
+// past its cap its oldest's), for
+// endTranscode once served, and r with the slot's context (a takeover ends
+// it), the device's session marked transcoded (noteTranscode). A HEAD takes
+// no slot and is answered as a GET would be, the 503 included, with no ffmpeg
+// run (media.Transcode), so a client can ask whether its transcode would run,
+// and with what the same ask's running GET has sent (headerTranscodeSent).
+func (a *API) beginTranscode(w http.ResponseWriter, r *http.Request, lib int64, rel string) (*transcodeHold, *http.Request) {
 	if a.ffmpeg == "" {
 		writeError(w, http.StatusServiceUnavailable, "transcoding is not available on this server")
-		return nil, 0, false
+		return nil, r
 	}
 	// Bound concurrent ffmpeg processes; when saturated, ask the client to retry
 	// rather than forking another core-pinning encoder.
-	done = a.takeTranscodeSlot()
-	if done == nil {
-		w.Header().Set("Retry-After", "5")
-		writeError(w, http.StatusServiceUnavailable, "server busy transcoding; try again shortly")
-		return nil, 0, false
+	h, r := a.takeTranscodeSlot(w, r, transcodeAskOf(r, lib, rel))
+	if h == nil {
+		writeTranscodeBusy(w)
+		return nil, r
 	}
-	return done, a.noteTranscode(r, lib, rel), true
-}
-
-// takeTranscodeSlot takes one of the transcode slots and returns its release,
-// nil when every slot is busy.
-func (a *API) takeTranscodeSlot() (release func()) {
-	select {
-	case a.transcodeSem <- struct{}{}:
-		return func() { <-a.transcodeSem }
-	default:
-		return nil
-	}
+	h.describe(w)
+	a.noteTranscode(r, lib, rel)
+	return h, r
 }
 
 // noteTranscode marks the device's session transcoded (a cast token's is its
-// sender's) and returns the ?t= start in seconds, for a transcode about to run.
-func (a *API) noteTranscode(r *http.Request, lib int64, rel string) (start float64) {
-	a.streams.Note(credentialFrom(r.Context()).DeviceID, lib, rel, time.Now())
-	start, _ = strconv.ParseFloat(r.URL.Query().Get("t"), 64)
-	return start
+// sender's), for a transcode about to run: a HEAD runs none.
+func (a *API) noteTranscode(r *http.Request, lib int64, rel string) {
+	if r.Method != http.MethodHead {
+		a.streams.Note(credentialFrom(r.Context()).DeviceID, lib, rel, time.Now())
+	}
+}
+
+// writeTranscodeBusy is the 503 for a transcode no slot is free for.
+func writeTranscodeBusy(w http.ResponseWriter) {
+	setRetryAfter(w, 5*time.Second)
+	writeError(w, http.StatusServiceUnavailable, "server busy transcoding; try again shortly")
 }
 
 // handleCover serves a book's cover for a path: a custom cover uploaded in the

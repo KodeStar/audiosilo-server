@@ -223,37 +223,36 @@ func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 // file is a metadata.Bounded stat (the request's context, at most wait), as
 // ServeFile's open: one given up on (metadata.GaveUp) is returned with nothing
 // written, for the caller to answer; every other outcome is answered here and
-// returns nil.
-func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath string, startSec float64, wait, idle time.Duration, log *slog.Logger) error {
+// returns nil. ended reports a stream that ran to its end (transcodeInput).
+func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath string, startSec float64, wait, idle time.Duration, log *slog.Logger) (ended bool, err error) {
 	if log == nil {
 		log = slog.Default()
 	}
 	switch _, err := metadata.StatBounded(r.Context(), absPath, wait); {
 	case metadata.GaveUp(err):
-		return err
+		return false, err
 	case err != nil:
 		http.Error(w, "not found", http.StatusNotFound)
-		return nil
+		return false, nil
 	}
-	transcodeInput(w, r, inputSpec{url: absPath}, ffmpegPath, startSec, idle, log)
-	return nil
+	return transcodeInput(w, r, inputSpec{url: absPath}, ffmpegPath, startSec, idle, log), nil
 }
 
 // TranscodeOpened transcodes an already verified descriptor (a podcast
 // episode's committed generation) without reopening its path: f is ffmpeg's
 // stdin, read seekably through the fd: protocol when this ffmpeg has it (so
 // -ss is a fast input seek and a file whose index sits at its end, a
-// non-faststart m4a, demuxes), else as the old non-seekable pipe:0. idle is
-// Transcode's.
-func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegPath string, startSec float64, idle time.Duration, log *slog.Logger) {
+// non-faststart m4a, demuxes), else as the old non-seekable pipe:0. idle and
+// ended are Transcode's.
+func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegPath string, startSec float64, idle time.Duration, log *slog.Logger) (ended bool) {
 	// The child shares this descriptor's offset: start it at the top.
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		http.Error(w, "transcode failed", http.StatusInternalServerError)
-		return
+		return false
 	}
 	in := inputFor(ffmpegPath)
 	in.file = f
-	transcodeInput(w, r, in, ffmpegPath, startSec, idle, log)
+	return transcodeInput(w, r, in, ffmpegPath, startSec, idle, log)
 }
 
 // inputSpec is how ffmpeg reads its input: a path (proto ""), or the
@@ -368,9 +367,18 @@ func transcodeArgs(in inputSpec, startSec float64) []string {
 // (the api's transcodeIdleFor).
 const TranscodeIdle = 10 * time.Minute
 
+// transcodeWaitDelay bounds Wait's wait for a killed ffmpeg's output pipes
+// (exec.Cmd.WaitDelay): a pipe held open past ffmpeg's end never keeps the
+// handler, or the process unreaped.
+const transcodeWaitDelay = 5 * time.Second
+
 // transcodeInput runs ffmpeg over in from startSec and streams its MP3 to w,
-// ending it (and ffmpeg) when the client has read nothing for idle.
-func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpegPath string, startSec float64, idle time.Duration, log *slog.Logger) {
+// ending it (and ffmpeg) when the client has read nothing for idle. It reports
+// whether the stream ran to its end: ffmpeg's output came to its end, all of it
+// written, while the request's context was live. One cut short (the context
+// ended, so ffmpeg was killed, which ends its output too; a write that
+// failed) did not, and neither did a HEAD or a failure to start.
+func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpegPath string, startSec float64, idle time.Duration, log *slog.Logger) (ended bool) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -378,7 +386,7 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 		// net/http discards a HEAD's body: answer its headers without running
 		// ffmpeg over the whole file for nothing.
 		writeTranscodeHeader(w)
-		return
+		return false
 	}
 	// Ended with the request, and at once when the copy fails (copyIdle's
 	// deadline): net/http ends the request's context on a failed write too, but
@@ -388,6 +396,9 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 	defer cancel()
 	logPath := in.url
 	cmd := exec.CommandContext(ctx, ffmpegPath, transcodeArgs(in, startSec)...)
+	// Once ctx ends (ffmpeg killed), Wait gives its output pipes this long to
+	// close before it closes them itself: ffmpeg is always reaped.
+	cmd.WaitDelay = transcodeWaitDelay
 	if in.file != nil {
 		logPath = in.file.Name()
 		cmd.Stdin = in.file
@@ -395,16 +406,18 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		http.Error(w, "transcode failed", http.StatusInternalServerError)
-		return
+		return false
 	}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		http.Error(w, "transcode failed", http.StatusInternalServerError)
-		return
+		return false
 	}
 	writeTranscodeHeader(w) // before the body
-	if err := copyIdle(w, stdout, idle); err != nil {
+	out := &endWatch{r: stdout, ctx: ctx}
+	err = copyIdle(w, out, idle)
+	if err != nil {
 		// Client disconnect / broken pipe is normal (seek, pause, navigate away),
 		// and so is a client that stopped reading (copyIdle).
 		log.Debug("transcode copy ended", "path", logPath, "err", err)
@@ -414,6 +427,27 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 		// Only a real ffmpeg failure (not a client cancel) is worth warning about.
 		log.Warn("ffmpeg transcode failed", "path", logPath, "err", err, "stderr", strings.TrimSpace(stderr.String()))
 	}
+	return err == nil && out.ended
+}
+
+// endWatch is ffmpeg's output as transcodeInput copies it, noting whether it
+// came to its end while ctx (the one ffmpeg runs under) was live: looked at as
+// the end is read, before the bytes still buffered are flushed and before
+// ffmpeg is waited for, so an end of ctx after that (a later ask taking the
+// transcode's slot over) leaves the stream ended. ffmpeg killed as ctx ends
+// ends its output too, but ctx has ended by then.
+type endWatch struct {
+	r     io.Reader
+	ctx   context.Context
+	ended bool
+}
+
+func (e *endWatch) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if errors.Is(err, io.EOF) {
+		e.ended = e.ctx.Err() == nil
+	}
+	return n, err
 }
 
 // copyIdle copies src to w as io.Copy does, each write given idle to reach

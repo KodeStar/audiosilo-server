@@ -1,4 +1,11 @@
-import { ApiError, api, bookQuery, setForbiddenHandler, setUnauthorizedHandler } from './client';
+import {
+  ApiError,
+  api,
+  bookQuery,
+  lookAtTranscode,
+  setForbiddenHandler,
+  setUnauthorizedHandler,
+} from './client';
 import { getToken, setToken } from './token';
 import { mockFetch } from '@/test/fetch-mock';
 import { activity, admin, stats } from '@/test/fixtures';
@@ -294,5 +301,30 @@ describe('api client', () => {
     expect(calls[1].body).toEqual({ finished: true, started_at: null });
     await api.devices();
     expect(calls[2].query.toString()).toBe('');
+  });
+
+  it('reads a transcode look: play now, what its running stream sent, or the busy wait', async () => {
+    const url = '/api/v1/libraries/1/stream?transcode=1';
+    const look = async (reply: Parameters<typeof mockFetch>[0][string]) => {
+      const calls = mockFetch({ 'HEAD /libraries/1/stream': reply });
+      const got = await lookAtTranscode(url);
+      expect(calls[0].method).toBe('HEAD');
+      return got;
+    };
+    expect(
+      await look({ status: 200, raw: '', headers: { 'X-AudioSilo-Transcode-Sent': '4096' } }),
+    ).toEqual({ wait: 0, sent: 4096 });
+    expect(await look({ status: 200, raw: '' })).toEqual({ wait: 0 });
+    expect(
+      await look({ status: 200, raw: '', headers: { 'X-AudioSilo-Transcode-Sent': 'lots' } }),
+    ).toEqual({ wait: 0 });
+    expect(await look({ status: 503, raw: '', headers: { 'Retry-After': '5' } })).toEqual({
+      wait: 5,
+    });
+    expect(await look({ status: 503, raw: '', headers: { 'Retry-After': '600' } })).toEqual({
+      wait: 30,
+    });
+    expect(await look({ status: 401, body: { error: 'unauthorized' } })).toBeUndefined();
+    expect(await look('network-error')).toBeUndefined();
   });
 });

@@ -1466,7 +1466,27 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`media.TranscodeOpened`, server#181) is ffmpeg's stdin read seekably as `fd:` (input seek, and a
   non-faststart m4a demuxes) when the ffmpeg lists the fd input protocol (`inputFor`: probed once
   per ffmpeg path, `-protocols`, 5 s, asked again after a probe that couldn't run), else the old
-  `pipe:0` with an output seek. A HEAD gets the transcode's headers without an ffmpeg run. The console's chapter
+  `pipe:0` with an output seek. Each transcode holds one of the 4 `transcodeSem` slots (503 + `Retry-After: 5`
+  with none free), keyed by its ask (`transcodeAsk`, `transcode_slots.go`: the credential's token id, the file, the
+  `?t=` start, `download=1`): a repeat GET of the same ask takes over the slot the earlier one holds, ending that
+  request's ffmpeg and aborting its response (`http.ErrAbortHandler`, a broken stream, never one that ended),
+  rather than needing a slot of its own, since Safari asks for one stream two or three times and plays only the
+  last; a token is one user's, so a takeover never ends another user's or device's transcode. A token holds at most
+  2 slots (`maxTranscodesPerToken`): its third ask (asks differing only in `?t=`, the web player's overlapping seek
+  re-asks) takes over its own oldest one's slot the same way rather than being refused, so one client (a demo
+  visitor included) can't hold all 4; another token's slots are never touched. A takeover also marks the old hold
+  taken (its writer refuses every write after it) and gives its response a 1 s write deadline
+  (`transcodeTakeoverGrace`, `http.ResponseController` from the taking goroutine), so a handler blocked writing to
+  a client that stopped reading fails, reaps its ffmpeg (`exec.Cmd.WaitDelay` 5 s on top) and lets go of the
+  connection. Its abort puts that deadline back first (the editor's idle copy clears its own as it ends,
+  `copyIdle`), so net/http's flush as it closes the connection never waits on that client. A stream that ran to its
+  end before the takeover came (`media.Transcode` reports `ended`: ffmpeg's output came to its end while the request
+  was live) is not aborted: it flushes what it still buffers under the deadline, and its kept-alive connection then
+  loses it. A HEAD runs no ffmpeg and takes no slot: it answers as a GET would now (200 when a slot is free, its ask
+  holds one or its token is at its cap, else the busy 503), with `X-AudioSilo-Transcode-Sent: <bytes>` when the same
+  ask's GET is running (what it has written so far; never another token's, exposed to CORS), the chapter editor's
+  check after a failed or stalled load (`lookAtTranscode`). A HEAD of an MP3-in-MKA starts no remux either
+  (`FileCache.Cached`): the cached copy's headers, else the transcode's. The console's chapter
   editor's transcode (its cast token, `auth.Credential.Editor`) that it has read nothing of for 10 minutes
   (`media.TranscodeIdle`: each write gets a write deadline, `copyIdle`) is ended with its ffmpeg, freeing its slot:
   a paused `<audio>` keeps its connection open while it reads nothing, and the editor asks for its stream again
@@ -4682,9 +4702,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   copy from the playhead once it is made and the audio is not playing (never by the `<audio>`'s duration, which
   Safari may report finite for a live stream). An ask a seek was made since leaves that seek waiting (`seeks`),
   and Play after a failed load loads again (Chrome leaves `paused` false then). Its `<audio>` failing is
-  looked at before a new token is minted (`transcodeRetryAfter` fetches the same URL and lets the body go): a 503
+  looked at before a new token is minted (`lookAtTranscode` sends a HEAD of the same URL, which starts no ffmpeg): a 503
   with `Retry-After` (no transcode slot free) is asked for again after that wait and played, up to three times
-  per row (`BUSY_TRIES`), with no mint, the player saying the server is busy while it waits; any other answer
+  per row (`BUSY_TRIES`), with no mint, the player saying the server is busy while it waits (a pause then is one
+  meant, though WebKit keeps the element's `error` set: only a pause with an error no error event has come for yet,
+  or within `FAILED_PAUSE_MS` of that event, Chrome's own, still means to play); a transcode asked to play that has
+  not started after `STALL_MS` (Safari's, with no error) is looked at the same way: one whose own GET still runs and
+  has sent more since the last look (`X-AudioSilo-Transcode-Sent`, or at a load's first look: the count is that
+  load's stream's, forgotten at `loadstart`) is a slow transcode, looked at again after another `STALL_MS` and
+  never asked for again (that would take its slot over and end it), and one
+  the server would play now with none running, or sending no more, still stalled, is loaded again once (WebKit
+  dropped the stream it was given), then "didn't load"; any other answer
   mints once, as a stored file's failure does (a transcode asks for no stream with the old token meanwhile, then
   asks again from where it was, playing if it was; a mint that fails says it can't play, asking nothing with the
   old token); the console offers no
