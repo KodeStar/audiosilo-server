@@ -830,15 +830,12 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 				return err
 			}
 		}
-		id, err := openJobID(ctx, tx, key)
-		if err != nil {
+		if job, err = openJob(ctx, tx, key); err != nil {
 			return err
 		}
-		if id != 0 {
-			job, err = getJob(ctx, tx, id)
-			if err != nil {
-				return err
-			}
+		var id int64
+		if job != nil {
+			id = job.ID
 			if j.Kind == KindPodcastSubscribe && subscribePrivate(job.Params) != subscribePrivate(j.Params) {
 				return ErrPrivacyConflict
 			}
