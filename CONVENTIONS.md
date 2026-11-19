@@ -66,7 +66,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it; a new 401 must go through `writeError`/`writeErrorCode`/`writeJSON`, never `w.WriteHeader`.
   `cors` exposes it (`corsExposeHeaders`). The player reads it to tell the server refusing its token
   from an auth proxy's own 401, or a proxy that rewrote the server's body; additive, the body is
-  unchanged. `TestUnauthorizedMarked` covers the middleware's and the sign-in, pairing and OIDC
+  unchanged. `GET /server` says so with the capability `unauthorized_mark` (always true), so a player
+  knows a 401 without the header was not this server's; an older server has neither. `TestUnauthorizedMarked` covers the middleware's and the sign-in, pairing and OIDC
   routes' 401s end to end, `TestUnauthorizedMarkWriters` the writers every other 401 goes through.
   A proxy that serves an error page of its own in place of the server's 401 (nginx's `error_page`
   with `proxy_intercept_errors`) drops the mark; the player then falls back to its older rules

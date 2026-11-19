@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -99,6 +100,24 @@ func TestUnauthorizedMarkWriters(t *testing.T) {
 		c.write(rec)
 		if got := rec.Header().Get(headerUnauthorized); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// GET /server advertises unauthorized_mark, to a signed-in caller and an
+// anonymous one (the player asks before it has a token), so a player knows a
+// 401 without the header was not this server's.
+func TestUnauthorizedMarkCapability(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	user, err := e.auth.CreateUser(t.Context(), "listener", "listener-password", auth.RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range []string{"", e.session(t, user.ID)} {
+		resp, body := e.do(t, "GET", "/api/v1/server", tok, "")
+		if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"unauthorized_mark":true`) {
+			t.Fatalf("capability unauthorized_mark missing (token %t): %d %s", tok != "", resp.StatusCode, body)
 		}
 	}
 }

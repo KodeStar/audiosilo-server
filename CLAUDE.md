@@ -481,7 +481,7 @@ keep this index in step (one line per topic).
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `bookmark_client_id`, `addresses`, `household`, `cast`,
 `household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`, `readalong`, `upcoming`,
-`upcoming_calendar`, `upcoming_covers`, `listening_sync`, `listening_stay`, `renditions`, `oidc`), plus one flag per managed module (`contributions`, `podcasts`, `audible`); flip them on
+`upcoming_calendar`, `upcoming_covers`, `listening_sync`, `listening_stay`, `renditions`, `oidc`, `unauthorized_mark`), plus one flag per managed module (`contributions`, `podcasts`, `audible`); flip them on
 as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
 the `bridge: {version, features}` block beside `capabilities` for a signed-in caller only (see The Bridge above). `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
@@ -509,7 +509,8 @@ AND the live `upcoming.enabled`; `upcoming_calendar` (the calendar feed) and `up
 served in a top-level `"renditions": ["watch"]` beside `auth` (`[]` while off; see Watch
 renditions in CONVENTIONS.md). `oidc` is single sign-on configured (`auth.oidc.enabled`, a
 public_url and a valid provider config at start; `false`, not absent, while off), with `"oidc"` in
-`auth.methods` and `auth.oidc: {name}` beside it (see Single sign-on in CONVENTIONS.md).
+`auth.methods` and `auth.oidc: {name}` beside it (see Single sign-on in CONVENTIONS.md). `unauthorized_mark`
+is true (every 401 the server writes carries `X-AudioSilo-Unauthorized`; see The server's own 401s are marked in CONVENTIONS.md).
 
 ## API surface
 
