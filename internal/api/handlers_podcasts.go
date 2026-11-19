@@ -395,10 +395,8 @@ func (a *API) handlePodcastUnfollow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The follow is stored at the show's spelling; one the caller can't see
-	// in another spelling is never taken for theirs. Their own follow at the
-	// path as given goes too (one kept past its show's row, as a follow is),
-	// and one of theirs at another spelling of it, kept past their access to
-	// the show (catalog.UnfollowPodcast reads only their rows for it).
+	// in another spelling is never taken for theirs. catalog.UnfollowPodcast
+	// decides which of their own rows go.
 	s, err := a.cat.CallerScope(r.Context(), callerOf(r.Context()), id)
 	if err != nil {
 		a.writeCatalogError(w, err, "podcast scope failed", "Could not check access.")

@@ -13,8 +13,6 @@ import (
 	"strings"
 	"time"
 
-	unorm "golang.org/x/text/unicode/norm"
-
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
@@ -632,13 +630,8 @@ func (c *Catalog) PodcastShowSpelling(ctx context.Context, lib int64, p string, 
 	if err != nil {
 		return "", err
 	}
-	k := unorm.NFC.String(p)
 	m := &spellMatch{allow: allow}
-	for _, s := range shows {
-		if unorm.NFC.String(s) == k {
-			m.add(s)
-		}
-	}
+	m.addReadingAs(p, shows)
 	if len(m.in) != 1 || c.ownEntry(ctx, lib, p) {
 		return p, nil
 	}
@@ -684,17 +677,12 @@ func (c *Catalog) UnfollowPodcast(ctx context.Context, user, lib int64, p string
 		if err != nil {
 			return err
 		}
-		k := unorm.NFC.String(p)
-		var reads []string
-		for _, s := range mine {
-			if unorm.NFC.String(s) == k {
-				reads = append(reads, s)
-			}
-		}
+		m := &spellMatch{}
+		m.addReadingAs(p, mine)
 		// p and each of spellings read as p, so a lone row reading as p that
 		// is none of them means none of them is a follow of theirs.
-		if len(reads) == 1 && !slices.Contains(at, reads[0]) && !c.ownEntry(ctx, lib, p) {
-			at = append(at, reads[0])
+		if len(m.in) == 1 && !slices.Contains(at, m.in[0]) && !c.ownEntry(ctx, lib, p) {
+			at = append(at, m.in[0])
 		}
 	}
 	args := append([]any{user, lib}, anyOf(at)...)
