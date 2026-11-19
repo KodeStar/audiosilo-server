@@ -247,6 +247,8 @@ describe('parks', () => {
       expect(strings[parkKey(c)], c).toBeTruthy();
     }
     expect(parkKey('core_needed')).toBe('bridge.park.core_needed');
+    // Its own sentence, never the GitHub sign-in's (contrib_unavailable).
+    expect(parkKey('share_unconfirmed')).toBe('bridge.park.share_unconfirmed');
     expect(parkKey('new_thing')).toBe('bridge.park.unknown');
     expect(strings['bridge.park.unknown']).toContain('{{code}}');
   });

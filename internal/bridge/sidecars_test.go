@@ -198,7 +198,8 @@ func (q *testQueue) heard() *[]string {
 
 // UpdateHeld reports the moves an admin is told about (OnTransition, by
 // Notable): into done or failed, and into needs_attention unless the park is a
-// transient one (the agent's rate limit or a short outage), whatever its
+// transient one (the agent's rate limit, a short outage, a wait for an ASR
+// worker, a share the server couldn't confirm), whatever its
 // retry_at: a monthly budget that resumes next month, or a refused credential,
 // is news. A park that hardens in place (a transient one turning into one that
 // isn't, still parked) is news too, once; a keepalive never is.
@@ -226,6 +227,9 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 		{StateRunning, `{"step":"asr"}`},
 		{StateNeedsAttention, `{"step":"asr","park":{"code":"asr_worker_waiting"}}`},
 		{StateRunning, `{"step":"asr"}`},
+		// A share the server couldn't confirm before filing is a blip, not news.
+		{StateNeedsAttention, `{"step":"contributing","park":{"code":"share_unconfirmed",` + later + `}}`},
+		{StateRunning, `{"step":"contributing"}`},
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_rate_limited",` + later + `}}`},
 		// ...until, still parked, one turns into a park that isn't (its retry ran
 		// into the book's budget), once.
@@ -233,7 +237,8 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded","hint":"raise it"}}`},
 		{StateRunning, `{"step":"fact_pass"}`},
 		// The monthly budget resumes by itself next month, but a month is long
-		// enough to hear about.
+		// enough to hear about, and under the book's budget's code it is a new
+		// wait (on a timer, not a person).
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded",` + later + `}}`},
 		{StateRunning, `{"step":"fact_pass"}`},
 		// A refused credential waits on a person, whatever its retry_at says.
@@ -257,6 +262,155 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 	}
 	if !slices.Equal(*heard, want) {
 		t.Fatalf("heard = %v, want %v", *heard, want)
+	}
+}
+
+// A park the Bridge retries on a timer (GitHub down for a signed-in Bridge, a
+// credential still refused) is announced once per outage, not on every retry
+// that parks again: news again when its code changes to another that isn't
+// transient, on a new claim, or six hours after it was last announced. Another
+// job's park is its own news, and a job that ends is forgotten.
+func TestReparkAnnouncedOncePerOutage(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	heard := q.heard()
+	job := q.verify(t, "A", 0)
+	other := q.verify(t, "B", 0)
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	const retry = `"retry_at":"2026-10-15T12:10:00Z"`
+	park := func(code string) string {
+		return `{"step":"contributing","park":{"code":"` + code + `",` + retry + `}}`
+	}
+	step := func(id int64, attempt int, state, progress string) {
+		t.Helper()
+		u := Update{Attempt: attempt, State: ptr(state)}
+		if progress != "" {
+			u.Progress = json.RawMessage(progress)
+		}
+		if _, err := q.UpdateHeld(ctx, id, u); err != nil {
+			t.Fatalf("%d %s %s: %v", id, state, progress, err)
+		}
+	}
+	running := `{"step":"contributing"}`
+	// repark is a timed retry that runs, then parks for code.
+	repark := func(id int64, attempt int, code string) {
+		t.Helper()
+		step(id, attempt, StateRunning, running)
+		step(id, attempt, StateNeedsAttention, park(code))
+	}
+	// GitHub is down: the first park is news; six retries that park again are not.
+	repark(job.ID, 1, "contrib_unavailable")
+	for range 6 {
+		repark(job.ID, 1, "contrib_unavailable")
+	}
+	// Another job parked for the same reason is its own news.
+	repark(other.ID, 1, "contrib_unavailable")
+	// A transient park in between changes nothing.
+	repark(job.ID, 1, "agent_rate_limited")
+	repark(job.ID, 1, "contrib_unavailable")
+	// A new reason is news, and so is the old one coming back after it.
+	repark(job.ID, 1, "agent_credential_refused")
+	repark(job.ID, 1, "agent_credential_refused")
+	repark(job.ID, 1, "contrib_unavailable")
+	// Six hours after its last announcement the same park is news again,
+	// once: a later outage on the same claim is not silent for ever.
+	q.advance(reannounceAfter - time.Minute)
+	repark(job.ID, 1, "contrib_unavailable")
+	q.advance(time.Minute)
+	repark(job.ID, 1, "contrib_unavailable")
+	repark(job.ID, 1, "contrib_unavailable")
+	// The Bridge stops reporting on a run: the job is queued again, and its
+	// next claim parking for the same reason is news.
+	step(job.ID, 1, StateRunning, running)
+	q.advance(Lease + time.Second)
+	if j, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || j == nil || j.ID != job.ID {
+		t.Fatalf("claim = %+v, %v", j, err)
+	}
+	repark(job.ID, 2, "contrib_unavailable")
+	repark(job.ID, 2, "contrib_unavailable")
+	step(job.ID, 2, StateRunning, running)
+	step(job.ID, 2, StateDone, "")
+	if _, err := q.Cancel(ctx, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"running>needs_attention:contrib_unavailable",
+		"running>needs_attention:contrib_unavailable",
+		"running>needs_attention:agent_credential_refused",
+		"running>needs_attention:contrib_unavailable",
+		"running>needs_attention:contrib_unavailable",
+		"running>needs_attention:contrib_unavailable",
+		"running>done:",
+	}
+	if !slices.Equal(*heard, want) {
+		t.Fatalf("heard = %v, want %v", *heard, want)
+	}
+	q.announcedMu.Lock()
+	left := len(q.announced)
+	q.announcedMu.Unlock()
+	if left != 0 {
+		t.Fatalf("announced parks kept for ended jobs: %d", left)
+	}
+}
+
+// One code can wait on a person or on a timer (budget_exceeded: the book's
+// budget, then the month's), so a park that turns from one to the other is
+// news; and an announcement six hours old, which quiets nothing, is dropped
+// even for a job whose end the Service never hears about.
+func TestReparkTimedIsNewsAndOldEntriesGo(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	heard := q.heard()
+	claim := func(name string) *Job {
+		t.Helper()
+		job := q.verify(t, name, 0)
+		if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+			t.Fatal(err)
+		}
+		return job
+	}
+	job := claim("A")
+	repark := func(id int64, progress string) {
+		t.Helper()
+		for _, u := range []Update{
+			{Attempt: 1, State: ptr(StateRunning), Progress: json.RawMessage(`{"step":"fact_pass"}`)},
+			{Attempt: 1, State: ptr(StateNeedsAttention), Progress: json.RawMessage(progress)},
+		} {
+			if _, err := q.UpdateHeld(ctx, id, u); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	book := `{"step":"waiting","park":{"code":"budget_exceeded"}}`
+	month := `{"step":"waiting","park":{"code":"budget_exceeded","retry_at":"2026-11-01T00:00:00Z"}}`
+	repark(job.ID, book)
+	repark(job.ID, book)
+	repark(job.ID, month)
+	repark(job.ID, month)
+	q.advance(reannounceAfter)
+	other := claim("B")
+	repark(other.ID, book)
+	want := []string{
+		"running>needs_attention:budget_exceeded",
+		"running>needs_attention:budget_exceeded",
+		"running>needs_attention:budget_exceeded",
+	}
+	if !slices.Equal(*heard, want) {
+		t.Fatalf("heard = %v, want %v", *heard, want)
+	}
+	q.announcedMu.Lock()
+	_, kept := q.announced[job.ID]
+	left := len(q.announced)
+	q.announcedMu.Unlock()
+	if kept || left != 1 {
+		t.Fatalf("announced = %d entries, %v kept for the old park", left, kept)
 	}
 }
 

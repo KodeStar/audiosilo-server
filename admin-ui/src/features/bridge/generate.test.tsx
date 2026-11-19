@@ -623,6 +623,34 @@ describe('generate characters and recaps', () => {
     expect((await screen.findAllByText('Tries again in 29 min.'))[0]).toBeInTheDocument();
   });
 
+  it('heads a share the server could not confirm with its own sentence, not as waiting for the admin', async () => {
+    const soon = new Date(Date.now() + 60_000).toISOString();
+    mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({
+                state: 'needs_attention',
+                progress: {
+                  step: 'contributing',
+                  park: { code: 'share_unconfirmed', retry_at: soon },
+                },
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp(URL);
+    expect(
+      await screen.findByText(
+        "The Bridge couldn't ask the server whether this book is still to be shared, so nothing has been filed. The job carries on by itself once it can.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/waiting for you/)).toBeNull();
+  });
+
   it('says what a finished job made', async () => {
     mockFetch(
       routes({

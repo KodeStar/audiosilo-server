@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -459,25 +460,39 @@ func TestBridgeJobEnded(t *testing.T) {
 	t.Fatal("no event for the failed job")
 }
 
-// Each announced park reads as a sentence of its own: a refused credential
-// says where to replace it (the agent container's own one wins), with no Retry;
-// a GitHub credential the Bridge can't use says to sign in, and to retry the
-// job when the Bridge was signed in but couldn't reach GitHub (nothing resumes
-// that by itself); a spent budget fits the book's and the month's alike (one in
-// config.yaml or the environment takes a restart, the monthly one resets); a
-// book with no community record says it needs one; an unknown code points at
-// the page.
+// Each announced park reads as a sentence of its own: a spent budget fits the
+// book's and the month's alike (one in config.yaml or the environment takes a
+// restart, the monthly one resets); a book with no community record says it
+// needs one; an unknown code (an older server hearing a newer Bridge's park)
+// points at the page.
 func TestBridgeParkReasons(t *testing.T) {
 	t.Parallel()
 	for code, want := range map[string]string{
-		"agent_credential_refused": "The agent's credential was refused. Replace it on the Bridge's Accounts tab, or in the agent container if it has one of its own, which it uses first; the job then carries on by itself.",
-		"contrib_unavailable":      "The Bridge can't share with the community: it has no GitHub sign-in it can use. Sign in to GitHub on the Bridge's Accounts tab and the job carries on; if the Bridge is signed in already, retry the job there once GitHub can be reached.",
-		"budget_exceeded":          "The job reached a spending limit set on the Bridge. Raise it there (one set in its config.yaml or environment needs a restart), or wait for the monthly limit to reset; the job then carries on by itself.",
-		"core_needed":              "The book needs a community record before it can be contributed.",
-		"something_new":            "See the job in Settings > Bridge.",
+		"budget_exceeded": "The job reached a spending limit set on the Bridge. Raise it there (one set in its config.yaml or environment needs a restart), or wait for the monthly limit to reset; the job then carries on by itself.",
+		"core_needed":     "The book needs a community record before it can be contributed.",
+		"something_new":   "See the job in Settings > Bridge.",
 	} {
 		if got := bridgeParkReason(code); got != want {
 			t.Errorf("bridgeParkReason(%q) = %q, want %q", code, got, want)
+		}
+	}
+}
+
+// The agent, GitHub and share parks read in the bell as the console words them
+// (bridge.park.<code> in admin-ui's en.json): the two stay the same.
+func TestBridgeParkReasonsMatchConsole(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("../../admin-ui/src/i18n/locales/en.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var en map[string]string
+	if err := json.Unmarshal(raw, &en); err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []string{"agent_credential_refused", "contrib_unavailable", "share_unconfirmed"} {
+		if got, want := bridgeParkReason(code), en["bridge.park."+code]; want == "" || got != want {
+			t.Errorf("bridgeParkReason(%q) = %q, the console's %q", code, got, want)
 		}
 	}
 }

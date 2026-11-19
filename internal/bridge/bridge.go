@@ -38,9 +38,10 @@ type Service struct {
 	OnEnded func(ctx context.Context, job Job)
 
 	// OnTransition, when set (at wiring, before the first request), hears about
-	// every move of a job into a state an admin is told about (Job.Notable): the
-	// Bridge's update, or a lease that ran out on the last attempt. It runs once
-	// the move has committed, on the caller's goroutine.
+	// every move of a job into a state an admin is told about (Job.Notable,
+	// a park once per outage: parkNews): the Bridge's update, or a lease that
+	// ran out on the last attempt. It runs once the move has committed, on the
+	// caller's goroutine.
 	OnTransition func(ctx context.Context, job Job, from string)
 
 	// ModuleOn, when set (at wiring, before the first request), says whether a
@@ -86,6 +87,26 @@ type Service struct {
 	// fails none before the Bridge's next heartbeat.
 	offlineMu    sync.Mutex
 	offlineSince time.Time
+
+	// announced is the park last announced per job (parkNews), under
+	// announcedMu, until the job ends (forgetPark) or reannounceAfter passes
+	// (parkNews drops an entry that old: it quiets nothing any more, so a
+	// parked job cancelled in SQL, cancelWaitingTx, or one whose end was
+	// reported before its park was, leaves nothing behind for long). In memory
+	// only: a restart forgets it, so a park still on is announced once more.
+	announcedMu sync.Mutex
+	announced   map[int64]announcedPark
+}
+
+// announcedPark is the park announced for a job: its code, whether it named a
+// retry_at (timed: the Bridge goes on by itself, as a monthly budget does,
+// where the book's own budget waits for a person under the same code), the
+// claim (attempt) it was announced on, and when.
+type announcedPark struct {
+	attempt int
+	code    string
+	timed   bool
+	at      time.Time
 }
 
 // New returns a Service. now may be nil to use time.Now.
@@ -94,7 +115,7 @@ func New(db *store.DB, now func() time.Time) *Service {
 		now = time.Now
 	}
 	return &Service{db: db, now: now, wake: newSignal(), ended: newSignal(), privateURLs: map[int64]string{},
-		syncFills: map[string]syncFill{}, Log: slog.New(slog.DiscardHandler)}
+		syncFills: map[string]syncFill{}, announced: map[int64]announcedPark{}, Log: slog.New(slog.DiscardHandler)}
 }
 
 // ts is now as the bridge tables store times: RFC3339 UTC, whole seconds, so

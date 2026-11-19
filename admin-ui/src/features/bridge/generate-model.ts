@@ -497,6 +497,7 @@ export const KNOWN_PARKS = [
   'asr_decode_timeout',
   'asr_worker_waiting',
   'contrib_unavailable',
+  'share_unconfirmed',
   'core_needed',
   'core_pending',
   'ebook_unreadable',

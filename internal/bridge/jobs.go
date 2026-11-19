@@ -1169,15 +1169,15 @@ func (s *Service) settle(ctx context.Context, e expiry) {
 }
 
 // report tells OnTransition about job's move out of from (fromCode: the park
-// code from named, "" for none) when it is news (Notable), on a context the
-// caller's leaving doesn't cancel: the move has committed, and the admin should
-// hear about it either way.
+// code from named, "" for none) when it is news (Notable, and a park not
+// announced already: parkNews), on a context the caller's leaving doesn't
+// cancel: the move has committed, and the admin should hear about it either way.
 func (s *Service) report(ctx context.Context, job *Job, from, fromCode string) {
 	if job.Kind == KindPodcastFetch && job.LibraryID != nil && job.Path != nil {
 		s.NotifyPodcast(*job.LibraryID, *job.Path)
 	}
 	s.reportEnded(ctx, job, from)
-	if s.OnTransition != nil && job.Notable(from, fromCode) {
+	if s.OnTransition != nil && job.Notable(from, fromCode) && s.parkNews(job) {
 		committed, cancel := committedContext(ctx)
 		defer cancel()
 		s.OnTransition(committed, *job, from)
@@ -1724,14 +1724,16 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 	return job, nil
 }
 
-// transientParks are the park codes that are not news: the agent's rate limit,
-// a short outage of the agent container, and a wait for an ASR worker (a
-// laptop worker asleep: each book that reaches its transcription would park in
-// turn), which the Bridge resumes by itself once they pass (telling an admin
-// about every one would flood a phone). Any other park waits on something a
-// person sees to, or is long enough to hear about (a monthly budget spent until
-// the month turns, a credential refused), whatever its retry_at says.
-var transientParks = []string{"agent_rate_limited", "agent_unavailable", "asr_worker_waiting"}
+// transientParks are the park codes that are not news, ones the Bridge resumes
+// by itself once they pass (telling an admin about every one would flood a
+// phone): the agent's rate limit, a short outage of the agent container, a wait
+// for an ASR worker (a laptop worker asleep: each book that reaches its
+// transcription would park in turn), and share_unconfirmed (a generate-and-share
+// job that couldn't ask this server, just before filing, whether its share is
+// still on). Any other park waits on something a person sees to, or is long
+// enough to hear about (a monthly budget spent until the month turns, a
+// credential refused), whatever its retry_at says.
+var transientParks = []string{"agent_rate_limited", "agent_unavailable", "asr_worker_waiting", "share_unconfirmed"}
 
 // Notable reports whether a job's move from the state `from` (fromCode: the
 // park code it named there, "" for none) is one the server tells admins about
@@ -1740,7 +1742,8 @@ var transientParks = []string{"agent_rate_limited", "agent_unavailable", "asr_wo
 // as it was (a running job's keepalive, a parked job's progress). A park that
 // changes its code in place is news when the new one isn't transient: the
 // Bridge reports a rate limit's retry that ran into the book's budget without a
-// running in between, and that park now waits for a person.
+// running in between, and that park now waits for a person. It judges the one
+// move; the Service then announces a park once per outage (parkNews).
 func (j *Job) Notable(from, fromCode string) bool {
 	if kinds[j.Kind].quiet {
 		return false
@@ -1756,6 +1759,63 @@ func (j *Job) Notable(from, fromCode string) bool {
 		return from != j.State || code != fromCode
 	}
 	return false
+}
+
+// reannounceAfter is how long a park announced once stays quiet while the
+// Bridge keeps parking the job again for the same reason (parkNews): a later,
+// separate outage on the same claim is not silent for ever.
+const reannounceAfter = 6 * time.Hour
+
+// parkNews reports whether a Notable move is still news once the parks
+// already announced are counted. A Bridge that resumes a parked job on a timer
+// (its retry_at) and parks it again with the same code (contrib_unavailable
+// while GitHub is down) is announced once per outage, not every ten minutes:
+// a park is news again when its code changes to another that isn't transient
+// (a transient park in between changes nothing), when it turns from waiting on
+// a person to waiting on a timer or back under the same code (budget_exceeded:
+// the book's budget, then the month's), on a new claim, or once
+// reannounceAfter has passed since it was last announced. Any other Notable
+// move (done, failed) is always news. The console shows the park either way.
+func (s *Service) parkNews(j *Job) bool {
+	if j.State != StateNeedsAttention {
+		return true
+	}
+	now := s.now()
+	seen := announcedPark{attempt: j.Attempts, code: j.ParkCode(), timed: parkTimed(j.Progress), at: now}
+	s.announcedMu.Lock()
+	defer s.announcedMu.Unlock()
+	last, ok := s.announced[j.ID]
+	if ok && last.attempt == seen.attempt && last.code == seen.code && last.timed == seen.timed &&
+		now.Sub(last.at) < reannounceAfter {
+		return false
+	}
+	// An entry past reannounceAfter quiets nothing: dropping it bounds the
+	// map by the parks announced in the last six hours, whatever ends unseen.
+	for id, p := range s.announced {
+		if now.Sub(p.at) >= reannounceAfter {
+			delete(s.announced, id)
+		}
+	}
+	s.announced[j.ID] = seen
+	return true
+}
+
+// parkTimed reports whether the park a progress names carries a retry_at: the
+// Bridge resumes it by itself then, where one without waits for a person.
+func parkTimed(progress json.RawMessage) bool {
+	var p struct {
+		Park *struct {
+			RetryAt string `json:"retry_at"`
+		} `json:"park"`
+	}
+	return json.Unmarshal(progress, &p) == nil && p.Park != nil && p.Park.RetryAt != ""
+}
+
+// forgetPark drops the park announced for a job that ended (parkNews).
+func (s *Service) forgetPark(id int64) {
+	s.announcedMu.Lock()
+	delete(s.announced, id)
+	s.announcedMu.Unlock()
 }
 
 // carryPark is a parked job's new progress with the stored park kept when it
