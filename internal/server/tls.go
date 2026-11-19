@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -14,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/acme/autocert"
@@ -49,24 +51,93 @@ const noSNIRefusal = "acme/autocert: missing server name"
 // noSNILogEnd ends the line net/http logs for that refusal.
 var noSNILogEnd = []byte(": " + noSNIRefusal)
 
+// handshakeErrorFrom starts the line net/http logs for a failed handshake,
+// the client's address after it.
+var handshakeErrorFrom = []byte("http: TLS handshake error from ")
+
 // autocertErrorLog is the http.Server's error log under autocert: the standard
-// logger, less the handshake error for a hello that names no host. The image's
-// healthcheck sends one every 30 seconds (launcher.Healthcheck), and so does
-// anything that scans the address; autocert refuses it before any order, and
-// the line says nothing an owner could fix.
+// logger, less the handshake error for a hello from a loopback address that
+// names no host. The image's healthcheck sends one every 30 seconds before a
+// certificate is cached (launcher.Healthcheck); autocert refuses it before any
+// order, and the line says nothing an owner could fix. The same refusal for
+// any other client is still logged: something on the network asking the
+// address without a name.
 func autocertErrorLog() *log.Logger {
 	return log.New(quietNoSNI{log.Writer()}, log.Prefix(), log.Flags())
 }
 
-// quietNoSNI passes each log line to w but the no-SNI handshake error.
+// quietNoSNI passes each log line to w but the loopback no-SNI handshake error.
 type quietNoSNI struct{ w io.Writer }
 
 func (q quietNoSNI) Write(p []byte) (int, error) {
 	line := bytes.TrimRight(p, "\n")
-	if bytes.HasSuffix(line, noSNILogEnd) && bytes.Contains(line, []byte("http: TLS handshake error from ")) {
-		return len(p), nil
+	if rest, ok := bytes.CutSuffix(line, noSNILogEnd); ok {
+		if i := bytes.Index(rest, handshakeErrorFrom); i >= 0 && loopbackAddr(string(rest[i+len(handshakeErrorFrom):])) {
+			return len(p), nil
+		}
 	}
 	return q.w.Write(p)
+}
+
+// loopbackAddr reports whether hostport (a client's "ip:port") is a loopback
+// address.
+func loopbackAddr(hostport string) bool {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// certValidMargin is how long past now a cached certificate must stay valid
+// for CachedCertName to name its host: one about to expire would be ordered
+// again by the handshake that names it.
+const certValidMargin = time.Hour
+
+// CachedCertName is the first of tls.hosts whose certificate autocert would
+// answer a hello naming it with from its cache, valid until past
+// certValidMargin, so the handshake can't start an order: the ECDSA one
+// (autocert's cache key is the bare host name for the ECDSA certificate any Go
+// client is given, host+"+rsa" for RSA), its key matching, the host on it. ""
+// when none is: none issued yet, one expired, a host that isn't plain ASCII
+// (autocert keys its IDNA form, which this does not compute) or a cache this
+// process may not read. The healthcheck names it to ask /healthz itself.
+func CachedCertName(ctx context.Context, cfg *config.Config, now time.Time) string {
+	cache := autocert.DirCache(cfg.TLS.CacheDir)
+	for _, host := range cfg.TLS.Hosts {
+		name := strings.ToLower(strings.TrimSuffix(host, "."))
+		if name == "" || !plainHost(name) {
+			continue
+		}
+		data, err := cache.Get(ctx, name)
+		if err != nil {
+			continue
+		}
+		pair, err := tls.X509KeyPair(data, data) // the key's block first, then the chain's
+		if err != nil || pair.Leaf == nil {
+			continue
+		}
+		leaf := pair.Leaf
+		if _, ecdsaKey := leaf.PublicKey.(*ecdsa.PublicKey); !ecdsaKey ||
+			now.Before(leaf.NotBefore) || now.Add(certValidMargin).After(leaf.NotAfter) ||
+			leaf.VerifyHostname(name) != nil {
+			continue
+		}
+		return name
+	}
+	return ""
+}
+
+// plainHost reports whether name is lower-case ASCII letters, digits, dots and
+// hyphens: a host autocert keys as written.
+func plainHost(name string) bool {
+	for _, c := range name {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // selfSignedPaths are where the self-signed pair lives: tls.cert_file/key_file,

@@ -61,6 +61,9 @@ type Options struct {
 	// metaReleases, set only by tests, is where the metadata mirror lists and
 	// downloads data releases (a fake GitHub); zero means GitHub's real one.
 	metaReleases releaseSource
+	// listening, set only by tests, runs once the listener is up, before the
+	// database opens: a long migration's stand-in.
+	listening func()
 }
 
 // dataFiles are the files in the data folder the server opens to write at
@@ -70,9 +73,10 @@ type Options struct {
 // console fails.
 var dataFiles = []string{"audiosilo.db", "audiosilo.db-wal", "audiosilo.db-shm"}
 
-// Run loads configuration from opts.DataDir, opens the store, wires the services,
-// performs first-run bootstrap (admin + auth code banner), starts the background
-// scan, and serves HTTP(S) until ctx is cancelled. It blocks until shutdown.
+// Run loads configuration from opts.DataDir, listens (answering "starting"
+// until the rest is done), opens the store, wires the services, performs
+// first-run bootstrap (admin + auth code banner), starts the background scan,
+// and serves HTTP(S) until ctx is cancelled. It blocks until shutdown.
 func Run(ctx context.Context, opts Options) error {
 	log := opts.Log
 	if log == nil {
@@ -112,6 +116,41 @@ func Run(ctx context.Context, opts Options) error {
 	// install that predates server_id). Persisted to config.yaml below so it survives
 	// a database rebuild; clients key their per-server state on it.
 	mintedServerID := ensureServerID(cfg)
+
+	// Persist a default config the first time (when none existed yet), or when we
+	// just minted a server_id for an install that predates it: before the
+	// listener, as the healthcheck reads the address there (Healthcheck).
+	if firstRun || mintedServerID {
+		if err := cfg.Save(); err != nil {
+			// A read-only config.yaml starts only when it already names the
+			// server_id: say which file refused the write (and, when the system
+			// refused permission, the fix).
+			return unusable(fsaccess.Wrap(config.Path(abs), true, err))
+		}
+	}
+
+	// Listen now, before the database opens: a restore, the upgrade's copy, the
+	// migrations and the re-keying below can take minutes on a large library,
+	// and until gate opens every request (/healthz too) is answered 503
+	// "starting", which the healthcheck reads as healthy, so an orchestrator
+	// never restarts a start mid-migration (server#217). A port already taken
+	// stops the start here, before any of it. The server stops when Run
+	// returns (stopServing), after the deferred work below it: it is deferred
+	// first.
+	gate := &server.StartGate{}
+	serveCtx, stopServing := context.WithCancel(ctx)
+	serving, err := server.Start(serveCtx, cfg, gate, log)
+	if err != nil {
+		stopServing()
+		return err
+	}
+	defer func() {
+		stopServing()
+		_ = serving.Wait()
+	}()
+	if opts.listening != nil {
+		opts.listening()
+	}
 
 	// A restore an admin asked for replaces the database before anything opens it.
 	dbPath := filepath.Join(abs, "audiosilo.db")
@@ -172,17 +211,6 @@ func Run(ctx context.Context, opts Options) error {
 	scanner.OnRunFinished = rekeyAfterScan(ctx, cat, log, ntf.ScanFinished)
 	cat.SetPodcastNotice(ntf.PodcastListener())
 	scanner.SetConcurrency(cfg.Scan.Concurrency)
-
-	// Persist a default config the first time (when none existed yet), or when we
-	// just minted a server_id for an install that predates it.
-	if firstRun || mintedServerID {
-		if err := cfg.Save(); err != nil {
-			// A read-only config.yaml starts only when it already names the
-			// server_id: say which file refused the write (and, when the system
-			// refused permission, the fix).
-			return unusable(fsaccess.Wrap(config.Path(abs), true, err))
-		}
-	}
 
 	// First-run bootstrap - two mutually-exclusive paths:
 	//   - default (headless/docker): auto-create the admin + print the one-time
@@ -329,7 +357,8 @@ func Run(ctx context.Context, opts Options) error {
 		setupBanner(cfg, setupToken)
 	}
 
-	return server.Run(ctx, cfg, a.Handler(), log)
+	gate.Open(a.Handler())
+	return serving.Wait()
 }
 
 // logRingSize is how many log lines the admin console's log viewer keeps.
@@ -351,7 +380,7 @@ func baseURL(cfg *config.Config) string {
 	if err != nil {
 		host, port = "localhost", "8080"
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
+	if unspecifiedHost(host) {
 		host = "localhost"
 	}
 	return scheme + "://" + net.JoinHostPort(host, port)

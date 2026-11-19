@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/config"
@@ -24,9 +25,35 @@ const readHeaderTimeout = 10 * time.Second
 // Run starts the server and blocks until ctx is cancelled, then drains
 // connections gracefully.
 func Run(ctx context.Context, cfg *config.Config, handler http.Handler, log *slog.Logger) error {
-	tlsCfg, err := tlsConfig(cfg)
+	s, err := Start(ctx, cfg, handler, log)
 	if err != nil {
 		return err
+	}
+	return s.Wait()
+}
+
+// Serving is a server Start left running.
+type Serving struct {
+	wait func() error
+	once sync.Once
+	err  error
+}
+
+// Wait blocks until the server stops: ctx cancelled (connections then drain
+// gracefully, nil) or serving failed (its error). Every call returns the same.
+func (s *Serving) Wait() error {
+	s.once.Do(func() { s.err = s.wait() })
+	return s.err
+}
+
+// Start listens on the address cfg describes and serves handler there in the
+// background until ctx is cancelled (Serving.Wait). A listen error (the port
+// taken, a certificate that won't load) is returned at once, before anything
+// is served.
+func Start(ctx context.Context, cfg *config.Config, handler http.Handler, log *slog.Logger) (*Serving, error) {
+	tlsCfg, err := tlsConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
 	// autocert (ACME TLS-ALPN-01/HTTP-01) only validates when Let's Encrypt can
 	// reach this server on port 443. The default bind is :8080, so warn loudly
@@ -56,16 +83,16 @@ func Run(ctx context.Context, cfg *config.Config, handler http.Handler, log *slo
 		srv.ErrorLog = autocertErrorLog()
 	}
 
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Bind)
+	if err != nil {
+		return nil, err
+	}
 	errCh := make(chan error, 1)
 	switch {
 	case cfg.ServesHomeHTTP():
 		// One port, both protocols: the TLS connections get the certificate here
 		// (so ALPN must offer HTTP/2 itself, as ServeTLS would), and the plain ones
 		// pass homeHTTPGate.
-		ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Bind)
-		if err != nil {
-			return err
-		}
 		tlsCfg.NextProtos = []string{"h2", "http/1.1"}
 		srv.Handler = homeHTTPGate(handler)
 		log.Info("listening", "addr", cfg.Bind, "tls", cfg.TLS.Mode)
@@ -74,24 +101,26 @@ func Run(ctx context.Context, cfg *config.Config, handler http.Handler, log *slo
 		go func() { errCh <- srv.Serve(newSplitListener(ln, tlsCfg, readHeaderTimeout)) }()
 	case tlsCfg != nil:
 		log.Info("listening", "addr", cfg.Bind, "tls", cfg.TLS.Mode)
-		go func() { errCh <- srv.ListenAndServeTLS("", "") }() // certs come from TLSConfig
+		go func() { errCh <- srv.ServeTLS(ln, "", "") }() // certs come from TLSConfig
 	default:
 		log.Info("listening", "addr", cfg.Bind, "tls", "off")
-		go func() { errCh <- srv.ListenAndServe() }()
+		go func() { errCh <- srv.Serve(ln) }()
 	}
 
-	select {
-	case <-ctx.Done():
-		log.Info("shutting down")
-		shutCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		return srv.Shutdown(shutCtx)
-	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+	return &Serving{wait: func() error {
+		select {
+		case <-ctx.Done():
+			log.Info("shutting down")
+			shutCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return srv.Shutdown(shutCtx)
+		case err := <-errCh:
+			if errors.Is(err, http.ErrServerClosed) {
+				return nil
+			}
+			return err
 		}
-		return err
-	}
+	}}, nil
 }
 
 // pemBlock PEM-encodes DER bytes under the given type.
