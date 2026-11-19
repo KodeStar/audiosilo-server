@@ -1202,25 +1202,25 @@ func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 // ran to its end; with ?download=1 an attachment named <stem>.mp3. Its look
 // at abs given up on at the stream's deadline is a 503 share_not_answering.
 func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, h *transcodeHold, abs string, deadline time.Time) {
-	ended, err := media.Transcode(h.writer(w), r, abs, a.ffmpeg, h.ask.start, h.ask.download, waitLeft(deadline), transcodeIdleFor(r), a.log)
+	ended, err := media.Transcode(h.writer(w), r, abs, a.ffmpeg, h.ask.start, h.ask.download, waitLeft(deadline), transcodeIdleFor(r, h.ask), a.log)
 	h.ended = ended
 	if err != nil {
 		writeShareNotAnswering(w)
 	}
 }
 
-// transcodeIdleFor is how long r's transcode waits for its client to read
-// before it ends: media.TranscodeIdle for the console's chapter editor (its
-// cast token, auth.Credential.Editor), which asks for its stream again after a
-// 10 s pause, and for a download (?download=1), whose slot no other ask takes
-// over (tokenHoldToTake), so a client that stopped reading it (a paused
-// browser download; a transcode resumes by no Range, so its save starts again
-// anyway) would hold it for good; 0 (no idle end) for every other client's
-// stream. The web player does not ask again for a transcode it loaded but never
-// played, so it would stall after a long wait, and a Cast receiver asks for
-// nothing again on resume.
-func transcodeIdleFor(r *http.Request) time.Duration {
-	if c := credentialFrom(r.Context()); c.Kind == auth.KindCast && c.Editor || r.URL.Query().Get("download") == "1" {
+// transcodeIdleFor is how long r's transcode of ask waits for its client to
+// read before it ends: media.TranscodeIdle for the console's chapter editor
+// (its cast token, auth.Credential.Editor), which asks for its stream again
+// after a 10 s pause, and for a download (ask.download, the very flag
+// tokenHoldToTake spares a hold by: no other ask takes its slot over), so a
+// client that stopped reading it (a paused browser download; a transcode
+// resumes by no Range, so its save starts again anyway) would hold it for
+// good; 0 (no idle end) for every other client's stream. The web player does
+// not ask again for a transcode it loaded but never played, so it would stall
+// after a long wait, and a Cast receiver asks for nothing again on resume.
+func transcodeIdleFor(r *http.Request, ask transcodeAsk) time.Duration {
+	if c := credentialFrom(r.Context()); c.Kind == auth.KindCast && c.Editor || ask.download {
 		return media.TranscodeIdle
 	}
 	return 0

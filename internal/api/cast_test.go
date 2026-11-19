@@ -725,13 +725,14 @@ func TestCastKeepIsOnePerToken(t *testing.T) {
 	}
 }
 
-// TestTranscodeIdleForEditorOnly: only the chapter editor's transcode (its
-// cast token) and a download end for want of reads: the editor asks for its
-// stream again after a pause, and no other ask takes a download's slot over.
+// TestTranscodeIdleFor: only the chapter editor's transcode (its cast token)
+// and a download (the ask's own flag, read from ?download=1) end for want of
+// reads: the editor asks for its stream again after a pause, and no other ask
+// takes a download's slot over.
 // A session's stream (the web player does not ask again for a track it loaded
 // and never played), an API key's and a Cast receiver's (its sender only says
 // play on resume) never do.
-func TestTranscodeIdleForEditorOnly(t *testing.T) {
+func TestTranscodeIdleFor(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name, target string
@@ -747,7 +748,7 @@ func TestTranscodeIdleForEditorOnly(t *testing.T) {
 	} {
 		r := httptest.NewRequest(http.MethodGet, c.target, nil)
 		r = r.WithContext(withCredential(r.Context(), &auth.User{}, c.cred))
-		if got := transcodeIdleFor(r); got != c.want {
+		if got := transcodeIdleFor(r, transcodeAskOf(r, 1, "Book/01.mka")); got != c.want {
 			t.Errorf("%s: transcodeIdleFor = %v, want %v", c.name, got, c.want)
 		}
 	}
