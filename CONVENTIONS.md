@@ -1258,7 +1258,27 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `POST /cast/token`) reads and stores the index's spelling; by a list's replace and remove
   (`catalog.listableRefs`, `removalRefs`); and by `/fs`
   (`handleBrowseFS` lists the folder in the index's spelling, so the listing's paths match the books
-  `annotateWithBooks` finds). `spelledIn` passes the caller's scope (for `/fs`, `VisibleInBrowse`;
+  `annotateWithBooks` finds). A show path (the podcast routes naming a show: `/podcasts/episodes`'s
+  `show`, `POST`/`DELETE /podcasts/follow` and `/podcasts/check`'s `path`, the console's and the Bridge's
+  `/podcasts/retention`, `/fs` in a podcast library, and a `?path=` naming a show there, its cover:
+  `spelledPath`, in place of `Spelling` and before the scope is checked, as a show with no episode rows
+  is no folder holding books, and one indexed at the path as given is never the show beside it,
+  `TestPodcastShowAtThePathGivenIsNotTheOneBesideIt`)
+  is spelled by the same rule from `podcast_shows`
+  (`Catalog.PodcastShowSpelling`, the API's `showSpelled`, server#495's follow-up): the show at the path as given,
+  else the one show whose NFC form is the path's that the caller's scope admits (`VisibleInBrowse`;
+  `spelledPath`'s `Allows`; the console and the Bridge every show), never two, never case, never a path
+  that is an entry of its own on disk (`ownEntry`); no key column (one row per top-level folder,
+  read only on a miss of a name with another spelling). A path the scope refuses is looked for as one
+  with no show is, whether or not a show is indexed there (the same reads, a look at the disk only for
+  a show the scope admits), so the time an answer takes never tells a show the caller can't see from
+  none, and such a show counts as none (`TestPodcastShowSpelling`). An unfollow also drops, in one statement, the caller's own follow at
+  the path as given (one kept past its show's row) and, when neither that nor the show's spelling is theirs, the one follow of theirs in another
+  spelling of it (one kept past their access to the show: a share removed, its identity replaced), by
+  the same rule over their own rows only (`Catalog.UnfollowPodcast`, `TestUnfollowPodcastByTheOtherSpelling`). So an older client or a saved link naming a show
+  folder renamed by hand to its other spelling still reaches it, and a private show it doesn't follow
+  stays 404 `show_not_found` (`TestPodcastShowRoutesMeetTheOtherSpelling`,
+  `TestPodcastPrivateShowNotReachedByTheOtherSpelling`). `spelledIn` passes the caller's scope (for `/fs`, `VisibleInBrowse`;
   a list replace's, per ref; a list remove and the re-key every spelling), so a rule naming another
   spelling byte for byte never learns, from a 403 where a missing path reads 404, that an indexed
   path it can't reach is there. When such a rule admits the path as given but the only indexed
@@ -3856,7 +3876,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   re-rooting, list their episodes at the next scan, and a renamed folder whose old folder holds the
   show again lists them no more: its listing and a stream (which reads feed.json the same way)
   agree. A look of the rerooter's that fails for now (`metadata.TransientFault`: EIO, ESTALE) is no
-  answer either way (`feed.rerooter`'s `fault`): the read lists no episode it might have read in
+  answer either way (`feed.rerooter`'s `fault`), and a folder named is gone only by `metadata.NotExist`
+  (Windows' ERROR_BAD_NETPATH, a share whose server is down, which Go reads as not there, is such a
+  fault, never a folder renamed away): the read lists no episode it might have read in
   the show's folder and is `feed.File.Unsure`. Such a read of a show with an index row keeps the
   row exactly as it was, however it comes (a quiet re-read, a folder changed since, the Bridge's
   forced rescan: no re-index, no episode dropped, no notice, no `cover_version` change), and the

@@ -597,6 +597,47 @@ func (c *Catalog) PodcastShow(ctx context.Context, lib int64, p string, user int
 	}
 	return &s, err
 }
+
+// PodcastShowSpelling is the index's spelling of p, a show path a client sent,
+// by Spelling's rule for a book (server#210) over podcast_shows: the one show
+// whose NFC form is p's that allow admits (nil: every one), so a show folder
+// renamed by hand to its other spelling (server#495) is still found by the
+// old one. p as given when a show allow admits is indexed there, when none or
+// two read as it (it never guesses), and when p is an entry of its own on the
+// disk (ownEntry: a folder in that spelling no scan has indexed yet). Only
+// Unicode form, never case, as for a book.
+//
+// A p allow refuses is looked for as a path with no show is, whether or not a
+// show is indexed there: such a show counts as none, as every spelling allow
+// refuses does (the same reads, a look at the disk only when a show it admits
+// reads as p), so neither the answer nor how long it takes tells a caller a
+// show they can't see from none. The caller still checks its scope on p.
+func (c *Catalog) PodcastShowSpelling(ctx context.Context, lib int64, p string, allow func(string) bool) (string, error) {
+	if !HasOtherSpelling(p) {
+		return p, nil
+	}
+	if allow == nil || allow(p) {
+		var one int
+		err := c.db.QueryRowContext(ctx, `SELECT 1 FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, p).Scan(&one)
+		if !errors.Is(err, sql.ErrNoRows) {
+			return p, err // the show at p, or a failed lookup
+		}
+	}
+	// A library's shows are one row per top-level folder, read only on a
+	// miss of a name with another spelling: no key column to keep.
+	shows, err := queryRows(ctx, c.db, func(r *sql.Rows, s *string) error { return r.Scan(s) },
+		`SELECT show_path FROM podcast_shows WHERE library_id=?`, lib)
+	if err != nil {
+		return "", err
+	}
+	m := &spellMatch{allow: allow}
+	m.addReadingAs(p, shows)
+	if len(m.in) != 1 || c.ownEntry(ctx, lib, p) {
+		return p, nil
+	}
+	return m.in[0], nil
+}
+
 func (c *Catalog) PodcastShowByHash(ctx context.Context, lib int64, hash string, user int64) (*PodcastShow, error) {
 	var p string
 	err := c.db.QueryRowContext(ctx, `SELECT show_path FROM podcast_feed_hashes WHERE library_id=? AND sha256=? ORDER BY show_path LIMIT 1`, lib, hash).Scan(&p)
@@ -617,8 +658,45 @@ func (c *Catalog) FollowPodcast(ctx context.Context, user, lib int64, p, showID 
 	_, err := c.db.ExecContext(ctx, followPodcastSQL, user, lib, p, showID, c.ts())
 	return err
 }
-func (c *Catalog) UnfollowPodcast(ctx context.Context, user, lib int64, p string) error {
-	_, err := c.db.ExecContext(ctx, `DELETE FROM podcast_follows WHERE user_id=? AND library_id=? AND show_path=?`, user, lib, p)
+
+// UnfollowPodcast ends user's follow of the show at p, a show path a client
+// sent, in lib, in one statement: their rows at p, at each of spellings (the
+// show's spelling the caller's scope found for p: PodcastShowSpelling) and,
+// when none of those is a follow of theirs, at the one follow of theirs whose
+// path reads as p in another Unicode spelling (never two, and not when p is
+// an entry of its own, a show indexed at it or a folder on the disk, as
+// PodcastShowSpelling's rule). A follow outlives the caller's access to its
+// show (a share removed, the show's identity replaced), and their own rows
+// still find it by the other spelling. Their rows are read first, and p is
+// looked up only when one of them reads as it, so the work done for a show
+// they never followed is that of a made-up name.
+func (c *Catalog) UnfollowPodcast(ctx context.Context, user, lib int64, p string, spellings ...string) error {
+	at := append([]string{p}, spellings...)
+	if HasOtherSpelling(p) {
+		mine, err := queryRows(ctx, c.db, func(r *sql.Rows, s *string) error { return r.Scan(s) },
+			`SELECT show_path FROM podcast_follows WHERE user_id=? AND library_id=?`, user, lib)
+		if err != nil {
+			return err
+		}
+		m := &spellMatch{}
+		m.addReadingAs(p, mine)
+		// p and each of spellings read as p, so a lone row reading as p that
+		// is none of them means none of them is a follow of theirs. A show
+		// indexed at p is an entry of its own, as one on the disk is, so
+		// the follow beside it stays when the disk can't be read.
+		if len(m.in) == 1 && !slices.Contains(at, m.in[0]) {
+			var one int
+			err := c.db.QueryRowContext(ctx, `SELECT 1 FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, p).Scan(&one)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if err != nil && !c.ownEntry(ctx, lib, p) {
+				at = append(at, m.in[0])
+			}
+		}
+	}
+	args := append([]any{user, lib}, anyOf(at)...)
+	_, err := c.db.ExecContext(ctx, `DELETE FROM podcast_follows WHERE user_id=? AND library_id=? AND show_path IN (`+placeholders(len(at))+`)`, args...)
 	return err
 }
 

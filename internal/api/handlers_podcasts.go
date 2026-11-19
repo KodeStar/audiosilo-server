@@ -28,6 +28,40 @@ type podcastRequest struct {
 	UpdatedAt string                `json:"updated_at"`
 }
 
+// showSpelled is the index's spelling of show, a show path a client sent,
+// among the shows allow admits (nil: every one): catalog.PodcastShowSpelling,
+// so an older client or a saved link naming a show folder in the Unicode
+// spelling it had before a rename by hand still finds it. A failed lookup is
+// answered here (false).
+func (a *API) showSpelled(w http.ResponseWriter, r *http.Request, lib int64, show string, allow func(string) bool) (string, bool) {
+	spelled, err := a.cat.PodcastShowSpelling(r.Context(), lib, show, allow)
+	if err != nil {
+		a.writeCatalogError(w, err, "resolve podcast show spelling failed", "Could not load show.")
+		return "", false
+	}
+	return spelled, true
+}
+
+// visibleShow is show, a show path a client sent, in the index's spelling
+// among the shows s lets the caller see, or false once answered: 404
+// show_not_found for a path no show folder could have or one s hides, a
+// failed lookup's error (showSpelled) otherwise.
+func (a *API) visibleShow(w http.ResponseWriter, r *http.Request, lib int64, s catalog.Scope, show string) (string, bool) {
+	if !feed.ShowPath(show) {
+		writeShowNotFound(w)
+		return "", false
+	}
+	show, ok := a.showSpelled(w, r, lib, show, s.VisibleInBrowse)
+	if !ok {
+		return "", false
+	}
+	if !s.VisibleInBrowse(show) {
+		writeShowNotFound(w)
+		return "", false
+	}
+	return show, true
+}
+
 func writeShowNotFound(w http.ResponseWriter) {
 	writeErrorCode(w, http.StatusNotFound, "show_not_found", "Show not found.")
 }
@@ -87,9 +121,8 @@ func (a *API) handlePodcastEpisodes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	show := r.URL.Query().Get("show")
-	if !feed.ShowPath(show) || !s.VisibleInBrowse(show) {
-		writeShowNotFound(w)
+	show, ok := a.visibleShow(w, r, lib.ID, s, r.URL.Query().Get("show"))
+	if !ok {
 		return
 	}
 	if _, err := a.cat.PodcastShow(r.Context(), lib.ID, show, userFrom(r.Context()).ID); err != nil {
@@ -226,8 +259,7 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "podcast scope failed", "Could not check access.")
 		return
 	}
-	if !feed.ShowPath(p) || !s.VisibleInBrowse(p) {
-		writeShowNotFound(w)
+	if p, ok = a.visibleShow(w, r, lib.ID, s, p); !ok {
 		return
 	}
 	show, err := a.cat.PodcastShow(r.Context(), lib.ID, p, user)
@@ -362,7 +394,19 @@ func (a *API) handlePodcastUnfollow(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.podcastActionLibrary(w, r, id); !ok {
 		return
 	}
-	if err := a.cat.UnfollowPodcast(r.Context(), userFrom(r.Context()).ID, id, p); err != nil {
+	// The follow is stored at the show's spelling, spelled only among the
+	// shows the caller can see; catalog.UnfollowPodcast decides which of
+	// their own rows go (one in another spelling only from their own rows).
+	s, err := a.cat.CallerScope(r.Context(), callerOf(r.Context()), id)
+	if err != nil {
+		a.writeCatalogError(w, err, "podcast scope failed", "Could not check access.")
+		return
+	}
+	spelled, ok := a.showSpelled(w, r, id, p, s.VisibleInBrowse)
+	if !ok {
+		return
+	}
+	if err := a.cat.UnfollowPodcast(r.Context(), userFrom(r.Context()).ID, id, p, spelled); err != nil {
 		a.writeCatalogError(w, err, "unfollow podcast failed", "Could not unfollow show.")
 		return
 	}
@@ -387,6 +431,9 @@ func (a *API) handlePodcastCheck(w http.ResponseWriter, r *http.Request) {
 	scope, err := a.cat.CallerScope(r.Context(), callerOf(r.Context()), lib.ID)
 	if err != nil {
 		a.writeCatalogError(w, err, "podcast scope failed", "Could not check access.")
+		return
+	}
+	if req.Path, ok = a.showSpelled(w, r, lib.ID, req.Path, scope.VisibleInBrowse); !ok {
 		return
 	}
 	// The show's identity may be replaced (a re-subscribe) between the reads
@@ -462,8 +509,12 @@ func (a *API) handleBridgeMarker(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]string{"nonce": nonce})
 }
+
+// servePodcastCover is a show's cover for p, a show's or an episode's path,
+// already in the index's spelling (spelledPath spells a show's own path from
+// podcast_shows).
 func (a *API) servePodcastCover(w http.ResponseWriter, r *http.Request, lib *catalog.Library, p string) {
-	showPath := strings.Split(p, "/")[0]
+	showPath, _, _ := strings.Cut(p, "/")
 	show, err := a.cat.PodcastShow(r.Context(), lib.ID, showPath, userFrom(r.Context()).ID)
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "no cover")

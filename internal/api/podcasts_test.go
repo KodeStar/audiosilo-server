@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -27,16 +28,26 @@ const privateFeed = "https://feeds.example.com/private?auth=SECRET123"
 
 func podcastEnv(t *testing.T, private bool) (*bridgeEnv, int64, *feed.File) {
 	t.Helper()
+	return podcastEnvAt(t, private, "Example Show")
+}
+
+// podcastEnvAt is podcastEnv with the fixture show in the folder named show,
+// its episode paths under it.
+func podcastEnvAt(t *testing.T, private bool, show string) (*bridgeEnv, int64, *feed.File) {
+	t.Helper()
 	b := newBridgeEnv(t)
 	ctx := context.Background()
 	root := t.TempDir()
-	dir := filepath.Join(root, "Example Show")
+	dir := filepath.Join(root, show)
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
 	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for i := range f.Episodes {
+		f.Episodes[i].Path = show + "/" + path.Base(f.Episodes[i].Path)
 	}
 	f.Private = private
 	if private {
@@ -911,4 +922,295 @@ func TestPodcastRenamedFolderKeepsItsFollow(t *testing.T) {
 	}
 	check("Renamed", 202, `"state":"queued"`)
 	check("Example Show", 404, "show_not_found")
+}
+
+// A show folder in its NFD spelling (renamed by hand on a Mac, server#495) is
+// found by its NFC spelling on every route that names a show by path, as a
+// book's path is (server#210): an older client or a saved link still names it
+// so. Each answers at the index's spelling, and a page's cursor carries on.
+func TestPodcastShowRoutesMeetTheOtherSpelling(t *testing.T) {
+	nfc, nfd := "Café Show", "Café Show"
+	b, uid, f := podcastEnvAt(t, false, nfd)
+	h := podcastHeaders()
+	ctx := context.Background()
+	q := url.QueryEscape(nfc)
+
+	resp, out := b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, nfc), h)
+	if resp.StatusCode != 200 || !strings.Contains(out, `"path":"`+nfd+`"`) {
+		t.Fatalf("follow %d %s", resp.StatusCode, out)
+	}
+	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "podcasts/episodes?limit=1&show="+q), b.userTok, "", h)
+	var page struct {
+		Episodes   []struct{ Path string } `json:"episodes"`
+		NextCursor *string                 `json:"next_cursor"`
+	}
+	if resp.StatusCode != 200 || json.Unmarshal([]byte(out), &page) != nil || len(page.Episodes) != 1 ||
+		!strings.HasPrefix(page.Episodes[0].Path, nfd+"/") || page.NextCursor == nil {
+		t.Fatalf("episodes %d %s", resp.StatusCode, out)
+	}
+	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "podcasts/episodes?limit=1&show="+q+"&cursor="+url.QueryEscape(*page.NextCursor)), b.userTok, "", h)
+	if resp.StatusCode != 200 || strings.Contains(out, page.Episodes[0].Path) {
+		t.Fatalf("next page %d %s", resp.StatusCode, out)
+	}
+	// An older client's /fs listing of the show, at the index's spelling.
+	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "fs?path="+q), b.userTok, "", h)
+	var listing struct {
+		Path    string            `json:"path"`
+		Entries []json.RawMessage `json:"entries"`
+	}
+	if resp.StatusCode != 200 || json.Unmarshal([]byte(out), &listing) != nil || listing.Path != nfd || len(listing.Entries) != len(f.Episodes) {
+		t.Fatalf("fs %d %s", resp.StatusCode, out)
+	}
+	resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, nfc), h)
+	if resp.StatusCode != 202 {
+		t.Fatalf("check %d %s", resp.StatusCode, out)
+	}
+	resp, out = b.do(t, "GET", fmt.Sprintf("/api/v1/admin/libraries/%d/podcasts/retention?path=%s", b.lib.ID, q), b.adminTok, "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("console retention %d %s", resp.StatusCode, out)
+	}
+	resp, out = b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/podcasts/retention?path=%s&show_id=%s", b.lib.ID, q, f.ShowID), b.bridgeTok, "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("Bridge retention %d %s", resp.StatusCode, out)
+	}
+	// A policy set and cleared by the other spelling is the show's own row.
+	b.beat(t, bridge.KindPodcastSubscribe, bridge.KindPodcastPoll, bridge.KindPodcastRetain)
+	policies := func(when string, want ...string) {
+		t.Helper()
+		var at []string
+		rows, err := b.db.QueryContext(ctx, `SELECT show_path FROM podcast_policies WHERE library_id=?`, b.lib.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var p string
+			if err := rows.Scan(&p); err != nil {
+				t.Fatal(err)
+			}
+			at = append(at, p)
+		}
+		if err := rows.Err(); err != nil || !slices.Equal(at, want) {
+			t.Fatalf("policies %s: %+q %v, want %+q", when, at, err, want)
+		}
+	}
+	retention := fmt.Sprintf("/api/v1/admin/libraries/%d/podcasts/retention?path=%s", b.lib.ID, q)
+	resp, out = b.do(t, "PUT", retention, b.adminTok, `{"mode":"keep","keep":5,"days":7}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("set retention %d %s", resp.StatusCode, out)
+	}
+	policies("set", nfd)
+	resp, out = b.do(t, "DELETE", retention, b.adminTok, "")
+	if resp.StatusCode != 204 {
+		t.Fatalf("clear retention %d %s", resp.StatusCode, out)
+	}
+	policies("cleared")
+	// A follow of the caller's kept at the path as given (no show row there)
+	// goes with the unfollow too, as it did before the other spelling was read.
+	if err := b.cat.FollowPodcast(ctx, uid, b.lib.ID, nfc, f.ShowID); err != nil {
+		t.Fatal(err)
+	}
+	resp, out = b.doHeaders(t, "DELETE", fmt.Sprintf("/api/v1/podcasts/follow?library_id=%d&path=%s", b.lib.ID, q), b.userTok, "", h)
+	if resp.StatusCode != 204 {
+		t.Fatalf("unfollow %d %s", resp.StatusCode, out)
+	}
+	var follows int
+	if err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM podcast_follows WHERE user_id=?`, uid).Scan(&follows); err != nil || follows != 0 {
+		t.Fatalf("follows after unfollow: %d %v", follows, err)
+	}
+
+	// A show with no episode rows is no folder holding books, so its cover is
+	// found by the show's spelling alone.
+	zoeNFC, zoeNFD := "Zoë Show", "Zoë Show"
+	dir := filepath.Join(b.lib.Root, zoeNFD)
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	empty := *f
+	empty.ShowID, empty.Episodes = "0123456789abcdef", nil
+	if err := os.WriteFile(filepath.Join(dir, "feed.json"), []byte(mustJSON(t, empty)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cover.png"), bandedPNG(t, 8, 8), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.api.scanner.IndexPodcastPath(ctx, *b.lib, zoeNFD); err != nil {
+		t.Fatal(err)
+	}
+	covers := func(when string) {
+		t.Helper()
+		for _, size := range []string{"", "&size=160"} {
+			resp, out := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "cover?path="+url.QueryEscape(zoeNFC)+size), b.userTok, "", h)
+			if resp.StatusCode != 200 {
+				t.Fatalf("cover %s %q %d %s", when, size, resp.StatusCode, out)
+			}
+		}
+	}
+	covers("whole library")
+	// A private show the caller doesn't follow narrows their scope to the
+	// shows they see, each by its path: the cover is still found by the
+	// other spelling, before that scope is checked on it.
+	hiddenDir := filepath.Join(b.lib.Root, "Hidden Show")
+	if err := os.Mkdir(hiddenDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	hidden := empty
+	hidden.ShowID, hidden.Private, hidden.FeedURL, hidden.Show.Link = "fedcba9876543210", true, "", ""
+	hidden.FeedURLSHA256 = feed.FeedURLHash("https://feeds.example.com/hidden?auth=OTHER")
+	if err := os.WriteFile(filepath.Join(hiddenDir, "feed.json"), []byte(mustJSON(t, hidden)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.api.scanner.IndexPodcastPath(ctx, *b.lib, "Hidden Show"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := b.cat.CallerScope(ctx, catalog.Caller{ID: uid, Podcasts: true}, b.lib.ID)
+	if err != nil || s.AllowAll || !slices.Contains(s.Paths, zoeNFD) || slices.Contains(s.Paths, "Hidden Show") {
+		t.Fatalf("narrowed scope %+v %v", s, err)
+	}
+	covers("shows seen")
+}
+
+// Denied: a private show in its NFD spelling that the caller does not follow
+// is not reached by its NFC spelling either (the caller's scope refuses the
+// one spelling there is, so the other names no show): episodes, follow by
+// path and check answer 404 show_not_found, and an unfollow touches nothing.
+// Allowed once the caller follows it by its URL.
+func TestPodcastPrivateShowNotReachedByTheOtherSpelling(t *testing.T) {
+	nfc, nfd := "Café Show", "Café Show"
+	b, uid, _ := podcastEnvAt(t, true, nfd)
+	h := podcastHeaders()
+	ctx := context.Background()
+	q := url.QueryEscape(nfc)
+	for _, show := range []string{nfc, nfd} {
+		resp, out := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "podcasts/episodes?show="+url.QueryEscape(show)), b.userTok, "", h)
+		wantCode(t, "episodes "+show, resp, out, 404, "show_not_found")
+		resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, show), h)
+		wantCode(t, "follow "+show, resp, out, 404, "show_not_found")
+		resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, show), h)
+		wantCode(t, "check "+show, resp, out, 404, "show_not_found")
+		resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "fs?path="+url.QueryEscape(show)), b.userTok, "", h)
+		if resp.StatusCode != 404 || !strings.Contains(out, "directory not found") {
+			t.Fatalf("fs %+q %d %s", show, resp.StatusCode, out)
+		}
+		// Its cover answers as a path with no show does.
+		resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "cover?path="+url.QueryEscape(show)), b.userTok, "", h)
+		none, noneOut := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "cover?path="+url.QueryEscape("Zo\u00eb Nothing")), b.userTok, "", h)
+		if resp.StatusCode != none.StatusCode || out != noneOut || resp.StatusCode/100 != 4 {
+			t.Fatalf("cover %+q %d %s, no show there %d %s", show, resp.StatusCode, out, none.StatusCode, noneOut)
+		}
+	}
+	// Another listener follows it; this caller's unfollow by the other
+	// spelling is theirs alone.
+	other, _ := newUserWithSession(t, b.testEnv, "other", false)
+	var showID string
+	if err := b.db.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=?`, b.lib.ID).Scan(&showID); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.FollowPodcast(ctx, other, b.lib.ID, nfd, showID); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := b.doHeaders(t, "DELETE", fmt.Sprintf("/api/v1/podcasts/follow?library_id=%d&path=%s", b.lib.ID, q), b.userTok, "", h)
+	if resp.StatusCode != 204 {
+		t.Fatalf("unfollow %d %s", resp.StatusCode, out)
+	}
+	// It answers as a show that was never there does.
+	none, noneOut := b.doHeaders(t, "DELETE", fmt.Sprintf("/api/v1/podcasts/follow?library_id=%d&path=%s", b.lib.ID, url.QueryEscape("Zo\u00eb Nothing")), b.userTok, "", h)
+	if none.StatusCode != resp.StatusCode || noneOut != out {
+		t.Fatalf("unfollow %d %s, no show there %d %s", resp.StatusCode, out, none.StatusCode, noneOut)
+	}
+	follows := func(user int64) int {
+		t.Helper()
+		var n int
+		if err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM podcast_follows WHERE user_id=?`, user).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := follows(other); n != 1 {
+		t.Fatalf("other's follow: %d", n)
+	}
+
+	// Allowed: a follow by its URL proves access, and the NFC spelling then
+	// reaches the show.
+	resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, fmt.Sprintf(`{"library_id":%d,"feed_url":%q}`, b.lib.ID, privateFeed), h)
+	if resp.StatusCode != 200 {
+		t.Fatalf("follow by URL %d %s", resp.StatusCode, out)
+	}
+	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "podcasts/episodes?show="+q), b.userTok, "", h)
+	if resp.StatusCode != 200 || !strings.Contains(out, `"path":"`+nfd+"/") {
+		t.Fatalf("followed episodes %d %s", resp.StatusCode, out)
+	}
+	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "fs?path="+q), b.userTok, "", h)
+	if resp.StatusCode != 200 || !strings.Contains(out, `"path":"`+nfd+`"`) {
+		t.Fatalf("followed fs %d %s", resp.StatusCode, out)
+	}
+	resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, nfc), h)
+	if resp.StatusCode != 202 {
+		t.Fatalf("followed check %d %s", resp.StatusCode, out)
+	}
+
+	// The show's identity is replaced (a re-subscribe at the folder): the
+	// caller's follow no longer admits them, and stays until they unfollow,
+	// which the other spelling still does (their own follow is read for it).
+	if _, err := b.db.ExecContext(ctx, `UPDATE podcast_shows SET show_id=? WHERE library_id=? AND show_path=?`, "0000111122223333", b.lib.ID, nfd); err != nil {
+		t.Fatal(err)
+	}
+	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "podcasts/episodes?show="+q), b.userTok, "", h)
+	wantCode(t, "episodes once replaced", resp, out, 404, "show_not_found")
+	if n := follows(uid); n != 1 {
+		t.Fatalf("follow kept past access: %d", n)
+	}
+	resp, out = b.doHeaders(t, "DELETE", fmt.Sprintf("/api/v1/podcasts/follow?library_id=%d&path=%s", b.lib.ID, q), b.userTok, "", h)
+	if resp.StatusCode != 204 {
+		t.Fatalf("unfollow once replaced %d %s", resp.StatusCode, out)
+	}
+	if n := follows(uid); n != 0 {
+		t.Fatalf("follow after unfollow by the other spelling: %d", n)
+	}
+	if n := follows(other); n != 1 {
+		t.Fatalf("other's follow after: %d", n)
+	}
+}
+
+// A show indexed at the path as given is that show on every route, its cover
+// included, whatever reads as it beside it: here one with no episode rows and
+// no cover, its folder not listed (a share that didn't answer the look),
+// beside a show with episodes and a cover in the other spelling.
+func TestPodcastShowAtThePathGivenIsNotTheOneBesideIt(t *testing.T) {
+	nfc, nfd := "Caf\u00e9 Show", "Cafe\u0301 Show"
+	b, _, f := podcastEnvAt(t, false, nfd)
+	h := podcastHeaders()
+	ctx := context.Background()
+	if err := os.WriteFile(filepath.Join(b.lib.Root, nfd, "cover.png"), bandedPNG(t, 8, 8), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.api.scanner.IndexPodcastPath(ctx, *b.lib, nfd); err != nil {
+		t.Fatal(err)
+	}
+	cover := func(show string) (int, string) {
+		t.Helper()
+		resp, out := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "cover?path="+url.QueryEscape(show)), b.userTok, "", h)
+		return resp.StatusCode, out
+	}
+	// Alone, the show with episodes is found by either spelling.
+	for _, show := range []string{nfd, nfc} {
+		if status, out := cover(show); status != 200 {
+			t.Fatalf("cover %+q %d %s", show, status, out)
+		}
+	}
+	empty := *f
+	empty.ShowID, empty.Episodes = "0123456789abcdef", nil
+	if _, err := b.cat.IndexPodcastShow(ctx, b.lib.ID, nfc, "sig", "", "", &empty, nil, true, false); err != nil {
+		t.Fatal(err)
+	}
+	if status, out := cover(nfd); status != 200 {
+		t.Fatalf("cover %+q %d %s", nfd, status, out)
+	}
+	if status, out := cover(nfc); status != 404 || !strings.Contains(out, "no cover") {
+		t.Fatalf("cover of the show at the path given %d %s", status, out)
+	}
+	resp, out := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "fs?path="+url.QueryEscape(nfc)), b.userTok, "", h)
+	if resp.StatusCode != 200 || !strings.Contains(out, `"path":"`+nfc+`"`) || !strings.Contains(out, `"entries":[]`) {
+		t.Fatalf("fs of the show at the path given %d %s", resp.StatusCode, out)
+	}
 }

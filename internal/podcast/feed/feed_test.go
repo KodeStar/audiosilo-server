@@ -3,6 +3,8 @@ package feed
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -324,7 +326,13 @@ func TestReadFeedTellsAFaultFromAHeldFolder(t *testing.T) {
 	}{
 		{"EIO", syscall.EIO, nil, true},
 		{"ESTALE", syscall.ESTALE, nil, true},
+		// Windows' ERROR_BAD_NETPATH (a share whose server is down), which Go
+		// reads as fs.ErrNotExist and metadata.TransientFault as a fault for
+		// now: no folder gone (metadata.NotExist), so no episode is read in
+		// the show's folder as if it had been renamed away.
+		{"not there, from a dropped share", errors.Join(fs.ErrNotExist, syscall.ESTALE), nil, true},
 		{"EACCES", syscall.EACCES, nil, false},
+		// Allowed: no fault, the folders gone (a real deletion: ENOENT).
 		{"none", nil, []string{nfd + "/a.mp3", nfd + "/b.mp3"}, false},
 	} {
 		for _, folder := range folders {

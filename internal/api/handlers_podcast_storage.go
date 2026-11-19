@@ -62,6 +62,9 @@ func (a *API) handleAdminPodcastRetention(w http.ResponseWriter, r *http.Request
 		writeErrorCode(w, 400, "invalid_request", "A show path is required.")
 		return
 	}
+	if showPath, ok = a.showSpelled(w, r, lib.ID, showPath, nil); !ok {
+		return
+	}
 	show, err := a.cat.PodcastShow(r.Context(), lib.ID, showPath, 0)
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeShowNotFound(w)
@@ -163,6 +166,11 @@ func (a *API) handleBridgePodcastRetention(w http.ResponseWriter, r *http.Reques
 	show, id := r.URL.Query().Get("path"), r.URL.Query().Get("show_id")
 	if !feed.ShowPath(show) || !feed.ValidHex(id, 16) {
 		writeErrorCode(w, 400, "invalid_request", "A show path and identity are required.")
+		return
+	}
+	// A retain job names the show as the index spelled it when it was queued:
+	// a folder renamed by hand to the other Unicode spelling since is found.
+	if show, ok = a.showSpelled(w, r, lib.ID, show, nil); !ok {
 		return
 	}
 	p, err := a.cat.PodcastPolicy(r.Context(), lib.ID, show, id)

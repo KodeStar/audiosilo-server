@@ -407,6 +407,18 @@ func (m *spellMatch) add(s string) {
 	}
 }
 
+// addReadingAs adds each of paths whose NFC form is p's: the paths of a
+// table with no key column (a library's shows, a user's follows) that read as
+// p.
+func (m *spellMatch) addReadingAs(p string, paths []string) {
+	k := unorm.NFC.String(p)
+	for _, s := range paths {
+		if unorm.NFC.String(s) == k {
+			m.add(s)
+		}
+	}
+}
+
 // one is the step's answer: the one path it found, or p for two (it never
 // guesses); found is false when it found none, so the next step looks (afresh:
 // in is emptied, out kept).
