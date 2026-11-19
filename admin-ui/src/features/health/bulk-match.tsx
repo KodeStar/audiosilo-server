@@ -811,6 +811,23 @@ function ItemList({
   );
 }
 
+/** What a review item says for each reason it is held for: first, then among others. */
+const HOLD_TEXT: Record<string, readonly [string, string]> = {
+  identifier_disagrees: [
+    'health.bulkMatch.item.identifierDisagrees',
+    'health.bulkMatch.item.identifierDisagrees',
+  ],
+  identifier_elsewhere: [
+    'health.bulkMatch.item.identifierElsewhere',
+    'health.bulkMatch.item.identifierElsewhere',
+  ],
+  dramatization_only: [
+    'health.bulkMatch.item.dramatizationOnly',
+    'health.bulkMatch.item.dramatizationToo',
+  ],
+  length_differs: ['health.bulkMatch.item.lengthDiffers', 'health.bulkMatch.item.lengthToo'],
+};
+
 /** A book, the match the run found for it, and what applying writes. */
 function ItemRow({
   item,
@@ -967,35 +984,16 @@ function ItemRow({
             )}
           </span>
         )}
-        {holds.includes('identifier_disagrees') ? (
-          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
-            {t('health.bulkMatch.item.identifierDisagrees')}
-          </span>
-        ) : null}
-        {holds.includes('identifier_elsewhere') ? (
-          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
-            {t('health.bulkMatch.item.identifierElsewhere')}
-          </span>
-        ) : null}
-        {holds.includes('dramatization_only') ? (
-          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
-            {t(
-              holds[0] === 'dramatization_only'
-                ? 'health.bulkMatch.item.dramatizationOnly'
-                : 'health.bulkMatch.item.dramatizationToo',
-            )}
-          </span>
-        ) : null}
-        {candidate && heldForLength ? (
-          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
-            {t(
-              holds[0] === 'length_differs'
-                ? 'health.bulkMatch.item.lengthDiffers'
-                : 'health.bulkMatch.item.lengthToo',
-              heldForLength,
-            )}
-          </span>
-        ) : null}
+        {holds.map((reason, i) => {
+          // The first reason says it is held for review; the rest say only why.
+          const [first, too] = HOLD_TEXT[reason];
+          if (reason === 'length_differs' && !heldForLength) return null;
+          return (
+            <span key={reason} className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
+              {t(i === 0 ? first : too, reason === 'length_differs' ? heldForLength : undefined)}
+            </span>
+          );
+        })}
         {hasCloseScore(item) ? (
           <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
             {t('health.bulkMatch.item.closeScore')}
