@@ -266,7 +266,7 @@ func TestAudibleContestGoneAndRemapped(t *testing.T) {
 	m.Match = &AudibleMatch{LibraryID: f.lib.ID, Path: book, How: "fuzzy"}
 	g := contested("B000000003", "")
 	g.ContestedPath, g.Planned = book, planned(f, "A/Gone/Gone.m4b")
-	pre := AudibleTitleInput{ASIN: "B000000004", Title: "Soon", State: AudiblePreorder}
+	pre := AudibleTitleInput{ASIN: "B000000004", Title: "Soon", State: AudiblePreorder, Reason: "Not released yet (pre-order)"}
 	f.poll(t, "p1", a, m, g, pre)
 	if c := f.title(t, "B000000001").Contested; c == nil || len(c.With) != 2 {
 		t.Fatalf("before = %+v", c)
@@ -282,19 +282,25 @@ func TestAudibleContestGoneAndRemapped(t *testing.T) {
 	if x := f.title(t, "B000000003"); x.Planned != nil || x.Contested != nil {
 		t.Fatalf("a gone title kept its plan %+v or contest %+v", x.Planned, x.Contested)
 	}
+	// Nor the preorder's "Not released yet": it is gone, not coming.
+	if x := f.title(t, "B000000004"); x.Reason != "" {
+		t.Fatalf("a gone title kept its reason %q", x.Reason)
+	}
 	var stale int
 	if err := f.c.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM audible_titles WHERE state = 'gone'
 		AND (import_pending = 1 OR contest_library_id IS NOT NULL OR contest_path <> '')`).Scan(&stale); err != nil || stale != 0 {
 		t.Fatalf("gone titles keeping a request or contest = %d, %v", stale, err)
 	}
-	// A title that went gone keeping its request (before a gone title dropped
-	// it) loses it at the next complete poll.
-	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET import_pending = 1 WHERE asin = 'B000000004'`); err != nil {
+	// A title that went gone keeping its request or reason (before a gone
+	// title dropped them) loses them at the next complete poll.
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET import_pending = 1, reason = 'Not released yet (pre-order)'
+		WHERE asin = 'B000000004'`); err != nil {
 		t.Fatal(err)
 	}
 	f.poll(t, "p2b", a)
-	if err := f.c.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM audible_titles WHERE state = 'gone' AND import_pending = 1`).Scan(&stale); err != nil || stale != 0 {
-		t.Fatalf("gone titles keeping an older request = %d, %v", stale, err)
+	if err := f.c.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM audible_titles WHERE state = 'gone'
+		AND (import_pending = 1 OR reason <> '')`).Scan(&stale); err != nil || stale != 0 {
+		t.Fatalf("gone titles keeping an older request or reason = %d, %v", stale, err)
 	}
 	// Bought again: no request left over to back it up.
 	f.poll(t, "p3", a, AudibleTitleInput{ASIN: "B000000004", Title: "Soon", State: AudibleAvailable})

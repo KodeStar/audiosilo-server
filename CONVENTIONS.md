@@ -3889,8 +3889,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`import {job_id, state, code, conflict}`, `state` a job state or `pending`; `conflict` is what an `exists`
   failure found in the way, `file`/`book`/`audio` as a plan's, from the result's `conflict`, else the
   Bridge's message: `importConflict`). A title's `can_backup` is Back up allowed (`backupRefusal`, the
-  account's pause aside), so the console never derives it. A title going gone drops its plan, its contest
-  and a pending request. **Policy** (`AudiblePolicyImports`,
+  account's pause aside), so the console never derives it. A title going gone drops its plan, its contest,
+  a pending request and its reason (a preorder's "Not released yet"). **Policy** (`AudiblePolicyImports`,
   after each final titles PUT while the module is on and a Bridge offers the kind, past the PUT's answer
   (`afterAudiblePoll`, waited for by `StopModules`; a final call served once it began waiting queues nothing, the next poll asks again); `autoImport.wants`, a
   table test): available, not on this server, not ignored, nothing open; a pending request always; otherwise not

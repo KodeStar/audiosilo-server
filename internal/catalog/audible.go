@@ -716,7 +716,7 @@ func bridgeBookPath(p string) bool {
 // FoldAudibleImport) stays while its book is indexed and the poll names no
 // other: the next poll may have listed the library before the backup landed.
 // On the poll's final call every title of the account the poll didn't report
-// becomes gone (its plan, contest and pending request dropped), and the account's last_poll_at is now, its sync's refusal
+// becomes gone (its plan, contest, pending request and reason dropped), and the account's last_poll_at is now, its sync's refusal
 // ended (refused_at: Audible answered the account's whole library); on its
 // first complete poll its policy_since moves to now too, so the library the account already
 // had is never backed up by a policy (new purchases only). A user-state write:
@@ -812,14 +812,16 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 		}
 		// A title gone from the account is backed up nowhere: its plan goes,
 		// with a request waiting for its release (a refunded preorder bought
-		// again is asked for again) and the contest it was left out by. One
-		// that went gone before a request or contest was dropped (v2.6) loses
-		// it now.
+		// again is asked for again), the contest it was left out by and the
+		// reason the last poll gave (a preorder's "Not released yet" is no
+		// longer so). One that went gone before these were dropped (v2.6)
+		// loses them now.
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE audible_titles SET state = 'gone', planned = '', import_pending = 0,
-			     contest_library_id = NULL, contest_path = '', updated_at = ?
+			     contest_library_id = NULL, contest_path = '', reason = '', updated_at = ?
 			  WHERE account = ? AND poll_id <> ?
-			    AND (state <> 'gone' OR import_pending = 1 OR contest_library_id IS NOT NULL OR contest_path <> '')`,
+			    AND (state <> 'gone' OR import_pending = 1 OR contest_library_id IS NOT NULL OR contest_path <> ''
+			         OR reason <> '')`,
 			now, account, pollID); err != nil {
 			return err
 		}
