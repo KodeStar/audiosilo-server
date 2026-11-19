@@ -12,7 +12,15 @@ import (
 // one that has stopped moving, not on one that is slow: a big book on a slow
 // share that answers keeps its waiter, one stuck in a call a share that
 // stopped answering never returns from does not.
+// last is when, as a monotonic time since progressEpoch.
 type Progress struct{ last atomic.Int64 }
+
+// progressEpoch is the monotonic origin a Progress counts from, so a wall
+// clock set back or forward (NTP, a NAS with no real-time clock catching up
+// at boot) changes no read's Idle: set back, a waiter would otherwise wait
+// that much longer on a read that stopped; set forward, give up on one that
+// moves on.
+var progressEpoch = time.Now()
 
 // NewProgress is a Progress noted now: a read that has just begun.
 func NewProgress() *Progress {
@@ -22,10 +30,12 @@ func NewProgress() *Progress {
 }
 
 // Note records progress now.
-func (p *Progress) Note() { p.last.Store(time.Now().UnixNano()) }
+func (p *Progress) Note() { p.last.Store(int64(time.Since(progressEpoch))) }
 
 // Idle is how long since the read last moved on.
-func (p *Progress) Idle() time.Duration { return time.Since(time.Unix(0, p.last.Load())) }
+func (p *Progress) Idle() time.Duration {
+	return time.Since(progressEpoch) - time.Duration(p.last.Load())
+}
 
 // progressKey carries a read's Progress (WithProgress).
 type progressKey struct{}

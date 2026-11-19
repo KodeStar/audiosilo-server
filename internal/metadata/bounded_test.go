@@ -209,7 +209,8 @@ func TestShareFault(t *testing.T) {
 func TestBoundedNotesProgress(t *testing.T) {
 	t.Parallel()
 	p := NewProgress()
-	p.last.Store(0) // last moved on long ago
+	longAgo := -int64(2 * time.Hour) // before progressEpoch
+	p.last.Store(longAgo)            // last moved on long ago
 	ctx := WithProgress(t.Context(), p)
 	if _, err := StatBounded(ctx, t.TempDir(), time.Minute); err != nil {
 		t.Fatal(err)
@@ -217,7 +218,7 @@ func TestBoundedNotesProgress(t *testing.T) {
 	if idle := p.Idle(); idle > time.Minute {
 		t.Errorf("idle %v after a look that answered, want it noted", idle)
 	}
-	p.last.Store(0)
+	p.last.Store(longAgo)
 	if _, err := Bounded(ctx, t.TempDir(), 10*time.Millisecond, func() (int, error) {
 		time.Sleep(200 * time.Millisecond)
 		return 0, nil
