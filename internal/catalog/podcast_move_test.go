@@ -141,7 +141,7 @@ func TestMovePodcastShowsCarriesARenamedFolder(t *testing.T) {
 	if err != nil || len(found) != 1 || len(found[fx.id]) != 2 || found[fx.id][0] != want[0] || found[fx.id][1] != want[1] {
 		t.Fatalf("identity paths %+v %v", found, err)
 	}
-	n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}})
+	n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}, false)
 	if err != nil || n != 1 {
 		t.Fatalf("move %d %v", n, err)
 	}
@@ -150,7 +150,7 @@ func TestMovePodcastShowsCarriesARenamedFolder(t *testing.T) {
 		t.Fatalf("after the move %+v %v", found, err)
 	}
 	// Again: nothing left to move, nothing changes.
-	if n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}); err != nil || n != 1 {
+	if n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}, false); err != nil || n != 1 {
 		t.Fatalf("repeat %d %v", n, err)
 	}
 	fx.checkMoved(t)
@@ -167,7 +167,7 @@ func TestMovePodcastShowsMergesWithTheNewFolder(t *testing.T) {
 	if _, err := fx.c.db.ExecContext(fx.ctx, `INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at) VALUES(?,?,'Renamed',?,'2099-01-01T00:00:00Z')`, fx.ann, fx.lib, fx.id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}); err != nil {
+	if _, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}, false); err != nil {
 		t.Fatal(err)
 	}
 	fx.checkMoved(t)
@@ -183,7 +183,7 @@ func TestMovePodcastShowsMergesWithTheNewFolder(t *testing.T) {
 func TestMovePodcastShowsRefusesAFolderHoldingAnotherShow(t *testing.T) {
 	fx := newRenameFixture(t)
 	indexShowAt(t, fx.c, fx.ctx, fx.lib, "Renamed", "0123456789abcdef")
-	n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}})
+	n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}, false)
 	if err != nil || n != 0 {
 		t.Fatalf("move %d %v", n, err)
 	}
@@ -211,7 +211,7 @@ func TestMovePodcastShowsLeavesAnotherShowsFolderHeart(t *testing.T) {
 	if err := fx.c.AddFavourite(fx.ctx, cat, Ref{LibraryID: fx.lib, Path: "Example Show"}); err != nil {
 		t.Fatal(err)
 	}
-	n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}})
+	n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}, false)
 	if err != nil || n != 1 {
 		t.Fatalf("move %d %v", n, err)
 	}
@@ -256,7 +256,7 @@ func TestMovePodcastShowsSwapsTwoFolders(t *testing.T) {
 	}
 	indexShowAt(t, c, ctx, lib.ID, "A", y)
 	indexShowAt(t, c, ctx, lib.ID, "B", x)
-	n, err := c.MovePodcastShows(ctx, lib.ID, []PodcastMove{{ShowID: x, From: []string{"A"}, To: "B"}, {ShowID: y, From: []string{"B"}, To: "A"}})
+	n, err := c.MovePodcastShows(ctx, lib.ID, []PodcastMove{{ShowID: x, From: []string{"A"}, To: "B"}, {ShowID: y, From: []string{"B"}, To: "A"}}, false)
 	if err != nil || n != 2 {
 		t.Fatalf("swap %d %v", n, err)
 	}
@@ -290,7 +290,7 @@ func TestPodcastPollFoldFollowsARenamedFolder(t *testing.T) {
 	if st, _ := fx.c.PodcastState(fx.ctx, fx.lib, "Renamed"); st.ETag != "" {
 		t.Fatalf("holder's state changed by the copy's poll %+v", st)
 	}
-	if _, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}); err != nil {
+	if _, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}, false); err != nil {
 		t.Fatal(err)
 	}
 	poll.ID = 11
@@ -321,7 +321,7 @@ func TestPodcastPollFoldFollowsARenamedFolder(t *testing.T) {
 // carried there.
 func TestPodcastFetchFoldFollowsARenamedFolder(t *testing.T) {
 	fx := newRenameFixture(t)
-	if _, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}); err != nil {
+	if _, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}, false); err != nil {
 		t.Fatal(err)
 	}
 	f := showAt(t, "Renamed", "")
@@ -356,7 +356,7 @@ func TestMovePodcastShowsKeepsTheEarliestFollow(t *testing.T) {
 	if _, err := fx.c.db.ExecContext(fx.ctx, `INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at) VALUES(?,?,'A copy',?,'2026-09-01T00:00:00Z')`, fx.ann, fx.lib, fx.id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"A copy", "Example Show"}, To: "Renamed"}}); err != nil {
+	if _, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"A copy", "Example Show"}, To: "Renamed"}}, false); err != nil {
 		t.Fatal(err)
 	}
 	fx.checkMoved(t)
@@ -410,5 +410,99 @@ func TestPodcastFetchDoneInAnotherFolderDoesNotRequeue(t *testing.T) {
 	var code string
 	if err := fx.c.db.QueryRowContext(fx.ctx, `SELECT failures,error_code FROM podcast_fetch_state WHERE library_id=? AND rel_path=? AND show_id=?`, fx.lib, fx.oldEpisode, fx.id).Scan(&failures, &code); err != nil || failures != 2 || code != "timeout" {
 		t.Fatalf("fetch state %d %q %v", failures, code, err)
+	}
+}
+
+// With unread (the caller could not read every folder the root lists), a move
+// to a folder carrying another identity's follow, feed state, policy or place
+// waits: the folder not read may be where that show is now, and its own move
+// still to come. Without unread it applies (that show is gone: its follow at
+// the folder is replaced); a place in the moving show's own episode never
+// holds it.
+func TestMovePodcastShowsWithUnreadHoldsAMoveOverAnotherShowsState(t *testing.T) {
+	other := "0123456789abcdef"
+	for _, tc := range []struct {
+		name string
+		seed func(fx renameFixture) error
+		held bool
+	}{
+		{"follow", func(fx renameFixture) error {
+			_, err := fx.c.db.ExecContext(fx.ctx, `INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at) VALUES(?,?,'Renamed',?,'2026-01-01T00:00:00Z')`, fx.ann, fx.lib, other)
+			return err
+		}, true},
+		{"feed state", func(fx renameFixture) error {
+			_, err := fx.c.db.ExecContext(fx.ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,etag) VALUES(?,'Renamed',?,'other')`, fx.lib, other)
+			return err
+		}, true},
+		{"policy", func(fx renameFixture) error {
+			_, err := fx.c.db.ExecContext(fx.ctx, `INSERT INTO podcast_policies(library_id,show_path,show_id,mode,keep,days,updated_at) VALUES(?,'Renamed',?,'on_demand',3,7,'2026-01-01T00:00:00Z')`, fx.lib, other)
+			return err
+		}, true},
+		{"place", func(fx renameFixture) error {
+			_, err := fx.c.SaveProgress(fx.ctx, fx.bob, Progress{Ref: Ref{LibraryID: fx.lib, Path: "Renamed/2025-01-01-other.mp3"}, Position: 9, Duration: 100, UpdatedAt: "2026-11-01T10:00:00Z"})
+			return err
+		}, true},
+		{"own place", func(fx renameFixture) error {
+			_, err := fx.c.SaveProgress(fx.ctx, fx.bob, Progress{Ref: Ref{LibraryID: fx.lib, Path: "Renamed/" + fx.ep}, Position: 9, Duration: 1720, UpdatedAt: "2026-11-01T10:00:00Z"})
+			return err
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newRenameFixture(t)
+			if err := tc.seed(fx); err != nil {
+				t.Fatal(err)
+			}
+			move := []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}
+			n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, move, true)
+			if want := map[bool]int{true: 0, false: 1}[tc.held]; err != nil || n != want {
+				t.Fatalf("unread move %d %v; want %d", n, err, want)
+			}
+			if !tc.held {
+				return
+			}
+			if got, err := fx.c.PodcastShow(fx.ctx, fx.lib, "Example Show", fx.ann); err != nil || !got.Following {
+				t.Fatalf("the held show's state moved: %+v %v", got, err)
+			}
+			if n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, move, false); err != nil || n != 1 {
+				t.Fatalf("move %d %v", n, err)
+			}
+		})
+	}
+}
+
+// Denied: a move to a folder carrying a follow of another identity indexed
+// elsewhere, whose own move is not in the call (skipped: a copy, a path that
+// can't be told), waits, so the listener's follow of that show stays. In one
+// call with that show's own move off the folder, both apply.
+func TestMovePodcastShowsHoldsAMoveOverAnIndexedShowsFollow(t *testing.T) {
+	fx := newRenameFixture(t)
+	other := "0123456789abcdef"
+	// Its own episode files, as two shows have.
+	f := showAt(t, "Third", other)
+	for i := range f.Episodes {
+		f.Episodes[i].Path = "Third/other-" + path.Base(f.Episodes[i].Path)
+	}
+	if _, err := fx.c.IndexPodcastShow(fx.ctx, fx.lib, "Third", "Third", "", "", f, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	cat := seedUserNamed(t, fx.c, fx.ctx, "cat")
+	if _, err := fx.c.db.ExecContext(fx.ctx, `INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at) VALUES(?,?,'Renamed',?,'2026-01-01T00:00:00Z')`, cat, fx.lib, other); err != nil {
+		t.Fatal(err)
+	}
+	move := PodcastMove{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}
+	if n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{move}, false); err != nil || n != 0 {
+		t.Fatalf("move %d %v", n, err)
+	}
+	var kept string
+	if err := fx.c.db.QueryRowContext(fx.ctx, `SELECT show_id FROM podcast_follows WHERE user_id=? AND show_path='Renamed'`, cat).Scan(&kept); err != nil || kept != other {
+		t.Fatalf("the other show's follow %q %v", kept, err)
+	}
+	n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{move, {ShowID: other, From: []string{"Renamed"}, To: "Third"}}, false)
+	if err != nil || n != 2 {
+		t.Fatalf("both moves %d %v", n, err)
+	}
+	fx.checkMoved(t)
+	if got, err := fx.c.PodcastShow(fx.ctx, fx.lib, "Third", cat); err != nil || !got.Following {
+		t.Fatalf("the other show at its folder %+v %v", got, err)
 	}
 }

@@ -416,43 +416,123 @@ func TestPodcastRescanOfAChainsFarEndTakesItsFolderHeart(t *testing.T) {
 	hearted()
 }
 
-// Denied: a chain of renames by hand whose other folder can't be read for now
-// (the other show renamed to "Third", this one to its old name). That folder
-// may be where the other show is, and a move to its old name would put this
-// show's follow over the other's for a listener following both: nothing moves,
-// on a scan (partial, as it prunes nothing) or on the Bridge's rescan, until
-// the folder reads again and both move in one call.
+// Denied: a chain of renames by hand whose other folder can't be read or used
+// for now (the other show renamed to "Third", this one to its old name):
+// unreadable, or its feed.json of a newer version or invalid (half written).
+// That folder may be where the other show is, and a move to its old name would
+// put this show's follow over the other's for a listener following both:
+// nothing moves, on a scan (partial when it can't read the folder) or on the
+// Bridge's rescan, until the folder reads again and both move in one call.
 func TestPodcastRenameChainWaitsOnAnUnreadableFolder(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs a file the server's user can't read")
 	}
+	for _, how := range []string{"unreadable", "newer", "invalid"} {
+		for _, rescan := range []bool{false, true} {
+			b := newRenameBed(t)
+			named := b.addOther(t)
+			b.renameEach(t, [2]string{"Other", "Third"}, [2]string{"Example Show", "Other"})
+			b.writeShow(t, "Other", "Other")
+			third := filepath.Join(b.root, "Third", "feed.json")
+			raw := named("Third")
+			switch how {
+			case "newer":
+				raw = []byte(`{"version":2}`)
+			case "invalid":
+				raw = raw[:len(raw)/2]
+			}
+			if err := os.WriteFile(third, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if how == "unreadable" {
+				if err := os.Chmod(third, 0o000); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(third, 0o600) })
+			}
+			if rescan {
+				if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Other"); err != nil {
+					t.Fatal(err)
+				}
+			} else if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || res.Partial != (how == "unreadable") {
+				t.Fatalf("%s: scan %+v %v", how, res, err)
+			}
+			if got, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Other", b.user); err != nil || got.Following {
+				t.Fatalf("%s, rescan %v: moved over the other show's follow: %+v %v", how, rescan, got, err)
+			}
+			if err := os.Chmod(third, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(third, named("Third"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+				t.Fatal(err)
+			}
+			b.checkFollowed(t, "Other")
+			b.checkOther(t, "Third")
+		}
+	}
+}
+
+// An unrelated folder the server can't read (a root-owned lost+found on an
+// ext4 volume) holds up no plain rename: a scan, partial, and the Bridge's
+// rescan each move the show to its new folder.
+func TestPodcastRenameMovesBesideAnUnreadableFolder(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a folder the server's user can't read")
+	}
 	for _, rescan := range []bool{false, true} {
 		b := newRenameBed(t)
-		named := b.addOther(t)
-		b.renameEach(t, [2]string{"Other", "Third"}, [2]string{"Example Show", "Other"})
-		b.writeShow(t, "Other", "Other")
-		third := filepath.Join(b.root, "Third", "feed.json")
-		if err := os.WriteFile(third, named("Third"), 0o600); err != nil {
+		lost := filepath.Join(b.root, "lost+found")
+		if err := os.Mkdir(lost, 0o000); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(third, 0o000); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(third, 0o600) })
+		t.Cleanup(func() { _ = os.Chmod(lost, 0o700) })
+		b.rename(t, "Renamed", true)
 		if rescan {
-			if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Other"); err != nil {
+			if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Renamed"); err != nil {
 				t.Fatal(err)
 			}
 		} else if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || !res.Partial {
 			t.Fatalf("scan %+v %v", res, err)
 		}
-		if err := os.Chmod(third, 0o600); err != nil {
-			t.Fatal(err)
+		if got := b.shows(t); len(got) != 1 || got[0] != "Renamed" {
+			t.Fatalf("rescan %v: shows %v", rescan, got)
 		}
-		if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
-			t.Fatal(err)
-		}
-		b.checkFollowed(t, "Other")
-		b.checkOther(t, "Third")
+		b.checkFollowed(t, "Renamed")
 	}
+}
+
+// Denied: a chain of renames whose other show can't move yet, as it is in two
+// folders (renamed to "Third", and copied to "Fourth"). This show, renamed to
+// the other's old name, waits too, so the follow of the other show stays; once
+// the copy goes, both move in one call.
+func TestPodcastRenameChainWaitsOnACopiedPartner(t *testing.T) {
+	b := newRenameBed(t)
+	named := b.addOther(t)
+	b.renameEach(t, [2]string{"Other", "Third"}, [2]string{"Example Show", "Other"})
+	b.writeShow(t, "Other", "Other")
+	for _, f := range []string{"Third", "Fourth"} {
+		if err := os.MkdirAll(filepath.Join(b.root, f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(b.root, f, "feed.json"), named(f), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Other", b.user); err != nil || got.Following {
+		t.Fatalf("moved over the other show's follow: %+v %v", got, err)
+	}
+	if err := os.RemoveAll(filepath.Join(b.root, "Fourth")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	b.checkFollowed(t, "Other")
+	b.checkOther(t, "Third")
 }
