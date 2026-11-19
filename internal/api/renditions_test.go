@@ -220,7 +220,7 @@ func TestRenditionPending(t *testing.T) {
 	t.Parallel()
 	r := newRenditionEnv(t)
 	r.api.renditionWait = 20 * time.Millisecond
-	release := holdRuns(t, r.api.renditions)
+	_, release := holdRuns(t, r.api.renditions)
 	resp, body := r.do(t, "GET", r.streamURL(rendM4BBook, "&rendition=watch"), r.token, "")
 	if resp.StatusCode != http.StatusServiceUnavailable || codeOf(body) != "rendition_pending" ||
 		resp.Header.Get("Retry-After") != "15" {
@@ -448,7 +448,7 @@ func TestRenditionsPrepare(t *testing.T) {
 	if n := r.cached(t); n != 0 {
 		t.Fatalf("GET queued %d encodes, want none", n)
 	}
-	release := holdRuns(t, r.api.renditions)
+	_, release := holdRuns(t, r.api.renditions)
 	got := read("POST", rendPartsBook, "", `{"kind":"watch"}`, 202)
 	if s := states(got); !slices.Equal(s, []string{rendPart1 + "=pending", rendPart2 + "=pending"}) {
 		t.Fatalf("prepare = %v, want both pending in play order", s)
