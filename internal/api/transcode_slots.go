@@ -146,16 +146,9 @@ func (a *API) takeTranscodeSlot(w http.ResponseWriter, r *http.Request, ask tran
 		}
 		return &transcodeHold{ask: ask, running: running}, r
 	}
-	keyed := ask.keyed()
 	a.transcodeMu.Lock()
 	defer a.transcodeMu.Unlock()
-	var prev *transcodeHold
-	if keyed {
-		prev = a.transcodeHolds[ask]
-		if prev == nil {
-			prev = a.tokenOldestAtCap(ask.token)
-		}
-	}
+	prev := a.holdToTake(ask)
 	if prev == nil {
 		select {
 		case a.transcodeSem <- struct{}{}:
@@ -165,7 +158,7 @@ func (a *API) takeTranscodeSlot(w http.ResponseWriter, r *http.Request, ask tran
 	}
 	ctx, end := context.WithCancel(r.Context())
 	h := &transcodeHold{ask: ask, end: end, rc: http.NewResponseController(w)}
-	if keyed {
+	if ask.keyed() {
 		if prev != nil {
 			delete(a.transcodeHolds, prev.ask)
 			prev.takeOver()
@@ -175,6 +168,19 @@ func (a *API) takeTranscodeSlot(w http.ResponseWriter, r *http.Request, ask tran
 		a.transcodeHolds[ask] = h
 	}
 	return h, r.WithContext(ctx)
+}
+
+// holdToTake is the hold ask's GET would take over: the one a same ask
+// holds, else its token's oldest when the token is at its cap; nil for an
+// ask with no token or with neither. The caller holds transcodeMu.
+func (a *API) holdToTake(ask transcodeAsk) *transcodeHold {
+	if !ask.keyed() {
+		return nil
+	}
+	if h := a.transcodeHolds[ask]; h != nil {
+		return h
+	}
+	return a.tokenOldestAtCap(ask.token)
 }
 
 // tokenOldestAtCap is the oldest hold of token's when it holds
@@ -216,13 +222,11 @@ func (h *transcodeHold) takeOver() {
 func (a *API) transcodeSlotFree(ask transcodeAsk) (free bool, running *transcodeHold) {
 	a.transcodeMu.Lock()
 	defer a.transcodeMu.Unlock()
-	if ask.keyed() {
-		if h := a.transcodeHolds[ask]; h != nil {
+	if h := a.holdToTake(ask); h != nil {
+		if h.ask == ask {
 			return true, h
 		}
-		if a.tokenOldestAtCap(ask.token) != nil {
-			return true, nil
-		}
+		return true, nil
 	}
 	return len(a.transcodeSem) < cap(a.transcodeSem), nil
 }
@@ -241,11 +245,10 @@ func (a *API) endTranscode(h *transcodeHold) {
 		return
 	}
 	h.end()
-	keyed := h.ask.keyed()
 	a.transcodeMu.Lock()
-	taken := keyed && a.transcodeHolds[h.ask] != h
+	taken := h.taken.Load() // set by takeOver under transcodeMu
 	if !taken {
-		if keyed {
+		if h.ask.keyed() {
 			delete(a.transcodeHolds, h.ask)
 		}
 		<-a.transcodeSem

@@ -34,6 +34,12 @@ func slotAPI(n, free int) *API {
 	return a
 }
 
+// takeSlot is a.takeTranscodeSlot for a request of method by ask's token,
+// answered on a recorder.
+func takeSlot(a *API, method string, ask transcodeAsk) (*transcodeHold, *http.Request) {
+	return a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(method, auth.Credential{ID: ask.token}), ask)
+}
+
 // endTaken is endTranscode for a hold taken over: it reports whether it aborted.
 func endTaken(a *API, h *transcodeHold) (aborted bool) {
 	defer func() {
@@ -51,11 +57,11 @@ func TestTranscodeRepeatAskTakesOverSlot(t *testing.T) {
 	t.Parallel()
 	a := slotAPI(2, 1)
 	ask := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka", start: 12.5}
-	first, r1 := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+	first, r1 := takeSlot(a, http.MethodGet, ask)
 	if first == nil {
 		t.Fatal("the first ask got no slot with one free")
 	}
-	second, r2 := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+	second, r2 := takeSlot(a, http.MethodGet, ask)
 	if second == nil {
 		t.Fatal("the repeat ask got no slot: it should take the first's over")
 	}
@@ -93,9 +99,9 @@ func TestTranscodeTakeoverAfterItsEnd(t *testing.T) {
 	t.Parallel()
 	a := slotAPI(2, 1)
 	ask := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka"}
-	first, _ := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+	first, _ := takeSlot(a, http.MethodGet, ask)
 	first.ended = true
-	second, _ := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+	second, _ := takeSlot(a, http.MethodGet, ask)
 	if second == nil {
 		t.Fatal("the repeat ask got no slot")
 	}
@@ -118,7 +124,7 @@ func TestTranscodeHeadSaysWhatItsAskSent(t *testing.T) {
 	t.Parallel()
 	a := slotAPI(2, 2)
 	ask := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka", start: 12.5}
-	h, _ := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+	h, _ := takeSlot(a, http.MethodGet, ask)
 	rec := httptest.NewRecorder()
 	w := h.writer(rec)
 	if _, err := w.Write(make([]byte, 1500)); err != nil {
@@ -194,8 +200,8 @@ func TestTranscodeTakenOverKeepsItsPanic(t *testing.T) {
 	t.Parallel()
 	a := slotAPI(1, 1)
 	ask := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka"}
-	first, _ := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
-	if h, _ := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask); h == nil {
+	first, _ := takeSlot(a, http.MethodGet, ask)
+	if h, _ := takeSlot(a, http.MethodGet, ask); h == nil {
 		t.Fatal("the repeat ask got no slot")
 	}
 	got := func() (p any) {
@@ -226,14 +232,14 @@ func TestTranscodeOtherAsksCountSeparately(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			a := slotAPI(2, 1)
-			h, r := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: held.token}), held)
+			h, r := takeSlot(a, http.MethodGet, held)
 			if h == nil {
 				t.Fatal("the held ask got no slot")
 			}
 			if free, running := a.transcodeSlotFree(other); free || running != nil {
 				t.Fatal("a HEAD of another ask was told a slot is free with none, or of the holder's stream")
 			}
-			if o, _ := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: other.token}), other); o != nil {
+			if o, _ := takeSlot(a, http.MethodGet, other); o != nil {
 				t.Fatal("another ask got a slot with none free")
 			}
 			if r.Context().Err() != nil {
@@ -243,7 +249,7 @@ func TestTranscodeOtherAsksCountSeparately(t *testing.T) {
 				t.Fatalf("the holder's end: %d slots taken, want 1", len(a.transcodeSem))
 			}
 			// Now free, the other ask is admitted.
-			if o, _ := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: other.token}), other); o == nil {
+			if o, _ := takeSlot(a, http.MethodGet, other); o == nil {
 				t.Fatal("another ask got no slot with one free")
 			}
 		})
@@ -258,8 +264,8 @@ func TestTranscodeUnkeyedAsksNeverTakeOver(t *testing.T) {
 	t.Parallel()
 	ask := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka"}
 	a := slotAPI(1, 1)
-	_, r := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
-	head, _ := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodHead, auth.Credential{ID: 7}), ask)
+	_, r := takeSlot(a, http.MethodGet, ask)
+	head, _ := takeSlot(a, http.MethodHead, ask)
 	if head == nil {
 		t.Fatal("a HEAD of the held ask was told busy: a GET would take its slot over")
 	}
@@ -270,15 +276,15 @@ func TestTranscodeUnkeyedAsksNeverTakeOver(t *testing.T) {
 		t.Fatal("a HEAD's end let go of a slot it never held")
 	}
 	other := transcodeAsk{token: 8, lib: 1, rel: "Book/01.mka"}
-	if h, _ := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodHead, auth.Credential{ID: 8}), other); h != nil {
+	if h, _ := takeSlot(a, http.MethodHead, other); h != nil {
 		t.Fatal("a HEAD of another ask was told a slot is free with none")
 	}
 	b := slotAPI(1, 1)
 	none := transcodeAsk{lib: 1, rel: "Book/01.mka"}
-	if h, _ := b.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{}), none); h == nil {
+	if h, _ := takeSlot(b, http.MethodGet, none); h == nil {
 		t.Fatal("an ask with no token got no slot with one free")
 	}
-	if h, _ := b.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{}), none); h != nil {
+	if h, _ := takeSlot(b, http.MethodGet, none); h != nil {
 		t.Fatal("a second ask with no token took over the first's slot")
 	}
 }
@@ -426,8 +432,7 @@ func TestTranscodeTokenCapTakesOverItsOldest(t *testing.T) {
 	a := slotAPI(maxConcurrentTranscodes, maxConcurrentTranscodes)
 	take := func(token int64, start float64) (*transcodeHold, *http.Request) {
 		t.Helper()
-		h, r := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: token}),
-			transcodeAsk{token: token, lib: 1, rel: "Book/01.mka", start: start})
+		h, r := takeSlot(a, http.MethodGet, transcodeAsk{token: token, lib: 1, rel: "Book/01.mka", start: start})
 		if h == nil {
 			t.Fatalf("token %d at t=%v got no slot", token, start)
 		}
@@ -460,7 +465,7 @@ func TestTranscodeTokenCapTakesOverItsOldest(t *testing.T) {
 	if !endTaken(a, oldest) || len(a.transcodeSem) != 4 {
 		t.Fatal("the taken-over oldest was not aborted, or let go of the slot it no longer holds")
 	}
-	if n, err := (sentWriter{ResponseWriter: httptest.NewRecorder(), hold: oldest}).Write([]byte("x")); n != 0 || !errors.Is(err, errTranscodeTaken) {
+	if n, err := oldest.writer(httptest.NewRecorder()).Write([]byte("x")); n != 0 || !errors.Is(err, errTranscodeTaken) {
 		t.Fatalf("a write to the taken-over stream = %d, %v; want refused", n, err)
 	}
 	if endTaken(a, third) || len(a.transcodeSem) != 3 {
@@ -477,8 +482,7 @@ func TestTranscodeGlobalCapAcrossTokens(t *testing.T) {
 	a := slotAPI(maxConcurrentTranscodes, maxConcurrentTranscodes)
 	var held []*http.Request
 	for token := int64(1); token <= maxConcurrentTranscodes; token++ {
-		h, r := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: token}),
-			transcodeAsk{token: token, lib: 1, rel: "Book/01.mka"})
+		h, r := takeSlot(a, http.MethodGet, transcodeAsk{token: token, lib: 1, rel: "Book/01.mka"})
 		if h == nil {
 			t.Fatalf("token %d got no slot with one free", token)
 		}
@@ -488,7 +492,7 @@ func TestTranscodeGlobalCapAcrossTokens(t *testing.T) {
 		"a fifth token":              {token: 5, lib: 1, rel: "Book/01.mka"},
 		"a holder's second-ask seek": {token: 1, lib: 1, rel: "Book/01.mka", start: 30},
 	} {
-		if h, _ := a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(http.MethodGet, auth.Credential{ID: ask.token}), ask); h != nil {
+		if h, _ := takeSlot(a, http.MethodGet, ask); h != nil {
 			t.Fatalf("%s got a slot with every one held", name)
 		}
 		if free, _ := a.transcodeSlotFree(ask); free {
