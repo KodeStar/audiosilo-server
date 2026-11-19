@@ -4184,7 +4184,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Bridge's storage) never counts, and the single follow always retries. The import runs outside the 30 s
   request timeout, under `opmlImportTimeout` (5 min) on its context with its answer unbuffered
   (`unbufferedBound`, as the Bridge's claim); one its bound ends answers the timeout's 503 (`writeOPMLImport`),
-  never the rows it got to as all of them (server#179). A library the caller holds no whole grant on, or
+  never the rows it got to as all of them (server#179). Its rows are followed under that bound without the
+  request's cancellation (`opmlImportContext`): a player gives the upload up after 45 s, and the import
+  runs to its end all the same, its slot held until then (the server stopping ends it). A library the caller holds no whole grant on, or
   none at that id, is 403 `no_library_access` before its kind, as for the single follow: neither tells
   which ids exist. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
   `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1; a busy import is answered before its body is read (`Slots.Busy`) and refunds its token, so the retry runs; so does a 400 `invalid_opml`, server#219, but not a 413 or an upload whose read failed). The export (`catalog.PodcastExport`: current

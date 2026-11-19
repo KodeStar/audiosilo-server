@@ -357,6 +357,96 @@ func TestOPMLImportEndedByItsBoundIs503(t *testing.T) {
 	}
 }
 
+// cancelAtEOF is an upload whose client goes away once the server has read
+// it whole: its last read cancels the request's context.
+type cancelAtEOF struct {
+	io.Reader
+	gone context.CancelFunc
+}
+
+func (c cancelAtEOF) Read(p []byte) (int, error) {
+	n, err := c.Reader.Read(p)
+	if err != nil {
+		c.gone()
+	}
+	return n, err
+}
+
+func (cancelAtEOF) Close() error { return nil }
+
+// A client that gives the upload up (the player does after 45 s) does not end
+// the import: every row is still followed, under the import's own bound
+// (allowed). The server stopping ends it, and so does its bound (denied).
+func TestOPMLImportOutlivesItsClient(t *testing.T) {
+	b, _, _ := podcastEnv(t, false)
+	capDoc := string(readFixture(t, phase2c3+"opml/queue-cap.opml"))
+	upload := func() *httptest.ResponseRecorder {
+		b.api.opml = newOPMLTransfers()
+		ctx, gone := context.WithCancel(context.Background())
+		defer gone()
+		req := httptest.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s?library_id=%d", opmlImportPath, b.lib.ID), nil)
+		req.Body = cancelAtEOF{strings.NewReader(capDoc), gone}
+		req.Header.Set("Authorization", "Bearer "+b.userTok)
+		req.Header.Set("Content-Type", "text/x-opml")
+		for k, v := range podcastHeaders() {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		b.srv.Config.Handler.ServeHTTP(rec, req)
+		if ctx.Err() == nil {
+			t.Fatal("the upload was never read to its end")
+		}
+		return rec
+	}
+	rec := upload()
+	if rec.Code != 200 || strings.Count(rec.Body.String(), `"status":"queued"`) != 5 || openSubscribes(t, b) != 5 {
+		t.Fatalf("import whose client left = %d %s, %d open subscribes", rec.Code, rec.Body.String(), openSubscribes(t, b))
+	}
+	if len(b.api.opml.slots) != 0 {
+		t.Fatal("the import's slot was not released at its end")
+	}
+
+	stopped, stop := context.WithCancel(context.Background())
+	stop()
+	was := b.api.baseCtx
+	b.api.baseCtx = stopped
+	defer func() { b.api.baseCtx = was }()
+	if rec = upload(); rec.Code != 503 || strings.Contains(rec.Body.String(), "outline_index") {
+		t.Fatalf("import on a stopping server = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The import's context carries the request's deadline and values, not its
+// cancellation.
+func TestOPMLImportContextKeepsTheBound(t *testing.T) {
+	t.Parallel()
+	a := &API{baseCtx: context.Background(), opmlImportDur: time.Hour}
+	type key struct{}
+	parent, gone := context.WithDeadline(context.WithValue(context.Background(), key{}, "v"), time.Now().Add(30*time.Millisecond))
+	ctx, cancel := a.opmlImportContext(httptest.NewRequestWithContext(parent, "POST", opmlImportPath, nil))
+	defer cancel()
+	want, _ := parent.Deadline()
+	if got, ok := ctx.Deadline(); !ok || !got.Equal(want) || ctx.Value(key{}) != "v" {
+		t.Fatalf("deadline %v %v, value %v", got, ok, ctx.Value(key{}))
+	}
+	gone()
+	if ctx.Err() != nil {
+		t.Fatal("the client leaving ended the import")
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the import's bound never ended it")
+	}
+	// A request with no deadline (the middleware always sets one) is bounded
+	// all the same.
+	ctx, cancel = a.opmlImportContext(httptest.NewRequest("POST", opmlImportPath, nil))
+	defer cancel()
+	if _, ok := ctx.Deadline(); !ok {
+		t.Fatal("an import with no bound")
+	}
+}
+
 func TestOPMLImportPrivateRowsStayInMemory(t *testing.T) {
 	b, _, _ := podcastEnv(t, false)
 	doc := string(readFixture(t, phase2c3+"opml/duplicates-private.opml"))

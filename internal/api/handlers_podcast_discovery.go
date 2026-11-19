@@ -317,7 +317,9 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 		defer a.opml.slots.Release()
 		var doc *opml.Document
 		if doc, err = opml.Parse(body); err == nil {
-			writeOPMLImport(w, r.Context(), a.follower().Import(r.Context(), who, id, doc))
+			ctx, cancel := a.opmlImportContext(r)
+			defer cancel()
+			writeOPMLImport(w, ctx, a.follower().Import(ctx, who, id, doc))
 			return
 		}
 	}
@@ -336,8 +338,26 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 	writeNoStoreError(w, http.StatusBadRequest, "invalid_opml", "Invalid OPML document.", 0)
 }
 
+// opmlImportContext is the context an import's rows are followed under: the
+// request's values and its bound (the deadline the timeout middleware set,
+// opmlImportTimeout) without its cancellation. A player gives the upload up
+// after 45 s, and the import that client no longer waits for still runs to
+// its end, holding its slot until then, so the rows it had not reached are
+// not left for an upload again. The server stopping ends it.
+func (a *API) opmlImportContext(r *http.Request) (context.Context, context.CancelFunc) {
+	ctx := context.WithoutCancel(r.Context())
+	var cancel context.CancelFunc
+	if deadline, ok := r.Context().Deadline(); ok {
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+	} else {
+		ctx, cancel = context.WithTimeout(ctx, a.opmlImportDur)
+	}
+	stop := context.AfterFunc(a.baseCtx, cancel)
+	return ctx, func() { stop(); cancel() }
+}
+
 // writeOPMLImport answers an import's rows, or, when ctx ended it (its bound,
-// opmlImportTimeout, or the client gone), the timeout's 503: the rows
+// opmlImportTimeout, or the server stopping), the timeout's 503: the rows
 // answered so far are followed and the rest not looked at, so a list short of
 // rows would read as all done. An upload again is safe: rows already done
 // answer already_following or already_queued.
