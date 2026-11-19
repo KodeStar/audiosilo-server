@@ -4865,7 +4865,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   events are logged with token 0. 200 the Sync v2 answer; 403 `sync_off` (the module or the account's sync off, or
   the account paused: no library), 403 `user_unavailable` (the person disabled, a kid or a demo since:
   `ErrAudibleSyncUser`), 404 `unknown_account` (none, a bad id, or its person deleted: the account cascades). **Here to Audible**: `GET /bridge/progress?account=&since=&limit=` (default 200,
-  at most 500; the same 403s and 404, 400 `invalid_request` for no account, a bad limit or cursor) answers
+  at most 500; the same 403s and 404, 400 `invalid_request` for no account or a bad limit, 400 `invalid_cursor` for a
+  `since` it can't read, so the Bridge reads the feed from its start for that alone, bridge#50) answers
   `{rows:[{library_id, path, asin, position, duration, finished, updated_at, device_id, version}], next, more,
   server_time}` (`server_time`: the server's clock, which the Bridge's baseline reads `updated_at` against, bridge#50):
   the person's progress rows on the synced titles' books inside their scopes, one per title (two titles on one book

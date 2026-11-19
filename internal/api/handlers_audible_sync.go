@@ -166,8 +166,10 @@ func (a *API) handleBridgeAudibleListening(w http.ResponseWriter, r *http.Reques
 // next is the cursor to send as since next time (kept between polls), more
 // whether to ask again at once, server_time the server's clock (RFC 3339),
 // which the Bridge reads the rows' updated_at against rather than its own
-// (bridge#50). 400 invalid_request (no account, a bad limit or cursor); 403
-// sync_off, user_unavailable; 404 unknown_account.
+// (bridge#50). 400 invalid_request (no account, a bad limit), 400
+// invalid_cursor (a since this server can't read: the Bridge reads the feed
+// again from its start, bridge#50; a server before 2.7.0 answered
+// invalid_request); 403 sync_off, user_unavailable; 404 unknown_account.
 func (a *API) handleBridgeProgress(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	id := q.Get("account")
@@ -189,6 +191,10 @@ func (a *API) handleBridgeProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, next, more, err := a.cat.AudibleProgress(r.Context(), acct, scopes, q.Get("since"), limit)
+	if errors.Is(err, catalog.ErrInvalidCursor) {
+		writeErrorCode(w, http.StatusBadRequest, "invalid_cursor", "the progress cursor can't be read: read the feed from its start")
+		return
+	}
 	if err != nil {
 		a.writeAudibleError(w, err, op)
 		return
