@@ -451,7 +451,7 @@ func waitRun(t *testing.T, done <-chan error) {
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(startWait):
 		t.Fatal("Run did not stop")
 	}
 }
@@ -508,7 +508,7 @@ func TestRunAnswersStartingBeforeTheDatabase(t *testing.T) {
 	case <-reached:
 	case err := <-done:
 		t.Fatalf("Run = %v before it listened", err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(startWait):
 		t.Fatal("Run never listened")
 	}
 	if _, err := os.Stat(filepath.Join(data, "audiosilo.db")); !os.IsNotExist(err) {
@@ -776,7 +776,7 @@ func TestRunStartMarkerUnderAutocert(t *testing.T) {
 	case <-reached:
 	case err := <-done:
 		t.Fatalf("Run = %v before it listened", err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(startWait):
 		t.Fatal("Run never listened")
 	}
 	var out bytes.Buffer

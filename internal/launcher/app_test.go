@@ -234,7 +234,7 @@ func TestStartupScansWarnAndContinue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(startWait)
 	for {
 		runs, _ := cat.ListScanRuns(ctx, 0, 0, 10)
 		if len(runs) == 2 && runs[0].FinishedAt != nil && runs[1].FinishedAt != nil {
@@ -279,7 +279,7 @@ func TestDemoReaperSweepsThenExits(t *testing.T) {
 	}()
 
 	// The startup sweep should remove the idle demo user.
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(startWait)
 	for {
 		if _, err := authSvc.GetUser(ctx, demo.ID); err != nil {
 			break // reaped
@@ -293,7 +293,7 @@ func TestDemoReaperSweepsThenExits(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(startWait):
 		t.Fatal("demoReaper did not exit after ctx cancel")
 	}
 }
@@ -508,7 +508,7 @@ func TestRunStartsWithAReadOnlyConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(startWait):
 		t.Fatal("Run did not stop")
 	}
 }
