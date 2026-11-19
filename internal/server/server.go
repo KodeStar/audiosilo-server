@@ -25,9 +25,15 @@ const readHeaderTimeout = 10 * time.Second
 // Serving is a server Start left running.
 type Serving struct {
 	wait func() error
+	done chan struct{}
 	once sync.Once
 	err  error
 }
+
+// Done is closed once the server stops accepting: when Wait shuts it down, or
+// on its own when serving failed (Wait then returns why), so a caller still
+// starting up can stop there rather than only at its end.
+func (s *Serving) Done() <-chan struct{} { return s.done }
 
 // Wait blocks until the server stops: ctx cancelled (connections then drain
 // gracefully, nil) or serving failed (its error). Every call returns the same.
@@ -70,14 +76,14 @@ func Start(ctx context.Context, cfg *config.Config, handler http.Handler, log *s
 		IdleTimeout: 120 * time.Second,
 	}
 	if cfg.TLS.Mode == config.TLSAutocert {
-		srv.ErrorLog = autocertErrorLog()
+		srv.ErrorLog = autocertErrorLog(cfg.Bind)
 	}
 
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Bind)
 	if err != nil {
 		return nil, err
 	}
-	errCh := make(chan error, 1)
+	var serve func() error
 	switch {
 	case cfg.ServesHomeHTTP():
 		// One port, both protocols: the TLS connections get the certificate here
@@ -88,16 +94,26 @@ func Start(ctx context.Context, cfg *config.Config, handler http.Handler, log *s
 		log.Info("listening", "addr", cfg.Bind, "tls", cfg.TLS.Mode)
 		log.Info("plain HTTP is served on the same port to home-network clients (tls.home_http); "+
 			"other plain HTTP clients are redirected to https", "addr", cfg.Bind)
-		go func() { errCh <- srv.Serve(newSplitListener(ln, tlsCfg, readHeaderTimeout)) }()
+		serve = func() error { return srv.Serve(newSplitListener(ln, tlsCfg, readHeaderTimeout)) }
 	case tlsCfg != nil:
 		log.Info("listening", "addr", cfg.Bind, "tls", cfg.TLS.Mode)
-		go func() { errCh <- srv.ServeTLS(ln, "", "") }() // certs come from TLSConfig
+		serve = func() error { return srv.ServeTLS(ln, "", "") } // certs come from TLSConfig
 	default:
 		log.Info("listening", "addr", cfg.Bind, "tls", "off")
-		go func() { errCh <- srv.Serve(ln) }()
+		serve = func() error { return srv.Serve(ln) }
 	}
+	return serveIn(ctx, srv, serve, log), nil
+}
 
-	return &Serving{wait: func() error {
+// serveIn runs serve (srv serving its listener) in the background, as Start's
+// Serving: Done closes when serve returns, and Wait shuts srv down once ctx
+// ends or returns serve's own failure.
+func serveIn(ctx context.Context, srv *http.Server, serve func() error, log *slog.Logger) *Serving {
+	errCh := make(chan error, 1)
+	done := make(chan struct{})
+	go func() { errCh <- serve(); close(done) }()
+
+	return &Serving{done: done, wait: func() error {
 		select {
 		case <-ctx.Done():
 			log.Info("shutting down")
@@ -110,7 +126,7 @@ func Start(ctx context.Context, cfg *config.Config, handler http.Handler, log *s
 			}
 			return err
 		}
-	}}, nil
+	}}
 }
 
 // pemBlock PEM-encodes DER bytes under the given type.

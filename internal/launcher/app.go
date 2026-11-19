@@ -77,7 +77,7 @@ var dataFiles = []string{"audiosilo.db", "audiosilo.db-wal", "audiosilo.db-shm"}
 // until the rest is done), opens the store, wires the services, performs
 // first-run bootstrap (admin + auth code banner), starts the background scan,
 // and serves HTTP(S) until ctx is cancelled. It blocks until shutdown.
-func Run(ctx context.Context, opts Options) error {
+func Run(ctx context.Context, opts Options) (err error) {
 	log := opts.Log
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -145,8 +145,28 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer func() {
+		// Serving that stopped on its own (Done before Run's end asked it to)
+		// is why the start or the run ended: its error is Run's.
+		select {
+		case <-serving.Done():
+			if serr := serving.Wait(); serr != nil {
+				err = serr
+			}
+		default:
+		}
 		stopServing()
 		_ = serving.Wait()
+	}()
+	// A serve failure mid-start (the listener lost) ends the start there, not
+	// only at its end: the rest runs under a context that ends with serving.
+	ctx, endStart := context.WithCancel(ctx)
+	defer endStart()
+	go func() {
+		select {
+		case <-serving.Done():
+			endStart()
+		case <-ctx.Done():
+		}
 	}()
 	if opts.listening != nil {
 		opts.listening()

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -46,7 +47,8 @@ func TestStartGate(t *testing.T) {
 }
 
 // Start returns a listen error at once, serving nothing; a started server
-// answers until its context ends, and Wait returns the same nil every call.
+// answers until its context ends, Done closed only then, and Wait returns the
+// same nil every call.
 func TestStartListenErrorAndWait(t *testing.T) {
 	t.Parallel()
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
@@ -74,11 +76,30 @@ func TestStartListenErrorAndWait(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("started server = %d, want the gate's 503", resp.StatusCode)
 	}
+	select {
+	case <-s.Done():
+		t.Fatal("Done closed while serving")
+	default:
+	}
 	stop()
 	if err := s.Wait(); err != nil {
 		t.Fatalf("Wait = %v", err)
 	}
+	<-s.Done() // closed once Wait shut it down
 	if err := s.Wait(); err != nil {
 		t.Fatalf("second Wait = %v", err)
+	}
+}
+
+// A serve that fails on its own (the listener lost) closes Done without
+// anyone asking, so a start still running can stop there, and Wait returns
+// why.
+func TestServingFailureClosesDone(t *testing.T) {
+	t.Parallel()
+	lost := errors.New("accept: listener lost")
+	s := serveIn(context.Background(), &http.Server{}, func() error { return lost }, slog.New(slog.DiscardHandler))
+	<-s.Done()
+	if err := s.Wait(); !errors.Is(err, lost) {
+		t.Fatalf("Wait = %v, want %v", err, lost)
 	}
 }
