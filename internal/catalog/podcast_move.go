@@ -99,6 +99,9 @@ func (c *Catalog) MovePodcastShows(ctx context.Context, lib int64, moves []Podca
 				continue
 			}
 			m.From = slices.DeleteFunc(slices.Clone(m.From), func(from string) bool { return from == m.To || !feed.ShowPath(from) })
+			if len(m.From) == 0 {
+				continue
+			}
 			hold := movePlaceholder(len(live))
 			for _, from := range m.From {
 				if err := liftShowRows(ctx, tx, lib, m.ShowID, from, hold); err != nil {
@@ -141,9 +144,13 @@ func movePlaceholder(i int) string { return fmt.Sprintf(".podcast-move-%d", i) }
 // liftShowRows moves id's follows at from, and the listening state on the
 // folder itself, to hold.
 func liftShowRows(ctx context.Context, tx *sql.Tx, lib int64, id, from, hold string) error {
-	// A listener following at two of a move's From paths keeps one follow.
+	// A listener following at two of a move's From paths keeps one follow,
+	// with the earlier date.
 	for _, q := range []string{
-		`UPDATE OR IGNORE podcast_follows SET show_path=?3 WHERE library_id=?1 AND show_path=?2 AND show_id=?4`,
+		`INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at)
+		 SELECT user_id,library_id,?3,show_id,created_at FROM podcast_follows WHERE library_id=?1 AND show_path=?2 AND show_id=?4
+		 ON CONFLICT(user_id,library_id,show_path) DO UPDATE SET created_at=excluded.created_at
+		  WHERE excluded.created_at<podcast_follows.created_at`,
 		`DELETE FROM podcast_follows WHERE library_id=?1 AND show_path=?2 AND show_id=?4`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, lib, from, hold, id); err != nil {

@@ -293,3 +293,25 @@ func TestPodcastFetchFoldFollowsARenamedFolder(t *testing.T) {
 		t.Fatalf("fetch state %d %d %v", failures, last, err)
 	}
 }
+
+// A listener following at two old folders (a copy removed, then the show
+// renamed) keeps one follow with the earlier date, not the date of the path
+// that sorts first.
+func TestMovePodcastShowsKeepsTheEarliestFollow(t *testing.T) {
+	fx := newRenameFixture(t)
+	if _, err := fx.c.db.ExecContext(fx.ctx, `UPDATE podcast_follows SET created_at='2026-01-01T00:00:00Z' WHERE user_id=?`, fx.ann); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.c.db.ExecContext(fx.ctx, `INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at) VALUES(?,?,'A copy',?,'2026-09-01T00:00:00Z')`, fx.ann, fx.lib, fx.id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"A copy", "Example Show"}, To: "Renamed"}}); err != nil {
+		t.Fatal(err)
+	}
+	fx.checkMoved(t)
+	var n int
+	var at string
+	if err := fx.c.db.QueryRowContext(fx.ctx, `SELECT COUNT(*),MIN(created_at) FROM podcast_follows WHERE user_id=?`, fx.ann).Scan(&n, &at); err != nil || n != 1 || at != "2026-01-01T00:00:00Z" {
+		t.Fatalf("follows %d %s %v", n, at, err)
+	}
+}
