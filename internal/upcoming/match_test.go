@@ -126,3 +126,79 @@ func TestRunnerSeriesResolvedAgainOnAMatch(t *testing.T) {
 		t.Fatalf("the series was resolved again at %s (first %s) with no match since", got, was)
 	}
 }
+
+// Unlinking a console match (server#375) leaves no match to compare with the
+// series' resolution, so the unlink itself sets the book's series due: the
+// series the match resolved is resolved again at the next run by what the
+// book's identifiers say, not a month on. A library's Clear matches does the
+// same; a series with no matched book keeps its resolution.
+func TestRunnerSeriesResolvedAgainOnAnUnlink(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newFixture(t)
+	f.expanse("2011", "2012")
+	f.md.workRefs["x1"] = []meta.SeriesRef{{ID: "other", Name: "Space Operas"}}
+	f.book(t, f.lib, "The Expanse", 1, "A1", "x1") // a wrong ASIN
+	f.book(t, f.lib, "Other", 1, "O1", "o1")
+	if err := f.cat.EditBook(ctx, f.lib.ID, "The Expanse/1", catalog.BookEdit{
+		Match: &catalog.MatchAnchor{WorkID: "e1"}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	series := func() map[string]catalog.UpcomingSeries {
+		t.Helper()
+		rows, err := f.cat.UpcomingSeriesAll(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]catalog.UpcomingSeries{}
+		for _, r := range rows {
+			out[r.Name] = r
+		}
+		return out
+	}
+	before := series()
+	if before["The Expanse"].SeriesID != "expanse" || before["Other"].ResolvedAt == "" {
+		t.Fatalf("series = %+v, want The Expanse resolved by the match", before)
+	}
+	f.clock = f.clock.Add(time.Hour)
+	if err := f.cat.EditBook(ctx, f.lib.ID, "The Expanse/1", catalog.BookEdit{
+		Match: &catalog.MatchAnchor{}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.RunOnce(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	after := series()
+	if got := after["The Expanse"]; got.SeriesID != "" {
+		t.Fatalf("after the unlink: The Expanse = %+v, want resolved again to none by its ASIN's work", got)
+	}
+	if after["Other"].ResolvedAt != before["Other"].ResolvedAt {
+		t.Fatalf("Other was resolved again (%s, first %s) with no match in it", after["Other"].ResolvedAt, before["Other"].ResolvedAt)
+	}
+
+	// Clear matches over the library: the same.
+	f.clock = f.clock.Add(time.Hour)
+	if err := f.cat.EditBook(ctx, f.lib.ID, "The Expanse/1", catalog.BookEdit{
+		Match: &catalog.MatchAnchor{WorkID: "e1"}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.RunOnce(ctx, false); err != nil || series()["The Expanse"].SeriesID != "expanse" {
+		t.Fatalf("matched again: %v, %+v", err, series())
+	}
+	f.clock = f.clock.Add(time.Hour)
+	if _, err := f.cat.ClearCommunityMatches(ctx, f.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.RunOnce(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := series()["The Expanse"]; got.SeriesID != "" {
+		t.Fatalf("after Clear matches: The Expanse = %+v, want resolved again to none", got)
+	}
+}

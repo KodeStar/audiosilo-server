@@ -192,6 +192,48 @@ func (c *Catalog) SetUpcomingSeries(ctx context.Context, libraryID int64, key, n
 	})
 }
 
+// setMatchedSeriesDue makes the upcoming job resolve again, at its next run,
+// the local series of each indexed book of pick with a recorded match, in tx
+// (clearCommunity's, before it removes the matches and the community series
+// values): their rows' resolved_at is emptied, which reads as never resolved.
+// The job's due rule compares a match's set_at with the series' resolved_at
+// (resolveSeries); an unlink leaves no row to compare, so a series resolved
+// by the match would otherwise keep it until the monthly recheck. Its
+// community series, items and classified mark stay until that run.
+func setMatchedSeriesDue(ctx context.Context, tx *sql.Tx, pick clearPick) error {
+	type matched struct {
+		lib          int64
+		series, more string
+	}
+	rows, err := queryRows(ctx, tx, func(r *sql.Rows, m *matched) error { return r.Scan(&m.lib, &m.series, &m.more) },
+		`SELECT b.library_id, b.series, b.more_series
+		   FROM (SELECT library_id AS lib, path AS p FROM book_matches WHERE `+pick.where+`) m
+		   JOIN books b ON b.library_id = m.lib AND b.rel_path = m.p
+		  WHERE b.series <> '' OR b.more_series <> '[]'`, pick.args...)
+	if err != nil {
+		return err
+	}
+	type local struct {
+		lib int64
+		key string
+	}
+	done := map[local]bool{}
+	for _, m := range rows {
+		for _, s := range SeriesList(SeriesRef{Name: m.series}, m.more) {
+			k := local{m.lib, seriesKey(s.Name)}
+			if strings.TrimSpace(s.Name) == "" || k.key == "" || done[k] {
+				continue
+			}
+			done[k] = true
+			if _, err := tx.ExecContext(ctx, `UPDATE upcoming_series SET resolved_at = ''
+			     WHERE library_id = ? AND series_key = ?`, k.lib, k.key); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // DropUpcomingSeries forgets local series (each [library id, key]) the
 // library no longer holds, with their items.
 func (c *Catalog) DropUpcomingSeries(ctx context.Context, gone []UpcomingSeries) error {

@@ -661,7 +661,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (primaries first; then give or take an article or "Series"), monthly or when it gains a book or a work
   (a book's identifiers answering another work, or a recorded match that stands in for another work than
   they answer, recorded since the series was resolved: `book_matches.set_at` against
-  `upcoming_series.resolved_at`, so nothing is remembered between runs; server#375);
+  `upcoming_series.resolved_at`, so nothing is remembered between runs; server#375; an unlink or a
+  library's Clear matches leaves no row to compare, so it empties the `resolved_at` of the series of each
+  book whose match it removes, in its own transaction: `catalog.setMatchedSeriesDue`);
   (3) metaserve's watch feed, 50 series a request (split when full), says which series have news; (4)
   `series/{id}` is read when new, with news, or a week old (2 at a time; a 404 marks it gone, dropped after
   a week); (5) classify; (6) announce. With metadata on and `upcoming.enabled` off, a run (scheduled or
