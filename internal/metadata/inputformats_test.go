@@ -99,8 +99,9 @@ func TestProbeReadsNoPlaylist(t *testing.T) {
 }
 
 // A book in another audio container under a name the server indexes (AIFF,
-// WMA's ASF, AC-3) still probes held to InputFormats, as it did before the
-// list.
+// WMA's ASF, AC-3, Wave64, E-AC-3, WavPack, CAF) still probes held to
+// InputFormats, as it did before the list; every name on the list is a
+// demuxer this ffmpeg has (a misspelt one would refuse its format).
 func TestProbeReadsOtherAudioContainers(t *testing.T) {
 	t.Parallel()
 	ffprobe, err := exec.LookPath("ffprobe")
@@ -111,6 +112,23 @@ func TestProbeReadsOtherAudioContainers(t *testing.T) {
 	if err != nil {
 		t.Skip("no ffmpeg on PATH")
 	}
+	out, err := exec.CommandContext(t.Context(), ffmpeg, "-hide_banner", "-demuxers").Output()
+	if err != nil {
+		t.Fatalf("ffmpeg -demuxers: %v", err)
+	}
+	demuxers := map[string]bool{}
+	for line := range strings.SplitSeq(string(out), "\n") {
+		if f := strings.Fields(line); len(f) >= 2 {
+			for name := range strings.SplitSeq(f[1], ",") {
+				demuxers[name] = true
+			}
+		}
+	}
+	for name := range strings.SplitSeq(InputFormats, ",") {
+		if !demuxers[name] {
+			t.Errorf("InputFormats names %q, a demuxer ffmpeg -demuxers doesn't list", name)
+		}
+	}
 	dir := t.TempDir()
 	for _, tc := range []struct {
 		file, format, codec string
@@ -118,6 +136,10 @@ func TestProbeReadsOtherAudioContainers(t *testing.T) {
 		{"aiff.m4a", "aiff", "pcm_s16be"},
 		{"wma.mp3", "asf", "wmav2"},
 		{"ac3.m4b", "ac3", "ac3"},
+		{"w64.flac", "w64", "pcm_s16le"},
+		{"eac3.mp3", "eac3", "eac3"},
+		{"wv.ogg", "wv", "wavpack"},
+		{"caf.m4a", "caf", "pcm_s16le"},
 	} {
 		path := filepath.Join(dir, tc.file)
 		gen := exec.CommandContext(t.Context(), ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=d=2",
