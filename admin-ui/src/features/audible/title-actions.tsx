@@ -6,7 +6,14 @@ import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { canReject, canSync, cleanDest, plannedPlaceholder, titleName } from './audible-model';
+import {
+  canReject,
+  canSync,
+  cleanDest,
+  onServer,
+  plannedPlaceholder,
+  titleName,
+} from './audible-model';
 import type { Backups } from './use-audible';
 
 /**
@@ -80,7 +87,7 @@ export function TitleActions({
           {t(x.no_sync ? 'audible.nosync.undo' : 'audible.nosync.action')}
         </Button>
       ) : null}
-      {!x.match || x.rejected ? (
+      {!onServer(x) ? (
         <Button
           size="sm"
           variant="ghost"
