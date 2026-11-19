@@ -429,9 +429,10 @@ func (a *API) sampleBook(ctx context.Context, lib *catalog.Library) (*catalog.Bo
 // next queued job of a kind the Bridge runs, narrowed to the kind= values when it
 // sends any (the kinds it has room for now), leased to it (200 job), waiting up
 // to wait (at most bridge.MaxWait) for one; share_off=1 says the Bridge honours
-// a job's share_off (bridge.ClaimOptions.ShareOff), any other value none; 204 when none came (at once when no
-// kind is left, and when the server is stopping), 409 no_heartbeat before its
-// first heartbeat, 401 once a pairing or an unpair revoked its token mid-wait.
+// a job's share_off (bridge.ClaimOptions.ShareOff), any other value none; 204
+// when none came (at once when no kind is left, and when the server is
+// stopping), 409 no_heartbeat before its first heartbeat, 401 once a pairing
+// or an unpair revoked its token mid-wait.
 func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 	wait := time.Duration(queryInt(r, "wait", 0)) * time.Second
 	// The wait ends with the server too: a paired Bridge always has a claim

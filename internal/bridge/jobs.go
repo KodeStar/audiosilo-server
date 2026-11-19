@@ -1229,7 +1229,9 @@ type ClaimOptions struct {
 	// sidecars.generate job that would also share is handed out while the
 	// Contributions module is off, flagged to keep its results local, rather
 	// than held (nextQueued). An older Bridge sends none: such a job stays
-	// held for it, as it would share anyway.
+	// held for it, as it would share anyway. Unlike MinPriority it is sent
+	// without the heartbeat's accepts naming it: a server that ignores it
+	// holds the job and never answers share_off, as before.
 	ShareOff bool
 }
 
