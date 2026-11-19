@@ -1338,11 +1338,14 @@ func (c *Catalog) PlaceByTitles(ctx context.Context) (int, error) {
 				// A book a scan removed meanwhile has nothing to resolve; one whose
 				// stored scan doesn't decode is skipped and recorded
 				// (refreshOrSkip).
+				// A failure to record the skip is the batch's, as any other.
 				skipped, err := refreshOrSkip(ctx, tx, id)
-				if errors.Is(err, sql.ErrNoRows) || skipped {
+				if errors.Is(err, sql.ErrNoRows) {
 					continue
 				} else if err != nil {
 					return err
+				} else if skipped {
+					continue
 				}
 				var idx float64
 				if err := tx.QueryRowContext(ctx, `SELECT series_index FROM books WHERE id = ?`, id).Scan(&idx); err != nil {
