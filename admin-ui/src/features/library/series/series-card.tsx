@@ -356,8 +356,9 @@ function SpineDate({
  * Whether the ruler's text (the whole line, out of the flow) fits the
  * line's room: the line's inline size, which is vertical on a spine. Measured
  * after layout, again whenever the line's size changes (the shelf's height on
- * a phone, a font loading late) and once the page's fonts have loaded. Before
- * any layout (no size at all, as in jsdom) it fits.
+ * a phone) or the ruler's does (its words: another language, a preorder become
+ * a new release, a new date; a font loading late), and once the page's fonts
+ * have loaded. Before any layout (no size at all, as in jsdom) it fits.
  */
 function useLineFits(
   line: RefObject<HTMLElement | null>,
@@ -378,6 +379,9 @@ function useLineFits(
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
+    // The line's size is its room, never its text: a change of words shows in
+    // the ruler's size alone.
+    if (ruler.current) ro.observe(ruler.current);
     let live = true;
     void document.fonts?.ready.then(() => live && measure());
     return () => {
