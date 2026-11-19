@@ -361,8 +361,14 @@ func linkRead(to string, err error, maybe bool) (string, error) {
 	case metadata.NotExist(err), maybe && notALink(err):
 		return "", nil
 	}
-	return "", fmt.Errorf("%w: a link that can't be read: %w", ErrOutsideRoot, err)
+	return "", fmt.Errorf("%w: %w: %w", ErrOutsideRoot, errLinkUnread, err)
 }
+
+// errLinkUnread is in linkRead's error for a link that is there and can't be
+// read (with ErrOutsideRoot and the read's own error): a caller that must tell
+// a link known to lead out from one whose target is not known (the scan's
+// linkOut, which keeps such a book as stored) asks for it.
+var errLinkUnread = errors.New("a link that can't be read")
 
 // notALink reports whether err is a read of a link's (os.Readlink's) saying
 // the name is no link: EINVAL, or Windows' ERROR_NOT_A_REPARSE_POINT (4390).

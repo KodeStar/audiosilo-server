@@ -195,37 +195,76 @@ func TestCoverSkipsLinksOutOfTheRoot(t *testing.T) {
 	}
 }
 
-// A link whose look fails as a share does that a retry may get past (its read
-// EIO) is not known to stay inside the root: the book is kept as stored, never
-// built without the part nor with it, and an asked book hears a look given up
-// on (the API's 503). Not parallel: it swaps SafeJoin's looks.
+// A link whose read fails, as a share does that a retry may get past (EIO) or
+// for good (a permission, or a limit of the server's own), is not known to
+// stay inside the root: the book is kept as stored, never built without the
+// part nor with it, nor removed when the link was its only other part; an
+// asked book hears a look given up on (the API's 503) for the first, a look
+// refused for good (lookRefused: a 404) for the other. Not parallel: it swaps
+// SafeJoin's looks.
 func TestScanKeepsABookWhoseLinkDidNotAnswer(t *testing.T) {
-	e := newLinkOutEnv(t)
-	e.scan(t)
-	want := []string{"Author/Book/01.m4b", "Author/Book/02.m4b"}
-	if got := e.files(t, "Author/Book"); !slices.Equal(got, want) {
-		t.Fatalf("before: the book's parts = %v, want %v", got, want)
+	for _, errno := range []syscall.Errno{syscall.EIO, syscall.EACCES, syscall.ENOMEM} {
+		t.Run(errno.Error(), func(t *testing.T) {
+			e := newLinkOutEnv(t)
+			e.scan(t)
+			want := []string{"Author/Book/01.m4b", "Author/Book/02.m4b"}
+			if got := e.files(t, "Author/Book"); !slices.Equal(got, want) {
+				t.Fatalf("before: the book's parts = %v, want %v", got, want)
+			}
+			was := plainLooks
+			t.Cleanup(func() { plainLooks = was })
+			plainLooks = plainLooksOver(os.Lstat, func(p string) (string, error) {
+				if strings.HasSuffix(p, filepath.Join("Author", "Book", "02.m4b")) {
+					return "", &fs.PathError{Op: "readlink", Path: p, Err: errno}
+				}
+				return os.Readlink(p)
+			})
+			if err := os.Remove(filepath.Join(e.root, "Author", "Book", "01.m4b")); err != nil {
+				t.Fatal(err)
+			}
+			e.scan(t)
+			if got := e.files(t, "Author/Book"); !slices.Equal(got, want) {
+				t.Errorf("after a link's look failed: the book's parts = %v, want it kept as stored %v", got, want)
+			}
+			_, err := e.s.resolveBook(e.ctx, *e.lib, "Author/Book", nil)
+			if refused := errors.As(err, new(lookRefused)); !metadata.GaveUp(err) || refused != (errno != syscall.EIO) {
+				t.Errorf("the book asked for with its link's look failing: %v (refused for good %v), want a look given up on, refused for good only past EIO", err, refused)
+			}
+			if bad := e.readThrough("Author/Book/02.m4b"); len(bad) > 0 {
+				t.Errorf("the scan read through the link whose look failed: %v", bad)
+			}
+		})
 	}
-	was := plainLooks
-	t.Cleanup(func() { plainLooks = was })
-	plainLooks = plainLooksOver(os.Lstat, func(p string) (string, error) {
-		if strings.HasSuffix(p, filepath.Join("Author", "Book", "02.m4b")) {
-			return "", &fs.PathError{Op: "readlink", Path: p, Err: syscall.EIO}
-		}
-		return os.Readlink(p)
-	})
-	if err := os.Remove(filepath.Join(e.root, "Author", "Book", "01.m4b")); err != nil {
+}
+
+// A book folder whose only image is a link out of the root has no cover
+// (coverLook.find), and the walk doesn't count that image as one put beside
+// it (coversOfWalk), so an unchanged scan doesn't read the book again for it.
+// Allowed: an image linked from inside the root, added later, is read as
+// the book's cover on the next scan.
+func TestScanIgnoresAnImageLinkOutOfTheRoot(t *testing.T) {
+	t.Parallel()
+	e := newLinkOutEnv(t)
+	copyFixtureM4B(t, filepath.Join(e.root, "Author", "Pic", "01.m4b"))
+	e.link(t, filepath.Join(e.outside, "secret.jpg"), "Author/Pic/cover.jpg")
+	e.link(t, filepath.Join(e.outside, "secret.jpg"), "Author/Pic/Back.png")
+	e.scan(t)
+	e.scan(t)
+	e.mu.Lock()
+	again := slices.ContainsFunc(e.reads, func(p string) bool { return strings.Contains(p, filepath.Join("Author", "Pic")) })
+	e.mu.Unlock()
+	if again {
+		t.Errorf("an unchanged book with only an image link out of the root was read again: %v", e.reads)
+	}
+	writeFile(t, e.root, "Shared/art.jpg", []byte("img"))
+	e.link(t, filepath.Join("..", "..", "Shared", "art.jpg"), "Author/Pic/art.jpg")
+	e.scan(t)
+	b, err := e.cat.GetBookByPath(e.ctx, e.lib.ID, "Author/Pic")
+	if err != nil {
 		t.Fatal(err)
 	}
-	e.scan(t)
-	if got := e.files(t, "Author/Book"); !slices.Equal(got, want) {
-		t.Errorf("after a link's look failed: the book's parts = %v, want it kept as stored %v", got, want)
-	}
-	if _, err := e.s.resolveBook(e.ctx, *e.lib, "Author/Book", nil); !metadata.GaveUp(err) {
-		t.Errorf("the book asked for with its link's look failing: %v, want a look given up on", err)
-	}
-	if bad := e.readThrough("Author/Book/02.m4b"); len(bad) > 0 {
-		t.Errorf("the scan read through the link whose look failed: %v", bad)
+	if b.CoverPath != "Author/Pic/art.jpg" {
+		t.Errorf("cover once an image linked from inside the root is added = %q, want Author/Pic/art.jpg", b.CoverPath)
 	}
 }
 
@@ -242,5 +281,34 @@ func TestHasAudioSkipsLinksOutOfTheRoot(t *testing.T) {
 	}
 	if !hasAudio(e.ctx, e.root, "Author/Only In", nil) {
 		t.Error("hasAudio misses a link inside the root")
+	}
+}
+
+// A conventionally named cover that is a link out of the root is never looked
+// at through the link (no stat of its target): its own entry says it is a
+// link, and the link leads out. Not parallel: it swaps the cover's looks.
+func TestCoverNeverStatsALinkOutOfTheRoot(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	writeFile(t, outside, "secret.jpg", []byte("img"))
+	writeFile(t, root, "Book/01.m4b", []byte("x"))
+	if err := os.Symlink(filepath.Join(outside, "secret.jpg"), filepath.Join(root, "Book", "cover.jpg")); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	var mu sync.Mutex
+	var stats []string
+	was := statLook
+	t.Cleanup(func() { statLook = was })
+	statLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+		mu.Lock()
+		stats = append(stats, p)
+		mu.Unlock()
+		return was(ctx, p, timeout)
+	}
+	var g givenUp
+	if got := (coverLook{ctx: t.Context(), root: root, timeout: time.Minute, gaveUp: &g}).find(filepath.Join(root, "Book"), false); got != "" || g.err != nil {
+		t.Errorf("cover %q, given up on %v; want none", got, g.err)
+	}
+	if slices.Contains(stats, filepath.Join(root, "Book", "cover.jpg")) {
+		t.Errorf("the cover link out of the root was stat'ed: %v", stats)
 	}
 }

@@ -1431,21 +1431,23 @@ func (l coverLook) find(dir string, anyImage bool) string {
 	// unansweredLook) is a look given up on, never "no cover", which would
 	// drop the stored one.
 	for _, name := range coverNames {
+		// Its own entry first (an lstat): a plain file there is the cover, a
+		// link out of the library none (linkOut), and only a link inside it
+		// has its target looked at (a stat), so no look goes past the root.
 		p := filepath.Join(dir, name)
-		_, err := statLook(l.ctx, p, l.timeout)
-		var own fs.FileInfo
+		own, err := lstatLook(l.ctx, p, l.timeout)
 		if err == nil {
-			// Found: its own entry (one lstat, only for a cover there) tells
-			// whether it is a link, and one out of the library is no cover.
-			own, err = metadata.LstatBounded(l.ctx, p, l.timeout)
+			if link, _ := linkKind(own.Mode()); link {
+				switch out, ok := l.linkOut(relOf(p), own.Mode()); {
+				case !ok:
+					return ""
+				case out:
+					continue
+				}
+				_, err = statLook(l.ctx, p, l.timeout)
+			}
 		}
 		if err == nil {
-			switch out, ok := l.linkOut(relOf(p), own.Mode()); {
-			case !ok:
-				return ""
-			case out:
-				continue
-			}
 			return relOf(p)
 		}
 		if err = unansweredLook(l.ctx, err); err != nil {
@@ -1467,6 +1469,13 @@ func (l coverLook) find(dir string, anyImage bool) string {
 		if !coverImage(name, e.IsDir()) {
 			continue
 		}
+		// Prefer a "cover"-named image (e.g. "<book> - Cover.jpg") over an arbitrary
+		// one like an Amazon thumbnail ("71AbC...._SL500_.jpg"). Once there is a
+		// first image, only such a one can change the pick: no other is looked at.
+		named := strings.Contains(strings.ToLower(name), "cover")
+		if firstImage != "" && !named {
+			continue
+		}
 		switch out, ok := l.linkOut(relOf(filepath.Join(dir, name)), e.Type()); {
 		case !ok:
 			return ""
@@ -1476,10 +1485,9 @@ func (l coverLook) find(dir string, anyImage bool) string {
 		if firstImage == "" {
 			firstImage = name
 		}
-		// Prefer a "cover"-named image (e.g. "<book> - Cover.jpg") over an arbitrary
-		// one like an Amazon thumbnail ("71AbC...._SL500_.jpg").
-		if coverish == "" && strings.Contains(strings.ToLower(name), "cover") {
+		if named {
 			coverish = name
+			break
 		}
 	}
 	pick := coverish
@@ -1494,14 +1502,19 @@ func (l coverLook) find(dir string, anyImage bool) string {
 
 // linkOut is the scan's linkOut for the cover candidate at library-relative
 // rel (its entry of type mode), its look under l's: ok false, with the look
-// noted in gaveUp, when it was given up on (no cover, and no more looks).
+// noted in gaveUp, when it was given up on (no cover, and no more looks). A
+// link refused for good (faultedForGood: a permission, a limit of the
+// server's own) is no cover, as a cover's look refused so is none (out).
 func (l coverLook) linkOut(rel string, mode fs.FileMode) (out, ok bool) {
 	out, err := linkOut(l.ctx, l.root, rel, mode, l.timeout)
-	if err != nil {
-		l.gaveUp.note(rel, err)
-		return false, false
+	switch {
+	case err == nil:
+		return out, true
+	case faultedForGood(err):
+		return true, true
 	}
-	return out, true
+	l.gaveUp.note(rel, err)
+	return false, false
 }
 
 // singleFileChapters takes embedded chapters from a single-file book and marks
@@ -1845,9 +1858,10 @@ var errPathTooLong = fmt.Errorf("the path is longer than the server allows (%d b
 // look may take (metadata.Bounded: walkDir's listings, a .audiosilo folder's,
 // a metadata.json's lstat); its audio files are not
 // looked at (statAudio: the callers building books from them do that), but
-// for a link among them (linkOut): one out of the library is no part, and
-// one whose look was given up on leaves its folder unanswered, as a listing
-// given up on does. A
+// for a link among them or among its images, each looked at once the walk
+// ends, width at a time (linksInRoot): one out of the library is no part nor
+// a cover candidate, and one whose look was given up on leaves its folder
+// unanswered, as a listing given up on does. A
 // folder or audio file whose path is overLong is skipped and logged as
 // unreadable (rl), the folder with everything under it; discovery isn't
 // partial for it (no book there can ever be indexed, so the prune is not at
@@ -1881,6 +1895,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 		rel := path.Join(fromRel, relPathOf(walkFrom, p))
 		return !skipped(d, rel) && !overLong(rel)
 	}
+	var links []walkLink // the audio files and images that are links, looked at once the walk ends (linksInRoot)
 	err = walkDir(ctx, walkFrom, width, timeout, descend, func(p string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1952,8 +1967,13 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			side.epubs[dirOf(rel)] = append(side.epubs[dirOf(rel)], d)
 			return nil
 		}
+		link, _ := linkKind(d.Type())
 		if seen := imageSeen(d); seen != 0 {
-			side.images[dirOf(rel)] |= seen
+			if link {
+				links = append(links, walkLink{dir: dirOf(rel), rel: rel, mode: d.Type(), seen: seen})
+			} else {
+				side.images[dirOf(rel)] |= seen
+			}
 			return nil
 		}
 		if !isAudioEntry(d, rel, ignore) {
@@ -1963,30 +1983,95 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			noteOverLong(rel)
 			return nil
 		}
-		dir := dirOf(rel)
-		out, lerr := linkOut(ctx, lib.Root, rel, d.Type(), timeout)
-		switch {
-		case lerr != nil && ctx.Err() != nil:
-			return ctx.Err()
-		case lerr != nil:
-			// Where the link leads is unknown for now: its folder is as
-			// unknown as one that wouldn't list (dropUnanswered), its book
-			// kept as stored, never built without the part.
-			hadErrors = true
-			log.Warn("skipping a folder whose link didn't answer during discovery", "library", lib.Name, "path", absOf(lib, rel), "err", lerr)
-			rl.unreadable(rel, lerr)
-			side.unanswered[dir] = lerr
+		f := audioFile{abs: absOf(lib, rel), de: d}
+		if link {
+			links = append(links, walkLink{dir: dirOf(rel), rel: rel, mode: d.Type(), part: f})
 			return nil
-		case out:
-			return nil // a link out of the library: never a part, nothing read through it
 		}
-		dirs[dir] = append(dirs[dir], audioFile{abs: absOf(lib, rel), de: d})
+		dirs[dirOf(rel)] = append(dirs[dirOf(rel)], f)
 		return nil
 	})
+	if err == nil || errors.Is(err, errWalkCapped) {
+		if lerr := linksInRoot(ctx, lib, links, dirs, side, width, timeout); lerr != nil {
+			return dirs, side, hadErrors, lerr
+		}
+		for _, l := range links {
+			if l.first {
+				// Where the link leads is unknown for now: its folder is as
+				// unknown as one that wouldn't list (dropUnanswered), its book
+				// kept as stored, never built without the part.
+				hadErrors = true
+				log.Warn("skipping a folder whose link couldn't be looked at during discovery", "library", lib.Name, "path", absOf(lib, l.rel), "err", l.err)
+				rl.unreadable(l.rel, l.err)
+			}
+		}
+	}
 	for dir, audio := range dirs {
 		dirs[dir] = folderAudio(audio)
 	}
 	return dirs, side, hadErrors, err
+}
+
+// walkLink is a link (linkKind, by its entry's type: mode) the discovery walk
+// listed (audioDirs) in the folder dir, at library-relative rel: an audio
+// file (part) or an image (seen, imageSeen's bits), and linksInRoot's look at
+// it (out, err; first for the link whose look left its folder unanswered).
+type walkLink struct {
+	dir, rel string
+	mode     fs.FileMode
+	part     audioFile
+	seen     imagesSeen
+	out      bool
+	err      error
+	first    bool
+}
+
+// linksInRoot is audioDirs' look at the links its walk listed (linkOut),
+// width at a time as statAudio's lstats are, each a SafeJoinBounded call (at
+// most timeout): an audio file that stays inside the root is added to its
+// folder's (dirs), one out of the library never is, and one whose look was
+// given up on, or failed as a share does, leaves its folder unanswered
+// (side.unanswered, as a listing given up on does: its book kept as stored),
+// the first such link of each folder marked (first), whose caller logs it.
+// An image that stays inside the root counts in its folder's images
+// (side.images), as find takes one only so; one out of it, or not answered,
+// does not. A link in a folder already unanswered, or an image adding nothing
+// to its folder's, is not looked at. err is ctx's once it ended.
+func linksInRoot(ctx context.Context, lib catalog.Library, links []walkLink, dirs map[string][]audioFile, side sidecarFiles, width int, timeout time.Duration) error {
+	if len(links) == 0 {
+		return nil
+	}
+	var mu sync.Mutex
+	pool.Each(ctx, min(width, len(links)), links, func() bool { return true }, func(l *walkLink) {
+		mu.Lock()
+		_, dropped := side.unanswered[l.dir]
+		seenAll := l.seen != 0 && side.images[l.dir]&l.seen == l.seen
+		mu.Unlock()
+		if dropped || seenAll {
+			l.out = true // never looked at: nothing to add
+			return
+		}
+		l.out, l.err = linkOut(ctx, lib.Root, l.rel, l.mode, timeout)
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case l.err != nil && l.seen == 0:
+			if _, seen := side.unanswered[l.dir]; !seen {
+				side.unanswered[l.dir], l.first = l.err, true
+			}
+		case l.err == nil && !l.out && l.seen != 0:
+			side.images[l.dir] |= l.seen
+		}
+	})
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, l := range links {
+		if _, dropped := side.unanswered[l.dir]; l.seen == 0 && l.err == nil && !l.out && !dropped {
+			dirs[l.dir] = append(dirs[l.dir], l.part)
+		}
+	}
+	return nil
 }
 
 // statAudio reads every audio file's lstat (fs.DirEntry.Info: its size and
@@ -2059,12 +2144,14 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, time
 
 // lstatAudio is statAudio's look at each audio file, readDirLook the walk's
 // and a book's own folder listings (walker.list, audioEntries, bookOnDisk,
-// coverLook.find) and statLook a book's own stat (resolveBook, bookOnDisk) and
-// its cover's (coverLook.find): a test injects a share's errors through them.
+// coverLook.find), statLook a book's own stat (resolveBook, bookOnDisk) and
+// its cover link's target's, and lstatLook a cover's own entry
+// (coverLook.find): a test injects a share's errors through them.
 var (
 	lstatAudio  = metadata.LstatBounded
 	readDirLook = metadata.ReadDirBounded
 	statLook    = metadata.StatBounded
+	lstatLook   = metadata.LstatBounded
 )
 
 // transientGaveUp is err made a look given up on (metadata.AsGaveUp) when it
@@ -2146,7 +2233,9 @@ const (
 // A link is never a named one: find stats a loose file's cover by name, which
 // a link with nothing behind it fails, and each scan would read the folder's
 // loose files again for a cover it never finds (a folder book's find lists
-// its folder, and takes the link as listed).
+// its folder, and takes the link as listed). Nor does the walk count a link
+// out of the library (linksInRoot), which find never takes: a book with only
+// such an image would be read again on every scan.
 func imageSeen(d fs.DirEntry) imagesSeen {
 	name := d.Name()
 	if !coverImage(name, d.IsDir()) {
@@ -2243,15 +2332,19 @@ func isAudioEntry(de fs.DirEntry, rel string, ignore *Ignore) bool {
 
 // linkOut reports whether the entry of type mode at library-relative rel is a
 // link (or a name that may be one: linkKind) that leads out of the library
-// root, or one that can't be read: SafeJoin's ErrOutsideRoot, the rule every
-// route opens a path by (resolveBelow, followLink: no look past the root). The
-// scan never takes such an entry as a book's part or cover, so nothing is read
-// from where it leads (its tags, length or art); a link that stays inside the
-// root is taken as ever. Only a link is looked at, so a scan of plain files
-// costs nothing more. Its look is a SafeJoinBounded call (ctx, at most
-// timeout): err is one given up on (a share's fault a retry may get past, or
-// not answered in time) or ctx's, the link's target unknown; any other failure
-// of the join reads as a link out, never followed unchecked.
+// root: SafeJoin's ErrOutsideRoot, the rule every route opens a path by
+// (resolveBelow, followLink: no look past the root). The scan never takes such
+// an entry as a book's part or cover, so nothing is read from where it leads
+// (its tags, length or art); a link that stays inside the root is taken as
+// ever. Only a link is looked at, so a scan of plain files costs nothing more.
+// Its look is a SafeJoinBounded call (ctx, at most timeout): err is one given
+// up on (a share's fault a retry may get past, or not answered in time) or
+// ctx's, or a link there that can't be read (errLinkUnread: a permission, a
+// limit of the server's own) made a look given up on (metadata.AsGaveUp, as
+// statAudio makes a part's lstat failing so): where it leads is not known, so
+// its book is kept as stored, never built without the part nor through it.
+// Any other failure of the join reads as a link out, never followed
+// unchecked.
 func linkOut(ctx context.Context, root, rel string, mode fs.FileMode, timeout time.Duration) (bool, error) {
 	if link, _ := linkKind(mode); !link {
 		return false, nil
@@ -2262,6 +2355,10 @@ func linkOut(ctx context.Context, root, rel string, mode fs.FileMode, timeout ti
 		return false, nil
 	case metadata.Unanswered(ctx, err):
 		return false, unansweredErr(ctx, err)
+	case errors.Is(err, errLinkUnread):
+		if err = metadata.AsGaveUp(err); metadata.GaveUp(err) {
+			return false, err
+		}
 	}
 	return true, nil
 }
