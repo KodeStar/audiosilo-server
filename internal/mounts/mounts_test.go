@@ -24,6 +24,8 @@ func TestLongest(t *testing.T) {
 		"/media/usb/a":         "/media/usb",
 		"/media/usbx":          "/",
 		"/srv/books":           "/",
+		"/":                    "/",
+		"/mnt/":                "/mnt",
 	} {
 		if _, got := longest(points, path); got != want {
 			t.Errorf("longest(%q) = %q, want %q", path, got, want)

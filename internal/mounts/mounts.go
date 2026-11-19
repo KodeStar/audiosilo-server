@@ -112,15 +112,27 @@ func newSnapshot(prev *snapshot, read func() ([]Mount, error)) *snapshot {
 // key, else path's volume root for both: path and its parents looked up in
 // turn.
 func longest(points map[string]string, path string) (key, point string) {
-	for p := path; ; {
+	// Each parent is a prefix of the clean path, cut at a separator: no
+	// filepath.Dir, which cleans every parent again (a look at a library file
+	// asks this once, and a no-change scan makes a look per audio file).
+	vol := len(filepath.VolumeName(path))
+	for p := path; len(p) > vol; {
 		if key, ok := points[p]; ok {
 			return key, p
 		}
-		parent := filepath.Dir(p)
-		if parent == p {
-			break
+		i := strings.LastIndexByte(p[vol:], filepath.Separator) + vol
+		switch {
+		case i < vol:
+			p = "" // a relative path: no parent left to look up
+		case i == vol:
+			p = p[:i+1] // the volume root, "/" or "C:\"
+			if key, ok := points[p]; ok {
+				return key, p
+			}
+			p = ""
+		default:
+			p = p[:i]
 		}
-		p = parent
 	}
 	root := filepath.VolumeName(path) + string(filepath.Separator)
 	return root, root
