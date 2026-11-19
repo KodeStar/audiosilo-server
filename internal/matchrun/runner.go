@@ -488,6 +488,11 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 		bare := q
 		bare.BookASIN, bare.BookISBN = "", ""
 		again, err := r.matcher.Candidates(ctx, bare)
+		if err != nil && ctx.Err() == nil {
+			// Not the item's failure (the hint's work stands), so said here or
+			// nowhere.
+			r.log.Info("match run: asking again without the identifier failed", "library", b.LibraryID, "path", b.RelPath, "err", err)
+		}
 		if err == nil && len(again) > 0 && again[0].WorkID != cands[0].WorkID {
 			if other := judge(again, bare, b.Duration, o.Region); other.outcome != catalog.OutcomeNone {
 				m, cands = other, again
