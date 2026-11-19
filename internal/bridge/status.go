@@ -216,11 +216,16 @@ func (st Status) Library(id int64) *LibraryStatus {
 }
 
 // Limits on a heartbeat: its body is the Bridge's, so the server bounds what it
-// stores and later shows in the console.
+// stores and later shows in the console. A Bridge reports every library the
+// server lists, so the libraries' bounds hold a server with thousands
+// (server#445): MaxStatusBytes has room for maxLibraries mappings of a few
+// hundred bytes each, and a list longer than maxLibraries is cut to it, never
+// refused (a refused heartbeat reads as a Bridge offline, and the Bridge sends
+// the same list again until it learns the server's from a reply).
 const (
-	MaxStatusBytes = 64 << 10
+	MaxStatusBytes = 2 << 20
 	maxKinds       = 64
-	maxLibraries   = 512
+	maxLibraries   = 4096
 	maxWorkers     = 64
 	maxShortText   = 128
 	maxLongText    = 1024
@@ -237,7 +242,8 @@ func invalid(format string, args ...any) error {
 }
 
 // Validate checks a heartbeat before it is stored: kinds are well formed and
-// listed once, libraries listed once by a positive id, and ui_url, which the
+// listed once, libraries listed once by a positive id (past maxLibraries the
+// rest are left out, server#445), and ui_url, which the
 // console renders as a link, is an absolute http(s) URL or empty (anything else
 // is refused). An estimate out of its bounds is dropped, and so is a setup
 // block that doesn't decode (a setup item it can't keep is left out). Its free text (the version,
@@ -254,13 +260,15 @@ func (st *Status) Validate() error {
 		}
 	}
 	if len(st.Libraries) > maxLibraries {
-		return invalid("too many libraries")
+		st.Libraries = st.Libraries[:maxLibraries]
 	}
+	seen := make(map[int64]bool, len(st.Libraries))
 	for i := range st.Libraries {
 		l := &st.Libraries[i]
-		if l.LibraryID <= 0 || slices.ContainsFunc(st.Libraries[:i], func(o LibraryStatus) bool { return o.LibraryID == l.LibraryID }) {
+		if l.LibraryID <= 0 || seen[l.LibraryID] {
 			return invalid("library %d", l.LibraryID)
 		}
+		seen[l.LibraryID] = true
 		l.MountPath = cleanText(l.MountPath, maxLongText, false)
 		l.CheckedPath = cleanText(l.CheckedPath, maxLongText, false)
 		l.Error = cleanText(l.Error, maxLongText, false)

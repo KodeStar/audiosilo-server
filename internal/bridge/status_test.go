@@ -102,3 +102,20 @@ func TestHeartbeatOnlineWindow(t *testing.T) {
 		t.Fatal("the last heartbeat is kept past the window")
 	}
 }
+
+// A heartbeat listing more libraries than the server keeps is cut to the
+// first maxLibraries, never refused (server#445): a refused one reads as the
+// Bridge offline, and it would send the same list again.
+func TestStatusValidateCutsLibraries(t *testing.T) {
+	t.Parallel()
+	st := Status{Libraries: make([]LibraryStatus, maxLibraries+100)}
+	for i := range st.Libraries {
+		st.Libraries[i].LibraryID = int64(i + 1)
+	}
+	if err := st.Validate(); err != nil {
+		t.Fatalf("Validate = %v, want the list cut", err)
+	}
+	if n := len(st.Libraries); n != maxLibraries || st.Libraries[n-1].LibraryID != maxLibraries {
+		t.Fatalf("kept %d libraries, last %d; want the first %d", n, st.Libraries[n-1].LibraryID, maxLibraries)
+	}
+}
