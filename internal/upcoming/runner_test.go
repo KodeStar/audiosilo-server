@@ -14,7 +14,6 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
-	"github.com/kodestar/audiosilo-server/internal/mirrortest"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
@@ -947,7 +946,7 @@ func runSchedule(t *testing.T, f *fixture) {
 // under -race on a loaded machine).
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	mirrortest.Eventually(t, what, testwait.Scaled(5*time.Second), cond)
+	testwait.Eventually(t, what, 5*time.Second, cond)
 }
 
 // A burst of kicks (a scan adding books) makes one light run, once the kicks

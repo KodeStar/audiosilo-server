@@ -80,7 +80,7 @@ func copies(t *testing.T, dir string) []string {
 // download and swap under -race on a loaded machine).
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	mirrortest.Eventually(t, what, testwait.Scaled(5*time.Second), cond)
+	testwait.Eventually(t, what, 5*time.Second, cond)
 }
 
 func TestMirrorDownloadsAndSwaps(t *testing.T) {

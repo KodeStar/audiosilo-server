@@ -224,15 +224,13 @@ func TestWebhookDelivery(t *testing.T) {
 
 func waitRecorded(t *testing.T, cat *catalog.Catalog, id int64) *catalog.NotifyTarget {
 	t.Helper()
-	for deadline := time.Now().Add(testwait.Scaled(5 * time.Second)); ; time.Sleep(10 * time.Millisecond) {
-		tg, err := cat.GetNotifyTarget(context.Background(), id)
-		if err == nil && tg.LastAt != nil {
-			return tg
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("delivery never recorded")
-		}
-	}
+	var tg *catalog.NotifyTarget
+	testwait.Eventually(t, "the delivery to be recorded", 5*time.Second, func() bool {
+		got, err := cat.GetNotifyTarget(context.Background(), id)
+		tg = got
+		return err == nil && got.LastAt != nil
+	})
+	return tg
 }
 
 func TestNtfyAndDiscordBodies(t *testing.T) {

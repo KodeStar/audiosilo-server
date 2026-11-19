@@ -40,25 +40,17 @@ func stoppedService(cat *catalog.Catalog) *Service { return newTestService(cat) 
 // ended (delivered, failed or skipped), not just reached its destination.
 func waitOwedNone(t *testing.T, cat *catalog.Catalog) {
 	t.Helper()
-	for deadline := time.Now().Add(testwait.Scaled(5 * time.Second)); ; time.Sleep(10 * time.Millisecond) {
-		if owed, err := cat.PendingDeliveries(context.Background(), 0); err == nil && len(owed) == 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the outbox still owes deliveries")
-		}
-	}
+	testwait.Eventually(t, "the outbox to owe nothing", 5*time.Second, func() bool {
+		owed, err := cat.PendingDeliveries(context.Background(), 0)
+		return err == nil && len(owed) == 0
+	})
 }
 
 // waitSwept waits until s has read the outbox (redeliver) n times, the start's
 // read the first.
 func waitSwept(t *testing.T, s *Service, n int64) {
 	t.Helper()
-	for deadline := time.Now().Add(testwait.Scaled(5 * time.Second)); s.swept.Load() < n; time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("the outbox was read %d times, want %d", s.swept.Load(), n)
-		}
-	}
+	testwait.Eventually(t, "the outbox's read", 5*time.Second, func() bool { return s.swept.Load() >= n })
 }
 
 // waitQuiet waits until s has no lane open: nothing queued, being sent or
@@ -66,16 +58,11 @@ func waitSwept(t *testing.T, s *Service, n int64) {
 // destination and no other is under way.
 func waitQuiet(t *testing.T, s *Service) {
 	t.Helper()
-	quiet := func() bool {
+	testwait.Eventually(t, "every lane to close", 5*time.Second, func() bool {
 		s.lanesMu.Lock()
 		defer s.lanesMu.Unlock()
 		return len(s.lanes) == 0 && len(s.queue) == 0
-	}
-	for deadline := time.Now().Add(testwait.Scaled(5 * time.Second)); !quiet(); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the service still has a lane open")
-		}
-	}
+	})
 }
 
 // settle is how many deliveries dest has had once running service s has read
@@ -226,22 +213,17 @@ func TestNoticeQueuedTwiceAtStartGoesOnce(t *testing.T) {
 	)
 	// The send is held until the start's redelivery has read the row, which
 	// is still owed while the first copy's send is under way.
-	release := make(chan struct{})
+	gate := make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
 	held := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		got++
 		mu.Unlock()
-		<-release
+		<-gate
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(held.Close)
-	t.Cleanup(func() { // before the Close, on a test that failed holding it
-		select {
-		case <-release:
-		default:
-			close(release)
-		}
-	})
+	t.Cleanup(release) // before the Close, on a test that failed holding it
 	addTarget(t, cat, TargetWebhook, held.URL, "", KindScanFailed)
 
 	s := newTestService(cat)
@@ -250,7 +232,7 @@ func TestNoticeQueuedTwiceAtStartGoesOnce(t *testing.T) {
 	t.Cleanup(cancel)
 	s.Run(runCtx)
 	waitSwept(t, s, 1)
-	close(release)
+	release()
 	waitOwedNone(t, cat)
 	waitQuiet(t, s)
 	mu.Lock()
