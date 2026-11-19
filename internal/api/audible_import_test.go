@@ -505,6 +505,24 @@ func TestAudibleBackupAllSkipsInvalidDestination(t *testing.T) {
 	}
 }
 
+// Only a title's own destination is skipped: an account template that no
+// longer validates refuses the whole batch (400) rather than count every
+// title as skipped for its destination.
+func TestAudibleBackupAllInvalidTemplateRefuses(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t,
+		title("B000000001", "A first", "available", 0, ""),
+		title("B000000002", "B second", "available", 0, ""))
+	if _, err := b.db.ExecContext(context.Background(),
+		`UPDATE audible_accounts SET template = '.hidden/{Title}' WHERE account = ?`, testAccount); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, "")
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, "template") {
+		t.Fatalf("backup-all with an invalid template: %d %q", resp.StatusCode, out)
+	}
+}
+
 // The policy acts after a poll's final call: new purchases only, never the
 // library the account had; the Bridge's PUT sets the policy only on create;
 // removing the account cancels its open backups.

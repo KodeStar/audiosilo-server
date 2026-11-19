@@ -56,11 +56,13 @@ func (q Queues) Backup(ctx context.Context, account, asin string, requestedBy in
 // BackupAll is "Back up everything" for account: every title
 // catalog.AudibleBackupAll names, queued and recorded on its title in one
 // transaction (bridge.EnqueueAll); queued counts the new jobs. A title whose
-// params the queue would refuse (a stored destination that no longer
-// validates: bridge.AudibleImportParams.Check) is skipped and counted in
-// skipped, so it doesn't stop the batch. A refusal of the queue (a Bridge that
-// can't take them: none will be taken) stops it at the title refused, with
-// the titles before it queued; any other failure queues none.
+// stored destination no longer validates (one saved before a rule tightened:
+// bridge.CheckAudibleDestPath) is skipped and counted in skipped, so it
+// doesn't stop the batch; only that title-level reason is skipped, so an
+// account-level one (its template) still comes back as the queue's refusal.
+// A refusal of the queue (a Bridge that can't take them: none will be taken)
+// stops it at the title refused, with the titles before it queued; any other
+// failure queues none.
 func (q Queues) BackupAll(ctx context.Context, account string, requestedBy int64) (queued, skipped int, err error) {
 	all, err := q.Catalog.AudibleBackupAll(ctx, account)
 	if err != nil {
@@ -69,7 +71,7 @@ func (q Queues) BackupAll(ctx context.Context, account string, requestedBy int64
 	valid := all[:0]
 	jobs := make([]bridge.NewJob, 0, len(all))
 	for _, p := range all {
-		if p.Check() != nil {
+		if bridge.CheckAudibleDestPath(p.DestPath) != nil {
 			skipped++
 			continue
 		}
