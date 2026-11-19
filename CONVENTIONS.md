@@ -1735,7 +1735,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
     ERROR_UNEXP_NET_ERR and the network's unreachable, refused or aborted): a share that stopped answering and may come back, as is a
     look given up on (`metadata.GaveUp`, a hang past its bound). A route answers 503 `share_not_answering` with
     `Retry-After` 30; nothing reads it as the file gone (a podcast episode is not fetched again, `podcastLookErr`;
-    the Bridge's book files keep their indexed size, `statBookFiles`).
+    the Bridge's book files keep their indexed size, `statBookFiles`, each file's look given `fileWait`
+    and all ending at the request's wait cap, `TestBridgeBookFilesEachGetALooksTime`).
   - **Lasting** (a permission, EACCES or EPERM, `fs.ErrPermission`; the device gone, ENXIO; a link loop, ELOOP; a
     name the share refuses, EINVAL, Windows' ERROR_INVALID_NAME): a retry would only meet it again. A route answers
     the lasting answer it had (a 404; a route's own 422 stays), and the book stays indexed.

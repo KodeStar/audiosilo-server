@@ -23,6 +23,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -425,6 +426,53 @@ func TestBridgeBookFilesOnAShareFault(t *testing.T) {
 	}
 	if got := get(""); got.Path != first.Path {
 		t.Errorf("the sample with every book gone = %q, want the first, %q", got.Path, first.Path)
+	}
+}
+
+// A book's files are each given a look's time (fileWait), not one between
+// them: a book with more files than one look's time covers, on a slow share
+// that answers every look, is read whole, each file with its modification
+// time, never cut off with its last files unread. Not parallel: it swaps
+// bridgeStatLook.
+func TestBridgeBookFilesEachGetALooksTime(t *testing.T) {
+	b := newBridgeEnv(t)
+	root := copyFixtures(t, "Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b")
+	ctx := context.Background()
+	lib, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Slow", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.SetFolderOverride(ctx, lib.ID, "Will Wight/Cradle", catalog.OverrideBook); err != nil {
+		t.Fatal(err)
+	}
+	scanFixture(t, b.testEnv, lib)
+	// Each stat takes most of a look's time and answers, as a bounded look
+	// does: within its timeout, else given up on.
+	const slow = 300 * time.Millisecond
+	b.api.fileWait = 400 * time.Millisecond
+	was := bridgeStatLook
+	t.Cleanup(func() { bridgeStatLook = was })
+	bridgeStatLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+		if timeout < slow {
+			time.Sleep(timeout)
+			return nil, fmt.Errorf("%s: %w", p, metadata.ErrNotAnswered)
+		}
+		time.Sleep(slow)
+		return was(ctx, p, timeout)
+	}
+	resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book?path=%s", lib.ID, url.QueryEscape("Will Wight/Cradle")), b.bridgeTok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET the book: %d %s", resp.StatusCode, body)
+	}
+	var out struct{ Files []bridgeFile }
+	decodeInto(t, body, &out)
+	if len(out.Files) != 2 {
+		t.Fatalf("the book's files = %+v, want its two parts", out.Files)
+	}
+	for _, f := range out.Files {
+		if f.ModTime == 0 {
+			t.Errorf("%s was not looked at (no modification time): a look's time is each file's, not the book's", f.Path)
+		}
 	}
 }
 

@@ -302,7 +302,7 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 	p := catalog.CleanRelPath(raw)
 	if p != "" {
 		if book, err = a.cat.GetBookByPath(r.Context(), lib.ID, p); err == nil {
-			files, _ = a.statBookFiles(r.Context(), lib, book, time.Now().Add(a.fileWait))
+			files, _ = a.statBookFiles(r.Context(), lib, book, a.flightWaitEnd(r.Context()))
 		}
 	} else {
 		book, files, err = a.sampleBook(r.Context(), lib)
@@ -412,8 +412,14 @@ const (
 // (filesUnknown), so a hiccup never tells the Bridge a book went missing. The
 // looks are metadata.Bounded calls; once one is given up on, or fails as a
 // share that may come back does, the rest keep their indexed values unlooked
-// at (each would wait out its time on the same share). The looks are bounded by deadline together (a.fileWait
-// from the request's start: the mapping check's sample shares one).
+// at (each would wait out its time on the same share). Each look is given
+// a.fileWait, and all of them end together at deadline (the request's wait
+// cap, a.flightWaitEnd: the mapping check's sample shares one), as an asked
+// book's looks do (library's resolveAsked): a share that stopped answering
+// costs one look's time, one that answers every look just inside its time
+// never holds the request past the cap, and a long book on a slow share that
+// answers is read whole, never cut off at one look's time with its last
+// files unread.
 func (a *API) statBookFiles(ctx context.Context, lib *catalog.Library, book *catalog.Book, deadline time.Time) ([]bridgeFile, filesState) {
 	indexed := book.Files
 	if len(indexed) == 0 {
@@ -426,10 +432,11 @@ func (a *API) statBookFiles(ctx context.Context, lib *catalog.Library, book *cat
 	for _, f := range indexed {
 		bf := bridgeFile{Path: f.RelPath, Size: f.Size, Duration: f.Duration}
 		if !stopped { // once the share stopped answering: the indexed values
-			abs, err := library.SafeJoinBounded(ctx, lib.Root, f.RelPath, metadata.WaitLeft(deadline))
+			wait := func() time.Duration { return min(a.fileWait, metadata.WaitLeft(deadline)) }
+			abs, err := library.SafeJoinBounded(ctx, lib.Root, f.RelPath, wait())
 			var info fs.FileInfo
 			if err == nil {
-				info, err = bridgeStatLook(ctx, abs, metadata.WaitLeft(deadline))
+				info, err = bridgeStatLook(ctx, abs, wait())
 			}
 			switch {
 			case err == nil:
@@ -455,8 +462,8 @@ const sampleBooks = 5
 // books (by title) whose files are all on the server's disk, so one book deleted
 // before a scan prunes it doesn't make the whole library look unmapped; when
 // none is whole, the first whose files can't be told now (a share that stopped
-// answering: never taken as gone), else the first book. The books' looks share
-// a.fileWait (statBookFiles).
+// answering: never taken as gone), else the first book. The books' looks end
+// together at the request's wait cap (statBookFiles).
 func (a *API) sampleBook(ctx context.Context, lib *catalog.Library) (*catalog.Book, []bridgeFile, error) {
 	if lib.Kind == catalog.KindPodcasts {
 		return nil, nil, catalog.ErrNotFound
@@ -469,7 +476,7 @@ func (a *API) sampleBook(ctx context.Context, lib *catalog.Library) (*catalog.Bo
 		book  *catalog.Book
 		files []bridgeFile
 	}
-	deadline := time.Now().Add(a.fileWait)
+	deadline := a.flightWaitEnd(ctx)
 	var unknown, gone *sample
 	for _, b := range page.Books {
 		book, err := a.cat.GetBookByPath(ctx, lib.ID, b.RelPath)
