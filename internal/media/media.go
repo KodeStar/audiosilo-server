@@ -410,20 +410,25 @@ var (
 // fdSupport remembers, per ffmpeg path, whether its input protocols include
 // fd (an *fdProbe), so each binary is asked once per process, however many
 // first requests arrive together, and no transcode or seek (each ?t= starts
-// one) runs a probe of its own. A probe that couldn't run (its 5 s timeout, a
-// failed start) is no answer: it is kept for fdProbeRetry (no fd:), so an
-// ffmpeg that won't answer is not asked again by every request, then asked
-// again.
+// one) runs a probe of its own. A probe that couldn't run is no answer: one
+// that ran past fdProbeTimeout (a busy host, a cold binary) is dropped, and
+// the next request asks again, so a slow start never stands as "no fd:" (the
+// caches' pipe:0, which can't demux an MP4 whose index sits at its end); one
+// that failed (no such binary, an exit status) stands for fdProbeRetry, so an
+// ffmpeg that won't answer is not asked again by every request.
 var fdSupport sync.Map
 
-// fdProbeRetry is how long a probe that couldn't run stands as "no fd:".
+// fdProbeRetry is how long a probe that failed stands as "no fd:".
 const fdProbeRetry = time.Minute
+
+// fdProbeTimeout bounds one probe; a variable for a test.
+var fdProbeTimeout = 5 * time.Second
 
 // fdProbe is one ffmpeg binary's answer, settled once by probeFD at at.
 type fdProbe struct {
-	once    sync.Once
-	fd, ran bool
-	at      time.Time
+	once              sync.Once
+	fd, ran, timedOut bool
+	at                time.Time
 }
 
 // inputFor is the stdin input spec for ffmpegPath: fd: when that ffmpeg lists
@@ -431,8 +436,8 @@ type fdProbe struct {
 func inputFor(ffmpegPath string) inputSpec {
 	v, _ := fdSupport.LoadOrStore(ffmpegPath, &fdProbe{})
 	p := v.(*fdProbe)
-	p.once.Do(func() { p.fd, p.ran = probeFD(ffmpegPath); p.at = time.Now() })
-	if !p.ran && time.Since(p.at) >= fdProbeRetry {
+	p.once.Do(func() { p.fd, p.ran, p.timedOut = probeFD(ffmpegPath); p.at = time.Now() })
+	if !p.ran && (p.timedOut || time.Since(p.at) >= fdProbeRetry) {
 		fdSupport.CompareAndDelete(ffmpegPath, p)
 	}
 	if p.fd {
@@ -441,16 +446,17 @@ func inputFor(ffmpegPath string) inputSpec {
 	return pipeInput
 }
 
-// probeFD asks ffmpegPath for its protocols (5 s at most) and reports whether
-// the Input section lists fd, and whether the probe ran at all.
-func probeFD(ffmpegPath string) (fd, ran bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// probeFD asks ffmpegPath for its protocols (fdProbeTimeout at most) and
+// reports whether the Input section lists fd, whether the probe ran at all,
+// and, when it didn't, whether it ran out of time.
+func probeFD(ffmpegPath string) (fd, ran, timedOut bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), fdProbeTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, ffmpegPath, "-hide_banner", "-protocols").Output()
 	if err != nil {
-		return false, false
+		return false, false, ctx.Err() != nil
 	}
-	return listsInputProtocol(string(out), "fd"), true
+	return listsInputProtocol(string(out), "fd"), true, false
 }
 
 // listsInputProtocol reports whether ffmpeg -protocols output lists name in its

@@ -484,24 +484,31 @@ func TestTranscodeDownloadAttachment(t *testing.T) {
 	}
 }
 
-// TestInputForRetriesAFailedProbe: a probe that couldn't run stands as no
-// fd: for fdProbeRetry, so the transcodes and seeks in between run no probe of
-// their own, and is asked again once that has passed.
-func TestInputForRetriesAFailedProbe(t *testing.T) {
-	t.Parallel()
+// probeCountingFFmpeg is a stand-in ffmpeg that counts its runs and runs
+// script for each (sh), and the count so far.
+func probeCountingFFmpeg(t *testing.T, script string) (path string, runs func() int) {
+	t.Helper()
 	dir := t.TempDir()
-	count := filepath.Join(dir, "probes")
-	failing := filepath.Join(dir, "ffmpeg")
+	count := filepath.Join(dir, "runs")
+	path = filepath.Join(dir, "ffmpeg")
 	syscall.ForkLock.RLock() // as fakeFFmpeg: no parallel fork inherits the write descriptor
-	err := os.WriteFile(failing, []byte("#!/bin/sh\necho x >> '"+count+"'\nexit 1\n"), 0o755)
+	err := os.WriteFile(path, []byte("#!/bin/sh\necho x >> '"+count+"'\n"+script+"\n"), 0o755)
 	syscall.ForkLock.RUnlock()
 	if err != nil {
 		t.Fatal(err)
 	}
-	probes := func() int {
+	return path, func() int {
 		b, _ := os.ReadFile(count)
 		return strings.Count(string(b), "x")
 	}
+}
+
+// TestInputForRetriesAFailedProbe: a probe that failed stands as no fd: for
+// fdProbeRetry, so the transcodes and seeks in between run no probe of their
+// own, and is asked again once that has passed.
+func TestInputForRetriesAFailedProbe(t *testing.T) {
+	t.Parallel()
+	failing, probes := probeCountingFFmpeg(t, "exit 1")
 	for range 3 {
 		if in := inputFor(failing); in != pipeInput {
 			t.Fatalf("inputFor(an ffmpeg that fails its probe) = %+v, want pipe:0", in)
@@ -516,5 +523,20 @@ func TestInputForRetriesAFailedProbe(t *testing.T) {
 	inputFor(failing)
 	if n := probes(); n != 2 {
 		t.Fatalf("%d probes once fdProbeRetry passed, want 2", n)
+	}
+}
+
+// TestInputForAsksAgainAfterASlowProbe: a probe that ran out of time (a busy
+// host) is no answer to keep, so the next ask probes again and a cache run
+// gets fd: once the binary answers. Not parallel: it shortens fdProbeTimeout.
+func TestInputForAsksAgainAfterASlowProbe(t *testing.T) {
+	was := fdProbeTimeout
+	t.Cleanup(func() { fdProbeTimeout = was })
+	fdProbeTimeout = time.Second
+	slow, probes := probeCountingFFmpeg(t, "exec sleep 5")
+	inputFor(slow)
+	inputFor(slow)
+	if n := probes(); n != 2 {
+		t.Fatalf("%d probes for 2 asks after a timed-out probe, want 2", n)
 	}
 }

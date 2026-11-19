@@ -1655,7 +1655,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   an error's answer; a podcast episode's too), as a plain download is named for its file. A podcast episode's verified descriptor
   (`media.TranscodeOpened`, server#181) is ffmpeg's stdin read seekably as `fd:` (input seek, and a
   non-faststart m4a demuxes) when the ffmpeg lists the fd input protocol (`inputFor`: probed once
-  per ffmpeg path, `-protocols`, 5 s, asked again after a probe that couldn't run), else the old
+  per ffmpeg path, `-protocols`, 5 s, so a transcode or a seek runs none of its own; one that ran out of time is
+  asked again by the next request, one that failed stands as no fd: for a minute, `fdProbeRetry`), else the old
   `pipe:0` with an output seek (never `/dev/fd/3`: the file protocol it needs would let publisher bytes that
   probe as a playlist open other local files). Each transcode holds one of the 4 `transcodeSem` slots (503 + `Retry-After: 5`
   with none free), keyed by its ask (`transcodeAsk`, `transcode_slots.go`: the credential's token id, the file, the
