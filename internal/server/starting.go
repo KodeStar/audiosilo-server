@@ -1,8 +1,10 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"sync/atomic"
+	"time"
 )
 
 // StartingStatus is the "status" a server answers every request with while it
@@ -10,21 +12,31 @@ import (
 // healthy, so a long migration is never restarted mid-way (server#217).
 const StartingStatus = "starting"
 
-// startingBody is StartGate's answer: the API's error envelope ("error", and a
-// "code" to branch on) with the healthcheck's "status".
-const startingBody = `{"status":"` + StartingStatus + `","error":"the server is starting","code":"server_starting"}` + "\n"
+// StartingAnswer is StartGate's answer: the API's error envelope ("error", and
+// a "code" to branch on) with the healthcheck's "status" and how long the start
+// has run, by which the healthcheck tells a long start from a stuck one.
+type StartingAnswer struct {
+	Status             string `json:"status"`
+	Error              string `json:"error"`
+	Code               string `json:"code"`
+	StartingForSeconds int64  `json:"starting_for_seconds"`
+}
 
 // startingRetry is the Retry-After StartGate sends, in seconds.
 const startingRetry = "5"
 
 // StartGate is the server's handler from the moment it listens: until Open
-// hands it the app's handler, every request is answered 503 with
-// startingBody, so the listener is up (and the healthcheck says "starting")
+// hands it the app's handler, every request is answered 503 with a
+// StartingAnswer, so the listener is up (and the healthcheck says "starting")
 // while the database opens and migrates, which can take minutes on a large
 // library; after Open every request goes to that handler.
 type StartGate struct {
-	h atomic.Pointer[http.Handler]
+	h       atomic.Pointer[http.Handler]
+	started time.Time
 }
+
+// NewStartGate is the gate of a start that begins now.
+func NewStartGate() *StartGate { return &StartGate{started: time.Now()} }
 
 // Open sends every request from now on to h.
 func (g *StartGate) Open(h http.Handler) { g.h.Store(&h) }
@@ -34,6 +46,10 @@ func (g *StartGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		(*h).ServeHTTP(w, r)
 		return
 	}
+	g.serveStarting(w, r)
+}
+
+func (g *StartGate) serveStarting(w http.ResponseWriter, r *http.Request) {
 	hdr := w.Header()
 	hdr.Set("Content-Type", "application/json")
 	hdr.Set("Cache-Control", "no-store")
@@ -41,6 +57,13 @@ func (g *StartGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	hdr.Set("Retry-After", startingRetry)
 	w.WriteHeader(http.StatusServiceUnavailable)
 	if r.Method != http.MethodHead {
-		_, _ = w.Write([]byte(startingBody))
+		_ = json.NewEncoder(w).Encode(StartingAnswer{
+			Status: StartingStatus,
+			Error:  "the server is starting",
+			Code:   "server_starting",
+			// time.Since reads the monotonic clock: a wall clock set mid-start
+			// (a board with no battery, at its first NTP answer) changes nothing.
+			StartingForSeconds: int64(time.Since(g.started) / time.Second),
+		})
 	}
 }

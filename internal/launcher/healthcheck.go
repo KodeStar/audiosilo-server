@@ -24,12 +24,22 @@ import (
 // Dockerfile's --timeout; Docker's own default is thirty).
 const healthcheckTimeout = 5 * time.Second
 
+// stuckStartAfter is how long a start may run and its "starting" answer still
+// be healthy. Past it the start is taken for stuck (a network mount that
+// stopped answering under the upgrade's copy or the database's open), which
+// only a restart ends. A constant, not a setting: a migration takes minutes
+// on a large library.
+const stuckStartAfter = 30 * time.Minute
+
 // Healthcheck asks the server running from dataDir whether it is healthy: a GET
 // of /healthz on the address config.yaml and the AUDIOSILO_* environment give
 // it (bind and tls.mode, read as the server reads them at start), answered 200,
 // or 503 "starting" (server.StartingStatus): the server listens before it opens
 // the database, and a start's migrations can outlast any start period, so a
 // starting server is healthy and an orchestrator never restarts it mid-way.
+// The answer says how long the start has run, and one that has run
+// stuckStartAfter is unhealthy: a start hung for good must not read healthy
+// for ever.
 // It backs `audiosilo healthcheck`, the Docker image's HEALTHCHECK (server#217):
 // nil is healthy, an error says why not. It opens nothing in the data folder
 // but config.yaml (and under autocert the certificate cache), writes nothing
@@ -118,7 +128,8 @@ func loadSettled(dataDir string) (*config.Config, error) {
 	}
 }
 
-// getHealthz asks addr's /healthz for a 200, or a 503 "starting". host, when
+// getHealthz asks addr's /healthz for a 200, or a 503 "starting" from a start
+// that has run under stuckStartAfter. host, when
 // set, is the name the request carries (its TLS server name and Host); the
 // connection goes to addr either way.
 func getHealthz(ctx context.Context, addr, host string, tlsOn bool, w io.Writer) error {
@@ -164,20 +175,27 @@ func getHealthz(ctx context.Context, addr, host string, tlsOn bool, w io.Writer)
 	case resp.StatusCode == http.StatusOK:
 		_, _ = fmt.Fprintln(w, "ok:", target)
 		return nil
-	case resp.StatusCode == http.StatusServiceUnavailable && startingAnswer(body):
-		_, _ = fmt.Fprintln(w, "starting:", target)
-		return nil
+	case resp.StatusCode == http.StatusServiceUnavailable:
+		if running, ok := startingFor(body); ok {
+			if running >= stuckStartAfter {
+				return fmt.Errorf("the start is stuck: %s has answered \"starting\" for %s (a start gets %s)",
+					target, running.Truncate(time.Minute), stuckStartAfter)
+			}
+			_, _ = fmt.Fprintln(w, "starting:", target)
+			return nil
+		}
 	}
 	return fmt.Errorf("%s answered %s", target, resp.Status)
 }
 
-// startingAnswer reports whether body is a starting server's answer
-// (server.StartGate).
-func startingAnswer(body []byte) bool {
-	var v struct {
-		Status string `json:"status"`
+// startingFor reads body as a starting server's answer (server.StartGate): how
+// long its start has run, and false when it is any other answer.
+func startingFor(body []byte) (time.Duration, bool) {
+	var v server.StartingAnswer
+	if json.Unmarshal(body, &v) != nil || v.Status != server.StartingStatus {
+		return 0, false
 	}
-	return json.Unmarshal(body, &v) == nil && v.Status == server.StartingStatus
+	return time.Duration(v.StartingForSeconds) * time.Second, true
 }
 
 // helloWithoutName sends addr a TLS hello naming no host (see Healthcheck):

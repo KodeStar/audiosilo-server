@@ -129,9 +129,7 @@ func TestHealthcheckUnhealthy(t *testing.T) {
 // any other body (the database probe failed) is not (TestHealthcheckUnhealthy).
 func TestHealthcheckStarting(t *testing.T) {
 	t.Parallel()
-	starting := healthServer(t, false, func(w http.ResponseWriter, r *http.Request) {
-		(&server.StartGate{}).ServeHTTP(w, r)
-	})
+	starting := healthServer(t, false, server.NewStartGate().ServeHTTP)
 	var out bytes.Buffer
 	if err := Healthcheck(context.Background(), healthDataDir(t, starting, config.TLSOff), &out); err != nil {
 		t.Fatalf("Healthcheck = %v, want a starting server healthy", err)
@@ -145,6 +143,34 @@ func TestHealthcheckStarting(t *testing.T) {
 	})
 	if err := Healthcheck(context.Background(), healthDataDir(t, other, config.TLSOff), io.Discard); err == nil {
 		t.Error("Healthcheck of a 503 not starting = nil, want unhealthy")
+	}
+}
+
+// A start that has answered "starting" for stuckStartAfter is unhealthy, and
+// the check says the start is stuck (a hung mount must not read healthy for
+// ever); one just short of it is still healthy, as is an answer that names no
+// time at all.
+func TestHealthcheckStuckStart(t *testing.T) {
+	t.Parallel()
+	startingFor := func(field string) string {
+		return healthDataDir(t, healthServer(t, false, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"status":"starting","error":"the server is starting","code":"server_starting"`+field+`}`)
+		}), config.TLSOff)
+	}
+	limit := int(stuckStartAfter / time.Second)
+	for name, field := range map[string]string{
+		"just short": fmt.Sprintf(`,"starting_for_seconds":%d`, limit-1),
+		"no time":    "",
+	} {
+		if err := Healthcheck(context.Background(), startingFor(field), io.Discard); err != nil {
+			t.Errorf("%s: Healthcheck = %v, want a starting server healthy", name, err)
+		}
+	}
+	var out bytes.Buffer
+	err := Healthcheck(context.Background(), startingFor(fmt.Sprintf(`,"starting_for_seconds":%d`, limit)), &out)
+	if err == nil || !strings.Contains(err.Error(), "the start is stuck") || out.Len() != 0 {
+		t.Errorf("Healthcheck of a start running %s = %v (output %q), want unhealthy, the start stuck", stuckStartAfter, err, out.String())
 	}
 }
 
@@ -498,7 +524,6 @@ func TestRunAnswersStartingBeforeTheDatabase(t *testing.T) {
 		!strings.Contains(string(body), `"status":"starting"`) {
 		t.Fatalf("API while starting = %d %q (Retry-After %q), want 503 starting", resp.StatusCode, body, resp.Header.Get("Retry-After"))
 	}
-
 	close(release)
 	waitFor(t, "the started server", func() bool {
 		out.Reset()

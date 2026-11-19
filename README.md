@@ -190,8 +190,10 @@ port and TLS mode from `config.yaml` and the `AUDIOSILO_*` environment, and exit
 when the database answers (`docker ps` shows `healthy`). The server listens before it
 opens the database, and while it restores a backup, copies the database for an upgrade
 or runs the migrations it answers every request with `503` and `"status": "starting"`,
-which the check counts as healthy: however long an upgrade's migrations take on a large
-library, autoheal never restarts the container part way through. `/healthz` is not
+which the check counts as healthy, so autoheal never restarts the container part way
+through an upgrade's migrations on a large library. The answer also says how long the
+start has run (`"starting_for_seconds"`), and a start that has run thirty minutes is
+counted as stuck and reads unhealthy. `/healthz` is not
 rate limited, so a busy reverse proxy on the same host never makes the check read
 `429`. Docker only marks the container `unhealthy`; to restart a stuck server (an NFS
 hard mount that stopped answering) pair it with an orchestrator liveness probe or an

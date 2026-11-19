@@ -137,7 +137,7 @@ func Run(ctx context.Context, opts Options) (err error) {
 	// stops the start here, before any of it. The server stops when Run
 	// returns (stopServing), after the deferred work below it: it is deferred
 	// first.
-	gate := &server.StartGate{}
+	gate := server.NewStartGate()
 	serveCtx, stopServing := context.WithCancel(ctx)
 	serving, err := server.Start(serveCtx, cfg, gate, log)
 	if err != nil {

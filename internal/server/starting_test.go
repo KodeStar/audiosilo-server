@@ -10,26 +10,31 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
 
 // Until Open, every request (any path, any method) is answered 503 with the
-// starting body and Retry-After, a HEAD with no body; after it, the handler
-// Open was given answers.
+// starting body (the envelope's fields, and how long the start has run) and
+// Retry-After, a HEAD with no body; after it, the handler Open was given
+// answers.
 func TestStartGate(t *testing.T) {
 	t.Parallel()
-	g := &StartGate{}
+	g := NewStartGate()
+	g.started = time.Now().Add(-90 * time.Second)
 	for _, path := range []string{"/healthz", "/api/v1/server", "/admin/"} {
 		rec := httptest.NewRecorder()
 		g.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		var body struct{ Status, Error, Code string }
+		var body map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatalf("%s: body %q: %v", path, rec.Body, err)
 		}
-		if rec.Code != http.StatusServiceUnavailable || body.Status != StartingStatus || body.Code == "" ||
+		running, _ := body["starting_for_seconds"].(float64)
+		if rec.Code != http.StatusServiceUnavailable || body["status"] != StartingStatus ||
+			body["code"] != "server_starting" || body["error"] == "" || running < 90 || running > 150 ||
 			rec.Header().Get("Retry-After") == "" || rec.Header().Get("Cache-Control") != "no-store" {
-			t.Errorf("%s while starting = %d %+v %v, want 503 starting", path, rec.Code, body, rec.Header())
+			t.Errorf("%s while starting = %d %v %v, want 503 starting for 90 s", path, rec.Code, body, rec.Header())
 		}
 	}
 	rec := httptest.NewRecorder()
@@ -64,7 +69,7 @@ func TestStartListenErrorAndWait(t *testing.T) {
 
 	cfg.Bind = freeAddr(t)
 	ctx, stop := context.WithCancel(t.Context())
-	s, err := Start(ctx, cfg, &StartGate{}, log)
+	s, err := Start(ctx, cfg, NewStartGate(), log)
 	if err != nil {
 		t.Fatal(err)
 	}

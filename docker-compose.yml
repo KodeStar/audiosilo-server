@@ -34,9 +34,9 @@ services:
     # The image's HEALTHCHECK (`audiosilo healthcheck` on the container's --data
     # folder, the server's /healthz) marks the container unhealthy when the server
     # stops answering; Docker doesn't restart it for that. While an upgrade's
-    # migrations run the server answers "starting", which counts as healthy, so
-    # they always finish first. To restart it, add a label and an autoheal
-    # sidecar:
+    # migrations run the server answers "starting", which counts as healthy for
+    # the start's first thirty minutes, so they finish first. To restart it, add
+    # a label and an autoheal sidecar:
     # labels:
     #   autoheal: "true"
   # autoheal:
