@@ -299,8 +299,9 @@ func TestXingWithoutFrameCountIsCounted(t *testing.T) {
 }
 
 // A read for the tags alone (WithoutFrameCount: the setup preview's samples,
-// a scan's tag backfill) counts no frames: a header-less VBR MP3 takes the
-// bitrate's estimate, and only the probe's few blocks are read.
+// a scan's tag backfill) counts no frames and samples none: a header-less MP3
+// takes the first frame's bitrate's estimate, the answer a CBR file gets
+// anyway, and only the first block is read.
 func TestWithoutFrameCountReadsNoFrames(t *testing.T) {
 	t.Parallel()
 	data := vbrFrames(20000) // ~8 MiB
@@ -308,11 +309,16 @@ func TestWithoutFrameCountReadsNoFrames(t *testing.T) {
 	if reason != "" || p.Counted || p.Duration <= 0 {
 		t.Fatalf("reason %q answer %+v, want the estimate", reason, p)
 	}
-	if read > int64(len(data))/4 {
-		t.Errorf("read %d of %d bytes, want the probe's blocks only", read, len(data))
+	if read > 2*bfBlock {
+		t.Errorf("read %d of %d bytes, want the first block only", read, len(data))
 	}
 	if _, _, read := probeBytes(t, t.Context(), data, maxProbeTime); read < int64(len(data)) {
 		t.Errorf("a count read %d of %d bytes, want the whole file", read, len(data))
+	}
+	cbr := bytes.Repeat(mp3Frame(9), 20000)
+	want, _, _ := probeBytes(t, t.Context(), cbr, maxProbeTime)
+	if got, _, _ := probeBytes(t, WithoutFrameCount(t.Context()), cbr, maxProbeTime); got == nil || got.Duration != want.Duration {
+		t.Errorf("a CBR file for the tags alone: %+v, want %v as sampled", got, want.Duration)
 	}
 }
 

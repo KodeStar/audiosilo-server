@@ -878,6 +878,11 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 		// the decoder skips at the start (the encoder delay and its own 529
 		// samples; the padding at the end is only cut with a frame count).
 		return nil, uncounted(skip)
+	case b.ctx != nil && !frameCountWanted(b.ctx):
+		// A read for the tags alone (WithoutFrameCount): the first frame's
+		// bitrate's estimate whether or not the stream is constant, so it is
+		// not sampled.
+		return nil, uncounted(0)
 	default:
 		br, cbr := mp3ConstantBitrate(b, off, fh)
 		if !cbr {
