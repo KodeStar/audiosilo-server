@@ -256,7 +256,8 @@ func TestMovePodcastShowsSwapsTwoFolders(t *testing.T) {
 	}
 	indexShowAt(t, c, ctx, lib.ID, "A", y)
 	indexShowAt(t, c, ctx, lib.ID, "B", x)
-	n, err := c.MovePodcastShows(ctx, lib.ID, []PodcastMove{{ShowID: x, From: []string{"A"}, To: "B"}, {ShowID: y, From: []string{"B"}, To: "A"}}, false)
+	// With unread too: each folder's other show moves off it in the call.
+	n, err := c.MovePodcastShows(ctx, lib.ID, []PodcastMove{{ShowID: x, From: []string{"A"}, To: "B"}, {ShowID: y, From: []string{"B"}, To: "A"}}, true)
 	if err != nil || n != 2 {
 		t.Fatalf("swap %d %v", n, err)
 	}
@@ -506,5 +507,45 @@ func TestMovePodcastShowsHoldsAMoveOverAnIndexedShowsFollow(t *testing.T) {
 	fx.checkMoved(t)
 	if got, err := fx.c.PodcastShow(fx.ctx, fx.lib, "Third", cat); err != nil || !got.Following {
 		t.Fatalf("the other show at its folder %+v %v", got, err)
+	}
+}
+
+// Denied: a move to a folder carrying the feed state or policy (no follow) of
+// another identity indexed elsewhere, whose own move is not in the call,
+// waits too: else the heart on that folder, keyed by path alone, would go to
+// the moving show (podcastFolderStateOf), not with the other show when it
+// moves. In one call with that show's own move both apply, the heart going
+// with the other show.
+func TestMovePodcastShowsHoldsAMoveOverAnIndexedShowsFeedState(t *testing.T) {
+	fx := newRenameFixture(t)
+	other := "0123456789abcdef"
+	f := showAt(t, "Third", other)
+	for i := range f.Episodes {
+		f.Episodes[i].Path = "Third/other-" + path.Base(f.Episodes[i].Path)
+	}
+	if _, err := fx.c.IndexPodcastShow(fx.ctx, fx.lib, "Third", "Third", "", "", f, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.c.db.ExecContext(fx.ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,etag) VALUES(?,'Renamed',?,'other')`, fx.lib, other); err != nil {
+		t.Fatal(err)
+	}
+	cat := seedUserNamed(t, fx.c, fx.ctx, "cat")
+	if err := fx.c.AddFavourite(fx.ctx, cat, Ref{LibraryID: fx.lib, Path: "Renamed"}); err != nil {
+		t.Fatal(err)
+	}
+	move := PodcastMove{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}
+	if n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{move}, false); err != nil || n != 0 {
+		t.Fatalf("move %d %v", n, err)
+	}
+	n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{move, {ShowID: other, From: []string{"Renamed"}, To: "Third"}}, false)
+	if err != nil || n != 2 {
+		t.Fatalf("both moves %d %v", n, err)
+	}
+	fx.checkMoved(t)
+	if favs, err := fx.c.ListAllFavourites(fx.ctx, cat, []Scope{{LibraryID: fx.lib, AllowAll: true}}); err != nil || len(favs) != 1 || favs[0].Path != "Third" {
+		t.Fatalf("the other show's heart %+v %v", favs, err)
+	}
+	if st, err := fx.c.PodcastState(fx.ctx, fx.lib, "Third"); err != nil || st.ETag != "other" {
+		t.Fatalf("the other show's feed state %+v %v", st, err)
 	}
 }

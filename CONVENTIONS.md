@@ -3690,8 +3690,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   hand) is indexed again first, so both move in one call (follows and folder state through a hidden
   placeholder path); a rescan about to move a show also indexes the listed folders with no row yet
   first (another show renamed out of the way to a new name), so a chain of renames moves in one call
-  too. A move whose new folder carries a follow of another show indexed elsewhere waits while that
-  show's own move is not in the same call (skipped: a copy, a path that can't be told). A folder the
+  too. A move whose new folder carries a follow, feed state or policy of another show indexed
+  elsewhere waits while that show's own move is not in the same call (skipped: a copy, a path that
+  can't be told; else that folder's heart would go to the moving show). A folder the
   scan (partial, it prunes nothing) or a rescan (the listed folders with no row) can't read, or whose
   feed.json is invalid or of a newer version, may be that other show's: then a move whose new folder
   carries another show's follow, feed state, policy or place (a progress row on a file the moving

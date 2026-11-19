@@ -74,13 +74,14 @@ type PodcastMove struct {
 // applied. A move applies only while To's index row is ShowID's (else it is
 // passed over: the folder changed since the caller looked), and is held while
 // To carries the state of another identity that may still be on its way
-// somewhere (unheldPodcastMoves): a listener's follow there of an identity
-// indexed elsewhere (its own move skipped: a copy, a path that can't be told)
-// and, with unread (the caller could not read every folder the root lists,
-// one of which may hold that identity now), any follow, feed state, policy or
-// place there of another identity. Either is passed over when that identity
-// is lifted from To in the same call (names swapped, a chain of renames). Of
-// a From path it moves only ShowID's rows:
+// somewhere (unheldPodcastMoves): a follow, feed state or policy there of an
+// identity indexed elsewhere (its own move skipped: a copy, a path that can't
+// be told; any of the three keeps To's show-folder heart that identity's,
+// podcastFolderStateOf) and, with unread (the caller could not read every
+// folder the root lists, one of which may hold that identity now), any of the
+// three or a place there of another identity. Either is passed over when that
+// identity is lifted from To in the same call (names swapped, a chain of
+// renames). Of a From path it moves only ShowID's rows:
 //
 //   - every listener's follow (one at To already for the same identity keeps
 //     the earlier date; a follow at To of another identity that is indexed
@@ -204,23 +205,23 @@ type podcastTo struct {
 	places bool
 }
 
-// podcastOther is an identity with state at a move's To: follow, a listener's
-// follow there; indexed, the identity is indexed somewhere in the library.
+// podcastOther is an identity with state at a move's To; indexed, the
+// identity is indexed somewhere in the library.
 type podcastOther struct {
-	id              string
-	follow, indexed bool
+	id      string
+	indexed bool
 }
 
 func readPodcastTo(ctx context.Context, tx *sql.Tx, lib int64, m PodcastMove, unread bool) (podcastTo, error) {
 	var to podcastTo
 	var err error
-	to.others, err = queryRows(ctx, tx, func(r *sql.Rows, o *podcastOther) error { return r.Scan(&o.id, &o.follow, &o.indexed) },
-		`WITH ids(show_id,follow) AS (
-		   SELECT show_id,1 FROM podcast_follows WHERE library_id=?1 AND show_path=?2 AND show_id<>?3
-		   UNION SELECT show_id,0 FROM podcast_feed_state WHERE library_id=?1 AND show_path=?2 AND show_id<>?3
-		   UNION SELECT show_id,0 FROM podcast_policies WHERE library_id=?1 AND show_path=?2 AND show_id<>?3)
-		 SELECT show_id,MAX(follow),EXISTS(SELECT 1 FROM podcast_shows s WHERE s.library_id=?1 AND s.show_id=ids.show_id)
-		   FROM ids GROUP BY show_id`, lib, m.To, m.ShowID)
+	to.others, err = queryRows(ctx, tx, func(r *sql.Rows, o *podcastOther) error { return r.Scan(&o.id, &o.indexed) },
+		`WITH ids(show_id) AS (
+		   SELECT show_id FROM podcast_follows WHERE library_id=?1 AND show_path=?2 AND show_id<>?3
+		   UNION SELECT show_id FROM podcast_feed_state WHERE library_id=?1 AND show_path=?2 AND show_id<>?3
+		   UNION SELECT show_id FROM podcast_policies WHERE library_id=?1 AND show_path=?2 AND show_id<>?3)
+		 SELECT show_id,EXISTS(SELECT 1 FROM podcast_shows s WHERE s.library_id=?1 AND s.show_id=ids.show_id)
+		   FROM ids`, lib, m.To, m.ShowID)
 	if err == nil && unread {
 		to.places, err = podcastOtherPlaces(ctx, tx, lib, m)
 	}
@@ -237,7 +238,7 @@ func (t podcastTo) held(to string, lifted map[[2]string]bool, unread bool) bool 
 			liftedHere = true
 			continue
 		}
-		if unread || o.follow && o.indexed {
+		if unread || o.indexed {
 			return true
 		}
 	}
