@@ -3369,7 +3369,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
   library: 409 `not_held`; with `reason: "cancelled"` when the job ended cancelled with no later claim than
   this one, `ErrCancelledWhileHeld`, so the Bridge records it cancelled, not lost, bridge#35), renews the lease and
-  answers the job, whose `cancel_requested` asks the Bridge to stop.
+  answers the job, whose `cancel_requested` asks the Bridge to stop. A `failed` report on a job with
+  `cancel_requested` is stored `cancelled` (the failure may be the stop itself, a cancel the Bridge's
+  last check missed or an older Bridge): the server's reason stays, an admin's cancel keeps the Bridge's
+  text, and the failure is logged; a `done` report stays done.
   Claim responses retain the request deadline but bypass response buffering and flush before return;
   a wait the deadline ends still answers 503 `request timed out`, as the buffered timeout did.
   A claim ended before its reply was written, a failed 200 write, or a Bridge that left before the

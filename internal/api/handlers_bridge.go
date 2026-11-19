@@ -548,8 +548,9 @@ func claimEnded(ctx context.Context, w http.ResponseWriter) {
 
 // handleBridgeUpdate serves PATCH /bridge/jobs/{id} {attempt, state?, progress?,
 // result?, error?}: the Bridge's report on a job it holds, renewing its lease.
-// The answer is the job as stored; its cancel_requested asks the Bridge to stop,
-// and its share_off to keep the job's results local (bridge.Job.ShareOff).
+// The answer is the job as stored (a failure reported once it was asked to stop
+// stored as cancelled); its cancel_requested asks the Bridge to stop, and its
+// share_off to keep the job's results local (bridge.Job.ShareOff).
 // 409 code not_held when the claim no longer holds it (it ended, was cancelled,
 // or its lease ran out and it was claimed again), with reason "cancelled" when
 // it ended cancelled with no later claim (bridge.ErrCancelledWhileHeld, bridge#35).
