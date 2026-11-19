@@ -172,6 +172,18 @@ const (
 // what the file is: one a later read may answer otherwise.
 func cutShort(detail string) bool { return detail == tagsUnreadDetail || detail == readRefusedDetail }
 
+// keptAsStored reports whether sig records a read problem that a read meeting
+// it again keeps the stored book over (catalog.Book.ReadCutShort), writing
+// nothing new of it: any unreadable one (a read cut short or refused, an open
+// a share failed, a file that is no regular file) and an ffprobe time-out.
+// Until problemCleared finds the file answers, reading the book again for
+// another reason (a cover that appeared beside it) would write nothing, on
+// every scan.
+func keptAsStored(sig catalog.Signature) bool {
+	return sig.ScanError == problemUnreadable ||
+		(sig.ScanError == problemProbe && strings.HasPrefix(sig.ScanErrorDetail, metadata.ErrProbeTimeout.Error()))
+}
+
 // fileState is a file's mtime (Unix seconds) and size: with its absolute path,
 // what a rejection of its data is remembered by (noteRejected). A scan that
 // finds the file in the same state takes it to hold the same bytes, as it does

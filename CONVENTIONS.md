@@ -2704,7 +2704,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.FileArtVersion`: sidecar or first audio file, size and mtime, the scan's
   `Book.ArtVersion`), so a re-index of unchanged art keeps the version and its colour,
   and art replaced in place gets a new one; a scan that finds the audio unchanged still
-  records a replaced sidecar (`SetArtVersions`, compare-and-set). `SetCover`, `DeleteCover`,
+  records a replaced sidecar (`SetArtVersions`, compare-and-set), and reads again a book stored
+  with no sidecar cover once its walk lists an image the cover rule would take beside it
+  (`Book.CoverSeen`, `coversOfWalk`: any image in a folder book's folder or, for a disc folder, the
+  one above; a conventionally named file, never a link, beside a loose file), unless its recorded
+  problem is one a read keeps the stored book over (`keptAsStored`: `problemCleared` says when a
+  read would write). `SetCover`, `DeleteCover`,
   moves and joins recompute it, keeping a file version the row holds; a row with none
   takes the index form (mtime, size, sidecar path) plus the removed custom cover's
   identity, so a version is never reused for other art (ADMIN-01). Every
