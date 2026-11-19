@@ -198,6 +198,13 @@ func EvalSymlinksBounded(ctx context.Context, path string, timeout time.Duration
 	return bounded(ctx, path, timeout, true, func() (string, error) { return filepath.EvalSymlinks(path) }, nil)
 }
 
+// ReadlinkBounded is os.Readlink of path as a Bounded call: one link's own
+// target, nothing it names looked at (library.SafeJoinListed's resolve, one
+// hop at a time).
+func ReadlinkBounded(ctx context.Context, path string, timeout time.Duration) (string, error) {
+	return bounded(ctx, path, timeout, true, func() (string, error) { return os.Readlink(path) }, nil)
+}
+
 // LookBounded is Bounded for a call that only looks at path (its links, a
 // folder's first entries: no file's contents read), as StatBounded is: on a
 // share whose listings and attributes answer while its reads hang

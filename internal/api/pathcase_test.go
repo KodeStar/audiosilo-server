@@ -442,7 +442,7 @@ func TestFSLinkOutOfRootIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTree(t, outside, "present/01.mp3")
-	for link, to := range map[string]string{"Out": outside, "In": filepath.Join(c.lib.Root, pcAuthor)} {
+	for link, to := range map[string]string{"Out": outside, "Gone": filepath.Join(outside, "nope"), "In": filepath.Join(c.lib.Root, pcAuthor)} {
 		if err := os.Symlink(to, filepath.Join(c.lib.Root, link)); err != nil {
 			t.Skipf("symlinks unsupported on this platform: %v", err)
 		}
@@ -463,7 +463,13 @@ func TestFSLinkOutOfRootIsMissing(t *testing.T) {
 	for _, p := range []string{"Out", "Out/present", "Out/absent", "/Out", "/Out/present"} {
 		c.same(t, c.samTok, "GET", c.get("fs"), p, "Nowhere")
 	}
-	c.same(t, c.samTok, "GET", c.get("stream"), "Out/present/01.mp3", "Out/absent/01.mp3")
+	// The stream, in every form, answers a file through a link out of the
+	// library as a missing one, whether the link's target is there or not.
+	for _, form := range streamForms {
+		for _, p := range []string{"Out/present/01.mp3", "Out/absent/01.mp3", "Gone/01.mp3"} {
+			c.same(t, c.samTok, "GET", c.get("stream", form), p, "Nowhere/01.mp3")
+		}
+	}
 	mu.Lock()
 	for _, d := range dirs {
 		if strings.HasPrefix(d, outside) {
@@ -476,6 +482,42 @@ func TestFSLinkOutOfRootIsMissing(t *testing.T) {
 		!strings.Contains(body, "Germinal") {
 		t.Errorf("fs through a link inside the library = %d %s, want its listing", resp.StatusCode, body)
 	}
+	if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "stream", "In/Germinal/01.mp3"), c.samTok, ""); resp.StatusCode != http.StatusOK ||
+		!strings.HasPrefix(body, "placeholder ") {
+		t.Errorf("stream through a link inside the library = %d %.80q, want the file", resp.StatusCode, body)
+	}
+}
+
+// TestStreamLinkOutOfRootOnAHeldShare (security): a file through a link out of
+// the library whose target's share stopped answering is answered at once as a
+// missing file, as a link to a target that answers is, never a 503
+// share_not_answering after the look's time: the link's target is never looked
+// at, so the answer tells nothing about where it points. Allowed: a file
+// through a link inside the library streams. Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
+func TestStreamLinkOutOfRootOnAHeldShare(t *testing.T) {
+	c := newCaseEnv(t)
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTree(t, outside, "present/01.mp3")
+	for link, to := range map[string]string{"Out": outside, "In": filepath.Join(c.lib.Root, pcAuthor)} {
+		if err := os.Symlink(to, filepath.Join(c.lib.Root, link)); err != nil {
+			t.Skipf("symlinks unsupported on this platform: %v", err)
+		}
+	}
+	c.api.fileWait, c.api.streamWait = time.Second, time.Second
+	release := metadata.HoldOpensForTests(outside)
+	t.Cleanup(release)
+	for _, form := range streamForms {
+		start := time.Now()
+		c.same(t, c.samTok, "GET", c.get("stream", form), "Out/present/01.mp3", "Nowhere/01.mp3")
+		if took := time.Since(start); took > c.api.streamWait {
+			t.Errorf("stream%s through a link to a held share took %v, want it answered at once", form, took)
+		}
+	}
+	release()
 	if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "stream", "In/Germinal/01.mp3"), c.samTok, ""); resp.StatusCode != http.StatusOK ||
 		!strings.HasPrefix(body, "placeholder ") {
 		t.Errorf("stream through a link inside the library = %d %.80q, want the file", resp.StatusCode, body)

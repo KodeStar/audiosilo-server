@@ -1145,9 +1145,11 @@ func lookAtSource(w http.ResponseWriter, r *http.Request, abs string, deadline t
 }
 
 // audioFile is the stream's guard on rel (scope-checked already): its absolute
-// path, or false having written 404 for a file that isn't recognized audio, 400
-// for a path that escapes the root, and 503 share_not_answering for a join
-// whose looks (bounded, up to deadline) were given up on. The scope check
+// path, or false having written 404 for a file that isn't recognized audio and
+// 503 share_not_answering for a join whose looks (bounded, up to deadline)
+// were given up on. A path through a link out of the root is one no file has
+// (noFile), every form of the stream answering it as a missing file whatever
+// the link points to. The scope check
 // bounds a stream to the caller's grant, but the library root can also hold
 // non-audio sidecar files (.nfo, .jpg, a stray .env/backup); BrowseFS hides
 // those from listings, and cover art has its own endpoint, so serving them
@@ -1167,11 +1169,13 @@ func (a *API) audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Lib
 	if err == nil && held {
 		abs, err = library.SafeJoinBounded(r.Context(), lib.Root, rel, metadata.WaitLeft(deadline))
 	}
-	switch {
-	case errors.Is(err, library.ErrOutsideRoot):
-		writeError(w, http.StatusBadRequest, "invalid path")
-		return "", false
-	case err != nil:
+	if errors.Is(err, library.ErrOutsideRoot) {
+		// rel is cleaned (its names never climb out of the root), so only a
+		// link out of the root leads here: answered as a missing file whatever
+		// it points to, its target never looked at (library.SafeJoinListed).
+		abs, refused, err = filepath.Join(lib.Root, filepath.FromSlash(rel)), true, nil
+	}
+	if err != nil {
 		a.writeJoinError(w, r, err, lib, "check a stream's path failed", "Could not load the file.")
 		return "", false
 	}

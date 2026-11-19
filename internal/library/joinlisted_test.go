@@ -66,7 +66,7 @@ func TestSafeJoinListedVariantCostsWhatMissingDoes(t *testing.T) {
 			defer mu.Unlock()
 			got = append(got, op+" "+strings.TrimPrefix(p, root))
 		}
-		lk := boundedLooks(ctx, root, time.Now().Add(time.Second), names, metadata.EvalSymlinksBounded)
+		lk := boundedLooks(ctx, time.Now().Add(time.Second), names, metadataLooks)
 		lstat, listed := lk.lstat, lk.listed
 		lk.lstat = func(p string) (fs.FileInfo, error) { note("lstat", p); return lstat(p) }
 		lk.listed = func(dir, name string) (bool, error) { note("list", dir); return listed(dir, name) }
@@ -163,16 +163,15 @@ func TestSafeJoinListedLinkOutOfRoot(t *testing.T) {
 	}
 }
 
-// TestSafeJoinListedLinkFaultOutOfRoot (security): a link out of the root
-// whose target's mount fails as a share does that a retry may get past (EIO,
-// ESTALE, ENOTCONN, met on a name out of the root, a sibling folder whose name
-// starts with the root's included, or with no path to tell where) is a link
-// that does not resolve, a name not there (the 404 it always was), never a
-// look given up on (a 503 share_not_answering), so the answer tells nothing
-// about what the link points to or how its mount fails. Denied the 404: a link
-// inside the root whose resolve faults on a name under the root (its target,
-// or the link itself) or on the root's own mount above it is a look given up
-// on, as any look there is.
+// TestSafeJoinListedLinkFaultOutOfRoot (security): a link out of the root is
+// refused (ErrOutsideRoot) whatever its target's mount does, hanging, failing
+// as a share does that a retry may get past (EIO, ESTALE) or answering, and
+// whether the target is there or not: the link is read, never followed, and
+// no look is made at any name out of the root, so the answer tells nothing
+// about what the link points to or how its mount fails. Denied the refusal: a
+// link inside the root whose own read or whose target's look faults is a look
+// given up on, as any look there is, and one whose target is there is
+// followed.
 func TestSafeJoinListedLinkFaultOutOfRoot(t *testing.T) {
 	t.Parallel()
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -185,7 +184,10 @@ func TestSafeJoinListedLinkFaultOutOfRoot(t *testing.T) {
 	}
 	writeFile(t, outside, "Book/01.mp3", []byte("x"))
 	writeFile(t, root, "Real/01.mp3", []byte("x"))
-	for link, to := range map[string]string{"Out": filepath.Join(outside, "Book"), "In": filepath.Join(root, "Real")} {
+	for link, to := range map[string]string{
+		"Out": filepath.Join(outside, "Book"), "OutGone": filepath.Join(outside, "nope"),
+		"OutRel": "../" + filepath.Base(outside) + "/Book", "In": filepath.Join(root, "Real"), "InRel": "Real",
+	} {
 		if err := os.Symlink(to, filepath.Join(root, link)); err != nil {
 			t.Skipf("symlinks unsupported on this platform: %v", err)
 		}
@@ -193,38 +195,100 @@ func TestSafeJoinListedLinkFaultOutOfRoot(t *testing.T) {
 	names := metadata.ReadDirNamesBounded
 	for _, c := range []struct {
 		name, rel string
-		fault     error // the link's resolve fails with it
-		gaveUp    bool
+		at        string // the look that fails there
+		fault     error
+		want      string // "out", "gaveUp", "there"
 	}{
-		{"out, its target's lstat EIO", "Out/01.mp3", &fs.PathError{Op: "lstat", Path: filepath.Join(outside, "Book"), Err: syscall.EIO}, false},
-		{"out, its target's readlink ESTALE", "Out", &fs.PathError{Op: "readlink", Path: outside, Err: syscall.ESTALE}, false},
-		{"out, ENOTCONN with no path", "Out/01.mp3", syscall.ENOTCONN, false},
-		{"out, EIO on a sibling named as the root's prefix", "Out", &fs.PathError{Op: "lstat", Path: root + "rary", Err: syscall.EIO}, false},
-		{"in, its target's lstat EIO", "In/01.mp3", &fs.PathError{Op: "lstat", Path: filepath.Join(root, "Real"), Err: syscall.EIO}, true},
-		{"in, the link's own readlink ESTALE", "In", &fs.PathError{Op: "readlink", Path: filepath.Join(root, "In"), Err: syscall.ESTALE}, true},
-		{"in, the root's mount above it ENOTCONN", "In/01.mp3", &fs.PathError{Op: "lstat", Path: filepath.Dir(root), Err: syscall.ENOTCONN}, true},
+		{"out, its target hanging", "Out/01.mp3", outside, metadata.ErrNotAnswered, "out"},
+		{"out, its target's mount EIO", "Out/01.mp3", outside, syscall.EIO, "out"},
+		{"out, its target ESTALE", "Out", filepath.Join(outside, "Book"), syscall.ESTALE, "out"},
+		{"out, its target not there", "OutGone/01.mp3", "", nil, "out"},
+		{"out by a relative link, its target hanging", "OutRel/01.mp3", outside, metadata.ErrNotAnswered, "out"},
+		{"in, its target's lstat EIO", "In/01.mp3", filepath.Join(root, "Real"), syscall.EIO, "gaveUp"},
+		{"in, the link's own readlink ESTALE", "In", filepath.Join(root, "In"), syscall.ESTALE, "gaveUp"},
+		{"in, a relative link's target hanging", "InRel/01.mp3", filepath.Join(root, "Real"), metadata.ErrNotAnswered, "gaveUp"},
+		{"in, answering", "In/01.mp3", "", nil, "there"},
+		{"in by a relative link, answering", "InRel/01.mp3", "", nil, "there"},
 	} {
-		eval := func(ctx context.Context, p string, timeout time.Duration) (string, error) {
-			if filepath.Dir(p) == root && (filepath.Base(p) == "Out" || filepath.Base(p) == "In") {
-				return "", c.fault
+		var (
+			mu     sync.Mutex
+			looked []string
+		)
+		fail := func(p string) error {
+			mu.Lock()
+			looked = append(looked, p)
+			mu.Unlock()
+			if c.at != "" && (p == c.at || strings.HasPrefix(p, c.at+string(filepath.Separator))) {
+				return &fs.PathError{Op: "lstat", Path: p, Err: c.fault}
 			}
-			return metadata.EvalSymlinksBounded(ctx, p, timeout)
+			return nil
 		}
-		lk := boundedLooks(t.Context(), root, time.Now().Add(time.Second), names, eval)
-		_, there, err := resolveBelow(root, filepath.Join(root, filepath.FromSlash(c.rel)), lk)
-		switch {
-		case c.gaveUp && (!metadata.GaveUp(err) || !errors.Is(err, c.fault)):
-			t.Errorf("%s: there %v, err %v; want a look given up on, keeping the fault", c.name, there, err)
-		case !c.gaveUp && (err != nil || there):
-			t.Errorf("%s: there %v, err %v; want a name not there, as a link that does not resolve", c.name, there, err)
+		raw := rawLooks{
+			lstat: func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+				if err := fail(p); err != nil {
+					return nil, err
+				}
+				return metadata.LstatBounded(ctx, p, timeout)
+			},
+			readlink: func(ctx context.Context, p string, timeout time.Duration) (string, error) {
+				if err := fail(p); err != nil {
+					return "", err
+				}
+				return metadata.ReadlinkBounded(ctx, p, timeout)
+			},
+		}
+		lk := boundedLooks(t.Context(), time.Now().Add(time.Second), names, raw)
+		target, there, err := resolveBelow(root, filepath.Join(root, filepath.FromSlash(c.rel)), lk)
+		switch c.want {
+		case "out":
+			if err != nil || withinRoot(root, target) {
+				t.Errorf("%s: target %q, there %v, err %v; want a path out of the root, no error", c.name, target, there, err)
+			}
+		case "gaveUp":
+			if !metadata.GaveUp(err) {
+				t.Errorf("%s: there %v, err %v; want a look given up on", c.name, there, err)
+			}
+		case "there":
+			if err != nil || !there || !withinRoot(root, target) {
+				t.Errorf("%s: target %q, there %v, err %v; want it there in the root", c.name, target, there, err)
+			}
+		}
+		for _, p := range looked {
+			if !withinRoot(root, p) {
+				t.Errorf("%s: looked at %q, out of the root", c.name, p)
+			}
 		}
 	}
-	// The links answering: one out of the root is refused, one in it followed.
-	if _, _, err := SafeJoinListed(t.Context(), root, "Out/01.mp3", time.Second, names); !errors.Is(err, ErrOutsideRoot) {
-		t.Errorf("a link out of the root answering: err %v, want ErrOutsideRoot", err)
+	// Through SafeJoinListed: every link out of the root refused, one in it followed.
+	for _, rel := range []string{"Out/01.mp3", "OutGone/01.mp3", "OutRel/01.mp3", "Out"} {
+		if _, _, err := SafeJoinListed(t.Context(), root, rel, time.Second, names); !errors.Is(err, ErrOutsideRoot) {
+			t.Errorf("SafeJoinListed(%q): err %v, want ErrOutsideRoot", rel, err)
+		}
 	}
 	if _, there, err := SafeJoinListed(t.Context(), root, "In/01.mp3", time.Second, names); err != nil || !there {
 		t.Errorf("a link in the root answering: there %v, err %v, want there", there, err)
+	}
+}
+
+// TestResolveBelowLinkLoop: a link loop inside the root resolves to nothing
+// (a name not there, as filepath.EvalSymlinks' error made it), never a walk
+// that does not end.
+func TestResolveBelowLinkLoop(t *testing.T) {
+	t.Parallel()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for link, to := range map[string]string{"A": "B", "B": "A", "Self": "Self/x"} {
+		if err := os.Symlink(to, filepath.Join(root, link)); err != nil {
+			t.Skipf("symlinks unsupported on this platform: %v", err)
+		}
+	}
+	for _, rel := range []string{"A", "A/x", "Self"} {
+		target, there, err := resolveBelow(root, filepath.Join(root, rel), plainLooks)
+		if err != nil || there || !withinRoot(root, target) {
+			t.Errorf("resolveBelow(%q) = %q, there %v, err %v; want a path in the root with nothing there", rel, target, there, err)
+		}
 	}
 }
 
