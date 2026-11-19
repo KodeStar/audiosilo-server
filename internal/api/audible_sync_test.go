@@ -593,6 +593,7 @@ func TestBridgeProgressCursorFeed(t *testing.T) {
 	ahead := recursor(t, held, func(k map[string]any) { k["q"] = k["q"].(float64) + 5 })
 	wantSync(t, s.patListens(t, "pat-c", cradleBook, 0, 30, "0"), "applied", "")
 	s.feedRefused(t, "a cursor past the feed's end", ahead)
+	s.feedRefused(t, "a cursor from before 2.7.0 past the feed's end", recursor(t, ahead, func(k map[string]any) { delete(k, "f") }))
 	if all := s.feed(t, ""); len(all.Rows) != 2 || all.Rows[1].ASIN != cradleASIN || all.Rows[1].Position != 30 {
 		t.Fatalf("read from the start = %+v, want both places", all.Rows)
 	}

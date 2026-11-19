@@ -313,8 +313,15 @@ func TestRecordRestore(t *testing.T) {
 		}
 		return v
 	}
+	// The backup's own id, which the Bridge's cursor carries.
+	if err := store.PutState(ctx, db, "progress_feed", "the-backups", "2026-11-19T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
 	recordRestore(ctx, cat, &backup.RestoreResult{Name: "audiosilo-a.db", RequestedBy: "chris", OK: true, SafetyCopy: "audiosilo-b.db"}, slog.Default())
 	renewed := feed()
+	if renewed == "the-backups" {
+		t.Fatal("an applied restore kept the backup's progress feed id")
+	}
 	recordRestore(ctx, cat, &backup.RestoreResult{Name: "audiosilo-c.db", RequestedBy: "chris", Error: "newer"}, slog.Default())
 	if feed() != renewed {
 		t.Fatal("a refused restore renewed the progress feed")
