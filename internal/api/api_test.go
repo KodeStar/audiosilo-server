@@ -28,6 +28,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
@@ -103,6 +104,10 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	}
 	scanner := library.NewScanner(cat, "", slog.Default())
 	a := New(cfg, authSvc, cat, scanner, "", slog.Default())
+	// Tests read a thumbnail's colour (and the version it moves) back at once:
+	// a loaded -race run's write can take longer than production's bound,
+	// which would drop the colour, not record it late.
+	a.colorWriteWait = testwait.Scaled(10 * time.Second)
 	// Backups and notifications as the launcher wires them (deliveries need Run;
 	// tests that send start it).
 	backups := backup.New(db, cfg.DataDir, "", slog.Default())

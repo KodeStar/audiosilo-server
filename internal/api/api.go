@@ -233,6 +233,10 @@ type API struct {
 	thumbs     *media.ThumbCache
 	coverReads chan struct{}
 	thumbSem   chan struct{}
+	// colorWriteWait bounds recording the colours a thumbnail read
+	// (coverColorWriteTimeout; a field so tests, which read the colour back,
+	// can give a loaded run's writer longer).
+	colorWriteWait time.Duration
 	// fileWait is how long a request waits for a look at a library file (a
 	// cover's stat and read) before answering 503, or with what is stored
 	// (/item's look at the book's ebook), and streamWait for a stream's open:
@@ -336,6 +340,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		favouriteWait:  favouriteIndexWait,
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
 		coverReads:     make(chan struct{}, maxCoverReads),
+		colorWriteWait: coverColorWriteTimeout,
 		fileWait:       fileWaitTimeout,
 		streamWait:     streamOpenTimeout,
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),

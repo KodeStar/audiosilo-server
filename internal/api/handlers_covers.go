@@ -415,7 +415,8 @@ const coverColorWriteTimeout = 250 * time.Millisecond
 // skipped). A failure only costs the colours until the next thumbnail (which
 // reads them again, revalidation included), so it is logged, not answered. The
 // write is detached from the request, so a client that has moved on still
-// leaves its colours behind, and bounded by coverColorWriteTimeout.
+// leaves its colours behind, and bounded by colorWriteWait
+// (coverColorWriteTimeout).
 func (a *API) recordCoverColors(ctx context.Context, recs ...*catalog.CoverColorRecord) {
 	var batch []catalog.CoverColorRecord
 	for _, r := range recs {
@@ -426,7 +427,7 @@ func (a *API) recordCoverColors(ctx context.Context, recs ...*catalog.CoverColor
 	if len(batch) == 0 {
 		return
 	}
-	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), coverColorWriteTimeout)
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.colorWriteWait)
 	defer cancel()
 	switch err := a.cat.RecordCoverColors(wctx, batch); {
 	case err != nil && wctx.Err() != nil:

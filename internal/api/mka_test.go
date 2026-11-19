@@ -21,6 +21,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // mkaFixture writes a 4-second Matroska audio file of MP3 with two chapters
@@ -199,11 +200,18 @@ func (m *mkaEnv) cachedFiles(t *testing.T) int {
 // media caches, so a failed test never hangs).
 func holdRuns(t *testing.T, c *media.FileCache) (release func()) {
 	t.Helper()
+	_, release = holdRunsHeld(t, c)
+	return release
+}
+
+// holdRunsHeld is holdRuns, with held closed once the first run is held.
+func holdRunsHeld(t *testing.T, c *media.FileCache) (held <-chan struct{}, release func()) {
+	t.Helper()
 	gate := make(chan struct{})
-	c.HoldRunsForTests(gate)
+	held = c.HoldRunsForTests(gate)
 	release = sync.OnceFunc(func() { close(gate) })
 	t.Cleanup(release)
-	return release
+	return held, release
 }
 
 // TestMatroskaAudioWithoutFFmpeg (D3a, #161): with ffmpeg off an .mka of MP3 is
@@ -842,10 +850,21 @@ func TestMatroskaRefusedPastTheStreamBound(t *testing.T) {
 	m := newMKAEnv(t)
 	m.api.ffmpeg = "ffmpeg"
 	m.api.remuxWait = 20 * time.Millisecond
-	m.api.streamWait = 100 * time.Millisecond
-	release := holdRuns(t, m.api.remux)
+	// The bound must outlast the looks before the remux (the join, the source's
+	// look) on a loaded run, or they would be the ones given up on.
+	m.api.streamWait = testwait.Scaled(time.Second)
+	held, release := holdRunsHeld(t, m.api.remux)
 	got := m.getAsyncOf(mkaAACFile, "&download=1")
-	time.Sleep(3 * m.api.streamWait) // inside the longer wait, past the stream's bound
+	select {
+	case <-held:
+	case a := <-got:
+		t.Fatalf("answered before the remux ran: %q, %v", a.body, a.err)
+	case <-time.After(testwait.Scaled(15 * time.Second)):
+		t.Fatal("the remux never ran")
+	}
+	// The request began before its remux did: a bound later, it is inside the
+	// longer wait and past the stream's bound.
+	time.Sleep(m.api.streamWait + 50*time.Millisecond)
 	release()
 	a := await(t, got)
 	if a.resp.StatusCode != http.StatusOK || a.resp.Header.Get("Content-Type") != "audio/x-matroska" || a.body == "" {
