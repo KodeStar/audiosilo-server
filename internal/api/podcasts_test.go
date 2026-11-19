@@ -973,6 +973,38 @@ func TestPodcastShowRoutesMeetTheOtherSpelling(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("Bridge retention %d %s", resp.StatusCode, out)
 	}
+	// A policy set and cleared by the other spelling is the show's own row.
+	b.beat(t, bridge.KindPodcastSubscribe, bridge.KindPodcastPoll, bridge.KindPodcastRetain)
+	policies := func(when string, want ...string) {
+		t.Helper()
+		var at []string
+		rows, err := b.db.QueryContext(ctx, `SELECT show_path FROM podcast_policies WHERE library_id=?`, b.lib.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var p string
+			if err := rows.Scan(&p); err != nil {
+				t.Fatal(err)
+			}
+			at = append(at, p)
+		}
+		if err := rows.Err(); err != nil || !slices.Equal(at, want) {
+			t.Fatalf("policies %s: %+q %v, want %+q", when, at, err, want)
+		}
+	}
+	retention := fmt.Sprintf("/api/v1/admin/libraries/%d/podcasts/retention?path=%s", b.lib.ID, q)
+	resp, out = b.do(t, "PUT", retention, b.adminTok, `{"mode":"keep","keep":5,"days":7}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("set retention %d %s", resp.StatusCode, out)
+	}
+	policies("set", nfd)
+	resp, out = b.do(t, "DELETE", retention, b.adminTok, "")
+	if resp.StatusCode != 204 {
+		t.Fatalf("clear retention %d %s", resp.StatusCode, out)
+	}
+	policies("cleared")
 	// A follow of the caller's kept at the path as given (no show row there)
 	// goes with the unfollow too, as it did before the other spelling was read.
 	if err := b.cat.FollowPodcast(ctx, uid, b.lib.ID, nfc, f.ShowID); err != nil {
@@ -1054,9 +1086,17 @@ func TestPodcastPrivateShowNotReachedByTheOtherSpelling(t *testing.T) {
 		wantCode(t, "episodes "+show, resp, out, 404, "show_not_found")
 		resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, show), h)
 		wantCode(t, "follow "+show, resp, out, 404, "show_not_found")
+		resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, show), h)
+		wantCode(t, "check "+show, resp, out, 404, "show_not_found")
 		resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "fs?path="+url.QueryEscape(show)), b.userTok, "", h)
 		if resp.StatusCode != 404 || !strings.Contains(out, "directory not found") {
 			t.Fatalf("fs %+q %d %s", show, resp.StatusCode, out)
+		}
+		// Its cover answers as a path with no show does.
+		resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "cover?path="+url.QueryEscape(show)), b.userTok, "", h)
+		none, noneOut := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "cover?path="+url.QueryEscape("Zo\u00eb Nothing")), b.userTok, "", h)
+		if resp.StatusCode != none.StatusCode || out != noneOut || resp.StatusCode/100 != 4 {
+			t.Fatalf("cover %+q %d %s, no show there %d %s", show, resp.StatusCode, out, none.StatusCode, noneOut)
 		}
 	}
 	// Another listener follows it; this caller's unfollow by the other
