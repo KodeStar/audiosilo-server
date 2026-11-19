@@ -1402,7 +1402,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `ErrNotAnswered` and `ErrReadRefused`; `HoldOpensForTests` holds them too): the files beside a
   book's audio (the ABS metadata.json read, the attachments' lstats and reads, the ebook check,
   `coverLook.find`'s stats and listing, `LookArt` (`ArtFile`'s `SafeJoin` and the stat) for the
-  cover version, `stampAddedAt`'s statx and lstat, `problemCleared`'s look), the backfill's embedded cover read
+  cover version, `stampAddedAt`'s statx and lstat (a birth time before 1980 is none, `birthKnown`, the
+  mtime standing in; `0087` redates the rows a scan stamped before 1980 to the book's mtime, else
+  to when it was last indexed), `problemCleared`'s look), the backfill's embedded cover read
   (`media.EmbeddedCover`), and in the API `/item`'s look at the book's ebook (`RefreshEbook`, given
   `API.fileWait` and answering with the stored ebook past it: the probe's time is the request's own),
   every cover (full, thumbnail, a
