@@ -240,8 +240,8 @@ func (a *API) rescanPath(w http.ResponseWriter, lib *catalog.Library, p string) 
 
 // rescanAt runs read, a re-read of what is at p in lib, as rescanPath does: on a
 // context detached from the request timeout, each look at a library file given
-// fileWait and the wait on another read of the book flightWaitTimeout
-// (a.lookCtx, both well under the request timeout, so a share that stopped
+// fileWait and the waits on another read of the book ending flightWaitMargin
+// ahead of the request timeout (a.lookCtx, so a share that stopped
 // answering is a 503 share_not_answering with Retry-After, not the
 // timeout's), a path with no book a 404 with code not_indexable, a read the
 // server's stop ended a 503 stopping, anything else the catalog error's answer.

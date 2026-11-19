@@ -503,12 +503,24 @@ func (a *API) indexOnDemand(ctx context.Context, lib *catalog.Library, path stri
 
 // lookCtx is ctx for a read of a book a request asked for (an on-demand index,
 // an admin's Re-read, the Bridge's rescan): each look at a library file given
-// fileWait (library.WithLookTimeout), and the wait in all on another read of
-// the book flightWaitTimeout (library.WithWaitCap), so a share that stopped
-// answering is a 503 share_not_answering with Retry-After before the request
-// timeout's bare 503.
+// fileWait (library.WithLookTimeout), and the waits on another read of the
+// book ending at a.flightWaitEnd (library.WithWaitCap), so a share that
+// stopped answering is a 503 share_not_answering with Retry-After before the
+// request timeout's bare 503.
 func (a *API) lookCtx(ctx context.Context) context.Context {
-	return library.WithWaitCap(library.WithLookTimeout(ctx, a.fileWait), flightWaitTimeout)
+	return library.WithWaitCap(library.WithLookTimeout(ctx, a.fileWait), a.flightWaitEnd(ctx))
+}
+
+// flightWaitEnd is when a request's waits on another read of its book end:
+// flightWaitMargin before ctx's deadline (the timeout middleware's, whatever
+// the request's looks took before it waits), or, on a context detached from
+// the request (rescanAt's), before a.timeoutDur from now.
+func (a *API) flightWaitEnd(ctx context.Context) time.Time {
+	end := time.Now().Add(a.timeoutDur)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(end) {
+		end = dl
+	}
+	return end.Add(-flightWaitMargin)
 }
 
 // bookAt is bookForPath for a handler: on a failure it writes the answer and

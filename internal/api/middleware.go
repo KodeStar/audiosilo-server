@@ -28,11 +28,11 @@ import (
 // scan endpoints return immediately since they run the scan in a goroutine.
 const requestTimeout = 30 * time.Second
 
-// flightWaitTimeout is how long in all a request waits on another read of its
-// book (library.WithWaitCap, a.lookCtx): far enough under requestTimeout that
-// the wait's own 503 share_not_answering, with Retry-After, is written before
-// the request timeout's bare 503, which has neither.
-const flightWaitTimeout = requestTimeout - 5*time.Second
+// flightWaitMargin is how far ahead of its timeout (a.timeoutDur) a request's
+// waits on another read of its book end (library.WithWaitCap, a.flightWaitEnd):
+// far enough that the wait's own 503 share_not_answering, with Retry-After, is
+// written before the request timeout's bare 503, which has neither.
+const flightWaitMargin = 5 * time.Second
 
 // isStreamingPath reports whether a request path serves a long-lived or large
 // body that must NOT be bounded by requestTimeout: a book's media (cover/stream,

@@ -1244,7 +1244,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `SafeJoinBounded`, else `library.SafeJoinListed`: `resolveBelow` with its looks bounded, each
   name looked for in its folder's listing through `API.listed`, names only, before it is `Lstat`ed), else
   answer as for a missing path (a listing or `Lstat` given up on, or failing as a share does that a retry may get
-  past, `transientFault`'s EIO, ESTALE, ENOTCONN, as the scanner reads them: 503 `share_not_answering` with
+  past, `transientFault`'s EIO, ESTALE, ENOTCONN and the network errnos, as the scanner reads them: 503 `share_not_answering` with
   `Retry-After`, the stream, `/fs` and `/item`'s on-demand index alike; a permission, EACCES or EPERM, stays the
   missing path's 404). A missing path and a
   case variant take the same steps (the same listings and `Lstat`s up to the first name not listed, none
@@ -1456,9 +1456,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   later waiter waits on it; a scan's read that has returned is waited on until its batch write, one marked
   stuck before it returned too; a read running ffprobe, which reports nothing until it returns, is given the
   probe's time from its last progress whatever the waiter's look time, `Progress.Probe` in `runFFprobe`,
-  `Probing`; a request's wait, one under `WithLookTimeout`, ends at `API.lookCtx`'s `library.WithWaitCap`,
-  `flightWaitTimeout` (`requestTimeout` less 5 s, so its coded 503 with `Retry-After` is written before the request
-  timeout's bare one), in all however the read moves on, `flightWaitCap`, where a scan's has no such cap), so a big
+  `Probing`; a request's waits, under `WithLookTimeout`, end at `API.lookCtx`'s `library.WithWaitCap`, a time,
+  `API.flightWaitEnd` (`flightWaitMargin`, 5 s, before the request's deadline, or `timeoutDur` from now on a context
+  detached from it, so its coded 503 with `Retry-After` is written before the request timeout's bare one whatever
+  its looks took first), in all however the read moves on, `flightWaitCap`, where a scan's has no such cap), so a big
   book read slowly from a share that answers is waited for, never a false 503 within that time: a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
   rest; an on-demand read gives up as a look at a share that stopped answering (`metadata.GaveUp`,
   503 `share_not_answering`). The walk's own looks are bounded the same way (SRV-15c: `walkDir`'s root lstat and

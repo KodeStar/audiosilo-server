@@ -558,8 +558,8 @@ func TestWaitFlightCapsARequestsWait(t *testing.T) {
 	}
 }
 
-// TestWaitFlightEndsAtTheRequestsWaitCap: a request whose wait is capped
-// under its own timeout (WithWaitCap, the API's flightWaitTimeout) gives up on
+// TestWaitFlightEndsAtTheRequestsWaitCap: a request whose waits are capped
+// ahead of its own timeout (WithWaitCap, the API's flightWaitEnd) gives up on
 // a read that trickles on, or one running ffprobe past the cap, at the cap,
 // not the probe's time: its 503 share_not_answering with Retry-After is then
 // written before the request timeout's bare 503. A cap past the probe's time
@@ -567,14 +567,19 @@ func TestWaitFlightCapsARequestsWait(t *testing.T) {
 func TestWaitFlightEndsAtTheRequestsWaitCap(t *testing.T) {
 	t.Parallel()
 	s := &Scanner{probeTimeout: 3 * time.Second}
-	asked := WithWaitCap(WithLookTimeout(t.Context(), 100*time.Millisecond), 400*time.Millisecond)
-	if d, ok := s.flightWaitCap(asked); !ok || d != 400*time.Millisecond {
-		t.Errorf("flightWaitCap with a cap under the probe's time = %v, %v; want the cap", d, ok)
+	capped := func(d time.Duration) context.Context {
+		return WithWaitCap(WithLookTimeout(t.Context(), 100*time.Millisecond), time.Now().Add(d))
 	}
-	if d, ok := s.flightWaitCap(WithWaitCap(WithLookTimeout(t.Context(), time.Second), time.Minute)); !ok || d != s.probeTimeout {
+	if d, ok := s.flightWaitCap(capped(400 * time.Millisecond)); !ok || d <= 0 || d > 400*time.Millisecond {
+		t.Errorf("flightWaitCap with a cap under the probe's time = %v, %v; want the time left to it", d, ok)
+	}
+	if d, ok := s.flightWaitCap(capped(-time.Second)); !ok || d != 0 {
+		t.Errorf("flightWaitCap with a cap passed = %v, %v; want none left", d, ok)
+	}
+	if d, ok := s.flightWaitCap(capped(time.Minute)); !ok || d != s.probeTimeout {
 		t.Errorf("flightWaitCap with a cap past the probe's time = %v, %v; want the probe's time", d, ok)
 	}
-	if _, ok := s.flightWaitCap(WithWaitCap(t.Context(), time.Second)); ok {
+	if _, ok := s.flightWaitCap(WithWaitCap(t.Context(), time.Now().Add(time.Second))); ok {
 		t.Error("a scan's wait (no look time) is capped")
 	}
 
@@ -600,7 +605,7 @@ func TestWaitFlightEndsAtTheRequestsWaitCap(t *testing.T) {
 		f    *indexFlight
 	}{{"a read that trickles on", trickling}, {"a read running ffprobe", probing}} {
 		began := time.Now()
-		err := s.waitFlight(asked, c.f)
+		err := s.waitFlight(capped(400*time.Millisecond), c.f)
 		if took := time.Since(began); !errors.Is(err, errReadLeft) || took < 400*time.Millisecond || took >= s.probeTimeout {
 			t.Errorf("%s, the wait capped at 400ms: %v after %v, want errReadLeft at the cap", c.name, err, took)
 		}

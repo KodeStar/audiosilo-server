@@ -2635,12 +2635,14 @@ func WithLookTimeout(ctx context.Context, d time.Duration) context.Context {
 type waitCapKey struct{}
 
 // WithWaitCap is ctx (a request's, given a look time: WithLookTimeout) whose
-// wait in all on another's read of its book (flightWaitCap) ends at d when
-// that is shorter than the probe's time: the API's, under its request
-// timeout, so the wait's 503 share_not_answering with Retry-After is answered
-// before the request's own time runs out. A scan's wait is never capped.
-func WithWaitCap(ctx context.Context, d time.Duration) context.Context {
-	return context.WithValue(ctx, waitCapKey{}, d)
+// waits on another's read of its book (flightWaitCap) end at at when that
+// comes before the probe's time from a wait's start: the API's, ahead of its
+// request timeout, so the wait's 503 share_not_answering with Retry-After is
+// answered before the request's own time runs out, however long its looks
+// took before it waited and however many waits it makes (startFlight's,
+// indexShared's). A scan's wait is never capped.
+func WithWaitCap(ctx context.Context, at time.Time) context.Context {
+	return context.WithValue(ctx, waitCapKey{}, at)
 }
 
 // lookTimeout is the time each look at a library file gets under ctx: its
@@ -2803,17 +2805,19 @@ func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
 // flightWaitCap is how long in all a request (an on-demand read given a look
 // time: WithLookTimeout) waits on another's read of its book, ok false for any
 // other waiter (a scan, which keeps the book as stored when it gives up, waits
-// for as long as the read moves on): its WithWaitCap when shorter, else the
-// probe's time. A read moving on slowly is then waited on for longer than a
-// look's time, and a running ffprobe for its own up to the cap, but a request
-// is never held for as long as a read may take (indexTimeout), nor past its
-// own timeout.
+// for as long as the read moves on): the time left to its WithWaitCap when
+// shorter (none once it has passed), else the probe's time. A read moving on
+// slowly is then waited on for longer than a look's time, and a running
+// ffprobe for its own up to the cap, but a request is never held for as long
+// as a read may take (indexTimeout), nor past its own timeout.
 func (s *Scanner) flightWaitCap(ctx context.Context) (time.Duration, bool) {
 	if _, asked := ctx.Value(lookTimeoutKey{}).(time.Duration); !asked {
 		return 0, false
 	}
-	if d, ok := ctx.Value(waitCapKey{}).(time.Duration); ok && d > 0 && d < s.probeTimeout {
-		return d, true
+	if at, ok := ctx.Value(waitCapKey{}).(time.Time); ok {
+		if left := time.Until(at); left < s.probeTimeout {
+			return max(left, 0), true
+		}
 	}
 	return s.probeTimeout, true
 }

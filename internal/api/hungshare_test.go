@@ -380,3 +380,34 @@ func TestFolderListingOnAHeldShareAnswersQuickly(t *testing.T) {
 		t.Errorf("the root listing once the share answers = %d %s, want the folder listed", resp.StatusCode, body)
 	}
 }
+
+// A request joining another's read of its book that does not end (/item of a
+// book a first /item is reading, its part held) answers 503
+// share_not_answering with Retry-After flightWaitMargin ahead of its own
+// timeout (a.flightWaitEnd), not the timeout's bare 503 "request timed out",
+// which has neither, even when a look's own time (fileWait) is longer than
+// the request has. Not parallel: metadata.HoldReadsForTests swaps the mount
+// lookup.
+func TestJoinedReadEndsBeforeTheRequestTimeout(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	root, lib := unindexedBook(t, e, "Held")
+	e.api.timeoutDur = flightWaitMargin + time.Second
+	e.api.fileWait = time.Minute // no look given up on before the request times out
+	release := metadata.HoldReadsForTests(filepath.Join(root, "Author", "Book", "01.mp3"))
+	t.Cleanup(release)
+	u := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + "/item?path=" + url.QueryEscape("Author/Book")
+	first := make(chan struct{})
+	go func() { // leads the read, held on the part
+		defer close(first)
+		_, _ = e.do(t, "GET", u, adminTok, "")
+	}()
+	time.Sleep(300 * time.Millisecond) // the read is under way, held
+	resp, body := e.do(t, "GET", u, adminTok, "")
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) || resp.Header.Get("Retry-After") != "30" {
+		t.Errorf("/item joining a held read = %d %s (Retry-After %q), want 503 %s with Retry-After 30",
+			resp.StatusCode, body, resp.Header.Get("Retry-After"), codeShareNotAnswering)
+	}
+	release()
+	<-first
+}
