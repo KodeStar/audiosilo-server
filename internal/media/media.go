@@ -270,12 +270,13 @@ func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 // output is not byte-seekable (no Range / Content-Length); a client seeks by
 // re-requesting with a new startSec. The ffmpeg process is bound to the request
 // context, so a client disconnect kills it, and so does a client that has read
-// nothing for idle (TranscodeIdle: the chapter editor's paused stream; 0 never
-// ends a stream for that). log may be nil. Its look at the
-// file is a metadata.Bounded stat (the request's context, at most wait), as
-// ServeFile's open: one given up on (metadata.GaveUp) is returned with nothing
-// written, for the caller to answer; every other outcome is answered here and
-// returns nil. ended reports a stream that ran to its end (transcodeInput).
+// nothing for idle (TranscodeIdle: the chapter editor's paused stream, a
+// download its client stopped reading; 0 never ends a stream for that). log
+// may be nil. Its look at the file is a metadata.Bounded stat (the request's
+// context, at most wait), as ServeFile's open: one given up on
+// (metadata.GaveUp) is returned with nothing written, for the caller to
+// answer; every other outcome is answered here and returns nil. ended reports
+// a stream that ran to its end (transcodeInput).
 // download makes the stream an attachment named for the file (its stem with
 // the MP3 extension), set only on the stream's own answer, never an error's.
 func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath string, startSec float64, download bool, wait, idle time.Duration, log *slog.Logger) (ended bool, err error) {
@@ -415,9 +416,11 @@ func transcodeArgs(in inputSpec, startSec float64) []string {
 // of the server's few transcode slots and an ffmpeg, for as long as the page
 // stays open. A playing client reads every few seconds (a browser buffers a
 // few minutes of it at most). The api applies it only to the console's
-// chapter editor, which asks for its stream again after a 10 s pause; the web
-// player does not ask again for a track it loaded and never played, and a
-// Cast receiver asks for nothing again on resume, so theirs get no idle end
+// chapter editor, which asks for its stream again after a 10 s pause, and to
+// a download (?download=1), whose slot no other ask takes over and whose
+// client reads as fast as it can until it is paused or gone; the web player
+// does not ask again for a track it loaded and never played, and a Cast
+// receiver asks for nothing again on resume, so their streams get no idle end
 // (the api's transcodeIdleFor).
 const TranscodeIdle = 10 * time.Minute
 
