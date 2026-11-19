@@ -73,6 +73,10 @@ func (a *API) writeAudibleError(w http.ResponseWriter, err error, op string) {
 	switch {
 	case errors.Is(err, catalog.ErrAudibleInvalid):
 		writeErrorCode(w, http.StatusBadRequest, "invalid_request", err.Error())
+	case errors.Is(err, catalog.ErrInvalidCursor):
+		// Its own code, so the Bridge reads the feed from its start for this
+		// alone (bridge#50).
+		writeErrorCode(w, http.StatusBadRequest, "invalid_cursor", "the progress cursor can't be read: read the feed from its start")
 	case errors.Is(err, catalog.ErrAudiblePolicy):
 		writeErrorCode(w, http.StatusBadRequest, "invalid_policy", err.Error())
 	case errors.Is(err, catalog.ErrAudibleMarketplace):

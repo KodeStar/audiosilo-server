@@ -191,10 +191,6 @@ func (a *API) handleBridgeProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, next, more, err := a.cat.AudibleProgress(r.Context(), acct, scopes, q.Get("since"), limit)
-	if errors.Is(err, catalog.ErrInvalidCursor) {
-		writeErrorCode(w, http.StatusBadRequest, "invalid_cursor", "the progress cursor can't be read: read the feed from its start")
-		return
-	}
 	if err != nil {
 		a.writeAudibleError(w, err, op)
 		return

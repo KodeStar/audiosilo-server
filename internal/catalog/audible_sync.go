@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -286,14 +285,13 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 	if s == "" {
 		return progressCursor{}, nil
 	}
-	bad := fmt.Errorf("%w: the progress cursor can't be read", ErrInvalidCursor)
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return progressCursor{}, bad
+		return progressCursor{}, ErrInvalidCursor
 	}
 	var k progressCursor
 	if json.Unmarshal(raw, &k) != nil {
-		return progressCursor{}, bad
+		return progressCursor{}, ErrInvalidCursor
 	}
 	return k, nil
 }
