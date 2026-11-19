@@ -134,9 +134,9 @@ func (a *API) handleDeleteShare(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// maxShareName is the longest share name, in characters: a name is stored,
-// listed, audited and logged, so it is bounded before any of those.
-const maxShareName = 200
+// maxShareName is the longest share name, in characters (catalog.MaxShareName):
+// a longer one is refused before it is stored, audited or logged.
+const maxShareName = catalog.MaxShareName
 
 // maxShareDescription is the longest share description, in bytes: what a
 // rename's body (decodeJSON's default 1 MiB) can carry, so a create, whose body

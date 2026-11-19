@@ -919,7 +919,7 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 	if err != nil {
 		return err
 	}
-	name := "Library: " + lib.Name
+	name := wholeLibraryShareName(lib.Name, libraryID)
 	share, err := c.wholeLibraryShare(ctx, libraryID, name)
 	created := false
 	if errors.Is(err, ErrNotFound) {
@@ -942,6 +942,24 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 		}
 	}
 	return c.GrantShare(ctx, userID, share.ID)
+}
+
+// MaxShareName is the longest share name, in characters: a name is stored,
+// listed, audited and logged, so the API refuses a longer one (400
+// invalid_name) and a grant share's is cut to fit (wholeLibraryShareName).
+const MaxShareName = 200
+
+// wholeLibraryShareName is the name of libraryID's grant share, "Library:
+// <name>", with the library's name cut, by characters, so the longest name
+// createWholeLibraryShare may give it (grantName's last) is at most
+// MaxShareName: a library's own name is not bounded, a share's is.
+func wholeLibraryShareName(libraryName string, libraryID int64) string {
+	const prefix = "Library: "
+	room := MaxShareName - utf8.RuneCountInString(grantName(prefix, libraryID, maxGrantNames-1))
+	if utf8.RuneCountInString(libraryName) > room {
+		libraryName = strings.TrimRight(string([]rune(libraryName)[:room]), " ")
+	}
+	return prefix + libraryName
 }
 
 // wholeLibraryShareDescription is the description GrantWholeLibrary has always
