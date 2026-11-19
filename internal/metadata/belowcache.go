@@ -63,6 +63,9 @@ type folderCache struct {
 	// keeps the folders above it from being renamed (a user's, or the
 	// Bridge's, rename on the share would fail), so none is kept there.
 	openOnly bool
+	// opened, in a test, is called by get once it has opened a folder,
+	// before it looks whether another read kept one meanwhile.
+	opened func()
 }
 
 // belowFolders are the folders the scan's reads keep open (BelowFolder).
@@ -70,7 +73,8 @@ var belowFolders = &folderCache{m: map[folderKey]*keptFolder{}, openOnly: runtim
 
 // get is the folder at rel under root now, held for a read (put it back with
 // put): one kept that is still the folder at its path (current), or opened
-// now through root (the root's own kept one), and kept.
+// now through root (the root's own kept one), and kept unless another read
+// kept its own meanwhile.
 func (c *folderCache) get(root, rel string) (*keptFolder, error) {
 	key := folderKey{root, rel}
 	c.mu.Lock()
@@ -102,13 +106,18 @@ func (c *folderCache) get(root, rel string) (*keptFolder, error) {
 		return nil, err
 	}
 	f := &keptFolder{key: key, r: r, refs: 1, opened: time.Now()}
+	if c.opened != nil {
+		c.opened()
+	}
 	c.mu.Lock()
 	if have := c.m[key]; have != nil && time.Since(have.opened) < folderMaxAge {
-		// Another read opened it meanwhile: that one is kept, this one closed.
-		have.refs++
+		// Another read opened it meanwhile: that one stays kept, and this
+		// one, opened through root just now, is its read's alone. The kept
+		// one is never taken unlooked at (current): it may have been opened
+		// before a rename this open came after.
+		f.gone = true
 		c.mu.Unlock()
-		_ = r.Close()
-		return have, nil
+		return f, nil
 	}
 	var closing []*keptFolder
 	if old := c.m[key]; old != nil {

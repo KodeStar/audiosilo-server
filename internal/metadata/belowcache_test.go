@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func readBelowFolder(t *testing.T, root, path string) (string, error) {
@@ -447,4 +448,60 @@ func TestCloseFoldersLetsEveryFolderGo(t *testing.T) {
 	}
 	c.put(again)
 	c.closeAll()
+}
+
+// TestFolderCacheNeverTakesAKeptFolderUnlookedAt (security): a read that
+// opens a folder and then finds another read has kept one for the same path
+// meanwhile reads through its own, opened through the root just now. The
+// kept one may be the folder that was at the path before a rename (opened by
+// a read slow to keep it), and is only ever handed out once looked at
+// (current).
+func TestFolderCacheNeverTakesAKeptFolderUnlookedAt(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	book := filepath.Join(root, "Book")
+	if err := os.Mkdir(book, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(book, "old.txt"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The folder as a slow read opened it, before it was renamed away and
+	// another made at its path.
+	was, err := os.OpenRoot(book)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(book, filepath.Join(root, "Away")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(book, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &folderCache{m: map[folderKey]*keptFolder{}}
+	t.Cleanup(c.closeAll)
+	key := folderKey{root, "Book"}
+	stale := &keptFolder{key: key, r: was, opened: time.Now(), used: time.Now()}
+	c.opened = func() {
+		// The slow read keeps its folder now, after this read opened its own.
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if key := (folderKey{root, "Book"}); c.m[key] == nil {
+			c.m[key] = stale
+		}
+	}
+	f, err := c.get(root, "Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f == stale {
+		t.Fatal("the folder another read kept was taken unlooked at")
+	}
+	if _, err := f.r.Stat("old.txt"); !os.IsNotExist(err) {
+		t.Errorf("read through the folder renamed away (%v), want the one at the path now", err)
+	}
+	c.put(f)
+	if _, err := f.r.Stat("."); err == nil {
+		t.Error("the read's own folder is still open after it")
+	}
 }
