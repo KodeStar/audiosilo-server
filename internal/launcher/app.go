@@ -205,6 +205,7 @@ func Run(ctx context.Context, opts Options) (err error) {
 	if restored != nil {
 		recordRestore(ctx, cat, restored, log)
 	}
+	renewProgressFeed(ctx, cat, abs, restored, log)
 	// Books indexed before series keys were stored (or keyed by older rules or
 	// Unicode tables) get them now, before anything reads a series filter (about a
 	// second per 50,000 books). Every series filter reads only the keys, so a failure
@@ -661,22 +662,48 @@ func demoReaper(ctx context.Context, authSvc *auth.Service, idleTTL time.Duratio
 }
 
 // recordRestore puts a restore applied (or refused) at this start in the audit log
-// of the database the server now runs on. One applied renews the Bridge's
-// progress feed (catalog.RenewProgressFeed): the backup's feed is behind the
-// cursor the Bridge holds, which must be refused rather than read as a place
-// in it (bridge#50).
+// of the database the server now runs on.
 func recordRestore(ctx context.Context, cat *catalog.Catalog, r *backup.RestoreResult, log *slog.Logger) {
 	action, details := "backup.restore_applied", map[string]any{"requested_by": r.RequestedBy}
 	if r.OK {
 		details["safety_copy"] = r.SafetyCopy
-		if err := cat.RenewProgressFeed(ctx); err != nil {
-			log.Warn("renewing the Bridge's progress feed after the restore failed", "err", err)
-		}
 	} else {
 		action, details["error"] = "backup.restore_failed", r.Error
 	}
 	if err := cat.RecordAudit(ctx, catalog.AuditEvent{Via: catalog.ViaSystem, Action: action, Target: r.Name, Details: details}); err != nil {
 		log.Warn("recording the restore in the audit log failed", "err", err)
+	}
+}
+
+// renewProgressFeed renews the Bridge's progress feed (catalog.RenewProgressFeed)
+// once for the last backup restored into dataDir: the
+// backup's feed is behind the cursor the Bridge holds, which must be refused
+// rather than read as a place in it (bridge#50). The restore is restored when
+// this start applied or refused one, else the one restore-result.json names:
+// the marker is gone before the database opens (kept, the next start would
+// swap the backup in again over what this one did), so a start that ended
+// between the two (the backup's migrations failing, a stop while they ran) or
+// a renewal that failed leaves the renewal to the next start, and the database
+// records which restore it renewed for. A failure is logged and the start goes
+// on (a cursor past the feed's end is refused either way).
+func renewProgressFeed(ctx context.Context, cat *catalog.Catalog, dataDir string, restored *backup.RestoreResult, log *slog.Logger) {
+	last := restored
+	if last == nil {
+		var err error
+		if last, err = backup.LastRestore(dataDir); err != nil {
+			log.Warn("reading the last restore's outcome failed; the Bridge's progress feed keeps its id", "err", err)
+			return
+		}
+	}
+	if last == nil || !last.OK {
+		return
+	}
+	renewed, err := cat.RenewProgressFeed(ctx, last.AppliedAt.UTC().Format(time.RFC3339Nano))
+	switch {
+	case err != nil:
+		log.Warn("renewing the Bridge's progress feed after the restore failed; the next start tries again", "backup", last.Name, "err", err)
+	case renewed:
+		log.Info("renewed the Bridge's progress feed after the restore", "backup", last.Name)
 	}
 }
 

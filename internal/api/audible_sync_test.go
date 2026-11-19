@@ -618,8 +618,8 @@ func TestBridgeProgressCursorFeed(t *testing.T) {
 		t.Fatalf("an old cursor at the end comes back as %q, want it with the feed's id %q", again.Next, end.Next)
 	}
 
-	if err := s.cat.RenewProgressFeed(context.Background()); err != nil {
-		t.Fatal(err)
+	if renewed, err := s.cat.RenewProgressFeed(context.Background(), "a restore"); err != nil || !renewed {
+		t.Fatalf("renewal = %v, %v", renewed, err)
 	}
 	s.feedRefused(t, "a cursor from before the restore", end.Next)
 	if f := s.feed(t, "&since="+url.QueryEscape(old)); len(f.Rows) != 1 {

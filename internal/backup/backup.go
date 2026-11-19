@@ -668,7 +668,13 @@ func RestorePending(dataDir string) (*PendingRestore, error) {
 
 // LastRestore returns how the last restore went, if one was applied or refused.
 func (s *Service) LastRestore() (*RestoreResult, error) {
-	return jsonfile.Read[RestoreResult](filepath.Join(s.dataDir, resultFile))
+	return LastRestore(s.dataDir)
+}
+
+// LastRestore returns how the last restore in dataDir went, if one was applied
+// or refused, for a caller with no Service (the launcher, at start).
+func LastRestore(dataDir string) (*RestoreResult, error) {
+	return jsonfile.Read[RestoreResult](filepath.Join(dataDir, resultFile))
 }
 
 // ApplyPendingRestore applies a restore waiting in dataDir to the database at

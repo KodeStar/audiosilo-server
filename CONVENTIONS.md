@@ -4162,7 +4162,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   folder as `before-restore` (or, if it can't be read, renames its files aside in the data folder), swaps
   the backup in (removing the old -wal/-shm), writes `<data>/restore-result.json` and always removes the
   marker (a refused restore is reported once, not retried at every start); `recordRestore` logs it in the
-  restored database's audit log as the server's own act. **Before an upgrade** (UPGRADE-01): next, still
+  restored database's audit log as the server's own act, and `renewProgressFeed` renews the Bridge's progress
+  feed once for the last restore applied (see Audible sync). **Before an upgrade** (UPGRADE-01): next, still
   before `store.Open`, `backup.BeforeUpgrade` asks `store.PendingMigrations` (read-only; empty for no file or
   no migration recorded, so a fresh install gets no copy) and, when migrations are pending, writes a
   `before-upgrade` copy with `store.VacuumFile` plus one INFO line naming them and the copy, keeping the
@@ -5041,10 +5042,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   2.7.0), a feed cursor the Bridge keeps between polls; `more` a full page read (its rows may be fewer). A cursor
   carries the feed's id (`f`: `server_state` `progress_feed`, a random id made on first use; `catalog.progressFrom`):
   one naming another feed (another server's, a database started afresh, or this one's before the launcher restored a
-  backup, which renews the id: `RenewProgressFeed`, as a backup carries it) is refused, and so is any cursor past the
+  backup, which renews the id, as a backup carries it: `RenewProgressFeed`, once per restore, the launcher's
+  `renewProgressFeed` asking at every start with the last applied restore's `applied_at` (this start's, else
+  `restore-result.json`'s, `backup.LastRestore`) and the database keeping the one it renewed for,
+  `server_state` `progress_feed_restore`, so a start that ended between the swap and the renewal, the backup's
+  migrations failing or a stop while they ran, leaves it to the next) is refused, and so is any cursor past the
   change counter (a database restored by hand keeps its id: until the counter passed the cursor again, the feed would
-  answer nothing and the places written in the gap never reach Audible). A cursor without the id (a server before
-  2.7.0's) has only the counter check. `ErrInvalidCursor` has one transport mapping, `writeCatalogError`'s 400
+  answer nothing and the places written in the gap never reach Audible). A cursor without the id (a server before 2.7.0's) has only the counter check. `ErrInvalidCursor` has one transport mapping, `writeCatalogError`'s 400
   `invalid_cursor` (every route's cursor: `GET /bridge/libraries/{id}/books?after=` and the console's Audible titles
   `after` too, which answered `invalid_request` before 2.7.0). `progress.change_seq` (`0066`, `idx_progress_user_change`) is the order
   this server wrote the rows in: drawn from the one-row `progress_change_counter` (strictly increasing, never

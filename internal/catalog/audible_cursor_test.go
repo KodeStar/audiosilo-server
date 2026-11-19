@@ -29,7 +29,7 @@ func TestDecodeProgressCursor(t *testing.T) {
 }
 
 // The feed's id is made once and kept; a renewal (a backup restored) makes a
-// new one.
+// new one, once for that restore.
 func TestProgressFeedID(t *testing.T) {
 	t.Parallel()
 	f := newAudibleFixture(t, "manual")
@@ -40,10 +40,23 @@ func TestProgressFeedID(t *testing.T) {
 	if again, err := f.c.progressFeedID(f.ctx); err != nil || again != first {
 		t.Fatalf("id again = %q, %v; want %q", again, err, first)
 	}
-	if err := f.c.RenewProgressFeed(f.ctx); err != nil {
-		t.Fatal(err)
+	if renewed, err := f.c.RenewProgressFeed(f.ctx, "a restore"); err != nil || !renewed {
+		t.Fatalf("renewal = %v, %v", renewed, err)
 	}
-	if renewed, err := f.c.progressFeedID(f.ctx); err != nil || renewed == "" || renewed == first {
-		t.Fatalf("renewed id = %q, %v; want a new one", renewed, err)
+	second, err := f.c.progressFeedID(f.ctx)
+	if err != nil || second == "" || second == first {
+		t.Fatalf("renewed id = %q, %v; want a new one", second, err)
+	}
+	if renewed, err := f.c.RenewProgressFeed(f.ctx, "a restore"); err != nil || renewed {
+		t.Fatalf("renewal again for the same restore = %v, %v; want none", renewed, err)
+	}
+	if kept, err := f.c.progressFeedID(f.ctx); err != nil || kept != second {
+		t.Fatalf("id after the same restore again = %q, %v; want %q", kept, err, second)
+	}
+	if renewed, err := f.c.RenewProgressFeed(f.ctx, "another restore"); err != nil || !renewed {
+		t.Fatalf("renewal for another restore = %v, %v", renewed, err)
+	}
+	if third, err := f.c.progressFeedID(f.ctx); err != nil || third == "" || third == second {
+		t.Fatalf("id after another restore = %q, %v; want a new one", third, err)
 	}
 }

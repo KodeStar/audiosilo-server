@@ -324,16 +324,31 @@ func (c *Catalog) progressFeedID(ctx context.Context) (string, error) {
 	return id, err
 }
 
+// progressFeedRestoreKey is the server_state row naming the restore the
+// progress feed was last renewed for (RenewProgressFeed).
+const progressFeedRestoreKey = "progress_feed_restore"
+
 // RenewProgressFeed gives the progress feed a new id, so every cursor handed
 // out before is refused (400 invalid_cursor) and the Bridge reads the feed
 // again from its start: the launcher's step after restoring a backup, whose
-// feed is behind the cursors the Bridge holds (a backup carries its id).
-// Durable: the restore runs once, so a renewal a power cut undid would not be
-// made again.
-func (c *Catalog) RenewProgressFeed(ctx context.Context) error {
-	return c.db.WithDurableTx(ctx, "RenewProgressFeed", func(tx *sql.Tx) error {
-		return putServerState(ctx, tx, progressFeedKey, rand.Text(), c.stamp())
+// feed is behind the cursors the Bridge holds (a backup carries its id). Once
+// for a restore (restore names it: when it was applied), which the database
+// records with the new id, so the launcher asks at every start and a start
+// that ended before this committed leaves it to the next (a power cut that
+// undid the commit undid the record with it); renewed is whether this call
+// made the new id.
+func (c *Catalog) RenewProgressFeed(ctx context.Context, restore string) (renewed bool, err error) {
+	if done, err := getServerState[string](ctx, c.db, progressFeedRestoreKey); err != nil || done == restore {
+		return false, err
+	}
+	err = c.db.WithTx(ctx, "RenewProgressFeed", func(tx *sql.Tx) error {
+		at := c.stamp()
+		if err := putServerState(ctx, tx, progressFeedKey, rand.Text(), at); err != nil {
+			return err
+		}
+		return putServerState(ctx, tx, progressFeedRestoreKey, restore, at)
 	})
+	return err == nil, err
 }
 
 // progressFrom reads since as a place in this server's feed (feed, its id):
