@@ -2684,7 +2684,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   when the search lists it, and the default search (no text, ASIN or ISBN) lists it when its own
   search misses it, last, looked up by its id and marked `recorded`, which the dialog shows as
   "Current match" in place of a score (`api.recordedCandidate`, `meta.MatchCandidate.Recorded`;
-  a failed or 404 lookup adds nothing; server#331); how `accepted`; refused in a bulk edit) and an apply (`Writes.Anchor`, which `Plan` sets under every
+  a failed or 404 lookup adds nothing; the console marks a book's cached searches stale on every
+  edit of it, `settleBookEdit`, so an Unlink or another accept never leaves the old one listed as
+  current; server#331); how `accepted`; refused in a bulk edit) and an apply (`Writes.Anchor`, which `Plan` sets under every
   scope when the proposal's work or recording is not the book's: how `auto` for a confident item,
   `accepted` for an included review item, a refresh's heal keeping the book's provenance, below). An empty work id
   (`{"work_id": ""}`, from any edit; the book aside's Unlink, behind a confirm) unlinks the book

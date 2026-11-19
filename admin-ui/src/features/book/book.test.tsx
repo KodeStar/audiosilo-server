@@ -1293,6 +1293,57 @@ describe('match with community metadata', () => {
     expect(await within(dialog).findByRole('radio', { name: /Merged/ })).toBeChecked();
   });
 
+  it('searches again after an Unlink, so the match taken back is no longer the current one', async () => {
+    const recorded: MatchCandidate = {
+      ...candidate,
+      work_id: 'the-way-of-kings-part-1',
+      title: 'The Way of Kings, Part 1',
+      score: 100,
+      recorded: true,
+    };
+    const detail = bookDetail();
+    detail.community_match = {
+      work_id: recorded.work_id,
+      how: 'accepted',
+      matched_at: '2026-11-01T00:00:00Z',
+    };
+    const unlinked = structuredClone(detail);
+    delete unlinked.community_match;
+    let linked = true;
+    mockFetch(
+      matchRoutes(detail, {
+        'GET /admin/libraries/1/book/match': () => ({
+          body: { candidates: linked ? [candidate, recorded] : [candidate] },
+        }),
+        'PATCH /admin/libraries/1/book': () => {
+          linked = false;
+          return { body: unlinked };
+        },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    const hero = await screen.findByRole('button', { name: 'Compare with community' });
+    await user.click(hero);
+    let dialog = await screen.findByRole('dialog', { name: 'Match with community metadata' });
+    expect(await within(dialog).findByText('Current match')).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await user.click(screen.getByRole('button', { name: 'Unlink' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Unlink from the community work?' });
+    await user.click(within(confirm).getByRole('button', { name: 'Unlink' }));
+    expect(await screen.findByText('Unlinked from the community work')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    // The search the dialog made while the book was matched is not shown again.
+    await user.click(hero);
+    dialog = await screen.findByRole('dialog', { name: 'Match with community metadata' });
+    expect(await within(dialog).findByRole('radio', { name: /The Way of Kings/ })).toBeChecked();
+    expect(within(dialog).queryByText('Current match')).toBeNull();
+    expect(within(dialog).queryByRole('radio', { name: /Part 1/ })).toBeNull();
+  });
+
   it("leaves a cover the server couldn't preview unticked", async () => {
     const detail = bookDetail();
     detail.book.has_cover = false;
