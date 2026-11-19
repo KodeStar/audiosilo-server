@@ -138,11 +138,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 	}
 	// The scan's own chapters, kept as found (books.scanned_chapters): what a
 	// community chapter check fits against, and what the chapters go back to.
-	ownChapters := b.Chapters
-	if ownChapters == nil {
-		ownChapters = []metadata.Chapter{}
-	}
-	scannedChapters, err := json.Marshal(ownChapters)
+	scannedChapters, err := scannedChaptersJSON(b.Chapters)
 	if err != nil {
 		return 0, err
 	}
@@ -226,7 +222,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, indexedAt, b.AddedAt,
 		b.Published, b.Description, hasCover, scanned,
 		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
-		b.Released, b.TagASIN, b.TagISBN, b.TagLanguage, string(scannedChapters), chaptersHash(string(scannedChapters)),
+		b.Released, b.TagASIN, b.TagISBN, b.TagLanguage, scannedChapters, chaptersHash(scannedChapters),
 		absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
 		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.LengthUncounted, indexedAt, pathKey(b.RelPath), b.ABS.Unread, b.ABS.Unread, b.EbookFile.Unread,
 		b.EbookFile.Unread, b.EbookFile.Unread).Scan(&id); err != nil {
@@ -289,6 +285,16 @@ func recordReadProblem(ctx context.Context, tx *sql.Tx, b *Book) (id int64, ok b
 	return id, true, nil
 }
 
+// scannedChaptersJSON is a scan's own chapters as books.scanned_chapters holds
+// them: a JSON list, [] for none.
+func scannedChaptersJSON(chs []metadata.Chapter) (string, error) {
+	if chs == nil {
+		chs = []metadata.Chapter{}
+	}
+	raw, err := json.Marshal(chs)
+	return string(raw), err
+}
+
 // recordLengths writes b's lengths over the stored row id that
 // recordReadProblem kept (Book.LengthsRead): its duration, codec and chapters
 // (the scan's own, books.scanned_chapters, with what stands over them put back
@@ -311,17 +317,13 @@ func recordLengths(ctx context.Context, tx *sql.Tx, id int64, b *Book) error {
 		b.LengthsRead = false
 		return nil
 	}
-	ownChapters := b.Chapters
-	if ownChapters == nil {
-		ownChapters = []metadata.Chapter{}
-	}
-	raw, err := json.Marshal(ownChapters)
+	raw, err := scannedChaptersJSON(b.Chapters)
 	if err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE books SET duration = ?, codec = ?, scanned_chapters = ?, chapters_hash = ?, chapters_source = '', chapters_fit = ''
-		  WHERE id = ?`, b.Duration, b.Codec, string(raw), chaptersHash(string(raw)), id); err != nil {
+		  WHERE id = ?`, b.Duration, b.Codec, raw, chaptersHash(raw), id); err != nil {
 		return err
 	}
 	for _, f := range b.Files {
