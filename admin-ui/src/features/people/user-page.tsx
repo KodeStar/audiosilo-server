@@ -21,6 +21,7 @@ import {
   forgetUsers,
   invalidateDevices,
   invalidatePeople,
+  keys as queryKeys,
   useDevices,
   useLibraries,
   useUser,
@@ -303,7 +304,7 @@ function EndKeys({ user, keys, link }: { user: AdminUser; keys: number; link: bo
         onConfirm={async () => {
           const ended = await api.endKeys(user.id);
           invalidateDevices(qc);
-          invalidatePeople(qc); // the detail's calendar link
+          void qc.invalidateQueries({ queryKey: queryKeys.user(user.id) }); // its calendar link
           toast.add({ title: endedKeysToast(t, ended, user.username), type: 'success' });
         }}
       />
