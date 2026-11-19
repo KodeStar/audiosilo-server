@@ -109,3 +109,24 @@ func TestNotifyOutboxFollowsTheDestination(t *testing.T) {
 		t.Fatalf("owed to a deleted destination: %+v", all)
 	}
 }
+
+// A destination whose events aren't JSON (a row edited by hand) is owed
+// nothing, as scanTarget reads it, and the event is recorded all the same.
+func TestNotifyOutboxPassesOverUnreadableEvents(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	tg, err := c.CreateNotifyTarget(ctx, NotifyTarget{Kind: "webhook", Name: "w", URL: "http://x", Enabled: true, Events: []string{"book_added"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.db.ExecContext(ctx, `UPDATE notification_targets SET events = 'book_added' WHERE id = ?`, tg.ID); err != nil {
+		t.Fatal(err)
+	}
+	ev, err := c.RecordServerEvent(ctx, "book_added", nil, "")
+	if err != nil {
+		t.Fatalf("recording beside unreadable events: %v", err)
+	}
+	if owed, err := c.PendingDeliveries(ctx, ev.ID); err != nil || len(owed) != 0 {
+		t.Fatalf("owed = %+v, %v; want none", owed, err)
+	}
+}

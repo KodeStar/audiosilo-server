@@ -186,10 +186,14 @@ func (c *Catalog) RecordServerEvent(ctx context.Context, kind string, data map[s
 		if id, err = res.LastInsertId(); err != nil {
 			return err
 		}
+		// json_valid first (CASE fixes the order): json_each raises on events
+		// that aren't JSON, which would lose the event, and on a snapshot the
+		// write that raised it, where scanTarget reads them as no events.
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO notify_outbox(event_id, target_id)
 			 SELECT ?, id FROM notification_targets
-			 WHERE enabled = 1 AND EXISTS (SELECT 1 FROM json_each(events) WHERE value = ?)`, id, kind)
+			 WHERE enabled = 1 AND CASE WHEN json_valid(events)
+			   THEN EXISTS (SELECT 1 FROM json_each(events) WHERE value = ?) ELSE 0 END`, id, kind)
 		return err
 	})
 	if err != nil {
