@@ -1000,7 +1000,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   long`, before it is cleaned, looked up or stored (server#289). Any `/api/` request's `?path=` over it is
   refused before a route or credential check reads it (`capPathQuery`, server#359); a path in a body is the
   route's to check (`pathTooLong`, `refsTooLong` for a selection of books, a share's rules), and a body that
-  names a path or two and little else is bounded (`pathBodyMax`). A scan never indexes a path past the cap
+  names a path or two and little else is bounded (`pathBodyMax`). A body that carries a share's rules (`POST
+  /admin/shares`, `POST /admin/shares/{id}/paths`) takes 1000 of them at the cap (`shareRulesBodyMax`); past
+  it is the route's 400 `too_large`, as more rules are, and a share's name is at most 200 characters
+  (`maxShareName`, 400 `invalid_name` on a create or rename). A scan never indexes a path past the cap
   (only a Windows library holds one): it skips the folder or file and logs it as unreadable (`overLong`), by the start of its path and its length (`loggedPath`). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
   `GetBookByPath`, then the indexed folder book holding the path

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
@@ -57,15 +58,14 @@ func (a *API) handleGetShare(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 	var s catalog.Share
-	if err := decodeJSON(r, &s, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeShareRules(w, r, &s) {
 		return
 	}
 	if s.Name == "" {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if tooManyRules(w, len(s.Paths)) {
+	if shareNameTooLong(w, s.Name) || tooManyRules(w, len(s.Paths)) {
 		return
 	}
 	for _, rule := range s.Paths {
@@ -99,6 +99,9 @@ func (a *API) handleUpdateShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
+	if req.Name != nil && shareNameTooLong(w, *req.Name) {
+		return
+	}
 	updated, err := a.cat.UpdateShare(r.Context(), id, req)
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "share not found")
@@ -125,6 +128,44 @@ func (a *API) handleDeleteShare(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit(r, "share.delete", name, nil)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// maxShareName is the longest share name, in characters: a name is stored,
+// listed, audited and logged, so it is bounded before any of those.
+const maxShareName = 200
+
+// shareNameTooLong answers 400 invalid_name for a share name over maxShareName
+// characters (true).
+func shareNameTooLong(w http.ResponseWriter, name string) bool {
+	if utf8.RuneCountInString(name) <= maxShareName {
+		return false
+	}
+	writeErrorCode(w, http.StatusBadRequest, codeInvalidName,
+		fmt.Sprintf("the name is at most %d characters", maxShareName))
+	return true
+}
+
+// shareRulesBodyMax bounds a body that carries a share's rules: maxBulkBooks
+// of them with paths at catalog.MaxPathBytes, sent unescaped, and room for each
+// rule's library id and the share's other fields. A longer body is the route's
+// 400 too_large, as more rules are (decodeShareRules).
+const shareRulesBodyMax = maxBulkBooks*(catalog.MaxPathBytes+64) + 64<<10
+
+// decodeShareRules decodes a body that carries a share's rules into v (true):
+// one over shareRulesBodyMax answers 400 too_large, one that doesn't decode
+// 400 invalid request.
+func decodeShareRules(w http.ResponseWriter, r *http.Request, v any) bool {
+	err := decodeJSON(r, v, shareRulesBodyMax)
+	if err == nil {
+		return true
+	}
+	if tooBig := (*http.MaxBytesError)(nil); errors.As(err, &tooBig) {
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+			fmt.Sprintf("the request is larger than %d bytes", shareRulesBodyMax))
+		return false
+	}
+	writeError(w, http.StatusBadRequest, "invalid request")
+	return false
 }
 
 // tooManyRules answers 400 too_large for more rules than one request may hold
@@ -157,8 +198,7 @@ func (a *API) handleAddSharePath(w http.ResponseWriter, r *http.Request) {
 		sharePathReq
 		Rules []sharePathReq `json:"rules"`
 	}
-	if err := decodeJSON(r, &req, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeShareRules(w, r, &req) {
 		return
 	}
 	rules := req.Rules

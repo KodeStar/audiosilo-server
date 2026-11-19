@@ -115,3 +115,80 @@ func TestAddSharePathsBatch(t *testing.T) {
 		t.Fatalf("paths after a single add = %v, want 3", got)
 	}
 }
+
+// A share created with as many rules as one request takes, each path at
+// catalog.MaxPathBytes, is made: its body is past the 1 MiB other admin
+// bodies take, so the route reads more. A body past even that is the route's
+// own 400 too_large, on the create and on an add of rules, never a bare 400.
+func TestShareRulesBodyBound(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	libID, _ := seedCatalog(t, e)
+	lib := strconv.FormatInt(libID, 10)
+	long := func(i int) string {
+		p := fmt.Sprintf("%04d/", i)
+		return p + strings.Repeat("a", catalog.MaxPathBytes-len(p))
+	}
+	rules := make([]string, maxBulkBooks)
+	for i := range rules {
+		rules[i] = `{"library_id":` + lib + `,"path":"` + long(i) + `"}`
+	}
+	body := `{"name":"Long paths","paths":[` + strings.Join(rules, ",") + `]}`
+	resp, out := e.do(t, "POST", "/api/v1/admin/shares", adminTok, body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("a share with %d rules at the path cap (%d bytes) = %d %.200s, want 201", maxBulkBooks, len(body), resp.StatusCode, out)
+	}
+	share, err := e.cat.CreateShare(context.Background(), catalog.Share{Name: "Other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	huge := strings.Repeat("a", shareRulesBodyMax)
+	for route, body := range map[string]string{
+		"/api/v1/admin/shares": `{"name":"Huge","description":"` + huge + `"}`,
+		"/api/v1/admin/shares/" + strconv.FormatInt(share.ID, 10) + "/paths": `{"rules":[{"library_id":` + lib + `,"path":"` + huge + `"}]}`,
+	} {
+		if resp, out := e.do(t, "POST", route, adminTok, body); resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, `"code":"`+codeTooLarge+`"`) {
+			t.Errorf("POST %s with a body past the bound = %d %.200s, want 400 too_large", route, resp.StatusCode, out)
+		}
+	}
+	// A body that doesn't decode stays a plain 400.
+	if resp, out := e.do(t, "POST", "/api/v1/admin/shares", adminTok, `{"name":`); resp.StatusCode != http.StatusBadRequest || strings.Contains(out, `"code"`) {
+		t.Errorf("a malformed body = %d %s, want a plain 400", resp.StatusCode, out)
+	}
+}
+
+// A share's name is at most maxShareName characters, counted as characters,
+// not bytes: a longer one is refused (400 invalid_name) on a create and a
+// rename before it is stored, audited or logged; one at the cap is kept.
+func TestShareNameBound(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	atCap := strings.Repeat("é", maxShareName) // twice as many bytes
+	over := atCap + "é"
+	resp, out := e.do(t, "POST", "/api/v1/admin/shares", adminTok, `{"name":"`+over+`"}`)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, `"code":"`+codeInvalidName+`"`) {
+		t.Fatalf("a create with a name of %d characters = %d %s, want 400 invalid_name", maxShareName+1, resp.StatusCode, out)
+	}
+	var made int
+	if err := e.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM shares`).Scan(&made); err != nil || made != 0 {
+		t.Fatalf("shares made by the refused create: %d, %v", made, err)
+	}
+	resp, out = e.do(t, "POST", "/api/v1/admin/shares", adminTok, `{"name":"`+atCap+`"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("a create with a name of %d characters = %d %s, want 201", maxShareName, resp.StatusCode, out)
+	}
+	shares, err := e.cat.ListShares(context.Background())
+	if err != nil || len(shares) != 1 {
+		t.Fatalf("shares = %v, %v", shares, err)
+	}
+	url := "/api/v1/admin/shares/" + strconv.FormatInt(shares[0].ID, 10)
+	resp, out = e.do(t, "PATCH", url, adminTok, `{"name":"`+over+`"}`)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, `"code":"`+codeInvalidName+`"`) {
+		t.Fatalf("a rename to %d characters = %d %s, want 400 invalid_name", maxShareName+1, resp.StatusCode, out)
+	}
+	if got, err := e.cat.GetShare(context.Background(), shares[0].ID); err != nil || got.Name != atCap {
+		t.Fatalf("after the refused rename the name is %q, %v", got.Name, err)
+	}
+}
