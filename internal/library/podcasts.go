@@ -203,6 +203,9 @@ func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Librar
 		}
 	}
 	for name := range *listed {
+		if err := ctx.Err(); err != nil {
+			return n, unread, err
+		}
 		if _, ok := known[name]; ok || !feed.ShowPath(name) {
 			continue
 		}
