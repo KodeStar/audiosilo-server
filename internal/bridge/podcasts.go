@@ -120,26 +120,36 @@ type PodcastOutcome struct {
 	RetryAfterSeconds *int   `json:"retry_after_seconds"`
 }
 
-// stopCodes are the failure codes a cancelled podcast job's result may name
-// for the stop itself: the Bridge reports a job it stopped as cancelled with
-// its handler's result, and a handler reads its ended context as a timeout
-// inside a fetch and as bridge_lost outside one.
-var stopCodes = []string{"timeout", "bridge_lost"}
+// cancelledFailureCodes are the failure codes that are an answer from the feed
+// (or the episode's host) itself: what it sent, its address, what its body held. Only
+// these count for a cancelled podcast job (PodcastFailed): a cancel never
+// causes them. Every other code (network, timeout, tls, dns, bridge_lost, the
+// Bridge's or the library's own) may be the stop itself: a Bridge reads the
+// job's ended context as a timeout, and a v0.6.0 Bridge as network
+// (BR-CANCEL-RACE). An http_NNN code (HTTPStatus) is one too.
+var cancelledFailureCodes = []string{"gone", "redirect_loop", "invalid_feed_url", "not_a_feed", "not_a_podcast", "too_large", "episode_not_found", "enclosure_missing", "invalid_audio", "unsupported_encoding"}
+
+// countsWhenCancelled reports whether code is one of cancelledFailureCodes or
+// an HTTP status. Unlike FeedAnswered it is an allow-list: a code it doesn't
+// know (a newer Bridge's) never counts after a cancel.
+func countsWhenCancelled(code string) bool {
+	_, status := HTTPStatus(code)
+	return status || slices.Contains(cancelledFailureCodes, code)
+}
 
 // PodcastFailed reports whether j, an ended podcast job, failed: stored
-// failed, or stored cancelled with a failure's code as its result. A failure
+// failed, or stored cancelled with the feed's answer as its result. A failure
 // reported once the job was asked to stop is stored cancelled with the
 // Bridge's result (UpdateHeld), and still says what the feed or the episode
 // answered (gone, a Retry-After): the folds, the fetch cooldown and
-// RecentSubscribeFailure count it. A cancel alone names no code, or one of
-// stopCodes, which is never counted.
+// RecentSubscribeFailure count it. A cancel alone names no code, or one that
+// isn't the feed's answer (countsWhenCancelled), which is never counted.
 func PodcastFailed(j Job) bool {
 	switch j.State {
 	case StateFailed:
 		return true
 	case StateCancelled:
-		code := failureCode(j, nil)
-		return code != "" && !slices.Contains(stopCodes, code)
+		return countsWhenCancelled(failureCode(j, nil))
 	}
 	return false
 }

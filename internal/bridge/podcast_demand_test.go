@@ -203,7 +203,7 @@ func TestEnsurePodcastFetchUnavailableAndCooldown(t *testing.T) {
 
 // A fetch that fails once it was asked to stop is stored cancelled and still
 // cools down, by its result's code, until the fold backs it off; one the
-// Bridge stopped (the stop's own code) cools nothing.
+// Bridge stopped (a timeout, or a v0.6.0 Bridge's network) cools nothing.
 func TestFetchCooldownCountsAFailureStoredCancelled(t *testing.T) {
 	for _, c := range []struct {
 		name, state, code string
@@ -211,6 +211,8 @@ func TestFetchCooldownCountsAFailureStoredCancelled(t *testing.T) {
 	}{
 		{"failed after a cancel", StateFailed, "too_large", true},
 		{"stopped by the Bridge", StateCancelled, "timeout", false},
+		{"stopped by a v0.6.0 Bridge", StateCancelled, "network", false},
+		{"gone after a cancel", StateCancelled, "gone", true},
 		{"cancelled, no code", StateCancelled, "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {

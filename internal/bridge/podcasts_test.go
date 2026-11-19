@@ -568,6 +568,34 @@ func TestFeedAnswered(t *testing.T) {
 	}
 }
 
+// PodcastFailed counts a cancelled job only by the feed's own answer: a cancel
+// can end a fetch as a timeout or, on a v0.6.0 Bridge, as network
+// (BR-CANCEL-RACE), so no network-class or Bridge-side code counts then. A job
+// stored failed counts whatever its code, network too.
+func TestPodcastFailed(t *testing.T) {
+	job := func(state, code string) Job {
+		return Job{State: state, Result: json.RawMessage(`{"code":"` + code + `"}`)}
+	}
+	for _, code := range []string{"gone", "http_404", "http_503", "http_310", "redirect_loop", "invalid_feed_url", "not_a_feed", "not_a_podcast", "too_large", "episode_not_found", "enclosure_missing", "invalid_audio", "unsupported_encoding"} {
+		if !PodcastFailed(job(StateCancelled, code)) {
+			t.Errorf("a cancelled job with %s is not counted", code)
+		}
+	}
+	for _, code := range []string{"", "network", "timeout", "dns", "tls", "bridge_lost", "blocked_address", "write_failed", "library_not_writable", "identity_changed", "feed_secret_missing", "http_99", "http_600"} {
+		if PodcastFailed(job(StateCancelled, code)) {
+			t.Errorf("a cancelled job with %q is counted", code)
+		}
+	}
+	for _, code := range []string{"network", "timeout", "bridge_lost", "gone"} {
+		if !PodcastFailed(job(StateFailed, code)) {
+			t.Errorf("a failed job with %s is not counted", code)
+		}
+	}
+	if PodcastFailed(job(StateDone, "gone")) {
+		t.Error("a done job is counted")
+	}
+}
+
 // An adopt-only subscribe that could never be queued says why (server#219):
 // its params and library are checked before it looks for an open request, so
 // an OPML row with a bad URL is invalid, never limited.

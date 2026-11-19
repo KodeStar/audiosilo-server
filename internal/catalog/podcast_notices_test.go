@@ -764,9 +764,10 @@ func TestPodcastStalePollFoldIgnored(t *testing.T) {
 // A poll that failed once it was asked to stop is stored cancelled with the
 // Bridge's result (bridge.UpdateHeld) and folds as the failure it was: its
 // code, its Retry-After, the run and the notice, with the result's message,
-// never the cancel's reason. A cancel alone, or one naming the stop's own code
-// (a stopped fetch reads as a timeout, a stopped handler as bridge_lost),
-// still folds nothing.
+// never the cancel's reason. A cancel alone, or one naming a code that isn't
+// the feed's answer (a stopped fetch reads as a timeout, or as network on a
+// v0.6.0 Bridge, a stopped handler as bridge_lost: BR-CANCEL-RACE), still
+// folds nothing, while a poll stored failed with network still counts.
 func TestPodcastPollFailureStoredCancelledFolds(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	now := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
@@ -784,7 +785,7 @@ func TestPodcastPollFailureStoredCancelledFolds(t *testing.T) {
 		}
 		return log.take()
 	}
-	for _, result := range []string{`{}`, `{"code":"timeout"}`, `{"code":"bridge_lost"}`} {
+	for _, result := range []string{`{}`, `{"code":"timeout"}`, `{"code":"bridge_lost"}`, `{"code":"network"}`, `{"code":"dns"}`, `{"code":"tls"}`, `{"code":"write_failed"}`} {
 		if got := fold(result); len(got) != 0 {
 			t.Fatalf("a cancelled poll with %s told %+v", result, got)
 		}
@@ -810,6 +811,16 @@ func TestPodcastPollFailureStoredCancelledFolds(t *testing.T) {
 	if code != "http_429" || msg != "" || failures != 1 || run != 1 || due.String != now.Add(time.Hour).Format(time.RFC3339) {
 		t.Fatalf("a failure stored cancelled: code %q, error %q, failures %d, run %d, next poll %q; want http_429 backed off an hour",
 			code, msg, failures, run, due.String)
+	}
+	// Stored failed, network counts as today: a second failure in the run.
+	next++
+	if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, next, bridge.StateFailed, "network")); err != nil {
+		t.Fatal(err)
+	}
+	log.take()
+	state()
+	if code != "network" || failures != 2 || run != 2 {
+		t.Fatalf("a network failure: code %q, failures %d, run %d; want network, 2 and 2", code, failures, run)
 	}
 	got := fold(`{"code":"gone","message":"The feed has ended."}`)
 	if len(got) != 1 || got[0].Kind != PodcastFeedFailing || got[0].Code != "gone" {
