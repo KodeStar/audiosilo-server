@@ -561,3 +561,26 @@ func TestEarlierInSeries(t *testing.T) {
 		t.Fatalf("before cw3, with generated recaps = %v, want %v", got, want)
 	}
 }
+
+// InPlacementOrder sorts books as SeriesBooks returns them: library sort order
+// ("Second" before "First"), then path.
+func TestInPlacementOrder(t *testing.T) {
+	t.Parallel()
+	c, ctx, first, second := seedSeries(t)
+	books := []Book{
+		{LibraryID: first.ID, RelPath: "b"}, {LibraryID: second.ID, RelPath: "z"},
+		{LibraryID: first.ID, RelPath: "a"}, {LibraryID: second.ID, RelPath: "c"},
+	}
+	if err := c.InPlacementOrder(ctx, books); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, b := range books {
+		got = append(got, strconv.FormatInt(b.LibraryID, 10)+":"+b.RelPath)
+	}
+	want := []string{strconv.FormatInt(second.ID, 10) + ":c", strconv.FormatInt(second.ID, 10) + ":z",
+		strconv.FormatInt(first.ID, 10) + ":a", strconv.FormatInt(first.ID, 10) + ":b"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+}

@@ -495,3 +495,23 @@ func TestItemAndMetaListTheSameRecordings(t *testing.T) {
 		t.Fatalf("/meta others = %q, want /item's %q", got, items)
 	}
 }
+
+// The pick's last tiebreak is library order, then path, for a recording /meta
+// finds by its work key (catalog.WorkBooks) as for one in the series: of two
+// recordings of "one" that rank alike, "A/One", filed in no series, comes
+// before "Saga/1".
+func TestMetaWorkBooksInLibraryOrder(t *testing.T) {
+	t.Parallel()
+	e := recordingsEnv(t, true)
+	ctx := context.Background()
+	addBooks(t, e.testEnv, e.lib.ID, &catalog.Book{RelPath: "A/One", ASIN: "B0ONEA", Narrator: "Kemper"})
+	if err := e.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{
+		{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "A/One"}, IDKey: "a:B0ONEA", WorkID: "one", CheckedAt: "now"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	entries, raw := railEntries(t, e, "Saga/2", e.adminTok)
+	if one := entries["one"]; one.local != "A/One" || !slices.Equal(one.others, []string{"Saga/1"}) {
+		t.Fatalf("entry one = %+v, want A/One with Saga/1 beside it: %s", one, raw)
+	}
+}

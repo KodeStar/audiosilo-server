@@ -255,7 +255,7 @@ func writeLookupFailed(w http.ResponseWriter) {
 // a series named like a rail, their main one or another (catalog.SeriesBooks
 // over their UserScopes), and every book whose work key is a rail's work
 // (catalog.WorkBooks: a recording filed in no series, or under another name,
-// as /item finds it, server#412), those after the series' books. The current
+// as /item finds it, server#412), both in library order. The current
 // work's other recordings, when requested's own work key is that work, are
 // /item's other_recordings (catalog.OtherRecordings), so both name one copy of
 // each recording, the same one (server#413). A book whose work the catalog
@@ -282,15 +282,14 @@ func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta
 		current = env.Work.ID
 	}
 	works := meta.RailWorks(env.Series)
+	var others []catalog.Book
 	if current != "" && requested.WorkID == current {
-		others, err := a.cat.OtherRecordings(ctx, scopes, requested)
-		if err != nil {
+		if others, err = a.cat.OtherRecordings(ctx, scopes, requested); err != nil {
 			return nil, nil, err
 		}
 		books = slices.DeleteFunc(books, func(b catalog.Book) bool {
 			return b.WorkID == current && !(b.LibraryID == me.LibraryID && b.RelPath == me.Path)
 		})
-		books = append(books, others...)
 		works = slices.DeleteFunc(works, func(w string) bool { return w == current })
 	}
 	more, err := a.cat.WorkBooks(ctx, scopes, works)
@@ -301,11 +300,20 @@ func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta
 	for _, b := range books {
 		have[catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}] = true
 	}
+	series := len(books)
 	for _, b := range more {
 		if !have[catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}] {
 			books = append(books, b)
 		}
 	}
+	if len(books) > series {
+		// The work books among the series' in library order, the pick's last
+		// tiebreak.
+		if err := a.cat.InPlacementOrder(ctx, books); err != nil {
+			return nil, nil, err
+		}
+	}
+	books = append(books, others...)
 	// A book in several series is a candidate in each, at its position there,
 	// and one in none a candidate by its work alone. requested is one too,
 	// outside every series when none named it, so the pick knows its narrator;
