@@ -766,7 +766,7 @@ func TestPodcastScanKeepsAShowRenamedIntoAClosedFolder(t *testing.T) {
 		t.Skip("needs a folder the server's user can't read")
 	}
 	b := newRenameBed(t)
-	if err := b.cat.UnfollowPodcast(b.ctx, b.user, b.lib.ID, "Example Show"); err != nil {
+	if err := b.cat.UnfollowPodcast(b.ctx, b.user, b.lib.ID, "Example Show", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.cat.SetPodcastPolicy(b.ctx, b.lib.ID, "Example Show", renameShowID, nil); err != nil {
@@ -994,7 +994,7 @@ func TestPodcastRenameChainWaitsOnACopiedPartner(t *testing.T) {
 func TestPodcastHeldMoveKeepsItsOldRowThroughThePrune(t *testing.T) {
 	b := newRenameBed(t)
 	named := b.chain(t)
-	if err := b.cat.UnfollowPodcast(b.ctx, b.user, b.lib.ID, "Example Show"); err != nil {
+	if err := b.cat.UnfollowPodcast(b.ctx, b.user, b.lib.ID, "Example Show", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.cat.SetPodcastPolicy(b.ctx, b.lib.ID, "Example Show", renameShowID, nil); err != nil {

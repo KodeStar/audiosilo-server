@@ -302,7 +302,7 @@ func TestPodcastPrivateShowScopes(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(out, "Example Show") {
 		t.Fatalf("followed household %d %s", resp.StatusCode, out)
 	}
-	if err := b.cat.UnfollowPodcast(ctx, b.adminID, b.lib.ID, "Example Show"); err != nil {
+	if err := b.cat.UnfollowPodcast(ctx, b.adminID, b.lib.ID, "Example Show", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -425,7 +425,7 @@ func TestPodcastFollowErrorsAndCoreReads(t *testing.T) {
 	if err := b.db.QueryRowContext(context.Background(), `SELECT params FROM bridge_jobs WHERE kind='podcast.poll' AND rel_path='Example Show'`).Scan(&params); err != nil || strings.Contains(params, "scheduled") {
 		t.Fatalf("Check now params %s %v", params, err)
 	}
-	if err := b.cat.UnfollowPodcast(context.Background(), uid, b.lib.ID, "Example Show"); err != nil {
+	if err := b.cat.UnfollowPodcast(context.Background(), uid, b.lib.ID, "Example Show", nil); err != nil {
 		t.Fatal(err)
 	}
 	// Turning the module off still permits indexed reads.

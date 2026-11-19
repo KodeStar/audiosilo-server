@@ -110,7 +110,7 @@ func TestUnfollowPodcastByTheOtherSpelling(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.UnfollowPodcast(ctx, user, lib.ID, nfc); err != nil {
+	if err := c.UnfollowPodcast(ctx, user, lib.ID, nfc, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := follows(lib.ID, user); len(got) != 0 {
@@ -127,7 +127,7 @@ func TestUnfollowPodcastByTheOtherSpelling(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.UnfollowPodcast(ctx, user, lib.ID, "Café Café"); err != nil {
+	if err := c.UnfollowPodcast(ctx, user, lib.ID, "Café Café", nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := follows(lib.ID, user); len(got) != 2 {
@@ -145,7 +145,7 @@ func TestUnfollowPodcastByTheOtherSpelling(t *testing.T) {
 	if err := c.FollowPodcast(ctx, user, own.ID, nfd, "0123456789abcdef"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.UnfollowPodcast(ctx, user, own.ID, nfc); err != nil {
+	if err := c.UnfollowPodcast(ctx, user, own.ID, nfc, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := follows(own.ID, user); !slices.Equal(got, []string{nfd}) {
@@ -162,10 +162,78 @@ func TestUnfollowPodcastByTheOtherSpelling(t *testing.T) {
 	if err := c.FollowPodcast(ctx, user, indexed.ID, nfd, "0123456789abcdef"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.UnfollowPodcast(ctx, user, indexed.ID, nfc); err != nil {
+	if err := c.UnfollowPodcast(ctx, user, indexed.ID, nfc, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := follows(indexed.ID, user); !slices.Equal(got, []string{nfd}) {
 		t.Errorf("show indexed at the path given: %+q", got)
+	}
+}
+
+// A show at the path given that the caller's scope refuses counts as none
+// for the unfollow's other spelling, as it does for PodcastShowSpelling: the
+// caller's own follow in the other spelling goes whether or not a show they
+// can't see (indexed, its folder on the disk) sits at the path, so the outcome
+// tells them nothing about it. Seen, the same show keeps the follow beside it.
+func TestUnfollowPodcastHiddenShowAtThePathCountsAsNone(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	nfc, nfd := "Caf\u00e9 Show", "Cafe\u0301 Show"
+	user := seedUserNamed(t, c, ctx, "u")
+	onlyOther := func(s string) bool { return s == nfd }
+	follows := func(lib int64) []string {
+		t.Helper()
+		rows, err := queryRows(ctx, c.db, func(r *sql.Rows, s *string) error { return r.Scan(s) },
+			`SELECT show_path FROM podcast_follows WHERE library_id=? AND user_id=?`, lib, user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	setup := func(name string, hidden bool) int64 {
+		t.Helper()
+		lib, err := c.CreateLibrary(ctx, Library{Name: name, Root: t.TempDir(), Kind: KindPodcasts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hidden {
+			if err := os.Mkdir(filepath.Join(lib.Root, nfc), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			indexShowAt(t, c, ctx, lib.ID, nfc, "3333333333333333")
+		}
+		if err := c.FollowPodcast(ctx, user, lib.ID, nfd, "0123456789abcdef"); err != nil {
+			t.Fatal(err)
+		}
+		return lib.ID
+	}
+
+	// Allowed to see it: the show at the path given is an entry of its own.
+	seen := setup("Seen", true)
+	if err := c.UnfollowPodcast(ctx, user, seen, nfc, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := follows(seen); !slices.Equal(got, []string{nfd}) {
+		t.Errorf("a show the caller sees at the path given: %+q", got)
+	}
+
+	// Refused: the same answer as with nothing there.
+	for _, tc := range []struct {
+		name   string
+		hidden bool
+	}{{"Nothing", false}, {"Hidden", true}} {
+		lib := setup(tc.name, tc.hidden)
+		if err := c.UnfollowPodcast(ctx, user, lib, nfc, onlyOther); err != nil {
+			t.Fatal(err)
+		}
+		if got := follows(lib); len(got) != 0 {
+			t.Errorf("%s at the path given: %+q, want the follow in the other spelling gone", tc.name, got)
+		}
+	}
+	// And on the library seen above once the caller's scope refuses it.
+	if err := c.UnfollowPodcast(ctx, user, seen, nfc, onlyOther); err != nil {
+		t.Fatal(err)
+	}
+	if got := follows(seen); len(got) != 0 {
+		t.Errorf("a show the caller no longer sees: %+q", got)
 	}
 }

@@ -665,12 +665,15 @@ func (c *Catalog) FollowPodcast(ctx context.Context, user, lib int64, p, showID 
 // when none of those is a follow of theirs, at the one follow of theirs whose
 // path reads as p in another Unicode spelling (never two, and not when p is
 // an entry of its own, a show indexed at it or a folder on the disk, as
-// PodcastShowSpelling's rule). A follow outlives the caller's access to its
-// show (a share removed, the show's identity replaced), and their own rows
-// still find it by the other spelling. Their rows are read first, and p is
-// looked up only when one of them reads as it, so the work done for a show
-// they never followed is that of a made-up name.
-func (c *Catalog) UnfollowPodcast(ctx context.Context, user, lib int64, p string, spellings ...string) error {
+// PodcastShowSpelling's rule). allow is the caller's scope (nil: every path),
+// as PodcastShowSpelling's: a show or folder at p it refuses counts as none,
+// so whether a show the caller can't see sits at p changes nothing they can
+// tell. A follow outlives the caller's access to its show (a share removed,
+// the show's identity replaced), and their own rows still find it by the
+// other spelling. Their rows are read first, and p is looked up only when one
+// of them reads as it, so the work done for a show they never followed is
+// that of a made-up name.
+func (c *Catalog) UnfollowPodcast(ctx context.Context, user, lib int64, p string, allow func(string) bool, spellings ...string) error {
 	at := append([]string{p}, spellings...)
 	if HasOtherSpelling(p) {
 		mine, err := queryRows(ctx, c.db, func(r *sql.Rows, s *string) error { return r.Scan(s) },
@@ -683,14 +686,14 @@ func (c *Catalog) UnfollowPodcast(ctx context.Context, user, lib int64, p string
 		// p and each of spellings read as p, so a lone row reading as p that
 		// is none of them means none of them is a follow of theirs. A show
 		// indexed at p is an entry of its own, as one on the disk is, so
-		// the follow beside it stays when the disk can't be read.
+		// the follow beside it stays when the disk can't be read; one allow
+		// refuses is no entry.
 		if len(m.in) == 1 && !slices.Contains(at, m.in[0]) {
-			var one int
-			err := c.db.QueryRowContext(ctx, `SELECT 1 FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, p).Scan(&one)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			own, err := c.showEntryAt(ctx, lib, p, allow)
+			if err != nil {
 				return err
 			}
-			if err != nil && !c.ownEntry(ctx, lib, p) {
+			if !own {
 				at = append(at, m.in[0])
 			}
 		}
@@ -698,6 +701,21 @@ func (c *Catalog) UnfollowPodcast(ctx context.Context, user, lib int64, p string
 	args := append([]any{user, lib}, anyOf(at)...)
 	_, err := c.db.ExecContext(ctx, `DELETE FROM podcast_follows WHERE user_id=? AND library_id=? AND show_path IN (`+placeholders(len(at))+`)`, args...)
 	return err
+}
+
+// showEntryAt reports whether p is an entry of its own in lib that allow
+// admits (nil: every path): a show indexed at p, or a folder at p on the disk.
+// One allow refuses is none, and is not looked for.
+func (c *Catalog) showEntryAt(ctx context.Context, lib int64, p string, allow func(string) bool) (bool, error) {
+	if allow != nil && !allow(p) {
+		return false, nil
+	}
+	var one int
+	err := c.db.QueryRowContext(ctx, `SELECT 1 FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, p).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c.ownEntry(ctx, lib, p), nil
+	}
+	return err == nil, err
 }
 
 // PodcastWholeGrant tests grants before private-show narrowing, which is not a

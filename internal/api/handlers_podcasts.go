@@ -406,7 +406,7 @@ func (a *API) handlePodcastUnfollow(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := a.cat.UnfollowPodcast(r.Context(), userFrom(r.Context()).ID, id, p, spelled); err != nil {
+	if err := a.cat.UnfollowPodcast(r.Context(), userFrom(r.Context()).ID, id, p, s.VisibleInBrowse, spelled); err != nil {
 		a.writeCatalogError(w, err, "unfollow podcast failed", "Could not unfollow show.")
 		return
 	}

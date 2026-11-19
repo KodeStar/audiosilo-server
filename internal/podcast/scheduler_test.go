@@ -105,7 +105,7 @@ func TestSchedulerDueAndWritableBackoff(t *testing.T) {
 	if err != nil || show.Status.NextCheck == nil || *show.Status.NextCheck != "2026-10-20T12:45:00Z" {
 		t.Fatalf("fold clamp %+v %v", show, err)
 	}
-	if err := cat.UnfollowPodcast(ctx, 1, lib.ID, "Example Show"); err != nil {
+	if err := cat.UnfollowPodcast(ctx, 1, lib.ID, "Example Show", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := SchedulerTick(ctx, deps); err != nil {

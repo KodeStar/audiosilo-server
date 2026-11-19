@@ -1275,7 +1275,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   none, and such a show counts as none (`TestPodcastShowSpelling`). An unfollow also drops, in one statement, the caller's own follow at
   the path as given (one kept past its show's row) and, when neither that nor the show's spelling is theirs, the one follow of theirs in another
   spelling of it (one kept past their access to the show: a share removed, its identity replaced), by
-  the same rule over their own rows only (`Catalog.UnfollowPodcast`, `TestUnfollowPodcastByTheOtherSpelling`). So an older client or a saved link naming a show
+  the same rule over their own rows only, a show or folder at the path the caller's scope refuses counting as none
+  (`Catalog.UnfollowPodcast`, `TestUnfollowPodcastByTheOtherSpelling`,
+  `TestUnfollowPodcastHiddenShowAtThePathCountsAsNone`). So an older client or a saved link naming a show
   folder renamed by hand to its other spelling still reaches it, and a private show it doesn't follow
   stays 404 `show_not_found` (`TestPodcastShowRoutesMeetTheOtherSpelling`,
   `TestPodcastPrivateShowNotReachedByTheOtherSpelling`). `spelledIn` passes the caller's scope (for `/fs`, `VisibleInBrowse`;
