@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -50,9 +50,6 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 			continue
 		}
 		n, changed, err := s.indexPodcastShow(ctx, lib, e.Name(), false)
-		if s.strayPodcastFolder(ctx, lib, e.Name(), err) {
-			continue
-		}
 		unread = unread || unreadPodcastFolder(err)
 		if errors.Is(err, ErrNotIndexable) {
 			continue
@@ -155,9 +152,8 @@ func (s *Scanner) movePodcastShows(ctx context.Context, lib catalog.Library, at 
 		// a new name, then this one to B's old name): its follows still sit
 		// at this move's folder, and a move without B's own would replace
 		// them. Index such folders first, as a scan does, so both move in
-		// one call. B renamed into a folder still indexed as another show's
-		// is not indexed again here: such a folder counts as unread
-		// (indexNewPodcastFolders), so the move waits for a scan.
+		// one call (a folder whose row no longer describes it counts as
+		// unread instead: indexNewPodcastFolders).
 		var n int
 		var skipped bool
 		if n, skipped, err = s.indexNewPodcastFolders(ctx, lib, &listed); err == nil && n > 0 {
@@ -198,7 +194,7 @@ func (s *Scanner) settledPodcastMoves(ctx context.Context, lib catalog.Library, 
 
 // indexNewPodcastFolders indexes the show folders the root lists that have no
 // index row yet, and answers how many it indexed and whether one was unread
-// (unreadPodcastFolder, a stray folder aside: strayPodcastFolder) or holds what
+// (unreadPodcastFolder; a stray folder is not: strayPodcastFolder) or holds what
 // its row no longer describes (a scan would index it again: another show
 // renamed into it by hand, the row's own gone). The rescan leaves such a row
 // as it is, so the show now in that folder is found by the next scan, and a
@@ -221,14 +217,16 @@ func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Librar
 			continue
 		}
 		if sig, ok := known[name]; ok {
-			_, _, now, err := podcastFolderSig(lib.Root, name)
-			unread = unread || err == nil && now != sig || unreadPodcastFolder(err)
+			if !unread {
+				_, _, now, err := podcastFolderSig(lib.Root, name)
+				unread = err == nil && now != sig || unreadPodcastFolder(err)
+			}
 			continue
 		}
 		switch _, _, err := s.indexPodcastShow(ctx, lib, name, false); {
 		case err == nil:
 			n++
-		case unreadPodcastFolder(err) && !s.strayPodcastFolder(ctx, lib, name, err):
+		case unreadPodcastFolder(err):
 			unread = true
 		}
 	}
@@ -397,18 +395,18 @@ func unreadPodcastFolder(err error) bool {
 // holds a feed.json at all can't be told.
 var errFolderClosed = errors.New("podcast folder could not be looked into")
 
-// strayPodcastFolder reports whether err, indexPodcastShow's for folder show,
-// is a root entry the server can't look into for good, where the index and
-// the podcast state know nothing (catalog.PodcastPathKnown): a root-owned
-// lost+found, say. A permission stays until an admin changes it, so such an
-// entry makes no scan partial (its prune would never run, and a deleted
-// show's leftover follow would hold a rename into its name for ever) and is
-// no unread folder. A fault a retry may get past (transientFault: EIO, ESTALE,
-// a timeout), one on a folder the index knows, or one past a feed.json seen
-// there (a show's, unreadable) stays both.
+// strayPodcastFolder reports whether err, podcastFolderSig's for folder show,
+// is a root entry the server may not look into (a permission, which stays
+// until an admin changes it), where the index and the podcast state know
+// nothing (catalog.PodcastPathKnown): a root-owned lost+found, say.
+// indexPodcastShow, but for a forced rescan, takes such an entry for no show
+// folder (ErrNotIndexable), so it makes no scan partial (its prune would never
+// run, and a deleted show's leftover follow would hold a rename into its name
+// for ever) and is no unread folder. Any other fault (EIO, ESTALE, a timeout),
+// one on a folder the index knows, or one past a feed.json seen there (a
+// show's, unreadable) stays both.
 func (s *Scanner) strayPodcastFolder(ctx context.Context, lib catalog.Library, show string, err error) bool {
-	var errno syscall.Errno
-	if !errors.Is(err, errFolderClosed) || !errors.As(err, &errno) || transientFault(err) {
+	if !errors.Is(err, errFolderClosed) || !errors.Is(err, fs.ErrPermission) {
 		return false
 	}
 	known, err := s.cat.PodcastPathKnown(ctx, lib.ID, show)
@@ -447,6 +445,9 @@ func podcastFolderSig(root, show string) (dir string, info os.FileInfo, sig stri
 
 func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, show string, force bool) (int, bool, error) {
 	dir, info, sig, err := podcastFolderSig(lib.Root, show)
+	if err != nil && !force && s.strayPodcastFolder(ctx, lib, show, err) {
+		return 0, false, ErrNotIndexable
+	}
 	if err != nil {
 		return 0, false, err
 	}

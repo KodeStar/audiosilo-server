@@ -3697,13 +3697,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   feed.json is invalid or of a newer version, may be that other show's: then a move whose new folder
   carries another show's follow, feed state or policy waits too, unless that show moves off it in the
   same call; a plain rename beside an unrelated unreadable folder still moves (the `unread` flag
-  through `MovePodcastShows`). A root entry the scanner can't look into for good (a permission, not
-  `transientFault`'s EIO, ESTALE or timeout) where the index and the podcast state know nothing (a
-  root-owned `lost+found`: `strayPodcastFolder`, `catalog.PodcastPathKnown`) is neither: the scan is
-  not partial for it, so a deleted show's leftover state holds no rename into its name for ever. A
-  rescan also counts as unread a listed folder whose row it does not index again but whose signature
-  changed (another show renamed into it by hand, the row's own gone), so the move waits for a scan. A
-  place at the new folder holds nothing: the new folder's
+  through `MovePodcastShows`). A root entry the scanner may not look into (EACCES or EPERM, which
+  last until an admin changes them; not EIO, ESTALE or a timeout) where the index and the podcast
+  state know nothing (a root-owned `lost+found`: `strayPodcastFolder`, `catalog.PodcastPathKnown`)
+  is neither: the scan takes it for no show folder, so a deleted show's leftover state holds no
+  rename into its name for ever. A rescan also counts as unread a listed folder whose row it does
+  not index again but whose signature changed (another show renamed into it by hand, the row's own
+  gone), so the move waits for a scan. A place at the new folder holds nothing: the new folder's
   row is the moving show's by then, so a show whose only state there is keyed by path has nothing
   left to move it later, and the move carries only its own files' state. A scan keeps each planned
   move's old folders' rows through its prune, so a held show whose only state there is a place is

@@ -587,9 +587,9 @@ func TestPodcastScanStaysPartialOnAKnownUnreadableFolder(t *testing.T) {
 	}
 }
 
-// Only a lasting refusal to look into a folder makes it stray: a fault a retry
-// may get past (transientFault) does not, nor a refusal past a feed.json seen
-// there, nor any error that is no file system's.
+// Only a refusal to look into a folder (EACCES, EPERM) makes it stray: a fault
+// a retry may get past (transientFault) or another errno does not, nor a
+// refusal past a feed.json seen there, nor any error that is no file system's.
 func TestStrayPodcastFolderErrors(t *testing.T) {
 	b := newRenameBed(t)
 	closed := func(err error) error {
@@ -604,6 +604,7 @@ func TestStrayPodcastFolderErrors(t *testing.T) {
 		{closed(syscall.EIO), false},
 		{closed(syscall.ESTALE), false},
 		{closed(syscall.ETIMEDOUT), false},
+		{closed(syscall.ELOOP), false},
 		{&os.PathError{Op: "open", Path: "x", Err: syscall.EACCES}, false},
 		{fmt.Errorf("%w: %w", errFolderClosed, context.Canceled), false},
 		{nil, false},
