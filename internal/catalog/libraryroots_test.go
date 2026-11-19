@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -37,6 +38,20 @@ func TestRootsOverlap(t *testing.T) {
 		if got := rootsOverlap(tc.a, tc.b, tc.sep, tc.fold); got != tc.want {
 			t.Errorf("rootsOverlap(%q, %q, fold %v) = %v, want %v", tc.a, tc.b, tc.fold, got, tc.want)
 		}
+	}
+}
+
+// On macOS a name's two Unicode spellings (NFC, NFD) are one folder, as its
+// file systems take them, so roots that differ only so overlap there (denied);
+// elsewhere they are two folders (allowed).
+func TestPathOverlapsUnicodeSpellings(t *testing.T) {
+	t.Parallel()
+	nfc, nfd := "/srv/Caf\u00e9/Pods", "/srv/Cafe\u0301"
+	if got, want := pathOverlaps(nfc, nfd), runtime.GOOS == "darwin"; got != want {
+		t.Errorf("pathOverlaps(%q, %q) = %v, want %v", nfc, nfd, got, want)
+	}
+	if pathOverlaps("/srv/Caf\u00e9", "/srv/Cafe") {
+		t.Error("a name without the accent overlaps")
 	}
 }
 

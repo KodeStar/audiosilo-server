@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	unorm "golang.org/x/text/unicode/norm"
+
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -18,8 +20,8 @@ import (
 // folder's files twice, as episodes and as books. Roots are compared as
 // written and as their links resolve (a podcast root reached through a link
 // into another library's folder is that folder), by the platform's rule for
-// names: Windows and macOS fold case, and a volume's root (`/`, `C:\`) holds
-// every folder on it (server#179).
+// names: Windows and macOS fold case (macOS a name's Unicode spellings too),
+// and a volume's root (`/`, `C:\`) holds every folder on it (server#179).
 
 // rootResolveWait bounds resolving every library's root before a create or
 // edit takes the writer (resolveRoots): a share that stopped answering leaves
@@ -111,8 +113,13 @@ func formsOverlap(a, b string, resolved map[string]string) bool {
 }
 
 // pathOverlaps reports whether absolute, cleaned paths a and b are one folder
-// or one holds the other, by this platform's rule (rootsOverlap).
+// or one holds the other, by this platform's rule (rootsOverlap). macOS's file
+// systems (APFS, HFS+) also take a name's two Unicode spellings (NFC, NFD) as
+// one, so there both are compared in NFC.
 func pathOverlaps(a, b string) bool {
+	if runtime.GOOS == "darwin" {
+		a, b = unorm.NFC.String(a), unorm.NFC.String(b)
+	}
 	return rootsOverlap(a, b, filepath.Separator, runtime.GOOS == "windows" || runtime.GOOS == "darwin")
 }
 
