@@ -189,7 +189,15 @@ func LstatBounded(ctx context.Context, path string, timeout time.Duration) (fs.F
 // catalog's ownEntry: one form, so they read a folder's kept listing, DirNames,
 // under one name), and a link met on the way.
 func EvalSymlinksBounded(ctx context.Context, path string, timeout time.Duration) (string, error) {
-	return Bounded(ctx, path, timeout, func() (string, error) { return filepath.EvalSymlinks(path) }, nil)
+	return bounded(ctx, path, timeout, true, func() (string, error) { return filepath.EvalSymlinks(path) }, nil)
+}
+
+// LookBounded is Bounded for a call that only looks at path (its links, a
+// folder's first entries: no file's contents read), as StatBounded is: on a
+// share whose listings and attributes answer while its reads hang
+// (HoldReadsForTests) it answers too.
+func LookBounded[T any](ctx context.Context, path string, timeout time.Duration, fn func() (T, error)) (T, error) {
+	return bounded(ctx, path, timeout, true, fn, nil)
 }
 
 // ReadDirBounded is os.ReadDir of path as a Bounded call.

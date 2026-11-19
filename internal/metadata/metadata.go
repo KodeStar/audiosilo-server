@@ -493,8 +493,8 @@ func HoldOpensUntilForTests(dir string, held <-chan struct{}) (restore func()) {
 }
 
 // HoldReadsForTests is HoldOpensForTests for the opens and reads alone: a
-// look at a path under dir (StatBounded, LstatBounded, ReadDirBounded: a
-// stat, a listing) answers, as on a share whose folder listings and
+// look at a path under dir (StatBounded, LstatBounded, ReadDirBounded,
+// EvalSymlinksBounded, LookBounded: a stat, a listing) answers, as on a share whose folder listings and
 // attributes are cached while its files' reads hang.
 func HoldReadsForTests(dir string) (release func()) {
 	held := make(chan struct{})

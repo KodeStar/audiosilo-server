@@ -350,9 +350,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// A root the server may reach but not list (a folder another user owns, as on
 	// a NAS share) would read as an empty library: stop, naming the folder, the
 	// server's user and the fix (server#368).
-	if _, err := metadata.Bounded(ctx, lib.Root, s.probeTimeout, func() (struct{}, error) {
+	if _, err := metadata.LookBounded(ctx, lib.Root, s.probeTimeout, func() (struct{}, error) {
 		return struct{}{}, fsaccess.CheckRead(lib.Root)
-	}, nil); err != nil {
+	}); err != nil {
 		if cerr := ctx.Err(); cerr != nil {
 			return res, cerr
 		}

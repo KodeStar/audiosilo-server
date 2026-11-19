@@ -80,7 +80,8 @@ const (
 
 // heldOpens is HoldOpensForTests's hook, called before each open and Bounded
 // call, look true for one that only looks at the path (StatBounded,
-// LstatBounded, ReadDirBounded); nil outside a test.
+// LstatBounded, ReadDirBounded, EvalSymlinksBounded, LookBounded); nil
+// outside a test.
 var heldOpens atomic.Pointer[func(path string, look bool)]
 
 // OpenRegular is openRegular for the files a request or a scan opens outside
