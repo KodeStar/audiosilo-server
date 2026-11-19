@@ -359,8 +359,9 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) b
 var errTooManyEntries = fmt.Errorf("a list holds more than %d entries", maxBulkBooks)
 
 // boundedList is a JSON array in a request body (a share's rules, a selection
-// of books) read one entry at a time and refused (errTooManyEntries) at the
-// first past maxBulkBooks, before the rest are decoded: a body bounded to take
+// of books) decoded one entry at a time and refused (errTooManyEntries) at the
+// first past maxBulkBooks, before the rest become values (the body's bytes are
+// already read, bounded by its route's size): a body bounded to take
 // that many paths at the cap (selectionBodyMax) holds over a million empty
 // objects, each a value once decoded, so a count taken after the decode would
 // come too late. null reads as no list. An entry takes no unknown field, as

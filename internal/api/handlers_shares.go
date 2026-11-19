@@ -142,23 +142,20 @@ func (a *API) handleDeleteShare(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// maxShareName is the longest share name, in characters (catalog.MaxShareName):
-// a longer one is refused before it is stored, audited or logged.
-const maxShareName = catalog.MaxShareName
-
 // maxShareDescription is the longest share description, in bytes: what a
 // rename's body (decodeJSON's default 1 MiB) can carry, so a create, whose body
 // is bounded for its rules (selectionBodyMax), takes no longer one.
 const maxShareDescription = 1 << 20
 
-// shareNameTooLong answers 400 invalid_name for a share name over maxShareName
-// characters (true).
+// shareNameTooLong answers 400 invalid_name for a share name over
+// catalog.MaxShareName characters (true): a longer one is refused before it is
+// stored, audited or logged.
 func shareNameTooLong(w http.ResponseWriter, name string) bool {
-	if utf8.RuneCountInString(name) <= maxShareName {
+	if utf8.RuneCountInString(name) <= catalog.MaxShareName {
 		return false
 	}
 	writeErrorCode(w, http.StatusBadRequest, codeInvalidName,
-		fmt.Sprintf("the name is at most %d characters", maxShareName))
+		fmt.Sprintf("the name is at most %d characters", catalog.MaxShareName))
 	return true
 }
 

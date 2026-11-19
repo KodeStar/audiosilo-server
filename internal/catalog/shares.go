@@ -956,8 +956,8 @@ const MaxShareName = 200
 func wholeLibraryShareName(libraryName string, libraryID int64) string {
 	const prefix = "Library: "
 	room := MaxShareName - utf8.RuneCountInString(grantName(prefix, libraryID, maxGrantNames-1))
-	if utf8.RuneCountInString(libraryName) > room {
-		libraryName = strings.TrimRight(string([]rune(libraryName)[:room]), " ")
+	if r := []rune(libraryName); len(r) > room {
+		libraryName = strings.TrimRight(string(r[:room]), " ")
 	}
 	return prefix + libraryName
 }

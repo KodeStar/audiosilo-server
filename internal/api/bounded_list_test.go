@@ -51,25 +51,23 @@ func TestDecodeBoundedStopsAtTheCap(t *testing.T) {
 		body string
 		n    int
 		ok   bool
+		want error // the error itself, when it is one decodeBody tells apart
 	}{
-		"at the cap":    {atCap, maxBulkBooks, true},
-		"past the cap":  {"[{}," + atCap[1:], 0, false},
-		"null":          {"null", 0, true},
-		"empty":         {"[]", 0, true},
-		"unknown field": {`[{"library_id":1,"path":"p","extra":1}]`, 0, false},
-		"not a list":    {`{"library_id":1}`, 0, false},
-		"not an object": {`[1]`, 0, false},
-		"unclosed":      {`[{}`, 0, false},
+		"at the cap":    {atCap, maxBulkBooks, true, nil},
+		"past the cap":  {"[{}," + atCap[1:], 0, false, errTooManyEntries},
+		"null":          {"null", 0, true, nil},
+		"empty":         {"[]", 0, true, nil},
+		"unknown field": {`[{"library_id":1,"path":"p","extra":1}]`, 0, false, nil},
+		"not a list":    {`{"library_id":1}`, 0, false, nil},
+		"not an object": {`[1]`, 0, false, nil},
+		"unclosed":      {`[{}`, 0, false, nil},
 	} {
 		var req struct {
 			Books boundedList[catalog.Ref] `json:"books"`
 		}
 		err := json.Unmarshal([]byte(`{"books":`+tc.body+`}`), &req)
-		if (err == nil) != tc.ok || len(req.Books) != tc.n {
+		if (err == nil) != tc.ok || len(req.Books) != tc.n || (tc.want != nil && !errors.Is(err, tc.want)) {
 			t.Errorf("%s: %d entries, %v", name, len(req.Books), err)
-		}
-		if name == "past the cap" && !errors.Is(err, errTooManyEntries) {
-			t.Errorf("past the cap: %v, want errTooManyEntries", err)
 		}
 	}
 }
@@ -85,26 +83,21 @@ func TestSelectionRoutesRefuseHugeLists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// About 1.3 million entries, inside selectionBodyMax.
+	// About 1.3 million entries, inside selectionBodyMax; the works route's
+	// body is decodeJSON's 1 MiB, and a list of empty objects that fits it is
+	// past maxBulkBooks too.
 	huge := "[" + strings.Repeat("{},", (selectionBodyMax-1024)/3) + "{}]"
+	works := "[" + strings.Repeat("{},", 300_000) + "{}]"
 	for _, tc := range []struct{ method, route, body string }{
 		{"POST", "/api/v1/admin/shares", `{"name":"Huge","paths":` + huge + `}`},
 		{"POST", "/api/v1/admin/shares/" + strconv.FormatInt(share.ID, 10) + "/paths", `{"rules":` + huge + `}`},
 		{"POST", "/api/v1/admin/books/bulk", `{"set":{"narrator":"x"},"books":` + huge + `}`},
 		{"POST", "/api/v1/admin/issues/ignore", `{"kind":"transcode","books":` + huge + `}`},
 		{"DELETE", "/api/v1/admin/issues/ignore", `{"kind":"transcode","books":` + huge + `}`},
+		{"POST", "/api/v1/admin/books/works", `{"books":` + works + `}`},
 	} {
-		if resp, out := e.do(t, tc.method, tc.route, adminTok, tc.body); resp.StatusCode != http.StatusBadRequest ||
-			!strings.Contains(out, `"code":"`+codeTooLarge+`"`) {
-			t.Errorf("%s %s with a huge list = %d %.200s, want 400 too_large", tc.method, tc.route, resp.StatusCode, out)
-		}
-	}
-	// The works route's body is decodeJSON's 1 MiB: a list of empty objects
-	// that fits it is past maxBulkBooks, and refused the same way.
-	works := `{"books":[` + strings.Repeat("{},", 300_000) + `{}]}`
-	if resp, out := e.do(t, "POST", "/api/v1/admin/books/works", adminTok, works); resp.StatusCode != http.StatusBadRequest ||
-		!strings.Contains(out, `"code":"`+codeTooLarge+`"`) {
-		t.Errorf("works with a huge list = %d %.200s, want 400 too_large", resp.StatusCode, out)
+		resp, out := e.do(t, tc.method, tc.route, adminTok, tc.body)
+		wantCode(t, tc.method+" "+tc.route+" with a huge list", resp, out, http.StatusBadRequest, codeTooLarge)
 	}
 	var made int
 	if err := e.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM shares WHERE name = 'Huge'`).Scan(&made); err != nil || made != 0 {
@@ -157,9 +150,7 @@ func TestSelectionRoutesTakeLongPaths(t *testing.T) {
 		{"POST", "/api/v1/admin/issues/ignore", `{"kind":"` + pad + `","books":[]}`},
 		{"POST", "/api/v1/admin/books/works", `{"books":[{"library_id":1,"path":"` + pad[:1<<20] + `"}]}`},
 	} {
-		if resp, out := e.do(t, tc.method, tc.route, adminTok, tc.body); resp.StatusCode != http.StatusBadRequest ||
-			!strings.Contains(out, `"code":"`+codeTooLarge+`"`) {
-			t.Errorf("%s %s with a body past its bound = %d %.200s, want 400 too_large", tc.method, tc.route, resp.StatusCode, out)
-		}
+		resp, out := e.do(t, tc.method, tc.route, adminTok, tc.body)
+		wantCode(t, tc.method+" "+tc.route+" with a body past its bound", resp, out, http.StatusBadRequest, codeTooLarge)
 	}
 }
