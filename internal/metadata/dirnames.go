@@ -97,7 +97,7 @@ func (c *DirNames) Names(ctx context.Context, dir string, timeout time.Duration)
 	for {
 		l, lead := c.join(dir)
 		if lead {
-			return c.fill(ctx, l, max(time.Until(deadline), time.Nanosecond))
+			return c.fill(ctx, l, WaitLeft(deadline))
 		}
 		names, again, err := c.await(ctx, l, deadline)
 		if !again {

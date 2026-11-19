@@ -90,6 +90,20 @@ var heldOpens atomic.Pointer[func(path string, look bool)]
 // which would hold a Bounded call, counted on its mount, for good.
 func OpenRegular(path string) (*os.File, os.FileInfo, error) { return openRegular(path) }
 
+// OpenRegularBounded is OpenRegular as a Bounded call: a file opened after a
+// call given up on is closed when its open returns.
+func OpenRegularBounded(ctx context.Context, path string, timeout time.Duration) (*os.File, os.FileInfo, error) {
+	type opened struct {
+		f    *os.File
+		info os.FileInfo
+	}
+	o, err := Bounded(ctx, path, timeout, func() (opened, error) {
+		f, info, err := openRegular(path)
+		return opened{f, info}, err
+	}, func(o opened) { _ = o.f.Close() })
+	return o.f, o.info, err
+}
+
 // openRegular opens the file at path for reading, without waiting for a
 // writer when it is a FIFO (openFlags), and stats it: an error when it is no
 // regular file.

@@ -65,7 +65,7 @@ func TestSafeJoinListedVariantCostsWhatMissingDoes(t *testing.T) {
 			defer mu.Unlock()
 			got = append(got, op+" "+strings.TrimPrefix(p, root))
 		}
-		lk := boundedLooks(ctx, func() time.Duration { return time.Second }, names)
+		lk := boundedLooks(ctx, time.Now().Add(time.Second), names)
 		lstat, listed := lk.lstat, lk.listed
 		lk.lstat = func(p string) (fs.FileInfo, error) { note("lstat", p); return lstat(p) }
 		lk.listed = func(dir, name string) (bool, error) { note("list", dir); return listed(dir, name) }

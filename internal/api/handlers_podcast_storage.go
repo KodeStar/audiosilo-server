@@ -219,7 +219,7 @@ func writePodcastIdentityBusy(w http.ResponseWriter) {
 func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, deadline time.Time) {
 	release := a.cat.MarkPodcastStream(catalog.Ref{LibraryID: lib.ID, Path: rel})
 	defer release()
-	f, pin, err := library.OpenPodcastBounded(r.Context(), a.cat, *lib, rel, waitLeft(deadline))
+	f, pin, err := library.OpenPodcastBounded(r.Context(), a.cat, *lib, rel, metadata.WaitLeft(deadline))
 	if metadata.GaveUp(err) {
 		writeShareNotAnswering(w)
 		return

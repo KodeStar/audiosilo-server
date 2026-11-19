@@ -174,6 +174,12 @@ func bounded[T any](ctx context.Context, path string, timeout time.Duration, loo
 	return r.v, r.err
 }
 
+// WaitLeft is what is left of deadline for a Bounded call's timeout, at least
+// a nanosecond: a call given 0 would wait with no bound at all.
+func WaitLeft(deadline time.Time) time.Duration {
+	return max(time.Until(deadline), time.Nanosecond)
+}
+
 // StatBounded is os.Stat of path as a Bounded call.
 func StatBounded(ctx context.Context, path string, timeout time.Duration) (fs.FileInfo, error) {
 	return bounded(ctx, path, timeout, true, func() (fs.FileInfo, error) { return os.Stat(path) }, nil)

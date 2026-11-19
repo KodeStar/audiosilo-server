@@ -1088,16 +1088,9 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := media.ServeFile(w, r, abs, download, waitLeft(deadline)); err != nil {
+	if err := media.ServeFile(w, r, abs, download, metadata.WaitLeft(deadline)); err != nil {
 		writeShareNotAnswering(w)
 	}
-}
-
-// waitLeft is what is left of a stream's bound (deadline, handleStream) for its
-// next look, at least a nanosecond: a metadata.Bounded call given 0 would wait
-// with none.
-func waitLeft(deadline time.Time) time.Duration {
-	return max(time.Until(deadline), time.Nanosecond)
 }
 
 // afterWait is a stream's deadline once it has waited on something that was no
@@ -1116,7 +1109,7 @@ func (a *API) afterWait(deadline time.Time) time.Time {
 // away or the look was given up on (a 503 share_not_answering written), else
 // the look's error (no regular file there).
 func lookAtSource(w http.ResponseWriter, r *http.Request, abs string, deadline time.Time) (answered bool, err error) {
-	_, err = media.Source(r.Context(), abs, waitLeft(deadline))
+	_, err = media.Source(r.Context(), abs, metadata.WaitLeft(deadline))
 	switch {
 	case r.Context().Err() != nil:
 		return true, err
@@ -1148,7 +1141,7 @@ func (a *API) audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Lib
 	}
 	abs, held, there, err := a.asGiven(r.Context(), lib, rel, deadline)
 	if err == nil && held {
-		abs, err = library.SafeJoinBounded(r.Context(), lib.Root, rel, waitLeft(deadline))
+		abs, err = library.SafeJoinBounded(r.Context(), lib.Root, rel, metadata.WaitLeft(deadline))
 	}
 	switch {
 	case errors.Is(err, library.ErrOutsideRoot):
@@ -1184,7 +1177,7 @@ func (a *API) asGiven(ctx context.Context, lib *catalog.Library, rel string, dea
 	if held, err := a.cat.IndexHolds(ctx, lib.ID, rel); err != nil || held {
 		return "", held, false, err
 	}
-	abs, there, err = library.SafeJoinListed(ctx, lib.Root, rel, waitLeft(deadline), a.listed.Names)
+	abs, there, err = library.SafeJoinListed(ctx, lib.Root, rel, metadata.WaitLeft(deadline), a.listed.Names)
 	return abs, false, there, err
 }
 
@@ -1256,7 +1249,7 @@ func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 // ran to its end; with ?download=1 an attachment named <stem>.mp3. Its look
 // at abs given up on at the stream's deadline is a 503 share_not_answering.
 func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, h *transcodeHold, abs string, deadline time.Time) {
-	ended, err := media.Transcode(h.writer(w), r, abs, a.ffmpeg, h.ask.start, h.ask.download, waitLeft(deadline), transcodeIdleFor(r, h.ask), a.log)
+	ended, err := media.Transcode(h.writer(w), r, abs, a.ffmpeg, h.ask.start, h.ask.download, metadata.WaitLeft(deadline), transcodeIdleFor(r, h.ask), a.log)
 	h.ended = ended
 	if err != nil {
 		writeShareNotAnswering(w)

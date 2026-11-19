@@ -186,12 +186,11 @@ func SafeJoin(root, relPath string) (string, error) {
 func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Duration,
 	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) (abs string, there bool, err error) {
 	deadline := time.Now().Add(timeout)
-	wait := func() time.Duration { return max(time.Until(deadline), time.Nanosecond) }
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return "", false, err
 	}
-	resolved, rerr := metadata.EvalSymlinksBounded(ctx, rootAbs, wait())
+	resolved, rerr := metadata.EvalSymlinksBounded(ctx, rootAbs, metadata.WaitLeft(deadline))
 	if metadata.Unanswered(ctx, rerr) {
 		return "", false, cmp.Or(rerr, ctx.Err())
 	}
@@ -205,7 +204,7 @@ func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Dura
 	if rerr != nil {
 		return full, false, nil // no root to list: nothing there
 	}
-	target, there, err := resolveBelow(resolved, full, boundedLooks(ctx, wait, names))
+	target, there, err := resolveBelow(resolved, full, boundedLooks(ctx, deadline, names))
 	switch {
 	case err != nil:
 		return "", false, err
@@ -231,8 +230,8 @@ type belowLooks struct {
 }
 
 // boundedLooks are SafeJoinListed's: each a metadata.Bounded look of its own,
-// within wait, a name first looked for in its folder's listing (names).
-func boundedLooks(ctx context.Context, wait func() time.Duration,
+// within deadline, a name first looked for in its folder's listing (names).
+func boundedLooks(ctx context.Context, deadline time.Time,
 	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) belowLooks {
 	answered := func(err error) error { // a look's error that is no answer, else nil
 		if metadata.Unanswered(ctx, err) {
@@ -242,21 +241,21 @@ func boundedLooks(ctx context.Context, wait func() time.Duration,
 	}
 	return belowLooks{
 		lstat: func(p string) (fs.FileInfo, error) {
-			fi, err := metadata.LstatBounded(ctx, p, wait())
+			fi, err := metadata.LstatBounded(ctx, p, metadata.WaitLeft(deadline))
 			if err != nil {
 				return nil, answered(err)
 			}
 			return fi, nil
 		},
 		eval: func(p string) (string, error) {
-			r, err := metadata.EvalSymlinksBounded(ctx, p, wait())
+			r, err := metadata.EvalSymlinksBounded(ctx, p, metadata.WaitLeft(deadline))
 			if err != nil {
 				return "", answered(err)
 			}
 			return r, nil
 		},
 		listed: func(dir, name string) (bool, error) {
-			ns, err := names(ctx, dir, wait())
+			ns, err := names(ctx, dir, metadata.WaitLeft(deadline))
 			if err != nil {
 				return false, answered(err)
 			}
@@ -385,7 +384,7 @@ func BrowseFS(ctx context.Context, root, relPath string, timeout time.Duration, 
 	// answers it (a stat on Linux and macOS, nothing at all on Windows, which
 	// lists it with the name).
 	type info struct{ size, mod int64 }
-	infos, _ := metadata.Bounded(ctx, filepath.Join(root, filepath.FromSlash(relPath)), max(time.Until(deadline), time.Nanosecond), func() ([]info, error) {
+	infos, _ := metadata.Bounded(ctx, filepath.Join(root, filepath.FromSlash(relPath)), metadata.WaitLeft(deadline), func() ([]info, error) {
 		out := make([]info, len(page))
 		for i := range page {
 			if page[i].IsDir {
@@ -432,7 +431,7 @@ func listDir(ctx context.Context, root, relPath string, timeout time.Duration, a
 	if err != nil {
 		return nil, nil, err
 	}
-	dirEntries, err := metadata.ReadDirBounded(ctx, full, max(time.Until(deadline), time.Nanosecond))
+	dirEntries, err := metadata.ReadDirBounded(ctx, full, metadata.WaitLeft(deadline))
 	if err != nil {
 		return nil, nil, err
 	}
