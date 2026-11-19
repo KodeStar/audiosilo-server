@@ -357,6 +357,10 @@ type Catalog struct {
 	// spellLooked, tests only, runs as each of Spelling's looks at the disk
 	// begins (ownEntry).
 	spellLooked func()
+	// listed is the folder listings Spelling's look at the disk reads
+	// (ownEntry), kept a few seconds, and the API's stream and /fs too
+	// (DirNames): one cache of names for every spelling check.
+	listed *metadata.DirNames
 	// rekeyMemos is each library's scan-end re-key memo (RekeyLibrary).
 	rekeyMemosMu sync.Mutex
 	rekeyMemos   map[int64]rekeyMemo
@@ -499,10 +503,15 @@ func New(db *store.DB, now func() time.Time) *Catalog {
 	if now == nil {
 		now = time.Now
 	}
-	c := &Catalog{db: db, now: now}
+	c := &Catalog{db: db, now: now, listed: metadata.NewDirNames(metadata.ReadDirNamesBounded)}
 	c.dups.Max = maxDuplicateCaches
 	return c
 }
+
+// DirNames is the folder listings the spelling checks read, each kept a few
+// seconds (metadata.DirNames): Spelling's look at the disk and the API's check
+// of a path the stream or /fs opens share it.
+func (c *Catalog) DirNames() *metadata.DirNames { return c.listed }
 
 // Ping verifies the underlying database is reachable for reads (backs GET /healthz).
 func (c *Catalog) Ping(ctx context.Context) error { return c.db.Ping(ctx) }

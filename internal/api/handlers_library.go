@@ -2,10 +2,8 @@ package api
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -421,15 +419,34 @@ func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catal
 		if lib.Kind == catalog.KindPodcasts {
 			return nil, library.ErrNotIndexable
 		}
-		// Each look at the share given fileWait: one that stopped answering is
-		// a 503 share_not_answering, not this request's own time running out.
-		return a.indexPath(library.WithLookTimeout(ctx, a.fileWait), *lib, path, scope.Allows)
+		return a.indexOnDemand(ctx, lib, path, scope.Allows)
 	case err != nil:
 		return nil, err
 	case !scope.Allows(b.RelPath):
 		return nil, library.ErrNotAllowed
 	}
 	return b, nil
+}
+
+// indexOnDemand reads the book at path (cleaned, scope-checked, no book of the
+// index at it) on demand (a.indexPath), each look at the share given fileWait:
+// one that stopped answering is a 503 share_not_answering, not this request's
+// own time running out. Only a path the disk has as given, byte for byte
+// (library.SafeJoinListed, through the kept listings, a.listed, as asGiven's):
+// any other is library.ErrNotIndexable, a path with nothing there. The
+// scanner's own read stats the path before it checks its spelling
+// (resolveBook, dirPresent), so on a disk that ignores case a case variant of
+// a folder it has would cost a stat and the folders' listings where a missing
+// path costs one failed look; here the two take the same steps, so how long
+// the 404 takes never tells a rule spelled in another case that the folder is
+// there, on any route that resolves a book (bookAt, a favourite).
+func (a *API) indexOnDemand(ctx context.Context, lib *catalog.Library, path string, allow func(string) bool) (*catalog.Book, error) {
+	if _, there, err := library.SafeJoinListed(ctx, lib.Root, path, a.fileWait, a.listed.Names); err != nil {
+		return nil, err
+	} else if !there {
+		return nil, library.ErrNotIndexable
+	}
+	return a.indexPath(library.WithLookTimeout(ctx, a.fileWait), *lib, path, allow)
 }
 
 // bookAt is bookForPath for a handler: on a failure it writes the answer and
@@ -499,19 +516,24 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 			dir, rel = spelled, spelled
 		}
 	}
-	// Nor is one the disk doesn't spell as given (onDiskAsGiven: a case
-	// variant, on a disk that ignores case, of a folder the caller's rule
-	// never named), looked at before the folder is read, so such a folder is
-	// never listed and answers as fast as a missing one. A path that climbs
-	// out of the root is BrowseFS's 400 first; looked at after it.
-	early := rel != "" && filepath.IsLocal(filepath.FromSlash(dir))
-	if early && !a.fsGiven(w, r, lib, rel) {
+	// Nor is one outside the caller's share rules (allow), nor one the disk
+	// doesn't spell as given (asGiven: a case variant, on a disk that ignores
+	// case, of a folder the caller's rule never named), nor one through a link
+	// out of the root, looked at before the folder is read, so such a folder is
+	// never listed and answers as a missing one does. A path that climbs out of
+	// the root by its names is BrowseFS's 400 first; looked at after it. One
+	// that doesn't, as BrowseFS joins it (a leading slash is no climb:
+	// "/Author" is the root's "Author", and would be read before the look
+	// otherwise), can leave the root only through a link: one the index holds
+	// (no look made before BrowseFS's) is "directory not found" too.
+	early := rel != "" && filepath.IsLocal(filepath.Join(".", filepath.FromSlash(dir)))
+	if early && !a.fsGiven(w, r, lib, rel, allow) {
 		return
 	}
 	ignore := library.ParseIgnore(lib.IgnorePatterns)
 	listing, err := library.BrowseFS(lib.Root, dir,
 		queryInt(r, "offset", 0), queryInt(r, "limit", 200), allow, ignore)
-	if errors.Is(err, library.ErrOutsideRoot) {
+	if errors.Is(err, library.ErrOutsideRoot) && !early {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
@@ -519,7 +541,7 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "directory not found")
 		return
 	}
-	if rel != "" && !early && !a.fsGiven(w, r, lib, rel) {
+	if rel != "" && !early && !a.fsGiven(w, r, lib, rel, allow) {
 		return
 	}
 	a.annotateWithBooks(r, lib, scope, ignore, listing)
@@ -1053,100 +1075,96 @@ func lookAtSource(w http.ResponseWriter, r *http.Request, abs string, deadline t
 // audioFile is the stream's guard on rel (scope-checked already): its absolute
 // path, or false having written 404 for a file that isn't recognized audio, 400
 // for a path that escapes the root, and 503 share_not_answering for a join
-// whose looks (SafeJoin's Lstats, one metadata.Bounded call up to deadline)
-// were given up on. The scope check bounds a stream to the caller's grant, but
-// the library root can also hold non-audio sidecar files (.nfo, .jpg, a stray
-// .env/backup); BrowseFS hides those from listings, and cover art has its own
-// endpoint, so serving them here would be an avenue to exfiltrate arbitrary
-// in-scope files by guessing paths. A refused rel (spelledPath: another
-// spelling of a book outside the caller's scope), and one the disk doesn't
-// spell as given (onDiskAsGiven: a case variant, on a disk that ignores case,
-// of a file a share rule spelled that way never named), is joined and checked
-// the same, then its path is one no file has (noFile), so every form of the
-// stream answers as for a missing file and none opens the file it would find.
+// whose looks (bounded, up to deadline) were given up on. The scope check
+// bounds a stream to the caller's grant, but the library root can also hold
+// non-audio sidecar files (.nfo, .jpg, a stray .env/backup); BrowseFS hides
+// those from listings, and cover art has its own endpoint, so serving them
+// here would be an avenue to exfiltrate arbitrary in-scope files by guessing
+// paths. A path the disk doesn't spell as given (asGiven: a case variant, on a
+// disk that ignores case, of a file a share rule spelled that way never
+// named), and a refused rel (spelledPath: another spelling of a book outside
+// the caller's scope), joined with the same steps as a missing path, is then
+// one no file has (noFile), so every form of the stream answers as for a
+// missing file and none opens the file it would find.
 func (a *API) audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, refused bool, deadline time.Time) (string, bool) {
 	if !metadata.IsAudio(rel) {
 		writeError(w, http.StatusNotFound, "not an audio file")
 		return "", false
 	}
-	abs, err := library.SafeJoinBounded(r.Context(), lib.Root, rel, waitLeft(deadline))
+	abs, held, there, err := a.asGiven(r.Context(), lib, rel, deadline)
+	if err == nil && held {
+		abs, err = library.SafeJoinBounded(r.Context(), lib.Root, rel, waitLeft(deadline))
+	}
 	switch {
-	case metadata.GaveUp(err):
-		writeShareNotAnswering(w)
-		return "", false
-	case err != nil:
+	case errors.Is(err, library.ErrOutsideRoot):
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return "", false
+	case err != nil:
+		a.writeJoinError(w, r, err, lib, "check a stream's path failed", "Could not load the file.")
+		return "", false
 	}
-	if !refused {
-		given, ok := a.givenOnDisk(w, r, lib, rel, func() time.Duration { return waitLeft(deadline) },
-			"check a stream's path failed", "Could not load the file.")
-		if !ok {
-			return "", false
-		}
-		refused = !given
-	}
-	if refused {
+	if refused || !(held || there) {
 		abs = noFile(abs)
 	}
 	return abs, true
 }
 
-// onDiskAsGiven reports whether rel (cleaned, scope-checked) is on the
-// library's disk as given, byte for byte: a path the index holds as given
-// (catalog.IndexHolds, the scan read it from the listings), else each of its
-// names in its folder's listing (metadata.NamesListed, a.readDir, each listing
-// bounded by wait). A path no file answers to at all is no more there as given:
-// one bounded lstat says so, with no listing read (a request for a missing
-// path costs what it did before the check). Share rules match byte for byte, so a rule spelled in
-// another case than the disk's names nothing there, like a rule naming a
-// missing folder; but a disk that ignores case (macOS's, a Windows or SMB
-// share) opens "émile zola/x.m4b" as "Émile Zola/x.m4b", a book that rule
-// never named. A route that opens rel itself (the stream, /fs) answers a path
-// that isn't there as given as missing. err is a failed index lookup, a
-// listing given up on (metadata.GaveUp) or ctx's.
-func (a *API) onDiskAsGiven(ctx context.Context, lib *catalog.Library, rel string, wait func() time.Duration) (bool, error) {
+// asGiven is how the stream and /fs, the routes that open rel (cleaned,
+// scope-checked) itself, learn whether the library's disk has it as given,
+// byte for byte: held when the index holds it as given (catalog.IndexHolds,
+// the scan read it from the listings; nothing looked at, abs empty), else
+// library.SafeJoinListed's join (abs, there; listings through a.listed, the
+// looks bounded by deadline). Share rules match byte for byte, so a rule
+// spelled in another case than the disk's names nothing there, like a rule
+// naming a missing folder; but a disk that ignores case (macOS's, a Windows or
+// SMB share) opens "émile zola/x.m4b" as "Émile Zola/x.m4b", a book that rule
+// never named, so a path that isn't there as given answers as missing. A
+// missing path and a case variant take the same steps, each name looked for
+// in its folder's listing before it is looked at (no lstat a variant answers
+// and a missing name doesn't), so how long the check takes never tells a rule
+// spelled in another case that the folder is there. err is a failed index
+// lookup, library.ErrOutsideRoot (a link out of the root, nothing below it
+// looked at), a look given up on (metadata.GaveUp) or ctx's.
+func (a *API) asGiven(ctx context.Context, lib *catalog.Library, rel string, deadline time.Time) (abs string, held, there bool, err error) {
 	if held, err := a.cat.IndexHolds(ctx, lib.ID, rel); err != nil || held {
-		return held, err
+		return "", held, false, err
 	}
-	if _, err := metadata.LstatBounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(rel)), wait()); err != nil {
-		if metadata.Unanswered(ctx, err) {
-			return false, cmp.Or(err, ctx.Err())
-		}
-		if errors.Is(err, fs.ErrNotExist) {
-			return false, nil
-		}
-	}
-	return metadata.NamesListed(ctx, lib.Root, rel, nil, func(ctx context.Context, dir string) ([]string, error) {
-		return a.readDir(ctx, dir, wait())
-	})
+	abs, there, err = library.SafeJoinListed(ctx, lib.Root, rel, waitLeft(deadline), a.listed.Names)
+	return abs, false, there, err
 }
 
-// givenOnDisk is onDiskAsGiven for a handler: ok false when it has answered
-// (a listing given up on is a 503 share_not_answering, a failed lookup a 500)
-// or the client left, with no one to answer.
-func (a *API) givenOnDisk(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string,
-	wait func() time.Duration, op, msg string) (given, ok bool) {
-	given, err := a.onDiskAsGiven(r.Context(), lib, rel, wait)
-	switch {
-	case err == nil:
-		return given, true
-	case !metadata.GaveUp(err) && r.Context().Err() != nil:
-		return false, false // the client left: no one to answer
+// writeJoinError answers asGiven's err (a look given up on is a 503
+// share_not_answering, a failed lookup a 500), or nothing when the client
+// left, with no one to answer.
+func (a *API) writeJoinError(w http.ResponseWriter, r *http.Request, err error, lib *catalog.Library, op, msg string) {
+	if !metadata.GaveUp(err) && r.Context().Err() != nil {
+		return
 	}
 	a.writeCatalogError(w, err, op, msg, "library", lib.ID)
-	return false, false
 }
 
-// fsGiven is /fs's onDiskAsGiven: false when it has answered, a folder the
-// disk doesn't spell as given as "directory not found".
-func (a *API) fsGiven(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string) bool {
-	given, ok := a.givenOnDisk(w, r, lib, rel, func() time.Duration { return a.fileWait },
-		"check a folder's path failed", "Could not list the folder.")
-	if ok && !given {
+// fsGiven is /fs's asGiven: false when it has answered, a folder the disk
+// doesn't spell as given as "directory not found", and so one through a link
+// out of the root (whatever the folder it points to holds: nothing below the
+// link is looked at). So is a folder outside the caller's share rules (allow,
+// Scope.VisibleInBrowse; nil allows every one), answered before any listing is
+// read: a listing of it would hold none of their entries, and a 200 for it
+// where a missing one is a 404 would tell them it is there.
+func (a *API) fsGiven(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, allow func(string) bool) bool {
+	if allow != nil && !allow(rel) {
 		writeError(w, http.StatusNotFound, "directory not found")
+		return false
 	}
-	return ok && given
+	_, held, there, err := a.asGiven(r.Context(), lib, rel, time.Now().Add(a.fileWait))
+	switch {
+	case err == nil && (held || there):
+		return true
+	case err == nil || errors.Is(err, library.ErrOutsideRoot):
+		writeError(w, http.StatusNotFound, "directory not found")
+	default:
+		a.writeJoinError(w, r, err, lib, "check a folder's path failed", "Could not list the folder.")
+	}
+	return false
 }
 
 // noFile is abs as a path no file has: a NUL byte is in no file name, so every

@@ -368,7 +368,7 @@ func (a *API) indexFavourite(ctx context.Context, lib *catalog.Library, scope ca
 		defer close(done)
 		ctx, cancel := context.WithTimeout(a.baseCtx, rescanBookTimeout)
 		defer cancel()
-		_, err := a.indexPath(library.WithLookTimeout(ctx, a.fileWait), l, path, scope.Allows)
+		_, err := a.indexOnDemand(ctx, &l, path, scope.Allows)
 		if err != nil && !errors.Is(err, library.ErrNotIndexable) && !errors.Is(err, library.ErrNotAllowed) {
 			a.log.Info("index favourite on demand failed", "library", lib.ID, "path", path, "err", err)
 		}

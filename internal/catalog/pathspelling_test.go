@@ -9,12 +9,14 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	unorm "golang.org/x/text/unicode/norm"
 
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
@@ -217,56 +219,120 @@ func TestSpellingScope(t *testing.T) {
 	if _, outside, err := c.Spelling(ctx, lib, "Rien/Ic\u00ed", nfdRule); err != nil || outside {
 		t.Errorf("Spelling of a path nothing reads as = outside %v %v", outside, err)
 	}
+
+	// A path the scope refuses as given is spelled with no look at the disk,
+	// whether an indexed path out of its reach reads as it or nothing does:
+	// how long the answer takes never tells which. Allowed: one the scope
+	// admits as given gets its look.
+	var looked atomic.Int64
+	c.spellLooked = func() { looked.Add(1) }
+	for _, p := range []string{nfdEmile, nfdEmile + "/02.mp3", "Rien/Ic\u00ed"} {
+		if got, _, err := c.Spelling(ctx, lib, p, none); err != nil || got != p || looked.Load() != 0 {
+			t.Errorf("Spelling(%+q) with no grant = %+q %v after %d looks, want it as given, unlooked at", p, got, err, looked.Load())
+		}
+	}
+	if _, outside, err := c.Spelling(ctx, lib, nfdEmile, nfdRule); err != nil || !outside || looked.Load() != 1 {
+		t.Errorf("Spelling under an NFD rule = outside %v %v after %d looks, want outside after one", outside, err, looked.Load())
+	}
 }
 
-// TestOwnEntry: p is an entry of its own when it is on the disk and none of
-// the others is the same file; another spelling of an indexed name is not,
-// whether the disk ignores the spelling (it finds the same folder) or keeps
-// them apart (it finds nothing by p).
+// TestOwnEntry: p is an entry of its own when each of its names is in its
+// folder's listing as given; another spelling of a listed name is not, whether
+// the disk ignores the spelling (it finds the same folder) or keeps them apart
+// (it finds nothing by p), and neither is a missing name.
 func TestOwnEntry(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	root := t.TempDir()
-	for _, d := range []string{"a", "b", "E\u0301mile"} {
+	for _, d := range []string{"a", "E\u0301mile"} {
 		if err := os.Mkdir(filepath.Join(root, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "E\u0301mile", "01.mp3"), nil, 0o644); err != nil {
+		t.Fatal(err)
 	}
 	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: root})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct {
-		p      string
-		others []string
-		want   bool
-	}{
-		{"a", []string{"b"}, true},
-		{"a", []string{"missing"}, true},
-		{"a", []string{"a"}, false},
-		{"missing", []string{"a"}, false},
-		{"\u00c9mile", []string{"E\u0301mile"}, false},
+	for p, want := range map[string]bool{
+		"a": true, "E\u0301mile": true, "E\u0301mile/01.mp3": true,
+		"\u00c9mile": false, "\u00c9mile/01.mp3": false, "missing": false, "E\u0301mile/missing": false, "a/x/y": false,
 	} {
-		if got := c.ownEntry(ctx, lib.ID, tc.p, tc.others); got != tc.want {
-			t.Errorf("ownEntry(%+q, %+q) = %v, want %v", tc.p, tc.others, got, tc.want)
+		if got := c.ownEntry(ctx, lib.ID, p); got != want {
+			t.Errorf("ownEntry(%+q) = %v, want %v", p, got, want)
 		}
 	}
-	if c.ownEntry(ctx, lib.ID+99, "a", nil) {
+	if c.ownEntry(ctx, lib.ID+99, "a") {
 		t.Error("ownEntry in no library = true")
 	}
-	// Whatever the disk's file ids say, a name is its own only as its folder
-	// lists it: the decomposed folder is listed, its precomposed spelling never
-	// (on a disk that finds it by that spelling too, or one that has no such
-	// entry), and a name with no other spelling is not looked up.
-	if err := os.WriteFile(filepath.Join(root, "E\u0301mile", "01.mp3"), nil, 0o644); err != nil {
+}
+
+// TestOwnEntryCostsWhatMissingDoes (security): ownEntry looks at the disk
+// through the kept listings only (no stat a variant answers and a missing name
+// doesn't): another spelling of a folder there and a missing name read the
+// same listings, so how long Spelling's look takes never tells a caller which,
+// and a folder is read once while it is kept.
+func TestOwnEntryCostsWhatMissingDoes(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	given := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(given, "Auteurs", "E\u0301mile", "Germinal"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for p, want := range map[string]bool{
-		"E\u0301mile/01.mp3": true, "\u00c9mile/01.mp3": false, "E\u0301mile": true, "\u00c9mile": false, "a": true,
-	} {
-		if got := spelledOnDisk(ctx, root, p); got != want {
-			t.Errorf("spelledOnDisk(%+q) = %v, want %v", p, got, want)
+	// The library's root as written, not cleaned: its folders are listed
+	// below the resolved root, as library.SafeJoinListed lists them (one kept
+	// listing for both).
+	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: given + string(filepath.Separator)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(given)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		mu    sync.Mutex
+		reads []string
+	)
+	at := time.Now()  // the listings' clock held, so a slow run never outlives the TTL
+	fresh := func() { // an empty cache, its reads recorded
+		c.listed = metadata.NewDirNames(func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+			mu.Lock()
+			reads = append(reads, strings.TrimPrefix(dir, root))
+			mu.Unlock()
+			return metadata.ReadDirNamesBounded(ctx, dir, timeout)
+		})
+		c.listed.SetClockForTests(func() time.Time { return at })
+	}
+	fresh()
+	steps := func(p string) []string {
+		t.Helper()
+		mu.Lock()
+		reads = nil
+		mu.Unlock()
+		if c.ownEntry(ctx, lib.ID, p) {
+			t.Errorf("ownEntry(%+q) = true, want false", p)
 		}
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(reads)
+	}
+	variant := steps("Auteurs/\u00c9mile/Germinal") // NFC; the disk has NFD
+	if want := []string{"", "/Auteurs"}; !slices.Equal(variant, want) {
+		t.Errorf("the variant read %q, want %q", variant, want)
+	}
+	fresh()
+	if missing := steps("Auteurs/Zo\u00e9/Germinal"); !slices.Equal(missing, variant) {
+		t.Errorf("the missing name read %q, the variant %q; want the same listings", missing, variant)
+	}
+	if again := steps("Auteurs/\u00c9mile/Germinal"); len(again) != 0 {
+		t.Errorf("a second look within the TTL read %q, want the kept listings", again)
+	}
+	// Allowed: the spelling the disk has is its own entry.
+	if !c.ownEntry(ctx, lib.ID, "Auteurs/E\u0301mile/Germinal") {
+		t.Error("the folder as the disk spells it is not its own entry")
 	}
 }
 
@@ -307,7 +373,11 @@ func TestSpellingOwnEntry(t *testing.T) {
 	if _, outside := spell(nfdRule); !outside {
 		t.Fatal("NFD under an NFD rule, only the NFC folder on disk: not outside")
 	}
+	// Listings are kept dirNamesTTL; after each change on disk the test reads
+	// afresh rather than wait the TTL out.
+	relist := func() { c.listed = metadata.NewDirNames(metadata.ReadDirNamesBounded) }
 	err = os.MkdirAll(filepath.Join(root, filepath.FromSlash(nfd)), 0o755)
+	relist()
 	if fi1, _ := os.Stat(filepath.Join(root, filepath.FromSlash(nfd))); err != nil || fi1 == nil {
 		t.Fatalf("mkdir NFD: %v", err)
 	}
@@ -329,6 +399,7 @@ func TestSpellingOwnEntry(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(root, "E\u0301mile")); err != nil {
 		t.Fatal(err)
 	}
+	relist()
 	if got, _ := spell(nil); got != nfc {
 		t.Errorf("NFD once its folder is gone = %+q, want %+q", got, nfc)
 	}

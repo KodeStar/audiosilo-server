@@ -1147,14 +1147,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   spelling of an NFC and an NFD folder side by side reads as the one granted, whether the other is
   there or not). Two indexed paths the scope admits that both read as `p` (an NFC and an NFD folder
   side by side on a byte-exact disk) leave `p` as given: it never guesses. Never an on-demand index,
-  and the disk only for one check (`ownEntry`, two bounded `Lstat`s, only when the index would read
-  `p` as another path or report it `outside`, and when their file ids differ, the listings of `p`'s
-  names that have another spelling, `spelledOnDisk`, as a share or FUSE mount whose ids don't follow
-  the file would tell one file apart from itself): a `p` that is an entry of its own there (a disk that
-  keeps an NFC and an NFD name apart, `p`'s folder not indexed yet) stays as given, so a folder no
-  scan has reached is never taken for the indexed one beside it (nor its rows moved there by the
-  re-key); a disk that ignores the spelling finds the same file by both, and a look that fails
-  leaves the index's answer. A request that spells many paths shares one allowance of looks
+  and the disk only for one check (`ownEntry`, only when the index would read `p` as another path or
+  report it `outside`: each of `p`'s names in its folder's listing as given, `metadata.NamesListed`
+  through the kept listings, `Catalog.DirNames`, the API's too; listings only, no stat, so a variant
+  and a missing name read the same listings up to the first name not listed, `TestOwnEntryCostsWhatMissingDoes`,
+  and a share or FUSE mount whose file ids don't follow the file never tells one file apart from
+  itself): a `p` that is an entry of its own there (a disk that keeps an NFC and an NFD name apart,
+  `p`'s folder not indexed yet) stays as given, so a folder no scan has reached is never taken for the
+  indexed one beside it (nor its rows moved there by the re-key); a disk that ignores the spelling
+  lists only the stored (indexed) name, and a look that fails leaves the index's answer. A request that spells many paths shares one allowance of looks
   (`spellLooks`: a list replace's `listSpellLooks` looks within `listSpellWait` in all, each look's
   context ending with it), the paths past it spelled from the index alone, so a share that stopped
   answering never holds a replace of a thousand refs to the request's timeout
@@ -1175,22 +1176,46 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   on-demand index takes only the on-disk spelling) and the listener's own state reads and stores
   at it, while the stream, the one route that opens the file at the path itself (on a disk that
   ignores the spelling, macOS's or a share's, the refused book's file), opens none: `audioFile`
-  joins it as usual, then names no file (`noFile`), so its download, transcode, remux and rendition
+  joins it with a missing path's steps (`asGiven`, below), then names no file (`noFile`), so its download, transcode, remux and rendition
   forms each answer as for a missing file; `/fs` "directory not found". A failed lookup is a 500 (a timed-out one a 503), never the spelling given.
   Case is no spelling: share rules and paths compare byte for byte, case included, so a rule spelled in
   another case than the disk's names nothing there, as a rule naming a missing folder does. A disk that
   ignores case (macOS's, a Windows or SMB share) still opens such a path as the folder it has, so the two
   routes that open the path given, the stream in every form (`audioFile`) and `/fs`, take it only when the
-  disk has it as given (`onDiskAsGiven`: a path the index holds byte for byte, `catalog.IndexHolds`, else,
-  when a bounded lstat finds something there at all, each name in its folder's listing,
-  `metadata.NamesListed` through `API.readDir`, names only), else answer as for a missing path (a listing
-  given up on: 503 `share_not_answering`); `/fs` looks before it reads the folder (after, for a path that
-  climbs out of the root, so it keeps its 400). Every other route reads the index,
-  which holds the disk's spelling only. `TestCaseVariantRoutes` compares every route on a temp dir that
-  ignores case; `TestCaseVariantDiskRoutes` covers the stream and `/fs` on any disk (`readDir` lists as
-  one that ignores case would).
+  disk has it as given (`asGiven`: a path the index holds byte for byte, `catalog.IndexHolds`, joined by
+  `SafeJoinBounded`, else `library.SafeJoinListed`: `resolveBelow` with its looks bounded, each
+  name looked for in its folder's listing through `API.listed`, names only, before it is `Lstat`ed), else
+  answer as for a missing path (a listing given up on: 503 `share_not_answering`). A missing path and a
+  case variant take the same steps (the same listings and `Lstat`s up to the first name not listed, none
+  past it), and the listings are kept a few seconds (`metadata.DirNames`, one per server,
+  `Catalog.DirNames`, which `Spelling`'s `ownEntry` reads too: `dirNamesTTL` 3 s from the read's start, at
+  most `dirNamesMax` folders and `dirNamesBytes` of names kept, oldest dropped first, one read in flight per
+  folder however long it takes, a failed read never kept and its waiters joining one read of their own, no
+  invalidation), so the check's time never tells a rule spelled in another case that the folder is there,
+  and missing paths in a loop read a folder once in the TTL (`TestCaseVariantCostsWhatMissingDoes`,
+  `TestSafeJoinListedVariantCostsWhatMissingDoes`; a folder whose names pass the bound once a request). A
+  link out of the root ends the walk where it is met, nothing below it listed or looked at: the stream's
+  400 `invalid path`, `/fs`'s "directory not found" whatever the folder it points to holds
+  (`TestFSLinkOutOfRootIsMissing`). `resolveBelow` returns such a link's own target, never joined with
+  the names after it, so `SafeJoin` too refuses every path through it: joined, a link to a folder above
+  the root (`up/<root>/Book/link/x`) read as a path back inside the root, a link out of it further down
+  never looked at (`TestResolveBelowIsResolveExisting`). `/fs` looks before it reads the folder (after,
+  for a path that climbs out of the root by its names, so it keeps its 400; a leading slash is no climb,
+  `/Author` is looked at first as `Author` is), and answers a folder outside the caller's share
+  rules (`VisibleInBrowse`) as a missing one before any listing (`TestFSOutsideScopeIsMissing`). Every
+  other route reads the index, which holds the disk's spelling only, and reads a book it doesn't hold on
+  demand (`bookAt`, a favourite) only once the same join finds the path there as given
+  (`API.indexOnDemand`: the scanner's own read stats the path before `dirPresent` checks its spelling,
+  a stat and the folders' listings a case variant would cost and a missing path would not;
+  `TestCaseVariantOnDemandCostsWhatMissingDoes`), so a new folder beside one listed in the last 3 s may
+  answer 404 until its listing is read again. `Spelling` makes no look for a `p` the scope refuses as
+  given that only refused paths read as (its caller refuses `p` whatever the disk has), and `ownEntry`
+  lists below the root as `SafeJoinListed` resolves it (`metadata.EvalSymlinksBounded`), so the two read
+  a folder's one kept listing however the library's root is written. `TestCaseVariantRoutes` compares
+  every route on a temp dir that ignores case; `TestCaseVariantDiskRoutes` covers the stream and `/fs` on
+  any disk (`listWith` lists as one that ignores case would).
   Unchanged on purpose: `CleanRelPath` and share rules stay byte-exact; the on-demand index takes
-  only the on-disk spelling (`dirPresent`), so another spelling of an unindexed book stays 404; the
+  only the on-disk spelling (`indexOnDemand`, then `dirPresent`), so another spelling of an unindexed book stays 404; the
   admin's folder-override route, the admin's edit of a person's progress (`exactPath`: the row
   by its own path) and the Bridge's routes (`pathInScope` itself, the Audible sync's
   `userPathResolver`) take the paths as given and match exactly. The admin's other book routes on
@@ -1503,7 +1528,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **Sharing & access (shares)**: access is via `shares` = named sets of path
   rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library
   (`AllowAll` or specific `Paths`); `Scope.Allows` gates item endpoints,
-  `Scope.VisibleInBrowse` filters `/fs` to a navigable subtree, and
+  `Scope.VisibleInBrowse` filters `/fs` to a navigable subtree (a folder outside it is a 404, as a
+  missing one), and
   `pathFilterSQL` scopes `ListBooks`/`Search` and the player's browse aggregates
   (`People`/`Series` given a `*Scope`, which also pins them to the scope's library;
   nil = the admin's unscoped view). Every content handler authorizes

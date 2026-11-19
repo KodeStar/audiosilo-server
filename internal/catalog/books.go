@@ -1068,8 +1068,9 @@ func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath stri
 	held := `f.rel_path = ?`
 	heldArgs := []any{relPath}
 	if !fileOnly {
-		held = `(f.rel_path = ? OR f.rel_path LIKE ? ESCAPE '\')`
-		heldArgs = append(heldArgs, escapeLike(relPath)+"/%")
+		below, belowArgs := belowPathSQL("f.rel_path", relPath)
+		held = `(f.rel_path = ? OR ` + below + `)`
+		heldArgs = append(heldArgs, belowArgs...)
 	}
 	var (
 		id   int64
@@ -1090,9 +1091,9 @@ func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath stri
 		below := `0`
 		var args []any
 		if end > 0 {
-			below = `EXISTS (SELECT 1 FROM books WHERE library_id = ? AND rel_path > ? || '/' AND rel_path < ? || '0')`
-			last := folders[len(folders)-1]
-			args = append(args, libraryID, last, last)
+			sub, subArgs := belowPathSQL("rel_path", folders[len(folders)-1].(string))
+			below = `EXISTS (SELECT 1 FROM books WHERE library_id = ? AND ` + sub + `)`
+			args = append(append(args, libraryID), subArgs...)
 		}
 		args = append(append(append(args, libraryID), folders...), heldArgs...)
 		var (
@@ -1133,15 +1134,17 @@ func (c *Catalog) keyedFolders(ctx context.Context, libraryID int64, k string) (
 		return ancestors(k), nil
 	}
 	// path_key != '' names the partial index's own condition, so it is used.
-	const below = `SELECT EXISTS (SELECT 1 FROM books WHERE library_id = ?1 AND rel_path > ?2 || '/' AND rel_path < ?2 || '0')
-	                   OR EXISTS (SELECT 1 FROM books WHERE library_id = ?1 AND path_key > ?2 || '/' AND path_key < ?2 || '0'
+	// ?2 and ?3 are belowRange's bounds.
+	const below = `SELECT EXISTS (SELECT 1 FROM books WHERE library_id = ?1 AND rel_path >= ?2 AND rel_path < ?3)
+	                   OR EXISTS (SELECT 1 FROM books WHERE library_id = ?1 AND path_key >= ?2 AND path_key < ?3
 	                                AND path_key != '')`
 	var out []string
 	for end := strings.IndexByte(k, '/'); end > 0; {
 		d := k[:end]
 		out = append(out, d)
 		var more bool
-		if err := c.db.QueryRowContext(ctx, below, libraryID, d).Scan(&more); err != nil {
+		lo, hi := belowRange(d)
+		if err := c.db.QueryRowContext(ctx, below, libraryID, lo, hi).Scan(&more); err != nil {
 			return nil, err
 		}
 		next := strings.IndexByte(k[end+1:], '/')

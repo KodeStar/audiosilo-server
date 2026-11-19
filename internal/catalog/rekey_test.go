@@ -688,6 +688,51 @@ func TestRekeyRespellsWhatStays(t *testing.T) {
 	}
 }
 
+// TestRekeyFolderMatchIsByteExact: a folder inside a book is matched byte for
+// byte, case included (SQLite's LIKE ignores ASCII case): on a disk that keeps
+// "cd 1" and "CD 1" apart, rows at a "cd 1" no indexed file lies under stay
+// where they are rather than moving into the book holding "CD 1", and the
+// timeline guard measures a disc by its own files only, so a place saved on
+// "cd1"'s track with "cd1"'s length is kept, not read as the book's because
+// "CD1" starts the book.
+func TestRekeyFolderMatchIsByteExact(t *testing.T) {
+	t.Parallel()
+	f := newRekeyFixture(t)
+	const (
+		lower = rkJoined + "/cd 1" // the joined book has only "CD 1"
+		mixed = "Mixed"
+		cdLen = 80.0
+	)
+	upsert(t, f.c, &Book{LibraryID: f.lib, RelPath: mixed, IsFolder: true, Title: "Mixed", Duration: 180,
+		Files: []BookFile{{RelPath: mixed + "/CD1/01.mp3", Duration: 100}, {RelPath: mixed + "/cd1/01.mp3", Seq: 1, Duration: 50},
+			{RelPath: mixed + "/cd1/02.mp3", Seq: 2, Duration: 30}}})
+	f.exec(t, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, updated_at) VALUES(?, ?, ?, 20, 40, ?)`,
+		f.eve, f.lib, lower, rkUpdated1)
+	f.exec(t, `INSERT INTO ratings(user_id, library_id, rel_path, rating, note, created_at, updated_at) VALUES(?, ?, ?, 4, '', ?, ?)`,
+		f.eve, f.lib, lower, rkUpdated1, rkUpdated1)
+	f.exec(t, `INSERT INTO progress(user_id, library_id, rel_path, position, duration, updated_at) VALUES(?, ?, ?, 25, ?, ?)`,
+		f.bob, f.lib, mixed+"/cd1/02.mp3", cdLen, rkUpdated1)
+
+	rep, err := f.c.RekeyLibrary(f.ctx, f.lib)
+	if err != nil || len(rep.Failed) != 0 || rep.Rows != 0 || rep.Moved[rekeyFolder] != 0 {
+		t.Fatalf("re-key: %+v %v, want nothing moved", rep, err)
+	}
+	if len(rep.Skipped) != 1 || rep.Skipped[0].Path != mixed+"/cd1/02.mp3" || rep.Skipped[0].Why != RekeyGuardTimeline {
+		t.Errorf("skipped = %+v, want cd1's second track by the timeline guard", rep.Skipped)
+	}
+	for _, k := range []struct {
+		table, path string
+		want        int
+	}{
+		{"progress", lower, 1}, {"ratings", lower, 1}, {"ratings", rkJoined, 0}, {"progress", rkJoined, 0},
+		{"progress", mixed + "/cd1/02.mp3", 1}, {"progress", mixed, 0},
+	} {
+		if got := f.rowCount(t, k.table, f.lib, k.path); got != k.want {
+			t.Errorf("%s at %q: %d rows, want %d", k.table, k.path, got, k.want)
+		}
+	}
+}
+
 // TestRekeyLibraryAfterIndexing: a row written while its book was not indexed
 // stays (no book to move to) until a scan indexes the book; the scan-end run
 // then moves it. A podcast library is never re-keyed.

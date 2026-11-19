@@ -134,9 +134,8 @@ func TestBoundedBurstKeepsToTheCap(t *testing.T) {
 }
 
 // TestNamesListed: each name must be in its folder's listing byte for byte (a
-// disk that ignores case finds "a" as "A" but lists only "A"); need limits the
-// names looked at; a listing that fails reads as not there, one given up on is
-// the error.
+// disk that ignores case finds "a" as "A" but lists only "A"); a listing that
+// fails reads as not there, one given up on is the error.
 func TestNamesListed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -147,25 +146,16 @@ func TestNamesListed(t *testing.T) {
 	list := func(ctx context.Context, dir string) ([]string, error) {
 		return ReadDirNamesBounded(ctx, dir, time.Second)
 	}
-	for _, tc := range []struct {
-		rel  string
-		need func(string) bool
-		want bool
-	}{
-		{"Author/Book", nil, true},
-		{"author/Book", nil, false},
-		{"Author/book", nil, false},
-		{"Author/Gone", nil, false},
-		{"Gone/Book", nil, false},
-		{"Author/book", func(name string) bool { return name != "book" }, true},
+	for rel, want := range map[string]bool{
+		"Author/Book": true, "author/Book": false, "Author/book": false, "Author/Gone": false, "Gone/Book": false,
 	} {
-		got, err := NamesListed(ctx, root, tc.rel, tc.need, list)
-		if err != nil || got != tc.want {
-			t.Errorf("NamesListed(%q) = %v %v, want %v", tc.rel, got, err, tc.want)
+		got, err := NamesListed(ctx, root, rel, list)
+		if err != nil || got != want {
+			t.Errorf("NamesListed(%q) = %v %v, want %v", rel, got, err, want)
 		}
 	}
 	refused := func(context.Context, string) ([]string, error) { return nil, ErrNotAnswered }
-	if got, err := NamesListed(ctx, root, "Author/Book", nil, refused); got || !GaveUp(err) {
+	if got, err := NamesListed(ctx, root, "Author/Book", refused); got || !GaveUp(err) {
 		t.Errorf("a listing given up on = %v %v, want false and the error", got, err)
 	}
 }
