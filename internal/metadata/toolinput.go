@@ -13,11 +13,14 @@ import "os"
 // On Unix input is a link in a private folder of its own, named for path's
 // extension (as ffmpeg guesses a format by it), to the descriptor the tool
 // inherits (/dev/fd/3): the tool opens the file the server opened, wherever
-// path now leads (inputLink). On Windows, where no descriptor is inherited so,
-// input is path resolved (no link left in it), checked to be under root and
-// to be f (os.SameFile) after f was opened: a folder along it can't be
-// renamed while a file in it is open there, so it still names f when the tool
-// opens it.
+// path now leads (inputLink); with no temporary folder to make it in (a
+// read-only one), the descriptor's own name, its format guessed from its
+// bytes. On Windows, where no descriptor is inherited so, input is path
+// resolved (no link left in it), checked to be under root and, opened once
+// more and held until cleanup, to be f (os.SameFile): a folder along it
+// can't be renamed while a file in it is open there, nor the file itself
+// while that handle (no delete sharing) is, so it still names f when the
+// tool opens it.
 func ToolInput(f *os.File, root, path string) (input string, extra []*os.File, cleanup func(), err error) {
 	return toolInput(f, root, path)
 }

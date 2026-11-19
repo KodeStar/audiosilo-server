@@ -118,6 +118,33 @@ func TestBelowFolderOpensAReplacedFolderAgain(t *testing.T) {
 	}
 }
 
+// TestToolInputWithNoTempFolder (Unix): with no temporary folder to make its
+// link in (a read-only one), a tool is handed the descriptor's own name and
+// still reads the file opened. Not parallel: it sets TMPDIR.
+func TestToolInputWithNoTempFolder(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows hands a tool a resolved path")
+	}
+	root, _ := belowFixture(t)
+	t.Setenv("TMPDIR", filepath.Join(root, "missing"))
+	file := filepath.Join(root, "Book", "01.mp3")
+	f, _, err := OpenRegularBelow(root, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	input, extra, cleanup, err := ToolInput(f, root, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	cmd := exec.Command("sh", "-c", `cat "$1"`, "sh", input)
+	cmd.ExtraFiles = extra
+	if out, err := cmd.Output(); err != nil || string(out) != "inside" {
+		t.Errorf("the tool read %q, %v (input %q); want the file opened", out, err, input)
+	}
+}
+
 // A folder cache keeps at most maxFolders folders, the one idle longest
 // closed for a new one, and hands the same folder to every read of it.
 func TestFolderCacheIsBounded(t *testing.T) {

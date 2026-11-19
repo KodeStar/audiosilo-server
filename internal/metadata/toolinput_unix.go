@@ -8,11 +8,14 @@ import (
 	"strings"
 )
 
-// toolInput is ToolInput by descriptor (inputLink).
+// toolInput is ToolInput by descriptor (inputLink). With no link made (no
+// temporary folder the server may write to: a read-only container), the
+// descriptor's own name: the tool still reads f, its format guessed from its
+// bytes alone, never every probe failing for want of a folder.
 func toolInput(f *os.File, _, path string) (string, []*os.File, func(), error) {
 	link, cleanup, err := inputLink(path)
 	if err != nil {
-		return "", nil, nil, err
+		return inheritedInput, []*os.File{f}, func() {}, nil
 	}
 	return link, []*os.File{f}, cleanup, nil
 }
