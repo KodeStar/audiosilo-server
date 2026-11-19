@@ -3497,7 +3497,7 @@
   "bridge.park.fix_loop_exhausted": "Las comprobaciones siguieron encontrando errores tras varias correcciones.",
   "bridge.park.asr_decode_timeout": "Un capítulo tardó demasiado en transcribirse.",
   "bridge.park.asr_worker_waiting": "Esperando a un worker de ASR. El trabajo sigue en cuanto se conecte uno.",
-  "bridge.park.contrib_unavailable": "La Bridge no puede compartir con la comunidad: no tiene una sesión de GitHub que pueda usar. Inicia sesión en GitHub en la pestaña Accounts de la Bridge y el trabajo sigue; si la Bridge ya tiene la sesión iniciada, vuelve a intentar el trabajo allí cuando se pueda acceder a GitHub.",
+  "bridge.park.contrib_unavailable": "La Bridge no puede compartir con la comunidad: no tiene una sesión de GitHub que pueda usar. Inicia sesión en GitHub en la pestaña Accounts de la Bridge y el trabajo sigue; si la Bridge ya tiene la sesión iniciada, el trabajo sigue por sí solo cuando se pueda acceder a GitHub.",
   "bridge.park.share_unconfirmed": "La Bridge no pudo preguntar al servidor si este libro se sigue compartiendo, así que no se ha enviado nada. El trabajo sigue por sí solo en cuanto pueda.",
   "bridge.park.core_needed": "La comunidad aún no tiene una entrada para este libro. Añade una en la Bridge para contribuir.",
   "bridge.park.core_pending": "Esperando a que se acepte la entrada del libro en la comunidad.",

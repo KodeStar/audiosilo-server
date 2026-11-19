@@ -3473,9 +3473,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the job at once (the Bridge's `agentCredentialChanged`), one in the agent container at the park's
   `retry_at`. `contrib_unavailable` (a `sidecars.generate` job's, at its `contribute: "issue"` stage) says
   to sign in to GitHub on the Accounts tab, which resumes the job at once (`githubChanged`), and, for a
-  Bridge already signed in, to retry the job once GitHub can be reached: the Bridge parks it too when a
-  sign-in's token couldn't be refreshed (GitHub unreachable), and nothing resumes that by itself (no
-  `retry_at`, no re-admit at a restart).
+  Bridge already signed in, that the job carries on by itself once GitHub can be reached: the Bridge parks
+  it too when a sign-in's token couldn't be refreshed (GitHub unreachable), with a `retry_at` ten minutes
+  on that its timed re-admit acts on (bridge#25).
 - **Podcasts (Bridge Phases 2c-1, 2c-2a, 2c-2b and 2c-3)**: libraries have an immutable `kind` (`books`, the default,
   or `podcasts`). Creating or re-rooting either kind may never overlap a podcast root in either
   direction (clean absolute paths, checked under the writer). Config sync logs a root clash and

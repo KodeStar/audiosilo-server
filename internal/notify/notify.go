@@ -600,9 +600,9 @@ func bridgeJobBook(ev catalog.ServerEvent) string {
 // sentence is the console's, so a bell that ever shows it never reads as a
 // fault. A sentence says the job carries on by itself only where the Bridge resumes it
 // with no Retry whatever the fix (a replaced agent credential, a raised or
-// reset budget), and names the Retry where one can still be needed: a Bridge
-// already signed in to GitHub parks contrib_unavailable too when GitHub couldn't
-// be reached, and only a new sign-in resumes that park by itself. The agent,
+// reset budget, a GitHub sign-in, or GitHub answering again: a Bridge already
+// signed in parks contrib_unavailable too when its sign-in couldn't be
+// refreshed, and tries again on its own every few minutes). The agent,
 // GitHub and share sentences are the console's (bridge.park.<code> in en.json), as the
 // bell shows them. The Bridge's own page says more.
 func bridgeParkReason(code string) string {
@@ -614,7 +614,7 @@ func bridgeParkReason(code string) string {
 	case "agent_credential_refused":
 		return "The agent's credential was refused. Replace it on the Bridge's Accounts tab, or in the agent container if it has one of its own, which it uses first; the job then carries on by itself."
 	case "contrib_unavailable":
-		return "The Bridge can't share with the community: it has no GitHub sign-in it can use. Sign in to GitHub on the Bridge's Accounts tab and the job carries on; if the Bridge is signed in already, retry the job there once GitHub can be reached."
+		return "The Bridge can't share with the community: it has no GitHub sign-in it can use. Sign in to GitHub on the Bridge's Accounts tab and the job carries on; if the Bridge is signed in already, it carries on by itself once GitHub can be reached."
 	case "share_unconfirmed":
 		return "The Bridge couldn't ask the server whether this book is still to be shared, so nothing has been filed. The job carries on by itself once it can."
 	case "core_needed":
