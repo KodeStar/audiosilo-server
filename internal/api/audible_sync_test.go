@@ -656,15 +656,16 @@ func TestBridgeProgressCursorFeedOldBridge(t *testing.T) {
 	held := s.feed(t, "").Next
 
 	ahead := recursor(t, held, func(k map[string]any) { k["q"] = k["q"].(float64) + 5 })
+	var atEnd string
 	for name, since := range map[string]string{"past the end": ahead,
 		"past the end, from before 2.7.0": recursor(t, ahead, func(k map[string]any) { delete(k, "f") })} {
 		end := s.feed(t, "&since="+url.QueryEscape(since))
-		if len(end.Rows) != 0 || end.More || end.Next == "" || end.Next == since {
+		if len(end.Rows) != 0 || end.More || end.Next == "" || end.Next == since || (atEnd != "" && end.Next != atEnd) {
 			t.Fatalf("%s: %+v, want no rows and the feed's end as next", name, end)
 		}
+		atEnd = end.Next
 		s.feedRefused(t, name+", with the flag", since) // the same cursor, from a Bridge that handles it
 	}
-	atEnd := s.feed(t, "&since="+url.QueryEscape(ahead)).Next
 	if f := s.feed(t, "&since="+url.QueryEscape(atEnd)); len(f.Rows) != 0 || f.Next != atEnd {
 		t.Fatalf("the feed's end = %+v, want no rows and itself as next", f)
 	}
