@@ -25,7 +25,13 @@ func podcastDiskFixture(t testing.TB) (context.Context, *catalog.Catalog, *catal
 	t.Helper()
 	ctx := context.Background()
 	cat := catalog.New(storetest.Open(t), time.Now)
-	root := t.TempDir()
+	// Resolved, as the looks name it (ContentJoin): a test injecting a share's
+	// errors by path then names the very path looked at (macOS's temp folder
+	// is under a link, /var to /private/var).
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Join(root, "Fixture Show")
 	if err := os.MkdirAll(filepath.Join(dir, ".audiosilo"), 0755); err != nil {
 		t.Fatal(err)

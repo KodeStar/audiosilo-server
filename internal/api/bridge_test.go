@@ -324,8 +324,13 @@ func TestBridgeBookForMappingCheck(t *testing.T) {
 func TestBridgeSampleBookSkipsAMissingBook(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
-	root := copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b",
-		"Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b")
+	// Resolved, as statBookFiles' joins name the files its stat is injected
+	// for (macOS's temp folder is under a link, /var to /private/var).
+	root, err := filepath.EvalSymlinks(copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b",
+		"Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := b.db.ExecContext(context.Background(), `UPDATE libraries SET root = ? WHERE id = ?`, root, b.lib.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -357,8 +362,13 @@ func TestBridgeSampleBookSkipsAMissingBook(t *testing.T) {
 // Not parallel: it swaps bridgeStatLook.
 func TestBridgeBookFilesOnAShareFault(t *testing.T) {
 	b := newBridgeEnv(t)
-	root := copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b",
-		"Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b")
+	// Resolved, as statBookFiles' joins name the files its stat is injected
+	// for (macOS's temp folder is under a link, /var to /private/var).
+	root, err := filepath.EvalSymlinks(copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b",
+		"Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := b.db.ExecContext(context.Background(), `UPDATE libraries SET root = ? WHERE id = ?`, root, b.lib.ID); err != nil {
 		t.Fatal(err)
 	}
