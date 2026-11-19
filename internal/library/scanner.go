@@ -3097,6 +3097,19 @@ func askedFault(errs map[string]error) error {
 	return refused
 }
 
+// unansweredErr is the error of a look that went unanswered
+// (metadata.Unanswered) with err: err when the look was given up on, else
+// ctx's. ctx may have ended as the look answered, and its answer is then not
+// read, an error of its own (the path gone) included: a caller that reads the
+// errors of a look given up on and of a context ended (resolveAsked, at the
+// request's wait cap) would answer that one as neither.
+func unansweredErr(ctx context.Context, err error) error {
+	if metadata.GaveUp(err) {
+		return err
+	}
+	return ctx.Err()
+}
+
 // resolveBook is the book relPath resolves to on disk, worked out exactly as a
 // full scan would (IndexPathWithin's rules), with the signatures of its metadata
 // files, but nothing read from its audio and nothing indexed. A look at the
@@ -3128,7 +3141,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	info, err := statLook(ctx, abs, look)
 	err = refusedForGood(metadata.AsGaveUp(err))
 	if metadata.Unanswered(ctx, err) {
-		return nil, cmp.Or(err, ctx.Err()) // ctx may have ended as the stat answered
+		return nil, unansweredErr(ctx, err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, err)
@@ -3716,7 +3729,7 @@ func renamedFolders(ctx context.Context, lib catalog.Library, moved map[string]s
 func dirPresent(ctx context.Context, lib catalog.Library, rel string, listed map[string]map[string]bool, timeout time.Duration) (bool, error) {
 	if _, err := metadata.LstatBounded(ctx, absOf(lib, rel), timeout); err != nil {
 		if metadata.Unanswered(ctx, err) {
-			return true, err
+			return true, unansweredErr(ctx, err)
 		}
 		// Gone (ENOENT, or ENOTDIR: a folder above it replaced), else a look a
 		// share failed (metadata.ShareFault), which can't be checked.

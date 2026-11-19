@@ -197,6 +197,24 @@ func TestAskedDiscWhoseSetIsRefused(t *testing.T) {
 	}
 }
 
+// A look that answers as the request's wait cap passes is not read: the ask
+// hears a look given up on (the request's time), never the look's own error
+// (the path gone), which is neither that nor ErrNotIndexable and would be
+// answered as the server's fault. Not parallel: it swaps the looks.
+func TestResolveAskedAtTheCapNeverHearsTheLooksOwnError(t *testing.T) {
+	_, lib, s, _ := askedEnv(t, "Author/Book/01.mp3")
+	wasStat := statLook
+	t.Cleanup(func() { statLook = wasStat })
+	statLook = func(_ context.Context, p string, _ time.Duration) (fs.FileInfo, error) {
+		time.Sleep(300 * time.Millisecond) // answers once the cap has passed
+		return nil, &fs.PathError{Op: "stat", Path: p, Err: syscall.ENOENT}
+	}
+	ctx := WithWaitCap(WithLookTimeout(t.Context(), 5*time.Second), time.Now().Add(100*time.Millisecond))
+	if _, err := s.resolveAsked(ctx, *lib, "Author/Book", nil); !metadata.GaveUp(err) {
+		t.Errorf("a stat answering past the cap: %v, want a look given up on", err)
+	}
+}
+
 // A request's looks while its book is resolved end together at its wait cap
 // (WithWaitCap), not only each at its look time: a share that answers each
 // look just inside its time never holds the request past the cap, its answer a
