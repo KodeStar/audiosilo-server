@@ -901,3 +901,40 @@ func TestWaitReadThatReturnsIsNotAbandoned(t *testing.T) {
 		t.Errorf("abandoned reads = %d after a read that returned", n)
 	}
 }
+
+// A file whose open does not answer in its time is not given to ffprobe
+// after it (its open would hang the same way, and a book read on demand
+// would wait out a second probe's time): the read is cut short, its tags
+// unread and its length timed out, ffprobe never run. Once the share
+// answers, the same file is read. Not parallel: HoldOpensForTests swaps the
+// mount lookup.
+func TestNoFFprobeAfterAnOpenThatDidNotAnswer(t *testing.T) {
+	probe, log := fakeFFprobe(t, "8.1.3", false)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "book.m4b")
+	src, err := os.ReadFile(fixture("m4b-aac-chap.m4b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	release := HoldOpensForTests(path)
+	defer release()
+	start := time.Now()
+	md, err := ExtractTimeout(t.Context(), path, probe, 200*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := runs(t, log); n != 0 || !md.TagsUnread() || !md.ProbeTimedOut() || md.Duration != 0 {
+		t.Errorf("a held open: %d ffprobe runs, tags unread %t, timed out %t, duration %v; want none, true, true, 0",
+			n, md.TagsUnread(), md.ProbeTimedOut(), md.Duration)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("the read took %v, want it cut short at its time", took)
+	}
+	release()
+	if md, err := ExtractTimeout(t.Context(), path, probe, ProbeTimeout); err != nil || md.TagsUnread() || md.ProbeTimedOut() || md.Duration <= 0 {
+		t.Errorf("the file once the share answers = %+v (%v), want it read", md, err)
+	}
+}
