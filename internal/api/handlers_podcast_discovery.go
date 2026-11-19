@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"mime"
 	"net/http"
@@ -262,23 +263,22 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	who := callerOf(r.Context())
-	lib, err := a.cat.GetLibrary(r.Context(), id)
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeNoStoreError(w, http.StatusNotFound, "library_not_found", "Library not found.", 0)
-		return
-	}
-	if err != nil {
-		a.writeCatalogError(w, err, "opml import library failed", "Could not import.")
-		return
-	}
-	// The grant before the kind: a library the caller holds no whole grant on
-	// is 403 whatever it holds, so its kind is never revealed.
+	// The grant before the library and its kind: a library the caller holds
+	// no whole grant on is 403 whatever it holds, so its kind is never
+	// revealed, nor, as for a single follow, whether it is there at all.
 	whole, err := a.cat.PodcastWholeGrant(r.Context(), who, id)
 	if err != nil {
 		a.writeCatalogError(w, err, "opml import grant failed", "Could not import.")
 		return
 	}
-	if !whole {
+	var lib *catalog.Library
+	if whole {
+		if lib, err = a.cat.GetLibrary(r.Context(), id); err != nil && !errors.Is(err, catalog.ErrNotFound) {
+			a.writeCatalogError(w, err, "opml import library failed", "Could not import.")
+			return
+		}
+	}
+	if lib == nil {
 		writeNoStoreError(w, http.StatusForbidden, "no_library_access", "Importing needs access to the whole library.", 0)
 		return
 	}
@@ -317,7 +317,7 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 		defer a.opml.slots.Release()
 		var doc *opml.Document
 		if doc, err = opml.Parse(body); err == nil {
-			writeNoStore(w, http.StatusOK, a.follower().Import(r.Context(), who, id, doc))
+			writeOPMLImport(w, r.Context(), a.follower().Import(r.Context(), who, id, doc))
 			return
 		}
 	}
@@ -334,6 +334,19 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 		a.opml.imports.Refund(quotaKey(r))
 	}
 	writeNoStoreError(w, http.StatusBadRequest, "invalid_opml", "Invalid OPML document.", 0)
+}
+
+// writeOPMLImport answers an import's rows, or, when ctx ended it (its bound,
+// opmlImportTimeout, or the client gone), the timeout's 503: the rows
+// answered so far are followed and the rest not looked at, so a list short of
+// rows would read as all done. An upload again is safe: rows already done
+// answer already_following or already_queued.
+func writeOPMLImport(w http.ResponseWriter, ctx context.Context, res podcast.ImportResult) {
+	if ctx.Err() != nil {
+		writeError(w, http.StatusServiceUnavailable, "request timed out")
+		return
+	}
+	writeNoStore(w, http.StatusOK, res)
 }
 
 // opmlAdmit answers a refused OPML budget: 429 opml_rate_limited with

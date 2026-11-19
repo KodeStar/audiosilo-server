@@ -23,6 +23,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/podcast"
 	"github.com/kodestar/audiosilo-server/internal/podcast/discovery"
 )
 
@@ -336,6 +337,26 @@ func TestOPMLImport(t *testing.T) {
 	}
 }
 
+// An import its bound ended (or whose client left) answers the timeout's 503,
+// never the rows it got to as if they were all; one that ran to its end
+// answers them.
+func TestOPMLImportEndedByItsBoundIs503(t *testing.T) {
+	t.Parallel()
+	res := podcast.ImportResult{LibraryID: 7, Rows: []podcast.ImportRow{{OutlineIndex: 0, Status: podcast.RowFollowed}}}
+	rec := httptest.NewRecorder()
+	writeOPMLImport(rec, context.Background(), res)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"outline_index":0`) {
+		t.Fatalf("finished import = %d %s", rec.Code, rec.Body.String())
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	rec = httptest.NewRecorder()
+	writeOPMLImport(rec, ctx, res)
+	if rec.Code != 503 || strings.Contains(rec.Body.String(), "outline_index") {
+		t.Fatalf("import past its bound = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestOPMLImportPrivateRowsStayInMemory(t *testing.T) {
 	b, _, _ := podcastEnv(t, false)
 	doc := string(readFixture(t, phase2c3+"opml/duplicates-private.opml"))
@@ -423,8 +444,10 @@ func TestOPMLImportRefusals(t *testing.T) {
 		resp, body := b.doHeaders(t, "POST", "/api/v1/podcasts/opml/import"+q, b.userTok, valid, h)
 		wantErr(t, resp, body, 400, "invalid_request")
 	}
+	// No such library is answered as one without a grant, as a single
+	// follow answers it: the import never tells a caller which ids exist.
 	resp, body := opmlPost(t, b, b.userTok, 999, valid, "text/xml", nil)
-	wantErr(t, resp, body, 404, "library_not_found")
+	wantErr(t, resp, body, 403, "no_library_access")
 	books, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Books", Root: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)

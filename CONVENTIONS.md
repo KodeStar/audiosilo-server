@@ -4171,7 +4171,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Bridge service's clock) is an `error` row `recently_failed` (`request_id` the failed request), neither
   queued nor counted (`FollowURL.SkipRecentFailure`, `bridge.RecentSubscribeFailure`); a failure that
   isn't the feed's (`notFeedFailures`: an expired private request, a lost lease, the library or the
-  Bridge's storage) never counts, and the single follow always retries. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
+  Bridge's storage) never counts, and the single follow always retries. The import runs outside the 30 s
+  request timeout, under `opmlImportTimeout` (5 min) on its context with its answer unbuffered
+  (`unbufferedBound`, as the Bridge's claim); one its bound ends answers the timeout's 503 (`writeOPMLImport`),
+  never the rows it got to as all of them (server#179). A library the caller holds no whole grant on, or
+  none at that id, is 403 `no_library_access` before its kind, as for the single follow: neither tells
+  which ids exist. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
   `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1; a busy import is answered before its body is read (`Slots.Busy`) and refunds its token, so the retry runs; so does a 400 `invalid_opml`, server#219, but not a 413 or an upload whose read failed). The export (`catalog.PodcastExport`: current
   scopes and private narrowing, follows matching the show id, <= 10,000 rows else 413
   `opml_export_limit`; `podcast.BuildExport`; `opml.Render`, <= 4 MiB) never writes a private show,

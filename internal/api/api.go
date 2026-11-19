@@ -138,6 +138,9 @@ type API struct {
 	// timeoutDur bounds non-streaming requests (see the timeout middleware).
 	// Defaults to requestTimeout; a field so tests can shorten it.
 	timeoutDur time.Duration
+	// opmlImportDur bounds an OPML import (opmlImportTimeout; a field so tests
+	// can shorten it).
+	opmlImportDur time.Duration
 	// dirs is the folder picker's lister (library.ListDirs behind a deadline and
 	// a few slots), which the setup preview checks its root through too; a field
 	// so tests can hand it a listing that hangs.
@@ -319,6 +322,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		log:               log,
 		baseCtx:           context.Background(),
 		timeoutDur:        requestTimeout,
+		opmlImportDur:     opmlImportTimeout,
 		mountHints:        library.MountHints,
 		listed:            cat.DirNames(),
 		dirs:              library.NewDirLister(library.ListDirs, dirListSlots, dirListTimeout),
