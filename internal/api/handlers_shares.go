@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
@@ -57,13 +58,25 @@ func (a *API) handleGetShare(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 	var s catalog.Share
-	if err := decodeJSON(r, &s, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeBody(w, r, &s, shareRulesBodyMax) {
 		return
 	}
 	if s.Name == "" {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
+	}
+	if shareNameTooLong(w, s.Name) || tooManyRules(w, len(s.Paths)) {
+		return
+	}
+	if len(s.Description) > maxShareDescription {
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+			fmt.Sprintf("the description is at most %d bytes", maxShareDescription))
+		return
+	}
+	for _, rule := range s.Paths {
+		if pathTooLong(w, rule.Path) {
+			return
+		}
 	}
 	// CreateShare inserts the share row and any supplied path rules atomically,
 	// so a failed rule rolls the whole thing back - no orphaned share to clean up
@@ -87,8 +100,10 @@ func (a *API) handleUpdateShare(w http.ResponseWriter, r *http.Request) {
 	// Pointer fields (see catalog.ShareUpdate) distinguish "omitted" from "set to
 	// empty" so a partial PATCH doesn't clear the fields it didn't mention.
 	var req catalog.ShareUpdate
-	if err := decodeJSON(r, &req, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeBody(w, r, &req, 0) {
+		return
+	}
+	if req.Name != nil && shareNameTooLong(w, *req.Name) {
 		return
 	}
 	updated, err := a.cat.UpdateShare(r.Context(), id, req)
@@ -119,6 +134,44 @@ func (a *API) handleDeleteShare(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// maxShareName is the longest share name, in characters: a name is stored,
+// listed, audited and logged, so it is bounded before any of those.
+const maxShareName = 200
+
+// maxShareDescription is the longest share description, in bytes: what a
+// rename's body (decodeJSON's default 1 MiB) can carry, so a create, whose body
+// is bounded for its rules (shareRulesBodyMax), takes no longer one.
+const maxShareDescription = 1 << 20
+
+// shareNameTooLong answers 400 invalid_name for a share name over maxShareName
+// characters (true).
+func shareNameTooLong(w http.ResponseWriter, name string) bool {
+	if utf8.RuneCountInString(name) <= maxShareName {
+		return false
+	}
+	writeErrorCode(w, http.StatusBadRequest, codeInvalidName,
+		fmt.Sprintf("the name is at most %d characters", maxShareName))
+	return true
+}
+
+// shareRulesBodyMax bounds a body that carries a share's rules (a create, an
+// add of rules): maxBulkBooks of them with paths at catalog.MaxPathBytes, sent
+// unescaped, and room for each rule's library id and the share's other fields.
+// A longer body is 400 too_large (decodeBody), as more rules are.
+const shareRulesBodyMax = maxBulkBooks*(catalog.MaxPathBytes+64) + 64<<10
+
+// tooManyRules answers 400 too_large for more rules than one request may hold
+// (true): a share created with its rules, or rules added to one, writes each in
+// one transaction, so both are bounded as a selection of books is.
+func tooManyRules(w http.ResponseWriter, n int) bool {
+	if n <= maxBulkBooks {
+		return false
+	}
+	writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+		fmt.Sprintf("too many paths in one request (at most %d)", maxBulkBooks))
+	return true
+}
+
 // sharePathReq is the body for adding/removing a path rule.
 type sharePathReq struct {
 	LibraryID int64  `json:"library_id"`
@@ -137,23 +190,23 @@ func (a *API) handleAddSharePath(w http.ResponseWriter, r *http.Request) {
 		sharePathReq
 		Rules []sharePathReq `json:"rules"`
 	}
-	if err := decodeJSON(r, &req, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeBody(w, r, &req, shareRulesBodyMax) {
 		return
 	}
 	rules := req.Rules
 	if len(rules) == 0 {
 		rules = []sharePathReq{req.sharePathReq}
 	}
-	if len(rules) > maxBulkBooks {
-		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
-			fmt.Sprintf("too many paths in one request (at most %d)", maxBulkBooks))
+	if tooManyRules(w, len(rules)) {
 		return
 	}
 	add := make([]catalog.PathRule, len(rules))
 	for i, rule := range rules {
 		if rule.LibraryID == 0 {
 			writeError(w, http.StatusBadRequest, "library_id is required")
+			return
+		}
+		if pathTooLong(w, rule.Path) {
 			return
 		}
 		add[i] = catalog.PathRule{LibraryID: rule.LibraryID, Path: rule.Path}
@@ -173,8 +226,11 @@ func (a *API) handleRemoveSharePath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req sharePathReq
-	if err := decodeJSON(r, &req, 0); err != nil || req.LibraryID == 0 {
+	if err := decodeJSON(r, &req, pathBodyMax); err != nil || req.LibraryID == 0 {
 		writeError(w, http.StatusBadRequest, "library_id is required")
+		return
+	}
+	if pathTooLong(w, req.Path) {
 		return
 	}
 	if err := a.cat.RemoveSharePath(r.Context(), id, catalog.PathRule{LibraryID: req.LibraryID, Path: req.Path}); err != nil {

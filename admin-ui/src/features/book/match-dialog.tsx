@@ -266,6 +266,7 @@ function MatchBody({
       toastError(
         t(ticks.size ? 'book.match.coverFailedFieldsTaken' : 'book.match.coverFailed'),
         coverErr,
+        { too_large: 'book.cover.tooLarge' },
       );
       // With nothing taken, stay, so the admin can try again or untick it.
       if (ticks.size) onDone();

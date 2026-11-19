@@ -190,6 +190,8 @@ func (a *API) applyIgnore(w http.ResponseWriter, r *http.Request, action string,
 	case len(req.Books) > maxBulkBooks:
 		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, "too many books at once (at most 1000)")
 		return
+	case refsTooLong(w, req.Books):
+		return
 	}
 	for i, b := range req.Books {
 		req.Books[i].Path = catalog.CleanRelPath(b.Path)

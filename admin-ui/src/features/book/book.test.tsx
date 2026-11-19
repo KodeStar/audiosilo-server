@@ -439,6 +439,27 @@ describe('book page', () => {
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
+  it("names the image when the server refuses a cover for its size (the general too_large doesn't)", async () => {
+    mockFetch(
+      routes(bookDetail(), {
+        'PUT /admin/libraries/1/cover': {
+          status: 413,
+          body: { error: 'the image is larger than 5 MB', code: 'too_large' },
+        },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' });
+    const image = new File([new Uint8Array([0xff, 0xd8, 0xff])], 'cover.jpg', {
+      type: 'image/jpeg',
+    });
+    await user.upload(screen.getByLabelText('Upload an image...'), image);
+    expect(
+      await screen.findByText('That image is larger than 5 MB. Pick a smaller one.'),
+    ).toBeInTheDocument();
+  });
+
   it('hides matching when community metadata is off, and says where to turn it on', async () => {
     mockFetch(
       routes(bookDetail(), {
@@ -1018,6 +1039,26 @@ describe('match with community metadata', () => {
     ).toBeInTheDocument();
     expect(patches(calls)).toHaveLength(0);
     expect(screen.getByRole('dialog', { name: 'Compare with community metadata' })).toBeVisible();
+  });
+
+  it('names the image when a community cover is refused for its size', async () => {
+    const detail = listingBook();
+    detail.book.has_cover = false;
+    mockFetch(
+      matchRoutes(detail, {
+        ...findsSameWork,
+        'PUT /admin/libraries/1/cover/community': {
+          status: 413,
+          body: { error: 'the image is larger than 5 MB', code: 'too_large' },
+        },
+      }),
+    );
+    const { user, compare } = await openCompare(MATCH_HERO);
+    await user.click(within(compare).getByRole('button', { name: 'Accept 1 field' }));
+
+    expect(
+      await screen.findByText('That image is larger than 5 MB. Pick a smaller one.'),
+    ).toBeInTheDocument();
   });
 
   it('says so when the match after a taken cover fails, and closes', async () => {

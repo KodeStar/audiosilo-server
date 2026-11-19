@@ -286,18 +286,68 @@ func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID in
 // path-addressed route (server#289, #291).
 const msgPathTooLong = "path is too long"
 
+// pathBodyMax bounds a body that names a path or two and little else (a list
+// add, the Bridge's rescan with its from): two paths at the cap fit however the
+// client escaped them (JSON spends up to six bytes on one: Go's encoder writes
+// "&" as \u0026, others every non-ASCII character as \uXXXX), with room for the
+// rest, so they get the route's answer, not a 400 for the body.
+const pathBodyMax = 2*6*catalog.MaxPathBytes + 1024
+
 // pathTooLong answers 400 msgPathTooLong for a raw path no file can have
 // (true), before it is cleaned, looked up (a library, a book's ancestors) or
 // stored: a route that takes a path outside pathInScope (an admin's folder
 // override, browse, a list's remove, the sessions and Bridge jobs filters, a
-// Bridge job or estimate, the Bridge's book read, rescan and enrichment)
-// checks it first, before the library is looked up.
+// Bridge job or estimate, the Bridge's book read, rescan and enrichment, a
+// share's rules, a selection of books: refsTooLong) checks it first, before
+// the library is looked up. A ?path= over the cap never reaches a route
+// (capPathQuery); the routes' own checks also hold for a handler reached
+// without it.
 func pathTooLong(w http.ResponseWriter, rawPath string) bool {
 	if len(rawPath) <= catalog.MaxPathBytes {
 		return false
 	}
 	writeError(w, http.StatusBadRequest, msgPathTooLong)
 	return true
+}
+
+// capPathQuery answers 400 msgPathTooLong for an API request with a ?path= over
+// catalog.MaxPathBytes (any of them), before its route reads it: the one check
+// every ?path= route gets, those that take the path outside pathInScope
+// included (a podcast show, a folder listing, a list's remove, the cast token's
+// book authenticate checks before its route), so a route added later can't
+// miss it (server#359). A query no longer than the cap can't hold such a path,
+// so it is only parsed here when it is longer. A path in a body is the route's
+// to check (pathTooLong, refsTooLong). A refusal rateLimit didn't charge (an
+// authenticated or media route's, which rateLimit only checks with Ready and
+// leaves to requireAuth or mediaAuth) pays into the address's bucket, as a
+// failed authentication does: otherwise these requests, refused before any
+// credential check, would never be limited.
+func (a *API) capPathQuery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.URL.RawQuery) > catalog.MaxPathBytes && strings.HasPrefix(r.URL.Path, "/api/") {
+			for _, p := range r.URL.Query()["path"] {
+				if pathTooLong(w, p) {
+					if !addressCharged(r) {
+						a.ipLimiter.Charge(clientIP(r))
+					}
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// refsTooLong is pathTooLong for each of a body's books (a bulk edit, the
+// covers or works of a selection, a Health ignore): one over the cap refuses
+// the request before any is cleaned, looked up or stored.
+func refsTooLong(w http.ResponseWriter, refs []catalog.Ref) bool {
+	for _, ref := range refs {
+		if pathTooLong(w, ref.Path) {
+			return true
+		}
+	}
+	return false
 }
 
 // pathInScope cleans rawPath and checks scope allows it (400 empty or over

@@ -942,7 +942,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the rest) and `upcoming_owned` (`checked_at`: the list books' `work_id` reads the
   rest, server#241), which columns an UPDATE may change by value (the hook reads a row only up to
   the rule's last watched column, `watchedChanged`, so a freed column after them, the
-  heartbeat's up to 64 KiB `status`, is never copied; S263-HOOK). Anything else on a listed table
+  heartbeat's `status` (as large as the server's libraries make it, server#445), is never copied; S263-HOOK). Anything else on a listed table
   moves the generation; a table the list doesn't name is a misfiling (logged; a panic in a
   test binary), and a rule's table or column a newer server's schema lacks (a rollback) only
   makes more writes content. Durability (`WithDurableTx`) is orthogonal. The user-state
@@ -997,7 +997,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `pathInScope` (`authorizedPath`/`authorizedScope`/`scopedPath*`, which take it through `spelledPathInScope`: see
   Path spelling; not the browse, the list-remove, the podcast or
   the admin folder-override route, which takes its path on its own) checks it first: over `catalog.MaxPathBytes` (4096 bytes as sent) is 400 `path is too
-  long`, before it is cleaned, looked up or stored (server#289). `item`/`chapters`/
+  long`, before it is cleaned, looked up or stored (server#289). Any `/api/` request's `?path=` over it is
+  refused before a route or credential check reads it (`capPathQuery`, server#359); a path in a body is the
+  route's to check (`pathTooLong`, `refsTooLong` for a selection of books, a share's rules), and a body that
+  names a path or two and little else is bounded (`pathBodyMax`). A body that carries a share's rules (`POST
+  /admin/shares`, `POST /admin/shares/{id}/paths`) takes 1000 of them at the cap (`shareRulesBodyMax`); past
+  it is the route's 400 `too_large`, as more rules are, and a share's name is at most 200 characters
+  (`maxShareName`, 400 `invalid_name` on a create or rename), its description at most the 1 MiB a
+  rename's body carries (`maxShareDescription`, 400 `too_large` on a create). A scan never indexes a path past the cap
+  (only a Windows library holds one): it skips the folder or file and logs it as unreadable (`overLong`), by the start of its path and its length (`loggedPath`). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
   `GetBookByPath`, then the indexed folder book holding the path
   (`GetBookHolding`: a part, a disc folder of a joined book), then indexing on
@@ -2649,7 +2657,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   from the request). Both are on the player `Book` JSON (`omitempty`). Admin book rows (list and book page) also carry
   `cover_color` (the Series spines) and `matched` (the `matched=` filter's rule, `catalog.matchedExpr`: an
   ASIN or ISBN, or a recorded community match, `book_matches`, see Bulk matching), and `POST /admin/shares/{id}/paths`
-  also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
+  also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection; a share created with `paths`
+  is held to the same 1000 (`tooManyRules`, 400 `too_large`).
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
   `api/ratelimit.go`, values from `config.rate_limit.*` read at start through
   `RateLimitConfig.Effective`: a rate or burst left at 0 is the current default and is
@@ -2662,7 +2671,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `authHandler` marks them; `tokenKeyed`, server#246) limit themselves: refused
   while the address's general bucket is empty (`Ready`, checked in rateLimit too, so
   the refusal comes before the timeout layer), a failed authentication (missing or
-  refused token) charges it (`Charge`: even past empty, down to -burst, so requests
+  refused token), and a `?path=` over the cap refused before the credential is
+  looked at (`capPathQuery`), charges it (`Charge`: even past empty, down to -burst, so requests
   that passed `Ready` together all pay; `Ready` reserves nothing, so a concurrent
   flood is looked up up to its concurrency before it pays), an authenticated one spends
   from its credential's bucket (`mediaLimiter` ~200/s burst 2000, `tokenLimiter`
@@ -3174,7 +3184,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `monthly_budget_usd`, `month_spent_usd`; read LENIENTLY, an unknown key ignored and a block that doesn't
   decode or is out of its bounds dropped, never refusing the heartbeat, since a refused heartbeat takes
   the Bridge offline; bounded and checked: `family.name` kinds, library ids, and `ui_url` http(s)
-  only since the console links it, are refused otherwise; free text is cleaned to printable bounded text,
+  only since the console links it, are refused otherwise; a body up to `bridge.MaxStatusBytes` (2 MiB) and
+  4096 mappings, a longer list cut, never refused (server#445); a body past the bound, or more `kinds` or
+  `workers` than theirs (64 each, `bridge.ErrTooLarge`), is 400 `too_large`, any other refusal a plain 400, its lists (`kinds`, `libraries`, `workers`,
+  the setup `items` and their `library_ids`) read to a bounded length whatever the body holds (`readList`, strict on the wire; the stored row is read back
+  leniently, `readStoredStatus`, so a row a newer server wrote survives a rollback), and only the mappings of libraries the
+  server has are stored, and of a setup item's `library_ids` only theirs (`Status.KeepLibraries`, the row written without HTML escaping; a beat whose library list can't be read is saved as sent, Validate-bounded, and answered with the fault, so a catalog read fault never shows the Bridge offline), so the row a
+  heartbeat rewrites stays the size of the server's own libraries; free text is cleaned to printable bounded text,
   `cleanText`, never refused, as is a job report's `error` (line breaks kept): it is partly the outside
   world's, and a refused report is retried for ever while its job is re-run; one row, never a history)
   answers `{server_time,
@@ -3198,7 +3214,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   handler also needs the contributions module on) and the `cannot_contribute` refusal all read it. **Capability**: `capabilities.bridge` is true only while the last
   heartbeat is under `bridge.OnlineWindow` (2 min) old (`bridge.Service` caches the parsed heartbeat for
   `heartbeatTTL`, 5 s, so `GET /server` mostly reads no database; `Forget` drops it on a pairing or an
-  unpair, and a read that began before a save or a `Forget` never replaces its answer: `hbGen`), with a
+  unpair, a read that began before a save or a `Forget` never replaces its answer: `hbGen`, and callers that
+  miss the cache at once share one read of the row, `heartbeatRead`), with a
   top-level `bridge: {version, features}`
   beside it for a signed-in caller only (a session or an API key of any role but a demo account's,
   `api.signedIn` over `auth.Peek`, which records nothing on the token, so the public route never waits on

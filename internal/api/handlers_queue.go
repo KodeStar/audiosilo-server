@@ -56,7 +56,7 @@ func decodeListReplace(w http.ResponseWriter, r *http.Request) ([]catalog.Ref, b
 // scopes it checked it with (callerScopes) are returned for the answer.
 func (a *API) decodeListAdd(w http.ResponseWriter, r *http.Request) (catalog.Ref, *int, []catalog.Scope, bool) {
 	var in listAdd
-	if err := decodeJSON(r, &in, 0); err != nil {
+	if err := decodeJSON(r, &in, pathBodyMax); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return catalog.Ref{}, nil, nil, false
 	}

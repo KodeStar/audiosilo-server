@@ -114,6 +114,29 @@ describe('shares', () => {
     expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ name: 'Kids' });
   });
 
+  it("holds a share's name to the server's 200 characters", async () => {
+    const calls = mockFetch(
+      routes({
+        'POST /admin/shares': {
+          status: 201,
+          body: { id: 12, name: 'x', description: '', read_only: false },
+        },
+      }),
+    );
+    renderApp('/people/shares');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'New share' }));
+    const dialog = await screen.findByRole('dialog', { name: 'New share' });
+    const name = within(dialog).getByLabelText('Name');
+    await user.click(name);
+    await user.paste('é'.repeat(201));
+    await user.click(within(dialog).getByRole('button', { name: 'Create share' }));
+    expect(
+      await within(dialog).findByText("Keep the share's name to 200 characters or fewer."),
+    ).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
   it('adds a folder picked from the library', async () => {
     const calls = mockFetch(
       routes({

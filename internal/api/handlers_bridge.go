@@ -207,16 +207,34 @@ func (a *API) adminBridgeBook(w http.ResponseWriter, r *http.Request, libraryID 
 // server's libraries, so the Bridge maps any it hasn't yet, and accepts: the
 // optional top-level blocks this server reads (bridge.HeartbeatAccepts), which
 // the Bridge sends only after a reply lists them, since an older server refuses
-// a heartbeat with a field it doesn't know.
+// a heartbeat with a field it doesn't know. A heartbeat refused for its size (a
+// body over bridge.MaxStatusBytes, a list over its bound) is 400 too_large, so
+// the Bridge tells it apart from a block this server can't read (a plain 400).
 func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 	var st bridge.Status
-	if err := decodeJSON(r, &st, bridge.MaxStatusBytes); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid status")
+	if !decodeBody(w, r, &st, bridge.MaxStatusBytes) {
 		return
 	}
 	if err := st.Validate(); err != nil {
+		if errors.Is(err, bridge.ErrTooLarge) {
+			writeErrorCode(w, http.StatusBadRequest, codeTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// The libraries are read before the save: only the mappings of libraries
+	// the server has, and the setup items' ids of them, are stored
+	// (Status.KeepLibraries). A list that can't be read still saves the beat,
+	// as sent (Validate bounded it), so a passing catalog fault never shows a
+	// healthy Bridge offline; the reply then answers the fault.
+	libs, listErr := a.cat.ListLibraries(r.Context())
+	if listErr == nil {
+		known := make(map[int64]bool, len(libs))
+		for _, l := range libs {
+			known[l.ID] = true
+		}
+		st.KeepLibraries(func(id int64) bool { return known[id] })
 	}
 	if err := a.bridge.SaveHeartbeat(r.Context(), credentialFrom(r.Context()).ID, st); err != nil {
 		if errors.Is(err, bridge.ErrNotPaired) {
@@ -229,9 +247,8 @@ func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "could not save the status, try again")
 		return
 	}
-	libs, err := a.cat.ListLibraries(r.Context())
-	if err != nil {
-		a.writeCatalogError(w, err, "bridge heartbeat failed", "could not list libraries")
+	if listErr != nil {
+		a.writeCatalogError(w, listErr, "bridge heartbeat failed", "could not list libraries")
 		return
 	}
 	out := make([]bridgeLibrary, 0, len(libs))
@@ -541,7 +558,9 @@ func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
 
 // notifyBridgeJob reports a job that just finished, failed or parked
 // (notify.BridgeJobEnded), naming its book: the title as indexed now, else its
-// path. Best effort: a book or library that can't be read is reported by path.
+// path (a librivox.fetch result's only when the fold could take it,
+// catalog.LibrivoxFetchFits). Best effort: a book or library that can't be
+// read is reported by path.
 func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 	ev := notify.BridgeJob{ID: job.ID, Kind: job.Kind, State: job.State, Path: job.Target(),
 		Code: job.ParkCode(), Error: job.Error, SharedNothing: job.SharedNothing()}
@@ -563,7 +582,13 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 		// be read) it is named by the work it was adding: the params' title.
 		ev.Title = p.Title
 		if err == nil {
-			ev.Path = cmp.Or(ev.Path, r.Path)
+			// A result the fold refused (another library or project, a path
+			// that isn't clean or is past the cap: the Bridge's result may run
+			// to 64 KiB) is no book's, so its path is neither looked up nor put
+			// in the notification's text.
+			if catalog.LibrivoxFetchFits(p, r) {
+				ev.Path = cmp.Or(ev.Path, r.Path)
+			}
 			if job.State == bridge.StateDone {
 				// The fold (OnEnded) ran before this, so the match is settled.
 				ev.LibrivoxMatch = a.cat.LibrivoxFetchMatch(ctx, p, r)
@@ -667,9 +692,7 @@ func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 		Mode      string  `json:"mode"`
 		From      *string `json:"from"`
 	}
-	// The body holds path and from each up to the cap, with room for JSON's
-	// escapes, so two paths at the cap get the route's answer, not a 400.
-	if err := decodeJSON(r, &req, 4*catalog.MaxPathBytes); err != nil || req.LibraryID <= 0 {
+	if err := decodeJSON(r, &req, pathBodyMax); err != nil || req.LibraryID <= 0 {
 		writeError(w, http.StatusBadRequest, "library_id and path are required")
 		return
 	}
@@ -806,17 +829,22 @@ func (a *API) handleAdminBridge(w http.ResponseWriter, r *http.Request) {
 	if p.CodeExpiresAt != "" {
 		out.Pairing = &bridgePairing{ExpiresAt: p.CodeExpiresAt}
 	}
+	// The mappings by library, read once: a heartbeat holds thousands
+	// (server#445), and a lookup per library (Status.Library) would scan them all.
+	var mappings map[int64]*bridge.LibraryStatus
 	if h != nil {
 		out.Online = h.Online(time.Now())
 		out.HeartbeatAt = h.At.UTC().Format(time.RFC3339)
 		out.Version, out.Kinds, out.Features, out.Workers, out.UIURL = h.Version, h.Kinds, h.Features(), h.Workers, h.UIURL
 		out.Estimates, out.Setup = h.Estimates, h.Setup
+		mappings = make(map[int64]*bridge.LibraryStatus, len(h.Libraries))
+		for i := range h.Libraries {
+			mappings[h.Libraries[i].LibraryID] = &h.Libraries[i]
+		}
 	}
 	for _, l := range libs {
 		al := adminBridgeLibrary{bridgeLibrary: bridgeLibrary{Kind: l.Kind, ID: l.ID, Name: l.Name, Root: l.Root}}
-		if h != nil {
-			al.Mapping = h.Library(l.ID)
-		}
+		al.Mapping = mappings[l.ID]
 		out.Libraries = append(out.Libraries, al)
 	}
 	writeJSON(w, http.StatusOK, out)

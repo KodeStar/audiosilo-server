@@ -53,7 +53,7 @@ func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 	if strings.TrimSpace(p.WorkID) == "" || strings.TrimSpace(p.RecordingID) == "" {
 		return nil
 	}
-	if r.LibraryID != *j.LibraryID || !fetchResultFits(p, r) {
+	if r.LibraryID != *j.LibraryID || !LibrivoxFetchFits(p, r) {
 		return ErrFetchNotIndexed
 	}
 	var editor any
@@ -117,7 +117,7 @@ const (
 // books library) is LibrivoxUnmatched whatever match is recorded at the path
 // it names: a deleted book's stays there.
 func (c *Catalog) LibrivoxFetchMatch(ctx context.Context, p bridge.LibrivoxFetchParams, r bridge.LibrivoxFetchResult) string {
-	if !fetchResultFits(p, r) {
+	if !LibrivoxFetchFits(p, r) {
 		return LibrivoxUnmatched
 	}
 	var work, recording sql.NullString
@@ -138,9 +138,10 @@ func (c *Catalog) LibrivoxFetchMatch(ctx context.Context, p bridge.LibrivoxFetch
 	return LibrivoxUnmatched
 }
 
-// fetchResultFits is whether a librivox.fetch's result names its params' own
-// library and project and a clean path: one that doesn't is never folded.
-func fetchResultFits(p bridge.LibrivoxFetchParams, r bridge.LibrivoxFetchResult) bool {
+// LibrivoxFetchFits is whether a librivox.fetch's result names its params' own
+// library and project and a clean path within MaxPathBytes: one that doesn't is
+// never folded, nor named in the job's notification.
+func LibrivoxFetchFits(p bridge.LibrivoxFetchParams, r bridge.LibrivoxFetchResult) bool {
 	return r.LibraryID == p.LibraryID && r.LibrivoxID == p.LibrivoxID && cleanLibPath(r.Path)
 }
 

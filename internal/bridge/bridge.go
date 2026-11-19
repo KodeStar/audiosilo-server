@@ -75,10 +75,16 @@ type Service struct {
 	// every client calls often, reads the database at most every heartbeatTTL.
 	// hbGen counts the cache's writes (a heartbeat saved, Forget): a read that
 	// began before one never replaces its newer answer.
-	hbMu   sync.Mutex
-	hb     *Heartbeat
-	hbRead time.Time
-	hbGen  uint64
+	// hbReading is the database read under way, when there is one, which the
+	// callers missing the cache meanwhile share (LastHeartbeat).
+	hbMu      sync.Mutex
+	hb        *Heartbeat
+	hbRead    time.Time
+	hbGen     uint64
+	hbReading *heartbeatRead
+	// readHeartbeatHook, when set (by a test), stands in for the database read
+	// (readHeartbeat).
+	readHeartbeatHook func(context.Context) (*Heartbeat, error)
 
 	// offlineSince is when expireOfflineSubscribes first saw no online Bridge
 	// for podcast.subscribe (its clock), zero while it last saw one: the

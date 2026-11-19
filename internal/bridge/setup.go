@@ -18,7 +18,7 @@ type Setup struct {
 	// Items are the checklist's steps in the Bridge's order. An id the server
 	// doesn't know is kept: the Bridge owns the list and the console words the
 	// ids it knows.
-	Items []SetupItem `json:"items"`
+	Items setupItems `json:"items"`
 	// CanContribute: the Bridge can file contributions now (a GitHub sign-in
 	// resolves). It wins over estimates.sidecars.can_contribute
 	// (Status.CanContribute).
@@ -57,13 +57,32 @@ type SetupItem struct {
 	// writable"), cleaned; "" for none.
 	Detail string `json:"detail,omitempty"`
 	// LibraryIDs are the server libraries the step is about (the libraries
-	// step: the ones still to fix); omitted for none.
-	LibraryIDs []int64 `json:"library_ids,omitempty"`
+	// step: the ones still to fix); omitted for none. An id of no library of
+	// the server's is not stored (Status.KeepLibraries).
+	LibraryIDs libraryIDs `json:"library_ids,omitempty"`
 	// NeedsWorker: the step waits for an ASR worker (the asr step while the
 	// engine's transcription waits for one), so it is fixed on the Bridge's
 	// Workers tab (bridge#28). An older Bridge sends none: the console then
 	// reads its detail text as before.
 	NeedsWorker bool `json:"needs_worker,omitempty"`
+}
+
+// setupItems is a setup block's items, read bounded like the heartbeat's other
+// lists (readList), and leniently like the block: an unknown key is ignored.
+type setupItems []SetupItem
+
+func (l *setupItems) UnmarshalJSON(b []byte) (err error) {
+	*l, err = readList[SetupItem](b, false)
+	return err
+}
+
+// libraryIDs is a setup item's library ids, read bounded too: validate keeps
+// at most maxLibraries of them.
+type libraryIDs []int64
+
+func (l *libraryIDs) UnmarshalJSON(b []byte) (err error) {
+	*l, err = readList[int64](b, false)
+	return err
 }
 
 // Bounds on a setup block.
@@ -115,11 +134,20 @@ func (s *Setup) validate() *Setup {
 			continue
 		}
 		it.Detail = cleanText(it.Detail, maxSetupDetail, false)
+		// Told apart by a set, and stopped at the bound: the list is as long
+		// as the heartbeat's body allows, and a scan of the ids kept for each
+		// would cost a second of CPU for one item (server#445).
 		var ids []int64
+		seen := map[int64]bool{}
 		for _, id := range it.LibraryIDs {
-			if id > 0 && len(ids) < maxLibraries && !slices.Contains(ids, id) {
-				ids = append(ids, id)
+			if len(ids) == maxLibraries {
+				break
 			}
+			if id <= 0 || seen[id] {
+				continue
+			}
+			seen[id] = true
+			ids = append(ids, id)
 		}
 		it.LibraryIDs = ids
 		items = append(items, it)
@@ -135,6 +163,23 @@ func (s *Setup) validate() *Setup {
 		s.AgentCredential = ""
 	}
 	return s
+}
+
+// keepLibraries leaves each item only the ids of libraries the server has
+// (known), in a list of its own (Status.KeepLibraries).
+func (s *Setup) keepLibraries(known func(id int64) bool) {
+	if s == nil {
+		return
+	}
+	for i := range s.Items {
+		var kept []int64
+		for _, id := range s.Items[i].LibraryIDs {
+			if known(id) {
+				kept = append(kept, id)
+			}
+		}
+		s.Items[i].LibraryIDs = kept
+	}
 }
 
 // AcceptSetup names the setup block in a heartbeat reply's accepts.

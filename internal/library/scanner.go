@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/fsaccess"
@@ -1709,6 +1710,40 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 	return books
 }
 
+// maxIndexedPath is the longest library-relative path a scan indexes:
+// catalog.MaxPathBytes, the longest any route takes (server#359). Only a
+// Windows library can hold a longer one (its paths run to 32,767 characters);
+// indexed, such a book would be listed but every route would refuse its path.
+// A variable so a (sequential) test can lower it: no disk the tests run on
+// holds a longer path.
+var maxIndexedPath = catalog.MaxPathBytes
+
+// overLong reports whether rel is past maxIndexedPath.
+func overLong(rel string) bool { return len(rel) > maxIndexedPath }
+
+// maxLoggedPath is how much of an overLong path the scan log and the server
+// log keep.
+const maxLoggedPath = 200
+
+// loggedPath is an overLong path as it is logged: its first maxLoggedPath
+// bytes (cut at a character) and its length, enough to find the folder. Kept
+// whole, each would put tens of kilobytes in the scan's stored log and the
+// console's reading of it (up to maxProblemEvents of them a scan).
+func loggedPath(rel string) string {
+	if len(rel) <= maxLoggedPath {
+		return rel
+	}
+	cut := maxLoggedPath
+	for cut > 0 && !utf8.RuneStart(rel[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s... (%d bytes)", rel[:cut], len(rel))
+}
+
+// errPathTooLong is the scan log's reason for a folder or file skipped as
+// overLong.
+var errPathTooLong = fmt.Errorf("the path is longer than the server allows (%d bytes), so it isn't indexed", catalog.MaxPathBytes)
+
 // audioDirs walks walkFrom (the folder at library-relative fromRel, "" for the
 // root) and returns the folders under it that directly hold audio, library-relative,
 // each with its audio files as a book has them (folderAudio): the files audioEntries
@@ -1720,7 +1755,11 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 // width is how many folders it lists at once (walkDir), timeout how long each
 // look may take (metadata.Bounded: walkDir's listings, a .audiosilo folder's,
 // a metadata.json's lstat); its audio files are not
-// looked at (statAudio: the callers building books from them do that).
+// looked at (statAudio: the callers building books from them do that). A
+// folder or audio file whose path is overLong is skipped and logged as
+// unreadable (rl), the folder with everything under it; discovery isn't
+// partial for it (no book there can ever be indexed, so the prune is not at
+// stake).
 func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap, width int, timeout time.Duration) (dirs map[string][]audioFile, side sidecarFiles, hadErrors bool, err error) {
 	dirs = map[string][]audioFile{}
 	side = sidecarFiles{abs: map[string]catalog.ABSReading{}, attachments: map[string]attachmentFiles{}, unlisted: map[string]bool{},
@@ -1732,13 +1771,24 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 	skipped := func(d fs.DirEntry, rel string) bool {
 		return isHidden(d.Name()) || (!ignore.Empty() && ignore.Match(rel, true))
 	}
+	// A folder past the path cap is logged once and never gone into (all
+	// below it is past the cap too); an audio file past it is logged and left
+	// out of its folder's book. Logged by the start of its path (loggedPath).
+	noteOverLong := func(rel string) {
+		short := loggedPath(rel)
+		log.Warn("skipping a path longer than the server allows", "library", lib.Name, "path", short, "bytes", len(rel))
+		rl.unreadable(short, errPathTooLong)
+	}
 	// The folders the walk goes into are listed ahead (walkDir), except by a
 	// capped walk (a setup preview, a folder listing's disc-set check), which may
 	// stop at any folder: it lists each as it reaches it, after the cap allows it.
 	if limit != nil {
 		width = 1
 	}
-	descend := func(p string, d fs.DirEntry) bool { return !skipped(d, path.Join(fromRel, relPathOf(walkFrom, p))) }
+	descend := func(p string, d fs.DirEntry) bool {
+		rel := path.Join(fromRel, relPathOf(walkFrom, p))
+		return !skipped(d, rel) && !overLong(rel)
+	}
 	err = walkDir(ctx, walkFrom, width, timeout, descend, func(p string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1773,8 +1823,14 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 				}
 				return fs.SkipDir
 			}
-			if rel != fromRel && skipped(d, rel) {
-				return fs.SkipDir
+			if rel != fromRel {
+				if skipped(d, rel) {
+					return fs.SkipDir
+				}
+				if overLong(rel) {
+					noteOverLong(rel)
+					return fs.SkipDir
+				}
 			}
 			if !limit.another() {
 				return errWalkCapped
@@ -1801,6 +1857,10 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			return nil
 		}
 		if !isAudioEntry(d, rel, ignore) {
+			return nil
+		}
+		if overLong(rel) {
+			noteOverLong(rel)
 			return nil
 		}
 		dir := dirOf(rel)
@@ -2081,7 +2141,8 @@ type audioFile struct {
 }
 
 // audioEntries returns the non-hidden, non-ignored audio files directly inside
-// absDir, as a book has them (folderAudio): none when it won't list. The
+// absDir whose paths aren't overLong, as a book has them (folderAudio): none
+// when it won't list. The
 // listing is a metadata.Bounded call (ctx, at most timeout): err is one given
 // up on (metadata.GaveUp) or ctx's.
 func audioEntries(ctx context.Context, root, absDir string, ignore *Ignore, timeout time.Duration) ([]audioFile, error) {
@@ -2095,7 +2156,7 @@ func audioEntries(ctx context.Context, root, absDir string, ignore *Ignore, time
 	var audio []audioFile
 	for _, de := range entries {
 		abs := filepath.Join(absDir, de.Name())
-		if isAudioEntry(de, relPathOf(root, abs), ignore) {
+		if rel := relPathOf(root, abs); isAudioEntry(de, rel, ignore) && !overLong(rel) {
 			audio = append(audio, audioFile{abs: abs, de: de})
 		}
 	}

@@ -93,7 +93,7 @@ func pendingBook(lib catalog.Library, rel string, overrides map[string]string, i
 }
 
 // hasAudio reports whether the folder abs (at library-relative rel) directly
-// holds an audio file discovery reads (isAudioEntry): audioEntries' question
+// holds an audio file discovery reads (isAudioEntry, not overLong): audioEntries' question
 // without building, filtering or sorting the list (a shadowed .mka has its
 // shadowing file beside it, so any audio entry answers it).
 func hasAudio(abs, rel string, ignore *Ignore) bool {
@@ -102,6 +102,7 @@ func hasAudio(abs, rel string, ignore *Ignore) bool {
 		return false
 	}
 	return slices.ContainsFunc(entries, func(de fs.DirEntry) bool {
-		return isAudioEntry(de, path.Join(rel, de.Name()), ignore)
+		p := path.Join(rel, de.Name())
+		return isAudioEntry(de, p, ignore) && !overLong(p)
 	})
 }

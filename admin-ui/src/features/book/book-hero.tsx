@@ -302,7 +302,7 @@ function CoverMenu({ detail }: { detail: AdminBookDetail }) {
         type: 'success',
       });
     } catch (err) {
-      toastError(t('book.cover.failed'), err);
+      toastError(t('book.cover.failed'), err, { too_large: 'book.cover.tooLarge' });
     }
   };
 

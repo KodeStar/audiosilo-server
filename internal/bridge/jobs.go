@@ -1834,16 +1834,26 @@ func carryPark(progress, stored json.RawMessage) json.RawMessage {
 		return progress
 	}
 	next["park"] = park
-	var b bytes.Buffer
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	if enc.Encode(next) != nil {
+	out, err := marshalUnescaped(next)
+	if err != nil {
 		return progress
 	}
-	if out := bytes.TrimSuffix(b.Bytes(), []byte("\n")); len(out) <= maxProgressBytes {
+	if len(out) <= maxProgressBytes {
 		return out
 	}
 	return stored
+}
+
+// marshalUnescaped is v as JSON without HTML escaping: what is stored is only
+// ever read back as JSON, and escaped, a "<" or "&" would take six bytes.
+func marshalUnescaped(v any) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 // parkOf is the park a progress object names, nil when it names none: absent,

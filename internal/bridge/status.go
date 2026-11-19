@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -28,12 +29,12 @@ type Status struct {
 	Version string `json:"version"`
 	// Kinds are the job kinds it implements (KindVerify, ...). The server queues
 	// only kinds that are both here and known to it (Kinds).
-	Kinds []string `json:"kinds"`
+	Kinds kindList `json:"kinds"`
 	// Libraries is the Bridge's mapping of each server library to its own mount,
 	// checked on every heartbeat.
-	Libraries []LibraryStatus `json:"libraries"`
+	Libraries libraryList `json:"libraries"`
 	// Workers are the ASR workers connected to it (Phase 1b).
-	Workers []Worker `json:"workers"`
+	Workers workerList `json:"workers"`
 	// UIURL is the Bridge's own LAN page, linked from the console.
 	UIURL string `json:"ui_url"`
 	// Estimates are the Bridge's figures for costing a job before it is queued
@@ -215,12 +216,96 @@ func (st Status) Library(id int64) *LibraryStatus {
 	return nil
 }
 
+// KeepLibraries leaves st only the mappings of libraries the server has
+// (known), in a list of their own, and its setup items only those libraries'
+// ids: the rest are never read (the console and the jobs ask by a library of
+// the server's), so storing them would let a heartbeat fill the stored row,
+// and each read of it, with up to maxLibraries mappings, and as many ids a
+// setup item, of libraries that don't exist (server#445).
+func (st *Status) KeepLibraries(known func(id int64) bool) {
+	kept := make([]LibraryStatus, 0, min(len(st.Libraries), 16))
+	for _, l := range st.Libraries {
+		if known(l.LibraryID) {
+			kept = append(kept, l)
+		}
+	}
+	st.Libraries = kept
+	st.Setup.keepLibraries(known)
+}
+
+// maxListRead is how many elements of a heartbeat's lists are read:
+// one more than the longest any is kept at (maxLibraries), so Validate still
+// sees a list over its bound.
+const maxListRead = maxLibraries + 1
+
+// readList reads the JSON list b into at most maxListRead elements, leaving the
+// rest unread: a heartbeat's body is bounded in bytes (MaxStatusBytes), but a
+// list of empty objects takes three bytes an element and some twenty times
+// that in memory (an empty string or a one-digit id, a few times), so read whole, a body of 2 MiB would be hundreds of
+// megabytes of structs to throw away (server#445). strict refuses a key T
+// doesn't have, as the heartbeat's own decoder does. b is one JSON value,
+// already checked (the decoder that calls an UnmarshalJSON has scanned it).
+func readList[T any](b []byte, strict bool) ([]T, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if strict {
+		dec.DisallowUnknownFields()
+	}
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if tok == nil {
+		return nil, nil // null
+	}
+	if tok != json.Delim('[') {
+		return nil, errors.New("bridge: not a list")
+	}
+	out := []T{}
+	for dec.More() && len(out) < maxListRead {
+		var v T
+		if err := dec.Decode(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// kindList, libraryList and workerList are a heartbeat's kinds, mappings and
+// workers, read bounded (readList). A strict list of objects is also shadowed
+// by readStoredStatus, which reads the stored row leniently.
+type (
+	kindList    []string
+	libraryList []LibraryStatus
+	workerList  []Worker
+)
+
+func (l *kindList) UnmarshalJSON(b []byte) (err error) {
+	*l, err = readList[string](b, true)
+	return err
+}
+
+func (l *libraryList) UnmarshalJSON(b []byte) (err error) {
+	*l, err = readList[LibraryStatus](b, true)
+	return err
+}
+
+func (l *workerList) UnmarshalJSON(b []byte) (err error) {
+	*l, err = readList[Worker](b, true)
+	return err
+}
+
 // Limits on a heartbeat: its body is the Bridge's, so the server bounds what it
-// stores and later shows in the console.
+// stores and later shows in the console. A Bridge reports every library the
+// server lists, so the libraries' bounds hold a server with thousands
+// (server#445): MaxStatusBytes has room for maxLibraries mappings of a few
+// hundred bytes each, and a list longer than maxLibraries is cut to it, never
+// refused (a refused heartbeat reads as a Bridge offline, and the Bridge sends
+// the same list again until it learns the server's from a reply).
 const (
-	MaxStatusBytes = 64 << 10
+	MaxStatusBytes = 2 << 20
 	maxKinds       = 64
-	maxLibraries   = 512
+	maxLibraries   = 4096
 	maxWorkers     = 64
 	maxShortText   = 128
 	maxLongText    = 1024
@@ -236,17 +321,26 @@ func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
 }
 
+// ErrTooLarge marks a heartbeat refused for its size (a list over its bound),
+// which is ErrInvalid too: the API answers it with its own code, so the Bridge
+// tells it apart from a block this server can't read.
+var ErrTooLarge = errors.New("too large")
+
+func tooLarge(what string) error { return fmt.Errorf("%w: %w: %s", ErrInvalid, ErrTooLarge, what) }
+
 // Validate checks a heartbeat before it is stored: kinds are well formed and
-// listed once, libraries listed once by a positive id, and ui_url, which the
+// listed once, libraries listed once by a positive id (past maxLibraries the
+// rest are left out, server#445), and ui_url, which the
 // console renders as a link, is an absolute http(s) URL or empty (anything else
-// is refused). An estimate out of its bounds is dropped, and so is a setup
+// is refused; more kinds or workers than their bounds are refused as
+// ErrTooLarge). An estimate out of its bounds is dropped, and so is a setup
 // block that doesn't decode (a setup item it can't keep is left out). Its free text (the version,
 // each mapping's paths and error, the workers, the estimates' backend) is
 // cleaned to printable bounded text instead (cleanText).
 func (st *Status) Validate() error {
 	st.Version = cleanText(st.Version, maxShortText, false)
 	if len(st.Kinds) > maxKinds {
-		return invalid("too many kinds")
+		return tooLarge("too many kinds")
 	}
 	for i, k := range st.Kinds {
 		if !kindPattern.MatchString(k) || slices.Contains(st.Kinds[:i], k) {
@@ -254,19 +348,22 @@ func (st *Status) Validate() error {
 		}
 	}
 	if len(st.Libraries) > maxLibraries {
-		return invalid("too many libraries")
+		// A copy, so the heartbeat kept in memory doesn't hold the rest.
+		st.Libraries = slices.Clone(st.Libraries[:maxLibraries])
 	}
+	seen := make(map[int64]bool, len(st.Libraries))
 	for i := range st.Libraries {
 		l := &st.Libraries[i]
-		if l.LibraryID <= 0 || slices.ContainsFunc(st.Libraries[:i], func(o LibraryStatus) bool { return o.LibraryID == l.LibraryID }) {
+		if l.LibraryID <= 0 || seen[l.LibraryID] {
 			return invalid("library %d", l.LibraryID)
 		}
+		seen[l.LibraryID] = true
 		l.MountPath = cleanText(l.MountPath, maxLongText, false)
 		l.CheckedPath = cleanText(l.CheckedPath, maxLongText, false)
 		l.Error = cleanText(l.Error, maxLongText, false)
 	}
 	if len(st.Workers) > maxWorkers {
-		return invalid("too many workers")
+		return tooLarge("too many workers")
 	}
 	for i := range st.Workers {
 		w := &st.Workers[i]
@@ -329,7 +426,9 @@ func cleanText(v string, max int, lines bool) string {
 	for cut > 0 && !utf8.RuneStart(v[cut]) {
 		cut--
 	}
-	return v[:cut]
+	// A copy: the cut text is kept (the cached heartbeat), and a slice of v
+	// would hold all of it, up to a heartbeat's whole body.
+	return strings.Clone(v[:cut])
 }
 
 // ErrNotPaired is a call from a Bridge that is no longer the paired one: its
@@ -342,7 +441,8 @@ var ErrNotPaired = errors.New("no bridge is paired")
 // heartbeat that was authenticated before a pairing or an unpair never lands on
 // the pairing that replaced it.
 func (s *Service) SaveHeartbeat(ctx context.Context, token int64, st Status) error {
-	body, err := json.Marshal(st)
+	// Unescaped: a status full of "<" would be stored at six times its size.
+	body, err := marshalUnescaped(st)
 	if err != nil {
 		return err
 	}
@@ -414,24 +514,74 @@ func (s *Service) Forget() {
 	s.hb, s.hbRead = nil, time.Time{}
 }
 
+// heartbeatRead is a database read of the heartbeat under way, begun while the
+// cache was at generation gen: the callers that miss the cache meanwhile wait
+// for it (LastHeartbeat) rather than each reading and parsing the row.
+type heartbeatRead struct {
+	done chan struct{} // closed once the read ended
+	gen  uint64
+	// h is what it read, when ok (set before done closes); a read that failed
+	// (its request ended, the database) answers no one but its own caller.
+	h  *Heartbeat
+	ok bool
+}
+
 // LastHeartbeat returns the paired Bridge's last heartbeat, or nil when no
 // Bridge is paired (auth.BridgeLiveSQL: a live bridge token of an enabled
 // admin) or none has beaten since it paired. The result is shared: never
-// change it.
+// change it. Callers that miss the cache at once share one read of the row
+// (GET /server is every client's, and the row can be large); when that read
+// fails, each still waiting reads again, one at a time.
 func (s *Service) LastHeartbeat(ctx context.Context) (*Heartbeat, error) {
-	s.hbMu.Lock()
-	if !s.hbRead.IsZero() && s.now().Sub(s.hbRead) < heartbeatTTL {
-		h := s.hb
+	for {
+		s.hbMu.Lock()
+		if !s.hbRead.IsZero() && s.now().Sub(s.hbRead) < heartbeatTTL {
+			h := s.hb
+			s.hbMu.Unlock()
+			return h, nil
+		}
+		// A read begun before a save or a Forget is not this caller's answer:
+		// it may have seen the row as it was before.
+		if f := s.hbReading; f != nil && f.gen == s.hbGen {
+			s.hbMu.Unlock()
+			select {
+			case <-f.done:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if f.ok {
+				return f.h, nil
+			}
+			continue
+		}
+		f := &heartbeatRead{done: make(chan struct{}), gen: s.hbGen}
+		s.hbReading = f
 		s.hbMu.Unlock()
-		return h, nil
+		return s.leadHeartbeatRead(ctx, f)
 	}
-	gen := s.hbGen
-	s.hbMu.Unlock()
-	h, err := readHeartbeat(ctx, s.db)
-	if err != nil {
+}
+
+// leadHeartbeatRead reads the heartbeat for f, the read this caller began, and
+// ends f with the outcome for those waiting on it (also when the read panics:
+// a waiter then reads for itself).
+func (s *Service) leadHeartbeatRead(ctx context.Context, f *heartbeatRead) (h *Heartbeat, err error) {
+	defer func() {
+		s.hbMu.Lock()
+		if s.hbReading == f {
+			s.hbReading = nil
+		}
+		s.hbMu.Unlock()
+		close(f.done)
+	}()
+	read := s.readHeartbeatHook
+	if read == nil {
+		read = func(ctx context.Context) (*Heartbeat, error) { return readHeartbeat(ctx, s.db) }
+	}
+	if h, err = read(ctx); err != nil {
 		return nil, err
 	}
-	s.keep(gen, h)
+	s.keep(f.gen, h)
+	f.h, f.ok = h, true
 	return h, nil
 }
 
@@ -455,12 +605,34 @@ func readHeartbeat(ctx context.Context, q interface {
 		// An unreadable stamp or body is no heartbeat.
 		if t, perr := time.Parse(time.RFC3339, stamp.String); perr == nil {
 			h = &Heartbeat{At: t}
-			if json.Unmarshal([]byte(body), &h.Status) != nil {
+			if readStoredStatus([]byte(body), &h.Status) != nil {
 				h = nil
 			}
 		}
 	}
 	return h, nil
+}
+
+// readStoredStatus reads a stored heartbeat's status into st leniently: a key
+// it doesn't know is ignored in the lists too, which the wire's decode refuses
+// (readList, strict). The row is ours, already bounded when it was saved, and
+// one a newer server wrote (before a rollback) can hold a key this one doesn't
+// know: read strictly, it would be no heartbeat, and the Bridge would show as
+// offline until its next beat.
+func readStoredStatus(body []byte, st *Status) error {
+	var stored struct {
+		Status
+		// The lists of objects, read as plain slices: they shadow Status's
+		// strict ones (a list of strings has no key to refuse).
+		Libraries []LibraryStatus `json:"libraries"`
+		Workers   []Worker        `json:"workers"`
+	}
+	if err := json.Unmarshal(body, &stored); err != nil {
+		return err
+	}
+	*st = stored.Status
+	st.Libraries, st.Workers = stored.Libraries, stored.Workers
+	return nil
 }
 
 // Online returns the last heartbeat when it is recent enough to count the Bridge
