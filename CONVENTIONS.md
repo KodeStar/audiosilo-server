@@ -3360,7 +3360,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   still stopping after a cancel (`cancel_requested`): a request never joins a job about to end, so the
   stopping job ends `cancelled` at once (`endStoppingTx`, as its lapsed lease would end it: one key holds
   one open job, migration 0047's unique index) and the request queues its own (201); the Bridge hears 409
-  `not_held` `cancelled` at its next report on the old one. `EnqueueAll` does the same; a stopping podcast
+  `not_held` `cancelled` at its next report on the old one. `EnqueueAll` does the same, and podcast Check's
+  look for an open poll (`OpenJob`) passes a stopping one on to `Enqueue`; a stopping podcast
   job of another identity still answers `identity_changed` until it has stopped. `GET /bridge/jobs/next?wait=
   &kind=[&share_off=1]` (`bridge.Service.ClaimFor`, `ClaimWith`; `share_off`: Community jobs below) long-polls (at most 25 s, woken by an enqueue; it ends with the
   server's base context, so a stop isn't held by the claim a Bridge always has waiting: 204) for the

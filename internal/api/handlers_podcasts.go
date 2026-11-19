@@ -411,7 +411,9 @@ func (a *API) handlePodcastCheck(w http.ResponseWriter, r *http.Request) {
 			a.writeCatalogError(w, err, "find open podcast poll failed", "Could not check show.")
 			return
 		}
-		if job != nil {
+		// An open poll joins the ask, unless it was asked to stop: it ends
+		// without checking, so the queue ends it and starts a new one.
+		if job != nil && !job.CancelRequested {
 			break
 		}
 		st, err := a.podcastState(r.Context(), lib.ID, show.Path)
