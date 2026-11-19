@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -83,6 +84,21 @@ func TestAddSharePathsBatch(t *testing.T) {
 	}
 	if resp, body := e.do(t, "POST", url, adminTok, `{"rules":[`+strings.Join(many, ",")+`]}`); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, codeTooLarge) {
 		t.Fatalf("oversized batch = %d %s, want 400 too_large", resp.StatusCode, body)
+	}
+	// A share created with its rules is bounded the same way: nothing is made
+	// past the cap, and a share at it is.
+	create := func(name string, rules []string) (*http.Response, string) {
+		return e.do(t, "POST", "/api/v1/admin/shares", adminTok, fmt.Sprintf(`{"name":%q,"paths":[%s]}`, name, strings.Join(rules, ",")))
+	}
+	if resp, body := create("Too many", many); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, codeTooLarge) {
+		t.Fatalf("a share created with %d rules = %d %s, want 400 too_large", len(many), resp.StatusCode, body)
+	}
+	var made int
+	if err := e.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM shares WHERE name = 'Too many'`).Scan(&made); err != nil || made != 0 {
+		t.Fatalf("shares made by the refused request: %d, %v", made, err)
+	}
+	if resp, body := create("At the cap", many[:maxBulkBooks]); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("a share created with %d rules = %d %.200s, want 201", maxBulkBooks, resp.StatusCode, body)
 	}
 
 	if resp, body := e.do(t, "POST", url, adminTok, batch); resp.StatusCode != http.StatusNoContent {

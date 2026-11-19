@@ -2653,7 +2653,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   from the request). Both are on the player `Book` JSON (`omitempty`). Admin book rows (list and book page) also carry
   `cover_color` (the Series spines) and `matched` (the `matched=` filter's rule, `catalog.matchedExpr`: an
   ASIN or ISBN, or a recorded community match, `book_matches`, see Bulk matching), and `POST /admin/shares/{id}/paths`
-  also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
+  also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection; a share created with `paths`
+  is held to the same 1000 (`tooManyRules`, 400 `too_large`).
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
   `api/ratelimit.go`, values from `config.rate_limit.*` read at start through
   `RateLimitConfig.Effective`: a rate or burst left at 0 is the current default and is

@@ -65,6 +65,9 @@ func (a *API) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if tooManyRules(w, len(s.Paths)) {
+		return
+	}
 	for _, rule := range s.Paths {
 		if pathTooLong(w, rule.Path) {
 			return
@@ -124,6 +127,18 @@ func (a *API) handleDeleteShare(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// tooManyRules answers 400 too_large for more rules than one request may hold
+// (true): a share created with its rules, or rules added to one, writes each in
+// one transaction, so both are bounded as a selection of books is.
+func tooManyRules(w http.ResponseWriter, n int) bool {
+	if n <= maxBulkBooks {
+		return false
+	}
+	writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+		fmt.Sprintf("too many paths in one request (at most %d)", maxBulkBooks))
+	return true
+}
+
 // sharePathReq is the body for adding/removing a path rule.
 type sharePathReq struct {
 	LibraryID int64  `json:"library_id"`
@@ -150,9 +165,7 @@ func (a *API) handleAddSharePath(w http.ResponseWriter, r *http.Request) {
 	if len(rules) == 0 {
 		rules = []sharePathReq{req.sharePathReq}
 	}
-	if len(rules) > maxBulkBooks {
-		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
-			fmt.Sprintf("too many paths in one request (at most %d)", maxBulkBooks))
+	if tooManyRules(w, len(rules)) {
 		return
 	}
 	add := make([]catalog.PathRule, len(rules))
