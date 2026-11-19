@@ -137,14 +137,28 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
       });
       continue;
     }
+    const audible = e.action.startsWith('bridge.audible.');
+    // An Audible account is named by its name (account_name) when the server
+    // could read one, else its id; the name has no line of its own.
+    if (audible && key === 'account_name') continue;
     let value: string;
-    if (key === 'kind' && e.action.startsWith('issue.') && typeof v === 'string')
+    if (
+      audible &&
+      key === 'account' &&
+      typeof e.details.account_name === 'string' &&
+      e.details.account_name
+    )
+      value = e.details.account_name;
+    // An empty placement template or destination is the automatic placement.
+    else if (audible && (key === 'template' || key === 'dest_path') && v === '')
+      value = t('audit.value.automatic');
+    else if (key === 'kind' && e.action.startsWith('issue.') && typeof v === 'string')
       value = t(`health.kind.${v}`, { defaultValue: v });
     // A Bridge job's kind ("bridge.verify") by the name the Bridge page gives it.
     else if (key === 'kind' && e.action.startsWith('bridge.') && typeof v === 'string')
       value = t(`bridge.kind.${v}`, { defaultValue: v });
     // An Audible account's backup policy by the words its settings give it.
-    else if (key === 'policy' && e.action.startsWith('bridge.audible.') && typeof v === 'string')
+    else if (key === 'policy' && audible && typeof v === 'string')
       value = t(`audible.policy.${v}`, { defaultValue: v });
     else if (Object.hasOwn(ENUMS, key) && typeof v === 'string')
       value = t(`audit.enum.${ENUMS[key]}.${v}`, { defaultValue: v });

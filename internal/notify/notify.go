@@ -679,7 +679,7 @@ func bridgeParkReason(code string) string {
 	case "contrib_unavailable":
 		return "The Bridge can't share with the community: it has no GitHub sign-in it can use. Sign in to GitHub on the Bridge's Accounts tab and the job carries on; if the Bridge is signed in already, it carries on by itself once GitHub can be reached."
 	case "share_unconfirmed":
-		return "The Bridge couldn't ask the server whether this book is still to be shared, so nothing has been filed. The job carries on by itself once it can."
+		return "Waiting to confirm this book is still to be shared. Nothing more is shared until then. The job carries on by itself once it can."
 	case "core_needed":
 		return "The book needs a community record before it can be contributed."
 	case "chapters_not_detected":

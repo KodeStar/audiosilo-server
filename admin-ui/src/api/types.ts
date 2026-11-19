@@ -3368,6 +3368,8 @@ export interface AudibleTitle {
   /** "Don't sync this book" (Phase 4c): its place never syncs with Audible either way; backups don't read it. */
   no_sync: boolean;
   dest_path: string;
+  /** dest_path no longer validates (stored before a rule tightened): its backup would be refused. Absent from an older server. */
+  dest_invalid?: boolean;
   first_seen: string;
   updated_at: string;
   import_job_id: number | null;

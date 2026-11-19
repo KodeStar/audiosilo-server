@@ -569,8 +569,12 @@ type AudibleTitle struct {
 	Ignored  bool `json:"ignored"`
 	// NoSync is the console's "Don't sync this book" (Phase 4c): neither
 	// direction of the account's sync touches its book. Backups don't read it.
-	NoSync      bool   `json:"no_sync"`
-	DestPath    string `json:"dest_path"`
+	NoSync   bool   `json:"no_sync"`
+	DestPath string `json:"dest_path"`
+	// DestInvalid: a DestPath stored before a rule tightened that
+	// bridge.CheckAudibleDestPath now refuses, so its backup would be refused
+	// (Back up everything skips it): the console says to set it again.
+	DestInvalid bool   `json:"dest_invalid"`
 	FirstSeen   string `json:"first_seen"`
 	UpdatedAt   string `json:"updated_at"`
 	ImportJobID *int64 `json:"import_job_id"`
@@ -1097,6 +1101,7 @@ func scanAudibleTitle(row rowScanner, now time.Time) (*AudibleTitle, error) {
 	}
 	t.NeedsAttention = preorderOverdue(&t, pending, now)
 	t.CanBackup = t.backupRefusal() == nil
+	t.DestInvalid = t.DestPath != "" && bridge.CheckAudibleDestPath(t.DestPath) != nil
 	return &t, nil
 }
 

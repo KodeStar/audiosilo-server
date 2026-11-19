@@ -3531,7 +3531,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   characters and recaps it is writing): while the module is off the Bridge's claim and report answers carry
   `share_off: true` (`Job.ShareOff`, `Service.flagShareOff`, computed, never stored, omitted otherwise), and
   a Bridge that honours it keeps the job's results local, filing nothing, and says so in its result
-  (`share_skipped`). Such a Bridge claims with `share_off=1` (`ClaimOptions.ShareOff`; an older server
+  (`share_skipped`: `contributions_off`, or `no_share_job` for a book no share job followed any more, each
+  worded by the console as `bridge.generate.shareSkipped.<reason>`). Such a Bridge claims with `share_off=1` (`ClaimOptions.ShareOff`; an older server
   ignores the parameter): a queued generate-and-share job is then handed to it flagged rather than held
   (`sharesAlong`), while a claim without it (an older Bridge, which would share anyway) still finds the job
   held. A podcast or Audible job a claim handed out carries on with its module off too.
@@ -4052,10 +4053,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `book` override, which the scan would join into it: `checkDestOwnFolder`, `metadata.IsDiscFolder`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
   `invalid_policy` / `invalid_template`), audited: a queued Back up `bridge.job` (kind `audible.import`; also
   when recording it on the title failed), a pending one `bridge.audible.backup`, then `bridge.audible.backup_all`
-  / `title` / `account` (the audit guard reads `moduleRoutes.Admin` routes too). The
+  / `title` / `account` (the audit guard reads `moduleRoutes.Admin` routes too), each naming the account by
+  its id and, when it has one, as `account_name` (`audibleAccountName`: its label, else "person (STORE)"),
+  which the console's audit details show for the id, an empty `template` or `dest_path` there reading
+  "Automatic". The
   accounts list adds `template`, `policy_since` and `backup_estimate {count, bytes}` (Back up everything's
-  titles, runtime at 8000 bytes a second); titles add `import`, `needs_attention`, `planned` and `contested` (see Audible
-  unmatched titles below). The Bridge's account
+  titles, runtime at 8000 bytes a second); titles add `import`, `needs_attention`, `planned`, `contested` (see Audible
+  unmatched titles below) and `dest_invalid` (a stored `dest_path` `CheckAudibleDestPath` now refuses). The Bridge's account
   PUT sets `policy` on create only (the console owns it after). Removing an account cancels its open
   imports. **Console**: per title Back up (off while its account is paused), Not this book (and undo) and
   Destination... (`title-actions.tsx`), the import state and code (`importStatus`; the loaded titles are asked
@@ -4093,7 +4097,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   folder (`state` `new`: a new author folder with the automatic placement, a new folder with a template) or a
   new series (`series_new`), where the Bridge most likely missed one the library has under another spelling
   (server#372), a note when the plan's template differs from
-  the account's now, and "Your destination is checked when the backup starts" instead while a `dest_path` is set;
+  the account's now, and "Your destination is checked when the backup starts" instead while a `dest_path` is set,
+  or, in warning tone and in Needs a look (`needsLook`), that it is no longer valid while `dest_invalid`;
   Destination...'s placeholder is the planned path, never its value (`plannedPlaceholder`). `ReasonNote`: `contested`
   explained with the other titles and the book linked (`bookRoute`), a plain sentence without data (this title isn't
   shown as here: the other may well be, when the Bridge kept it as the better match); a reason that is

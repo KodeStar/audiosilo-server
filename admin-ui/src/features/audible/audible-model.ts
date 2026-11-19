@@ -301,10 +301,11 @@ export function plannedLine(
 /**
  * Whether a title is one "Needs a look" lists: not on this server, one a backup
  * can still come of (not unavailable or gone from the account), whose planned
- * destination warns (plannedLine).
+ * destination warns (plannedLine) or whose own destination is no longer valid.
  */
 export function needsLook(x: AudibleTitle, template: string | undefined): boolean {
   if (x.match || x.state === 'unavailable' || x.state === 'gone') return false;
+  if (x.dest_path && x.dest_invalid) return true;
   return plannedLine(x, template)?.warn ?? false;
 }
 

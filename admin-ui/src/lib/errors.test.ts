@@ -131,10 +131,10 @@ describe('errorMessage', () => {
         },
       );
     expect(errorMessage(stored('invalid_template', 'account'), t)).toBe(
-      "This account's placement template no longer works. Fix it in Account settings..., then back up again.",
+      "This account's placement template no longer works. Fix it in Account settings and back up again.",
     );
     expect(errorMessage(stored('invalid_dest_path', 'title'), t)).toBe(
-      "This title's destination is no longer valid. Set it again with Destination..., then back up again.",
+      "This title's destination is no longer valid. Set it again with Destination and back up again.",
     );
     // The value just typed (the account and title PATCHes): no reason.
     expect(errorMessage(stored('invalid_template'), t)).toMatch(/^That template doesn't work/);

@@ -385,6 +385,16 @@ describe("a generate job's share kept local (server#218)", () => {
     ).toBeInTheDocument();
   });
 
+  it('says no share job followed the book', async () => {
+    mockFetch(done({ characters: 3, share_skipped: 'no_share_job' }));
+    renderApp(URL);
+    expect(
+      await screen.findByText(
+        'Not shared with the community: the job that was to share this book ended before it could, so the results stay on this server. Regenerate with contributing turned on to share them.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('words an unknown reason plainly', async () => {
     mockFetch(done({ characters: 3, share_skipped: 'something_new' }));
     renderApp(URL);

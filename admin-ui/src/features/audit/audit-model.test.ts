@@ -182,6 +182,38 @@ describe('audit model', () => {
     ]);
   });
 
+  it('names an Audible account and says Automatic for an empty placement', () => {
+    const tr = i18n.getFixedT('en');
+    // By its name when the server read one; by its id from an older row.
+    expect(
+      detailLines(
+        ev('bridge.audible.backup_all', {
+          account: 'acct0001',
+          account_name: 'Chris (US)',
+          queued: 2,
+        }),
+        tr,
+        fmt,
+      ),
+    ).toEqual([
+      { label: 'Audible account', value: 'Chris (US)' },
+      { label: 'Backups queued', value: '2' },
+    ]);
+    expect(
+      detailLines(ev('bridge.audible.title', { account: 'acct0001', dest_path: '' }), tr, fmt),
+    ).toEqual([
+      { label: 'Audible account', value: 'acct0001' },
+      { label: 'Destination', value: 'Automatic' },
+    ]);
+    expect(
+      detailLines(ev('bridge.audible.account', { account_name: '', template: '' }), tr, fmt),
+    ).toEqual([{ label: 'Placement template', value: 'Automatic' }]);
+    // Elsewhere an empty value is still none.
+    expect(detailLines(ev('settings.save', { template: '' }), tr, fmt)).toEqual([
+      { label: 'Placement template', value: 'none' },
+    ]);
+  });
+
   it('words an answer to the support card', () => {
     const tr = i18n.getFixedT('en');
     const snooze = ev('settings.support', {
