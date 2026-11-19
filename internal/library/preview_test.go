@@ -1,6 +1,7 @@
 package library
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -234,5 +235,31 @@ func TestPreviewTimeBudget(t *testing.T) {
 	}
 	if p.Counts.Capped || p.Counts.FolderBooks != 3 || p.Counts.AudioFiles != 3 || len(p.Samples) != 0 {
 		t.Errorf("counts %+v with %d samples; want uncapped, 3 books, no samples", p.Counts, len(p.Samples))
+	}
+}
+
+// A preview's sample reads the names alone (metadata.WithoutFrameCount,
+// server#452): a header-less VBR MP3's frames are not counted, a read of the
+// whole file in the preview's time, and its read gives the bitrate's estimate.
+func TestPreviewCountsNoFrames(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	copyFixture(t, filepath.Join("..", "metadata", "testdata", "probe", "lame-vbr-noxing.mp3"), filepath.Join(root, "Author", "Book.mp3"))
+	s := previewScanner()
+	var lengths []float64 // the samples are read one at a time
+	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		md := extractFile(ctx, root, p, ffprobe, timeout)
+		lengths = append(lengths, md.Duration)
+		return md
+	}
+	p, err := s.Preview(t.Context(), root, nil, PreviewLimits{})
+	if err != nil || len(p.Samples) != 1 {
+		t.Fatalf("preview = %+v, %v; want one sample", p, err)
+	}
+	if len(lengths) != 1 {
+		t.Fatalf("%d reads, want the sample's one", len(lengths))
+	}
+	if d := lengths[0]; d <= 0 || (d > headerlessSecs-0.001 && d < headerlessSecs+0.001) {
+		t.Errorf("the sample read %v, want the bitrate's estimate, no count", d)
 	}
 }

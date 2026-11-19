@@ -75,8 +75,8 @@ type Scanner struct {
 	// batched, when set (tests), hears each book a scan takes into its write
 	// batch, with the batch's length then.
 	batched func(n int)
-	// readFile, when set (tests), stands in for each scan's and on-demand
-	// index's metadata.ExtractTimeout (readSlots.readFile).
+	// readFile, when set (tests), stands in for each scan's, on-demand
+	// index's and preview sample's metadata.ExtractTimeout (readSlots.readFile).
 	readFile readFunc
 
 	// The files this server has seen ffprobe reject (problemCleared), by
