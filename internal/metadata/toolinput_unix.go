@@ -22,6 +22,10 @@ func toolInput(f *os.File, _, path string) (string, []*os.File, func(), error) {
 	return link, []*os.File{f}, cleanup, nil
 }
 
+// toolInputLooks: toolInput looks at nothing on the share (its link is made
+// in the temporary folder).
+const toolInputLooks = false
+
 // inheritedInput is the descriptor a tool inherits its input on: the first of
 // exec.Cmd.ExtraFiles, as the tool's own /dev/fd names it.
 const inheritedInput = "/dev/fd/3"

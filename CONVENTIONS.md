@@ -1356,8 +1356,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   refuses a link a join allows, one that stays in the root by an absolute target or by climbing above it
   and back, so `Below` opens the resolved path through the root then
   (`TestOpenRegularBelowNeverLeavesTheRoot`, `TestReadDirBelowNeverLeavesTheRoot`,
-  `TestStreamOpensThroughTheRootAfterASwap`). A podcast episode checks the open file against the path again
-  instead (`OpenPodcast`: `os.SameFile`); the reader's ebook does both (`OpenEbook`: opened through the root,
+  `TestStreamOpensThroughTheRootAfterASwap`). So does a transcode, whose ffmpeg reads the file opened there,
+  never the path (`media.Transcode`, `fileInput`: ffmpeg's stdin as `fd:`, else the file as
+  `metadata.ToolInput` hands every tool one, below; `TestTranscodeOpensThroughTheRoot`), and a remux's or a
+  rendition's source: its look (`media.Source`, a stat through the root) and its run's open
+  (`FileCache.make`), whose descriptor ffmpeg reads (`TestFileCacheSourceThroughTheRoot`). A podcast episode
+  checks the open file against the path again instead (`OpenPodcast`: `os.SameFile`); the reader's ebook does both (`OpenEbook`: opened through the root,
   `metadata.OpenBelow`, then `os.SameFile`). The scan's reads and an asked book's (`resolveBook`, then
   `indexBook`) go through the root too, so a name swapped for a link out of it after the walk's or the join's
   check is never followed: the audio read, tags and the in-process probe (`metadata.ExtractTimeout` and
@@ -1385,13 +1389,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   folder can't open (a link to a folder beside it, an absolute target) is opened through the root's kept
   folder, then resolved as `Below` does (an lstat's up to its last name only, so `LstatBelow` is always the
   link's own: `TestLstatBelowIsTheLinksOwn`). An external tool is handed the file
-  opened so, never its path (`metadata.ToolInput`): ffprobe's fallback run (`runFFprobe`) and the chapter
-  check's ffmpeg (`media.DetectSilences`, given the library's root). On Unix the tool inherits the descriptor
+  opened so, never its path (`metadata.ToolInput`): ffprobe's fallback run (`runFFprobe`), the chapter
+  check's ffmpeg (`media.DetectSilences`, given the library's root) and a transcode on an ffmpeg without
+  `fd:` (`media.fileInput`, through `ToolInputBounded`: where its looks are on the share, Windows, a bounded
+  look whose late answer's handle is closed when it comes, `TestBoundedToolInputGivenUp`). On Unix the tool inherits the descriptor
   and is named a link to its own `/dev/fd/3` in a private folder, named for the file's extension (ffmpeg
   guesses a format by it; `TestProbeMatchesLiveFFprobe` holds parity), or, with no temporary folder it may
   write to (a read-only container), `/dev/fd/3` itself, its format guessed from its bytes
   (`TestToolInputWithNoTempFolder`); on Windows it is given the path resolved, checked to be under the root
-  and the very file opened (`os.SameFile`) through a second handle held until the tool is done: opened
+  and the very file opened (`os.SameFile`, `heldPathInput`, built and tested on every platform:
+  `TestHeldPathInput`) through a second handle held until the tool is done: opened
   without delete sharing, it keeps the file from being renamed or replaced meanwhile (the os.Root open
   shares deletion), and a folder along it can't be renamed while a file in it is open there. The tool reads
   the file as an audio container only: both runs pass `metadata.InputFormatArgs()`
@@ -1400,9 +1407,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   for ffprobe, before `-i` for ffmpeg), since FFmpeg picks a demuxer by the file's bytes and one shaped
   like a playlist (concat, hls, dash, sdp) under an audio name would have it open the files it lists
   (`TestProbeReadsNoPlaylist`, `TestDetectSilencesReadsNoPlaylist`); a new ffprobe or ffmpeg run on a library
-  file passes them too. The runs fed a descriptor as stdin (a podcast episode's transcode, the remux, the
-  rendition) are held by `-protocol_whitelist` instead, and the transcode of a library file by its path is
-  held by neither yet. A start removes the private folders an earlier run left in the temporary folder
+  file passes them too, and so does every transcode and watch rendition, on every input they take (see
+  Transcoding); only the MP3-in-MKA remux names its one demuxer (`-f matroska`). A start removes the private folders an earlier run left in the temporary folder
   (`metadata.SweepToolInputs`: `audiosilo-input-*`, the server's user's, 0700, over an hour old, holding only
   the link; `TestSweepInputDirsRemovesOnlyItsOwn`). A test's
   ffprobe stand-in reads the path from `AUDIOSILO_TEST_INPUT`
@@ -1411,8 +1417,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestAttachmentsReadThroughTheRootAfterASwap`, `TestReadalongMapReadThroughTheRootAfterASwap`,
   `TestLookArtStatsThroughTheRootAfterASwap`, `TestBridgeBookFilesStatThroughTheRoot`,
   `TestProberHandsFFmpegTheFileItOpened`, `TestBelowFolderNeverLeavesTheRoot`, `TestToolInputIsTheOpenedFile`).
-  Still a check and then a look by path: a transcode (ffmpeg opens the path), a remux's or a rendition's
-  source (`media.FileCache`, `media.Source`), a podcast show's `feed.json` and a library's `library.json`
+  Still a check and then a look by path: a podcast show's `feed.json` and a library's `library.json`
   (`metadata.ReadRegularFile`: an lstat, an open and `os.SameFile`, all by path), and the looks (listings,
   lstats) that only decide what a scan reads. The scan takes no link out of the root
   either, by the same rule (`linkOut`: `SafeJoin` of each link the walk lists, looked at once the walk ends,
@@ -1719,14 +1724,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode, ffmpeg reading the
   descriptor opened through the library's root (`fileInput`: `fd:` on its stdin, seekable; without the fd
   protocol, an ffmpeg older than 6.1, the child's descriptor 3 as `/dev/fd/3` on Unix, seekable too, so an
-  input `-ss` and an MP4 whose index sits at its end still work, or the re-checked resolved path elsewhere;
+  input `-ss` and an MP4 whose index sits at its end still work, or the re-checked resolved path elsewhere,
+  both as `metadata.ToolInput` hands every tool a library file, see Path spelling;
   `TestTranscodeSeeksTheDescriptor`), the input's protocol the only one it may open (`-protocol_whitelist`:
   through `fd:` no other file; through `/dev/fd/3` or a path the `file` protocol, which opens any local file),
-  and an audio container the only input (`-format_whitelist` `audioDemuxers`, on every input whose demuxer
-  ffmpeg guesses: the transcode's, a podcast episode's and the watch rendition's; the remux names its own): a
-  file that probes as a manifest or a playlist, DASH, HLS or ffconcat, is refused, where through the `file`
-  protocol ffmpeg opened the files it names and transcoded them to whoever could stream it
-  (`TestTranscodeOpensNoOtherInput`; a new container is added to the list and to
+  and an audio container the only input (`metadata.InputFormatArgs`, the one list the probe and the chapter
+  check take too, on every input whose demuxer ffmpeg guesses: the transcode's, a podcast episode's and the
+  watch rendition's; the remux names its own): a file that probes as a manifest or a playlist, DASH, HLS or
+  ffconcat, is refused, where through the `file` protocol ffmpeg opened the files it names and transcoded
+  them to whoever could stream it (`TestTranscodeOpensNoOtherInput`; at the API an empty transcode and a 422
+  `rendition_failed`, `TestCraftedPlaylistIsNoInput`; a new container is added to the list and to
   `TestAllowListReadsEveryLibraryFormat`); a HEAD
   runs no ffmpeg, its probe included, a podcast episode's too;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
@@ -1784,7 +1791,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `<data>/cache/renditions/watch/<key>.m4a`, never into the library (read-only). The encode (`renditionArgs`) is
   AAC-LC (ffmpeg's own `aac`; HE-AAC needs the non-free libfdk_aac), mono, 48 kbps, 44.1 kHz, MP4 with
   `+faststart`, no video, metadata or chapters, `+bitexact` (format and encoder), the input only the descriptor
-  (`-protocol_whitelist fd|pipe`, the demuxer ffmpeg's guess); no `-xerror` (it fails a whole encode on one damaged
+  (`-protocol_whitelist fd|pipe`, the demuxer ffmpeg's guess among `metadata.InputFormats`); no `-xerror` (it fails a whole encode on one damaged
   MP3 frame, ffmpeg 7.1 tested). Its duration is the source's (within 0.1 s on MP3 and M4B), so positions and
   chapters (CROSS-REPO §6) hold; since a read error partway still exits 0, a copy more than 1 s short of the
   source's exact duration (`metadata.ExactDuration`, the in-process probe, a header-less VBR MP3's frames counted;

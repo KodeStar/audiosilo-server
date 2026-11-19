@@ -320,6 +320,48 @@ func TestRenditionRefusals(t *testing.T) {
 	}
 }
 
+// TestCraftedPlaylistIsNoInput (security): a library file under an audio name
+// that is an HLS playlist or an ffconcat script naming another of the
+// library's files is no input to ffmpeg (metadata.InputFormats, the one list
+// a transcode and a rendition take with the probe): its transcode sends none
+// of the audio it names, and its watch rendition is 422 rendition_failed (a
+// refusal, remembered), not that file's audio encoded. Allowed: the file it
+// names transcodes.
+func TestCraftedPlaylistIsNoInput(t *testing.T) {
+	t.Parallel()
+	r := newRenditionEnv(t)
+	named := filepath.Join(r.lib.Root, filepath.FromSlash(rendPart1))
+	if resp, body := r.do(t, "GET", r.streamURL(rendPart1, "&transcode=1"), r.token, ""); resp.StatusCode != 200 || len(body) == 0 {
+		t.Fatalf("the named file's transcode = %d with %d bytes, want its audio", resp.StatusCode, len(body))
+	}
+	crafted := map[string]string{
+		"hls":      "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:4\n#EXTINF:3.0,\nfile://" + filepath.ToSlash(named) + "\n#EXT-X-ENDLIST\n",
+		"ffconcat": "ffconcat version 1.0\nfile '" + named + "'\n",
+	}
+	// Both written before either is asked for: a folder's listing is kept a
+	// moment (metadata.DirNames).
+	if err := os.MkdirAll(filepath.Join(r.lib.Root, "Crafted"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range crafted {
+		if err := os.WriteFile(filepath.Join(r.lib.Root, "Crafted", name+".mp3"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name := range crafted {
+		rel := "Crafted/" + name + ".mp3"
+		if resp, got := r.do(t, "GET", r.streamURL(rel, "&transcode=1"), r.token, ""); resp.StatusCode != 200 || len(got) != 0 {
+			t.Errorf("%s: transcode = %d with %d bytes, want none of the audio it names", name, resp.StatusCode, len(got))
+		}
+		if resp, got := r.do(t, "GET", r.streamURL(rel, "&rendition=watch"), r.token, ""); resp.StatusCode != 422 || codeOf(got) != "rendition_failed" {
+			t.Errorf("%s: watch rendition = %d %s, want 422 rendition_failed", name, resp.StatusCode, got)
+		}
+	}
+	if n := r.cached(t); n != 0 {
+		t.Fatalf("%d renditions cached, want none", n)
+	}
+}
+
 // TestRenditionRefusalRetryHint (server#289): a remembered refusal says when it
 // is tried again: the 422 carries Retry-After (the refusal's hour, in seconds)
 // and the renditions answer gives the failed file retry_after_seconds; a file not

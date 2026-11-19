@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 func TestAudioContentType(t *testing.T) {
@@ -303,14 +305,15 @@ func TestTranscodeArgs(t *testing.T) {
 		in   inputSpec
 		want []string
 	}{
-		// The seekable inputs (a descriptor, /dev/fd/3, a re-checked path)
-		// seek on the input side, each the only protocol ffmpeg may open, an
-		// audio container the only input.
-		{"fd", fdInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "fd", "-format_whitelist", audioDemuxers, "-ss", "8.500", "-i", "fd:"}},
-		{"dev fd", inputSpec{proto: "file", url: "/dev/fd/3"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-format_whitelist", audioDemuxers, "-ss", "8.500", "-i", "/dev/fd/3"}},
-		{"path", inputSpec{proto: "file", url: "file:/b/x.m4b"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-format_whitelist", audioDemuxers, "-ss", "8.500", "-i", "file:/b/x.m4b"}},
+		// The seekable inputs (a descriptor, /dev/fd/3 through ToolInput's
+		// link, a re-checked path) seek on the input side, each the only
+		// protocol ffmpeg may open, an audio container (metadata.InputFormats,
+		// the one list) the only input.
+		{"fd", fdInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "fd", "-format_whitelist", metadata.InputFormats, "-ss", "8.500", "-i", "fd:"}},
+		{"dev fd", inputSpec{proto: "file", url: "file:/tmp/audiosilo-input-1/input.m4b"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-format_whitelist", metadata.InputFormats, "-ss", "8.500", "-i", "file:/tmp/audiosilo-input-1/input.m4b"}},
+		{"path", inputSpec{proto: "file", url: "file:/b/x.m4b"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-format_whitelist", metadata.InputFormats, "-ss", "8.500", "-i", "file:/b/x.m4b"}},
 		// A pipe can't seek: -ss after -i decodes up to it.
-		{"pipe", pipeInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "pipe", "-format_whitelist", audioDemuxers, "-i", "pipe:0", "-ss", "8.500"}},
+		{"pipe", pipeInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "pipe", "-format_whitelist", metadata.InputFormats, "-i", "pipe:0", "-ss", "8.500"}},
 	} {
 		if got := transcodeArgs(tc.in, 8.5); !slices.Equal(got, append(tc.want, tail...)) {
 			t.Errorf("%s: transcodeArgs = %q\nwant %q", tc.name, got, append(tc.want, tail...))
@@ -365,7 +368,7 @@ func transcodeOpened(t *testing.T, ffprobe, src string, start float64) float64 {
 func nonFaststartM4A(t *testing.T) string {
 	t.Helper()
 	needFFmpeg(t)
-	if inputFor("ffmpeg") != fdInput {
+	if inputFor("ffmpeg").proto != fdInput.proto {
 		t.Skip("this ffmpeg has no fd: input protocol (older than 6.1)")
 	}
 	return writeNonFaststartM4A(t)
@@ -512,7 +515,7 @@ func TestInputForRetriesAFailedProbe(t *testing.T) {
 	t.Parallel()
 	failing, probes := probeCountingFFmpeg(t, "exit 1")
 	for range 3 {
-		if in := inputFor(failing); in != pipeInput {
+		if in := inputFor(failing); in.proto != pipeInput.proto {
 			t.Fatalf("inputFor(an ffmpeg that fails its probe) = %+v, want pipe:0", in)
 		}
 	}

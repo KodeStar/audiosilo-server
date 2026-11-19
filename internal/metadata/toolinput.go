@@ -1,6 +1,11 @@
 package metadata
 
-import "os"
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"time"
+)
 
 // ToolInput is how an external tool (ffprobe, ffmpeg) is handed f, the file
 // at path under root opened through root (BelowFolder, OpenRegularBelow), so
@@ -25,6 +30,75 @@ func ToolInput(f *os.File, root, path string) (input string, extra []*os.File, c
 	return toolInput(f, root, path)
 }
 
+// ToolInputBounded is ToolInput for a request's tool run (media's transcode
+// on an ffmpeg without the fd: protocol): where it looks at the share (path's
+// links resolved and the file opened once more, on Windows) it is a
+// LookBounded call (ctx, at most timeout), given up on (GaveUp) on a share
+// that stopped answering since the file's open, and what a late answer holds
+// let go then; on Unix it looks at nothing there, so it is ToolInput.
+func ToolInputBounded(ctx context.Context, f *os.File, root, path string, timeout time.Duration) (input string, extra []*os.File, cleanup func(), err error) {
+	if !toolInputLooks {
+		return toolInput(f, root, path)
+	}
+	return boundedToolInput(ctx, path, timeout, func() (string, []*os.File, func(), error) { return toolInput(f, root, path) })
+}
+
+// boundedToolInput runs look, a ToolInput on the share at path, as a
+// LookBounded call whose late answer, once given up on, is cleaned up (its
+// held handle closed) when it arrives.
+func boundedToolInput(ctx context.Context, path string, timeout time.Duration, look func() (string, []*os.File, func(), error)) (string, []*os.File, func(), error) {
+	type handed struct {
+		input   string
+		extra   []*os.File
+		cleanup func()
+	}
+	h, err := bounded(ctx, path, timeout, true, func() (handed, error) {
+		input, extra, cleanup, err := look()
+		return handed{input, extra, cleanup}, err
+	}, func(h handed) { h.cleanup() })
+	return h.input, h.extra, h.cleanup, err
+}
+
+// heldPathInput is ToolInput by path, where a tool inherits no descriptor
+// (Windows): path resolved (no link left in it), under root resolved, opened
+// there once more and the same file as f. That second handle is held until
+// cleanup: os.Open shares reads and writes but not deletion, so while it is
+// open the file can't be renamed away or deleted, and no link can take its
+// name before the tool opens it (f, opened through an os.Root, shares
+// deletion, so it alone would not hold the name). An error when path no
+// longer leads under root (errOutsideRoot) or to f (ErrReplacedWhileOpening).
+// Built on every platform so its test runs on every one.
+func heldPathInput(f *os.File, root, path string) (string, []*os.File, func(), error) {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if _, ok := relBelow(rootReal, real); !ok {
+		return "", nil, nil, &os.PathError{Op: "open", Path: path, Err: errOutsideRoot}
+	}
+	opened, err := f.Stat()
+	if err != nil {
+		return "", nil, nil, err
+	}
+	held, err := os.Open(real)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	now, err := held.Stat()
+	if err == nil && !os.SameFile(opened, now) {
+		err = &os.PathError{Op: "open", Path: path, Err: ErrReplacedWhileOpening}
+	}
+	if err != nil {
+		_ = held.Close()
+		return "", nil, nil, err
+	}
+	return real, nil, func() { _ = held.Close() }, nil
+}
+
 // InputFormats is the demuxers ffprobe and ffmpeg may read a library file
 // with (FFmpeg's -format_whitelist, each by the name ffmpeg -demuxers gives
 // it): the containers of the files the server indexes and serves
@@ -44,13 +118,14 @@ func ToolInput(f *os.File, root, path string) (input string, extra []*os.File, c
 const InputFormats = "mov,mp4,m4a,3gp,3g2,mj2,mp3,matroska,webm,ogg,flac,wav,aac,w64,aiff,asf,ac3,eac3,ape,wv,caf,amr"
 
 // InputFormatArgs is the arguments that hold ffprobe or ffmpeg to
-// InputFormats for a library file: before the input for ffprobe, before its
-// -i for ffmpeg (an input option). The tool fails ("Format not on
-// whitelist") on a file of any other format, nothing it names opened. Every
-// run handed a library file by ToolInput passes them (runFFprobe,
-// media.DetectSilences), and a new run on a library file should; media's
-// descriptor inputs (fd:, pipe:0) are held by -protocol_whitelist instead,
-// and its transcode of a library file by path is held by neither yet.
+// InputFormats for a library file or a podcast episode: before the input for
+// ffprobe, before its -i for ffmpeg (an input option). The tool fails
+// ("Format not on whitelist") on a file of any other format, nothing it names
+// opened. Every run whose demuxer the tool guesses passes them: runFFprobe,
+// media.DetectSilences, a transcode and a watch rendition (media's
+// transcodeArgs, renditionArgs, on every input they take: fd:, pipe:0 and the
+// file protocol, which alone could open what a playlist names), and a new run
+// should; the MP3-in-MKA remux names its one demuxer (-f matroska).
 func InputFormatArgs() []string { return []string{"-format_whitelist", InputFormats} }
 
 // SweepToolInputs removes the private folders ToolInput made for a tool's

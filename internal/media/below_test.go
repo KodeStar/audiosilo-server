@@ -106,10 +106,11 @@ func TestTranscodeSeeksTheDescriptor(t *testing.T) {
 	t.Parallel()
 	ffprobe := needFFmpeg(t)
 	src := writeNonFaststartM4A(t)
-	// Without fd: (an ffmpeg older than 6.1) the descriptor is /dev/fd/3 on
-	// Unix, the re-checked path elsewhere: both seekable.
+	// Without fd: (an ffmpeg older than 6.1) the input is metadata.ToolInput's
+	// (/dev/fd/3 through a link on Unix, the re-checked path elsewhere): both
+	// seekable.
 	ffmpegs := map[string]string{"no fd:": pipeOnlyFFmpeg(t)}
-	if inputFor("ffmpeg") == fdInput {
+	if inputFor("ffmpeg").proto == fdInput.proto {
 		ffmpegs["fd:"] = "ffmpeg"
 	}
 	for name, ffmpeg := range ffmpegs {
@@ -126,28 +127,6 @@ func TestTranscodeSeeksTheDescriptor(t *testing.T) {
 				t.Errorf("%s: transcoded duration from %v s = %v, want about %v", name, tc.start, d, tc.want)
 			}
 		}
-	}
-}
-
-// TestRecheckedInput: the fallback where ffmpeg can be handed no descriptor
-// (Windows without fd:) is the file's resolved path, only while it names the
-// file opened: the same file through a link gives the link's target, a path
-// that leads elsewhere since the open none.
-func TestRecheckedInput(t *testing.T) {
-	t.Parallel()
-	root, outside := libraryWithOutside(t)
-	f, _, err := metadata.OpenRegularBelow(root, filepath.Join(root, "Book", "a.m4a"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	in, err := recheckedInput(f)
-	if want := "file:" + filepath.Join(root, "Book", "a.m4a"); err != nil || in.url != want || in.proto != "file" || in.file != nil {
-		t.Fatalf("recheckedInput in place = %+v, %v, want %s alone", in, err, want)
-	}
-	swapForLink(t, root, outside)
-	if in, err := recheckedInput(f); !errors.Is(err, errNotOpened) {
-		t.Fatalf("recheckedInput once the path leads out of the library = %+v, %v, want errNotOpened", in, err)
 	}
 }
 

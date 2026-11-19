@@ -84,7 +84,7 @@ func TestTranscodeOpensNoOtherInput(t *testing.T) {
 				t.Errorf("the manifest through the file protocol was transcoded: %d bytes of the file it names, want none", len(out))
 			}
 			ffmpegs := map[string]string{"/dev/fd/3 or a path": noFD}
-			if inputFor("ffmpeg") == fdInput {
+			if inputFor("ffmpeg").proto == fdInput.proto {
 				ffmpegs["fd:"] = "ffmpeg"
 			}
 			for name, ffmpeg := range ffmpegs {
@@ -129,8 +129,9 @@ func writeFormat(path string, enc ...string) bool {
 	return exec.Command("ffmpeg", append(args, "-y", path)...).Run() == nil
 }
 
-// TestAllowListReadsEveryLibraryFormat: the demuxer allow-list (audioDemuxers)
-// refuses none of the library's own formats (metadata.AudioExtensions), nor a
+// TestAllowListReadsEveryLibraryFormat: the demuxer allow-list
+// (metadata.InputFormats, the one list the probe and the chapter check take
+// too) refuses none of the library's own formats (metadata.AudioExtensions), nor a
 // plain audio file under another's name: each still transcodes whole and from
 // a seek, through fd: and through the /dev/fd/3 fallback of an ffmpeg without
 // it, and encodes to a watch rendition of the source's length. A format this
@@ -139,7 +140,7 @@ func TestAllowListReadsEveryLibraryFormat(t *testing.T) {
 	t.Parallel()
 	ffprobe := needFFmpeg(t)
 	ffmpegs := map[string]string{"no fd:": pipeOnlyFFmpeg(t)}
-	fd := inputFor("ffmpeg") == fdInput
+	fd := inputFor("ffmpeg").proto == fdInput.proto
 	if fd {
 		ffmpegs["fd:"] = "ffmpeg"
 	}
@@ -169,6 +170,11 @@ func TestAllowListReadsEveryLibraryFormat(t *testing.T) {
 		{"webm.mka", []string{"-c:a", "libopus", "-ar", "48000", "-f", "webm"}, true},
 		{"adts.m4a", []string{"-c:a", "aac", "-b:a", "64k", "-f", "adts"}, false},
 		{"wav.mp3", []string{"-c:a", "pcm_s16le", "-f", "wav"}, true},
+		// The other audio containers a book may be in under a library name
+		// (metadata.InputFormats: aiff, asf, ac3).
+		{"aiff.m4a", []string{"-c:a", "pcm_s16be", "-f", "aiff"}, true},
+		{"wma.mp3", []string{"-c:a", "wmav2", "-b:a", "64k", "-f", "asf"}, true},
+		{"ac3.m4a", []string{"-c:a", "ac3", "-b:a", "64k", "-f", "ac3"}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

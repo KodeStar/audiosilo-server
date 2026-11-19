@@ -113,8 +113,8 @@ func renditionCheck(ctx context.Context, src *os.File, size int64, out string) e
 // before the end arrives). No video (cover art), no metadata, no chapters (the
 // watch reads the book's from the API). The input may only be the descriptor
 // (-protocol_whitelist), so crafted bytes that probe as a playlist can't make
-// ffmpeg open other files, and only an audio container (-format_whitelist,
-// audioDemuxers: a playlist is no input at all); the demuxer is ffmpeg's guess
+// ffmpeg open other files, and only an audio container
+// (metadata.InputFormatArgs: a playlist is no input at all); the demuxer is ffmpeg's guess
 // among those, since the library holds every audio format. The list changes
 // which inputs are read, never an encode (renditionVersion stays). Bitexact
 // output names no encoder version, so the same ffmpeg writes the same bytes
@@ -123,12 +123,11 @@ func renditionCheck(ctx context.Context, src *os.File, size int64, out string) e
 // skips) fail the whole encode; a read error that ends the encode early is
 // caught by renditionCheck instead (a short copy).
 func renditionArgs(in inputSpec, out string) []string {
-	return []string{
-		"-nostdin", "-loglevel", "error",
-		"-protocol_whitelist", in.proto, "-format_whitelist", audioDemuxers, "-i", in.url,
+	args := append([]string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", in.proto}, metadata.InputFormatArgs()...)
+	return append(args, "-i", in.url,
 		"-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1",
 		"-c:a", "aac", "-b:a", "48k", "-ac", "1", "-ar", "44100",
 		"-fflags", "+bitexact", "-flags:a", "+bitexact",
-		"-movflags", "+faststart", "-f", "mp4", "-y", "file:" + out,
-	}
+		"-movflags", "+faststart", "-f", "mp4", "-y", "file:"+out,
+	)
 }
