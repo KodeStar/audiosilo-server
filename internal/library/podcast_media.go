@@ -76,23 +76,28 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 		if err != nil {
 			return nil, nil, podcastLookErr(err)
 		}
-		// The final checks, after the open: a share's fault a retry may get
-		// past on any of them is a look given up on, as on the looks before.
+		// The final checks, after the open, each made once the one before it
+		// answered: a share's fault a retry may get past on any of them is a
+		// look given up on, as on the looks before.
 		opened, err := f.Stat()
-		named, nerr := podcastLstat(abs)
-		berr := podcastBarrier(dir, path.Base(rel))
-		feedNow, ferr := podcastLstat(filename)
-		for _, lerr := range []error{err, nerr, ferr, berr} {
-			if metadata.TransientFault(lerr) || metadata.GaveUp(lerr) {
-				_ = f.Close()
-				return nil, nil, podcastLookErr(lerr)
-			}
+		var named, feedNow os.FileInfo
+		if err == nil {
+			named, err = podcastLstat(abs)
 		}
-		if err == nil && nerr == nil && berr == nil && ferr == nil && opened.Mode().IsRegular() && named.Mode().IsRegular() &&
+		if err == nil {
+			err = podcastBarrier(dir, path.Base(rel))
+		}
+		if err == nil {
+			feedNow, err = podcastLstat(filename)
+		}
+		if err == nil && opened.Mode().IsRegular() && named.Mode().IsRegular() &&
 			opened.Size() == pin.Fetch.Bytes && os.SameFile(before, opened) && os.SameFile(opened, named) && feedSignature(feedNow) == pin.FeedSig {
 			return f, pin.Fetch, nil
 		}
 		_ = f.Close()
+		if err = transientGaveUp(err); metadata.GaveUp(err) {
+			return nil, nil, err
+		}
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return nil, nil, ctx.Err()
 		}
@@ -109,11 +114,8 @@ var podcastLstat = os.Lstat
 // up on (metadata.AsGaveUp), never the episode absent; any other
 // ErrNotIndexable, the episode not there as pinned.
 func podcastLookErr(err error) error {
-	switch {
-	case metadata.GaveUp(err):
+	if err = transientGaveUp(err); metadata.GaveUp(err) {
 		return err
-	case metadata.TransientFault(err):
-		return metadata.AsGaveUp(err)
 	}
 	return ErrNotIndexable
 }
