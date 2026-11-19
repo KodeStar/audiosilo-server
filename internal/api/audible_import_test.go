@@ -600,6 +600,22 @@ func TestAudiblePollAnswersBeforeQueueing(t *testing.T) {
 	}
 }
 
+// A panic while a poll's backups are queued, past the Bridge's request, is
+// that pass's failure: the server carries on and the next poll queues again.
+func TestAudiblePollQueuePanicIsContained(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t)
+	b.api.audibleAfterPoll = func(context.Context, string) (int, error) { panic("boom") }
+	if code, out := b.putTitles(t, testAccount, "p2", true); code != http.StatusOK {
+		t.Fatalf("the poll whose queueing panics: %d %s", code, out)
+	}
+	asked := 0
+	b.api.audibleAfterPoll = func(context.Context, string) (int, error) { asked++; return 0, nil }
+	if code, out := b.putTitles(t, testAccount, "p3", true); code != http.StatusOK || asked != 1 {
+		t.Fatalf("the next poll: %d %s, queueing asked %d times", code, out, asked)
+	}
+}
+
 // A backup's job and its record on the title commit together: a record that
 // fails queues no job, for the console's Back up and for the backups a poll
 // asks for (a job with no title record ran with nothing showing it).

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -432,10 +433,16 @@ func (a *API) afterAudiblePoll(account string) {
 		queue = a.audibleQueues().AfterPoll
 	}
 	a.audiblePollFolds.Go(func() {
+		// Past the request, a panic is no longer net/http's to contain: it is
+		// this pass's failure, never the server's.
+		defer func() {
+			if p := recover(); p != nil {
+				a.log.Error("audible: queueing a poll's backups panicked", "account", account, "panic", p, "stack", string(debug.Stack()))
+			}
+		}()
 		// Not ended with the server's base context: a shutdown has already
-		// cancelled it by the time StopModules waits, which would drop the
-		// queue mid-way (jobs queued, their titles unrecorded) rather than
-		// let it finish within the timeout.
+		// cancelled it by the time StopModules waits, which would stop the
+		// queue part-way rather than let it finish within the timeout.
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(a.baseCtx), afterAudiblePollTimeout)
 		defer cancel()
 		if n, err := queue(ctx, account); err != nil {
