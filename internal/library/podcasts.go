@@ -417,7 +417,8 @@ func (s *Scanner) strayPodcastFolder(ctx context.Context, lib catalog.Library, s
 // details and the folder's signature (podcastShowSignature), which an index
 // row of the folder records. err is ErrNotIndexable where no show folder or
 // feed.json is, errFeedUnusable where the feed.json is no regular file, and
-// wraps errFolderClosed where the folder can't be looked into.
+// wraps errFolderClosed where the folder can't be looked into (the folder
+// itself not statable is the bare error: unread, never stray).
 func podcastFolderSig(root, show string) (dir string, info os.FileInfo, sig string, err error) {
 	dir, err = ContentJoin(root, show)
 	if err != nil {
@@ -425,9 +426,14 @@ func podcastFolderSig(root, show string) (dir string, info os.FileInfo, sig stri
 	}
 	// A top-level show must itself be a real directory, even if a symlink would
 	// remain inside the root. The Bridge owns only this one directory level.
+	// Only a folder that is gone is no show's: one the server can't stat (a
+	// share that dropped, a root it may list but not search) may still be one.
 	fi, err := os.Lstat(filepath.Join(root, show))
-	if err != nil || !fi.IsDir() {
+	if errors.Is(err, os.ErrNotExist) || err == nil && !fi.IsDir() {
 		return "", nil, "", ErrNotIndexable
+	}
+	if err != nil {
+		return "", nil, "", err
 	}
 	info, err = os.Lstat(filepath.Join(dir, "feed.json"))
 	if errors.Is(err, os.ErrNotExist) {

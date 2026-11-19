@@ -587,6 +587,29 @@ func TestPodcastScanStaysPartialOnAKnownUnreadableFolder(t *testing.T) {
 	}
 }
 
+// Denied: a root the server may list but not search (no x bit, or a share
+// dropping after its listing) lets no show folder be stat'ed. That is a
+// partial scan, not every show gone: nothing is pruned.
+func TestPodcastScanKeepsShowsItCannotStat(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a folder the server's user can't search")
+	}
+	b := newRenameBed(t)
+	if err := os.Chmod(b.root, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(b.root, 0o700) })
+	if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || !res.Partial {
+		t.Fatalf("scan %+v %v", res, err)
+	}
+	if err := os.Chmod(b.root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.shows(t); len(got) != 1 || got[0] != "Example Show" {
+		t.Fatalf("a show the scan could not stat was pruned: %v", got)
+	}
+}
+
 // Only a refusal to look into a folder (EACCES, EPERM) makes it stray: a fault
 // a retry may get past (transientFault) or another errno does not, nor a
 // refusal past a feed.json seen there, nor any error that is no file system's.
