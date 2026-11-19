@@ -440,8 +440,9 @@ func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer context.AfterFunc(a.baseCtx, cancel)()
+	query := r.URL.Query()
 	var floor *int32
-	if values, exists := r.URL.Query()["min_priority"]; exists {
+	if values, exists := query["min_priority"]; exists {
 		if len(values) != 1 {
 			writeErrorCode(w, 400, "invalid_request", "Invalid minimum priority.")
 			return
@@ -454,8 +455,8 @@ func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 		v := int32(n)
 		floor = &v
 	}
-	opt := bridge.ClaimOptions{MinPriority: floor, ShareOff: r.URL.Query().Get("share_off") == "1"}
-	job, err := a.bridge.ClaimWith(ctx, credentialFrom(r.Context()).ID, r.URL.Query()["kind"], wait, opt)
+	opt := bridge.ClaimOptions{MinPriority: floor, ShareOff: query.Get("share_off") == "1"}
+	job, err := a.bridge.ClaimWith(ctx, credentialFrom(r.Context()).ID, query["kind"], wait, opt)
 	switch {
 	case errors.Is(err, bridge.ErrNoHeartbeat):
 		writeErrorCode(w, http.StatusConflict, "no_heartbeat", "send a status first")

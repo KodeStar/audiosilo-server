@@ -173,7 +173,8 @@ type kindSpec struct {
 	cancelsOpen map[string]string
 	// module is the managed module a job of the kind needs ("" for none): the
 	// api answers 404 module_off while it is off (ModuleFor), and a queued one
-	// is held meanwhile (Service.ModuleOn). A job that needs ModuleContributions
+	// is held meanwhile (Service.held; a generate job that shares along is not
+	// held from a claim that honours ShareOff). A job that needs ModuleContributions
 	// files to the community, so it also needs a Bridge that can
 	// (ErrCannotContribute), and one of a kind that only files (the kind's own
 	// module is ModuleContributions) is asked to stop at its next report once
@@ -261,7 +262,8 @@ func (s *Service) moduleOff(id string) bool {
 
 // held reports whether a queued job of kind with params waits for a managed
 // module that is off (ModuleFor, moduleOff): no claim hands it out
-// (nextQueued), and it refuses no new job that cancels it (givesWay).
+// (nextQueued; but a claim that honours ShareOff is handed one held only for
+// its share, sharesAlong), and it refuses no new job that cancels it (givesWay).
 func (s *Service) held(kind string, params json.RawMessage) bool {
 	m := ModuleFor(kind, params)
 	return m != "" && s.moduleOff(m)
@@ -403,7 +405,7 @@ func contributes(params json.RawMessage) bool {
 // claim hands out a queued one meanwhile (nextQueued), but for a generate job
 // that shares along to a Bridge that honours ShareOff (ClaimOptions.ShareOff).
 func ModuleFor(kind string, params json.RawMessage) string {
-	if kind == KindSidecars && contributes(params) {
+	if sharesAlong(kind, params) {
 		return ModuleContributions
 	}
 	return kinds[kind].module
@@ -630,8 +632,9 @@ type NewJob struct {
 	Params      json.RawMessage
 	RequestedBy int64
 	Priority    int
-	// Check, when set, refuses the job with its error, run first in Enqueue's
-	// transaction (before the open job of the kind is looked up), so a write
+	// Check, when set, refuses the job with its error, run in Enqueue's
+	// transaction once lapsed leases are ended (before the open job of the
+	// kind is looked up, so it refuses even when one is open), so a write
 	// that would refuse it can't land between the caller's own look and the
 	// insert: chapters.detect's catalog.DetectRefusal (server#471).
 	Check        func(context.Context, *sql.Tx) error
@@ -770,6 +773,9 @@ func checkNew(j *NewJob) error {
 // job only while no open job of another kind refuses it (kindSpec's
 // refusedWhileOpen: ErrGenerateOpen, ErrDetectOpen, ErrDescribeOpen,
 // ErrContributeOpen, ErrReadalongOpen); the open job of its own kind is still returned either way.
+// j.Check, when set, refuses it in the insert's transaction once the kind is
+// known to run, ahead of the open job and the other refusals
+// (chapters.detect's catalog.DetectRefusal).
 // The caller has resolved the library and the book (j.Path is the book's
 // indexed path) and checked the job's module is on (ModuleFor).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (*Job, bool, error) {
