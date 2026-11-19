@@ -3467,11 +3467,17 @@ func (s *Scanner) splitParentOf(ctx context.Context, lib catalog.Library, b *cat
 	// Folders refused for good (a permission, the device gone) stay so: a
 	// disc folder among them counts as the disc its name says, as it was
 	// when it last listed, so a sibling disc refused never fails a disc that
-	// reads (nor makes it a book of its own).
+	// reads (nor makes it a book of its own). Any other folder refused, the
+	// set's own among them, may hold audio that makes this no disc set: the
+	// set can't be known, the refusal the answer (lookRefused).
 	folders := slices.Collect(maps.Keys(dirs))
-	for dir := range side.unanswered {
-		if metadata.IsDiscFolder(path.Base(dir)) {
+	for dir, refused := range side.unanswered {
+		switch {
+		case refused == nil:
+		case metadata.IsDiscFolder(path.Base(dir)):
 			folders = append(folders, dir)
+		default:
+			return "", lookRefused{refused}
 		}
 	}
 	if discSets(slices.Values(folders))[parent] {

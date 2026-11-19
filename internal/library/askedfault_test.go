@@ -178,6 +178,25 @@ func TestAskedDiscWithARefusedSibling(t *testing.T) {
 	}
 }
 
+// A disc folder whose set can't be known for good is not indexable on demand,
+// rather than a book of its own with no set: the set's own folder refusing
+// its listing (traversable, not listable), or a folder in it with no disc's
+// name refused, which may hold the audio that makes it no disc set. Not
+// parallel: it swaps the looks.
+func TestAskedDiscWhoseSetIsRefused(t *testing.T) {
+	root, lib, s, asks := askedEnv(t, "Author/Book/CD1/01.mp3", "Author/Book/CD2/01.mp3", "Author/Book/Bonus/01.mp3")
+	for _, refused := range []string{filepath.Join(root, "Author", "Book"), filepath.Join(root, "Author", "Book", "Bonus")} {
+		failLooks(t, map[string]syscall.Errno{refused: syscall.EACCES})
+		for name, ask := range asks {
+			_, err := ask("Author/Book/CD1")
+			checkAsked(t, name+" of a disc with "+refused+" refused", err, false)
+		}
+		if b, err := s.cat.GetBookByPath(t.Context(), lib.ID, "Author/Book/CD1"); !errors.Is(err, catalog.ErrNotFound) {
+			t.Errorf("with %s refused the disc was indexed: %+v, %v; want no book", refused, b, err)
+		}
+	}
+}
+
 // A request's looks while its book is resolved end together at its wait cap
 // (WithWaitCap), not only each at its look time: a share that answers each
 // look just inside its time never holds the request past the cap, its answer a
