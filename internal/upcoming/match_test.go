@@ -203,6 +203,60 @@ func TestRunnerSeriesResolvedAgainOnAnUnlink(t *testing.T) {
 	}
 }
 
+// Re-matching a book from another work to the one its own ASIN gives leaves
+// the job no newer match to compare (it reads a match naming the identifiers'
+// work as standing in for nothing), so the re-match itself sets the series
+// due: it is resolved again at the next run by that work, not a month on. A
+// re-match to the same work sets nothing due.
+func TestRunnerSeriesResolvedAgainOnARematchToItsOwnWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newFixture(t)
+	f.expanse("2011", "2012")
+	f.md.workRefs["x1"] = []meta.SeriesRef{{ID: "other", Name: "Space Operas"}}
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	match := func(work string) {
+		t.Helper()
+		if err := f.cat.EditBook(ctx, f.lib.ID, "The Expanse/1", catalog.BookEdit{
+			Match: &catalog.MatchAnchor{WorkID: work}, Source: catalog.SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	series := func() catalog.UpcomingSeries {
+		t.Helper()
+		rows, err := f.cat.UpcomingSeriesAll(ctx)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("series = %+v, %v", rows, err)
+		}
+		return rows[0]
+	}
+	match("x1") // a wrong match: the series is none by it
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := series(); got.SeriesID != "" {
+		t.Fatalf("matched to x1: series = %+v, want none", got)
+	}
+	f.clock = f.clock.Add(time.Hour)
+	match("e1") // the work A1 already gives
+	if err := f.r.RunOnce(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	was := series()
+	if was.SeriesID != "expanse" {
+		t.Fatalf("re-matched to its own work: series = %+v, want expanse", was)
+	}
+	f.clock = f.clock.Add(time.Hour)
+	match("e1")
+	if err := f.r.RunOnce(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := series(); got.ResolvedAt != was.ResolvedAt {
+		t.Fatalf("matched to e1 again: resolved again at %s (first %s)", got.ResolvedAt, was.ResolvedAt)
+	}
+}
+
 // A book matched in the console to a work its community series doesn't list
 // holds its own position in that series: the volume is not missing, and a
 // recent release there is not announced; the match still decides its work,

@@ -121,8 +121,17 @@ var ErrMatchedSince = errors.New("the book's community match changed since it wa
 // writeAnchor stores the book's anchor at ref (a non-empty WorkID; an unlink is
 // clearCommunity's) in the edit's transaction. With was (BookEdit.MatchIf), only
 // while the recorded match is still was: else it writes nothing and returns
-// ErrMatchedSince, so the caller's transaction rolls back.
+// ErrMatchedSince, so the caller's transaction rolls back. A match it replaces
+// with another work sets the book's series due (setMatchedSeriesDue), as an
+// unlink does: the job reads a match naming the work the book's identifiers
+// resolved to as standing in for nothing, so a re-match to that work would
+// leave the series resolved by the old match's until the monthly recheck.
 func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, editor any, now string) error {
+	if was == nil || was.WorkID != "" { // an insert-only write replaces no match
+		if err := setMatchedSeriesDue(ctx, tx, rematched(ref, a.WorkID)); err != nil {
+			return err
+		}
+	}
 	args := []any{ref.LibraryID, ref.Path, a.WorkID, a.RecordingID, a.How, nullableID(a.RunID), editor, now,
 		a.OfferedASIN, a.OfferedISBN}
 	if was != nil && was.WorkID != "" {

@@ -666,7 +666,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `upcoming_series.resolved_at`, so nothing is remembered between runs; server#375; an unlink or a
   library's Clear matches leaves no row to compare, so it empties the `resolved_at` of the series of each
   book whose match it removes, in its own transaction, bar a match naming the work `upcoming_owned` holds
-  for the book (it stood in for nothing): `catalog.setMatchedSeriesDue`; such a series whose books then
+  for the book (it stood in for nothing): `catalog.setMatchedSeriesDue`; a re-match does the same for the
+  match it replaces with another work (`writeAnchor`), since a new match naming the identifiers' own work
+  stands in for nothing either; such a series whose books then
   have no work, a match-only book's, is resolved to none, its items dropped);
   (3) metaserve's watch feed, 50 series a request (split when full), says which series have news; (4)
   `series/{id}` is read when new, with news, or a week old (2 at a time; a 404 marks it gone, dropped after

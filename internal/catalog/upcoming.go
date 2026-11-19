@@ -195,9 +195,11 @@ func (c *Catalog) SetUpcomingSeries(ctx context.Context, libraryID int64, key, n
 // setMatchedSeriesDue makes the upcoming job resolve again, at its next run,
 // the local series (their stored keys: books.series_key, book_more_series) of
 // each indexed book of pick with a recorded match, in tx (clearCommunity's,
-// before it removes the matches): their rows' resolved_at is emptied, which
-// reads as never resolved. The job's due rule compares a match's set_at with
-// resolved_at, and an unlink leaves no match to compare. A match naming the
+// before it removes the matches; writeAnchor's, before it replaces one): their
+// rows' resolved_at is emptied, which reads as never resolved. The job's due
+// rule compares a match's set_at with resolved_at, and an unlink leaves no
+// match to compare, nor a re-match to the work the book's identifiers resolved
+// to, which the job reads as standing in for nothing. A match naming the
 // work its book's identifiers resolved to (upcoming_owned) stood in for
 // nothing, so its going changes no series (the job's own rule when a match is
 // set): a library's Clear matches over tagged books sets none due. The
