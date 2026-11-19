@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // seedMonsters indexes He Who Fights with Monsters as the report found it: five
@@ -405,7 +407,7 @@ const (
 func TestSeriesKeyScale(t *testing.T) {
 	t.Parallel()
 	var sizes []*seriesScale
-	if raceEnabled {
+	if testwait.Race {
 		sizes = []*seriesScale{newSeriesScale(t, 5_000)}
 	} else {
 		sizes = []*seriesScale{newSeriesScale(t, 5_000), newSeriesScale(t, 50_000)}
@@ -431,7 +433,7 @@ func TestSeriesKeyScale(t *testing.T) {
 					best[i] = took
 				}
 			}
-			if raceEnabled {
+			if testwait.Race {
 				t.Logf("%s: %v", what, best[0])
 				return
 			}

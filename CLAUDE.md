@@ -140,6 +140,7 @@ internal/importer/    listening imports from Audiobookshelf (admin, v1): the rea
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/metamirror/  metadata mirror mode: the runner keeping a local copy of the community metadata database in <data>/meta-mirror/ (audiosilo-meta's pkg/release download, pkg/query handler over it; see "Mirror mode" below)
 internal/mirrortest/  mirror-mode test support (tests only): the data releases published on audiosilo-meta's releasetest GitHub fake (querytest's artifact, a schema_version rewrite, a realistic release list), a remote metadata service that counts and answers 500 (Remote), and Eventually
+internal/testwait/    test support (tests only): Scaled, a test's wait for this build (four times as long under -race), and Race; see "Every feature ships with a test" in CONVENTIONS.md
 internal/diskspace/   a filesystem's size and free space per OS (statfs / GetDiskFreeSpaceEx): Health > System's roots and the mirror's disk guard
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)

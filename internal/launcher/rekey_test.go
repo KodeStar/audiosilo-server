@@ -62,7 +62,7 @@ func TestScanEndRekeysANewBook(t *testing.T) {
 		if r.Status != catalog.RunOK {
 			t.Fatalf("scan ended %s", r.Status)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(startWait):
 		t.Fatal("the scan never finished")
 	}
 	p, err := cat.GetProgress(ctx, ann, catalog.Ref{LibraryID: lib.ID, Path: book})

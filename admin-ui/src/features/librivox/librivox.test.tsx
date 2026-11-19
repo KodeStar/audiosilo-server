@@ -363,10 +363,10 @@ describe('Library > LibriVox', () => {
       await within(list).findByRole(
         'link',
         { name: 'In library' },
-        { timeout: DONE_RECHECK_MS + 3000 },
+        { timeout: DONE_RECHECK_MS + 10_000 },
       ),
     ).toBeInTheDocument();
-  }, 15_000);
+  });
 
   it('keeps the rows when asking the work again fails, and lets go of a job that is gone', async () => {
     let asked = 0;

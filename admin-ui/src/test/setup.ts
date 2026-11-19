@@ -7,9 +7,10 @@ import '@/i18n';
 // file's tests keeps that cold import out of every test's own time
 // (preloadScreens); a plain .ts unit test renders no screen, so it skips the
 // console's module graph. The hook's budget is for the import alone, so a slow
-// machine has room. findBy keeps 3 s for a screen's own requests and renders
-// under a full parallel run.
-configure({ asyncUtilTimeout: 3000 });
+// machine has room. findBy keeps 10 s for a screen's own requests and renders
+// under a full parallel run on a loaded machine (the server's gate beside it):
+// the bound only ends a look that has already failed.
+configure({ asyncUtilTimeout: 10_000 });
 beforeAll(async () => {
   if (!expect.getState().testPath?.endsWith('.tsx')) return;
   const { preloadScreens } = await import('./preload-screens');

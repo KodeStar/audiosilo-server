@@ -443,19 +443,6 @@ func writeOffConfig(t *testing.T, data, addr, extra string) {
 	}
 }
 
-// waitRun waits for a stopped Run's result, which must be nil.
-func waitRun(t *testing.T, done <-chan error) {
-	t.Helper()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Run: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("Run did not stop")
-	}
-}
-
 // A real start answers the healthcheck, and setup.skip finishes the console's
 // first-run flow at start (server#184) while a start without it leaves the
 // flow to the console.
@@ -508,7 +495,7 @@ func TestRunAnswersStartingBeforeTheDatabase(t *testing.T) {
 	case <-reached:
 	case err := <-done:
 		t.Fatalf("Run = %v before it listened", err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(startWait):
 		t.Fatal("Run never listened")
 	}
 	if _, err := os.Stat(filepath.Join(data, "audiosilo.db")); !os.IsNotExist(err) {
@@ -776,7 +763,7 @@ func TestRunStartMarkerUnderAutocert(t *testing.T) {
 	case <-reached:
 	case err := <-done:
 		t.Fatalf("Run = %v before it listened", err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(startWait):
 		t.Fatal("Run never listened")
 	}
 	var out bytes.Buffer

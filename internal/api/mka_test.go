@@ -21,6 +21,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // mkaFixture writes a 4-second Matroska audio file of MP3 with two chapters
@@ -196,14 +197,15 @@ func (m *mkaEnv) cachedFiles(t *testing.T) int {
 
 // holdRuns holds the runs of c (the env's remux or rendition cache) until the
 // returned release is called (also at cleanup, before the env waits for its
-// media caches, so a failed test never hangs).
-func holdRuns(t *testing.T, c *media.FileCache) (release func()) {
+// media caches, so a failed test never hangs). held closes once the first run
+// is held.
+func holdRuns(t *testing.T, c *media.FileCache) (held <-chan struct{}, release func()) {
 	t.Helper()
 	gate := make(chan struct{})
-	c.HoldRunsForTests(gate)
+	held = c.HoldRunsForTests(gate)
 	release = sync.OnceFunc(func() { close(gate) })
 	t.Cleanup(release)
-	return release
+	return held, release
 }
 
 // TestMatroskaAudioWithoutFFmpeg (D3a, #161): with ffmpeg off an .mka of MP3 is
@@ -446,7 +448,7 @@ func TestMatroskaRemuxWarmsOnItem(t *testing.T) {
 	t.Parallel()
 	m := newMKAEnv(t)
 	m.api.ffmpeg = "ffmpeg"
-	release := holdRuns(t, m.api.remux)
+	_, release := holdRuns(t, m.api.remux)
 
 	// Held remuxes: the answers still come back at once.
 	if resp, body := m.do(t, "GET", m.url("item", mkaMixed), m.token, ""); resp.StatusCode != http.StatusOK {
@@ -524,7 +526,7 @@ func TestMatroskaAdminBookSaysRemuxCached(t *testing.T) {
 		t.Fatalf("%d cached files after a view of the page, want none", n)
 	}
 
-	release := holdRuns(t, m.api.remux)
+	_, release := holdRuns(t, m.api.remux)
 	// Held: the editor's read answers at once, the copy not made yet.
 	if got := read(mkaBook, mkaFile, true); got == nil || *got {
 		t.Fatalf("remux_cached before the remux = %v, want false", got)
@@ -606,7 +608,7 @@ func TestMatroskaColdRemuxTranscodes(t *testing.T) {
 	m := newMKAEnv(t)
 	m.api.ffmpeg = "ffmpeg"
 	m.api.remuxWait = 20 * time.Millisecond
-	release := holdRuns(t, m.api.remux)
+	_, release := holdRuns(t, m.api.remux)
 
 	resp, body := m.do(t, "GET", m.url("stream", mkaFile), m.token, "")
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "audio/mpeg" ||
@@ -721,7 +723,7 @@ func TestMatroskaColdRemuxWaits(t *testing.T) {
 			m := newMKAEnv(t)
 			m.api.ffmpeg = "ffmpeg"
 			m.api.remuxWait = 20 * time.Millisecond
-			release := holdRuns(t, m.api.remux)
+			_, release := holdRuns(t, m.api.remux)
 			if tc.fill {
 				for range cap(m.api.transcodeSem) {
 					m.api.transcodeSem <- struct{}{}
@@ -842,10 +844,21 @@ func TestMatroskaRefusedPastTheStreamBound(t *testing.T) {
 	m := newMKAEnv(t)
 	m.api.ffmpeg = "ffmpeg"
 	m.api.remuxWait = 20 * time.Millisecond
-	m.api.streamWait = 100 * time.Millisecond
-	release := holdRuns(t, m.api.remux)
+	// The bound must outlast the looks before the remux (the join, the source's
+	// look) on a loaded run, or they would be the ones given up on.
+	m.api.streamWait = testwait.Scaled(time.Second)
+	held, release := holdRuns(t, m.api.remux)
 	got := m.getAsyncOf(mkaAACFile, "&download=1")
-	time.Sleep(3 * m.api.streamWait) // inside the longer wait, past the stream's bound
+	select {
+	case <-held:
+	case a := <-got:
+		t.Fatalf("answered before the remux ran: %q, %v", a.body, a.err)
+	case <-time.After(testwait.Scaled(15 * time.Second)):
+		t.Fatal("the remux never ran")
+	}
+	// The request began before its remux did: a bound later, it is inside the
+	// longer wait and past the stream's bound.
+	time.Sleep(m.api.streamWait + 50*time.Millisecond)
 	release()
 	a := await(t, got)
 	if a.resp.StatusCode != http.StatusOK || a.resp.Header.Get("Content-Type") != "audio/x-matroska" || a.body == "" {

@@ -333,9 +333,7 @@ describe('libraries', () => {
     const fiction = await screen.findByRole('listitem', { name: 'Fiction' });
     await userEvent.setup().click(within(fiction).getByRole('button', { name: 'Rescan' }));
     expect(await within(fiction).findByText('1 of 4 books checked')).toBeInTheDocument();
-    expect(
-      await screen.findByText('Finished scanning Fiction', {}, { timeout: 3000 }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Finished scanning Fiction')).toBeInTheDocument();
   });
 
   it('deletes a library only after its name is typed', async () => {

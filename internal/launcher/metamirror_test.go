@@ -110,14 +110,7 @@ metadata:
 	}()
 	t.Cleanup(func() {
 		stop()
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Errorf("Run: %v", err)
-			}
-		case <-time.After(10 * time.Second):
-			t.Error("Run did not stop")
-		}
+		waitRun(t, done)
 	})
 	base := "http://" + addr + "/api/v1"
 	waitFor(t, "the server", func() bool {
@@ -223,12 +216,6 @@ func freeAddr(t *testing.T) string {
 	addr := l.Addr().String()
 	_ = l.Close()
 	return addr
-}
-
-// waitFor polls cond for up to ten seconds.
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	mirrortest.Eventually(t, what, 10*time.Second, cond)
 }
 
 // call sends one API request, checks its status and decodes its answer into out

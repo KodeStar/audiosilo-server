@@ -13,6 +13,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/oidc"
 	"github.com/kodestar/audiosilo-server/internal/oidc/oidctest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 const redirectURI = "https://audiosilo.test/api/v1/auth/oidc/callback"
@@ -264,40 +265,44 @@ func TestDiscoveryIssuerMismatch(t *testing.T) {
 // TestCallsShareOneBudget: a sign-in's calls to the provider (discovery, token,
 // keys, userinfo) share one deadline. Each slow answer alone is well inside the
 // budget, so only a shared deadline ends the use that needs four; the same
-// provider within a larger budget signs in.
+// provider within a larger budget signs in. The times are scaled to the build:
+// a loaded -race run is late by more than a fixed few hundred milliseconds.
 func TestCallsShareOneBudget(t *testing.T) {
 	t.Parallel()
-	const delay = 150 * time.Millisecond
+	delay := testwait.Scaled(400 * time.Millisecond)
 	for _, tc := range []struct {
 		budget time.Duration
 		ok     bool
-	}{{400 * time.Millisecond, false}, {5 * time.Second, true}} {
-		idp := oidctest.New(t, "audiosilo", "s3cret", alice)
-		settings := oidc.Settings{Issuer: idp.Issuer, ClientID: idp.ClientID, ClientSecret: "s3cret",
-			UsernameClaim: "preferred_username", GroupsClaim: "groups", Budget: tc.budget}
-		p, err := oidc.New(settings)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// The authorize step on its own (its discovery is the use's only call).
-		f := flow()
-		code := signIn(t, p, f)
-		idp.SetKnobs(oidctest.Knobs{Delay: delay, UserinfoOnly: true})
-		// A fresh provider so the exchange discovers again: four slow calls.
-		p, err = oidc.New(settings)
-		if err != nil {
-			t.Fatal(err)
-		}
-		began := time.Now()
-		_, err = p.Exchange(context.Background(), code, f, true)
-		took := time.Since(began)
-		if tc.ok && err != nil {
-			t.Fatalf("budget %v: %v", tc.budget, err)
-		}
-		// Out of time is the provider unavailable (nothing refused), not a failure.
-		if !tc.ok && (!errors.Is(err, oidc.ErrUnavailable) || took > tc.budget+delay) {
-			t.Fatalf("budget %v: err %v after %v", tc.budget, err, took)
-		}
+	}{{delay * 5 / 2, false}, {testwait.Scaled(10 * time.Second), true}} {
+		t.Run(tc.budget.String(), func(t *testing.T) {
+			t.Parallel()
+			idp := oidctest.New(t, "audiosilo", "s3cret", alice)
+			settings := oidc.Settings{Issuer: idp.Issuer, ClientID: idp.ClientID, ClientSecret: "s3cret",
+				UsernameClaim: "preferred_username", GroupsClaim: "groups", Budget: tc.budget}
+			p, err := oidc.New(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The authorize step on its own (its discovery is the use's only call).
+			f := flow()
+			code := signIn(t, p, f)
+			idp.SetKnobs(oidctest.Knobs{Delay: delay, UserinfoOnly: true})
+			// A fresh provider so the exchange discovers again: four slow calls.
+			p, err = oidc.New(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			began := time.Now()
+			_, err = p.Exchange(context.Background(), code, f, true)
+			took := time.Since(began)
+			if tc.ok && err != nil {
+				t.Fatalf("budget %v: %v", tc.budget, err)
+			}
+			// Out of time is the provider unavailable (nothing refused), not a failure.
+			if !tc.ok && (!errors.Is(err, oidc.ErrUnavailable) || took > tc.budget+delay) {
+				t.Fatalf("budget %v: err %v after %v", tc.budget, err, took)
+			}
+		})
 	}
 }
 
@@ -519,27 +524,36 @@ func TestProbeSeesTheProviderGone(t *testing.T) {
 
 // TestBudgetStartsAfterAnotherDiscovery: a use that waits for a discovery
 // another use has under way is not charged that wait: its own calls still get
-// the whole budget. Here the wait plus its two slow calls (token, keys) is
-// over the budget, the two calls alone well within it.
+// the whole budget. Here the wait (most of the discovery's 7/10 of the budget)
+// plus its two slow calls (token and keys, 3/10 each) is over the budget, the
+// two calls alone well within it, and the discovery within its own use's. The
+// budget is scaled to the build, so a loaded -race run keeps those margins, up
+// to 5 s: the discovery must also end inside the longest a use waits for
+// another's (UseTime less CallBudget, 5 s).
 func TestBudgetStartsAfterAnotherDiscovery(t *testing.T) {
 	t.Parallel()
-	const delay = 200 * time.Millisecond
+	// UseTime less CallBudget is the longest a use waits for another's discovery.
+	budget := min(testwait.Scaled(2*time.Second), oidc.UseTime-oidc.CallBudget)
 	idp := oidctest.New(t, "audiosilo", "s3cret", alice)
 	settings := oidc.Settings{Issuer: idp.Issuer, ClientID: idp.ClientID, ClientSecret: "s3cret",
-		UsernameClaim: "preferred_username", GroupsClaim: "groups", Budget: 500 * time.Millisecond}
+		UsernameClaim: "preferred_username", GroupsClaim: "groups", Budget: budget}
 	first, err := oidc.New(settings)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f := flow()
 	code := signIn(t, first, f)
-	idp.SetKnobs(oidctest.Knobs{Delay: delay})
+	idp.SetKnobs(oidctest.Knobs{Delay: budget * 3 / 10, DiscoveryDelay: budget * 7 / 10})
 	p, err := oidc.New(settings)
 	if err != nil {
 		t.Fatal(err)
 	}
 	go func() { _, _ = p.AuthURL(context.Background(), flow(), scopes) }() // discovers, slowly
-	for idp.Calls("discovery") < 2 {                                       // the discovery is under way
+	deadline := time.Now().Add(testwait.Scaled(10 * time.Second))
+	for idp.Calls("discovery") < 2 { // the discovery is under way
+		if time.Now().After(deadline) {
+			t.Fatal("the other use's discovery never began")
+		}
 		time.Sleep(time.Millisecond)
 	}
 	if _, err := p.Exchange(context.Background(), code, f, false); err != nil {

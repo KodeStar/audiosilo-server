@@ -878,7 +878,7 @@ describe('settings', () => {
     );
     renderApp('/server?topic=metadata');
     expect(await screen.findByText('Opening the local copy')).toBeInTheDocument();
-    expect(await screen.findByText('Local copy ready', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText('Local copy ready')).toBeInTheDocument();
     expect(calls.some((c) => c.path === '/admin/meta/mirror')).toBe(true);
   });
 

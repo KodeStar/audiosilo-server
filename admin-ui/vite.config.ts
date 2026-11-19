@@ -68,5 +68,11 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: true,
+    // A screen's test renders the console and walks it with user-event: under
+    // a full parallel run on a loaded machine (the server's gate beside it, a
+    // busy CI runner) one takes several times its time alone, past vitest's
+    // 5 s. The bound only ends a test that is stuck; a timing a test means to
+    // check runs on a fake clock.
+    testTimeout: 30_000,
   },
 });

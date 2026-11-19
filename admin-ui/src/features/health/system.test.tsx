@@ -103,9 +103,7 @@ describe('system in mirror mode', () => {
     expect(
       await screen.findByText('Downloading the local copy for the first time.'),
     ).toBeInTheDocument();
-    expect(
-      await screen.findByText('220 MB of 440 MB downloaded (50%)', {}, { timeout: 3000 }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('220 MB of 440 MB downloaded (50%)')).toBeInTheDocument();
     expect(screen.getByRole('progressbar', { name: 'Download progress' })).toHaveAttribute(
       'aria-valuenow',
       '50',
@@ -161,9 +159,7 @@ describe('system in mirror mode', () => {
       }),
     );
     renderApp('/health/system');
-    expect(
-      await screen.findByText('data-v2026.10.10-aaaaaaa-bbbbbbb', {}, { timeout: 3000 }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('data-v2026.10.10-aaaaaaa-bbbbbbb')).toBeInTheDocument();
     await waitFor(() => expect(systemGets).toBe(2));
     // Ready again: the light poll stops.
     const polls = calls.filter((c) => c.path === '/admin/meta/mirror').length;
@@ -196,9 +192,7 @@ describe('system in mirror mode', () => {
     );
     // The answer says a check is due now: the page follows it on the light route,
     // which finds the download running.
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Check now' })).toBeDisabled(), {
-      timeout: 3000,
-    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Check now' })).toBeDisabled());
     expect(calls.some((c) => c.method === 'GET' && c.path === '/admin/meta/mirror')).toBe(true);
   });
 
@@ -231,8 +225,6 @@ describe('system in mirror mode', () => {
     expect(
       await screen.findByText(
         'Answering from the local copy. No book is looked up over the internet.',
-        {},
-        { timeout: 3000 },
       ),
     ).toBeInTheDocument();
     expect(calls.some((c) => c.path === '/admin/meta/mirror')).toBe(true);
@@ -293,7 +285,7 @@ describe('system in mirror mode', () => {
       }),
     );
     renderApp('/health/system');
-    await waitFor(() => expect(systemGets).toBe(2), { timeout: 3000 });
+    await waitFor(() => expect(systemGets).toBe(2));
     await screen.findByText(
       code === 'metadata_off'
         ? 'Turned off. No requests leave the server for it.'

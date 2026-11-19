@@ -209,9 +209,7 @@ describe('single sign-on', () => {
           : { body: { token: 'sso-session', user: admin, server_id: 'srv-1' } },
     });
     renderApp('/', { oidcReturn: { flow: 'aZ09-_aZ09-_aZ09' } });
-    expect(
-      await screen.findByRole('heading', { level: 1, name: /chris\.$/ }, { timeout: 3000 }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: /chris\.$/ })).toBeInTheDocument();
     expect(getToken()).toBe('sso-session');
     const sent = calls.filter((c) => c.path === '/auth/oidc/finish');
     expect(sent).toHaveLength(2);

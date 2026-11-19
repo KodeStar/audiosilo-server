@@ -139,7 +139,7 @@ describe('backups', () => {
     await user.click(await screen.findByRole('button', { name: 'Back up now' }));
     const before = feedReads();
     expect(screen.getByRole('button', { name: 'Backing up...' })).toBeDisabled();
-    expect(await screen.findByText('Backup made', {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText('Backup made')).toBeInTheDocument();
     // The run's end reads the bell's feed again: a failure would be there now,
     // not a minute later (server#383).
     await waitFor(() => expect(feedReads()).toBeGreaterThan(before));
