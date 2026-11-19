@@ -525,6 +525,7 @@
   "shares.name": "Nome",
   "shares.namePlaceholder": "p. ex. Crianças",
   "shares.nameRequired": "Dê um nome à partilha.",
+  "shares.nameTooLong": "O nome da partilha não pode ter mais de 200 caracteres.",
   "shares.create": "Criar partilha",
   "shares.saveName": "Guardar nome",
   "shares.addFolderTitle": "Adicionar a {{name}}",

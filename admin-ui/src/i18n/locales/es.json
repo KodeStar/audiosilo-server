@@ -525,6 +525,7 @@
   "shares.name": "Nombre",
   "shares.namePlaceholder": "p. ej. Niños",
   "shares.nameRequired": "Ponle un nombre a la colección.",
+  "shares.nameTooLong": "El nombre de la colección no puede pasar de 200 caracteres.",
   "shares.create": "Crear colección",
   "shares.saveName": "Guardar nombre",
   "shares.addFolderTitle": "Añadir a {{name}}",

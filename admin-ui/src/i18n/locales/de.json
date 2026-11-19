@@ -503,6 +503,7 @@
   "shares.name": "Name",
   "shares.namePlaceholder": "z. B. Kinder",
   "shares.nameRequired": "Gib der Freigabe einen Namen.",
+  "shares.nameTooLong": "Der Name der Freigabe darf höchstens 200 Zeichen lang sein.",
   "shares.create": "Freigabe erstellen",
   "shares.saveName": "Namen speichern",
   "shares.addFolderTitle": "Zu {{name}} hinzufügen",

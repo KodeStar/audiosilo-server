@@ -503,6 +503,7 @@
   "shares.name": "Name",
   "shares.namePlaceholder": "e.g. Kids",
   "shares.nameRequired": "Give the share a name.",
+  "shares.nameTooLong": "Keep the share's name to 200 characters or fewer.",
   "shares.create": "Create share",
   "shares.saveName": "Save name",
   "shares.addFolderTitle": "Add to {{name}}",
