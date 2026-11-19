@@ -22,16 +22,6 @@ import (
 // first byte (splitListener's peek).
 const readHeaderTimeout = 10 * time.Second
 
-// Run starts the server and blocks until ctx is cancelled, then drains
-// connections gracefully.
-func Run(ctx context.Context, cfg *config.Config, handler http.Handler, log *slog.Logger) error {
-	s, err := Start(ctx, cfg, handler, log)
-	if err != nil {
-		return err
-	}
-	return s.Wait()
-}
-
 // Serving is a server Start left running.
 type Serving struct {
 	wait func() error

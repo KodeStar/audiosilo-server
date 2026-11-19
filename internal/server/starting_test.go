@@ -60,12 +60,7 @@ func TestStartListenErrorAndWait(t *testing.T) {
 		t.Fatalf("Start on a taken port = %v, nil; want the listen error", s)
 	}
 
-	free, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Bind = free.Addr().String()
-	_ = free.Close()
+	cfg.Bind = freeAddr(t)
 	ctx, stop := context.WithCancel(t.Context())
 	s, err := Start(ctx, cfg, &StartGate{}, log)
 	if err != nil {
