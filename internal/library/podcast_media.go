@@ -40,23 +40,9 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 		if !pin.Present || !feed.ValidFetch(pin.Fetch) || pin.Fetch.DeletedAt != "" {
 			return nil, nil, ErrNotIndexable
 		}
-		dir, err := ContentJoin(lib.Root, show)
+		dir, filename, feedInfo, err := podcastShowLooks(lib.Root, show)
 		if err != nil {
-			// The join's look a share failed is never the episode absent; a
-			// link out of the root, a name no show has, are.
-			return nil, nil, podcastShowLookErr(err)
-		}
-		st, err := podcastLstat(filepath.Join(lib.Root, show))
-		if err != nil {
-			return nil, nil, podcastShowLookErr(err)
-		}
-		if !st.IsDir() {
-			return nil, nil, ErrNotIndexable
-		}
-		filename := filepath.Join(dir, "feed.json")
-		feedInfo, err := podcastLstat(filename)
-		if err != nil {
-			return nil, nil, podcastShowLookErr(err)
+			return nil, nil, err
 		}
 		if feedSignature(feedInfo) != pin.FeedSig {
 			return nil, nil, ErrNotIndexable
@@ -113,6 +99,66 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 		}
 	}
 	return nil, nil, ErrNotIndexable
+}
+
+// podcastShowLooks is OpenPodcast's looks at the folder of show, under root,
+// above any episode's file: the join, the folder and its feed.json, which
+// ShowRefused makes too. dir is the folder joined, filename its feed.json and
+// feedInfo that file's Lstat; err is podcastShowLookErr's for a look that
+// failed (a lasting refusal ErrShowRefused), ErrNotIndexable for a show that
+// is no folder.
+func podcastShowLooks(root, show string) (dir, filename string, feedInfo os.FileInfo, err error) {
+	if dir, err = ContentJoin(root, show); err != nil {
+		// The join's look a share failed is never the episode absent; a
+		// link out of the root, a name no show has, are.
+		return "", "", nil, podcastShowLookErr(err)
+	}
+	st, err := podcastLstat(filepath.Join(root, show))
+	if err != nil {
+		return "", "", nil, podcastShowLookErr(err)
+	}
+	if !st.IsDir() {
+		return "", "", nil, ErrNotIndexable
+	}
+	filename = filepath.Join(dir, "feed.json")
+	if feedInfo, err = podcastLstat(filename); err != nil {
+		return "", "", nil, podcastShowLookErr(err)
+	}
+	return dir, filename, feedInfo, nil
+}
+
+// ShowRefused is ErrShowRefused (with the share's error) when the share
+// refuses for good the show folder of the episode at rel in lib, its
+// feed.json or the episode's publish barrier: OpenPodcast's looks above the
+// episode's file, made whatever the index holds of the episode (one not
+// downloaded yet among them), as one metadata.Bounded call (ctx, at most
+// timeout). The Bridge writes only the episode's file, which would sit behind
+// the same refusal, so a fetch would download the whole episode again for
+// nothing: the fetch routes answer it 409 show_unreadable, the stream its
+// 404, and the scheduler and the prefetch pass the show over. nil for any
+// other answer (no such folder yet, a share that stopped answering): a fetch
+// may still help there.
+func ShowRefused(ctx context.Context, lib catalog.Library, rel string, timeout time.Duration) error {
+	show := path.Dir(rel)
+	if !feed.EpisodePath(show, rel) {
+		return nil
+	}
+	_, err := metadata.Bounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(show)), timeout, func() (struct{}, error) {
+		dir, filename, feedInfo, err := podcastShowLooks(lib.Root, show)
+		if err == nil {
+			err = podcastBarrier(podcastLstat, dir, path.Base(rel))
+		}
+		if err == nil {
+			if _, err = podcastFeeds.read(lib.Root, filename, show, feedInfo); err != nil {
+				err = podcastShowLookErr(err)
+			}
+		}
+		return struct{}{}, err
+	}, nil)
+	if errors.Is(err, ErrShowRefused) {
+		return err
+	}
+	return nil
 }
 
 // podcastLstat is OpenPodcast's and a scan's (podcastFolderSig,

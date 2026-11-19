@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -85,5 +87,76 @@ func TestPodcastSchedulerBoundsFairnessAndPolicies(t *testing.T) {
 		if err = db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE substr(rel_path,1,6)=?`, show).Scan(&total); err != nil || total != 0 {
 			t.Fatalf("no automatic work: %s %d %v", show, total, err)
 		}
+	}
+}
+
+// TestSchedulerPassesOverARefusedShow: a followed show whose folder the share
+// refuses the server for good (chmod 000) gets no scheduled fetch
+// (library.ShowRefused, the fetch routes' check): the Bridge's file would sit
+// behind the same refusal, the episode never indexed as there, so every tick
+// would download it again. Allowed: the folder readable again, its episodes
+// are fetched. Not parallel only for the chmod: the folder is this test's own.
+func TestSchedulerPassesOverARefusedShow(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a folder whatever its mode")
+	}
+	ctx := context.Background()
+	db := storetest.Open(t)
+	now := time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)
+	cat := catalog.New(db, func() time.Time { return now })
+	queue := bridge.New(db, func() time.Time { return now })
+	if _, err := db.ExecContext(ctx, `INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES(1,'admin','','admin','t','t'); INSERT INTO tokens(id,user_id,token_hash,kind,created_at) VALUES(1,1,'hash','bridge','t'); INSERT INTO bridge_status(id,paired_at,paired_by) VALUES(1,'t',1)`); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Pods", Root: t.TempDir(), Kind: catalog.KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = queue.SaveHeartbeat(ctx, 1, bridge.Status{Version: "0.9.0", Kinds: []string{bridge.KindPodcastFetch}, Libraries: []bridge.LibraryStatus{{LibraryID: lib.ID, MountPath: "/podcasts", Mapped: true, Writable: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := feed.ReadFile("testdata/phase2c2", "testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for j := range f.Episodes {
+		f.Episodes[j].Fetch = nil
+	}
+	if _, err = cat.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "s", "", "", f, nil, true, false); err != nil {
+		t.Fatal(err)
+	}
+	if err = cat.FollowPodcast(ctx, 1, lib.ID, "Fixture Show", f.ShowID); err != nil {
+		t.Fatal(err)
+	}
+	if err = cat.SetPodcastPolicy(ctx, lib.ID, "Fixture Show", f.ShowID, &catalog.Policy{Mode: "archive", Keep: 3, Days: 7}); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(lib.Root, "Fixture Show")
+	if err = os.Mkdir(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	deps := modules.Deps{Log: slog.Default(), Catalog: cat, Bridge: queue}
+	fetches := func() (n int) {
+		t.Helper()
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE kind='podcast.fetch'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if err = SchedulerTick(ctx, deps); err != nil {
+		t.Fatal(err)
+	}
+	if n := fetches(); n != 0 {
+		t.Fatalf("%d fetches scheduled in a show the share refuses, want none", n)
+	}
+	if err = os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err = SchedulerTick(ctx, deps); err != nil {
+		t.Fatal(err)
+	}
+	if n := fetches(); n == 0 {
+		t.Fatal("no fetch scheduled once the show's folder reads")
 	}
 }

@@ -633,6 +633,51 @@ func TestOpenPodcastReadsAShareFault(t *testing.T) {
 	opened.Close()
 }
 
+// TestShowRefusedForAnEpisodeNotDownloaded: ShowRefused makes OpenPodcast's
+// looks above the episode's file for an episode the library does not hold
+// yet, which OpenPodcast answers absent before it looks: a permission on the
+// show's folder, its feed.json or the publish barrier is ErrShowRefused, and
+// the folder unreadable on the disk too (chmod 000, read through the root).
+// Denied the refusal: a share's fault a retry may get past, the folder not
+// there, a readable show. Not parallel: it swaps podcastLstat.
+func TestShowRefusedForAnEpisodeNotDownloaded(t *testing.T) {
+	ctx, _, lib, _, f, dir := podcastDiskFixture(t)
+	rel := f.Episodes[2].Path
+	if err := ShowRefused(ctx, *lib, rel, time.Second); err != nil {
+		t.Fatalf("a readable show: %v", err)
+	}
+	was := podcastLstat
+	t.Cleanup(func() { podcastLstat = was })
+	for _, at := range []string{dir, filepath.Join(dir, "feed.json"), filepath.Join(dir, ".audiosilo")} {
+		for _, errno := range []syscall.Errno{syscall.EACCES, syscall.EIO, syscall.ENOENT} {
+			podcastLstat = func(p string) (os.FileInfo, error) {
+				if p == at {
+					return nil, &fs.PathError{Op: "lstat", Path: p, Err: errno}
+				}
+				return was(p)
+			}
+			err := ShowRefused(ctx, *lib, rel, time.Second)
+			if refused := errors.Is(err, ErrShowRefused); refused != (errno == syscall.EACCES) || (err != nil) != refused {
+				t.Errorf("%s failing %v: %v, want ErrShowRefused for the permission alone", at, errno, err)
+			}
+		}
+	}
+	podcastLstat = was
+	if err := ShowRefused(ctx, *lib, "Another Show/2026-10-17-c0d697452a.mp3", time.Second); err != nil {
+		t.Errorf("a show folder not there yet: %v, want nil (a fetch makes it)", err)
+	}
+	if os.Geteuid() == 0 {
+		return // root reads a folder whatever its mode
+	}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := ShowRefused(ctx, *lib, rel, time.Second); !errors.Is(err, ErrShowRefused) {
+		t.Errorf("a show folder chmod 000: %v, want ErrShowRefused", err)
+	}
+}
+
 // TestPodcastScanKeepsAShowOnAShareFault: a podcast scan whose look at a show
 // (its folder, an episode's publish barrier) fails as a share does that a
 // retry may get past is partial, the show and its episodes kept as indexed,

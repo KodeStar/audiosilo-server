@@ -1930,7 +1930,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
     new file sitting behind the same refusal, so it is `library.ErrShowRefused` (`podcastShowLookErr`) and
     those three routes answer it up front, 409 `show_unreadable` with nothing queued, rather than download the
     whole episode again on every ask (`podcastPresent`, `writePodcastStorageError`;
-    `TestPodcastStreamRefusedFolderIs404`, `TestOpenPodcastReadsAShareFault`).
+    `TestPodcastStreamRefusedFolderIs404`, `TestOpenPodcastReadsAShareFault`). An episode not downloaded yet
+    in such a show meets the same check, `library.ShowRefused` (OpenPodcast's looks above the file, whatever the
+    index holds): the fetch routes' 409, the stream's 404, and the scheduler and the prefetch pass the show over
+    (`TestShowRefusedForAnEpisodeNotDownloaded`, `TestSchedulerPassesOverARefusedShow`,
+    `TestPrefetchPassesOverARefusedShow`).
   - **The server's own limits** (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY) and any error on neither list: no share's
     fault, never a 503 `share_not_answering`; a route answers it as it did before the rule (an asked read's
     `lookRefused` 404, a stream's missing file, a 500 where the route logs one).

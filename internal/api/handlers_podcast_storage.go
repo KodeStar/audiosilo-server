@@ -265,6 +265,13 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 			writePodcastFetchPending(w, bridge.UnavailableFetchStatus(bridge.FetchStatus{}, bridge.ErrKindUnavailable))
 			return
 		}
+		// An episode not downloaded yet in a show the share refuses for good
+		// is the 404 a refused one is: its fetch would sit behind the same
+		// refusal (library.ShowRefused).
+		if library.ShowRefused(r.Context(), *lib, rel, metadata.WaitLeft(deadline)) != nil {
+			writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
+			return
+		}
 		var status bridge.FetchStatus
 		f, pin, status, err = a.podcastDemand.Fetch(r.Context(), *lib, rel, userFrom(r.Context()).ID, userFrom(r.Context()).IsDemo)
 		if err != nil {

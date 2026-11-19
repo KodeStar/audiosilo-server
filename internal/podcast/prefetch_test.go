@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -278,5 +280,81 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 	p4.work.Wait()
 	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE rel_path=?`, candidate.Path).Scan(&n); err != nil || n != 0 {
 		t.Fatal("removed entry prefetched", n, err)
+	}
+}
+
+// TestPrefetchPassesOverARefusedShow: the next episode in a show whose folder
+// the share refuses the server for good (chmod 000) is not prepared
+// (library.ShowRefused, the fetch routes' check): the Bridge's file would sit
+// behind the same refusal. Allowed: the folder readable again, a queue's
+// change prepares it. Not parallel only for the chmod: the folder is this
+// test's own.
+func TestPrefetchPassesOverARefusedShow(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a folder whatever its mode")
+	}
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	jobs := bridge.New(db, time.Now)
+	if _, err := db.ExecContext(ctx, `INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES(1,'admin','','admin','t','t'),(2,'listener','','user','t','t'); INSERT INTO tokens(id,user_id,token_hash,kind,created_at) VALUES(1,1,'bridgehash','bridge','t'); INSERT INTO bridge_status(id,paired_at,paired_by) VALUES(1,'t',1)`); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Pods", Root: t.TempDir(), Kind: catalog.KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = jobs.SaveHeartbeat(ctx, 1, bridge.Status{Kinds: []string{bridge.KindPodcastFetch}, Libraries: []bridge.LibraryStatus{{LibraryID: lib.ID, Mapped: true, Writable: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := feed.ReadFile("testdata/phase2c2", "testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range f.Episodes {
+		f.Episodes[i].Fetch = nil
+	}
+	if _, err = cat.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "s", "", "", f, nil, true, false); err != nil {
+		t.Fatal(err)
+	}
+	if err = cat.GrantWholeLibrary(ctx, 2, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(lib.Root, "Fixture Show")
+	if err = os.Mkdir(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	who := catalog.Caller{ID: 2, Podcasts: true}
+	scopes, err := cat.CallerScopes(ctx, who)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := catalog.Ref{LibraryID: lib.ID, Path: f.Episodes[0].Path}
+	next := catalog.Ref{LibraryID: lib.ID, Path: f.Episodes[1].Path}
+	if err = cat.SetQueue(ctx, 2, []catalog.Ref{current, next}, scopes, nil); err != nil {
+		t.Fatal(err)
+	}
+	prepared := func() (n int) {
+		t.Helper()
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE kind='podcast.fetch' AND rel_path=?`, next.Path).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	p := &Prefetcher{Catalog: cat, Bridge: jobs, Context: ctx}
+	done := p.Start(who, current, true)
+	defer done()
+	p.work.Wait()
+	if n := prepared(); n != 0 {
+		t.Fatalf("%d fetches prepared in a show the share refuses, want none", n)
+	}
+	if err = os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p.Reconsider(who)
+	p.work.Wait()
+	if n := prepared(); n != 1 {
+		t.Fatalf("%d fetches prepared once the show's folder reads, want 1", n)
 	}
 }

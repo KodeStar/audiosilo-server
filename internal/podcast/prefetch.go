@@ -7,6 +7,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
 type prefetchCurrent struct {
@@ -151,8 +152,10 @@ func (p *Prefetcher) reconsider(who catalog.Caller, initial bool) {
 			return
 		}
 		podcasts := map[int64]bool{}
+		byID := map[int64]catalog.Library{}
 		for _, lib := range libs {
 			podcasts[lib.ID] = lib.Kind == catalog.KindPodcasts
+			byID[lib.ID] = lib
 		}
 		next, ok := NextPodcast(queue, c.ref, podcasts)
 		if !ok {
@@ -185,6 +188,13 @@ func (p *Prefetcher) reconsider(who catalog.Caller, initial bool) {
 		// A removed entry is never fetched automatically (plan 2.2); open
 		// work for it may still be raised.
 		if pin.Removed && st.State == "absent" {
+			settled = true
+			return
+		}
+		// Nor one in a show the share refuses for good (library.ShowRefused,
+		// the fetch routes' check): the Bridge's file would sit behind the
+		// same refusal.
+		if library.ShowRefused(ctx, byID[next.LibraryID], next.Path, StreamWait) != nil {
 			settled = true
 			return
 		}

@@ -394,10 +394,11 @@ func TestPodcastStreamOnAHeldShareAnswers(t *testing.T) {
 // a feed's episode ids it couldn't queue, a 500). The fetch routes refuse it
 // up front too, a 409 show_unreadable with nothing queued (a listener's GET
 // and POST, an admin's download): a new file would sit behind the same
-// refusal, so each ask downloaded the whole episode again for nothing.
-// Allowed: the folder readable again, the episode streams; an episode file
-// gone is still fetched again. Not parallel only for the chmod: the folder is
-// this test's own.
+// refusal, so each ask downloaded the whole episode again for nothing. So is
+// an episode not downloaded yet in that folder (library.ShowRefused): the
+// fetch routes' 409, the stream's 404, nothing queued. Allowed: the folder
+// readable again, the episode streams; an episode file gone is still fetched
+// again. Not parallel only for the chmod: the folder is this test's own.
 func TestPodcastStreamRefusedFolderIs404(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a folder whatever its mode")
@@ -420,9 +421,18 @@ func TestPodcastStreamRefusedFolderIs404(t *testing.T) {
 			t.Errorf("a listener's %s fetch of that episode = %d %s, want 409 show_unreadable", method, resp.StatusCode, out)
 		}
 	}
-	resp, out := b.do(t, "POST", fmt.Sprintf("/api/v1/admin/libraries/%d/podcasts/fetch", b.lib.ID), b.adminTok, fmt.Sprintf(`{"path":%q}`, ep.Path))
-	if resp.StatusCode != http.StatusConflict || !strings.Contains(out, `"code":"show_unreadable"`) {
-		t.Errorf("an admin's download of that episode = %d %s, want 409 show_unreadable", resp.StatusCode, out)
+	for _, p := range []string{ep.Path, f.Episodes[2].Path} {
+		resp, out := b.do(t, "POST", fmt.Sprintf("/api/v1/admin/libraries/%d/podcasts/fetch", b.lib.ID), b.adminTok, fmt.Sprintf(`{"path":%q}`, p))
+		if resp.StatusCode != http.StatusConflict || !strings.Contains(out, `"code":"show_unreadable"`) {
+			t.Errorf("an admin's download of %s = %d %s, want 409 show_unreadable", p, resp.StatusCode, out)
+		}
+	}
+	absent := f.Episodes[2].Path
+	if resp, out := b.doHeaders(t, "POST", fetchRoute(b.lib.ID, absent), b.userTok, fetchBody(absent), podcastHeaders()); resp.StatusCode != http.StatusConflict || !strings.Contains(out, `"code":"show_unreadable"`) {
+		t.Errorf("a listener's fetch of an episode not downloaded yet there = %d %s, want 409 show_unreadable", resp.StatusCode, out)
+	}
+	if w := getPodcastStream(b, podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(absent))); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "episode_not_found") {
+		t.Errorf("the stream of an episode not downloaded yet there = %d %s, want 404 episode_not_found", w.Code, w.Body)
 	}
 	if n := podcastFetches(t, b); n != 0 {
 		t.Errorf("%d fetches asked of the Bridge for an episode the share refuses, want none", n)

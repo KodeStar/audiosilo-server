@@ -56,10 +56,12 @@ func (a *API) podcastFetchStatuses(r *http.Request, lib int64, paths []string) (
 // new file. One whose show folder, feed.json or publish barrier is refused
 // (library.ErrShowRefused) is returned: a new file would sit behind the same
 // refusal, so every ask would download the whole episode again for nothing
-// (writePodcastStorageError's 409 show_unreadable).
+// (writePodcastStorageError's 409 show_unreadable); so is that refusal for an
+// episode not downloaded yet (library.ShowRefused, the scheduler's and the
+// prefetch's check too).
 func (a *API) podcastPresent(ctx context.Context, lib *catalog.Library, rel string, pin catalog.PodcastPin) (bool, error) {
 	if !pin.Present || !feed.ValidFetch(pin.Fetch) || pin.Fetch.DeletedAt != "" {
-		return false, nil
+		return false, library.ShowRefused(ctx, *lib, rel, a.fileWait)
 	}
 	f, _, err := library.OpenPodcastBounded(ctx, a.cat, *lib, rel, a.fileWait)
 	if err == nil {
