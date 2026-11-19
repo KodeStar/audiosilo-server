@@ -545,9 +545,15 @@ function Candidates({
                 ) : null}
               </span>
               <span className="flex shrink-0 flex-col items-end gap-1 text-right">
-                <Badge variant={scoreTone(c.score)}>
-                  {t('book.match.score', { score: Math.round(c.score) })}
-                </Badge>
+                {c.recorded ? (
+                  // Named, not matched: the book's recorded match, which the
+                  // search missed (server#331), says so instead of a score.
+                  <Badge variant="secondary">{t('book.match.recorded')}</Badge>
+                ) : (
+                  <Badge variant={scoreTone(c.score)}>
+                    {t('book.match.score', { score: Math.round(c.score) })}
+                  </Badge>
+                )}
                 {length ? (
                   <span className="text-[11.5px] text-subtle-foreground">
                     {lengthLabel(t, lang, length)}

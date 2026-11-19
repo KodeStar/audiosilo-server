@@ -367,6 +367,12 @@ type FieldValue struct {
 	Locked   bool   `json:"locked"`
 	EditedBy string `json:"edited_by,omitempty"`
 	EditedAt string `json:"edited_at,omitempty"`
+	// Enrichment is the Bridge's enrichment of the field (an ASIN or ISBN its
+	// Audible backfill stored) while an override hides it, omitted otherwise:
+	// what the field falls back to, over Scanned, once that override goes (an
+	// Unlink taking back a community one leaves the book matched by it,
+	// server#350).
+	Enrichment string `json:"enrichment,omitempty"`
 }
 
 // chapterOverrideMatch pairs a chapter_overrides row `co` with the chapters row
@@ -561,6 +567,7 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 			fv.Value, fv.Source = v, SourceCommunity
 		}
 		if o, ok := l.overrides[field]; ok {
+			fv.Enrichment = l.enrichment[field]
 			fv.Value, fv.Source, fv.Locked, fv.EditedBy, fv.EditedAt = o.Value, o.Source, true, o.UpdatedBy, o.UpdatedAt
 		}
 		out[field] = fv
@@ -826,7 +833,10 @@ type BookEdit struct {
 	// the Audible backfill) stays too. A run's bookkeeping of a match it read (a
 	// refresh's heal or new identifier, a repick's ASIN, a match item's new
 	// match), so a match made by hand meanwhile stays, and so do its values: an
-	// ASIN taken from the old match would outrank it (server#354).
+	// ASIN taken from the old match would outrank it (server#354). A MatchIf
+	// naming a match rewrites only its work, recording and offered identifiers:
+	// how, the run, the editor and the time stay the match's own (MatchAnchor),
+	// a hand re-accept of the same match made meanwhile included (server#355).
 	MatchIf *MatchAnchor
 	// MatchIfASIN, beside a zero MatchIf, is the ASIN the book was read with
 	// when it is matched by it alone (an unknown_asin run's book: its own ASIN
@@ -1003,8 +1013,28 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		// the record of it: left behind, its values would match the book to
 		// the same work again on the next run. First, so the rest of the edit
 		// (a series swap, labels) reads the unlinked book and still applies.
-		if _, _, err := clearCommunity(ctx, tx, oneBook(at)); err != nil {
+		// Its rebuild is the edit's own when the rest only writes fields
+		// (rebuilt once, at the end: server#331); one that reads the books row
+		// first (a series swap, labels, chapters) reads it rebuilt.
+		pick := oneBook(at)
+		pick.noRebuild = (len(edit.Set) > 0 || len(edit.Revert) > 0) && !touches(edit, FieldSeries) &&
+			len(edit.Add) == 0 && len(edit.Remove) == 0 &&
+			edit.ChapterSource == "" && len(edit.ChapterSet) == 0 && len(edit.ChapterRevert) == 0
+		cleared, _, err := clearCommunity(ctx, tx, pick)
+		if err != nil {
 			return err
+		}
+		if cleared > 0 {
+			// The runs that applied its match no longer show it standing. By
+			// run, outcome and applied first, which idx_match_run_items_counts
+			// covers (the kept runs' applied items), then the book.
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE match_run_items SET detail = ?
+				  WHERE run_id IN (SELECT id FROM match_runs) AND outcome IN (?, ?) AND applied = ?
+				    AND library_id = ? AND path = ?`,
+				ItemDetailUnlinked, OutcomeAuto, OutcomeReview, ItemApplied, ref.LibraryID, path); err != nil {
+				return err
+			}
 		}
 	default:
 		if edit.MatchIf != nil && edit.MatchIf.WorkID == "" {

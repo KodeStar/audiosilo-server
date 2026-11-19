@@ -74,7 +74,8 @@ func startRun(t *testing.T, e *testEnv, admin string, libID int64) int64 {
 
 // A run whose FinishMatching and its own settle (server#350) both failed is
 // left matching with nothing behind it: an Unlink isn't refused for it, Stop
-// settles it (interrupted) and a Start settles any other.
+// settles it and a Start settles any other. Each had recorded every book, so
+// it settles ready, its review kept, not interrupted (server#350 item 2).
 func TestStuckMatchingRunIsReleased(t *testing.T) {
 	t.Parallel()
 	e, admin, _, libID := newMatchRunEnv(t, "us")
@@ -96,8 +97,8 @@ func TestStuckMatchingRunIsReleased(t *testing.T) {
 	if resp, body := e.do(t, "POST", stopURL, admin, ""); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("stop a stuck run = %d %s, want 204", resp.StatusCode, body)
 	}
-	if s := runStatus(t, e, id); s != catalog.MatchInterrupted {
-		t.Fatalf("status after stop = %s, want interrupted", s)
+	if s := runStatus(t, e, id); s != catalog.MatchReady {
+		t.Fatalf("status after stop = %s, want ready", s)
 	}
 	if _, body := e.do(t, "GET", "/api/v1/admin/audit", admin, ""); !strings.Contains(body, `"orphan":true`) {
 		t.Errorf("audit = %s, want the stop marked orphan", body)
@@ -108,8 +109,8 @@ func TestStuckMatchingRunIsReleased(t *testing.T) {
 	// A Start settles a stuck run too.
 	id = stuck()
 	next := startRun(t, e, admin, libID)
-	if s := runStatus(t, e, id); s != catalog.MatchInterrupted {
-		t.Fatalf("stuck run after a start = %s, want interrupted", s)
+	if s := runStatus(t, e, id); s != catalog.MatchReady {
+		t.Fatalf("stuck run after a start = %s, want ready", s)
 	}
 	if s := runStatus(t, e, next); s != catalog.MatchReady {
 		t.Fatalf("next run = %s, want ready", s)
@@ -195,7 +196,8 @@ func TestFailedStartupSettleRecovers(t *testing.T) {
 			t.Parallel()
 			e, admin, _, libID := newMatchRunEnv(t, "us")
 			ctx := context.Background()
-			matching, err := e.cat.StartMatchRun(ctx, catalog.MatchRun{Mode: catalog.MatchModeMatch, LibraryID: &libID})
+			// Stopped part way: one book of two still to match.
+			matching, err := e.cat.StartMatchRun(ctx, catalog.MatchRun{Mode: catalog.MatchModeMatch, LibraryID: &libID, Total: 2})
 			if err != nil {
 				t.Fatal(err)
 			}

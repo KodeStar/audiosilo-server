@@ -734,6 +734,15 @@ describe('a book matched to a store listing (server#320)', () => {
       true,
     ],
     [
+      'a Bridge enrichment ASIN under the community one (server#350)',
+      (() => {
+        const d = matchedDetail({ asin: 'B00ASIN001' });
+        d.fields.asin.enrichment = 'B00ENRICH1';
+        return d;
+      })(),
+      true,
+    ],
+    [
       'an ASIN its files name that the admin cleared',
       (() => {
         const d = matchedDetail({});
@@ -1223,6 +1232,39 @@ describe('match with community metadata', () => {
       asin: 'B003P2WO5E',
       isbn: '',
     });
+  });
+
+  it('lists the recorded match the search missed as the current match (server#331)', async () => {
+    const recorded: MatchCandidate = {
+      ...candidate,
+      work_id: 'the-way-of-kings-part-1',
+      title: 'The Way of Kings, Part 1',
+      score: 100,
+      recorded: true,
+    };
+    const detail = bookDetail();
+    detail.community_match = {
+      work_id: recorded.work_id,
+      how: 'accepted',
+      matched_at: '2026-11-01T00:00:00Z',
+    };
+    mockFetch(
+      matchRoutes(detail, {
+        'GET /admin/libraries/1/book/match': { body: { candidates: [candidate, recorded] } },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Match with community metadata' });
+    const radio = await within(dialog).findByRole('radio', { name: /Part 1/ });
+    expect(radio).toBeChecked();
+    expect(within(radio).getByText('Current match')).toBeInTheDocument();
+    expect(within(radio).queryByText('100% match')).toBeNull();
+    // The search's own candidate keeps its score.
+    expect(
+      within(dialog).getByRole('radio', { name: /^(?!.*Part 1).*The Way of Kings/ }),
+    ).toHaveTextContent(/\d+% match/);
   });
 
   it("leaves a cover the server couldn't preview unticked", async () => {

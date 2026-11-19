@@ -278,8 +278,9 @@ func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 // while it works. Matching stops (cancelled); applying stops after the books in
 // hand (ready again, the rest still to apply). A run still marked working with
 // nothing behind it (its finishing write failed, or a stopped server left it) is
-// settled at once: matching -> interrupted, applying -> ready (204, audited with
-// "orphan": true). 409 match_run_not_running when it isn't working.
+// settled at once: matching -> interrupted (ready once it recorded every book),
+// applying -> ready (204, audited with "orphan": true). 409
+// match_run_not_running when it isn't working.
 func (a *API) handleCancelMatchRun(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
 		return

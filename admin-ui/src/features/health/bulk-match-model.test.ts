@@ -12,6 +12,7 @@ import {
   changeParts,
   firstReviewTab,
   heldLengths,
+  holdReasons,
   isChosen,
   isPickable,
   leaveOut,
@@ -115,22 +116,39 @@ describe('a run seen for what it found (server#307, server#352)', () => {
     expect(answeredCount(run({ done: 2 }, { error: 3 }))).toBe(0);
   });
 
-  it("gives the lengths of an item held for its length, or its identifier when they're far apart", () => {
-    const held = (detail: string, runtime: number, duration: number) =>
+  it('gives the lengths of an item held for its length, alone or beside another reason', () => {
+    const held = (detail: string, runtime: number, duration: number, holds?: string[]) =>
       heldLengths(
         item({
           outcome: 'review',
           detail,
+          holds,
           proposal: { values: {}, runtime_min: runtime },
           book: { title: 'B', author: 'A', duration },
         }),
       );
     expect(held('length_differs', 600, 36000)).toEqual({ book: 36000, recording: 36000 });
-    expect(held('identifier_disagrees', 600, 28800)).toEqual({ book: 28800, recording: 36000 });
-    // Within 10%: the identifier is the only reason given.
-    expect(held('identifier_disagrees', 600, 34000)).toBeUndefined();
+    expect(
+      held('identifier_disagrees', 600, 28800, ['identifier_disagrees', 'length_differs']),
+    ).toEqual({ book: 28800, recording: 36000 });
+    // The run says when the length is a reason (server#352): an identifier
+    // held alone shows no lengths, however far apart they read.
+    expect(held('identifier_disagrees', 600, 28800)).toBeUndefined();
     expect(held('dramatization_only', 600, 28800)).toBeUndefined();
     expect(held('length_differs', 0, 28800)).toBeUndefined();
+  });
+
+  it('reads every reason an item is held for', () => {
+    expect(holdReasons({ detail: 'length_differs' })).toEqual(['length_differs']);
+    expect(
+      holdReasons({
+        detail: 'identifier_elsewhere',
+        holds: ['identifier_elsewhere', 'dramatization_only'],
+      }),
+    ).toEqual(['identifier_elsewhere', 'dramatization_only']);
+    // An apply's detail, or none, is no reason to hold it.
+    expect(holdReasons({ detail: 'cover_failed' })).toEqual([]);
+    expect(holdReasons({})).toEqual([]);
   });
 });
 
@@ -322,6 +340,8 @@ it('explains only review scores closer than the classification lead without a st
     { detail: 'length_differs' },
     { detail: 'dramatization_only' },
     { detail: 'identifier_disagrees' },
+    { detail: 'identifier_elsewhere' },
+    { detail: 'length_differs', holds: ['length_differs', 'dramatization_only'] },
   ]) {
     expect(hasCloseScore(item({ outcome: 'review', score: 94, runner_up: 90, ...over }))).toBe(
       false,

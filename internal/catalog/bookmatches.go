@@ -29,7 +29,20 @@ const maxMatchID = 200
 // sets one. OfferedASIN and OfferedISBN are the identifiers the match offered,
 // ticked or not ("" for none, or a match recorded before 0070): a refresh by the
 // recorded match never fills one a book with neither has when it is the one
-// offered (the admin unticked it, or reverted it since; server#330).
+// offered (the admin unticked it, or reverted it since; server#330). One the
+// book already holds of its own when the match is written (its files', an
+// Audiobookshelf file's, an enrichment's or an admin's, anything but a
+// community override) is not recorded as offered: nobody chose to leave it
+// out, so a refresh fills it once the book loses it (a retag; server#355).
+//
+// How, RunID, the editor and the time are the match's provenance: who made it
+// and when ("matched on"). A run's bookkeeping of a match it read (BookEdit.
+// MatchIf naming one: a refresh's heal or new identifier, a repick's ASIN)
+// rewrites only the work, recording and offered identifiers and keeps them, so
+// a refresh filling an identifier never moves "matched on" and a repick never
+// takes the match's run (server#355). A heal to another work id (a merged
+// work's) moves the time alone: the upcoming job reads a match's change of
+// work by it.
 type MatchAnchor struct {
 	WorkID      string
 	RecordingID string
@@ -133,6 +146,10 @@ var ErrMatchedSince = errors.New("the book's community match changed since it wa
 // (checkIsOf). The caller rebuilds the book (refreshEffective), which takes a
 // check left stale out of its chapters.
 func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, editor any, now string) error {
+	a, err := withoutOwnOffered(ctx, tx, ref, a)
+	if err != nil {
+		return err
+	}
 	if was == nil || was.WorkID != "" { // an insert-only write replaces no match
 		if err := setMatchedSeriesDue(ctx, tx, oneBook(ref), a.WorkID); err != nil {
 			return err
@@ -148,19 +165,55 @@ func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, 
 	return stampChapterBasis(ctx, tx, ref)
 }
 
-// storeAnchor is writeAnchor's write of the book_matches row.
+// withoutOwnOffered is a with each offered identifier the book at ref already
+// holds of its own left out (MatchAnchor): its value now, before the edit, the
+// same, from any layer but a community override. a itself is not changed.
+func withoutOwnOffered(ctx context.Context, tx *sql.Tx, ref Ref, a *MatchAnchor) (*MatchAnchor, error) {
+	if a.OfferedASIN == "" && a.OfferedISBN == "" {
+		return a, nil
+	}
+	id, err := bookIDByPath(ctx, tx, ref.LibraryID, ref.Path)
+	if errors.Is(err, ErrNotFound) {
+		return a, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	l, err := loadLayers(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	fields := l.resolve()
+	out := *a
+	for field, offered := range map[string]*string{FieldASIN: &out.OfferedASIN, FieldISBN: &out.OfferedISBN} {
+		fv := fields[field]
+		if *offered != "" && !(fv.Locked && fv.Source == SourceCommunity) &&
+			CleanOverride(field, fv.Value) == *offered {
+			*offered = ""
+		}
+	}
+	return &out, nil
+}
+
+// storeAnchor is writeAnchor's write of the book_matches row. A write with was
+// naming a match (a run's bookkeeping) changes only the work, recording and
+// offered identifiers, keeping the match's provenance (MatchAnchor; a heal's
+// time aside).
 func storeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, editor any, now string) error {
-	args := []any{ref.LibraryID, ref.Path, a.WorkID, a.RecordingID, a.How, nullableID(a.RunID), editor, now,
-		a.OfferedASIN, a.OfferedISBN}
 	if was != nil && was.WorkID != "" {
+		// A heal to another work id (a merged work's) stamps the time alone:
+		// the upcoming job reads a match's change of work by it (set_at).
 		res, err := tx.ExecContext(ctx,
-			`UPDATE book_matches SET work_id = ?3, recording_id = ?4, how = ?5, run_id = ?6, set_by = ?7,
-			        set_at = ?8, offered_asin = ?9, offered_isbn = ?10
-			  WHERE library_id = ?1 AND path = ?2 AND work_id = ?11 AND recording_id = ?12
-			    AND offered_asin = ?13 AND offered_isbn = ?14`,
-			append(args, was.WorkID, was.RecordingID, was.OfferedASIN, was.OfferedISBN)...)
+			`UPDATE book_matches SET work_id = ?3, recording_id = ?4, offered_asin = ?5, offered_isbn = ?6,
+			        set_at = CASE WHEN work_id = ?3 THEN set_at ELSE ?11 END
+			  WHERE library_id = ?1 AND path = ?2 AND work_id = ?7 AND recording_id = ?8
+			    AND offered_asin = ?9 AND offered_isbn = ?10`,
+			ref.LibraryID, ref.Path, a.WorkID, a.RecordingID, a.OfferedASIN, a.OfferedISBN,
+			was.WorkID, was.RecordingID, was.OfferedASIN, was.OfferedISBN, now)
 		return anchorWritten(res, err)
 	}
+	args := []any{ref.LibraryID, ref.Path, a.WorkID, a.RecordingID, a.How, nullableID(a.RunID), editor, now,
+		a.OfferedASIN, a.OfferedISBN}
 	upsert := ` ON CONFLICT(library_id, path) DO UPDATE SET
 		     work_id = excluded.work_id, recording_id = excluded.recording_id, how = excluded.how,
 		     run_id = excluded.run_id, set_by = excluded.set_by, set_at = excluded.set_at,

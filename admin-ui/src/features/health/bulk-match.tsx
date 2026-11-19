@@ -76,6 +76,7 @@ import {
   changeParts,
   firstReviewTab,
   heldLengths,
+  holdReasons,
   isChosen,
   hasCloseScore,
   picksForScope,
@@ -841,9 +842,11 @@ function ItemRow({
   const status =
     item.detail === 'asin_known'
       ? 'asinKnown'
-      : item.matched_since || item.detail === 'matched_since'
-        ? 'matchedSince'
-        : item.applied;
+      : item.detail === 'unlinked'
+        ? 'unlinked'
+        : item.matched_since || item.detail === 'matched_since'
+          ? 'matchedSince'
+          : item.applied;
   const changed = changeParts(change).map((part) =>
     part.kind === 'cover'
       ? t('book.match.cover')
@@ -853,10 +856,10 @@ function ItemRow({
   );
   const asin = p.values.asin;
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
-  // An item held for its length says both, the book's as it is now: none once
-  // they read the same (the book's length changed since the run, server#355).
-  // One held for its identifier says them too when they are that far apart (the
-  // run records one reason, server#352).
+  // Every reason the run held it for (server#352). One held for its length says
+  // both, the book's as it is now: none once they read the same (the book's
+  // length changed since the run, server#355).
+  const holds = candidate ? holdReasons(item) : [];
   const held = heldLengths(item);
   const lengths = held
     ? {
@@ -964,24 +967,33 @@ function ItemRow({
             )}
           </span>
         )}
-        {candidate && item.detail === 'identifier_disagrees' ? (
+        {holds.includes('identifier_disagrees') ? (
           <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
             {t('health.bulkMatch.item.identifierDisagrees')}
+          </span>
+        ) : null}
+        {holds.includes('identifier_elsewhere') ? (
+          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
+            {t('health.bulkMatch.item.identifierElsewhere')}
+          </span>
+        ) : null}
+        {holds.includes('dramatization_only') ? (
+          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
+            {t(
+              holds[0] === 'dramatization_only'
+                ? 'health.bulkMatch.item.dramatizationOnly'
+                : 'health.bulkMatch.item.dramatizationToo',
+            )}
           </span>
         ) : null}
         {candidate && heldForLength ? (
           <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
             {t(
-              item.detail === 'identifier_disagrees'
-                ? 'health.bulkMatch.item.lengthToo'
-                : 'health.bulkMatch.item.lengthDiffers',
+              holds[0] === 'length_differs'
+                ? 'health.bulkMatch.item.lengthDiffers'
+                : 'health.bulkMatch.item.lengthToo',
               heldForLength,
             )}
-          </span>
-        ) : null}
-        {candidate && item.detail === 'dramatization_only' ? (
-          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
-            {t('health.bulkMatch.item.dramatizationOnly')}
           </span>
         ) : null}
         {hasCloseScore(item) ? (

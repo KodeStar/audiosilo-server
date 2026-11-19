@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -745,6 +746,9 @@ func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 // and its library path) and ?asin= / ?isbn= look an identifier up; with none,
 // meta.Candidates matches the book's facts and looks its own identifiers, or its
 // hints (an Audiobookshelf import's, else its tags': matchrun.QueryFor), up.
+// That default search lists the book's recorded community match (book_matches)
+// too when it misses it, last and marked recorded (recordedCandidate), so the
+// dialog starts from the match the book has (server#331).
 //
 // Responses: metadata off -> 404 (code metadata_off); no book -> 404; upstream
 // down -> 502; otherwise 200 {"candidates": [...]} (possibly empty).
@@ -783,7 +787,46 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "metadata service unavailable")
 		return
 	}
+	if mq.Text == "" && mq.ASIN == "" && mq.ISBN == "" {
+		if c := a.recordedCandidate(r.Context(), lib.ID, p, mq, cands); c != nil {
+			cands = append(cands, *c)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"candidates": cands})
+}
+
+// recordedCandidate is the book's recorded community match as a match
+// candidate (meta.MatchQuery.WorkID: its work by id, the recorded recording
+// kept while the work lists it), marked Recorded, when the book has one that
+// cands doesn't list; nil otherwise, and when the lookup fails or the
+// community no longer has the work (the search's own answer stands).
+func (a *API) recordedCandidate(ctx context.Context, libraryID int64, path string, mq meta.MatchQuery, cands []meta.MatchCandidate) *meta.MatchCandidate {
+	m, err := a.cat.BookMatchAt(ctx, libraryID, path)
+	if err != nil {
+		a.log.Warn("load recorded match for match search failed", "err", err, "library", libraryID, "path", path)
+		return nil
+	}
+	if m == nil || slices.ContainsFunc(cands, func(c meta.MatchCandidate) bool { return c.WorkID == m.WorkID }) {
+		return nil
+	}
+	// The book's facts stay beside the id, as a refresh's work lookup keeps
+	// them: the recording is chosen by its length and whether it says it is a
+	// dramatization.
+	q := mq
+	q.WorkID, q.RecordingID = m.WorkID, m.RecordingID
+	found, err := a.meta.Candidates(ctx, q)
+	if err != nil {
+		a.log.Warn("recorded match lookup for match search failed", "err", err, "library", libraryID, "path", path)
+		return nil
+	}
+	// A retired id follows its redirect: the work it was merged into may be
+	// listed already.
+	if len(found) == 0 || slices.ContainsFunc(cands, func(c meta.MatchCandidate) bool { return c.WorkID == found[0].WorkID }) {
+		return nil
+	}
+	c := found[0]
+	c.Recorded = true
+	return &c
 }
 
 // maxWorkBooks caps one POST /admin/books/works: more books than a real series

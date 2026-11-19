@@ -2681,9 +2681,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   transaction (`catalog.BookEdit.Match`, `MatchAnchor`; `EditBooks` refuses it): the match dialog's
   accept (`PATCH .../book` `match: {work_id, recording_id}` with the ticked fields, or alone for a book
   with no ASIN or ISBN whose pick isn't its recorded match; the dialog starts from the recorded match
-  when the search lists it; how `accepted`; refused in a bulk edit) and an apply (`Writes.Anchor`, which `Plan` sets under every
+  when the search lists it, and the default search (no text, ASIN or ISBN) lists it when its own
+  search misses it, last, looked up by its id and marked `recorded`, which the dialog shows as
+  "Current match" in place of a score (`api.recordedCandidate`, `meta.MatchCandidate.Recorded`;
+  a failed or 404 lookup adds nothing; server#331); how `accepted`; refused in a bulk edit) and an apply (`Writes.Anchor`, which `Plan` sets under every
   scope when the proposal's work or recording is not the book's: how `auto` for a confident item,
-  `accepted` for an included review item, a refresh's heal keeping the book's). An empty work id
+  `accepted` for an included review item, a refresh's heal keeping the book's provenance, below). An empty work id
   (`{"work_id": ""}`, from any edit; the book aside's Unlink, behind a confirm) unlinks the book
   (an id of only white space or other invisible characters (`catalog.invisible`: format characters
   such as U+200B/U+FEFF/U+2060, variation selectors, default-ignorables such as U+3164, U+2800;
@@ -2692,7 +2695,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `ClearCommunityMatches` for that one book (`clearCommunity`, in the edit's transaction, before the
   rest of the edit), so its community values and cover go with the row and the next run asks about it
   again (removing only the row would leave the values to match it to the same work); an admin's own
-  edits and uploads stay. Unlink is refused only while a run that covers the book's library (or
+  edits and uploads stay. The book's applied items in the kept runs are marked detail `unlinked`
+  (`catalog.ItemDetailUnlinked`; still applied, so a run's counts stay what its apply did; the
+  review says "Unlinked since"; server#331). An Unlink sent with field edits rebuilds the book once,
+  at the edit's end (`clearPick.noRebuild`); one whose rest reads the books row first (a series
+  swap, a label add or remove, chapters) is rebuilt by the clear. Unlink is refused only while a run that covers the book's library (or
   every library, `library_id` NULL) is applying (`catalog.ErrMatchRunBusy`, HTTP 409
   `match_run_busy`, "a match run is applying to this library"; stop it or wait for it to finish;
   server#341). A run that is only matching records items and doesn't refuse it, nor does a run
@@ -2743,7 +2750,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ASIN/ISBN is written beside it). The console's Community card shows a recorded match whenever the
   book has one, with or without an ASIN or ISBN (work, recording, how and when, Unlink; server#338); its
   Unlink confirm says the book stays matched when it keeps an identifier of its own (one not from the
-  community, or one its files name). No backfill: a book matched before E6 has none until matched again.
+  community, one its files name, or the Bridge's enrichment a community value hides: the field's
+  `enrichment`, `catalog.FieldValue.Enrichment`, sent only while an override hides one; server#350). No backfill: a book matched before E6 has none until matched again.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
   the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`), or within 20%
   when the book's narrator reads it (`meta.NarratedRuntimeOff`, `narratorReads`: metaserve's
@@ -2764,7 +2772,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `IdentifierTitleAgree` (0.65), and with `reasons.series` `conflict` a title of at least
   `IdentifierTitleSame` (0.9; none judged, a title that is only the series' name and number, is held),
   as the same title at another position is the series numbered another way (The Witcher counting its
-  story collections, Halo, a chronological order). Else review, detail `identifier_disagrees`.
+  story collections, Halo, a chronological order). Else review, detail `identifier_disagrees`, and
+  the run asks again without the hint (server#352: metaserve answers one work per request, so a wrong
+  volume's ASIN hid the right work): another work that query finds, not `none` by Classify, is the
+  item instead, held for review however confident, detail `identifier_elsewhere` (the book still
+  carries an identifier naming something else); the same work, nothing worth a look or a failed ask
+  keeps the hint's work held. A review item records every reason it is held for, in this order:
+  `identifier_disagrees` or `identifier_elsewhere`, `dramatization_only`, `length_differs`
+  (`matchrun.judge`; `MatchRunItem.Holds`, wire `holds` only with more than one, the detail column
+  comma-separated, `detail` the first; server#352), which the review lists, a length with both lengths.
   Calibrated on the LibraForge benchmark (the highest title value holding at most 0.2% of its right
   automatic matches: 3,806 auto-right / 4 auto-wrong before, 3,799 / 4 after, none of its wrong ones
   an identifier hit); a series conflict alone held 19 right ones (the renumbered series) and nothing
@@ -2843,7 +2859,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   A book with neither identifier may fill an ASIN/ISBN its recording gained, never the one its
   recorded match offered (server#330, `0070`: `book_matches.offered_asin` / `offered_isbn`,
   `MatchAnchor.OfferedASIN/ISBN`, the identifiers the match offered when recorded, ticked or
-  not, in the fields' stored form): the book has neither, so the admin unticked it in the match
+  not, in the fields' stored form; one the book holds of its own when the match is written, from any
+  layer but a community override (its files', an Audiobookshelf file's, an enrichment's, an
+  admin's), is left out, `withoutOwnOffered`, as nobody chose to leave it out, so a refresh fills it
+  once the book loses it, a retag say: server#355): the book has neither, so the admin unticked it in the match
   dialog or reverted it since, and `planRefresh` drops it (such a book records no item). One the
   recording gained since (another value) fills, and the apply then records it as offered (the
   anchor rewritten with the same work and recording, so the review's `match` is true beside the
@@ -2855,8 +2874,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or ISBN still sends none), a heal or a refresh's identifier fill (each identifier the
   proposal's when it names one, else the match's own) and a repick of a book with a recorded
   match (`planFor`: the anchor kept, its offered ASIN the one the repick writes);
-  copied by a join, moved with the book. A refresh's or repick's anchor write keeps the
-  match's `how`; every apply's anchor write is conditional (`BookEdit.MatchIf`, the anchor the
+  copied by a join, moved with the book. A refresh's or repick's anchor write (a `MatchIf` naming
+  the match) rewrites only its work, recording and offered identifiers: `how`, `run_id`, `set_by`
+  and `set_at` (the console's "matched on") stay the match's, so a repick never takes the match's
+  run, a refresh's identifier fill never moves its date, and a hand re-accept of the same match made
+  mid-apply keeps its own (server#355); a heal to another work id moves `set_at` alone, as the
+  upcoming job reads a match's change of work by it. Every apply's anchor write is conditional (`BookEdit.MatchIf`, the anchor the
   apply read: work, recording and offered identifiers, or for a match item an unmatched book,
   none recorded and no ASIN or ISBN (`matchedExpr`, as `matchedSince` reads it); checked in
   the edit's transaction; else nothing of the edit is written, `catalog.ErrMatchedSince`, and
@@ -2896,8 +2919,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Apply caps manual includes at 20,000 ids; exclusions use the existing 1 MiB
   request-body limit (an older console still sends every unchanged book).
   `InterruptMatchRuns` (launcher, at
-  start) settles runs a stopped server left: matching -> interrupted, applying ->
-  ready (`catalog.SettleMatchRuns(ctx, 0)`, one transaction; a failure is a warning). A run
+  start) settles runs a stopped server left: matching -> interrupted (ready when it had
+  recorded every book, done = total: only its finishing write was lost, so its review is kept,
+  server#350), applying -> ready (`catalog.SettleMatchRuns(ctx, 0)`, one transaction; a failure is a warning). A run
   whose finishing write failed (`FinishMatching`, `FinishApply` log it) settles itself at once,
   every worker done (`Runner.settleOwn`, server#350). One whose own settle failed too, or that
   the start's settle missed, is settled too (server#339): `Runner.settleLocked` at the top of

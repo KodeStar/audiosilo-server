@@ -31,6 +31,9 @@ type mockMetaserve struct {
 	// match serves works/match (a current metaserve); without it the route
 	// falls through to works/{id} and 404s, as on a metaserve that predates it.
 	match bool
+	// matchBody, when set, is works/match's answer (else the one Martian hit);
+	// under mu, as a test changes it between requests.
+	matchBody string
 	// chapters, when set, is the body of the recordings' chapters route
 	// (without it the route 404s, as on a metaserve that predates it).
 	chapters string
@@ -54,8 +57,10 @@ func (m *mockMetaserve) handler() http.Handler {
 		mux.HandleFunc("GET /api/v1/works/match", func(w http.ResponseWriter, r *http.Request) {
 			m.mu.Lock()
 			m.gotMatch = r.URL.Query()
+			body := m.matchBody
 			m.mu.Unlock()
-			_, _ = w.Write([]byte(`{"results":[{"kind":"work","id":"the-martian","title":"The Martian","cover_url":"https://c/w.jpg","score":88,"reasons":{"title":1,"author":"full"}}]}`))
+			_, _ = w.Write([]byte(cmp.Or(body,
+				`{"results":[{"kind":"work","id":"the-martian","title":"The Martian","cover_url":"https://c/w.jpg","score":88,"reasons":{"title":1,"author":"full"}}]}`)))
 		})
 	}
 	if m.chapters != "" {

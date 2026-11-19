@@ -1905,6 +1905,12 @@ export interface FieldValue {
   locked: boolean;
   edited_by?: string;
   edited_at?: string;
+  /**
+   * The Bridge's enrichment (an ASIN or ISBN its Audible backfill stored) an
+   * override hides: what the field falls back to, over `scanned`, once the
+   * override goes. Absent when none is hidden.
+   */
+  enrichment?: string;
 }
 
 /** catalog.AdminChapter. Times are seconds. */
@@ -2237,6 +2243,11 @@ export interface MatchCandidate {
   score: number;
   /** Which facts agreed, when the community service's match scored it. */
   reasons?: MatchReasons;
+  /**
+   * The book's recorded community match, listed by the default search when its
+   * own search missed it: named, not matched, so its score says nothing.
+   */
+  recorded?: boolean;
 }
 
 /** meta.MatchSeries: one of a candidate's series, with its position. */
@@ -2547,8 +2558,14 @@ export interface MatchRunItem {
   proposal: MatchProposal;
   /** What applying did: '' (not yet) | applied | skipped | failed. */
   applied: '' | 'applied' | 'skipped' | 'failed';
-  /** Why: book_gone | nothing_to_change | matched_since | asin_known (an unknown_asin run's book whose ASIN the community knows now: skipped, its ASIN and details as they are) | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; work_unknown on a refresh's none item whose recorded work the community no longer has (the book keeps its match); dramatization_only (held for review); cover_pending while still to apply (a stop cut its cover short); cover_superseded when its cover was not written because the book changed while it was fetched (a cover uploaded, another match accepted, an Unlink: final, applied when its fields went in, else skipped); length_differs on a review item held because the recording is another length; identifier_disagrees on a review item found by its tag ASIN or ISBN whose title or series position doesn't agree (it may name another book); weak_match on a none item whose best candidate scored under the review floor (its `score` kept). */
+  /** Why: book_gone | nothing_to_change | matched_since | asin_known (an unknown_asin run's book whose ASIN the community knows now: skipped, its ASIN and details as they are) | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; work_unknown on a refresh's none item whose recorded work the community no longer has (the book keeps its match); dramatization_only (held for review); cover_pending while still to apply (a stop cut its cover short); cover_superseded when its cover was not written because the book changed while it was fetched (a cover uploaded, another match accepted, an Unlink: final, applied when its fields went in, else skipped); length_differs on a review item held because the recording is another length; identifier_disagrees on a review item found by its tag ASIN or ISBN whose title or series position doesn't agree (it may name another book); identifier_elsewhere on a review item whose tag ASIN or ISBN named another book, so the run asked again by its title and found this work; unlinked on an applied item whose book was unlinked since (its match and community values taken back); weak_match on a none item whose best candidate scored under the review floor (its `score` kept). */
   detail?: string;
+  /**
+   * Every reason a review item is held for when there is more than one, `detail`
+   * the first (identifier_disagrees or identifier_elsewhere, dramatization_only,
+   * length_differs, in that order). Absent for one reason or none.
+   */
+  holds?: string[];
   /** The book as it is now; duration in seconds (absent when unknown, or from an older server). */
   book: { title: string; author: string; duration?: number };
   /** Nothing is indexed at the path any more. */

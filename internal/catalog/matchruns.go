@@ -74,6 +74,12 @@ const (
 	ItemFailed  = "failed"
 )
 
+// ItemDetailUnlinked is the detail of an applied item whose book was unlinked
+// since (BookEdit.Match with an empty work): the apply's match and community
+// values were taken back, so the run no longer shows it as standing (server#331).
+// It stays applied, as the run's counts are what the apply did.
+const ItemDetailUnlinked = "unlinked"
+
 // MatchRunCounts are a run's items by outcome, and what applying did. Pending is
 // the confident items not applied yet (what an apply takes unless told otherwise).
 type MatchRunCounts struct {
@@ -151,6 +157,13 @@ type MatchRunItem struct {
 	Proposal  MatchProposal `json:"proposal"`
 	Applied   string        `json:"applied"`
 	Detail    string        `json:"detail,omitempty"`
+	// Holds is every reason a review item is held for when there is more than
+	// one (matchrun's identifier, dramatization and length details, in that
+	// order), Detail being the first: recorded in the detail column, comma
+	// separated (server#352). nil, and omitted, for an item with one reason or
+	// none, and once an apply marked the item (its detail then says what the
+	// apply did).
+	Holds []string `json:"holds,omitempty"`
 	// Unchanged is the scopes a refresh item had nothing to change under when
 	// the run recorded it (migration 0070): what the review showed as no change,
 	// so an apply under one leaves the item out (MatchItemsToApply), and the
@@ -208,10 +221,14 @@ func (c *Catalog) RecordMatchItem(ctx context.Context, runID int64, item *MatchR
 		if err != nil {
 			return err
 		}
+		detail := item.Detail
+		if len(item.Holds) > 1 {
+			detail = strings.Join(item.Holds, ",")
+		}
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO match_run_items(run_id, library_id, path, outcome, score, runner_up, proposal, detail, unchanged)
 			 SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM libraries WHERE id = ?)`,
-			runID, item.LibraryID, item.Path, item.Outcome, item.Score, item.RunnerUp, string(raw), item.Detail,
+			runID, item.LibraryID, item.Path, item.Outcome, item.Score, item.RunnerUp, string(raw), detail,
 			strings.Join(item.Unchanged, ","), item.LibraryID)
 		return err
 	})
@@ -278,7 +295,8 @@ func (c *Catalog) FinishApply(ctx context.Context, runID int64, cancelled bool) 
 }
 
 // InterruptMatchRuns settles runs a previous server left working: one matching
-// is interrupted; one applying goes back to ready (what it applied is marked).
+// is interrupted (ready when it had recorded every book: settleMatchRuns); one
+// applying goes back to ready (what it applied is marked).
 // Called once at startup, before any run can start (SettleMatchRuns of every
 // run).
 func (c *Catalog) InterruptMatchRuns(ctx context.Context) error {
@@ -287,8 +305,9 @@ func (c *Catalog) InterruptMatchRuns(ctx context.Context) error {
 }
 
 // SettleMatchRuns settles every run but keep (0 = none kept) still marked
-// working that no worker is behind: matching -> interrupted, applying -> ready
-// (what it applied is marked, the rest still to apply). One transaction; it
+// working that no worker is behind: matching -> interrupted, or ready when it
+// recorded every book (done = total: its review is whole, server#350),
+// applying -> ready (what it applied is marked, the rest still to apply). One transaction; it
 // returns how many runs it settled. Such a run is one a stopped server left, or
 // one whose finishing write failed (FinishMatching, FinishApply), which would
 // otherwise refuse every Unlink of its library until a restart. Only the caller
@@ -307,14 +326,17 @@ func (c *Catalog) SettleMatchRun(ctx context.Context, id int64) (bool, error) {
 
 // settleMatchRuns settles the working run id when only, else every working
 // run but id.
-// An interrupted run's finished_at is when it started, unless it has one: when
-// it stopped is unknown.
+// A settled matching run's finished_at is when it started, unless it has one:
+// when it stopped is unknown. One that had recorded every book (done reaches
+// total) is ready, not interrupted: only its finishing write was lost (a
+// failed FinishMatching, or a server stopped just before it), so its review is
+// kept to apply.
 func (c *Catalog) settleMatchRuns(ctx context.Context, op string, id int64, only bool) (int, error) {
 	var settled int64
 	err := c.db.WithTx(ctx, op, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
 			`UPDATE match_runs
-			    SET status = CASE status WHEN ?1 THEN ?2 ELSE ?3 END,
+			    SET status = CASE WHEN status = ?1 AND done < total THEN ?2 ELSE ?3 END,
 			        finished_at = CASE status WHEN ?1 THEN COALESCE(finished_at, started_at) ELSE finished_at END
 			  WHERE status IN (?1, ?4) AND (id = ?5) = ?6`,
 			MatchMatching, MatchInterrupted, MatchReady, MatchApplying, id, only)
@@ -386,6 +408,10 @@ func scanMatchItem(rows *sql.Rows, it *MatchRunItem) error {
 	}
 	if unchanged != "" {
 		it.Unchanged = strings.Split(unchanged, ",")
+	}
+	if strings.Contains(it.Detail, ",") {
+		it.Holds = strings.Split(it.Detail, ",")
+		it.Detail = it.Holds[0]
 	}
 	if err := json.Unmarshal([]byte(raw), &it.Proposal); err != nil {
 		return err
@@ -677,16 +703,19 @@ func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*
 type clearPick struct {
 	where string // over library_id and path
 	args  []any
+	// noRebuild leaves the books' effective metadata as it is: the caller
+	// rebuilds them itself (an unlink sent with other edits, editTx).
+	noRebuild bool
 }
 
 // libraryBooks picks every book of a library (0 = every library).
 func libraryBooks(libraryID int64) clearPick {
-	return clearPick{`(?1 = 0 OR library_id = ?1)`, []any{libraryID}}
+	return clearPick{where: `(?1 = 0 OR library_id = ?1)`, args: []any{libraryID}}
 }
 
 // oneBook picks the one book at ref (its path clean).
 func oneBook(ref Ref) clearPick {
-	return clearPick{`library_id = ?1 AND path = ?2`, []any{ref.LibraryID, ref.Path}}
+	return clearPick{where: `library_id = ?1 AND path = ?2`, args: []any{ref.LibraryID, ref.Path}}
 }
 
 // clearCommunity removes the community overrides, covers and recorded matches
@@ -745,7 +774,7 @@ func clearCommunity(ctx context.Context, tx *sql.Tx, pick clearPick) (books, cov
 	// stale and leaves its chapters.
 	rebuilt := map[Ref]bool{}
 	for _, ref := range slices.Concat(fields, anchors) {
-		if ids[ref] == 0 || rebuilt[ref] {
+		if pick.noRebuild || ids[ref] == 0 || rebuilt[ref] {
 			continue
 		}
 		rebuilt[ref] = true
