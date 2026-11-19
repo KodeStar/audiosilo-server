@@ -237,7 +237,7 @@ func TestWaitClaimWakesOnEnqueue(t *testing.T) {
 	q := newTestQueue(t)
 	got := make(chan *Job, 1)
 	go func() {
-		j, _ := q.waitClaim(context.Background(), q.token, []string{KindVerify}, MaxWait)
+		j, _ := q.waitClaim(context.Background(), q.token, []string{KindVerify}, MaxWait, ClaimOptions{})
 		got <- j
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -737,7 +737,7 @@ func TestWaitClaimWakesOnRequeue(t *testing.T) {
 	}
 	got := make(chan *Job, 1)
 	go func() {
-		j, _ := q.waitClaim(ctx, q.token, []string{KindVerify}, MaxWait)
+		j, _ := q.waitClaim(ctx, q.token, []string{KindVerify}, MaxWait, ClaimOptions{})
 		got <- j
 	}()
 	time.Sleep(50 * time.Millisecond) // the other lane is waiting

@@ -253,13 +253,18 @@ const claimedStatesSQL = `('claimed', 'running')`
 // parked.
 const workingStatesSQL = `('queued', 'claimed', 'running')`
 
+// moduleOff reports whether the managed module id is off (with no ModuleOn
+// wired every module counts as on).
+func (s *Service) moduleOff(id string) bool {
+	return s.ModuleOn != nil && !s.ModuleOn(id)
+}
+
 // held reports whether a queued job of kind with params waits for a managed
-// module that is off (ModuleFor; with no ModuleOn wired every module counts as
-// on): no claim hands it out (nextQueued), and it refuses no new job that
-// cancels it (givesWay).
+// module that is off (ModuleFor, moduleOff): no claim hands it out
+// (nextQueued), and it refuses no new job that cancels it (givesWay).
 func (s *Service) held(kind string, params json.RawMessage) bool {
 	m := ModuleFor(kind, params)
-	return m != "" && s.ModuleOn != nil && !s.ModuleOn(m)
+	return m != "" && s.moduleOff(m)
 }
 
 // stopsShare reports whether a job of kind the Bridge works on is asked to
@@ -272,13 +277,7 @@ func (s *Service) held(kind string, params json.RawMessage) bool {
 // characters and recaps it is writing: it is told to keep them local instead
 // (Job.ShareOff).
 func (s *Service) stopsShare(kind string) bool {
-	return kinds[kind].module == ModuleContributions && s.contributionsOff()
-}
-
-// contributionsOff reports whether the Contributions module is off (with no
-// ModuleOn wired every module counts as on).
-func (s *Service) contributionsOff() bool {
-	return s.ModuleOn != nil && !s.ModuleOn(ModuleContributions)
+	return kinds[kind].module == ModuleContributions && s.moduleOff(ModuleContributions)
 }
 
 // sharesAlong reports whether a job of kind with params files to the community
@@ -286,14 +285,14 @@ func (s *Service) contributionsOff() bool {
 // "issue", which ModuleFor gives ModuleContributions though its kind's own
 // module is none.
 func sharesAlong(kind string, params json.RawMessage) bool {
-	return kinds[kind].module != ModuleContributions && ModuleFor(kind, params) == ModuleContributions
+	return kind == KindSidecars && contributes(params)
 }
 
 // flagShareOff sets j.ShareOff for the Bridge's answer: a job that shares
 // along (sharesAlong) while the Contributions module is off keeps its results
 // local, its work carried on (server#218).
 func (s *Service) flagShareOff(j *Job) {
-	j.ShareOff = sharesAlong(j.Kind, j.Params) && s.contributionsOff()
+	j.ShareOff = s.moduleOff(ModuleContributions) && sharesAlong(j.Kind, j.Params)
 }
 
 // blocker is the open job that refuses a new job of kind for the book
@@ -1246,7 +1245,7 @@ func (s *Service) ClaimWith(ctx context.Context, token int64, asked []string, wa
 	if len(ks) == 0 {
 		return nil, nil
 	}
-	job, err := s.waitClaimPriority(ctx, token, ks, wait, opt)
+	job, err := s.waitClaim(ctx, token, ks, wait, opt)
 	if job != nil {
 		s.flagShareOff(job)
 	}
@@ -1500,14 +1499,11 @@ func (s *Service) nextQueued(ctx context.Context, q rowsQuerier, kinds []string,
 	return 0, rows.Err()
 }
 
-// waitClaim is claim that waits up to wait (at most MaxWait) for a job to be
+// waitClaim is claimPriority that waits up to wait (at most MaxWait) for a job to be
 // queued when there is none, returning nil when none came or ctx ended (the
 // caller left, or the server is stopping: a claim cut short by it committed
 // nothing).
-func (s *Service) waitClaim(ctx context.Context, token int64, kinds []string, wait time.Duration) (*Job, error) {
-	return s.waitClaimPriority(ctx, token, kinds, wait, ClaimOptions{})
-}
-func (s *Service) waitClaimPriority(ctx context.Context, token int64, kinds []string, wait time.Duration, opt ClaimOptions) (*Job, error) {
+func (s *Service) waitClaim(ctx context.Context, token int64, kinds []string, wait time.Duration, opt ClaimOptions) (*Job, error) {
 	wait = min(max(wait, 0), MaxWait)
 	timer := time.NewTimer(wait)
 	defer timer.Stop()

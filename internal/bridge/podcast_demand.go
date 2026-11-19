@@ -48,7 +48,7 @@ func (s *Service) fetchRefusal(h *Heartbeat, lib int64, noNew bool) error {
 	switch {
 	case noNew:
 		return ErrFetchDemo
-	case s.ModuleOn != nil && !s.ModuleOn(ModulePodcasts):
+	case s.moduleOff(ModulePodcasts):
 		return ErrFetchModuleOff
 	default:
 		return s.heldFetchRefusal(h, lib)
