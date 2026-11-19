@@ -23,6 +23,12 @@ npm run build     # production build into ../internal/web/adminui/dist + the CSP
 
 From the repo root, `scripts/build-admin.sh` runs `ci` + `check` + `build`.
 
+Tests run under the server's gate, often beside a full `go test -race`, so a test's own time is
+generous (`testTimeout` 30 s in `vite.config.ts`, `findBy` 10 s in `src/test/setup.ts`): those
+bounds only end a test that is stuck. A timing the test means to check (a wait to be pressed
+through, a Retry-After) runs on a fake clock the test moves itself, never a short real one
+(`fakeClock` and `settle` in `chapters-editor.test.tsx`).
+
 ## Dev loop
 
 ```sh

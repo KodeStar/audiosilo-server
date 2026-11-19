@@ -176,8 +176,6 @@ describe('community chapters on the book page', () => {
     expect(
       await screen.findByText(
         'Using the community’s 4 chapters: the files have none of their own.',
-        undefined,
-        { timeout: 8000 },
       ),
     ).toBeInTheDocument();
     expect(
@@ -185,7 +183,7 @@ describe('community chapters on the book page', () => {
         (c) => c.method === 'POST' && c.path === '/admin/libraries/1/book/community-chapters',
       ),
     ).toBe(true);
-  }, 12000);
+  });
 });
 
 describe('generated chapters on the book page', () => {

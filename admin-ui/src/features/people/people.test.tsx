@@ -791,7 +791,7 @@ describe("a person's listening", () => {
       playback_speed: 1,
       version: 3,
       device_id: 'iphone',
-      updated_at: new Date().toISOString(),
+      updated_at: '',
       title: 'Project Hail Mary',
       author: 'Andy Weir',
       started_at: `${year}-01-05T10:00:00Z`,
@@ -815,8 +815,11 @@ describe("a person's listening", () => {
   ];
 
   function listeningRoutes(over: Record<string, MockRoute> = {}) {
+    // Saved as the test runs ("saved now" reads under a minute), not as the
+    // file loaded: a loaded run's screen preload and earlier tests take longer.
+    const fresh = [{ ...progress[0], updated_at: new Date().toISOString() }, progress[1]];
     return routes({
-      'GET /admin/users/2/progress': { body: { progress } },
+      'GET /admin/users/2/progress': { body: { progress: fresh } },
       'GET /admin/sessions': { body: { sessions: [liveSession()], next_before: null } },
       'GET /admin/devices': { body: { devices: [device()] } },
       // sam's own days this year (5h: the fixture's per-day share for user 2).
@@ -834,7 +837,7 @@ describe("a person's listening", () => {
         };
       },
       'PATCH /admin/libraries/1/progress': (req) => ({
-        body: { progress: { ...progress[0], ...(req.body as object) } },
+        body: { progress: { ...fresh[0], ...(req.body as object) } },
       }),
       ...over,
     });

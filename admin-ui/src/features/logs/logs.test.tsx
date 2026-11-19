@@ -50,7 +50,7 @@ describe('logs', () => {
     expect(await screen.findByText('scan started')).toBeInTheDocument();
     expect(log).toHaveTextContent('library=Fiction');
     // The live tail asks only for lines after the last one it has.
-    expect(await screen.findByText('ffmpeg failed', {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText('ffmpeg failed')).toBeInTheDocument();
     expect(calls.find((c) => c.query.get('after'))?.query.get('after')).toBe('2');
 
     await userEvent.setup().click(screen.getByRole('button', { name: 'Warnings' }));

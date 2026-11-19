@@ -135,12 +135,12 @@ describe('bridge page', () => {
     ).toHaveLength(1);
 
     // The status poll (every 3 s while the code waits) sees the Bridge paired.
-    expect(await screen.findByText('Bridge connected', {}, { timeout: 6000 })).toBeInTheDocument();
+    expect(await screen.findByText('Bridge connected')).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Connect a Bridge' })).not.toBeInTheDocument(),
     );
     expect(await screen.findByRole('button', { name: 'Unpair...' })).toBeInTheDocument();
-  }, 10_000);
+  });
 
   it('says when a code is waiting and offers a new one, with no Jobs card while there are none', async () => {
     const calls = mockFetch(

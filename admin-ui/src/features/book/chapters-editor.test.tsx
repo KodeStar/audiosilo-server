@@ -30,6 +30,14 @@ async function openEditor() {
   return user;
 }
 
+// The editor's <audio> once its stream is asked for: the element is there
+// before the media token's mint answers, and its src only then, which a loaded
+// run can leave for later than a test's next look at it.
+async function streamed(container: HTMLElement) {
+  await waitFor(() => expect(container.querySelector('audio')?.getAttribute('src')).toBeTruthy());
+  return container.querySelector('audio')!;
+}
+
 beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
@@ -185,7 +193,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    await streamed(container);
     const audio = container.querySelector('audio')!;
     const src = new window.URL(audio.getAttribute('src')!, 'http://admin.test');
     expect(src.pathname).toBe('/api/v1/libraries/1/stream');
@@ -224,7 +232,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    await streamed(container);
     const mints = () => calls.filter((c) => c.path === '/cast/token');
     expect(mints()).toHaveLength(1);
 
@@ -249,7 +257,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    await streamed(container);
     const srcOf = () =>
       new window.URL(container.querySelector('audio')!.getAttribute('src')!, 'http://admin.test')
         .searchParams;
@@ -291,7 +299,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    await streamed(container);
     const from = () =>
       Number(
         new window.URL(
@@ -333,7 +341,7 @@ describe('the chapter editor', () => {
         ).searchParams.get('t'),
       );
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    await streamed(container);
     fireEvent.loadedMetadata(container.querySelector('audio')!);
     await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
     await waitFor(() => expect(from()).toBe(1201));
@@ -351,7 +359,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL, { strict: true });
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    await streamed(container);
     // Past the microtask a real removal lets go of its stream in.
     await Promise.resolve();
     expect(container.querySelector('audio')!.getAttribute('src')).toContain('token=media-tok');
@@ -371,7 +379,7 @@ describe('the chapter editor', () => {
       );
     const playhead = () => Number((screen.getByRole('slider') as HTMLInputElement).value);
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    await streamed(container);
     // Nothing loads (no ffmpeg, no transcode slot), and the playhead is the row's start all the same.
     expect(audio()).toHaveAttribute('preload', 'none');
     await waitFor(() => expect(playhead()).toBe(1200));
@@ -398,7 +406,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    await streamed(container);
     const audio = container.querySelector('audio')!;
     const from = () =>
       Number(new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams.get('t'));
@@ -428,7 +436,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    await streamed(container);
     const audio = container.querySelector('audio')!;
     const from = () =>
       Number(new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams.get('t'));
@@ -532,7 +540,7 @@ describe('the chapter editor', () => {
       const { container } = renderApp(URL);
       const user = await openEditor();
       await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-      await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+      await streamed(container);
       const audio = container.querySelector('audio')!;
       const query = () =>
         new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams;
@@ -588,7 +596,7 @@ describe('the chapter editor', () => {
       const { container } = renderApp(URL);
       const user = await openEditor();
       await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-      await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+      await streamed(container);
       const audio = container.querySelector('audio')!;
       expect(audio.getAttribute('src')).toContain('transcode=1');
       const reads = () => calls.filter((c) => c.path === '/admin/libraries/1/book').length;
@@ -622,7 +630,7 @@ describe('the chapter editor', () => {
       const { container } = renderApp(URL);
       const user = await openEditor();
       await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-      await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+      await streamed(container);
       fail = true;
       for (let i = 0; i < 3; i++) {
         act(() => vi.advanceTimersByTime(5000));
@@ -639,7 +647,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    await streamed(container);
     const audio = container.querySelector('audio')!;
     expect(audio.getAttribute('src')).not.toContain('transcode');
     fireEvent.loadedMetadata(audio);
@@ -683,7 +691,11 @@ describe('the chapter editor', () => {
       const { container } = renderApp(URL);
       const user = await openEditor();
       await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-      await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+      // The stream, with its token: the element is there before the mint
+      // answers, and a test's first event must find the stream asked for.
+      await waitFor(() =>
+        expect(container.querySelector('audio')?.getAttribute('src')).toContain('media-tok-'),
+      );
       load.mockClear();
       return {
         user,
@@ -694,6 +706,21 @@ describe('the chapter editor', () => {
     }
     // Every transcode slot taken: 503 with a Retry-After (a short one, for the test).
     const busy = { status: 503, raw: '', headers: { 'Retry-After': '0.02' } };
+    const busyLine = 'The server is busy. Trying again in a moment.';
+
+    // A test that acts during a wait (a press, an event, a look at the page)
+    // runs it on a fake clock, which moves only when the test moves it: a
+    // loaded run gets there however late, the wait not yet run out. Faked
+    // before the first play, so the stall's wait is the fake clock's too.
+    // The look's answers settle on promises alone (settle); presses are
+    // fireEvent's while it is fake (user-event and findBy wait on setTimeout).
+    // The describe's afterEach puts the real clock back.
+    const fakeClock = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const settle = () =>
+      act(async () => {
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+      });
+    afterEach(() => vi.useRealTimers());
 
     it('waits and asks again when the server is too busy, with no new token', async () => {
       const { user, audio, mints, looks } = await listen(busy);
@@ -754,15 +781,17 @@ describe('the chapter editor', () => {
     it('does not play a busy stream paused while it waits, though WebKit keeps the error', async () => {
       const { audio } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
       Object.defineProperty(audio, 'paused', { value: false, configurable: true });
+      fakeClock();
       fireEvent.play(audio);
       failed(audio);
       at(audio, 'error', 1000);
-      await screen.findByText('The server is busy. Trying again in a moment.');
+      await settle();
+      expect(screen.getByText(busyLine)).toBeInTheDocument();
       // A headset's pause, well after the failure: the error is still set.
       Object.defineProperty(audio, 'paused', { value: true, configurable: true });
       at(audio, 'pause', 3000);
-      await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
-      await new Promise((r) => setTimeout(r, 50));
+      act(() => vi.advanceTimersByTime(300)); // the wait runs out
+      expect(load).toHaveBeenCalledTimes(1);
       expect(play).not.toHaveBeenCalled();
     });
 
@@ -781,61 +810,78 @@ describe('the chapter editor', () => {
     });
 
     it('drops the wait when another row is chosen', async () => {
-      const { user, audio, looks } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
+      const { audio, looks } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
+      fakeClock();
       fireEvent.error(audio);
-      await waitFor(() => expect(looks()).toHaveLength(1));
-      await user.click(screen.getByRole('button', { name: 'Listen from chapter 1' }));
+      await settle();
+      expect(looks()).toHaveLength(1);
+      expect(screen.getByText(busyLine)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Listen from chapter 1' }));
       expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
-      await new Promise((r) => setTimeout(r, 300));
+      act(() => vi.advanceTimersByTime(300));
       expect(play).not.toHaveBeenCalled();
     });
 
     it('says the server is busy while it waits to ask again', async () => {
       const { audio } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
-      const line = 'The server is busy. Trying again in a moment.';
-      expect(screen.queryByText(line)).not.toBeInTheDocument();
+      expect(screen.queryByText(busyLine)).not.toBeInTheDocument();
+      fakeClock();
       fireEvent.play(audio);
       fireEvent.error(audio);
-      expect(await screen.findByText(line)).toBeInTheDocument();
+      await settle();
+      expect(screen.getByText(busyLine)).toBeInTheDocument();
       // Asked again: the line goes.
-      await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
-      expect(screen.queryByText(line)).not.toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(300));
+      expect(play).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(busyLine)).not.toBeInTheDocument();
     });
 
     it('stops waiting when a move asks for the stream again from elsewhere', async () => {
-      const { user, audio } = await listen({ ...busy, headers: { 'Retry-After': '0.4' } });
+      const { audio } = await listen({ ...busy, headers: { 'Retry-After': '0.4' } });
       const from = () =>
         Number(
           new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams.get('t'),
         );
+      fakeClock();
       fireEvent.error(audio);
-      await screen.findByText('The server is busy. Trying again in a moment.');
+      await settle();
+      expect(screen.getByText(busyLine)).toBeInTheDocument();
       load.mockClear();
-      await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
-      await waitFor(() => expect(from()).toBe(1201));
+      fireEvent.click(screen.getByRole('button', { name: 'Forward 1 second' }));
+      act(() => vi.advanceTimersByTime(300)); // the seek's ask (RESTREAM_MS), inside the wait
+      await settle();
+      expect(from()).toBe(1201);
       // The wait was the old stream's: it ends with the ask, and the new
       // stream is not loaded again when it would have run out.
       expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
-      await new Promise((r) => setTimeout(r, 500));
+      act(() => vi.advanceTimersByTime(500));
       expect(load).not.toHaveBeenCalled();
     });
 
-    it('stops the wait when its button is pressed, and asks at once on Play after', async () => {
-      const { user, audio, looks } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
+    // Into a busy stream's wait, on the fake clock.
+    async function busyOnAFakeClock(audio: HTMLAudioElement) {
+      fakeClock();
       fireEvent.play(audio);
       fireEvent.error(audio);
-      await waitFor(() => expect(looks()).toHaveLength(1));
+      await settle();
+      expect(screen.getByText(busyLine)).toBeInTheDocument();
+    }
+
+    it('stops the wait when its button is pressed, and asks at once on Play after', async () => {
+      const { user, audio, looks } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
       // Past the look's answer, into the wait: the button stops it, no Play.
-      await screen.findByText('The server is busy. Trying again in a moment.');
+      await busyOnAFakeClock(audio);
+      expect(looks()).toHaveLength(1);
       expect(screen.queryByRole('button', { name: 'Play' })).not.toBeInTheDocument();
       const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause');
-      await user.click(screen.getByRole('button', { name: 'Stop trying again' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Stop trying again' }));
       expect(pause).toHaveBeenCalledTimes(1);
       expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
       // The wait ran out with nothing asked again.
-      await new Promise((r) => setTimeout(r, 300));
+      act(() => vi.advanceTimersByTime(300));
       expect(load).not.toHaveBeenCalled();
       expect(play).not.toHaveBeenCalled();
+      vi.useRealTimers();
       // Play asks again at once.
       await user.click(screen.getByRole('button', { name: 'Play' }));
       expect(load).toHaveBeenCalledTimes(1);
@@ -843,35 +889,36 @@ describe('the chapter editor', () => {
     });
 
     it('asks at once on Play 5 s during the wait, and the wait asks nothing after', async () => {
-      const { user, audio } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
-      fireEvent.play(audio);
-      fireEvent.error(audio);
-      await screen.findByText('The server is busy. Trying again in a moment.');
-      await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
+      const { audio } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
+      await busyOnAFakeClock(audio);
+      fireEvent.click(screen.getByRole('button', { name: 'Play 5 s' }));
       expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
       expect(load).toHaveBeenCalledTimes(1);
       expect(play).toHaveBeenCalledTimes(1);
       // The wait's own ask again would load the element over the preview.
-      await new Promise((r) => setTimeout(r, 300));
+      act(() => vi.advanceTimersByTime(300));
       expect(load).toHaveBeenCalledTimes(1);
       expect(play).toHaveBeenCalledTimes(1);
     });
 
     it('asks at once on Play 5 s during the look at a failed load, whose late answer starts no wait', async () => {
       let answer!: (reply: MockReply) => void;
-      const { user, audio, looks } = await listen(
+      const { audio, looks } = await listen(
         () => new Promise<MockReply>((resolve) => (answer = resolve)),
       );
+      fakeClock();
       fireEvent.play(audio);
       fireEvent.error(audio);
-      await waitFor(() => expect(looks()).toHaveLength(1));
-      await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
+      await settle();
+      expect(looks()).toHaveLength(1);
+      fireEvent.click(screen.getByRole('button', { name: 'Play 5 s' }));
       expect(load).toHaveBeenCalledTimes(1);
       expect(play).toHaveBeenCalledTimes(1);
       // The look was the failed load's: its busy answer waits for nothing and
       // asks nothing again over the preview.
       answer({ ...busy, headers: { 'Retry-After': '0.05' } });
-      await new Promise((r) => setTimeout(r, 200));
+      await settle();
+      act(() => vi.advanceTimersByTime(200));
       expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
       expect(load).toHaveBeenCalledTimes(1);
       expect(play).toHaveBeenCalledTimes(1);
@@ -904,11 +951,14 @@ describe('the chapter editor', () => {
       // Chrome leaves paused false after a failed load: Play must not pause it.
       const { user, audio } = await listen({ ...busy, headers: { 'Retry-After': '0.4' } });
       Object.defineProperty(audio, 'paused', { value: false, configurable: true });
+      fakeClock();
       fireEvent.play(audio);
       expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
       fireEvent.error(audio);
-      await screen.findByText('The server is busy. Trying again in a moment.');
-      await user.click(screen.getByRole('button', { name: 'Stop trying again' }));
+      await settle();
+      expect(screen.getByText(busyLine)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Stop trying again' }));
+      vi.useRealTimers();
       const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause');
       await user.click(screen.getByRole('button', { name: 'Play' }));
       expect(pause).not.toHaveBeenCalled();
@@ -934,7 +984,7 @@ describe('the chapter editor', () => {
       const { container } = renderApp(URL);
       const user = await openEditor();
       await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-      await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+      await streamed(container);
       const audio = container.querySelector('audio')!;
       // Playing: its stream would load at once if it came back.
       await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
@@ -1022,30 +1072,29 @@ describe('the chapter editor', () => {
       return {
         ...got,
         // Past the stall's wait (counting nothing asked before its end), then
-        // real timers for the look and the retry.
-        wait: (before?: () => void) => {
+        // real timers for the look and the retry, or the fake clock kept for a
+        // test that acts during the busy answer's wait (fake).
+        wait: (before?: () => void, fake = false) => {
           act(() => vi.advanceTimersByTime(5900));
           before?.();
           act(() => vi.advanceTimersByTime(100));
-          vi.useRealTimers();
+          if (!fake) vi.useRealTimers();
         },
       };
     }
-    afterEach(() => vi.useRealTimers());
-
     it('says the server is busy and asks again when a stream that started nothing was a 503', async () => {
       const { audio, looks, mints, wait } = await stall({
         ...busy,
         headers: { 'Retry-After': '0.2' },
       });
-      wait(() => expect(looks()).toHaveLength(0));
-      expect(
-        await screen.findByText('The server is busy. Trying again in a moment.'),
-      ).toBeInTheDocument();
+      wait(() => expect(looks()).toHaveLength(0), true);
+      await settle();
+      expect(screen.getByText(busyLine)).toBeInTheDocument();
       expect(looks()).toHaveLength(1);
       // The wait can be stopped meanwhile.
       expect(screen.getByRole('button', { name: 'Stop trying again' })).toBeEnabled();
-      await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+      act(() => vi.advanceTimersByTime(300));
+      expect(play).toHaveBeenCalledTimes(1);
       expect(load).toHaveBeenCalledTimes(1);
       expect(play.mock.contexts[0]).toBe(audio);
       expect(mints()).toBe(1);
@@ -1053,13 +1102,14 @@ describe('the chapter editor', () => {
 
     it('plays on when a stalled stream starts while it waits to be asked for again', async () => {
       const { audio, looks, wait } = await stall({ ...busy, headers: { 'Retry-After': '0.2' } });
-      wait();
-      await screen.findByText('The server is busy. Trying again in a moment.');
+      wait(undefined, true);
+      await settle();
+      expect(screen.getByText(busyLine)).toBeInTheDocument();
       expect(looks()).toHaveLength(1);
       fireEvent.playing(audio);
       expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
-      await new Promise((r) => setTimeout(r, 300));
+      act(() => vi.advanceTimersByTime(300));
       expect(load).not.toHaveBeenCalled();
       expect(play).not.toHaveBeenCalled();
     });
@@ -1129,12 +1179,6 @@ describe('the chapter editor', () => {
       expect(play).not.toHaveBeenCalled();
       expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
     });
-
-    // The look's answers settle on promises alone: let them, timers still fake.
-    const settle = () =>
-      act(async () => {
-        for (let i = 0; i < 20; i++) await Promise.resolve();
-      });
 
     // A slow transcode, its own ask holding the slot: asked for again, it would
     // be ended (the new ask takes its slot over), so it is waited for while it
@@ -1235,7 +1279,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    await streamed(container);
     const src = container.querySelector('audio')!.getAttribute('src')!;
     expect(src).not.toContain('transcode');
   });
