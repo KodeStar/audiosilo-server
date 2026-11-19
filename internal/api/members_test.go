@@ -215,6 +215,15 @@ func codeOf(body string) string {
 	return e.Code
 }
 
+// reasonOf is an error envelope's reason.
+func reasonOf(body string) string {
+	var e struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.Unmarshal([]byte(body), &e)
+	return e.Reason
+}
+
 // Create (allowed): an ordinary user adds a kid signed in here and a grown-up
 // with no session; each works on GET /me and shows managed_by and member_kind.
 func TestMembers_Create_Allowed(t *testing.T) {

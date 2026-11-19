@@ -46,6 +46,8 @@ func (b *bridgeEnv) putTitles(t *testing.T, id, poll string, final bool, titles 
 	t.Helper()
 	body := fmt.Sprintf(`{"poll_id":%q,"final":%t,"titles":[%s]}`, poll, final, strings.Join(titles, ","))
 	resp, out := b.do(t, "PUT", "/api/v1/bridge/audible/accounts/"+id+"/titles", b.bridgeTok, body)
+	// The backups a final call asks for are queued past its answer.
+	b.api.audiblePollFolds.Wait()
 	return resp.StatusCode, out
 }
 

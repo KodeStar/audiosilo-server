@@ -126,7 +126,8 @@ const BY_CODE: Record<string, string> = {
   // Library > LibriVox: the recording is on this server already.
   in_library: 'errors.librivoxInLibrary',
   // Settings > Audible: a title's destination, an account's placement template
-  // (bridge.CheckAudibleDestPath, CheckAudibleTemplate).
+  // (bridge.CheckAudibleDestPath, CheckAudibleTemplate); a backup's refusal of
+  // a stored one carries the reason (account, title).
   invalid_dest_path: 'errors.invalidDestPath',
   invalid_template: 'errors.invalidTemplate',
 };

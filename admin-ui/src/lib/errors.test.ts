@@ -118,4 +118,25 @@ describe('errorMessage', () => {
     expect(errorMessage(refused('something_new'), t)).toBe('the server says no');
     expect(errorMessage(refused(undefined), t)).toBe('the server says no');
   });
+  it("words a backup's stored template or destination by whose setting it is", () => {
+    const t = i18n.getFixedT('en');
+    const stored = (code: string, reason?: string) =>
+      new ApiError(
+        400,
+        'invalid: template: invalid template: unknown variable {Bogus}',
+        code,
+        undefined,
+        {
+          reason,
+        },
+      );
+    expect(errorMessage(stored('invalid_template', 'account'), t)).toBe(
+      "This account's placement template no longer works. Fix it in Account settings..., then back up again.",
+    );
+    expect(errorMessage(stored('invalid_dest_path', 'title'), t)).toBe(
+      "This title's destination is no longer valid. Set it again with Destination..., then back up again.",
+    );
+    // The value just typed (the account and title PATCHes): no reason.
+    expect(errorMessage(stored('invalid_template'), t)).toMatch(/^That template doesn't work/);
+  });
 });

@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -68,6 +69,37 @@ type AudibleImport struct {
 	State string `json:"state"`
 	// Code is a failed or parked job's code ("" for none).
 	Code string `json:"code"`
+	// Conflict is what a backup that failed exists found in the way, as a
+	// plan's conflict names it ("file", "book", "audio"; "" for none:
+	// importConflict).
+	Conflict string `json:"conflict"`
+}
+
+// importConflict is what j, an audible.import that failed with code exists,
+// found in the way: the result's "conflict" when the Bridge sends one of
+// audiblePlanConflicts, else read from the Bridge's message (its
+// audiblejob.vacantAt words each): a folder already the library's book, one
+// already holding audio, else a file at the destination.
+func importConflict(j bridge.Job, code string) string {
+	if code != bridge.ImportExists {
+		return ""
+	}
+	var r struct {
+		Conflict string `json:"conflict"`
+		Message  string `json:"message"`
+	}
+	_ = json.Unmarshal(j.Result, &r)
+	if r.Conflict != "" && slices.Contains(audiblePlanConflicts, r.Conflict) {
+		return r.Conflict
+	}
+	msg := cmp.Or(r.Message, j.Error)
+	switch {
+	case strings.Contains(msg, "is already the library's book"):
+		return "book"
+	case strings.Contains(msg, "already holds audio"):
+		return "audio"
+	}
+	return "file"
 }
 
 // AudibleEstimate is what "Back up everything" would queue: how many titles and
@@ -324,7 +356,10 @@ func importParams(acct *AudibleAccount, asin, dest string) bridge.AudibleImportP
 // ErrUnknownTitle; ErrAudiblePaused for a paused account; ErrAudibleMatched
 // for a title on this server (unless marked "Not this book");
 // ErrAudibleImportOpen while its backup is open (or a request is pending);
-// ErrAudibleNotAvailable for an unavailable or gone title.
+// ErrAudibleNotAvailable for an unavailable or gone title; a
+// bridge.ErrAudibleDestPath or ErrAudibleTemplate for a stored destination or
+// template that no longer validates (saved before a rule tightened), a
+// preorder's too: its request would be refused by the queue at every poll.
 func (c *Catalog) RequestAudibleBackup(ctx context.Context, account, asin string) (*bridge.AudibleImportParams, bool, error) {
 	acct, err := c.AudibleAccount(ctx, account)
 	if err != nil {
@@ -336,19 +371,40 @@ func (c *Catalog) RequestAudibleBackup(ctx context.Context, account, asin string
 		return nil, false, err
 	case acct.Paused:
 		return nil, false, ErrAudiblePaused
-	case t.Match != nil && !t.Rejected:
-		return nil, false, ErrAudibleMatched
-	case t.Import != nil && (t.Import.State == AudibleImportPending || bridge.IsOpenState(t.Import.State)):
-		return nil, false, ErrAudibleImportOpen
-	case t.State == AudiblePreorder:
+	}
+	if err := t.backupRefusal(); err != nil {
+		return nil, false, err
+	}
+	if err := bridge.CheckAudibleDestPath(t.DestPath); err != nil {
+		return nil, false, err
+	}
+	if err := bridge.CheckAudibleTemplate(acct.Template); err != nil {
+		return nil, false, err
+	}
+	if t.State == AudiblePreorder {
 		_, err := c.db.ExecUserState(ctx, `UPDATE audible_titles SET import_pending = 1, updated_at = ? WHERE account = ? AND asin = ?`,
 			c.ts(), account, asin)
 		return nil, err == nil, err
-	case t.State != AudibleAvailable:
-		return nil, false, ErrAudibleNotAvailable
 	}
 	p := importParams(acct, asin, t.DestPath)
 	return &p, false, nil
+}
+
+// backupRefusal is why the console's Back up refuses t whatever its account:
+// ErrAudibleMatched for a title on this server (unless marked "Not this
+// book"), ErrAudibleImportOpen while its backup is open (or a request is
+// pending), ErrAudibleNotAvailable unless it is available or a preorder; nil
+// when it may be backed up (AudibleTitle.CanBackup).
+func (t *AudibleTitle) backupRefusal() error {
+	switch {
+	case t.Match != nil && !t.Rejected:
+		return ErrAudibleMatched
+	case t.Import != nil && (t.Import.State == AudibleImportPending || bridge.IsOpenState(t.Import.State)):
+		return ErrAudibleImportOpen
+	case t.State != AudibleAvailable && t.State != AudiblePreorder:
+		return ErrAudibleNotAvailable
+	}
+	return nil
 }
 
 // AudibleBackupAll are the params of the backups "Back up everything" queues
@@ -551,10 +607,11 @@ func (o *seriesOwner) any(ctx context.Context, series []AudibleSeries) (bool, er
 	return false, nil
 }
 
-// SetAudibleImport records job as the backup of account's title asin (a
-// pending request is now queued). A user-state write.
-func (c *Catalog) SetAudibleImport(ctx context.Context, account, asin string, job int64) error {
-	_, err := c.db.ExecUserState(ctx, `UPDATE audible_titles SET import_job_id = ?, import_pending = 0, updated_at = ?
+// SetAudibleImportTx records job as the backup of account's title asin (a
+// pending request is now queued), in tx: the transaction that queued the job
+// (bridge.EnqueueAll), so a job and its title's record commit together.
+func (c *Catalog) SetAudibleImportTx(ctx context.Context, tx *sql.Tx, account, asin string, job int64) error {
+	_, err := tx.ExecContext(ctx, `UPDATE audible_titles SET import_job_id = ?, import_pending = 0, updated_at = ?
 		  WHERE account = ? AND asin = ?`, job, c.ts(), account, asin)
 	return err
 }

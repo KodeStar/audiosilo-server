@@ -2,6 +2,7 @@ package audible
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -20,54 +21,75 @@ type Queues struct {
 }
 
 // queue queues p's backup at priority for requestedBy (0: the server) and
-// records it on the title. The open backup of the title, if there is one, is
-// returned instead (created false) and recorded too: a job queued before a
-// crash that lost its record is found by its dedupe key. A job queued whose
-// record failed comes back with the error (created true).
-func (q Queues) queue(ctx context.Context, p bridge.AudibleImportParams, requestedBy int64, priority int) (*bridge.Job, bool, error) {
-	job, created, err := q.Bridge.Enqueue(ctx, bridge.AudibleImport(p, requestedBy, priority))
+// records it on the title in the queue's transaction (bridge.EnqueueAll, a
+// batch of one): a job is never queued without its title's record, nor the
+// record written for a job that didn't commit. The open backup of the title,
+// if there is one, is recorded instead (created false): one a concurrent ask
+// queued first, or one from before the two committed together.
+func (q Queues) queue(ctx context.Context, p bridge.AudibleImportParams, requestedBy int64, priority int) (jobID int64, created bool, err error) {
+	n, err := q.Bridge.EnqueueAll(ctx, []bridge.NewJob{bridge.AudibleImport(p, requestedBy, priority)},
+		func(tx *sql.Tx, _ int, id int64) error {
+			jobID = id
+			return q.Catalog.SetAudibleImportTx(ctx, tx, p.Account, p.ASIN, id)
+		})
 	if err != nil {
-		return nil, false, err
+		return 0, false, err
 	}
-	return job, created, q.Catalog.SetAudibleImport(ctx, p.Account, p.ASIN, job.ID)
+	return jobID, n > 0, nil
 }
 
-// Backup is the console's "Back up" of one title: the job queued (created), or
-// for a preorder pending true and no job (queued once a poll says it is
-// available). The catalog's refusals (catalog.RequestAudibleBackup) and the
-// queue's (bridge.Enqueue: ErrKindUnavailable, ErrLibraryNotWritable) come
-// back as they are.
-func (q Queues) Backup(ctx context.Context, account, asin string, requestedBy int64) (job *bridge.Job, created, pending bool, err error) {
+// Backup is the console's "Back up" of one title: its queued job's id
+// (created, or the open one a concurrent ask queued first), or for a preorder
+// pending true and no job (queued once a poll says it is available). The
+// catalog's refusals (catalog.RequestAudibleBackup) and the queue's
+// (bridge.EnqueueAll: ErrKindUnavailable, ErrLibraryNotWritable) come back as
+// they are.
+func (q Queues) Backup(ctx context.Context, account, asin string, requestedBy int64) (jobID int64, created, pending bool, err error) {
 	p, pending, err := q.Catalog.RequestAudibleBackup(ctx, account, asin)
 	if err != nil || pending {
-		return nil, false, pending, err
+		return 0, false, pending, err
 	}
-	job, created, err = q.queue(ctx, *p, requestedBy, bridge.PriorityAsked)
-	return job, created, false, err
+	jobID, created, err = q.queue(ctx, *p, requestedBy, bridge.PriorityAsked)
+	return jobID, created, false, err
 }
 
 // BackupAll is "Back up everything" for account: every title
-// catalog.AudibleBackupAll names, queued; queued counts the new jobs. It stops
-// at the first refusal of the queue (a Bridge that can't take them: none
-// will be taken), with what it queued so far.
-func (q Queues) BackupAll(ctx context.Context, account string, requestedBy int64) (queued int, err error) {
+// catalog.AudibleBackupAll names, queued and recorded on its title in one
+// transaction (bridge.EnqueueAll); queued counts the new jobs. A title whose
+// stored destination no longer validates (one saved before a rule tightened:
+// bridge.CheckAudibleDestPath) is skipped and counted in skipped, so it
+// doesn't stop the batch; only that title-level reason is skipped, so an
+// account-level one (its template, a bridge.ErrAudibleTemplate) refuses the
+// batch, checked before the titles' destinations.
+// A refusal of the queue (a Bridge that can't take them: none will be taken)
+// stops it at the title refused, with the titles before it queued; any other
+// failure queues none.
+func (q Queues) BackupAll(ctx context.Context, account string, requestedBy int64) (queued, skipped int, err error) {
 	all, err := q.Catalog.AudibleBackupAll(ctx, account)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
+	// The template is the account's, so every title's: checked first, it
+	// refuses the batch even when each title is skipped for its destination.
+	if len(all) > 0 {
+		if err := bridge.CheckAudibleTemplate(all[0].Template); err != nil {
+			return 0, 0, err
+		}
+	}
+	valid := all[:0]
+	jobs := make([]bridge.NewJob, 0, len(all))
 	for _, p := range all {
-		if err := ctx.Err(); err != nil {
-			return queued, err
+		if bridge.CheckAudibleDestPath(p.DestPath) != nil {
+			skipped++
+			continue
 		}
-		_, created, err := q.queue(ctx, p, requestedBy, bridge.PriorityBulk)
-		if created {
-			queued++
-		}
-		if err != nil {
-			return queued, err
-		}
+		valid = append(valid, p)
+		jobs = append(jobs, bridge.AudibleImport(p, requestedBy, bridge.PriorityBulk))
 	}
-	return queued, nil
+	queued, err = q.Bridge.EnqueueAll(ctx, jobs, func(tx *sql.Tx, i int, jobID int64) error {
+		return q.Catalog.SetAudibleImportTx(ctx, tx, valid[i].Account, valid[i].ASIN, jobID)
+	})
+	return queued, skipped, err
 }
 
 // AfterPoll queues what a completed poll of account asks for

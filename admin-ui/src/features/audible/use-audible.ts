@@ -4,6 +4,9 @@ import {
   useInfiniteQuery,
   useQuery,
   useQueryClient,
+  type InfiniteData,
+  type Query,
+  type QueryClient,
 } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/client';
@@ -12,6 +15,7 @@ import type {
   AudibleAccount,
   AudibleAccountPatch,
   AudibleTitle,
+  AudibleTitlePage,
   AudibleTitlePatch,
   AudibleTitleState,
 } from '@/api/types';
@@ -156,11 +160,66 @@ export function useCheckNow() {
   return { checkNow, busy };
 }
 
+/** A title's key among the loaded titles: its account and ASIN. */
+const titleKey = (x: Pick<AudibleTitle, 'account' | 'asin'>) => `${x.account}/${x.asin}`;
+
+/**
+ * Puts a title as the server answered it into every loaded titles page, in
+ * place, rather than reading every page again; the lists are marked stale, so
+ * one it now belongs in or has left is read again when next shown. A list's
+ * read it had to stop is started again.
+ */
+export async function storeTitle(qc: QueryClient, x: AudibleTitle) {
+  const key = titleKey(x);
+  const holds = (p: AudibleTitlePage) => p.titles.some((t) => titleKey(t) === key);
+  const lists = {
+    queryKey: keys.audibleTitleLists,
+    predicate: (q: Query) =>
+      (q.state.data as InfiniteData<AudibleTitlePage> | undefined)?.pages.some(holds) ?? false,
+  };
+  // A read of a list holding the title already under way (the poll while a
+  // backup runs, the re-read after an account's check landed) would land its
+  // row as it was before this answer, over it: it is stopped first, and
+  // started again below. A list without it, a first read among them, carries on.
+  const stopped = new Set(
+    qc
+      .getQueryCache()
+      .findAll({ ...lists, fetchStatus: 'fetching' })
+      .map((q) => q.queryHash),
+  );
+  await qc.cancelQueries(lists);
+  // A list (or page) without the title is left as it is: its rows don't render again.
+  qc.setQueriesData<InfiniteData<AudibleTitlePage>>({ queryKey: keys.audibleTitleLists }, (data) =>
+    data?.pages.some(holds)
+      ? {
+          ...data,
+          pages: data.pages.map((p) =>
+            holds(p) ? { ...p, titles: p.titles.map((t) => (titleKey(t) === key ? x : t)) } : p,
+          ),
+        }
+      : data,
+  );
+  void qc.invalidateQueries({ queryKey: keys.audibleTitleLists, refetchType: 'none' });
+  // The reads stopped above had news of their own (a check's new titles): a
+  // shown list reads again, now past this answer.
+  if (stopped.size > 0) {
+    void qc.refetchQueries({
+      queryKey: keys.audibleTitleLists,
+      type: 'active',
+      predicate: (q) => stopped.has(q.queryHash),
+    });
+  }
+}
+
 /**
  * Backups (Phase 4b): "Back up", "Not this book", a destination, "Back up
- * everything" and an account's settings; "Don't sync this book" (Phase 4c). Each says how it went (a refusal is a
- * toast, or the dialog's error when it throws) and refreshes the titles, the
- * accounts (their estimate) and the Bridge's jobs ("Don't sync" the titles only).
+ * everything" and an account's settings; "Don't sync this book" (Phase 4c).
+ * Each says how it went (a refusal is a toast, or the dialog's error when it
+ * throws). A title's action puts the title the server answered into its row
+ * (storeTitle; every page is read again only when an older server answers
+ * without it) and refreshes the accounts (their estimate) and the Bridge's
+ * jobs ("Don't sync" its row only); Back up everything reads the titles again.
+ * A title's row is busy while its own action runs, whatever another row does.
  */
 /** What useBackups gives the account card and the title rows. */
 export type Backups = ReturnType<typeof useBackups>;
@@ -168,18 +227,34 @@ export type Backups = ReturnType<typeof useBackups>;
 export function useBackups() {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const [busy, setBusy] = useState<string | null>(null);
-  const refresh = () => {
-    void qc.invalidateQueries({ queryKey: keys.audibleTitleLists });
-    void qc.invalidateQueries({ queryKey: keys.audibleAccounts });
-    void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
+  const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
+  const mark = (x: AudibleTitle, on: boolean) =>
+    setBusy((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(titleKey(x));
+      else next.delete(titleKey(x));
+      return next;
+    });
+  const isBusy = (x: AudibleTitle) => busy.has(titleKey(x));
+  /**
+   * The title the server answered into its row, else (no answer) every page
+   * read again; then, unless `others` is false, the accounts and the jobs.
+   */
+  const settle = (x: AudibleTitle | undefined, others = true) => {
+    if (x) void storeTitle(qc, x);
+    else void qc.invalidateQueries({ queryKey: keys.audibleTitleLists });
+    if (others) {
+      void qc.invalidateQueries({ queryKey: keys.audibleAccounts });
+      void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
+    }
   };
-  const titleKey = (x: AudibleTitle) => `${x.account}/${x.asin}`;
 
   const backUp = async (x: AudibleTitle) => {
-    setBusy(titleKey(x));
+    mark(x, true);
+    let answered: AudibleTitle | undefined;
     try {
-      const { pending } = await api.backupAudible(x.account, x.asin);
+      const { pending, title } = await api.backupAudible(x.account, x.asin);
+      answered = title;
       toast.add(
         pending
           ? {
@@ -195,52 +270,53 @@ export function useBackups() {
     } catch (err) {
       toastError(t('audible.backup.failed'), err);
     } finally {
-      setBusy(null);
-      refresh();
+      mark(x, false);
+      settle(answered);
     }
   };
 
-  /** A title's flag from its row's menu: a refusal is a toast, then `done` refreshes. */
+  /** A title's flag from its row's menu: a refusal is a toast, then `done` with the title answered (none after a refusal). */
   const patchTitle = async (
     x: AudibleTitle,
     patch: AudibleTitlePatch,
     failed: string,
-    done: () => void,
+    done: (answered: AudibleTitle | undefined) => void,
   ) => {
-    setBusy(titleKey(x));
+    mark(x, true);
+    let answered: AudibleTitle | undefined;
     try {
-      await api.patchAudibleTitle(x.account, x.asin, patch);
+      answered = await api.patchAudibleTitle(x.account, x.asin, patch);
     } catch (err) {
       toastError(failed, err);
     } finally {
-      setBusy(null);
-      done();
+      mark(x, false);
+      done(answered);
     }
   };
 
   const setRejected = (x: AudibleTitle, rejected: boolean) =>
-    patchTitle(x, { rejected }, t('audible.reject.failed'), refresh);
+    patchTitle(x, { rejected }, t('audible.reject.failed'), settle);
 
-  /** "Don't sync this book" and its undo (Phase 4c): it changes no estimate or job, only the title rows. */
+  /** "Don't sync this book" and its undo (Phase 4c): it changes no estimate or job, only the title's row. */
   const setNoSync = (x: AudibleTitle, noSync: boolean) =>
-    patchTitle(x, { no_sync: noSync }, t('audible.nosync.failed'), () => {
-      void qc.invalidateQueries({ queryKey: keys.audibleTitleLists });
-    });
+    patchTitle(x, { no_sync: noSync }, t('audible.nosync.failed'), (answered) =>
+      settle(answered, false),
+    );
 
   /** Throws for the dialog to show. */
   const setDest = async (x: AudibleTitle, dest: string) => {
-    await api.patchAudibleTitle(x.account, x.asin, { dest_path: dest });
-    refresh();
+    settle(await api.patchAudibleTitle(x.account, x.asin, { dest_path: dest }));
   };
 
   /** Throws for the confirm to show. */
   const backUpAll = async (account: AudibleAccount) => {
-    const { queued } = await api.backupAllAudible(account.id);
+    const { queued, skipped = 0 } = await api.backupAllAudible(account.id);
     toast.add({
       title: t('audible.backupAll.done', { count: queued, name: accountName(t, account) }),
-      type: 'success',
+      description: skipped > 0 ? t('audible.backupAll.skipped', { count: skipped }) : undefined,
+      type: skipped > 0 ? 'warning' : 'success',
     });
-    refresh();
+    settle(undefined);
   };
 
   /** Throws for the dialog to show. */
@@ -254,5 +330,5 @@ export function useBackups() {
     void qc.invalidateQueries({ queryKey: keys.audibleAccounts });
   };
 
-  return { backUp, setRejected, setNoSync, setDest, backUpAll, saveAccount, busy, titleKey };
+  return { backUp, setRejected, setNoSync, setDest, backUpAll, saveAccount, isBusy };
 }

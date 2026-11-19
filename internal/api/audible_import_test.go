@@ -139,11 +139,16 @@ func TestAudibleBackupFlow(t *testing.T) {
 	}
 	resp, out := b.do(t, "POST", backupPath("B000000001"), b.adminTok, "")
 	var queued struct {
-		JobID int64 `json:"job_id"`
+		JobID int64                 `json:"job_id"`
+		Title *catalog.AudibleTitle `json:"title"`
 	}
 	decodeInto(t, out, &queued)
 	if resp.StatusCode != http.StatusAccepted || queued.JobID == 0 {
 		t.Fatalf("backup: %d %s", resp.StatusCode, out)
+	}
+	// The title as it is now, for the console's row: queued, no more Back up.
+	if x := queued.Title; x == nil || x.ASIN != "B000000001" || x.Import == nil || x.Import.State != bridge.StateQueued || x.CanBackup {
+		t.Fatalf("backup's title = %+v", x)
 	}
 	job, err := b.api.bridge.Job(ctx, queued.JobID)
 	want := fmt.Sprintf(`{"account":%q,"asin":"B000000001","library_id":%d,"dest_path":"Brandon Sanderson/New/One.m4b","template":"{Author}/{Title}"}`,
@@ -167,7 +172,8 @@ func TestAudibleBackupFlow(t *testing.T) {
 		}
 	}
 	// A preorder is a pending request.
-	if resp, out := b.do(t, "POST", backupPath("B000000004"), b.adminTok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(out, `"pending":true`) {
+	if resp, out := b.do(t, "POST", backupPath("B000000004"), b.adminTok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(out, `"pending":true`) ||
+		!strings.Contains(out, `"import":{"job_id":null,"state":"pending"`) {
 		t.Fatalf("preorder backup: %d %s", resp.StatusCode, out)
 	}
 	// The Bridge runs it: done with the book's place.
@@ -436,10 +442,10 @@ func TestAudibleBackupAll(t *testing.T) {
 		t.Fatalf("one first: %d %s", resp.StatusCode, out)
 	}
 	resp, out = b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, "")
-	if resp.StatusCode != http.StatusOK || out != `{"queued":1}`+"\n" {
+	if resp.StatusCode != http.StatusOK || out != `{"queued":1,"skipped":0}`+"\n" {
 		t.Fatalf("backup-all: %d %q", resp.StatusCode, out)
 	}
-	if resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, ""); out != `{"queued":0}`+"\n" {
+	if resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, ""); out != `{"queued":0,"skipped":0}`+"\n" {
 		t.Fatalf("backup-all again: %d %q", resp.StatusCode, out)
 	}
 	var n int
@@ -471,6 +477,102 @@ func TestAudibleBackupAll(t *testing.T) {
 	}
 	if resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/unknown01/backup-all", b.adminTok, ""); resp.StatusCode != http.StatusNotFound || codeOf(out) != "unknown_account" {
 		t.Fatalf("unknown account: %d %s", resp.StatusCode, out)
+	}
+}
+
+// Back up everything skips a title whose stored destination no longer
+// validates (a rule tightened after it was saved) and queues the rest, rather
+// than stop the batch at it; the answer counts the titles skipped.
+func TestAudibleBackupAllSkipsInvalidDestination(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t,
+		title("B000000001", "A first", "available", 0, ""),
+		title("B000000002", "B second", "available", 0, ""),
+		title("B000000003", "C third", "available", 0, ""))
+	// The first title by order, so a batch that stops at it queues nothing.
+	if _, err := b.db.ExecContext(context.Background(),
+		`UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE asin = 'B000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, "")
+	if resp.StatusCode != http.StatusOK || out != `{"queued":2,"skipped":1}`+"\n" {
+		t.Fatalf("backup-all: %d %q", resp.StatusCode, out)
+	}
+	for asin, queued := range map[string]bool{"B000000001": false, "B000000002": true, "B000000003": true} {
+		if x := b.audibleTitle(t, asin); (x.ImportJobID != nil) != queued {
+			t.Fatalf("%s backed up = %v, want %v", asin, x.ImportJobID != nil, queued)
+		}
+	}
+}
+
+// Only a title's own destination is skipped: an account template that no
+// longer validates refuses the whole batch (400) rather than count every
+// title as skipped for its destination.
+func TestAudibleBackupAllInvalidTemplateRefuses(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t,
+		title("B000000001", "A first", "available", 0, ""),
+		title("B000000002", "B second", "available", 0, ""),
+		title("B000000003", "C soon", "preorder", 0, ""))
+	if _, err := b.db.ExecContext(context.Background(),
+		`UPDATE audible_accounts SET template = '.hidden/{Title}' WHERE account = ?`, testAccount); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, "")
+	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_template" || reasonOf(out) != "account" {
+		t.Fatalf("backup-all with an invalid template: %d %q", resp.StatusCode, out)
+	}
+	// One title's Back up refuses the same way, a preorder's request too (the
+	// queue would refuse it at every poll).
+	for _, asin := range []string{"B000000001", "B000000003"} {
+		resp, out = b.do(t, "POST", backupPath(asin), b.adminTok, "")
+		if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_template" || reasonOf(out) != "account" {
+			t.Fatalf("backup of %s with an invalid template: %d %q", asin, resp.StatusCode, out)
+		}
+	}
+	for _, asin := range []string{"B000000001", "B000000002", "B000000003"} {
+		if x := b.audibleTitle(t, asin); x.ImportJobID != nil || x.Import != nil {
+			t.Fatalf("%s queued or requested under an invalid template", asin)
+		}
+	}
+	// Every title skipped for its destination: the template still refuses.
+	if _, err := b.db.ExecContext(context.Background(),
+		`UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE account = ?`, testAccount); err != nil {
+		t.Fatal(err)
+	}
+	resp, out = b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, "")
+	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_template" {
+		t.Fatalf("backup-all with an invalid template and every destination: %d %q", resp.StatusCode, out)
+	}
+}
+
+// One title's Back up with a stored destination that no longer validates
+// refuses it as the title's (400 invalid_dest_path, reason title); a valid
+// one still queues.
+func TestAudibleBackupInvalidDestination(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t,
+		title("B000000001", "A first", "available", 0, ""),
+		title("B000000002", "B second", "available", 0, ""),
+		title("B000000003", "C soon", "preorder", 0, ""))
+	if _, err := b.db.ExecContext(context.Background(),
+		`UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE asin IN ('B000000001', 'B000000003')`); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := b.do(t, "POST", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001/backup", b.adminTok, "")
+	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_dest_path" || reasonOf(out) != "title" {
+		t.Fatalf("backup with an invalid destination: %d %q", resp.StatusCode, out)
+	}
+	if resp, out := b.do(t, "POST", "/api/v1/admin/audible/titles/"+testAccount+"/B000000002/backup", b.adminTok, ""); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("backup with a valid destination: %d %q", resp.StatusCode, out)
+	}
+	// A preorder's request is refused the same way, not stored to fail at every poll.
+	resp, out = b.do(t, "POST", backupPath("B000000003"), b.adminTok, "")
+	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_dest_path" || reasonOf(out) != "title" {
+		t.Fatalf("preorder backup with an invalid destination: %d %q", resp.StatusCode, out)
+	}
+	if x := b.audibleTitle(t, "B000000003"); x.Import != nil {
+		t.Fatalf("a preorder's request stored with an invalid destination: %+v", x.Import)
 	}
 }
 
@@ -548,6 +650,137 @@ func TestAudiblePolicyAfterPoll(t *testing.T) {
 	}
 	if j, err := b.api.bridge.Job(context.Background(), job.ID); err != nil || j.State != bridge.StateCancelled || j.Error != bridge.CancelAudibleRemoved {
 		t.Fatalf("backup after removal = %+v, %v", j, err)
+	}
+}
+
+// A poll's final call is answered before its backups are queued: the Bridge
+// never waits for the queue, which runs on and is waited for at shutdown,
+// still able to write once the server's base context has ended.
+func TestAudiblePollAnswersBeforeQueueing(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beat(t, bridge.KindVerify, bridge.KindAudiblePoll, bridge.KindAudibleImport)
+	setAudible(t, b.testEnv, b.adminTok, true)
+	body := fmt.Sprintf(`{"label":"x","marketplace":"us","user_id":%d,"library_id":%d,"policy":"all","sync":true}`, b.adminID, b.lib.ID)
+	if resp, out := b.do(t, "PUT", "/api/v1/bridge/audible/accounts/"+testAccount, b.bridgeTok, body); resp.StatusCode != http.StatusOK {
+		t.Fatalf("create: %d %s", resp.StatusCode, out)
+	}
+	base, stop := context.WithCancel(context.Background())
+	defer stop()
+	b.api.baseCtx = base
+	release, queued, ended := make(chan struct{}), make(chan string, 1), make(chan error, 1)
+	b.api.audibleAfterPoll = func(ctx context.Context, account string) (int, error) {
+		<-release
+		ended <- ctx.Err()
+		queued <- account
+		return 0, nil
+	}
+	resp, out := b.do(t, "PUT", "/api/v1/bridge/audible/accounts/"+testAccount+"/titles", b.bridgeTok,
+		`{"poll_id":"p1","final":true,"titles":[`+title("B000000001", "One", "available", 0, "")+`]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("final call: %d %s", resp.StatusCode, out)
+	}
+	select {
+	case <-queued:
+		t.Fatal("queued before the answer")
+	default:
+	}
+	stop() // the server shutting down
+	close(release)
+	b.api.StopModules()
+	if got := <-queued; got != testAccount {
+		t.Fatalf("queued for %q", got)
+	}
+	if err := <-ended; err != nil {
+		t.Fatalf("the queue's context ended with the server's: %v", err)
+	}
+}
+
+// A poll's final call served once shutdown has begun waiting (a request that
+// outlived the shutdown timeout) queues nothing: the wait may have returned and
+// the database be closing. One served before it still queues.
+func TestAudiblePollAfterStopQueuesNothing(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t)
+	asked := 0
+	b.api.audibleAfterPoll = func(context.Context, string) (int, error) { asked++; return 0, nil }
+	if code, out := b.putTitles(t, testAccount, "p2", true); code != http.StatusOK || asked != 1 {
+		t.Fatalf("before shutdown: %d %s, queueing asked %d times", code, out, asked)
+	}
+	b.api.StopModules()
+	for _, poll := range []string{"p3", "p4"} {
+		if code, out := b.putTitles(t, testAccount, poll, true); code != http.StatusOK {
+			t.Fatalf("after shutdown: %d %s", code, out)
+		}
+	}
+	if asked != 1 {
+		t.Fatalf("queueing asked %d times after shutdown began", asked-1)
+	}
+}
+
+// A panic while a poll's backups are queued, past the Bridge's request, is
+// that pass's failure: the server carries on and the next poll queues again.
+func TestAudiblePollQueuePanicIsContained(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t)
+	b.api.audibleAfterPoll = func(context.Context, string) (int, error) { panic("boom") }
+	if code, out := b.putTitles(t, testAccount, "p2", true); code != http.StatusOK {
+		t.Fatalf("the poll whose queueing panics: %d %s", code, out)
+	}
+	asked := 0
+	b.api.audibleAfterPoll = func(context.Context, string) (int, error) { asked++; return 0, nil }
+	if code, out := b.putTitles(t, testAccount, "p3", true); code != http.StatusOK || asked != 1 {
+		t.Fatalf("the next poll: %d %s, queueing asked %d times", code, out, asked)
+	}
+}
+
+// A backup's job and its record on the title commit together: a record that
+// fails queues no job, for the console's Back up and for the backups a poll
+// asks for (a job with no title record ran with nothing showing it).
+func TestAudibleBackupQueuedWithItsRecord(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t, title("B000000001", "One", "available", 0, ""), title("B000000002", "Two", "preorder", 0, ""))
+	ctx := context.Background()
+	if resp, out := b.do(t, "POST", backupPath("B000000002"), b.adminTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("the preorder's request: %d %s", resp.StatusCode, out)
+	}
+	jobs := func() (n int) {
+		t.Helper()
+		if err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE kind = ?`, bridge.KindAudibleImport).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	// Recording a job on a title fails from here on.
+	if _, err := b.db.ExecContext(ctx, `CREATE TRIGGER record_fails BEFORE UPDATE OF import_job_id ON audible_titles
+		BEGIN SELECT RAISE(ABORT, 'record failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if resp, out := b.do(t, "POST", backupPath("B000000001"), b.adminTok, ""); resp.StatusCode != http.StatusInternalServerError || jobs() != 0 {
+		t.Fatalf("Back up with a failing record: %d %s, %d jobs; want a 500 and none queued", resp.StatusCode, out, jobs())
+	}
+	// The preorder is out: the poll queues its request, whose record fails too.
+	out := []string{title("B000000001", "One", "available", 0, ""), title("B000000002", "Two", "available", 0, "")}
+	if code, body := b.putTitles(t, testAccount, "p2", true, out...); code != http.StatusOK || jobs() != 0 {
+		t.Fatalf("a poll with a failing record: %d %s, %d jobs; want none queued", code, body, jobs())
+	}
+	if x := b.audibleTitle(t, "B000000002"); x.Import == nil || x.Import.State != catalog.AudibleImportPending {
+		t.Fatalf("the request after the failed record = %+v, want it still pending", x.Import)
+	}
+	if _, err := b.db.ExecContext(ctx, `DROP TRIGGER record_fails`); err != nil {
+		t.Fatal(err)
+	}
+	// Both go through once the record can be written, each on its title.
+	if resp, out := b.do(t, "POST", backupPath("B000000001"), b.adminTok, ""); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("Back up: %d %s", resp.StatusCode, out)
+	}
+	if code, body := b.putTitles(t, testAccount, "p3", true, out...); code != http.StatusOK || jobs() != 2 {
+		t.Fatalf("the next poll: %d %s, %d jobs; want both queued", code, body, jobs())
+	}
+	for _, asin := range []string{"B000000001", "B000000002"} {
+		if x := b.audibleTitle(t, asin); x.Import == nil || x.Import.JobID == nil || x.Import.State != bridge.StateQueued {
+			t.Fatalf("%s = %+v, want its queued job recorded", asin, x.Import)
+		}
 	}
 }
 

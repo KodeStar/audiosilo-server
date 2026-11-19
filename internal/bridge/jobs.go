@@ -341,6 +341,18 @@ func openJob(ctx context.Context, q rowQuerier, key string) (*Job, error) {
 	return j, err
 }
 
+// openJobID is the id of the open job with dedupe key key, read in tx, 0 when
+// there is none (openJob's query, the id alone).
+func openJobID(ctx context.Context, tx *sql.Tx, key string) (int64, error) {
+	var id int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT id FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL, key).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
+}
+
 // sidecars.generate's param values (auto and local are the defaults),
 // and the longest work id it takes.
 const (
@@ -792,23 +804,17 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (*Job, bool, error) {
 // normalised): Subscribe checks an adopt-only request before it looks for the
 // open one, and the check isn't made twice.
 func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
-	var h *Heartbeat
+	// A new fetch's authorization is checked in the writer transaction below.
+	var refuse error
 	if j.fetch == nil {
-		if h, err = s.LastHeartbeat(ctx); err != nil {
+		h, err := s.LastHeartbeat(ctx)
+		if err != nil {
 			return nil, false, err
 		}
 		if h == nil || !h.Offers(j.Kind) {
 			return nil, false, ErrKindUnavailable
 		}
-	}
-	var refuse error
-	switch {
-	case j.fetch != nil:
-		// New fetch authorization is checked in the writer transaction below.
-	case kinds[j.Kind].writes && !h.Writable(*j.LibraryID):
-		refuse = ErrLibraryNotWritable
-	case ModuleFor(j.Kind, j.Params) == ModuleContributions && !h.CanContribute():
-		refuse = ErrCannotContribute
+		refuse = heartbeatRefusal(h, j)
 	}
 	key := jobKey(j)
 	var exp expiry
@@ -824,17 +830,12 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 				return err
 			}
 		}
-		var id int64
-		err = tx.QueryRowContext(ctx,
-			`SELECT id FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL, key).Scan(&id)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if job, err = openJob(ctx, tx, key); err != nil {
 			return err
 		}
-		if err == nil {
-			job, err = getJob(ctx, tx, id)
-			if err != nil {
-				return err
-			}
+		var id int64
+		if job != nil {
+			id = job.ID
 			if j.Kind == KindPodcastSubscribe && subscribePrivate(job.Params) != subscribePrivate(j.Params) {
 				return ErrPrivacyConflict
 			}
@@ -951,14 +952,7 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 		if b != nil {
 			return spec.refusedWhileOpen[b.Kind]
 		}
-		res, err := tx.ExecContext(ctx,
-			`INSERT INTO bridge_jobs(kind, library_id, rel_path, params, requested_by, priority, dedupe_key, created_at, updated_at,feed_redacted)
-			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?,?)`,
-			j.Kind, j.LibraryID, j.Path, string(j.Params), requesterID(j.RequestedBy), j.Priority, key, now, now, j.feedRedacted)
-		if err != nil {
-			return err
-		}
-		if id, err = res.LastInsertId(); err != nil {
+		if id, err = insertJob(ctx, tx, j, key, now); err != nil {
 			return err
 		}
 		created = true
@@ -989,6 +983,128 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 	}
 	s.settle(ctx, exp)
 	return job, created, nil
+}
+
+// heartbeatRefusal is why h, the last heartbeat of a Bridge offering j's
+// kind, can't take j: ErrLibraryNotWritable for a job that writes into a
+// library it doesn't report mapped and writable, ErrCannotContribute for one
+// that files to the community when it says it can't; nil when it can.
+func heartbeatRefusal(h *Heartbeat, j NewJob) error {
+	switch {
+	case kinds[j.Kind].writes && !h.Writable(*j.LibraryID):
+		return ErrLibraryNotWritable
+	case ModuleFor(j.Kind, j.Params) == ModuleContributions && !h.CanContribute():
+		return ErrCannotContribute
+	}
+	return nil
+}
+
+// insertJob inserts j, checked, with dedupe key key, as of now: its id.
+func insertJob(ctx context.Context, tx *sql.Tx, j NewJob, key, now string) (int64, error) {
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO bridge_jobs(kind, library_id, rel_path, params, requested_by, priority, dedupe_key, created_at, updated_at,feed_redacted)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?,?)`,
+		j.Kind, j.LibraryID, j.Path, string(j.Params), requesterID(j.RequestedBy), j.Priority, key, now, now, j.feedRedacted)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// batchKinds are the kinds EnqueueAll queues: none refuses, cancels, promotes
+// or prunes another job.
+var batchKinds = map[string]bool{KindAudibleImport: true}
+
+// EnqueueAll is Enqueue for many jobs of one kind at once, in one writer
+// transaction ("Back up everything" queues hundreds; one backup is a batch of
+// one): each queued, or the open job with its key found, then its id passed
+// to record (with its index in jobs) in the same transaction, so what the
+// caller records of each commits with the queue or not at all. Only a kind that refuses,
+// cancels, promotes and prunes nothing qualifies (audible.import), else
+// ErrInvalid. The queue's refusals (ErrKindUnavailable, heartbeatRefusal's,
+// a job's ErrInvalid, a library of the wrong kind) stop it at the first job
+// refused, with the jobs before it queued, the count of those created, and
+// the refusal; any other error queues none.
+func (s *Service) EnqueueAll(ctx context.Context, jobs []NewJob,
+	record func(tx *sql.Tx, i int, jobID int64) error) (created int, err error) {
+	if len(jobs) == 0 {
+		return 0, nil
+	}
+	kind := jobs[0].Kind
+	if !batchKinds[kind] {
+		return 0, invalid("kind %q can't be queued in a batch", kind)
+	}
+	h, err := s.LastHeartbeat(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if h == nil || !h.Offers(kind) {
+		return 0, ErrKindUnavailable
+	}
+	// The refusals before the transaction: it queues the jobs ahead of the
+	// first refused.
+	var refused error
+	checked := make([]NewJob, 0, len(jobs))
+	libraries := map[int64]error{} // checkLibraryKind's answer by library
+	for _, j := range jobs {
+		if j.Kind != kind || j.Check != nil {
+			refused = invalid("a batch holds jobs of one kind, with no check")
+		} else if refused = checkNew(&j); refused == nil && j.LibraryID != nil {
+			libErr, seen := libraries[*j.LibraryID]
+			if !seen {
+				libErr = s.checkLibraryKind(ctx, j)
+				if libErr != nil && !errors.Is(libErr, ErrNotBookLibrary) && !errors.Is(libErr, ErrNotPodcastLibrary) {
+					return 0, libErr // a library that couldn't be read is no refusal
+				}
+				libraries[*j.LibraryID] = libErr
+			}
+			refused = libErr
+		}
+		if refused == nil {
+			refused = heartbeatRefusal(h, j)
+		}
+		if refused != nil {
+			break
+		}
+		checked = append(checked, j)
+	}
+	if len(checked) == 0 {
+		return 0, refused
+	}
+	var exp expiry
+	err = s.db.WithTx(ctx, "bridge.EnqueueAll", func(tx *sql.Tx) error {
+		created = 0
+		now := s.ts()
+		var err error
+		if exp, err = expireTx(ctx, tx, now); err != nil {
+			return err
+		}
+		for i, j := range checked {
+			key := jobKey(j)
+			id, err := openJobID(ctx, tx, key)
+			if err != nil {
+				return err
+			}
+			if id == 0 {
+				if id, err = insertJob(ctx, tx, j, key, now); err != nil {
+					return err
+				}
+				created++
+			}
+			if err := record(tx, i, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	if created > 0 {
+		s.wake.fire()
+	}
+	s.settle(ctx, exp)
+	return created, refused
 }
 
 // Job returns one job, after expiring a lapsed lease (so the console shows what
@@ -1403,7 +1519,8 @@ func checkOpenRequests(ctx context.Context, tx *sql.Tx, kind string, by int64, s
 }
 
 // ReleaseUnsentClaim returns an undelivered claim without spending an attempt.
-// A job whose cancel was asked for is cancelled instead.
+// A job whose cancel was asked for is cancelled instead. A Bridge that read the
+// claim after all still hears a cancel as one (cancelledUnder).
 func (s *Service) ReleaseUnsentClaim(ctx context.Context, claim *Job) error {
 	now := s.ts()
 	return s.settleUnsentClaim(ctx, claim, "bridge.ReleaseUnsentClaim", `UPDATE bridge_jobs SET
@@ -1556,11 +1673,23 @@ var ErrNotHeld = errors.New("the job is not held by this claim")
 // cancelled (by an admin, or by the server itself: Cancel*, cancelsOpen), which
 // ends at once, as does a held one whose book moved onto another open job of
 // its kind (MoveJobs), a working one whose lease ran out after the cancel was
-// asked for, or one this claim lost to a lapsed lease and that was cancelled
-// while queued again. The 409 not_held then carries reason "cancelled", so the
+// asked for, one this claim lost to a lapsed lease and that was cancelled
+// while queued again, or one whose claim the server released as undelivered
+// though the Bridge read it (ReleaseUnsentClaim) and that was cancelled then or
+// while queued again (cancelledUnder). The 409 not_held then carries reason "cancelled", so the
 // Bridge records the job cancelled rather than lost, which is how it ended
 // (bridge#35, BRIDGE-04). errors.Is reads it as ErrNotHeld too.
 var ErrCancelledWhileHeld = fmt.Errorf("%w: it was cancelled", ErrNotHeld)
+
+// cancelledUnder reports whether job cur ended cancelled with no claim later
+// than attempt (ErrCancelledWhileHeld). Attempt 0 is no claim: a job cancelled
+// before any took it. The job's attempts are the claim's own, or one fewer
+// when the server released the claim as undelivered (ReleaseUnsentClaim gives
+// the attempt back) though the Bridge had read it, and it was cancelled then
+// or while queued again: only a later claim takes the count past it.
+func cancelledUnder(cur *Job, attempt int) bool {
+	return cur.State == StateCancelled && attempt > 0 && (cur.Attempts == attempt || cur.Attempts == attempt-1)
+}
 
 // heldStates are the states the Bridge holds a job in (it may report on it);
 // reportable are the states it may report.
@@ -1634,8 +1763,7 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 			return err
 		}
 		if !slices.Contains(heldStates, cur.State) || cur.Attempts != u.Attempt {
-			// Attempt 0 is no claim: a job cancelled before any took it.
-			if cur.State == StateCancelled && cur.Attempts == u.Attempt && u.Attempt > 0 {
+			if cancelledUnder(cur, u.Attempt) {
 				return ErrCancelledWhileHeld
 			}
 			return ErrNotHeld

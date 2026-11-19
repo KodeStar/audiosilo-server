@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -110,6 +111,16 @@ func TestAudibleImportJobs(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	// Which rule a stored value broke stays readable: the console's routes
+	// answer invalid_dest_path / invalid_template for it.
+	for raw, want := range map[string]error{
+		`{"account":"acct0001","asin":"B000000001","library_id":1,"dest_path":"../x"}`:  ErrAudibleDestPath,
+		`{"account":"acct0001","asin":"B000000001","library_id":1,"template":"{Nope}"}`: ErrAudibleTemplate,
+	} {
+		if _, err := audibleImportParams(json.RawMessage(raw)); !errors.Is(err, want) {
+			t.Errorf("%s: %v, want %v", raw, err, want)
+		}
+	}
 	// Removing acct0001 cancels both of its backups, not acct0002's, whose
 	// stored params a damaged row has lost (ParamSQL: no failed read).
 	q.damageParams(t, third.ID)
@@ -145,5 +156,101 @@ func TestAudibleImportCode(t *testing.T) {
 		if got := AudibleImportCode(tc.j); got != tc.want {
 			t.Errorf("%+v: %q, want %q", tc.j, got, tc.want)
 		}
+	}
+}
+
+// EnqueueAll queues a batch of backups in one transaction: the same jobs as
+// one Enqueue each (the open one found, not queued twice), each passed to
+// record in that transaction, so a record that fails queues none. A refusal
+// stops it at the job refused, the jobs before it queued; a kind that is no
+// batch's is refused whole.
+func TestEnqueueAll(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	const n = 750
+	batch := make([]NewJob, n)
+	for i := range batch {
+		p := AudibleImportParams{Account: "acct0001", ASIN: fmt.Sprintf("B%09d", i+1), LibraryID: q.lib}
+		batch[i] = AudibleImport(p, q.admin, PriorityBulk)
+	}
+	none := func(*sql.Tx, int, int64) error { return nil }
+	if _, err := q.EnqueueAll(ctx, batch, none); !errors.Is(err, ErrKindUnavailable) {
+		t.Fatalf("no Bridge offering it: %v", err)
+	}
+	q.beatWritable(t, false, KindVerify, KindAudibleImport)
+	if created, err := q.EnqueueAll(ctx, batch, none); created != 0 || !errors.Is(err, ErrLibraryNotWritable) {
+		t.Fatalf("not writable = %d, %v", created, err)
+	}
+	q.beatWritable(t, true, KindVerify, KindAudibleImport)
+	open, _, err := q.Enqueue(ctx, batch[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		var c int
+		if err := q.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE kind = ?`, KindAudibleImport).Scan(&c); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	failing := errors.New("record failed")
+	if created, err := q.EnqueueAll(ctx, batch, func(_ *sql.Tx, i int, _ int64) error {
+		if i == n-1 {
+			return failing
+		}
+		return nil
+	}); created != 0 || !errors.Is(err, failing) || count() != 1 {
+		t.Fatalf("a failed record = %d, %v, %d jobs: want none queued", created, err, count())
+	}
+	ids := make([]int64, n)
+	created, err := q.EnqueueAll(ctx, batch, func(tx *sql.Tx, i int, id int64) error {
+		// The job is in record's transaction.
+		var state string
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM bridge_jobs WHERE id = ?`, id).Scan(&state); err != nil {
+			return err
+		}
+		ids[i] = id
+		return nil
+	})
+	if err != nil || created != n-1 || count() != n {
+		t.Fatalf("batch = %d, %v, %d jobs", created, err, count())
+	}
+	if ids[1] != open.ID {
+		t.Fatalf("the open job = %d, want %d", ids[1], open.ID)
+	}
+	for i, id := range ids {
+		j, err := q.Job(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var p AudibleImportParams
+		if err := json.Unmarshal(j.Params, &p); err != nil || p.ASIN != fmt.Sprintf("B%09d", i+1) ||
+			j.Priority != PriorityBulk || j.State != StateQueued {
+			t.Fatalf("job %d = %+v, %v", i, j, err)
+		}
+	}
+	if again, err := q.EnqueueAll(ctx, batch, none); again != 0 || err != nil || count() != n {
+		t.Fatalf("again = %d, %v, %d jobs", again, err, count())
+	}
+	// A bad job stops the batch there.
+	more := []NewJob{
+		AudibleImport(AudibleImportParams{Account: "acct0002", ASIN: "B000000001", LibraryID: q.lib}, q.admin, 0),
+		AudibleImport(AudibleImportParams{Account: "acct0002", ASIN: "nope", LibraryID: q.lib}, q.admin, 0),
+		AudibleImport(AudibleImportParams{Account: "acct0002", ASIN: "B000000003", LibraryID: q.lib}, q.admin, 0),
+	}
+	if created, err := q.EnqueueAll(ctx, more, none); created != 1 || !errors.Is(err, ErrInvalid) || count() != n+1 {
+		t.Fatalf("a bad job = %d, %v, %d jobs", created, err, count())
+	}
+	// A library that can't be read is no refusal: none queued.
+	unread := []NewJob{
+		AudibleImport(AudibleImportParams{Account: "acct0003", ASIN: "B000000001", LibraryID: q.lib}, q.admin, 0),
+		AudibleImport(AudibleImportParams{Account: "acct0003", ASIN: "B000000002", LibraryID: q.lib + 1000}, q.admin, 0),
+	}
+	if created, err := q.EnqueueAll(ctx, unread, none); created != 0 || !errors.Is(err, sql.ErrNoRows) || count() != n+1 {
+		t.Fatalf("an unread library = %d, %v, %d jobs", created, err, count())
+	}
+	if _, err := q.EnqueueAll(ctx, []NewJob{{Kind: KindVerify, LibraryID: &q.lib}}, none); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("another kind: %v", err)
 	}
 }

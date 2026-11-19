@@ -6,17 +6,25 @@ import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { canBackUp, canSync, cleanDest, plannedPlaceholder, titleName } from './audible-model';
+import {
+  canReject,
+  canSync,
+  cleanDest,
+  onServer,
+  plannedPlaceholder,
+  titleName,
+} from './audible-model';
 import type { Backups } from './use-audible';
 
 /**
  * A title's backup actions (Bridge Phase 4b): Back up (a preorder's waits for
- * its release), "Not this book" (never backed up by a policy or Back up
- * everything, and its match isn't this title) and its undo, and the
+ * its release) where the server says it can (can_backup), "Not this book"
+ * (never backed up by a policy or Back up everything, and its match isn't this
+ * title; not on a title whose match is its own backup) and its undo, and the
  * destination: where in the library the backup goes instead of the account's
  * placement. Back up is off while the account is paused, as Back up everything.
  * Phase 4c: "Don't sync this book" (its place never syncs with Audible, either
- * way) for a title on this server, and its undo.
+ * way) for a title on this server, and its undo. Each row is busy on its own.
  */
 export function TitleActions({
   title: x,
@@ -33,11 +41,11 @@ export function TitleActions({
 }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
-  const busy = backups.busy === backups.titleKey(x);
+  const busy = backups.isBusy(x);
   const name = titleName(x);
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {canBackUp(x) ? (
+      {x.can_backup ? (
         <Button
           size="sm"
           variant="outline"
@@ -53,16 +61,20 @@ export function TitleActions({
           {t('audible.backup.action')}
         </Button>
       ) : null}
-      <Button
-        size="sm"
-        variant="ghost"
-        disabled={busy}
-        onClick={() => void backups.setRejected(x, !x.rejected)}
-        aria-label={t(x.rejected ? 'audible.reject.undoLabel' : 'audible.reject.label', { name })}
-      >
-        {x.rejected ? <Undo2 aria-hidden="true" /> : <Ban aria-hidden="true" />}
-        {t(x.rejected ? 'audible.reject.undo' : 'audible.reject.action')}
-      </Button>
+      {canReject(x) ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          onClick={() => void backups.setRejected(x, !x.rejected)}
+          aria-label={t(x.rejected ? 'audible.reject.undoLabel' : 'audible.reject.label', {
+            name,
+          })}
+        >
+          {x.rejected ? <Undo2 aria-hidden="true" /> : <Ban aria-hidden="true" />}
+          {t(x.rejected ? 'audible.reject.undo' : 'audible.reject.action')}
+        </Button>
+      ) : null}
       {canSync(x) || x.no_sync ? (
         <Button
           size="sm"
@@ -75,7 +87,7 @@ export function TitleActions({
           {t(x.no_sync ? 'audible.nosync.undo' : 'audible.nosync.action')}
         </Button>
       ) : null}
-      {!x.match || x.rejected ? (
+      {!onServer(x) ? (
         <Button
           size="sm"
           variant="ghost"

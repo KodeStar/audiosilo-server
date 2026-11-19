@@ -364,7 +364,9 @@ func TestUpdateHeldCancelledWhileHeld(t *testing.T) {
 	if !errors.Is(err, ErrCancelledWhileHeld) || !errors.Is(err, ErrNotHeld) {
 		t.Fatalf("the holding claim's report: %v, want ErrCancelledWhileHeld (and ErrNotHeld)", err)
 	}
-	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 2, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) ||
+	// A claim two past the job's attempts was never handed out (one past is a
+	// claim the server released as undelivered: claim_delivery_test.go).
+	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 3, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) ||
 		errors.Is(err, ErrCancelledWhileHeld) {
 		t.Fatalf("another claim's report: %v, want plain ErrNotHeld", err)
 	}

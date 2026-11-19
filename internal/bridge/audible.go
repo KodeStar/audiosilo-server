@@ -354,11 +354,13 @@ func audibleImportParams(raw json.RawMessage) (json.RawMessage, error) {
 	case p.LibraryID <= 0:
 		return nil, invalid("library_id is required")
 	}
+	// Both wrapped, not only worded: the console's routes answer a stored
+	// destination or template that fails the rule with its own code.
 	if err := CheckAudibleDestPath(p.DestPath); err != nil {
-		return nil, invalid("dest_path: %v", err)
+		return nil, fmt.Errorf("%w: dest_path: %w", ErrInvalid, err)
 	}
 	if err := CheckAudibleTemplate(p.Template); err != nil {
-		return nil, invalid("template: %v", err)
+		return nil, fmt.Errorf("%w: template: %w", ErrInvalid, err)
 	}
 	return json.Marshal(p)
 }

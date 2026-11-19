@@ -622,18 +622,23 @@ export const api = {
 
   /**
    * "Back up" one title: 202 with its queued backup's job, or 200 pending for a
-   * preorder (queued once a poll finds it available). 409 already_matched,
+   * preorder (queued once a poll finds it available), either with the title
+   * as it is now (absent from an older server). 409 already_matched,
    * import_open, not_available, account_paused, kind_unavailable,
    * library_not_writable.
    */
   backupAudible: (account: string, asin: string) =>
-    request<{ pending: boolean; job_id: number | null }>(
+    request<{ pending: boolean; job_id: number | null; title?: AudibleTitle }>(
       'POST',
       `/admin/audible/titles/${encodeURIComponent(account)}/${encodeURIComponent(asin)}/backup`,
     ),
-  /** "Back up everything" for an account: how many backups it queued. */
+  /**
+   * "Back up everything" for an account: how many backups it queued, and how
+   * many titles it skipped because their destination no longer validates
+   * (`skipped` is absent from a server before it).
+   */
   backupAllAudible: (account: string) =>
-    request<{ queued: number }>(
+    request<{ queued: number; skipped?: number }>(
       'POST',
       `/admin/audible/accounts/${encodeURIComponent(account)}/backup-all`,
     ),

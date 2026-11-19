@@ -3870,8 +3870,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   are the account's at queue time), the row's `library_id` set, deduped per `|account|asin`. Priorities (`bridge`'s bands, `priority.go`): a console Back up 0
   (a preorder's pending request too, when a poll queues it, with no requester), a policy -10 with no
   requester (as the podcast scheduler's fetches), Back up everything -20 (below new episodes: a bulk backup
-  in the Bridge's one download slot never holds them back). `SetAudibleImport` records the job on the title
-  (`import_job_id`); the open one comes back on a repeat. **On this server** is a match not marked Not this
+  in the Bridge's one download slot never holds them back). `SetAudibleImportTx` records the job on the title
+  (`import_job_id`) in the transaction that queued it (`bridge.EnqueueAll`, `batchKinds`), so a job is never
+  queued without its title's record: a console Back up and each backup a poll asks for as a batch of one
+  (`audible.Queues.queue`), Back up everything its whole batch in one writer transaction; the open one comes back on a repeat. **On this server** is a match not marked Not this
   book (rejected): Back up, the policy's pending drop, the titles' `matched` filter and the accounts'
   `matched` count read it so. **Done** (`FoldAudibleImport` from `OnEnded`): the
   result (`{library_id, path, files:[{path,size}], bytes, enriched}`; `enriched:false` is no ASIN added: one
@@ -3884,8 +3886,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`match_how:"import"`), clears rejected and pending, only while `import_job_id` is still this job. A poll
   keeps an `import` match while its book is indexed and the poll names no other. A failure's code is the
   result's `code` (or a `code:` error prefix, or a park's code): `AudibleImportCodes`, shown on the title
-  (`import {job_id, state, code}`, `state` a job state or `pending`). **Policy** (`AudiblePolicyImports`,
-  after each final titles PUT while the module is on and a Bridge offers the kind; `autoImport.wants`, a
+  (`import {job_id, state, code, conflict}`, `state` a job state or `pending`; `conflict` is what an `exists`
+  failure found in the way, `file`/`book`/`audio` as a plan's, from the result's `conflict`, else the
+  Bridge's message: `importConflict`). A title's `can_backup` is Back up allowed (`backupRefusal`, the
+  account's pause aside), so the console never derives it. A title going gone drops its plan, its contest,
+  a pending request and its reason (a preorder's "Not released yet"). **Policy** (`AudiblePolicyImports`,
+  after each final titles PUT while the module is on and a Bridge offers the kind, past the PUT's answer
+  (`afterAudiblePoll`, waited for by `StopModules`; a final call served once it began waiting queues nothing, the next poll asks again); `autoImport.wants`, a
   table test): available, not on this server, not ignored, nothing open; a pending request always; otherwise not
   rejected, not `contested` (`AudibleReasonContested`: the Bridge left it unmatched because another title
   claimed the same book, so the book is here under that title), never attempted, first seen after `policy_since`, and `all`, or `series` with a book in one of
@@ -3898,11 +3905,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`preorderOverdue`, the same terms). A pending request survives a restart (a column) and is queued by the
   first poll that reports the title available (a rejected match's too). **Admin routes**
   (`moduleRoutes`, admin session or admin API key; cast, feed and bridge tokens 401):
-  `POST /admin/audible/titles/{account}/{asin}/backup` (202 `{pending:false, job_id}`, 200 `{pending:true,
-  job_id:null}` for a preorder; 404 `unknown_title`, 409 `already_matched` (matched, not rejected),
+  `POST /admin/audible/titles/{account}/{asin}/backup` (202 `{pending:false, job_id, title}`, 200 `{pending:true,
+  job_id:null, title}` for a preorder, `title` the row as it is now; 404 `unknown_title`, 409 `already_matched` (matched, not rejected),
   `import_open`, `not_available` (unavailable or gone), `account_paused`; the queue's
-  `kind_unavailable` / `library_not_writable`), `POST /admin/audible/accounts/{account}/backup-all`
-  (`{queued}`: `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, the
+  `kind_unavailable` / `library_not_writable`; a stored value that no longer validates 400 `invalid_template` reason
+  `account` / `invalid_dest_path` reason `title`, `writeAudibleBackupError`, the console's `errors.<code>.<reason>`), `POST /admin/audible/accounts/{account}/backup-all`
+  (`{queued, skipped}`, `skipped` the titles left out because their params no longer validate (a stored `dest_path` from before a rule tightened: `CheckAudibleDestPath`; an account template that no longer validates refuses the batch: 400 `invalid_template`, reason `account`), the rest queued; `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, the
   latest import not a `done` one whose book is still indexed (a refused fold, `ErrImportNotOwn`, isn't
   queued again; a done one whose book left the library is), a failed or cancelled one again; a console Back up of one contested or done title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
   `invalid_dest_path`, also for a disc folder ("CD 3") directly inside an indexed book or a folder with a

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -170,10 +171,10 @@ func (a *API) handleBridgeAudibleTitles(w http.ResponseWriter, r *http.Request) 
 		a.writeAudibleError(w, err, "put audible titles failed")
 		return
 	}
-	if req.Final {
-		a.afterAudiblePoll(r, id)
-	}
 	writeJSON(w, http.StatusOK, map[string]int{"stored": len(req.Titles)})
+	if req.Final {
+		a.afterAudiblePoll(id)
+	}
 }
 
 // bridgeListBook is one book of GET /bridge/libraries/{id}/books: what the
@@ -413,25 +414,50 @@ func (a *API) audibleSyncNow(r *http.Request, account string, titlesChanged bool
 	}
 }
 
-// afterAudiblePollTimeout bounds the backups a poll's final call queues: well
-// inside the 30 s the Bridge (and the request timeout) give the whole call, so
-// a slow pass still leaves the stored poll time to answer; what it didn't
-// queue, the next poll asks for again.
+// afterAudiblePollTimeout bounds the backups a poll's final call queues: what
+// it didn't queue, the next poll asks for again. Shutdown waits for it at most
+// this long.
 const afterAudiblePollTimeout = 10 * time.Second
 
 // afterAudiblePoll queues the backups a completed poll of account asks for
-// (audible.Queues.AfterPoll) while the module is on, past the Bridge's
-// request: its titles call has landed whatever happens here, so a failure is
-// logged and the next poll asks again.
-func (a *API) afterAudiblePoll(r *http.Request, account string) {
+// (audible.Queues.AfterPoll) while the module is on, in the background once
+// the Bridge's final titles call has its answer: the titles have landed
+// whatever happens here, so the Bridge doesn't wait for the queue, and a
+// failure is logged and the next poll asks again. StopModules waits for it;
+// once it has begun to (a titles call that outlived the shutdown timeout),
+// nothing is queued: the database may be closing, and the next poll after a
+// start asks again.
+func (a *API) afterAudiblePoll(account string) {
 	if a.bridge == nil || !a.moduleOn(bridge.ModuleAudible) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), afterAudiblePollTimeout)
-	defer cancel()
-	if n, err := a.audibleQueues().AfterPoll(ctx, account); err != nil {
-		a.log.Warn("audible: queueing a poll's backups failed", "account", account, "queued", n, "err", err)
+	queue := a.audibleAfterPoll
+	if queue == nil {
+		queue = a.audibleQueues().AfterPoll
 	}
+	a.audiblePollMu.Lock()
+	defer a.audiblePollMu.Unlock()
+	if a.audiblePollStopped {
+		a.log.Debug("audible: a poll ended after shutdown began, its backups are left for the next poll", "account", account)
+		return
+	}
+	a.audiblePollFolds.Go(func() {
+		// Past the request, a panic is no longer net/http's to contain: it is
+		// this pass's failure, never the server's.
+		defer func() {
+			if p := recover(); p != nil {
+				a.log.Error("audible: queueing a poll's backups panicked", "account", account, "panic", p, "stack", string(debug.Stack()))
+			}
+		}()
+		// Not ended with the server's base context: a shutdown has already
+		// cancelled it by the time StopModules waits, which would stop the
+		// queue part-way rather than let it finish within the timeout.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(a.baseCtx), afterAudiblePollTimeout)
+		defer cancel()
+		if n, err := queue(ctx, account); err != nil {
+			a.log.Warn("audible: queueing a poll's backups failed", "account", account, "queued", n, "err", err)
+		}
+	})
 }
 
 // audibleTitleID is the {account} and {asin} path values of a title, else it
@@ -464,6 +490,14 @@ func (a *API) writeAudibleBackupError(w http.ResponseWriter, err error, op strin
 		writeErrorCode(w, http.StatusConflict, "not_available", "the title can't be downloaded from the account now")
 	case errors.Is(err, catalog.ErrAudiblePaused):
 		writeErrorCode(w, http.StatusConflict, "account_paused", "the account's library was deleted; map it again on the Bridge")
+	case errors.Is(err, bridge.ErrAudibleTemplate):
+		// The queue's check of the job's params refused what was stored (saved
+		// before a rule tightened): the reason says whose setting to fix, the
+		// account's template or the title's destination (the account and title
+		// PATCHes answer the same codes with no reason, for the value just sent).
+		writeErrorReason(w, http.StatusBadRequest, "invalid_template", "account", err.Error())
+	case errors.Is(err, bridge.ErrAudibleDestPath):
+		writeErrorReason(w, http.StatusBadRequest, "invalid_dest_path", "title", err.Error())
 	default:
 		return a.writeBridgeError(w, err, op)
 	}
@@ -473,45 +507,56 @@ func (a *API) writeAudibleBackupError(w http.ResponseWriter, err error, op strin
 // handleAdminAudibleBackup serves POST /admin/audible/titles/{account}/{asin}/
 // backup: "Back up" one title. 202 {"job_id": N} with its queued backup (the
 // open one when a concurrent request queued it first); 200 {"pending": true, "job_id": null} for a preorder, queued
-// once a poll says it is available. 404 unknown_account, unknown_title; 409
-// already_matched, import_open, not_available, account_paused,
-// kind_unavailable, library_not_writable.
+// once a poll says it is available. Either carries "title", the title as it is
+// now (the console updates its row from it), unless reading it failed. 404
+// unknown_account, unknown_title; 409 already_matched, import_open,
+// not_available, account_paused, kind_unavailable, library_not_writable; 400
+// invalid_template / invalid_dest_path with a reason (account, title) for a
+// stored template or destination that no longer validates.
 func (a *API) handleAdminAudibleBackup(w http.ResponseWriter, r *http.Request) {
 	account, asin, ok := audibleTitleID(w, r)
 	if !ok {
 		return
 	}
 	by := userFrom(r.Context()).ID
-	job, created, pending, err := a.audibleQueues().Backup(r.Context(), account, asin, by)
-	if created {
-		// Queued, even when recording it on the title failed (a repeat finds
-		// it by its dedupe key and records it then).
-		a.audit(r, "bridge.job", "", map[string]any{"job": job.ID, "kind": job.Kind, "account": account, "asin": asin})
-	}
+	jobID, created, pending, err := a.audibleQueues().Backup(r.Context(), account, asin, by)
 	if !a.writeAudibleBackupError(w, err, "audible backup failed") {
 		return
 	}
+	if created {
+		a.audit(r, "bridge.job", "", map[string]any{"job": jobID, "kind": bridge.KindAudibleImport, "account": account, "asin": asin})
+	}
+	out := map[string]any{"pending": pending, "job_id": nil}
+	if t, err := a.cat.AudibleTitle(r.Context(), account, asin); err == nil {
+		out["title"] = t
+	} else {
+		a.log.Warn("audible backup: read the title back failed", "account", account, "asin", asin, "err", err)
+	}
 	if pending {
 		a.audit(r, "bridge.audible.backup", "", map[string]any{"account": account, "asin": asin, "pending": true})
-		writeJSON(w, http.StatusOK, map[string]any{"pending": true, "job_id": nil})
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"pending": false, "job_id": job.ID})
+	out["job_id"] = jobID
+	writeJSON(w, http.StatusAccepted, out)
 }
 
 // handleAdminAudibleBackupAll serves POST /admin/audible/accounts/{account}/
 // backup-all: "Back up everything" (every title available, not here, not
-// marked "Not this book" and with no backup open). 200 {"queued": N}; 404
-// unknown_account; 409 account_paused, kind_unavailable, library_not_writable
-// (nothing queued: the Bridge can't take them).
+// marked "Not this book" and with no backup open). 200 {"queued": N,
+// "skipped": M}, M the titles left out because their stored destination no
+// longer validates (the rest are queued); 400 invalid_template with reason
+// account for a stored account template that no longer validates (nothing
+// queued); 404 unknown_account; 409 account_paused, kind_unavailable,
+// library_not_writable (nothing queued: the Bridge can't take them).
 func (a *API) handleAdminAudibleBackupAll(w http.ResponseWriter, r *http.Request) {
 	account, ok := audibleAccountID(w, r)
 	if !ok {
 		return
 	}
-	n, err := a.audibleQueues().BackupAll(r.Context(), account, userFrom(r.Context()).ID)
+	n, skipped, err := a.audibleQueues().BackupAll(r.Context(), account, userFrom(r.Context()).ID)
 	if n > 0 {
-		a.audit(r, "bridge.audible.backup_all", "", map[string]any{"account": account, "queued": n})
+		a.audit(r, "bridge.audible.backup_all", "", map[string]any{"account": account, "queued": n, "skipped": skipped})
 	}
 	if err != nil && n == 0 {
 		a.writeAudibleBackupError(w, err, "audible backup all failed")
@@ -520,7 +565,10 @@ func (a *API) handleAdminAudibleBackupAll(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		a.log.Warn("audible backup all stopped early", "account", account, "queued", n, "err", err)
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"queued": n})
+	if skipped > 0 {
+		a.log.Warn("audible backup all skipped titles whose destination no longer validates", "account", account, "skipped", skipped)
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"queued": n, "skipped": skipped})
 }
 
 // handleAdminAudibleTitle serves PATCH /admin/audible/titles/{account}/{asin}

@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,6 +66,14 @@ type audibleFixture struct {
 	lib   *Library
 	user  int64
 	clock time.Time
+}
+
+// setImport records job as the title's backup, in a transaction of its own
+// (the queue's, outside these tests: bridge.EnqueueAll).
+func (f *audibleFixture) setImport(account, asin string, job int64) error {
+	return f.c.db.WithTx(f.ctx, "test.setImport", func(tx *sql.Tx) error {
+		return f.c.SetAudibleImportTx(f.ctx, tx, account, asin, job)
+	})
 }
 
 func newAudibleFixture(t *testing.T, policy string) *audibleFixture {
@@ -166,7 +175,7 @@ func TestAudiblePolicySince(t *testing.T) {
 		t.Fatalf("p3 queues %+v, want B000000004 with the template", ps)
 	}
 	// Once queued it is not asked for again.
-	if err := f.c.SetAudibleImport(f.ctx, "acct0001", "B000000004", 1); err != nil {
+	if err := f.setImport("acct0001", "B000000004", 1); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.policyImports(t); len(got) != 0 {
@@ -255,7 +264,7 @@ func TestAudiblePendingBackup(t *testing.T) {
 	if ps, err := f.c.AudiblePolicyImports(f.ctx, "acct0001"); err != nil || len(ps) != 1 || ps[0].ASIN != "B000000001" || !ps[0].Requested {
 		t.Fatalf("available now: %+v, %v; want the pending one only, as a request", ps, err)
 	}
-	if err := f.c.SetAudibleImport(f.ctx, "acct0001", "B000000001", 7); err != nil {
+	if err := f.setImport("acct0001", "B000000001", 7); err != nil {
 		t.Fatal(err)
 	}
 	if tt, _ := f.c.AudibleTitle(f.ctx, "acct0001", "B000000001"); tt.Import != nil || *tt.ImportJobID != 7 {
@@ -397,7 +406,7 @@ func TestFoldAudibleImport(t *testing.T) {
 	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000001", AudibleTitlePatch{Rejected: new(true)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.c.SetAudibleImport(f.ctx, "acct0001", "B000000001", 5); err != nil {
+	if err := f.setImport("acct0001", "B000000001", 5); err != nil {
 		t.Fatal(err)
 	}
 	lib := f.lib.ID
@@ -703,7 +712,7 @@ func TestAudibleBackupAllSkipsDone(t *testing.T) {
 			id, bridge.KindAudibleImport, job.state, result, fmt.Sprintf("k%d", id)); err != nil {
 			t.Fatal(err)
 		}
-		if err := f.c.SetAudibleImport(f.ctx, "acct0001", titles[i].ASIN, id); err != nil {
+		if err := f.setImport("acct0001", titles[i].ASIN, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -770,5 +779,76 @@ func TestCancelOrphanAudibleJobsPassesDamagedParams(t *testing.T) {
 	}
 	if n, err := c.CancelOrphanAudibleJobs(ctx); err != nil || n != 1 {
 		t.Fatalf("sweep = %d, %v; want the one orphaned account, no error", n, err)
+	}
+}
+
+// can_backup is the console's Back up allowed: exactly the titles
+// RequestAudibleBackup takes (its account's pause aside).
+func TestAudibleCanBackup(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	const book = "A/Here"
+	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: f.lib.ID, RelPath: book, Title: "Here"}); err != nil {
+		t.Fatal(err)
+	}
+	matched := func(asin string) AudibleTitleInput {
+		x := avail(asin, "")
+		x.Match = &AudibleMatch{LibraryID: f.lib.ID, Path: book, How: "asin"}
+		return x
+	}
+	f.poll(t, "p1", avail("B000000001", ""), AudibleTitleInput{ASIN: "B000000002", State: AudiblePreorder},
+		AudibleTitleInput{ASIN: "B000000003", State: AudibleUnavailable}, matched("B000000004"), matched("B000000005"),
+		avail("B000000006", ""), avail("B000000007", ""), AudibleTitleInput{ASIN: "B000000008", State: AudiblePreorder})
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000005", AudibleTitlePatch{Rejected: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	for i, job := range []struct{ asin, state string }{{"B000000006", bridge.StateQueued}, {"B000000007", bridge.StateFailed}} {
+		id := int64(i + 1)
+		if _, err := f.c.db.ExecContext(f.ctx, `INSERT INTO bridge_jobs(id,kind,state,params,dedupe_key,created_at,updated_at) VALUES(?,?,?,'{}',?,'t','t')`,
+			id, bridge.KindAudibleImport, job.state, fmt.Sprintf("k%d", id)); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.setImport("acct0001", job.asin, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, pending, err := f.c.RequestAudibleBackup(f.ctx, "acct0001", "B000000008"); err != nil || !pending {
+		t.Fatalf("the preorder's request = %t, %v", pending, err)
+	}
+	want := map[string]bool{"B000000001": true, "B000000002": true, "B000000003": false, "B000000004": false,
+		"B000000005": true, "B000000006": false, "B000000007": true, "B000000008": false}
+	can := map[string]bool{}
+	for asin := range want {
+		can[asin] = f.title(t, asin).CanBackup
+	}
+	for asin, w := range want {
+		_, _, err := f.c.RequestAudibleBackup(f.ctx, "acct0001", asin)
+		if can[asin] != w || (err == nil) != w {
+			t.Errorf("%s: can_backup %t, Back up %v; want %t", asin, can[asin], err, w)
+		}
+	}
+}
+
+// A backup that failed exists says what was in the way, as a plan's conflict
+// names it: the Bridge's own conflict when it sends one, else read from its
+// message; nothing for another code.
+func TestImportConflict(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, result, err, code, want string
+	}{
+		{"a file", `{"code":"exists","message":"A file is already at A/B.m4b: nothing was overwritten."}`, "", "exists", "file"},
+		{"a different file", `{"code":"exists","message":"A different file is already at A/B.m4b"}`, "", "exists", "file"},
+		{"a book", `{"code":"exists","message":"A/B is already the library's book \"B\": a backup goes in a folder of its own."}`, "", "exists", "book"},
+		{"audio", `{"code":"exists","message":"A/B already holds audio (x.mp3), a book of its own"}`, "", "exists", "audio"},
+		{"the error only", `{}`, "exists: A/B already holds audio (x.mp3)", "exists", "audio"},
+		{"the Bridge's own", `{"code":"exists","conflict":"book","message":"A file is already at A/B.m4b"}`, "", "exists", "book"},
+		{"an unknown conflict", `{"code":"exists","conflict":"zzz","message":"A file is already at A/B.m4b"}`, "", "exists", "file"},
+		{"another code", `{"code":"disk_full","message":"already holds audio"}`, "", "disk_full", ""},
+	} {
+		j := bridge.Job{Kind: bridge.KindAudibleImport, State: bridge.StateFailed, Result: json.RawMessage(tc.result), Error: tc.err}
+		if got := importConflict(j, tc.code); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

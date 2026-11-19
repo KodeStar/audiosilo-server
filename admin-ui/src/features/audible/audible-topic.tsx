@@ -18,6 +18,7 @@ import {
   chosenAccount,
   importStatus,
   lookList,
+  onServer,
   plannedLine,
   pollTarget,
   REASON_CONTESTED,
@@ -286,23 +287,25 @@ function TitleRow({
         >
           {t(`audible.state.${x.state}`)}
         </StatusText>
-        {x.match ? (
-          <Link
-            {...bookRoute(x.match.library_id, x.match.path)}
-            className="inline-flex items-center gap-1 text-[12.5px] font-semibold text-primary hover:underline"
-          >
-            <BookCheck className="size-3.5" aria-hidden="true" />
-            {t('audible.titles.onThisServer')}
-          </Link>
+        {/* A match marked Not this book isn't this title: not here. */}
+        {onServer(x) ? (
+          <>
+            <Link
+              {...bookRoute(x.match.library_id, x.match.path)}
+              className="inline-flex items-center gap-1 text-[12.5px] font-semibold text-primary hover:underline"
+            >
+              <BookCheck className="size-3.5" aria-hidden="true" />
+              {t('audible.titles.onThisServer')}
+            </Link>
+            {x.match.how === 'fuzzy' ? (
+              <Badge variant="outline">{t('audible.titles.fuzzy')}</Badge>
+            ) : x.match.how === 'import' ? (
+              <Badge variant="outline">{t('audible.titles.backedUp')}</Badge>
+            ) : null}
+          </>
         ) : (
           <Badge variant="outline">{t('audible.titles.notHere')}</Badge>
         )}
-        {x.match?.how === 'fuzzy' ? (
-          <Badge variant="outline">{t('audible.titles.fuzzy')}</Badge>
-        ) : null}
-        {x.match?.how === 'import' ? (
-          <Badge variant="outline">{t('audible.titles.backedUp')}</Badge>
-        ) : null}
         {x.rejected ? <Badge variant="outline">{t('audible.titles.rejected')}</Badge> : null}
         {x.no_sync ? <Badge variant="outline">{t('audible.titles.notSynced')}</Badge> : null}
         {backup ? (
