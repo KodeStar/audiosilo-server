@@ -80,11 +80,12 @@ func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
 	write(map[string]any{"categories": counts, "offline": offline, "checked_at": checked})
 }
 
-// offlineLibraries lists the libraries whose root can't be read right now, with
-// their indexed books and listeners.
+// offlineLibraries lists the libraries whose root can't be read right now,
+// podcast libraries among them (server#179), with their indexed books (a
+// podcast library's episodes) and listeners.
 func (a *API) offlineLibraries(r *http.Request) ([]offlineLibrary, error) {
 	ctx := r.Context()
-	libs, err := a.cat.ListBookLibraries(ctx)
+	libs, err := a.cat.ListLibraries(ctx)
 	if err != nil {
 		return nil, err
 	}

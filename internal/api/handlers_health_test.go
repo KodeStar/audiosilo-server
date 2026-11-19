@@ -224,6 +224,14 @@ func TestIssuesSummaryAndIgnore(t *testing.T) {
 	if _, err := e.cat.SaveProgress(ctx, uid, catalog.Progress{Ref: catalog.Ref{LibraryID: gone.ID, Path: "Kept/Book"}, Position: 5}); err != nil {
 		t.Fatal(err)
 	}
+	// A podcast library's root is checked too (server#179); one that reads
+	// is not listed.
+	if _, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Pods NAS", Root: filepath.Join(t.TempDir(), "unmounted"), Kind: catalog.KindPodcasts}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Pods", Root: t.TempDir(), Kind: catalog.KindPodcasts}); err != nil {
+		t.Fatal(err)
+	}
 
 	resp, body := e.do(t, "GET", "/api/v1/admin/issues", adminTok, "")
 	if resp.StatusCode != 200 {
@@ -238,7 +246,7 @@ func TestIssuesSummaryAndIgnore(t *testing.T) {
 			t.Fatal("not matched is listed while community metadata is off")
 		}
 	}
-	if len(got.Offline) != 1 || got.Offline[0].Name != "NAS" || got.Offline[0].Books != 1 || got.Offline[0].Listeners != 1 {
+	if len(got.Offline) != 2 || got.Offline[0].Name != "NAS" || got.Offline[0].Books != 1 || got.Offline[0].Listeners != 1 || got.Offline[1].Name != "Pods NAS" {
 		t.Fatalf("offline = %+v", got.Offline)
 	}
 

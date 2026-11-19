@@ -171,6 +171,51 @@ func TestSyncLibraries(t *testing.T) {
 	}
 }
 
+// A stored pair of libraries whose roots overlap, a podcast library among
+// them (made so by a link added after both were created), is warned of at
+// start, naming both (denied pair); libraries apart are not (allowed).
+func TestSyncLibrariesWarnsOfStoredRootOverlaps(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	cat := catalog.New(storetest.Open(t), time.Now)
+	root := t.TempDir()
+	books := filepath.Join(root, "books")
+	if err := os.MkdirAll(filepath.Join(books, "Shows"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "shows")
+	if err := os.Mkdir(link, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range []catalog.Library{{Name: "Books", Root: books}, {Name: "Shows", Root: link, Kind: catalog.KindPodcasts},
+		{Name: "Apart", Root: filepath.Join(root, "apart"), Kind: catalog.KindPodcasts}} {
+		if _, err := cat.CreateLibrary(ctx, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	if err := syncLibraries(ctx, &config.Config{}, cat, log); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), "library roots overlap") {
+		t.Fatalf("warned with no overlap: %s", logs.String())
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(books, "Shows"), link); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	if err := syncLibraries(ctx, &config.Config{}, cat, log); err != nil {
+		t.Fatal(err)
+	}
+	out := logs.String()
+	if strings.Count(out, "library roots overlap") != 1 || !strings.Contains(out, "library=Books") || !strings.Contains(out, "other=Shows") || strings.Contains(out, "Apart") {
+		t.Fatalf("stored overlap warning: %s", out)
+	}
+}
+
 func TestSyncLibrariesContinuesAfterRootOverlap(t *testing.T) {
 	t.Parallel()
 	for _, existing := range []bool{false, true} {
@@ -202,6 +247,9 @@ func TestSyncLibrariesContinuesAfterRootOverlap(t *testing.T) {
 			}
 			if _, err := cat.GetLibraryByName(ctx, "Healthy"); err != nil {
 				t.Fatalf("later library was not synced: %v", err)
+			}
+			if strings.Contains(logs.String(), "library roots overlap") {
+				t.Fatalf("a stored overlap warned with none stored: %s", logs.String())
 			}
 			clash, err := cat.GetLibraryByName(ctx, "Clash")
 			if existing {

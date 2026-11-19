@@ -630,7 +630,11 @@ func writeBanner(w io.Writer, cfg *config.Config, password, code string) {
 	p("========================================================\n")
 }
 
-// syncLibraries upserts config-declared libraries into the catalog.
+// syncLibraries upserts config-declared libraries into the catalog, then warns
+// of every stored pair of libraries whose roots overlap, a podcast library
+// among them (catalog.RootOverlaps): one stored before the create and edit
+// checks knew links and case, or made by a link added since, stays until an
+// admin moves one of the two.
 func syncLibraries(ctx context.Context, cfg *config.Config, cat *catalog.Catalog, log *slog.Logger) error {
 	for _, l := range cfg.Libraries {
 		root, err := filepath.Abs(l.Root)
@@ -646,6 +650,15 @@ func syncLibraries(ctx context.Context, cfg *config.Config, cat *catalog.Catalog
 			}
 			return err
 		}
+	}
+	overlaps, err := cat.RootOverlaps(ctx)
+	if err != nil {
+		log.Warn("checking library roots for overlaps failed", "err", err)
+		return nil
+	}
+	for _, o := range overlaps {
+		log.Warn("library roots overlap, one a podcast library: move one so neither folder holds the other",
+			"library", o.Library.Name, "root", o.Library.Root, "other", o.Other.Name, "other_root", o.Other.Root)
 	}
 	return nil
 }

@@ -166,7 +166,12 @@ func fillUnmarkedSteps(ctx context.Context, q querier, steps map[string]string) 
 // create racing it is still checked again when it runs), else the name of a
 // library already at exactly this root ("" for none), which create allows.
 func (c *Catalog) CheckLibraryRoot(ctx context.Context, root string) (sameRoot string, err error) {
-	return checkLibraryRoot(ctx, c.db, Library{Root: root, Kind: KindBooks})
+	lib := Library{Root: root, Kind: KindBooks}
+	resolved, err := c.resolveRoots(ctx, lib)
+	if err != nil {
+		return "", err
+	}
+	return checkLibraryRoot(ctx, c.db, lib, resolved)
 }
 
 // ScannedNames are a book's names as a library resolves them from what the scan

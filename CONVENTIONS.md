@@ -3846,9 +3846,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   on that its timed re-admit acts on (bridge#25).
 - **Podcasts (Bridge Phases 2c-1, 2c-2a, 2c-2b and 2c-3)**: libraries have an immutable `kind` (`books`, the default,
   or `podcasts`). Creating or re-rooting either kind may never overlap a podcast root in either
-  direction (clean absolute paths, checked under the writer). Config sync logs a root clash and
-  skips that entry, keeping its existing library when present, so startup continues. API creates
-  and patches still refuse it with 409 `root_overlaps`. Two books libraries may share a folder or
+  direction (clean absolute paths, checked under the writer, compared as written and as their links
+  resolve, `resolveRoots` before the writer, under 2 s, a root not there yet through the nearest folder
+  that is; Windows and macOS fold case, and a volume's root holds every folder on it: `rootsOverlap`,
+  `libraryroots.go`, server#179). Config sync logs a root clash and
+  skips that entry, keeping its existing library when present, so startup continues, then warns of every
+  stored pair that overlaps (`catalog.RootOverlaps`: one stored before the check knew links and case, or a
+  link added since). API creates and patches still refuse it with 409 `root_overlaps`. Two books libraries may share a folder or
   nest one inside the other (their books are then listed twice, once in each): the server allows
   it, and the console's Add library and folder edit ask first (`bookRootOverlap`, ADMIN-14). Podcast libraries are indexed only
   from regular, non-symlinked `feed.json` v1 files in top-level non-hidden show folders, capped at
