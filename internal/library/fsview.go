@@ -263,7 +263,7 @@ type belowLooks struct {
 // one given up on, transientGaveUp), as the scanner's cover look reads it
 // (coverLook.find), so a book on a share that stopped answering is a 503
 // share_not_answering, never a 404. A lasting fault (a permission, the device
-// gone, a link loop: lastingFault) stays a name not there, the lasting answer
+// gone, a link loop: metadata.LastingFault) stays a name not there, the lasting answer
 // it had, as does the name gone; so does a fault of the server's own (too
 // many open files: neither), as it always was.
 func unansweredLook(ctx context.Context, err error) error {

@@ -1443,10 +1443,10 @@ func (l coverLook) find(dir string, anyImage bool) string {
 			switch out, ok := l.linkOut(relOf(p), own.Mode()); {
 			case !ok:
 				return ""
-			case !out:
-				return relOf(p)
+			case out:
+				continue
 			}
-			continue
+			return relOf(p)
 		}
 		if err = unansweredLook(l.ctx, err); err != nil {
 			l.gaveUp.note(relOf(p), err)
@@ -3118,10 +3118,10 @@ func refusedForGood(err error) error {
 
 // faultedForGood reports whether err is a look given up on (metadata.AsGaveUp)
 // for a fault that is not a share's that a retry may get past (not
-// metadata.TransientFault): a lasting refusal (a permission, EACCES or EPERM;
-// the device gone, ENXIO; a link loop, ELOOP; a name refused, EINVAL or
-// Windows' ERROR_INVALID_NAME), or a limit of the server's own (EMFILE,
-// ENFILE, ENOMEM, EAGAIN, EBUSY), which says nothing of the share either:
+// metadata.TransientFault): a lasting refusal (metadata.LastingFault: a
+// permission, the device gone, a link loop, a name refused), or a limit of
+// the server's own (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY), which says nothing
+// of the share either:
 // resolveBook's lookRefused (a caller who asked hears the 404 it had before a
 // share's faults were read, never a 503 share_not_answering), bookOnDisk's
 // present.

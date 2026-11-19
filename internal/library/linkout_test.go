@@ -87,11 +87,7 @@ func (e *linkOutEnv) files(t *testing.T, rel string) []string {
 	if err != nil {
 		return nil
 	}
-	var out []string
-	for _, f := range b.Files {
-		out = append(out, f.RelPath)
-	}
-	return out
+	return filePaths(b)
 }
 
 // readThrough reports any read the scan was handed through one of the links
@@ -137,11 +133,7 @@ func TestScanSkipsLinksOutOfTheRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var parts []string
-	for _, f := range b.Files {
-		parts = append(parts, f.RelPath)
-	}
-	if want := []string{"Author/Book/01.m4b", "Author/Book/02.m4b"}; !slices.Equal(parts, want) {
+	if parts, want := filePaths(b), []string{"Author/Book/01.m4b", "Author/Book/02.m4b"}; !slices.Equal(parts, want) {
 		t.Errorf("the book resolved on demand has parts %v, want %v", parts, want)
 	}
 	if _, err := e.s.resolveBook(e.ctx, *e.lib, "Author/Only Out", nil); !errors.Is(err, ErrNotIndexable) {
