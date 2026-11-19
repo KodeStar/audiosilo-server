@@ -66,7 +66,7 @@ func TestSafeJoinListedVariantCostsWhatMissingDoes(t *testing.T) {
 			defer mu.Unlock()
 			got = append(got, op+" "+strings.TrimPrefix(p, root))
 		}
-		lk := boundedLooks(ctx, root, time.Now().Add(time.Second), names)
+		lk := boundedLooks(ctx, root, time.Now().Add(time.Second), names, metadata.EvalSymlinksBounded)
 		lstat, listed := lk.lstat, lk.listed
 		lk.lstat = func(p string) (fs.FileInfo, error) { note("lstat", p); return lstat(p) }
 		lk.listed = func(dir, name string) (bool, error) { note("list", dir); return listed(dir, name) }
@@ -165,14 +165,16 @@ func TestSafeJoinListedLinkOutOfRoot(t *testing.T) {
 
 // TestSafeJoinListedLinkFaultOutOfRoot (security): a link out of the root
 // whose target's mount fails as a share does that a retry may get past (EIO,
-// ESTALE, ENOTCONN, met on a name out of the root, or with no path to tell
-// where) is a link that does not resolve, a name not there (the 404 it always
-// was), never a look given up on (a 503 share_not_answering), so the answer
-// tells nothing about what the link points to or how its mount fails. Denied
-// the 404: a link inside the root whose resolve faults on a name under the
-// root (its target, or the link itself) is a look given up on, as any look
-// there is. Not parallel: it swaps evalLook.
+// ESTALE, ENOTCONN, met on a name out of the root, a sibling folder whose name
+// starts with the root's included, or with no path to tell where) is a link
+// that does not resolve, a name not there (the 404 it always was), never a
+// look given up on (a 503 share_not_answering), so the answer tells nothing
+// about what the link points to or how its mount fails. Denied the 404: a link
+// inside the root whose resolve faults on a name under the root (its target,
+// or the link itself) or on the root's own mount above it is a look given up
+// on, as any look there is.
 func TestSafeJoinListedLinkFaultOutOfRoot(t *testing.T) {
+	t.Parallel()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -188,8 +190,6 @@ func TestSafeJoinListedLinkFaultOutOfRoot(t *testing.T) {
 			t.Skipf("symlinks unsupported on this platform: %v", err)
 		}
 	}
-	was := evalLook
-	t.Cleanup(func() { evalLook = was })
 	names := metadata.ReadDirNamesBounded
 	for _, c := range []struct {
 		name, rel string
@@ -199,16 +199,19 @@ func TestSafeJoinListedLinkFaultOutOfRoot(t *testing.T) {
 		{"out, its target's lstat EIO", "Out/01.mp3", &fs.PathError{Op: "lstat", Path: filepath.Join(outside, "Book"), Err: syscall.EIO}, false},
 		{"out, its target's readlink ESTALE", "Out", &fs.PathError{Op: "readlink", Path: outside, Err: syscall.ESTALE}, false},
 		{"out, ENOTCONN with no path", "Out/01.mp3", syscall.ENOTCONN, false},
+		{"out, EIO on a sibling named as the root's prefix", "Out", &fs.PathError{Op: "lstat", Path: root + "rary", Err: syscall.EIO}, false},
 		{"in, its target's lstat EIO", "In/01.mp3", &fs.PathError{Op: "lstat", Path: filepath.Join(root, "Real"), Err: syscall.EIO}, true},
 		{"in, the link's own readlink ESTALE", "In", &fs.PathError{Op: "readlink", Path: filepath.Join(root, "In"), Err: syscall.ESTALE}, true},
+		{"in, the root's mount above it ENOTCONN", "In/01.mp3", &fs.PathError{Op: "lstat", Path: filepath.Dir(root), Err: syscall.ENOTCONN}, true},
 	} {
-		evalLook = func(ctx context.Context, p string, timeout time.Duration) (string, error) {
+		eval := func(ctx context.Context, p string, timeout time.Duration) (string, error) {
 			if filepath.Dir(p) == root && (filepath.Base(p) == "Out" || filepath.Base(p) == "In") {
 				return "", c.fault
 			}
-			return was(ctx, p, timeout)
+			return metadata.EvalSymlinksBounded(ctx, p, timeout)
 		}
-		_, there, err := SafeJoinListed(t.Context(), root, c.rel, time.Second, names)
+		lk := boundedLooks(t.Context(), root, time.Now().Add(time.Second), names, eval)
+		_, there, err := resolveBelow(root, filepath.Join(root, filepath.FromSlash(c.rel)), lk)
 		switch {
 		case c.gaveUp && (!metadata.GaveUp(err) || !errors.Is(err, c.fault)):
 			t.Errorf("%s: there %v, err %v; want a look given up on, keeping the fault", c.name, there, err)
@@ -217,7 +220,6 @@ func TestSafeJoinListedLinkFaultOutOfRoot(t *testing.T) {
 		}
 	}
 	// The links answering: one out of the root is refused, one in it followed.
-	evalLook = was
 	if _, _, err := SafeJoinListed(t.Context(), root, "Out/01.mp3", time.Second, names); !errors.Is(err, ErrOutsideRoot) {
 		t.Errorf("a link out of the root answering: err %v, want ErrOutsideRoot", err)
 	}

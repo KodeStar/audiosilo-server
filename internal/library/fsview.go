@@ -208,7 +208,7 @@ func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Dura
 	if rerr != nil {
 		return full, false, nil // no root to list: nothing there
 	}
-	target, there, err := resolveBelow(resolved, full, boundedLooks(ctx, resolved, deadline, names))
+	target, there, err := resolveBelow(resolved, full, boundedLooks(ctx, resolved, deadline, names, metadata.EvalSymlinksBounded))
 	switch {
 	case err != nil:
 		return "", false, err
@@ -251,13 +251,15 @@ func unansweredLook(ctx context.Context, err error) error {
 
 // boundedLooks are SafeJoinListed's: each a metadata.Bounded look of its own,
 // within deadline, a name first looked for in its folder's listing (names),
-// each failure read by unansweredLook. A link's resolve reads a share's fault
-// that way only when it was met on a name under rootAbs (faultWithin): one met
-// out of the root, where an out-of-root link's target lies, is a link that
-// does not resolve, so the answer tells nothing about what the target's mount
-// does.
+// each failure read by unansweredLook. A link's resolve (evalLinks:
+// metadata.EvalSymlinksBounded, a test's to inject a share's errors) reads a
+// share's fault that way only when it was met on a name under rootAbs or above
+// it (faultWithin): one met out of the root, where an out-of-root link's
+// target lies, is a link that does not resolve, so the answer tells nothing
+// about what the target's mount does.
 func boundedLooks(ctx context.Context, rootAbs string, deadline time.Time,
-	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) belowLooks {
+	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error),
+	evalLinks func(ctx context.Context, path string, timeout time.Duration) (string, error)) belowLooks {
 	return belowLooks{
 		lstat: func(p string) (fs.FileInfo, error) {
 			fi, err := metadata.LstatBounded(ctx, p, metadata.WaitLeft(deadline))
@@ -267,7 +269,7 @@ func boundedLooks(ctx context.Context, rootAbs string, deadline time.Time,
 			return fi, nil
 		},
 		eval: func(p string) (string, error) {
-			r, err := evalLook(ctx, p, metadata.WaitLeft(deadline))
+			r, err := evalLinks(ctx, p, metadata.WaitLeft(deadline))
 			switch {
 			case err == nil:
 				return r, nil
@@ -286,17 +288,17 @@ func boundedLooks(ctx context.Context, rootAbs string, deadline time.Time,
 	}
 }
 
-// evalLook is boundedLooks' resolve of a link: a test injects a share's
-// errors through it, as through the scanner's statLook.
-var evalLook = metadata.EvalSymlinksBounded
-
 // faultWithin reports whether err, a link's resolve (filepath.EvalSymlinks,
 // which Lstats and reads each name it meets, the link's target's included),
-// failed on a name under rootAbs (the root's own included). One with no path
-// to tell where (no fs.PathError) is not.
+// failed on a name under rootAbs (the root's own included) or on a folder
+// above it: a link's absolute target is walked from the filesystem's root, so
+// its first looks are at the root's own mount (/mnt/user, a share's mount
+// point), whose fault every request meets resolving the root, telling nothing
+// about where the link points. One with no path to tell where (no
+// fs.PathError) is not.
 func faultWithin(rootAbs string, err error) bool {
 	var pe *fs.PathError
-	return errors.As(err, &pe) && withinRoot(rootAbs, pe.Path)
+	return errors.As(err, &pe) && (withinRoot(rootAbs, pe.Path) || withinRoot(pe.Path, rootAbs))
 }
 
 // plainLooks are SafeJoin's: os.Lstat and filepath.EvalSymlinks, no listing.
