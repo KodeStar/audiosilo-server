@@ -15,6 +15,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // serviceRun is one run of the server's notifications over cat: stop ends it
@@ -39,20 +40,52 @@ func stoppedService(cat *catalog.Catalog) *Service { return newTestService(cat) 
 // ended (delivered, failed or skipped), not just reached its destination.
 func waitOwedNone(t *testing.T, cat *catalog.Catalog) {
 	t.Helper()
-	for range 500 {
+	for deadline := time.Now().Add(testwait.Scaled(5 * time.Second)); ; time.Sleep(10 * time.Millisecond) {
 		if owed, err := cat.PendingDeliveries(context.Background(), 0); err == nil && len(owed) == 0 {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		if time.Now().After(deadline) {
+			t.Fatal("the outbox still owes deliveries")
+		}
 	}
-	t.Fatal("the outbox still owes deliveries")
 }
 
-// settle gives a delivery that should not happen time to arrive, then says
-// how many dest has had.
-func settle(f *fakeDest) int {
-	time.Sleep(150 * time.Millisecond)
-	return f.count()
+// waitSwept waits until s has read the outbox (redeliver) n times, the start's
+// read the first.
+func waitSwept(t *testing.T, s *Service, n int64) {
+	t.Helper()
+	for deadline := time.Now().Add(testwait.Scaled(5 * time.Second)); s.swept.Load() < n; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the outbox was read %d times, want %d", s.swept.Load(), n)
+		}
+	}
+}
+
+// waitQuiet waits until s has no lane open: nothing queued, being sent or
+// waiting out a retry's delay, so every send it made has reached its
+// destination and no other is under way.
+func waitQuiet(t *testing.T, s *Service) {
+	t.Helper()
+	quiet := func() bool {
+		s.lanesMu.Lock()
+		defer s.lanesMu.Unlock()
+		return len(s.lanes) == 0 && len(s.queue) == 0
+	}
+	for deadline := time.Now().Add(testwait.Scaled(5 * time.Second)); !quiet(); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the service still has a lane open")
+		}
+	}
+}
+
+// settle is how many deliveries dest has had once running service s has read
+// the outbox at its start and every send it made has ended: one that should
+// not happen (a second send of a row) would have arrived by then.
+func settle(t *testing.T, s *Service, dest *fakeDest) int {
+	t.Helper()
+	waitSwept(t, s, 1)
+	waitQuiet(t, s)
+	return dest.count()
 }
 
 // server#465: a notice recorded but not yet sent when the server stopped goes
@@ -78,8 +111,8 @@ func TestOwedNoticeIsSentAtTheNextStart(t *testing.T) {
 	push.wait(t, 1)
 	waitOwedNone(t, cat) // ended, not cut short by the stop
 	stop()
-	serviceRun(t, cat) // and another start
-	if n, m, o := settle(hook), push.count(), other.count(); n != 1 || m != 1 || o != 0 {
+	again, _ := serviceRun(t, cat) // and another start
+	if n, m, o := settle(t, again, hook), push.count(), other.count(); n != 1 || m != 1 || o != 0 {
 		t.Fatalf("webhook %d, ntfy %d, unsubscribed %d deliveries; want 1, 1, 0", n, m, o)
 	}
 	if events, _, _ := cat.ListServerEvents(ctx, 0, 10, ""); len(events) != 1 {
@@ -127,8 +160,8 @@ func TestOwedPodcastNoticeIsSentAtTheNextStart(t *testing.T) {
 	}
 	waitOwedNone(t, cat)
 	stop()
-	serviceRun(t, cat)
-	if n := settle(hook); n != 1 {
+	again, _ := serviceRun(t, cat)
+	if n := settle(t, again, hook); n != 1 {
 		t.Fatalf("sent %d times, want once", n)
 	}
 }
@@ -154,8 +187,8 @@ func TestFailingDestinationRetriesOnABound(t *testing.T) {
 	if got := waitRecorded(t, cat, tg.ID); got.LastError != "http_503" {
 		t.Fatalf("recorded %q", got.LastError)
 	}
-	serviceRun(t, cat, time.Millisecond, time.Millisecond)
-	if n := settle(failing); n != 3 {
+	again, _ := serviceRun(t, cat, time.Millisecond, time.Millisecond)
+	if n := settle(t, again, failing); n != 3 {
 		t.Fatalf("tried %d times, want 3", n)
 	}
 	if owed, _ := cat.PendingDeliveries(ctx, 0); len(owed) != 0 {
@@ -191,23 +224,35 @@ func TestNoticeQueuedTwiceAtStartGoesOnce(t *testing.T) {
 		mu  sync.Mutex
 		got int
 	)
-	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	// The send is held until the start's redelivery has read the row, which
+	// is still owed while the first copy's send is under way.
+	release := make(chan struct{})
+	held := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		got++
 		mu.Unlock()
-		time.Sleep(200 * time.Millisecond) // the redelivery reads the row meanwhile
+		<-release
 		w.WriteHeader(http.StatusNoContent)
 	}))
-	t.Cleanup(slow.Close)
-	addTarget(t, cat, TargetWebhook, slow.URL, "", KindScanFailed)
+	t.Cleanup(held.Close)
+	t.Cleanup(func() { // before the Close, on a test that failed holding it
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	addTarget(t, cat, TargetWebhook, held.URL, "", KindScanFailed)
 
 	s := newTestService(cat)
 	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
 	runCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 	s.Run(runCtx)
+	waitSwept(t, s, 1)
+	close(release)
 	waitOwedNone(t, cat)
-	time.Sleep(300 * time.Millisecond)
+	waitQuiet(t, s)
 	mu.Lock()
 	defer mu.Unlock()
 	if got != 1 {
@@ -228,13 +273,13 @@ func TestOwedNoticeGoesAtTheNextSweep(t *testing.T) {
 	t.Cleanup(cancel)
 	s.Run(runCtx)
 	// Recorded after the start's read, by a service whose queue no one reads.
-	time.Sleep(20 * time.Millisecond)
+	waitSwept(t, s, 1)
 	stoppedService(cat).ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
 	if got := dest.wait(t, 1)[0]; got.body["event"] != KindScanFailed {
 		t.Fatalf("swept %v", got.body)
 	}
 	waitOwedNone(t, cat)
-	if n := settle(dest); n != 1 {
+	if n := settle(t, s, dest); n != 1 {
 		t.Fatalf("sent %d times, want once", n)
 	}
 }
@@ -331,7 +376,7 @@ func TestFreshNoticeWaitsForAnOlderOwedOne(t *testing.T) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	s.Run(runCtx)
-	time.Sleep(20 * time.Millisecond)
+	waitSwept(t, s, 1) // the start's read, which finds nothing owed
 
 	// Recorded by a service whose queue no one reads: owed, and not queued here.
 	older := scanFailed(t, stoppedService(cat), cat, "First")
@@ -342,7 +387,7 @@ func TestFreshNoticeWaitsForAnOlderOwedOne(t *testing.T) {
 		t.Fatalf("the destination had %v then %v, want %v then %v", seen[0].body["id"], seen[1].body["id"], older, newer)
 	}
 	waitOwedNone(t, cat)
-	if n := settle(dest); n != 2 {
+	if n := settle(t, s, dest); n != 2 {
 		t.Fatalf("sent %d times, want 2", n)
 	}
 }

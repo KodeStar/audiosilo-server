@@ -21,6 +21,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/oidc"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 func TestClean(t *testing.T) {
@@ -126,7 +127,7 @@ func newFakeDest(t *testing.T) *fakeDest {
 
 func (f *fakeDest) wait(t *testing.T, n int) []received {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(testwait.Scaled(5 * time.Second))
 	for time.Now().Before(deadline) {
 		f.mu.Lock()
 		if len(f.got) >= n {
@@ -137,7 +138,7 @@ func (f *fakeDest) wait(t *testing.T, n int) []received {
 		f.mu.Unlock()
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("got %d deliveries, want %d", len(f.got), n)
+	t.Fatalf("got %d deliveries, want %d", f.count(), n)
 	return nil
 }
 
@@ -208,8 +209,8 @@ func TestWebhookDelivery(t *testing.T) {
 	if data := got.body["data"].(map[string]any); data["device"] != "Sam's iPhone" {
 		t.Fatalf("data = %v", data)
 	}
-	time.Sleep(50 * time.Millisecond)
-	if len(unsubscribed.got) != 0 || len(off.got) != 0 {
+	waitQuiet(t, s) // every send the event made has ended
+	if unsubscribed.count() != 0 || off.count() != 0 {
 		t.Fatal("sent to an unsubscribed or disabled destination")
 	}
 	// The outcome is recorded on the destination.
@@ -223,15 +224,15 @@ func TestWebhookDelivery(t *testing.T) {
 
 func waitRecorded(t *testing.T, cat *catalog.Catalog, id int64) *catalog.NotifyTarget {
 	t.Helper()
-	for range 200 {
+	for deadline := time.Now().Add(testwait.Scaled(5 * time.Second)); ; time.Sleep(10 * time.Millisecond) {
 		tg, err := cat.GetNotifyTarget(context.Background(), id)
 		if err == nil && tg.LastAt != nil {
 			return tg
 		}
-		time.Sleep(10 * time.Millisecond)
+		if time.Now().After(deadline) {
+			t.Fatal("delivery never recorded")
+		}
 	}
-	t.Fatal("delivery never recorded")
-	return nil
 }
 
 func TestNtfyAndDiscordBodies(t *testing.T) {
@@ -579,7 +580,7 @@ func TestRetryFollowsTheDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	next.wait(t, 1)
-	time.Sleep(100 * time.Millisecond)
+	waitQuiet(t, s) // the switched-off one's retry has ended too
 	old.mu.Lock()
 	off.mu.Lock()
 	defer old.mu.Unlock()

@@ -44,6 +44,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -154,6 +155,10 @@ type Service struct {
 	// was open (open), so it reads the outbox once more before it closes.
 	lanesMu sync.Mutex
 	lanes   map[int64]bool
+
+	// swept counts the reads of the outbox redeliver has finished (the start's
+	// first): a test waits on it rather than for a time.
+	swept atomic.Int64
 }
 
 // oidcPendingTaken is one oidc_pending notification raised: when, and the
@@ -264,6 +269,7 @@ func (s *Service) redeliver(ctx context.Context) {
 	defer tick.Stop()
 	for {
 		s.sweepOwed(ctx)
+		s.swept.Add(1)
 		select {
 		case <-ctx.Done():
 			return
