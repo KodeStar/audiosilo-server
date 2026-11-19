@@ -125,19 +125,37 @@ func workBooksFrom(scopes []Scope, all bool, works []string) (string, []any) {
 	return q, args
 }
 
+// maxBooksPerWork bounds the books WorkBooks returns of one work: room for
+// every recording a caller holds of it and their copies in several libraries.
+const maxBooksPerWork = 50
+
 // WorkBooks returns the books within scopes whose work key (Book.WorkID) is one
 // of works, books libraries only, in placement preference order (library sort
-// order, then path, as SeriesBooks), list shape, at most maxSeriesBooks (as SeriesBooks): what
-// places a /meta envelope's rails on every recording the caller holds of their
-// works, one filed in no series or under another series name too, as /item's
-// other_recordings finds them (server#412).
+// order, then path, as SeriesBooks), list shape: what places a /meta envelope's
+// rails on every recording the caller holds of their works, one filed in no
+// series or under another series name too, as /item's other_recordings finds
+// them (server#412). At most maxBooksPerWork of each work, its first in that
+// order: the bound is each work's own, so hundreds of copies of one work never
+// take the rows of the works after it (a bound over them all left those works'
+// entries unplaced, and /next with no book to offer).
 func (c *Catalog) WorkBooks(ctx context.Context, scopes []Scope, works []string) ([]Book, error) {
 	if len(scopes) == 0 || len(works) == 0 {
 		return nil, nil
 	}
+	q, args := workBooksQuery(scopes, works)
+	return queryRows(ctx, c.db, scanBookRow, q, args...)
+}
+
+// workBooksQuery is WorkBooks' query, and its args: workBooksFrom's books
+// numbered within their work in placement order, the first maxBooksPerWork of
+// each kept.
+func workBooksQuery(scopes []Scope, works []string) (string, []any) {
 	from, args := workBooksFrom(scopes, false, works)
-	return queryRows(ctx, c.db, scanBookRow, `SELECT `+prefixCols("b.")+from+`
-		 ORDER BY l.sort_order, l.name, l.id, b.rel_path LIMIT ?`, append(args, maxSeriesBooks)...)
+	return `SELECT ` + derivedBookCols + ` FROM (
+		  SELECT *, ROW_NUMBER() OVER (PARTITION BY work_id ORDER BY lib_order, lib_name, library_id, rel_path) AS nth
+		    FROM (SELECT ` + prefixCols("b.") + `, l.sort_order AS lib_order, l.name AS lib_name` + from + `)
+		) WHERE nth <= ?
+		 ORDER BY lib_order, lib_name, library_id, rel_path`, append(args, maxBooksPerWork)
 }
 
 // InProgress reports which of refs the user has started and not finished

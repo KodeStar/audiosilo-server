@@ -393,7 +393,8 @@ func TestOtherRecordingsPlan(t *testing.T) {
 		// WorkBooks and UpcomingOwnedWorks: several works at once, where
 		// upcoming_owned, unpinned, was read by a library's whole key prefix.
 		from, wargs := workBooksFrom(scopes, false, []string{"w-one", "w-two", "w-three"})
-		for i, plan := range [][]string{queryPlan(t, f.c, q, args), queryPlan(t, f.c, `SELECT b.id`+from, wargs)} {
+		wq, wqargs := workBooksQuery(scopes, []string{"w-one", "w-two", "w-three"})
+		for i, plan := range [][]string{queryPlan(t, f.c, q, args), queryPlan(t, f.c, `SELECT b.id`+from, wargs), queryPlan(t, f.c, wq, wqargs)} {
 			joined := strings.Join(plan, "\n")
 			name := fmt.Sprintf("%s (%d)", name, i)
 			for _, want := range []string{
@@ -409,6 +410,53 @@ func TestOtherRecordingsPlan(t *testing.T) {
 					t.Errorf("%s: plan does not use %s:\n%s", name, want, joined)
 				}
 			}
+		}
+	}
+}
+
+// TestWorkBooksBoundPerWork: the bound is each work's own. A work the caller
+// holds more copies of than its bound (they sort first) gives its first
+// maxBooksPerWork and no more, and the works after it still give their books:
+// one bound over them all (maxSeriesBooks) let a work's copies take the rows
+// of the works after it.
+func TestWorkBooksBoundPerWork(t *testing.T) {
+	t.Parallel()
+	f := newRecordingsFixture(t)
+	const copies = maxBooksPerWork + 10
+	work := map[string]string{"Zed/After": "w-after"}
+	books := []*Book{{LibraryID: f.main.ID, RelPath: "Zed/After", Title: "After", AddedAt: "2024-01-01T00:00:00Z"}}
+	for i := range copies {
+		b := &Book{LibraryID: f.main.ID, RelPath: fmt.Sprintf("Many/%03d", i), Title: "Many", AddedAt: "2024-01-01T00:00:00Z"}
+		books, work[b.RelPath] = append(books, b), "w-many"
+	}
+	for i, err := range f.c.UpsertBooks(f.ctx, books, 0) {
+		if err != nil {
+			t.Fatalf("book %d: %v", i, err)
+		}
+	}
+	var values []string
+	var args []any
+	for _, b := range books {
+		values = append(values, `(?, ?, ?, 'accepted', 'now')`)
+		args = append(args, f.main.ID, b.RelPath, work[b.RelPath])
+	}
+	if _, err := f.c.db.ExecContext(f.ctx, `INSERT INTO book_matches(library_id, path, work_id, how, set_at)
+		VALUES`+strings.Join(values, ","), args...); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.c.WorkBooks(f.ctx, f.all(), []string{"w-many", "w-after", "w-two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := relPaths(got)
+	if len(paths) != maxBooksPerWork+2 || paths[0] != "Many/000" || paths[maxBooksPerWork-1] != fmt.Sprintf("Many/%03d", maxBooksPerWork-1) ||
+		!reflect.DeepEqual(paths[maxBooksPerWork:], []string{"Rematched/Two", "Zed/After"}) {
+		t.Fatalf("%d books, first %q, after the many %q; want the first %d of the many, then Rematched/Two and Zed/After",
+			len(paths), paths[0], paths[min(len(paths), maxBooksPerWork):], maxBooksPerWork)
+	}
+	for _, b := range got[:maxBooksPerWork] {
+		if b.WorkID != "w-many" {
+			t.Fatalf("%s: work %q", b.RelPath, b.WorkID)
 		}
 	}
 }

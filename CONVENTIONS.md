@@ -532,7 +532,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   that work. Resolved per request AFTER the cache, on a copy of the rails (never
   stored: the cached envelope is shared): `api.localRails` fetches the caller's
   candidates (`catalog.SeriesBooks` over their `UserScopes`, then every book whose work key is a rail's
-  work, `catalog.WorkBooks`, so a recording filed in no series is placed too, server#412; scope-filtered: books
+  work, `catalog.WorkBooks`, at most 50 a work so many copies of one never crowd out the next, so a recording filed in no series is placed too, server#412; scope-filtered: books
   whose series - the main one (`books.series_key`), or one their `more_series` names
   (`seriesMembers`, over `book_more_series`, migration 0041) - folds to a
   rail/ordering name by `match.SeriesKey`, the console's `seriesKey` - NFKD, case,
