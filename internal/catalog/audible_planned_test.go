@@ -248,8 +248,9 @@ func TestAudibleContestedWith(t *testing.T) {
 	}
 }
 
-// A title gone from the account loses its plan and is no other title's
-// contender (the poll that contested it didn't have it); a contest the poll
+// A title gone from the account loses its plan, its own contest and a request
+// waiting for its release, and is no other title's contender (the poll that
+// contested it didn't have it); a contest the poll
 // made in another library (the account mapped elsewhere while it ran) is
 // never stored against the account's.
 func TestAudibleContestGoneAndRemapped(t *testing.T) {
@@ -265,21 +266,35 @@ func TestAudibleContestGoneAndRemapped(t *testing.T) {
 	m.Match = &AudibleMatch{LibraryID: f.lib.ID, Path: book, How: "fuzzy"}
 	g := contested("B000000003", "")
 	g.ContestedPath, g.Planned = book, planned(f, "A/Gone/Gone.m4b")
-	f.poll(t, "p1", a, m, g)
+	pre := AudibleTitleInput{ASIN: "B000000004", Title: "Soon", State: AudiblePreorder}
+	f.poll(t, "p1", a, m, g, pre)
 	if c := f.title(t, "B000000001").Contested; c == nil || len(c.With) != 2 {
 		t.Fatalf("before = %+v", c)
 	}
-	// The next complete poll reports a alone: m and g are gone.
+	if _, pending, err := f.c.RequestAudibleBackup(f.ctx, "acct0001", "B000000004"); err != nil || !pending {
+		t.Fatalf("the preorder's request = %t, %v", pending, err)
+	}
+	// The next complete poll reports a alone: m, g and the preorder are gone.
 	f.poll(t, "p2", a)
 	if c := f.title(t, "B000000001").Contested; c == nil || len(c.With) != 0 {
 		t.Fatalf("with gone titles = %+v", c)
 	}
-	if p := f.title(t, "B000000003").Planned; p != nil {
-		t.Fatalf("a gone title kept its plan %+v", p)
+	if x := f.title(t, "B000000003"); x.Planned != nil || x.Contested != nil {
+		t.Fatalf("a gone title kept its plan %+v or contest %+v", x.Planned, x.Contested)
+	}
+	var stale int
+	if err := f.c.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM audible_titles WHERE state = 'gone'
+		AND (import_pending = 1 OR contest_library_id IS NOT NULL OR contest_path <> '')`).Scan(&stale); err != nil || stale != 0 {
+		t.Fatalf("gone titles keeping a request or contest = %d, %v", stale, err)
+	}
+	// Bought again: no request left over to back it up.
+	f.poll(t, "p3", a, AudibleTitleInput{ASIN: "B000000004", Title: "Soon", State: AudibleAvailable})
+	if x := f.title(t, "B000000004"); x.Import != nil || !x.CanBackup {
+		t.Fatalf("bought again = import %+v, can back up %t", x.Import, x.CanBackup)
 	}
 	// A poll that listed another library: its contest isn't this library's.
 	a.Planned.LibraryID = f.lib.ID + 100
-	f.poll(t, "p3", a)
+	f.poll(t, "p4", a)
 	var lib any
 	var path string
 	if err := f.c.db.QueryRowContext(f.ctx, `SELECT contest_library_id, contest_path FROM audible_titles

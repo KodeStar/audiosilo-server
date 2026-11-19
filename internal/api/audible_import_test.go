@@ -139,11 +139,16 @@ func TestAudibleBackupFlow(t *testing.T) {
 	}
 	resp, out := b.do(t, "POST", backupPath("B000000001"), b.adminTok, "")
 	var queued struct {
-		JobID int64 `json:"job_id"`
+		JobID int64                 `json:"job_id"`
+		Title *catalog.AudibleTitle `json:"title"`
 	}
 	decodeInto(t, out, &queued)
 	if resp.StatusCode != http.StatusAccepted || queued.JobID == 0 {
 		t.Fatalf("backup: %d %s", resp.StatusCode, out)
+	}
+	// The title as it is now, for the console's row: queued, no more Back up.
+	if x := queued.Title; x == nil || x.ASIN != "B000000001" || x.Import == nil || x.Import.State != bridge.StateQueued || x.CanBackup {
+		t.Fatalf("backup's title = %+v", x)
 	}
 	job, err := b.api.bridge.Job(ctx, queued.JobID)
 	want := fmt.Sprintf(`{"account":%q,"asin":"B000000001","library_id":%d,"dest_path":"Brandon Sanderson/New/One.m4b","template":"{Author}/{Title}"}`,
@@ -167,7 +172,8 @@ func TestAudibleBackupFlow(t *testing.T) {
 		}
 	}
 	// A preorder is a pending request.
-	if resp, out := b.do(t, "POST", backupPath("B000000004"), b.adminTok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(out, `"pending":true`) {
+	if resp, out := b.do(t, "POST", backupPath("B000000004"), b.adminTok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(out, `"pending":true`) ||
+		!strings.Contains(out, `"import":{"job_id":null,"state":"pending"`) {
 		t.Fatalf("preorder backup: %d %s", resp.StatusCode, out)
 	}
 	// The Bridge runs it: done with the book's place.
@@ -548,6 +554,40 @@ func TestAudiblePolicyAfterPoll(t *testing.T) {
 	}
 	if j, err := b.api.bridge.Job(context.Background(), job.ID); err != nil || j.State != bridge.StateCancelled || j.Error != bridge.CancelAudibleRemoved {
 		t.Fatalf("backup after removal = %+v, %v", j, err)
+	}
+}
+
+// A poll's final call is answered before its backups are queued: the Bridge
+// never waits for the queue, which runs on and is waited for at shutdown.
+func TestAudiblePollAnswersBeforeQueueing(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beat(t, bridge.KindVerify, bridge.KindAudiblePoll, bridge.KindAudibleImport)
+	setAudible(t, b.testEnv, b.adminTok, true)
+	body := fmt.Sprintf(`{"label":"x","marketplace":"us","user_id":%d,"library_id":%d,"policy":"all","sync":true}`, b.adminID, b.lib.ID)
+	if resp, out := b.do(t, "PUT", "/api/v1/bridge/audible/accounts/"+testAccount, b.bridgeTok, body); resp.StatusCode != http.StatusOK {
+		t.Fatalf("create: %d %s", resp.StatusCode, out)
+	}
+	release, queued := make(chan struct{}), make(chan string, 1)
+	b.api.audibleAfterPoll = func(ctx context.Context, account string) (int, error) {
+		<-release
+		queued <- account
+		return 0, nil
+	}
+	resp, out := b.do(t, "PUT", "/api/v1/bridge/audible/accounts/"+testAccount+"/titles", b.bridgeTok,
+		`{"poll_id":"p1","final":true,"titles":[`+title("B000000001", "One", "available", 0, "")+`]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("final call: %d %s", resp.StatusCode, out)
+	}
+	select {
+	case <-queued:
+		t.Fatal("queued before the answer")
+	default:
+	}
+	close(release)
+	b.api.StopModules()
+	if got := <-queued; got != testAccount {
+		t.Fatalf("queued for %q", got)
 	}
 }
 

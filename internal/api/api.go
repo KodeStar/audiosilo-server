@@ -256,6 +256,12 @@ type API struct {
 	// moduleRuns their background work while each is on (modules.go).
 	modules    []modules.Module
 	moduleRuns modules.Runner
+	// audiblePollFolds are the backups a poll asked for being queued past the
+	// Bridge's titles call (afterAudiblePoll); StopModules waits for them.
+	// audibleAfterPoll queues them: audible.Queues.AfterPoll when nil, a field
+	// so tests can hold it.
+	audiblePollFolds sync.WaitGroup
+	audibleAfterPoll func(ctx context.Context, account string) (int, error)
 
 	// discovery is podcast directory search and its artwork proxy (Bridge Phase
 	// 2c-3), nil when podcasts.discovery.enabled was off at start; opml holds

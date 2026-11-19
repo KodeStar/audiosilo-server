@@ -170,10 +170,10 @@ func (a *API) handleBridgeAudibleTitles(w http.ResponseWriter, r *http.Request) 
 		a.writeAudibleError(w, err, "put audible titles failed")
 		return
 	}
-	if req.Final {
-		a.afterAudiblePoll(r, id)
-	}
 	writeJSON(w, http.StatusOK, map[string]int{"stored": len(req.Titles)})
+	if req.Final {
+		a.afterAudiblePoll(id)
+	}
 }
 
 // bridgeListBook is one book of GET /bridge/libraries/{id}/books: what the
@@ -413,25 +413,31 @@ func (a *API) audibleSyncNow(r *http.Request, account string, titlesChanged bool
 	}
 }
 
-// afterAudiblePollTimeout bounds the backups a poll's final call queues: well
-// inside the 30 s the Bridge (and the request timeout) give the whole call, so
-// a slow pass still leaves the stored poll time to answer; what it didn't
-// queue, the next poll asks for again.
+// afterAudiblePollTimeout bounds the backups a poll's final call queues: what
+// it didn't queue, the next poll asks for again. Shutdown waits for it at most
+// this long.
 const afterAudiblePollTimeout = 10 * time.Second
 
 // afterAudiblePoll queues the backups a completed poll of account asks for
-// (audible.Queues.AfterPoll) while the module is on, past the Bridge's
-// request: its titles call has landed whatever happens here, so a failure is
-// logged and the next poll asks again.
-func (a *API) afterAudiblePoll(r *http.Request, account string) {
+// (audible.Queues.AfterPoll) while the module is on, in the background once
+// the Bridge's final titles call has its answer: the titles have landed
+// whatever happens here, so the Bridge doesn't wait for the queue, and a
+// failure is logged and the next poll asks again. StopModules waits for it.
+func (a *API) afterAudiblePoll(account string) {
 	if a.bridge == nil || !a.moduleOn(bridge.ModuleAudible) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), afterAudiblePollTimeout)
-	defer cancel()
-	if n, err := a.audibleQueues().AfterPoll(ctx, account); err != nil {
-		a.log.Warn("audible: queueing a poll's backups failed", "account", account, "queued", n, "err", err)
+	queue := a.audibleAfterPoll
+	if queue == nil {
+		queue = a.audibleQueues().AfterPoll
 	}
+	a.audiblePollFolds.Go(func() {
+		ctx, cancel := context.WithTimeout(a.baseCtx, afterAudiblePollTimeout)
+		defer cancel()
+		if n, err := queue(ctx, account); err != nil {
+			a.log.Warn("audible: queueing a poll's backups failed", "account", account, "queued", n, "err", err)
+		}
+	})
 }
 
 // audibleTitleID is the {account} and {asin} path values of a title, else it
@@ -473,9 +479,10 @@ func (a *API) writeAudibleBackupError(w http.ResponseWriter, err error, op strin
 // handleAdminAudibleBackup serves POST /admin/audible/titles/{account}/{asin}/
 // backup: "Back up" one title. 202 {"job_id": N} with its queued backup (the
 // open one when a concurrent request queued it first); 200 {"pending": true, "job_id": null} for a preorder, queued
-// once a poll says it is available. 404 unknown_account, unknown_title; 409
-// already_matched, import_open, not_available, account_paused,
-// kind_unavailable, library_not_writable.
+// once a poll says it is available. Either carries "title", the title as it is
+// now (the console updates its row from it), unless reading it failed. 404
+// unknown_account, unknown_title; 409 already_matched, import_open,
+// not_available, account_paused, kind_unavailable, library_not_writable.
 func (a *API) handleAdminAudibleBackup(w http.ResponseWriter, r *http.Request) {
 	account, asin, ok := audibleTitleID(w, r)
 	if !ok {
@@ -491,12 +498,19 @@ func (a *API) handleAdminAudibleBackup(w http.ResponseWriter, r *http.Request) {
 	if !a.writeAudibleBackupError(w, err, "audible backup failed") {
 		return
 	}
+	out := map[string]any{"pending": pending, "job_id": nil}
+	if t, err := a.cat.AudibleTitle(r.Context(), account, asin); err == nil {
+		out["title"] = t
+	} else {
+		a.log.Warn("audible backup: read the title back failed", "account", account, "asin", asin, "err", err)
+	}
 	if pending {
 		a.audit(r, "bridge.audible.backup", "", map[string]any{"account": account, "asin": asin, "pending": true})
-		writeJSON(w, http.StatusOK, map[string]any{"pending": true, "job_id": nil})
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"pending": false, "job_id": job.ID})
+	out["job_id"] = job.ID
+	writeJSON(w, http.StatusAccepted, out)
 }
 
 // handleAdminAudibleBackupAll serves POST /admin/audible/accounts/{account}/

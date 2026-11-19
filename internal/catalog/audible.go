@@ -583,6 +583,11 @@ type AudibleTitle struct {
 	// Contested is the book a contested title tied for and the account's
 	// other titles on it (nil for none).
 	Contested *AudibleContest `json:"contested"`
+	// CanBackup: the console's Back up would queue the title's backup (or,
+	// for a preorder, wait for its release): backupRefusal finds no reason
+	// against it. Its account's pause isn't counted (the console shows Back up
+	// held while paused).
+	CanBackup bool `json:"can_backup"`
 }
 
 // checkAudibleTitle checks and normalises one reported title: its identity,
@@ -711,7 +716,7 @@ func bridgeBookPath(p string) bool {
 // FoldAudibleImport) stays while its book is indexed and the poll names no
 // other: the next poll may have listed the library before the backup landed.
 // On the poll's final call every title of the account the poll didn't report
-// becomes gone, and the account's last_poll_at is now, its sync's refusal
+// becomes gone (its plan, contest and pending request dropped), and the account's last_poll_at is now, its sync's refusal
 // ended (refused_at: Audible answered the account's whole library); on its
 // first complete poll its policy_since moves to now too, so the library the account already
 // had is never backed up by a policy (new purchases only). A user-state write:
@@ -805,9 +810,12 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 		if !final {
 			return nil
 		}
-		// A title gone from the account is backed up nowhere: its plan goes.
+		// A title gone from the account is backed up nowhere: its plan goes,
+		// with a request waiting for its release (a refunded preorder bought
+		// again is asked for again) and the contest it was left out by.
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE audible_titles SET state = 'gone', planned = '', updated_at = ?
+			`UPDATE audible_titles SET state = 'gone', planned = '', import_pending = 0,
+			     contest_library_id = NULL, contest_path = '', updated_at = ?
 			  WHERE account = ? AND poll_id <> ? AND state <> 'gone'`,
 			now, account, pollID); err != nil {
 			return err
@@ -1079,9 +1087,11 @@ func scanAudibleTitle(row rowScanner, now time.Time) (*AudibleTitle, error) {
 	case jobID.Valid && jobState.Valid:
 		j := bridge.Job{ID: jobID.Int64, State: jobState.String, Error: jobErr.String,
 			Result: json.RawMessage(jobRes.String), Progress: json.RawMessage(jobProgrs.String)}
-		t.Import = &AudibleImport{JobID: &j.ID, State: j.State, Code: bridge.AudibleImportCode(j)}
+		code := bridge.AudibleImportCode(j)
+		t.Import = &AudibleImport{JobID: &j.ID, State: j.State, Code: code, Conflict: importConflict(j, code)}
 	}
 	t.NeedsAttention = preorderOverdue(&t, pending, now)
+	t.CanBackup = t.backupRefusal() == nil
 	return &t, nil
 }
 
