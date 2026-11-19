@@ -2799,8 +2799,14 @@ func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *cata
 	book.EbookFile = ebook
 	s.enrich(ctx, lib, book, s.readSlots(1))
 	// UpsertBook layers any path-keyed enrichment and metadata overrides onto the
-	// scanned values in the same transaction.
-	_, err = s.cat.UpsertBook(ctx, book)
+	// scanned values in the same transaction. The read may have outlasted its
+	// request (leadIndex): a library moved to another folder meanwhile is not
+	// written to (catalog.ErrRootChanged), its path naming a file under the old
+	// one, and the caller hears there is no book there now.
+	book.ReadRoot = lib.Root
+	if _, err = s.cat.UpsertBook(ctx, book); errors.Is(err, catalog.ErrRootChanged) {
+		return fmt.Errorf("%w: %w", ErrNotIndexable, err)
+	}
 	return err
 }
 
@@ -3000,6 +3006,17 @@ func (s *Scanner) IndexMoved(ctx context.Context, lib catalog.Library, relPath, 
 // "": none), then drops the old book's row. Its caller (leadIndex) runs it past
 // the end of the request that asked for it.
 func (s *Scanner) indexBookFrom(ctx context.Context, lib catalog.Library, book *catalog.Book, from string) error {
+	// Nothing is carried for a library moved to another folder since the read
+	// began (indexBook writes nothing then either).
+	if from != "" {
+		cur, err := s.cat.GetLibrary(ctx, lib.ID)
+		if err != nil {
+			return err
+		}
+		if cur.Root != lib.Root {
+			return fmt.Errorf("%w: %w", ErrNotIndexable, catalog.ErrRootChanged)
+		}
+	}
 	moved, err := s.carryFrom(ctx, lib, from, book)
 	if err != nil {
 		return err

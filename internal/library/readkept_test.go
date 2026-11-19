@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -152,5 +153,46 @@ func TestAHungFileThatAnswersWithAPermissionRecordsIt(t *testing.T) {
 	}
 	if title, problem, _ := read(); title != "Real Title" || problem != "" {
 		t.Errorf("once it opens = %q, problem %q; want it read, no problem", title, problem)
+	}
+}
+
+// An on-demand read goes on past its request (leadIndex), so a library moved
+// to another folder while it reads must not be written to: the book's path
+// names a file under the old folder. Nothing is indexed, the caller hears
+// there is no book there now, and a read after the move indexes the book
+// under the new folder (server#453).
+func TestAnOnDemandReadIsNotWrittenAfterTheLibraryMoved(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	oldRoot, newRoot := t.TempDir(), t.TempDir()
+	audio := testAudio(t)
+	writeFile(t, oldRoot, "Author/Book/01.m4b", audio)
+	writeFile(t, newRoot, "Author/Book/01.m4b", audio)
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: oldRoot})
+	s := NewScanner(cat, "", slog.Default())
+	moved := false
+	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		if !moved {
+			moved = true
+			if _, _, err := cat.UpdateLibrary(ctx, lib.ID, catalog.LibraryPatch{Root: newRoot}); err != nil {
+				t.Error(err)
+			}
+		}
+		return extractFile(ctx, p, ffprobe, timeout)
+	}
+	if _, err := s.IndexPath(ctx, *lib, "Author/Book"); !errors.Is(err, ErrNotIndexable) || !errors.Is(err, catalog.ErrRootChanged) {
+		t.Fatalf("IndexPath across a move of the library = %v, want ErrNotIndexable for the changed root", err)
+	}
+	if _, err := cat.GetBookByPath(ctx, lib.ID, "Author/Book"); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("the book read under the old folder = %v, want none written", err)
+	}
+	now, err := cat.GetLibrary(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := s.IndexPath(ctx, *now, "Author/Book"); err != nil || b.RelPath != "Author/Book" {
+		t.Fatalf("IndexPath under the new folder = %v, %v; want the book", b, err)
 	}
 }

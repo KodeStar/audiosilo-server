@@ -228,6 +228,12 @@ type Book struct {
 	// reads it again) but writes those lengths (recordLengths), while its files
 	// are the stored ones by path; it clears LengthsRead when it writes none.
 	LengthsRead bool `json:"-"`
+	// ReadRoot is the library folder the book was read under, for a read that
+	// may outlast a change to it (an on-demand index, which goes on past its
+	// request): UpsertBook writes nothing (ErrRootChanged) once the library's
+	// root is no longer it, as the book's path names a file under the old
+	// folder. "" for no check (a scan's batch writes).
+	ReadRoot string `json:"-"`
 	// LengthUncounted: one of the book's files is a VBR MP3 with no Xing or
 	// VBRI header whose frames the scan could not count for now (a deadline, a
 	// read error: metadata.Metadata.LengthUncounted), its length ffprobe's

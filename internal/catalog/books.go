@@ -88,8 +88,25 @@ func (c *Catalog) UpsertBooks(ctx context.Context, books []*Book, budget time.Du
 	return errs
 }
 
+// ErrRootChanged is UpsertBook's error for a book read under a library folder
+// (Book.ReadRoot) the library no longer has (an admin moved it, or the
+// library is gone): nothing is written (server#453).
+var ErrRootChanged = errors.New("catalog: the library's folder changed while the book was read")
+
 // upsertBook is UpsertBook's writes, in tx.
 func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, error) {
+	if b.ReadRoot != "" {
+		// In the write's own transaction, so a root changed by an admin's edit
+		// that commits first is seen.
+		var root string
+		err := tx.QueryRowContext(ctx, `SELECT root FROM libraries WHERE id = ?`, b.LibraryID).Scan(&root)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && root != b.ReadRoot) {
+			return 0, ErrRootChanged
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
 	// A read cut short (Book.ReadCutShort) rewrites nothing of a book indexed
 	// before: only its read problem is recorded, so the next scan reads it again.
 	// One that is only a length out of time (Book.LengthOnly) keeps the book
