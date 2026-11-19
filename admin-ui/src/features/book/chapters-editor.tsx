@@ -861,14 +861,9 @@ function Scrubber({
     // During a busy stream's wait the button stops it: no automatic ask again
     // (as a pause then plays nothing), and Play later asks at once, with its
     // own tries. Paused, a stalled stream lets go of its slot (Safari).
-    if (waiting) {
+    if (waiting || (!a.paused && !broken.current)) {
       wanted.current = false;
-      busy.current = 0;
-      a.pause();
-      return;
-    }
-    if (!a.paused && !broken.current) {
-      wanted.current = false;
+      if (waiting) busy.current = 0;
       a.pause();
       return;
     }
