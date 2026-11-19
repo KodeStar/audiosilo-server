@@ -2666,7 +2666,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `authHandler` marks them; `tokenKeyed`, server#246) limit themselves: refused
   while the address's general bucket is empty (`Ready`, checked in rateLimit too, so
   the refusal comes before the timeout layer), a failed authentication (missing or
-  refused token) charges it (`Charge`: even past empty, down to -burst, so requests
+  refused token), and a `?path=` over the cap refused before the credential is
+  looked at (`capPathQuery`), charges it (`Charge`: even past empty, down to -burst, so requests
   that passed `Ready` together all pay; `Ready` reserves nothing, so a concurrent
   flood is looked up up to its concurrency before it pays), an authenticated one spends
   from its credential's bucket (`mediaLimiter` ~200/s burst 2000, `tokenLimiter`

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
 // routeLimitEnv is a test env whose token buckets are frozen in time, so a test
@@ -181,6 +182,30 @@ func TestRateLimitUnauthenticatedMediaBounded(t *testing.T) {
 	}
 	if code := e.get("192.0.2.22", mediaURL(libID, "cover", "Sidecar", tok), ""); code != http.StatusOK {
 		t.Fatalf("media from another address = %d, want 200", code)
+	}
+}
+
+// A ?path= over the cap is refused before any credential check (capPathQuery),
+// on an authenticated route and on media alike, and pays into the address's
+// bucket as a failed authentication does: past the burst the address is
+// refused (429), never answered for free.
+func TestRateLimitOverLongPathBounded(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	over := strings.Repeat("a", catalog.MaxPathBytes+1)
+	for i, path := range []string{
+		"/api/v1/libraries/1/item?path=" + escape(over),
+		mediaURL(1, "stream", over, ""),
+	} {
+		ip := "192.0.2." + strconv.Itoa(40+i)
+		for n := range 200 {
+			if code := e.get(ip, path, ""); code != http.StatusBadRequest {
+				t.Fatalf("%.40s: request %d = %d, want 400", path, n, code)
+			}
+		}
+		if code := e.get(ip, path, ""); code != http.StatusTooManyRequests {
+			t.Fatalf("%.40s: request past the burst = %d, want 429", path, code)
+		}
 	}
 }
 

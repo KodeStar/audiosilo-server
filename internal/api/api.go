@@ -990,7 +990,7 @@ func (a *API) Handler() http.Handler {
 	// context) and sits inside the timeout, whose buffer takes its writes.
 	h := compress(mux)
 	h = a.timeout(h)
-	h = capPathQuery(h)
+	h = a.capPathQuery(h)
 	h = a.rateLimit(mux, h)
 	h = a.realIP(h)
 	h = a.cors(h)
