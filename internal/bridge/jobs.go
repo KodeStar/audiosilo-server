@@ -951,14 +951,7 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 		if b != nil {
 			return spec.refusedWhileOpen[b.Kind]
 		}
-		res, err := tx.ExecContext(ctx,
-			`INSERT INTO bridge_jobs(kind, library_id, rel_path, params, requested_by, priority, dedupe_key, created_at, updated_at,feed_redacted)
-			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?,?)`,
-			j.Kind, j.LibraryID, j.Path, string(j.Params), requesterID(j.RequestedBy), j.Priority, key, now, now, j.feedRedacted)
-		if err != nil {
-			return err
-		}
-		if id, err = res.LastInsertId(); err != nil {
+		if id, err = insertJob(ctx, tx, j, key, now); err != nil {
 			return err
 		}
 		created = true
@@ -989,6 +982,120 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 	}
 	s.settle(ctx, exp)
 	return job, created, nil
+}
+
+// insertJob inserts j, checked, with dedupe key key, as of now: its id.
+func insertJob(ctx context.Context, tx *sql.Tx, j NewJob, key, now string) (int64, error) {
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO bridge_jobs(kind, library_id, rel_path, params, requested_by, priority, dedupe_key, created_at, updated_at,feed_redacted)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?,?)`,
+		j.Kind, j.LibraryID, j.Path, string(j.Params), requesterID(j.RequestedBy), j.Priority, key, now, now, j.feedRedacted)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// batchKinds are the kinds EnqueueAll queues: none refuses, cancels, promotes
+// or prunes another job, or asks the Bridge for more than the kind and, when
+// it writes, a writable library.
+var batchKinds = map[string]bool{KindAudibleImport: true}
+
+// EnqueueAll is Enqueue for many jobs of one kind at once, in one writer
+// transaction ("Back up everything" queues hundreds): each queued, or the open
+// job with its key found, then passed to record (its index in jobs and
+// whether it was created) in the same transaction, so what the caller records
+// of each commits with the queue or not at all. Only a kind that refuses,
+// cancels, promotes and prunes nothing qualifies (audible.import), else
+// ErrInvalid. The queue's refusals (ErrKindUnavailable, ErrLibraryNotWritable,
+// a job's ErrInvalid) stop it at the first job refused, with the jobs before
+// it queued, the count of those created, and the refusal; any other error
+// queues none.
+func (s *Service) EnqueueAll(ctx context.Context, jobs []NewJob,
+	record func(tx *sql.Tx, i int, job *Job, created bool) error) (created int, err error) {
+	if len(jobs) == 0 {
+		return 0, nil
+	}
+	kind := jobs[0].Kind
+	if !batchKinds[kind] {
+		return 0, invalid("kind %q can't be queued in a batch", kind)
+	}
+	h, err := s.LastHeartbeat(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if h == nil || !h.Offers(kind) {
+		return 0, ErrKindUnavailable
+	}
+	// The refusals before the transaction: it queues the jobs ahead of the
+	// first refused.
+	var refused error
+	checked := make([]NewJob, 0, len(jobs))
+	libraries := map[int64]error{}
+	for _, j := range jobs {
+		if j.Kind != kind || j.Check != nil {
+			refused = invalid("a batch holds jobs of one kind, with no check")
+		} else if refused = checkNew(&j); refused == nil && j.LibraryID != nil {
+			lib := *j.LibraryID
+			libErr, seen := libraries[lib]
+			if !seen {
+				if libErr = s.checkLibraryKind(ctx, j); libErr == nil && kinds[kind].writes && !h.Writable(lib) {
+					libErr = ErrLibraryNotWritable
+				}
+				libraries[lib] = libErr
+			}
+			refused = libErr
+		}
+		if refused != nil {
+			break
+		}
+		checked = append(checked, j)
+	}
+	if len(checked) == 0 {
+		return 0, refused
+	}
+	var exp expiry
+	err = s.db.WithTx(ctx, "bridge.EnqueueAll", func(tx *sql.Tx) error {
+		created = 0
+		now := s.ts()
+		var err error
+		if exp, err = expireTx(ctx, tx, now); err != nil {
+			return err
+		}
+		for i, j := range checked {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			key := jobKey(j)
+			job, err := openJob(ctx, tx, key)
+			if err != nil {
+				return err
+			}
+			isNew := job == nil
+			if isNew {
+				id, err := insertJob(ctx, tx, j, key, now)
+				if err != nil {
+					return err
+				}
+				if job, err = getJob(ctx, tx, id); err != nil {
+					return err
+				}
+				created++
+			}
+			if err := record(tx, i, job, isNew); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	if created > 0 {
+		s.wake.fire()
+	}
+	s.settle(ctx, exp)
+	return created, refused
 }
 
 // Job returns one job, after expiring a lapsed lease (so the console shows what

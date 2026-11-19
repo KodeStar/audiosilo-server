@@ -2,6 +2,7 @@ package audible
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -47,27 +48,23 @@ func (q Queues) Backup(ctx context.Context, account, asin string, requestedBy in
 }
 
 // BackupAll is "Back up everything" for account: every title
-// catalog.AudibleBackupAll names, queued; queued counts the new jobs. It stops
-// at the first refusal of the queue (a Bridge that can't take them: none
-// will be taken), with what it queued so far.
+// catalog.AudibleBackupAll names, queued and recorded on its title in one
+// transaction (bridge.EnqueueAll); queued counts the new jobs. A refusal of
+// the queue (a Bridge that can't take them: none will be taken) stops it at
+// the title refused, with the titles before it queued; any other failure
+// queues none.
 func (q Queues) BackupAll(ctx context.Context, account string, requestedBy int64) (queued int, err error) {
 	all, err := q.Catalog.AudibleBackupAll(ctx, account)
 	if err != nil {
 		return 0, err
 	}
-	for _, p := range all {
-		if err := ctx.Err(); err != nil {
-			return queued, err
-		}
-		_, created, err := q.queue(ctx, p, requestedBy, bridge.PriorityBulk)
-		if created {
-			queued++
-		}
-		if err != nil {
-			return queued, err
-		}
+	jobs := make([]bridge.NewJob, len(all))
+	for i, p := range all {
+		jobs[i] = bridge.AudibleImport(p, requestedBy, bridge.PriorityBulk)
 	}
-	return queued, nil
+	return q.Bridge.EnqueueAll(ctx, jobs, func(tx *sql.Tx, i int, job *bridge.Job, _ bool) error {
+		return q.Catalog.SetAudibleImportTx(ctx, tx, all[i].Account, all[i].ASIN, job.ID)
+	})
 }
 
 // AfterPoll queues what a completed poll of account asks for
