@@ -42,6 +42,16 @@ func takeSlot(a *API, method string, ask transcodeAsk) (*transcodeHold, *http.Re
 	return a.takeTranscodeSlot(httptest.NewRecorder(), slotRequest(method, auth.Credential{ID: ask.token}), ask)
 }
 
+// mustTakeSlot is takeSlot for a GET that must get a slot.
+func mustTakeSlot(t *testing.T, a *API, ask transcodeAsk) (*transcodeHold, *http.Request) {
+	t.Helper()
+	h, r := takeSlot(a, http.MethodGet, ask)
+	if h == nil {
+		t.Fatalf("%+v got no slot", ask)
+	}
+	return h, r
+}
+
 // endTaken is endTranscode for a hold taken over: it reports whether it aborted.
 func endTaken(a *API, h *transcodeHold) (aborted bool) {
 	defer func() {
@@ -441,11 +451,7 @@ func TestTranscodeTokenCapTakesOverItsOldest(t *testing.T) {
 	a := slotAPI(maxConcurrentTranscodes, maxConcurrentTranscodes)
 	take := func(token int64, start float64) (*transcodeHold, *http.Request) {
 		t.Helper()
-		h, r := takeSlot(a, http.MethodGet, transcodeAsk{token: token, lib: 1, rel: "Book/01.mka", start: start})
-		if h == nil {
-			t.Fatalf("token %d at t=%v got no slot", token, start)
-		}
-		return h, r
+		return mustTakeSlot(t, a, transcodeAsk{token: token, lib: 1, rel: "Book/01.mka", start: start})
 	}
 	// Another token's two slots, taken first: the oldest of all.
 	_, theirs1 := take(8, 0)
@@ -527,22 +533,14 @@ func TestTranscodeGlobalCapAcrossTokens(t *testing.T) {
 func TestTranscodeTokenCapSparesItsDownload(t *testing.T) {
 	t.Parallel()
 	a := slotAPI(maxConcurrentTranscodes, maxConcurrentTranscodes)
-	take := func(ask transcodeAsk) (*transcodeHold, *http.Request) {
-		t.Helper()
-		h, r := takeSlot(a, http.MethodGet, ask)
-		if h == nil {
-			t.Fatalf("%+v got no slot", ask)
-		}
-		return h, r
-	}
 	dl := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka", download: true}
-	_, dlReq := take(dl)
-	stream, streamReq := take(transcodeAsk{token: 7, lib: 1, rel: "Book/02.mka", start: 10})
+	_, dlReq := mustTakeSlot(t, a, dl)
+	stream, streamReq := mustTakeSlot(t, a, transcodeAsk{token: 7, lib: 1, rel: "Book/02.mka", start: 10})
 	seek := transcodeAsk{token: 7, lib: 1, rel: "Book/03.mka", start: 20}
 	if free, _ := a.transcodeSlotFree(seek); !free {
 		t.Fatal("a HEAD of the token's third ask was told busy: a GET would take its stream over")
 	}
-	third, _ := take(seek)
+	third, _ := mustTakeSlot(t, a, seek)
 	if dlReq.Context().Err() != nil {
 		t.Fatal("the token's third ask ended its running download")
 	}
@@ -558,7 +556,7 @@ func TestTranscodeTokenCapSparesItsDownload(t *testing.T) {
 
 	// Two downloads: the token's next ask is busy though slots are free.
 	dl2 := transcodeAsk{token: 7, lib: 1, rel: "Book/02.mka", download: true}
-	_, dl2Req := take(dl2)
+	_, dl2Req := mustTakeSlot(t, a, dl2)
 	if free, running := a.transcodeSlotFree(seek); free || running != nil {
 		t.Fatal("a HEAD of a token holding only downloads at its cap was told a slot is free")
 	}
@@ -578,7 +576,7 @@ func TestTranscodeTokenCapSparesItsDownload(t *testing.T) {
 	}
 
 	// A repeat of a download's own ask (a client retrying it) takes it over.
-	again, _ := take(dl)
+	again, _ := mustTakeSlot(t, a, dl)
 	if dlReq.Context().Err() == nil {
 		t.Fatal("a repeat of the download's own ask did not take its slot over")
 	}
@@ -597,11 +595,7 @@ func TestTranscodeTokenCapPrefersSameFile(t *testing.T) {
 	a := slotAPI(maxConcurrentTranscodes, maxConcurrentTranscodes)
 	take := func(rel string, start float64) (*transcodeHold, *http.Request) {
 		t.Helper()
-		h, r := takeSlot(a, http.MethodGet, transcodeAsk{token: 7, lib: 1, rel: rel, start: start})
-		if h == nil {
-			t.Fatalf("%s at t=%v got no slot", rel, start)
-		}
-		return h, r
+		return mustTakeSlot(t, a, transcodeAsk{token: 7, lib: 1, rel: rel, start: start})
 	}
 	otherTab, otherReq := take("Book/01.mka", 0)
 	thisTab, thisReq := take("Book/05.mka", 0)
