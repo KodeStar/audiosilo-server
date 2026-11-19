@@ -104,13 +104,14 @@ func ABSSignature(info fs.FileInfo) string {
 	return fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
 }
 
-// ReadABSFile reads the ABS metadata.json at path (ParseABSFile): a regular file
-// only, never through a link, including one swapped in after the file was looked
-// at, so a link can't make it read a file outside the library. An error wrapping
+// ReadABSFile reads the ABS metadata.json at path under root (ParseABSFile): a
+// regular file only, never through a link, including one swapped in after the
+// file was looked at, and opened through root (readRegularFileInfo), so a link
+// can't make it read a file outside the library. An error wrapping
 // ErrABSFileInvalid is about the file itself; any other is a read that may work
 // later.
-func ReadABSFile(path string) (*ABSFile, error) {
-	data, err := ReadRegularFile(path, maxABSFile, errABSFileNotRegular, ErrABSFileTooLarge)
+func ReadABSFile(root, path string) (*ABSFile, error) {
+	data, _, err := readRegularFileInfo(root, path, maxABSFile, errABSFileNotRegular, ErrABSFileTooLarge)
 	if err != nil {
 		return nil, err
 	}
@@ -122,21 +123,32 @@ func ReadABSFile(path string) (*ABSFile, error) {
 // looked at (os.SameFile on the opened file), so a link can't make the scan read
 // a file outside the library. A link or anything else but a regular file is
 // notRegular, a file over limit tooLarge; any other error is a read that may work
-// later. The metadata files the scan reads beside the audio (ABS's metadata.json,
-// the Bridge's .audiosilo/ attachments) share it.
+// later. A podcast's feed.json and library.json are read so; the metadata
+// files the scan reads beside a book's audio (ABS's metadata.json, the
+// Bridge's .audiosilo/ attachments) are read so through the library's root
+// too (readRegularFileInfo).
 func ReadRegularFile(path string, limit int, notRegular, tooLarge error) ([]byte, error) {
-	data, _, err := readRegularFileInfo(path, limit, notRegular, tooLarge)
+	data, _, err := readRegularFileInfo("", path, limit, notRegular, tooLarge)
 	return data, err
 }
 
 // readRegularFileInfo is ReadRegularFile with the opened file's info (its size
-// and modification time as read). A file replaced while being opened (the
-// Bridge renaming a new version into place, server#265) is read once more
-// (retrySwap), so every attachment, feed.json and library.json read meets the
-// rename with the new file rather than failing.
-func readRegularFileInfo(path string, limit int, notRegular, tooLarge error) ([]byte, fs.FileInfo, error) {
+// and modification time as read), the file at path looked at and opened
+// through root (BelowFolder) when root is not "": a name along the path
+// swapped for a link out of root since it was checked is never followed,
+// where the os.SameFile check alone would follow it for both looks. A file
+// replaced while being opened (the Bridge renaming a new version into place,
+// server#265) is read once more (retrySwap), so every attachment, feed.json
+// and library.json read meets the rename with the new file rather than
+// failing.
+func readRegularFileInfo(root, path string, limit int, notRegular, tooLarge error) ([]byte, fs.FileInfo, error) {
+	lstat, open := os.Lstat, func(p string) (*os.File, error) { return os.Open(p) }
+	if root != "" {
+		lstat = func(p string) (fs.FileInfo, error) { return LstatBelow(root, p) }
+		open = func(p string) (*os.File, error) { return OpenBelow(root, p) }
+	}
 	return retrySwap(func() ([]byte, fs.FileInfo, error) {
-		return readRegularFileOnce(path, limit, notRegular, tooLarge)
+		return readRegularFileOnce(path, lstat, open, limit, notRegular, tooLarge)
 	})
 }
 
@@ -150,16 +162,18 @@ func retrySwap(read func() ([]byte, fs.FileInfo, error)) ([]byte, fs.FileInfo, e
 	return data, info, err
 }
 
-// readRegularFileOnce is one try of readRegularFileInfo.
-func readRegularFileOnce(path string, limit int, notRegular, tooLarge error) ([]byte, fs.FileInfo, error) {
-	info, err := os.Lstat(path)
+// readRegularFileOnce is one try of readRegularFileInfo, its looks lstat and
+// open.
+func readRegularFileOnce(path string, lstat func(string) (fs.FileInfo, error), open func(string) (*os.File, error),
+	limit int, notRegular, tooLarge error) ([]byte, fs.FileInfo, error) {
+	info, err := lstat(path)
 	if err != nil {
 		return nil, nil, err
 	}
 	if !info.Mode().IsRegular() {
 		return nil, nil, notRegular
 	}
-	f, err := os.Open(path)
+	f, err := open(path)
 	if err != nil {
 		return nil, nil, err
 	}

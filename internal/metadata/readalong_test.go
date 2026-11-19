@@ -133,24 +133,24 @@ func TestReadReadalong(t *testing.T) {
 	if err := os.WriteFile(ok, big, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if h, err := ReadReadalong(ok); err != nil || h.Ebook.SHA256 != testSHA {
+	if h, err := ReadReadalong(filepath.Dir(ok), ok); err != nil || h.Ebook.SHA256 != testSHA {
 		t.Fatalf("a 4 MiB map = %+v, %v", h, err)
 	}
 	huge := filepath.Join(dir, "huge.json")
 	if err := os.WriteFile(huge, append(readalongMap(t, nil), make([]byte, MaxReadalongFile)...), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadReadalong(huge); err == nil || !isInvalid(err) {
+	if _, err := ReadReadalong(filepath.Dir(huge), huge); err == nil || !isInvalid(err) {
 		t.Errorf("over 16 MiB: %v, want an invalid attachment", err)
 	}
 	link := filepath.Join(dir, "link.json")
 	if err := os.Symlink(ok, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadReadalong(link); err == nil || !isInvalid(err) {
+	if _, err := ReadReadalong(filepath.Dir(link), link); err == nil || !isInvalid(err) {
 		t.Errorf("a link: %v, want an invalid attachment", err)
 	}
-	if _, err := ReadReadalong(filepath.Join(dir, "none.json")); err == nil || isInvalid(err) {
+	if _, err := ReadReadalong(filepath.Dir(filepath.Join(dir, "none.json")), filepath.Join(dir, "none.json")); err == nil || isInvalid(err) {
 		t.Errorf("none: %v, want a read error that isn't the file's", err)
 	}
 }

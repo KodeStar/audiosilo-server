@@ -185,7 +185,7 @@ func (s *Scanner) readAttachments(ctx context.Context, lib catalog.Library, b *c
 		// The read fills a copy: a read given up on may still end later.
 		cur := files
 		got, err := metadata.Bounded(ctx, p, s.lookTimeout(ctx), func() (metadata.AttachmentFiles, error) {
-			err := readAttachment(&cur, name, p)
+			err := readAttachment(&cur, name, lib.Root, p)
 			return cur, err
 		}, nil)
 		if err != nil {
@@ -205,21 +205,22 @@ func (s *Scanner) readAttachments(ctx context.Context, lib catalog.Library, b *c
 }
 
 // readAttachment reads the attachment named name (one of
-// metadata.AttachmentNames) at p into its field of files.
-func readAttachment(files *metadata.AttachmentFiles, name, p string) (err error) {
+// metadata.AttachmentNames) at p, under the library root root (opened through
+// it), into its field of files.
+func readAttachment(files *metadata.AttachmentFiles, name, root, p string) (err error) {
 	switch name {
 	case metadata.AttachmentCharacters:
-		files.Characters, err = metadata.ReadCharacters(p)
+		files.Characters, err = metadata.ReadCharacters(root, p)
 	case metadata.AttachmentRecaps:
-		files.Recaps, err = metadata.ReadRecaps(p)
+		files.Recaps, err = metadata.ReadRecaps(root, p)
 	case metadata.AttachmentDescription:
-		files.Description, err = metadata.ReadDescription(p)
+		files.Description, err = metadata.ReadDescription(root, p)
 	case metadata.AttachmentChapters:
-		files.Chapters, err = metadata.ReadChapterList(p)
+		files.Chapters, err = metadata.ReadChapterList(root, p)
 	case metadata.AttachmentBridge:
-		files.Provenance, err = metadata.ReadProvenance(p)
+		files.Provenance, err = metadata.ReadProvenance(root, p)
 	case metadata.AttachmentReadalong:
-		files.Readalong, err = metadata.ReadReadalong(p)
+		files.Readalong, err = metadata.ReadReadalong(root, p)
 	}
 	return err
 }

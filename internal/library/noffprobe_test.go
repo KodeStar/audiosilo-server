@@ -80,20 +80,20 @@ func TestReadSlotsRetryInProcessTimeoutAlone(t *testing.T) {
 	var calls atomic.Int32
 	var started sync.WaitGroup
 	started.Add(2)
-	slots.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+	slots.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
 		if calls.Add(1) <= 2 {
 			// The first two reads overlap, and run out of time.
 			started.Done()
 			started.Wait()
-			md, _ := metadata.ExtractTimeout(ctx, p, ffprobe, time.Nanosecond)
+			md, _ := metadata.ExtractTimeout(ctx, root, p, ffprobe, time.Nanosecond)
 			return md
 		}
-		return extractFile(ctx, p, ffprobe, timeout)
+		return extractFile(ctx, root, p, ffprobe, timeout)
 	}
 	var wg sync.WaitGroup
 	mds := make([]*metadata.Metadata, 2)
 	for i := range mds {
-		wg.Go(func() { mds[i] = slots.extract(context.Background(), path, "") })
+		wg.Go(func() { mds[i] = slots.extract(context.Background(), filepath.Dir(path), path, "") })
 	}
 	wg.Wait()
 	for i, md := range mds {
@@ -108,12 +108,12 @@ func TestReadSlotsRetryInProcessTimeoutAlone(t *testing.T) {
 	// Alone, a time-out is the file's own: no retry.
 	lone := newReadSlots(2, 5*time.Second)
 	var loneCalls atomic.Int32
-	lone.readFile = func(ctx context.Context, p, ffprobe string, _ time.Duration) *metadata.Metadata {
+	lone.readFile = func(ctx context.Context, root, p, ffprobe string, _ time.Duration) *metadata.Metadata {
 		loneCalls.Add(1)
-		md, _ := metadata.ExtractTimeout(ctx, p, ffprobe, time.Nanosecond)
+		md, _ := metadata.ExtractTimeout(ctx, root, p, ffprobe, time.Nanosecond)
 		return md
 	}
-	if md := lone.extract(context.Background(), path, ""); !md.ProbeTimedOut() || loneCalls.Load() != 1 {
+	if md := lone.extract(context.Background(), filepath.Dir(path), path, ""); !md.ProbeTimedOut() || loneCalls.Load() != 1 {
 		t.Errorf("a lone time-out: %+v after %d reads, want it kept after one", md, loneCalls.Load())
 	}
 }
@@ -128,8 +128,8 @@ func TestReadSlotsRetryUncountedAlone(t *testing.T) {
 	var calls atomic.Int32
 	var started sync.WaitGroup
 	started.Add(2)
-	slots.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
-		md := extractFile(ctx, p, ffprobe, timeout)
+	slots.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		md := extractFile(ctx, root, p, ffprobe, timeout)
 		if calls.Add(1) <= 2 {
 			// The first two reads overlap, and their counts run out of time.
 			started.Done()
@@ -141,7 +141,7 @@ func TestReadSlotsRetryUncountedAlone(t *testing.T) {
 	var wg sync.WaitGroup
 	mds := make([]*metadata.Metadata, 2)
 	for i := range mds {
-		wg.Go(func() { mds[i] = slots.extract(context.Background(), path, "") })
+		wg.Go(func() { mds[i] = slots.extract(context.Background(), filepath.Dir(path), path, "") })
 	}
 	wg.Wait()
 	for i, md := range mds {
@@ -166,7 +166,7 @@ func TestReadSlotsStoppedReadIsNotRetried(t *testing.T) {
 	defer close(release)
 	ctx, stop := context.WithCancel(t.Context())
 	var calls atomic.Int32
-	slots.readFile = func(context.Context, string, string, time.Duration) *metadata.Metadata {
+	slots.readFile = func(context.Context, string, string, string, time.Duration) *metadata.Metadata {
 		if calls.Add(1) == 1 {
 			close(stuck)
 			<-release // a call stuck in the kernel ignores the stop
@@ -175,10 +175,10 @@ func TestReadSlotsStoppedReadIsNotRetried(t *testing.T) {
 		stop() // the scan stops while this read counts its frames
 		return metadata.UncountedForTests(&metadata.Metadata{})
 	}
-	first.Go(func() { slots.extract(ctx, "stuck.mp3", "") })
+	first.Go(func() { slots.extract(ctx, "", "stuck.mp3", "") })
 	<-stuck
 	read := make(chan *metadata.Metadata, 1)
-	go func() { read <- slots.extract(ctx, "cut-short.mp3", "") }()
+	go func() { read <- slots.extract(ctx, "", "cut-short.mp3", "") }()
 	select {
 	case md := <-read:
 		if md != nil {

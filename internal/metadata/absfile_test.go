@@ -145,7 +145,7 @@ func TestReadABSFileTooLarge(t *testing.T) {
 	if err := os.WriteFile(p, []byte(`{"title":"`+strings.Repeat("x", maxABSFile)+`"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadABSFile(p); err != ErrABSFileTooLarge || !errors.Is(err, ErrABSFileInvalid) {
+	if _, err := ReadABSFile(filepath.Dir(p), p); err != ErrABSFileTooLarge || !errors.Is(err, ErrABSFileInvalid) {
 		t.Errorf("err = %v, want ErrABSFileTooLarge (invalid)", err)
 	}
 }
@@ -164,13 +164,13 @@ func TestReadABSFileKinds(t *testing.T) {
 		}
 		return p
 	}
-	if f, err := ReadABSFile(write("bom.json", "\xef\xbb\xbf"+`{"asin":"B000000001"}`)); err != nil || f.ASIN != "B000000001" {
+	if f, err := ReadABSFile(filepath.Dir(write("bom.json", "\xef\xbb\xbf"+`{"asin":"B000000001"}`)), write("bom.json", "\xef\xbb\xbf"+`{"asin":"B000000001"}`)); err != nil || f.ASIN != "B000000001" {
 		t.Errorf("with a byte order mark: %+v, %v", f, err)
 	}
-	if _, err := ReadABSFile(write("bad.json", "not json")); !errors.Is(err, ErrABSFileInvalid) {
+	if _, err := ReadABSFile(filepath.Dir(write("bad.json", "not json")), write("bad.json", "not json")); !errors.Is(err, ErrABSFileInvalid) {
 		t.Errorf("not JSON: err = %v, want ErrABSFileInvalid", err)
 	}
-	if _, err := ReadABSFile(filepath.Join(dir, "missing.json")); err == nil || errors.Is(err, ErrABSFileInvalid) {
+	if _, err := ReadABSFile(filepath.Dir(filepath.Join(dir, "missing.json")), filepath.Join(dir, "missing.json")); err == nil || errors.Is(err, ErrABSFileInvalid) {
 		t.Errorf("missing: err = %v, want a read error that isn't ErrABSFileInvalid", err)
 	}
 	// A link is never followed, even to a well-formed file.
@@ -179,7 +179,7 @@ func TestReadABSFileKinds(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if f, err := ReadABSFile(link); !errors.Is(err, ErrABSFileInvalid) {
+	if f, err := ReadABSFile(filepath.Dir(link), link); !errors.Is(err, ErrABSFileInvalid) {
 		t.Errorf("a link: %+v, err = %v, want ErrABSFileInvalid", f, err)
 	}
 }

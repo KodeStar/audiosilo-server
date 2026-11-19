@@ -413,7 +413,7 @@ func TestScanRetriesTimedOutProbeAlone(t *testing.T) {
 		closeOnce  sync.Once
 		timedOut   atomic.Int32
 	)
-	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
 		mu.Lock()
 		under++
 		beside := under > 1
@@ -435,7 +435,7 @@ func TestScanRetriesTimedOutProbeAlone(t *testing.T) {
 			case <-time.After(time.Minute): // the scan never read two at once: failed below
 			}
 		})
-		return extractFile(ctx, p, ffprobe, timeout)
+		return extractFile(ctx, root, p, ffprobe, timeout)
 	}
 	res, err := s.Scan(context.Background(), *lib)
 	if err != nil {
@@ -509,7 +509,7 @@ func TestScanSkipsRetryOfLoneTimeout(t *testing.T) {
 	t.Parallel()
 	s, lib, db := timeoutScanner(t, smallLibrary(t, 1, 1), stubProbe(t, "exit 1"), 4, 5*time.Second)
 	var reads atomic.Int32
-	s.readFile = func(_ context.Context, _, _ string, timeout time.Duration) *metadata.Metadata {
+	s.readFile = func(_ context.Context, _, _, _ string, timeout time.Duration) *metadata.Metadata {
 		reads.Add(1)
 		return &metadata.Metadata{ProbeErr: fmt.Errorf("%w after %s", metadata.ErrProbeTimeout, timeout)}
 	}

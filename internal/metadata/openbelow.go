@@ -31,24 +31,9 @@ import (
 // no file has) fails at once, the disk not reached, as a plain open's does.
 func Below[T any](root, path string, open func(r *os.Root, rel string) (T, error)) (T, error) {
 	var zero T
-	if strings.IndexByte(path, 0) >= 0 {
-		return zero, &fs.PathError{Op: "open", Path: path, Err: syscall.EINVAL}
-	}
-	rootAbs, err := filepath.Abs(root)
+	rootAbs, rel, resolved, err := underRoot(root, path)
 	if err != nil {
 		return zero, err
-	}
-	// path is joined on the root as configured or, by a join, as resolved (the
-	// same folder: resolved only when the first does not lead it).
-	resolved := ""
-	rel, ok := relBelow(rootAbs, path)
-	if !ok {
-		if resolved, err = filepath.EvalSymlinks(rootAbs); err != nil {
-			return zero, err
-		}
-		if rel, ok = relBelow(resolved, path); !ok {
-			return zero, &fs.PathError{Op: "open", Path: path, Err: errOutsideRoot}
-		}
 	}
 	r, err := os.OpenRoot(rootAbs)
 	if err != nil {
@@ -72,6 +57,36 @@ func Below[T any](root, path string, open func(r *os.Root, rel string) (T, error
 		return open(r, at)
 	}
 	return zero, err
+}
+
+// underRoot is path relative to root (rel), and the root it is under: root
+// as configured (rootAbs, absolute) or, when path is joined on it as resolved
+// (a join's), that one (rootAbs and resolved both). An error for a path that
+// is under neither, or that holds a NUL (the API's noFile: a path no file
+// has), the disk not reached, as a plain open's does.
+func underRoot(root, path string) (rootAbs, rel, resolved string, err error) {
+	if strings.IndexByte(path, 0) >= 0 {
+		return "", "", "", &fs.PathError{Op: "open", Path: path, Err: syscall.EINVAL}
+	}
+	if rootAbs, err = filepath.Abs(root); err != nil {
+		return "", "", "", err
+	}
+	if path, err = filepath.Abs(path); err != nil {
+		return "", "", "", err
+	}
+	// path is joined on the root as configured or, by a join, as resolved (the
+	// same folder: resolved only when the first does not lead it).
+	rel, ok := relBelow(rootAbs, path)
+	if !ok {
+		if resolved, err = filepath.EvalSymlinks(rootAbs); err != nil {
+			return "", "", "", err
+		}
+		if rel, ok = relBelow(resolved, path); !ok {
+			return "", "", "", &fs.PathError{Op: "open", Path: path, Err: errOutsideRoot}
+		}
+		rootAbs = resolved
+	}
+	return rootAbs, rel, resolved, nil
 }
 
 // errOutsideRoot is Below's for a path that is not under its root.

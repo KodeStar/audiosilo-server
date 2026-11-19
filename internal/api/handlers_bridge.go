@@ -382,9 +382,11 @@ func orEmpty(ss []string) []string {
 	return ss
 }
 
-// bridgeStatLook is statBookFiles' stat of a file: a test injects a share's
-// errors through it.
-var bridgeStatLook = metadata.StatBounded
+// bridgeStatLook is statBookFiles' stat of a file, through the library's root
+// (metadata.StatBelowBounded: a name along the path swapped for a link out of
+// it after the join is never followed): a test injects a share's errors
+// through it.
+var bridgeStatLook = metadata.StatBelowBounded
 
 // filesState is what statBookFiles learned of a book's files on the server's
 // disk.
@@ -436,7 +438,7 @@ func (a *API) statBookFiles(ctx context.Context, lib *catalog.Library, book *cat
 			abs, err := library.SafeJoinBounded(ctx, lib.Root, f.RelPath, wait())
 			var info fs.FileInfo
 			if err == nil {
-				info, err = bridgeStatLook(ctx, abs, wait())
+				info, err = bridgeStatLook(ctx, lib.Root, abs, wait())
 			}
 			switch {
 			case err == nil:

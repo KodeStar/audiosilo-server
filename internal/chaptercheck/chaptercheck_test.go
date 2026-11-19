@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -479,6 +481,52 @@ func TestProberStaysInTheLibrary(t *testing.T) {
 	// Inside the root the path is allowed: what fails is the (missing) ffmpeg.
 	if _, err := probe(ctx, "A/Book.m4a", 0, 5); err == nil || errors.Is(err, library.ErrOutsideRoot) {
 		t.Fatalf("inside the root: %v, want ffmpeg's error", err)
+	}
+}
+
+// TestProberHandsFFmpegTheFileItOpened (security): ffmpeg is handed the
+// file the prober opened below the library's root, never its path: a folder
+// swapped for a link out of the library after the open (here by the
+// stand-in itself, as it starts) leaves ffmpeg reading the file opened, not
+// the one the link leads to. The stand-in reports a pause only in the file
+// out of the library.
+func TestProberHandsFFmpegTheFileItOpened(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the ffmpeg stand-in is a shell script")
+	}
+	e := newEnv(t)
+	ctx := context.Background()
+	root, err := filepath.EvalSymlinks(e.lib.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	book := filepath.Join(root, "A")
+	for p, body := range map[string]string{filepath.Join(book, "Book.m4a"): "inside", filepath.Join(outside, "Book.m4a"): "outside"} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ffmpeg := filepath.Join(t.TempDir(), "ffmpeg")
+	script := `#!/bin/sh
+while [ $# -gt 0 ]; do [ "$1" = "-i" ] && in=$2; shift; done
+[ -L '` + book + `' ] || { mv '` + book + `' '` + book + `.aside' && ln -s '` + outside + `' '` + book + `'; }
+if [ "$(head -c 7 "$in")" = "outside" ]; then echo "[silencedetect @ 0x1] silence_start: 1" >&2; echo "[silencedetect @ 0x1] silence_end: 2 | silence_duration: 1" >&2; fi
+`
+	if err := os.WriteFile(ffmpeg, []byte(script), 0o755); err != nil { //nolint:gosec // G306: the stand-in must be executable
+		t.Fatal(err)
+	}
+	r := New(e.cat, e.src, ffmpeg, on, nil, nil)
+	probe, err := r.prober(ctx, e.lib.ID)
+	if err != nil || probe == nil {
+		t.Fatalf("prober %v", err)
+	}
+	pauses, err := probe(ctx, "A/Book.m4a", 0, 5)
+	if err != nil || len(pauses) != 0 {
+		t.Errorf("pauses %v, %v; want ffmpeg to read the file opened, never the one through the link", pauses, err)
 	}
 }
 

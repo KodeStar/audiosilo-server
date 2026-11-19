@@ -188,11 +188,12 @@ func AttachmentSigNames(sig string) []string {
 	return out
 }
 
-// ReadCharacters reads and checks a characters.json (ParseCharacters), a regular
-// file only, never through a link. An error wrapping ErrAttachmentInvalid is
-// about the file itself.
-func ReadCharacters(path string) (*model.Characters, error) {
-	data, err := readAttachment(path)
+// ReadCharacters reads and checks the characters.json at path under root
+// (ParseCharacters), a regular file only, never through a link, opened through
+// root (readRegularFileInfo). An error wrapping ErrAttachmentInvalid is about
+// the file itself.
+func ReadCharacters(root, path string) (*model.Characters, error) {
+	data, err := readAttachment(root, path)
 	if err != nil {
 		return nil, err
 	}
@@ -200,8 +201,8 @@ func ReadCharacters(path string) (*model.Characters, error) {
 }
 
 // ReadRecaps is ReadCharacters for a recaps.json (ParseRecaps).
-func ReadRecaps(path string) (*model.Recaps, error) {
-	data, err := readAttachment(path)
+func ReadRecaps(root, path string) (*model.Recaps, error) {
+	data, err := readAttachment(root, path)
 	if err != nil {
 		return nil, err
 	}
@@ -209,8 +210,8 @@ func ReadRecaps(path string) (*model.Recaps, error) {
 }
 
 // ReadDescription is ReadCharacters for a description.json (ParseDescription).
-func ReadDescription(path string) (*model.Description, error) {
-	data, err := readAttachment(path)
+func ReadDescription(root, path string) (*model.Description, error) {
+	data, err := readAttachment(root, path)
 	if err != nil {
 		return nil, err
 	}
@@ -218,8 +219,8 @@ func ReadDescription(path string) (*model.Description, error) {
 }
 
 // ReadChapterList is ReadCharacters for a chapters.json (ParseChapterList).
-func ReadChapterList(path string) (*ChapterList, error) {
-	data, err := readAttachment(path)
+func ReadChapterList(root, path string) (*ChapterList, error) {
+	data, err := readAttachment(root, path)
 	if err != nil {
 		return nil, err
 	}
@@ -227,16 +228,17 @@ func ReadChapterList(path string) (*ChapterList, error) {
 }
 
 // ReadProvenance is ReadCharacters for a bridge.json (ParseProvenance).
-func ReadProvenance(path string) (*AttachmentProvenance, error) {
-	data, err := readAttachment(path)
+func ReadProvenance(root, path string) (*AttachmentProvenance, error) {
+	data, err := readAttachment(root, path)
 	if err != nil {
 		return nil, err
 	}
 	return ParseProvenance(data)
 }
 
-func readAttachment(path string) ([]byte, error) {
-	return ReadRegularFile(path, maxAttachmentFile, errAttachmentNotRegular, errAttachmentTooLarge)
+func readAttachment(root, path string) ([]byte, error) {
+	data, _, err := readRegularFileInfo(root, path, maxAttachmentFile, errAttachmentNotRegular, errAttachmentTooLarge)
+	return data, err
 }
 
 // decodeAttachment decodes data (a leading byte order mark skipped) into v,

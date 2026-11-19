@@ -72,7 +72,7 @@ func fakeFFprobe(t *testing.T, version string, reject bool) (probe, log string) 
 	}
 	script := `#!/bin/sh
 if [ "$1" = "-version" ]; then echo "ffprobe version ` + version + ` Copyright (c) 2007-2026"; exit 0; fi
-for f; do :; done
+for f; do :; done; f=${AUDIOSILO_TEST_INPUT:-$f}
 echo "$f" >> '` + log + `'
 ` + answer + "\n"
 	// Held so no exec another parallel test forks meanwhile inherits the file
@@ -188,11 +188,11 @@ func TestExtractWithoutFFprobe(t *testing.T) {
 	if unsure.Duration != 0 || unsure.Codec != "" {
 		t.Errorf("unsure file: duration %v codec %q, want none", unsure.Duration, unsure.Codec)
 	}
-	tags := ExtractTags(t.Context(), fixture("m4b-aac-chap.m4b"), ProbeTimeout)
+	tags := ExtractTags(t.Context(), filepath.Dir(fixture("m4b-aac-chap.m4b")), fixture("m4b-aac-chap.m4b"), ProbeTimeout)
 	if tags.OpenErr != nil || tags.Title != "The Spike Book (Unabridged)" || tags.Duration != 0 || tags.Codec != "" || len(tags.Chapters) != 0 {
 		t.Errorf("ExtractTags: %+v, want the tags alone", tags)
 	}
-	if ExtractTags(t.Context(), filepath.Join(t.TempDir(), "gone.mp3"), ProbeTimeout).OpenErr == nil {
+	if ExtractTags(t.Context(), filepath.Dir(filepath.Join(t.TempDir(), "gone.mp3")), filepath.Join(t.TempDir(), "gone.mp3"), ProbeTimeout).OpenErr == nil {
 		t.Error("ExtractTags of a missing file: no OpenErr")
 	}
 }
@@ -286,13 +286,13 @@ func TestTagsUnreadWhenCutShort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	m := &Metadata{Format: "mp3"}
-	if _, _, err := readFile(ctx, m, fixture("mp3-v23-chap.mp3"), noFFprobeRules, false, ProbeTimeout); err != nil {
+	if _, _, err := readFile(ctx, m, filepath.Dir(fixture("mp3-v23-chap.mp3")), fixture("mp3-v23-chap.mp3"), noFFprobeRules, false, ProbeTimeout); err != nil {
 		t.Fatal(err)
 	}
 	if !m.TagsUnread() || m.Title != "" {
 		t.Errorf("cut short: TagsUnread %t, title %q; want true and none", m.TagsUnread(), m.Title)
 	}
-	whole := ExtractTags(t.Context(), fixture("mp3-v23-chap.mp3"), ProbeTimeout)
+	whole := ExtractTags(t.Context(), filepath.Dir(fixture("mp3-v23-chap.mp3")), fixture("mp3-v23-chap.mp3"), ProbeTimeout)
 	if whole.TagsUnread() || whole.Title == "" || (*Metadata)(nil).TagsUnread() {
 		t.Errorf("a whole read (title %q), or none, reported its tags unread", whole.Title)
 	}
@@ -848,7 +848,7 @@ func TestAbandonedReadsAreCapped(t *testing.T) {
 	// it takes no time.
 	start := time.Now()
 	for range 3 {
-		m, err := ExtractTimeout(context.Background(), filepath.Join(share, "missing.mp3"), "/no/such/ffprobe", time.Second)
+		m, err := ExtractTimeout(context.Background(), filepath.Dir(filepath.Join(share, "missing.mp3")), filepath.Join(share, "missing.mp3"), "/no/such/ffprobe", time.Second)
 		if err != nil || m.OpenErr != nil || !m.TagsUnread() || !m.ReadRefused() || m.ProbeErr != nil || m.ProbeTimedOut() || m.Duration != 0 {
 			t.Fatalf("saturated read = %+v (err %v), want it failed fast, tags unread", m, err)
 		}
@@ -860,7 +860,7 @@ func TestAbandonedReadsAreCapped(t *testing.T) {
 		t.Errorf("logged the cap %d times, want once, naming the mount:\n%s", n, logged.String())
 	}
 	// Another mount reads as ever while that one is hung.
-	if m := ExtractTags(t.Context(), fixture("mp3-v23-chap.mp3"), ProbeTimeout); m.TagsUnread() || m.Title == "" {
+	if m := ExtractTags(t.Context(), filepath.Dir(fixture("mp3-v23-chap.mp3")), fixture("mp3-v23-chap.mp3"), ProbeTimeout); m.TagsUnread() || m.Title == "" {
 		t.Errorf("a file on another mount = %+v, want it read", m)
 	}
 	if n := stuckByMount.For(fixture("mp3-v23-chap.mp3")).n.Load(); n != 0 {
@@ -922,7 +922,7 @@ func TestNoFFprobeAfterAnOpenThatDidNotAnswer(t *testing.T) {
 	release := HoldOpensForTests(path)
 	defer release()
 	start := time.Now()
-	md, err := ExtractTimeout(t.Context(), path, probe, 200*time.Millisecond)
+	md, err := ExtractTimeout(t.Context(), filepath.Dir(path), path, probe, 200*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -934,7 +934,7 @@ func TestNoFFprobeAfterAnOpenThatDidNotAnswer(t *testing.T) {
 		t.Errorf("the read took %v, want it cut short at its time", took)
 	}
 	release()
-	if md, err := ExtractTimeout(t.Context(), path, probe, ProbeTimeout); err != nil || md.TagsUnread() || md.ProbeTimedOut() || md.Duration <= 0 {
+	if md, err := ExtractTimeout(t.Context(), filepath.Dir(path), path, probe, ProbeTimeout); err != nil || md.TagsUnread() || md.ProbeTimedOut() || md.Duration <= 0 {
 		t.Errorf("the file once the share answers = %+v (%v), want it read", md, err)
 	}
 }

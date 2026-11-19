@@ -431,7 +431,8 @@ func (r *Runner) chapters(ctx context.Context, in *catalog.ChapterInputs) (*meta
 }
 
 // prober finds pauses in the library's files with ffmpeg, through SafeJoin like
-// every read of the library.
+// every read of the library, ffmpeg handed the file opened through the
+// library's root (media.DetectSilences), never its path.
 func (r *Runner) prober(ctx context.Context, libraryID int64) (chapteralign.Prober, error) {
 	if r.ffmpeg == "" {
 		return nil, nil
@@ -445,7 +446,7 @@ func (r *Runner) prober(ctx context.Context, libraryID int64) (chapteralign.Prob
 		if err != nil {
 			return nil, err
 		}
-		pauses, err := media.DetectSilences(ctx, r.ffmpeg, abs, from, to)
+		pauses, err := media.DetectSilences(ctx, r.ffmpeg, lib.Root, abs, from, to)
 		if err != nil {
 			return nil, err
 		}

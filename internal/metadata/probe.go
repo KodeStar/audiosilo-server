@@ -1,16 +1,19 @@
 package metadata
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"testing"
 	"time"
 )
 
@@ -72,10 +75,10 @@ type probeResult struct {
 	Counted bool
 }
 
-// probe runs ffprobe to obtain duration, the audio codec, chapters and container
-// tags (runFFprobe).
-func probe(parent context.Context, path, ffprobePath string, timeout time.Duration) (*probeResult, error) {
-	parsed, err := runFFprobe(parent, path, ffprobePath, timeout)
+// probe runs ffprobe on the file at path under root to obtain duration, the
+// audio codec, chapters and container tags (runFFprobe).
+func probe(parent context.Context, root, path, ffprobePath string, timeout time.Duration) (*probeResult, error) {
+	parsed, err := runFFprobe(parent, root, path, ffprobePath, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -94,17 +97,25 @@ func probe(parent context.Context, path, ffprobePath string, timeout time.Durati
 	return res, nil
 }
 
+// TestInputEnv names, in a test binary only, the environment variable an
+// ffprobe stand-in reads the path of the file it was handed from.
+const TestInputEnv = "AUDIOSILO_TEST_INPUT"
+
 // ffprobeKillGrace is how long runFFprobe waits for an ffprobe killed at its
 // time-out to end before leaving it (tests shorten it).
 var ffprobeKillGrace = 5 * time.Second
 
-// runFFprobe runs ffprobe on path and returns its answer. -select_streams a:0
+// runFFprobe runs ffprobe on the file at path under root and returns its
+// answer. The file is opened through root (openBlockFile, bounded as a tag
+// read's open is) and handed to ffprobe opened (ToolInput), so ffprobe never
+// opens the path itself: a link swapped in along it since it was checked
+// can't lead ffprobe out of the library. -select_streams a:0
 // limits -show_streams to the first audio stream so we read the codec that
 // actually needs (or doesn't need) transcoding. One killed at its time-out
 // that has not ended ffprobeKillGrace later (stuck in a read the kernel won't
 // interrupt: an NFS share on macOS) is left to end on its own, counted on
 // path's mount as a read given up on (await), and answers as timed out.
-func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.Duration) (*ffprobeOutput, error) {
+func runFFprobe(parent context.Context, root, path, ffprobePath string, timeout time.Duration) (*ffprobeOutput, error) {
 	stuck := stuckByMount.For(path)
 	if stuck.saturated() {
 		// Reads from its mount hang already (a share that stopped answering):
@@ -117,6 +128,39 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 	defer probing(parent)()
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
+	timedOut := func() error {
+		if parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("%w after %s", ErrProbeTimeout, timeout)
+		}
+		return nil
+	}
+	_, f, err := openBlockFile(ctx, root, path)
+	switch {
+	case errors.Is(err, errReadRefused):
+		return nil, fmt.Errorf("%w: %w", ErrProbeTimeout, errReadRefused)
+	case errors.Is(err, errOpenAbandoned):
+		return nil, cmp.Or(timedOut(), context.Cause(ctx))
+	case err != nil:
+		return nil, err
+	}
+	input, extra, cleanup, err := ToolInput(f, root, path)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	// The run owns f and its input once it starts, and lets them go when
+	// ffprobe ends: one left running (await) still reads them. A run that
+	// never starts (its ctx ended first) leaves them to this call.
+	release := func() {
+		cleanup()
+		_ = f.Close()
+	}
+	var owner atomic.Int32 // 0 none yet, 1 the run, 2 this call
+	defer func() {
+		if owner.CompareAndSwap(0, 2) {
+			release()
+		}
+	}()
 	cmd := exec.CommandContext(ctx, ffprobePath,
 		"-v", "error", // errors only, on stderr: what the Health page shows for a file ffprobe can't read
 		"-print_format", "json",
@@ -124,8 +168,14 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 		"-show_chapters",
 		"-show_streams",
 		"-select_streams", "a:0",
-		path,
+		input,
 	)
+	cmd.ExtraFiles = extra
+	if testing.Testing() {
+		// A test's ffprobe stand-in tells the files it is handed apart by
+		// their paths (TestInputEnv), as ffprobe is never given one.
+		cmd.Env = append(os.Environ(), TestInputEnv+"="+path)
+	}
 	type ran struct {
 		out []byte
 		err error
@@ -133,6 +183,10 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 	wait, stop := graceAfter(ctx, ffprobeKillGrace)
 	defer stop()
 	r, ok := await(wait, stuck, func() ran {
+		if !owner.CompareAndSwap(0, 1) {
+			return ran{err: context.Cause(wait)}
+		}
+		defer release()
 		out, err := cmd.Output()
 		return ran{out, err}
 	}, nil)
@@ -141,8 +195,8 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 		err = context.Cause(ctx)
 	}
 	if err != nil {
-		if parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("%w after %s", ErrProbeTimeout, timeout)
+		if err := timedOut(); err != nil {
+			return nil, err
 		}
 		return nil, probeError(err)
 	}

@@ -921,12 +921,14 @@ func podcastBarrier(lstat func(string) (os.FileInfo, error), dir, base string) e
 
 // podcastChapters is an episode's chapter attachment, nil when it has none:
 // an error for one that can't be used (ErrNotIndexable), or a look given up
-// on when its read failed as a share does that a retry may get past.
+// on when its read failed as a share does that a retry may get past. It is
+// read through the show's folder dir (metadata.ReadChapterList's root), so a
+// link swapped in for its .audiosilo folder is never followed out of it.
 func podcastChapters(dir, base string, f *feed.Fetch) (*metadata.ChapterList, error) {
 	if !feed.ValidFetch(f) || f.DeletedAt != "" {
 		return nil, nil
 	}
-	l, err := metadata.ReadChapterList(filepath.Join(dir, metadata.AttachmentsDir, stemOf(base)+"."+metadata.AttachmentChapters))
+	l, err := metadata.ReadChapterList(dir, filepath.Join(dir, metadata.AttachmentsDir, stemOf(base)+"."+metadata.AttachmentChapters))
 	if metadata.TransientFault(err) {
 		return nil, metadata.AsGaveUp(err) // a share's hiccup: unknown, never no chapters
 	}

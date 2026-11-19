@@ -27,6 +27,9 @@ func TestFFprobeThatWontEndIsLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "book.mp3"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	wasGrace := ffprobeKillGrace
 	ffprobeKillGrace = 100 * time.Millisecond
 	key := t.Name()
@@ -35,7 +38,7 @@ func TestFFprobeThatWontEndIsLeft(t *testing.T) {
 	stuck := stuckByMount.For(dir)
 
 	start := time.Now()
-	_, err = runFFprobe(context.Background(), filepath.Join(dir, "book.mp3"), probe, 500*time.Millisecond)
+	_, err = runFFprobe(context.Background(), filepath.Dir(filepath.Join(dir, "book.mp3")), filepath.Join(dir, "book.mp3"), probe, 500*time.Millisecond)
 	if !errors.Is(err, ErrProbeTimeout) {
 		t.Errorf("err = %v, want the time-out", err)
 	}
@@ -55,7 +58,7 @@ func TestFFprobeNotRunOnSaturatedMount(t *testing.T) {
 	dir := t.TempDir()
 	release := HangMountForTests(dir)
 	t.Cleanup(release)
-	_, err := runFFprobe(context.Background(), filepath.Join(dir, "book.mp3"), "/no/such/ffprobe", time.Minute)
+	_, err := runFFprobe(context.Background(), filepath.Dir(filepath.Join(dir, "book.mp3")), filepath.Join(dir, "book.mp3"), "/no/such/ffprobe", time.Minute)
 	if !errors.Is(err, ErrProbeTimeout) || !errors.Is(err, errReadRefused) {
 		t.Errorf("err = %v, want it refused as a time-out, ffprobe not run", err)
 	}

@@ -403,7 +403,7 @@ func TestBridgeBookFilesOnAShareFault(t *testing.T) {
 	}
 	for _, errno := range []syscall.Errno{syscall.EIO, syscall.ESTALE, syscall.EACCES} {
 		// The first book's files gone, every other's stat failing with errno.
-		bridgeStatLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+		bridgeStatLook = func(ctx context.Context, _, p string, timeout time.Duration) (fs.FileInfo, error) {
 			if under(p, first.Path) {
 				return nil, &fs.PathError{Op: "stat", Path: p, Err: syscall.ENOENT}
 			}
@@ -421,7 +421,7 @@ func TestBridgeBookFilesOnAShareFault(t *testing.T) {
 		}
 	}
 	// Every book gone: the first is still the sample, as before.
-	bridgeStatLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+	bridgeStatLook = func(ctx context.Context, _, p string, timeout time.Duration) (fs.FileInfo, error) {
 		return nil, &fs.PathError{Op: "stat", Path: p, Err: syscall.ENOENT}
 	}
 	if got := get(""); got.Path != first.Path {
@@ -452,13 +452,13 @@ func TestBridgeBookFilesEachGetALooksTime(t *testing.T) {
 	b.api.fileWait = 400 * time.Millisecond
 	was := bridgeStatLook
 	t.Cleanup(func() { bridgeStatLook = was })
-	bridgeStatLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+	bridgeStatLook = func(ctx context.Context, root, p string, timeout time.Duration) (fs.FileInfo, error) {
 		if timeout < slow {
 			time.Sleep(timeout)
 			return nil, fmt.Errorf("%s: %w", p, metadata.ErrNotAnswered)
 		}
 		time.Sleep(slow)
-		return was(ctx, p, timeout)
+		return was(ctx, root, p, timeout)
 	}
 	resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book?path=%s", lib.ID, url.QueryEscape("Will Wight/Cradle")), b.bridgeTok, "")
 	if resp.StatusCode != http.StatusOK {
@@ -472,6 +472,68 @@ func TestBridgeBookFilesEachGetALooksTime(t *testing.T) {
 	for _, f := range out.Files {
 		if f.ModTime == 0 {
 			t.Errorf("%s was not looked at (no modification time): a look's time is each file's, not the book's", f.Path)
+		}
+	}
+}
+
+// TestBridgeBookFilesStatThroughTheRoot (security): a book folder swapped for
+// a link out of the library after its file's path was joined is never
+// stat'ed through it: the Bridge never hears the size of the file the link
+// leads to. Allowed: the file's own size before the swap. Not parallel: it
+// swaps bridgeStatLook.
+func TestBridgeBookFilesStatThroughTheRoot(t *testing.T) {
+	b := newBridgeEnv(t)
+	root, err := filepath.EvalSymlinks(copyFixtures(t, "Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	lib, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Swap", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.SetFolderOverride(ctx, lib.ID, "Will Wight/Cradle", catalog.OverrideBook); err != nil {
+		t.Fatal(err)
+	}
+	scanFixture(t, b.testEnv, lib)
+	outside := t.TempDir()
+	for _, name := range []string{"01 - Unsouled.m4b", "02 - Soulsmith.m4b"} {
+		if err := os.WriteFile(filepath.Join(outside, name), make([]byte, 12345), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := func() []bridgeFile {
+		t.Helper()
+		resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book?path=%s", lib.ID, url.QueryEscape("Will Wight/Cradle")), b.bridgeTok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET the book: %d %s", resp.StatusCode, body)
+		}
+		var out struct{ Files []bridgeFile }
+		decodeInto(t, body, &out)
+		return out.Files
+	}
+	for _, f := range files() {
+		if f.Size == 12345 || f.ModTime == 0 {
+			t.Fatalf("before the swap: %+v, want the file's own stat", f)
+		}
+	}
+	folder := filepath.Join(root, "Will Wight", "Cradle")
+	was := bridgeStatLook
+	t.Cleanup(func() { bridgeStatLook = was })
+	bridgeStatLook = func(ctx context.Context, root, p string, timeout time.Duration) (fs.FileInfo, error) {
+		if _, err := os.Lstat(folder + ".aside"); err != nil {
+			if err := os.Rename(folder, folder+".aside"); err != nil {
+				t.Error(err)
+			}
+			if err := os.Symlink(outside, folder); err != nil {
+				t.Error(err)
+			}
+		}
+		return was(ctx, root, p, timeout)
+	}
+	for _, f := range files() {
+		if f.Size == 12345 {
+			t.Errorf("after the swap: %+v, the size of the file out of the library", f)
 		}
 	}
 }

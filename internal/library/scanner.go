@@ -77,7 +77,7 @@ type Scanner struct {
 	batched func(n int)
 	// readFile, when set (tests), stands in for each scan's and on-demand
 	// index's metadata.ExtractTimeout (readSlots.readFile).
-	readFile func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata
+	readFile readFunc
 
 	// The files this server has seen ffprobe reject (problemCleared), by
 	// absolute path.
@@ -459,7 +459,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			return
 		}
 		pool.Each(ctx, slots.size(), tagReads, func() bool { return ctx.Err() == nil }, func(r **tagRead) {
-			md := slots.extract(ctx, (*r).primary, s.ffprobePath)
+			md := slots.extract(ctx, lib.Root, (*r).primary, s.ffprobePath)
 			if ctx.Err() != nil {
 				return // one a Stop may have cut short is dropped, for the next scan
 			}
@@ -467,7 +467,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// A book of several files whose title turns on another file's tags
 			// (partNamed): its last file's, read beside the first.
 			if b := (*r).book; (*r).names && partNamed(b, md) {
-				if last := slots.extract(ctx, absOf(lib, lastPath(b)), s.ffprobePath); ctx.Err() == nil {
+				if last := slots.extract(ctx, lib.Root, absOf(lib, lastPath(b)), s.ffprobePath); ctx.Err() == nil {
 					(*r).last = last
 				}
 			}
@@ -744,7 +744,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// failed open per scan instead of an ffprobe sweep forever, and is
 				// otherwise kept as any unchanged book is: the metadata files beside
 				// it (an ABS metadata.json, attachments, an ebook) are still read below.
-				b.ContentHash = s.fingerprint(ctx, absOf(lib, primaryPath(b)))
+				b.ContentHash = s.fingerprint(ctx, lib, absOf(lib, primaryPath(b)))
 			}
 			if old.ContentHash != "" || b.ContentHash == "" {
 				// Rows indexed before migration 0016 have no cover flag; fill it with a
@@ -1106,7 +1106,7 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	}
 	primary := primaryPath(b)
 	abs := absOf(lib, primary)
-	md := slots.extract(ctx, abs, s.ffprobePath)
+	md := slots.extract(ctx, lib.Root, abs, s.ffprobePath)
 	if ctx.Err() != nil {
 		return // stopped: the scan drops this reading, so read no more of the book
 	}
@@ -1204,7 +1204,7 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// Move-detection fingerprint (reused content_hash column); skip if already
 	// computed during move detection.
 	if b.ContentHash == "" && !md.TagsUnread() {
-		b.ContentHash = s.fingerprint(ctx, abs)
+		b.ContentHash = s.fingerprint(ctx, lib, abs)
 	}
 
 	// Normalize chapters so single-file and multi-file books look the same to a
@@ -1328,8 +1328,11 @@ func (a Art) Version() string {
 // LookArt is ArtFile with the file's stat, the two (SafeJoin's lstats and the
 // stat) one metadata.Bounded call under ctx, given up on after timeout, so art
 // on a share that stopped answering costs a scan or a cover request at most
-// that (metadata.GaveUp). err is fs.ErrNotExist when no file inside root is
-// named or it is gone, else the stat's or a look given up on.
+// that (metadata.GaveUp). The stat is through root (artStat,
+// metadata.StatBelow): a name along the path swapped for a link out of the
+// library after the join is never followed, its target's size and time never
+// the art's version. err is fs.ErrNotExist when no file inside root is named
+// or it is gone, else the stat's or a look given up on.
 func LookArt(ctx context.Context, root string, src catalog.CoverSource, timeout time.Duration) (Art, error) {
 	at := filepath.Join(root, filepath.FromSlash(cmp.Or(src.CoverPath, src.AudioPath)))
 	return metadata.Bounded(ctx, at, timeout, func() (Art, error) {
@@ -1337,10 +1340,14 @@ func LookArt(ctx context.Context, root string, src catalog.CoverSource, timeout 
 		if err != nil {
 			return Art{}, err
 		}
-		info, err := os.Stat(abs)
+		info, err := artStat(root, abs)
 		return Art{Kind: kind, Abs: abs, Info: info}, err
 	}, nil)
 }
+
+// artStat is LookArt's stat of the art file it joined: metadata.StatBelow (a
+// test's swaps a folder between the join and the stat).
+var artStat = metadata.StatBelow
 
 // artVersion is the version of src's art file (ArtFile) as the cover handler
 // names it (Art.Version). "" when that file can't be read now, its look given
@@ -1444,7 +1451,7 @@ func (l coverLook) find(dir string, anyImage bool) string {
 				case out:
 					continue
 				}
-				_, err = statLook(l.ctx, p, l.timeout)
+				_, err = statLook(l.ctx, l.root, p, l.timeout)
 			}
 		}
 		if err == nil {
@@ -2145,12 +2152,14 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, time
 // lstatAudio is statAudio's look at each audio file, readDirLook the walk's
 // and a book's own folder listings (walker.list, audioEntries, bookOnDisk,
 // coverLook.find), statLook a book's own stat (resolveBook, bookOnDisk) and
-// its cover link's target's, and lstatLook a cover's own entry
-// (coverLook.find): a test injects a share's errors through them.
+// its cover link's target's, through the library's root (a link swapped in
+// along the path after its join or listing is never followed out of it), and
+// lstatLook a cover's own entry (coverLook.find): a test injects a share's
+// errors through them.
 var (
 	lstatAudio  = metadata.LstatBounded
 	readDirLook = metadata.ReadDirBounded
-	statLook    = metadata.StatBounded
+	statLook    = metadata.StatBelowBounded
 	lstatLook   = metadata.LstatBounded
 )
 
@@ -2313,7 +2322,7 @@ func (s *Scanner) readABS(ctx context.Context, lib catalog.Library, rel, sig str
 	}
 	file := path.Join(rel, metadata.ABSFileName)
 	abs := absOf(lib, file)
-	f, err := metadata.Bounded(ctx, abs, s.lookTimeout(ctx), func() (*metadata.ABSFile, error) { return metadata.ReadABSFile(abs) }, nil)
+	f, err := metadata.Bounded(ctx, abs, s.lookTimeout(ctx), func() (*metadata.ABSFile, error) { return metadata.ReadABSFile(lib.Root, abs) }, nil)
 	if err != nil {
 		s.log.Warn("unreadable Audiobookshelf metadata.json", "library", lib.Name, "path", file, "err", err)
 		gaveUp.note(file, err)
@@ -3324,7 +3333,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	// A stat failing as a share does (metadata.ShareFault: EIO, a permission)
 	// says nothing about whether the book is there: a look given up on, never
 	// "no book" (bookOnDisk would read that as gone).
-	info, err := statLook(ctx, abs, look)
+	info, err := statLook(ctx, lib.Root, abs, look)
 	err = refusedForGood(metadata.AsGaveUp(err))
 	if metadata.Unanswered(ctx, err) {
 		return nil, unansweredErr(ctx, err)
@@ -3618,7 +3627,7 @@ func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel strin
 	// faults on its own looks as looks given up on.
 	abs := absOf(lib, rel)
 	look := s.lookTimeout(ctx)
-	info, err := statLook(ctx, abs, look)
+	info, err := statLook(ctx, lib.Root, abs, look)
 	if err == nil && info.IsDir() {
 		_, err = readDirLook(ctx, abs, look)
 	}
@@ -3709,17 +3718,17 @@ func ext(name string) string {
 	return strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
 }
 
-// fingerprint is the file at absPath's move-detection fingerprint
-// (metadata.Fingerprint), its open and reads bounded as a scan's tag read's
-// are: "" when it can't be read in that time.
-func (s *Scanner) fingerprint(ctx context.Context, absPath string) string {
-	return metadata.Fingerprint(ctx, absPath, s.probeTimeout)
+// fingerprint is the move-detection fingerprint (metadata.Fingerprint) of
+// the file at absPath under lib's root, opened through it, its open and reads
+// bounded as a scan's tag read's are: "" when it can't be read in that time.
+func (s *Scanner) fingerprint(ctx context.Context, lib catalog.Library, absPath string) string {
+	return metadata.Fingerprint(ctx, lib.Root, absPath, s.probeTimeout)
 }
 
 // fingerprintErr is book b's fingerprint (its primary file's, as fingerprint
 // reads it) with why it is "" (metadata.FingerprintErr's error).
 func (s *Scanner) fingerprintErr(ctx context.Context, lib catalog.Library, b *catalog.Book) (string, error) {
-	return metadata.FingerprintErr(ctx, absOf(lib, primaryPath(b)), s.probeTimeout)
+	return metadata.FingerprintErr(ctx, lib.Root, absOf(lib, primaryPath(b)), s.probeTimeout)
 }
 
 // detectMoves migrates durable user state (progress/bookmarks/notes/history)
@@ -3763,7 +3772,7 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 		}
 	}
 	for _, nb := range newBooks {
-		fp := s.fingerprint(ctx, absOf(lib, primaryPath(nb)))
+		fp := s.fingerprint(ctx, lib, absOf(lib, primaryPath(nb)))
 		nb.ContentHash = fp // reused by enrich, avoiding a second read
 		if fp == "" {
 			continue
@@ -3819,7 +3828,7 @@ func (s *Scanner) byteFirstFingerprintErr(ctx context.Context, lib catalog.Libra
 	if byteFirst == first {
 		return "", nil
 	}
-	return metadata.FingerprintErr(ctx, absOf(lib, byteFirst), s.probeTimeout)
+	return metadata.FingerprintErr(ctx, lib.Root, absOf(lib, byteFirst), s.probeTimeout)
 }
 
 // fingerprintUnknown reports whether err, a fingerprint read's

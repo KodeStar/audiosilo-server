@@ -244,12 +244,12 @@ func holdRead(t *testing.T, s *Scanner, held func(absPath string) bool) (started
 	release = sync.OnceFunc(func() { close(unblock) })
 	t.Cleanup(release)
 	var once sync.Once
-	s.readFile = func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
+	s.readFile = func(ctx context.Context, root, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
 		if held(absPath) {
 			once.Do(func() { close(started) })
 			<-unblock
 		}
-		return extractFile(ctx, absPath, ffprobePath, timeout)
+		return extractFile(ctx, root, absPath, ffprobePath, timeout)
 	}
 	return started, release
 }

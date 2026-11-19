@@ -1159,9 +1159,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   /libraries/{id}/ebook?path=<the book's own path>` serves the file the scan recorded for the book
   (`books.ebook_path`, see Auto book/folder detection), opened fresh by `library.OpenEbook`: joined
   again through `ContentJoin`, checked a regular file BEFORE it is opened (a FIFO's open would wait
-  for a writer; a folder book's must not be a link now either, `Lstat`) and, once open, still the
-  very file the path leads to inside the library (`os.SameFile` against a second look), so a link
-  swapped in meanwhile is never followed out. Gone, or anything but such a file now
+  for a writer; a folder book's must not be a link now either, `Lstat`), opened through the library's
+  root (`metadata.OpenBelow`) and, once open, still the very file the path leads to inside the library
+  (`os.SameFile` against a second look), so a link swapped in meanwhile is never followed out. Gone, or anything but such a file now
   (`library.ErrNoEbook`): 404; one that is there but can't be read right now (a permission, a flaky
   mount): 500, logged. Served with `http.ServeContent` (Range, a size+mtime
   ETag, Last-Modified), `Content-Type: application/epub+zip`, `Content-Security-Policy: sandbox;
@@ -1354,16 +1354,36 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   refuses a link a join allows, one that stays in the root by an absolute target or by climbing above it
   and back, so `Below` opens the resolved path through the root then
   (`TestOpenRegularBelowNeverLeavesTheRoot`, `TestReadDirBelowNeverLeavesTheRoot`,
-  `TestStreamOpensThroughTheRootAfterASwap`). So does a transcode, whose ffmpeg reads the descriptor opened
-  there, never the path (`media.Transcode`, `fileInput`: ffmpeg's stdin as `fd:`, else on Unix the child's
-  descriptor 3 read as `/dev/fd/3`, else the resolved path re-checked as the file opened, `recheckedInput`, a
-  bounded look;
-  `TestTranscodeOpensThroughTheRoot`), and a remux's or a rendition's source: its look (`media.Source`, a stat
-  through the root) and its run's open (`FileCache.make`), whose descriptor ffmpeg reads
-  (`TestFileCacheSourceThroughTheRoot`). The reader's ebook and a podcast episode check the open file
-  against the path again instead (`OpenEbook`, `OpenPodcast`: `os.SameFile`). Still a check and then a look
-  by path: an asked book's read (`resolveBook`, the probes), the Bridge's file stats
-  (`statBookFiles`), `LookArt`'s stat and the looks under `.audiosilo/`. The scan takes no link out of the root
+  `TestStreamOpensThroughTheRootAfterASwap`). A podcast episode checks the open file against the path again
+  instead (`OpenPodcast`: `os.SameFile`); the reader's ebook does both (`OpenEbook`: opened through the root,
+  `metadata.OpenBelow`, then `os.SameFile`). The scan's reads and an asked book's (`resolveBook`, then
+  `indexBook`) go through the root too, so a name swapped for a link out of it after the walk's or the join's
+  check is never followed: the audio read, tags and the in-process probe (`metadata.ExtractTimeout` and
+  `ExtractTags`, given the library's root), the fingerprint (`metadata.Fingerprint`), the files beside the
+  audio (`metadata.ReadABSFile`, the `.audiosilo/` attachments and the read-along map: `readRegularFileInfo`
+  looks and opens through the root, then `os.SameFile`), a problem's recheck (`sideAnswers`), a book's own
+  stat (`statLook`, `metadata.StatBelowBounded`), `LookArt`'s stat (`artStat`, `metadata.StatBelow`) and the
+  Bridge's file stats (`statBookFiles`' `bridgeStatLook`). These open through `metadata.BelowFolder`: the
+  file's folder is opened once through the root and kept open a moment (`belowFolders`: 2 s idle, 30 s at
+  most, 64 folders), so a book's files cost one `openat` each, what the plain open of the path cost (the
+  in-process probe's speed, SCAN-SPIKE, is kept: `BenchmarkOpenBelowFolder`); a kept folder swapped for a
+  link since is never followed (it answers with its own files), one in which a name is gone is opened again
+  (a folder replaced), and a name its folder can't open (a link to a folder beside it, an absolute target) is
+  opened through the root's kept folder, then resolved as `Below` does. An external tool is handed the file
+  opened so, never its path (`metadata.ToolInput`): ffprobe's fallback run (`runFFprobe`) and the chapter
+  check's ffmpeg (`media.DetectSilences`, given the library's root). On Unix the tool inherits the descriptor
+  and is named a link to its own `/dev/fd/3` in a private folder, named for the file's extension (ffmpeg
+  guesses a format by it; `TestProbeMatchesLiveFFprobe` holds parity); on Windows it is given the path
+  resolved, checked to be under the root and the very file opened (`os.SameFile`), which can't be renamed
+  while it is open there. A test's ffprobe stand-in reads the path from `AUDIOSILO_TEST_INPUT`
+  (`metadata.TestInputEnv`, set in a test binary only) (`TestIndexPathReadsThroughTheRootAfterASwap`,
+  `TestScanReadsThroughTheRootAfterASwap`, `TestFFprobeReadsTheFileTheScanOpened`,
+  `TestAttachmentsReadThroughTheRootAfterASwap`, `TestReadalongMapReadThroughTheRootAfterASwap`,
+  `TestLookArtStatsThroughTheRootAfterASwap`, `TestBridgeBookFilesStatThroughTheRoot`,
+  `TestProberHandsFFmpegTheFileItOpened`, `TestBelowFolderNeverLeavesTheRoot`, `TestToolInputIsTheOpenedFile`).
+  Still a check and then a look by path: a transcode (ffmpeg opens the path), a remux's or a rendition's
+  source (`media.FileCache`, `media.Source`), and the looks (listings, lstats) that only decide what a scan
+  reads. The scan takes no link out of the root
   either, by the same rule (`linkOut`: `SafeJoin` of each link the walk lists, looked at once the walk ends,
   width at a time, `linksInRoot`; a plain file never looked at again): a file or folder link out in a book
   folder is never a part, nor a cover (`coverLook.find`, which looks at a cover's own entry before any stat,
@@ -2045,7 +2065,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a backfill and an index alike (`UpsertBook`; a new row gets none), so the next scan looks again
   (`TestIndexKeepsEbookItCantRead`). Every open, the scan's and the route's, is `library.OpenEbook`: a
   regular file inside the library checked before it is opened (a FIFO's open would wait for a writer,
-  `TestOpenEbookFIFO`) and, once open, still the very file its name leads to (`os.SameFile`).
+  `TestOpenEbookFIFO`), opened through the library's root (`metadata.OpenBelow`) and, once open, still the
+  very file its name leads to (`os.SameFile`).
   `books.ebook_size` (`0058`, backfilled from the signature) is the recorded file's size, written
   with `ebook_path` (`UpsertBook`, `SetEbooks`). Only a book with a read-along map has its ebook
   hashed (Bridge Phase 3c: `books.ebook_sha256`, computed for the `ebook_sig` in
@@ -2124,7 +2145,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   after the upgrade touches only books that have one. `setABSFile` re-resolves a book unless the
   reading equals the one recorded for this very index (an older server's re-index resolved the
   row without it). `metadata.ReadABSFile` reads a regular file only, never through a link (one
-  swapped in after the walk included: `os.SameFile` on the opened file). A file that can't be used
+  swapped in after the walk included: looked at and opened through the library's root, then `os.SameFile`
+  on the opened file). A file that can't be used
   (not JSON, too large, not a regular file: `metadata.ErrABSFileInvalid`) keeps its signature (read
   again once it changes); one that can't be looked at or read right now (a flaky mount, a share that
   stopped answering: its lstat and read are `metadata.Bounded` calls, see In-process probe) is

@@ -44,12 +44,12 @@ func TestProbeFallbackLoggedAtDebug(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if p, _, err := readFile(context.Background(), &Metadata{Format: "wav"}, wav, ff8, false, time.Second); err != nil || p != nil {
+	if p, _, err := readFile(context.Background(), &Metadata{Format: "wav"}, filepath.Dir(wav), wav, ff8, false, time.Second); err != nil || p != nil {
 		t.Fatalf("wav: %v %v", p, err)
 	}
 	done, cancel := context.WithCancel(context.Background())
 	cancel() // the caller's context ended: a limit, met by the tag read already
-	if p, _, err := readFile(done, &Metadata{Format: "mp3"}, mp3, ff8, false, time.Second); err != nil || p != nil {
+	if p, _, err := readFile(done, &Metadata{Format: "mp3"}, filepath.Dir(mp3), mp3, ff8, false, time.Second); err != nil || p != nil {
 		t.Fatalf("mp3: %v %v", p, err)
 	}
 	out := logs.String()

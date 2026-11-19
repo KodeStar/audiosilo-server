@@ -117,11 +117,12 @@ func (a *jsonArray) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// ReadReadalong reads and checks a read-along map's head (ParseReadalongHead),
-// a regular file only, never through a link, at most MaxReadalongFile bytes.
-// An error wrapping ErrAttachmentInvalid is about the file itself.
-func ReadReadalong(path string) (*ReadalongHead, error) {
-	data, _, err := ReadReadalongFile(path)
+// ReadReadalong reads and checks the read-along map's head at path under root
+// (ParseReadalongHead), a regular file only, never through a link, opened
+// through root, at most MaxReadalongFile bytes. An error wrapping
+// ErrAttachmentInvalid is about the file itself.
+func ReadReadalong(root, path string) (*ReadalongHead, error) {
+	data, _, err := ReadReadalongFile(root, path)
 	if err != nil {
 		return nil, err
 	}
@@ -130,8 +131,8 @@ func ReadReadalong(path string) (*ReadalongHead, error) {
 
 // ReadReadalongFile reads a read-along map's bytes as ReadReadalong does, with
 // the opened file's info (GET /readalong's validators), never checking them.
-func ReadReadalongFile(path string) ([]byte, fs.FileInfo, error) {
-	return readRegularFileInfo(path, MaxReadalongFile, errReadalongNotRegular, errReadalongTooLarge)
+func ReadReadalongFile(root, path string) ([]byte, fs.FileInfo, error) {
+	return readRegularFileInfo(root, path, MaxReadalongFile, errReadalongNotRegular, errReadalongTooLarge)
 }
 
 // ParseReadalongHead decodes a read-along map and checks its head: format

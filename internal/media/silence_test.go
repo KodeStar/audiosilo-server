@@ -42,14 +42,14 @@ func TestDetectSilences(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Skipf("ffmpeg could not build the fixture: %v\n%s", err, out)
 	}
-	got, err := DetectSilences(context.Background(), "ffmpeg", path, 2, 9)
+	got, err := DetectSilences(context.Background(), "ffmpeg", filepath.Dir(path), path, 2, 9)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || math.Abs(got[0].Start-4) > 0.1 || math.Abs(got[0].End-6) > 0.1 {
 		t.Fatalf("pauses %v, want one about 4-6 s", got)
 	}
-	if _, err := DetectSilences(context.Background(), "ffmpeg", filepath.Join(t.TempDir(), "none.m4a"), 0, 5); err == nil {
+	if _, err := DetectSilences(context.Background(), "ffmpeg", t.TempDir(), filepath.Join(t.TempDir(), "none.m4a"), 0, 5); err == nil {
 		t.Error("no error for a missing file")
 	}
 }

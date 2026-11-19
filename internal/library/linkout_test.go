@@ -49,11 +49,11 @@ func newLinkOutEnv(t *testing.T) *linkOutEnv {
 		t.Fatal(err)
 	}
 	e.lib = lib
-	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
 		e.mu.Lock()
 		e.reads = append(e.reads, p)
 		e.mu.Unlock()
-		return extractFile(ctx, p, ffprobe, timeout)
+		return extractFile(ctx, root, p, ffprobe, timeout)
 	}
 	return e
 }
@@ -298,11 +298,11 @@ func TestCoverNeverStatsALinkOutOfTheRoot(t *testing.T) {
 	var stats []string
 	was := statLook
 	t.Cleanup(func() { statLook = was })
-	statLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+	statLook = func(ctx context.Context, root, p string, timeout time.Duration) (fs.FileInfo, error) {
 		mu.Lock()
 		stats = append(stats, p)
 		mu.Unlock()
-		return was(ctx, p, timeout)
+		return was(ctx, root, p, timeout)
 	}
 	var g givenUp
 	if got := (coverLook{ctx: t.Context(), root: root, timeout: time.Minute, gaveUp: &g}).find(filepath.Join(root, "Book"), false); got != "" || g.err != nil {

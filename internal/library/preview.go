@@ -235,13 +235,13 @@ func (s *Scanner) preview(ctx context.Context, root string, lines []string, lim 
 // headed "From folders" never shows a tag's narrator or author (server#271
 // ADMIN-06); a metadata.json goes over both.
 func (s *Scanner) previewSample(ctx context.Context, lib catalog.Library, b *catalog.Book) (PreviewSample, PreviewBlanks) {
-	md, _ := metadata.ExtractContext(ctx, absOf(lib, primaryPath(b)), s.ffprobePath)
+	md, _ := metadata.ExtractTimeout(ctx, lib.Root, absOf(lib, primaryPath(b)), s.ffprobePath, metadata.ProbeTimeout)
 	own := PreviewBlanks{Tags: blanks(tagNames(md)), Path: blanks(namesOf(metadata.FromPathLayout(b.RelPath, b.IsFolder)))}
 	folders := *b
 	setNames(&folders, nil, nil)
 	var last *metadata.Metadata
 	if partNamed(b, md) {
-		last, _ = metadata.ExtractContext(ctx, absOf(lib, lastPath(b)), s.ffprobePath)
+		last, _ = metadata.ExtractTimeout(ctx, lib.Root, absOf(lib, lastPath(b)), s.ffprobePath, metadata.ProbeTimeout)
 	}
 	setNames(b, md, last)
 	if b.IsFolder {

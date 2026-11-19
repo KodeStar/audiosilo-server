@@ -223,7 +223,7 @@ func ebookEntry(root, rel string, entry fs.DirEntry) catalog.EbookReading {
 func ebookFound(root, rel string, info fs.FileInfo) catalog.EbookReading {
 	if !info.Mode().IsRegular() {
 		if full, err := ContentJoin(root, rel); err == nil {
-			if target, err := os.Stat(full); err == nil {
+			if target, err := metadata.StatBelow(root, full); err == nil {
 				info = target
 			}
 		}
@@ -292,7 +292,7 @@ var ErrNoEbook = errors.New("library: no regular file inside the library there")
 // fs.ErrNotExist when nothing is; any other error is one reading it right now (a
 // permission, a flaky mount).
 func OpenEbook(root, rel string, noLink bool) (*os.File, fs.FileInfo, error) {
-	return openEbook(root, rel, noLink, openEbookFile)
+	return openEbook(root, rel, noLink, func(full string) (*os.File, error) { return metadata.OpenBelow(root, full) })
 }
 
 // OpenEbookBounded is OpenEbook as one metadata.Bounded call (ctx, at most
@@ -336,11 +336,6 @@ func openEbook(root, rel string, noLink bool, open func(full string) (*os.File, 
 		return nil, nil, err
 	}
 	return f, opened, nil
-}
-
-// openEbookFile opens the file OpenEbook found.
-func openEbookFile(full string) (*os.File, error) {
-	return os.Open(full) //nolint:gosec // ContentJoin'd under the library root, a regular file when looked at
 }
 
 // lookEbook is the regular file rel names inside the library by OpenEbook's
