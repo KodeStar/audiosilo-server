@@ -105,8 +105,9 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 	return nil, nil, ErrNotIndexable
 }
 
-// podcastLstat is OpenPodcast's look at a show's folder, its feed.json, its
-// publish barrier and an episode: a test injects a share's errors through it.
+// podcastLstat is OpenPodcast's and a scan's (podcastFolderSig,
+// podcastBarrier) look at a show's folder, its feed.json, its publish barrier
+// and an episode: a test injects a share's errors through it.
 var podcastLstat = os.Lstat
 
 // podcastLookErr is OpenPodcast's answer for a look that failed with err: a

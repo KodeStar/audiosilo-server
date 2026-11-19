@@ -30,9 +30,12 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 	if err != nil {
 		return res, err
 	}
-	// The root's listing is bounded as every look of a scan is (the probe's
-	// time, on the root's mount): a share that stopped answering is the
-	// library unavailable, never a scan held for good.
+	// The root's listing is bounded as a books scan's looks are (the probe's
+	// time, on the root's mount): a root on a share that stopped answering is
+	// the library unavailable, not a scan held at its first look. The looks
+	// at each show after it (its folder, feed.json, its listing, the publish
+	// barriers) are not bounded yet: a share that stops answering between them
+	// still holds the scan.
 	entries, err := metadata.ReadDirBounded(ctx, lib.Root, s.probeTimeout)
 	if err != nil {
 		if cerr := ctx.Err(); cerr != nil {
@@ -432,8 +435,8 @@ func (s *Scanner) strayPodcastFolder(ctx context.Context, lib catalog.Library, s
 // row of the folder records. err is ErrNotIndexable where no show folder or
 // feed.json is, errFeedUnusable where the feed.json is no regular file, and
 // wraps errFolderClosed where the folder can't be looked into (the folder
-// itself not statable is the bare error: unread, never stray; a look given up
-// on, transientGaveUp, for a fault a retry may get past).
+// itself not statable is the bare error: unread, never stray). Either is a
+// look given up on (transientGaveUp) for a fault a retry may get past.
 func podcastFolderSig(root, show string) (dir string, info os.FileInfo, sig string, err error) {
 	dir, err = ContentJoin(root, show)
 	if err != nil {
@@ -450,12 +453,13 @@ func podcastFolderSig(root, show string) (dir string, info os.FileInfo, sig stri
 	if err != nil {
 		return "", nil, "", transientGaveUp(err) // a share's hiccup: a look given up on
 	}
-	info, err = os.Lstat(filepath.Join(dir, "feed.json"))
+	info, err = podcastLstat(filepath.Join(dir, "feed.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil, "", ErrNotIndexable
 	}
 	if err != nil {
-		return "", nil, "", fmt.Errorf("%w: %w", errFolderClosed, err)
+		// A fault a retry may get past is a look given up on, as the folder's.
+		return "", nil, "", fmt.Errorf("%w: %w", errFolderClosed, transientGaveUp(err))
 	}
 	if !info.Mode().IsRegular() {
 		return "", nil, "", errFeedUnusable
