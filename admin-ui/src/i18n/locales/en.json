@@ -3404,6 +3404,8 @@
   "bridge.generate.descriptionMade": "a description",
   "bridge.generate.noDescription": "No description this time: {{reason}}",
   "bridge.generate.noDescriptionPlain": "No description this time.",
+  "bridge.generate.shareSkipped.contributions_off": "Not shared with the community: the Contributions module was turned off, so the results stay on this server.",
+  "bridge.generate.shareSkippedPlain": "Not shared with the community.",
   "bridge.describe.title": "Description",
   "bridge.describe.noteAt": "Generated on this server {{when}}.",
   "bridge.describe.showMore": "Show more",

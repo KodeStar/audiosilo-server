@@ -312,14 +312,14 @@ func TestClaimMinimumPriorityBeforeLease(t *testing.T) {
 	low := q.verify(t, "", 20)
 	high := q.verify(t, "A", 100)
 	floor := int32(100)
-	claimed, err := q.ClaimForPriority(ctx, q.token, []string{KindVerify}, 0, &floor)
+	claimed, err := q.ClaimWith(ctx, q.token, []string{KindVerify}, 0, ClaimOptions{MinPriority: &floor})
 	if err != nil || claimed == nil || claimed.ID != high.ID {
 		t.Fatalf("claim %+v %v", claimed, err)
 	}
 	if j, err := q.Job(ctx, low.ID); err != nil || j.Attempts != 0 || j.LeaseUntil != nil || j.State != StateQueued {
 		t.Fatalf("excluded mutated %+v %v", j, err)
 	}
-	if j, err := q.ClaimForPriority(ctx, q.token, nil, 0, &floor); err != nil || j != nil {
+	if j, err := q.ClaimWith(ctx, q.token, nil, 0, ClaimOptions{MinPriority: &floor}); err != nil || j != nil {
 		t.Fatalf("floor %+v %v", j, err)
 	}
 	if j, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || j == nil || j.ID != low.ID {
@@ -391,7 +391,7 @@ func TestClaimMinimumPriorityStillChecksModuleAndToken(t *testing.T) {
 	}
 	floor := int32(100)
 	q.ModuleOn = func(string) bool { return false }
-	if got, err := q.ClaimForPriority(ctx, q.token, nil, 0, &floor); err != nil || got != nil {
+	if got, err := q.ClaimWith(ctx, q.token, nil, 0, ClaimOptions{MinPriority: &floor}); err != nil || got != nil {
 		t.Fatalf("module held %+v %v", got, err)
 	}
 	if got, err := q.Job(ctx, j.ID); err != nil || got.Attempts != 0 || got.LeaseUntil != nil {
@@ -401,7 +401,7 @@ func TestClaimMinimumPriorityStillChecksModuleAndToken(t *testing.T) {
 	if _, err = q.db.ExecContext(ctx, `UPDATE tokens SET revoked=1 WHERE id=?`, q.token); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := q.ClaimForPriority(ctx, q.token, nil, 0, &floor); !errors.Is(err, ErrNotPaired) || got != nil {
+	if got, err := q.ClaimWith(ctx, q.token, nil, 0, ClaimOptions{MinPriority: &floor}); !errors.Is(err, ErrNotPaired) || got != nil {
 		t.Fatalf("revoked %+v %v", got, err)
 	}
 	if got, err := q.Job(ctx, j.ID); err != nil || got.Attempts != 0 || got.LeaseUntil != nil {

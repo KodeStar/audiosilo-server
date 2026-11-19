@@ -428,7 +428,8 @@ func (a *API) sampleBook(ctx context.Context, lib *catalog.Library) (*catalog.Bo
 // handleBridgeClaim serves GET /bridge/jobs/next?wait=<seconds>&kind=...: the
 // next queued job of a kind the Bridge runs, narrowed to the kind= values when it
 // sends any (the kinds it has room for now), leased to it (200 job), waiting up
-// to wait (at most bridge.MaxWait) for one; 204 when none came (at once when no
+// to wait (at most bridge.MaxWait) for one; share_off=1 says the Bridge honours
+// a job's share_off (bridge.ClaimOptions.ShareOff), any other value none; 204 when none came (at once when no
 // kind is left, and when the server is stopping), 409 no_heartbeat before its
 // first heartbeat, 401 once a pairing or an unpair revoked its token mid-wait.
 func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
@@ -453,7 +454,8 @@ func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 		v := int32(n)
 		floor = &v
 	}
-	job, err := a.bridge.ClaimForPriority(ctx, credentialFrom(r.Context()).ID, r.URL.Query()["kind"], wait, floor)
+	opt := bridge.ClaimOptions{MinPriority: floor, ShareOff: r.URL.Query().Get("share_off") == "1"}
+	job, err := a.bridge.ClaimWith(ctx, credentialFrom(r.Context()).ID, r.URL.Query()["kind"], wait, opt)
 	switch {
 	case errors.Is(err, bridge.ErrNoHeartbeat):
 		writeErrorCode(w, http.StatusConflict, "no_heartbeat", "send a status first")
@@ -513,7 +515,8 @@ func claimEnded(ctx context.Context, w http.ResponseWriter) {
 
 // handleBridgeUpdate serves PATCH /bridge/jobs/{id} {attempt, state?, progress?,
 // result?, error?}: the Bridge's report on a job it holds, renewing its lease.
-// The answer is the job as stored; its cancel_requested asks the Bridge to stop.
+// The answer is the job as stored; its cancel_requested asks the Bridge to stop,
+// and its share_off to keep the job's results local (bridge.Job.ShareOff).
 // 409 code not_held when the claim no longer holds it (it ended, was cancelled,
 // or its lease ran out and it was claimed again), with reason "cancelled" when
 // it ended cancelled with no later claim (bridge.ErrCancelledWhileHeld, bridge#35).

@@ -757,7 +757,7 @@ func validShowPath(p *string) bool {
 }
 
 func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job, error) {
-	return s.claimPriority(ctx, token, kinds, nil)
+	return s.claimPriority(ctx, token, kinds, ClaimOptions{})
 }
 
 // claimPriority claims the next job (claimSecret), then gives a claimed
@@ -767,9 +767,9 @@ func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job,
 // never be handed out, so its first claim ends it (paramsUnreadReason) rather
 // than handing the Bridge a job with no options. A job ended so (failed,
 // never claimed again) hands out the job behind it.
-func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
+func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string, opt ClaimOptions) (*Job, error) {
 	for {
-		j, err := s.claimSecret(ctx, token, kinds, minPriority)
+		j, err := s.claimSecret(ctx, token, kinds, opt)
 		if err != nil || j == nil {
 			return j, err
 		}
@@ -814,10 +814,10 @@ func paramsUnreadReason(kind string) string {
 // URL put back from memory, under secretFlowMu. A podcast.subscribe whose
 // params can't be read comes back as stored, flagged (ParamsUnreadable), for
 // claimPriority to end outside the lock.
-func (s *Service) claimSecret(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
+func (s *Service) claimSecret(ctx context.Context, token int64, kinds []string, opt ClaimOptions) (*Job, error) {
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
-	j, err := s.claimStored(ctx, token, kinds, minPriority)
+	j, err := s.claimStored(ctx, token, kinds, opt)
 	if err != nil || j == nil {
 		return j, err
 	}

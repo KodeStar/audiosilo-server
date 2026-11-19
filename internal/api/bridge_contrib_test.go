@@ -242,6 +242,49 @@ func TestBridgeContributeJob(t *testing.T) {
 	}
 }
 
+// A generate job that would share, queued while Contributions was on, and the
+// module turned off (server#218): denied, a claim without share_off=1 (an
+// older Bridge, which would share anyway) finds it held (204), and so does
+// one with share_off of another value; allowed, a claim with share_off=1 is
+// handed it with share_off, and the Bridge's report answers carry share_off
+// while the module stays off.
+func TestBridgeClaimShareOff(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	setModule(t, b.testEnv, b.adminTok, true)
+	b.beatKinds(t, `,"setup":`+setupBlock(true), bridge.KindVerify, bridge.KindSidecars)
+	resp, body := b.queueSidecars(t, b.lib.ID, mistbornBook, `{"contribute":"issue"}`)
+	var job bridge.Job
+	decodeInto(t, body, &job)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("generate and share: %d %s", resp.StatusCode, body)
+	}
+	setModule(t, b.testEnv, b.adminTok, false)
+	claim := "/api/v1/bridge/jobs/next?wait=0&kind=" + bridge.KindSidecars
+	for _, q := range []string{"", "&share_off=0", "&share_off=true"} {
+		if resp, body := b.do(t, "GET", claim+q, b.bridgeTok, ""); resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("claim%s with the module off: %d %s, want 204", q, resp.StatusCode, body)
+		}
+	}
+	resp, body = b.do(t, "GET", claim+"&share_off=1", b.bridgeTok, "")
+	var claimed bridge.Job
+	decodeInto(t, body, &claimed)
+	if resp.StatusCode != http.StatusOK || claimed.ID != job.ID || !strings.Contains(body, `"share_off":true`) {
+		t.Fatalf("claim with share_off=1: %d %s", resp.StatusCode, body)
+	}
+	resp, body = b.do(t, "PATCH", fmt.Sprintf("/api/v1/bridge/jobs/%d", job.ID), b.bridgeTok,
+		fmt.Sprintf(`{"attempt":%d,"state":"running"}`, claimed.Attempts))
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"share_off":true`) || strings.Contains(body, `"cancel_requested":true`) {
+		t.Fatalf("report with the module off: %d %s, want share_off, no cancel", resp.StatusCode, body)
+	}
+	setModule(t, b.testEnv, b.adminTok, true)
+	resp, body = b.do(t, "PATCH", fmt.Sprintf("/api/v1/bridge/jobs/%d", job.ID), b.bridgeTok,
+		fmt.Sprintf(`{"attempt":%d,"state":"running"}`, claimed.Attempts))
+	if resp.StatusCode != http.StatusOK || strings.Contains(body, `"share_off"`) {
+		t.Fatalf("report with the module on: %d %s, want no share_off", resp.StatusCode, body)
+	}
+}
+
 // A share of a book the console matched files under that match: a contribute
 // job whose params name no work_id takes the book's recorded community work
 // (bridge#25), so the Bridge never files under its own match of the book.

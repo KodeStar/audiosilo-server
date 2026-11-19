@@ -804,6 +804,18 @@ describe('a description (Phase 1c)', () => {
     expect(generateResult({ description: 'yes' })).toBeNull();
   });
 
+  it("reads why a result's share was kept local", () => {
+    expect(generateResult({ characters: 2, share_skipped: ' contributions_off ' })).toEqual({
+      characters: 2,
+      shareSkipped: 'contributions_off',
+      contributed: [],
+    });
+    expect(generateResult({ share_skipped: 'contributions_off' })?.shareSkipped).toBe(
+      'contributions_off',
+    );
+    expect(generateResult({ characters: 2, share_skipped: 7 })?.shareSkipped).toBeUndefined();
+  });
+
   it('clamps a long description only', () => {
     expect(clampsDescription('x'.repeat(DESCRIPTION_CLAMP_CHARS))).toBe(false);
     expect(clampsDescription('x'.repeat(DESCRIPTION_CLAMP_CHARS + 1))).toBe(true);

@@ -676,6 +676,12 @@ export interface GenerateResult {
   descriptionError?: string;
   /** The community issues filed (http(s) links only), by what each offers. */
   contributed: { what: string; url: string }[];
+  /**
+   * Why a generate job that was to share kept its results local (the Bridge's
+   * code: `contributions_off` when the server's Contributions module was
+   * turned off, server#218); absent when it shared, or from an older Bridge.
+   */
+  shareSkipped?: string;
   /** A share job's dimensions the community already had (nothing filed for them). */
   covered?: string[];
   /** A corrections job's issue (an http(s) link) and its number. */
@@ -718,6 +724,8 @@ export function generateResult(result: unknown): GenerateResult | null {
       if (safe) out.contributed.push({ what, url: safe });
     }
   }
+  const shareSkipped = text(r.share_skipped);
+  if (shareSkipped) out.shareSkipped = shareSkipped;
   const covered = strings(r.covered);
   if (covered?.length) out.covered = covered;
   const issueUrl = typeof r.issue_url === 'string' ? safeHttpUrl(r.issue_url) : undefined;
@@ -746,6 +754,7 @@ export function generateResult(result: unknown): GenerateResult | null {
     out.costUsd !== undefined ||
     out.description !== undefined ||
     out.contributed.length > 0 ||
+    out.shareSkipped !== undefined ||
     out.covered !== undefined ||
     out.issue !== undefined ||
     out.changes !== undefined ||

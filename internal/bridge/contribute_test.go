@@ -856,11 +856,100 @@ func TestUpdateHeldLeavesOtherJobsOfAnOffModule(t *testing.T) {
 		if err != nil || j.CancelRequested || j.Error != "" || j.State != StateRunning {
 			t.Fatalf("%s, module off: %+v, %v; want working on", name, j, err)
 		}
+		// Only the generate job is told to keep its results local (server#218).
+		if j.ShareOff != (id == generate.ID) {
+			t.Fatalf("%s, module off: share_off = %t", name, j.ShareOff)
+		}
 	}
-	result := json.RawMessage(`{"characters":3,"contributed":{"characters":"https://github.com/o/r/issues/1"}}`)
+	result := json.RawMessage(`{"characters":3,"share_skipped":"contributions_off"}`)
 	j, err := q.UpdateHeld(ctx, generate.ID, Update{Attempt: 1, State: ptr(StateDone), Result: result, Error: ptr("")})
 	if err != nil || j.State != StateDone || j.CancelRequested || j.Error != "" || string(j.Result) != string(result) {
 		t.Fatalf("generate and share's end = %+v, %v; want done with its result", j, err)
+	}
+}
+
+// A generate job that shares along hears share_off on its report answers
+// while the Contributions module is off, and only then: with the module on
+// again, and for a generate job that keeps its results local anyway, the
+// answer carries none (server#218).
+func TestUpdateHeldAnswersShareOff(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	q := newTestQueue(t)
+	q.beatSetup(t, true, true, KindSidecars)
+	on := true
+	q.ModuleOn = func(id string) bool { return id != ModuleContributions || on }
+	share, _, err := q.sidecars(`{"contribute":"issue"}`, ptr("Author/One"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, _, err := q.sidecars(`{"contribute":"local"}`, ptr("Author/Two"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if j, err := q.claim(ctx, q.token, []string{KindSidecars}); err != nil || j == nil {
+			t.Fatalf("claim = %+v, %v", j, err)
+		}
+	}
+	report := func(id int64) *Job {
+		t.Helper()
+		j, err := q.UpdateHeld(ctx, id, Update{Attempt: 1, State: ptr(StateRunning)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+	if j := report(share.ID); j.ShareOff {
+		t.Fatalf("module on: %+v, want no share_off", j)
+	}
+	on = false
+	if j := report(share.ID); !j.ShareOff || j.CancelRequested {
+		t.Fatalf("module off: %+v, want share_off and working on", j)
+	}
+	if j := report(local.ID); j.ShareOff {
+		t.Fatalf("a local generate job, module off: %+v, want no share_off", j)
+	}
+	// Never stored: the console's read of the job carries none.
+	if j, err := q.Job(ctx, share.ID); err != nil || j.ShareOff {
+		t.Fatalf("stored job = %+v, %v; want no share_off", j, err)
+	}
+	on = true
+	if j := report(share.ID); j.ShareOff {
+		t.Fatalf("module on again: %+v, want no share_off", j)
+	}
+}
+
+// A claim from a Bridge that honours share_off is handed a generate job held
+// only for its share while the Contributions module is off, flagged share_off;
+// one that doesn't (an older Bridge, which would share anyway) still finds it
+// held, and a job that only files (sidecars.contribute) is held from both
+// (server#218).
+func TestClaimHandsAShareAlongJobToABridgeThatKeepsItLocal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	q := newTestQueue(t)
+	q.beatSetup(t, true, true, KindSidecars, KindContribute)
+	share, _, err := q.sidecars(`{"contribute":"issue"}`, ptr("Author/One"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := q.contribute("", ptr("Author/Two")); err != nil || !created {
+		t.Fatalf("contribute: %v, %v", created, err)
+	}
+	q.ModuleOn = func(id string) bool { return id != ModuleContributions }
+	all := []string{KindSidecars, KindContribute}
+	// Denied: a claim that doesn't honour share_off.
+	if j, err := q.ClaimWith(ctx, q.token, all, 0, ClaimOptions{}); err != nil || j != nil {
+		t.Fatalf("claim without share_off = %+v, %v; want none (held)", j, err)
+	}
+	// Allowed: one that does.
+	j, err := q.ClaimWith(ctx, q.token, all, 0, ClaimOptions{ShareOff: true})
+	if err != nil || j == nil || j.ID != share.ID || !j.ShareOff || j.State != StateClaimed {
+		t.Fatalf("claim with share_off = %+v, %v; want the generate job, share_off", j, err)
+	}
+	if j, err := q.ClaimWith(ctx, q.token, all, 0, ClaimOptions{ShareOff: true}); err != nil || j != nil {
+		t.Fatalf("second claim with share_off = %+v, %v; want none (the share-only job held)", j, err)
 	}
 }
 

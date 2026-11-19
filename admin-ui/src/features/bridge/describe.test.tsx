@@ -356,3 +356,45 @@ describe("a generate job's description", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("a generate job's share kept local (server#218)", () => {
+  const done = (result: Record<string, unknown>) =>
+    routes({
+      'GET /admin/bridge/jobs': {
+        body: {
+          jobs: [
+            job({
+              id: 42,
+              kind: 'sidecars.generate',
+              state: 'done',
+              finished_at: '2026-10-16T14:00:00Z',
+              result,
+            }),
+          ],
+        },
+      },
+    });
+
+  it('says the Contributions module was turned off', async () => {
+    mockFetch(done({ characters: 3, recaps: 2, share_skipped: 'contributions_off' }));
+    renderApp(URL);
+    expect(
+      await screen.findByText(
+        'Not shared with the community: the Contributions module was turned off, so the results stay on this server.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('words an unknown reason plainly', async () => {
+    mockFetch(done({ characters: 3, share_skipped: 'something_new' }));
+    renderApp(URL);
+    expect(await screen.findByText('Not shared with the community.')).toBeInTheDocument();
+  });
+
+  it('says nothing of it when the result names no reason', async () => {
+    mockFetch(done({ characters: 3, description: false, description_error: 'x' }));
+    renderApp(URL);
+    expect(await screen.findByText('No description this time: x')).toBeInTheDocument();
+    expect(screen.queryByText(/Not shared with the community/)).toBeNull();
+  });
+});
