@@ -337,6 +337,26 @@ func TestRenditionQueueBounded(t *testing.T) {
 	}
 }
 
+// TestRenditionNoAudioRefused: a copy ffmpeg exits 0 on that holds no audio
+// track (renditionCheck's errNoAudio) is never cached: the file is refused,
+// and remembered, as an exit status would be.
+func TestRenditionNoAudioRefused(t *testing.T) {
+	t.Parallel()
+	m, runs := fakeRenditions(t, nil, func(out string) error { return os.WriteFile(out, []byte("no track"), 0o600) })
+	m.spec.check = renditionCheck
+	src := srcFile(t, "a.m4b")
+	ctx := context.Background()
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) || !errors.Is(err, errNoAudio) || errors.Is(err, ErrNoSource) {
+		t.Fatalf("open = %v, want the copy refused for no audio", err)
+	}
+	if st, _, _ := m.Queue(ctx, "ffmpeg", filepath.Dir(src), src); st != CacheFailed || runs.Load() != 1 {
+		t.Fatalf("queue = %s after %d runs, want failed (remembered) and no new run", st, runs.Load())
+	}
+	if entries, _ := os.ReadDir(m.dir); len(entries) != 0 {
+		t.Fatalf("cache holds %d files, want none", len(entries))
+	}
+}
+
 // TestRenditionWithoutFDReadsAnIndexAtTheEnd (server#498's regression): an
 // M4B whose index sits at its end, on an ffmpeg without the fd protocol (older
 // than 6.1), is read seekably through metadata.ToolInput's /dev/fd/3 link, as
