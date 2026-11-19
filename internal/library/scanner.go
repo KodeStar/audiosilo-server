@@ -337,20 +337,14 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		return res, fmt.Errorf("%w: %q is not responding", ErrLibraryUnavailable, lib.Root)
 	}
 	// The probe answering says little of the next look (a share can stop between
-	// them), so the stat and the read check are bounded as well.
-	if info, statErr := metadata.StatBounded(ctx, lib.Root, s.probeTimeout); statErr != nil || !info.IsDir() {
-		if err := ctx.Err(); err != nil {
-			return res, err
-		}
-		if statErr == nil {
-			statErr = errors.New("not a folder")
-		}
-		return res, fmt.Errorf("%w: %q: %w", ErrLibraryUnavailable, lib.Root, statErr)
-	}
-	// A root the server may reach but not list (a folder another user owns, as on
-	// a NAS share) would read as an empty library: stop, naming the folder, the
+	// them), so the stat and the read check are one bounded look as well. A root
+	// the server may reach but not list (a folder another user owns, as on a NAS
+	// share) would read as an empty library: stop, naming the folder, the
 	// server's user and the fix (server#368).
 	if _, err := metadata.LookBounded(ctx, lib.Root, s.probeTimeout, func() (struct{}, error) {
+		if info, err := os.Stat(lib.Root); err != nil || !info.IsDir() {
+			return struct{}{}, fmt.Errorf("%q: %w", lib.Root, cmp.Or(err, errors.New("not a folder")))
+		}
 		return struct{}{}, fsaccess.CheckRead(lib.Root)
 	}); err != nil {
 		if cerr := ctx.Err(); cerr != nil {
@@ -1131,21 +1125,21 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// book's other parts count too (buildMultiFileChapters).
 	// An open that failed as a share fails (openFaulted: EIO, a permission)
 	// knows as little of the file.
-	b.ReadCutShort = readCutShort(md) || openFaulted(md)
+	faulted := openFaulted(md)
+	b.ReadCutShort = readCutShort(md) || faulted
 	// Only a length out of time, with a part added, gone or changed since, is
 	// written whole after all (catalog.Book.LengthOnly); a folder book's parts
 	// say which it is (buildMultiFileChapters).
-	b.LengthOnly = b.ReadCutShort && !md.TagsUnread() && !openFaulted(md)
-	// Only the tags cut short, the length read all the same (ffprobe
-	// answered): the stored book keeps its names but takes the lengths read
-	// now (catalog.Book.LengthsRead); a folder book's parts say whether every
-	// one was.
-	b.LengthsRead = md.TagsUnread() && lengthKnown(md)
+	b.LengthOnly = b.ReadCutShort && !md.TagsUnread() && !faulted
 	// A header-less VBR MP3 whose frames went uncounted (its length ffprobe's
 	// estimate) leaves the book's length revision unstamped, so the next scan
 	// reads it again; a folder book's other parts count too.
 	b.LengthUncounted = md.LengthUncounted()
-	b.LengthsRead = b.LengthsRead && !b.LengthUncounted
+	// Only the tags cut short, the length read all the same (ffprobe
+	// answered, its frames counted): the stored book keeps its names but takes
+	// the lengths read now (catalog.Book.LengthsRead); a folder book's parts
+	// say whether every one was.
+	b.LengthsRead = md.TagsUnread() && lengthKnown(md) && !b.LengthUncounted
 	setNames(b, md, nil)
 	if md != nil {
 		b.Released = md.Released
@@ -2656,11 +2650,12 @@ func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
 			}
 			// A read still moving on (a big book on a slow share that answers)
 			// is waited on a look's time from its last progress.
-			if idle := f.progress.Idle(); idle < look {
+			idle := f.progress.Idle()
+			if idle < look {
 				wait.Reset(look - idle)
 				continue
 			}
-			if f.progress.Idle() >= s.probeTimeout {
+			if idle >= s.probeTimeout {
 				f.stuck.Store(true) // stopped for a whole look's time: left
 			}
 			return errReadLeft
