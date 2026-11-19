@@ -146,9 +146,14 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 	if err := checkMetadataSource(existing); err != nil {
 		return nil, false, err
 	}
-	resolved, err := c.resolveRoots(ctx, *existing)
-	if err != nil {
-		return nil, false, err
+	// An edit that keeps the root compares it as written only: its links were
+	// judged when it was set, and a pair a link made since is the warning at
+	// start (RootOverlaps), not a refusal of a rename.
+	var resolved map[string]string
+	if existing.Root != before.Root {
+		if resolved, err = c.resolveRoots(ctx, *existing); err != nil {
+			return nil, false, err
+		}
 	}
 	err = c.db.WithTx(ctx, "UpdateLibrary", func(tx *sql.Tx) error {
 		if _, err := checkLibraryRoot(ctx, tx, *existing, resolved); err != nil {

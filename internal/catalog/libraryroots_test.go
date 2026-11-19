@@ -44,7 +44,8 @@ func TestRootsOverlap(t *testing.T) {
 // library's folder (or holds a link-made path to one) is refused on create
 // and on an edit (denied), its folder not there yet included; a link that
 // leads elsewhere is no overlap (allowed). A pair stored before a link made
-// them overlap is listed by RootOverlaps, the launcher's start warning.
+// them overlap is listed by RootOverlaps, the launcher's start warning, and
+// an edit keeping either root is not refused for it.
 func TestPodcastRootOverlapThroughLinks(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	base := t.TempDir()
@@ -101,5 +102,12 @@ func TestPodcastRootOverlapThroughLinks(t *testing.T) {
 	got, err := c.RootOverlaps(ctx)
 	if err != nil || len(got) != 1 || got[0].Library.ID != books.ID || got[0].Other.ID != pods.ID {
 		t.Fatalf("overlaps once a link made one: %+v %v", got, err)
+	}
+	// An edit that keeps either root is no refusal of the pair a link made:
+	// that is the warning at start, and moving one is the edit it asks for.
+	for _, id := range []int64{pods.ID, books.ID} {
+		if _, _, err := c.UpdateLibrary(ctx, id, LibraryPatch{ScanSchedule: new(string)}); err != nil {
+			t.Errorf("an edit of library %d keeping its root: %v", id, err)
+		}
 	}
 }
