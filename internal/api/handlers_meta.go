@@ -206,52 +206,40 @@ const metaComposeShare = 20 * time.Second
 // so their answer is not composed only to be set aside (server#447).
 func (a *API) bookEnrichment(ctx context.Context, book *catalog.Book) (env *meta.Enrichment, err, matchErr error) {
 	ctx = meta.WithSharedBudget(ctx, metaComposeShare)
-	var m *catalog.BookMatch
-	matchRead := false
+	// matchFirst: the cache already knows the identifiers' work to be another.
+	matchFirst := false
 	if book.WorkID != "" {
-		if id, ok := a.meta.CachedWorkID(ctx, book.ASIN, book.ISBN); ok && id != book.WorkID {
-			if m, matchErr = a.cat.BookMatchAt(ctx, book.LibraryID, book.RelPath); matchErr != nil {
-				return nil, nil, matchErr
-			}
-			matchRead = true
-			if m != nil {
-				menv, merr := a.meta.EnrichMatch(ctx, m.WorkID, m.RecordingID)
-				if merr == nil {
-					return menv, nil, nil
-				}
-				env, err = a.meta.Enrich(ctx, book.ASIN, book.ISBN)
-				return matchOrIdentifiers(menv, merr, env, err)
-			}
+		id, ok := a.meta.CachedWorkID(ctx, book.ASIN, book.ISBN)
+		matchFirst = ok && id != book.WorkID
+	}
+	if !matchFirst {
+		env, err = a.meta.Enrich(ctx, book.ASIN, book.ISBN)
+		if book.WorkID == "" || (err == nil && env.Work != nil && env.Work.ID == book.WorkID) {
+			return env, err, nil
 		}
 	}
-	env, err = a.meta.Enrich(ctx, book.ASIN, book.ISBN)
-	if book.WorkID == "" || (err == nil && env.Work != nil && env.Work.ID == book.WorkID) {
-		return env, err, nil
-	}
-	if !matchRead {
-		m, matchErr = a.cat.BookMatchAt(ctx, book.LibraryID, book.RelPath)
-	}
-	if matchErr != nil || m == nil {
-		// No recorded match: the work id is the upcoming job's, from these
-		// same identifiers.
+	m, matchErr := a.cat.BookMatchAt(ctx, book.LibraryID, book.RelPath)
+	if matchErr != nil {
 		return env, err, matchErr
 	}
-	menv, merr := a.meta.EnrichMatch(ctx, m.WorkID, m.RecordingID)
-	return matchOrIdentifiers(menv, merr, env, err)
-}
-
-// matchOrIdentifiers is bookEnrichment's answer once both the recorded match
-// (menv, merr) and the identifiers (env, err) were asked: the match's when it
-// answered; nothing, with the match's failure, when the identifiers match
-// nothing; else the identifiers' answer, or their failure (an outage on both is
-// theirs).
-func matchOrIdentifiers(menv *meta.Enrichment, merr error, env *meta.Enrichment, err error) (*meta.Enrichment, error, error) {
-	switch {
-	case merr == nil:
-		return menv, nil, nil
-	case errors.Is(err, meta.ErrNotFound):
+	var merr error
+	if m != nil {
+		var menv *meta.Enrichment
+		if menv, merr = a.meta.EnrichMatch(ctx, m.WorkID, m.RecordingID); merr == nil {
+			return menv, nil, nil
+		}
+	}
+	if matchFirst {
+		env, err = a.meta.Enrich(ctx, book.ASIN, book.ISBN)
+	}
+	if merr != nil && errors.Is(err, meta.ErrNotFound) {
+		// The recorded match failed and the identifiers match nothing: its
+		// failure.
 		return nil, merr, nil
 	}
+	// No recorded match (the work id is the upcoming job's, from these same
+	// identifiers), or one that failed: the identifiers' answer, or their
+	// failure (an outage on both is theirs).
 	return env, err, nil
 }
 
