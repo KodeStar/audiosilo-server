@@ -711,7 +711,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		if existed && old.MTime == b.MTime && old.Size == b.Size &&
 			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) && !old.DurationStale &&
 			((s.ffprobePath == "" && !s.rereadUnprobed(lib.ID, b)) || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
-			!s.problemCleared(ctx, lib, old, slots) {
+			(old.CoverPath != "" || !b.CoverSeen) && !s.problemCleared(ctx, lib, old, slots) {
 			// Unchanged since last scan, its files in the order stored (a book
 			// indexed in byte order before #160 is read again in natural order),
 			// its lengths read by today's revision (an MP3 book indexed before
@@ -721,7 +721,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// backfilled), or, with no ffprobe, the in-process probe has had its
 			// one go at the book this run (rereadUnprobed), or the book's one
 			// file has a read problem that problemCleared just found still there:
-			// reading the book again would find the same.
+			// reading the book again would find the same. One stored with no
+			// sidecar cover is read again once the walk lists an image beside
+			// it (coversOfWalk).
 			// Whether it is a disc of a split book turns on its siblings, so it can
 			// change while the book doesn't (and starts unset before migration 0022).
 			if old.SplitParent != b.SplitParent {
@@ -1642,6 +1644,7 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 		}
 	}
 	attachmentsOfWalk(books, side)
+	coversOfWalk(books, side.images)
 	return books, side.epubs, hadErrors, err
 }
 
@@ -1789,7 +1792,7 @@ var errPathTooLong = fmt.Errorf("the path is longer than the server allows (%d b
 func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap, width int, timeout time.Duration) (dirs map[string][]audioFile, side sidecarFiles, hadErrors bool, err error) {
 	dirs = map[string][]audioFile{}
 	side = sidecarFiles{abs: map[string]catalog.ABSReading{}, attachments: map[string]attachmentFiles{}, unlisted: map[string]bool{},
-		epubs: map[string][]fs.DirEntry{}, unanswered: map[string]error{}}
+		epubs: map[string][]fs.DirEntry{}, images: map[string]imagesSeen{}, unanswered: map[string]error{}}
 	// Hidden folders (.Trash-1000, Syncthing .stversions, .git, and .audiosilo,
 	// listed on its own below) and ignored ones are never gone into, so their
 	// audio isn't indexed into books unreachable via the fs browse view (which
@@ -1884,6 +1887,10 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 		}
 		if isEpubEntry(d) {
 			side.epubs[dirOf(rel)] = append(side.epubs[dirOf(rel)], d)
+			return nil
+		}
+		if seen := imageSeen(d); seen != 0 {
+			side.images[dirOf(rel)] |= seen
 			return nil
 		}
 		if !isAudioEntry(d, rel, ignore) {
@@ -2036,7 +2043,54 @@ type sidecarFiles struct {
 	attachments map[string]attachmentFiles
 	unlisted    map[string]bool
 	epubs       map[string][]fs.DirEntry
+	images      map[string]imagesSeen
 	unanswered  map[string]error
+}
+
+// imagesSeen is what images the discovery walk listed in a folder
+// (sidecarFiles.images): any a folder book's cover may be (coverLook.find with
+// anyImage), and a conventionally named one (coverNames) a loose file's may be.
+type imagesSeen uint8
+
+const (
+	anyImageSeen imagesSeen = 1 << iota
+	namedCoverSeen
+)
+
+// imageSeen is what a directory entry adds to its folder's imagesSeen: an
+// image coverLook.find would take (not a folder, not hidden, an image type),
+// conventionally named or not.
+func imageSeen(d fs.DirEntry) imagesSeen {
+	name := d.Name()
+	if d.IsDir() || isHidden(name) || !imageExts[strings.ToLower(filepath.Ext(name))] {
+		return 0
+	}
+	if slices.Contains(coverNames, name) {
+		return anyImageSeen | namedCoverSeen
+	}
+	return anyImageSeen
+}
+
+// coversOfWalk marks each book stored with no sidecar cover that the walk
+// listed an image beside as one to read again (catalog.Book.CoverSeen), the
+// image put there since: a folder book's own folder holding any image, a disc
+// folder's parent too (enrich looks there next), a loose file's folder holding
+// a conventionally named one. Enrich then finds it, so a book reads again once.
+func coversOfWalk(books []*catalog.Book, images map[string]imagesSeen) {
+	if len(images) == 0 {
+		return
+	}
+	for _, b := range books {
+		dir := sidecarDir(b.RelPath, b.IsFolder)
+		switch {
+		case !b.IsFolder:
+			b.CoverSeen = images[dir]&namedCoverSeen != 0
+		case images[dir]&anyImageSeen != 0:
+			b.CoverSeen = true
+		case metadata.IsDiscFolder(path.Base(b.RelPath)):
+			b.CoverSeen = images[dirOf(b.RelPath)]&anyImageSeen != 0
+		}
+	}
 }
 
 // gaveUp is one of the walk's looks given up on (unanswered), nil for none.

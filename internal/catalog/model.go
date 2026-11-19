@@ -246,6 +246,11 @@ type Book struct {
 	// book's own file's for a single-file book. Set by the scanner only, so the
 	// added_at it stamps needs no second lstat a file (library.stampAddedAt).
 	FoundAdded []int64 `json:"-"`
+	// CoverSeen: the scan's discovery walk listed an image the book's sidecar
+	// cover rule would take (library.coversOfWalk). A book stored with no
+	// sidecar cover is then read again though its audio is unchanged, so a
+	// cover put beside it is found. Set by the scanner only.
+	CoverSeen bool `json:"-"`
 	// Readalong is the state of the book's read-along map (Bridge Phase 3c,
 	// readalong.go), set by the api on GET /libraries/{id}/item only (never a
 	// list row); nil, and omitted, with no ebook or no valid map.
