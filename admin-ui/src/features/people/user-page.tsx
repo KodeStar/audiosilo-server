@@ -273,7 +273,8 @@ function SignOutEverywhere({ user, sso }: { user: AdminUser; sso?: string }) {
 /**
  * Ends a person's API keys and their calendar link at once (server#285), the
  * lever Sign out everywhere leaves out: their sessions stay. Offered while they
- * have either; the toast says what it ended.
+ * have either, its button, title and body naming only what they have; the toast
+ * says what it ended.
  */
 function EndKeys({ user, keys, link }: { user: AdminUser; keys: number; link: boolean }) {
   const { t } = useTranslation();
@@ -297,7 +298,7 @@ function EndKeys({ user, keys, link }: { user: AdminUser; keys: number; link: bo
         onOpenChange={setOpen}
         icon={KeyRound}
         title={t(`user.devices.endKeys.title.${what}`, { name: user.username, count: keys })}
-        description={t(self ? 'user.devices.endKeys.selfBody' : 'user.devices.endKeys.body', {
+        description={t(`user.devices.endKeys.${self ? 'selfBody' : 'body'}.${what}`, {
           name: user.username,
         })}
         confirmLabel={t(`user.devices.endKeys.${what}`)}

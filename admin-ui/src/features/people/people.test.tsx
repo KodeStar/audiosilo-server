@@ -591,6 +591,9 @@ describe('a person', () => {
     const dialog = await screen.findByRole('dialog', {
       name: "End sam's API key and calendar link?",
     });
+    expect(
+      within(dialog).getByText(/^Every API key sam made and their calendar link stop working/),
+    ).toBeInTheDocument();
     expect(within(dialog).getByText(/stay signed in/)).toBeInTheDocument();
     await user.click(
       within(dialog).getByRole('button', { name: 'End API keys and calendar link' }),
@@ -611,7 +614,33 @@ describe('a person', () => {
       }),
     );
     renderApp('/people/user/2?tab=devices');
-    expect(await screen.findByRole('button', { name: 'End calendar link' })).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'End calendar link' }));
+    // The dialog names the link alone: they have no key to end.
+    const dialog = await screen.findByRole('dialog', { name: "End sam's calendar link?" });
+    expect(
+      within(dialog).getByText(/^sam's calendar link stops working at once\..*a new link\.$/),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/API key/)).not.toBeInTheDocument();
+  });
+
+  it('names the keys alone in End API keys when they have no calendar link', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/users/2': { body: samDetail({ calendar_link: { active: false } }) },
+        'GET /admin/devices': {
+          body: { devices: [device(), device({ id: 3, kind: 'api', name: 'Home Assistant' })] },
+        },
+      }),
+    );
+    renderApp('/people/user/2?tab=devices');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'End API keys' }));
+    const dialog = await screen.findByRole('dialog', { name: "End sam's API key?" });
+    expect(
+      within(dialog).getByText(/^Every API key sam made stops working at once\..*new keys\.$/),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/calendar link/)).not.toBeInTheDocument();
   });
 
   it('offers no End API keys with nothing to end', async () => {

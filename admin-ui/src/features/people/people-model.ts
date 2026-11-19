@@ -155,7 +155,7 @@ export function signedIn(devices: readonly Device[]): Device[] {
   return devices.filter((d) => d.kind === 'session');
 }
 
-/** What End API keys would end (server#285): the words of its button and title. */
+/** What End API keys would end (server#285): the words of its button, title and body. */
 export type EndKeysWhat = 'keys' | 'link' | 'both';
 
 export function endKeysWhat(keys: number, link: boolean): EndKeysWhat {
