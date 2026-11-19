@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -38,7 +39,8 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 	}
 	keep := map[string]bool{}
 	// partial: a show folder could not be read; unread: that, or its feed.json
-	// can't be used for now (unreadPodcastFolder).
+	// can't be used for now (unreadPodcastFolder). A stray folder is neither
+	// (strayPodcastFolder).
 	partial, unread := false, false
 	for _, e := range entries {
 		if err := ctx.Err(); err != nil {
@@ -48,6 +50,9 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 			continue
 		}
 		n, changed, err := s.indexPodcastShow(ctx, lib, e.Name(), false)
+		if s.strayPodcastFolder(ctx, lib, e.Name(), err) {
+			continue
+		}
 		unread = unread || unreadPodcastFolder(err)
 		if errors.Is(err, ErrNotIndexable) {
 			continue
@@ -191,7 +196,7 @@ func (s *Scanner) settledPodcastMoves(ctx context.Context, lib catalog.Library, 
 
 // indexNewPodcastFolders indexes the show folders the root lists that have no
 // index row yet, and answers how many it indexed and whether one was unread
-// (unreadPodcastFolder).
+// (unreadPodcastFolder, a stray folder aside: strayPodcastFolder).
 func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Library, listed *map[string]bool) (n int, unread bool, err error) {
 	known, err := s.cat.PodcastSignatures(ctx, lib.ID)
 	if err != nil {
@@ -212,7 +217,7 @@ func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Librar
 		switch _, _, err := s.indexPodcastShow(ctx, lib, name, false); {
 		case err == nil:
 			n++
-		case unreadPodcastFolder(err):
+		case unreadPodcastFolder(err) && !s.strayPodcastFolder(ctx, lib, name, err):
 			unread = true
 		}
 	}
@@ -377,33 +382,65 @@ func unreadPodcastFolder(err error) bool {
 	return err != nil && (errors.Is(err, errFeedUnusable) || !errors.Is(err, ErrNotIndexable))
 }
 
-func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, show string, force bool) (int, bool, error) {
-	dir, err := ContentJoin(lib.Root, show)
+// errFolderClosed is a show folder the server could not look into: whether it
+// holds a feed.json at all can't be told.
+var errFolderClosed = errors.New("podcast folder could not be looked into")
+
+// strayPodcastFolder reports whether err, indexPodcastShow's for folder show,
+// is a root entry the server can't look into for good, where the index and
+// the podcast state know nothing (catalog.PodcastPathKnown): a root-owned
+// lost+found, say. A permission stays until an admin changes it, so such an
+// entry makes no scan partial (its prune would never run, and a deleted
+// show's leftover follow would hold a rename into its name for ever) and is
+// no unread folder. A fault a retry may get past (transientFault: EIO, ESTALE,
+// a timeout), one on a folder the index knows, or one past a feed.json seen
+// there (a show's, unreadable) stays both.
+func (s *Scanner) strayPodcastFolder(ctx context.Context, lib catalog.Library, show string, err error) bool {
+	var errno syscall.Errno
+	if !errors.Is(err, errFolderClosed) || !errors.As(err, &errno) || transientFault(err) {
+		return false
+	}
+	known, err := s.cat.PodcastPathKnown(ctx, lib.ID, show)
+	return err == nil && !known
+}
+
+// podcastFolderSig is folder show of root's directory, its feed.json's
+// details and the folder's signature (podcastShowSignature), which an index
+// row of the folder records. err is ErrNotIndexable where no show folder or
+// feed.json is, errFeedUnusable where the feed.json is no regular file, and
+// wraps errFolderClosed where the folder can't be looked into.
+func podcastFolderSig(root, show string) (dir string, info os.FileInfo, sig string, err error) {
+	dir, err = ContentJoin(root, show)
 	if err != nil {
-		return 0, false, ErrNotIndexable
+		return "", nil, "", ErrNotIndexable
 	}
 	// A top-level show must itself be a real directory, even if a symlink would
 	// remain inside the root. The Bridge owns only this one directory level.
-	fi, err := os.Lstat(filepath.Join(lib.Root, show))
+	fi, err := os.Lstat(filepath.Join(root, show))
 	if err != nil || !fi.IsDir() {
-		return 0, false, ErrNotIndexable
+		return "", nil, "", ErrNotIndexable
 	}
-	filename := filepath.Join(dir, "feed.json")
-	info, err := os.Lstat(filename)
+	info, err = os.Lstat(filepath.Join(dir, "feed.json"))
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, false, ErrNotIndexable
+		return "", nil, "", ErrNotIndexable
 	}
 	if err != nil {
-		return 0, false, err
+		return "", nil, "", fmt.Errorf("%w: %w", errFolderClosed, err)
 	}
 	if !info.Mode().IsRegular() {
-		return 0, false, errFeedUnusable
+		return "", nil, "", errFeedUnusable
 	}
-	feedSig := feedSignature(info)
-	sig, err := podcastShowSignature(dir, info)
+	sig, err = podcastShowSignature(dir, info)
+	return dir, info, sig, err
+}
+
+func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, show string, force bool) (int, bool, error) {
+	dir, info, sig, err := podcastFolderSig(lib.Root, show)
 	if err != nil {
 		return 0, false, err
 	}
+	filename := filepath.Join(dir, "feed.json")
+	feedSig := feedSignature(info)
 	if !force {
 		old, err := s.cat.PodcastShow(ctx, lib.ID, show, 0)
 		if err != nil && !errors.Is(err, catalog.ErrNotFound) {

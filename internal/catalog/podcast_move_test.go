@@ -556,3 +556,40 @@ func TestMovePodcastShowsHoldsAMoveOverAnIndexedShowsFeedState(t *testing.T) {
 		t.Fatalf("the other show's feed state %+v %v", st, err)
 	}
 }
+
+// PodcastPathKnown answers for an index row, a follow, feed state or a policy
+// at the path, and for nothing else (another library's, an unknown name).
+func TestPodcastPathKnown(t *testing.T) {
+	fx := newRenameFixture(t)
+	c, ctx := fx.c, fx.ctx
+	other, err := c.CreateLibrary(ctx, Library{Name: "Other pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	known := func(lib int64, show string) bool {
+		t.Helper()
+		got, err := c.PodcastPathKnown(ctx, lib, show)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if !known(fx.lib, "Renamed") || known(fx.lib, "lost+found") || known(other.ID, "Example Show") {
+		t.Fatal("rows")
+	}
+	// Each kind of state alone at a path of its own, the row pruned.
+	if err := c.PrunePodcastShows(ctx, fx.lib, []string{"Example Show"}); err != nil {
+		t.Fatal(err)
+	}
+	for table, to := range map[string]string{"podcast_follows": "Followed", "podcast_feed_state": "Polled", "podcast_policies": "Kept"} {
+		if _, err := c.db.ExecContext(ctx, `UPDATE `+table+` SET show_path=? WHERE library_id=? AND show_path=?`, to, fx.lib, "Example Show"); err != nil {
+			t.Fatal(err)
+		}
+		if !known(fx.lib, to) {
+			t.Errorf("state in %s not known", table)
+		}
+	}
+	if known(fx.lib, "Example Show") {
+		t.Fatal("known with nothing left")
+	}
+}

@@ -57,6 +57,19 @@ func (c *Catalog) PodcastIdentityPaths(ctx context.Context, lib int64, at string
 	return out, nil
 }
 
+// PodcastPathKnown reports whether lib's index or durable podcast state names
+// folder show: an index row, a follow, feed state or a retention policy there.
+// The scanner asks it of a root entry it can't look into for good (a
+// root-owned lost+found): one known nowhere holds up neither a prune nor a move.
+func (c *Catalog) PodcastPathKnown(ctx context.Context, lib int64, show string) (bool, error) {
+	var known bool
+	err := c.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM podcast_shows WHERE library_id=?1 AND show_path=?2)
+		 OR EXISTS(SELECT 1 FROM podcast_follows WHERE library_id=?1 AND show_path=?2)
+		 OR EXISTS(SELECT 1 FROM podcast_feed_state WHERE library_id=?1 AND show_path=?2)
+		 OR EXISTS(SELECT 1 FROM podcast_policies WHERE library_id=?1 AND show_path=?2)`, lib, show).Scan(&known)
+	return known, err
+}
+
 // PodcastMove carries a show identity's state from the folders that no
 // longer hold it (From) to the one folder that does (To).
 type PodcastMove struct {

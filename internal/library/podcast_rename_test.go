@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 
@@ -486,8 +487,9 @@ func TestPodcastRenameChainWaitsOnAnUnreadableFolder(t *testing.T) {
 }
 
 // An unrelated folder the server can't read (a root-owned lost+found on an
-// ext4 volume) holds up no plain rename: a scan, partial, and the Bridge's
-// rescan each move the show to its new folder.
+// ext4 volume) holds up no plain rename: a scan, not partial for it
+// (strayPodcastFolder), and the Bridge's rescan each move the show to its new
+// folder.
 func TestPodcastRenameMovesBesideAnUnreadableFolder(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs a folder the server's user can't read")
@@ -504,13 +506,115 @@ func TestPodcastRenameMovesBesideAnUnreadableFolder(t *testing.T) {
 			if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Renamed"); err != nil {
 				t.Fatal(err)
 			}
-		} else if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || !res.Partial {
+		} else if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || res.Partial {
 			t.Fatalf("scan %+v %v", res, err)
 		}
 		if got := b.shows(t); len(got) != 1 || got[0] != "Renamed" {
 			t.Fatalf("rescan %v: shows %v", rescan, got)
 		}
 		b.checkFollowed(t, "Renamed")
+	}
+}
+
+// A root entry the server can't look into for good (a root-owned lost+found)
+// that the index knows nothing at makes no scan partial: a show deleted
+// beside it is pruned, so its leftover follow is no show's indexed anywhere,
+// and a rename by hand into its old name then moves, the stray folder not
+// counting as one that may hold the deleted show (on a scan or the Bridge's
+// rescan).
+func TestPodcastScanPrunesBesideAStrayUnreadableFolder(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a folder the server's user can't read")
+	}
+	for _, rescan := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rescan=%v", rescan), func(t *testing.T) {
+			b := newRenameBed(t)
+			b.addOther(t)
+			lost := filepath.Join(b.root, "lost+found")
+			if err := os.Mkdir(lost, 0o000); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(lost, 0o700) })
+			if err := os.RemoveAll(filepath.Join(b.root, "Other")); err != nil {
+				t.Fatal(err)
+			}
+			if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || res.Partial {
+				t.Fatalf("scan %+v %v", res, err)
+			}
+			if got := b.shows(t); len(got) != 1 || got[0] != "Example Show" {
+				t.Fatalf("the deleted show was not pruned: %v", got)
+			}
+			b.rename(t, "Other", true)
+			if rescan {
+				if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Other"); err != nil {
+					t.Fatal(err)
+				}
+			} else if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || res.Partial {
+				t.Fatalf("scan %+v %v", res, err)
+			}
+			b.checkFollowed(t, "Other")
+		})
+	}
+}
+
+// Denied: a folder the server can't look into still makes the scan partial
+// where the index knows it (a show's folder, its permissions changed), so the
+// show is not pruned, and where podcast state is left at its name (a follow
+// of a show gone from the index).
+func TestPodcastScanStaysPartialOnAKnownUnreadableFolder(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a folder the server's user can't read")
+	}
+	b := newRenameBed(t)
+	b.addOther(t)
+	other := filepath.Join(b.root, "Other")
+	if err := os.Chmod(other, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(other, 0o700) })
+	if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || !res.Partial {
+		t.Fatalf("scan %+v %v", res, err)
+	}
+	if got := b.shows(t); len(got) != 2 {
+		t.Fatalf("a show whose folder can't be read was pruned: %v", got)
+	}
+	// Its row gone (an older run's prune), the follow left there still counts.
+	if err := b.cat.PrunePodcastShows(b.ctx, b.lib.ID, []string{"Other"}); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || !res.Partial {
+		t.Fatalf("scan with state at the folder %+v %v", res, err)
+	}
+}
+
+// Only a lasting refusal to look into a folder makes it stray: a fault a retry
+// may get past (transientFault) does not, nor a refusal past a feed.json seen
+// there, nor any error that is no file system's.
+func TestStrayPodcastFolderErrors(t *testing.T) {
+	b := newRenameBed(t)
+	closed := func(err error) error {
+		return fmt.Errorf("%w: %w", errFolderClosed, &os.PathError{Op: "lstat", Path: "x", Err: err})
+	}
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{closed(syscall.EACCES), true},
+		{closed(syscall.EPERM), true},
+		{closed(syscall.EIO), false},
+		{closed(syscall.ESTALE), false},
+		{closed(syscall.ETIMEDOUT), false},
+		{&os.PathError{Op: "open", Path: "x", Err: syscall.EACCES}, false},
+		{fmt.Errorf("%w: %w", errFolderClosed, context.Canceled), false},
+		{nil, false},
+	} {
+		if got := b.s.strayPodcastFolder(b.ctx, *b.lib, "lost+found", tc.err); got != tc.want {
+			t.Errorf("%v: stray %v, want %v", tc.err, got, tc.want)
+		}
+	}
+	// A refusal at a folder the index knows is no stray.
+	if b.s.strayPodcastFolder(b.ctx, *b.lib, "Example Show", closed(syscall.EACCES)) {
+		t.Error("a known show's folder taken for a stray")
 	}
 }
 
