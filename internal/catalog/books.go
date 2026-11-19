@@ -795,7 +795,7 @@ type TagHints struct{ ASIN, ISBN, Language string }
 // found (the scanner's backfill for rows indexed before migration 0067),
 // marking them checked, a batch to a transaction.
 func (c *Catalog) SetTagHints(ctx context.Context, libraryID int64, hints map[string]TagHints) error {
-	return c.eachPathBatch(ctx, "SetTagHints", slices.Collect(maps.Keys(hints)), func(tx *sql.Tx, relPath string) (bool, error) {
+	return c.eachPathBatch(ctx, "SetTagHints", libraryID, slices.Collect(maps.Keys(hints)), func(tx *sql.Tx, relPath string) (bool, error) {
 		h := hints[relPath]
 		_, err := tx.ExecContext(ctx,
 			`UPDATE books SET tag_asin = ?, tag_isbn = ?, tag_language = ?, hints_checked = 1

@@ -746,7 +746,11 @@ func clearCommunity(ctx context.Context, tx *sql.Tx, pick clearPick) (books, cov
 			continue
 		}
 		rebuilt[ref] = true
-		if err := refreshEffective(ctx, tx, ids[ref]); err != nil {
+		// A book whose stored scan doesn't decode is skipped and recorded, never
+		// the whole clear failed with it (skipUnreadable).
+		id := ids[ref]
+		if _, err := skipUnreadable(ctx, tx, func() (int64, error) { return id, nil },
+			func() error { return refreshEffective(ctx, tx, id) }); err != nil {
 			return 0, 0, err
 		}
 	}

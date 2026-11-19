@@ -121,7 +121,7 @@ func tagReadingMayDiffer(rel, format, title, series, narrator string) bool {
 // revision 1 to 4 snapshot) is left as it is. It commits every
 // pathReadingBatch books.
 func (c *Catalog) StampScannedRev(ctx context.Context, libraryID int64, paths []string) error {
-	return c.eachPathBatch(ctx, "StampScannedRev", paths, func(tx *sql.Tx, relPath string) (bool, error) {
+	return c.eachPathBatch(ctx, "StampScannedRev", libraryID, paths, func(tx *sql.Tx, relPath string) (bool, error) {
 		_, err := tx.ExecContext(ctx,
 			`UPDATE books SET scanned = json_set(scanned, '$."`+scannedRevKey+`"', ?)
 			  WHERE library_id = ? AND rel_path = ? AND `+revOlderOwn,
@@ -141,26 +141,33 @@ const pathReadingBatch = 250
 // book's path and tags gives (PathRead); nil takes it from the snapshot itself
 // (PathFromSnapshot). It commits every pathReadingBatch books.
 func (c *Catalog) SetPathReading(ctx context.Context, libraryID int64, readings map[string]*metadata.Metadata) error {
-	return c.eachPathBatch(ctx, "SetPathReading", slices.Collect(maps.Keys(readings)),
+	return c.eachPathBatch(ctx, "SetPathReading", libraryID, slices.Collect(maps.Keys(readings)),
 		func(tx *sql.Tx, relPath string) (bool, error) {
 			return true, setPathReading(ctx, tx, libraryID, relPath, readings[relPath])
 		})
 }
 
-// eachPathBatch runs fn on each of paths, pathReadingBatch to a transaction so a
-// large backfill never holds the writer for long, and announces a change
-// (c.changed) after each batch in which fn reported one.
-func (c *Catalog) eachPathBatch(ctx context.Context, name string, paths []string,
+// eachPathBatch runs fn on each of paths in library libraryID,
+// pathReadingBatch to a transaction so a large backfill never holds the writer
+// for long, and announces a change (c.changed) after each batch in which fn
+// reported one. A book whose stored scan doesn't decode is skipped, its read
+// problem recorded (skipUnreadable), never the batch failed with it.
+func (c *Catalog) eachPathBatch(ctx context.Context, name string, libraryID int64, paths []string,
 	fn func(tx *sql.Tx, relPath string) (changed bool, err error)) error {
 	for batch := range slices.Chunk(paths, pathReadingBatch) {
 		changed := false
 		if err := c.db.WithTx(ctx, name, func(tx *sql.Tx) error {
 			for _, relPath := range batch {
-				ch, err := fn(tx, relPath)
+				var ch bool
+				skipped, err := skipUnreadable(ctx, tx, func() (int64, error) { return bookIDByPath(ctx, tx, libraryID, relPath) },
+					func() (err error) {
+						ch, err = fn(tx, relPath)
+						return err
+					})
 				if err != nil {
 					return err
 				}
-				changed = changed || ch
+				changed = changed || ch || skipped
 			}
 			return nil
 		}); err != nil {

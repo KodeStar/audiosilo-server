@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -497,5 +498,53 @@ func TestLeafSeriesSources(t *testing.T) {
 			})
 			assertFields(t, fieldValues(t, c, ctx, lib.ID, spell), untagged)
 		})
+	}
+}
+
+// TestBatchBackfillsSkipAnUnreadableBook: the scan's batch backfills (genres,
+// the path reading: eachPathBatch) pass over a book whose stored scan doesn't
+// decode, recording its read problem as ResolveSources does, rather than
+// failing every other book of the batch with it (server#453).
+func TestBatchBackfillsSkipAnUnreadableBook(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{"Author/One", "Author/Broken", "Author/Three"}
+	for _, p := range paths {
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, IsFolder: true, Title: "Tagged",
+			Files: []BookFile{{RelPath: p + "/01.mp3"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const broken = "Author/Broken"
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET scanned = '{broken' WHERE library_id = ? AND rel_path = ?`,
+		lib.ID, broken); err != nil {
+		t.Fatal(err)
+	}
+	genres := map[string][]string{}
+	for _, p := range paths {
+		genres[p] = []string{"Fantasy"}
+	}
+	if err := c.SetGenres(ctx, lib.ID, genres); err != nil {
+		t.Fatalf("SetGenres with one unreadable book: %v, want the rest written", err)
+	}
+	for _, p := range []string{"Author/One", "Author/Three"} {
+		if got := mustBook(t, c, ctx, lib.ID, p).Genres; len(got) != 1 || got[0] != "Fantasy" {
+			t.Errorf("%s genres = %v, want Fantasy", p, got)
+		}
+	}
+	var problem, file, detail string
+	if err := c.db.QueryRowContext(ctx, `SELECT scan_error, scan_error_file, scan_error_detail FROM books
+		WHERE library_id = ? AND rel_path = ?`, lib.ID, broken).Scan(&problem, &file, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if problem != ProblemUnreadable || file != broken+"/01.mp3" || detail != scannedUnreadableDetail {
+		t.Errorf("the unreadable book's problem = %q on %q (%q), want unreadable on its first file", problem, file, detail)
+	}
+	if err := c.SetPathReading(ctx, lib.ID, map[string]*metadata.Metadata{"Author/One": nil, broken: nil}); err != nil {
+		t.Errorf("SetPathReading with one unreadable book: %v, want the rest written", err)
 	}
 }

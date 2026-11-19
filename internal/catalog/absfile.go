@@ -117,7 +117,7 @@ const absUncheckedExpr = `(is_folder AND abs_indexed_at IS NOT indexed_at)`
 // effective row may lack what the file says. It commits every pathReadingBatch
 // books.
 func (c *Catalog) SetABSFiles(ctx context.Context, libraryID int64, readings map[string]ABSReading) error {
-	return c.eachPathBatch(ctx, "SetABSFiles", slices.Collect(maps.Keys(readings)),
+	return c.eachPathBatch(ctx, "SetABSFiles", libraryID, slices.Collect(maps.Keys(readings)),
 		func(tx *sql.Tx, relPath string) (bool, error) {
 			changed, err := setABSFile(ctx, tx, libraryID, relPath, readings[relPath])
 			if err != nil {
