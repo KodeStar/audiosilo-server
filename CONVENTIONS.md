@@ -1450,8 +1450,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or an on-demand one, maybe stuck the same way) for more than a look's time (`lookTimeout`) in which that
   read made no progress (`waitFlight`: `metadata.Progress`, noted by each of the read's bounded calls that
   answers in time, `WithProgress`; a read idle a probe's time is marked stuck, `indexFlight.stuck`, and no
-  later waiter waits on it; a scan's read that has returned is waited on until its batch write), so a big
-  book read slowly from a share that answers is waited for, never a false 503: a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
+  later waiter waits on it; a scan's read that has returned is waited on until its batch write, one marked
+  stuck before it returned too; a read running ffprobe, which reports nothing until it returns, is given the
+  probe's time from its last progress whatever the waiter's look time, `Progress.Probe` in `runFFprobe`,
+  `Probing`; a request's wait, one under `WithLookTimeout`, ends at the probe's time in all however the read
+  moves on, `flightWaitCap`, where a scan's has no such cap), so a big
+  book read slowly from a share that answers is waited for, never a false 503 within that time: a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
   rest; an on-demand read gives up as a look at a share that stopped answering (`metadata.GaveUp`,
   503 `share_not_answering`). The walk's own looks are bounded the same way (SRV-15c: `walkDir`'s root lstat and
   listings, a `.audiosilo` folder's listing, a metadata.json's lstat, `statAudio`'s lstat of each audio file, the

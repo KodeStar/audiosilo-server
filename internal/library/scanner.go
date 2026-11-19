@@ -2623,8 +2623,8 @@ type lookTimeoutKey struct{}
 // WithLookTimeout gives the on-demand reads under ctx (IndexPath and its kin,
 // ReindexPath, IndexMoved, RefreshAttachments) d for each look at a library
 // file (metadata.Bounded: resolveBook's, the files beside the audio, the wait
-// on another read of the book) in place of the scan's probe time, which is a
-// whole request's: a request on a share that stopped answering then hears it
+// on another read of the book while it does not move on: waitFlight) in place
+// of the scan's probe time, which is a whole request's: a request on a share that stopped answering then hears it
 // (metadata.GaveUp, the API's 503 share_not_answering) before its own time
 // runs out. The audio's own read keeps the probe's time. It rides on ctx so
 // the read leadIndex goes on with past the request keeps it.
@@ -2723,7 +2723,14 @@ func (s *Scanner) startFlight(ctx context.Context, key bookKey, scan *bookRead) 
 // (bookRead.left) or a waiter found stuck (indexFlight.stuck), and for any
 // other once a look's time (lookTimeout) has passed with it not returned and
 // not moved on (indexFlight.progress: a slow read that answers is waited on);
-// one that has not moved on for the probe's time is marked stuck. A scan's
+// one that has not moved on for the probe's time is marked stuck. A read with
+// an ffprobe run under way (metadata.Progress.Probing), which reports nothing
+// until it returns, is given the probe's time from its last progress rather
+// than a shorter look's: ffprobe is killed at the end of it, so the wait is
+// bounded, and a healthy run on a big file is not read as a share that
+// stopped answering. A request's wait (WithLookTimeout) ends at the probe's
+// time in all, however the read moves on (flightWaitCap): a read that
+// trickles on never holds it for its whole time. A scan's
 // read that has returned is waited on until the scan writes its book, one
 // marked stuck before it returned (it waited that long for a read slot) too.
 func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
@@ -2735,30 +2742,64 @@ func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
 	wait := time.NewTimer(look)
 	defer wait.Stop()
 	expired := wait.C
+	var capped <-chan time.Time
+	if d, ok := s.flightWaitCap(ctx); ok {
+		t := time.NewTimer(d)
+		defer t.Stop()
+		capped = t.C
+	}
+	// Given up on: a read that has not moved on for the probe's time is stuck.
+	leave := func() error {
+		if f.progress.Idle() >= s.probeTimeout {
+			f.stuck.Store(true) // stopped for a whole look's time: left
+		}
+		return errReadLeft
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-f.done:
 			return nil
+		case <-capped:
+			if f.scan != nil && f.scan.finished() {
+				expired, capped = nil, nil // returned: waited on until the scan writes it
+				continue
+			}
+			return leave()
 		case <-expired:
 			if f.scan != nil && f.scan.finished() {
-				expired = nil // returned: waited on until the scan writes it
+				expired, capped = nil, nil // returned: waited on until the scan writes it
 				continue
 			}
 			// A read still moving on (a big book on a slow share that answers)
-			// is waited on a look's time from its last progress.
-			idle := f.progress.Idle()
-			if idle < look {
-				wait.Reset(look - idle)
+			// is waited on a look's time from its last progress, one running
+			// ffprobe the probe's.
+			allowed := look
+			if f.progress.Probing() {
+				allowed = s.probeTimeout
+			}
+			if idle := f.progress.Idle(); idle < allowed {
+				wait.Reset(allowed - idle)
 				continue
 			}
-			if idle >= s.probeTimeout {
-				f.stuck.Store(true) // stopped for a whole look's time: left
-			}
-			return errReadLeft
+			return leave()
 		}
 	}
+}
+
+// flightWaitCap is how long in all a request (an on-demand read given a look
+// time: WithLookTimeout) waits on another's read of its book, ok false for any
+// other waiter (a scan, which keeps the book as stored when it gives up, waits
+// for as long as the read moves on): the probe's time, a whole request's. A
+// read moving on slowly is then waited on for longer than a look's time, and
+// a running ffprobe for its own, but a request is never held for as long as a
+// read may take (indexTimeout).
+func (s *Scanner) flightWaitCap(ctx context.Context) (time.Duration, bool) {
+	if _, asked := ctx.Value(lookTimeoutKey{}).(time.Duration); !asked {
+		return 0, false
+	}
+	return s.probeTimeout, true
 }
 
 // claimFlight is the flight of key under way, or a new one registered for the

@@ -480,3 +480,102 @@ func TestWaitFlightWaitsOnAReadThatMovesOn(t *testing.T) {
 	}
 	close(stop)
 }
+
+// TestWaitFlightGivesARunningProbeItsTime: ffprobe reports nothing until it
+// returns, so a request's wait on a read that is running one is not given up
+// on after its own short look's time (a healthy probe of a big file on a slow
+// share would be a false 503 share_not_answering): the probe gets its own
+// time, from the read's last progress, and the read is given up on once that
+// has passed (server#360).
+func TestWaitFlightGivesARunningProbeItsTime(t *testing.T) {
+	t.Parallel()
+	// The probe's time well past the run's, so a loaded test machine's late
+	// timer is still within it.
+	s := &Scanner{probeTimeout: 1500 * time.Millisecond}
+	asked := WithLookTimeout(t.Context(), 30*time.Millisecond)
+
+	probed := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
+	done := probed.progress.Probe()
+	time.AfterFunc(200*time.Millisecond, func() { // well past the look's time
+		done()
+		close(probed.done)
+	})
+	if err := s.waitFlight(asked, probed); err != nil {
+		t.Errorf("a read running ffprobe past a look's time: %v, want it waited for", err)
+	}
+
+	// The same wait on a read that runs no probe is a look's.
+	idle := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
+	began := time.Now()
+	if err := s.waitFlight(asked, idle); !errors.Is(err, errReadLeft) || time.Since(began) >= s.probeTimeout {
+		t.Errorf("a read not moving on, no probe running: %v after %v, want errReadLeft after a look's time", err, time.Since(began))
+	}
+
+	// A probe that outlasts its time is given up on, and its read marked stuck.
+	hung := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
+	defer hung.progress.Probe()()
+	began = time.Now()
+	if err := s.waitFlight(asked, hung); !errors.Is(err, errReadLeft) || time.Since(began) < s.probeTimeout || !hung.stuck.Load() {
+		t.Errorf("a probe past its time: %v after %v, stuck %v; want errReadLeft once the probe's time has passed, marked stuck", err, time.Since(began), hung.stuck.Load())
+	}
+}
+
+// TestWaitFlightCapsARequestsWait: a request (an on-demand read given a look
+// time) waits on a read that keeps moving on for the probe's time in all, then
+// gives up on it as a look not answered, the read not marked stuck: one that
+// trickles on never holds a request for its whole time. A scan's wait has no
+// such cap (TestWaitFlightWaitsOnAReadThatMovesOn).
+func TestWaitFlightCapsARequestsWait(t *testing.T) {
+	t.Parallel()
+	s := &Scanner{probeTimeout: 500 * time.Millisecond}
+	f := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() { // the read: progress every 20 ms, for six times the probe's time
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		for end := time.After(6 * s.probeTimeout); ; {
+			select {
+			case <-tick.C:
+				f.progress.Note()
+			case <-end:
+				close(f.done)
+				return
+			case <-stop:
+				return
+			}
+		}
+	}()
+	began := time.Now()
+	// A look's time well past the progress tick (a late one on a loaded test
+	// machine is still progress within it).
+	err := s.waitFlight(WithLookTimeout(t.Context(), 250*time.Millisecond), f)
+	if took := time.Since(began); !errors.Is(err, errReadLeft) || took < s.probeTimeout || took >= 5*s.probeTimeout {
+		t.Errorf("a request's wait on a read that trickles on: %v after %v, want errReadLeft at the probe's time", err, took)
+	}
+	if f.stuck.Load() {
+		t.Error("a read still moving on was marked stuck")
+	}
+}
+
+// TestRequestWaitsOutAnotherReadsProbe: a request joining a read of its book
+// whose ffprobe runs take longer than the request's look time gets the book
+// once the read ends, not a look given up on: the runs are marked on the
+// read's progress (metadata.Progress.Probe), each given the probe's own time.
+func TestRequestWaitsOutAnotherReadsProbe(t *testing.T) {
+	t.Parallel()
+	s, lib, ctx, _ := newSlowProbeEnv(t) // each ffprobe run takes half a second
+	read := make(chan error, 1)
+	go func() {
+		_, err := s.IndexPath(ctx, lib, "A/Book")
+		read <- err
+	}()
+	waitFlight(t, s, lib, "A/Book", true)
+	b, err := s.IndexPath(WithLookTimeout(ctx, 250*time.Millisecond), lib, "A/Book")
+	if err != nil || b == nil || b.RelPath != "A/Book" {
+		t.Errorf("a request joining a read that is running ffprobe: %+v, %v; want the book it stored", b, err)
+	}
+	if err := <-read; err != nil {
+		t.Fatal(err)
+	}
+}

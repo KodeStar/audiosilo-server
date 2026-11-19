@@ -13,7 +13,11 @@ import (
 // share that answers keeps its waiter, one stuck in a call a share that
 // stopped answering never returns from does not.
 // last is when, as a monotonic time since progressEpoch.
-type Progress struct{ last atomic.Int64 }
+type Progress struct {
+	last atomic.Int64
+	// probes counts the read's ffprobe runs under way (Probing).
+	probes atomic.Int32
+}
 
 // progressEpoch is the monotonic origin a Progress counts from, so a wall
 // clock set back or forward (NTP, a NAS with no real-time clock catching up
@@ -37,6 +41,20 @@ func (p *Progress) Idle() time.Duration {
 	return time.Since(progressEpoch) - time.Duration(p.last.Load())
 }
 
+// Probe marks an ffprobe run of the read as under way until done is called,
+// and its start as progress. ffprobe says nothing until it returns, so a
+// healthy run on a big file over a slow share looks, for all its time, like a
+// read that stopped: whoever waits on the read gives a running probe the
+// probe's own time (Probing), ffprobe being killed at the end of it.
+func (p *Progress) Probe() (done func()) {
+	p.Note()
+	p.probes.Add(1)
+	return func() { p.probes.Add(-1) }
+}
+
+// Probing reports whether an ffprobe run of the read is under way (Probe).
+func (p *Progress) Probing() bool { return p.probes.Load() > 0 }
+
 // progressKey carries a read's Progress (WithProgress).
 type progressKey struct{}
 
@@ -51,4 +69,13 @@ func noteProgress(ctx context.Context) {
 	if p, ok := ctx.Value(progressKey{}).(*Progress); ok {
 		p.Note()
 	}
+}
+
+// probing marks an ffprobe run under way on ctx's Progress (Progress.Probe),
+// when it has one, until done is called.
+func probing(ctx context.Context) (done func()) {
+	if p, ok := ctx.Value(progressKey{}).(*Progress); ok {
+		return p.Probe()
+	}
+	return func() {}
 }
