@@ -20,7 +20,8 @@ import (
 // library: its handle, the series (key and spelling; both "" for a book in no
 // series), its position there (a range's end, 0 for none), its identifiers and
 // its recorded community match's work (book_matches, "" for none), which is
-// its work whatever its identifiers say (workIDExpr's rule).
+// its work whatever its identifiers say (workIDExpr's rule), with when that
+// match was recorded (MatchedAt: set_at, a catalog timestamp).
 type UpcomingBook struct {
 	Ref
 	SeriesKey   string
@@ -29,6 +30,7 @@ type UpcomingBook struct {
 	PositionEnd float64
 	ASIN, ISBN  string
 	MatchWorkID string
+	MatchedAt   string
 }
 
 // UpcomingBooks lists every book of a books library that is in a series, once
@@ -39,7 +41,8 @@ type UpcomingBook struct {
 func (c *Catalog) UpcomingBooks(ctx context.Context) ([]UpcomingBook, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT b.library_id, b.rel_path, b.series, b.series_index,
 		       b.series_index_end, b.more_series, b.asin, b.isbn,
-		       COALESCE(`+matchWorkIDExpr("b")+`, '')
+		       COALESCE(`+matchWorkIDExpr("b")+`, ''),
+		       COALESCE((SELECT ma.set_at FROM book_matches ma WHERE ma.library_id = b.library_id AND ma.path = b.rel_path), '')
 		  FROM books b JOIN libraries l ON l.id = b.library_id
 		 WHERE l.kind = 'books' AND (b.series <> '' OR b.more_series <> '[]' OR b.asin <> '' OR b.isbn <> '')
 		 ORDER BY l.sort_order, l.name, l.id, b.rel_path`)
@@ -50,9 +53,9 @@ func (c *Catalog) UpcomingBooks(ctx context.Context) ([]UpcomingBook, error) {
 	var out []UpcomingBook
 	for rows.Next() {
 		var ref Ref
-		var series, more, asin, isbn, matched string
+		var series, more, asin, isbn, matched, matchedAt string
 		var idx, end float64
-		if err := rows.Scan(&ref.LibraryID, &ref.Path, &series, &idx, &end, &more, &asin, &isbn, &matched); err != nil {
+		if err := rows.Scan(&ref.LibraryID, &ref.Path, &series, &idx, &end, &more, &asin, &isbn, &matched, &matchedAt); err != nil {
 			return nil, err
 		}
 		n := len(out)
@@ -62,10 +65,11 @@ func (c *Catalog) UpcomingBooks(ctx context.Context) ([]UpcomingBook, error) {
 				continue
 			}
 			out = append(out, UpcomingBook{Ref: ref, SeriesKey: key, SeriesName: s.Name,
-				Position: s.Position, PositionEnd: s.PositionEnd, ASIN: asin, ISBN: isbn, MatchWorkID: matched})
+				Position: s.Position, PositionEnd: s.PositionEnd, ASIN: asin, ISBN: isbn,
+				MatchWorkID: matched, MatchedAt: matchedAt})
 		}
 		if len(out) == n && (asin != "" || isbn != "") {
-			out = append(out, UpcomingBook{Ref: ref, ASIN: asin, ISBN: isbn, MatchWorkID: matched})
+			out = append(out, UpcomingBook{Ref: ref, ASIN: asin, ISBN: isbn, MatchWorkID: matched, MatchedAt: matchedAt})
 		}
 	}
 	return out, rows.Err()

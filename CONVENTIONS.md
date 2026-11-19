@@ -658,7 +658,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   follows). A full run: (1) each book with an ASIN/ISBN gets its work id (the
   meta cache, else `WorkIDs` in batches of 100; answers rechecked monthly, at most 500 a run); (2) each
   local series (library, `match.SeriesKey`) gets its community series from its works' series named like it
-  (primaries first; then give or take an article or "Series"), monthly or when it gains a book or a work;
+  (primaries first; then give or take an article or "Series"), monthly or when it gains a book or a work
+  (a book's identifiers answering another work, or a recorded match that stands in for another work than
+  they answer, recorded since the series was resolved: `book_matches.set_at` against
+  `upcoming_series.resolved_at`, so nothing is remembered between runs; server#375);
   (3) metaserve's watch feed, 50 series a request (split when full), says which series have news; (4)
   `series/{id}` is read when new, with news, or a week old (2 at a time; a 404 marks it gone, dropped after
   a week); (5) classify; (6) announce. With metadata on and `upcoming.enabled` off, a run (scheduled or
