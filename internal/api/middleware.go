@@ -366,19 +366,20 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 // l nil the request was already charged to its address (rateLimit's
 // authRoutes) and is only authenticated. authed, when set, runs once the
 // request has authenticated and before its credential spends, so a header it
-// sets is on a 429 too. ok false means the answer (401 or 429) is written.
+// sets is on a 429 too. ok false means the answer (401 or 429, or 503 for a
+// token it could not check: refuseToken) is written.
 func (a *API) authLimited(w http.ResponseWriter, r *http.Request, l *rateLimiter, queryToken bool, kinds []string, authed func(context.Context)) (ctx context.Context, ok bool) {
 	ip := clientIP(r)
 	if l != nil && !a.ipLimiter.Ready(ip) {
 		rateLimited(w, a.ipLimiter.Wait(ip))
 		return nil, false
 	}
-	ctx, failure, _ := a.authenticate(r, queryToken, kinds)
+	ctx, failure, err := a.authenticate(r, queryToken, kinds)
 	if failure != "" {
 		if l != nil {
 			a.ipLimiter.Charge(ip)
 		}
-		writeError(w, http.StatusUnauthorized, failure)
+		a.refuseToken(w, r, failure, err)
 		return nil, false
 	}
 	if authed != nil {
@@ -607,7 +608,7 @@ var (
 // authenticate resolves r's credential, one of kinds, and returns r's context
 // carrying the user and the credential, or the reason for a 401 with the error
 // behind it (nil for no token at all; a refused token's, or a failure to check
-// it, which requireBridge tells apart). allowQueryToken also takes the token from
+// it, which refuseToken answers 503). allowQueryToken also takes the token from
 // ?token= (mediaAuth's GETs only, see bearerToken).
 func (a *API) authenticate(r *http.Request, allowQueryToken bool, kinds []string) (context.Context, string, error) {
 	token := bearerToken(r, allowQueryToken)
@@ -641,6 +642,22 @@ func (a *API) authenticate(r *http.Request, allowQueryToken bool, kinds []string
 	// can bar an api key (denyAPIKey) - a leaked key must not spawn a durable
 	// credential.
 	return withCredential(r.Context(), u, cred), "", nil
+}
+
+// refuseToken answers a request authenticate refused (its failure and err).
+// Only a missing or refused token is a 401: that answer is marked as the
+// server's own (headerUnauthorized), and a client ends its session on it (the
+// player signs out, the Bridge stops calling in). A token the server could not
+// check (the database) is a 503, a passing fault the caller tries again.
+func (a *API) refuseToken(w http.ResponseWriter, r *http.Request, failure string, err error) {
+	if err == nil || errors.Is(err, auth.ErrInvalidToken) {
+		writeError(w, http.StatusUnauthorized, failure)
+		return
+	}
+	if r.Context().Err() == nil { // not the caller leaving, or the request's deadline
+		a.log.Warn("token check failed", "path", r.URL.Path, "err", err)
+	}
+	writeError(w, http.StatusServiceUnavailable, "could not check the token, try again")
 }
 
 // requestPresence is what a request says about its device: its address and app

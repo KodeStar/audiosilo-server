@@ -67,8 +67,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `cors` exposes it (`corsExposeHeaders`). The player reads it to tell the server refusing its token
   from an auth proxy's own 401, or a proxy that rewrote the server's body; additive, the body is
   unchanged. `GET /server` says so with the capability `unauthorized_mark` (always true), so a player
-  knows a 401 without the header was not this server's; an older server has neither. `TestUnauthorizedMarked` covers the middleware's and the sign-in, pairing and OIDC
-  routes' 401s end to end, `TestUnauthorizedMarkWriters` the writers every other 401 goes through.
+  knows a 401 without the header was not this server's; an older server has neither.
+  Since a client ends its session on the marked 401, only a missing or refused token is one: a token
+  the server could not check (the database) is a 503 `could not check the token, try again` with no
+  mark, on every authenticated route (`refuseToken`: `requireAuth`, `mediaAuth`, `requireBridge`;
+  the address is charged for it as for a refusal). `TestUnauthorizedMarked` covers the middleware's
+  and the sign-in, pairing and OIDC routes' 401s end to end, `TestUnauthorizedMarkWriters` the
+  writers every other 401 goes through, `TestUncheckedTokenIsNot401` the 503.
   A proxy that serves an error page of its own in place of the server's 401 (nginx's `error_page`
   with `proxy_intercept_errors`) drops the mark; the player then falls back to its older rules
   (the body, and whether the request carried proxy headers).
@@ -3435,7 +3440,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and forgets the row (`UnpairBridge`). **The bridge token is narrow**: routes opt in to token kinds and only
   the Bridge's own list `auth.KindBridge` (`requireBridge` = `authenticate` with `bridgeKinds`,
   `/api/v1/bridge/*`, Authorization header only, never `?token=`; only a missing or refused token is a 401,
-  which stops the Bridge calling in until its 5-minute retry, so a failure to check one is a 503); `resolve` refuses it once its admin is
+  which stops the Bridge calling in until its 5-minute retry, so a failure to check one is a 503, `refuseToken`); `resolve` refuses it once its admin is
   demoted (lookupToken already refuses a disabled one); it is never a device, and never touched (its calls
   are not its admin's activity, the newest `last_seen` of their tokens). "Paired" has ONE statement,
   `auth.BridgeLiveSQL` (a live bridge token of an enabled admin, partial index `idx_tokens_bridge`), which

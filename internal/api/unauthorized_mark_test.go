@@ -67,6 +67,37 @@ func TestUnauthorizedMarked(t *testing.T) {
 	}
 }
 
+// TestUncheckedTokenIsNot401: a token the server could not check (the
+// database) is not a refusal: 503 without the mark, on the API's, the media's
+// and the Bridge's routes, so no client ends its session on a passing fault.
+// Allowed: the same token, checked, is the marked 401 (TestUnauthorizedMarked).
+func TestUncheckedTokenIsNot401(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	if err := e.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, path, token string }{
+		{"requireAuth", "/api/v1/me", "not-a-token"},
+		{"mediaAuth ?token=", "/api/v1/libraries/1/cover?path=a&token=not-a-token", ""},
+		{"requireFeedAuth", "/api/v1/me/upcoming/releases.ics?token=not-a-feed", ""},
+		{"requireBridge", "/api/v1/bridge/libraries/1/marker", "not-a-token"},
+	} {
+		resp, body := e.do(t, "GET", c.path, c.token, "")
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("%s: %d %s, want 503", c.name, resp.StatusCode, body)
+		}
+		if got := resp.Header.Get(headerUnauthorized); got != "" {
+			t.Errorf("%s: %s = %q on a token that was not checked", c.name, headerUnauthorized, got)
+		}
+	}
+	// No token at all needs no check: still the server's own 401.
+	resp, _ := e.do(t, "GET", "/api/v1/me", "", "")
+	if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get(headerUnauthorized) != unauthorizedPlain {
+		t.Errorf("no token: %d, %s = %q", resp.StatusCode, headerUnauthorized, resp.Header.Get(headerUnauthorized))
+	}
+}
+
 // TestUnauthorizedMarkWriters: the writers mark a 401 alone, with its code when
 // it has one (writeErrorCode, writeErrorReason) and the plain value otherwise
 // (writeError, writeSessionEnded, a 401 written by writeJSON).

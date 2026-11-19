@@ -82,19 +82,15 @@ var bridgeKinds = []string{auth.KindBridge}
 // requireBridge authenticates the paired Bridge's token (Authorization header
 // only). Only a missing or refused token is a 401 (the Bridge then stops calling
 // in and retries every few minutes), so a failure to check the token (the
-// database) is a 503, which it retries at once.
+// database) is a 503, which it retries at once (refuseToken).
 func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, failure, err := a.authenticate(r, false, bridgeKinds)
-		switch {
-		case failure == "":
-			next(w, r.WithContext(ctx))
-		case err != nil && !errors.Is(err, auth.ErrInvalidToken):
-			a.log.Warn("bridge token check failed", "err", err)
-			writeError(w, http.StatusServiceUnavailable, "could not check the token, try again")
-		default:
-			writeError(w, http.StatusUnauthorized, failure)
+		if failure != "" {
+			a.refuseToken(w, r, failure, err)
+			return
 		}
+		next(w, r.WithContext(ctx))
 	})
 }
 
