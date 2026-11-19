@@ -122,12 +122,14 @@ func scheduleEpisodes(ctx context.Context, d modules.Deps, h *bridge.Heartbeat) 
 				continue
 			}
 			if len(candidates) > 0 {
+				// GetLibrary answers from the catalog's library cache.
 				lib, err := d.Catalog.GetLibrary(ctx, show.LibraryID)
-				if err != nil {
+				switch {
+				case err != nil:
+					// No fetch unchecked; the show's retention below still runs.
 					errs = append(errs, err)
-					continue
-				}
-				if library.ShowRefused(ctx, *lib, candidates[0].Path, StreamWait) != nil {
+					candidates = nil
+				case library.ShowRefused(ctx, *lib, candidates[0].Path, StreamWait) != nil:
 					candidates = nil // see library.ShowRefused
 				}
 			}
