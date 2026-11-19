@@ -1,6 +1,6 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, type InfiniteData } from '@tanstack/react-query';
+import { InfiniteQueryObserver, QueryClient, type InfiniteData } from '@tanstack/react-query';
 import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type {
@@ -1618,5 +1618,40 @@ describe('storeTitle', () => {
     expect(got?.pages[0]?.titles[0]).toEqual(after);
     // A list without the title is left as it was.
     expect(qc.getQueryData(otherKey)).toBe(otherData);
+  });
+
+  it("starts a shown list's stopped read again, past the answer", async () => {
+    const qc = new QueryClient();
+    const key = [...keys.audibleTitleLists, 'acct'];
+    const before = title({ no_sync: false });
+    const after = title({ no_sync: true });
+    const bought = title({ asin: 'B000000009', title: 'Bought since' });
+    qc.setQueryData<InfiniteData<AudibleTitlePage>>(key, {
+      pages: [{ titles: [before], next: '' }],
+      pageParams: [''],
+    });
+    // The list is on screen, and a check that landed has it reading again:
+    // the first read never answers, the one started after the answer does.
+    let reads = 0;
+    const shown = new InfiniteQueryObserver<AudibleTitlePage>(qc, {
+      queryKey: key,
+      queryFn: () =>
+        ++reads === 1
+          ? new Promise<AudibleTitlePage>(() => undefined)
+          : Promise.resolve({ titles: [after, bought], next: '' }),
+      initialPageParam: '',
+      getNextPageParam: () => undefined,
+    });
+    const unsubscribe = shown.subscribe(() => undefined);
+    await waitFor(() => expect(reads).toBe(1));
+    await storeTitle(qc, after);
+    await waitFor(() =>
+      expect(qc.getQueryData<InfiniteData<AudibleTitlePage>>(key)?.pages[0]?.titles).toEqual([
+        after,
+        bought,
+      ]),
+    );
+    expect(reads).toBe(2);
+    unsubscribe();
   });
 });

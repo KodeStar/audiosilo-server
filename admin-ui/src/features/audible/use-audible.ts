@@ -5,6 +5,7 @@ import {
   useQuery,
   useQueryClient,
   type InfiniteData,
+  type Query,
   type QueryClient,
 } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -165,20 +166,28 @@ const titleKey = (x: Pick<AudibleTitle, 'account' | 'asin'>) => `${x.account}/${
 /**
  * Puts a title as the server answered it into every loaded titles page, in
  * place, rather than reading every page again; the lists are marked stale, so
- * one it now belongs in or has left is read again when next shown.
+ * one it now belongs in or has left is read again when next shown. A list's
+ * read it had to stop is started again.
  */
 export async function storeTitle(qc: QueryClient, x: AudibleTitle) {
   const key = titleKey(x);
   const holds = (p: AudibleTitlePage) => p.titles.some((t) => titleKey(t) === key);
-  // A read of a list holding the title already under way (the poll while a
-  // backup runs) would land its row as it was before this answer, over it:
-  // it is stopped first (the next poll asks again). A list without it, a
-  // first read among them, carries on.
-  await qc.cancelQueries({
+  const lists = {
     queryKey: keys.audibleTitleLists,
-    predicate: (q) =>
+    predicate: (q: Query) =>
       (q.state.data as InfiniteData<AudibleTitlePage> | undefined)?.pages.some(holds) ?? false,
-  });
+  };
+  // A read of a list holding the title already under way (the poll while a
+  // backup runs, the re-read after an account's check landed) would land its
+  // row as it was before this answer, over it: it is stopped first, and
+  // started again below. A list without it, a first read among them, carries on.
+  const stopped = new Set(
+    qc
+      .getQueryCache()
+      .findAll({ ...lists, fetchStatus: 'fetching' })
+      .map((q) => q.queryHash),
+  );
+  await qc.cancelQueries(lists);
   // A list (or page) without the title is left as it is: its rows don't render again.
   qc.setQueriesData<InfiniteData<AudibleTitlePage>>({ queryKey: keys.audibleTitleLists }, (data) =>
     data?.pages.some(holds)
@@ -191,6 +200,15 @@ export async function storeTitle(qc: QueryClient, x: AudibleTitle) {
       : data,
   );
   void qc.invalidateQueries({ queryKey: keys.audibleTitleLists, refetchType: 'none' });
+  // The reads stopped above had news of their own (a check's new titles): a
+  // shown list reads again, now past this answer.
+  if (stopped.size > 0) {
+    void qc.refetchQueries({
+      queryKey: keys.audibleTitleLists,
+      type: 'active',
+      predicate: (q) => stopped.has(q.queryHash),
+    });
+  }
 }
 
 /**
