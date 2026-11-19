@@ -83,8 +83,8 @@ func TestScanRereadsAnUncountedLength(t *testing.T) {
 	db, cat, lib, s := headerlessBook(t)
 	const estimate = 5.0799
 	// The count out of time, as on a slow disk: ffprobe's estimate stands.
-	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
-		md := extractFile(ctx, p, ffprobe, timeout)
+	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		md := extractFile(ctx, root, p, ffprobe, timeout)
 		md.Duration = estimate
 		return metadata.UncountedForTests(md)
 	}

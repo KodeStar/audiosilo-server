@@ -90,11 +90,11 @@ func TestScanDoesNotRereadForACoverItCannotStore(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var reads []string
-	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
 		mu.Lock()
 		reads = append(reads, filepath.Base(p))
 		mu.Unlock()
-		return extractFile(ctx, p, ffprobe, timeout)
+		return extractFile(ctx, root, p, ffprobe, timeout)
 	}
 	scan := func() (*ScanResult, string) {
 		t.Helper()

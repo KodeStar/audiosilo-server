@@ -67,8 +67,8 @@ func TestReindexWithOnlyTagsCutShortKeepsTheLengthsRead(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(root, filepath.FromSlash(book+"/02.mp3")), later, later); err != nil {
 		t.Fatal(err)
 	}
-	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
-		md := extractFile(ctx, p, ffprobe, timeout)
+	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		md := extractFile(ctx, root, p, ffprobe, timeout)
 		if strings.HasSuffix(filepath.ToSlash(p), book+"/02.mp3") {
 			return metadata.TagsUnreadForTests(md)
 		}
@@ -173,14 +173,14 @@ func TestAnOnDemandReadIsNotWrittenAfterTheLibraryMoved(t *testing.T) {
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: oldRoot})
 	s := NewScanner(cat, "", slog.Default())
 	moved := false
-	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
 		if !moved {
 			moved = true
 			if _, _, err := cat.UpdateLibrary(ctx, lib.ID, catalog.LibraryPatch{Root: newRoot}); err != nil {
 				t.Error(err)
 			}
 		}
-		return extractFile(ctx, p, ffprobe, timeout)
+		return extractFile(ctx, root, p, ffprobe, timeout)
 	}
 	if _, err := s.IndexPath(ctx, *lib, "Author/Book"); !errors.Is(err, ErrNotIndexable) || !errors.Is(err, catalog.ErrRootChanged) {
 		t.Fatalf("IndexPath across a move of the library = %v, want ErrNotIndexable for the changed root", err)

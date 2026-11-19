@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strconv"
 )
@@ -83,7 +84,7 @@ func probeView(path string, ff ffRules) (*ProbeView, string, error) {
 	if ff == ffNone {
 		return nil, "no rules for this ffprobe's release", nil
 	}
-	p, reason, err := readFile(context.Background(), &Metadata{Format: fileFormat(path)}, path, ff, false, ProbeTimeout)
+	p, reason, err := readFile(context.Background(), &Metadata{Format: fileFormat(path)}, filepath.Dir(path), path, ff, false, ProbeTimeout)
 	if err != nil || reason != "" {
 		return nil, reason, err
 	}
@@ -91,9 +92,10 @@ func probeView(path string, ff ffRules) (*ProbeView, string, error) {
 }
 
 // ProbeFFprobe is ffprobe's view of the file at path: probe's answer, the one
-// Extract stores, through the same viewOf as the in-process probe's.
+// Extract stores (ffprobe handed the file opened through its folder, as
+// Extract hands it), through the same viewOf as the in-process probe's.
 func ProbeFFprobe(ctx context.Context, path, ffprobePath string) (*ProbeView, error) {
-	p, err := probe(ctx, path, ffprobePath, ProbeTimeout)
+	p, err := probe(ctx, filepath.Dir(path), path, ffprobePath, ProbeTimeout)
 	if err != nil {
 		return nil, err
 	}

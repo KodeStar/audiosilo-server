@@ -39,11 +39,11 @@ func TestHeldOpenIsAbandonedAndCounted(t *testing.T) {
 	hung := stuckByMount.For(path)
 
 	start := time.Now()
-	m, err := ExtractTimeout(context.Background(), path, "", 20*time.Millisecond)
+	m, err := ExtractTimeout(context.Background(), filepath.Dir(path), path, "", 20*time.Millisecond)
 	if err != nil || m.OpenErr != nil || !m.TagsUnread() || m.ReadRefused() || !m.ProbeTimedOut() {
 		t.Fatalf("held open = %+v (err %v), want it out of time, not refused", m, err)
 	}
-	if fp, err := FingerprintErr(context.Background(), path, 20*time.Millisecond); fp != "" || !GaveUp(err) {
+	if fp, err := FingerprintErr(context.Background(), filepath.Dir(path), path, 20*time.Millisecond); fp != "" || !GaveUp(err) {
 		t.Errorf("fingerprint of a held open = %q, %v; want none, given up on", fp, err)
 	}
 	if d := time.Since(start); d > 5*time.Second {
@@ -53,17 +53,17 @@ func TestHeldOpenIsAbandonedAndCounted(t *testing.T) {
 		t.Errorf("abandoned reads = %d, want the two opens counted", n)
 	}
 	for hung.n.Load() < maxAbandonedReads {
-		Fingerprint(context.Background(), path, time.Millisecond)
+		Fingerprint(context.Background(), filepath.Dir(path), path, time.Millisecond)
 	}
-	if m := ExtractTags(t.Context(), path, ProbeTimeout); !m.ReadRefused() {
+	if m := ExtractTags(t.Context(), filepath.Dir(path), path, ProbeTimeout); !m.ReadRefused() {
 		t.Errorf("an open at the cap = %+v, want it refused", m)
 	}
-	if _, err := FingerprintErr(t.Context(), path, ProbeTimeout); !GaveUp(err) {
+	if _, err := FingerprintErr(t.Context(), filepath.Dir(path), path, ProbeTimeout); !GaveUp(err) {
 		t.Errorf("a fingerprint at the cap = %v, want it given up on", err)
 	}
 	release()
 	waitUncounted(t, hung)
-	if fp := Fingerprint(context.Background(), path, time.Minute); fp == "" {
+	if fp := Fingerprint(context.Background(), filepath.Dir(path), path, time.Minute); fp == "" {
 		t.Error("no fingerprint once the opens answer")
 	}
 }

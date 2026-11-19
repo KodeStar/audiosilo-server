@@ -82,21 +82,21 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 	}
 	abs := absOf(lib, sig.ScanErrorFile)
 	if !metadata.IsAudio(abs) {
-		return sideAnswers(ctx, abs, s.probeTimeout)
+		return sideAnswers(ctx, lib.Root, abs, s.probeTimeout)
 	}
 	probe := sig.ScanError == problemProbe
 	var at *fileState
 	if probe {
 		// The file's own state, before the read: a book's is a folder's newest
 		// part and total size, which a part put back as it was leaves unchanged.
-		if info, err := metadata.StatBounded(ctx, abs, s.probeTimeout); err == nil {
+		if info, err := metadata.StatBelowBounded(ctx, lib.Root, abs, s.probeTimeout); err == nil {
 			at = &fileState{mtime: info.ModTime().Unix(), size: info.Size()}
 			if s.wasRejected(abs, *at) {
 				return false
 			}
 		}
 	}
-	md := slots.extract(ctx, abs, s.ffprobePath)
+	md := slots.extract(ctx, lib.Root, abs, s.ffprobePath)
 	if md == nil {
 		return false
 	}
@@ -126,20 +126,24 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 // back); the re-index decides what it is. A fault a retry may get past
 // (metadata.TransientFault: EIO, ENOTCONN) is no answer: the re-index would meet it on
 // the same look, and a cover look reading it as "no cover" would drop the
-// stored one.
-func sideAnswers(ctx context.Context, abs string, timeout time.Duration) bool {
+// stored one. Every look is through the library's root (metadata.StatBelow,
+// ReadDirBelow, OpenRegularBelow), never out of it by a link swapped in since.
+func sideAnswers(ctx context.Context, root, abs string, timeout time.Duration) bool {
 	// One bounded call, the stat and the look it leads to: a share that
 	// stopped answering costs timeout once, and holds one of its mount's slots.
 	_, err := metadata.Bounded(ctx, abs, timeout, func() (struct{}, error) {
-		info, err := os.Stat(abs)
+		info, err := metadata.StatBelow(root, abs)
 		switch {
 		case err != nil:
 		case info.IsDir():
-			_, err = os.ReadDir(abs)
+			var d *metadata.DirBelow
+			if d, err = metadata.ReadDirBelow(root, abs); err == nil {
+				_ = d.Close()
+			}
 		case imageExts[strings.ToLower(filepath.Ext(abs))], !info.Mode().IsRegular():
 		default:
 			var f *os.File
-			if f, info, err = metadata.OpenRegular(abs); err == nil {
+			if f, info, err = metadata.OpenRegularBelow(root, abs); err == nil {
 				_, err = f.ReadAt(make([]byte, sideProbeBytes), max(0, info.Size()-sideProbeBytes))
 				_ = f.Close()
 				if errors.Is(err, io.EOF) {
@@ -322,7 +326,7 @@ func suspectParts(parts []partFacts) int {
 func suspectFromTags(ctx context.Context, lib catalog.Library, b *catalog.Book, timeout time.Duration) (n int, ok bool) {
 	parts := make([]partFacts, 0, len(b.Files))
 	for _, f := range b.Files {
-		md := metadata.ExtractTags(ctx, absOf(lib, f.RelPath), timeout)
+		md := metadata.ExtractTags(ctx, lib.Root, absOf(lib, f.RelPath), timeout)
 		if md.OpenErr != nil || md.TagsUnread() {
 			return 0, false
 		}

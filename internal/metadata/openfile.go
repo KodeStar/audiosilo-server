@@ -134,13 +134,15 @@ func openRegularWith(path string, open func() (*os.File, error)) (*os.File, os.F
 	return f, info, nil
 }
 
-// openBlockFile opens the file at path for reads bounded by ctx (blockFile's
-// bounded, waitRead), the open and its stat bounded too: refused at once
+// openBlockFile opens the file at path, under root, for reads bounded by ctx
+// (blockFile's bounded, waitRead), through root (openBelow: a link swapped in
+// along the path since it was checked is never followed out of the library),
+// the open and its stat bounded too: refused at once
 // (errReadRefused) when reads from its mount hang already
 // (stuckReads.saturated); errOpenAbandoned when they don't answer while ctx
 // lives, counted on the mount as a read given up on; errNotRegular when it is
 // no regular file. The caller closes f.
-func openBlockFile(ctx context.Context, path string) (b *blockFile, f *os.File, err error) {
+func openBlockFile(ctx context.Context, root, path string) (b *blockFile, f *os.File, err error) {
 	stuck := stuckByMount.For(path)
 	if stuck.saturated() {
 		return nil, nil, errReadRefused
@@ -151,7 +153,7 @@ func openBlockFile(ctx context.Context, path string) (b *blockFile, f *os.File, 
 		err  error
 	}
 	o, ok := await(ctx, stuck, func() opened {
-		f, info, err := openRegular(path)
+		f, info, err := openRegularWith(path, func() (*os.File, error) { return openBelow(root, path) })
 		return opened{f, info, err}
 	}, func(o opened) {
 		if o.f != nil {
@@ -173,14 +175,15 @@ func openBlockFile(ctx context.Context, path string) (b *blockFile, f *os.File, 
 // tail.
 const fingerprintChunk = 64 << 10
 
-// Fingerprint is a cheap content fingerprint of the file at path, sha256 of
+// Fingerprint is a cheap content fingerprint of the file at path under root
+// (opened through it, as a tag read is: openBlockFile), sha256 of
 // (size, first 64 KiB, last 64 KiB), used only to tell "same content, new
 // path" moves: not a full hash (large files stay cheap) and not a durable
 // identity (that is the path). Its open and reads are bounded as a tag read's
 // are (openBlockFile): timeout and ctx. "" when it can't be read in that time,
 // or at all.
-func Fingerprint(ctx context.Context, path string, timeout time.Duration) string {
-	fp, _ := FingerprintErr(ctx, path, timeout)
+func Fingerprint(ctx context.Context, root, path string, timeout time.Duration) string {
+	fp, _ := FingerprintErr(ctx, root, path, timeout)
 	return fp
 }
 
@@ -188,10 +191,10 @@ func Fingerprint(ctx context.Context, path string, timeout time.Duration) string
 // when its open or reads were given up on (refused, or not answered in time),
 // else the open's own (the file gone, no regular file) or a read's that came
 // back short (EIO).
-func FingerprintErr(ctx context.Context, path string, timeout time.Duration) (string, error) {
+func FingerprintErr(ctx context.Context, root, path string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
 	defer cancel()
-	b, f, err := openBlockFile(ctx, path)
+	b, f, err := openBlockFile(ctx, root, path)
 	if errors.Is(err, errOpenAbandoned) {
 		return "", fmt.Errorf("%s: %w", path, ErrNotAnswered)
 	}

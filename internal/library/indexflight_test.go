@@ -435,7 +435,7 @@ func newProbeEnv(t *testing.T, took time.Duration) (*Scanner, catalog.Library, c
 	probe := filepath.Join(t.TempDir(), "ffprobe")
 	// A lock per file probed (its path is the last argument): a second run on it
 	// while one holds it notes the overlap.
-	script := "#!/bin/sh\nfor a; do f=$a; done\nl='" + locks + "'/$(printf %s \"$f\" | cksum | cut -d' ' -f1)\n" +
+	script := "#!/bin/sh\nfor a; do f=$a; done; f=${AUDIOSILO_TEST_INPUT:-$f}\nl='" + locks + "'/$(printf %s \"$f\" | cksum | cut -d' ' -f1)\n" +
 		"mkdir \"$l\" 2>/dev/null || echo overlap >> '" + runs + "'\n" +
 		"echo run >> '" + runs + "'\n"
 	if took > 0 {

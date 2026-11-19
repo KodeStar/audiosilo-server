@@ -92,8 +92,8 @@ func TestReindexWithAReadCutShortKeepsTheStoredBook(t *testing.T) {
 			// (Each file's read runs out of time, not the probe's time itself:
 			// that bounds the walk's looks too, SRV-15c. The read is the real
 			// one, ffprobe's or in process, so either's cut short is what is kept.)
-			s.readFile = func(ctx context.Context, p, ffprobe string, _ time.Duration) *metadata.Metadata {
-				return extractFile(ctx, p, ffprobe, time.Nanosecond)
+			s.readFile = func(ctx context.Context, root, p, ffprobe string, _ time.Duration) *metadata.Metadata {
+				return extractFile(ctx, root, p, ffprobe, time.Nanosecond)
 			}
 			res, err := s.Scan(ctx, *lib)
 			if err != nil {
@@ -113,11 +113,11 @@ func TestReindexWithAReadCutShortKeepsTheStoredBook(t *testing.T) {
 			// Reads answer again, but the second part's is refused (too many
 			// stuck): the book is still kept whole, and Health says why.
 			s.probeTimeout = 10 * time.Second
-			s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+			s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
 				if strings.HasSuffix(filepath.ToSlash(p), kept+"/02.mp3") {
 					return metadata.UnreadForTests(p, true)
 				}
-				return extractFile(ctx, p, ffprobe, timeout)
+				return extractFile(ctx, root, p, ffprobe, timeout)
 			}
 			if res, err = s.Scan(ctx, *lib); err != nil {
 				t.Fatal(err)
@@ -182,11 +182,11 @@ func TestReindexWithALengthTimeOutRecordsItsProblem(t *testing.T) {
 	if err := os.Chtimes(part2, later, later); err != nil {
 		t.Fatal(err)
 	}
-	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
 		if strings.HasSuffix(filepath.ToSlash(p), book+"/02.mp3") {
 			return metadata.TimedOutForTests(p)
 		}
-		return extractFile(ctx, p, ffprobe, timeout)
+		return extractFile(ctx, root, p, ffprobe, timeout)
 	}
 	res, err := s.Scan(ctx, *lib)
 	if err != nil {
@@ -210,13 +210,13 @@ func TestProblemClearedNotWhileTheLengthTimesOut(t *testing.T) {
 	lib := catalog.Library{Root: t.TempDir()}
 	sig := catalog.Signature{ScanError: problemUnreadable, ScanErrorFile: "Book/02.mp3"}
 	slots := newReadSlots(1, time.Second)
-	slots.readFile = func(_ context.Context, p, _ string, _ time.Duration) *metadata.Metadata {
+	slots.readFile = func(_ context.Context, _, p, _ string, _ time.Duration) *metadata.Metadata {
 		return metadata.TimedOutForTests(p)
 	}
 	if s.problemCleared(t.Context(), lib, sig, slots) {
 		t.Error("a length still out of time cleared the problem")
 	}
-	slots.readFile = func(_ context.Context, p, _ string, _ time.Duration) *metadata.Metadata {
+	slots.readFile = func(_ context.Context, _, p, _ string, _ time.Duration) *metadata.Metadata {
 		return &metadata.Metadata{Format: "mp3", Duration: 1}
 	}
 	if !s.problemCleared(t.Context(), lib, sig, slots) {
@@ -248,8 +248,8 @@ func TestKeptBookRecordsThePartCutShortOverAnEarlierProblem(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(root, filepath.FromSlash(book+"/03.mp3")), later, later); err != nil {
 		t.Fatal(err)
 	}
-	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
-		md := extractFile(ctx, p, ffprobe, timeout)
+	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		md := extractFile(ctx, root, p, ffprobe, timeout)
 		switch {
 		case strings.HasSuffix(filepath.ToSlash(p), book+"/01.mp3"):
 			md.ProbeErr = errors.New("Invalid data found when processing input")
@@ -318,14 +318,14 @@ func TestLengthTimeOutKeepsTheBookOnlyWhileItsFilesAreTheStoredOnes(t *testing.T
 	// What each scan below reads of the parts: 03's length out of time, or 02's
 	// read cut short.
 	timedOut, cutShort := book+"/03.mp3", ""
-	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+	s.readFile = func(ctx context.Context, root, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
 		switch p := filepath.ToSlash(p); {
 		case cutShort != "" && strings.HasSuffix(p, cutShort):
 			return metadata.UnreadForTests(p, false)
 		case timedOut != "" && strings.HasSuffix(p, timedOut):
 			return metadata.TimedOutForTests(p)
 		}
-		return extractFile(ctx, p, ffprobe, timeout)
+		return extractFile(ctx, root, p, ffprobe, timeout)
 	}
 	scan := func() *ScanResult {
 		t.Helper()

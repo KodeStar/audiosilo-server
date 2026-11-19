@@ -242,9 +242,10 @@ func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Dura
 // made at a name out of the root: a link is read (readlink), never followed,
 // and its target walked name by name from the root down.
 type belowLooks struct {
-	// lstat is the name's Lstat, nil when it is not there (or the look
-	// failed); err only for a look that went unanswered (with boundedLooks,
-	// one failing as a share does that a retry may get past too).
+	// lstat is the name's Lstat, nil when it is not there; err for a look
+	// that went unanswered (with boundedLooks, one failing as a share does
+	// that a retry may get past too), or a lookFailed one for a look that
+	// failed otherwise (a permission, the server's own limits: lookFailed).
 	lstat func(path string) (fs.FileInfo, error)
 	// readlink is a link's own target as stored (relative or absolute), ""
 	// when the name is gone or is no link (maybe: linkKind's name that may be
@@ -294,7 +295,7 @@ func boundedLooks(ctx context.Context, deadline time.Time,
 		lstat: func(p string) (fs.FileInfo, error) {
 			fi, err := raw.lstat(ctx, p, metadata.WaitLeft(deadline))
 			if err != nil {
-				return nil, unansweredLook(ctx, err)
+				return nil, cmp.Or(unansweredLook(ctx, err), lookFailed(err))
 			}
 			return fi, nil
 		},
@@ -323,14 +324,14 @@ var plainLooks = plainLooksOver(os.Lstat, os.Readlink)
 // plainLooksOver are SafeJoin's looks over lstat and readlink (os.Lstat and
 // os.Readlink; a test's, to inject a share's errors), each failure read as
 // boundedLooks reads its own: a fault a retry may get past is a look given up
-// on (unansweredLook), any other lstat a name not there, which ends the walk,
-// and any other read of a link linkRead's answer.
+// on (unansweredLook), any other lstat a name not there (lookFailed), which
+// ends the walk, and any other read of a link linkRead's answer.
 func plainLooksOver(lstat func(string) (fs.FileInfo, error), readlink func(string) (string, error)) belowLooks {
 	return belowLooks{
 		lstat: func(p string) (fs.FileInfo, error) {
 			fi, err := lstat(p)
 			if err != nil {
-				return nil, unansweredLook(context.Background(), err)
+				return nil, cmp.Or(unansweredLook(context.Background(), err), lookFailed(err))
 			}
 			return fi, nil
 		},
@@ -343,6 +344,26 @@ func plainLooksOver(lstat func(string) (fs.FileInfo, error), readlink func(strin
 		},
 	}
 }
+
+// lookFailed is a belowLooks lstat's error for err, a look that failed and
+// was not unanswered: nil for a name not there (gone, a folder above it
+// replaced by a file, a name too long for the disk: absentOK), else the look
+// failed (a permission, the device gone, a limit of the server's own), which
+// resolveBelow reads as a name not there, the walk's end, and followLink as
+// a link whose target is not known.
+func lookFailed(err error) error {
+	if absentOK(err) == nil {
+		return nil
+	}
+	return failedLook{err}
+}
+
+// failedLook is lookFailed's error: a name whose lstat failed for a reason
+// that says nothing of whether it is there, or what it is.
+type failedLook struct{ err error }
+
+func (e failedLook) Error() string { return e.err.Error() }
+func (e failedLook) Unwrap() error { return e.err }
 
 // linkRead is a look's answer from a link's read (os.Readlink's to and err,
 // one that went unanswered or failed as a share does that a retry may get
@@ -415,6 +436,9 @@ func resolveBelow(rootAbs, rootAs, p string, lk belowLooks) (target string, ther
 		}
 		next := filepath.Join(cur, name)
 		info, err := lk.lstat(next)
+		if errors.As(err, new(failedLook)) {
+			err = nil // a name that can't be looked at: the walk ends there, as at one not there
+		}
 		if err != nil || info == nil {
 			return rest(), false, err
 		}
@@ -484,7 +508,9 @@ func isPathSep(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) }
 // along its target not there, a link gone since it was looked at, more than
 // maxLinkHops links: a loop); link itself for a name that may be a link
 // (maybe: linkKind) and does not read as one. err is a look's that went
-// unanswered, or ErrOutsideRoot for a link that can't be read (linkRead).
+// unanswered, or ErrOutsideRoot for a link that can't be read (linkRead) or
+// one with a name along its target that can't be looked at (lookFailed):
+// where either leads is not known.
 func followLink(w *linkWalk, dir, link string, maybe bool) (string, error) {
 	if w.hops++; w.hops > maxLinkHops {
 		return "", nil
@@ -523,6 +549,13 @@ func followLink(w *linkWalk, dir, link string, maybe bool) (string, error) {
 			return next, nil // out of the root: never looked at
 		}
 		info, err := w.lk.lstat(next)
+		if errors.As(err, new(failedLook)) {
+			// A name along the target that can't be looked at (a permission, a
+			// limit of the server's own): it may be a link out of the root, so
+			// where the link leads is not known, as for a link that can't be
+			// read (linkRead), never a name not there, inside the root.
+			return "", fmt.Errorf("%w: %w: %w", ErrOutsideRoot, errLinkUnread, err)
+		}
 		if err != nil || info == nil {
 			return "", err
 		}

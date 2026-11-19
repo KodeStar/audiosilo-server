@@ -183,38 +183,38 @@ func TestReadAttachmentFiles(t *testing.T) {
 	if err := os.WriteFile(valid, []byte(`{"characters":[{"id":"a","name":"A","reveal":{"chapter":1}}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if c, err := ReadCharacters(valid); err != nil || c == nil {
+	if c, err := ReadCharacters(filepath.Dir(valid), valid); err != nil || c == nil {
 		t.Fatalf("regular file: %+v, %v", c, err)
 	}
 	link := filepath.Join(dir, "linked.characters.json")
 	if err := os.Symlink(valid, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadCharacters(link); !errors.Is(err, ErrAttachmentInvalid) {
+	if _, err := ReadCharacters(filepath.Dir(link), link); !errors.Is(err, ErrAttachmentInvalid) {
 		t.Errorf("a link: %v, want ErrAttachmentInvalid", err)
 	}
 	big := filepath.Join(dir, "recaps.json")
 	if err := os.WriteFile(big, []byte(`{"recaps":[],"in_short":"`+strings.Repeat("x", maxAttachmentFile)+`"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadRecaps(big); !errors.Is(err, ErrAttachmentInvalid) {
+	if _, err := ReadRecaps(filepath.Dir(big), big); !errors.Is(err, ErrAttachmentInvalid) {
 		t.Errorf("too large: %v, want ErrAttachmentInvalid", err)
 	}
 	desc := filepath.Join(dir, "description.json")
 	if err := os.WriteFile(desc, []byte(fmt.Sprintf(`{"text":%q}`, descriptionText(minDescriptionText))), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if d, err := ReadDescription(desc); err != nil || d == nil {
+	if d, err := ReadDescription(filepath.Dir(desc), desc); err != nil || d == nil {
 		t.Fatalf("description: %+v, %v", d, err)
 	}
 	descLink := filepath.Join(dir, "linked.description.json")
 	if err := os.Symlink(desc, descLink); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadDescription(descLink); !errors.Is(err, ErrAttachmentInvalid) {
+	if _, err := ReadDescription(filepath.Dir(descLink), descLink); !errors.Is(err, ErrAttachmentInvalid) {
 		t.Errorf("a linked description: %v, want ErrAttachmentInvalid", err)
 	}
-	if _, err := ReadProvenance(filepath.Join(dir, "missing.json")); err == nil || errors.Is(err, ErrAttachmentInvalid) {
+	if _, err := ReadProvenance(filepath.Dir(filepath.Join(dir, "missing.json")), filepath.Join(dir, "missing.json")); err == nil || errors.Is(err, ErrAttachmentInvalid) {
 		t.Errorf("missing: %v, want a read error that isn't ErrAttachmentInvalid", err)
 	}
 }

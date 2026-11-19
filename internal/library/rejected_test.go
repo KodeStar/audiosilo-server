@@ -21,7 +21,7 @@ import (
 func rejectingProbe(t *testing.T) (probe, log string) {
 	t.Helper()
 	log = filepath.Join(t.TempDir(), "log")
-	probe = stubProbe(t, fmt.Sprintf(`for f; do :; done
+	probe = stubProbe(t, fmt.Sprintf(`for f; do :; done; f=${AUDIOSILO_TEST_INPUT:-$f}
 echo "$f" >> %[1]q
 if [ -e "$f.flaky" ]; then echo "$f: Input/output error" >&2; exit 1; fi
 case "${f##*/}" in

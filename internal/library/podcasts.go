@@ -744,7 +744,7 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 			continue
 		}
 		file.Chapters, err = readAt(l, filepath.Join(dir, metadata.AttachmentsDir), func() (*metadata.ChapterList, error) {
-			return podcastChapters(dir, base, ep.Fetch)
+			return podcastChapters(lib.Root, dir, base, ep.Fetch)
 		})
 		if metadata.Unanswered(ctx, err) {
 			return 0, false, cmp.Or(err, ctx.Err()) // unknown, never the episode's chapters gone
@@ -921,12 +921,15 @@ func podcastBarrier(lstat func(string) (os.FileInfo, error), dir, base string) e
 
 // podcastChapters is an episode's chapter attachment, nil when it has none:
 // an error for one that can't be used (ErrNotIndexable), or a look given up
-// on when its read failed as a share does that a retry may get past.
-func podcastChapters(dir, base string, f *feed.Fetch) (*metadata.ChapterList, error) {
+// on when its read failed as a share does that a retry may get past. It is
+// read through the library's root (metadata.ReadChapterList's), dir the
+// show's folder under it, so a link swapped in for that folder or for its
+// .audiosilo folder is never followed out of the library.
+func podcastChapters(root, dir, base string, f *feed.Fetch) (*metadata.ChapterList, error) {
 	if !feed.ValidFetch(f) || f.DeletedAt != "" {
 		return nil, nil
 	}
-	l, err := metadata.ReadChapterList(filepath.Join(dir, metadata.AttachmentsDir, stemOf(base)+"."+metadata.AttachmentChapters))
+	l, err := metadata.ReadChapterList(root, filepath.Join(dir, metadata.AttachmentsDir, stemOf(base)+"."+metadata.AttachmentChapters))
 	if metadata.TransientFault(err) {
 		return nil, metadata.AsGaveUp(err) // a share's hiccup: unknown, never no chapters
 	}

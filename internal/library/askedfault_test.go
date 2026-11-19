@@ -205,7 +205,7 @@ func TestResolveAskedAtTheCapNeverHearsTheLooksOwnError(t *testing.T) {
 	_, lib, s, _ := askedEnv(t, "Author/Book/01.mp3")
 	wasStat := statLook
 	t.Cleanup(func() { statLook = wasStat })
-	statLook = func(_ context.Context, p string, _ time.Duration) (fs.FileInfo, error) {
+	statLook = func(_ context.Context, _, p string, _ time.Duration) (fs.FileInfo, error) {
 		time.Sleep(300 * time.Millisecond) // answers once the cap has passed
 		return nil, &fs.PathError{Op: "stat", Path: p, Err: syscall.ENOENT}
 	}
@@ -229,9 +229,9 @@ func TestResolveAskedEndsAtTheRequestsWaitCap(t *testing.T) {
 		time.Sleep(slow)
 		return wasDir(ctx, p, timeout)
 	}
-	statLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+	statLook = func(ctx context.Context, root, p string, timeout time.Duration) (fs.FileInfo, error) {
 		time.Sleep(slow)
-		return wasStat(ctx, p, timeout)
+		return wasStat(ctx, root, p, timeout)
 	}
 	asked := func(capAt time.Duration) context.Context {
 		return WithWaitCap(WithLookTimeout(t.Context(), 5*time.Second), time.Now().Add(capAt))

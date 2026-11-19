@@ -1159,9 +1159,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   /libraries/{id}/ebook?path=<the book's own path>` serves the file the scan recorded for the book
   (`books.ebook_path`, see Auto book/folder detection), opened fresh by `library.OpenEbook`: joined
   again through `ContentJoin`, checked a regular file BEFORE it is opened (a FIFO's open would wait
-  for a writer; a folder book's must not be a link now either, `Lstat`) and, once open, still the
-  very file the path leads to inside the library (`os.SameFile` against a second look), so a link
-  swapped in meanwhile is never followed out. Gone, or anything but such a file now
+  for a writer; a folder book's must not be a link now either, `Lstat`), opened through the library's
+  root (`metadata.OpenBelow`) and, once open, still the very file the path leads to inside the library
+  (`os.SameFile` against a second look), so a link swapped in meanwhile is never followed out. Gone, or anything but such a file now
   (`library.ErrNoEbook`): 404; one that is there but can't be read right now (a permission, a flaky
   mount): 500, logged. Served with `http.ServeContent` (Range, a size+mtime
   ETag, Last-Modified), `Content-Type: application/epub+zip`, `Content-Security-Policy: sandbox;
@@ -1306,8 +1306,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   included, is the 404 they always had. The stream's open of the file itself (`media.ServeFile`,
   `media.Transcode`, a copy's look at its source, `media.Source`) follows the share-fault rule whatever the
   index holds: a transient fault is the 503, a lasting one the 404 (`TestOpenFaultsAnswerByKind`,
-  `TestSourceTransientFaultIsUnanswered`), a copy's run included, whose open of a source that stats but is
-  refused for good is no source (`openFault`: a rendition's 404, not a 503 `rendition_error` asked again for
+  `TestSourceTransientFaultIsUnanswered`), a transcode's re-check of the path on an ffmpeg without `fd:`
+  included (Windows: `media.fileInput`, `TestInputFaultsAnswerByKind`), and a copy's run, whose open of a
+  source that stats but is refused for good is no source (`openFault`: a rendition's 404, not a 503 `rendition_error` asked again for
   good; never remembered as ffmpeg's refusal, `TestFileCacheRunOpenFaultsByKind`). A missing path and a
   case variant take the same steps (the same listings and `Lstat`s up to the first name not listed, none
   past it), and the listings are kept a few seconds (`metadata.DirNames`, one per server,
@@ -1327,8 +1328,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   irregular entry that is no folder since Go 1.23, neither a link nor a folder) is read as a link
   (`linkKind`), and another reparse point that doesn't read as one is a plain name
   (`TestJoinLinkThroughTheRootAsConfigured`, `TestResolveBelowJunction`). A link or junction that is there and
-  can't be read (a permission, a junction another process holds) is `ErrOutsideRoot` too (`linkRead`): where
-  it points is not known, so no path through it is accepted, by `SafeJoin` (which had read it as a name not
+  can't be read (a permission, a junction another process holds) is `ErrOutsideRoot` too (`linkRead`), and so is
+  one with a name along its target whose look failed for anything but the name gone (a permission, a limit of
+  the server's own: `lookFailed`, which a name of the path itself still reads as a name not there), so the scan
+  keeps its book as stored (`TestScanKeepsABookWhoseLinkTargetDidNotAnswer`): where it points is not known, so no path through it is accepted, by `SafeJoin` (which had read it as a name not
   there and joined the path) or by `SafeJoinListed`, nor is it walked as a plain folder. `SafeJoin`'s own
   looks (`plainLooks`) read a fault a retry may get past (the root's, a name's lstat, a link's read) as a look
   given up on, as `SafeJoinListed`'s do, so a caller that reads a join's error as "none" checks
@@ -1354,16 +1357,70 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   refuses a link a join allows, one that stays in the root by an absolute target or by climbing above it
   and back, so `Below` opens the resolved path through the root then
   (`TestOpenRegularBelowNeverLeavesTheRoot`, `TestReadDirBelowNeverLeavesTheRoot`,
-  `TestStreamOpensThroughTheRootAfterASwap`). So does a transcode, whose ffmpeg reads the descriptor opened
-  there, never the path (`media.Transcode`, `fileInput`: ffmpeg's stdin as `fd:`, else on Unix the child's
-  descriptor 3 read as `/dev/fd/3`, else the resolved path re-checked as the file opened, `recheckedInput`, a
-  bounded look;
-  `TestTranscodeOpensThroughTheRoot`), and a remux's or a rendition's source: its look (`media.Source`, a stat
-  through the root) and its run's open (`FileCache.make`), whose descriptor ffmpeg reads
-  (`TestFileCacheSourceThroughTheRoot`). The reader's ebook and a podcast episode check the open file
-  against the path again instead (`OpenEbook`, `OpenPodcast`: `os.SameFile`). Still a check and then a look
-  by path: an asked book's read (`resolveBook`, the probes), the Bridge's file stats
-  (`statBookFiles`), `LookArt`'s stat and the looks under `.audiosilo/`. The scan takes no link out of the root
+  `TestStreamOpensThroughTheRootAfterASwap`). So does a transcode, whose ffmpeg reads the file opened there,
+  never the path (`media.Transcode`, `fileInput`: ffmpeg's stdin as `fd:`, else the file as
+  `metadata.ToolInput` hands every tool one, below; `TestTranscodeOpensThroughTheRoot`), and a remux's or a
+  rendition's source: its look (`media.Source`, a stat through the root) and its run's open
+  (`FileCache.make`), whose descriptor ffmpeg reads (`TestFileCacheSourceThroughTheRoot`). A podcast episode
+  checks the open file against the path again instead (`OpenPodcast`: `os.SameFile`); the reader's ebook does both (`OpenEbook`: opened through the root,
+  `metadata.OpenBelow`, then `os.SameFile`). The scan's reads and an asked book's (`resolveBook`, then
+  `indexBook`) go through the root too, so a name swapped for a link out of it after the walk's or the join's
+  check is never followed: the audio read, tags and the in-process probe (`metadata.ExtractTimeout` and
+  `ExtractTags`, given the library's root), the fingerprint (`metadata.Fingerprint`), the files beside the
+  audio (`metadata.ReadABSFile`, the `.audiosilo/` attachments, a podcast episode's chapters among them
+  (`podcastChapters`, given the library's root, never the show's folder: `TestPodcastChaptersReadThroughTheLibraryRoot`),
+  and the read-along map: `readRegularFileInfo` looks and opens through the root, then `os.SameFile`), a problem's recheck (`sideAnswers`), a book's own
+  stat (`statLook`, `metadata.StatBelowBounded`), `LookArt`'s stat (`artStat`, `metadata.StatBelow`) and the
+  Bridge's file stats (`statBookFiles`' `bridgeStatLook`). These open through `metadata.BelowFolder`: the
+  file's folder is opened once through the root and kept open a moment (`belowFolders`: 2 s idle, 30 s at
+  most, 64 folders), so a book's files cost one `openat` each, what the plain open of the path cost (the
+  in-process probe's speed, SCAN-SPIKE, is kept: `BenchmarkOpenBelowFolder`); a kept folder swapped for a
+  link since is never followed, and a kept folder is looked at again on each use (`folderCache.current`: a stat
+  of the handle and one of its path, `os.SameFile`), so one renamed away, replaced or remounted is opened again,
+  never read through the old handle (`TestBelowFolderReadsTheFolderAtItsPathNow`); a name not there is the
+  answer, both folders kept (an episode with no chapters file costs one look,
+  `TestBelowFolderKeepsItsFoldersForANameNotThere`), a folder whose handle went stale (ESTALE) is let go. On
+  Windows no folder is kept past its read (`openOnly`: an open folder there blocks renaming the folders above
+  it, `TestFolderCacheOpenOnlyKeepsNothing`). Every kept folder is let go at once when a library is removed
+  or its root (or ignore patterns) change, and as the server stops (`metadata.CloseFolders`: an unmount never
+  meets a folder held for a next read, only the reads in progress, a stopped scan's last ones included;
+  `TestLibraryGoneKeepsNoFolderOpen`, `TestCloseFoldersLetsEveryFolderGo`). A read that finds another has
+  kept the folder while it opened its own reads through its own, never the kept one unlooked at
+  (`TestFolderCacheNeverTakesAKeptFolderUnlookedAt`). A name its
+  folder can't open (a link to a folder beside it, an absolute target) is opened through the root's kept
+  folder, then resolved as `Below` does (an lstat's up to its last name only, so `LstatBelow` is always the
+  link's own: `TestLstatBelowIsTheLinksOwn`). An external tool is handed the file
+  opened so, never its path (`metadata.ToolInput`): ffprobe's fallback run (`runFFprobe`), the chapter
+  check's ffmpeg (`media.DetectSilences`, given the library's root) and a transcode on an ffmpeg without
+  `fd:` (`media.fileInput`, through `ToolInputBounded`: where its looks are on the share, Windows, a bounded
+  look whose late answer's handle is closed when it comes, `TestBoundedToolInputGivenUp`). On Unix the tool inherits the descriptor
+  and is named a link to its own `/dev/fd/3` in a private folder, named for the file's extension (ffmpeg
+  guesses a format by it; `TestProbeMatchesLiveFFprobe` holds parity), or, with no temporary folder it may
+  write to (a read-only container), `/dev/fd/3` itself, its format guessed from its bytes
+  (`TestToolInputWithNoTempFolder`); on Windows it is given the path resolved, checked to be under the root
+  and the very file opened (`os.SameFile`, `heldPathInput`, built and tested on every platform:
+  `TestHeldPathInput`) through a second handle held until the tool is done: opened
+  without delete sharing, it keeps the file from being renamed or replaced meanwhile (the os.Root open
+  shares deletion), and a folder along it can't be renamed while a file in it is open there. The tool reads
+  the file as an audio container only: both runs pass `metadata.InputFormatArgs()`
+  (`-format_whitelist` `metadata.InputFormats`: the audio containers a book may be in under an indexed
+  name, none of which opens another input; the one list for every run on a library file; before the input
+  for ffprobe, before `-i` for ffmpeg), since FFmpeg picks a demuxer by the file's bytes and one shaped
+  like a playlist (concat, hls, dash, sdp) under an audio name would have it open the files it lists
+  (`TestProbeReadsNoPlaylist`, `TestDetectSilencesReadsNoPlaylist`); a new ffprobe or ffmpeg run on a library
+  file passes them too, and so does every transcode and watch rendition, on every input they take (see
+  Transcoding); only the MP3-in-MKA remux names its one demuxer (`-f matroska`). A start removes the private folders an earlier run left in the temporary folder
+  (`metadata.SweepToolInputs`: `audiosilo-input-*`, the server's user's, 0700, over an hour old, holding only
+  the link; `TestSweepInputDirsRemovesOnlyItsOwn`). A test's
+  ffprobe stand-in reads the path from `AUDIOSILO_TEST_INPUT`
+  (`metadata.TestInputEnv`, set in a test binary only) (`TestIndexPathReadsThroughTheRootAfterASwap`,
+  `TestScanReadsThroughTheRootAfterASwap`, `TestFFprobeReadsTheFileTheScanOpened`,
+  `TestAttachmentsReadThroughTheRootAfterASwap`, `TestReadalongMapReadThroughTheRootAfterASwap`,
+  `TestLookArtStatsThroughTheRootAfterASwap`, `TestBridgeBookFilesStatThroughTheRoot`,
+  `TestProberHandsFFmpegTheFileItOpened`, `TestBelowFolderNeverLeavesTheRoot`, `TestToolInputIsTheOpenedFile`).
+  Still a check and then a look by path: a podcast show's `feed.json` and a library's `library.json`
+  (`metadata.ReadRegularFile`: an lstat, an open and `os.SameFile`, all by path), and the looks (listings,
+  lstats) that only decide what a scan reads. The scan takes no link out of the root
   either, by the same rule (`linkOut`: `SafeJoin` of each link the walk lists, looked at once the walk ends,
   width at a time, `linksInRoot`; a plain file never looked at again): a file or folder link out in a book
   folder is never a part, nor a cover (`coverLook.find`, which looks at a cover's own entry before any stat,
@@ -1522,7 +1579,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   cover version, `stampAddedAt`'s statx and lstat (a birth time before 1980 is none, `birthKnown`, the
   mtime standing in; `0087` redates the rows a scan stamped before 1980 to the book's mtime, else
   to when it was last indexed), `problemCleared`'s look), the backfill's embedded cover read
-  (`media.EmbeddedCover`), and in the API `/item`'s look at the book's ebook (`RefreshEbook`, given
+  (`media.EmbeddedCoverBelow`, through the library's root), and in the API `/item`'s look at the book's ebook (`RefreshEbook`, given
   `API.fileWait` and answering with the stored ebook past it: the probe's time is the request's own),
   every cover (full, thumbnail, a
   show's: `serveArt`, `coverArt`, `readSidecar`) and every look a stream makes at its file (SRV-15c: the
@@ -1668,14 +1725,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode, ffmpeg reading the
   descriptor opened through the library's root (`fileInput`: `fd:` on its stdin, seekable; without the fd
   protocol, an ffmpeg older than 6.1, the child's descriptor 3 as `/dev/fd/3` on Unix, seekable too, so an
-  input `-ss` and an MP4 whose index sits at its end still work, or the re-checked resolved path elsewhere;
+  input `-ss` and an MP4 whose index sits at its end still work, or the re-checked resolved path elsewhere,
+  both as `metadata.ToolInput` hands every tool a library file, see Path spelling;
   `TestTranscodeSeeksTheDescriptor`), the input's protocol the only one it may open (`-protocol_whitelist`:
   through `fd:` no other file; through `/dev/fd/3` or a path the `file` protocol, which opens any local file),
-  and an audio container the only input (`-format_whitelist` `audioDemuxers`, on every input whose demuxer
-  ffmpeg guesses: the transcode's, a podcast episode's and the watch rendition's; the remux names its own): a
-  file that probes as a manifest or a playlist, DASH, HLS or ffconcat, is refused, where through the `file`
-  protocol ffmpeg opened the files it names and transcoded them to whoever could stream it
-  (`TestTranscodeOpensNoOtherInput`; a new container is added to the list and to
+  and an audio container the only input (`metadata.InputFormatArgs`, the one list the probe and the chapter
+  check take too, on every input whose demuxer ffmpeg guesses: the transcode's, a podcast episode's and the
+  watch rendition's; the remux names its own): a file that probes as a manifest or a playlist, DASH, HLS or
+  ffconcat, is refused, where through the `file` protocol ffmpeg opened the files it names and transcoded
+  them to whoever could stream it (`TestTranscodeOpensNoOtherInput`; at the API an empty transcode and a 422
+  `rendition_failed`, `TestCraftedPlaylistIsNoInput`; a new container is added to the list and to
   `TestAllowListReadsEveryLibraryFormat`); a HEAD
   runs no ffmpeg, its probe included, a podcast episode's too;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
@@ -1733,7 +1792,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `<data>/cache/renditions/watch/<key>.m4a`, never into the library (read-only). The encode (`renditionArgs`) is
   AAC-LC (ffmpeg's own `aac`; HE-AAC needs the non-free libfdk_aac), mono, 48 kbps, 44.1 kHz, MP4 with
   `+faststart`, no video, metadata or chapters, `+bitexact` (format and encoder), the input only the descriptor
-  (`-protocol_whitelist fd|pipe`, the demuxer ffmpeg's guess); no `-xerror` (it fails a whole encode on one damaged
+  (`-protocol_whitelist fd|pipe`, the demuxer ffmpeg's guess among `metadata.InputFormats`); no `-xerror` (it fails a whole encode on one damaged
   MP3 frame, ffmpeg 7.1 tested). Its duration is the source's (within 0.1 s on MP3 and M4B), so positions and
   chapters (CROSS-REPO §6) hold; since a read error partway still exits 0, a copy more than 1 s short of the
   source's exact duration (`metadata.ExactDuration`, the in-process probe, a header-less VBR MP3's frames counted;
@@ -2045,7 +2104,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a backfill and an index alike (`UpsertBook`; a new row gets none), so the next scan looks again
   (`TestIndexKeepsEbookItCantRead`). Every open, the scan's and the route's, is `library.OpenEbook`: a
   regular file inside the library checked before it is opened (a FIFO's open would wait for a writer,
-  `TestOpenEbookFIFO`) and, once open, still the very file its name leads to (`os.SameFile`).
+  `TestOpenEbookFIFO`), opened through the library's root (`metadata.OpenBelow`) and, once open, still the
+  very file its name leads to (`os.SameFile`).
   `books.ebook_size` (`0058`, backfilled from the signature) is the recorded file's size, written
   with `ebook_path` (`UpsertBook`, `SetEbooks`). Only a book with a read-along map has its ebook
   hashed (Bridge Phase 3c: `books.ebook_sha256`, computed for the `ebook_sig` in
@@ -2124,7 +2184,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   after the upgrade touches only books that have one. `setABSFile` re-resolves a book unless the
   reading equals the one recorded for this very index (an older server's re-index resolved the
   row without it). `metadata.ReadABSFile` reads a regular file only, never through a link (one
-  swapped in after the walk included: `os.SameFile` on the opened file). A file that can't be used
+  swapped in after the walk included: looked at and opened through the library's root, then `os.SameFile`
+  on the opened file). A file that can't be used
   (not JSON, too large, not a regular file: `metadata.ErrABSFileInvalid`) keeps its signature (read
   again once it changes); one that can't be looked at or read right now (a flaky mount, a share that
   stopped answering: its lstat and read are `metadata.Bounded` calls, see In-process probe) is
@@ -2245,7 +2306,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `API.resolvePending`), which the console's toast reports as finishing in the background.
   `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
   NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
-  with a tag read (`media.EmbeddedCover`, no ffprobe). A `scanned` snapshot carries `@rev` (`scannedRevKey`), the path baseline's revision: one
+  with a tag read (`media.EmbeddedCoverBelow`, no ffprobe). A `scanned` snapshot carries `@rev` (`scannedRevKey`), the path baseline's revision: one
   without it (any older server's) was read when a lone folder above the book was its series.
   `Signatures` classifies such a book one folder deep (`pathCheckExpr`): settled by the snapshot
   alone (a tag's series and no author, missing or 0016's "": the folder is the author; the folder
@@ -2978,7 +3039,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`problemCleared`: a fixed permission changes neither mtime nor size). A one-file book with a
   problem counts as unchanged while `problemCleared` finds the problem there (`soleFileProblem`;
   its metadata files are still read), and a file ffprobe rejected (`ErrProbeRejected`: its last
-  stderr line is ffmpeg's invalid-data words) is not probed again while its own mtime and size are
+  stderr line is ffmpeg's invalid-data words, or its invalid-argument words after "Format not on
+  whitelist", a format `InputFormats` leaves out) is not probed again while its own mtime and size are
   as they were then (`noteRejected`, by absolute path, for the server's life; any other reading of
   the file forgets it). A folder book
   whose parts are all >= 1 h with >= 2 distinct titles (tag, else file name) gets
@@ -5477,7 +5539,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `same_root` names a library already at exactly the root (a warning; create allows it). It walks as a
   scan discovers (`discoverAuto`, no overrides, a `walkCap` of 5,000 folders and 10 s: `capped`), reads
   (four at a time, under the preview's 15 s overall: none starts after it, one running then is ended with
-  its ffprobe via `metadata.ExtractContext` and left out, fewer samples, `capped` untouched) 8 samples spread evenly over the path-sorted books as a scan reads names (`setNames`: tags over
+  its ffprobe via `metadata.ExtractTimeout`'s ctx and left out, fewer samples, `capped` untouched) 8 samples spread evenly over the path-sorted books as a scan reads names (`setNames`: tags over
   `DeriveFromPath`, `readABS`; no fingerprint, chapters or covers), and names each both ways with
   `catalog.ResolveScanned` (the stored book's own `bookLayers.scannedFields`, so preview and library never
   disagree): `tags` as a tags-first library shows it, `path` from the folders alone (the names a scan reads

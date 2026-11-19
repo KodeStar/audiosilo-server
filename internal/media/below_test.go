@@ -106,10 +106,11 @@ func TestTranscodeSeeksTheDescriptor(t *testing.T) {
 	t.Parallel()
 	ffprobe := needFFmpeg(t)
 	src := writeNonFaststartM4A(t)
-	// Without fd: (an ffmpeg older than 6.1) the descriptor is /dev/fd/3 on
-	// Unix, the re-checked path elsewhere: both seekable.
+	// Without fd: (an ffmpeg older than 6.1) the input is metadata.ToolInput's
+	// (/dev/fd/3 through a link on Unix, the re-checked path elsewhere): both
+	// seekable.
 	ffmpegs := map[string]string{"no fd:": pipeOnlyFFmpeg(t)}
-	if inputFor("ffmpeg") == fdInput {
+	if inputFor("ffmpeg").proto == fdInput.proto {
 		ffmpegs["fd:"] = "ffmpeg"
 	}
 	for name, ffmpeg := range ffmpegs {
@@ -126,28 +127,6 @@ func TestTranscodeSeeksTheDescriptor(t *testing.T) {
 				t.Errorf("%s: transcoded duration from %v s = %v, want about %v", name, tc.start, d, tc.want)
 			}
 		}
-	}
-}
-
-// TestRecheckedInput: the fallback where ffmpeg can be handed no descriptor
-// (Windows without fd:) is the file's resolved path, only while it names the
-// file opened: the same file through a link gives the link's target, a path
-// that leads elsewhere since the open none.
-func TestRecheckedInput(t *testing.T) {
-	t.Parallel()
-	root, outside := libraryWithOutside(t)
-	f, _, err := metadata.OpenRegularBelow(root, filepath.Join(root, "Book", "a.m4a"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	in, err := recheckedInput(f)
-	if want := "file:" + filepath.Join(root, "Book", "a.m4a"); err != nil || in.url != want || in.proto != "file" || in.file != nil {
-		t.Fatalf("recheckedInput in place = %+v, %v, want %s alone", in, err, want)
-	}
-	swapForLink(t, root, outside)
-	if in, err := recheckedInput(f); !errors.Is(err, errNotOpened) {
-		t.Fatalf("recheckedInput once the path leads out of the library = %+v, %v, want errNotOpened", in, err)
 	}
 }
 
@@ -194,6 +173,37 @@ func TestOpenFaultsAnswerByKind(t *testing.T) {
 			case !c.transient && (got.err != nil || got.rec.Code != http.StatusNotFound):
 				t.Errorf("%s with its open failing %v = %v, %d, want a 404", what, c.errno, got.err, got.rec.Code)
 			}
+		}
+	}
+}
+
+// TestInputFaultsAnswerByKind: where ffmpeg is handed the file as
+// metadata.ToolInputBounded hands it (an ffmpeg without fd:), a look of its
+// that fails as a share does that a retry may get past (EIO, ESTALE: Windows'
+// re-check of the path on a share that dropped) is returned with nothing
+// written, the caller's 503 share_not_answering; a lasting refusal (a
+// permission) and the file gone are the 404. Not parallel: it swaps
+// toolInputBounded.
+func TestInputFaultsAnswerByKind(t *testing.T) {
+	root := t.TempDir()
+	abs := filepath.Join(root, "a.mp3")
+	if err := os.WriteFile(abs, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ffmpeg := echoFFmpeg(t) // no fd: protocol, so the file goes through toolInputBounded
+	was := toolInputBounded
+	t.Cleanup(func() { toolInputBounded = was })
+	for _, c := range shareFaults {
+		toolInputBounded = func(context.Context, *os.File, string, string, time.Duration) (string, []*os.File, func(), error) {
+			return "", nil, nil, &fs.PathError{Op: "open", Path: abs, Err: c.errno}
+		}
+		rec := httptest.NewRecorder()
+		_, err := Transcode(rec, httptest.NewRequest(http.MethodGet, "/", nil), root, abs, ffmpeg, 0, false, time.Minute, 0, nil)
+		switch {
+		case c.transient && (!metadata.GaveUp(err) || !errors.Is(err, c.errno) || rec.Body.Len() != 0):
+			t.Errorf("Transcode with its input's look failing %v = %v (%d written), want the fault returned given up on, nothing written", c.errno, err, rec.Body.Len())
+		case !c.transient && (err != nil || rec.Code != http.StatusNotFound):
+			t.Errorf("Transcode with its input's look failing %v = %v, %d, want a 404", c.errno, err, rec.Code)
 		}
 	}
 }

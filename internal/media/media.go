@@ -300,12 +300,13 @@ func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 // download its client stopped reading; 0 never ends a stream for that). log
 // may be nil. The file is opened through root as ServeFile opens it
 // (metadata.OpenRegularBelow, one metadata.Bounded call: the request's
-// context, at most wait) and ffmpeg reads that descriptor (fileInput), never
-// the path: a name along it swapped for a link out of the library after the
-// caller's check is refused (a 404), never followed by ffmpeg's own open. An
-// open given up on (openLibraryFile), or the path's re-check where ffmpeg is
-// handed one (fileInput), is returned with nothing written, for the caller to
-// answer (ServeFile's rule);
+// context, at most wait) and ffmpeg reads that descriptor (fileInput) or,
+// where none can be handed over (Windows without fd:), the path checked to
+// lead to it and held so: a name along it swapped for a link out of the
+// library after the caller's check is refused (a 404), never followed by
+// ffmpeg's own open. An open given up on (openLibraryFile), or the path's
+// re-check where ffmpeg is handed one (fileInput), is returned with nothing
+// written, for the caller to answer (ServeFile's rule);
 // every other outcome is answered here and returns nil. ended reports a
 // stream that ran to its end (transcodeInput).
 // download makes the stream an attachment named for the file (its stem with
@@ -325,7 +326,7 @@ func Transcode(w http.ResponseWriter, r *http.Request, root, absPath, ffmpegPath
 		// either.
 		return transcodeInput(w, r, inputSpec{}, absPath, ffmpegPath, startSec, download, idle, log), nil
 	}
-	in, err := fileInput(r.Context(), ffmpegPath, f, wait)
+	in, cleanup, err := fileInput(r.Context(), ffmpegPath, f, root, absPath, wait)
 	switch {
 	case metadata.GaveUp(err):
 		return false, err // the re-check's looks, on a share that stopped answering
@@ -335,6 +336,7 @@ func Transcode(w http.ResponseWriter, r *http.Request, root, absPath, ffmpegPath
 		http.Error(w, "not found", http.StatusNotFound)
 		return false, nil
 	}
+	defer cleanup()
 	return transcodeInput(w, r, in, absPath, ffmpegPath, startSec, download, idle, log), nil
 }
 
@@ -361,61 +363,48 @@ func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegP
 	return transcodeInput(w, r, in, f.Name(), ffmpegPath, startSec, download, idle, log)
 }
 
-// fileInput is how ffmpeg reads f, a library file opened below its root
-// (Transcode), without resolving its path again: f as its stdin through the
-// fd: protocol when this ffmpeg has it (inputFor), else descriptorInput (the
-// platform's: on Unix f handed over as the child's descriptor 3, read
-// seekably as /dev/fd/3, where pipe:0 could neither seek nor demux an MP4
-// whose index sits at its end; elsewhere the resolved path, re-checked as
-// the file opened, its looks a metadata.Bounded call: ctx, at most wait). An
-// error is a path that no longer leads to f, or those looks given up on
-// (metadata.GaveUp).
-func fileInput(ctx context.Context, ffmpegPath string, f *os.File, wait time.Duration) (inputSpec, error) {
-	if in := inputFor(ffmpegPath); in == fdInput {
+// fileInput is how ffmpeg reads f, the library file at path under root,
+// opened through root (Transcode), without resolving its path again: f as
+// its stdin through the fd: protocol when this ffmpeg has it (inputFor), else
+// handed over as metadata.ToolInput hands every tool a library file (its
+// ToolInputBounded: ctx, at most wait), read by the file protocol: on Unix
+// the child's descriptor 3 through a link named for path's extension, read
+// seekably (an input -ss; an MP4 whose index sits at its end demuxes, which
+// pipe:0 can't), never a path in the library; elsewhere path resolved,
+// checked to be under root and f, and held so until cleanup. Since the file
+// protocol opens any local file, the input may only be an audio container
+// (transcodeArgs: metadata.InputFormatArgs), never a playlist naming others;
+// fd: and pipe:0 open none whatever the demuxer, which is why a podcast
+// episode, publisher bytes, never takes this fallback. cleanup, called once
+// ffmpeg is done, lets go of what was made for it. An error is a path that no
+// longer leads to f, or the looks given up on (metadata.GaveUp).
+func fileInput(ctx context.Context, ffmpegPath string, f *os.File, root, path string, wait time.Duration) (in inputSpec, cleanup func(), err error) {
+	if in := inputFor(ffmpegPath); in.proto == fdInput.proto {
 		in.file = f
-		return in, nil
+		return in, func() {}, nil
 	}
-	return descriptorInput(ctx, f, wait)
+	input, extra, cleanup, err := toolInputBounded(ctx, f, root, path, wait)
+	if err != nil {
+		return inputSpec{}, nil, transientGaveUp(err)
+	}
+	return inputSpec{proto: "file", url: "file:" + input, extra: extra}, cleanup, nil
 }
 
-// recheckedInput is f's resolved path for an ffmpeg that can be handed no
-// descriptor it can seek (no fd: protocol, no /dev/fd): the path with every
-// link resolved (filepath.EvalSymlinks), so ffmpeg follows none, and only
-// when it names f itself (os.SameFile with the open file, which was opened
-// through the library's root). What is left is the moment between this check
-// and ffmpeg's open. The input may be a file only (-protocol_whitelist), and
-// an audio container only (transcodeArgs: audioDemuxers).
-func recheckedInput(f *os.File) (inputSpec, error) {
-	opened, err := f.Stat()
-	if err != nil {
-		return inputSpec{}, err
-	}
-	real, err := filepath.EvalSymlinks(f.Name())
-	if err != nil {
-		return inputSpec{}, err
-	}
-	now, err := os.Stat(real)
-	if err != nil {
-		return inputSpec{}, err
-	}
-	if !os.SameFile(opened, now) {
-		return inputSpec{}, errNotOpened
-	}
-	return inputSpec{proto: "file", url: "file:" + real}, nil
-}
-
-// errNotOpened is recheckedInput's for a path that leads to another file than
-// the one opened.
-var errNotOpened = errors.New("media: the path no longer leads to the file opened")
+// toolInputBounded is fileInput's metadata.ToolInputBounded, a test's to
+// inject a share's errors: only Windows' re-check of the path looks at the
+// share, so no other platform meets them.
+var toolInputBounded = metadata.ToolInputBounded
 
 // inputSpec is how ffmpeg reads its input: the descriptor file handed over as
 // its stdin through the fd: protocol (seekable) or pipe:0 (not seekable, for
-// an ffmpeg older than 6.1), or as its descriptor 3 read by the file protocol
-// as /dev/fd/3 (seekable, Unix: setInput); or a file's path (recheckedInput,
-// no file). proto is the one protocol ffmpeg may open (-protocol_whitelist).
+// an ffmpeg older than 6.1), or what metadata.ToolInput hands a tool, read by
+// the file protocol: extra its inherited descriptors (exec.Cmd.ExtraFiles),
+// none for a path. proto is the one protocol ffmpeg may open
+// (-protocol_whitelist).
 type inputSpec struct {
 	proto, url string
 	file       *os.File
+	extra      []*os.File
 }
 
 var (
@@ -494,20 +483,12 @@ func listsInputProtocol(out, name string) bool {
 	return false
 }
 
-// audioDemuxers are the demuxers ffmpeg may read a library file or a podcast
-// episode with, its -format_whitelist on every input whose demuxer it guesses
-// (transcodeArgs, renditionArgs; the remux names its own, -f matroska): the
-// containers the library's extensions name (metadata.AudioExtensions: MP4 as
-// mov, MP3, FLAC, Ogg, Matroska) and the plain audio files one of them may be
-// under another's name (ADTS AAC, WAV and the like). Each reads its one input
-// and opens no other. Without the list a file that probes as a manifest or a
-// playlist (DASH, HLS, ffconcat) had ffmpeg open what it names: through the
-// file protocol (/dev/fd/3, a re-checked path: an ffmpeg older than 6.1),
-// which opens any local file, another library's audio, transcoded to whoever
-// could stream the crafted one. fd: and pipe:0 leave such a demuxer nothing to
-// open (-protocol_whitelist); the list is on them all the same, so no input
-// rests on the protocol alone.
-const audioDemuxers = "mov,mp3,flac,ogg,matroska,aac,wav,w64,aiff,asf,ac3,eac3,ape,wv,caf,amr"
+// inputArgs starts every ffmpeg command line that reads in, its demuxer
+// guessed (transcodeArgs, renditionArgs): in's protocol the only one ffmpeg
+// may open, an audio container (metadata.InputFormatArgs) the only input.
+func inputArgs(in inputSpec) []string {
+	return append([]string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", in.proto}, metadata.InputFormatArgs()...)
+}
 
 // transcodeArgs is the ffmpeg command line that re-encodes in to MP3 on
 // stdout from startSec. A seekable input (fd:, /dev/fd/3, a path) seeks on the
@@ -515,10 +496,12 @@ const audioDemuxers = "mov,mp3,flac,ogg,matroska,aac,wav,w64,aiff,asf,ac3,eac3,a
 // pipe:0 can't seek, so there -ss follows -i and decodes up to it. The input's
 // protocol is the only one ffmpeg may open (-protocol_whitelist): never the
 // network, and through fd: or pipe:0 no other file either. The input may only
-// be an audio container (-format_whitelist, audioDemuxers), never a manifest
-// or a playlist naming other inputs, which the file protocol would open.
+// be an audio container (metadata.InputFormatArgs, the one list every tool
+// run on a library file takes), never a manifest or a playlist naming other
+// inputs (DASH, HLS, ffconcat), which the file protocol would open: another
+// library's audio, transcoded to whoever could stream the crafted file.
 func transcodeArgs(in inputSpec, startSec float64) []string {
-	args := []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", in.proto, "-format_whitelist", audioDemuxers}
+	args := inputArgs(in)
 	var seek []string
 	if startSec > 0 {
 		seek = []string{"-ss", strconv.FormatFloat(startSec, 'f', 3, 64)}
@@ -556,14 +539,11 @@ const TranscodeIdle = 10 * time.Minute
 // handler, or the process unreaped.
 const transcodeWaitDelay = 5 * time.Second
 
-// setInput hands in's descriptor to cmd: its descriptor 3 when ffmpeg reads it
-// through the file protocol (/dev/fd/3, descriptorInput), else its stdin.
+// setInput hands in's descriptors to cmd: those the file protocol's input
+// names (fileInput: metadata.ToolInput's), else file as its stdin.
 func setInput(cmd *exec.Cmd, in inputSpec) {
-	switch {
-	case in.file == nil:
-	case in.proto == "file":
-		cmd.ExtraFiles = []*os.File{in.file}
-	default:
+	cmd.ExtraFiles = in.extra
+	if in.file != nil {
 		cmd.Stdin = in.file
 	}
 }
@@ -725,34 +705,25 @@ func coverMIME(data []byte) (string, bool) {
 	return mime, coverImageTypes[mime]
 }
 
-// EmbeddedCover returns embedded cover art from absPath with its sniffed image
-// type (see coverMIME): nil data and no error when the file holds none (art
-// that isn't an image is no art, and so is a file whose tags don't read). An
-// error is a file that couldn't be opened or read right now: its open and tag
-// read are one metadata.Bounded call (ctx, at most timeout, the per-mount cap
-// of a scan's reads), so a share that stopped answering costs at most timeout
-// (metadata.GaveUp), never a caller held for good; a FIFO is turned away at
-// once (metadata.OpenRegular), never waited on for a writer.
-func EmbeddedCover(ctx context.Context, absPath string, timeout time.Duration) (data []byte, mime string, err error) {
-	return embeddedCover(ctx, absPath, timeout, func() (*os.File, os.FileInfo, error) { return metadata.OpenRegular(absPath) })
-}
-
-// EmbeddedCoverBelow is EmbeddedCover of absPath, a file a request named
-// that its caller joined and checked under the library root root, opened
-// through root (metadata.OpenRegularBelow): the open can't leave the library
-// whatever changed on disk since the check.
+// EmbeddedCoverBelow returns embedded cover art from absPath, a file its
+// caller joined and checked under the library root root (a request's, or the
+// scan's cover backfill), with its sniffed image type (see coverMIME): nil
+// data and no error when the file holds none (art that isn't an image is no
+// art, and so is a file whose tags don't read). The file is opened through
+// root (metadata.OpenRegularBelow): the open can't leave the library whatever
+// changed on disk since the check. An error is a file that couldn't be opened
+// or read right now: its open and tag read are one metadata.Bounded call
+// (ctx, at most timeout, the per-mount cap of a scan's reads), so a share
+// that stopped answering costs at most timeout (metadata.GaveUp), never a
+// caller held for good; a FIFO is turned away at once, never waited on for a
+// writer.
 func EmbeddedCoverBelow(ctx context.Context, root, absPath string, timeout time.Duration) (data []byte, mime string, err error) {
-	return embeddedCover(ctx, absPath, timeout, func() (*os.File, os.FileInfo, error) { return metadata.OpenRegularBelow(root, absPath) })
-}
-
-// embeddedCover is EmbeddedCover with the file's open.
-func embeddedCover(ctx context.Context, absPath string, timeout time.Duration, open func() (*os.File, os.FileInfo, error)) (data []byte, mime string, err error) {
 	type art struct {
 		data []byte
 		mime string
 	}
 	a, err := metadata.Bounded(ctx, absPath, timeout, func() (art, error) {
-		f, _, err := open()
+		f, _, err := metadata.OpenRegularBelow(root, absPath)
 		if err != nil {
 			return art{}, err
 		}

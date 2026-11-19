@@ -27,7 +27,7 @@ type readSlots struct {
 	// timeout is each ffprobe run's (Scanner.probeTimeout).
 	timeout time.Duration
 	// readFile is metadata.ExtractTimeout, or a test's stand-in for it.
-	readFile func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata
+	readFile readFunc
 }
 
 // newReadSlots returns n slots (at least one) whose ffprobe runs get timeout.
@@ -45,9 +45,13 @@ func (s *Scanner) readSlots(n int) *readSlots {
 	return slots
 }
 
+// readFunc reads the audio file at absPath, under the library root root,
+// opened through it (metadata.ExtractTimeout), its ffprobe run given timeout.
+type readFunc func(ctx context.Context, root, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata
+
 // extractFile is metadata.ExtractTimeout's reading (it never errs).
-func extractFile(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
-	md, _ := metadata.ExtractTimeout(ctx, absPath, ffprobePath, timeout)
+func extractFile(ctx context.Context, root, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
+	md, _ := metadata.ExtractTimeout(ctx, root, absPath, ffprobePath, timeout)
 	return md
 }
 
@@ -66,8 +70,8 @@ func (r *readSlots) size() int { return cap(r.ch) }
 // ffprobe to fall back to (ProbeTimedOut): it would otherwise have no duration.
 // And one whose header-less VBR MP3 went uncounted (LengthUncounted): its
 // length would otherwise be ffprobe's estimate until a later scan.
-func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *metadata.Metadata {
-	md, shared := r.read(ctx, absPath, ffprobePath)
+func (r *readSlots) extract(ctx context.Context, root, absPath, ffprobePath string) *metadata.Metadata {
+	md, shared := r.read(ctx, root, absPath, ffprobePath)
 	if ctx.Err() != nil {
 		// Stopped (an MP3's count cut short is uncounted): dropped, never
 		// retried behind a read stuck on a share.
@@ -82,7 +86,7 @@ func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *m
 	if ctx.Err() != nil {
 		return nil // stopped while it waited: dropped by the scan
 	}
-	return r.readFile(ctx, absPath, ffprobePath, r.timeout)
+	return r.readFile(ctx, root, absPath, ffprobePath, r.timeout)
 }
 
 // lengthTimedOut reports whether md's length read ran out of time: its ffprobe
@@ -134,7 +138,7 @@ func lengthKnown(md *metadata.Metadata) bool {
 
 // read is metadata.ExtractTimeout holding a slot, and whether another read ran
 // beside it; nil when ctx ends first.
-func (r *readSlots) read(ctx context.Context, absPath, ffprobePath string) (*metadata.Metadata, bool) {
+func (r *readSlots) read(ctx context.Context, root, absPath, ffprobePath string) (*metadata.Metadata, bool) {
 	select {
 	case r.ch <- struct{}{}:
 	case <-ctx.Done():
@@ -148,7 +152,7 @@ func (r *readSlots) read(ctx context.Context, absPath, ffprobePath string) (*met
 	}
 	start := r.started.Add(1)
 	before := r.active.Add(1)
-	md := r.readFile(ctx, absPath, ffprobePath, r.timeout)
+	md := r.readFile(ctx, root, absPath, ffprobePath, r.timeout)
 	after := r.active.Add(-1)
 	return md, before > 1 || after > 0 || r.started.Load() != start
 }
@@ -166,7 +170,7 @@ func (s *Scanner) readFiles(ctx context.Context, lib catalog.Library, files []ca
 	mds[0] = first
 	read := func(i int) {
 		if ctx.Err() == nil { // stopped: the scan drops this book's reading
-			mds[i] = slots.extract(ctx, absOf(lib, files[i].RelPath), s.ffprobePath)
+			mds[i] = slots.extract(ctx, lib.Root, absOf(lib, files[i].RelPath), s.ffprobePath)
 		}
 	}
 	workers := min(slots.size(), len(files)-1)

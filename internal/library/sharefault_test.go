@@ -34,11 +34,11 @@ func failLooks(t *testing.T, fail map[string]syscall.Errno) {
 		}
 		return wasDir(ctx, p, timeout)
 	}
-	statLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+	statLook = func(ctx context.Context, root, p string, timeout time.Duration) (fs.FileInfo, error) {
 		if errno, ok := fail[p]; ok {
 			return nil, &fs.PathError{Op: "stat", Path: p, Err: errno}
 		}
-		return wasStat(ctx, p, timeout)
+		return wasStat(ctx, root, p, timeout)
 	}
 }
 
@@ -211,8 +211,8 @@ func TestAskedBookRefusedForGoodIsNotIndexable(t *testing.T) {
 				failLooks(t, fail)
 				if look == "listing" {
 					wasStat := statLook
-					statLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
-						return metadata.StatBounded(ctx, p, timeout)
+					statLook = func(ctx context.Context, root, p string, timeout time.Duration) (fs.FileInfo, error) {
+						return metadata.StatBelowBounded(ctx, root, p, timeout)
 					}
 					t.Cleanup(func() { statLook = wasStat })
 				}

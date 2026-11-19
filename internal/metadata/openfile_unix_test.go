@@ -32,11 +32,11 @@ func TestFIFOIsNotRead(t *testing.T) {
 			t.Cleanup(func() { _ = w.Close() })
 		}
 		start := time.Now()
-		m, err := ExtractTimeout(context.Background(), path, "/no/such/ffprobe", time.Minute)
+		m, err := ExtractTimeout(context.Background(), filepath.Dir(path), path, "/no/such/ffprobe", time.Minute)
 		if err != nil || !errors.Is(m.OpenErr, ErrNotRegular) || m.TagsUnread() || m.ProbeErr != nil {
 			t.Errorf("writer %v: FIFO read = %+v (err %v), want it not a regular file, no ffprobe", writer, m, err)
 		}
-		if fp := Fingerprint(context.Background(), path, time.Minute); fp != "" {
+		if fp := Fingerprint(context.Background(), filepath.Dir(path), path, time.Minute); fp != "" {
 			t.Errorf("writer %v: FIFO fingerprint = %q, want none", writer, fp)
 		}
 		if d := time.Since(start); d > 5*time.Second {

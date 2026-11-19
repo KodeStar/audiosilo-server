@@ -118,14 +118,14 @@ func TestReadChapterList(t *testing.T) {
 	if err := os.WriteFile(valid, []byte(chapterListJSON(oneFile, twoChapters)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if l, err := ReadChapterList(valid); err != nil || l == nil {
+	if l, err := ReadChapterList(filepath.Dir(valid), valid); err != nil || l == nil {
 		t.Fatalf("regular file: %+v, %v", l, err)
 	}
 	link := filepath.Join(dir, "Book.chapters.json")
 	if err := os.Symlink(valid, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadChapterList(link); !errors.Is(err, ErrAttachmentInvalid) {
+	if _, err := ReadChapterList(filepath.Dir(link), link); !errors.Is(err, ErrAttachmentInvalid) {
 		t.Errorf("a link: %v, want ErrAttachmentInvalid", err)
 	}
 	big := filepath.Join(dir, "big.chapters.json")
@@ -133,7 +133,7 @@ func TestReadChapterList(t *testing.T) {
 		`"version":1,"pad":"`+strings.Repeat("x", maxAttachmentFile)+`"`, 1)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadChapterList(big); !errors.Is(err, ErrAttachmentInvalid) {
+	if _, err := ReadChapterList(filepath.Dir(big), big); !errors.Is(err, ErrAttachmentInvalid) {
 		t.Errorf("too large: %v, want ErrAttachmentInvalid", err)
 	}
 }

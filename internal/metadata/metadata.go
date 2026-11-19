@@ -190,24 +190,26 @@ func IsAudio(path string) bool {
 	return AudioExtensions[strings.ToLower(filepath.Ext(path))]
 }
 
-// Extract reads embedded metadata (tags + ffprobe) for the file at path.
-// ffprobePath may be empty to skip ffprobe-based duration/chapter extraction.
-// Path-based inference is intentionally not done here - the scanner applies it
-// with knowledge of the library's storage layout (see DeriveFromPath).
+// Extract reads embedded metadata (tags + ffprobe) for the file at path,
+// opened through its own folder (ExtractTimeout with that as its root),
+// ffprobe given ProbeTimeout. ffprobePath may be empty to skip ffprobe-based
+// duration/chapter extraction. Path-based inference is intentionally not done
+// here - the scanner applies it with knowledge of the library's storage
+// layout (see DeriveFromPath).
 func Extract(path, ffprobePath string) (*Metadata, error) {
-	return ExtractContext(context.Background(), path, ffprobePath)
+	return ExtractTimeout(context.Background(), filepath.Dir(path), path, ffprobePath, ProbeTimeout)
 }
 
-// ExtractContext is Extract with its ffprobe run ended when ctx is (a ProbeErr
-// then, the tags still read): the setup preview's time budget.
-func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, error) {
-	return ExtractTimeout(ctx, path, ffprobePath, ProbeTimeout)
-}
-
-// ExtractTimeout is ExtractContext with ffprobe given timeout instead of
-// ProbeTimeout (a ProbeErr matching ErrProbeTimeout when it runs out).
+// ExtractTimeout reads embedded metadata (tags + ffprobe) for the file at
+// path, under root (a library's): every open of it, the in-process read's and
+// ffprobe's, is through root (BelowFolder), so a link swapped in along the
+// path since it was checked is never followed out of the library. ffprobe is
+// handed the file opened so (ToolInput), never its path, and given timeout (a
+// ProbeErr matching ErrProbeTimeout when it runs out); its run ends when ctx
+// does (a ProbeErr then, the tags still read): the setup preview's time
+// budget.
 //
-// The file is opened once: its tags, the iTunes narrator and the in-process
+// The file is opened once for its own reads: its tags, the iTunes narrator and the in-process
 // probe read it through one block cache. The probe answers as the configured
 // ffprobe's release would (ffprobeRules; off for a release it doesn't know),
 // and ffprobe runs only when it is off or unsure of the file (a shape it does
@@ -221,13 +223,13 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 // has its frames counted (SRV-16): by the probe, or, when the probe is off, in
 // readFile's one read of the file, over ffprobe's estimate; a count cut short
 // leaves the estimate.
-func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.Duration) (*Metadata, error) {
+func ExtractTimeout(ctx context.Context, root, path, ffprobePath string, timeout time.Duration) (*Metadata, error) {
 	m := &Metadata{Format: fileFormat(path)}
 	ff, forced := ffNone, ffprobeForced(ffprobePath)
 	if !forced {
 		ff = probeRules(ctx, ffprobePath)
 	}
-	p, reason, err := readFile(ctx, m, path, ff, ff == ffNone && !forced, timeout)
+	p, reason, err := readFile(ctx, m, root, path, ff, ff == ffNone && !forced, timeout)
 	if err != nil {
 		m.OpenErr = err
 		return m, nil // ffprobe can't read what the server can't open
@@ -246,7 +248,7 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 		applyProbe(m, p)
 	case ffprobePath != "":
 		// ffprobe for duration + chapters + richer container tags (best-effort).
-		if p, err := probe(ctx, path, ffprobePath, timeout); err == nil {
+		if p, err := probe(ctx, root, path, ffprobePath, timeout); err == nil {
 			if m.counted > 0 {
 				// The probe is off for this ffprobe's release, but its estimate of a
 				// VBR MP3 with no Xing/VBRI header is no better: the frames counted.
@@ -262,14 +264,14 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 	return m, nil
 }
 
-// ExtractTags reads only the tags of the file at path (and the iTunes
-// narrator): no probe, in-process or ffprobe, so no duration, codec or
+// ExtractTags reads only the tags of the file at path under root, opened
+// through it as ExtractTimeout opens it (and the iTunes narrator): no probe, in-process or ffprobe, so no duration, codec or
 // chapters. An OpenErr when it can't be opened. The read is bounded as a
 // probe's tag read is (readFile): by ctx and timeout, cut short past them
 // (TagsUnread), and refused on a mount whose reads hang (ReadRefused).
-func ExtractTags(ctx context.Context, path string, timeout time.Duration) *Metadata {
+func ExtractTags(ctx context.Context, root, path string, timeout time.Duration) *Metadata {
 	m := &Metadata{Format: fileFormat(path)}
-	if _, _, err := readFile(ctx, m, path, ffNone, false, timeout); err != nil {
+	if _, _, err := readFile(ctx, m, root, path, ffNone, false, timeout); err != nil {
 		m.OpenErr = err
 	}
 	return m
@@ -288,7 +290,8 @@ func fileFormat(path string) string {
 	return strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
 }
 
-// readFile reads the tags of the file at path into m and, unless ff is ffNone,
+// readFile reads the tags of the file at path under root (opened through it:
+// openBlockFile) into m and, unless ff is ffNone,
 // the in-process probe's answer by ff's rules, or why it has none (reason:
 // unsure of the file, a bound passed; ffprobe reads it then). With ff ffNone
 // and count, an MP3 is probed by noFFprobeRules all the same, its answer kept
@@ -303,10 +306,10 @@ func fileFormat(path string) string {
 // well (openHung). The file is closed when it
 // returns, before any ffprobe run. An error: it could not be opened, or is no
 // regular file.
-func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, count bool, timeout time.Duration) (p *probeResult, reason string, err error) {
+func readFile(ctx context.Context, m *Metadata, root, path string, ff ffRules, count bool, timeout time.Duration) (p *probeResult, reason string, err error) {
 	rctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
 	defer cancel()
-	b, f, err := openBlockFile(rctx, path)
+	b, f, err := openBlockFile(rctx, root, path)
 	switch {
 	case errors.Is(err, errReadRefused):
 		// Enough reads from this file's mount hang already (a share that

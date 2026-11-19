@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"path"
 	"path/filepath"
 	"time"
@@ -132,6 +131,10 @@ func (s *Scanner) hashReadalongEbooks(ctx context.Context, lib catalog.Library, 
 	}
 }
 
+// readalongLstat is ReadReadalongMap's look at the book's .audiosilo folder:
+// metadata.LstatBelow (a test's swaps the folder once it has looked).
+var readalongLstat = metadata.LstatBelow
+
 // ReadReadalongMap reads the read-along map of the book at bookPath (folder
 // says whether it is a folder book) from disk now: its bytes and the opened
 // file's info. The map is where the Bridge writes it (attachmentsPlace: the
@@ -152,7 +155,7 @@ func ReadReadalongMap(lib catalog.Library, bookPath string, folder bool) ([]byte
 		return nil, nil, fmt.Errorf("%w: %w", ErrNoReadalong, err)
 	}
 	attDir := filepath.Join(full, metadata.AttachmentsDir)
-	info, err := os.Lstat(attDir)
+	info, err := readalongLstat(lib.Root, attDir)
 	switch {
 	case err == nil && !isAttachmentsDir(fs.FileInfoToDirEntry(info), path.Join(dir, metadata.AttachmentsDir), ParseIgnore(lib.IgnorePatterns)):
 		return nil, nil, ErrNoReadalong
@@ -162,7 +165,7 @@ func ReadReadalongMap(lib catalog.Library, bookPath string, folder bool) ([]byte
 		return nil, nil, err
 	}
 	// metadata reads a map the Bridge renamed in mid-read once more.
-	data, fi, err := metadata.ReadReadalongFile(filepath.Join(attDir, prefix+metadata.AttachmentReadalong))
+	data, fi, err := metadata.ReadReadalongFile(lib.Root, filepath.Join(attDir, prefix+metadata.AttachmentReadalong))
 	switch {
 	case err == nil:
 		return data, fi, nil

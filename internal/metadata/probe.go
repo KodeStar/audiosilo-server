@@ -1,16 +1,19 @@
 package metadata
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"testing"
 	"time"
 )
 
@@ -43,13 +46,26 @@ const ProbeTimeout = 30 * time.Second
 var ErrProbeTimeout = errors.New("ffprobe timed out")
 
 // ErrProbeRejected matches a ProbeErr when ffprobe read the file and rejected
-// what it holds (ffmpeg's "Invalid data found when processing input"): unlike a
+// what it holds (ffmpeg's "Invalid data found when processing input"), or found
+// it in a format InputFormats leaves out ("Format not on whitelist"): unlike a
 // time-out or a read error, the same ffprobe rejects the same bytes every time.
 var ErrProbeRejected = errors.New("ffprobe rejected the file's data")
 
 // invalidData is how ffmpeg words AVERROR_INVALIDDATA, the end of its message
 // for a file it can't make sense of.
 const invalidData = "Invalid data found when processing input"
+
+// notOnWhitelist is how ffmpeg says the format it found for an input is not on
+// its -format_whitelist (InputFormats), followed by the list in quotes;
+// ffprobe's own last line then ends in invalidArgument (AVERROR(EINVAL)).
+const (
+	notOnWhitelist  = "Format not on whitelist"
+	invalidArgument = "Invalid argument"
+)
+
+// whitelistQuote is the quoted list after notOnWhitelist, dropped from the
+// message the Health page shows.
+var whitelistQuote = regexp.MustCompile(notOnWhitelist + ` '[^']*'`)
 
 // probeMessage is a failed ffprobe run's own words (probeError), and whether
 // they say it rejected the file's data (ErrProbeRejected).
@@ -72,10 +88,10 @@ type probeResult struct {
 	Counted bool
 }
 
-// probe runs ffprobe to obtain duration, the audio codec, chapters and container
-// tags (runFFprobe).
-func probe(parent context.Context, path, ffprobePath string, timeout time.Duration) (*probeResult, error) {
-	parsed, err := runFFprobe(parent, path, ffprobePath, timeout)
+// probe runs ffprobe on the file at path under root to obtain duration, the
+// audio codec, chapters and container tags (runFFprobe).
+func probe(parent context.Context, root, path, ffprobePath string, timeout time.Duration) (*probeResult, error) {
+	parsed, err := runFFprobe(parent, root, path, ffprobePath, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -94,17 +110,27 @@ func probe(parent context.Context, path, ffprobePath string, timeout time.Durati
 	return res, nil
 }
 
+// TestInputEnv names, in a test binary only, the environment variable an
+// ffprobe stand-in reads the path of the file it was handed from.
+const TestInputEnv = "AUDIOSILO_TEST_INPUT"
+
 // ffprobeKillGrace is how long runFFprobe waits for an ffprobe killed at its
 // time-out to end before leaving it (tests shorten it).
 var ffprobeKillGrace = 5 * time.Second
 
-// runFFprobe runs ffprobe on path and returns its answer. -select_streams a:0
+// runFFprobe runs ffprobe on the file at path under root and returns its
+// answer. The file is opened through root (openBlockFile, bounded as a tag
+// read's open is) and handed to ffprobe opened (ToolInput), so ffprobe never
+// opens the path itself: a link swapped in along it since it was checked
+// can't lead ffprobe out of the library, and it reads the file
+// as an audio container only (InputFormatArgs), never as a playlist of other
+// files. -select_streams a:0
 // limits -show_streams to the first audio stream so we read the codec that
 // actually needs (or doesn't need) transcoding. One killed at its time-out
 // that has not ended ffprobeKillGrace later (stuck in a read the kernel won't
 // interrupt: an NFS share on macOS) is left to end on its own, counted on
 // path's mount as a read given up on (await), and answers as timed out.
-func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.Duration) (*ffprobeOutput, error) {
+func runFFprobe(parent context.Context, root, path, ffprobePath string, timeout time.Duration) (*ffprobeOutput, error) {
 	stuck := stuckByMount.For(path)
 	if stuck.saturated() {
 		// Reads from its mount hang already (a share that stopped answering):
@@ -117,15 +143,54 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 	defer probing(parent)()
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, ffprobePath,
+	timedOut := func() error {
+		if parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("%w after %s", ErrProbeTimeout, timeout)
+		}
+		return nil
+	}
+	_, f, err := openBlockFile(ctx, root, path)
+	switch {
+	case errors.Is(err, errReadRefused):
+		return nil, fmt.Errorf("%w: %w", ErrProbeTimeout, errReadRefused)
+	case errors.Is(err, errOpenAbandoned):
+		return nil, cmp.Or(timedOut(), context.Cause(ctx))
+	case err != nil:
+		return nil, err
+	}
+	input, extra, cleanup, err := ToolInput(f, root, path)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	// The run owns f and its input once it starts, and lets them go when
+	// ffprobe ends: one left running (await) still reads them. A run that
+	// never starts (its ctx ended first) leaves them to this call.
+	release := func() {
+		cleanup()
+		_ = f.Close()
+	}
+	var claimed atomic.Bool // by the run or by this call, whichever is first
+	defer func() {
+		if claimed.CompareAndSwap(false, true) {
+			release()
+		}
+	}()
+	args := append([]string{
 		"-v", "error", // errors only, on stderr: what the Health page shows for a file ffprobe can't read
 		"-print_format", "json",
 		"-show_format",
 		"-show_chapters",
 		"-show_streams",
 		"-select_streams", "a:0",
-		path,
-	)
+	}, InputFormatArgs()...)
+	cmd := exec.CommandContext(ctx, ffprobePath, append(args, input)...)
+	cmd.ExtraFiles = extra
+	if testing.Testing() {
+		// A test's ffprobe stand-in tells the files it is handed apart by
+		// their paths (TestInputEnv), as ffprobe is never given one.
+		cmd.Env = append(os.Environ(), TestInputEnv+"="+path)
+	}
 	type ran struct {
 		out []byte
 		err error
@@ -133,6 +198,10 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 	wait, stop := graceAfter(ctx, ffprobeKillGrace)
 	defer stop()
 	r, ok := await(wait, stuck, func() ran {
+		if !claimed.CompareAndSwap(false, true) {
+			return ran{err: context.Cause(wait)}
+		}
+		defer release()
 		out, err := cmd.Output()
 		return ran{out, err}
 	}, nil)
@@ -141,8 +210,8 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 		err = context.Cause(ctx)
 	}
 	if err != nil {
-		if parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("%w after %s", ErrProbeTimeout, timeout)
+		if err := timedOut(); err != nil {
+			return nil, err
 		}
 		return nil, probeError(err)
 	}
@@ -178,8 +247,10 @@ const maxProbeMessage = 300
 // mp4 @ 0x..] moov atom not found") usually comes before the generic last line
 // ("x.m4b: Invalid data found when processing input"). Falls back to the exit
 // status. A run whose last line (ffprobe's own error, which it writes last) ends
-// in invalidData matches ErrProbeRejected; an earlier line ending so, followed by
-// another error (a read failure, which may pass), does not.
+// in invalidData, or in invalidArgument with a notOnWhitelist line before it (a
+// format InputFormats leaves out), matches ErrProbeRejected; an earlier line
+// ending so, followed by another error (a read failure, which may pass), does
+// not.
 func probeError(err error) error {
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) {
@@ -187,11 +258,13 @@ func probeError(err error) error {
 	}
 	var parts []string
 	last := ""
+	offList := false // a line said the format is not on the list
 	for _, l := range strings.Split(string(exit.Stderr), "\n") {
 		l = strings.TrimSpace(l)
 		if l != "" {
 			last = l
 		}
+		offList = offList || strings.Contains(l, notOnWhitelist)
 		// ffprobe prefixes the input path ("/srv/books/x.m4b: Invalid data..."); the
 		// Health page shows the file separately.
 		if i := strings.LastIndex(l, ": "); i >= 0 && strings.ContainsAny(l[:i], "/\\") {
@@ -200,6 +273,7 @@ func probeError(err error) error {
 		// FFmpeg names the reader that complained by its address ("[mp3 @
 		// 0xcbcc3c000]"): new each run, and noise on the Health page (server#272).
 		l = ffContextAddr.ReplaceAllString(l, "]")
+		l = whitelistQuote.ReplaceAllString(l, notOnWhitelist)
 		if l != "" && !slices.Contains(parts, l) {
 			parts = append(parts, l)
 		}
@@ -211,7 +285,8 @@ func probeError(err error) error {
 	if len(msg) > maxProbeMessage {
 		msg = strings.ToValidUTF8(msg[:maxProbeMessage], "")
 	}
-	return &probeMessage{msg: msg, rejected: strings.HasSuffix(last, invalidData)}
+	refused := offList && strings.HasSuffix(last, invalidArgument)
+	return &probeMessage{msg: msg, rejected: strings.HasSuffix(last, invalidData) || refused}
 }
 
 func normalizeTags(in map[string]string) map[string]string {
