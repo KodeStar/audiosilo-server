@@ -1313,7 +1313,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   against the path again instead (`OpenEbook`, `OpenPodcast`: `os.SameFile`). Still a check and then a look
   by path: a transcode (ffmpeg opens the path), a remux's or a rendition's source (`media.FileCache`,
   `media.Source`), an asked book's read (`resolveBook`, the probes), the Bridge's file stats
-  (`statBookFiles`), `LookArt`'s stat and the looks under `.audiosilo/`. `/fs` looks before it reads the folder (after,
+  (`statBookFiles`), `LookArt`'s stat and the looks under `.audiosilo/`. The scan takes no link out of the root
+  either, by the same rule (`linkOut`: `SafeJoin` of each link the walk lists, a plain file never looked at
+  again): a file or folder link out in a book folder is never a part, nor a cover (`coverLook.find`), so
+  nothing is read from where it leads, and a part that becomes one leaves the book on the next scan as a part
+  gone does; a link inside the root is a part as ever, and one whose look a share failed for now keeps its
+  folder's book as stored (`TestScanSkipsLinksOutOfTheRoot`, `TestScanDropsAPartNowALinkOut`,
+  `TestCoverSkipsLinksOutOfTheRoot`, `TestScanKeepsABookWhoseLinkDidNotAnswer`). `/fs` looks before it reads the folder (after,
   for a path that climbs out of the root by its names, so it keeps its 400; a leading slash is no climb,
   `/Author` is looked at first as `Author` is), and answers a folder outside the caller's share
   rules (`VisibleInBrowse`) as a missing one before any listing (`TestFSOutsideScopeIsMissing`). Every

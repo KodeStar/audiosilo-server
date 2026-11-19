@@ -70,10 +70,13 @@ func TestStampAddedAt(t *testing.T) {
 // The added_at stamped from discovery's lstat (Book.FoundAdded) is the one a
 // fresh lstat of each file gives: a folder book whose earliest file is not its
 // first, a single-file book and a book whose file is a link (an lstat reads
-// the link; on Linux statx the target's birth time, as before).
+// the link; on Linux statx the target's birth time, as before). The link
+// stays inside the root (a hidden folder no walk goes into): one out of it is
+// no part (linkOut).
 func TestStampAddedAtFromDiscovery(t *testing.T) {
 	t.Parallel()
-	root, elsewhere := t.TempDir(), t.TempDir()
+	root := t.TempDir()
+	elsewhere := filepath.Join(root, ".store")
 	writeFile(t, root, "A/Book/02.mp3", []byte("x"))
 	old := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
 	if err := os.Chtimes(filepath.Join(root, "A/Book/02.mp3"), old, old); err != nil {

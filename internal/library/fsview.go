@@ -412,7 +412,7 @@ func resolveBelow(rootAbs, rootAs, p string, lk belowLooks) (target string, ther
 		if err != nil || info == nil {
 			return rest(), false, err
 		}
-		if link, maybe := linkKind(info); link {
+		if link, maybe := linkKind(info.Mode()); link {
 			resolved, err := followLink(w, cur, next, maybe)
 			if err != nil || resolved == "" {
 				return rest(), false, err
@@ -440,16 +440,17 @@ type linkWalk struct {
 	hops            int
 }
 
-// linkKind is how resolveBelow and followLink read a name by its Lstat: a
-// symbolic link (link), or a name that may be one (link and maybe): Lstat's
+// linkKind is how resolveBelow, followLink and the scan (linkOut) read a name
+// by its mode (an Lstat's, or a listing's entry type): a symbolic link (link),
+// or a name that may be one (link and maybe): Lstat's
 // irregular entry that is no folder, which on Windows is a junction (a mount
 // point: since Go 1.23 neither ModeSymlink nor ModeDir, so walking through it
 // as a folder would read its target's names, out of the root as it may be)
 // or another reparse point (a cloud file's placeholder). Such a name is read
 // (os.Readlink reads a junction's target) and followed as a link when it
 // reads as one, else walked as a plain name, as it always was.
-func linkKind(info fs.FileInfo) (link, maybe bool) {
-	switch m := info.Mode(); {
+func linkKind(m fs.FileMode) (link, maybe bool) {
+	switch {
 	case m&fs.ModeSymlink != 0:
 		return true, false
 	case m&fs.ModeIrregular != 0 && !m.IsDir():
@@ -519,7 +520,7 @@ func followLink(w *linkWalk, dir, link string, maybe bool) (string, error) {
 		if err != nil || info == nil {
 			return "", err
 		}
-		if link, maybe := linkKind(info); link {
+		if link, maybe := linkKind(info.Mode()); link {
 			resolved, err := followLink(w, cur, next, maybe)
 			if err != nil || resolved == "" || !withinRoot(w.rootAbs, resolved) {
 				return resolved, err

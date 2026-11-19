@@ -1415,8 +1415,10 @@ type coverLook struct {
 // certainly its cover) - the first image file alphabetically. A hidden file is
 // never a cover (isHidden: macOS writes an AppleDouble "._Book - Cover.jpg"
 // beside each image on a share, a resource fork, not an image, and it sorts
-// first). Returns "" if none, so the cover handler falls back to embedded art,
-// and "" too, with no more looks, once one was given up on.
+// first). Nor is a link out of the library (linkOut): the cover handler would
+// never serve it, and an image inside the root, or the embedded art, is the
+// book's cover instead. Returns "" if none, so the cover handler falls back to
+// embedded art, and "" too, with no more looks, once one was given up on.
 func (l coverLook) find(dir string, anyImage bool) string {
 	if l.gaveUp != nil && l.gaveUp.err != nil {
 		return ""
@@ -1431,8 +1433,20 @@ func (l coverLook) find(dir string, anyImage bool) string {
 	for _, name := range coverNames {
 		p := filepath.Join(dir, name)
 		_, err := statLook(l.ctx, p, l.timeout)
+		var own fs.FileInfo
 		if err == nil {
-			return relOf(p)
+			// Found: its own entry (one lstat, only for a cover there) tells
+			// whether it is a link, and one out of the library is no cover.
+			own, err = metadata.LstatBounded(l.ctx, p, l.timeout)
+		}
+		if err == nil {
+			switch out, ok := l.linkOut(relOf(p), own.Mode()); {
+			case !ok:
+				return ""
+			case !out:
+				return relOf(p)
+			}
+			continue
 		}
 		if err = unansweredLook(l.ctx, err); err != nil {
 			l.gaveUp.note(relOf(p), err)
@@ -1453,6 +1467,12 @@ func (l coverLook) find(dir string, anyImage bool) string {
 		if !coverImage(name, e.IsDir()) {
 			continue
 		}
+		switch out, ok := l.linkOut(relOf(filepath.Join(dir, name)), e.Type()); {
+		case !ok:
+			return ""
+		case out:
+			continue
+		}
 		if firstImage == "" {
 			firstImage = name
 		}
@@ -1470,6 +1490,18 @@ func (l coverLook) find(dir string, anyImage bool) string {
 		return ""
 	}
 	return relOf(filepath.Join(dir, pick))
+}
+
+// linkOut is the scan's linkOut for the cover candidate at library-relative
+// rel (its entry of type mode), its look under l's: ok false, with the look
+// noted in gaveUp, when it was given up on (no cover, and no more looks).
+func (l coverLook) linkOut(rel string, mode fs.FileMode) (out, ok bool) {
+	out, err := linkOut(l.ctx, l.root, rel, mode, l.timeout)
+	if err != nil {
+		l.gaveUp.note(rel, err)
+		return false, false
+	}
+	return out, true
 }
 
 // singleFileChapters takes embedded chapters from a single-file book and marks
@@ -1608,7 +1640,8 @@ func partTitle(relPath string) string {
 // The root is resolved first and the walk starts at its target: filepath.WalkDir
 // Lstat's its root, so a root that is itself a symlink (a NAS mount linked into
 // place) was one non-directory entry and indexed nothing. Links below the
-// root are still not followed. Rel paths are taken against the folder walked and
+// root are still not walked into, and a file link is a part only while it
+// stays inside the root (linkOut). Rel paths are taken against the folder walked and
 // folders are named under lib.Root, so both are the same whether or not the root
 // is a link. (Not os.DirFS: it refuses folder names that aren't valid UTF-8,
 // which a Linux share can hold, and every scan would then read as partial.)
@@ -1811,7 +1844,10 @@ var errPathTooLong = fmt.Errorf("the path is longer than the server allows (%d b
 // width is how many folders it lists at once (walkDir), timeout how long each
 // look may take (metadata.Bounded: walkDir's listings, a .audiosilo folder's,
 // a metadata.json's lstat); its audio files are not
-// looked at (statAudio: the callers building books from them do that). A
+// looked at (statAudio: the callers building books from them do that), but
+// for a link among them (linkOut): one out of the library is no part, and
+// one whose look was given up on leaves its folder unanswered, as a listing
+// given up on does. A
 // folder or audio file whose path is overLong is skipped and logged as
 // unreadable (rl), the folder with everything under it; discovery isn't
 // partial for it (no book there can ever be indexed, so the prune is not at
@@ -1928,6 +1964,22 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			return nil
 		}
 		dir := dirOf(rel)
+		out, lerr := linkOut(ctx, lib.Root, rel, d.Type(), timeout)
+		switch {
+		case lerr != nil && ctx.Err() != nil:
+			return ctx.Err()
+		case lerr != nil:
+			// Where the link leads is unknown for now: its folder is as
+			// unknown as one that wouldn't list (dropUnanswered), its book
+			// kept as stored, never built without the part.
+			hadErrors = true
+			log.Warn("skipping a folder whose link didn't answer during discovery", "library", lib.Name, "path", absOf(lib, rel), "err", lerr)
+			rl.unreadable(rel, lerr)
+			side.unanswered[dir] = lerr
+			return nil
+		case out:
+			return nil // a link out of the library: never a part, nothing read through it
+		}
 		dirs[dir] = append(dirs[dir], audioFile{abs: absOf(lib, rel), de: d})
 		return nil
 	})
@@ -2189,6 +2241,31 @@ func isAudioEntry(de fs.DirEntry, rel string, ignore *Ignore) bool {
 		(ignore.Empty() || !ignore.Match(rel, false))
 }
 
+// linkOut reports whether the entry of type mode at library-relative rel is a
+// link (or a name that may be one: linkKind) that leads out of the library
+// root, or one that can't be read: SafeJoin's ErrOutsideRoot, the rule every
+// route opens a path by (resolveBelow, followLink: no look past the root). The
+// scan never takes such an entry as a book's part or cover, so nothing is read
+// from where it leads (its tags, length or art); a link that stays inside the
+// root is taken as ever. Only a link is looked at, so a scan of plain files
+// costs nothing more. Its look is a SafeJoinBounded call (ctx, at most
+// timeout): err is one given up on (a share's fault a retry may get past, or
+// not answered in time) or ctx's, the link's target unknown; any other failure
+// of the join reads as a link out, never followed unchecked.
+func linkOut(ctx context.Context, root, rel string, mode fs.FileMode, timeout time.Duration) (bool, error) {
+	if link, _ := linkKind(mode); !link {
+		return false, nil
+	}
+	_, err := SafeJoinBounded(ctx, root, rel, timeout)
+	switch {
+	case err == nil:
+		return false, nil
+	case metadata.Unanswered(ctx, err):
+		return false, unansweredErr(ctx, err)
+	}
+	return true, nil
+}
+
 // absOf is the folder or file at a library-relative path, named under lib.Root.
 func absOf(lib catalog.Library, rel string) string {
 	return filepath.Join(lib.Root, filepath.FromSlash(rel))
@@ -2235,10 +2312,10 @@ type audioFile struct {
 }
 
 // audioEntries returns the non-hidden, non-ignored audio files directly inside
-// absDir whose paths aren't overLong, as a book has them (folderAudio): none
-// when it won't list. The
-// listing is a metadata.Bounded call (ctx, at most timeout): err is one given
-// up on (metadata.GaveUp) or ctx's.
+// absDir whose paths aren't overLong, as a book has them (folderAudio), less
+// any link out of the library (linkOut): none when it won't list. The
+// listing and a link's look are metadata.Bounded calls (ctx, at most timeout):
+// err is one given up on (metadata.GaveUp) or ctx's.
 func audioEntries(ctx context.Context, root, absDir string, ignore *Ignore, timeout time.Duration) ([]audioFile, error) {
 	// A listing failing as a share does (metadata.ShareFault) is a look given
 	// up on, as one that did not answer: never "no audio", which reads as the
@@ -2254,7 +2331,15 @@ func audioEntries(ctx context.Context, root, absDir string, ignore *Ignore, time
 	var audio []audioFile
 	for _, de := range entries {
 		abs := filepath.Join(absDir, de.Name())
-		if rel := relPathOf(root, abs); isAudioEntry(de, rel, ignore) && !overLong(rel) {
+		rel := relPathOf(root, abs)
+		if !isAudioEntry(de, rel, ignore) || overLong(rel) {
+			continue
+		}
+		// A link out of the library is never a part (linkOut, as the walk's).
+		switch out, err := linkOut(ctx, root, rel, de.Type(), timeout); {
+		case err != nil:
+			return nil, err
+		case !out:
 			audio = append(audio, audioFile{abs: abs, de: de})
 		}
 	}
