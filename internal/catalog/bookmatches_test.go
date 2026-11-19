@@ -967,21 +967,19 @@ func TestWorkSources(t *testing.T) {
 }
 
 // TestMatchWorkIDs: only the books with a recorded match, each its match's
-// work; one known by its identifiers alone (the upcoming job's resolution) is
-// left out, as are a book with neither and none at the path.
+// work; one known by its identifiers alone (the fixture's Kemper/One, the
+// upcoming job's resolution) is left out, as are a book with neither and none
+// at the path. Each is WorkSources' MatchWorkID, so /meta's placement and the
+// Bridge's estimate never tell a match apart differently.
 func TestMatchWorkIDs(t *testing.T) {
 	t.Parallel()
 	f := newRecordingsFixture(t)
-	if err := f.c.SaveUpcomingOwned(f.ctx, []UpcomingOwned{
-		{Ref: Ref{LibraryID: f.main.ID, Path: "Kemper/One"}, IDKey: "a:B0KEMPER", WorkID: "w-one", CheckedAt: "2026-11-01T00:00:00.000Z"},
-	}, nil); err != nil {
-		t.Fatal(err)
-	}
-	got, err := f.c.MatchWorkIDs(f.ctx, []Ref{
+	refs := []Ref{
 		{LibraryID: f.main.ID, Path: "Bray/One"}, {LibraryID: f.main.ID, Path: "Rematched/Two"},
 		{LibraryID: f.main.ID, Path: "Kemper/One"}, {LibraryID: f.other.ID, Path: "Abridged/One"},
 		{LibraryID: f.main.ID, Path: "Else/Three"}, {LibraryID: f.main.ID, Path: "Nowhere"},
-	})
+	}
+	got, err := f.c.MatchWorkIDs(f.ctx, refs)
 	want := map[Ref]string{
 		{LibraryID: f.main.ID, Path: "Bray/One"}:      "w-one",
 		{LibraryID: f.main.ID, Path: "Rematched/Two"}: "w-two",
@@ -989,5 +987,14 @@ func TestMatchWorkIDs(t *testing.T) {
 	}
 	if err != nil || !maps.Equal(got, want) {
 		t.Fatalf("match work ids = %v, %v; want %v", got, err, want)
+	}
+	sources, err := f.c.WorkSources(f.ctx, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range refs {
+		if got[ref] != sources[ref].MatchWorkID {
+			t.Errorf("%v: match work id %q, WorkSources' %q", ref, got[ref], sources[ref].MatchWorkID)
+		}
 	}
 }

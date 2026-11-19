@@ -85,8 +85,10 @@ func TestCachedAnswer(t *testing.T) {
 		Payload: []byte(`{"matched":true,"work":{"id":"stale","recaps":[{"through":{"chapter":1},"text":"x"}]}}`),
 		Expires: now.Add(-time.Hour), StoredAt: now.Add(-time.Hour - positiveTTL)})
 	store.put(StoredEntry{Key: nsASIN.key("B0FRESH"), Version: storeVersion, Source: srv.URL,
-		Payload: []byte(`{"matched":true,"work":{"id":"fresh","characters":[{"id":"c","name":"C","reveal":{"chapter":1}}]}}`), Expires: now.Add(time.Hour)})
-	store.put(StoredEntry{Key: nsASIN.key("B0NOMATCH"), Version: storeVersion, Source: srv.URL, Expires: now.Add(time.Hour)})
+		Payload: []byte(`{"matched":true,"work":{"id":"fresh","characters":[{"id":"c","name":"C","reveal":{"chapter":1}}]}}`),
+		Expires: now.Add(time.Hour), StoredAt: now.Add(time.Hour - positiveTTL)})
+	store.put(StoredEntry{Key: nsASIN.key("B0NOMATCH"), Version: storeVersion, Source: srv.URL,
+		Expires: now.Add(time.Hour), StoredAt: now.Add(time.Hour - notFoundTTL)})
 	store.put(StoredEntry{Key: nsASIN.key("B0OTHER"), Version: storeVersion + 1, Source: srv.URL,
 		Payload: []byte(`{"matched":true,"work":{"id":"other"}}`), Expires: now.Add(time.Hour)})
 	if c := svc.cachedAnswerOf(ctx, "B0STALE", ""); c.env == nil || c.id != "stale" || !coverageOf(c.env).Recaps ||
@@ -96,13 +98,15 @@ func TestCachedAnswer(t *testing.T) {
 	if _, hit, _ := cacheGet[Enrichment](svc.cache, nsASIN.key("B0STALE")); hit {
 		t.Error("a stale row warmed memory")
 	}
-	if c := svc.cachedAnswerOf(ctx, "B0FRESH", ""); c.env == nil || c.id != "fresh" || !coverageOf(c.env).Characters {
+	if c := svc.cachedAnswerOf(ctx, "B0FRESH", ""); c.env == nil || c.id != "fresh" || !coverageOf(c.env).Characters ||
+		!c.at.Equal(now.Add(time.Hour-positiveTTL)) {
 		t.Fatalf("fresh stored row = %+v", c)
 	}
-	if e, hit, err := cacheGet[Enrichment](svc.cache, nsASIN.key("B0FRESH")); !hit || err != nil || e.Work.ID != "fresh" {
-		t.Errorf("the fresh row didn't warm memory: %+v, %v, %v", e, hit, err)
+	if e, at, hit, err := cacheGetAt[Enrichment](svc.cache, nsASIN.key("B0FRESH")); !hit || err != nil || e.Work.ID != "fresh" ||
+		!at.Equal(now.Add(time.Hour-positiveTTL)) {
+		t.Errorf("the fresh row didn't warm memory with its age: %+v, %v, %v, %v", e, at, hit, err)
 	}
-	if c := svc.cachedAnswerOf(ctx, "B0NOMATCH", ""); !c.ok || c.id != "" || c.env != nil {
+	if c := svc.cachedAnswerOf(ctx, "B0NOMATCH", ""); !c.ok || c.id != "" || c.env != nil || !c.at.Equal(now.Add(time.Hour-notFoundTTL)) {
 		t.Fatalf("stored no match = %+v", c)
 	}
 	if c := svc.cachedAnswerOf(ctx, "B0OTHER", ""); c.ok {

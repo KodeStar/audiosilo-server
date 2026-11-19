@@ -285,10 +285,15 @@ func TestStoreIncompleteDatedByItsWrite(t *testing.T) {
 	e.clk.advance(time.Minute) // a restart, the row still fresh
 	recheck := CoverageBook{ASIN: martianASIN, WorkID: "older-work", ResolvedAt: written.Add(-2 * time.Hour)}
 	svc := e.service()
-	// Read from the row, then from the memory the row warmed.
+	// Read from the row, then from the memory the row warmed (no second read
+	// of the store).
 	for _, from := range []string{"the row", "memory"} {
+		loads := e.store.loads.Load()
 		if got := svc.CachedWork(ctx, recheck); got != "the-martian" {
 			t.Fatalf("book facts from %s over an older recheck = %q, want the incomplete row's the-martian", from, got)
+		}
+		if read := e.store.loads.Load() - loads; (from == "memory") != (read == 0) {
+			t.Fatalf("book facts from %s read the store %d times", from, read)
 		}
 	}
 }
