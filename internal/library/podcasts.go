@@ -1,23 +1,77 @@
 package library
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
+
+// podcastLooks are a podcast scan's or rescan's looks at a show (its folder,
+// feed.json, its listing and each entry's info, the publish barriers, a
+// chapter attachment), each a metadata.Bounded call of its own (ctx, at most
+// timeout, on the path's mount), as a books scan's looks and the root's
+// listing are: on a share that stopped answering each is given up on
+// (metadata.GaveUp) and, once enough hang, refused at once, so the show reads
+// as unread and the scan goes on, never held at a look.
+type podcastLooks struct {
+	ctx     context.Context
+	timeout time.Duration
+}
+
+// podcastLooks are the looks of a scan or rescan under ctx: each given the
+// time of a look at a library file (lookTimeout).
+func (s *Scanner) podcastLooks(ctx context.Context) podcastLooks {
+	return podcastLooks{ctx: ctx, timeout: s.lookTimeout(ctx)}
+}
+
+// lookAt is fn, a look at p that reads no file's contents (an lstat, an
+// entry's info), as one of l's bounded looks; readAt is one that reads p.
+func lookAt[T any](l podcastLooks, p string, fn func() (T, error)) (T, error) {
+	return metadata.LookBounded(l.ctx, p, l.timeout, fn)
+}
+
+func readAt[T any](l podcastLooks, p string, fn func() (T, error)) (T, error) {
+	return metadata.Bounded(l.ctx, p, l.timeout, fn, nil)
+}
+
+func (l podcastLooks) lstat(p string) (os.FileInfo, error) {
+	return lookAt(l, p, func() (os.FileInfo, error) { return podcastLstat(p) })
+}
+
+func (l podcastLooks) readDir(p string) ([]fs.DirEntry, error) {
+	return metadata.ReadDirBounded(l.ctx, p, l.timeout)
+}
+
+// info is the info of e, an entry dir listed.
+func (l podcastLooks) info(dir string, e fs.DirEntry) (fs.FileInfo, error) {
+	return lookAt(l, filepath.Join(dir, e.Name()), e.Info)
+}
+
+// join is ContentJoin of show under root.
+func (l podcastLooks) join(root, show string) (string, error) {
+	return ContentJoinBounded(l.ctx, root, show, l.timeout)
+}
+
+// readFeed is feed.ReadFile of a show's feed.json.
+func (l podcastLooks) readFeed(filename, show string, log *slog.Logger) (*feed.File, error) {
+	return readAt(l, filename, func() (*feed.File, error) { return feed.ReadFile(filename, show, log) })
+}
 
 func feedSignature(info os.FileInfo) string {
 	return strconv.FormatInt(info.Size(), 10) + ":" + strconv.FormatInt(info.ModTime().UnixNano(), 10)
@@ -33,9 +87,9 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 	// The root's listing is bounded as a books scan's looks are (the probe's
 	// time, on the root's mount): a root on a share that stopped answering is
 	// the library unavailable, not a scan held at its first look. The looks
-	// at each show after it (its folder, feed.json, its listing, the publish
-	// barriers) are not bounded yet: a share that stops answering between them
-	// still holds the scan.
+	// at each show after it are bounded the same way (podcastLooks): a share
+	// that stops answering between them leaves its shows unread, the run
+	// partial.
 	entries, err := metadata.ReadDirBounded(ctx, lib.Root, s.probeTimeout)
 	if err != nil {
 		if cerr := ctx.Err(); cerr != nil {
@@ -213,8 +267,9 @@ func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Librar
 	if err != nil {
 		return 0, false, err
 	}
+	l := s.podcastLooks(ctx)
 	if *listed == nil {
-		if *listed, err = podcastFolderNames(lib.Root); err != nil {
+		if *listed, err = podcastFolderNames(l, lib.Root); err != nil {
 			return 0, false, err
 		}
 	}
@@ -227,7 +282,7 @@ func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Librar
 		}
 		if sig, ok := known[name]; ok {
 			if !unread {
-				_, _, now, err := podcastFolderSig(lib.Root, name)
+				_, _, now, err := podcastFolderSig(l, lib.Root, name)
 				unread = err == nil && now != sig || unreadPodcastFolder(err)
 			}
 			continue
@@ -250,12 +305,13 @@ func (s *Scanner) planPodcastMoves(ctx context.Context, lib catalog.Library, at 
 	if err != nil {
 		return nil, false, err
 	}
+	l := s.podcastLooks(ctx)
 identities:
 	for id, paths := range found {
 		occupied := map[string]bool{} // the path holds a show, this one or another
 		var holders []catalog.PodcastIdentityPath
 		for _, p := range paths {
-			now, ok := podcastHeldID(lib.Root, p.Path)
+			now, ok := podcastHeldID(l, lib.Root, p.Path)
 			if !ok {
 				continue identities
 			}
@@ -269,7 +325,7 @@ identities:
 			// spelling of a folder renamed only in case or form still
 			// opens it: only the name the root lists is the folder.
 			if *listed == nil {
-				if *listed, err = podcastFolderNames(lib.Root); err != nil {
+				if *listed, err = podcastFolderNames(l, lib.Root); err != nil {
 					return nil, false, err
 				}
 			}
@@ -286,7 +342,7 @@ identities:
 		if len(holders) != 1 || !holders[0].Indexed {
 			continue
 		}
-		files, ok := podcastFeedFiles(lib.Root, holders[0].Path)
+		files, ok := podcastFeedFiles(l, lib.Root, holders[0].Path)
 		if !ok {
 			continue
 		}
@@ -312,8 +368,8 @@ identities:
 }
 
 // podcastFolderNames are the names of the folders root lists, as listed.
-func podcastFolderNames(root string) (map[string]bool, error) {
-	entries, err := os.ReadDir(root)
+func podcastFolderNames(l podcastLooks, root string) (map[string]bool, error) {
+	entries, err := l.readDir(root)
 	if err != nil {
 		return nil, err
 	}
@@ -331,12 +387,14 @@ func podcastFolderNames(root string) (map[string]bool, error) {
 // old folder until the Bridge takes it in, and where that old name now holds
 // another show (names swapped or reused) no index row lists them. ok is false
 // when feed.json can't be read.
-func podcastFeedFiles(root, show string) (files []string, ok bool) {
-	dir, err := ContentJoin(root, show)
+func podcastFeedFiles(l podcastLooks, root, show string) (files []string, ok bool) {
+	dir, err := l.join(root, show)
 	if err != nil {
 		return nil, false
 	}
-	raw, err := metadata.ReadRegularFile(filepath.Join(dir, "feed.json"), feed.MaxReadBytes, feed.ErrInvalidFeed, feed.ErrInvalidFeed)
+	raw, err := readAt(l, filepath.Join(dir, "feed.json"), func() ([]byte, error) {
+		return metadata.ReadRegularFile(filepath.Join(dir, "feed.json"), feed.MaxReadBytes, feed.ErrInvalidFeed, feed.ErrInvalidFeed)
+	})
 	if err != nil {
 		return nil, false
 	}
@@ -363,13 +421,20 @@ func podcastFeedFiles(root, show string) (files []string, ok bool) {
 // or no regular file, which may be the show's own feed.json half written or
 // damaged for now (so a copy beside it is not taken for the show's one
 // folder, and nothing merges into it).
-func podcastHeldID(root, show string) (id string, ok bool) {
-	dir, err := ContentJoin(root, show)
-	if err != nil || !feed.ShowPath(show) {
+func podcastHeldID(l podcastLooks, root, show string) (id string, ok bool) {
+	if !feed.ShowPath(show) {
 		return "", true
 	}
-	fi, err := os.Lstat(filepath.Join(root, show))
-	if errors.Is(err, os.ErrNotExist) {
+	dir, err := l.join(root, show)
+	if metadata.Unanswered(l.ctx, err) {
+		return "", false // the join's looks given up on: not known
+	}
+	if err != nil {
+		return "", true
+	}
+	at := filepath.Join(root, show)
+	fi, err := lookAt(l, at, func() (os.FileInfo, error) { return os.Lstat(at) })
+	if metadata.NotExist(err) {
 		return "", true
 	}
 	if err != nil {
@@ -378,9 +443,9 @@ func podcastHeldID(root, show string) (id string, ok bool) {
 	if !fi.IsDir() {
 		return "", true
 	}
-	f, err := feed.ReadFile(filepath.Join(dir, "feed.json"), show, nil)
+	f, err := l.readFeed(filepath.Join(dir, "feed.json"), show, nil)
 	switch {
-	case errors.Is(err, os.ErrNotExist):
+	case metadata.NotExist(err):
 		return "", true
 	case err != nil:
 		return "", false
@@ -436,9 +501,13 @@ func (s *Scanner) strayPodcastFolder(ctx context.Context, lib catalog.Library, s
 // feed.json is, errFeedUnusable where the feed.json is no regular file, and
 // wraps errFolderClosed where the folder can't be looked into (the folder
 // itself not statable is the bare error: unread, never stray). Either is a
-// look given up on (transientGaveUp) for a fault a retry may get past.
-func podcastFolderSig(root, show string) (dir string, info os.FileInfo, sig string, err error) {
-	dir, err = ContentJoin(root, show)
+// look given up on (transientGaveUp) for a fault a retry may get past, as is
+// one of l's looks that did not answer, or ctx's error.
+func podcastFolderSig(l podcastLooks, root, show string) (dir string, info os.FileInfo, sig string, err error) {
+	dir, err = l.join(root, show)
+	if metadata.Unanswered(l.ctx, err) {
+		return "", nil, "", cmp.Or(err, l.ctx.Err()) // the join's looks given up on: unread, never no show
+	}
 	if err != nil {
 		return "", nil, "", ErrNotIndexable
 	}
@@ -446,14 +515,14 @@ func podcastFolderSig(root, show string) (dir string, info os.FileInfo, sig stri
 	// remain inside the root. The Bridge owns only this one directory level.
 	// Only a folder that is gone is no show's: one the server can't stat (a
 	// share that dropped, a root it may list but not search) may still be one.
-	fi, err := podcastLstat(filepath.Join(root, show))
+	fi, err := l.lstat(filepath.Join(root, show))
 	if metadata.NotExist(err) || err == nil && !fi.IsDir() {
 		return "", nil, "", ErrNotIndexable
 	}
 	if err != nil {
 		return "", nil, "", transientGaveUp(err) // a share's hiccup: a look given up on
 	}
-	info, err = podcastLstat(filepath.Join(dir, "feed.json"))
+	info, err = l.lstat(filepath.Join(dir, "feed.json"))
 	if metadata.NotExist(err) {
 		return "", nil, "", ErrNotIndexable
 	}
@@ -464,12 +533,13 @@ func podcastFolderSig(root, show string) (dir string, info os.FileInfo, sig stri
 	if !info.Mode().IsRegular() {
 		return "", nil, "", errFeedUnusable
 	}
-	sig, err = podcastShowSignature(dir, info)
+	sig, err = podcastShowSignature(l, dir, info)
 	return dir, info, sig, err
 }
 
 func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, show string, force bool) (int, bool, error) {
-	dir, info, sig, err := podcastFolderSig(lib.Root, show)
+	l := s.podcastLooks(ctx)
+	dir, info, sig, err := podcastFolderSig(l, lib.Root, show)
 	if err != nil && !force && s.strayPodcastFolder(ctx, lib, show, err) {
 		return 0, false, ErrNotIndexable
 	}
@@ -498,7 +568,7 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 			force = true
 		}
 	}
-	f, err := feed.ReadFile(filename, show, s.log)
+	f, err := l.readFeed(filename, show, s.log)
 	if errors.Is(err, feed.ErrInvalidFeed) || errors.Is(err, feed.ErrVersion) {
 		s.log.Warn("skipping invalid or unsupported podcast feed.json", "library", lib.ID)
 		return 0, false, errFeedUnusable
@@ -506,7 +576,7 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 	if err != nil {
 		return 0, false, err
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := l.readDir(dir)
 	if err != nil {
 		return 0, false, err
 	}
@@ -518,8 +588,8 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 		if !e.Type().IsRegular() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		info, err := e.Info()
-		if errors.Is(err, os.ErrNotExist) {
+		info, err := l.info(dir, e)
+		if metadata.NotExist(err) {
 			continue
 		}
 		if err != nil {
@@ -537,14 +607,19 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 		if !ok {
 			continue
 		}
-		if berr := podcastBarrier(dir, base); berr != nil {
+		if berr := podcastBarrier(l.lstat, dir, base); berr != nil {
 			if metadata.GaveUp(berr) {
 				return 0, false, berr // unknown, never the episode unpublished
 			}
 			delete(present, base)
 			continue
 		}
-		file.Chapters, err = podcastChapters(dir, base, ep.Fetch)
+		file.Chapters, err = readAt(l, filepath.Join(dir, metadata.AttachmentsDir), func() (*metadata.ChapterList, error) {
+			return podcastChapters(dir, base, ep.Fetch)
+		})
+		if metadata.Unanswered(ctx, err) {
+			return 0, false, cmp.Or(err, ctx.Err()) // unknown, never the episode's chapters gone
+		}
 		if err != nil {
 			s.log.Warn("unusable podcast chapter attachment", "library", lib.ID)
 		}
@@ -633,13 +708,14 @@ func ReadLibraryMarker(root string, id int64) (string, error) {
 
 // podcastShowSignature notices content and attachment changes even if feed.json
 // kept its size and mtime. Hidden staging files are not content.
-func podcastShowSignature(dir string, info os.FileInfo) (string, error) {
+func podcastShowSignature(l podcastLooks, dir string, info os.FileInfo) (string, error) {
 	h := sha256.New()
 	_, _ = fmt.Fprint(h, feedSignature(info))
 	for _, sub := range []string{"", metadata.AttachmentsDir} {
+		at := filepath.Join(dir, sub)
 		if sub != "" {
-			st, e := os.Lstat(filepath.Join(dir, sub))
-			if errors.Is(e, os.ErrNotExist) {
+			st, e := lookAt(l, at, func() (os.FileInfo, error) { return os.Lstat(at) })
+			if metadata.NotExist(e) {
 				continue
 			}
 			if e != nil {
@@ -650,8 +726,8 @@ func podcastShowSignature(dir string, info os.FileInfo) (string, error) {
 				continue
 			}
 		}
-		entries, err := os.ReadDir(filepath.Join(dir, sub))
-		if errors.Is(err, os.ErrNotExist) {
+		entries, err := l.readDir(at)
+		if metadata.NotExist(err) {
 			continue
 		}
 		if err != nil {
@@ -661,8 +737,8 @@ func podcastShowSignature(dir string, info os.FileInfo) (string, error) {
 			if sub == "" && e.Name() != ".audiosilo" && strings.HasPrefix(e.Name(), ".") {
 				continue
 			}
-			st, err := e.Info()
-			if errors.Is(err, os.ErrNotExist) {
+			st, err := l.info(at, e)
+			if metadata.NotExist(err) {
 				continue // renamed away since the listing (a Bridge temp or trash move)
 			}
 			if err != nil {
@@ -677,10 +753,11 @@ func podcastShowSignature(dir string, info os.FileInfo) (string, error) {
 // podcastBarrier is nil when an episode is published: no publish marker beside
 // it in the show's .audiosilo folder. A look that fails as a share does that a
 // retry may get past is a look given up on (podcastLookErr); any other answer
-// but no marker is ErrNotIndexable.
-func podcastBarrier(dir, base string) error {
+// but no marker is ErrNotIndexable. lstat is its look: podcastLstat inside
+// OpenPodcast's one bounded call, a scan's bounded one (podcastLooks.lstat).
+func podcastBarrier(lstat func(string) (os.FileInfo, error), dir, base string) error {
 	side := filepath.Join(dir, metadata.AttachmentsDir)
-	st, err := podcastLstat(side)
+	st, err := lstat(side)
 	switch {
 	case metadata.NotExist(err):
 		return nil
@@ -689,7 +766,7 @@ func podcastBarrier(dir, base string) error {
 	case !st.IsDir():
 		return ErrNotIndexable
 	}
-	_, err = podcastLstat(filepath.Join(side, stemOf(base)+".publish.json"))
+	_, err = lstat(filepath.Join(side, stemOf(base)+".publish.json"))
 	switch {
 	case metadata.NotExist(err):
 		return nil
@@ -698,11 +775,18 @@ func podcastBarrier(dir, base string) error {
 	}
 	return ErrNotIndexable
 }
+
+// podcastChapters is an episode's chapter attachment, nil when it has none:
+// an error for one that can't be used (ErrNotIndexable), or a look given up
+// on when its read failed as a share does that a retry may get past.
 func podcastChapters(dir, base string, f *feed.Fetch) (*metadata.ChapterList, error) {
 	if !feed.ValidFetch(f) || f.DeletedAt != "" {
 		return nil, nil
 	}
 	l, err := metadata.ReadChapterList(filepath.Join(dir, metadata.AttachmentsDir, stemOf(base)+"."+metadata.AttachmentChapters))
+	if metadata.TransientFault(err) {
+		return nil, metadata.AsGaveUp(err) // a share's hiccup: unknown, never no chapters
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}

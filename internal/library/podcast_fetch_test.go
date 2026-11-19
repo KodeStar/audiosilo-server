@@ -461,3 +461,46 @@ func TestPodcastScanKeepsAShowOnAShareFault(t *testing.T) {
 		t.Errorf("a scan with every look answering: %v, downloaded %v", err, downloaded())
 	}
 }
+
+// TestPodcastScanBoundsAShowsLooks: a podcast scan's looks at a show (its
+// folder, feed.json, its listing) are bounded as the root's listing is: with
+// the show's folder on a share that stopped answering after the root listed,
+// the scan gives each look up, ends partial with the show and its episode
+// kept as indexed, and the Bridge's rescan hears a look given up on; neither
+// is held. Allowed: once the share answers, the same scan reads the show.
+// Not parallel: it swaps the mount lookup.
+func TestPodcastScanBoundsAShowsLooks(t *testing.T) {
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
+	ep := f.Episodes[0]
+	writePodcastFixture(t, filepath.Join(lib.Root, filepath.FromSlash(ep.Path)), "chap-v24-reverse.mp3")
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	downloaded := func() bool {
+		t.Helper()
+		b, err := cat.GetBookByPath(ctx, lib.ID, ep.Path)
+		return err == nil && b.Episode != nil && b.Episode.Downloaded
+	}
+	if !downloaded() {
+		t.Fatal("the fixture's episode is not indexed as downloaded")
+	}
+	s.probeTimeout = 200 * time.Millisecond
+	release := metadata.HoldOpensForTests(dir)
+	t.Cleanup(release)
+	began := time.Now()
+	res, err := s.Scan(ctx, *lib)
+	if err != nil || !res.Partial || time.Since(began) > 10*time.Second {
+		t.Errorf("a scan with the show's folder not answering: %+v %v after %v, want a partial run, not held", res, err, time.Since(began))
+	}
+	began = time.Now()
+	if _, _, err := s.IndexPodcastPath(ctx, *lib, "Fixture Show"); !metadata.GaveUp(err) || time.Since(began) > 10*time.Second {
+		t.Errorf("the Bridge's rescan with the show's folder not answering: %v after %v, want a look given up on", err, time.Since(began))
+	}
+	if !downloaded() {
+		t.Error("the episode is no longer downloaded after a scan that could not look at its show")
+	}
+	release()
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Partial || !downloaded() {
+		t.Errorf("a scan with every look answering: %+v %v, downloaded %v", res, err, downloaded())
+	}
+}

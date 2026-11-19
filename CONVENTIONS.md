@@ -1725,7 +1725,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or ENOTDIR is ever "gone", read by `metadata.NotExist`, never `errors.Is(err, fs.ErrNotExist)` alone, where a
   share's fault may be the error: Go reads Windows' ERROR_BAD_NETPATH (a share whose server is down, on the transient
   list) as `fs.ErrNotExist`, so a route checks the transient fault first (`TestBadNetpathIsNoFileGone`). Every look is a `metadata.Bounded` call, the reader's ebook open (`OpenEbookBounded`)
-  and a podcast scan's root listing among them.
+  and a podcast scan's among them: its root listing and each look at a show after it (`podcastLooks`: the
+  folder, `feed.json`, the listing and each entry's info, the publish barriers, a chapter attachment), so a
+  share that stops answering mid-scan leaves its shows unread and the run partial
+  (`TestPodcastScanBoundsAShowsLooks`). `OpenPodcast`'s looks stay plain inside its one bounded call.
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). After a partial discovery (a folder unreadable, or

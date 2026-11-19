@@ -36,6 +36,9 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 			return nil, nil, ErrNotIndexable
 		}
 		dir, err := ContentJoin(lib.Root, show)
+		if metadata.GaveUp(err) {
+			return nil, nil, err // the join's look a share failed: never the episode absent
+		}
 		if err != nil {
 			return nil, nil, ErrNotIndexable
 		}
@@ -54,7 +57,7 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 		if feedSignature(feedInfo) != pin.FeedSig {
 			return nil, nil, ErrNotIndexable
 		}
-		if err := podcastBarrier(dir, path.Base(rel)); err != nil {
+		if err := podcastBarrier(podcastLstat, dir, path.Base(rel)); err != nil {
 			return nil, nil, err
 		}
 		current, err := podcastFeeds.read(filename, show, feedInfo)
@@ -85,7 +88,7 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 			named, err = podcastLstat(abs)
 		}
 		if err == nil {
-			err = podcastBarrier(dir, path.Base(rel))
+			err = podcastBarrier(podcastLstat, dir, path.Base(rel))
 		}
 		if err == nil {
 			feedNow, err = podcastLstat(filename)
