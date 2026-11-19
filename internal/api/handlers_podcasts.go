@@ -394,9 +394,9 @@ func (a *API) handlePodcastUnfollow(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.podcastActionLibrary(w, r, id); !ok {
 		return
 	}
-	// The follow is stored at the show's spelling; one the caller can't see
-	// in another spelling is never taken for theirs. catalog.UnfollowPodcast
-	// decides which of their own rows go.
+	// The follow is stored at the show's spelling, spelled only among the
+	// shows the caller can see; catalog.UnfollowPodcast decides which of
+	// their own rows go (one in another spelling only from their own rows).
 	s, err := a.cat.CallerScope(r.Context(), callerOf(r.Context()), id)
 	if err != nil {
 		a.writeCatalogError(w, err, "podcast scope failed", "Could not check access.")

@@ -664,11 +664,12 @@ func (c *Catalog) FollowPodcast(ctx context.Context, user, lib int64, p, showID 
 // show's spelling the caller's scope found for p: PodcastShowSpelling) and,
 // when none of those is a follow of theirs, at the one follow of theirs whose
 // path reads as p in another Unicode spelling (never two, and not when p is
-// an entry of its own on the disk, as PodcastShowSpelling's rule). A follow
-// outlives the caller's access to its show (a share removed, the show's
-// identity replaced), and their own rows still find it by the other
-// spelling; only their rows are read, so nothing is told of a show they
-// can't see.
+// an entry of its own, a show indexed at it or a folder on the disk, as
+// PodcastShowSpelling's rule). A follow outlives the caller's access to its
+// show (a share removed, the show's identity replaced), and their own rows
+// still find it by the other spelling. Their rows are read first, and p is
+// looked up only when one of them reads as it, so the work done for a show
+// they never followed is that of a made-up name.
 func (c *Catalog) UnfollowPodcast(ctx context.Context, user, lib int64, p string, spellings ...string) error {
 	at := append([]string{p}, spellings...)
 	if HasOtherSpelling(p) {
@@ -680,9 +681,18 @@ func (c *Catalog) UnfollowPodcast(ctx context.Context, user, lib int64, p string
 		m := &spellMatch{}
 		m.addReadingAs(p, mine)
 		// p and each of spellings read as p, so a lone row reading as p that
-		// is none of them means none of them is a follow of theirs.
-		if len(m.in) == 1 && !slices.Contains(at, m.in[0]) && !c.ownEntry(ctx, lib, p) {
-			at = append(at, m.in[0])
+		// is none of them means none of them is a follow of theirs. A show
+		// indexed at p is an entry of its own, as one on the disk is, so
+		// the follow beside it stays when the disk can't be read.
+		if len(m.in) == 1 && !slices.Contains(at, m.in[0]) {
+			var one int
+			err := c.db.QueryRowContext(ctx, `SELECT 1 FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, p).Scan(&one)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if err != nil && !c.ownEntry(ctx, lib, p) {
+				at = append(at, m.in[0])
+			}
 		}
 	}
 	args := append([]any{user, lib}, anyOf(at)...)

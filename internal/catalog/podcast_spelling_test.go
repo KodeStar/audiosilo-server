@@ -151,4 +151,21 @@ func TestUnfollowPodcastByTheOtherSpelling(t *testing.T) {
 	if got := follows(own.ID, user); !slices.Equal(got, []string{nfd}) {
 		t.Errorf("own entry: %+q", got)
 	}
+
+	// Nor is a show indexed at the spelling given, when the disk can't say
+	// (its folder gone, a share not mounted).
+	indexed, err := c.CreateLibrary(ctx, Library{Name: "Indexed", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexShowAt(t, c, ctx, indexed.ID, nfc, "")
+	if err := c.FollowPodcast(ctx, user, indexed.ID, nfd, "0123456789abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.UnfollowPodcast(ctx, user, indexed.ID, nfc); err != nil {
+		t.Fatal(err)
+	}
+	if got := follows(indexed.ID, user); !slices.Equal(got, []string{nfd}) {
+		t.Errorf("show indexed at the path given: %+q", got)
+	}
 }
