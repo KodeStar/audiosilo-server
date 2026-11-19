@@ -633,11 +633,11 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 	// not cached under it. The open is a bounded look (openWait, on the
 	// source's mount): on a share that stopped answering since the stat it is
 	// given up on (metadata.GaveUp), freeing the run's slot, where a plain
-	// open held it, and every run queued behind it, for good.
-	src, err := metadata.Bounded(ctx, abs, m.openWait, func() (*os.File, error) {
-		f, _, err := metadata.OpenRegular(abs)
-		return f, err
-	}, func(f *os.File) { _ = f.Close() })
+	// open held it, and every run queued behind it, for good. It has that
+	// bound of its own (runCtx, not the run's timeout): an open that answers
+	// leaves a run past its time to be refused as one (timedOut), not failed
+	// as the server going away.
+	src, _, err := metadata.OpenRegularBounded(runCtx, abs, m.openWait)
 	if err != nil {
 		return err
 	}
