@@ -8,6 +8,7 @@
 package launcher
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -65,6 +66,9 @@ type Options struct {
 	// listening, set only by tests, runs once the listener is up, before the
 	// database opens: a long migration's stand-in.
 	listening func()
+	// banners, set only by tests, takes the first-run banners in place of
+	// standard output.
+	banners io.Writer
 }
 
 // dataFiles are the files in the data folder the server opens to write at
@@ -241,6 +245,18 @@ func Run(ctx context.Context, opts Options) (err error) {
 	//     when none exists yet, mint a one-time setup token and enable /setup.
 	// Either way, a later start while the admin the banner named has never
 	// signed in says so again, with the way to a new password (server#369).
+	//
+	// Each banner names an address on this server, so it is printed once the
+	// gate opens (a link followed at once would be answered "starting"): the
+	// two written here are held until then, or until a start that fails
+	// returns, as the credentials banner is the only place the admin's
+	// password is ever printed.
+	stdout := opts.banners
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+	banners := &heldWriter{w: stdout}
+	defer banners.release()
 	var setupToken string
 	created := false
 	if opts.Setup {
@@ -251,11 +267,11 @@ func Run(ctx context.Context, opts Options) (err error) {
 		if !exists {
 			setupToken = randomSecret(18)
 		}
-	} else if created, err = ensureAdmin(ctx, cfg, authSvc, os.Stdout, log); err != nil {
+	} else if created, err = ensureAdmin(ctx, cfg, authSvc, banners, log); err != nil {
 		return err
 	}
 	if !created {
-		signInHint(ctx, cfg, authSvc, os.Stdout, log)
+		signInHint(ctx, cfg, authSvc, banners, log)
 	}
 
 	// Sync libraries declared in config into the database, then scan them in the
@@ -376,11 +392,40 @@ func Run(ctx context.Context, opts Options) (err error) {
 	ntf.Run(ctx)
 	if setupToken != "" {
 		a.EnableSetup(setupToken)
-		setupBanner(cfg, setupToken)
 	}
 
 	gate.Open(a.Handler())
+	// The banners' links answer from here on.
+	banners.release()
+	if setupToken != "" {
+		setupBanner(stdout, cfg, setupToken)
+	}
 	return serving.Wait()
+}
+
+// heldWriter keeps what is written to it until release, which writes it to w;
+// later writes go straight there.
+type heldWriter struct {
+	w        io.Writer
+	held     bytes.Buffer
+	released bool
+}
+
+func (h *heldWriter) Write(p []byte) (int, error) {
+	if h.released {
+		return h.w.Write(p)
+	}
+	return h.held.Write(p)
+}
+
+// release writes what was held, once: a second call writes nothing.
+func (h *heldWriter) release() {
+	if h.released {
+		return
+	}
+	h.released = true
+	_, _ = h.w.Write(h.held.Bytes())
+	h.held.Reset()
 }
 
 // logRingSize is how many log lines the admin console's log viewer keeps.
@@ -410,15 +455,16 @@ func baseURL(cfg *config.Config) string {
 
 // setupBanner prints where to finish first-run setup (the token rides in the URL
 // fragment, so it never reaches request logs).
-func setupBanner(cfg *config.Config, token string) {
-	fmt.Println("\n========================================================")
-	fmt.Println(" AudioSilo first-run setup")
-	fmt.Println("========================================================")
-	fmt.Println(" Open this URL in your browser to finish setting up:")
-	fmt.Printf("   %s/setup#token=%s\n", baseURL(cfg), token)
-	fmt.Println("--------------------------------------------------------")
-	fmt.Println(" You'll choose an admin password, then the console walks you through the rest.")
-	fmt.Println("========================================================")
+func setupBanner(w io.Writer, cfg *config.Config, token string) {
+	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
+	p("\n========================================================\n")
+	p(" AudioSilo first-run setup\n")
+	p("========================================================\n")
+	p(" Open this URL in your browser to finish setting up:\n")
+	p("   %s/setup#token=%s\n", baseURL(cfg), token)
+	p("--------------------------------------------------------\n")
+	p(" You'll choose an admin password, then the console walks you through the rest.\n")
+	p("========================================================\n")
 }
 
 // resolveTools picks the ffmpeg/ffprobe paths to use. For each enabled tool it

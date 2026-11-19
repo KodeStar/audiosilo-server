@@ -493,8 +493,9 @@ func TestRunAnswersStartingBeforeTheDatabase(t *testing.T) {
 	defer stop()
 	reached, release := make(chan struct{}), make(chan struct{})
 	done := make(chan error, 1)
+	banner := &bannerProbe{url: "http://" + addr + "/healthz"}
 	go func() {
-		done <- Run(ctx, Options{DataDir: data, Log: discardLog(), listening: func() {
+		done <- Run(ctx, Options{DataDir: data, Log: discardLog(), banners: banner, listening: func() {
 			close(reached)
 			<-release
 		}})
@@ -554,14 +555,74 @@ func TestRunAnswersStartingBeforeTheDatabase(t *testing.T) {
 		resp.Header.Get("Access-Control-Allow-Origin") != "" {
 		t.Errorf("another origin while starting = %d %v, want the 503 with no grant", resp.StatusCode, resp.Header)
 	}
+	if banner.wrote() {
+		t.Error("the first-run banner was printed before the start reached the database")
+	}
 
 	close(release)
 	waitFor(t, "the started server", func() bool {
 		out.Reset()
 		return Healthcheck(ctx, data, &out) == nil && strings.HasPrefix(out.String(), "ok: ")
 	})
+	// The first-run banner names the console's address, so it is printed only
+	// once that address answers.
+	waitFor(t, "the first-run banner", banner.wrote)
+	if status, text := banner.first(); status != http.StatusOK || !strings.Contains(text, "Admin password") {
+		t.Errorf("the banner was printed while /healthz answered %d: %q", status, text)
+	}
 	stop()
 	waitRun(t, done)
+}
+
+// bannerProbe is a first-run banner's writer that asks url at its first write:
+// what the server answered at the moment the banner was printed.
+type bannerProbe struct {
+	url    string
+	mu     sync.Mutex
+	status int
+	text   bytes.Buffer
+}
+
+func (b *bannerProbe) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.text.Len() == 0 {
+		if resp, err := http.Get(b.url); err == nil {
+			_ = resp.Body.Close()
+			b.status = resp.StatusCode
+		}
+	}
+	return b.text.Write(p)
+}
+
+func (b *bannerProbe) wrote() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.text.Len() > 0
+}
+
+func (b *bannerProbe) first() (status int, text string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.status, b.text.String()
+}
+
+// heldWriter keeps every write until release, then passes writes through; a
+// second release (Run's deferred one, after the gate opened) repeats nothing.
+func TestHeldWriter(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	h := &heldWriter{w: &out}
+	_, _ = io.WriteString(h, "banner\n")
+	if out.Len() != 0 {
+		t.Fatalf("written before release: %q", out.String())
+	}
+	h.release()
+	h.release()
+	_, _ = io.WriteString(h, "later\n")
+	if out.String() != "banner\nlater\n" {
+		t.Errorf("output %q, want the held text once, then the later write", out.String())
+	}
 }
 
 // A port another process holds stops the start before the database opens, and
