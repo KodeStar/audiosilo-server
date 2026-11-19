@@ -2388,9 +2388,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Series rail and Suggest corrections. Upcoming (a matched book is its work: it holds its slot, its own
   position's when the series doesn't list that work, and is a copy, `UpcomingBook.MatchWorkID`, `UpcomingOwnedWorks` by `workIDExpr`), the Bridge's estimate
   (`meta.Service.Coverages` by `/meta`'s rule: a recorded match's work first, `CoverageBook.Matched` from
-  `catalog.MatchedWorks`, fetched by id, the identifiers' cached envelope standing when upstream no longer
-  has that work; else the identifiers' cached envelope; only then the work the upcoming job resolved, which
-  can be a month stale and never answers "none" over a cached envelope) and the Bridge's book facts
+  `catalog.WorkSources`, fetched by id, the identifiers' cached envelope standing when upstream no longer
+  has that work; else the newer of the identifiers' cached answer (memory's envelope or lookup, else the
+  stored row, `cachedAnswerOf`, dated by its expiry less its TTL) and the work the upcoming job resolved
+  (`upcoming_owned.checked_at`, `CoverageBook.ResolvedAt`), so a stored row older than the job's monthly
+  recheck never wins after a restart, nor a month-old resolution over a lookup since) and the Bridge's book facts
   (`work_id`, the same order by `meta.Service.CachedWork`, both through `CoverageBook.workOf`) read the
   book's work key, the match first (server#375). `/meta` and `/next`'s community rail read the row when the book
   has no identifier, its lookup is a not-found or fails, or the row names another work than its

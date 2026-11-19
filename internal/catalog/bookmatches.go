@@ -174,25 +174,41 @@ func (c *Catalog) BookMatchAt(ctx context.Context, libraryID int64, path string)
 	return bookAnchor(ctx, c.db, libraryID, path)
 }
 
-// MatchedWorks is the work each of refs was matched to (book_matches), only
-// for those with a recorded match naming one: the books whose work key
-// (Book.WorkID, workIDExpr) is their match's, not the upcoming job's
-// resolution of their identifiers.
-func (c *Catalog) MatchedWorks(ctx context.Context, refs []Ref) (map[Ref]string, error) {
-	out := map[Ref]string{}
-	type matched struct{ path, work string }
+// WorkSource is where a book's work key (Book.WorkID, workIDExpr) comes from:
+// its recorded match's work (book_matches, MatchWorkID), which wins whatever
+// its identifiers say, else the upcoming job's resolution of those identifiers,
+// checked at ResolvedAt (upcoming_owned.checked_at, a catalog stamp).
+type WorkSource struct {
+	MatchWorkID string
+	ResolvedAt  string
+}
+
+// WorkSources is each of refs' WorkSource, only for the indexed books with a
+// work key: what tells a match from a resolution (and how old that is) for a
+// reader that weighs the key against the metadata cache (the Bridge's
+// estimate and book facts, /meta's placement).
+func (c *Catalog) WorkSources(ctx context.Context, refs []Ref) (map[Ref]WorkSource, error) {
+	out := map[Ref]WorkSource{}
+	type row struct {
+		path string
+		WorkSource
+	}
 	_, byLib := GroupRefs(refs)
 	for lib, paths := range byLib {
 		for chunk := range slices.Chunk(paths, 500) {
-			rows, err := queryRows(ctx, c.db, func(r *sql.Rows, m *matched) error { return r.Scan(&m.path, &m.work) },
-				`SELECT path, work_id FROM book_matches
-				  WHERE library_id = ? AND path IN (`+placeholders(len(chunk))+`) AND work_id <> ''`,
+			rows, err := queryRows(ctx, c.db, func(r *sql.Rows, m *row) error { return r.Scan(&m.path, &m.MatchWorkID, &m.ResolvedAt) },
+				`SELECT path, matched, resolved FROM (
+				   SELECT b.rel_path AS path, COALESCE(`+matchWorkIDExpr("b")+`, '') AS matched,
+				          COALESCE((SELECT wo.checked_at FROM upcoming_owned wo WHERE wo.library_id = b.library_id
+				             AND wo.path = b.rel_path AND wo.work_id <> '' AND wo.id_key = `+idKeyExpr("b")+`), '') AS resolved
+				     FROM books b WHERE b.library_id = ? AND b.rel_path IN (`+placeholders(len(chunk))+`))
+				  WHERE matched <> '' OR resolved <> ''`,
 				slices.Concat([]any{lib}, anyOf(chunk))...)
 			if err != nil {
 				return nil, err
 			}
 			for _, m := range rows {
-				out[Ref{LibraryID: lib, Path: m.path}] = m.work
+				out[Ref{LibraryID: lib, Path: m.path}] = m.WorkSource
 			}
 		}
 	}

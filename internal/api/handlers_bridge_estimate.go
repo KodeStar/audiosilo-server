@@ -196,9 +196,10 @@ func (a *API) communityContent(ctx context.Context, book *catalog.Book) (has has
 
 // coverageBooks is what meta.Service.Coverages asks about books by: each one's
 // identifiers and its work key (Book.WorkID), marked as its recorded match's
-// when it is (catalog.MatchedWorks, read only for books with a work key): a
-// match wins over the identifiers' answer, the upcoming job's resolution of
-// those identifiers never does.
+// when it is, else dated by when the upcoming job resolved it
+// (catalog.WorkSources, read only for books with a work key): a match wins over
+// the identifiers' cached answer, the job's resolution only when it is the
+// newer of the two (meta.CoverageBook).
 func (a *API) coverageBooks(ctx context.Context, books []*catalog.Book) ([]meta.CoverageBook, error) {
 	var refs []catalog.Ref
 	for _, b := range books {
@@ -206,14 +207,20 @@ func (a *API) coverageBooks(ctx context.Context, books []*catalog.Book) ([]meta.
 			refs = append(refs, catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath})
 		}
 	}
-	matched, err := a.cat.MatchedWorks(ctx, refs)
+	sources, err := a.cat.WorkSources(ctx, refs)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]meta.CoverageBook, len(books))
 	for i, b := range books {
-		out[i] = meta.CoverageBook{ASIN: b.ASIN, ISBN: b.ISBN, WorkID: b.WorkID,
-			Matched: b.WorkID != "" && matched[catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}] == b.WorkID}
+		out[i] = meta.CoverageBook{ASIN: b.ASIN, ISBN: b.ISBN, WorkID: b.WorkID}
+		if b.WorkID == "" {
+			continue
+		}
+		src := sources[catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}]
+		if out[i].Matched = src.MatchWorkID == b.WorkID; !out[i].Matched {
+			out[i].ResolvedAt, _ = catalog.ParseStamp(src.ResolvedAt)
+		}
 	}
 	return out, nil
 }

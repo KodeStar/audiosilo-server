@@ -136,20 +136,38 @@ func newCache(now func() time.Time) *cache {
 // masquerade as a cached negative. On a hit the error is nil (positive result),
 // ErrNotFound (cached "no match") or the cached transport error.
 func cacheGet[T any](c *cache, key string) (result *T, hit bool, err error) {
+	result, _, hit, err = cacheGetUntil[T](c, key)
+	return result, hit, err
+}
+
+// cacheGetUntil is cacheGet with the entry's expiry (zero on a miss), for a
+// reader that needs to know when the answer was had (answeredAt).
+func cacheGetUntil[T any](c *cache, key string) (result *T, expiry time.Time, hit bool, err error) {
 	e, ok := c.get(key)
 	switch {
 	case !ok:
-		return nil, false, nil
+		return nil, time.Time{}, false, nil
 	case e.err != nil:
-		return nil, true, e.err
+		return nil, e.expiry, true, e.err
 	case e.value == nil:
-		return nil, true, ErrNotFound
+		return nil, e.expiry, true, ErrNotFound
 	}
 	v, ok := e.value.(*T)
 	if !ok {
-		return nil, false, nil
+		return nil, time.Time{}, false, nil
 	}
-	return v, true, nil
+	return v, e.expiry, true, nil
+}
+
+// answeredAt is when an answer held until expiry was had, at the earliest: its
+// expiry less the TTL it was held for, positiveTTL for a match (an incomplete
+// envelope, held errorTTL, so reads as older than it is), notFoundTTL for a
+// "no match".
+func answeredAt(expiry time.Time, match bool) time.Time {
+	if match {
+		return expiry.Add(-positiveTTL)
+	}
+	return expiry.Add(-notFoundTTL)
 }
 
 // cachePut caches a positive result for ttl (positiveTTL, or errorTTL for an

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-meta/pkg/model"
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -817,6 +818,18 @@ func TestBridgeEstimateStaleWork(t *testing.T) {
 	has("a stale resolved work")
 	if got := b.factsWorkID(t, lib.ID, path); got != "the-martian" {
 		t.Fatalf("book facts work_id over a stale resolution = %q, want the identifiers' the-martian", got)
+	}
+	// A resolution newer than the cached answer (the job's monthly recheck
+	// after the lookup /meta cached) names the work for both.
+	if err := b.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{{Ref: catalog.Ref{LibraryID: lib.ID, Path: path},
+		IDKey: "a:B00FLIJJSY", WorkID: "merged-away", CheckedAt: catalog.FormatStamp(time.Now().Add(time.Hour))}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.factsWorkID(t, lib.ID, path); got != "merged-away" {
+		t.Fatalf("book facts work_id under a newer resolution = %q, want merged-away", got)
+	}
+	if est := b.briefEstimate(t, lib.ID, path); est.Has.Community.Characters || est.Has.Community.Recaps {
+		t.Fatalf("estimate under a newer resolution = %+v, want merged-away's (nothing)", est.Has)
 	}
 	if err := b.cat.EditBook(ctx, lib.ID, path, catalog.BookEdit{
 		Match: &catalog.MatchAnchor{WorkID: "gone-upstream"}, Source: catalog.SourceCommunity,

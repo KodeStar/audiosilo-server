@@ -5,35 +5,64 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
-// CachedEnrichment is a book's enrichment from the cache alone, never the
-// upstream (CachedWorkID's rule, for the whole envelope): memory first, else its
-// persisted row, fresh or stale. Nil for anything but a cached match: a cached
-// "no match", a miss, a cached failure and no identifier alike. A fresh row
-// warms memory for the rest of its TTL, as Enrich's read of it does. For a
-// question over many books at once (the Bridge's estimate looks at a series'
-// earlier books), where a lookup each would be one upstream call per book.
-//
-// The returned *Enrichment is shared with the cache: never modify it.
-func (s *Service) CachedEnrichment(ctx context.Context, asin, isbn string) *Enrichment {
+// cachedAnswer is an identifier's answer from the cache alone, never the
+// upstream: memory's enrichment, else memory's lookup (WorkIDs'), else the
+// enrichment's persisted row, fresh or stale, as CachedWorkID reads them. env
+// is the enrichment when one answered with a match (nil for a lookup's answer
+// and a "no match"; shared with the cache: never modify it), id its work ("" for
+// a "no match"), at when it was had (answeredAt: at the earliest) and ok
+// whether there is an answer at all (a miss, a cached failure and no identifier
+// are none). A fresh row warms memory for the rest of its TTL, as Enrich's read
+// of it does.
+type cachedAnswer struct {
+	env *Enrichment
+	id  string
+	at  time.Time
+	ok  bool
+}
+
+// cachedAnswerOf is the cache's answer for a book's identifiers (cachedAnswer):
+// what both the estimate (Coverages) and the Bridge's book facts (CachedWork)
+// read, so they never name different works.
+func (s *Service) cachedAnswerOf(ctx context.Context, asin, isbn string) cachedAnswer {
 	key := cacheKey(match.NormalizeASIN(asin), match.NormalizeISBN(isbn))
 	if key == "" {
-		return nil
+		return cachedAnswer{}
 	}
-	if e, hit, err := cacheGet[Enrichment](s.cache, key); hit {
-		if err != nil {
-			return nil
+	if e, until, hit, err := cacheGetUntil[Enrichment](s.cache, key); hit {
+		switch {
+		case err == nil && e.Work != nil && e.Work.ID != "":
+			return cachedAnswer{env: e, id: e.Work.ID, at: answeredAt(until, true), ok: true}
+		case errors.Is(err, ErrNotFound):
+			return cachedAnswer{at: answeredAt(until, false), ok: true}
 		}
-		return e
+	}
+	if l, until, hit, err := cacheGetUntil[upstreamLookup](s.cache, nsLookup.key(key)); hit {
+		switch {
+		case err == nil && l.Work != nil && l.Work.ID != "":
+			return cachedAnswer{id: l.Work.ID, at: answeredAt(until, true), ok: true}
+		case errors.Is(err, ErrNotFound):
+			return cachedAnswer{at: answeredAt(until, false), ok: true}
+		}
 	}
 	stored, expires, fresh := readStored[Enrichment](ctx, s, key)
+	switch {
+	case expires.IsZero(): // no row, or none this build reads
+		return cachedAnswer{}
+	case stored == nil:
+		return cachedAnswer{at: answeredAt(expires, false), ok: true}
+	case stored.Work == nil || stored.Work.ID == "":
+		return cachedAnswer{}
+	}
 	if fresh {
 		cachePutUntil(s.cache, key, stored, expires)
 	}
-	return stored
+	return cachedAnswer{env: stored, id: stored.Work.ID, at: answeredAt(expires, true), ok: true}
 }
 
 // Coverage is what a book's community work carries: characters and a recap
@@ -58,39 +87,42 @@ func coverageOf(e *Enrichment) Coverage {
 // CoverageBook is one book Coverages answers for: its identifiers, its
 // community work when the catalog knows it (Book.WorkID, "" when not), and
 // whether that is its recorded match's (book_matches: the work a book matched
-// in the console with no ASIN or ISBN has, server#375) rather than the
-// upcoming job's resolution of those same identifiers.
+// in the console with no ASIN or ISBN has, server#375) or else when the
+// upcoming job resolved it from those same identifiers (ResolvedAt,
+// upcoming_owned.checked_at; zero when not known).
 type CoverageBook struct {
 	ASIN, ISBN string
 	WorkID     string
 	Matched    bool
+	ResolvedAt time.Time
 }
 
 // workOf is the work b is asked about by (/meta's work rule, api.bookEnrichment),
-// given its identifiers' cached work (cached, "" for none: no identifier, a
-// miss, a cached "no match" or failure): its recorded match's work (Matched),
-// else cached, else the work the upcoming job resolved (WorkID), else "". The
-// upcoming job's resolution is of those same identifiers and can be a month
-// older than their cached answer, so it never wins over that one.
-func (b CoverageBook) workOf(cached string) string {
+// given its identifiers' cached answer: its recorded match's work (Matched),
+// else the newer of the cached answer and the upcoming job's resolution
+// (WorkID), else "". Both answer the same identifiers: the cached one can be a
+// day old or, read back from the store after a restart, older than the job's
+// monthly recheck, and the job's a month older than a lookup since (a work
+// since merged away would read as "no content"). A tie goes to the cache, as
+// does a resolution of unknown age. A newer cached "no match" is no work.
+func (b CoverageBook) workOf(c cachedAnswer) string {
 	switch {
 	case b.Matched && b.WorkID != "":
 		return b.WorkID
-	case cached != "":
-		return cached
+	case b.WorkID != "" && (!c.ok || c.at.Before(b.ResolvedAt)):
+		return b.WorkID
 	}
-	return b.WorkID
+	return c.id
 }
 
 // CachedWork is the work b is asked about by, from the cache alone, never the
-// upstream (workOf over CachedWorkID): Coverages' order, for a caller that
+// upstream (workOf over cachedAnswerOf): Coverages' order, for a caller that
 // needs only the id (the Bridge's book facts). "" when none is known.
 func (s *Service) CachedWork(ctx context.Context, b CoverageBook) string {
 	if b.Matched && b.WorkID != "" {
 		return b.WorkID
 	}
-	cached, _ := s.CachedWorkID(ctx, b.ASIN, b.ISBN)
-	return b.workOf(cached)
+	return b.workOf(s.cachedAnswerOf(ctx, b.ASIN, b.ISBN))
 }
 
 // Coverages answers Coverage for many books at once (the Bridge's estimate: a
@@ -101,12 +133,10 @@ func (s *Service) CachedWork(ctx context.Context, b CoverageBook) string {
 //     when it is of that work, else the work fetched by id; a work upstream
 //     no longer has leaves the identifiers' cached enrichment standing, as on
 //     /meta;
-//  2. else the identifiers' cached enrichment, whatever its work (fresh or
-//     stale, as CachedEnrichment): the upcoming job's resolution is of those
-//     same identifiers and can be a month older, so it never answers for them
-//     (a work since merged away would read as "no content");
-//  3. else the work the upcoming job resolved, fetched by id;
-//  4. else the console's bounded path, the lookups batched by WorkIDs (under
+//  2. else the newer of the identifiers' cached answer (cachedAnswerOf: fresh
+//     or stale) and the work the upcoming job resolved from them (workOf): the
+//     cached enrichment when it is of that work, else the work fetched by id;
+//  3. else the console's bounded path, the lookups batched by WorkIDs (under
 //     lookupSem, inside composeBudget) and each work then fetched by id.
 //
 // A work is fetched once (cached per work, under workSem), never a series
@@ -123,20 +153,16 @@ func (s *Service) Coverages(ctx context.Context, books []CoverageBook) []Coverag
 	// work), what answers when its match's work is gone upstream.
 	standing := make([]*Enrichment, len(books))
 	for i, b := range books {
-		env := s.CachedEnrichment(ctx, b.ASIN, b.ISBN)
-		cached := ""
-		if env != nil && env.Work != nil {
-			cached = env.Work.ID
-		}
-		switch id := b.workOf(cached); {
+		c := s.cachedAnswerOf(ctx, b.ASIN, b.ISBN)
+		switch id := b.workOf(c); {
 		case id == "":
 			ask, at = append(ask, BookIDs{ASIN: b.ASIN, ISBN: b.ISBN}), append(at, i)
-		case env.OfWork(id):
-			out[i] = coverageOf(env)
+		case c.env.OfWork(id):
+			out[i] = coverageOf(c.env)
 		default:
 			works[id] = append(works[id], i)
 			if b.Matched {
-				standing[i] = env
+				standing[i] = c.env
 			}
 		}
 	}
