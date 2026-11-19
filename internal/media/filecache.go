@@ -245,21 +245,17 @@ func (m *FileCache) Ext() string { return m.spec.ext }
 // out of the library swapped in since the check is never followed: ErrRefused
 // joined with ErrNoSource when there is no regular file there (the stored
 // file's answer, a 404, is the right one), such a link among them; a stat
-// given up on (metadata.GaveUp: a share that stopped answering) or ctx's error
-// as it is, and one failing as a share does that a retry may get past
-// (metadata.TransientFault) as one given up on (metadata.AsGaveUp), never the
-// file gone. A request looks with it before asking
-// the cache for the copy (Open, Status, Queue, RefusedFor), whose own stat of
+// given up on (metadata.GaveUp: a share that stopped answering, a transient
+// fault among them: transientGaveUp) or ctx's error as it is, never the file
+// gone. A request looks with it before asking the cache for the copy (Open, Status, Queue, RefusedFor), whose own stat of
 // the source then answers at once, as the share just did; that stat is given
 // sourceWait all the same, so one on a share that stopped answering since is
 // given up on rather than holding one of its mount's slots for good.
 func Source(ctx context.Context, root, abs string, wait time.Duration) (os.FileInfo, error) {
 	info, err := statBelow(ctx, root, abs, wait)
-	switch {
+	switch err = transientGaveUp(err); {
 	case metadata.GaveUp(err) || (err != nil && ctx.Err() != nil):
 		return nil, err
-	case metadata.TransientFault(err):
-		return nil, metadata.AsGaveUp(err)
 	case err != nil:
 		return nil, fmt.Errorf("%w: %w: %v", ErrRefused, ErrNoSource, err)
 	case !info.Mode().IsRegular():

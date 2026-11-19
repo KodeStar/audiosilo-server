@@ -12,5 +12,5 @@ import "os"
 // only one ffmpeg may open (-protocol_whitelist): a crafted file that probes
 // as a playlist reaches no network, as before when ffmpeg was handed the path.
 func descriptorInput(f *os.File) (inputSpec, error) {
-	return inputSpec{proto: "file", url: "/dev/fd/3", file: f, extra: true}, nil
+	return inputSpec{proto: "file", url: "/dev/fd/3", file: f}, nil
 }

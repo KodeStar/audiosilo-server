@@ -304,7 +304,7 @@ func TestTranscodeArgs(t *testing.T) {
 		// The seekable inputs (a descriptor, /dev/fd/3, a re-checked path)
 		// seek on the input side, each the only protocol ffmpeg may open.
 		{"fd", fdInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "fd", "-ss", "8.500", "-i", "fd:"}},
-		{"dev fd", inputSpec{proto: "file", url: "/dev/fd/3", extra: true}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-ss", "8.500", "-i", "/dev/fd/3"}},
+		{"dev fd", inputSpec{proto: "file", url: "/dev/fd/3"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-ss", "8.500", "-i", "/dev/fd/3"}},
 		{"path", inputSpec{proto: "file", url: "file:/b/x.m4b"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-ss", "8.500", "-i", "file:/b/x.m4b"}},
 		// A pipe can't seek: -ss after -i decodes up to it.
 		{"pipe", pipeInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "pipe", "-i", "pipe:0", "-ss", "8.500"}},

@@ -146,19 +146,18 @@ func audioContentType(ext string) string {
 // Its open and stat are one metadata.Bounded call (the request's context, at
 // most wait, the per-mount cap of a scan's reads): a file on a share that
 // stopped answering is given up on, never a handler held for good (the reads
-// that follow are the client's to wait for). That error (metadata.GaveUp), and
-// an open that failed as a share does that a retry may get past
-// (metadata.TransientFault: EIO, ESTALE), is returned with nothing written,
-// for the caller to answer (a 503 share_not_answering); every other outcome
-// is answered here and returns nil, a lasting refusal (a permission) the 404
-// a file gone is. Only a regular file is served
+// that follow are the client's to wait for). That error, or a transient one
+// (openLibraryFile: metadata.GaveUp either way), is returned with nothing
+// written, for the caller to answer (a 503 share_not_answering); every other
+// outcome is answered here and returns nil, a lasting refusal (a permission)
+// the 404 a file gone is. Only a regular file is served
 // (metadata.OpenRegular): a FIFO named as audio is a 404 at once, never an open
 // waiting for a writer, given up on and counted on its mount for good. A 404
 // carries no Cache-Control a caller set for the file it expected.
 func ServeFile(w http.ResponseWriter, r *http.Request, root, absPath string, download bool, wait time.Duration) error {
-	f, info, err := openBelow(r.Context(), root, absPath, wait)
+	f, info, err := openLibraryFile(r.Context(), root, absPath, wait)
 	switch {
-	case unanswered(err):
+	case metadata.GaveUp(err):
 		return err
 	case err != nil:
 		w.Header().Del("Cache-Control")
@@ -176,12 +175,24 @@ func ServeFile(w http.ResponseWriter, r *http.Request, root, absPath string, dow
 // to inject a share's errors.
 var openBelow = metadata.OpenRegularBelowBounded
 
-// unanswered reports whether err, an open's or a look's at a library file, is
-// a share's that did not answer: given up on (metadata.GaveUp) or failing as
-// one does that a retry may get past (metadata.TransientFault), which a route
-// answers 503 share_not_answering, never as the file gone.
-func unanswered(err error) bool {
-	return metadata.GaveUp(err) || metadata.TransientFault(err)
+// openLibraryFile is openBelow with an open that failed as a share does that a
+// retry may get past made one given up on (transientGaveUp), so its caller
+// tells a share that did not answer (a 503 share_not_answering) from the file
+// gone with metadata.GaveUp alone.
+func openLibraryFile(ctx context.Context, root, abs string, wait time.Duration) (*os.File, os.FileInfo, error) {
+	f, info, err := openBelow(ctx, root, abs, wait)
+	return f, info, transientGaveUp(err)
+}
+
+// transientGaveUp is err made a look given up on (metadata.AsGaveUp) when it
+// is a share's fault a retry may get past (metadata.TransientFault: EIO,
+// ESTALE), which a route answers 503 share_not_answering, never as the file
+// gone; else err as it is (a lasting refusal, a permission, is the 404).
+func transientGaveUp(err error) error {
+	if metadata.TransientFault(err) {
+		return metadata.AsGaveUp(err)
+	}
+	return err
 }
 
 // ServeOpened serves an already verified descriptor without reopening its path.
@@ -292,16 +303,16 @@ func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 // context, at most wait) and ffmpeg reads that descriptor (fileInput), never
 // the path: a name along it swapped for a link out of the library after the
 // caller's check is refused (a 404), never followed by ffmpeg's own open. An
-// open given up on, or failing as a share does that a retry may get past, is
-// returned with nothing written, for the caller to answer (ServeFile's rule);
+// open given up on (openLibraryFile) is returned with nothing written, for the
+// caller to answer (ServeFile's rule);
 // every other outcome is answered here and returns nil. ended reports a
 // stream that ran to its end (transcodeInput).
 // download makes the stream an attachment named for the file (its stem with
 // the MP3 extension), set only on the stream's own answer, never an error's.
 func Transcode(w http.ResponseWriter, r *http.Request, root, absPath, ffmpegPath string, startSec float64, download bool, wait, idle time.Duration, log *slog.Logger) (ended bool, err error) {
-	f, _, err := openBelow(r.Context(), root, absPath, wait)
+	f, _, err := openLibraryFile(r.Context(), root, absPath, wait)
 	switch {
-	case unanswered(err):
+	case metadata.GaveUp(err):
 		return false, err
 	case err != nil:
 		http.Error(w, "not found", http.StatusNotFound)
@@ -383,13 +394,12 @@ var errNotOpened = errors.New("media: the path no longer leads to the file opene
 
 // inputSpec is how ffmpeg reads its input: the descriptor file handed over as
 // its stdin through the fd: protocol (seekable) or pipe:0 (not seekable, for
-// an ffmpeg older than 6.1), or as its descriptor 3 (extra) read by the file
-// protocol as /dev/fd/3 (seekable, Unix); or a file's path (recheckedInput).
-// proto is the one protocol ffmpeg may open (-protocol_whitelist).
+// an ffmpeg older than 6.1), or as its descriptor 3 read by the file protocol
+// as /dev/fd/3 (seekable, Unix: setInput); or a file's path (recheckedInput,
+// no file). proto is the one protocol ffmpeg may open (-protocol_whitelist).
 type inputSpec struct {
 	proto, url string
 	file       *os.File
-	extra      bool
 }
 
 var (
@@ -501,12 +511,12 @@ const TranscodeIdle = 10 * time.Minute
 // handler, or the process unreaped.
 const transcodeWaitDelay = 5 * time.Second
 
-// setInput hands in's descriptor to cmd: its descriptor 3 (in.extra), else its
-// stdin.
+// setInput hands in's descriptor to cmd: its descriptor 3 when ffmpeg reads it
+// through the file protocol (/dev/fd/3, descriptorInput), else its stdin.
 func setInput(cmd *exec.Cmd, in inputSpec) {
 	switch {
 	case in.file == nil:
-	case in.extra:
+	case in.proto == "file":
 		cmd.ExtraFiles = []*os.File{in.file}
 	default:
 		cmd.Stdin = in.file

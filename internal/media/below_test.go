@@ -76,26 +76,24 @@ func TestTranscodeOpensThroughTheRoot(t *testing.T) {
 	ffmpeg := echoFFmpeg(t)
 	root, outside := libraryWithOutside(t)
 	abs := filepath.Join(root, "Book", "a.m4a")
-	get := func() *httptest.ResponseRecorder {
+	get := func(abs string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		if _, err := Transcode(rec, httptest.NewRequest(http.MethodGet, "/", nil), root, abs, ffmpeg, 0, false, time.Minute, 0, nil); err != nil {
 			t.Fatalf("Transcode = %v, want it answered here", err)
 		}
 		return rec
 	}
-	if rec := get(); rec.Code != http.StatusOK || rec.Body.String() != "inside bytes" {
+	if rec := get(abs); rec.Code != http.StatusOK || rec.Body.String() != "inside bytes" {
 		t.Fatalf("transcode in place = %d %q, want the library file's bytes", rec.Code, rec.Body)
 	}
 	if err := os.Symlink("Book", filepath.Join(root, "Again")); err != nil {
 		t.Skipf("symlinks unsupported here: %v", err)
 	}
-	rec := httptest.NewRecorder()
-	if _, err := Transcode(rec, httptest.NewRequest(http.MethodGet, "/", nil), root, filepath.Join(root, "Again", "a.m4a"), ffmpeg, 0, false, time.Minute, 0, nil); err != nil ||
-		rec.Code != http.StatusOK || rec.Body.String() != "inside bytes" {
-		t.Fatalf("transcode through a link inside the library = %d %q (%v), want the file's bytes", rec.Code, rec.Body, err)
+	if rec := get(filepath.Join(root, "Again", "a.m4a")); rec.Code != http.StatusOK || rec.Body.String() != "inside bytes" {
+		t.Fatalf("transcode through a link inside the library = %d %q, want the file's bytes", rec.Code, rec.Body)
 	}
 	swapForLink(t, root, outside)
-	if rec := get(); rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "outside") {
+	if rec := get(abs); rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "outside") {
 		t.Fatalf("transcode after its folder became a link out of the library = %d %q, want a 404 and none of that file", rec.Code, rec.Body)
 	}
 }
@@ -153,6 +151,14 @@ func TestRecheckedInput(t *testing.T) {
 	}
 }
 
+// shareFaults are the errors a share fails a look or an open with, and
+// whether each is one a retry may get past (metadata.TransientFault: the 503
+// share_not_answering) rather than the lasting answer, a 404.
+var shareFaults = []struct {
+	errno     syscall.Errno
+	transient bool
+}{{syscall.EIO, true}, {syscall.ESTALE, true}, {syscall.EACCES, false}, {syscall.ENOENT, false}}
+
 // failOpens makes every open of a library file (openBelow) fail with errno,
 // until the test ends. Not for a parallel test: it swaps the package's open.
 func failOpens(t *testing.T, errno syscall.Errno) {
@@ -172,10 +178,7 @@ func failOpens(t *testing.T, errno syscall.Errno) {
 func TestOpenFaultsAnswerByKind(t *testing.T) {
 	root := t.TempDir()
 	abs := filepath.Join(root, "a.mp3")
-	for _, c := range []struct {
-		errno     syscall.Errno
-		transient bool
-	}{{syscall.EIO, true}, {syscall.ESTALE, true}, {syscall.EACCES, false}, {syscall.ENOENT, false}} {
+	for _, c := range shareFaults {
 		failOpens(t, c.errno)
 		serve := httptest.NewRecorder()
 		serveErr := ServeFile(serve, httptest.NewRequest(http.MethodGet, "/", nil), root, abs, false, time.Minute)
@@ -263,10 +266,7 @@ func TestFileCacheSourceThroughTheRoot(t *testing.T) {
 func TestSourceTransientFaultIsUnanswered(t *testing.T) {
 	was := statBelow
 	t.Cleanup(func() { statBelow = was })
-	for _, c := range []struct {
-		errno     syscall.Errno
-		transient bool
-	}{{syscall.EIO, true}, {syscall.ESTALE, true}, {syscall.EACCES, false}} {
+	for _, c := range shareFaults {
 		statBelow = func(_ context.Context, _, abs string, _ time.Duration) (fs.FileInfo, error) {
 			return nil, &fs.PathError{Op: "stat", Path: abs, Err: c.errno}
 		}
