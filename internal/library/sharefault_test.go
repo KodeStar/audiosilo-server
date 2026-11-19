@@ -66,6 +66,7 @@ func TestBookOnDiskReadsAShareFaultAsNoAnswer(t *testing.T) {
 		{"the library folder's listing ENXIO", "Loose.mp3", root, syscall.ENXIO, diskPresent},
 		{"the library folder's listing ENOENT", "Loose.mp3", root, syscall.ENOENT, diskGone},
 		{"its own listing EIO", "Author/Book", book, syscall.EIO, diskUnknown},
+		{"its own listing ENXIO", "Author/Book", book, syscall.ENXIO, diskPresent},
 		{"its own stat EPERM", "Author/Book", book, syscall.EPERM, diskPresent},
 		{"its own stat ENOTDIR", "Author/Book", book, syscall.ENOTDIR, diskGone},
 	} {
