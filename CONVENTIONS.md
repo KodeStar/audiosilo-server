@@ -179,7 +179,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the user's other still-redeemable invites; `redeemed_at` records
   acceptance (first successful exchange) but the console buckets invites by whether
   they are still redeemable, not by `redeemed_at`. **Self-
-  service password**: `POST /auth/password` reuses `SetPassword`; setting a first
+  service password**: `POST /auth/password` calls `ChangePassword` (`SetPassword` answering the count below); setting a first
   password needs no challenge, but changing an existing one requires `current_password`
   (`CheckPassword`), an empty password is rejected (clearing is admin-only), and the
   admin-must-keep-a-password guard still holds.
