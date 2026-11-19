@@ -1271,7 +1271,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 	running := r.Context().Err() == nil && errors.Is(err, media.ErrPending)
 	if running {
 		if !download {
-			held, r = a.takeTranscodeSlot(r, transcodeAskOf(r, lib, rel))
+			held, r = a.takeTranscodeSlot(w, r, transcodeAskOf(r, lib, rel))
 		}
 		if held == nil {
 			// A download, or no slot free: wait for the remux, up to
@@ -1323,7 +1323,8 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 
 // beginTranscode admits one ?transcode=1 request for the file at rel: 503 when
 // ffmpeg isn't configured or no slot is free for it (Retry-After 5), else its
-// hold (takeTranscodeSlot: a repeat ask takes its earlier one's over), for
+// hold (takeTranscodeSlot: a repeat ask takes its earlier one's over, a token
+// past its cap its oldest's), for
 // endTranscode once served, and r with the slot's context (a takeover ends
 // it), the device's session marked transcoded (noteTranscode). A HEAD takes
 // no slot and is answered as a GET would be, the 503 included, with no ffmpeg
@@ -1336,7 +1337,7 @@ func (a *API) beginTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 	}
 	// Bound concurrent ffmpeg processes; when saturated, ask the client to retry
 	// rather than forking another core-pinning encoder.
-	h, r := a.takeTranscodeSlot(r, transcodeAskOf(r, lib, rel))
+	h, r := a.takeTranscodeSlot(w, r, transcodeAskOf(r, lib, rel))
 	if h == nil {
 		writeTranscodeBusy(w)
 		return nil, r

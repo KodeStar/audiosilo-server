@@ -367,6 +367,11 @@ func transcodeArgs(in inputSpec, startSec float64) []string {
 // (the api's transcodeIdleFor).
 const TranscodeIdle = 10 * time.Minute
 
+// transcodeWaitDelay bounds Wait's wait for a killed ffmpeg's output pipes
+// (exec.Cmd.WaitDelay): a pipe held open past ffmpeg's end never keeps the
+// handler, or the process unreaped.
+const transcodeWaitDelay = 5 * time.Second
+
 // transcodeInput runs ffmpeg over in from startSec and streams its MP3 to w,
 // ending it (and ffmpeg) when the client has read nothing for idle. It reports
 // whether the stream ran to its end: ffmpeg's output came to its end, all of it
@@ -391,6 +396,9 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 	defer cancel()
 	logPath := in.url
 	cmd := exec.CommandContext(ctx, ffmpegPath, transcodeArgs(in, startSec)...)
+	// Once ctx ends (ffmpeg killed), Wait gives its output pipes this long to
+	// close before it closes them itself: ffmpeg is always reaped.
+	cmd.WaitDelay = transcodeWaitDelay
 	if in.file != nil {
 		logPath = in.file.Name()
 		cmd.Stdin = in.file

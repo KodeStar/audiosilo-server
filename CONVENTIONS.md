@@ -1471,10 +1471,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `?t=` start, `download=1`): a repeat GET of the same ask takes over the slot the earlier one holds, ending that
   request's ffmpeg and aborting its response (`http.ErrAbortHandler`, a broken stream, never one that ended),
   rather than needing a slot of its own, since Safari asks for one stream two or three times and plays only the
-  last; a token is one user's, so a takeover never ends another user's or device's transcode. A stream that ran to
+  last; a token is one user's, so a takeover never ends another user's or device's transcode. A token holds at most
+  2 slots (`maxTranscodesPerToken`): its third ask (asks differing only in `?t=`, the web player's overlapping seek
+  re-asks) takes over its own oldest one's slot the same way rather than being refused, so one client (a demo
+  visitor included) can't hold all 4; another token's slots are never touched. A takeover also marks the old hold
+  taken (its writer refuses every write after it) and gives its response a 1 s write deadline
+  (`transcodeTakeoverGrace`, `http.ResponseController` from the taking goroutine), so a handler blocked writing to
+  a client that stopped reading fails, reaps its ffmpeg (`exec.Cmd.WaitDelay` 5 s on top) and lets go of the
+  connection. A stream that ran to
   its end before the takeover came (`media.Transcode` reports `ended`: ffmpeg's output came to its end while the
-  request was live) is not aborted. A HEAD runs no ffmpeg and takes no slot: it answers as a GET would now (200 when
-  a slot is free or its ask holds one, else the busy 503), with `X-AudioSilo-Transcode-Sent: <bytes>` when the same
+  request was live) is not aborted, and its kept-alive connection loses that deadline. A HEAD runs no ffmpeg and takes no slot: it answers as a GET would now (200 when
+  a slot is free, its ask holds one or its token is at its cap, else the busy 503), with `X-AudioSilo-Transcode-Sent: <bytes>` when the same
   ask's GET is running (what it has written so far; never another token's, exposed to CORS), the chapter editor's
   check after a failed or stalled load (`lookAtTranscode`). A HEAD of an MP3-in-MKA starts no remux either
   (`FileCache.Cached`): the cached copy's headers, else the transcode's. The console's chapter
