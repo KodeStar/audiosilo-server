@@ -375,9 +375,9 @@ func resolveBelow(rootAbs, p string, lk belowLooks) (target string, there bool, 
 // rootAbs), one hop at a time: its target is read (lk.readlink) and walked
 // name by name from dir (a relative one) or the filesystem's root (an
 // absolute one), ".." taking the folder above, each name under the root
-// looked at (lk.lstat) and a link among them followed the same way. The root
-// and the folders above it are walked through unlooked at (rootAbs is
-// resolved: no link in any of them). The first name out of the root ends it,
+// looked at (lk.lstat) and a link among them followed the same way. dir and
+// the folders above it, the root's among them, are walked through unlooked at
+// (both are resolved: no link in any of them). The first name out of the root ends it,
 // that path returned, never looked at: a link out of the root answers the
 // same whatever its target is, there or not, on a mount that answers, hangs
 // or fails. A target that resolves to a folder above the root is returned as
@@ -407,8 +407,8 @@ func followLink(rootAbs, dir, link string, lk belowLooks, hops *int) (string, er
 		}
 		next := filepath.Join(cur, name)
 		switch {
-		case withinRoot(next, rootAbs):
-			cur = next // the root or a folder above it: no link there
+		case withinRoot(next, dir):
+			cur = next // dir or a folder above it (the root's too): resolved, no link there
 			continue
 		case !withinRoot(rootAbs, next):
 			return next, nil // out of the root: never looked at
