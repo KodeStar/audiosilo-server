@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -172,5 +173,70 @@ func TestSafeJoinListedGivesUp(t *testing.T) {
 		func(context.Context, string, time.Duration) ([]string, error) { return nil, metadata.ErrNotAnswered })
 	if !metadata.GaveUp(err) {
 		t.Errorf("err = %v, want one given up on", err)
+	}
+}
+
+// TestSafeJoinListedReadsAShareFault: a listing or look failing as a share
+// does that a retry may get past (EIO, ESTALE, ENOTCONN: transientFault) is
+// one given up on (metadata.GaveUp, the API's 503 share_not_answering), as the
+// scanner reads it, never a name not there (a 404 for a book on a share that
+// stopped answering). Denied the 503: a permission (EACCES, EPERM), which
+// stays until an admin changes it, and the name gone stay a name not there.
+func TestSafeJoinListedReadsAShareFault(t *testing.T) {
+	t.Parallel()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "Author/Book/01.mp3", []byte("x"))
+	author := filepath.Join(root, "Author")
+	for _, c := range []struct {
+		errno  syscall.Errno
+		gaveUp bool
+	}{
+		{syscall.EIO, true}, {syscall.ESTALE, true}, {syscall.ENOTCONN, true},
+		{syscall.EACCES, false}, {syscall.EPERM, false}, {syscall.ENOENT, false},
+	} {
+		names := func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+			if dir == author {
+				return nil, &fs.PathError{Op: "open", Path: dir, Err: c.errno}
+			}
+			return metadata.ReadDirNamesBounded(ctx, dir, timeout)
+		}
+		_, there, err := SafeJoinListed(t.Context(), root, "Author/Book", time.Second, names)
+		switch {
+		case c.gaveUp && (!metadata.GaveUp(err) || !errors.Is(err, c.errno)):
+			t.Errorf("the book's folder's listing %v: there %v, err %v; want a look given up on, keeping the errno", c.errno, there, err)
+		case !c.gaveUp && (err != nil || there):
+			t.Errorf("the book's folder's listing %v: there %v, err %v; want a name not there", c.errno, there, err)
+		}
+	}
+}
+
+// TestUnansweredLookReadsAShareFault: the book folder's own stat in
+// SafeJoinListed's walk is read by the same rule as a listing: EIO or ESTALE
+// a look given up on, a permission or the name gone none (a name not there).
+func TestUnansweredLookReadsAShareFault(t *testing.T) {
+	t.Parallel()
+	stat := func(errno syscall.Errno) error {
+		return &fs.PathError{Op: "lstat", Path: "/lib/Author/Book", Err: errno}
+	}
+	for _, errno := range []syscall.Errno{syscall.EIO, syscall.ESTALE, syscall.ETIMEDOUT} {
+		if err := unansweredLook(t.Context(), stat(errno)); !metadata.GaveUp(err) {
+			t.Errorf("a stat failing %v: %v, want a look given up on", errno, err)
+		}
+	}
+	for _, errno := range []syscall.Errno{syscall.EACCES, syscall.EPERM, syscall.ENOENT, syscall.ENOTDIR} {
+		if err := unansweredLook(t.Context(), stat(errno)); err != nil {
+			t.Errorf("a stat failing %v: %v, want a name not there", errno, err)
+		}
+	}
+	if err := unansweredLook(t.Context(), metadata.ErrNotAnswered); !metadata.GaveUp(err) {
+		t.Errorf("a stat not answered in time: %v, want a look given up on", err)
+	}
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := unansweredLook(ended, stat(syscall.ENOENT)); err == nil {
+		t.Error("a look whose context ended: no error, want it unanswered")
 	}
 }

@@ -181,8 +181,10 @@ func SafeJoin(root, relPath string) (string, error) {
 // would not. A link out of the root is ErrOutsideRoot as soon as it is
 // reached, nothing below it listed or looked at, so the answer never tells
 // what the folder it points to holds. err is that, or a look given up on
-// (metadata.GaveUp) or ctx's; a listing or look that fails otherwise is a name
-// not there.
+// (metadata.GaveUp: one that did not answer in time, or failed as a share does
+// that a retry may get past, transientFault's EIO, ESTALE, ENOTCONN, as the
+// scanner reads them) or ctx's; a listing or look that fails otherwise (the
+// name gone, a permission) is a name not there.
 func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Duration,
 	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) (abs string, there bool, err error) {
 	deadline := time.Now().Add(timeout)
@@ -191,8 +193,8 @@ func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Dura
 		return "", false, err
 	}
 	resolved, rerr := metadata.EvalSymlinksBounded(ctx, rootAbs, metadata.WaitLeft(deadline))
-	if metadata.Unanswered(ctx, rerr) {
-		return "", false, cmp.Or(rerr, ctx.Err())
+	if err := unansweredLook(ctx, rerr); err != nil {
+		return "", false, err
 	}
 	if rerr != nil {
 		resolved = rootAbs
@@ -219,7 +221,8 @@ func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Dura
 // bounded and a name first looked for in its folder's listing.
 type belowLooks struct {
 	// lstat is the name's Lstat, nil when it is not there (or the look
-	// failed); err only for a look that went unanswered.
+	// failed); err only for a look that went unanswered (with boundedLooks,
+	// one failing as a share does that a retry may get past too).
 	lstat func(path string) (fs.FileInfo, error)
 	// eval is a link's target, every link in it resolved, "" when it does not
 	// resolve (a dangling link); err as lstat's.
@@ -229,16 +232,27 @@ type belowLooks struct {
 	listed func(dir, name string) (bool, error)
 }
 
+// unansweredLook is err, a bounded look's (one of SafeJoinListed's), when it
+// is no answer about the name, else nil (a name not there): a look given up
+// on, ctx ended (its error ctx's), or a look failing as a share does that a
+// retry may get past (transientFault: EIO, ESTALE, a mount that dropped, made
+// one given up on, transientGaveUp), as the scanner's own looks read it
+// (resolveBook), so a book on a share that stopped answering is a 503
+// share_not_answering, never a 404. A permission (EACCES, EPERM) stays a name
+// not there, the lasting answer it had, as does the name gone.
+func unansweredLook(ctx context.Context, err error) error {
+	if err = transientGaveUp(err); metadata.Unanswered(ctx, err) {
+		return cmp.Or(err, ctx.Err())
+	}
+	return nil
+}
+
 // boundedLooks are SafeJoinListed's: each a metadata.Bounded look of its own,
-// within deadline, a name first looked for in its folder's listing (names).
+// within deadline, a name first looked for in its folder's listing (names),
+// each failure read by unansweredLook.
 func boundedLooks(ctx context.Context, deadline time.Time,
 	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) belowLooks {
-	answered := func(err error) error { // a look's error that is no answer, else nil
-		if metadata.Unanswered(ctx, err) {
-			return cmp.Or(err, ctx.Err())
-		}
-		return nil
-	}
+	answered := func(err error) error { return unansweredLook(ctx, err) }
 	return belowLooks{
 		lstat: func(p string) (fs.FileInfo, error) {
 			fi, err := metadata.LstatBounded(ctx, p, metadata.WaitLeft(deadline))

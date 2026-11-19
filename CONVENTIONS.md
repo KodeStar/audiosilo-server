@@ -1243,7 +1243,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   disk has it as given (`asGiven`: a path the index holds byte for byte, `catalog.IndexHolds`, joined by
   `SafeJoinBounded`, else `library.SafeJoinListed`: `resolveBelow` with its looks bounded, each
   name looked for in its folder's listing through `API.listed`, names only, before it is `Lstat`ed), else
-  answer as for a missing path (a listing given up on: 503 `share_not_answering`). A missing path and a
+  answer as for a missing path (a listing or `Lstat` given up on, or failing as a share does that a retry may get
+  past, `transientFault`'s EIO, ESTALE, ENOTCONN, as the scanner reads them: 503 `share_not_answering` with
+  `Retry-After`, the stream, `/fs` and `/item`'s on-demand index alike; a permission, EACCES or EPERM, stays the
+  missing path's 404). A missing path and a
   case variant take the same steps (the same listings and `Lstat`s up to the first name not listed, none
   past it), and the listings are kept a few seconds (`metadata.DirNames`, one per server,
   `Catalog.DirNames`, which `Spelling`'s `ownEntry` reads too: `dirNamesTTL` 3 s from the read's start, at
