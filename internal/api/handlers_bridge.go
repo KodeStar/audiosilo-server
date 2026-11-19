@@ -82,7 +82,12 @@ var bridgeKinds = []string{auth.KindBridge}
 // requireBridge authenticates the paired Bridge's token (Authorization header
 // only). Only a missing or refused token is a 401 (the Bridge then stops calling
 // in and retries every few minutes), so a failure to check the token (the
-// database) is a 503, which it retries at once.
+// database) is a 503, which it retries at once. A 401 also pays into its
+// address's general bucket, as a refused token does on any other route
+// (authLimited): rateLimit spent the request from bridgeLimiter, so without
+// it the Bridge's routes would give an address a second budget of token
+// lookups, and one refused elsewhere could keep trying tokens here. A paired
+// Bridge's own requests never pay it.
 func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, failure, err := a.authenticate(r, false, bridgeKinds)
@@ -93,6 +98,7 @@ func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
 			a.log.Warn("bridge token check failed", "err", err)
 			writeError(w, http.StatusServiceUnavailable, "could not check the token, try again")
 		default:
+			a.ipLimiter.Charge(clientIP(r))
 			writeError(w, http.StatusUnauthorized, failure)
 		}
 	})

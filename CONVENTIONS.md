@@ -2999,7 +2999,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   session, so a per-token budget would be none); the Bridge's `/api/v1/bridge/*` spends from
   `bridgeLimiter`, a bucket per IP of its own at the address bucket's rate and burst (`addressLimiter`), so
   a Bridge behind the address busy players share is not refused for their requests, nor they for its
-  (server#179); everything else (public routes and `/api/v1/auth/*` with or without a token: sign-in,
+  (server#179); a refused token there (`requireBridge`'s 401) still pays into the address's `ipLimiter`, as
+  one does on any route, so the Bridge's bucket is no second budget of token lookups
+  (`TestRateLimitBridgeRefusedTokenPaysTheAddress`); everything else (public routes and `/api/v1/auth/*` with or without a token: sign-in,
   pairing, password, API keys) spends from `ipLimiter` (~50/s, burst 200, per IP), but `/healthz` and
   `/api/v1/healthz` (`healthPatterns`), which spend nothing: a container's healthcheck asks from the loopback
   address an untrusted proxy on the same host shares with everyone, and one probe answers every request
