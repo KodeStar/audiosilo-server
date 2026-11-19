@@ -104,7 +104,7 @@ func TestTranscodeIdleEndsFFmpeg(t *testing.T) {
 	returned := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer close(returned)
-		transcodeInput(w, r, inputSpec{url: src}, "ffmpeg", 0, false, 300*time.Millisecond, nil)
+		transcodeInput(w, r, inputSpec{proto: "file", url: "file:" + src}, src, "ffmpeg", 0, false, 300*time.Millisecond, nil)
 	}))
 	t.Cleanup(srv.Close)
 	resp, err := http.Get(srv.URL)
@@ -146,14 +146,19 @@ func TestCopyIdleNoneKeepsUnreadStream(t *testing.T) {
 	}
 }
 
-// fakeFFmpeg is a stand-in ffmpeg running script (sh), whatever it is asked.
+// answerNoProtocols makes a stand-in ffmpeg asked for its protocols (inputFor's
+// probe) list none, so it runs script only for a transcode.
+const answerNoProtocols = "case \" $* \" in *\" -protocols \"*) exit 0;; esac\n"
+
+// fakeFFmpeg is a stand-in ffmpeg running script (sh) for every run but its
+// protocols probe (answerNoProtocols).
 func fakeFFmpeg(t *testing.T, script string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "ffmpeg")
 	// Written under ForkLock: a parallel test's fork must not inherit its open
 	// write descriptor, or exec fails with ETXTBSY (golang/go#22315).
 	syscall.ForkLock.RLock()
-	err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o755)
+	err := os.WriteFile(path, []byte("#!/bin/sh\n"+answerNoProtocols+script+"\n"), 0o755)
 	syscall.ForkLock.RUnlock()
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +192,7 @@ func TestTranscodeReportsItsEnd(t *testing.T) {
 	endless := fakeFFmpeg(t, "exec cat /dev/zero")
 
 	rec := httptest.NewRecorder()
-	if ended, err := Transcode(rec, httptest.NewRequest(http.MethodGet, "/", nil), src, short, 0, false, time.Minute, 0, nil); err != nil || !ended {
+	if ended, err := Transcode(rec, httptest.NewRequest(http.MethodGet, "/", nil), filepath.Dir(src), src, short, 0, false, time.Minute, 0, nil); err != nil || !ended {
 		t.Fatalf("a whole stream: ended %v, %v, want true", ended, err)
 	}
 	if rec.Body.String() != "mp3 bytes" {
@@ -199,7 +204,7 @@ func TestTranscodeReportsItsEnd(t *testing.T) {
 	cut := cancelOnWrite{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
 	done := make(chan bool, 1)
 	go func() {
-		ended, _ := Transcode(cut, httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx), src, endless, 0, false, time.Minute, 0, nil)
+		ended, _ := Transcode(cut, httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx), filepath.Dir(src), src, endless, 0, false, time.Minute, 0, nil)
 		done <- ended
 	}()
 	select {
@@ -211,7 +216,7 @@ func TestTranscodeReportsItsEnd(t *testing.T) {
 		t.Fatal("a stream whose request ended went on")
 	}
 
-	if ended, _ := Transcode(httptest.NewRecorder(), httptest.NewRequest(http.MethodHead, "/", nil), src, short, 0, false, time.Minute, 0, nil); ended {
+	if ended, _ := Transcode(httptest.NewRecorder(), httptest.NewRequest(http.MethodHead, "/", nil), filepath.Dir(src), src, short, 0, false, time.Minute, 0, nil); ended {
 		t.Fatal("a HEAD said it streamed to the end")
 	}
 }

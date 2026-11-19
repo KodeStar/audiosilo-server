@@ -148,7 +148,7 @@ func TestRemuxerOpen(t *testing.T) {
 	m, runs := countingRemuxer(t, nil)
 	ctx := context.Background()
 
-	f, etag, err := m.Open(ctx, ctx, "ffmpeg", src)
+	f, etag, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestRemuxerOpen(t *testing.T) {
 		t.Fatalf("cache dir mode = %v, want 0700", fi.Mode().Perm())
 	}
 
-	f2, etag2, err := m.Open(ctx, ctx, "ffmpeg", src)
+	f2, etag2, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestRemuxerOpen(t *testing.T) {
 	if err := os.Chtimes(src, later, later); err != nil {
 		t.Fatal(err)
 	}
-	f3, etag3, err := m.Open(ctx, ctx, "ffmpeg", src)
+	f3, etag3, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestRemuxerSingleFlight(t *testing.T) {
 	errs := make([]error, 8)
 	for i := range names {
 		wg.Go(func() {
-			f, _, err := m.Open(ctx, ctx, "ffmpeg", src)
+			f, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src)
 			errs[i] = err
 			if err == nil {
 				names[i] = f.Name()
@@ -247,7 +247,7 @@ func TestRemuxerWaiterLeaves(t *testing.T) {
 	reqCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := m.Open(reqCtx, context.Background(), "ffmpeg", src)
+		_, _, err := m.Open(reqCtx, context.Background(), "ffmpeg", filepath.Dir(src), src)
 		done <- err
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -256,7 +256,7 @@ func TestRemuxerWaiterLeaves(t *testing.T) {
 		t.Fatalf("cancelled waiter = %v, want context.Canceled", err)
 	}
 	close(gate)
-	f, _, err := m.Open(context.Background(), context.Background(), "ffmpeg", src)
+	f, _, err := m.Open(context.Background(), context.Background(), "ffmpeg", filepath.Dir(src), src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestRemuxerRefusesOtherCodecs(t *testing.T) {
 	m, runs := countingRemuxer(t, nil)
 	ctx := context.Background()
 	for range 2 {
-		if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) {
+		if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) {
 			t.Fatalf("open = %v, want ErrRefused", err)
 		}
 	}
@@ -288,7 +288,7 @@ func TestRemuxerRefusesOtherCodecs(t *testing.T) {
 	}
 	later := time.Now().Add(time.Hour)
 	_ = os.Chtimes(src, later, later)
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || runs.Load() != 2 {
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) || runs.Load() != 2 {
 		t.Fatalf("changed file: %v after %d runs, want a retry", err, runs.Load())
 	}
 }
@@ -303,13 +303,13 @@ func TestRemuxerDiskGuard(t *testing.T) {
 	m, runs := countingRemuxer(t, nil)
 	m.freeSpace = func(string) (uint64, bool) { return cacheMinFree, true }
 	ctx := context.Background()
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrUnavailable) || runs.Load() != 0 {
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrUnavailable) || runs.Load() != 0 {
 		t.Fatalf("open = %v after %d runs, want ErrUnavailable and no run", err, runs.Load())
 	}
 	// Room for this remux alone, but another one still writing has taken it.
 	m.freeSpace = func(string) (uint64, bool) { return 2 * cacheMinFree, true }
 	m.reserved.Store(cacheMinFree)
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrUnavailable) || runs.Load() != 0 {
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrUnavailable) || runs.Load() != 0 {
 		t.Fatalf("open beside a remux writing = %v after %d runs, want ErrUnavailable", err, runs.Load())
 	}
 	if n := m.reserved.Load(); n != cacheMinFree {
@@ -322,7 +322,7 @@ func TestRemuxerDiskGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range []string{filepath.Join(t.TempDir(), "missing.mka"), folder} {
-		if _, _, err := m.Open(ctx, ctx, "ffmpeg", p); !errors.Is(err, ErrRefused) || runs.Load() != 0 {
+		if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(p), p); !errors.Is(err, ErrRefused) || runs.Load() != 0 {
 			t.Fatalf("open %s = %v after %d runs, want ErrRefused and no run", p, err, runs.Load())
 		}
 	}
@@ -373,7 +373,7 @@ func TestRemuxerFailurePartwayIsNotARefusal(t *testing.T) {
 	})
 	ctx := context.Background()
 	for range 2 {
-		if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); err == nil || errors.Is(err, ErrRefused) {
+		if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); err == nil || errors.Is(err, ErrRefused) {
 			t.Fatalf("open = %v, want a failure that is not a refusal", err)
 		}
 	}
@@ -412,7 +412,7 @@ func TestRemuxerReadErrorIsNotARefusal(t *testing.T) {
 		})
 		ctx := context.Background()
 		for range 2 {
-			if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); err == nil || errors.Is(err, ErrRefused) != tc.refusal {
+			if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); err == nil || errors.Is(err, ErrRefused) != tc.refusal {
 				t.Fatalf("%s: open = %v, want refusal %v", tc.log, err, tc.refusal)
 			}
 		}
@@ -431,7 +431,7 @@ func TestRemuxerRecreatesItsDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	f, _, err := m.Open(ctx, ctx, "ffmpeg", src)
+	f, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src)
 	if err != nil {
 		t.Fatalf("open after the cache folder went = %v", err)
 	}
@@ -453,7 +453,7 @@ func TestRemuxerSourceChangedWhileRead(t *testing.T) {
 		return os.WriteFile(out, []byte("ID3 copy"), 0o600)
 	})
 	ctx := context.Background()
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrUnavailable) {
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("open = %v, want ErrUnavailable", err)
 	}
 	if entries, _ := os.ReadDir(m.dir); len(entries) != 0 {
@@ -527,17 +527,17 @@ func TestRemuxerWarmAll(t *testing.T) {
 		return run(ctx, ffmpegPath, args, stdin)
 	}
 	ctx := context.Background()
-	m.WarmAll(ctx, "ffmpeg", []string{one, aac, two})
+	m.WarmAll(ctx, "ffmpeg", dir, []string{one, aac, two})
 	m.Wait()
 	if n := runs.Load(); n != 3 || most.Load() != 1 {
 		t.Fatalf("%d runs, at most %d at once; want 3, one at a time", n, most.Load())
 	}
-	m.WarmAll(ctx, "ffmpeg", []string{one, aac, two, filepath.Join(dir, "missing.mka")})
+	m.WarmAll(ctx, "ffmpeg", dir, []string{one, aac, two, filepath.Join(dir, "missing.mka")})
 	m.Wait()
 	if n := runs.Load(); n != 3 {
 		t.Fatalf("second warm ran ffmpeg %d more times, want none", n-3)
 	}
-	f, _, err := m.Open(ctx, ctx, "ffmpeg", two)
+	f, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(two), two)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,13 +559,13 @@ func TestRemuxerHeldWaiterTimesOut(t *testing.T) {
 	m.HoldRunsForTests(gate)
 	wait, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, _, err := m.Open(wait, context.Background(), "ffmpeg", src); !errors.Is(err, context.DeadlineExceeded) {
+	if _, _, err := m.Open(wait, context.Background(), "ffmpeg", filepath.Dir(src), src); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("bounded wait = %v, want DeadlineExceeded", err)
 	}
 	close(gate)
 	m.Wait()
 	ctx := context.Background()
-	f, _, err := m.Open(ctx, ctx, "ffmpeg", src)
+	f, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,10 +584,10 @@ func TestRemuxerWarmBounded(t *testing.T) {
 	ctx := context.Background()
 	missing := func(i int) []string { return []string{filepath.Join(t.TempDir(), strconv.Itoa(i)+".mka")} }
 	book := missing(0)
-	m.WarmAll(ctx, "ffmpeg", book)
-	m.WarmAll(ctx, "ffmpeg", book)
+	m.WarmAll(ctx, "ffmpeg", filepath.Dir(book[0]), book)
+	m.WarmAll(ctx, "ffmpeg", filepath.Dir(book[0]), book)
 	for i := 1; i < 2*cacheWarmQueue; i++ {
-		m.WarmAll(ctx, "ffmpeg", missing(i))
+		m.WarmAll(ctx, "ffmpeg", filepath.Dir(book[0]), missing(i))
 	}
 	m.warmMu.Lock()
 	n := len(m.warming)
@@ -617,14 +617,14 @@ func TestFileCacheTimeoutIsARefusal(t *testing.T) {
 	}
 	ctx := context.Background()
 	for range 2 {
-		if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) {
+		if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) {
 			t.Fatalf("open = %v, want ErrRefused", err)
 		}
 	}
 	if n := runs.Load(); n != 1 {
 		t.Fatalf("%d runs, want the timeout remembered after one", n)
 	}
-	if left := m.RefusedFor(src); left <= 0 || left > cacheRefusalTTL {
+	if left := m.RefusedFor(filepath.Dir(src), src); left <= 0 || left > cacheRefusalTTL {
 		t.Fatalf("refused for %v, want the refusal's hint", left)
 	}
 
@@ -637,10 +637,10 @@ func TestFileCacheTimeoutIsARefusal(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	if _, _, err := g.Open(ctx, runCtx, "ffmpeg", gsrc); err == nil || errors.Is(err, ErrRefused) {
+	if _, _, err := g.Open(ctx, runCtx, "ffmpeg", filepath.Dir(gsrc), gsrc); err == nil || errors.Is(err, ErrRefused) {
 		t.Fatalf("open with the server going away = %v, want a failure that is not a refusal", err)
 	}
-	if left := g.RefusedFor(gsrc); left != 0 {
+	if left := g.RefusedFor(filepath.Dir(gsrc), gsrc); left != 0 {
 		t.Fatalf("a shutdown was remembered for %v", left)
 	}
 }
@@ -655,19 +655,19 @@ func TestFileCacheCachedStartsNothing(t *testing.T) {
 		return os.WriteFile(out, []byte("mp3 bytes"), 0o644)
 	})
 	ctx := context.Background()
-	if _, _, err := m.Cached(ctx, src); !errors.Is(err, ErrUnavailable) {
+	if _, _, err := m.Cached(ctx, filepath.Dir(src), src); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("Cached of a cold copy = %v, want ErrUnavailable", err)
 	}
 	m.Wait()
 	if runs.Load() != 0 {
 		t.Fatal("Cached started a run")
 	}
-	f, _, err := m.Open(ctx, ctx, "ffmpeg", src)
+	f, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.Close()
-	f, etag, err := m.Cached(ctx, src)
+	f, etag, err := m.Cached(ctx, filepath.Dir(src), src)
 	if err != nil || etag == "" {
 		t.Fatalf("Cached of a made copy = %q, %v, want the copy", etag, err)
 	}
@@ -690,7 +690,7 @@ func TestFileCacheRunGivesUpOnAHeldSourceOpen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	start := time.Now()
-	if _, _, err := m.Open(ctx, context.Background(), "ffmpeg", src); !metadata.GaveUp(err) {
+	if _, _, err := m.Open(ctx, context.Background(), "ffmpeg", filepath.Dir(src), src); !metadata.GaveUp(err) {
 		t.Errorf("a run on a held source = %v, want it given up on", err)
 	}
 	if took := time.Since(start); took > 5*time.Second {
@@ -700,7 +700,7 @@ func TestFileCacheRunGivesUpOnAHeldSourceOpen(t *testing.T) {
 		t.Errorf("%d run slots still held, want none", len(m.sem))
 	}
 	release()
-	f, _, err := m.Open(ctx, context.Background(), "ffmpeg", src)
+	f, _, err := m.Open(ctx, context.Background(), "ffmpeg", filepath.Dir(src), src)
 	if err != nil {
 		t.Fatalf("the run once the share answers = %v, want the copy", err)
 	}

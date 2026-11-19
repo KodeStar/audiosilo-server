@@ -301,13 +301,14 @@ func TestTranscodeUnkeyedAsksNeverTakeOver(t *testing.T) {
 }
 
 // standInFFmpeg writes a stand-in ffmpeg that sends bytes until it is killed,
-// each run noting its pid on a line of pids.
+// each run noting its pid on a line of pids; asked for its protocols (the
+// transcode's probe for fd:, media.inputFor) it lists none and notes nothing.
 func standInFFmpeg(t *testing.T) (ffmpeg, pids string) {
 	t.Helper()
 	dir := t.TempDir()
 	pids = filepath.Join(dir, "pids")
 	ffmpeg = filepath.Join(dir, "ffmpeg")
-	script := "#!/bin/sh\necho $$ >> '" + pids + "'\nexec cat /dev/zero\n"
+	script := "#!/bin/sh\ncase \" $* \" in *\" -protocols \"*) exit 0;; esac\necho $$ >> '" + pids + "'\nexec cat /dev/zero\n"
 	// Written under ForkLock: a parallel test's fork must not inherit its open
 	// write descriptor, or exec fails with ETXTBSY (golang/go#22315).
 	syscall.ForkLock.RLock()

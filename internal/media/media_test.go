@@ -159,13 +159,16 @@ func TestTranscode(t *testing.T) {
 		t.Skip("ffmpeg not available; transcoding requires it")
 	}
 	// A fixture m4b (AAC) is fine input - we only assert it re-encodes to MP3.
-	src := filepath.Join("..", "..", "testdata", "library", "Will Wight", "Cradle", "01 - Unsouled.m4b")
+	src, err := filepath.Abs(filepath.Join("..", "..", "testdata", "library", "Will Wight", "Cradle", "01 - Unsouled.m4b"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(src); err != nil {
 		t.Skipf("fixture missing: %v", err)
 	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	ended, err := Transcode(rec, req, src, "ffmpeg", 0, false, time.Minute, TranscodeIdle, nil)
+	ended, err := Transcode(rec, req, filepath.Dir(src), src, "ffmpeg", 0, false, time.Minute, TranscodeIdle, nil)
 	if err != nil || !ended {
 		t.Fatalf("Transcode = %v, %v, want a stream that ran to its end", ended, err)
 	}
@@ -298,9 +301,11 @@ func TestTranscodeArgs(t *testing.T) {
 		in   inputSpec
 		want []string
 	}{
-		// A path and the seekable descriptor seek on the input side.
-		{"path", inputSpec{url: "/b/x.m4b"}, []string{"-nostdin", "-loglevel", "error", "-ss", "8.500", "-i", "/b/x.m4b"}},
+		// The seekable inputs (a descriptor, /dev/fd/3, a re-checked path)
+		// seek on the input side, each the only protocol ffmpeg may open.
 		{"fd", fdInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "fd", "-ss", "8.500", "-i", "fd:"}},
+		{"dev fd", inputSpec{proto: "file", url: "/dev/fd/3", extra: true}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-ss", "8.500", "-i", "/dev/fd/3"}},
+		{"path", inputSpec{proto: "file", url: "file:/b/x.m4b"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-ss", "8.500", "-i", "file:/b/x.m4b"}},
 		// A pipe can't seek: -ss after -i decodes up to it.
 		{"pipe", pipeInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "pipe", "-i", "pipe:0", "-ss", "8.500"}},
 	} {
@@ -352,14 +357,23 @@ func transcodeOpened(t *testing.T, ffprobe, src string, start float64) float64 {
 	return ffprobeOf(t, ffprobe, out).duration(t)
 }
 
-// nonFaststartM4A writes a 10-second AAC .m4a whose moov box follows its mdat
-// (ffmpeg's default without +faststart), which only a seekable input demuxes.
+// nonFaststartM4A is writeNonFaststartM4A's file for a test of TranscodeOpened,
+// which seeks only through fd: (it skips for an ffmpeg without it).
 func nonFaststartM4A(t *testing.T) string {
 	t.Helper()
 	needFFmpeg(t)
 	if inputFor("ffmpeg") != fdInput {
 		t.Skip("this ffmpeg has no fd: input protocol (older than 6.1)")
 	}
+	return writeNonFaststartM4A(t)
+}
+
+// writeNonFaststartM4A writes a 10-second AAC .m4a whose moov box follows its
+// mdat (ffmpeg's default without +faststart), which only a seekable input
+// demuxes.
+func writeNonFaststartM4A(t *testing.T) string {
+	t.Helper()
+	needFFmpeg(t)
 	src := filepath.Join(t.TempDir(), "episode.m4a")
 	if out, err := exec.Command("ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "sine=f=440:d=10",
 		"-c:a", "aac", "-b:a", "64k", "-y", src).CombinedOutput(); err != nil {
@@ -399,7 +413,7 @@ func TestTranscodeHEAD(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	// No ffmpeg at this path: a run would fail with a 500.
-	if ended, err := Transcode(rec, httptest.NewRequest(http.MethodHead, "/", nil), src, filepath.Join(t.TempDir(), "no-ffmpeg"), 0, false, time.Minute, TranscodeIdle, nil); err != nil || ended {
+	if ended, err := Transcode(rec, httptest.NewRequest(http.MethodHead, "/", nil), filepath.Dir(src), src, filepath.Join(t.TempDir(), "no-ffmpeg"), 0, false, time.Minute, TranscodeIdle, nil); err != nil || ended {
 		t.Fatalf("Transcode = %v, %v, want no error and no stream (a HEAD)", ended, err)
 	}
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "audio/mpeg" ||
@@ -460,7 +474,7 @@ func TestTranscodeDownloadAttachment(t *testing.T) {
 		{"failed start", http.MethodGet, src, true, http.StatusInternalServerError, ""},
 	} {
 		rec := httptest.NewRecorder()
-		if _, err := Transcode(rec, httptest.NewRequest(c.method, "/", nil), c.path, noFFmpeg, 0, c.download, time.Minute, 0, nil); err != nil {
+		if _, err := Transcode(rec, httptest.NewRequest(c.method, "/", nil), dir, c.path, noFFmpeg, 0, c.download, time.Minute, 0, nil); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		if rec.Code != c.code || rec.Header().Get("Content-Disposition") != c.want {

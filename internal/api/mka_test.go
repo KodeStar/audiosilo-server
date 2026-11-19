@@ -644,7 +644,7 @@ func TestMatroskaHeadStartsNoRemux(t *testing.T) {
 			resp.Header.Get("Content-Type"), resp.Header.Get("Accept-Ranges"))
 	}
 	m.api.remux.Wait()
-	if state, _, _ := m.api.remux.Status(abs); state != media.CacheMissing || m.cachedFiles(t) != 0 {
+	if state, _, _ := m.api.remux.Status(m.lib.Root, abs); state != media.CacheMissing || m.cachedFiles(t) != 0 {
 		t.Fatalf("after a HEAD the remux is %s with %d cached, want missing and none", state, m.cachedFiles(t))
 	}
 
