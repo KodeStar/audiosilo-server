@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -18,7 +19,10 @@ import (
 
 // UpcomingBook is one owned book in one of its series, as the job reads the
 // library: its handle, the series (key and spelling; both "" for a book in no
-// series), its position there (a range's end, 0 for none) and its identifiers.
+// series), its position there (a range's end, 0 for none), its identifiers and
+// its recorded community match's work (book_matches, "" for none), which is
+// its work whatever its identifiers say (workIDExpr's rule), with when that
+// match was recorded (MatchedAt: set_at, a catalog timestamp).
 type UpcomingBook struct {
 	Ref
 	SeriesKey   string
@@ -26,6 +30,8 @@ type UpcomingBook struct {
 	Position    float64
 	PositionEnd float64
 	ASIN, ISBN  string
+	MatchWorkID string
+	MatchedAt   string
 }
 
 // UpcomingBooks lists every book of a books library that is in a series, once
@@ -35,7 +41,9 @@ type UpcomingBook struct {
 // are never read.
 func (c *Catalog) UpcomingBooks(ctx context.Context) ([]UpcomingBook, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT b.library_id, b.rel_path, b.series, b.series_index,
-		       b.series_index_end, b.more_series, b.asin, b.isbn
+		       b.series_index_end, b.more_series, b.asin, b.isbn,
+		       COALESCE(`+matchWorkIDExpr("b")+`, ''),
+		       COALESCE((SELECT ma.set_at FROM book_matches ma WHERE ma.library_id = b.library_id AND ma.path = b.rel_path), '')
 		  FROM books b JOIN libraries l ON l.id = b.library_id
 		 WHERE l.kind = 'books' AND (b.series <> '' OR b.more_series <> '[]' OR b.asin <> '' OR b.isbn <> '')
 		 ORDER BY l.sort_order, l.name, l.id, b.rel_path`)
@@ -46,9 +54,9 @@ func (c *Catalog) UpcomingBooks(ctx context.Context) ([]UpcomingBook, error) {
 	var out []UpcomingBook
 	for rows.Next() {
 		var ref Ref
-		var series, more, asin, isbn string
+		var series, more, asin, isbn, matched, matchedAt string
 		var idx, end float64
-		if err := rows.Scan(&ref.LibraryID, &ref.Path, &series, &idx, &end, &more, &asin, &isbn); err != nil {
+		if err := rows.Scan(&ref.LibraryID, &ref.Path, &series, &idx, &end, &more, &asin, &isbn, &matched, &matchedAt); err != nil {
 			return nil, err
 		}
 		n := len(out)
@@ -58,10 +66,11 @@ func (c *Catalog) UpcomingBooks(ctx context.Context) ([]UpcomingBook, error) {
 				continue
 			}
 			out = append(out, UpcomingBook{Ref: ref, SeriesKey: key, SeriesName: s.Name,
-				Position: s.Position, PositionEnd: s.PositionEnd, ASIN: asin, ISBN: isbn})
+				Position: s.Position, PositionEnd: s.PositionEnd, ASIN: asin, ISBN: isbn,
+				MatchWorkID: matched, MatchedAt: matchedAt})
 		}
 		if len(out) == n && (asin != "" || isbn != "") {
-			out = append(out, UpcomingBook{Ref: ref, ASIN: asin, ISBN: isbn})
+			out = append(out, UpcomingBook{Ref: ref, ASIN: asin, ISBN: isbn, MatchWorkID: matched, MatchedAt: matchedAt})
 		}
 	}
 	return out, rows.Err()
@@ -182,6 +191,38 @@ func (c *Catalog) SetUpcomingSeries(ctx context.Context, libraryID int64, key, n
 		}
 		return nil
 	})
+}
+
+// setMatchedSeriesDue makes the upcoming job resolve again, at its next run,
+// the local series (their stored keys: books.series_key, book_more_series) of
+// each indexed book of pick with a recorded match, in tx (clearCommunity's,
+// before it removes the matches; writeAnchor's, before it replaces one): their
+// rows' resolved_at is emptied, which reads as never resolved. The job's due
+// rule compares a match's set_at with resolved_at, and an unlink leaves no
+// match to compare, nor a re-match to the work the book's identifiers resolved
+// to, which the job reads as standing in for nothing. A match naming the
+// work its book's identifiers resolved to (upcoming_owned) stood in for
+// nothing, so its going changes no series (the job's own rule when a match is
+// set): a library's Clear matches over tagged books sets none due. The
+// series' items stay until that run. With except (writeAnchor's new work),
+// only a match naming another work counts: a re-match to the same work
+// changes nothing.
+func setMatchedSeriesDue(ctx context.Context, tx *sql.Tx, pick clearPick, except string) error {
+	// pick.where is clearPick's own SQL, never a caller's.
+	matched := `SELECT library_id AS lib, path AS p, work_id AS w FROM book_matches WHERE ` + pick.where
+	args := pick.args
+	if except != "" {
+		args = append(slices.Clip(args), except)
+		matched += ` AND work_id <> ?` + strconv.Itoa(len(args))
+	}
+	_, err := tx.ExecContext(ctx, `WITH x AS (`+matched+`), m AS (
+		  SELECT b.id, b.library_id, b.series_key FROM x JOIN books b ON b.library_id = x.lib AND b.rel_path = x.p
+		   WHERE NOT EXISTS (SELECT 1 FROM upcoming_owned o WHERE o.library_id = x.lib AND o.path = x.p AND o.work_id = x.w))
+		UPDATE upcoming_series SET resolved_at = ''
+		 WHERE resolved_at <> '' AND (library_id, series_key) IN (
+		       SELECT library_id, series_key FROM m WHERE series_key <> ''
+		       UNION SELECT s.library_id, s.series_key FROM m JOIN book_more_series s ON s.book_id = m.id)`, args...)
+	return err
 }
 
 // DropUpcomingSeries forgets local series (each [library id, key]) the
@@ -443,26 +484,19 @@ func (c *Catalog) MarkUpcomingAnnounced(ctx context.Context, handled, announced 
 }
 
 // UpcomingOwnedWorks reports which of workIDs an indexed book of a books
-// library is: within scopes, or anywhere on the server with all. A book holds
-// the work the job resolved only while it still has the identifiers it was
-// resolved by (id_key, as workIDExpr reads it), so a retag holds no stale work.
+// library is: within scopes, or anywhere on the server with all. A book is the
+// work its work key names (workIDExpr, Book.WorkID): its recorded match first,
+// so a book matched in the console with no ASIN or ISBN holds its work
+// (server#375), else the work the job resolved while the book still has the
+// identifiers it was resolved by (id_key), so a retag holds no stale work.
 func (c *Catalog) UpcomingOwnedWorks(ctx context.Context, scopes []Scope, all bool, workIDs []string) (map[string]bool, error) {
 	out := map[string]bool{}
 	if len(workIDs) == 0 || (!all && len(scopes) == 0) {
 		return out, nil
 	}
 	for chunk := range slices.Chunk(workIDs, 500) {
-		q := `SELECT DISTINCT o.work_id FROM upcoming_owned o
-			JOIN books b ON b.library_id = o.library_id AND b.rel_path = o.path
-			JOIN libraries l ON l.id = o.library_id AND l.kind = 'books'
-		   WHERE o.work_id IN (` + placeholders(len(chunk)) + `) AND o.id_key = ` + idKeyExpr("b")
-		args := anyOf(chunk)
-		if !all {
-			frag, fargs := scopesFilterSQL("o.library_id", "o.path", scopes)
-			q += " AND " + frag
-			args = append(args, fargs...)
-		}
-		if err := c.collectWorkIDs(ctx, out, q, args); err != nil {
+		from, args := workBooksFrom(scopes, all, chunk)
+		if err := c.collectWorkIDs(ctx, out, `SELECT DISTINCT `+workIDExpr("b")+from, args); err != nil {
 			return nil, err
 		}
 	}

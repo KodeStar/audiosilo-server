@@ -531,7 +531,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `orderings[].works[]`, carries `local` `{library_id, path}` when the CALLER owns
   that work. Resolved per request AFTER the cache, on a copy of the rails (never
   stored: the cached envelope is shared): `api.localRails` fetches the caller's
-  candidates (`catalog.SeriesBooks` over their `UserScopes`, scope-filtered: books
+  candidates (`catalog.SeriesBooks` over their `UserScopes`, then every book whose work key is a rail's
+  work, `catalog.WorkBooks`, at most 50 a work so many copies of one never crowd out the next, so a recording filed in no series is placed too, server#412, merged among the series' books in library order, `catalog.InPlacementOrder`, the pick's last tiebreak; scope-filtered: books
   whose series - the main one (`books.series_key`), or one their `more_series` names
   (`seriesMembers`, over `book_more_series`, migration 0041) - folds to a
   rail/ordering name by `match.SeriesKey`, the console's `seriesKey` - NFKD, case,
@@ -542,7 +543,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `CachedWorkID` knows); else (orderings) the main view's book for that work;
   else the series position == the entry's numeric position on a series named like that
   view (a range entry "1-3" holds a book at that range; an entry at one number a book at it,
-  else a book whose range starts there; `parseSpan`). A book with a known work id is never placed by index; one book per entry
+  else a book whose range starts there; `parseSpan`). A book with a known work id is never placed by index, bar one
+  matched in the console (`LocalBook.Matched`, from `catalog.WorkSources`) to a work the view doesn't list, which
+  holds its own position as in upcoming (an ordering that lists its work places it there alone, not where the
+  main view placed it by index); one book per entry
   as `local`, the pick (`pickRank`, server#241): the narrator of the requested book (the
   one just finished, for Next), then a book the caller started and hasn't finished
   (`catalog.InProgress`), then the requested book's library, then not known to be
@@ -556,9 +560,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   seen first never hides an ASIN recording sharing its print ISBN (server#412; one sorted after
   such a recording is its copy); the first copy in that order is kept, a book with neither never merged); an entry only
   ever lists recordings of its own work, so no book is on two entries: the current work's entry
-  holds the requested book as `local` beside the envelope's work's other books, which match
-  `/item`'s `other_recordings` of the rail's series books (a recording filed in no series, or one
-  only the cache has resolved, can still differ); an entry placed by its index
+  holds the requested book as `local` beside the envelope's work's other books, which are
+  `/item`'s `other_recordings` themselves when the requested book's work key is that work (the same
+  copy of each recording; one only the cache has resolved can still differ), their copies told apart
+  in that list's order and listed in the pick's (`meta.currentOthers`: the rule depends on the order,
+  so in the pick's it could drop a recording `/item` lists); a copy of the requested
+  book is placed on no entry (`meta.copyOf`: one recording, one handle, server#413); the caller's
+  progress is read only for the books the pick chooses between (`meta.Contested`); an entry placed by its index
   has none; per request like `local`, never on a cached envelope. A book's
   work key is `book_matches.work_id`, else a non-empty `upcoming_owned.work_id` while that
   row's `id_key` is the book's identifiers' (`meta.IDKey`, in SQL `idKeyExpr`: a retag or an
@@ -570,7 +578,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`match.Recordings`, the same rule as `local_others`, after the
   scope filter, so a copy the caller cannot open never stands in for one they can); its own
   library first, then title, then narrator, the first copy in that order kept; at most 20
-  after the copies are dropped; metadata on only).
+  after the copies are dropped; the book's own copies that teach the rule nothing are left out in
+  SQL, `notCopyOfSQL`; metadata on only).
   **Next book** (`next_book` capability): `GET /libraries/{id}/next?path=`
   (`handlers_next.go`, `authorizedScope` + `bookForPath` like `item`) answers
   `{source, next?, book?, work?}`; `source` names the step that produced `next`
@@ -636,7 +645,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   libraries hold, the community's preorders, recent releases and missing volumes, and `GET /me/upcoming`
   (requireAuth, notKid) reads what it stored for one caller. **Layout**: `upcoming/classify.go` is the pure
   `Classify` (slots by the console's `railEntries` rule; a book with a known work holds that work's span,
-  else its own position or range; kinds in order preorder (future at the date's own precision,
+  else its own position or range, as does a console-matched book whose work the series doesn't list
+  (`OwnedBook.Matched`: that volume is never missing nor announced, the match still its work; one it lists
+  unnumbered holds nothing); kinds in order preorder (future at the date's own precision,
   `releaseIsFuture`), released (within `upcoming.window_days`, counted from the date's first day), missing
   (a whole-number interior gap below the highest held, plus the first whole non-preorder slot after it;
   never a fractional position); a work in two series is the first's); `runner.go` is the job; `list.go` the
@@ -652,7 +663,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   follows). A full run: (1) each book with an ASIN/ISBN gets its work id (the
   meta cache, else `WorkIDs` in batches of 100; answers rechecked monthly, at most 500 a run); (2) each
   local series (library, `match.SeriesKey`) gets its community series from its works' series named like it
-  (primaries first; then give or take an article or "Series"), monthly or when it gains a book or a work;
+  (primaries first; then give or take an article or "Series"), monthly or when it gains a book or a work
+  (a book's identifiers answering another work, or a recorded match that stands in for another work than
+  they answer, recorded since the series was resolved: `book_matches.set_at` against
+  `upcoming_series.resolved_at`, so nothing is remembered between runs; server#375; an unlink or a
+  library's Clear matches leaves no row to compare, so it empties the `resolved_at` of the series of each
+  book whose match it removes, in its own transaction, bar a match naming the work `upcoming_owned` holds
+  for the book (it stood in for nothing): `catalog.setMatchedSeriesDue`; a re-match does the same for the
+  match it replaces with another work (`writeAnchor`), since a new match naming the identifiers' own work
+  stands in for nothing either; such a series whose books then
+  have no work, a match-only book's, is resolved to none, its items dropped);
   (3) metaserve's watch feed, 50 series a request (split when full), says which series have news; (4)
   `series/{id}` is read when new, with news, or a week old (2 at a time; a 404 marks it gone, dropped after
   a week); (5) classify; (6) announce. With metadata on and `upcoming.enabled` off, a run (scheduled or
@@ -662,7 +682,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.UpcomingPending`, path-keyed) so a restart keeps them (server#447). It makes no call while
   `metadataOn()` is false, and a run in flight stops within a second when switched off (`pool.WhileOn`,
   `errSwitchedOff`: a cancellation, no status recorded, no retry). In mirror mode every call goes to the
-  local copy. A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
+  local copy, and the schedule's first run (kicked or timed) waits for it to load (`Options.Ready`,
+  `api.mirrorReady`, at most 10 min, as the chapter checks: server#454). A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
   path-keyed, no FK to `books`, cascaded with the library, written through the user-state path; no
   content cache reads them but `upcoming_owned`'s rows, `work_id` and `id_key`, the list books' `work_id`,
   so a new or removed row, a changed work or a re-keyed one moves the content generation, a re-check does not):
@@ -2367,9 +2388,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`b.asin <> '' OR b.isbn <> '' OR EXISTS(book_matches by its key)`) is the list's `matched` and its
   facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire
   name stays), the series' naming and a refresh's `MatchedBooks`. What needs an identifier tests
-  asin/isbn itself and stays identifier-only: community chapters, the unknown-ASIN report, upcoming,
-  a repick (`CommunityASINBooks`), the Bridge's estimate and the console's chapter check,
-  Series rail and Suggest corrections. `/meta` and `/next`'s community rail read the row when the book
+  asin/isbn itself and stays identifier-only: community chapters, the unknown-ASIN report,
+  a repick (`CommunityASINBooks`) and the console's chapter check,
+  Series rail and Suggest corrections. Upcoming (a matched book is its work: it holds its slot, its own
+  position's when the series doesn't list that work, and is a copy, `UpcomingBook.MatchWorkID`, `UpcomingOwnedWorks` by `workIDExpr`), the Bridge's estimate
+  (`meta.Service.Coverages` by `/meta`'s rule: a recorded match's work first, `CoverageBook.Matched` from
+  `catalog.WorkSources`, fetched by id, the identifiers' cached envelope standing when upstream no longer
+  has that work; else the newer of the identifiers' cached answer (memory's envelope or lookup, else the
+  stored row, a "no match" only while fresh, `cachedAnswerOf`, dated when it was had: `cacheEntry.at`, a stored row's expiry less its TTL,
+  which a stale row held through an outage keeps, `cacheHoldStale`) and the work the upcoming job resolved
+  (`upcoming_owned.checked_at`, `CoverageBook.ResolvedAt`), so a stored row older than the job's monthly
+  recheck never wins after a restart, nor a month-old resolution over a lookup since) and the Bridge's book facts
+  (`work_id`, the same order by `meta.Service.CachedWork`, both through `CoverageBook.workOf`) read the
+  book's work key, the match first (server#375). `/meta` and `/next`'s community rail read the row when the book
   has no identifier, its lookup is a not-found or fails, or the row names another work than its
   identifiers' (`bookEnrichment`, `meta.Service.EnrichMatch`, see Community metadata lookup). Path-keyed state: a move carries it with the book's edits as one
   set, a join copies the first part's, a rescan or rebuild keeps it, `ClearCommunityMatches` drops it
@@ -3351,7 +3382,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   answers its own shape, below; any other kind is a
   400); 409 `kind_unavailable`. With a `path`, `GET /bridge/libraries/{id}/book` also answers a `book` block
   (title, authors and narrators split by `names.Split`, series, `series_index`, asin, isbn, duration,
-  `work_id` from the metadata cache alone, `CachedWorkID`, and Phase 3c's `ebook {path, size}`, omitted
+  `work_id`, by the estimate's order (`meta.Service.CachedWork`: its recorded match, else the newer of its
+  identifiers' cached answer and the upcoming job's resolution; cache only, "" when none; a 500 when the
+  match can't be read, so the Bridge asks again), and Phase 3c's `ebook {path, size}`, omitted
   with none), never on the sample-book answer; each `files[]` entry carries its indexed `duration`
   (Phase 3c, additive; a single-file book's is the book's).
   Settings > Bridge in `admin-ui` (`features/bridge/`: the topic shows the heartbeat's estimates and

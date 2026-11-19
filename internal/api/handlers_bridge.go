@@ -317,7 +317,12 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 	if p != "" {
 		// What a job about the book reads (a path was asked for: never the
 		// mapping check's sample).
-		out["book"] = a.bridgeBookFacts(r.Context(), book)
+		facts, err := a.bridgeBookFacts(r.Context(), book)
+		if err != nil {
+			a.writeCatalogError(w, err, "bridge book failed", "could not load the book")
+			return
+		}
+		out["book"] = facts
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -325,8 +330,7 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 // bridgeBook is a book's facts for a Bridge job (GET /bridge/libraries/{id}/book
 // with a path): the effective values, its credits split as the server reads
 // them (names.Split), its series position as stored ("" for none), its
-// community work id when the metadata cache knows it ("" otherwise) and its
-// ebook.
+// community work id when known (bridgeBookFacts; "" otherwise) and its ebook.
 type bridgeBook struct {
 	Title       string   `json:"title"`
 	Authors     []string `json:"authors"`
@@ -343,19 +347,29 @@ type bridgeBook struct {
 	Ebook *catalog.Ebook `json:"ebook,omitempty"`
 }
 
-// bridgeBookFacts is book's bridgeBook. The work id comes from the metadata
-// cache alone (meta.Service.CachedWorkID), never an upstream call: the Bridge
-// asks this for every job, and a book nobody has looked up yet simply has none.
-func (a *API) bridgeBookFacts(ctx context.Context, book *catalog.Book) bridgeBook {
+// bridgeBookFacts is book's bridgeBook. The work id is the one /meta and the
+// estimate ask about (meta.Service.CachedWork over coverageBooks): its
+// recorded match (so a book matched in the console with no ASIN or ISBN has
+// one, server#375), else the newer of its identifiers' cached answer and the
+// upcoming job's resolution of them. Never an upstream call: the Bridge asks
+// this for every job, and a book nobody has looked up yet simply has none. A
+// failure to read the match is the error, so the Bridge asks again rather than
+// take "no work" for an answer.
+func (a *API) bridgeBookFacts(ctx context.Context, book *catalog.Book) (bridgeBook, error) {
 	out := bridgeBook{
 		Title: book.Title, Authors: orEmpty(names.Split(book.Author)), Narrators: orEmpty(names.Split(book.Narrator)),
 		Series: book.Series, SeriesIndex: catalog.FormatSeriesRange(book.SeriesIndex, book.SeriesIndexEnd),
 		ASIN: book.ASIN, ISBN: book.ISBN, Duration: book.Duration, Ebook: book.Ebook,
 	}
-	if a.metadataOn() {
-		out.WorkID, _ = a.meta.CachedWorkID(ctx, book.ASIN, book.ISBN)
+	if !a.metadataOn() {
+		return out, nil
 	}
-	return out
+	ids, err := a.coverageBooks(ctx, []*catalog.Book{book})
+	if err != nil {
+		return bridgeBook{}, err
+	}
+	out.WorkID = a.meta.CachedWork(ctx, ids[0])
+	return out, nil
 }
 
 // orEmpty is ss, or an empty list for none (the wire's lists are never null).

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -120,8 +121,17 @@ var ErrMatchedSince = errors.New("the book's community match changed since it wa
 // writeAnchor stores the book's anchor at ref (a non-empty WorkID; an unlink is
 // clearCommunity's) in the edit's transaction. With was (BookEdit.MatchIf), only
 // while the recorded match is still was: else it writes nothing and returns
-// ErrMatchedSince, so the caller's transaction rolls back.
+// ErrMatchedSince, so the caller's transaction rolls back. A match it replaces
+// with another work sets the book's series due (setMatchedSeriesDue), as an
+// unlink does: the job reads a match naming the work the book's identifiers
+// resolved to as standing in for nothing, so a re-match to that work would
+// leave the series resolved by the old match's until the monthly recheck.
 func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, editor any, now string) error {
+	if was == nil || was.WorkID != "" { // an insert-only write replaces no match
+		if err := setMatchedSeriesDue(ctx, tx, oneBook(ref), a.WorkID); err != nil {
+			return err
+		}
+	}
 	args := []any{ref.LibraryID, ref.Path, a.WorkID, a.RecordingID, a.How, nullableID(a.RunID), editor, now,
 		a.OfferedASIN, a.OfferedISBN}
 	if was != nil && was.WorkID != "" {
@@ -171,6 +181,46 @@ func anchorWritten(res sql.Result, err error) error {
 // than the book's identifiers do, or they match nothing: api.bookEnrichment).
 func (c *Catalog) BookMatchAt(ctx context.Context, libraryID int64, path string) (*BookMatch, error) {
 	return bookAnchor(ctx, c.db, libraryID, path)
+}
+
+// WorkSource is where a book's work key (Book.WorkID, workIDExpr) comes from:
+// its recorded match's work (book_matches, MatchWorkID), which wins whatever
+// its identifiers say, else the upcoming job's resolution of those identifiers,
+// checked at ResolvedAt (upcoming_owned.checked_at, a catalog stamp).
+type WorkSource struct {
+	MatchWorkID string
+	ResolvedAt  string
+}
+
+// WorkSources is each of refs' WorkSource, only for the indexed books with a
+// work key: what tells a match from a resolution (and how old that is) for a
+// reader that weighs the key against the metadata cache (the Bridge's
+// estimate and book facts, /meta's placement).
+func (c *Catalog) WorkSources(ctx context.Context, refs []Ref) (map[Ref]WorkSource, error) {
+	out := map[Ref]WorkSource{}
+	type row struct {
+		path string
+		WorkSource
+	}
+	_, byLib := GroupRefs(refs)
+	for lib, paths := range byLib {
+		for chunk := range slices.Chunk(paths, 500) {
+			rows, err := queryRows(ctx, c.db, func(r *sql.Rows, m *row) error { return r.Scan(&m.path, &m.MatchWorkID, &m.ResolvedAt) },
+				`SELECT path, matched, resolved FROM (
+				   SELECT b.rel_path AS path, COALESCE(`+matchWorkIDExpr("b")+`, '') AS matched,
+				          COALESCE(`+ownedExpr("b", "checked_at")+`, '') AS resolved
+				     FROM books b WHERE b.library_id = ? AND b.rel_path IN (`+placeholders(len(chunk))+`))
+				  WHERE matched <> '' OR resolved <> ''`,
+				slices.Concat([]any{lib}, anyOf(chunk))...)
+			if err != nil {
+				return nil, err
+			}
+			for _, m := range rows {
+				out[Ref{LibraryID: lib, Path: m.path}] = m.WorkSource
+			}
+		}
+	}
+	return out, nil
 }
 
 // bookAnchor reads the anchor at (libraryID, path), nil when it has none.

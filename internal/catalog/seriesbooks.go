@@ -21,6 +21,25 @@ import (
 // holds.
 const maxSeriesBooks = 1000
 
+// InPlacementOrder sorts books into placement preference order (library sort
+// order, then path): SeriesBooks' and WorkBooks' own, so books read by both
+// come in the one order a single read would give them (meta.PlaceLocal's last
+// tiebreak).
+func (c *Catalog) InPlacementOrder(ctx context.Context, books []Book) error {
+	libs, err := c.ListLibraries(ctx) // sort_order, then name: unique
+	if err != nil {
+		return err
+	}
+	rank := make(map[int64]int, len(libs))
+	for i, l := range libs {
+		rank[l.ID] = i
+	}
+	slices.SortStableFunc(books, func(a, b Book) int {
+		return cmp.Or(cmp.Compare(rank[a.LibraryID], rank[b.LibraryID]), strings.Compare(a.RelPath, b.RelPath))
+	})
+	return nil
+}
+
 // SeriesBooks returns the books within scopes whose series matches one of names
 // by its folded key (seriesKey: case, accents, punctuation and spacing
 // ignored), so a local "The Expanse" is found for a community rail named "the
@@ -116,17 +135,9 @@ func (c *Catalog) seriesMembers(ctx context.Context, scopes []Scope, keys []stri
 	}
 	// Two ordered lists (or several chunks): one placement order, so a more_series
 	// book in an earlier library (or at an earlier path) is still preferred.
-	libs, err := c.ListBookLibraries(ctx)
-	if err != nil {
+	if err := c.InPlacementOrder(ctx, found); err != nil {
 		return nil, err
 	}
-	rank := make(map[int64]int, len(libs))
-	for i, l := range libs {
-		rank[l.ID] = i
-	}
-	slices.SortStableFunc(found, func(a, b Book) int {
-		return cmp.Or(cmp.Compare(rank[a.LibraryID], rank[b.LibraryID]), strings.Compare(a.RelPath, b.RelPath))
-	})
 	return found[:min(len(found), maxSeriesBooks)], nil
 }
 

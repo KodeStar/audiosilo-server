@@ -172,16 +172,57 @@ func (a *API) openOrBlocker(ctx context.Context, kind string, libraryID int64, p
 // (meta.Service.Coverages: its cached enrichment, else the console's bounded
 // lookup, never a full Enrich per book, which a series batch would multiply),
 // and whether that couldn't be had right now (unknown, logged: never to be read
-// as "none"). Metadata off, no identifier or no match is nothing.
+// as "none"). The book is asked about by /meta's work rule (coverageBooks): its
+// recorded match first, so a book matched in the console with no ASIN or ISBN
+// is asked about by its match (server#375), else its identifiers'. Metadata
+// off, no identifier and no work, or no match is nothing.
 func (a *API) communityContent(ctx context.Context, book *catalog.Book) (has hasContent, unknown bool) {
-	if !a.metadataOn() || (book.ASIN == "" && book.ISBN == "") {
+	if !a.metadataOn() || (book.ASIN == "" && book.ISBN == "" && book.WorkID == "") {
 		return hasContent{}, false
 	}
-	c := a.meta.Coverages(ctx, []meta.BookIDs{{ASIN: book.ASIN, ISBN: book.ISBN}})[0]
+	ids, err := a.coverageBooks(ctx, []*catalog.Book{book})
+	if err != nil {
+		if ctx.Err() == nil {
+			a.log.Warn("read the book's match for the bridge estimate failed", "err", err, "library", book.LibraryID, "path", book.RelPath)
+		}
+		return hasContent{}, true
+	}
+	c := a.meta.Coverages(ctx, ids)[0]
 	if !c.Known && ctx.Err() == nil {
 		a.log.Warn("community lookup for the bridge estimate failed", "library", book.LibraryID, "path", book.RelPath)
 	}
 	return hasContent{Characters: c.Characters, Recaps: c.Recaps, Description: c.Description}, !c.Known
+}
+
+// coverageBooks is what meta.Service.Coverages asks about books by: each one's
+// identifiers and its work key (Book.WorkID), marked as its recorded match's
+// when it is, else dated by when the upcoming job resolved it
+// (catalog.WorkSources, read only for books with a work key): a match wins over
+// the identifiers' cached answer, the job's resolution only when it is the
+// newer of the two (meta.CoverageBook).
+func (a *API) coverageBooks(ctx context.Context, books []*catalog.Book) ([]meta.CoverageBook, error) {
+	var refs []catalog.Ref
+	for _, b := range books {
+		if b.WorkID != "" {
+			refs = append(refs, catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath})
+		}
+	}
+	sources, err := a.cat.WorkSources(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]meta.CoverageBook, len(books))
+	for i, b := range books {
+		out[i] = meta.CoverageBook{ASIN: b.ASIN, ISBN: b.ISBN, WorkID: b.WorkID}
+		if b.WorkID == "" {
+			continue
+		}
+		src := sources[catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}]
+		if out[i].Matched = src.MatchWorkID == b.WorkID; !out[i].Matched {
+			out[i].ResolvedAt, _ = catalog.ParseStamp(src.ResolvedAt)
+		}
+	}
+	return out, nil
 }
 
 // localContent is what the book's generated attachments carry (a stored file is
@@ -211,9 +252,13 @@ func (a *API) earlierWithoutRecaps(ctx context.Context, book *catalog.Book, st b
 		checked += len(chunk)
 		var cov []meta.Coverage
 		if a.metadataOn() {
-			ids := make([]meta.BookIDs, len(chunk))
-			for i, m := range chunk {
-				ids[i] = meta.BookIDs{ASIN: m.ASIN, ISBN: m.ISBN}
+			books := make([]*catalog.Book, len(chunk))
+			for i := range chunk {
+				books[i] = &chunk[i].Book
+			}
+			ids, err := a.coverageBooks(ctx, books)
+			if err != nil {
+				return nil, err
 			}
 			cov = a.meta.Coverages(ctx, ids)
 		}

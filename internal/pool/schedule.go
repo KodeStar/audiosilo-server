@@ -44,3 +44,29 @@ func Jittered(interval, jitter time.Duration) time.Duration {
 	}
 	return interval + time.Duration(rand.Int64N(int64(2*jitter))) - jitter //nolint:gosec // schedule jitter, not a secret
 }
+
+// WaitReady waits until ready reports true, looked at every poll, at most wait:
+// a job's first run while the metadata's local copy loads. It reports whether
+// ready did (false: wait ran out first) and whether ctx is still live (false:
+// ctx ended first, the caller stops).
+func WaitReady(ctx context.Context, ready func() bool, wait, poll time.Duration) (isReady, live bool) {
+	if ready() {
+		return true, true
+	}
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	t := time.NewTicker(poll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false, false
+		case <-deadline.C:
+			return false, true
+		case <-t.C:
+			if ready() {
+				return true, true
+			}
+		}
+	}
+}

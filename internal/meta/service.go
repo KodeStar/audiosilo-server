@@ -289,6 +289,13 @@ type Enrichment struct {
 	Previous []*MetaWork `json:"previous,omitempty"`
 }
 
+// OfWork reports whether e is an envelope of community work id (false for a
+// nil envelope or one of no work): a book's known work (Book.WorkID) is the
+// one rule its envelope is checked by.
+func (e *Enrichment) OfWork(id string) bool {
+	return e != nil && e.Work != nil && e.Work.ID == id
+}
+
 // Service composes book enrichments from the metadata API, with a bounded TTL
 // cache in front so a repeated lookup (and a down upstream) is cheap. A nil
 // *Service means the feature is off; callers must guard on that.
@@ -454,7 +461,7 @@ func (s *Service) enrich(ctx context.Context, key string, compose func(context.C
 	result, complete, err := compose(cctx)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		if keepStored(s, key, stored, err) {
+		if keepStored(s, key, stored, expires, err) {
 			return stored, nil
 		}
 		s.cache.putMiss(key, notFoundTTL)
@@ -476,7 +483,7 @@ func (s *Service) enrich(ctx context.Context, key string, compose func(context.C
 			// again soon, and the row itself is left as it was. An error is
 			// never persisted.
 			if stored != nil {
-				cachePut(s.cache, key, stored, errorTTL)
+				cacheHoldStale(s.cache, key, stored, expires)
 				return stored, nil
 			}
 			s.cache.putError(key, err)
@@ -648,7 +655,7 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 		// alone, that row would bring the work upstream no longer has back as
 		// the fallback of every later outage. When the local copy answered it
 		// (mirror mode) the stored answer is kept and served instead (keepStored).
-		if keepStored(s, key, stored, err) {
+		if keepStored(s, key, stored, expires, err) {
 			return stored, nil
 		}
 		s.cache.putMiss(key, notFoundTTL)
@@ -664,7 +671,7 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 		// Enrich, a persisted positive work outlives the outage.
 		if ctx.Err() == nil {
 			if stored != nil {
-				cachePut(s.cache, key, stored, errorTTL)
+				cacheHoldStale(s.cache, key, stored, expires)
 				return stored, nil
 			}
 			s.cache.putError(key, err)
@@ -687,11 +694,11 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 // A local copy's is not: one that lags, or a release that dropped a record by
 // mistake, must not erase what the cache knew and blank a companion that worked,
 // so the stored answer outlives it as it outlives an outage.
-func keepStored[T any](s *Service, key string, stored *T, err error) bool {
+func keepStored[T any](s *Service, key string, stored *T, expires time.Time, err error) bool {
 	if stored == nil || !errors.Is(err, errLocalNotFound) {
 		return false
 	}
-	cachePut(s.cache, key, stored, errorTTL)
+	cacheHoldStale(s.cache, key, stored, expires)
 	return true
 }
 

@@ -164,26 +164,14 @@ func (r *Runner) Run(ctx context.Context) {
 // waitReady waits until r.ready reports true, at most r.readyWait; false when
 // ctx ended first.
 func (r *Runner) waitReady(ctx context.Context) bool {
-	if r.ready == nil || r.ready() {
+	if r.ready == nil {
 		return true
 	}
-	deadline := time.NewTimer(r.readyWait)
-	defer deadline.Stop()
-	poll := time.NewTicker(r.readyPoll)
-	defer poll.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-deadline.C:
-			r.log.Info("community chapters: the local copy of the metadata is not ready; checking anyway", "waited", r.readyWait)
-			return true
-		case <-poll.C:
-			if r.ready() {
-				return true
-			}
-		}
+	isReady, live := pool.WaitReady(ctx, r.ready, r.readyWait, r.readyPoll)
+	if live && !isReady {
+		r.log.Info("community chapters: the local copy of the metadata is not ready; checking anyway", "waited", r.readyWait)
 	}
+	return live
 }
 
 // Kick asks the background to look for due books now (a scan, a match or an edit

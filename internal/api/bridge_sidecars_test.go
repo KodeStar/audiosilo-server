@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-meta/pkg/model"
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -704,5 +705,174 @@ func TestBridgeEstimateNeedsAnAdmin(t *testing.T) {
 	}
 	if resp, _, body := b.estimate(t, b.adminTok, b.lib.ID, mistbornBook); resp.StatusCode != http.StatusOK {
 		t.Fatalf("allowed: the admin: %d %s", resp.StatusCode, body)
+	}
+}
+
+// A book matched in the console with no ASIN or ISBN (server#375) is asked
+// about by its match: the estimate reads its work's characters and recaps (not
+// "none", which would price a generation /meta then hides), an earlier book so
+// matched is not offered, and the Bridge's book facts carry its work id. A book
+// with neither an identifier nor a match still has nothing.
+func TestBridgeEstimateMatchOnly(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnvOn(t, newMetaEnv(t, true, 0))
+	ctx := context.Background()
+	lib, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Series", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bk := range []catalog.Book{
+		{RelPath: "Mars/1", Series: "Mars", SeriesIndex: 1},
+		{RelPath: "Mars/2", Series: "Mars", SeriesIndex: 2},
+		{RelPath: "Mars/3", Series: "Mars", SeriesIndex: 3},
+	} {
+		bk.LibraryID, bk.Title, bk.AddedAt = lib.ID, bk.RelPath, "2020-01-01"
+		if _, err := b.cat.UpsertBook(ctx, &bk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{"Mars/1", "Mars/3"} {
+		if err := b.cat.EditBook(ctx, lib.ID, p, catalog.BookEdit{
+			Match: &catalog.MatchAnchor{WorkID: "the-martian"}, Source: catalog.SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.beatWith(t, true, true, sidecarsEstimates)
+	resp, est, body := b.estimate(t, b.adminTok, lib.ID, "Mars/3")
+	if resp.StatusCode != http.StatusOK || !est.Has.Community.Characters || !est.Has.Community.Recaps || est.Has.CommunityUnknown {
+		t.Fatalf("match-only book: %d %s", resp.StatusCode, body)
+	}
+	var earlier []string
+	for _, e := range est.Earlier {
+		earlier = append(earlier, e.Path)
+	}
+	if want := []string{"Mars/2"}; !slices.Equal(earlier, want) {
+		t.Fatalf("earlier = %v, want %v", earlier, want)
+	}
+	if brief := b.briefEstimate(t, lib.ID, "Mars/2"); brief.Has.Community.Recaps || brief.Has.CommunityUnknown {
+		t.Fatalf("no identifier, no match = %+v, want nothing", brief.Has)
+	}
+	if got := b.factsWorkID(t, lib.ID, "Mars/3"); got != "the-martian" {
+		t.Fatalf("match-only book facts work_id = %q, want the-martian", got)
+	}
+	if got := b.factsWorkID(t, lib.ID, "Mars/2"); got != "" {
+		t.Fatalf("unmatched book facts work_id = %q, want none", got)
+	}
+}
+
+// A book's match that can't be read is an error the Bridge retries (500, the
+// SQL never in the body), never a book with no work; the allowed case is the
+// same book's facts with the store whole (TestBridgeEstimateStaleWork).
+func TestBridgeBookFactsMatchReadFails(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnvOn(t, newMetaEnv(t, true, 0))
+	ctx := context.Background()
+	const path = "Mars/1"
+	if _, err := b.cat.UpsertBook(ctx, &catalog.Book{LibraryID: b.lib.ID, RelPath: path, Title: path, AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.EditBook(ctx, b.lib.ID, path, catalog.BookEdit{
+		Match: &catalog.MatchAnchor{WorkID: "the-martian"}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.factsWorkID(t, b.lib.ID, path); got != "the-martian" {
+		t.Fatalf("work_id = %q, want the-martian", got)
+	}
+	// The book still reads (its work key's columns stand); its work's source
+	// (catalog.WorkSources, upcoming_owned.checked_at) does not.
+	for _, q := range []string{
+		`ALTER TABLE upcoming_owned RENAME TO upcoming_owned_gone`,
+		`CREATE VIEW upcoming_owned AS SELECT library_id, path, id_key, work_id FROM upcoming_owned_gone`,
+	} {
+		if _, err := b.db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book?path=%s", b.lib.ID, url.QueryEscape(path)), b.bridgeTok, "")
+	if resp.StatusCode != http.StatusInternalServerError || strings.Contains(body, "upcoming_owned") || strings.Contains(body, "work_id") {
+		t.Fatalf("book facts with the match unreadable: %d %s", resp.StatusCode, body)
+	}
+}
+
+// factsWorkID is the work id of the Bridge's book facts for the book at path.
+func (b *bridgeEnv) factsWorkID(t *testing.T, libraryID int64, path string) string {
+	t.Helper()
+	resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book?path=%s", libraryID, url.QueryEscape(path)), b.bridgeTok, "")
+	var out struct {
+		Book bridgeBook `json:"book"`
+	}
+	decodeInto(t, body, &out)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("book facts %s: %d %s", path, resp.StatusCode, body)
+	}
+	return out.Book.WorkID
+}
+
+// The estimate reads a book's community content by /meta's work rule. A work
+// id the upcoming job resolved from the book's identifiers, since merged away
+// upstream, never answers for them: the identifiers' cached answer does (what
+// /meta shows), not "none", which would price a generation /meta then hides.
+// The same holds for a recorded match whose work upstream no longer has. The
+// Bridge's book facts name the work by the same order: the identifiers'
+// cached answer over the stale resolution, a recorded match over both.
+func TestBridgeEstimateStaleWork(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnvOn(t, newMetaEnv(t, true, 0))
+	ctx := context.Background()
+	lib, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Mars", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const path = "Andy Weir/The Martian"
+	if _, err := b.cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: path, Title: "The Martian",
+		ASIN: "B00FLIJJSY", AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	// /meta caches the identifiers' answer: the-martian, characters and recaps.
+	if resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/libraries/%d/meta?path=%s", lib.ID, url.QueryEscape(path)), b.adminTok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"mark-watney"`) {
+		t.Fatalf("meta: %d %s", resp.StatusCode, body)
+	}
+	if err := b.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{
+		{Ref: catalog.Ref{LibraryID: lib.ID, Path: path}, IDKey: "a:B00FLIJJSY", WorkID: "merged-away", CheckedAt: "now"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	b.beatWith(t, true, true, sidecarsEstimates)
+	has := func(what string) {
+		t.Helper()
+		book, err := b.cat.GetBookByPath(ctx, lib.ID, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if est := b.briefEstimate(t, lib.ID, path); !est.Has.Community.Characters || !est.Has.Community.Recaps || est.Has.CommunityUnknown {
+			t.Fatalf("%s (work key %q): %+v, want the identifiers' characters and recaps", what, book.WorkID, est.Has)
+		}
+	}
+	has("a stale resolved work")
+	if got := b.factsWorkID(t, lib.ID, path); got != "the-martian" {
+		t.Fatalf("book facts work_id over a stale resolution = %q, want the identifiers' the-martian", got)
+	}
+	// A resolution newer than the cached answer (the job's monthly recheck
+	// after the lookup /meta cached) names the work for both.
+	if err := b.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{{Ref: catalog.Ref{LibraryID: lib.ID, Path: path},
+		IDKey: "a:B00FLIJJSY", WorkID: "merged-away", CheckedAt: catalog.FormatStamp(time.Now().Add(time.Hour))}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.factsWorkID(t, lib.ID, path); got != "merged-away" {
+		t.Fatalf("book facts work_id under a newer resolution = %q, want merged-away", got)
+	}
+	if est := b.briefEstimate(t, lib.ID, path); est.Has.Community.Characters || est.Has.Community.Recaps {
+		t.Fatalf("estimate under a newer resolution = %+v, want merged-away's (nothing)", est.Has)
+	}
+	if err := b.cat.EditBook(ctx, lib.ID, path, catalog.BookEdit{
+		Match: &catalog.MatchAnchor{WorkID: "gone-upstream"}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	has("a match gone upstream")
+	if got := b.factsWorkID(t, lib.ID, path); got != "gone-upstream" {
+		t.Fatalf("book facts work_id of a matched book = %q, want its match gone-upstream", got)
 	}
 }

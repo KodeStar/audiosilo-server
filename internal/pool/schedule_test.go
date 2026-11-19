@@ -49,3 +49,19 @@ func TestJitteredStaysWithinItsBounds(t *testing.T) {
 		t.Fatalf("no jitter = %v", d)
 	}
 }
+
+func TestWaitReadyEndsOnReadyDeadlineOrCancel(t *testing.T) {
+	var n atomic.Int32
+	if isReady, live := WaitReady(t.Context(), func() bool { return n.Add(1) > 2 }, time.Hour, time.Millisecond); !isReady || !live {
+		t.Fatalf("ready after polls: isReady=%v live=%v", isReady, live)
+	}
+	never := func() bool { return false }
+	if isReady, live := WaitReady(t.Context(), never, 20*time.Millisecond, time.Millisecond); isReady || !live {
+		t.Fatalf("past the wait: isReady=%v live=%v", isReady, live)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, live := WaitReady(ctx, never, time.Hour, time.Millisecond); live {
+		t.Fatal("a cancelled wait must report ctx ended")
+	}
+}

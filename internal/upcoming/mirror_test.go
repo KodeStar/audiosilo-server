@@ -3,6 +3,7 @@ package upcoming
 import (
 	"context"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,4 +73,35 @@ func TestRunnerMirrorModeAsksNoRemote(t *testing.T) {
 	if st.LastSuccessAt == "" || st.Series != 1 {
 		t.Fatalf("status = %+v", st)
 	}
+}
+
+// The schedule's first run, here a kicked one, waits for the metadata to
+// answer locally (Options.Ready, a mirror's copy loading: server#454), at most
+// readyWait.
+func TestRunnerWaitsForReady(t *testing.T) {
+	t.Parallel()
+	kicked := func(ready func() bool, wait time.Duration) *fixture {
+		f := newFixture(t)
+		f.clock = time.Now()
+		f.r.settle = 10 * time.Millisecond
+		f.r.opt.Ready = ready
+		f.r.readyWait, f.r.readyPoll = wait, time.Millisecond
+		f.expanse("2011", "2012")
+		f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+		runSchedule(t, f)
+		f.r.Kick()
+		return f
+	}
+	var ready atomic.Bool
+	f := kicked(ready.Load, time.Hour)
+	time.Sleep(100 * time.Millisecond)
+	if n := len(f.md.lookups()); n != 0 {
+		t.Fatalf("%d lookups before the copy was ready", n)
+	}
+	ready.Store(true)
+	eventually(t, "the run once ready", func() bool { return len(f.md.lookups()) > 0 })
+
+	// Never ready: the first run goes ahead once readyWait is up.
+	g := kicked(func() bool { return false }, 50*time.Millisecond)
+	eventually(t, "the run past readyWait", func() bool { return len(g.md.lookups()) > 0 })
 }

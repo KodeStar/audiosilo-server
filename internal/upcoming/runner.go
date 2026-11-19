@@ -90,18 +90,25 @@ type Options struct {
 	// Announce tells the admin about new releases (one call per run, never
 	// with none). nil announces nothing.
 	Announce func(ctx context.Context, releases []Release)
-	Now      func() time.Time
-	Log      *slog.Logger
+	// Ready reports whether lookups answer locally yet (mirror mode: the
+	// local copy of the metadata is loaded). Run's first run waits for it, at
+	// most readyWait, so a start sends no lookups to the service while the
+	// copy loads (server#454). nil is always ready.
+	Ready func() bool
+	Now   func() time.Time
+	Log   *slog.Logger
 }
 
 // Schedule.
 const (
-	firstDelay  = time.Hour      // after the start
-	interval    = 24 * time.Hour // between successful runs
-	jitter      = time.Hour      // +- on interval
-	retryDelay  = time.Hour      // after a failed run
-	maxRetries  = 3              // failed runs retried before waiting for the next day
-	offPoll     = time.Minute    // while off, how often the switch is looked at
+	firstDelay  = time.Hour        // after the start
+	interval    = 24 * time.Hour   // between successful runs
+	jitter      = time.Hour        // +- on interval
+	retryDelay  = time.Hour        // after a failed run
+	maxRetries  = 3                // failed runs retried before waiting for the next day
+	offPoll     = time.Minute      // while off, how often the switch is looked at
+	readyWait   = 10 * time.Minute // the first run's longest wait for Options.Ready
+	readyPoll   = 2 * time.Second  // how often that wait looks again
 	settleKicks = 30 * time.Second
 	maxSettle   = 10 * time.Minute
 
@@ -153,6 +160,11 @@ type Runner struct {
 	// how often a run looks at the switch (pool.WhileOn).
 	settle   time.Duration
 	offCheck time.Duration
+	// readyWait and readyPoll bound and pace the first run's wait for
+	// Options.Ready (waitReady); readied is set once it is over (Run's
+	// goroutine alone reads and sets it).
+	readyWait, readyPoll time.Duration
+	readied              bool
 	// pending is the books whose work a step-1-alone run (resolveOnly) found
 	// new or changed, kept for the next full run's series step (resolveSeries),
 	// which would otherwise not look at their series again until the monthly
@@ -183,7 +195,7 @@ func New(cat *catalog.Catalog, md Metadata, opt Options) *Runner {
 	}
 	return &Runner{cat: cat, meta: md, opt: opt, log: opt.Log,
 		kick: make(chan struct{}, 1), wake: make(chan struct{}, 1), settle: settleKicks, offCheck: time.Second,
-		pending: map[catalog.Ref]bool{}}
+		readyWait: readyWait, readyPoll: readyPoll, pending: map[catalog.Ref]bool{}}
 }
 
 // Kick asks for a light run once the kicks settle: a scan or an edit may have
@@ -205,7 +217,9 @@ func (r *Runner) Wake() {
 
 // Run keeps the schedule until ctx ends: the first run an hour after the start
 // (sooner when an earlier success is due again), then daily with jitter, a
-// failed run again in an hour (three times), and a light run after kicks.
+// failed run again in an hour (three times), and a light run after kicks. The
+// first run of either kind waits for the metadata to answer locally
+// (waitReady).
 func (r *Runner) Run(ctx context.Context) {
 	next := r.firstRun(ctx)
 	r.saveNext(ctx, next)
@@ -235,6 +249,9 @@ func (r *Runner) Run(ctx context.Context) {
 				return
 			}
 			if r.active() {
+				if !r.waitReady(ctx) {
+					return
+				}
 				_ = r.RunOnce(ctx, false)
 			}
 			continue
@@ -247,6 +264,9 @@ func (r *Runner) Run(ctx context.Context) {
 			continue
 		}
 		if !r.opt.Now().Before(next) {
+			if !r.waitReady(ctx) {
+				return
+			}
 			whole, err := r.runOnce(ctx, true)
 			if errors.Is(err, errSwitchedOff) {
 				// Switched off before or during it: still due, run once it is
@@ -258,6 +278,24 @@ func (r *Runner) Run(ctx context.Context) {
 			r.saveNext(ctx, next)
 		}
 	}
+}
+
+// waitReady waits, before Run's first run, until Options.Ready reports true, at
+// most readyWait; false when ctx ended first. Only the first run waits: once
+// loaded, a copy answers until the server stops. Run's goroutine alone calls it.
+func (r *Runner) waitReady(ctx context.Context) bool {
+	if r.readied || r.opt.Ready == nil {
+		return true
+	}
+	isReady, live := pool.WaitReady(ctx, r.opt.Ready, r.readyWait, r.readyPoll)
+	if !live {
+		return false
+	}
+	if !isReady {
+		r.log.Info("upcoming releases: the local copy of the metadata is not ready; running anyway", "waited", r.readyWait)
+	}
+	r.readied = true
+	return true
 }
 
 // active reports whether a run may do anything now: the whole job (On), or
@@ -408,7 +446,7 @@ func (r *Runner) runOnce(ctx context.Context, full bool) (whole bool, err error)
 // whose work it found new or changed are kept (pending) for the next full
 // run's series step. r.mu is held.
 func (r *Runner) resolveOnly(ctx context.Context, full bool, now time.Time) error {
-	books, _, changed, err := r.resolveOwned(ctx, full, now)
+	books, _, changed, _, err := r.resolveOwned(ctx, full, now)
 	dirty := false
 	if len(r.pending) > 0 && (books != nil || err == nil) {
 		// A book no longer owned (removed, moved, its library gone) has no series
@@ -470,23 +508,23 @@ func (r *Runner) savePending(ctx context.Context) {
 }
 
 // resolveOwned is step 1: the owned books, and the work each is (resolveWorks).
-func (r *Runner) resolveOwned(ctx context.Context, full bool, now time.Time) (books []catalog.UpcomingBook, works map[catalog.Ref]string, changed map[catalog.Ref]bool, err error) {
+func (r *Runner) resolveOwned(ctx context.Context, full bool, now time.Time) (books []catalog.UpcomingBook, works map[catalog.Ref]string, changed map[catalog.Ref]bool, matched map[catalog.Ref]time.Time, err error) {
 	if books, err = r.cat.UpcomingBooks(ctx); err != nil {
-		return nil, nil, nil, fmt.Errorf("reading the books: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("reading the books: %w", err)
 	}
-	works, changed, err = r.resolveWorks(ctx, books, full, now)
-	return books, works, changed, err
+	works, changed, matched, err = r.resolveWorks(ctx, books, full, now)
+	return books, works, changed, matched, err
 }
 
 // run is a run of the whole job (r.mu held).
 func (r *Runner) run(ctx context.Context, full bool, now time.Time) error {
-	books, works, changed, err := r.resolveOwned(ctx, full, now)
+	books, works, changed, matched, err := r.resolveOwned(ctx, full, now)
 	if err != nil {
 		return err
 	}
 	maps.Copy(changed, r.pending)
 	locals := groupSeries(books)
-	failed, err := r.resolveSeries(ctx, locals, works, changed, now)
+	failed, err := r.resolveSeries(ctx, locals, works, changed, matched, now)
 	if err != nil {
 		return err
 	}
@@ -555,7 +593,11 @@ func distinct[T any](xs []T, key func(T) string) []string {
 }
 
 // resolveWorks returns each book's community work id ("" for none or not yet
-// known) and the books whose work this run found new or changed. A book whose
+// known: its recorded match, else its identifiers'), the books whose
+// identifiers' work this run found new or changed, and when the match of each
+// book whose match stands in for another work than its identifiers' (or for
+// none) was recorded: its series is due again while that is no earlier than
+// the series' own resolution (resolveSeries). A book whose
 // identifiers have no answer yet (a new book, or its identifiers changed) takes
 // the cache's work id, else a lookup; a full run looks again at answers a month
 // old (a work merged upstream, a match the catalogue gained), up to maxRechecks,
@@ -565,12 +607,12 @@ func distinct[T any](xs []T, key func(T) string) []string {
 // time; one that fails is asked again next run, the book keeping its old answer
 // meanwhile. A book whose identifiers went, or that left the index, is
 // forgotten, so it holds no work any more.
-func (r *Runner) resolveWorks(ctx context.Context, books []catalog.UpcomingBook, full bool, now time.Time) (works map[catalog.Ref]string, changed map[catalog.Ref]bool, err error) {
+func (r *Runner) resolveWorks(ctx context.Context, books []catalog.UpcomingBook, full bool, now time.Time) (works map[catalog.Ref]string, changed map[catalog.Ref]bool, matched map[catalog.Ref]time.Time, err error) {
 	stored, err := r.cat.UpcomingOwnedAll(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading the resolved books: %w", err)
+		return nil, nil, nil, fmt.Errorf("reading the resolved books: %w", err)
 	}
-	works, changed = map[catalog.Ref]string{}, map[catalog.Ref]bool{}
+	works, changed, matched = map[catalog.Ref]string{}, map[catalog.Ref]bool{}, map[catalog.Ref]time.Time{}
 	type want struct {
 		ref catalog.Ref
 		key string
@@ -614,7 +656,7 @@ func (r *Runner) resolveWorks(ctx context.Context, books []catalog.UpcomingBook,
 	}
 	for chunk := range slices.Chunk(asks, workBatch) {
 		if ctx.Err() != nil {
-			return nil, nil, ctx.Err()
+			return nil, nil, nil, ctx.Err()
 		}
 		ids := make([]meta.BookIDs, len(chunk))
 		for i, a := range chunk {
@@ -631,16 +673,36 @@ func (r *Runner) resolveWorks(ctx context.Context, books []catalog.UpcomingBook,
 		}
 	}
 	if err := r.cat.SaveUpcomingOwned(ctx, saved, drop); err != nil {
-		return nil, nil, fmt.Errorf("saving the resolved books: %w", err)
+		return nil, nil, nil, fmt.Errorf("saving the resolved books: %w", err)
 	}
-	return works, changed, nil
+	// A recorded match is the book's work whatever its identifiers resolved to
+	// (workIDExpr's rule), and the only one a book matched in the console with
+	// no ASIN or ISBN has (server#375): its series is read by it and it holds
+	// its slot. Its identifiers' answer is stored still, for when the match goes.
+	// A match naming the work they answer changes nothing, so a match run over
+	// a library of tagged books sets no series due.
+	for _, b := range books {
+		if b.MatchWorkID != "" && b.MatchWorkID != works[b.Ref] {
+			works[b.Ref] = b.MatchWorkID
+			matched[b.Ref], _ = parseStamp(b.MatchedAt)
+		}
+	}
+	return works, changed, matched, nil
 }
 
 // resolveSeries finds the community series of each local series that is due
 // (never resolved, a month old, holding more books than when it was, or with a
-// book whose work changed), and forgets those the library no longer holds. It
-// returns how many failed.
-func (r *Runner) resolveSeries(ctx context.Context, locals []*localSeries, works map[catalog.Ref]string, changed map[catalog.Ref]bool, now time.Time) (int, error) {
+// book whose work changed: its identifiers' answer, changed, or a match
+// standing in for it recorded since the series was resolved, matched), and
+// forgets those the library no longer holds. It returns how many failed.
+//
+// The match's own time is what is compared (book_matches.set_at against
+// upcoming_series.resolved_at), not a memory of the last run: a match made
+// before the first run after a start, or while the job was off, is still found,
+// and one the series was resolved by is not found twice. A match recorded at
+// the very time of the resolution counts as since (the run may have read the
+// books before it): resolved once more, never left out.
+func (r *Runner) resolveSeries(ctx context.Context, locals []*localSeries, works map[catalog.Ref]string, changed map[catalog.Ref]bool, matched map[catalog.Ref]time.Time, now time.Time) (int, error) {
 	rows, err := r.cat.UpcomingSeriesAll(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("reading the series: %w", err)
@@ -657,7 +719,10 @@ func (r *Runner) resolveSeries(ctx context.Context, locals []*localSeries, works
 		if prior := have[k]; len(prior) > 0 {
 			resolved, _ := parseStamp(prior[0].ResolvedAt)
 			if now.Sub(resolved) < resolveAge && len(l.books) <= prior[0].Books &&
-				!slices.ContainsFunc(l.books, func(b catalog.UpcomingBook) bool { return changed[b.Ref] }) {
+				!slices.ContainsFunc(l.books, func(b catalog.UpcomingBook) bool {
+					at, stands := matched[b.Ref]
+					return changed[b.Ref] || (stands && !at.Before(resolved))
+				}) {
 				continue
 			}
 		}
@@ -670,7 +735,15 @@ func (r *Runner) resolveSeries(ctx context.Context, locals []*localSeries, works
 			}
 		}
 		if len(ids) == 0 {
-			continue // nothing to ask by yet: a later run, once a book resolves
+			// Nothing to ask by yet: a later run, once a book resolves. A series
+			// an unlink set due (resolved_at emptied, catalog.setMatchedSeriesDue)
+			// whose books now have no work, a match-only book's, is none.
+			if prior := have[k]; len(prior) > 0 && prior[0].ResolvedAt == "" {
+				if err := r.cat.SetUpcomingSeries(ctx, l.libraryID, l.key, l.name, len(l.books), nil, stamp(now)); err != nil {
+					return failed, fmt.Errorf("saving a series: %w", err)
+				}
+			}
+			continue
 		}
 		found, ok := r.seriesOf(ctx, l.name, ids)
 		if !ok {
@@ -970,7 +1043,7 @@ func (r *Runner) classify(ctx context.Context, locals []*localSeries, works map[
 		}
 		owned := make([]OwnedBook, len(l.books))
 		for i, b := range l.books {
-			owned[i] = OwnedBook{WorkID: works[b.Ref], Position: b.Position, PositionEnd: b.PositionEnd}
+			owned[i] = OwnedBook{WorkID: works[b.Ref], Matched: b.MatchWorkID != "", Position: b.Position, PositionEnd: b.PositionEnd}
 		}
 		items := Classify(series, owned, now, window)
 		baseline := map[string]bool{}

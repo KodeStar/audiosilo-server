@@ -110,6 +110,10 @@ type cacheEntry struct {
 	value  any
 	err    error
 	expiry time.Time
+	// at is when the answer was had, at the earliest: when it was put, or
+	// for a persisted row read back (cachePutUntil, cacheHoldStale) when that
+	// row was written (answeredAt).
+	at time.Time
 }
 
 // cache is a bounded in-memory TTL cache. The clock is injectable so tests can
@@ -136,34 +140,63 @@ func newCache(now func() time.Time) *cache {
 // masquerade as a cached negative. On a hit the error is nil (positive result),
 // ErrNotFound (cached "no match") or the cached transport error.
 func cacheGet[T any](c *cache, key string) (result *T, hit bool, err error) {
+	result, _, hit, err = cacheGetAt[T](c, key)
+	return result, hit, err
+}
+
+// cacheGetAt is cacheGet with when the entry's answer was had (cacheEntry.at,
+// zero on a miss), for a reader that weighs it against another answer.
+func cacheGetAt[T any](c *cache, key string) (result *T, at time.Time, hit bool, err error) {
 	e, ok := c.get(key)
 	switch {
 	case !ok:
-		return nil, false, nil
+		return nil, time.Time{}, false, nil
 	case e.err != nil:
-		return nil, true, e.err
+		return nil, e.at, true, e.err
 	case e.value == nil:
-		return nil, true, ErrNotFound
+		return nil, e.at, true, ErrNotFound
 	}
 	v, ok := e.value.(*T)
 	if !ok {
-		return nil, false, nil
+		return nil, time.Time{}, false, nil
 	}
-	return v, true, nil
+	return v, e.at, true, nil
+}
+
+// answeredAt is when a persisted row expiring at expiry was written, at the
+// earliest: its expiry less the TTL it was saved for, positiveTTL for a match
+// (an incomplete envelope, saved for errorTTL, so reads as older than it is),
+// notFoundTTL for a "no match". The TTLs are constants, so a row never outlives
+// a TTL other than the one it was written under.
+func answeredAt(expiry time.Time, match bool) time.Time {
+	if match {
+		return expiry.Add(-positiveTTL)
+	}
+	return expiry.Add(-notFoundTTL)
 }
 
 // cachePut caches a positive result for ttl (positiveTTL, or errorTTL for an
 // incomplete one). A nil result is a "no match" and is stored as such (see
 // payload).
 func cachePut[T any](c *cache, key string, result *T, ttl time.Duration) {
-	cachePutUntil(c, key, result, c.now().Add(ttl))
+	now := c.now()
+	c.store(key, cacheEntry{value: payload(result), expiry: now.Add(ttl), at: now})
 }
 
-// cachePutUntil is cachePut with an absolute expiry: a row read back from the
-// persistent store warms memory for what is left of ITS TTL, not a fresh one, so
-// a restart never stretches an answer's age past the policy above.
+// cachePutUntil caches a row read back from the persistent store, expiring at
+// expiry: it warms memory for what is left of ITS TTL, not a fresh one, so a
+// restart never stretches an answer's age past the policy above, and keeps the
+// row's age (answeredAt).
 func cachePutUntil[T any](c *cache, key string, result *T, expiry time.Time) {
-	c.store(key, cacheEntry{value: payload(result), expiry: expiry})
+	c.store(key, cacheEntry{value: payload(result), expiry: expiry, at: answeredAt(expiry, result != nil)})
+}
+
+// cacheHoldStale holds a stale persisted positive answer (its row expiring at
+// expiry) in memory for errorTTL, the outage fallback (Enrich, Work,
+// keepStored): asked again soon, and dated by its row, so a reader weighing
+// its age (cachedAnswerOf) never takes a months-old answer for a new one.
+func cacheHoldStale[T any](c *cache, key string, stored *T, expiry time.Time) {
+	c.store(key, cacheEntry{value: payload(stored), expiry: c.now().Add(errorTTL), at: answeredAt(expiry, true)})
 }
 
 // get returns the live entry for key, or ok=false when it is absent or expired
@@ -184,7 +217,8 @@ func (c *cache) get(key string) (cacheEntry, bool) {
 
 // putMiss caches a "no match" marker (1h) - a nil payload with a nil error.
 func (c *cache) putMiss(key string, ttl time.Duration) {
-	c.store(key, cacheEntry{expiry: c.now().Add(ttl)})
+	now := c.now()
+	c.store(key, cacheEntry{expiry: now.Add(ttl), at: now})
 }
 
 // putError caches a transport error marker (2min) so a down upstream isn't

@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -931,5 +932,36 @@ func TestAnchorWrittenOnlyIfStillItsASIN(t *testing.T) {
 	}
 	if a := anchorOf(t, c, ctx, lib.ID, "A/Pinned"); a.WorkID != "the-work" {
 		t.Fatalf("keeping an admin's ASIN: match %+v, want recorded", a)
+	}
+}
+
+// TestWorkSources: a book with a recorded match has its match's work,
+// whatever its identifiers resolved to; one known by its identifiers alone
+// has none, but the time the upcoming job resolved them; a book with neither,
+// or none at the path, is left out.
+func TestWorkSources(t *testing.T) {
+	t.Parallel()
+	f := newRecordingsFixture(t)
+	if err := f.c.SaveUpcomingOwned(f.ctx, []UpcomingOwned{
+		{Ref: Ref{LibraryID: f.main.ID, Path: "Kemper/One"}, IDKey: "a:B0KEMPER", WorkID: "w-one", CheckedAt: "2026-11-01T00:00:00.000Z"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.c.WorkSources(f.ctx, []Ref{
+		{LibraryID: f.main.ID, Path: "Bray/One"}, {LibraryID: f.main.ID, Path: "Rematched/Two"},
+		{LibraryID: f.main.ID, Path: "Kemper/One"}, {LibraryID: f.other.ID, Path: "Abridged/One"},
+		{LibraryID: f.main.ID, Path: "Else/Three"}, {LibraryID: f.main.ID, Path: "Nowhere"},
+	})
+	want := map[Ref]WorkSource{
+		{LibraryID: f.main.ID, Path: "Bray/One"}:      {MatchWorkID: "w-one", ResolvedAt: "now"},
+		{LibraryID: f.main.ID, Path: "Rematched/Two"}: {MatchWorkID: "w-two", ResolvedAt: "now"},
+		{LibraryID: f.main.ID, Path: "Kemper/One"}:    {ResolvedAt: "2026-11-01T00:00:00.000Z"},
+		{LibraryID: f.other.ID, Path: "Abridged/One"}: {MatchWorkID: "w-one"},
+	}
+	if err != nil || !maps.Equal(got, want) {
+		t.Fatalf("work sources = %v, %v; want %v", got, err, want)
+	}
+	if got, err = f.c.WorkSources(f.ctx, nil); err != nil || len(got) != 0 {
+		t.Fatalf("no refs = %v, %v", got, err)
 	}
 }

@@ -263,7 +263,9 @@ func TestMetaLocalOthers(t *testing.T) {
 // holding a copy of the book sharing its ASIN. A book matched in the console to
 // another work than its ASIN's keeps them together: /item and /meta both follow
 // the match (server#412), and each rail entry lists only recordings of its own
-// work, so no book is on two entries.
+// work, so no book is on two entries. A book matched to a work the rail doesn't
+// list holds its own position there, as in upcoming; one matched to a work the
+// rail lists is placed by that work alone.
 func TestItemAndMetaAgree(t *testing.T) {
 	t.Parallel()
 	e := recordingsEnv(t, true)
@@ -271,12 +273,21 @@ func TestItemAndMetaAgree(t *testing.T) {
 	addBooks(t, e.testEnv, e.lib.ID,
 		&catalog.Book{RelPath: "Saga/2 copy", Series: "Saga", SeriesIndex: 2, ASIN: "b0two", Narrator: "Bray"},
 		&catalog.Book{RelPath: "Saga/3", Series: "Saga", SeriesIndex: 3, ASIN: "B0THREE", Narrator: "Lee"},
+		&catalog.Book{RelPath: "Saga/4 one", Series: "Saga", SeriesIndex: 4},
+		&catalog.Book{RelPath: "Saga/4 special", Series: "Saga", SeriesIndex: 4},
 	)
 	if err := e.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{
 		{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/2 copy"}, IDKey: "a:B0TWO", WorkID: "two", CheckedAt: "now"},
 		{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/3"}, IDKey: "a:B0THREE", WorkID: "three", CheckedAt: "now"},
 	}, nil); err != nil {
 		t.Fatal(err)
+	}
+	for path, work := range map[string]string{"Saga/4 one": "one", "Saga/4 special": "special"} {
+		if err := e.cat.EditBook(ctx, e.lib.ID, path, catalog.BookEdit{
+			Match: &catalog.MatchAnchor{WorkID: work}, Source: catalog.SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// rail checks /meta for Saga/2: about work and placed as want, each path
 	// on one entry only.
@@ -299,7 +310,11 @@ func TestItemAndMetaAgree(t *testing.T) {
 		}
 	}
 	two := railEntry{local: "Saga/2", others: []string{"Saga/2 Abe", "Saga/2 Kemper"}}
-	adminRail := map[string]railEntry{"one": {local: "Saga/1"}, "two": two, "three": {local: "Saga/3"}, "four": {}}
+	// Saga/4 special holds four (its work, special, is not on the rail); Saga/4
+	// one is a recording of one, never at four.
+	one := railEntry{local: "Saga/1", others: []string{"Saga/4 one"}}
+	special := railEntry{local: "Saga/4 special"}
+	adminRail := map[string]railEntry{"one": one, "two": two, "three": {local: "Saga/3"}, "four": special}
 	item(e.adminTok, "two", two.others)
 	rail(e.adminTok, "two", adminRail)
 	// Denied: the member's grant (Saga/1, Saga/2, Saga/2 Abe) holds neither
@@ -311,16 +326,18 @@ func TestItemAndMetaAgree(t *testing.T) {
 
 	// Matched in the console to "three": /item lists that work's recordings,
 	// and /meta is about that work too, the book on entry "three" beside
-	// Saga/3, entry "two" left to the work's own recordings.
+	// Saga/3, entry "two" left to the work's own recordings. Saga/2 copy is
+	// the book's recording again (its ASIN): the book is that recording's one
+	// handle, so the copy is on no entry (server#413).
 	if err := e.cat.EditBook(ctx, e.lib.ID, "Saga/2", catalog.BookEdit{
 		Match: &catalog.MatchAnchor{WorkID: "three"}, Source: catalog.SourceCommunity,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	item(e.adminTok, "three", []string{"Saga/3"})
-	rail(e.adminTok, "three", map[string]railEntry{"one": {local: "Saga/1"},
-		"two":   {local: "Saga/2 copy", others: []string{"Saga/2 Abe", "Saga/2 Kemper"}},
-		"three": {local: "Saga/2", others: []string{"Saga/3"}}, "four": {}})
+	rail(e.adminTok, "three", map[string]railEntry{"one": one,
+		"two":   {local: "Saga/2 Abe", others: []string{"Saga/2 Kemper"}},
+		"three": {local: "Saga/2", others: []string{"Saga/3"}}, "four": special})
 	item(e.memberTok, "three", nil)
 	rail(e.memberTok, "three", map[string]railEntry{"one": {local: "Saga/1"},
 		"two": {local: "Saga/2 Abe"}, "three": {local: "Saga/2"}, "four": {}})
@@ -383,5 +400,133 @@ func TestNextPicksRecording(t *testing.T) {
 	// Another listener's progress is not the admin's: the narrator still decides.
 	if n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.adminTok); n.nextPath() != "Saga/2 Kemper" {
 		t.Fatalf("admin next after the member's progress = %s", n.raw)
+	}
+}
+
+// TestMetaFindsRecordingsAsItemDoes (server#412): /meta's rails find the
+// caller's recordings of their works as /item does, by the work key, so a
+// recording filed in no series (an ASIN's work, or a console match with no
+// identifier) is placed too; the pair: a member whose grant misses them gets
+// neither.
+func TestMetaFindsRecordingsAsItemDoes(t *testing.T) {
+	t.Parallel()
+	e := recordingsEnv(t, true)
+	ctx := context.Background()
+	addBooks(t, e.testEnv, e.lib.ID,
+		&catalog.Book{RelPath: "Loose/Two Lee", ASIN: "B0TWOLEE", Narrator: "Lee"},
+		&catalog.Book{RelPath: "Loose/Three", Narrator: "Lee"},
+	)
+	if err := e.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{
+		{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Loose/Two Lee"}, IDKey: "a:B0TWOLEE", WorkID: "two", CheckedAt: "now"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.EditBook(ctx, e.lib.ID, "Loose/Three", catalog.BookEdit{
+		Match: &catalog.MatchAnchor{WorkID: "three"}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, items, _ := itemRecordings(t, e, "Saga/2", e.adminTok)
+	slices.Sort(items)
+	if want := []string{"Loose/Two Lee", "Saga/2 Abe", "Saga/2 Kemper"}; !reflect.DeepEqual(items, want) {
+		t.Fatalf("/item others = %q, want %q", items, want)
+	}
+	entries, _ := railEntries(t, e, "Saga/2", e.adminTok)
+	two := slices.Sorted(slices.Values(entries["two"].others))
+	if entries["two"].local != "Saga/2" || !reflect.DeepEqual(two, items) || entries["three"].local != "Loose/Three" {
+		t.Fatalf("/meta entries = %+v, want two's others %q and three on Loose/Three", entries, items)
+	}
+	member, _ := railEntries(t, e, "Saga/2", e.memberTok)
+	if !reflect.DeepEqual(member["two"].others, []string{"Saga/2 Abe"}) || member["three"].local != "" {
+		t.Fatalf("member /meta entries = %+v", member)
+	}
+}
+
+// TestItemAndMetaKeepOneCopy (server#413): of a recording's two copies /item
+// and the /meta entry the envelope is for keep the same one, though the caller
+// started the other (the pick's order would take it), so one recording never
+// shows under two handles.
+func TestItemAndMetaKeepOneCopy(t *testing.T) {
+	t.Parallel()
+	e := recordingsEnv(t, true)
+	ctx := context.Background()
+	addBooks(t, e.testEnv, e.lib.ID, &catalog.Book{RelPath: "Saga/2 Abe again", Series: "Saga", SeriesIndex: 2, ASIN: "b0twoabe", Narrator: "Abe"})
+	if err := e.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{
+		{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/2 Abe again"}, IDKey: "a:B0TWOABE", WorkID: "two", CheckedAt: "now"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	share, err := e.cat.CreateShare(ctx, catalog.Share{Name: "Again"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.AddSharePaths(ctx, share.ID, []catalog.PathRule{{LibraryID: e.lib.ID, Path: "Saga/2 Abe again"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.GrantShare(ctx, e.memberID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cat.SaveProgress(ctx, e.memberID, catalog.Progress{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/2 Abe again"},
+		Position: 30, Duration: 600, UpdatedAt: "2026-01-01T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	_, items, _ := itemRecordings(t, e, "Saga/2", e.memberTok)
+	entries, _ := railEntries(t, e, "Saga/2", e.memberTok)
+	if want := []string{"Saga/2 Abe"}; !reflect.DeepEqual(items, want) || !reflect.DeepEqual(entries["two"].others, want) {
+		t.Fatalf("/item others %q, /meta others %q, want %q on both", items, entries["two"].others, want)
+	}
+}
+
+// TestItemAndMetaListTheSameRecordings: a book with an ISBN alone is a copy of
+// a recording listed before it that carries the ISBN, never of one after, so
+// the answer depends on the order. /meta's entry for the book lists what /item
+// lists, though its pick order (the book's narrator first) would put the ASIN
+// book first and take the ISBN book for its copy.
+func TestItemAndMetaListTheSameRecordings(t *testing.T) {
+	t.Parallel()
+	e := recordingsEnv(t, true)
+	ctx := context.Background()
+	addBooks(t, e.testEnv, e.lib.ID,
+		&catalog.Book{RelPath: "Loose/A isbn", ISBN: "9780000000011", Narrator: "Zed"},
+		&catalog.Book{RelPath: "Loose/B both", ASIN: "B0TWOBOTH", ISBN: "978-0-00-000001-1", Narrator: "Bray"},
+	)
+	for _, p := range []string{"Loose/A isbn", "Loose/B both"} {
+		if err := e.cat.EditBook(ctx, e.lib.ID, p, catalog.BookEdit{
+			Match: &catalog.MatchAnchor{WorkID: "two"}, Source: catalog.SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, items, _ := itemRecordings(t, e, "Saga/2", e.adminTok)
+	if want := []string{"Loose/A isbn", "Loose/B both", "Saga/2 Abe", "Saga/2 Kemper"}; !reflect.DeepEqual(items, want) {
+		t.Fatalf("/item others = %q, want %q", items, want)
+	}
+	entries, _ := railEntries(t, e, "Saga/2", e.adminTok)
+	two := entries["two"]
+	if two.local != "Saga/2" || len(two.others) == 0 || two.others[0] != "Loose/B both" {
+		t.Fatalf("/meta entry = %+v, want Saga/2 with the Bray recording first", two)
+	}
+	if got := slices.Sorted(slices.Values(two.others)); !reflect.DeepEqual(got, items) {
+		t.Fatalf("/meta others = %q, want /item's %q", got, items)
+	}
+}
+
+// The pick's last tiebreak is library order, then path, for a recording /meta
+// finds by its work key (catalog.WorkBooks) as for one in the series: of two
+// recordings of "one" that rank alike, "A/One", filed in no series, comes
+// before "Saga/1".
+func TestMetaWorkBooksInLibraryOrder(t *testing.T) {
+	t.Parallel()
+	e := recordingsEnv(t, true)
+	ctx := context.Background()
+	addBooks(t, e.testEnv, e.lib.ID, &catalog.Book{RelPath: "A/One", ASIN: "B0ONEA", Narrator: "Kemper"})
+	if err := e.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{
+		{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "A/One"}, IDKey: "a:B0ONEA", WorkID: "one", CheckedAt: "now"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	entries, raw := railEntries(t, e, "Saga/2", e.adminTok)
+	if one := entries["one"]; one.local != "A/One" || !slices.Equal(one.others, []string{"Saga/1"}) {
+		t.Fatalf("entry one = %+v, want A/One with Saga/1 beside it: %s", one, raw)
 	}
 }

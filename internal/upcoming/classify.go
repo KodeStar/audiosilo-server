@@ -24,7 +24,12 @@ import (
 // Holding follows meta.PlaceLocal: a book whose community work is known holds
 // that work's entry (a range: every entry inside it) and nothing else, whatever
 // its own number says; a book whose work isn't known holds the entry at its own
-// position (a range at that range, a single entry the range starts on). A range
+// position (a range at that range, a single entry the range starts on), and so
+// does a book matched in the console to a work the series doesn't list (an
+// edition the community files apart): that volume is the admin's, never
+// missing nor a release to announce, while the match still decides which work
+// the book is. A matched work the series lists unnumbered is listed, so holds
+// no slot. A range
 // (a box set) is held too when every volume inside it is, one book each. Entries
 // are the console's railEntries: one per position, the first member there, and
 // a range entry ("1-3", an omnibus) only on a rail that numbers none of the
@@ -33,9 +38,11 @@ import (
 // though it is a preorder or a release like any member.
 
 // OwnedBook is one book of a local series: its community work ("" when not
-// known) and its position in the series (a range's end, 0 for none).
+// known), whether that is its recorded console match's (Matched), and its
+// position in the series (a range's end, 0 for none).
 type OwnedBook struct {
 	WorkID      string
+	Matched     bool
 	Position    float64
 	PositionEnd float64
 }
@@ -133,7 +140,9 @@ func classifyOne(s Series, owned []OwnedBook, ownedWorks map[string]bool, now ti
 	slots := entries(members)
 	// Each work's span on this series (its first numbered one).
 	workSpan := map[string]span{}
+	listed := map[string]bool{} // every work the series names, numbered or not
 	for _, m := range members {
+		listed[m.WorkID] = true
 		if _, ok := workSpan[m.WorkID]; ok {
 			continue
 		}
@@ -144,12 +153,11 @@ func classifyOne(s Series, owned []OwnedBook, ownedWorks map[string]bool, now ti
 	// Where the owned books sit.
 	var held []span
 	for _, b := range owned {
+		sp, numbered := workSpan[b.WorkID]
 		switch {
-		case b.WorkID != "":
-			if sp, ok := workSpan[b.WorkID]; ok {
-				held = append(held, sp)
-			}
-		case b.Position > 0:
+		case b.WorkID != "" && numbered:
+			held = append(held, sp)
+		case b.Position > 0 && (b.WorkID == "" || (b.Matched && !listed[b.WorkID])):
 			held = append(held, span{b.Position, max(b.Position, b.PositionEnd)})
 		}
 	}

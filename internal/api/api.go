@@ -384,7 +384,10 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 			Announce: func(ctx context.Context, releases []upcoming.Release) {
 				upcoming.Announce(ctx, a.rt.Notify, releases)
 			},
-			Log: log,
+			// Its first run waits for a mirror's local copy, as the chapter
+			// checks do (server#454).
+			Ready: a.mirrorReady,
+			Log:   log,
 		})
 		a.kickUpcoming = a.upcoming.Kick
 		cat.OnBookChange(a.upcoming.Kick)

@@ -692,11 +692,16 @@ func oneBook(ref Ref) clearPick {
 // clearCommunity removes the community overrides, covers and recorded matches
 // (book_matches) of the books pick names, keeping an admin's own edits and
 // uploads, and rebuilds each such indexed book's effective metadata and cover
-// art, in tx. It returns how many indexed books had any and how many community
-// covers went: ClearCommunityMatches for a library, an unlink (BookEdit.Match with no
-// work) for one book.
+// art, in tx; the upcoming job's series of a book whose match goes are due
+// again (setMatchedSeriesDue). It returns how many indexed books had any and
+// how many community covers went: ClearCommunityMatches for a library, an
+// unlink (BookEdit.Match with no work) for one book.
 func clearCommunity(ctx context.Context, tx *sql.Tx, pick clearPick) (books, covers int, err error) {
 	where, args := pick.where, pick.args
+	// First, while the community series and the matches still stand.
+	if err := setMatchedSeriesDue(ctx, tx, pick, ""); err != nil {
+		return 0, 0, err
+	}
 	scanRef := func(r *sql.Rows, ref *Ref) error { return r.Scan(&ref.LibraryID, &ref.Path) }
 	fields, err := queryRows(ctx, tx, scanRef, `DELETE FROM book_overrides
 	     WHERE source = 'community' AND `+where+` RETURNING library_id, path`, args...)

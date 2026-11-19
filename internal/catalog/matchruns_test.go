@@ -3,6 +3,7 @@ package catalog
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -428,5 +429,69 @@ func TestLanguageCounts(t *testing.T) {
 	}
 	if !slices.Equal(genres["A/1"], []string{"Radio Drama"}) || len(genres["A/3"]) != 0 {
 		t.Errorf("genres = %q, want the book's", genres)
+	}
+}
+
+// An unlink sets due again (an empty resolved_at) the upcoming job's rows for every
+// series the matched book is in, its main one and the ones its list names, in
+// its own library only; a series no matched book is in, or whose matched book's
+// match named its identifiers' work, keeps its resolution.
+func TestUnlinkSetsMatchedSeriesDue(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
+	lib2, _ := c.CreateLibrary(ctx, Library{Name: "Other", Root: "/tmp/o"})
+	for _, b := range []*Book{
+		{LibraryID: lib.ID, RelPath: "gg", Title: "Guards! Guards!", Series: "Discworld", SeriesIndex: 8},
+		{LibraryID: lib.ID, RelPath: "dune", Title: "Dune", Series: "Dune", SeriesIndex: 1},
+		{LibraryID: lib2.ID, RelPath: "gg", Title: "Guards! Guards!", Series: "Discworld", SeriesIndex: 8},
+	} {
+		b.Format = "m4b"
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.EditBook(ctx, lib.ID, "gg", BookEdit{Set: map[string]string{FieldMoreSeries: `[{"name":"City Watch","position":1}]`}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, "gg", BookEdit{Match: &MatchAnchor{WorkID: "w"}, Source: SourceCommunity}); err != nil {
+		t.Fatal(err)
+	}
+	// Dune's match names the work its identifiers resolved to: it stood in
+	// for nothing, so its going leaves Dune's resolution standing.
+	if err := c.EditBook(ctx, lib.ID, "dune", BookEdit{Match: &MatchAnchor{WorkID: "d"}, Source: SourceCommunity}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SaveUpcomingOwned(ctx, []UpcomingOwned{{Ref: Ref{LibraryID: lib.ID, Path: "dune"}, IDKey: "a:B0DUNE", WorkID: "d", CheckedAt: "now"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	const at = "2026-11-01T00:00:00Z"
+	for _, s := range []struct {
+		lib  int64
+		name string
+	}{{lib.ID, "Discworld"}, {lib.ID, "City Watch"}, {lib.ID, "Dune"}, {lib2.ID, "Discworld"}} {
+		if err := c.SetUpcomingSeries(ctx, s.lib, seriesKey(s.name), s.name, 1, []string{"s"}, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{"gg", "dune"} {
+		if err := c.EditBook(ctx, lib.ID, p, BookEdit{Match: &MatchAnchor{}, Source: SourceCommunity}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := c.UpcomingSeriesAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range rows {
+		got[fmt.Sprintf("%d %s", r.LibraryID, r.Name)] = r.ResolvedAt
+	}
+	want := map[string]string{
+		fmt.Sprintf("%d Discworld", lib.ID): "", fmt.Sprintf("%d City Watch", lib.ID): "",
+		fmt.Sprintf("%d Dune", lib.ID): at, fmt.Sprintf("%d Discworld", lib2.ID): at,
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("resolved_at = %v, want %v", got, want)
 	}
 }
