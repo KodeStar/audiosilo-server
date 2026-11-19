@@ -184,11 +184,8 @@ func (a *API) handleListBookmarks(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAddBookmark saves a bookmark on the book the path keys (timelinePath):
-// 201 with the row. A body's optional client_id (capability bookmark_client_id,
-// a UUID) makes the add idempotent: one the caller already holds on this book
-// answers 200 with that bookmark, saving nothing (an outbox replay whose first
-// answer was lost); on another book it is 409 client_id_conflict, a malformed
-// one 400 invalid_request.
+// 201 with the row, or 200 with the stored one for a client_id the caller
+// already holds there (catalog.AddBookmark has the idempotency rule).
 func (a *API) handleAddBookmark(w http.ResponseWriter, r *http.Request) {
 	lib, path, _, ok := a.timelineKey(w, r, "could not save bookmark")
 	if !ok {

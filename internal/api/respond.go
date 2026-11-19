@@ -142,7 +142,7 @@ const (
 	codeReportOff                = "report_off" // an unknown_asin match run while the unknown-ASIN report is off
 	codeMatchRunNotReady         = "match_run_not_ready"
 	codeMatchRunNotRunning       = "match_run_not_running"
-	codeInvalidRequest           = "invalid_request"    // a malformed field the message names (a bookmark's client_id)
+	codeInvalidRequest           = "invalid_request"    // a malformed field the message names (also sent as a literal by older handlers)
 	codeClientIDConflict         = "client_id_conflict" // 409: a bookmark client_id the caller holds on another book
 	// Listening imports (handlers_import.go); the ABS failures carry importer.Code*.
 	codeInvalidURL       = "invalid_url"

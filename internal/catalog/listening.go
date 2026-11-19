@@ -989,21 +989,14 @@ func (c *Catalog) AddBookmark(ctx context.Context, userID int64, b Bookmark) (*B
 	// One writer transaction, so a concurrent delete of the held row can't fall
 	// between the insert that met it and the read of it.
 	err := c.db.WithUserStateTx(ctx, "AddBookmark", func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx,
+		err := tx.QueryRowContext(ctx,
 			`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, label, created_at, client_id)
 			 VALUES(?,?,?,?,?,?,?,NULLIF(?, ''))
-			 ON CONFLICT(user_id, client_id) WHERE client_id IS NOT NULL DO NOTHING`,
-			userID, b.LibraryID, b.Path, b.Position, b.Note, b.Label, b.CreatedAt, b.ClientID)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n == 1 {
-			b.ID, err = res.LastInsertId()
-			return err
+			 ON CONFLICT(user_id, client_id) WHERE client_id IS NOT NULL DO NOTHING
+			 RETURNING id`,
+			userID, b.LibraryID, b.Path, b.Position, b.Note, b.Label, b.CreatedAt, b.ClientID).Scan(&b.ID)
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err // nil: a fresh save
 		}
 		created = false
 		var held Bookmark
