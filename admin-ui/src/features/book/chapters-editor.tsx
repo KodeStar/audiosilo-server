@@ -1009,9 +1009,11 @@ function Scrubber({
     if (!a) return;
     clearTimeout(preview.current);
     previewing.current = transcoded;
-    // During a busy stream's wait this asks at once: the wait's own ask again
-    // would load the element over the preview.
-    if (waiting) stopRetry();
+    // During a busy stream's wait, or the look at a failed load before it,
+    // this asks at once: the wait's own ask again (or the look's answer, which
+    // starts that wait or mints a token) would load the element over the
+    // preview. A stalled stream's look goes on: it is the one played here.
+    if (waiting || broken.current) stopRetry();
     // A transcode already asked for from the row's start and not played yet
     // plays at once, in this click; else it is asked for from there.
     if (transcoded && (from !== offset || pending.current !== null || a.currentTime > 0)) {

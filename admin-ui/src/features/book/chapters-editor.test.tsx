@@ -857,6 +857,26 @@ describe('the chapter editor', () => {
       expect(play).toHaveBeenCalledTimes(1);
     });
 
+    it('asks at once on Play 5 s during the look at a failed load, whose late answer starts no wait', async () => {
+      let answer!: (reply: MockReply) => void;
+      const { user, audio, looks } = await listen(
+        () => new Promise<MockReply>((resolve) => (answer = resolve)),
+      );
+      fireEvent.play(audio);
+      fireEvent.error(audio);
+      await waitFor(() => expect(looks()).toHaveLength(1));
+      await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+      // The look was the failed load's: its busy answer waits for nothing and
+      // asks nothing again over the preview.
+      answer({ ...busy, headers: { 'Retry-After': '0.05' } });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+    });
+
     it('loads again on Play after a failed load that left the audio unpaused', async () => {
       // Chrome leaves paused false after a failed load: Play must not pause it.
       const { user, audio } = await listen({ ...busy, headers: { 'Retry-After': '0.4' } });
