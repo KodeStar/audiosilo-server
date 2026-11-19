@@ -410,7 +410,7 @@ func (r *Runner) runOnce(ctx context.Context, full bool) (whole bool, err error)
 func (r *Runner) resolveOnly(ctx context.Context, full bool, now time.Time) error {
 	books, _, changed, err := r.resolveOwned(ctx, full, now)
 	dirty := false
-	if books != nil || err == nil {
+	if len(r.pending) > 0 && (books != nil || err == nil) {
 		// A book no longer owned (removed, moved, its library gone) has no series
 		// to look at: dropped, so the stored list can't grow with them for as long
 		// as the job stays off.
@@ -458,7 +458,8 @@ func (r *Runner) loadPending(ctx context.Context) {
 }
 
 // savePending stores r.pending (catalog.SaveUpcomingPending), once it was read
-// in. A failed write is logged: the books stay pending in memory. r.mu is held.
+// in. A failed write is logged and r.pending stands, stored by its next change:
+// a restart before that reads the list as it was last stored. r.mu is held.
 func (r *Runner) savePending(ctx context.Context) {
 	if !r.pendingLoaded {
 		return
