@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
@@ -183,6 +184,12 @@ func (a *API) bookEnvelope(w http.ResponseWriter, r *http.Request) (lib *catalog
 	return lib, path, book, env, nil, true
 }
 
+// metaComposeShare is what bookEnrichment's composes may spend together
+// (meta.WithSharedBudget): the identifiers' one keeps its own budget, the
+// recorded match's has what is left, so the two never take the whole of the
+// API's request budget (requestTimeout) between them (server#447).
+const metaComposeShare = 20 * time.Second
+
 // bookEnrichment is the community envelope of book, the one work rule of /meta
 // and /next (server#412), which /item's other_recordings shares (Book.WorkID,
 // catalog.workIDExpr): the book's recorded match (book_matches, the console's or
@@ -194,26 +201,45 @@ func (a *API) bookEnvelope(w http.ResponseWriter, r *http.Request) (lib *catalog
 // leaves the identifiers' answer standing. err is the lookup's outcome
 // (meta.ErrNotFound when nothing matches); matchErr a failure to read the
 // recorded match. The match is read only when Book.WorkID (the recorded work
-// first) differs from the identifiers' work.
+// first) differs from the identifiers' work. When the cache already knows that
+// it does, the match is composed first and the identifiers only when it fails,
+// so their answer is not composed only to be set aside (server#447).
 func (a *API) bookEnrichment(ctx context.Context, book *catalog.Book) (env *meta.Enrichment, err, matchErr error) {
-	env, err = a.meta.Enrich(ctx, book.ASIN, book.ISBN)
-	if book.WorkID == "" || (err == nil && env.Work != nil && env.Work.ID == book.WorkID) {
-		return env, err, nil
+	ctx = meta.WithSharedBudget(ctx, metaComposeShare)
+	// matchFirst: the cache already knows the identifiers' work to be another.
+	matchFirst := false
+	if book.WorkID != "" {
+		id, ok := a.meta.CachedWorkID(ctx, book.ASIN, book.ISBN)
+		matchFirst = ok && id != book.WorkID
+	}
+	if !matchFirst {
+		env, err = a.meta.Enrich(ctx, book.ASIN, book.ISBN)
+		if book.WorkID == "" || (err == nil && env.Work != nil && env.Work.ID == book.WorkID) {
+			return env, err, nil
+		}
 	}
 	m, matchErr := a.cat.BookMatchAt(ctx, book.LibraryID, book.RelPath)
-	if matchErr != nil || m == nil {
-		// No recorded match: the work id is the upcoming job's, from these
-		// same identifiers.
+	if matchErr != nil {
 		return env, err, matchErr
 	}
-	menv, merr := a.meta.EnrichMatch(ctx, m.WorkID, m.RecordingID)
-	switch {
-	case merr == nil:
-		return menv, nil, nil
-	case errors.Is(err, meta.ErrNotFound):
+	var merr error
+	if m != nil {
+		var menv *meta.Enrichment
+		if menv, merr = a.meta.EnrichMatch(ctx, m.WorkID, m.RecordingID); merr == nil {
+			return menv, nil, nil
+		}
+	}
+	if matchFirst {
+		env, err = a.meta.Enrich(ctx, book.ASIN, book.ISBN)
+	}
+	if merr != nil && errors.Is(err, meta.ErrNotFound) {
+		// The recorded match failed and the identifiers match nothing: its
+		// failure.
 		return nil, merr, nil
 	}
-	// The identifiers' answer, or their failure: an outage on both is theirs.
+	// No recorded match (the work id is the upcoming job's, from these same
+	// identifiers), or one that failed: the identifiers' answer, or their
+	// failure (an outage on both is theirs).
 	return env, err, nil
 }
 

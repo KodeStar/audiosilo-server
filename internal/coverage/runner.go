@@ -30,12 +30,14 @@
 package coverage
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -67,7 +69,7 @@ type Options struct {
 // The run's states (the console's status line).
 const (
 	StateNever      = "never"
-	StateOK         = "ok"
+	StateOK         = catalog.UnknownASINReportOK
 	StateNotOffered = "not_offered"
 	StateFailed     = "failed"
 )
@@ -111,6 +113,12 @@ type Runner struct {
 	offCheck time.Duration
 	// httpsLogged: the "needs an https URL" line is logged once a process.
 	httpsLogged bool
+	// next is when the schedule (Run) runs the report next, in Unix
+	// nanoseconds; 0 before Run has worked it out, and after it returns.
+	next atomic.Int64
+	// woken is a Wake the schedule has not looked at yet: until it has, and
+	// has stored the time it then runs at, Status answers for it.
+	woken atomic.Bool
 }
 
 // New returns a Runner; Run starts its schedule.
@@ -127,6 +135,7 @@ func New(cat *catalog.Catalog, md Metadata, opt Options) *Runner {
 // Wake makes the schedule look again at once (the report or metadata was
 // switched on): it runs now unless it ran within the day.
 func (r *Runner) Wake() {
+	r.woken.Store(true)
 	select {
 	case r.wake <- struct{}{}:
 	default:
@@ -137,7 +146,9 @@ func (r *Runner) Wake() {
 // (or a day after the last run, when that is later), then daily with jitter.
 func (r *Runner) Run(ctx context.Context) {
 	next := r.firstRun(ctx)
+	defer r.next.Store(0)
 	for {
+		r.next.Store(next.UnixNano())
 		wait := next.Sub(r.opt.Now())
 		if !r.opt.On() {
 			// Looked at again in a minute (Wake runs it at once when it is
@@ -155,6 +166,10 @@ func (r *Runner) Run(ctx context.Context) {
 			if r.opt.On() && r.due(ctx) {
 				next = r.opt.Now()
 			}
+			// Stored before the Wake counts as looked at, so Status never
+			// reads the time the schedule had before it.
+			r.next.Store(next.UnixNano())
+			r.woken.Store(false)
 			continue
 		case <-t.C:
 		}
@@ -380,18 +395,34 @@ type Status struct {
 	State     string `json:"state"`
 	LastRunAt string `json:"last_run_at,omitempty"`
 	LastSent  int    `json:"last_sent"`
+	// NextRunAt is when the schedule runs the report next, while it is on
+	// (absent while it is off, or before the schedule has started), so the
+	// console can poll the status around it rather than guess the schedule
+	// (server#448). It is now for a Wake the schedule has yet to look at
+	// that will run it (the answer to the request that switched it on), and
+	// the run's own start while one is running. A run due now may still be
+	// skipped (a run within the day, the quiet week) or held for the
+	// mirror's copy.
+	NextRunAt string `json:"next_run_at,omitempty"`
 }
 
-// Status reads the report's last run.
+// Status reads the report's last run, and when the next is due.
 func (r *Runner) Status(ctx context.Context) (Status, error) {
 	st, err := r.cat.UnknownASINReportState(ctx)
 	if err != nil {
 		return Status{}, err
 	}
-	if st.State == "" {
-		return Status{State: StateNever}, nil
+	out := Status{State: cmp.Or(st.State, StateNever), LastRunAt: st.LastRunAt, LastSent: st.LastSent}
+	if next := r.next.Load(); next != 0 && r.opt.On() {
+		at := time.Unix(0, next)
+		// A Wake not looked at yet runs the report at once unless it ran
+		// within the day (Run, due): the schedule's own time is the old one.
+		if now := r.opt.Now(); r.woken.Load() && now.Before(at) && !within(st.LastRunAt, now, minGap) {
+			at = now
+		}
+		out.NextRunAt = stamp(at)
 	}
-	return Status{State: st.State, LastRunAt: st.LastRunAt, LastSent: st.LastSent}, nil
+	return out, nil
 }
 
 // within reports whether the stamp at is less than age before now ("" never is).

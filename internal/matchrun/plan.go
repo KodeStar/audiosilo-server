@@ -579,7 +579,8 @@ func newMatches(mode string) bool {
 // the Bridge's Audible backfill, or by a rescan reading one from an
 // Audiobookshelf metadata.json. An unknown_asin run took books with an ASIN of
 // their own the community didn't know (UnknownASINBooks, found by it: the item's
-// FoundBy): one with a recorded match, an ISBN, or another ASIN now has been. The
+// FoundBy), with an ISBN or none (/meta never asks by an ISBN beside an ASIN):
+// one with a recorded match or another ASIN now has been. The
 // run's match never writes over it, whatever the scope. An item whose own apply a
 // stop cut short after its fields went in (DetailCoverPending) holds the run's
 // identifier and match: it is matched since only by a recorded match that isn't
@@ -590,7 +591,7 @@ func matchedSince(mode string, st *catalog.MatchState, it *catalog.MatchRunItem)
 		return st.Anchor.WorkID != "" && (st.Anchor.WorkID != p.WorkID || st.Anchor.RecordingID != p.RecordingID)
 	}
 	if mode == catalog.MatchModeUnknownASIN {
-		return st.Anchor.WorkID != "" || st.Fields[catalog.FieldISBN].Value != "" || !stillFoundBy(st, it.Proposal.FoundBy)
+		return st.Anchor.WorkID != "" || !stillFoundBy(st, it.Proposal.FoundBy)
 	}
 	return st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != "" || st.Anchor.WorkID != ""
 }

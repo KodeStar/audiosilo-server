@@ -33,8 +33,8 @@ type offlineLibrary struct {
 // count and a few books to show, the offline libraries, and when a scan last
 // finished. "Not matched" is left out while community metadata is off (there is
 // nothing to match against), and "unknown ASIN" while the unknown-ASIN report
-// is off (only its lookups find such a book, so its count would read as all
-// clear when nothing was checked).
+// is off or has no answers yet (unknownASINListed: only its lookups find such a
+// book, so its count would read as all clear when nothing was checked).
 //
 // Counting is a pass over the whole library (about 100 ms at 5,000 books), so
 // the answer is kept in the list cache (listcache.go) under the content
@@ -53,9 +53,10 @@ type offlineLibrary struct {
 func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
 	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
 	listeners := a.cat.ListenerGeneration()
+	unknownListed := a.unknownASINListed(r.Context())
 	kinds := slices.DeleteFunc(slices.Clone(catalog.IssueKinds), func(k string) bool {
 		return (k == catalog.IssueUnmatched && !a.metadataOn()) ||
-			(k == catalog.IssueUnknownASIN && !a.reportUnknownOn())
+			(k == catalog.IssueUnknownASIN && !unknownListed)
 	})
 	offline, err := a.offlineLibraries(r)
 	if err != nil {

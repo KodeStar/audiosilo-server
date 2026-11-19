@@ -595,7 +595,7 @@ func boundBytes(s string, n int) string {
 // empty list when nothing matches, and an error only when the community service
 // could not be reached.
 func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidate, error) {
-	ctx, cancel := context.WithTimeout(ctx, s.composeBudget)
+	ctx, cancel := withBudget(ctx, s.composeBudget)
 	defer cancel()
 
 	if id := strings.TrimSpace(q.WorkID); id != "" {
@@ -626,6 +626,7 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 		switch {
 		case err == nil:
 			matched = true
+			byASIN := false
 			for _, r := range res {
 				if r.ID == "" {
 					continue
@@ -637,7 +638,11 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 				if h.reasons.Identifier != "" {
 					h.recordingID = r.RecordingID
 				}
+				byASIN = byASIN || h.reasons.Identifier == "asin"
 				hits = append(hits, h)
+			}
+			if byASIN {
+				s.foundASIN(ctx, asin)
 			}
 		case ctx.Err() == nil && routeMissing(err):
 			s.matchUnsupportedUntil.Store(s.now().Add(matchUnsupportedTTL).UnixNano())
@@ -857,6 +862,9 @@ func (s *Service) searchHits(ctx context.Context, q MatchQuery, text, asin, isbn
 				by := "isbn"
 				if asin != "" {
 					by = "asin"
+					if lookup.Work.ID != "" { // as Service.lookup reads a work found
+						s.foundASIN(ctx, asin)
+					}
 				}
 				lookupHit = &matchHit{id: lookup.Work.ID, recordingID: lookup.RecordingID, cover: deref(lookup.Work.CoverURL),
 					score: 100, reasons: &MatchReasons{Identifier: by}}

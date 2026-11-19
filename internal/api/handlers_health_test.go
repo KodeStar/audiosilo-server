@@ -501,9 +501,11 @@ func TestRescanBook(t *testing.T) {
 }
 
 // TestIssuesUnknownASIN (server#370): "unknown ASIN" is a category only while
-// the unknown-ASIN report runs (its lookups are what find such a book), its
-// list is an admin's alone, and a book the report finds unknown after the
-// summary was cached is counted at once (its rows are content to Health).
+// the unknown-ASIN report runs and has answers (its lookups are what find such a
+// book: before its first run a 0 would read as all clear, server#392), its
+// list is an admin's alone, a book the report finds unknown after the summary
+// was cached is counted at once (its rows are content to Health), and with the
+// report off a direct ?issue=unknown_asin lists none of its stale rows.
 func TestIssuesUnknownASIN(t *testing.T) {
 	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) { c.Metadata.ReportUnknown = true })
@@ -527,8 +529,15 @@ func TestIssuesUnknownASIN(t *testing.T) {
 		}
 		return 0, false
 	}
+	if _, ok := unknownCount(); ok {
+		t.Fatal("before the report's first run: unknown_asin is listed")
+	}
+	// A run with nothing to look up has answered: none.
+	if err := e.cat.SaveUnknownASINReportState(ctx, catalog.UnknownASINReport{State: "ok", LastRunAt: "2026-11-14T00:00:00.000Z"}); err != nil {
+		t.Fatal(err)
+	}
 	if n, ok := unknownCount(); !ok || n != 0 {
-		t.Fatalf("before any lookup: unknown_asin = %d (listed %v), want 0 listed", n, ok)
+		t.Fatalf("after a run: unknown_asin = %d (listed %v), want 0 listed", n, ok)
 	}
 	if err := e.cat.SaveASINChecks(ctx, []catalog.ASINCheck{{ASIN: "B0UNKNOWN1", Unknown: true}}, "2026-11-14T00:00:00.000Z"); err != nil {
 		t.Fatal(err)
@@ -570,5 +579,22 @@ func TestIssuesUnknownASIN(t *testing.T) {
 	}
 	if _, ok := unknownCount(); ok {
 		t.Fatal("unknown_asin is listed with the report off")
+	}
+	if resp, body := e.do(t, "DELETE", "/api/v1/admin/issues/ignore", adminTok, ignore); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("unignore = %d %s", resp.StatusCode, body)
+	}
+	if resp, body := e.do(t, "GET", list, adminTok, ""); resp.StatusCode != http.StatusOK || strings.Contains(body, "Unknown/Book") {
+		t.Fatalf("admin list with the report off = %d %s, want none of its rows", resp.StatusCode, body)
+	}
+	if resp, body := e.do(t, "GET", "/api/v1/admin/books/facets?issue="+catalog.IssueUnknownASIN, adminTok, ""); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(body, `"total":0`) {
+		t.Fatalf("facets with the report off = %d %s, want none", resp.StatusCode, body)
+	}
+	// Back on, the same link lists it again (the off answer is not served from the cache).
+	if r, b := e.do(t, "PATCH", "/api/v1/admin/settings", adminTok, `{"metadata":{"report_unknown":true}}`); r.StatusCode != http.StatusOK {
+		t.Fatalf("report on = %d %s", r.StatusCode, b)
+	}
+	if resp, body := e.do(t, "GET", list, adminTok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"path":"Unknown/Book"`) {
+		t.Fatalf("admin list with the report on again = %d %s", resp.StatusCode, body)
 	}
 }

@@ -326,6 +326,10 @@ type BookFilter struct {
 	// IssueIgnored, listing only those.
 	Issue        string
 	IssueIgnored bool
+	// IssueOff makes an Issue list nothing: its kind isn't kept current now
+	// (unknown_asin while the unknown-ASIN report is off), so its rows would
+	// be stale.
+	IssueOff bool
 }
 
 // Facet dimensions: the filters a facet count is computed without, so the console
@@ -426,6 +430,9 @@ func (f BookFilter) where(skip string) (string, []any) {
 		add("b.added_at < ?", f.AddedBefore)
 	}
 	if pred, ok := issuePredicates[f.Issue]; ok {
+		if f.IssueOff {
+			pred = "0"
+		}
 		add(pred)
 		if f.IssueIgnored {
 			add(ignoredExpr, f.Issue)

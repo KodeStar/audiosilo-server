@@ -364,7 +364,7 @@ func (s *Service) seriesFactsFor(ctx context.Context, works []*upstreamWorkDetai
 			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, seriesFactsTimeout)
+	ctx, cancel := withBudget(ctx, seriesFactsTimeout)
 	defer cancel()
 	facts := make([]*seriesFacts, len(ids))
 	var wg sync.WaitGroup
@@ -413,9 +413,15 @@ func (s *Service) seriesFacts(ctx context.Context, id string) *seriesFacts {
 		case !busy:
 			return s.readSeriesFacts(ctx, id, flight)
 		}
+		// In a bulk run the read waited on may sit out a Retry-After, which only
+		// its own caller's budgets are held for (holdBudgets): this book's are
+		// held too while it waits, so the wait doesn't spend them (server#447).
+		release := holdBudgets(ctx)
 		select {
 		case <-flight:
+			release()
 		case <-ctx.Done():
+			release()
 			return nil
 		}
 	}

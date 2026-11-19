@@ -45,7 +45,8 @@ const maxOrderingAlternates = 2
 // starve a rail of the budget).
 // Each call already has the client's 5s timeout, but sequentially those could
 // sum past the API's 30s request budget; this keeps the whole composition
-// comfortably under it. When THIS deadline
+// comfortably under it. In a bulk run the Retry-After waits are not counted
+// (withBudget). When THIS deadline
 // fires while the caller is still live, the parent ctx.Err() stays nil, so the
 // failure IS cached as a transport error for errorTTL - exactly the protective
 // behavior we want against a degraded-but-alive upstream (it is not re-hammered
@@ -333,9 +334,11 @@ type Service struct {
 
 // SetASINFound has the Service tell found each ASIN an identifier lookup finds
 // a work for (Service.lookup: a player's /meta, the upcoming job's work ids, the
-// chapter check), so the unknown-ASIN report learns at once that the community
-// added one (server#392) rather than at its monthly recheck. found runs inside
-// the lookup and must be quick. Call it once, right after NewService and before
+// chapter check; Candidates: the match dialog and a match run), so the
+// unknown-ASIN report learns at once that the community added one (server#392)
+// rather than at its monthly recheck. found runs inside
+// the lookup and must be quick; ctx is the lookup's, which may have ended as
+// its answer came in. Call it once, right after NewService and before
 // the Service is used.
 func (s *Service) SetASINFound(found func(ctx context.Context, asin string)) { s.asinFound = found }
 
@@ -446,7 +449,7 @@ func (s *Service) enrich(ctx context.Context, key string, compose func(context.C
 	// slow-but-alive upstream must not eat the API's whole request budget, and
 	// hitting THIS deadline (parent still live) is cached like any upstream
 	// failure below, so a degraded upstream is not re-hammered per cold book.
-	cctx, cancel := context.WithTimeout(ctx, s.composeBudget)
+	cctx, cancel := withBudget(ctx, s.composeBudget)
 	defer cancel()
 	result, complete, err := compose(cctx)
 	switch {
@@ -531,10 +534,18 @@ func (s *Service) lookup(ctx context.Context, asin, isbn string) (*upstreamLooku
 		return nil, ErrNotFound
 	}
 	// The lookup asks by the ASIN alone when there is one (client.lookup).
+	s.foundASIN(ctx, asin)
+	return l, nil
+}
+
+// foundASIN tells SetASINFound's func that a request asking by asin found a
+// work: a lookup, or the match's works/match or search answering by the ASIN
+// (Candidates: the unknown-ASIN run's book found by its own ASIN, server#448).
+// Nothing for "" or without a func.
+func (s *Service) foundASIN(ctx context.Context, asin string) {
 	if asin != "" && s.asinFound != nil {
 		s.asinFound(ctx, asin)
 	}
-	return l, nil
 }
 
 // compose runs the uncached lookup -> work -> series fan-out. complete is false
@@ -687,7 +698,7 @@ func keepStored[T any](s *Service, key string, stored *T, err error) bool {
 // workSlot takes a workSem slot for one uncached read, or gives up with ctx (its
 // error then); release gives it back. A bulk run (a Pacer in ctx) takes none: its
 // workers and Pacer bound what it asks, and its reads sit out the service's Retry-After
-// for as long as its compose budget lasts, which must not hold up a listener's read or
+// (outside its compose budget: withBudget), which must not hold up a listener's read or
 // the match dialog queued here.
 func (s *Service) workSlot(ctx context.Context) (release func(), err error) {
 	if pacerOf(ctx) != nil {

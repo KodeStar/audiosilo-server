@@ -831,9 +831,10 @@ type BookEdit struct {
 	// MatchIfASIN, beside a zero MatchIf, is the ASIN the book was read with
 	// when it is matched by it alone (an unknown_asin run's book: its own ASIN
 	// the community doesn't know): the edit writes only while the book still
-	// has this ASIN and no ISBN (and, as for any zero MatchIf, no recorded
-	// match), while the unknown-ASIN report still holds that ASIN as unknown
-	// (once the community knows it, it names the book's record, which a match
+	// has this ASIN, with an ISBN or none (/meta never asks by an ISBN beside
+	// an ASIN), and, as for any zero MatchIf, no recorded match, while the
+	// unknown-ASIN report still holds that ASIN as unknown (once the community
+	// knows it, it names the book's record, which a match
 	// found by the title must not outrank or replace), and, when it sets the
 	// ASIN, while that ASIN is no admin's own edit (one typed in since, the
 	// same value), else ErrMatchedSince. "" keeps the zero MatchIf's rule.
@@ -1009,8 +1010,8 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		if edit.MatchIf != nil && edit.MatchIf.WorkID == "" {
 			// Read as unmatched: the anchor write below refuses a match recorded
 			// since, this an ASIN or ISBN the book gained since, which the
-			// edit's own would replace (for MatchIfASIN, another ASIN, an ISBN,
-			// or that ASIN known to the community since).
+			// edit's own would replace (for MatchIfASIN, another ASIN, or that
+			// ASIN known to the community since).
 			q, args := `SELECT `+matchedExpr+` FROM books b WHERE b.id = ?`, []any{bookID}
 			if edit.MatchIfASIN != "" {
 				// An edit replacing that ASIN also needs it to be no admin's
@@ -1021,8 +1022,7 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 					adminASIN = ` AND NOT EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id
 					    AND o.path = b.rel_path AND o.field = '` + FieldASIN + `' AND o.source = '` + SourceEdited + `')`
 				}
-				q = `SELECT NOT (` + normASINSQL("b.asin") + ` = ? AND TRIM(b.isbn, ` + sqlSpace + `) = ''
-				    AND ` + asinHeldUnknownExpr + adminASIN + `)
+				q = `SELECT NOT (` + normASINSQL("b.asin") + ` = ? AND ` + asinHeldUnknownExpr + adminASIN + `)
 				     FROM books b WHERE b.id = ?`
 				args = []any{match.NormalizeASIN(edit.MatchIfASIN), bookID}
 			}

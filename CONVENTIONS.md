@@ -347,7 +347,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   exactly as `Enrich` (shared `enrich`) under its own key space `m:<work id>/<recording id>` (each part
   `url.PathEscape`d); the row is read only when `Book.WorkID` (the recorded work first) differs
   from the identifiers' work, and a recorded work upstream lacks (or can't answer) leaves the
-  identifiers' answer standing. Degradation: disabled ->
+  identifiers' answer standing. When the cache already knows the identifiers' work (`CachedWorkID`)
+  and it isn't `Book.WorkID`, the match is composed first and the identifiers only when it fails;
+  the two composes of one request share 20 s (`metaComposeShare`, `meta.WithSharedBudget`: each
+  keeps its own budget but ends with the shared one, cached as the upstream's failure; server#447). Degradation: disabled ->
   404 (and the `metadata` capability is false, so clients hide the UI); no asin/isbn match and no
   recorded match -> `200
   {"matched": false}` (with a `work` of the book's own when the Bridge generated
@@ -654,7 +657,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `series/{id}` is read when new, with news, or a week old (2 at a time; a 404 marks it gone, dropped after
   a week); (5) classify; (6) announce. With metadata on and `upcoming.enabled` off, a run (scheduled or
   kicked) is step (1) alone (`Options.Resolve`, `resolveOnly`: no series, feed, items, announcement or
-  status; server#241, a book's `work_id` rides on the player's lists). It makes no call while
+  status; server#241, a book's `work_id` rides on the player's lists); the books whose work it found
+  new or changed are pending for the next full run's series step, kept in `server_state('upcoming_pending')`
+  (`catalog.UpcomingPending`, path-keyed) so a restart keeps them (server#447). It makes no call while
   `metadataOn()` is false, and a run in flight stops within a second when switched off (`pool.WhileOn`,
   `errSwitchedOff`: a cancellation, no status recorded, no retry). In mirror mode every call goes to the
   local copy. A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
@@ -775,16 +780,25 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `sent_at` (even mid-stop, `WithoutCancel`); 404, 405, a 3xx or a 2xx without `accepted` is `not_offered` (one
   INFO line, no call for 7 days: `quiet_until`); 429, 5xx or anything else marks nothing (`failed`, next day). An
   `unknown` row a recheck finds known forgets its `sent_at`, as does one any other identifier lookup finds
-  (`meta.Service.SetASINFound`, wired to `catalog.ClearUnknownASIN`: a player's /meta, the upcoming job's
-  work ids, the chapter check), so a book the community added leaves Health's list at once, not at the
-  monthly recheck (server#392; a read first, so a lookup of an ASIN the report doesn't hold writes nothing). **Storage**: `unknown_asin_reports(asin PK, checked_at,
+  (`meta.Service.SetASINFound`, wired to `catalog.ClearUnknownASIN` by `api.clearFoundASIN`, which writes
+  outside the lookup's context under 3 s of its own, so a budget ending as the answer comes in doesn't drop
+  the clear, and logs a failure: a player's /meta, the upcoming job's
+  work ids, the chapter check, and a match (`Candidates`: works/match finding the work by the ASIN it sent,
+  or an older metaserve's lookup leg; the unknown_asin run's own ASIN, server#448)), so a book the community
+  added leaves Health's list at once, not at the monthly recheck (server#392; a read first, so a lookup of
+  an ASIN the report doesn't hold writes nothing, then an UPDATE of the row only as read, so a recheck or a
+  drop in between wins, server#447). **Storage**: `unknown_asin_reports(asin PK, checked_at,
   unknown, sent_at)`, no path or book (disposable; user-state writes, but a row added or removed or its `unknown`
   changed moves the content generation: Health reads it). **Health** (server#370): `catalog.IssueUnknownASIN`
-  (`unknown_asin`) lists a book whose own ASIN a row marks unknown, with no ISBN, no `book_matches` row and no
-  community-given ASIN (a hand match settles it); `/admin/issues` lists the kind only while `reportUnknownOn()`
-  (off, the table is not kept current, and an empty card would read as all clear). **Wire**: GET /admin/settings
+  (`unknown_asin`) lists a book whose own ASIN a row marks unknown, with or without an ISBN (a lookup asks by
+  the ASIN alone, so /meta never tries the ISBN: server#392), no `book_matches` row and no community-given
+  ASIN (a hand match settles it); `/admin/issues` lists the kind only while `reportUnknownOn()` and the report
+  has answers (`unknownASINListed`, `catalog.UnknownASINAnswered`: a row, or a run recorded `ok`; off, the
+  table is not kept current, and before the first run an empty card would read as all clear), and
+  `/admin/books[/facets]?issue=unknown_asin` lists nothing then (`BookFilter.IssueOff`, in the list cache's key). **Wire**: GET /admin/settings
   `metadata.report_unknown` and read-only `metadata.report_status` = `{"state":"never|ok|not_offered|failed",
-  "last_run_at"?, "last_sent"}` (both absent without the job: no service, or a demo server, so the console shows
+  "last_run_at"?, "last_sent", "next_run_at"?}` (`next_run_at`: when the schedule runs it next, while it is on,
+  now for a switch-on's `Wake` the schedule has yet to look at, `Runner.woken`; server#448) (both absent without the job: no service, or a demo server, so the console shows
   no switch there, server#314). The mounted Metadata topic polls status every 30 s (`pollsReport`) only while metadata and
   reporting are on and a run is near: one never ran, or a switch-on saved there in the last 10 minutes whose
   run is not recorded yet; a settled status changes once a day and is not polled (server#335). A `failed` run
@@ -2209,7 +2223,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `POST /admin/match-runs/{id}/apply|cancel`. Mode `unknown_asin` (server#392, Health's unknown-ASIN card,
   audited `book.match_unknown_asin`) is a match over `UnknownASINBooks` (the `unknown_asin` predicate, less
   ignored) found by the title, the item's `found_by` the book's own ASIN: an apply writes only while the book
-  still has that ASIN, no ISBN and no recorded match (`matchedSince`; in the edit's transaction
+  still has that ASIN and no recorded match, an ISBN gained since changing nothing (`matchedSince`; in the edit's transaction
   `BookEdit.MatchIfASIN`, which also refuses replacing an ASIN an admin typed in since, the same value), and
   only while the report still holds that ASIN as unknown (`MatchState.ASINUnknown`, `asinKnownSince`, again in
   `MatchIfASIN`'s check: once a lookup found it, the ASIN names the book's record, so the item is skipped
@@ -2249,7 +2263,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `workSem` slot (`workSlot`): its Pacer and workers bound it, and a Retry-After it sits out must not hold up a
   listener's read or the dialog. Concurrent misses of one series share one read (`seriesFacts`). In a run a
   503 is waited out like a 429 (`getJSON`: Retry-After, `rateLimitRetries`, `maxRetryAfter`, not past
-  the deadline), each wait logged at INFO with the run's total in wall time (the workers' overlapping
+  the deadline; a run's per-book budgets stop their clock for the wait, `withBudget`/`holdBudgets`, so two
+  waits don't use up a book's 15 s, server#447), each wait logged at INFO with the run's total in wall time (the workers' overlapping
   waits counted once, `Pacer.noteWait`); while one runs the working run's `GET /admin/match-runs[/{id}]`
   carries `waiting_until` (`Runner.WaitingUntil`, never stored) and the console says the run is
   pausing; outside one a 503 is an outage at once (the dialog's 502). The book whose failure trips

@@ -156,8 +156,11 @@ type Runner struct {
 	// pending is the books whose work a step-1-alone run (resolveOnly) found
 	// new or changed, kept for the next full run's series step (resolveSeries),
 	// which would otherwise not look at their series again until the monthly
-	// refresh. Guarded by mu.
-	pending map[catalog.Ref]bool
+	// refresh. Guarded by mu. Stored too (catalog.UpcomingPending), read in at
+	// the first run (pendingLoaded) and written when it changes, so a restart
+	// keeps it (server#447).
+	pending       map[catalog.Ref]bool
+	pendingLoaded bool
 	// stepped, when set (tests), is called each time the schedule is about to
 	// wait again: once at the start, then after each wake, kick or timer is
 	// handled (its run, if any, over).
@@ -373,6 +376,7 @@ func (r *Runner) RunOnce(ctx context.Context, full bool) error {
 func (r *Runner) runOnce(ctx context.Context, full bool) (whole bool, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.loadPending(ctx)
 	whole = r.opt.On()
 	on, step := r.opt.On, r.run
 	if !whole {
@@ -404,13 +408,65 @@ func (r *Runner) runOnce(ctx context.Context, full bool) (whole bool, err error)
 // whose work it found new or changed are kept (pending) for the next full
 // run's series step. r.mu is held.
 func (r *Runner) resolveOnly(ctx context.Context, full bool, now time.Time) error {
-	_, _, changed, err := r.resolveOwned(ctx, full, now)
-	for ref, c := range changed {
-		if c {
-			r.pending[ref] = true
+	books, _, changed, err := r.resolveOwned(ctx, full, now)
+	dirty := false
+	if len(r.pending) > 0 && (books != nil || err == nil) {
+		// A book no longer owned (removed, moved, its library gone) has no series
+		// to look at: dropped, so the stored list can't grow with them for as long
+		// as the job stays off.
+		owned := make(map[catalog.Ref]bool, len(books))
+		for _, b := range books {
+			owned[b.Ref] = true
+		}
+		for ref := range r.pending {
+			if !owned[ref] {
+				delete(r.pending, ref)
+				dirty = true
+			}
 		}
 	}
+	for ref, c := range changed {
+		if c && !r.pending[ref] {
+			r.pending[ref] = true
+			dirty = true
+		}
+	}
+	if dirty {
+		r.savePending(ctx)
+	}
 	return err
+}
+
+// loadPending adds the stored pending books to r.pending, once (a read that
+// failed is tried again at the next run, and until then nothing is stored over
+// what it would have read). r.mu is held.
+func (r *Runner) loadPending(ctx context.Context) {
+	if r.pendingLoaded {
+		return
+	}
+	refs, err := r.cat.UpcomingPending(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			r.log.Warn("upcoming releases: reading the pending books failed", "err", err)
+		}
+		return
+	}
+	for _, ref := range refs {
+		r.pending[ref] = true
+	}
+	r.pendingLoaded = true
+}
+
+// savePending stores r.pending (catalog.SaveUpcomingPending), once it was read
+// in. A failed write is logged and r.pending stands, stored by its next change:
+// a restart before that reads the list as it was last stored. r.mu is held.
+func (r *Runner) savePending(ctx context.Context) {
+	if !r.pendingLoaded {
+		return
+	}
+	if err := r.cat.SaveUpcomingPending(context.WithoutCancel(ctx), slices.Collect(maps.Keys(r.pending))); err != nil {
+		r.log.Warn("upcoming releases: saving the pending books failed", "err", err)
+	}
 }
 
 // resolveOwned is step 1: the owned books, and the work each is (resolveWorks).
@@ -434,7 +490,10 @@ func (r *Runner) run(ctx context.Context, full bool, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	clear(r.pending) // their series are looked at (a failed read is the run's, as for changed)
+	if len(r.pending) > 0 {
+		clear(r.pending) // their series are looked at (a failed read is the run's, as for changed)
+		r.savePending(ctx)
+	}
 	n, err := r.fetchSeries(ctx, full, now)
 	if err != nil {
 		return err

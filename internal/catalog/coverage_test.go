@@ -189,3 +189,38 @@ func TestClearUnknownASIN(t *testing.T) {
 		t.Fatalf("rows = %+v, want no row made", rows)
 	}
 }
+
+// TestClearUnknownASINLeavesALaterWrite (server#447): the clear writes the row
+// only as it read it, so a recheck saved since (a newer answer) or a drop (no
+// book holds the ASIN any more) between the read and the write survives: no
+// row is made again, and no newer unknown answer is overwritten.
+func TestClearUnknownASINLeavesALaterWrite(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	const read = "2026-11-01T00:00:00.000Z"
+	if err := c.SaveASINChecks(ctx, []ASINCheck{{ASIN: "B0RECHECK1", Unknown: true}, {ASIN: "B0DROPPED1", Unknown: true}}, read); err != nil {
+		t.Fatal(err)
+	}
+	// What a report run writes while a lookup is between its read and its write.
+	if err := c.SaveASINChecks(ctx, []ASINCheck{{ASIN: "B0RECHECK1", Unknown: true}}, "2026-11-02T00:00:00.000Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DropUnknownASINs(ctx, []string{"B0DROPPED1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []string{"B0RECHECK1", "B0DROPPED1"} {
+		if err := c.clearHeldASIN(ctx, a, read); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := c.UnknownASINRows(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := rows["B0RECHECK1"]; !r.Unknown || r.CheckedAt != "2026-11-02T00:00:00.000Z" {
+		t.Fatalf("rechecked row = %+v, want the recheck's answer kept", r)
+	}
+	if _, ok := rows["B0DROPPED1"]; ok {
+		t.Fatalf("dropped row made again: %+v", rows)
+	}
+}
