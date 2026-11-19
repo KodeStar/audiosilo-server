@@ -71,7 +71,8 @@ func TestRefusedBookFolderIsNoShareNotAnswering(t *testing.T) {
 // is a 503 share_not_answering with Retry-After to /item's on-demand index and
 // to the stream of its track, as the scanner reads the same faults, never the
 // 404 "no book at that path" a missing book gets (server#360). Denied the
-// 503: a permission on that listing (EACCES, EPERM) stays the 404, and so
+// 503: a permission on that listing (EACCES, EPERM) or the device gone
+// (ENXIO, a USB disk unplugged) stays the 404, and so
 // does a book missing from folders that answer; the same asks answer once the
 // listing reads again.
 func TestShareFaultOnAnUnindexedBookIsShareNotAnswering(t *testing.T) {
@@ -81,6 +82,7 @@ func TestShareFaultOnAnUnindexedBookIsShareNotAnswering(t *testing.T) {
 		coded bool
 	}{
 		{syscall.EIO, true}, {syscall.ESTALE, true}, {syscall.EACCES, false}, {syscall.EPERM, false},
+		{syscall.ENXIO, false}, // the device gone (a USB disk unplugged): lasting, as before
 	} {
 		t.Run(c.errno.Error(), func(t *testing.T) {
 			t.Parallel()

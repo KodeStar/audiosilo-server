@@ -2001,8 +2001,8 @@ var (
 // transientFault reports whether err is a share's fault that trying again may
 // get past (transientErrnos): EIO, ESTALE, ENOTCONN, ETIMEDOUT, a host or
 // network down or unreachable, a connection reset, aborted or refused (an SMB
-// or NFS session that dropped), ENXIO (a macOS share volume gone away). Not a
-// permission, which stays until an admin changes it, nor any other
+// or NFS session that dropped). Not a permission, which stays until an admin
+// changes it, nor ENXIO (the device gone, a USB disk unplugged), nor any other
 // metadata.ShareFault (a link loop, a name the share refuses), which a retry
 // would only meet again.
 func transientFault(err error) bool {
@@ -2018,7 +2018,7 @@ func transientFault(err error) bool {
 var transientErrnos = []syscall.Errno{
 	syscall.EIO, syscall.ESTALE, syscall.ENOTCONN, syscall.ETIMEDOUT,
 	syscall.EHOSTDOWN, syscall.EHOSTUNREACH, syscall.ENETDOWN, syscall.ENETUNREACH,
-	syscall.ECONNRESET, syscall.ECONNABORTED, syscall.ECONNREFUSED, syscall.ENXIO,
+	syscall.ECONNRESET, syscall.ECONNABORTED, syscall.ECONNREFUSED,
 }
 
 // transientGaveUp is err made a look given up on (metadata.AsGaveUp) when it

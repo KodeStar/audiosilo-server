@@ -63,6 +63,7 @@ func TestBookOnDiskReadsAShareFaultAsNoAnswer(t *testing.T) {
 		{"the library folder's listing EIO", "Loose.mp3", root, syscall.EIO, diskUnknown},
 		{"the library folder's listing ENOTCONN", "Loose.mp3", root, syscall.ENOTCONN, diskUnknown},
 		{"the library folder's listing EACCES", "Loose.mp3", root, syscall.EACCES, diskPresent},
+		{"the library folder's listing ENXIO", "Loose.mp3", root, syscall.ENXIO, diskPresent},
 		{"the library folder's listing ENOENT", "Loose.mp3", root, syscall.ENOENT, diskGone},
 		{"its own listing EIO", "Author/Book", book, syscall.EIO, diskUnknown},
 		{"its own stat EPERM", "Author/Book", book, syscall.EPERM, diskPresent},
@@ -145,6 +146,7 @@ func TestCoverLookReadsATransientFaultAsNoAnswer(t *testing.T) {
 		{"folder listing EIO", listingFails(syscall.EIO), "", true},
 		// An answer: the listing then picks the image, as before.
 		{"cover stat EACCES", map[string]syscall.Errno{filepath.Join(dir, "cover.jpg"): syscall.EACCES}, "Book/cover.jpg", false},
+		{"cover stat ENXIO", map[string]syscall.Errno{filepath.Join(dir, "cover.jpg"): syscall.ENXIO}, "Book/cover.jpg", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			failLooks(t, c.fail)
