@@ -2867,7 +2867,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `MatchAnchor.OfferedASIN/ISBN`, the identifiers the match offered when recorded, ticked or
   not, in the fields' stored form; one the book holds of its own when the match is written, from any
   layer but a community override (its files', an Audiobookshelf file's, an enrichment's, an
-  admin's), is left out, `withoutOwnOffered`, as nobody chose to leave it out, so a refresh fills it
+  admin's), is left out, `withoutOwnOffered`, which reads the book as the match's own edit leaves it
+  (`bookLayers.edited`: one its revert of an earlier match's value uncovers is the book's own too),
+  as nobody chose to leave it out, so a refresh fills it
   once the book loses it, a retag say: server#355): the book has neither, so the admin unticked it in the match
   dialog or reverted it since, and `planRefresh` drops it (such a book records no item). One the
   recording gained since (another value) fills, and the apply then records it as offered (the

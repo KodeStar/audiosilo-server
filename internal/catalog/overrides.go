@@ -1064,7 +1064,7 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 				return ErrMatchedSince
 			}
 		}
-		if err := writeAnchor(ctx, tx, at, bookID, edit.Match, edit.MatchIf, editor, now); err != nil {
+		if err := writeAnchor(ctx, tx, at, bookID, edit.Match, edit.MatchIf, edit, editor, now); err != nil {
 			return err
 		}
 	}
@@ -1312,6 +1312,26 @@ func (l *bookLayers) unedited(fields ...string) map[string]FieldValue {
 		delete(c.overrides, f)
 	}
 	return c.resolve()
+}
+
+// edited is l once edit's own field writes are in, as editTx makes them: each
+// value it sets an override of its source, each field it reverts without its
+// override, a community edit taking back only a community value. Not what the
+// edit derives besides (a series swap, a label change: other fields). l itself
+// is not changed.
+func (l *bookLayers) edited(edit BookEdit) *bookLayers {
+	c := *l
+	c.overrides = make(map[string]storedOverride, len(l.overrides)+len(edit.Set))
+	maps.Copy(c.overrides, l.overrides)
+	for field, v := range edit.Set {
+		c.overrides[field] = storedOverride{Value: v, Source: edit.Source}
+	}
+	for _, field := range edit.Revert {
+		if edit.Source != SourceCommunity || c.overrides[field].Source == SourceCommunity {
+			delete(c.overrides, field)
+		}
+	}
+	return &c
 }
 
 // editsChapters reports whether the edit changes the book's chapters (their

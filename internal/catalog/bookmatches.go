@@ -30,7 +30,7 @@ const maxMatchID = 200
 // ticked or not ("" for none, or a match recorded before 0070): a refresh by the
 // recorded match never fills one a book with neither has when it is the one
 // offered (the admin unticked it, or reverted it since; server#330). One the
-// book already holds of its own when the match is written (its files', an
+// book holds of its own once the match's edit is in (its files', an
 // Audiobookshelf file's, an enrichment's or an admin's, anything but a
 // community override) is not recorded as offered: nobody chose to leave it
 // out, so a refresh fills it once the book loses it (a retag; server#355).
@@ -144,9 +144,10 @@ var ErrMatchedSince = errors.New("the book's community match changed since it wa
 // so writing one makes the book's check stale, except a check that already
 // came from the recording it names, which is carried over the write
 // (checkIsOf). The caller rebuilds the book (refreshEffective), which takes a
-// check left stale out of its chapters.
-func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, bookID int64, a, was *MatchAnchor, editor any, now string) error {
-	a, err := withoutOwnOffered(ctx, tx, bookID, a)
+// check left stale out of its chapters. with is the field edit the caller
+// writes beside the match, after this (withoutOwnOffered).
+func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, bookID int64, a, was *MatchAnchor, with BookEdit, editor any, now string) error {
+	a, err := withoutOwnOffered(ctx, tx, bookID, a, with)
 	if err != nil {
 		return err
 	}
@@ -165,10 +166,13 @@ func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, bookID int64, a, was 
 	return stampChapterBasis(ctx, tx, ref)
 }
 
-// withoutOwnOffered is a with each offered identifier the book bookID already
-// holds of its own left out (MatchAnchor): its value now, before the edit, the
-// same, from any layer but a community override. a itself is not changed.
-func withoutOwnOffered(ctx context.Context, tx *sql.Tx, bookID int64, a *MatchAnchor) (*MatchAnchor, error) {
+// withoutOwnOffered is a with each offered identifier the book bookID holds of
+// its own left out (MatchAnchor): its value the same, from any layer but a
+// community override, once with, the field edit the match is written beside
+// (not yet written), is in. So one a revert in the same edit uncovers (the
+// files' under an earlier match's) is the book's own too (server#355). a itself
+// is not changed.
+func withoutOwnOffered(ctx context.Context, tx *sql.Tx, bookID int64, a *MatchAnchor, with BookEdit) (*MatchAnchor, error) {
 	if a.OfferedASIN == "" && a.OfferedISBN == "" {
 		return a, nil
 	}
@@ -176,7 +180,7 @@ func withoutOwnOffered(ctx context.Context, tx *sql.Tx, bookID int64, a *MatchAn
 	if err != nil {
 		return nil, err
 	}
-	fields := l.resolve()
+	fields := l.edited(with).resolve()
 	out := *a
 	for field, offered := range map[string]*string{FieldASIN: &out.OfferedASIN, FieldISBN: &out.OfferedISBN} {
 		fv := fields[field]

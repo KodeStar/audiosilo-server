@@ -1140,6 +1140,66 @@ func TestOfferedLeavesTheBooksOwnIdentifier(t *testing.T) {
 	}
 }
 
+// TestOfferedReadsTheBookAsTheEditLeavesIt (server#355): the book's own
+// identifiers are read as the match's own edit leaves them. One the edit's
+// revert uncovers (an enrichment's under an earlier match's ASIN) is the
+// book's own, so not recorded as offered; one the edit writes as a community
+// value over the book's own, or uncovers nothing by reverting, is recorded;
+// and a community edit's revert never uncovers what an admin's edit hides.
+func TestOfferedReadsTheBookAsTheEditLeavesIt(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const own, other = "B0OWN00001", "B0OTHER001"
+	community := func(asin string) BookEdit {
+		return BookEdit{Set: map[string]string{FieldASIN: asin}, Source: SourceCommunity}
+	}
+	for p, before := range map[string][]BookEdit{
+		"A/Uncovered": {community(other)},                           // the enrichment's ASIN under an earlier match's
+		"A/Bare":      {community(own)},                             // an earlier match's ASIN over nothing
+		"A/Replaced":  nil,                                          // the enrichment's ASIN alone
+		"A/Edited":    {{Set: map[string]string{FieldASIN: other}}}, // an admin's ASIN over the enrichment's
+	} {
+		if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+			t.Fatal(err)
+		}
+		if p != "A/Bare" {
+			if err := c.BackfillASIN(ctx, lib.ID, p, own); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, e := range before {
+			if err := c.EditBook(ctx, lib.ID, p, e); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	accept := func(p, offered string, edit BookEdit) string {
+		t.Helper()
+		edit.Match, edit.Source = &MatchAnchor{WorkID: "w", OfferedASIN: offered}, SourceCommunity
+		if err := c.EditBook(ctx, lib.ID, p, edit); err != nil {
+			t.Fatal(err)
+		}
+		return anchorOf(t, c, ctx, lib.ID, p).OfferedASIN
+	}
+	revert := BookEdit{Revert: []string{FieldASIN}}
+	if got := accept("A/Uncovered", own, revert); got != "" {
+		t.Errorf("uncovered by the revert: offered = %q, want the book's own ASIN left out", got)
+	}
+	if st, err := c.BookMatchState(ctx, lib.ID, "A/Uncovered"); err != nil || st.Fields[FieldASIN].Value != own || st.Fields[FieldASIN].Locked {
+		t.Fatalf("uncovered = %+v %v, want the enrichment's ASIN showing", st.Fields[FieldASIN], err)
+	}
+	if got := accept("A/Bare", own, revert); got != own {
+		t.Errorf("reverted to nothing: offered = %q, want it recorded", got)
+	}
+	if got := accept("A/Replaced", other, BookEdit{Set: map[string]string{FieldASIN: other}}); got != other {
+		t.Errorf("written over the book's own: offered = %q, want it recorded", got)
+	}
+	if got := accept("A/Edited", own, revert); got != own {
+		t.Errorf("an admin's ASIN kept by the revert: offered = %q, want the hidden one recorded", got)
+	}
+}
+
 // TestUnlinkMarksTheRunsThatAppliedIt (server#331 item 6): an Unlink marks the
 // book's applied items of every kept run unlinked (still applied, so the run's
 // counts stay what its apply did), leaving its other items and other books'
