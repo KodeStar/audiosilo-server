@@ -2861,6 +2861,8 @@
   "audit.detail.secret_changed": "Nouveau secret",
   "audit.detail.enabled": "Activé",
   "audit.detail.run": "Passe",
+  "audit.detail.api_keys": "Clés d'API",
+  "audit.detail.calendar_link": "Lien d'agenda",
   "audit.detail.scope": "Ce qui est écrit",
   "audit.detail.account": "Compte Audible",
   "audit.detail.region": "Boutique Audible",

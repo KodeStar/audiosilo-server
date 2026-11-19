@@ -2690,6 +2690,8 @@
   "audit.detail.secret_changed": "Neues Secret",
   "audit.detail.enabled": "An",
   "audit.detail.run": "Lauf",
+  "audit.detail.api_keys": "API-Schlüssel",
+  "audit.detail.calendar_link": "Kalenderlink",
   "audit.detail.scope": "Was übernommen wird",
   "audit.detail.account": "Audible-Konto",
   "audit.detail.region": "Audible-Shop",
