@@ -1123,7 +1123,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := media.ServeFile(w, r, abs, download, metadata.WaitLeft(deadline)); err != nil {
+	if err := media.ServeFile(w, r, lib.Root, abs, download, metadata.WaitLeft(deadline)); err != nil {
 		writeShareNotAnswering(w)
 	}
 }

@@ -584,10 +584,11 @@ func resolveExisting(p string) string {
 // sizes).
 func BrowseFS(ctx context.Context, root, relPath string, timeout time.Duration, offset, limit int, allow func(relPath string) bool, ignore *Ignore) (*Listing, error) {
 	deadline := time.Now().Add(timeout)
-	entries, dirEntries, err := listDir(ctx, root, relPath, timeout, allow, ignore)
+	entries, dirEntries, dir, err := listDir(ctx, root, relPath, timeout, allow, ignore)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = dir.Close() }()
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
@@ -597,9 +598,10 @@ func BrowseFS(ctx context.Context, root, relPath string, timeout time.Duration, 
 	page := entries[offset:end]
 	// Only files need their info (for Size, used to compute bitrate), and only
 	// the page's: one round-trip per entry is the difference between a snappy and
-	// a multi-second listing on a network mount. The directory read's own entry
-	// answers it (a stat on Linux and macOS, nothing at all on Windows, which
-	// lists it with the name).
+	// a multi-second listing on a network mount. The open folder answers it
+	// (metadata.DirBelow.Info: an lstat through it on Linux and macOS, nothing
+	// at all on Windows, which lists it with the name), never the folder's
+	// path looked up again.
 	type info struct{ size, mod int64 }
 	infos, _ := metadata.LookBounded(ctx, filepath.Join(root, filepath.FromSlash(relPath)), metadata.WaitLeft(deadline), func() ([]info, error) {
 		out := make([]info, len(page))
@@ -607,7 +609,7 @@ func BrowseFS(ctx context.Context, root, relPath string, timeout time.Duration, 
 			if page[i].IsDir {
 				continue
 			}
-			if fi, err := dirEntries[offset+i].Info(); err == nil {
+			if fi, err := dir.Info(dirEntries[offset+i]); err == nil {
 				out[i] = info{fi.Size(), fi.ModTime().Unix()}
 			}
 		}
@@ -633,25 +635,33 @@ func BrowseFS(ctx context.Context, root, relPath string, timeout time.Duration, 
 // (sortFileOrder) and the order is stable for paging. The join and the
 // listing are bounded looks (ctx, timeout in all, on the folder's mount): on a
 // share that stopped answering the error is a look given up on
-// (metadata.GaveUp).
+// (metadata.GaveUp). The folder is opened through the root
+// (metadata.ReadDirBelow), so a name along the path swapped for a link out of
+// the library after the join's check is never listed.
 func ListDir(ctx context.Context, root, relPath string, timeout time.Duration, allow func(relPath string) bool, ignore *Ignore) ([]Entry, error) {
-	entries, _, err := listDir(ctx, root, relPath, timeout, allow, ignore)
-	return entries, err
+	entries, _, dir, err := listDir(ctx, root, relPath, timeout, allow, ignore)
+	if err != nil {
+		return nil, err
+	}
+	_ = dir.Close()
+	return entries, nil
 }
 
 // listDir is ListDir, with each entry's fs.DirEntry from the directory read,
-// in the same order.
-func listDir(ctx context.Context, root, relPath string, timeout time.Duration, allow func(relPath string) bool, ignore *Ignore) ([]Entry, []fs.DirEntry, error) {
+// in the same order, and the open folder they were read from (dir, the
+// caller's to close: an entry's info is read through it).
+func listDir(ctx context.Context, root, relPath string, timeout time.Duration, allow func(relPath string) bool, ignore *Ignore) ([]Entry, []fs.DirEntry, *metadata.DirBelow, error) {
 	deadline := time.Now().Add(timeout)
 	// A hidden folder isn't listed, so it can't be opened by name either.
 	full, err := ContentJoinBounded(ctx, root, relPath, timeout)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	dirEntries, err := metadata.ReadDirBounded(ctx, full, metadata.WaitLeft(deadline))
+	dir, err := metadata.ReadDirBelowBounded(ctx, root, full, metadata.WaitLeft(deadline))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	dirEntries := dir.Entries
 	type listed struct {
 		Entry
 		lower string // Name case folded once, for the sort
@@ -706,7 +716,7 @@ func listDir(ctx context.Context, root, relPath string, timeout time.Duration, a
 	for i, e := range entries {
 		out[i], des[i] = e.Entry, e.de
 	}
-	return out, des, nil
+	return out, des, dir, nil
 }
 
 // MarkBooks fills in the entries the index holds as books (books by path, as

@@ -24,7 +24,7 @@ func TestServeFileTurnsAwayAFIFO(t *testing.T) {
 	rec := httptest.NewRecorder()
 	rec.Header().Set("Cache-Control", "private, max-age=86400")
 	start := time.Now()
-	if err := ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), path, false, time.Minute); err != nil {
+	if err := ServeFile(rec, httptest.NewRequest(http.MethodGet, "/", nil), filepath.Dir(path), path, false, time.Minute); err != nil {
 		t.Fatalf("ServeFile of a FIFO = %v, want it answered here", err)
 	}
 	if took := time.Since(start); took > 5*time.Second {

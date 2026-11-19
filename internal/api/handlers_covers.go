@@ -467,11 +467,11 @@ func (a *API) coverArt(ctx context.Context, lib *catalog.Library, path string, s
 		return nil
 	}
 	load := func() ([]byte, error) {
-		data, _, err := media.EmbeddedCover(ctx, art.Abs, a.fileWait)
+		data, _, err := media.EmbeddedCoverBelow(ctx, lib.Root, art.Abs, a.fileWait)
 		return data, err
 	}
 	if art.Kind == catalog.ArtSidecar {
-		load = func() ([]byte, error) { return a.readSidecar(ctx, art.Abs) }
+		load = func() ([]byte, error) { return a.readSidecar(ctx, lib.Root, art.Abs) }
 	}
 	return &artSource{version: version, load: load}
 }
@@ -499,13 +499,13 @@ func (a *API) serveArt(w http.ResponseWriter, r *http.Request, root string, src 
 		// Served from the open file: Range, conditional requests (a 304 reads
 		// none of it) and the type from the file's name.
 		w.Header().Set("Cache-Control", coverCache)
-		if err := media.ServeFile(w, r, art.Abs, false, a.fileWait); err != nil {
+		if err := media.ServeFile(w, r, root, art.Abs, false, a.fileWait); err != nil {
 			w.Header().Del("Cache-Control")
 			writeShareNotAnswering(w)
 		}
 		return
 	}
-	data, mime, err := media.EmbeddedCover(r.Context(), art.Abs, a.fileWait)
+	data, mime, err := media.EmbeddedCoverBelow(r.Context(), root, art.Abs, a.fileWait)
 	switch {
 	case metadata.GaveUp(err):
 		writeShareNotAnswering(w)
@@ -520,13 +520,14 @@ func (a *API) serveArt(w http.ResponseWriter, r *http.Request, root string, src 
 	_, _ = w.Write(data)
 }
 
-// readSidecar reads the sidecar image at abs whole (up to maxSidecarBytes,
-// media.ErrImageTooLarge past it), its open and reads one metadata.Bounded call:
-// a share that stopped answering costs the request fileWait at most
-// (metadata.GaveUp).
-func (a *API) readSidecar(ctx context.Context, abs string) ([]byte, error) {
+// readSidecar reads the sidecar image at abs (joined under the library root
+// root, and opened through it: metadata.OpenRegularBelow) whole (up to
+// maxSidecarBytes, media.ErrImageTooLarge past it), its open and reads one
+// metadata.Bounded call: a share that stopped answering costs the request
+// fileWait at most (metadata.GaveUp).
+func (a *API) readSidecar(ctx context.Context, root, abs string) ([]byte, error) {
 	return metadata.Bounded(ctx, abs, a.fileWait, func() ([]byte, error) {
-		f, _, err := metadata.OpenRegular(abs)
+		f, _, err := metadata.OpenRegularBelow(root, abs)
 		if err != nil {
 			return nil, err
 		}

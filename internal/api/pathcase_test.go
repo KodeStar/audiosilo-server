@@ -529,6 +529,59 @@ func TestStreamLinkOutOfRootOnAHeldShare(t *testing.T) {
 	}
 }
 
+// TestStreamOpensThroughTheRootAfterASwap (security): the stream's open can't
+// leave the library even when the path changes after its check. With the
+// file's open held, its folder is swapped for a link to a folder out of the
+// library holding a file of the same name; once the open goes on it answers
+// as a missing file, never with that file's bytes (a plain open of the
+// checked path follows the link). Allowed: the same request before the swap
+// streams the file. Not parallel: metadata.HoldReadsForTests swaps the mount
+// lookup.
+func TestStreamOpensThroughTheRootAfterASwap(t *testing.T) {
+	c := newCaseEnv(t)
+	root, err := filepath.EvalSymlinks(c.lib.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "01.mp3"), []byte("a file out of the library"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	at := bookURL(c.lib.ID, "stream", pcUnindexedT)
+	if resp, body := c.do(t, "GET", at, c.samTok, ""); resp.StatusCode != http.StatusOK || !strings.HasPrefix(body, "placeholder ") {
+		t.Fatalf("stream before the swap = %d %.80q, want the file", resp.StatusCode, body)
+	}
+	// The path's check (its listings and lstats) answers; the open waits.
+	release := metadata.HoldReadsForTests(filepath.Join(root, filepath.FromSlash(pcUnindexedT)))
+	t.Cleanup(release)
+	type answer struct {
+		status int
+		body   string
+	}
+	done := make(chan answer, 1)
+	go func() {
+		resp, body := c.do(t, "GET", at, c.samTok, "")
+		done <- answer{resp.StatusCode, body}
+	}()
+	time.Sleep(500 * time.Millisecond) // the request has checked its path and waits on the open
+	folder := filepath.Join(root, filepath.FromSlash(pcUnindexed))
+	if err := os.Rename(folder, folder+".aside"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, folder); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+	release()
+	got := <-done
+	if got.status != http.StatusNotFound || strings.Contains(got.body, "out of the library") {
+		t.Errorf("stream after its folder was swapped for a link out of the library = %d %.80q, want a 404 and none of that file",
+			got.status, got.body)
+	}
+}
+
 // TestCaseVariantRoutes (security, a disk that ignores case only): every
 // path-addressed route a listener reaches answers hal, whose rule is the
 // author folder in lower case, at the book in that case exactly as at a path

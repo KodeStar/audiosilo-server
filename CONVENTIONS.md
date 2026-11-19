@@ -1298,7 +1298,22 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and never climbs). `resolveBelow` returns such a link's own target, never joined with
   the names after it, so `SafeJoin` too refuses every path through it: joined, a link to a folder above
   the root (`up/<root>/Book/link/x`) read as a path back inside the root, a link out of it further down
-  never looked at (`TestResolveBelowIsResolveExisting`). `/fs` looks before it reads the folder (after,
+  never looked at (`TestResolveBelowIsResolveExisting`). A join is a check, and the open that follows it
+  is a second look at the same path: a name along it swapped for a link out of the root between the two
+  (by whoever can write to the library, or a share that serves one) would be followed. So the routes that
+  open what a request named open it through an `os.Root` at the library's root (`metadata.Below`): the
+  stream's stored file and a sidecar cover (`media.ServeFile`, `metadata.OpenRegularBelow`), a cover's
+  embedded art and its thumbnail read (`media.EmbeddedCoverBelow`, `readSidecar`), and `/fs`'s listing
+  with its page of file info, read through the open folder (`metadata.ReadDirBelow`, `DirBelow.Info`); the
+  open refuses a link out of the root wherever it then is (a 404, a missing folder). `os.Root` also
+  refuses a link a join allows, one that stays in the root by an absolute target or by climbing above it
+  and back, so `Below` opens the resolved path through the root then
+  (`TestOpenRegularBelowNeverLeavesTheRoot`, `TestReadDirBelowNeverLeavesTheRoot`,
+  `TestStreamOpensThroughTheRootAfterASwap`). The reader's ebook and a podcast episode check the open file
+  against the path again instead (`OpenEbook`, `OpenPodcast`: `os.SameFile`). Still a check and then a look
+  by path: a transcode (ffmpeg opens the path), a remux's or a rendition's source (`media.FileCache`,
+  `media.Source`), an asked book's read (`resolveBook`, the probes), the Bridge's file stats
+  (`statBookFiles`), `LookArt`'s stat and the looks under `.audiosilo/`. `/fs` looks before it reads the folder (after,
   for a path that climbs out of the root by its names, so it keeps its 400; a leading slash is no climb,
   `/Author` is looked at first as `Author` is), and answers a folder outside the caller's share
   rules (`VisibleInBrowse`) as a missing one before any listing (`TestFSOutsideScopeIsMissing`). Every
@@ -1450,8 +1465,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `API.fileWait` and answering with the stored ebook past it: the probe's time is the request's own),
   every cover (full, thumbnail, a
   show's: `serveArt`, `coverArt`, `readSidecar`) and every look a stream makes at its file (SRV-15c: the
-  path's join, `library.SafeJoinBounded`; its open and stat, `media.ServeFile`, a regular file only,
-  `metadata.OpenRegular`, so a FIFO is a 404 at once, never an open held and counted on its mount; a
+  path's join, `library.SafeJoinBounded`; its open and stat, `media.ServeFile`, through the library's root
+  (`metadata.OpenRegularBelow`) and a regular file only, so a FIFO is a 404 at once, never an open held and counted on its mount; a
   transcode's stat, `media.Transcode`; a remux's or rendition's look at its source, `media.Source`; a
   podcast episode's checks and open, `library.OpenPodcastBounded`, the download's presence check and an
   on-demand fetch's waits too), `/fs`'s join, listing and page of file info (`library.BrowseFS`, `ListDir`,
