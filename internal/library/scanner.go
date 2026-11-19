@@ -757,7 +757,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				primary := absOf(lib, primaryPath(b))
 				fingerprintFailed := old.ContentHash == "" && b.ContentHash == ""
 				if old.HasCover == nil && !fingerprintFailed {
-					if art, _, err := media.EmbeddedCover(ctx, primary, s.probeTimeout); err == nil {
+					if art, _, err := media.EmbeddedCoverBelow(ctx, lib.Root, primary, s.probeTimeout); err == nil {
 						coverBackfill[b.RelPath] = art != nil
 					}
 				}
