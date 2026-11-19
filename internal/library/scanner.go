@@ -3023,10 +3023,8 @@ func faultedForGood(err error) bool {
 // that did not answer, is one. Nothing is written either way.
 func (s *Scanner) resolveAsked(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
 	book, err := s.resolveBook(ctx, lib, relPath, allow)
-	var refused lookRefused
-	if errors.As(err, &refused) {
-		cause, _ := metadata.Faulted(err)
-		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, cause)
+	if errors.As(err, new(lookRefused)) {
+		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, err) // the share's own message, no look given up on
 	}
 	return book, err
 }
@@ -3344,8 +3342,8 @@ const (
 // calls (ctx, at most lookTimeout): one given up on (a share that stopped
 // answering), or failed as a share does that a retry may get past
 // (transientFault), is diskUnknown, which no caller takes as gone either; one
-// refused for good (faultedForGood: a permission, the device gone) is present. Only a path gone (ENOENT, ENOTDIR) is diskGone
-// (metadata.ShareFault's rule).
+// refused for good (faultedForGood: a permission, the device gone) is present.
+// Only a path gone (ENOENT, ENOTDIR) is diskGone (metadata.ShareFault's rule).
 func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel string) onDisk {
 	// A path whose stat or listing fails as a share does (metadata.ShareFault)
 	// can't be checked: a fault a retry may get past (transientFault: EIO,
