@@ -965,3 +965,29 @@ func TestWorkSources(t *testing.T) {
 		t.Fatalf("no refs = %v, %v", got, err)
 	}
 }
+
+// TestMatchWorkIDs: only the books with a recorded match, each its match's
+// work; one known by its identifiers alone (the upcoming job's resolution) is
+// left out, as are a book with neither and none at the path.
+func TestMatchWorkIDs(t *testing.T) {
+	t.Parallel()
+	f := newRecordingsFixture(t)
+	if err := f.c.SaveUpcomingOwned(f.ctx, []UpcomingOwned{
+		{Ref: Ref{LibraryID: f.main.ID, Path: "Kemper/One"}, IDKey: "a:B0KEMPER", WorkID: "w-one", CheckedAt: "2026-11-01T00:00:00.000Z"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.c.MatchWorkIDs(f.ctx, []Ref{
+		{LibraryID: f.main.ID, Path: "Bray/One"}, {LibraryID: f.main.ID, Path: "Rematched/Two"},
+		{LibraryID: f.main.ID, Path: "Kemper/One"}, {LibraryID: f.other.ID, Path: "Abridged/One"},
+		{LibraryID: f.main.ID, Path: "Else/Three"}, {LibraryID: f.main.ID, Path: "Nowhere"},
+	})
+	want := map[Ref]string{
+		{LibraryID: f.main.ID, Path: "Bray/One"}:      "w-one",
+		{LibraryID: f.main.ID, Path: "Rematched/Two"}: "w-two",
+		{LibraryID: f.other.ID, Path: "Abridged/One"}: "w-one",
+	}
+	if err != nil || !maps.Equal(got, want) {
+		t.Fatalf("match work ids = %v, %v; want %v", got, err, want)
+	}
+}
