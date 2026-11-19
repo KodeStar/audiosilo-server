@@ -384,7 +384,7 @@ func BrowseFS(ctx context.Context, root, relPath string, timeout time.Duration, 
 	// answers it (a stat on Linux and macOS, nothing at all on Windows, which
 	// lists it with the name).
 	type info struct{ size, mod int64 }
-	infos, _ := metadata.Bounded(ctx, filepath.Join(root, filepath.FromSlash(relPath)), metadata.WaitLeft(deadline), func() ([]info, error) {
+	infos, _ := metadata.LookBounded(ctx, filepath.Join(root, filepath.FromSlash(relPath)), metadata.WaitLeft(deadline), func() ([]info, error) {
 		out := make([]info, len(page))
 		for i := range page {
 			if page[i].IsDir {
@@ -395,7 +395,7 @@ func BrowseFS(ctx context.Context, root, relPath string, timeout time.Duration, 
 			}
 		}
 		return out, nil
-	}, nil)
+	})
 	for i := range infos {
 		page[i].Size, page[i].ModTime = infos[i].size, infos[i].mod
 	}
