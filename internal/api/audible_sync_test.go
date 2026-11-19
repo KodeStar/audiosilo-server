@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -457,9 +458,12 @@ func TestAudibleSyncRefusals(t *testing.T) {
 	// A cursor the server can't read is its own code, so the Bridge reads the
 	// feed from the start for it alone (bridge#50): one that is no base64url,
 	// base64url of bytes that are no JSON ("not-a-cursor" decodes), and of
-	// text that is no JSON ("not-json"). Any other 400 is invalid_request.
+	// text that is no JSON ("not-json"), and a JSON null or {} (no row: never
+	// the start). Any other 400 is invalid_request.
 	for q, code := range map[string]string{"&since=not.a.cursor": "invalid_cursor", "&since=not-a-cursor": "invalid_cursor",
 		"&since=bm90LWpzb24": "invalid_cursor", "&since=bm90LWpzb24&limit=0": "invalid_request",
+		"&since=" + base64.RawURLEncoding.EncodeToString([]byte("null")): "invalid_cursor",
+		"&since=" + base64.RawURLEncoding.EncodeToString([]byte("{}")):   "invalid_cursor",
 		"&limit=0": "invalid_request", "&limit=x": "invalid_request"} {
 		if resp, out := s.do(t, "GET", "/api/v1/bridge/progress?account="+testAccount+q, s.bridgeTok, ""); resp.StatusCode != http.StatusBadRequest || codeOf(out) != code {
 			t.Errorf("progress%s: %d %s, want 400 %s", q, resp.StatusCode, out, code)
@@ -542,6 +546,145 @@ func TestBridgeProgressFeed(t *testing.T) {
 	wantSync(t, s.patListens(t, "pat-m2", mistbornBook, 400, 460, "2"), "applied", "")
 	if f := s.feed(t, "&since="+url.QueryEscape(end.Next)); len(f.Rows) != 1 || f.Rows[0].Position != 460 {
 		t.Fatalf("feed after the phone's save = %+v", f.Rows)
+	}
+}
+
+// recursor is the feed's cursor c with edit applied to its JSON: the cursor
+// another feed, or this one before a restore, would have handed out.
+func recursor(t *testing.T, c string, edit func(map[string]any)) string {
+	t.Helper()
+	raw, err := base64.RawURLEncoding.DecodeString(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var k map[string]any
+	if err := json.Unmarshal(raw, &k); err != nil {
+		t.Fatal(err)
+	}
+	edit(k)
+	raw, _ = json.Marshal(k)
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// feedRefused asks for the feed after since as a Bridge that handles the
+// refusal (refuse_stale=1) and wants it refused, 400 invalid_cursor.
+func (s *audibleSyncEnv) feedRefused(t *testing.T, name, since string) {
+	t.Helper()
+	resp, out := s.do(t, "GET", "/api/v1/bridge/progress?refuse_stale=1&account="+testAccount+"&since="+url.QueryEscape(since),
+		s.bridgeTok, "")
+	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_cursor" {
+		t.Fatalf("%s: %d %s, want 400 invalid_cursor", name, resp.StatusCode, out)
+	}
+}
+
+// A cursor the feed no longer holds is refused to a Bridge that handles it
+// (refuse_stale=1), never answered empty (bridge#50): the server restored from a backup behind the Bridge's cursor
+// (by hand: past the change counter; or through the console: a new feed id),
+// or a cursor from another feed. The Bridge then reads from the start and
+// misses nothing written since. A cursor from a server before 2.7.0 (no feed
+// id) still pages, and comes back with this feed's id.
+func TestBridgeProgressCursorFeed(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	wantSync(t, s.patListens(t, "pat-m", mistbornBook, 0, 20, "0"), "applied", "")
+	held := s.feed(t, "").Next
+
+	// Restored by hand: the Bridge's cursor is ahead of the feed (the backup's
+	// counter is behind it), so the place written next lands in the gap.
+	ahead := recursor(t, held, func(k map[string]any) { k["q"] = k["q"].(float64) + 5 })
+	wantSync(t, s.patListens(t, "pat-c", cradleBook, 0, 30, "0"), "applied", "")
+	s.feedRefused(t, "a cursor past the feed's end", ahead)
+	s.feedRefused(t, "a cursor from before 2.7.0 past the feed's end", recursor(t, ahead, func(k map[string]any) { delete(k, "f") }))
+	if all := s.feed(t, ""); len(all.Rows) != 2 || all.Rows[1].ASIN != cradleASIN || all.Rows[1].Position != 30 {
+		t.Fatalf("read from the start = %+v, want both places", all.Rows)
+	}
+
+	// Another feed's cursor, and this one's before a restore renewed its id.
+	s.feedRefused(t, "another feed's cursor", recursor(t, held, func(k map[string]any) { k["f"] = "another" }))
+	if f := s.feed(t, "&since="+url.QueryEscape(held)); len(f.Rows) != 1 || f.Rows[0].ASIN != cradleASIN {
+		t.Fatalf("this feed's cursor = %+v", f.Rows)
+	}
+
+	// A cursor from before 2.7.0 carries no id: still read, past nothing.
+	old := recursor(t, held, func(k map[string]any) { delete(k, "f") })
+	f := s.feed(t, "&since="+url.QueryEscape(old))
+	if len(f.Rows) != 1 || f.Rows[0].ASIN != cradleASIN {
+		t.Fatalf("an old cursor = %+v", f.Rows)
+	}
+	end := s.feed(t, "&since="+url.QueryEscape(f.Next))
+	if len(end.Rows) != 0 || end.Next == "" {
+		t.Fatalf("the end = %+v", end)
+	}
+	if again := s.feed(t, "&since="+url.QueryEscape(recursor(t, end.Next, func(k map[string]any) { delete(k, "f") }))); again.Next != end.Next {
+		t.Fatalf("an old cursor at the end comes back as %q, want it with the feed's id %q", again.Next, end.Next)
+	}
+
+	if renewed, err := s.cat.RenewProgressFeed(context.Background(), "a restore"); err != nil || !renewed {
+		t.Fatalf("renewal = %v, %v", renewed, err)
+	}
+	s.feedRefused(t, "a cursor from before the restore", end.Next)
+	if f := s.feed(t, "&since="+url.QueryEscape(old)); len(f.Rows) != 1 {
+		t.Fatalf("an old cursor after the renewal = %+v, want it read as before", f.Rows)
+	}
+	all := s.feed(t, "")
+	if len(all.Rows) != 2 {
+		t.Fatalf("read from the start after the renewal = %+v", all.Rows)
+	}
+
+	// Restored by hand and written to since: the counter has passed the
+	// Bridge's cursor again, so only the mark kept outside the database tells
+	// (the launcher's, at start), and the feed's new id refuses the cursor.
+	if f := s.feed(t, "&since="+url.QueryEscape(all.Next)); len(f.Rows) != 0 {
+		t.Fatalf("the end after the renewal = %+v", f.Rows)
+	}
+	if _, renewed, err := s.cat.RenewProgressFeedBehind(context.Background(), 1<<40); err != nil || !renewed {
+		t.Fatalf("renewal behind the mark = %v, %v", renewed, err)
+	}
+	s.feedRefused(t, "a cursor the counter has passed, in a database behind its mark", all.Next)
+}
+
+// A Bridge that doesn't send refuse_stale=1 (v0.6.0) retries a refused cursor
+// for ever and would push no place again, so it keeps the answers from before
+// 2.7.0 after a renewal: a cursor past the feed's end gets 200 with no rows and
+// the feed's end as next, which then reads the places written after it, and a
+// cursor from another feed, or this one's before a restore, pages on. A cursor
+// it can't read is still 400 (TestAudibleSyncRefusals asks without the flag).
+func TestBridgeProgressCursorFeedOldBridge(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	wantSync(t, s.patListens(t, "pat-m", mistbornBook, 0, 20, "0"), "applied", "")
+	held := s.feed(t, "").Next
+
+	ahead := recursor(t, held, func(k map[string]any) { k["q"] = k["q"].(float64) + 5 })
+	var atEnd string
+	for name, since := range map[string]string{"past the end": ahead,
+		"past the end, from before 2.7.0": recursor(t, ahead, func(k map[string]any) { delete(k, "f") })} {
+		end := s.feed(t, "&since="+url.QueryEscape(since))
+		if len(end.Rows) != 0 || end.More || end.Next == "" || end.Next == since || (atEnd != "" && end.Next != atEnd) {
+			t.Fatalf("%s: %+v, want no rows and the feed's end as next", name, end)
+		}
+		atEnd = end.Next
+		s.feedRefused(t, name+", with the flag", since) // the same cursor, from a Bridge that handles it
+	}
+	if f := s.feed(t, "&since="+url.QueryEscape(atEnd)); len(f.Rows) != 0 || f.Next != atEnd {
+		t.Fatalf("the feed's end = %+v, want no rows and itself as next", f)
+	}
+	wantSync(t, s.patListens(t, "pat-c", cradleBook, 0, 30, "0"), "applied", "")
+	f := s.feed(t, "&since="+url.QueryEscape(atEnd))
+	if len(f.Rows) != 1 || f.Rows[0].ASIN != cradleASIN || f.Rows[0].Position != 30 {
+		t.Fatalf("after the feed's end = %+v, want the place written since", f.Rows)
+	}
+
+	other := recursor(t, held, func(k map[string]any) { k["f"] = "another" })
+	if f := s.feed(t, "&since="+url.QueryEscape(other)); len(f.Rows) != 1 || f.Rows[0].ASIN != cradleASIN {
+		t.Fatalf("another feed's cursor = %+v, want it read as a place in this one", f.Rows)
+	}
+	if renewed, err := s.cat.RenewProgressFeed(context.Background(), "a restore"); err != nil || !renewed {
+		t.Fatalf("renewal = %v, %v", renewed, err)
+	}
+	s.feedRefused(t, "a cursor from before the restore, with the flag", held)
+	if f := s.feed(t, "&since="+url.QueryEscape(held)); len(f.Rows) != 1 || f.Rows[0].ASIN != cradleASIN {
+		t.Fatalf("a cursor from before the restore = %+v, want it read as before", f.Rows)
 	}
 }
 

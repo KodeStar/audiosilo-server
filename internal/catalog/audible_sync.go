@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -266,10 +267,12 @@ const (
 )
 
 // progressCursor is a GET /bridge/progress position: the last row's
-// (change_seq, asin), opaque on the wire (base64url JSON).
+// (change_seq, asin) and the feed that made it (progressFeedID; none in a
+// cursor from a server before 2.7.0), opaque on the wire (base64url JSON).
 type progressCursor struct {
 	Seq  int64  `json:"q"`
 	ASIN string `json:"s"`
+	Feed string `json:"f,omitempty"`
 }
 
 func (k progressCursor) encode() string {
@@ -278,9 +281,12 @@ func (k progressCursor) encode() string {
 }
 
 // decodeProgressCursor reads AudibleProgress's since ("" from the start).
-// ErrInvalidCursor for one it can't read, which the route answers 400
+// ErrInvalidCursor for one it can't read, or one naming no row (a JSON null
+// or {} is no position, never the start), which the route answers 400
 // invalid_cursor so the Bridge reads the feed again from its start
-// (bridge#50).
+// (bridge#50). A cursor names a row once read, and every row's change_seq is
+// at least 1, or is the end of a feed no row was written to yet: (0,
+// progressEndASIN), progressFrom's answer to a cursor past it.
 func decodeProgressCursor(s string) (progressCursor, error) {
 	if s == "" {
 		return progressCursor{}, nil
@@ -290,11 +296,139 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 		return progressCursor{}, ErrInvalidCursor
 	}
 	var k progressCursor
-	if json.Unmarshal(raw, &k) != nil {
+	if json.Unmarshal(raw, &k) != nil || k.ASIN == "" || k.Seq < 0 || (k.Seq == 0 && k.ASIN != progressEndASIN) {
 		return progressCursor{}, ErrInvalidCursor
 	}
 	return k, nil
 }
+
+// progressFeedKey is the server_state row holding this server's progress feed
+// id: a random id every GET /bridge/progress cursor carries, so a cursor from
+// another feed (another server's, a database started afresh, or this one's
+// before a backup was restored here: RenewProgressFeed) is refused to a Bridge
+// that asks (refuse_stale=1), never read as a place in this feed (bridge#50;
+// an older Bridge's is read as before 2.7.0: progressFrom).
+const progressFeedKey = "progress_feed"
+
+// progressFeedID is the progress feed's id, made on first use.
+func (c *Catalog) progressFeedID(ctx context.Context) (string, error) {
+	id, err := getServerState[string](ctx, c.db, progressFeedKey)
+	if err != nil || id != "" {
+		return id, err
+	}
+	err = c.db.WithTx(ctx, "progressFeedID", func(tx *sql.Tx) error {
+		if id, err = getServerState[string](ctx, tx, progressFeedKey); err != nil || id != "" {
+			return err
+		}
+		id = rand.Text()
+		return putServerState(ctx, tx, progressFeedKey, id, c.stamp())
+	})
+	return id, err
+}
+
+// progressFeedRestoreKey is the server_state row naming the restore the
+// progress feed was last renewed for (RenewProgressFeed).
+const progressFeedRestoreKey = "progress_feed_restore"
+
+// RenewProgressFeed gives the progress feed a new id, so every cursor handed
+// out before is refused (400 invalid_cursor, to a Bridge sending
+// refuse_stale=1: progressFrom) and the Bridge reads the feed again from its
+// start: the launcher's step after restoring a backup, whose
+// feed is behind the cursors the Bridge holds (a backup carries its id). Once
+// for a restore (restore names it: when it was applied), which the database
+// records with the new id, so the launcher asks at every start and a start
+// that ended before this committed leaves it to the next; renewed is whether
+// this call made the new id.
+func (c *Catalog) RenewProgressFeed(ctx context.Context, restore string) (renewed bool, err error) {
+	if done, err := getServerState[string](ctx, c.db, progressFeedRestoreKey); err != nil || done == restore {
+		return false, err
+	}
+	err = c.renewProgressFeed(ctx, "RenewProgressFeed", func(tx *sql.Tx, at string) error {
+		return putServerState(ctx, tx, progressFeedRestoreKey, restore, at)
+	})
+	return err == nil, err
+}
+
+// RenewProgressFeedBehind renews the progress feed when its end (end, the last
+// number the change counter gave) is below mark, the end the launcher last
+// wrote down outside the database: the database went back with no restore
+// recorded, a backup put in place by hand or commits a power cut lost, and it
+// kept its feed id. A cursor past end is refused already (progressFrom, with
+// refuse_stale=1), but only until the counter passes it again, after which it
+// would page on past the places written in between; with a new id it is
+// refused for good.
+func (c *Catalog) RenewProgressFeedBehind(ctx context.Context, mark int64) (end int64, renewed bool, err error) {
+	if end, err = c.ProgressFeedEnd(ctx); err != nil || end >= mark {
+		return end, false, err
+	}
+	err = c.renewProgressFeed(ctx, "RenewProgressFeedBehind", nil)
+	return end, err == nil, err
+}
+
+// renewProgressFeed stores a new feed id, and what also (when set) writes with
+// it, in one transaction. Durable: the launcher goes on to record outside the
+// database that the renewal is made (RenewProgressFeedBehind's mark), which a
+// power cut must not leave standing over a renewal it undid.
+func (c *Catalog) renewProgressFeed(ctx context.Context, name string, also func(tx *sql.Tx, at string) error) error {
+	return c.db.WithDurableTx(ctx, name, func(tx *sql.Tx) error {
+		at := c.stamp()
+		if err := putServerState(ctx, tx, progressFeedKey, rand.Text(), at); err != nil || also == nil {
+			return err
+		}
+		return also(tx, at)
+	})
+}
+
+// ProgressFeedEnd is the progress feed's end: the last number the change
+// counter gave (progress_change_counter, migration 0066).
+func (c *Catalog) ProgressFeedEnd(ctx context.Context) (int64, error) {
+	var end int64
+	err := c.db.QueryRowContext(ctx, `SELECT seq FROM progress_change_counter WHERE id = 1`).Scan(&end)
+	return end, err
+}
+
+// progressFrom reads since as a place in this server's feed (feed, its id):
+// the start for "", else ErrInvalidCursor for a cursor that isn't one
+// (decodeProgressCursor). With refuseStale (the Bridge asked for it:
+// AudibleProgress) it is ErrInvalidCursor too for one from another feed, or
+// one past the feed's end (ProgressFeedEnd). That last is a database that went
+// back and kept its id (RenewProgressFeedBehind renews it at the next start
+// the launcher sees it from): until the counter passes the cursor again, the
+// feed would answer nothing and the rows written since would never reach
+// Audible. A cursor from a server before 2.7.0 carries no id and has only that
+// check. Without refuseStale (v0.6.0 and older Bridges, which retry a refused
+// cursor for ever and so would push no place again) both are read as before
+// 2.7.0, a cursor from another feed as a place in this one, except that one
+// past the end is read as the feed's end (progressEndASIN), so the page is
+// empty and its next reads the rows written from now on (with the counter at
+// 0, a feed no row was written to, from its first). The place comes back with
+// feed as its id.
+func (c *Catalog) progressFrom(ctx context.Context, since, feed string, refuseStale bool) (progressCursor, error) {
+	from, err := decodeProgressCursor(since)
+	if err != nil || since == "" {
+		return from, err
+	}
+	if refuseStale && from.Feed != "" && from.Feed != feed {
+		return progressCursor{}, ErrInvalidCursor
+	}
+	end, err := c.ProgressFeedEnd(ctx)
+	if err != nil {
+		return progressCursor{}, err
+	}
+	if from.Seq > end {
+		if refuseStale {
+			return progressCursor{}, ErrInvalidCursor
+		}
+		from = progressCursor{Seq: end, ASIN: progressEndASIN}
+	}
+	from.Feed = feed
+	return from, nil
+}
+
+// progressEndASIN is a progress cursor's ASIN after every title's (an ASIN is
+// ten upper-case letters and digits, ValidASIN): a cursor at a row number with
+// it is past all of that number's rows, so the feed's end.
+const progressEndASIN = "~"
 
 // AudibleProgress is a page of the places of a's person that the Bridge may
 // push to Audible: the progress rows on the books of the account's synced
@@ -310,10 +444,18 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 // feed's cursor, kept for the next poll) and more whether a full page was read
 // (ask again with next now; a page may carry fewer rows than it read, a row
 // whose title's runtime disagrees with the book's length left out).
-// ErrInvalidCursor for a cursor not made here.
-func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, scopes []Scope, since string, limit int) (
-	rows []AudibleProgressRow, next string, more bool, err error) {
-	from, err := decodeProgressCursor(since)
+// A cursor carries the feed's id (progressFeedID): one from before 2.7.0 that
+// is still good comes back as next with it. With refuseStale (the Bridge
+// handles the refusal by reading the feed again from its start: bridge#50),
+// ErrInvalidCursor for a cursor not made by this feed, or past its end;
+// without it (a Bridge v0.6.0 or older), the answer progressFrom gives.
+func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, scopes []Scope, since string, limit int,
+	refuseStale bool) (rows []AudibleProgressRow, next string, more bool, err error) {
+	feed, err := c.progressFeedID(ctx)
+	if err != nil {
+		return nil, "", false, err
+	}
+	from, err := c.progressFrom(ctx, since, feed, refuseStale)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -347,6 +489,9 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 		return nil, "", false, err
 	}
 	if len(got) == 0 {
+		if since != "" {
+			since = from.encode()
+		}
 		return []AudibleProgressRow{}, since, false, nil
 	}
 	// A row whose title's runtime disagrees with the book's length (the
@@ -354,12 +499,11 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 	// route's duration_mismatch, AudibleSyncBooks) is another edition or volume's, so it is never
 	// pushed to that ASIN; the Bridge needs no check of its own.
 	rows = make([]AudibleProgressRow, 0, len(got))
-	next = since
 	for _, x := range got {
 		if audibleRuntimeAgrees(x.runtimeS, x.length) {
 			rows = append(rows, x.AudibleProgressRow)
 		}
-		next = progressCursor{Seq: x.seq, ASIN: x.ASIN}.encode()
+		next = progressCursor{Seq: x.seq, ASIN: x.ASIN, Feed: feed}.encode()
 	}
 	return rows, next, len(got) == limit, nil
 }

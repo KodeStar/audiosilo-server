@@ -21,7 +21,9 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/fsaccess"
+	"github.com/kodestar/audiosilo-server/internal/jsonfile"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -315,6 +317,74 @@ func TestRecordRestore(t *testing.T) {
 	}
 	if failed.Action != "backup.restore_failed" || failed.Details["error"] != "newer" {
 		t.Fatalf("failed = %+v", failed)
+	}
+}
+
+// A backup restored here renews the Bridge's progress feed once, so the cursor
+// the Bridge holds is refused (bridge#50): at the start that applied it, or,
+// when that start ended before the renewal (the marker is gone by then), at
+// the next one, from the restore's recorded outcome. A refused restore, and a
+// start after the renewal, keep the id.
+func TestRenewProgressFeed(t *testing.T) {
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	dir := t.TempDir()
+	feed := func() string {
+		t.Helper()
+		v, err := store.GetState[string](ctx, db, "progress_feed")
+		if err != nil || v == "" {
+			t.Fatalf("progress feed = %q, %v", v, err)
+		}
+		return v
+	}
+	// outcome is the restore's recorded outcome, as ApplyPendingRestore leaves it.
+	outcome := func(r *backup.RestoreResult) {
+		t.Helper()
+		if err := jsonfile.Write(filepath.Join(dir, "restore-result.json"), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The backup's own id, which the Bridge's cursor carries.
+	if err := store.PutState(ctx, db, "progress_feed", "the-backups", "2026-11-19T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	// No restore ever: nothing to renew for.
+	renewProgressFeed(ctx, cat, dir, nil, slog.Default())
+	if feed() != "the-backups" {
+		t.Fatal("a start with no restore renewed the progress feed")
+	}
+
+	first := &backup.RestoreResult{Name: "audiosilo-a.db", AppliedAt: time.Now().UTC(), OK: true}
+	outcome(first)
+	renewProgressFeed(ctx, cat, dir, first, slog.Default())
+	renewed := feed()
+	if renewed == "the-backups" {
+		t.Fatal("an applied restore kept the backup's progress feed id")
+	}
+	// The starts after it read the same restore from its outcome: renewed already.
+	renewProgressFeed(ctx, cat, dir, nil, slog.Default())
+	if feed() != renewed {
+		t.Fatal("a later start renewed the progress feed again for the same restore")
+	}
+
+	// A restore whose start ended before the renewal: the next start, with no
+	// marker left, renews from the outcome.
+	second := &backup.RestoreResult{Name: "audiosilo-b.db", AppliedAt: first.AppliedAt.Add(time.Hour), OK: true}
+	outcome(second)
+	renewProgressFeed(ctx, cat, dir, nil, slog.Default())
+	again := feed()
+	if again == renewed {
+		t.Fatal("a restore whose start ended early never renewed the progress feed")
+	}
+
+	// A refused restore left the database as it was.
+	refused := &backup.RestoreResult{Name: "audiosilo-c.db", AppliedAt: second.AppliedAt.Add(time.Hour), Error: "newer"}
+	outcome(refused)
+	renewProgressFeed(ctx, cat, dir, refused, slog.Default())
+	renewProgressFeed(ctx, cat, dir, nil, slog.Default())
+	if feed() != again {
+		t.Fatal("a refused restore renewed the progress feed")
 	}
 }
 

@@ -21,13 +21,13 @@ func TestAudibleTitlesMoveAfterTheirPlaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	scopes := []Scope{{LibraryID: f.lib.ID, AllowAll: true}}
-	rows, cursor, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, "", 0)
+	rows, cursor, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, "", 0, true)
 	if err != nil || len(rows) != 1 || rows[0].Position != 5000 {
 		t.Fatalf("feed = %+v, %v", rows, err)
 	}
 	feed := func() []AudibleProgressRow {
 		t.Helper()
-		rows, _, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, cursor, 0)
+		rows, _, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, cursor, 0, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -81,7 +81,7 @@ func TestAudibleMoveLeavesALeftRowUnoffered(t *testing.T) {
 		scopes := []Scope{{LibraryID: f.lib.ID, AllowAll: true}}
 		feed := func(since string) ([]AudibleProgressRow, string) {
 			t.Helper()
-			rows, next, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, since, 0)
+			rows, next, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, since, 0, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -129,7 +129,7 @@ func TestAudibleJoinOffersTheFoldersOwnRow(t *testing.T) {
 		if tc.played {
 			f.savePlace(t, part, 300, f.clock.Add(-48*time.Hour))
 		}
-		_, cursor, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, "", 0)
+		_, cursor, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, "", 0, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -138,7 +138,7 @@ func TestAudibleJoinOffersTheFoldersOwnRow(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, since := range []string{cursor, ""} {
-			rows, _, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, since, 0)
+			rows, _, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, since, 0, true)
 			if err != nil || len(rows) != 1 || rows[0].Path != into || rows[0].Position != 18000 || rows[0].ASIN != syncedASIN {
 				t.Fatalf("%s: feed from %q after the join = %+v, %v; want the folder's own place", tc.name, since, rows, err)
 			}

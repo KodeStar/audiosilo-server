@@ -157,6 +157,9 @@ const (
 	codeIdentityLinked  = "identity_linked"   // the sign-in is linked to an account meanwhile
 	codeUserHasIdentity = "user_has_identity" // the account has an identity from this provider
 	codeNotLinkable     = "not_linkable"      // a household member or demo account
+	// A paging cursor the route can't read, or one its feed no longer holds
+	// (catalog.ErrInvalidCursor, every route's): read again from the start.
+	codeInvalidCursor = "invalid_cursor"
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.
@@ -245,7 +248,9 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 	case errors.Is(err, catalog.ErrNameTaken):
 		writeErrorCode(w, http.StatusConflict, codeNameTaken, "name already taken")
 	case errors.Is(err, catalog.ErrInvalidCursor):
-		writeError(w, http.StatusBadRequest, "invalid cursor")
+		// Its own code (bridge#50), so a client reads again from the start for
+		// this alone: the Bridge's progress feed, books and titles cursors.
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidCursor, "invalid cursor")
 	case errors.Is(err, catalog.ErrInvalidOverrideMode):
 		writeError(w, http.StatusBadRequest, `mode must be "book" or "collection"`)
 	case errors.Is(err, catalog.ErrInvalidSetupStep):

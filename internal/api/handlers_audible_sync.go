@@ -158,7 +158,7 @@ func (a *API) handleBridgeAudibleListening(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, answer)
 }
 
-// handleBridgeProgress serves GET /bridge/progress?account=&since=&limit=: a
+// handleBridgeProgress serves GET /bridge/progress?account=&since=&limit=&refuse_stale=: a
 // page of the places of the account's person that the Bridge may push to
 // Audible (catalog.AudibleProgress: the books of the account's synced titles
 // the person can still reach, rows the account itself wrote left out, oldest
@@ -167,9 +167,16 @@ func (a *API) handleBridgeAudibleListening(w http.ResponseWriter, r *http.Reques
 // whether to ask again at once, server_time the server's clock (RFC 3339),
 // which the Bridge reads the rows' updated_at against rather than its own
 // (bridge#50). 400 invalid_request (no account, a bad limit), 400
-// invalid_cursor (a since this server can't read: the Bridge reads the feed
-// again from its start, bridge#50; a server before 2.7.0 answered
-// invalid_request); 403 sync_off, user_unavailable; 404 unknown_account.
+// invalid_cursor (a since this server can't read, and with refuse_stale=1 one
+// from another feed (its id: another server's, or this one's before a backup
+// was restored) or one past the feed's end (a database restored by hand): the
+// Bridge reads the feed again from its start, bridge#50; a server before 2.7.0
+// answered invalid_request); 403 sync_off, user_unavailable; 404
+// unknown_account. refuse_stale=1 is the Bridge saying it handles that
+// refusal: a v0.6.0 Bridge, which sends none, retries a refused cursor for
+// ever, so it gets the answer before 2.7.0 instead (a cursor from another
+// feed pages on, one past the end gets no rows and the feed's end as next:
+// catalog.AudibleProgress). An older server ignores the flag.
 func (a *API) handleBridgeProgress(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	id := q.Get("account")
@@ -190,7 +197,8 @@ func (a *API) handleBridgeProgress(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, next, more, err := a.cat.AudibleProgress(r.Context(), acct, scopes, q.Get("since"), limit)
+	rows, next, more, err := a.cat.AudibleProgress(r.Context(), acct, scopes, q.Get("since"), limit,
+		q.Get("refuse_stale") == "1")
 	if err != nil {
 		a.writeAudibleError(w, err, op)
 		return

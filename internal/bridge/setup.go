@@ -193,5 +193,6 @@ const AcceptClaimMinPriority = "claim_min_priority"
 // A Bridge sends one of these only after negotiation with this server. A
 // claim's query flag that an older server can safely ignore needs none and is
 // not listed: share_off=1 (ClaimOptions.ShareOff), which leaves such a job
-// held there, as before.
+// held there, as before. The same holds for /bridge/progress's refuse_stale=1
+// (the Bridge reads its feed again after a refused cursor).
 func HeartbeatAccepts() []string { return []string{AcceptSetup, AcceptClaimMinPriority} }

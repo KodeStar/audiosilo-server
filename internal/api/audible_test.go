@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -558,9 +559,14 @@ func TestAudibleTitlesPoll(t *testing.T) {
 	if strings.Join(seen, "|") != "The Final Empire|The Hero of Ages|The Well of Ascension|Unknown Thing" {
 		t.Errorf("pages = %q", seen)
 	}
-	for _, q := range []string{"state=nope", "matched=maybe", "limit=0", "after=!!!"} {
-		if resp, body := b.do(t, "GET", "/api/v1/admin/audible/titles?"+q, b.adminTok, ""); resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("?%s: %d %s, want 400", q, resp.StatusCode, body)
+	// A cursor that isn't one, a JSON null or {} among them (no title: never
+	// the start), is invalid_cursor (bridge#50); the other bad asks invalid_request.
+	null, empty := base64.RawURLEncoding.EncodeToString([]byte("null")), base64.RawURLEncoding.EncodeToString([]byte("{}"))
+	for q, code := range map[string]string{"state=nope": "invalid_request", "matched=maybe": "invalid_request",
+		"limit=0": "invalid_request", "after=!!!": "invalid_cursor", "after=" + null: "invalid_cursor", "after=" + empty: "invalid_cursor"} {
+		if resp, body := b.do(t, "GET", "/api/v1/admin/audible/titles?"+q, b.adminTok, ""); resp.StatusCode != http.StatusBadRequest ||
+			codeOf(body) != code {
+			t.Errorf("?%s: %d %s, want 400 %s", q, resp.StatusCode, body, code)
 		}
 	}
 	// Bad titles calls are refused whole: a final call without its titles
@@ -815,6 +821,8 @@ func TestBridgeBooksPaged(t *testing.T) {
 		fmt.Sprintf("/api/v1/bridge/libraries/%d/books", pods.ID):          "not_books",
 		"/api/v1/bridge/libraries/999/books":                               "unknown_library",
 		fmt.Sprintf("/api/v1/bridge/libraries/%d/books?limit=x", b.lib.ID): "invalid_request",
+		// A cursor that isn't one is the shared invalid_cursor (bridge#50).
+		fmt.Sprintf("/api/v1/bridge/libraries/%d/books?after=!!!", b.lib.ID): "invalid_cursor",
 	} {
 		if resp, out := b.do(t, "GET", path, b.bridgeTok, ""); resp.StatusCode < 400 || codeOf(out) != want {
 			t.Errorf("%s: %d %s, want %s", path, resp.StatusCode, out, want)

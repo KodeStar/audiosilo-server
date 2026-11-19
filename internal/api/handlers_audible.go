@@ -74,13 +74,6 @@ func (a *API) writeAudibleError(w http.ResponseWriter, err error, op string) {
 	switch {
 	case errors.Is(err, catalog.ErrAudibleInvalid):
 		writeErrorCode(w, http.StatusBadRequest, "invalid_request", err.Error())
-	case errors.Is(err, catalog.ErrInvalidCursor):
-		// Its own code, so the Bridge reads the feed from its start for this
-		// alone (bridge#50). Only catalog.AudibleProgress returns it here
-		// today (BridgeBooks and AudibleTitles answer a bad cursor of theirs
-		// invalid_request); worded for any route's cursor all the same, as
-		// this writer is shared by every Audible route.
-		writeErrorCode(w, http.StatusBadRequest, "invalid_cursor", "the cursor can't be read: read from the start")
 	case errors.Is(err, catalog.ErrAudiblePolicy):
 		writeErrorCode(w, http.StatusBadRequest, "invalid_policy", err.Error())
 	case errors.Is(err, catalog.ErrAudibleMarketplace):
@@ -215,7 +208,8 @@ func bridgeSeries(b *catalog.Book) []catalog.AudibleSeries {
 
 // handleBridgeBooks serves GET /bridge/libraries/{id}/books?after=&limit=: a
 // books library's indexed books by path, a page at a time (at most 500), for
-// the Bridge's Audible matching. {"books": [...], "next": cursor | null}.
+// the Bridge's Audible matching. {"books": [...], "next": cursor | null}; 400
+// invalid_cursor for an after that isn't one (invalid_request before 2.7.0).
 func (a *API) handleBridgeBooks(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -304,7 +298,8 @@ func (a *API) handleAdminAudibleAccounts(w http.ResponseWriter, r *http.Request)
 
 // handleAdminAudibleTitles serves GET /admin/audible/titles?account=&state=
 // &matched=&q=&after=&limit=: the titles, by title, keyset-paged.
-// {"titles": [...], "next": cursor | ""}.
+// {"titles": [...], "next": cursor | ""}; 400 invalid_cursor for an after
+// that isn't one.
 func (a *API) handleAdminAudibleTitles(w http.ResponseWriter, r *http.Request) {
 	var ok bool
 	q := r.URL.Query()

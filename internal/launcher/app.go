@@ -205,6 +205,13 @@ func Run(ctx context.Context, opts Options) (err error) {
 	if restored != nil {
 		recordRestore(ctx, cat, restored, log)
 	}
+	renewed := renewProgressFeed(ctx, cat, abs, restored, log)
+	// The feed's end, written down outside the database, tells a database that
+	// went back with no restore recorded (one put in place by hand); saved a
+	// last time once the work below has stopped.
+	if feedMark := openProgressFeedMark(ctx, cat, abs, renewed, log); feedMark != nil {
+		defer feedMark.keep(ctx)()
+	}
 	// Books indexed before series keys were stored (or keyed by older rules or
 	// Unicode tables) get them now, before anything reads a series filter (about a
 	// second per 50,000 books). Every series filter reads only the keys, so a failure
@@ -672,6 +679,39 @@ func recordRestore(ctx context.Context, cat *catalog.Catalog, r *backup.RestoreR
 	if err := cat.RecordAudit(ctx, catalog.AuditEvent{Via: catalog.ViaSystem, Action: action, Target: r.Name, Details: details}); err != nil {
 		log.Warn("recording the restore in the audit log failed", "err", err)
 	}
+}
+
+// renewProgressFeed renews the Bridge's progress feed (catalog.RenewProgressFeed)
+// once for the last backup restored into dataDir, and says whether it did: the
+// backup's feed is behind the cursor the Bridge holds, which must be refused
+// rather than read as a place in it (bridge#50). The restore is restored when
+// this start applied or refused one, else the one restore-result.json names:
+// the marker is gone before the database opens (kept, the next start would
+// swap the backup in again over what this one did), so a start that ended
+// between the two (the backup's migrations failing, a stop while they ran) or
+// a renewal that failed leaves the renewal to the next start, and the database
+// records which restore it renewed for. A failure is logged and the start goes
+// on (a cursor past the feed's end is refused either way).
+func renewProgressFeed(ctx context.Context, cat *catalog.Catalog, dataDir string, restored *backup.RestoreResult, log *slog.Logger) bool {
+	last := restored
+	if last == nil {
+		var err error
+		if last, err = backup.LastRestore(dataDir); err != nil {
+			log.Warn("reading the last restore's outcome failed; the Bridge's progress feed keeps its id", "err", err)
+			return false
+		}
+	}
+	if last == nil || !last.OK {
+		return false
+	}
+	renewed, err := cat.RenewProgressFeed(ctx, last.AppliedAt.UTC().Format(time.RFC3339Nano))
+	switch {
+	case err != nil:
+		log.Warn("renewing the Bridge's progress feed after the restore failed; the next start tries again", "backup", last.Name, "err", err)
+	case renewed:
+		log.Info("renewed the Bridge's progress feed after the restore", "backup", last.Name)
+	}
+	return renewed
 }
 
 // retention, once at startup and then daily until ctx is cancelled: rolls

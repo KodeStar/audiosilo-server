@@ -4162,7 +4162,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   folder as `before-restore` (or, if it can't be read, renames its files aside in the data folder), swaps
   the backup in (removing the old -wal/-shm), writes `<data>/restore-result.json` and always removes the
   marker (a refused restore is reported once, not retried at every start); `recordRestore` logs it in the
-  restored database's audit log as the server's own act. **Before an upgrade** (UPGRADE-01): next, still
+  restored database's audit log as the server's own act, and `renewProgressFeed` renews the Bridge's progress
+  feed once for the last restore applied (see Audible sync; a database put in place by hand is told by the feed's
+  mark, `<data>/progress-feed.json`). **Before an upgrade** (UPGRADE-01): next, still
   before `store.Open`, `backup.BeforeUpgrade` asks `store.PendingMigrations` (read-only; empty for no file or
   no migration recorded, so a fresh install gets no copy) and, when migrations are pending, writes a
   `before-upgrade` copy with `store.VacuumFile` plus one INFO line naming them and the copy, keeping the
@@ -5026,9 +5028,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (owner decision 2); the
   events are logged with token 0. 200 the Sync v2 answer; 403 `sync_off` (the module or the account's sync off, or
   the account paused: no library), 403 `user_unavailable` (the person disabled, a kid or a demo since:
-  `ErrAudibleSyncUser`), 404 `unknown_account` (none, a bad id, or its person deleted: the account cascades). **Here to Audible**: `GET /bridge/progress?account=&since=&limit=` (default 200,
+  `ErrAudibleSyncUser`), 404 `unknown_account` (none, a bad id, or its person deleted: the account cascades). **Here to Audible**: `GET /bridge/progress?account=&since=&limit=&refuse_stale=` (default 200,
   at most 500; the same 403s and 404, 400 `invalid_request` for no account or a bad limit, 400 `invalid_cursor` for a
-  `since` it can't read, so the Bridge reads the feed from its start for that alone, bridge#50) answers
+  `since` it can't read (a base64url JSON null or `{}` too: never the start), and with `refuse_stale=1` one from
+  another feed or past the feed's end, so the Bridge reads the feed from its start for that alone, bridge#50) answers
   `{rows:[{library_id, path, asin, position, duration, finished, updated_at, device_id, version}], next, more,
   server_time}` (`server_time`: the server's clock, which the Bridge's baseline reads `updated_at` against, bridge#50):
   the person's progress rows on the synced titles' books inside their scopes, one per title (two titles on one book
@@ -5036,8 +5039,30 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   with the book's length left out (`audibleRuntimeAgrees`, the listening route's `duration_mismatch` checked per
   title: the indexed duration, else the row's stored one, both unknown agreeing; the Bridge checks no length of its
   own), keyset by `(change_seq, asin)` after the opaque cursor `since` (base64url JSON); `next` is
-  the last row read, one left out too (since again when none), a feed cursor the Bridge keeps between polls; `more`
-  a full page read (its rows may be fewer). `progress.change_seq` (`0066`, `idx_progress_user_change`) is the order
+  the last row read, one left out too (since again when none, with the feed's id added to a cursor from before
+  2.7.0), a feed cursor the Bridge keeps between polls; `more` a full page read (its rows may be fewer). A cursor
+  carries the feed's id (`f`: `server_state` `progress_feed`, a random id made on first use; `catalog.progressFrom`):
+  one naming another feed (another server's, a database started afresh, or this one's before the launcher restored a
+  backup, which renews the id, as a backup carries it: `RenewProgressFeed`, once per restore, the launcher's
+  `renewProgressFeed` asking at every start with the last applied restore's `applied_at` (this start's, else
+  `restore-result.json`'s, `backup.LastRestore`) and the database keeping the one it renewed for,
+  `server_state` `progress_feed_restore`, so a start that ended between the swap and the renewal, the backup's
+  migrations failing or a stop while they ran, leaves it to the next) is refused, and so is any cursor past the
+  change counter (a database restored by hand keeps its id: until the counter passed the cursor again, the feed would
+  answer nothing and the places written in the gap never reach Audible). Once the counter has passed the cursor only
+  a record outside the database tells: the launcher's mark `<data>/progress-feed.json` (`launcher/feedmark.go`: the
+  feed's end, `catalog.ProgressFeedEnd`, written at start, every minute while it moves and at the stop, never per
+  request), and a start that finds the database behind it (a backup put in place by hand, commits a power cut lost)
+  renews the id (`RenewProgressFeedBehind`; a failed renewal leaves the mark for the next start; both renewals are
+  durable commits, made before the gate opens). A data folder put back whole takes the mark with it and is not seen.
+  A cursor without the id (a server before 2.7.0's) has only the counter check. Both refusals are only for a Bridge
+  that sends `refuse_stale=1` (it reads the feed again from its start; an older server ignores the flag, like a
+  claim's `share_off=1`): a v0.6.0 Bridge retries any 400 with the same cursor for ever, so without the flag the answer
+  is the one before 2.7.0, a cursor from another feed paging on as a place in this one and one past the end answering
+  no rows with the feed's end as `next` (`(end, "~")`, `progressEndASIN`, after every ASIN; `(0, "~")` in a feed no row
+  was ever written to, the one cursor at row 0 `decodeProgressCursor` takes), so the places written from then on still reach Audible. `ErrInvalidCursor` has one transport mapping, `writeCatalogError`'s 400
+  `invalid_cursor` (every route's cursor: `GET /bridge/libraries/{id}/books?after=` and the console's Audible titles
+  `after` too, which answered `invalid_request` before 2.7.0). `progress.change_seq` (`0066`, `idx_progress_user_change`) is the order
   this server wrote the rows in: drawn from the one-row `progress_change_counter` (strictly increasing, never
   reused, so a deleted row can't hand its number to the next write), set by two triggers on every insert and every
   UPDATE OF position, duration, finished, version, device_id or updated_at (so no write path can miss it; free in
