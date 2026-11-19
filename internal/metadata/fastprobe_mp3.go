@@ -1072,13 +1072,12 @@ func mp3FrameCount(b *blockFile, off, end int64, ref uint32) (c mp3Count, whole 
 	n := int64(0) // frames of ref's stream since it began
 	defer func() { c.add(ref, n) }()
 	for pos := off; pos+4 <= end && b.err == nil; {
-		h := w.u32(pos)
-		if fs := mp3FrameSize(h, ref); fs > 0 {
+		if fs := mp3FrameSize(w.u32(pos), ref); fs > 0 {
 			n++
 			pos += fs
 			continue
 		}
-		if mp3StreamAt(&w, pos) {
+		if h := mp3StreamAt(&w, pos); h != 0 {
 			c.add(ref, n)
 			ref, n = h, 0 // another stream's first frame, counted next
 			continue
@@ -1089,9 +1088,9 @@ func mp3FrameCount(b *blockFile, off, end int64, ref uint32) (c mp3Count, whole 
 				return c, false
 			}
 			b.tick()
-			if mp3StreamAt(&w, pos) {
+			if h := mp3StreamAt(&w, pos); h != 0 {
 				c.add(ref, n)
-				ref, n = w.u32(pos), 0
+				ref, n = h, 0
 				break
 			}
 		}
@@ -1099,13 +1098,16 @@ func mp3FrameCount(b *blockFile, off, end int64, ref uint32) (c mp3Count, whole 
 	return c, true
 }
 
-// mp3StreamAt reports whether a layer III frame starts at pos whose next
-// frame is of its stream (mp3SyncMask), or which ends at the audio's end.
-func mp3StreamAt(w *mp3Window, pos int64) bool {
+// mp3StreamAt is the header of the layer III frame at pos when its next frame
+// is of its stream (mp3SyncMask), or it ends at the audio's end; 0 (no
+// header) otherwise.
+func mp3StreamAt(w *mp3Window, pos int64) uint32 {
 	w.ensure(pos, mp3MaxFrame+4)
 	h := w.u32(pos)
-	fs := mp3FrameSize(h, h)
-	return fs > 0 && (pos+fs == w.end || mp3FrameSize(w.u32(pos+fs), h) > 0)
+	if fs := mp3FrameSize(h, h); fs > 0 && (pos+fs == w.end || mp3FrameSize(w.u32(pos+fs), h) > 0) {
+		return h
+	}
+	return 0
 }
 
 // mp3MaxJunk is the share of an MP3's audio a frame count skips as junk (a
