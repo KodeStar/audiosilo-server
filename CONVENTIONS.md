@@ -3697,7 +3697,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   carries another show's follow, feed state, policy or place (a progress row on a file the moving
   show doesn't list) waits too, unless that show moves off it in the same call; a plain rename beside
   an unrelated unreadable folder (a root-owned `lost+found`) still moves (the `unread` flag through
-  `MovePodcastShows`). On a
+  `MovePodcastShows`). A scan keeps each planned move's old folders' rows through its prune, so a
+  held show whose only state there is a place is found again once the hold clears. On a
   case-insensitive file system only the spelling the root lists, read fresh, is the folder.
   A poll's or fetch's fold whose queued folder (episode) no longer holds its identity folds at the
   outcome's `show_path` (`path`) when that holds it; a copy keeps its own outcome. A fetch done in

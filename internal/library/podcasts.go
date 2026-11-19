@@ -73,8 +73,13 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 	// old name until then, and the move takes that row's episodes' listening
 	// state along. With a folder unread, a move over another show's state
 	// waits (catalog.MovePodcastShows); a plain rename does not, whatever else
-	// the root holds (a lost+found).
-	s.movePodcastShows(ctx, lib, "", unread)
+	// the root holds (a lost+found). A move's old folders keep their rows
+	// through the prune: a held move's row is the show's one way back to a
+	// place it has there with no follow, feed state or policy (an applied
+	// move dropped its own already).
+	for _, from := range s.movePodcastShows(ctx, lib, "", unread) {
+		keep[from] = true
+	}
 	if !partial {
 		var gone []string
 		for show := range old {
@@ -131,9 +136,10 @@ func (s *Scanner) IndexPodcastPath(ctx context.Context, lib catalog.Library, p s
 // call. unread (a scan's) is that a folder the root lists could not be read
 // or its feed.json used (unreadPodcastFolder); a rescan finds that out itself
 // (indexNewPodcastFolders). It goes to catalog.MovePodcastShows, which then
-// holds a move over another show's state. Failures are logged: the next scan
-// or rescan looks again.
-func (s *Scanner) movePodcastShows(ctx context.Context, lib catalog.Library, at string, unread bool) {
+// holds a move over another show's state. It answers the old folders of the
+// moves it planned, applied or held. Failures are logged: the next scan or
+// rescan looks again.
+func (s *Scanner) movePodcastShows(ctx context.Context, lib catalog.Library, at string, unread bool) (from []string) {
 	// The root's folder names, read when first needed (fresh, not a scan's
 	// listing from before its indexing: a copy made since is a folder too).
 	var listed map[string]bool
@@ -154,19 +160,23 @@ func (s *Scanner) movePodcastShows(ctx context.Context, lib catalog.Library, at 
 	}
 	if err != nil {
 		s.log.Warn("podcasts: looking for renamed show folders failed", "library", lib.ID, "err", err)
-		return
+		return nil
+	}
+	for _, m := range moves {
+		from = append(from, m.From...)
 	}
 	if len(moves) == 0 {
-		return
+		return from
 	}
 	n, err := s.cat.MovePodcastShows(ctx, lib.ID, moves, unread)
 	if err != nil {
 		s.log.Warn("podcasts: moving a renamed show folder's state failed", "library", lib.ID, "err", err)
-		return
+		return from
 	}
 	if n > 0 {
 		s.log.Info("podcasts: moved the state of show folders renamed by hand", "library", lib.ID, "shows", n)
 	}
+	return from
 }
 
 // settledPodcastMoves plans, and plans once more when the plan indexed a

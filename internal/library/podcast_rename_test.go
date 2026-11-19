@@ -544,3 +544,39 @@ func TestPodcastRenameChainWaitsOnACopiedPartner(t *testing.T) {
 	b.checkFollowed(t, "Other")
 	b.checkOther(t, "Third")
 }
+
+// A held move's old folder keeps its index row through the scan's prune (the
+// feed.json not usable is no partial scan): a show whose only state there is
+// a place (no follow, feed state or policy) is found at both folders again
+// once the hold clears, so its place moves.
+func TestPodcastHeldMoveKeepsItsOldRowThroughThePrune(t *testing.T) {
+	b := newRenameBed(t)
+	named := b.chain(t)
+	if err := b.cat.UnfollowPodcast(b.ctx, b.user, b.lib.ID, "Example Show"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.SetPodcastPolicy(b.ctx, b.lib.ID, "Example Show", renameShowID, nil); err != nil {
+		t.Fatal(err)
+	}
+	third := filepath.Join(b.root, "Third", "feed.json")
+	if err := os.WriteFile(third, named("Third")[:100], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || res.Partial {
+		t.Fatalf("scan %+v %v", res, err)
+	}
+	if got, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Other", b.user); err != nil || got.ShowID != renameShowID {
+		t.Fatalf("other %+v %v", got, err)
+	}
+	if err := os.WriteFile(third, named("Third"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	p, err := b.cat.GetProgress(b.ctx, b.user, catalog.Ref{LibraryID: b.lib.ID, Path: "Other/" + renameEpisode})
+	if err != nil || p == nil || p.Position != 42 {
+		t.Fatalf("the held show's place: %+v %v", p, err)
+	}
+	b.checkOther(t, "Third")
+}
