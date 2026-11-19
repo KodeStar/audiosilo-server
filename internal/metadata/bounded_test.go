@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -157,5 +158,74 @@ func TestNamesListed(t *testing.T) {
 	refused := func(context.Context, string) ([]string, error) { return nil, ErrNotAnswered }
 	if got, err := NamesListed(ctx, root, "Author/Book", refused); got || !GaveUp(err) {
 		t.Errorf("a listing given up on = %v %v, want false and the error", got, err)
+	}
+}
+
+// ShareFault is every error a look at a file a share answers with but the
+// file gone (ENOENT, ENOTDIR), a look given up on already or a context's;
+// AsGaveUp makes one a look given up on with the share's own message, and
+// Faulted tells it apart from one that did not answer.
+func TestShareFault(t *testing.T) {
+	t.Parallel()
+	pathErr := func(errno syscall.Errno) error { return &fs.PathError{Op: "lstat", Path: "/x", Err: errno} }
+	for _, c := range []struct {
+		err   error
+		fault bool
+	}{
+		{nil, false},
+		{pathErr(syscall.ENOENT), false},
+		{pathErr(syscall.ENOTDIR), false},
+		{pathErr(syscall.ENAMETOOLONG), false},
+		{ErrNotAnswered, false},
+		{ErrReadRefused, false},
+		{context.Canceled, false},
+		{context.DeadlineExceeded, false},
+		{pathErr(syscall.EIO), true},
+		{pathErr(syscall.ESTALE), true},
+		{pathErr(syscall.ENOTCONN), true},
+		{pathErr(syscall.EACCES), true},
+		{pathErr(syscall.EPERM), true},
+	} {
+		if got := ShareFault(c.err); got != c.fault {
+			t.Errorf("ShareFault(%v) = %v, want %v", c.err, got, c.fault)
+		}
+		made := AsGaveUp(c.err)
+		if c.fault {
+			cause, ok := Faulted(made)
+			if !GaveUp(made) || !ok || cause != c.err || made.Error() != c.err.Error() {
+				t.Errorf("AsGaveUp(%v) = %v: GaveUp %v, Faulted %v %v; want a look given up on keeping its error", c.err, made, GaveUp(made), cause, ok)
+			}
+		} else if made != c.err {
+			t.Errorf("AsGaveUp(%v) = %v, want it as it is", c.err, made)
+		}
+	}
+	if _, ok := Faulted(ErrNotAnswered); ok {
+		t.Error("Faulted(ErrNotAnswered) = true, want a look not answered told from a share's fault")
+	}
+}
+
+// A look that returns in time is progress on the read its context carries
+// (WithProgress); one given up on is not.
+func TestBoundedNotesProgress(t *testing.T) {
+	t.Parallel()
+	p := NewProgress()
+	longAgo := -int64(2 * time.Hour) // before progressEpoch
+	p.last.Store(longAgo)            // last moved on long ago
+	ctx := WithProgress(t.Context(), p)
+	if _, err := StatBounded(ctx, t.TempDir(), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if idle := p.Idle(); idle > time.Minute {
+		t.Errorf("idle %v after a look that answered, want it noted", idle)
+	}
+	p.last.Store(longAgo)
+	if _, err := Bounded(ctx, t.TempDir(), 10*time.Millisecond, func() (int, error) {
+		time.Sleep(200 * time.Millisecond)
+		return 0, nil
+	}, nil); !GaveUp(err) {
+		t.Fatalf("a look past its time = %v, want given up on", err)
+	}
+	if idle := p.Idle(); idle < time.Hour {
+		t.Errorf("idle %v after a look given up on, want none noted", idle)
 	}
 }

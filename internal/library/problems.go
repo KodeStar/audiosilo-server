@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,7 +103,14 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 	s.noteRejected(abs, at, md)
 	// A read cut short again (readCutShort: its length still out of time
 	// included) has not cleared: the full re-index would only keep the book.
-	return md.OpenErr == nil && !readCutShort(md) && (!probe || md.ProbeErr == nil)
+	if md.OpenErr == nil && !readCutShort(md) && (!probe || md.ProbeErr == nil) {
+		return true
+	}
+	// A read cut short before (a share that hung) that is answered now with
+	// a lasting problem (a permission on a share that came back): the
+	// re-index records that one (the book kept as stored: openFaulted), so
+	// the time-out isn't left listed for good.
+	return cutShort(sig.ScanErrorDetail) && md.OpenErr != nil && !readCutShort(md)
 }
 
 // sideAnswers reports whether the file or folder at abs beside a book's audio,
@@ -115,8 +121,12 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 // small file, an EPUB's zip directory, where checkEbook reads). A stat
 // alone would not do for those: on NFS or FUSE it can answer from a cache
 // while reads still hang, and every scan would then read the whole book again
-// only to wait out the same read. Gone, or no longer a regular file or folder,
-// counts as answered: the re-index decides what it is.
+// only to wait out the same read. Any lasting answer counts: gone, no longer a
+// regular file or folder, or a lasting error (a permission on a share that came
+// back); the re-index decides what it is. A fault a retry may get past
+// (transientFault: EIO, ENOTCONN) is no answer: the re-index would meet it on
+// the same look, and a cover look reading it as "no cover" would drop the
+// stored one.
 func sideAnswers(ctx context.Context, abs string, timeout time.Duration) bool {
 	// One bounded call, the stat and the look it leads to: a share that
 	// stopped answering costs timeout once, and holds one of its mount's slots.
@@ -139,7 +149,10 @@ func sideAnswers(ctx context.Context, abs string, timeout time.Duration) bool {
 		}
 		return struct{}{}, err
 	}, nil)
-	return err == nil || errors.Is(err, fs.ErrNotExist) || errors.Is(err, metadata.ErrNotRegular)
+	// Any lasting answer counts (a permission on a share that came back
+	// included: the re-index records what it is); a look given up on again,
+	// or a share's fault a retry may get past, doesn't.
+	return !metadata.Unanswered(ctx, err) && !transientFault(err)
 }
 
 // sideProbeBytes is how much of a file beside the audio sideAnswers reads.
@@ -153,6 +166,23 @@ const (
 	tagsUnreadDetail  = "reading it timed out"
 	readRefusedDetail = "too many earlier reads from the same drive or share are stuck, so it wasn't tried"
 )
+
+// cutShort reports whether detail is a read problem's that says the file's
+// read was cut short or refused (tagsUnreadDetail, readRefusedDetail), not
+// what the file is: one a later read may answer otherwise.
+func cutShort(detail string) bool { return detail == tagsUnreadDetail || detail == readRefusedDetail }
+
+// keptAsStored reports whether sig records a read problem that a read meeting
+// it again keeps the stored book over (catalog.Book.ReadCutShort), writing
+// nothing new of it: any unreadable one (a read cut short or refused, an open
+// a share failed, a file that is no regular file) and an ffprobe time-out.
+// Until problemCleared finds the file answers, reading the book again for
+// another reason (a cover that appeared beside it) would write nothing, on
+// every scan.
+func keptAsStored(sig catalog.Signature) bool {
+	return sig.ScanError == problemUnreadable ||
+		(sig.ScanError == problemProbe && strings.HasPrefix(sig.ScanErrorDetail, metadata.ErrProbeTimeout.Error()))
+}
 
 // fileState is a file's mtime (Unix seconds) and size: with its absolute path,
 // what a rejection of its data is remembered by (noteRejected). A scan that

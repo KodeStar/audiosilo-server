@@ -220,6 +220,20 @@ type Book struct {
 	// added, gone, renamed or changed UpsertBook writes it whole, the part's
 	// problem with it, and clears ReadCutShort to say so.
 	LengthOnly bool `json:"-"`
+	// LengthsRead narrows ReadCutShort the other way: only tags went unread
+	// (the in-process read cut short) and every file's length was read all the
+	// same (ffprobe answered: metadata.Metadata.LengthRead), so the length,
+	// codec and chapters are known though the names are not. UpsertBook keeps
+	// the stored book's names, cover flag and file signatures (the next scan
+	// reads it again) but writes those lengths (recordLengths), while its files
+	// are the stored ones by path; it clears LengthsRead when it writes none.
+	LengthsRead bool `json:"-"`
+	// ReadRoot is the library folder the book was read under, for a read that
+	// may outlast a change to it (an on-demand index, which goes on past its
+	// request): UpsertBook writes nothing (ErrRootChanged) once the library's
+	// root is no longer it, as the book's path names a file under the old
+	// folder. "" for no check (a scan's batch writes).
+	ReadRoot string `json:"-"`
 	// LengthUncounted: one of the book's files is a VBR MP3 with no Xing or
 	// VBRI header whose frames the scan could not count for now (a deadline, a
 	// read error: metadata.Metadata.LengthUncounted), its length ffprobe's
@@ -232,6 +246,11 @@ type Book struct {
 	// book's own file's for a single-file book. Set by the scanner only, so the
 	// added_at it stamps needs no second lstat a file (library.stampAddedAt).
 	FoundAdded []int64 `json:"-"`
+	// CoverSeen: the scan's discovery walk listed an image the book's sidecar
+	// cover rule would take (library.coversOfWalk). A book stored with no
+	// sidecar cover is then read again though its audio is unchanged, so a
+	// cover put beside it is found. Set by the scanner only.
+	CoverSeen bool `json:"-"`
 	// Readalong is the state of the book's read-along map (Bridge Phase 3c,
 	// readalong.go), set by the api on GET /libraries/{id}/item only (never a
 	// list row); nil, and omitted, with no ebook or no valid map.

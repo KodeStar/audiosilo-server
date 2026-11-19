@@ -27,8 +27,16 @@ var (
 // good. ok is false when ctx ended first: fn is left to finish (or not) on its
 // own goroutine, counted in stuck until it does, and drop (when not nil) is
 // handed what it then returns, a file to close. With ctx ended already fn is
-// not run (ok false, nothing counted).
+// not run (ok false, nothing counted). A call that returns in time is progress
+// on ctx's read (WithProgress).
 func await[T any](ctx context.Context, stuck *stuckReads, fn func() T, drop func(T)) (v T, ok bool) {
+	return awaitUntil(ctx, nil, stuck, fn, drop)
+}
+
+// awaitUntil is await, given up on too once expire fires (nil: never), so a
+// caller bounding one call by a time needs no context of its own for it (a
+// look per audio file in a no-change scan: Bounded).
+func awaitUntil[T any](ctx context.Context, expire <-chan time.Time, stuck *stuckReads, fn func() T, drop func(T)) (v T, ok bool) {
 	if ctx.Err() != nil {
 		return v, false
 	}
@@ -47,17 +55,20 @@ func await[T any](ctx context.Context, stuck *stuckReads, fn func() T, drop func
 	}()
 	select {
 	case v = <-done:
+		noteProgress(ctx)
 		return v, true
 	case <-ctx.Done():
-		// Counted before it is marked, so the goroutine's release always
-		// follows; a call that returned meanwhile was never abandoned.
-		stuck.n.Add(1)
-		if state.CompareAndSwap(readRunning, readAbandoned) {
-			return v, false
-		}
-		stuck.release()
-		return <-done, true
+	case <-expire:
 	}
+	// Counted before it is marked, so the goroutine's release always follows;
+	// a call that returned meanwhile was never abandoned.
+	stuck.n.Add(1)
+	if state.CompareAndSwap(readRunning, readAbandoned) {
+		return v, false
+	}
+	stuck.release()
+	noteProgress(ctx)
+	return <-done, true
 }
 
 // An await's call: still running, abandoned by its waiter, or returned.
@@ -69,7 +80,8 @@ const (
 
 // heldOpens is HoldOpensForTests's hook, called before each open and Bounded
 // call, look true for one that only looks at the path (StatBounded,
-// LstatBounded, ReadDirBounded); nil outside a test.
+// LstatBounded, ReadDirBounded, EvalSymlinksBounded, LookBounded); nil
+// outside a test.
 var heldOpens atomic.Pointer[func(path string, look bool)]
 
 // OpenRegular is openRegular for the files a request or a scan opens outside
@@ -77,6 +89,20 @@ var heldOpens atomic.Pointer[func(path string, look bool)]
 // once (ErrNotRegular) rather than waited on for a writer that may never come,
 // which would hold a Bounded call, counted on its mount, for good.
 func OpenRegular(path string) (*os.File, os.FileInfo, error) { return openRegular(path) }
+
+// OpenRegularBounded is OpenRegular as a Bounded call: a file opened after a
+// call given up on is closed when its open returns.
+func OpenRegularBounded(ctx context.Context, path string, timeout time.Duration) (*os.File, os.FileInfo, error) {
+	type opened struct {
+		f    *os.File
+		info os.FileInfo
+	}
+	o, err := Bounded(ctx, path, timeout, func() (opened, error) {
+		f, info, err := openRegular(path)
+		return opened{f, info}, err
+	}, func(o opened) { _ = o.f.Close() })
+	return o.f, o.info, err
+}
 
 // openRegular opens the file at path for reading, without waiting for a
 // writer when it is a FIFO (openFlags), and stats it: an error when it is no

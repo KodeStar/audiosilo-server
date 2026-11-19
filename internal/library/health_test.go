@@ -194,7 +194,7 @@ func TestScanRecordsProblemsAndHonoursIgnore(t *testing.T) {
 		t.Fatalf("the problem isn't in the run log: %+v", res.Log)
 	}
 
-	listing, err := BrowseFS(root, "", 0, 100, nil, ParseIgnore(lib.IgnorePatterns))
+	listing, err := BrowseFS(t.Context(), root, "", time.Minute, 0, 100, nil, ParseIgnore(lib.IgnorePatterns))
 	if err != nil {
 		t.Fatal(err)
 	}

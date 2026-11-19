@@ -111,7 +111,7 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 	}
 	for {
 		wake, release := d.Bridge.WatchPodcast(lib.ID, rel)
-		f, fetch, openErr := library.OpenPodcast(budget, d.Catalog, lib, rel)
+		f, fetch, openErr := library.OpenPodcastBounded(budget, d.Catalog, lib, rel, wait)
 		if openErr == nil {
 			release()
 			return f, fetch, bridge.ReadyFetchStatus(fetch), nil
@@ -139,7 +139,7 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 		if status.State == "failed" || status.State == "unavailable" || left <= 25*time.Millisecond || wake == nil || budget.Err() != nil || ctx.Err() != nil {
 			release()
 			// Presence always gets one final check, including timeout and terminal wakes.
-			f, fetch, err = library.OpenPodcast(budget, d.Catalog, lib, rel)
+			f, fetch, err = library.OpenPodcastBounded(budget, d.Catalog, lib, rel, wait)
 			if err == nil {
 				return f, fetch, bridge.ReadyFetchStatus(fetch), nil
 			}

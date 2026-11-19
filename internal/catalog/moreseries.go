@@ -365,7 +365,9 @@ func (c *Catalog) KeySeries(ctx context.Context) (int, error) {
 			}
 		}
 		for _, id := range relisted {
-			if err := refreshEffective(ctx, tx, id); err != nil {
+			// A book whose stored scan doesn't decode is skipped and recorded,
+			// never the whole re-key failed with it (refreshOrSkip).
+			if _, err := refreshOrSkip(ctx, tx, id); err != nil {
 				return err
 			}
 		}

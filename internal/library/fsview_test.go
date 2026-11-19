@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // SafeJoin is the single security primitive gating every filesystem access
@@ -138,7 +139,7 @@ func TestBrowseFSPagination(t *testing.T) {
 	seen := map[string]int{}
 	offset, pages := 0, 0
 	for {
-		listing, err := BrowseFS(root, rel, offset, limit, nil, nil)
+		listing, err := BrowseFS(t.Context(), root, rel, time.Minute, offset, limit, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,7 +185,7 @@ func TestBrowseFSPagination(t *testing.T) {
 	}
 
 	// An offset at/past the total returns an empty page with no NextOffset.
-	past, err := BrowseFS(root, rel, total+5, limit, nil, nil)
+	past, err := BrowseFS(t.Context(), root, rel, time.Minute, total+5, limit, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +197,7 @@ func TestBrowseFSPagination(t *testing.T) {
 	}
 
 	// limit<=0 falls back to the 200 default, so all 25 entries fit on one page.
-	def, err := BrowseFS(root, rel, 0, 0, nil, nil)
+	def, err := BrowseFS(t.Context(), root, rel, time.Minute, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +234,7 @@ func TestBrowseFSAllowFilter(t *testing.T) {
 	}
 
 	// One unpaged pass: only permitted entries appear, denied ones never leak.
-	full, err := BrowseFS(root, rel, 0, 0, allow, nil)
+	full, err := BrowseFS(t.Context(), root, rel, time.Minute, 0, 0, allow, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +256,7 @@ func TestBrowseFSAllowFilter(t *testing.T) {
 	// after slicing). With 10 permitted entries and limit 5, the first page is a
 	// full 5 and there is a second page.
 	const limit = 5
-	page0, err := BrowseFS(root, rel, 0, limit, allow, nil)
+	page0, err := BrowseFS(t.Context(), root, rel, time.Minute, 0, limit, allow, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +266,7 @@ func TestBrowseFSAllowFilter(t *testing.T) {
 	if page0.NextOffset != limit {
 		t.Fatalf("first page NextOffset = %d, want %d", page0.NextOffset, limit)
 	}
-	page1, err := BrowseFS(root, rel, page0.NextOffset, limit, allow, nil)
+	page1, err := BrowseFS(t.Context(), root, rel, time.Minute, page0.NextOffset, limit, allow, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,13 +293,13 @@ func TestListDirIsBrowseFSUnpaged(t *testing.T) {
 		t.Fatal(err)
 	}
 	allow := func(p string) bool { return !strings.HasSuffix(p, "hidden-by-allow") }
-	all, err := ListDir(root, rel, allow, nil)
+	all, err := ListDir(t.Context(), root, rel, time.Minute, allow, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var paged []Entry
 	for offset := 0; ; {
-		listing, err := BrowseFS(root, rel, offset, 3, allow, nil)
+		listing, err := BrowseFS(t.Context(), root, rel, time.Minute, offset, 3, allow, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

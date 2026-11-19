@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -251,14 +252,7 @@ func (c *Catalog) resolveLibrary(ctx context.Context, lib, gen int64) error {
 				return err
 			}
 			for _, id := range ids {
-				if err := refreshEffective(ctx, tx, id); errors.Is(err, errScannedUnreadable) {
-					// Its snapshot fails to decode before anything of the book is
-					// written: the rest of the batch goes on.
-					err = recordScannedUnreadable(ctx, tx, id)
-					if err != nil {
-						return err
-					}
-				} else if err != nil {
+				if _, err := refreshOrSkip(ctx, tx, id); err != nil {
 					return err
 				}
 			}
@@ -310,6 +304,54 @@ func recordScannedUnreadable(ctx context.Context, tx *sql.Tx, id int64) error {
 		  WHERE id = ?4 AND NOT (scan_error = ?1 AND scan_error_file = ?2)`,
 		ProblemUnreadable, first, scannedUnreadableDetail, id)
 	return err
+}
+
+// refreshOrSkip re-resolves book id (refreshEffective) or, when its stored
+// scan doesn't decode, records its read problem instead
+// (recordScannedUnreadable), so a batch of many books goes on past it
+// (server#453). loadLayers finds that before anything of the book is written,
+// so no savepoint is needed (skipUnreadable is for writes made first).
+// skipped reports it.
+func refreshOrSkip(ctx context.Context, tx *sql.Tx, id int64) (skipped bool, err error) {
+	err = refreshEffective(ctx, tx, id)
+	if !errors.Is(err, errScannedUnreadable) {
+		return false, err
+	}
+	return true, recordScannedUnreadable(ctx, tx, id)
+}
+
+// skipSavepoint is the savepoint skipUnreadable writes one book under.
+const skipSavepoint = "skip_unreadable"
+
+// skipUnreadable runs fn, one book's writes in tx, under a savepoint: when fn
+// fails because the book's stored scan doesn't decode (errScannedUnreadable,
+// from loadLayers or refreshEffective), what it wrote is rolled back and the
+// book's read problem recorded instead (recordScannedUnreadable, id naming the
+// book), so a batch of many books goes on past it, as ResolveSources does
+// (server#453): the next scan reads the book again and writes a new snapshot.
+// skipped reports that. Any other error is fn's, the batch's to fail.
+func skipUnreadable(ctx context.Context, tx *sql.Tx, id func() (int64, error), fn func() error) (skipped bool, err error) {
+	if _, err := tx.ExecContext(ctx, `SAVEPOINT `+skipSavepoint); err != nil {
+		return false, err
+	}
+	ferr := fn()
+	unreadable := errors.Is(ferr, errScannedUnreadable)
+	if unreadable {
+		if _, err := tx.ExecContext(ctx, `ROLLBACK TO `+skipSavepoint); err != nil {
+			return false, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `RELEASE `+skipSavepoint); err != nil {
+		return false, cmp.Or(ferr, err)
+	}
+	if !unreadable {
+		return false, ferr // the caller's to handle (a batch fails on it)
+	}
+	bookID, err := id()
+	if err != nil {
+		return false, err
+	}
+	return true, recordScannedUnreadable(ctx, tx, bookID)
 }
 
 // joinPatterns and splitPatterns store an ignore list as one pattern per line.

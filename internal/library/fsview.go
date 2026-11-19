@@ -180,20 +180,23 @@ func SafeJoin(root, relPath string) (string, error) {
 // listed, and none past it: no Lstat a variant would answer and a missing name
 // would not. A link out of the root is ErrOutsideRoot as soon as it is
 // reached, nothing below it listed or looked at, so the answer never tells
-// what the folder it points to holds. err is that, or a look given up on
-// (metadata.GaveUp) or ctx's; a listing or look that fails otherwise is a name
-// not there.
+// what the folder it points to holds, nor how its mount fails (a fault met
+// resolving a link out of the root is a link that does not resolve, as
+// before: boundedLooks). err is that, or a look given up on
+// (metadata.GaveUp: one that did not answer in time, or failed as a share does
+// that a retry may get past, transientFault's EIO, ESTALE, ENOTCONN, as the
+// scanner reads them) or ctx's; a listing or look that fails otherwise (the
+// name gone, a permission) is a name not there.
 func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Duration,
 	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) (abs string, there bool, err error) {
 	deadline := time.Now().Add(timeout)
-	wait := func() time.Duration { return max(time.Until(deadline), time.Nanosecond) }
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return "", false, err
 	}
-	resolved, rerr := metadata.EvalSymlinksBounded(ctx, rootAbs, wait())
-	if metadata.Unanswered(ctx, rerr) {
-		return "", false, cmp.Or(rerr, ctx.Err())
+	resolved, rerr := metadata.EvalSymlinksBounded(ctx, rootAbs, metadata.WaitLeft(deadline))
+	if err := unansweredLook(ctx, rerr); err != nil {
+		return "", false, err
 	}
 	if rerr != nil {
 		resolved = rootAbs
@@ -205,7 +208,7 @@ func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Dura
 	if rerr != nil {
 		return full, false, nil // no root to list: nothing there
 	}
-	target, there, err := resolveBelow(resolved, full, boundedLooks(ctx, wait, names))
+	target, there, err := resolveBelow(resolved, full, boundedLooks(ctx, resolved, deadline, names, metadata.EvalSymlinksBounded))
 	switch {
 	case err != nil:
 		return "", false, err
@@ -220,7 +223,8 @@ func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Dura
 // bounded and a name first looked for in its folder's listing.
 type belowLooks struct {
 	// lstat is the name's Lstat, nil when it is not there (or the look
-	// failed); err only for a look that went unanswered.
+	// failed); err only for a look that went unanswered (with boundedLooks,
+	// one failing as a share does that a retry may get past too).
 	lstat func(path string) (fs.FileInfo, error)
 	// eval is a link's target, every link in it resolved, "" when it does not
 	// resolve (a dangling link); err as lstat's.
@@ -230,39 +234,71 @@ type belowLooks struct {
 	listed func(dir, name string) (bool, error)
 }
 
-// boundedLooks are SafeJoinListed's: each a metadata.Bounded look of its own,
-// within wait, a name first looked for in its folder's listing (names).
-func boundedLooks(ctx context.Context, wait func() time.Duration,
-	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) belowLooks {
-	answered := func(err error) error { // a look's error that is no answer, else nil
-		if metadata.Unanswered(ctx, err) {
-			return cmp.Or(err, ctx.Err())
-		}
-		return nil
+// unansweredLook is err, a bounded look's (SafeJoinListed's, coverLook's), when it
+// is no answer about the name, else nil (a name not there): a look given up
+// on, ctx ended (its error ctx's), or a look failing as a share does that a
+// retry may get past (transientFault: EIO, ESTALE, a mount that dropped, made
+// one given up on, transientGaveUp), as the scanner's cover look reads it
+// (coverLook.find), so a book on a share that stopped answering is a 503
+// share_not_answering, never a 404. A permission (EACCES, EPERM) stays a name
+// not there, the lasting answer it had, as does the name gone.
+func unansweredLook(ctx context.Context, err error) error {
+	if err = transientGaveUp(err); metadata.Unanswered(ctx, err) {
+		return cmp.Or(err, ctx.Err())
 	}
+	return nil
+}
+
+// boundedLooks are SafeJoinListed's: each a metadata.Bounded look of its own,
+// within deadline, a name first looked for in its folder's listing (names),
+// each failure read by unansweredLook. A link's resolve (evalLinks:
+// metadata.EvalSymlinksBounded, a test's to inject a share's errors) reads a
+// share's fault that way only when it was met on a name under rootAbs or above
+// it (faultWithin): one met out of the root, where an out-of-root link's
+// target lies, is a link that does not resolve, so the answer tells nothing
+// about what the target's mount does.
+func boundedLooks(ctx context.Context, rootAbs string, deadline time.Time,
+	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error),
+	evalLinks func(ctx context.Context, path string, timeout time.Duration) (string, error)) belowLooks {
 	return belowLooks{
 		lstat: func(p string) (fs.FileInfo, error) {
-			fi, err := metadata.LstatBounded(ctx, p, wait())
+			fi, err := metadata.LstatBounded(ctx, p, metadata.WaitLeft(deadline))
 			if err != nil {
-				return nil, answered(err)
+				return nil, unansweredLook(ctx, err)
 			}
 			return fi, nil
 		},
 		eval: func(p string) (string, error) {
-			r, err := metadata.EvalSymlinksBounded(ctx, p, wait())
-			if err != nil {
-				return "", answered(err)
+			r, err := evalLinks(ctx, p, metadata.WaitLeft(deadline))
+			switch {
+			case err == nil:
+				return r, nil
+			case faultWithin(rootAbs, err) || metadata.Unanswered(ctx, err):
+				return "", unansweredLook(ctx, err)
 			}
-			return r, nil
+			return "", nil // a dangling link, or a fault out of the root
 		},
 		listed: func(dir, name string) (bool, error) {
-			ns, err := names(ctx, dir, wait())
+			ns, err := names(ctx, dir, metadata.WaitLeft(deadline))
 			if err != nil {
-				return false, answered(err)
+				return false, unansweredLook(ctx, err)
 			}
 			return slices.Contains(ns, name), nil
 		},
 	}
+}
+
+// faultWithin reports whether err, a link's resolve (filepath.EvalSymlinks,
+// which Lstats and reads each name it meets, the link's target's included),
+// failed on a name under rootAbs (the root's own included) or on a folder
+// above it: a link's absolute target is walked from the filesystem's root, so
+// its first looks are at the root's own mount (/mnt/user, a share's mount
+// point), whose fault every request meets resolving the root, telling nothing
+// about where the link points. One with no path to tell where (no
+// fs.PathError) is not.
+func faultWithin(rootAbs string, err error) bool {
+	var pe *fs.PathError
+	return errors.As(err, &pe) && (withinRoot(rootAbs, pe.Path) || withinRoot(pe.Path, rootAbs))
 }
 
 // plainLooks are SafeJoin's: os.Lstat and filepath.EvalSymlinks, no listing.
@@ -363,9 +399,12 @@ func resolveExisting(p string) string {
 
 // BrowseFS lists a directory within a library root with offset pagination: a
 // page of ListDir, its files with their Size and ModTime. relPath "" (or "/")
-// lists the root.
-func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string) bool, ignore *Ignore) (*Listing, error) {
-	entries, dirEntries, err := listDir(root, relPath, allow, ignore)
+// lists the root. Its looks are ListDir's, within timeout in all, the page's
+// file info among them (one Bounded call: given up on, the page lists without
+// sizes).
+func BrowseFS(ctx context.Context, root, relPath string, timeout time.Duration, offset, limit int, allow func(relPath string) bool, ignore *Ignore) (*Listing, error) {
+	deadline := time.Now().Add(timeout)
+	entries, dirEntries, err := listDir(ctx, root, relPath, timeout, allow, ignore)
 	if err != nil {
 		return nil, err
 	}
@@ -381,14 +420,21 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 	// a multi-second listing on a network mount. The directory read's own entry
 	// answers it (a stat on Linux and macOS, nothing at all on Windows, which
 	// lists it with the name).
-	for i := range page {
-		if page[i].IsDir {
-			continue
+	type info struct{ size, mod int64 }
+	infos, _ := metadata.LookBounded(ctx, filepath.Join(root, filepath.FromSlash(relPath)), metadata.WaitLeft(deadline), func() ([]info, error) {
+		out := make([]info, len(page))
+		for i := range page {
+			if page[i].IsDir {
+				continue
+			}
+			if fi, err := dirEntries[offset+i].Info(); err == nil {
+				out[i] = info{fi.Size(), fi.ModTime().Unix()}
+			}
 		}
-		if info, err := dirEntries[offset+i].Info(); err == nil {
-			page[i].Size = info.Size()
-			page[i].ModTime = info.ModTime().Unix()
-		}
+		return out, nil
+	})
+	for i := range infos {
+		page[i].Size, page[i].ModTime = infos[i].size, infos[i].mod
 	}
 	out := &Listing{Path: catalog.CleanRelPath(relPath), Entries: page, Total: total, Offset: offset}
 	if end < total {
@@ -404,21 +450,25 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 // the folder leaves out (shadowedMKA: beside a file of its name in another
 // format). Directories sort before files, each in natural name order
 // (naturalLess), so the files list in the order a book of the folder plays them
-// (sortFileOrder) and the order is stable for paging.
-func ListDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) ([]Entry, error) {
-	entries, _, err := listDir(root, relPath, allow, ignore)
+// (sortFileOrder) and the order is stable for paging. The join and the
+// listing are bounded looks (ctx, timeout in all, on the folder's mount): on a
+// share that stopped answering the error is a look given up on
+// (metadata.GaveUp).
+func ListDir(ctx context.Context, root, relPath string, timeout time.Duration, allow func(relPath string) bool, ignore *Ignore) ([]Entry, error) {
+	entries, _, err := listDir(ctx, root, relPath, timeout, allow, ignore)
 	return entries, err
 }
 
 // listDir is ListDir, with each entry's fs.DirEntry from the directory read,
 // in the same order.
-func listDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) ([]Entry, []fs.DirEntry, error) {
+func listDir(ctx context.Context, root, relPath string, timeout time.Duration, allow func(relPath string) bool, ignore *Ignore) ([]Entry, []fs.DirEntry, error) {
+	deadline := time.Now().Add(timeout)
 	// A hidden folder isn't listed, so it can't be opened by name either.
-	full, err := ContentJoin(root, relPath)
+	full, err := ContentJoinBounded(ctx, root, relPath, timeout)
 	if err != nil {
 		return nil, nil, err
 	}
-	dirEntries, err := os.ReadDir(full)
+	dirEntries, err := metadata.ReadDirBounded(ctx, full, metadata.WaitLeft(deadline))
 	if err != nil {
 		return nil, nil, err
 	}

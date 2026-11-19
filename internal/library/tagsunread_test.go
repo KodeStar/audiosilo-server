@@ -382,28 +382,40 @@ func TestLengthTimeOutKeepsTheBookOnlyWhileItsFilesAreTheStoredOnes(t *testing.T
 
 // A problem with a file beside the audio clears only once the kind of call
 // that gave up answers: a read of a metadata.json, an attachment or an ebook,
-// a listing of a folder, a stat of a cover image. A file whose stat answers
-// while it still can't be read (on NFS or FUSE a stat can answer from a cache
-// while reads hang) keeps its problem, so the scan does not read the whole
-// book again only to wait out the same read. Gone counts as cleared.
+// a listing of a folder, a stat of a cover image. A file whose read still
+// doesn't answer (on NFS or FUSE a stat can answer from a cache while reads
+// hang) keeps its problem, so the scan does not read the whole book again only
+// to wait out the same read. Gone counts as cleared, and so does a lasting
+// answer (a permission on a share that came back: hung-then-EACCES, server#360),
+// for the re-index to record what it is. Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
 func TestProblemClearedAsksTheKindOfCallThatGaveUp(t *testing.T) {
-	t.Parallel()
 	s := NewScanner(nil, "", slog.Default())
-	s.probeTimeout = 5 * time.Second
-	root := t.TempDir()
+	s.probeTimeout = 200 * time.Millisecond
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	lib := catalog.Library{Root: root}
 	writeFile(t, root, "Book/metadata.json", []byte(`{"title":"T"}`))
 	writeFile(t, root, "Book/cover.jpg", []byte("img"))
 	writeFile(t, root, "Folder/01.mp3", []byte("x"))
 	cleared := func(rel string) bool {
 		t.Helper()
-		sig := catalog.Signature{ScanError: problemUnreadable, ScanErrorFile: rel}
+		sig := catalog.Signature{ScanError: problemUnreadable, ScanErrorFile: rel, ScanErrorDetail: tagsUnreadDetail}
 		return s.problemCleared(t.Context(), lib, sig, newReadSlots(1, time.Second))
 	}
 	for _, rel := range []string{"Book/metadata.json", "Book/cover.jpg", "Folder", "Book/gone.json"} {
 		if !cleared(rel) {
 			t.Errorf("%s answers its call: problem not cleared", rel)
 		}
+	}
+	for _, rel := range []string{"Book/metadata.json", "Folder"} {
+		release := metadata.HoldOpensForTests(filepath.Join(root, filepath.FromSlash(rel)))
+		if cleared(rel) {
+			t.Errorf("%s whose call still doesn't answer: problem cleared, want it kept", rel)
+		}
+		release()
 	}
 
 	chmod := func(rel string, mode os.FileMode) {
@@ -419,18 +431,13 @@ func TestProblemClearedAsksTheKindOfCallThatGaveUp(t *testing.T) {
 		t.Cleanup(func() { _ = os.Chmod(p, was.Mode().Perm()) })
 	}
 	chmod("Book/metadata.json", 0)
-	chmod("Book/cover.jpg", 0)
 	chmod("Folder", 0o300)
 	if _, err := os.ReadFile(filepath.Join(root, "Book", "metadata.json")); err == nil {
 		t.Skip("file permissions don't stop this user reading (root?)")
 	}
-	if cleared("Book/metadata.json") {
-		t.Error("a metadata.json whose stat answers but read doesn't: problem cleared, want it kept")
-	}
-	if cleared("Folder") {
-		t.Error("a folder whose stat answers but listing doesn't: problem cleared, want it kept")
-	}
-	if !cleared("Book/cover.jpg") {
-		t.Error("a cover image whose stat answers: problem kept, want it cleared (a stat is all its look makes)")
+	for _, rel := range []string{"Book/metadata.json", "Folder"} {
+		if !cleared(rel) {
+			t.Errorf("%s that answers with a permission now: problem kept, want it cleared for the re-index", rel)
+		}
 	}
 }

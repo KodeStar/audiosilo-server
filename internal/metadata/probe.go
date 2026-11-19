@@ -112,6 +112,9 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 		// not run, as readFile refuses an open there.
 		return nil, fmt.Errorf("%w: %w", ErrProbeTimeout, errReadRefused)
 	}
+	// Marked on the read's progress for as long as it runs: it reports none
+	// until it returns (Progress.Probe).
+	defer probing(parent)()
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffprobePath,

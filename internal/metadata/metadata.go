@@ -94,8 +94,8 @@ type Metadata struct {
 	// item, Vorbis or ffprobe "narrator"), which a composer tag, the fallback
 	// when there is none, never replaces (applyProbe).
 	narratorExplicit bool
-	// timedOut: with no ffprobe to ask, the in-process read ran out of time
-	// (ProbeTimedOut).
+	// timedOut: with no ffprobe to ask, the in-process read ran out of time,
+	// or the open did not answer (ProbeTimedOut).
 	timedOut bool
 	// tagsUnread: the tag read was cut short (out of time, or the caller's
 	// context ended), or refused, so the tags were not read (TagsUnread).
@@ -103,6 +103,9 @@ type Metadata struct {
 	// readRefused: the read was refused, the file not opened, as too many
 	// earlier reads hang (ReadRefused).
 	readRefused bool
+	// openHung: the file's open did not answer in its time, so ffprobe was not
+	// run on it (ExtractTimeout).
+	openHung bool
 	// counted: a VBR MP3 with no Xing or VBRI header, read with the probe off,
 	// has its frames counted (readFile's count): its length in seconds, which
 	// replaces ffprobe's estimate. 0 for any other file.
@@ -124,9 +127,10 @@ func (m *Metadata) LengthUncounted() bool { return m != nil && m.uncounted }
 
 // ProbeTimedOut reports whether, with no ffprobe configured, the file's read
 // ran out of its time (the tag read's or the in-process probe's deadline) and
-// so gave no duration: as with an ffprobe time-out (ErrProbeTimeout), a slow or
-// busy disk may read it given time alone. With ffprobe configured a timed-out
-// probe goes to ffprobe, whose own time-out is the ProbeErr.
+// so gave no duration, or, with or without one, its open did not answer in
+// that time: as with an ffprobe time-out (ErrProbeTimeout), a slow or busy
+// disk may read it given time alone. With ffprobe configured a timed-out read
+// of an opened file goes to ffprobe, whose own time-out is the ProbeErr.
 func (m *Metadata) ProbeTimedOut() bool { return m != nil && m.timedOut }
 
 // TagsUnread reports whether the file's tag read was cut short (a share that
@@ -134,6 +138,15 @@ func (m *Metadata) ProbeTimedOut() bool { return m != nil && m.timedOut }
 // them is unknown, not empty. ffprobe, when configured, may still have read
 // the duration and its own container tags.
 func (m *Metadata) TagsUnread() bool { return m != nil && m.tagsUnread }
+
+// LengthRead reports whether the file's length was read, its codec and
+// chapters with it: a duration, no probe error, no read out of time. With its
+// tags unread (TagsUnread: the in-process read cut short) that is ffprobe's
+// answer, given once the share answered again: a scan keeps it
+// (catalog.Book.LengthsRead), its tags still unknown.
+func (m *Metadata) LengthRead() bool {
+	return m != nil && m.OpenErr == nil && m.ProbeErr == nil && !m.timedOut && !m.readRefused && m.Duration > 0
+}
 
 // ReadRefused reports whether the file was not read at all, not even opened,
 // because maxAbandonedReads earlier reads from its mount have not returned (a
@@ -202,6 +215,8 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 // error as its ProbeErr. With ffprobePath "" (none configured, or none found)
 // the probe still runs, by noFFprobeRules (SCAN-SPIKE decision 2, server#269):
 // a file it is unsure of then has no duration, and no ProbeErr, as before.
+// A file whose open did not answer, or whose mount's reads hang already, is
+// not given to ffprobe either: it would hang there too.
 // A VBR MP3 with no Xing or VBRI header, whose length ffprobe only estimates,
 // has its frames counted (SRV-16): by the probe, or, when the probe is off, in
 // readFile's one read of the file, over ffprobe's estimate; a count cut short
@@ -221,6 +236,12 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 	case reason == reasonSaturated:
 		// Reads stopped answering: ffprobe would hang on the same share, and a
 		// process stuck in a read can't be killed either.
+	case m.openHung:
+		// Its open did not answer in its time: ffprobe's open of the same file
+		// would hang as it did (one more process left past its kill), and a
+		// read of a book on demand (Re-read) would wait out a second probe's
+		// time on top. Cut short, as a read out of time is.
+		m.timedOut = timedOutReason(reason)
 	case p != nil:
 		applyProbe(m, p)
 	case ffprobePath != "":
@@ -278,7 +299,8 @@ func fileFormat(path string) string {
 // file waited for under them (openBlockFile, blockFile.raw), so a file on a
 // share that stops answering costs at most timeout, and a FIFO none. A tag read
 // over a bound leaves the tags unread and the probe unrun (ffprobe, killable,
-// answers), as does an open that did not answer. The file is closed when it
+// answers); an open that did not answer leaves them so too, ffprobe unrun as
+// well (openHung). The file is closed when it
 // returns, before any ffprobe run. An error: it could not be opened, or is no
 // regular file.
 func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, count bool, timeout time.Duration) (p *probeResult, reason string, err error) {
@@ -293,7 +315,9 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, count b
 		m.tagsUnread, m.readRefused = true, true
 		return nil, reasonSaturated, nil
 	case errors.Is(err, errOpenAbandoned):
-		// Its open did not answer in time: as a tag read out of time (below).
+		// Its open did not answer in time: as a tag read out of time (below),
+		// though no ffprobe follows (ExtractTimeout).
+		m.openHung = true
 		return nil, tagsCutShort(m, path, "limit: "+context.Cause(rctx).Error()), nil
 	case errors.Is(err, errNotRegular):
 		// A FIFO (or a device) is never read as audio: an OpenErr like any
@@ -414,6 +438,19 @@ func TimedOutForTests(path string) *Metadata {
 	return &Metadata{Format: fileFormat(path), timedOut: true}
 }
 
+// TagsUnreadForTests marks m's tags unread (TagsUnread) and returns it: for
+// tests of what a scan does with a file whose in-process tag read was cut
+// short but whose ffprobe run answered (LengthRead), which a real read gives
+// only on a share that answers ffprobe after the tag read's deadline. It
+// panics outside a test binary.
+func TagsUnreadForTests(m *Metadata) *Metadata {
+	if !testing.Testing() {
+		panic("metadata.TagsUnreadForTests called outside a test binary")
+	}
+	m.tagsUnread = true
+	return m
+}
+
 // UncountedForTests marks m as LengthUncounted (a header-less VBR MP3 whose
 // count ran out of time) and returns it: for tests of what a scan does with
 // one, which a real read gives only on a file whose count outlasts its
@@ -471,8 +508,8 @@ func HoldOpensUntilForTests(dir string, held <-chan struct{}) (restore func()) {
 }
 
 // HoldReadsForTests is HoldOpensForTests for the opens and reads alone: a
-// look at a path under dir (StatBounded, LstatBounded, ReadDirBounded: a
-// stat, a listing) answers, as on a share whose folder listings and
+// look at a path under dir (StatBounded, LstatBounded, ReadDirBounded,
+// EvalSymlinksBounded, LookBounded: a stat, a listing) answers, as on a share whose folder listings and
 // attributes are cached while its files' reads hang.
 func HoldReadsForTests(dir string) (release func()) {
 	held := make(chan struct{})

@@ -157,7 +157,7 @@ func decodeAttachment[T any](raw string) *T {
 // row.
 func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings map[string]AttachmentsReading) error {
 	now := c.ts()
-	return c.eachPathBatch(ctx, "SetAttachments", slices.Collect(maps.Keys(readings)),
+	return c.eachPathBatch(ctx, "SetAttachments", libraryID, slices.Collect(maps.Keys(readings)),
 		func(tx *sql.Tx, relPath string) (bool, error) {
 			id, err := bookIDByPath(ctx, tx, libraryID, relPath)
 			if errors.Is(err, ErrNotFound) {

@@ -479,9 +479,11 @@ func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catal
 }
 
 // indexOnDemand reads the book at path (cleaned, scope-checked, no book of the
-// index at it) on demand (a.indexPath), each look at the share given fileWait:
-// one that stopped answering is a 503 share_not_answering, not this request's
-// own time running out. Only a path the disk has as given, byte for byte
+// index at it) on demand (a.indexPath), each look at the share given fileWait
+// (a.lookCtx): one that stopped answering, or failed as a share does that a
+// retry may get past (EIO, ESTALE: library.SafeJoinListed's rule, the
+// scanner's), is a 503 share_not_answering, not this request's own time
+// running out nor a 404. Only a path the disk has as given, byte for byte
 // (library.SafeJoinListed, through the kept listings, a.listed, as asGiven's):
 // any other is library.ErrNotIndexable, a path with nothing there. The
 // scanner's own read stats the path before it checks its spelling
@@ -496,7 +498,29 @@ func (a *API) indexOnDemand(ctx context.Context, lib *catalog.Library, path stri
 	} else if !there {
 		return nil, library.ErrNotIndexable
 	}
-	return a.indexPath(library.WithLookTimeout(ctx, a.fileWait), *lib, path, allow)
+	return a.indexPath(a.lookCtx(ctx), *lib, path, allow)
+}
+
+// lookCtx is ctx for a read of a book a request asked for (an on-demand index,
+// an admin's Re-read, the Bridge's rescan): each look at a library file given
+// fileWait (library.WithLookTimeout), and the waits on another read of the
+// book ending at a.flightWaitEnd (library.WithWaitCap), so a share that
+// stopped answering is a 503 share_not_answering with Retry-After before the
+// request timeout's bare 503.
+func (a *API) lookCtx(ctx context.Context) context.Context {
+	return library.WithWaitCap(library.WithLookTimeout(ctx, a.fileWait), a.flightWaitEnd(ctx))
+}
+
+// flightWaitEnd is when a request's waits on another read of its book end:
+// flightWaitMargin before ctx's deadline (the timeout middleware's, whatever
+// the request's looks took before it waits), or, on a context detached from
+// the request (rescanAt's), before a.timeoutDur from now.
+func (a *API) flightWaitEnd(ctx context.Context) time.Time {
+	end := time.Now().Add(a.timeoutDur)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(end) {
+		end = dl
+	}
+	return end.Add(-flightWaitMargin)
 }
 
 // bookAt is bookForPath for a handler: on a failure it writes the answer and
@@ -581,10 +605,14 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ignore := library.ParseIgnore(lib.IgnorePatterns)
-	listing, err := library.BrowseFS(lib.Root, dir,
+	listing, err := library.BrowseFS(r.Context(), lib.Root, dir, a.fileWait,
 		queryInt(r, "offset", 0), queryInt(r, "limit", 200), allow, ignore)
 	if errors.Is(err, library.ErrOutsideRoot) && !early {
 		writeError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	if metadata.GaveUp(err) {
+		writeShareNotAnswering(w)
 		return
 	}
 	if err != nil {
@@ -1084,16 +1112,9 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := media.ServeFile(w, r, abs, download, waitLeft(deadline)); err != nil {
+	if err := media.ServeFile(w, r, abs, download, metadata.WaitLeft(deadline)); err != nil {
 		writeShareNotAnswering(w)
 	}
-}
-
-// waitLeft is what is left of a stream's bound (deadline, handleStream) for its
-// next look, at least a nanosecond: a metadata.Bounded call given 0 would wait
-// with none.
-func waitLeft(deadline time.Time) time.Duration {
-	return max(time.Until(deadline), time.Nanosecond)
 }
 
 // afterWait is a stream's deadline once it has waited on something that was no
@@ -1112,7 +1133,7 @@ func (a *API) afterWait(deadline time.Time) time.Time {
 // away or the look was given up on (a 503 share_not_answering written), else
 // the look's error (no regular file there).
 func lookAtSource(w http.ResponseWriter, r *http.Request, abs string, deadline time.Time) (answered bool, err error) {
-	_, err = media.Source(r.Context(), abs, waitLeft(deadline))
+	_, err = media.Source(r.Context(), abs, metadata.WaitLeft(deadline))
 	switch {
 	case r.Context().Err() != nil:
 		return true, err
@@ -1144,7 +1165,7 @@ func (a *API) audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Lib
 	}
 	abs, held, there, err := a.asGiven(r.Context(), lib, rel, deadline)
 	if err == nil && held {
-		abs, err = library.SafeJoinBounded(r.Context(), lib.Root, rel, waitLeft(deadline))
+		abs, err = library.SafeJoinBounded(r.Context(), lib.Root, rel, metadata.WaitLeft(deadline))
 	}
 	switch {
 	case errors.Is(err, library.ErrOutsideRoot):
@@ -1180,7 +1201,7 @@ func (a *API) asGiven(ctx context.Context, lib *catalog.Library, rel string, dea
 	if held, err := a.cat.IndexHolds(ctx, lib.ID, rel); err != nil || held {
 		return "", held, false, err
 	}
-	abs, there, err = library.SafeJoinListed(ctx, lib.Root, rel, waitLeft(deadline), a.listed.Names)
+	abs, there, err = library.SafeJoinListed(ctx, lib.Root, rel, metadata.WaitLeft(deadline), a.listed.Names)
 	return abs, false, there, err
 }
 
@@ -1252,7 +1273,7 @@ func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 // ran to its end; with ?download=1 an attachment named <stem>.mp3. Its look
 // at abs given up on at the stream's deadline is a 503 share_not_answering.
 func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, h *transcodeHold, abs string, deadline time.Time) {
-	ended, err := media.Transcode(h.writer(w), r, abs, a.ffmpeg, h.ask.start, h.ask.download, waitLeft(deadline), transcodeIdleFor(r, h.ask), a.log)
+	ended, err := media.Transcode(h.writer(w), r, abs, a.ffmpeg, h.ask.start, h.ask.download, metadata.WaitLeft(deadline), transcodeIdleFor(r, h.ask), a.log)
 	h.ended = ended
 	if err != nil {
 		writeShareNotAnswering(w)

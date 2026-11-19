@@ -295,7 +295,7 @@ func ftsLabels(v string) string { return strings.Join(ParseLabels(v), "\n") }
 // re-resolved when that changes its snapshot. It commits every pathReadingBatch
 // books.
 func (c *Catalog) SetGenres(ctx context.Context, libraryID int64, genres map[string][]string) error {
-	return c.eachPathBatch(ctx, "SetGenres", slices.Collect(maps.Keys(genres)),
+	return c.eachPathBatch(ctx, "SetGenres", libraryID, slices.Collect(maps.Keys(genres)),
 		func(tx *sql.Tx, relPath string) (bool, error) {
 			return setGenres(ctx, tx, libraryID, relPath, genres[relPath])
 		})

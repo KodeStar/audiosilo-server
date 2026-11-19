@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"maps"
-	"os"
 	"path"
 	"slices"
 	"time"
@@ -63,7 +62,7 @@ func MarkPendingBooks(ctx context.Context, lib catalog.Library, entries []Entry,
 		if !e.IsDir || e.IsBook || holding[e.Path] || (allow != nil && !allow(e.Path)) {
 			continue
 		}
-		e.PendingBook = pendingBook(lib, e.Path, overrides, ignore, isDiscSet)
+		e.PendingBook = pendingBook(ctx, lib, e.Path, overrides, ignore, isDiscSet)
 	}
 }
 
@@ -76,11 +75,11 @@ func MarkPendingBooks(ctx context.Context, lib catalog.Library, entries []Entry,
 // (booksInDir's folder book). isDiscSet walks a folder (bounded), asked only as
 // resolveBook asks it: of rel when it holds no audio, of the folder above when
 // rel is a disc folder holding some.
-func pendingBook(lib catalog.Library, rel string, overrides map[string]string, ignore *Ignore, isDiscSet func(string) bool) bool {
+func pendingBook(ctx context.Context, lib catalog.Library, rel string, overrides map[string]string, ignore *Ignore, isDiscSet func(string) bool) bool {
 	if overrides[rel] == catalog.OverrideCollection {
 		return false
 	}
-	own := hasAudio(absOf(lib, rel), rel, ignore)
+	own := hasAudio(ctx, absOf(lib, rel), rel, ignore)
 	if root, ok := joinRoot(overrides, rel, func(p string) bool {
 		if p == rel {
 			return !own && isDiscSet(p)
@@ -95,9 +94,10 @@ func pendingBook(lib catalog.Library, rel string, overrides map[string]string, i
 // hasAudio reports whether the folder abs (at library-relative rel) directly
 // holds an audio file discovery reads (isAudioEntry, not overLong): audioEntries' question
 // without building, filtering or sorting the list (a shadowed .mka has its
-// shadowing file beside it, so any audio entry answers it).
-func hasAudio(abs, rel string, ignore *Ignore) bool {
-	entries, err := os.ReadDir(abs)
+// shadowing file beside it, so any audio entry answers it). The listing is a
+// bounded look, within ctx (the pass's time): one given up on is no audio.
+func hasAudio(ctx context.Context, abs, rel string, ignore *Ignore) bool {
+	entries, err := metadata.ReadDirBounded(ctx, abs, pendingTime)
 	if err != nil {
 		return false
 	}

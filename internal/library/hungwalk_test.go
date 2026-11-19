@@ -198,7 +198,8 @@ func TestBookOnDiskTellsAShareFaultFromAPermission(t *testing.T) {
 
 // A fingerprint missing for a reason a retry may get past (given up on, a
 // share's EIO or ENOTCONN, a read cut short) leaves a move unknown; one
-// refused for good (a permission, no regular file, the file gone) does not.
+// refused for good (a permission, the device gone, no regular file, the file
+// gone) does not.
 func TestFingerprintUnknown(t *testing.T) {
 	for _, c := range []struct {
 		err  error
@@ -210,6 +211,7 @@ func TestFingerprintUnknown(t *testing.T) {
 		{&fs.PathError{Op: "open", Err: syscall.ENOTCONN}, true},
 		{io.ErrUnexpectedEOF, true},
 		{&fs.PathError{Op: "open", Err: syscall.EACCES}, false},
+		{&fs.PathError{Op: "open", Err: syscall.ENXIO}, false},
 		{metadata.ErrNotRegular, false},
 		{&fs.PathError{Op: "open", Err: syscall.ENOENT}, false},
 		{nil, false},

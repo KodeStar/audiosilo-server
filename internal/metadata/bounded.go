@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -38,6 +39,50 @@ func GaveUp(err error) bool {
 // what it knows rather than read the look's answer.
 func Unanswered(ctx context.Context, err error) bool {
 	return GaveUp(err) || ctx.Err() != nil
+}
+
+// ShareFault reports whether err, a look's at a file or folder its parent
+// listed or a caller named (a stat, a listing, an open), is how a share fails
+// rather than an answer about the file: any error but the file gone (ENOENT,
+// ENOTDIR: a folder above it replaced; ENAMETOOLONG: a name no file can
+// have), a look given up on already (GaveUp) or a context's. EIO or ESTALE (a soft-mounted NFS share whose server stopped
+// answering, or a handle it lost), ENOTCONN or ETIMEDOUT (a FUSE pool or a
+// network mount that dropped), a permission (EACCES, EPERM: a share refusing a
+// look it allowed the listing) among them. Such a look says nothing about
+// whether the file is there: its caller keeps what it knows, as for a look
+// given up on (AsGaveUp), never reads it as "none".
+func ShareFault(err error) bool {
+	return err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) &&
+		!errors.Is(err, syscall.ENAMETOOLONG) && !GaveUp(err) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+// AsGaveUp is err made a look given up on (GaveUp reports it) when it is a
+// ShareFault, keeping the share's own message (a permission is not "did not
+// answer in time" in a run's log); any other err as it is.
+func AsGaveUp(err error) error {
+	if ShareFault(err) {
+		return shareFaultErr{err}
+	}
+	return err
+}
+
+// shareFaultErr is a ShareFault's error made a look given up on (AsGaveUp).
+type shareFaultErr struct{ err error }
+
+func (e shareFaultErr) Error() string        { return e.err.Error() }
+func (e shareFaultErr) Unwrap() error        { return e.err }
+func (e shareFaultErr) Is(target error) bool { return target == ErrNotAnswered }
+
+// Faulted reports whether err is a ShareFault made a look given up on
+// (AsGaveUp), and the share's own error: a caller that tells a look a share
+// failed from one it did not answer (a permission, which stays until an admin
+// changes it, from a share that may come back).
+func Faulted(err error) (cause error, ok bool) {
+	var f shareFaultErr
+	if errors.As(err, &f) {
+		return f.err, true
+	}
+	return nil, false
 }
 
 // Bounded runs fn, a call on the file or folder at path that a share which
@@ -70,11 +115,13 @@ func bounded[T any](ctx context.Context, path string, timeout time.Duration, loo
 	if stuck.saturated() {
 		return zero, fmt.Errorf("%s: %w", path, ErrReadRefused)
 	}
-	wctx := ctx
+	// One timer bounds the wait for a slot and the call together (a context of
+	// its own per call would cost a no-change scan, a look per audio file).
+	var expire <-chan time.Time
 	if timeout > 0 {
-		var cancel context.CancelFunc
-		wctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
+		t := time.NewTimer(timeout)
+		defer t.Stop()
+		expire = t.C
 	}
 	notAnswered := func() (T, error) {
 		if err := ctx.Err(); err != nil {
@@ -84,7 +131,9 @@ func bounded[T any](ctx context.Context, path string, timeout time.Duration, loo
 	}
 	select {
 	case stuck.calls <- struct{}{}:
-	case <-wctx.Done():
+	case <-ctx.Done():
+		return notAnswered()
+	case <-expire:
 		return notAnswered()
 	}
 	// The slot is freed once, by whichever claims it first: fn's goroutine as
@@ -96,7 +145,7 @@ func bounded[T any](ctx context.Context, path string, timeout time.Duration, loo
 		v   T
 		err error
 	}
-	r, ok := await(wctx, stuck, func() (r result) {
+	r, ok := awaitUntil(ctx, expire, stuck, func() (r result) {
 		if !claimed.CompareAndSwap(false, true) {
 			return result{err: ErrNotAnswered}
 		}
@@ -125,6 +174,12 @@ func bounded[T any](ctx context.Context, path string, timeout time.Duration, loo
 	return r.v, r.err
 }
 
+// WaitLeft is what is left of deadline for a Bounded call's timeout, at least
+// a nanosecond: a call given 0 would wait with no bound at all.
+func WaitLeft(deadline time.Time) time.Duration {
+	return max(time.Until(deadline), time.Nanosecond)
+}
+
 // StatBounded is os.Stat of path as a Bounded call.
 func StatBounded(ctx context.Context, path string, timeout time.Duration) (fs.FileInfo, error) {
 	return bounded(ctx, path, timeout, true, func() (fs.FileInfo, error) { return os.Stat(path) }, nil)
@@ -140,7 +195,15 @@ func LstatBounded(ctx context.Context, path string, timeout time.Duration) (fs.F
 // catalog's ownEntry: one form, so they read a folder's kept listing, DirNames,
 // under one name), and a link met on the way.
 func EvalSymlinksBounded(ctx context.Context, path string, timeout time.Duration) (string, error) {
-	return Bounded(ctx, path, timeout, func() (string, error) { return filepath.EvalSymlinks(path) }, nil)
+	return bounded(ctx, path, timeout, true, func() (string, error) { return filepath.EvalSymlinks(path) }, nil)
+}
+
+// LookBounded is Bounded for a call that only looks at path (its links, a
+// folder's first entries: no file's contents read), as StatBounded is: on a
+// share whose listings and attributes answer while its reads hang
+// (HoldReadsForTests) it answers too.
+func LookBounded[T any](ctx context.Context, path string, timeout time.Duration, fn func() (T, error)) (T, error) {
+	return bounded(ctx, path, timeout, true, fn, nil)
 }
 
 // ReadDirBounded is os.ReadDir of path as a Bounded call.

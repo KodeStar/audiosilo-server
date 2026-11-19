@@ -1318,8 +1318,10 @@ func (c *Catalog) PlaceByTitles(ctx context.Context) (int, error) {
 			continue
 		}
 		l, err := loadLayers(ctx, c.db, b.id)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue // removed by a scan meanwhile
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, errScannedUnreadable) {
+			// Removed by a scan meanwhile, or its stored scan doesn't decode (the
+			// next scan reads it again): not placed now.
+			continue
 		} else if err != nil {
 			return 0, err
 		}
@@ -1333,11 +1335,17 @@ func (c *Catalog) PlaceByTitles(ctx context.Context) (int, error) {
 		ids = ids[len(batch):]
 		if err := c.db.WithTx(ctx, "PlaceByTitles", func(tx *sql.Tx) error {
 			for _, id := range batch {
-				// A book a scan removed meanwhile has nothing to resolve.
-				if err := refreshEffective(ctx, tx, id); errors.Is(err, sql.ErrNoRows) {
+				// A book a scan removed meanwhile has nothing to resolve; one whose
+				// stored scan doesn't decode is skipped and recorded
+				// (refreshOrSkip).
+				// A failure to record the skip is the batch's, as any other.
+				skipped, err := refreshOrSkip(ctx, tx, id)
+				if errors.Is(err, sql.ErrNoRows) {
 					continue
 				} else if err != nil {
 					return err
+				} else if skipped {
+					continue
 				}
 				var idx float64
 				if err := tx.QueryRowContext(ctx, `SELECT series_index FROM books WHERE id = ?`, id).Scan(&idx); err != nil {

@@ -115,6 +115,9 @@ type FileCache struct {
 	run       func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error
 	// now is the refusals' clock (a field so tests can move it).
 	now func() time.Time
+	// openWait bounds a run's open of its source (sourceWait; a field so a
+	// test of a share that stops answering waits less).
+	openWait time.Duration
 
 	mu       sync.Mutex
 	inflight map[string]*cacheFlight
@@ -160,6 +163,7 @@ func newFileCache(dir string, spec cacheSpec, log *slog.Logger) (*FileCache, err
 		run:       runFFmpeg,
 		inflight:  map[string]*cacheFlight{},
 		now:       time.Now,
+		openWait:  sourceWait,
 		failed:    map[string]time.Time{},
 		reserved:  new(atomic.Int64),
 		warming:   map[string]struct{}{},
@@ -626,8 +630,14 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 
 	// Opened only once a slot is free, so queued runs hold no descriptor; a
 	// source that changed since the key was made, or while ffmpeg read it, is
-	// not cached under it.
-	src, err := os.Open(abs)
+	// not cached under it. The open is a bounded look (openWait, on the
+	// source's mount): on a share that stopped answering since the stat it is
+	// given up on (metadata.GaveUp), freeing the run's slot, where a plain
+	// open held it, and every run queued behind it, for good. It has that
+	// bound of its own (runCtx, not the run's timeout): an open that answers
+	// leaves a run past its time to be refused as one (timedOut), not failed
+	// as the server going away.
+	src, _, err := metadata.OpenRegularBounded(runCtx, abs, m.openWait)
 	if err != nil {
 		return err
 	}

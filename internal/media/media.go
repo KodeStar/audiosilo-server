@@ -149,14 +149,7 @@ func audioContentType(ext string) string {
 // waiting for a writer, given up on and counted on its mount for good. A 404
 // carries no Cache-Control a caller set for the file it expected.
 func ServeFile(w http.ResponseWriter, r *http.Request, absPath string, download bool, wait time.Duration) error {
-	type opened struct {
-		f    *os.File
-		info os.FileInfo
-	}
-	o, err := metadata.Bounded(r.Context(), absPath, wait, func() (opened, error) {
-		f, info, err := metadata.OpenRegular(absPath)
-		return opened{f, info}, err
-	}, func(o opened) { _ = o.f.Close() })
+	f, _, err := metadata.OpenRegularBounded(r.Context(), absPath, wait)
 	switch {
 	case metadata.GaveUp(err):
 		return err
@@ -165,8 +158,8 @@ func ServeFile(w http.ResponseWriter, r *http.Request, absPath string, download 
 		http.Error(w, "not found", http.StatusNotFound)
 		return nil
 	}
-	defer o.f.Close()
-	ServeOpened(w, r, o.f, download)
+	defer f.Close()
+	ServeOpened(w, r, f, download)
 	return nil
 }
 

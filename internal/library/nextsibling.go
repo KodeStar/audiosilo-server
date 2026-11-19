@@ -6,6 +6,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"time"
 
 	"golang.org/x/text/collate"
 	"golang.org/x/text/language"
@@ -20,14 +21,15 @@ import (
 // logged to log), then NextSibling. book is the index's book at the entry, nil
 // for a bare or pending folder; folder is the index's books in the folder by
 // path (the current one included). next is nil when nothing follows or the
-// folder cannot be read; an error is the index's.
-func NextInFolder(ctx context.Context, cat *catalog.Catalog, lib *catalog.Library, scope catalog.Scope, rel string, log *slog.Logger) (next *Entry, book *catalog.Book, folder map[string]catalog.Book, err error) {
+// folder cannot be read (its looks bounded by timeout, as ListDir's); an error
+// is the index's.
+func NextInFolder(ctx context.Context, cat *catalog.Catalog, lib *catalog.Library, scope catalog.Scope, rel string, timeout time.Duration, log *slog.Logger) (next *Entry, book *catalog.Book, folder map[string]catalog.Book, err error) {
 	var allow func(string) bool
 	if !scope.AllowAll {
 		allow = scope.Allows
 	}
 	ignore := ParseIgnore(lib.IgnorePatterns)
-	entries, err := ListDir(lib.Root, dirOf(rel), allow, ignore)
+	entries, err := ListDir(ctx, lib.Root, dirOf(rel), timeout, allow, ignore)
 	if err != nil {
 		return nil, nil, nil, nil
 	}

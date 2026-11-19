@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
@@ -353,5 +355,32 @@ func TestCORSVaryOrigin(t *testing.T) {
 				t.Fatalf("%s %s: granted = %t", c.name, method, got)
 			}
 		}
+	}
+}
+
+// TestFlightWaitEndsBeforeTheRequestTimeout: a request's waits on another
+// read of its book (a.flightWaitEnd, a.lookCtx) end flightWaitMargin ahead of
+// its own deadline, however much of its time its looks took before it waits,
+// so its 503 share_not_answering with Retry-After is written, not the
+// timeout's bare 503, which has neither; a context detached from the request
+// (rescanAt's) ends them that far ahead of a.timeoutDur from now; and a whole
+// request's wait outlasts a look's own time (fileWait), so a read that moves
+// on slowly is still waited on.
+func TestFlightWaitEndsBeforeTheRequestTimeout(t *testing.T) {
+	t.Parallel()
+	a := &API{timeoutDur: requestTimeout}
+	near := time.Now().Add(12 * time.Second) // a request whose looks took 18 s of its 30
+	ctx, cancel := context.WithDeadline(t.Context(), near)
+	defer cancel()
+	if end := a.flightWaitEnd(ctx); !end.Equal(near.Add(-flightWaitMargin)) {
+		t.Errorf("waits under a deadline %v away end %v before it, want %v", time.Until(near).Round(time.Second), near.Sub(end), flightWaitMargin)
+	}
+	before := time.Now()
+	end := a.flightWaitEnd(t.Context())
+	if want := before.Add(requestTimeout - flightWaitMargin); end.Before(want) || end.After(time.Now().Add(requestTimeout-flightWaitMargin)) {
+		t.Errorf("waits on a detached context end %v from now, want %v", end.Sub(before), requestTimeout-flightWaitMargin)
+	}
+	if requestTimeout-flightWaitMargin <= fileWaitTimeout {
+		t.Errorf("a whole request's wait %v is not past a look's time %v", requestTimeout-flightWaitMargin, fileWaitTimeout)
 	}
 }
