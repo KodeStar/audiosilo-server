@@ -137,10 +137,10 @@ func TestAudibleBackupFlow(t *testing.T) {
 		  AND details LIKE '%B000000001%' AND details LIKE '%New/One.m4b%'`).Scan(&audited); err != nil || audited != 1 {
 		t.Fatalf("the destination was audited %d times (%v), want once", audited, err)
 	}
-	// The account is named by its label as well as its id, for the log's reader.
+	// The row's target names the account, its details keep its id, for the log's reader.
 	for _, action := range []string{"bridge.audible.account", "bridge.audible.title"} {
 		if err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_events WHERE action = ?
-			  AND details LIKE '%"account":"`+testAccount+`"%' AND details LIKE '%"account_name":"Chris (US)"%'`, action).Scan(&audited); err != nil || audited != 1 {
+			  AND details LIKE '%"account":"`+testAccount+`"%' AND target = 'Chris (US)'`, action).Scan(&audited); err != nil || audited != 1 {
 			t.Fatalf("%s audited by name %d times (%v), want once", action, audited, err)
 		}
 	}

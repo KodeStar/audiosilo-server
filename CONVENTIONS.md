@@ -4053,10 +4053,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `book` override, which the scan would join into it: `checkDestOwnFolder`, `metadata.IsDiscFolder`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
   `invalid_policy` / `invalid_template`), audited: a queued Back up `bridge.job` (kind `audible.import`; also
   when recording it on the title failed), a pending one `bridge.audible.backup`, then `bridge.audible.backup_all`
-  / `title` / `account` (the audit guard reads `moduleRoutes.Admin` routes too), each naming the account by
-  its id and, when it has one, as `account_name` (`audibleAccountName`: its label, else "person (STORE)"),
-  which the console's audit details show for the id, an empty `template` or `dest_path` there reading
-  "Automatic". The
+  / `title` / `account` (the audit guard reads `moduleRoutes.Admin` routes too), each with the account's id
+  in its details and its name as the row's target, as `bridge.audible.remove` has it (`audibleAccountName`:
+  its label, else "person (STORE)", else the id), an empty `template` or `dest_path` in the console's audit
+  details reading "Automatic". The
   accounts list adds `template`, `policy_since` and `backup_estimate {count, bytes}` (Back up everything's
   titles, runtime at 8000 bytes a second); titles add `import`, `needs_attention`, `planned`, `contested` (see Audible
   unmatched titles below) and `dest_invalid` (a stored `dest_path` `CheckAudibleDestPath` now refuses). The Bridge's account

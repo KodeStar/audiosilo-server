@@ -1101,7 +1101,7 @@ func scanAudibleTitle(row rowScanner, now time.Time) (*AudibleTitle, error) {
 	}
 	t.NeedsAttention = preorderOverdue(&t, pending, now)
 	t.CanBackup = t.backupRefusal() == nil
-	t.DestInvalid = t.DestPath != "" && bridge.CheckAudibleDestPath(t.DestPath) != nil
+	t.DestInvalid = bridge.CheckAudibleDestPath(t.DestPath) != nil
 	return &t, nil
 }
 

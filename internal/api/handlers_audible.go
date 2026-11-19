@@ -381,41 +381,30 @@ func (a *API) handleAdminAudibleAccountDelete(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if acct != nil {
-		// Named, not just by its opaque id, for an admin reading the log
-		// (server#294), else (an account read without its person) the id.
-		name := audibleAccountName(acct)
-		a.audit(r, "bridge.audible.remove", cmp.Or(name, id), withAccountName(map[string]any{"account": id}, name))
+		a.audit(r, "bridge.audible.remove", audibleAccountName(acct), map[string]any{"account": id})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// audibleAccountName is how the audit log names an account for an admin
-// reading it: its label, else "person (STORE)", else "" (an account read
-// without its person).
+// audibleAccountName is an Audible audit row's target: the account named, not
+// just by its opaque id, for an admin reading the log (server#294). Its label,
+// else "person (STORE)", else (an account read without its person) its id.
 func audibleAccountName(acct *catalog.AudibleAccount) string {
 	if acct.Label == "" && acct.User.DisplayName != "" {
 		return fmt.Sprintf("%s (%s)", acct.User.DisplayName, strings.ToUpper(acct.Marketplace))
 	}
-	return acct.Label
+	return cmp.Or(acct.Label, acct.ID)
 }
 
-// withAccountName adds an account's name to its audit details as
-// account_name (the console shows it for the id), when it has one.
-func withAccountName(details map[string]any, name string) map[string]any {
-	if name != "" {
-		details["account_name"] = name
-	}
-	return details
-}
-
-// auditAudible records an Audible action whose details name account by its id:
-// with its name too when it can be read (audibleAccountName).
+// auditAudible records an Audible action on account: its details name it by
+// its id, the row's target by its name when it can be read (audibleAccountName).
 func (a *API) auditAudible(r *http.Request, action, account string, details map[string]any) {
 	details["account"] = account
+	target := account
 	if acct, err := a.cat.AudibleAccount(r.Context(), account); err == nil {
-		withAccountName(details, audibleAccountName(acct))
+		target = audibleAccountName(acct)
 	}
-	a.audit(r, action, "", details)
+	a.audit(r, action, target, details)
 }
 
 // Bridge Phase 4b: backing up Audible titles (internal/audible's Queues, the
@@ -652,7 +641,7 @@ func (a *API) handleAdminAudibleAccount(w http.ResponseWriter, r *http.Request) 
 		a.writeAudibleError(w, err, "patch audible account failed")
 		return
 	}
-	details := withAccountName(map[string]any{"account": id}, audibleAccountName(acct))
+	details := map[string]any{"account": id}
 	if p.Policy != nil {
 		details["policy"] = *p.Policy
 	}
@@ -662,7 +651,7 @@ func (a *API) handleAdminAudibleAccount(w http.ResponseWriter, r *http.Request) 
 	if p.Sync != nil {
 		details["sync"] = *p.Sync
 	}
-	a.audit(r, "bridge.audible.account", "", details)
+	a.audit(r, "bridge.audible.account", audibleAccountName(acct), details)
 	if p.Sync != nil && *p.Sync {
 		a.audibleSyncNow(r, id, false)
 	}

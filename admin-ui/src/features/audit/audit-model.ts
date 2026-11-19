@@ -95,6 +95,7 @@ export function valueText(v: unknown, t: Translate, fmt: Formatters): string {
 export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): DetailLine[] {
   const out: DetailLine[] = [];
   const label = (key: string) => t(`audit.detail.${key}`, { defaultValue: key });
+  const audible = e.action.startsWith('bridge.audible.');
   for (const [key, v] of Object.entries(e.details)) {
     if (key === 'changes' && Array.isArray(v)) {
       for (const c of v as { setting?: unknown; from?: unknown; to?: unknown }[]) {
@@ -137,20 +138,9 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
       });
       continue;
     }
-    const audible = e.action.startsWith('bridge.audible.');
-    // An Audible account is named by its name (account_name) when the server
-    // could read one, else its id; the name has no line of its own.
-    if (audible && key === 'account_name') continue;
     let value: string;
-    if (
-      audible &&
-      key === 'account' &&
-      typeof e.details.account_name === 'string' &&
-      e.details.account_name
-    )
-      value = e.details.account_name;
     // An empty placement template or destination is the automatic placement.
-    else if (audible && (key === 'template' || key === 'dest_path') && v === '')
+    if (audible && (key === 'template' || key === 'dest_path') && v === '')
       value = t('audit.value.automatic');
     else if (key === 'kind' && e.action.startsWith('issue.') && typeof v === 'string')
       value = t(`health.kind.${v}`, { defaultValue: v });

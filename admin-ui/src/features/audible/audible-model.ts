@@ -305,7 +305,7 @@ export function plannedLine(
  */
 export function needsLook(x: AudibleTitle, template: string | undefined): boolean {
   if (x.match || x.state === 'unavailable' || x.state === 'gone') return false;
-  if (x.dest_path && x.dest_invalid) return true;
+  if (x.dest_invalid) return true;
   return plannedLine(x, template)?.warn ?? false;
 }
 
