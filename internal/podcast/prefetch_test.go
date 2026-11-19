@@ -57,7 +57,7 @@ func TestPrefetchSkipsFetchLimitAndRetriesAfterSlotFreed(t *testing.T) {
 		ep.ID, ep.Path, ep.Fetch = fmt.Sprintf("%016x", i+1), fmt.Sprintf("Fixture Show/limit-%d.mp3", i), nil
 		f.Episodes = append(f.Episodes, ep)
 	}
-	if _, err = cat.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "s", "", "", f, nil, true); err != nil {
+	if _, err = cat.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "s", "", "", f, nil, true, false); err != nil {
 		t.Fatal(err)
 	}
 	var first int64
@@ -126,7 +126,7 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 	for i := range f.Episodes {
 		f.Episodes[i].Fetch = nil
 	}
-	if _, err = cat.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "s", "", "", f, nil, true); err != nil {
+	if _, err = cat.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "s", "", "", f, nil, true, false); err != nil {
 		t.Fatal(err)
 	}
 	private := *f
@@ -136,7 +136,7 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 	for i := range private.Episodes {
 		private.Episodes[i].Path = path.Join("Private", path.Base(private.Episodes[i].Path))
 	}
-	if _, err = cat.IndexPodcastShow(ctx, lib.ID, "Private", "s", "", "", &private, nil, true); err != nil {
+	if _, err = cat.IndexPodcastShow(ctx, lib.ID, "Private", "s", "", "", &private, nil, true, false); err != nil {
 		t.Fatal(err)
 	}
 	if err = cat.GrantWholeLibrary(ctx, 2, lib.ID); err != nil {

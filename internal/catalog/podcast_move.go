@@ -91,8 +91,10 @@ type PodcastMove struct {
 // identity indexed elsewhere (its own move skipped: a copy, a path that can't
 // be told; any of the three keeps To's show-folder heart that identity's,
 // podcastFolderStateOf) and, with unread (the caller could not read every
-// folder the root lists, one of which may hold that identity now), any of the
-// three there of another identity. Either is passed over when that identity is
+// folder the root lists, one of which may hold that identity now, or read
+// none as no move asked for it when it looked, PodcastMovesOverOthers: that is
+// decided here, in the transaction), any of the three there of another
+// identity. Either is passed over when that identity is
 // lifted from To in the same call (names swapped, a chain of renames). A
 // listener's place in To holds nothing: To's index row is ShowID's by now, so
 // a show whose only state there is keyed by path alone has no identity left
@@ -113,8 +115,11 @@ type PodcastMove struct {
 //     chain of renames). The state on a folder an unrelated show holds under
 //     that name in its own right stays that show's;
 //   - the listening state on each episode, From/<file> to To/<file>
-//     (carryListeningState, a move's rule), for the files listed at To, at
-//     From's own index row and in Files;
+//     (carryListeningState), for the files listed at To, at From's own index
+//     row and in Files. A place the listener already has at To/<file> (the
+//     new folder listed the episode while the move waited) merges as two saves
+//     that never saw each other: the further place is kept, a finished one
+//     over any (showMoveCarry, mergeUnseen), never the newer save alone;
 //   - From's index row and episodes, dropped when the row is ShowID's.
 //
 // Follows and the show folder's listening state go through a placeholder path
@@ -219,9 +224,29 @@ type podcastOther struct {
 	indexed bool
 }
 
+// PodcastMovesOverOthers reports whether one of moves' new folders (To)
+// carries a follow, feed state or policy of another identity indexed nowhere:
+// only such a move can wait on the caller's unread (podcastMoveHeld: one
+// indexed elsewhere holds the move whatever unread says), so the scanner looks
+// at the folders that may hold that identity only then. It reads outside
+// MovePodcastShows' transaction, so its answer only saves the look: a caller
+// that did not look passes unread, and the transaction decides.
+func (c *Catalog) PodcastMovesOverOthers(ctx context.Context, lib int64, moves []PodcastMove) (bool, error) {
+	for _, m := range moves {
+		others, err := podcastOthersAt(ctx, c.db, lib, m)
+		if err != nil {
+			return false, err
+		}
+		if slices.ContainsFunc(others, func(o podcastOther) bool { return !o.indexed }) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // podcastOthersAt are the identities other than m's with state at m.To.
-func podcastOthersAt(ctx context.Context, tx *sql.Tx, lib int64, m PodcastMove) ([]podcastOther, error) {
-	return queryRows(ctx, tx, func(r *sql.Rows, o *podcastOther) error { return r.Scan(&o.id, &o.indexed) },
+func podcastOthersAt(ctx context.Context, q rowQuerier, lib int64, m PodcastMove) ([]podcastOther, error) {
+	return queryRows(ctx, q, func(r *sql.Rows, o *podcastOther) error { return r.Scan(&o.id, &o.indexed) },
 		`WITH ids(show_id) AS (
 		   SELECT show_id FROM podcast_follows WHERE library_id=?1 AND show_path=?2 AND show_id<>?3
 		   UNION SELECT show_id FROM podcast_feed_state WHERE library_id=?1 AND show_path=?2 AND show_id<>?3
@@ -292,7 +317,7 @@ func liftShowRows(ctx context.Context, tx *sql.Tx, lib int64, id, from, hold str
 	if !folder {
 		return nil
 	}
-	return carryListeningState(ctx, tx, lib, JoinPart{Path: from, Last: true}, hold, 0, moveCarry)
+	return carryListeningState(ctx, tx, lib, JoinPart{Path: from, Last: true}, hold, 0, showMoveCarry)
 }
 
 // placeShowRows moves what liftShowRows held to the show's folder.
@@ -306,7 +331,7 @@ func placeShowRows(ctx context.Context, tx *sql.Tx, lib int64, hold, to string) 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM podcast_follows WHERE library_id=? AND show_path=?`, lib, hold); err != nil {
 		return err
 	}
-	return carryListeningState(ctx, tx, lib, JoinPart{Path: hold, Last: true}, to, 0, moveCarry)
+	return carryListeningState(ctx, tx, lib, JoinPart{Path: hold, Last: true}, to, 0, showMoveCarry)
 }
 
 // moveShowState moves id's feed state, policy, fetch backoffs and episodes'
@@ -360,7 +385,7 @@ func moveShowState(ctx context.Context, tx *sql.Tx, lib int64, id, from, to stri
 			continue
 		}
 		seen[base] = true
-		if err := carryListeningState(ctx, tx, lib, JoinPart{Path: from + "/" + base, Last: true}, to+"/"+base, 0, moveCarry); err != nil {
+		if err := carryListeningState(ctx, tx, lib, JoinPart{Path: from + "/" + base, Last: true}, to+"/"+base, 0, showMoveCarry); err != nil {
 			return fmt.Errorf("move episode listening state: %w", err)
 		}
 	}

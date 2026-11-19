@@ -151,7 +151,8 @@ func OpenPodcastBounded(ctx context.Context, cat *catalog.Catalog, lib catalog.L
 // within feedRacyWindow of the moment its read began is not remembered (git's
 // racy-clean rule): a rewrite in place, or onto a reused inode, inside the
 // file system's timestamp granularity could keep the size and mtime the memo
-// checks.
+// checks. Nor is a copy whose episodes were re-rooted against the folder's
+// listing (feed.File.Rerooted): a file added since would not be in it.
 var podcastFeeds feedMemo
 
 const (
@@ -215,9 +216,12 @@ func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, e
 		}
 	}
 	// Remembered only when the file read is the one stat'ed before (one
-	// replaced meanwhile may have been read in either version), and its mtime
-	// was past the racy window (one written since could keep it).
-	if after, err := os.Lstat(filename); settled && err == nil && sameFeedFile(before, after) {
+	// replaced meanwhile may have been read in either version), its mtime
+	// was past the racy window (one written since could keep it), and its
+	// episodes were read from it alone: a folder renamed by hand lists its
+	// episodes against the disk too (feed.File.Rerooted), which the file's
+	// identity doesn't vouch for.
+	if after, err := os.Lstat(filename); settled && !f.Rerooted && err == nil && sameFeedFile(before, after) {
 		m.mu.Lock()
 		if _, held := m.feeds[filename]; m.feeds == nil || (!held && len(m.feeds) >= maxFeedMemo) {
 			m.feeds = map[string]*feedCopy{}

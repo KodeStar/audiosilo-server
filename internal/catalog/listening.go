@@ -531,7 +531,8 @@ func keepLeftOffers(ctx context.Context, tx *sql.Tx, libraryID int64, into strin
 // for a move); total is into's length (0 = unknown: each row takes where its
 // part ends on into's timeline, JoinPart.end).
 // Progress where the listener already has some on into merges by rule: a move
-// takes the newer save (moveCarry), a join the furthest (joinCarry); a
+// takes the newer save (moveCarry), a join the furthest (joinCarry), a show
+// folder renamed by hand the further place (showMoveCarry); a
 // favourite lands once; an up-next entry or collection item already on into
 // stays (with its position) and the carried one goes; a rating already on into
 // is replaced only by a newer one (updated_at; a tie keeps into's), and so is a
@@ -830,7 +831,7 @@ func carriedAudiblePlace(from, written UserProgress) bool {
 }
 
 // carryRule is how a carry treats one listener's progress: moveCarry for a move,
-// joinCarry for a join.
+// joinCarry for a join, showMoveCarry for a show folder renamed by hand.
 type carryRule struct {
 	// merge is the row already on a path (have) merged with the row carried onto
 	// it (carried).
@@ -846,6 +847,8 @@ type carryRule struct {
 var (
 	moveCarry = carryRule{merge: mergeNewest, keepsAudible: true}
 	joinCarry = carryRule{merge: mergeFurthest}
+	// showMoveCarry is a show folder renamed by hand (MovePodcastShows).
+	showMoveCarry = carryRule{merge: mergeUnseen, keepsAudible: true}
 )
 
 // mergeNewest is a move's merge: the newer save wins whole (IsNewer: updated_at,
@@ -867,14 +870,55 @@ func mergeNewest(have, carried UserProgress) UserProgress {
 // (IsNewer), the earlier start, and a version above both, so it is not older than
 // either save it replaces.
 func mergeFurthest(a, b UserProgress) UserProgress {
-	out, other := a, b
 	if b.Position > a.Position || (b.Position == a.Position && b.Finished && !a.Finished) {
-		out, other = b, a
+		return mergedOver(b, a)
 	}
+	return mergedOver(a, b)
+}
+
+// mergeUnseen is a show folder move's merge (showMoveCarry). The two rows are
+// one episode's: the old folder's, and the one a listener made at the new folder
+// while it already listed the episode and the move still waited (a feed.json
+// read in a folder renamed by hand, feed.rerooter). Neither was made with the
+// other seen, so they merge as Sync v2 resolves a save made without seeing the
+// stored row (ResolvePlace on base 0): the further place is kept, whole, and a
+// tie keeps the new folder's. The newer save does not win as in a move
+// (mergeNewest): a play from the start at the new folder, where the episode
+// showed no place, would replace the place the listener had got to. A finished
+// row is the furthest there is, whatever its position (a finish applies whatever
+// place it saw, syncRun.finish), so an episode marked played on either side
+// stays played. Listening sync's backstop (resume_behind) has nothing left to
+// add: it guards a last-write-wins save, and none of these is one. The result
+// is stamped as mergeFurthest's (mergedOver), so a save a device still holds of
+// the row not kept is not newer than it: that device's next span then diverges
+// from the row or is a resume behind it.
+func mergeUnseen(have, carried UserProgress) UserProgress {
+	if have.Finished != carried.Finished {
+		if carried.Finished {
+			return mergedOver(carried, have)
+		}
+		return mergedOver(have, carried)
+	}
+	var unseen int64 // base 0: the row was not seen
+	place := func(p UserProgress) Place {
+		return Place{Progression: p.Position, DeviceID: p.DeviceID, UpdatedAt: p.UpdatedAt, Version: p.Version}
+	}
+	stored := place(have)
+	if ResolvePlace(&stored, place(carried), &unseen) == PlaceApplyDiverged {
+		return mergedOver(carried, have)
+	}
+	return mergedOver(have, carried)
+}
+
+// mergedOver is kept as it replaces both itself and other: with the newer
+// save's time (IsNewer), the earlier start and a version above both, so it is
+// not older than either save.
+func mergedOver(kept, other UserProgress) UserProgress {
+	out := kept
 	if IsNewer(other.Progress, out.Progress) {
 		out.UpdatedAt = other.UpdatedAt
 	}
-	out.Version = max(a.Version, b.Version) + 1
+	out.Version = max(kept.Version, other.Version) + 1
 	if other.StartedAt != nil && (out.StartedAt == nil || *other.StartedAt < *out.StartedAt) {
 		out.StartedAt = other.StartedAt
 	}

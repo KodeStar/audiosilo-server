@@ -3,16 +3,19 @@ package library
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -31,6 +34,21 @@ type renameBed struct {
 }
 
 const renameEpisode = "2026-10-19-03fd13fa08.mp3" // the fixture's first episode file
+
+// renameFetched is the fixture's one downloaded episode's file.
+const renameFetched = "2026-10-12-2fa6ddd63e.m4a"
+
+// writeFetched writes name as the fixture's downloaded episode's file: its
+// fetch's size (a hole: no audio is read).
+func writeFetched(t *testing.T, name string) {
+	t.Helper()
+	if err := os.WriteFile(name, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(name, 24000000); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func newRenameBed(t *testing.T) renameBed {
 	t.Helper()
@@ -164,6 +182,73 @@ func TestPodcastScanMovesAFolderRenamedByHand(t *testing.T) {
 	}
 	if _, err := b.cat.GetBookByPath(b.ctx, b.lib.ID, "Renamed/"+renameEpisode); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A scan's move lists the renamed folder's downloaded episodes at once, before
+// the Bridge takes it in (its feed.json still naming the old folder), so the
+// moved place opens; an episode not downloaded (a file there, but no fetch in
+// feed.json) or with no file there waits for the Bridge.
+func TestPodcastScanListsARenamedFoldersEpisodes(t *testing.T) {
+	b := newRenameBed(t)
+	if err := os.WriteFile(filepath.Join(b.root, "Example Show", renameEpisode), []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeFetched(t, filepath.Join(b.root, "Example Show", renameFetched))
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.cat.SaveProgress(b.ctx, b.user, catalog.Progress{Ref: catalog.Ref{LibraryID: b.lib.ID, Path: "Example Show/" + renameFetched}, Position: 99, Duration: 1512, UpdatedAt: "2026-11-01T10:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	b.rename(t, "Renamed", false)
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	b.checkFollowed(t, "Renamed")
+	if _, err := b.cat.GetBookByPath(b.ctx, b.lib.ID, "Renamed/"+renameFetched); err != nil {
+		t.Fatalf("moved episode: %v", err)
+	}
+	if p, err := b.cat.GetProgress(b.ctx, b.user, catalog.Ref{LibraryID: b.lib.ID, Path: "Renamed/" + renameFetched}); err != nil || p == nil || p.Position != 99 {
+		t.Fatalf("moved episode's place: %+v %v", p, err)
+	}
+	if _, err := b.cat.GetBookByPath(b.ctx, b.lib.ID, "Renamed/"+renameEpisode); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("an episode not downloaded listed: %v", err)
+	}
+	if n, err := b.cat.PodcastEpisodeRows(b.ctx, b.lib.ID, "Renamed"); err != nil || n != 1 {
+		t.Fatalf("episodes %d %v", n, err)
+	}
+}
+
+// A move by hand done as a copy and a delete, a scan in between: the copy
+// lists nothing beside its original (its feed.json names that folder, which
+// holds the show), and once the original is gone the next scan lists its
+// downloaded episode and moves the show there, though the copy's own folder
+// has not changed since its row was written.
+func TestPodcastScanListsACopyOnceItsOriginalIsGone(t *testing.T) {
+	b := newRenameBed(t)
+	writeFetched(t, filepath.Join(b.root, "Example Show", renameFetched))
+	b.writeShow(t, "Moved", "Example Show")
+	writeFetched(t, filepath.Join(b.root, "Moved", renameFetched))
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := b.cat.PodcastEpisodeRows(b.ctx, b.lib.ID, "Moved"); err != nil || n != 0 {
+		t.Fatalf("a copy beside its original lists %d %v", n, err)
+	}
+	b.checkFollowed(t, "Example Show")
+	if err := os.RemoveAll(filepath.Join(b.root, "Example Show")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	b.checkFollowed(t, "Moved")
+	if _, err := b.cat.GetBookByPath(b.ctx, b.lib.ID, "Moved/"+renameFetched); err != nil {
+		t.Fatalf("the moved episode: %v", err)
+	}
+	if got := b.shows(t); len(got) != 1 || got[0] != "Moved" {
+		t.Fatalf("shows %v", got)
 	}
 }
 
@@ -339,6 +424,21 @@ func (b renameBed) checkOther(t *testing.T, at string) {
 	}
 }
 
+// addThird indexes a third show (its own id, no follow) at "Third".
+func (b renameBed) addThird(t *testing.T) {
+	t.Helper()
+	third := bytes.ReplaceAll(b.feed, []byte(renameShowID), []byte("fedcba9876543210"))
+	if err := os.MkdirAll(filepath.Join(b.root, "Third"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(b.root, "Third", "feed.json"), third, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Third"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // chain renames by hand the other show (addOther) to "Third", then this one to
 // the other's old name, the Bridge having taken this one in, and answers the
 // other's feed.json as it names folder (the caller writes Third's).
@@ -372,6 +472,40 @@ func TestPodcastScanSwapsTwoFoldersNotTakenIn(t *testing.T) {
 	}
 	b.checkFollowed(t, "Other")
 	b.checkOther(t, "Example Show")
+}
+
+// The same swap with each show's downloaded episode on disk: each new folder
+// lists its own show's episode at once (read from a feed.json naming the
+// other folder, which holds the other show), and each episode's place moves
+// with its show, neither crossing to the other's.
+func TestPodcastScanSwapListsEachShowsOwnEpisodes(t *testing.T) {
+	b := newRenameBed(t)
+	b.addOther(t)
+	const mine, theirs = renameFetched, "2025-10-12-2fa6ddd63e.m4a" // each show's downloaded episode
+	for _, f := range [][2]string{{"Example Show", mine}, {"Other", theirs}} {
+		writeFetched(t, filepath.Join(b.root, f[0], f[1]))
+		if _, err := b.cat.SaveProgress(b.ctx, b.user, catalog.Progress{Ref: catalog.Ref{LibraryID: b.lib.ID, Path: f[0] + "/" + f[1]}, Position: float64(len(f[0])), Duration: 1512, UpdatedAt: "2026-11-01T10:00:00Z"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	b.renameEach(t, [2]string{"Example Show", "tmp"}, [2]string{"Other", "Example Show"}, [2]string{"tmp", "Other"})
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	b.checkFollowed(t, "Other")
+	b.checkOther(t, "Example Show")
+	for _, f := range [][3]string{{"Other", mine, "Example Show"}, {"Example Show", theirs, "Other"}} {
+		if _, err := b.cat.GetBookByPath(b.ctx, b.lib.ID, f[0]+"/"+f[1]); err != nil {
+			t.Fatalf("%s/%s not listed: %v", f[0], f[1], err)
+		}
+		p, err := b.cat.GetProgress(b.ctx, b.user, catalog.Ref{LibraryID: b.lib.ID, Path: f[0] + "/" + f[1]})
+		if err != nil || p == nil || p.Position != float64(len(f[2])) {
+			t.Fatalf("%s/%s place %+v %v", f[0], f[1], p, err)
+		}
+	}
 }
 
 // A chain of renames by hand: the other show to a new name, then this one to
@@ -663,7 +797,7 @@ func TestPodcastScanKeepsAShowRenamedIntoAClosedFolder(t *testing.T) {
 }
 
 // Only a refusal to look into a folder (EACCES, EPERM) makes it stray: a fault
-// a retry may get past (transientFault) or another errno does not, nor a
+// a retry may get past (metadata.TransientFault) or another errno does not, nor a
 // refusal past a feed.json seen there, nor any error that is no file system's.
 func TestStrayPodcastFolderErrors(t *testing.T) {
 	b := newRenameBed(t)
@@ -710,16 +844,7 @@ func TestStrayPodcastFolderErrors(t *testing.T) {
 func TestPodcastRescanChainIntoAStaleRowFolderWaits(t *testing.T) {
 	b := newRenameBed(t)
 	named := b.addOther(t)
-	third := bytes.ReplaceAll(b.feed, []byte(renameShowID), []byte("fedcba9876543210"))
-	if err := os.MkdirAll(filepath.Join(b.root, "Third"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(b.root, "Third", "feed.json"), third, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Third"); err != nil {
-		t.Fatal(err)
-	}
+	b.addThird(t)
 	if err := os.RemoveAll(filepath.Join(b.root, "Third")); err != nil {
 		t.Fatal(err)
 	}
@@ -739,6 +864,96 @@ func TestPodcastRescanChainIntoAStaleRowFolderWaits(t *testing.T) {
 	}
 	b.checkFollowed(t, "Other")
 	b.checkOther(t, "Third")
+}
+
+// Denied: a rescan asks the index whether a move's new folder carries a show
+// indexed nowhere before the move's transaction does. The other show here is
+// indexed elsewhere then (two copies, so its own move is not planned), which
+// holds the move with no folder read; the copies' rows go in between (their
+// folders removed, a scan's prune), and the move still waits: the folders were
+// never read for that show, which a folder with a stale row holds. A scan then
+// moves both.
+func TestPodcastRescanMoveWaitsWhenTheOtherShowLosesItsRows(t *testing.T) {
+	b := newRenameBed(t)
+	named := b.addOther(t)
+	b.addThird(t)
+	copies := []string{"Copy One", "Copy Two"}
+	for _, f := range copies {
+		if err := os.MkdirAll(filepath.Join(b.root, f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(b.root, f, "feed.json"), named(f), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.RemoveAll(filepath.Join(b.root, "Third")); err != nil {
+		t.Fatal(err)
+	}
+	b.renameEach(t, [2]string{"Other", "Third"}, [2]string{"Example Show", "Other"})
+	b.writeShow(t, "Other", "Other")
+	if err := os.WriteFile(filepath.Join(b.root, "Third", "feed.json"), named("Third"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The rescan of "Other", step by step (IndexPodcastPath, movePodcastShows).
+	if _, _, err := b.s.indexPodcastShow(b.ctx, *b.lib, "Other", true); err != nil {
+		t.Fatal(err)
+	}
+	var listed map[string]bool
+	moves, err := b.s.settledPodcastMoves(b.ctx, *b.lib, "Other", &listed)
+	if err != nil || len(moves) != 1 || moves[0].ShowID != renameShowID || moves[0].To != "Other" {
+		t.Fatalf("planned %+v %v", moves, err)
+	}
+	if n, skipped, err := b.s.indexNewPodcastFolders(b.ctx, *b.lib, &listed); err != nil || n != 0 || skipped {
+		t.Fatalf("new folders %d %v %v", n, skipped, err)
+	}
+	unread, err := b.s.stalePodcastRow(b.ctx, *b.lib, moves, listed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range copies {
+		if err := os.RemoveAll(filepath.Join(b.root, f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.cat.PrunePodcastShows(b.ctx, b.lib.ID, copies); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := b.cat.MovePodcastShows(b.ctx, b.lib.ID, moves, unread); err != nil || n != 0 {
+		t.Fatalf("moved %d %v over a show whose folders were not read", n, err)
+	}
+	if got, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Other", b.user); err != nil || got.Following {
+		t.Fatalf("moved over the other show's follow: %+v %v", got, err)
+	}
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	b.checkFollowed(t, "Other")
+	b.checkOther(t, "Third")
+}
+
+// A rescan's move onto a folder carrying a gone show's follow looks at the
+// indexed folders for that show, by identity only: an unrelated show with a
+// new episode file since its row was written (its signature changed, its
+// show_id not) holds nothing up, so the move goes as a scan's would.
+func TestPodcastRescanMoveIgnoresANewEpisodeElsewhere(t *testing.T) {
+	b := newRenameBed(t)
+	b.addOther(t)
+	b.addThird(t)
+	if err := os.WriteFile(filepath.Join(b.root, "Third", renameEpisode), []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(b.root, "Other")); err != nil {
+		t.Fatal(err)
+	}
+	b.renameEach(t, [2]string{"Example Show", "Other"})
+	b.writeShow(t, "Other", "Other")
+	if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	b.checkFollowed(t, "Other")
 }
 
 // Denied: a chain of renames whose other show can't move yet, as it is in two
@@ -806,4 +1021,198 @@ func TestPodcastHeldMoveKeepsItsOldRowThroughThePrune(t *testing.T) {
 		t.Fatalf("the held show's place: %+v %v", p, err)
 	}
 	b.checkOther(t, "Third")
+}
+
+// listenEpisodeNews counts the new-episode notices b's catalog tells.
+func (b renameBed) listenEpisodeNews() *atomic.Int32 {
+	var told atomic.Int32
+	b.cat.SetPodcastNotice(&catalog.PodcastListener{
+		Event: func(n catalog.PodcastNotice) (string, map[string]any, string) {
+			if n.Kind == catalog.PodcastEpisodesNew {
+				told.Add(int32(len(n.EpisodeIDs)))
+			}
+			return "", nil, ""
+		},
+		Deliver: func(context.Context, catalog.ServerEvent) {},
+	})
+	return &told
+}
+
+// faultFolder makes the rerooter's looks at b's folder fail with err until the
+// test ends (feed.FaultForTests; nil clears it), the folder named as the
+// rerooter names it: below the root with its links resolved (SafeJoin's), as
+// macOS's temporary folder is reached through one (/var -> /private/var).
+func (b renameBed) faultFolder(t *testing.T, folder string, err error) {
+	t.Helper()
+	root, rerr := filepath.EvalSymlinks(b.root)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	name := filepath.Join(root, folder)
+	feed.FaultForTests(name, err)
+	t.Cleanup(func() { feed.FaultForTests(name, nil) })
+}
+
+// Denied: a scan's quiet re-read of a renamed folder (its row re-rooted) that
+// can't tell whether its old folder holds the show (EIO there: feed.File.Unsure)
+// keeps the row exactly as it was: no episode dropped, no re-index, no notice,
+// the same signature and cover_version. Once the fault is gone, nothing
+// changes either.
+func TestPodcastQuietReReadKeepsItsRowOnAFault(t *testing.T) {
+	b := newRenameBed(t)
+	writeFetched(t, filepath.Join(b.root, "Example Show", renameFetched))
+	if err := os.WriteFile(filepath.Join(b.root, "Example Show", "cover.jpg"), []byte("jpeg"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	b.rename(t, "Renamed", false)
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	before, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Renamed", b.user)
+	if err != nil || before.EpisodeCount != 1 || before.CoverVersion == "" {
+		t.Fatalf("renamed: %+v %v", before, err)
+	}
+	told := b.listenEpisodeNews()
+	for _, fault := range []error{syscall.EIO, nil} {
+		b.faultFolder(t, "Example Show", fault)
+		if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || res.Added+res.Updated != 0 {
+			t.Fatalf("%v: scan %+v %v", fault, res, err)
+		}
+		after, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Renamed", b.user)
+		if err != nil || after.FeedSig != before.FeedSig || after.CoverVersion != before.CoverVersion || after.EpisodeCount != 1 {
+			t.Fatalf("%v: the row %+v, was %+v (%v)", fault, after, before, err)
+		}
+		if _, err := b.cat.GetBookByPath(b.ctx, b.lib.ID, "Renamed/"+renameFetched); err != nil {
+			t.Fatalf("%v: the episode: %v", fault, err)
+		}
+	}
+	if n := told.Load(); n != 0 {
+		t.Fatalf("told %d new episodes", n)
+	}
+}
+
+// Denied: a read that can't tell (EIO at the old folder: feed.File.Unsure)
+// keeps an indexed row as it was however it comes, the folder changed since
+// (a scan that is no quiet re-read) or the Bridge's forced rescan: the
+// episode it left out stays listed. Allowed: once the fault is gone, the next
+// scan indexes the change.
+func TestPodcastUnsureReadKeepsAnIndexedRow(t *testing.T) {
+	b := newRenameBed(t)
+	writeFetched(t, filepath.Join(b.root, "Example Show", renameFetched))
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	b.rename(t, "Renamed", false)
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	before, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Renamed", b.user)
+	if err != nil || before.EpisodeCount != 1 {
+		t.Fatalf("renamed: %+v %v", before, err)
+	}
+	if err := os.WriteFile(filepath.Join(b.root, "Renamed", "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b.faultFolder(t, "Example Show", syscall.EIO)
+	kept := func(how string) {
+		t.Helper()
+		after, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Renamed", b.user)
+		if err != nil || after.FeedSig != before.FeedSig || after.EpisodeCount != 1 {
+			t.Fatalf("%s: the row %+v, was %+v (%v)", how, after, before, err)
+		}
+		if _, err := b.cat.GetBookByPath(b.ctx, b.lib.ID, "Renamed/"+renameFetched); err != nil {
+			t.Fatalf("%s: the episode: %v", how, err)
+		}
+	}
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	kept("scan")
+	if show, n, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Renamed"); err != nil || show != "Renamed" || n != 1 {
+		t.Fatalf("rescan: %q %d %v", show, n, err)
+	}
+	kept("rescan")
+	b.faultFolder(t, "Example Show", nil)
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	after, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Renamed", b.user)
+	if err != nil || after.FeedSig == before.FeedSig || after.EpisodeCount != 1 {
+		t.Fatalf("read again: the row %+v, was %+v (%v)", after, before, err)
+	}
+}
+
+// Denied: a first read of a folder renamed only in case (a disk that ignores
+// case) that can't tell (EIO at the old spelling) lists none of the episodes
+// it would read at the folder's spelling and tells nothing; the next scan,
+// which can, lists them all, telling nothing either: its feed.json is the one
+// the row was read from, so they are no news, however recent.
+func TestPodcastFirstReadOnAFaultTellsNothing(t *testing.T) {
+	b := newRenameBed(t)
+	b.rename(t, "example show", false)
+	if _, err := os.Lstat(filepath.Join(b.root, "Example Show")); err != nil {
+		t.Skipf("the disk keeps names apart by case: %v", err)
+	}
+	recent := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	raw := bytes.ReplaceAll(b.feed, []byte(`"first_seen": "2026-10-20T08:00:00Z"`), []byte(`"first_seen": "`+recent+`"`))
+	if bytes.Equal(raw, b.feed) {
+		t.Fatal("the fixture's first_seen is not in its feed")
+	}
+	if err := os.WriteFile(filepath.Join(b.root, "example show", "feed.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeFetched(t, filepath.Join(b.root, "example show", renameFetched))
+	told := b.listenEpisodeNews()
+	b.faultFolder(t, "Example Show", syscall.EIO)
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := b.cat.PodcastEpisodeRows(b.ctx, b.lib.ID, "example show"); err != nil || n != 0 {
+		t.Fatalf("read on a fault: episodes %d %v", n, err)
+	}
+	b.faultFolder(t, "Example Show", nil)
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := b.cat.PodcastEpisodeRows(b.ctx, b.lib.ID, "example show"); err != nil || n != 3 {
+		t.Fatalf("read again: episodes %d %v", n, err)
+	}
+	if n := told.Load(); n != 0 {
+		t.Fatalf("told %d new episodes", n)
+	}
+}
+
+// The Bridge's rescan at its feed.json's spelling of a folder the root lists in
+// another (renamed by hand only in case, or to the other Unicode form, on a
+// disk that opens both: APFS, SMB) indexes the folder at the spelling listed
+// and answers it, so it has one row, the show's state moved there; the
+// spelling asked gets none.
+func TestPodcastRescanAtTheFeedsSpellingIndexesTheListedFolder(t *testing.T) {
+	for _, c := range []struct{ name, listed, asked string }{
+		{"case", "example show", "Example Show"},
+		{"form", "Café Show", "Café Show"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := newRenameBed(t)
+			b.rename(t, c.listed, false)
+			if _, err := os.Lstat(filepath.Join(b.root, c.asked)); err != nil {
+				t.Skipf("the disk keeps the two spellings apart: %v", err)
+			}
+			if names, err := os.ReadDir(b.root); err != nil || len(names) != 1 || names[0].Name() != c.listed {
+				t.Skipf("the disk does not keep the name as given: %v %v", names, err)
+			}
+			b.writeShow(t, c.listed, c.asked)
+			show, n, err := b.s.IndexPodcastPath(b.ctx, *b.lib, c.asked)
+			if err != nil || show != c.listed || n != 3 {
+				t.Fatalf("rescan: %q %d %v", show, n, err)
+			}
+			if got := b.shows(t); len(got) != 1 || got[0] != c.listed {
+				t.Fatalf("shows %q", got)
+			}
+			b.checkFollowed(t, c.listed)
+		})
+	}
 }

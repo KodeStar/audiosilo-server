@@ -22,7 +22,7 @@ func TestPodcastFeedStateReplacementIsolation(t *testing.T) {
 				t.Fatal(err)
 			}
 			f.ShowID = "0123456789abcdef"
-			if _, err := c.IndexPodcastShow(ctx, lib.ID, show, "replacement", "", "", f, nil, true); err != nil {
+			if _, err := c.IndexPodcastShow(ctx, lib.ID, show, "replacement", "", "", f, nil, true, false); err != nil {
 				t.Fatal(err)
 			}
 			check := func() {
@@ -101,7 +101,7 @@ func TestPodcastGenerationIndexPreservesListeningState(t *testing.T) {
 			present["2026-10-19-1cc306d831.mp3"] = PodcastFile{Size: fetch.Bytes}
 		}
 		ep.Fetch = &fetch
-		if _, err = c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", state, "", "", f, present, true); err != nil {
+		if _, err = c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", state, "", "", f, present, true, false); err != nil {
 			t.Fatal(err)
 		}
 		got, err := c.GetProgress(ctx, user, ref)

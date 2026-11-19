@@ -44,7 +44,7 @@ func newGateEnv(t *testing.T) gateEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, e.pods.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, e.pods.ID, "Example Show", "s", "", "", f, nil, false, false); err != nil {
 		t.Fatal(err)
 	}
 	for _, ep := range f.Episodes {

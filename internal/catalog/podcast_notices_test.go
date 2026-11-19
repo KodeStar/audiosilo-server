@@ -56,6 +56,71 @@ func withEpisode(f *feed.File, id, file, title, published string) *feed.File {
 	return &g
 }
 
+// Denied: a feed.json read in a folder renamed by hand, its paths still naming
+// the old one (feed.File.Rerooted), tells nothing however its listing grows:
+// the Bridge has not written it since, so its episodes were news at the old
+// folder. The same growth read as the Bridge wrote it is told.
+func TestPodcastRerootedFeedTellsNoNews(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	c.now = func() time.Time { return time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC) }
+	log := listenNotices(c)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := podcastFixture(t)
+	index := func(sig string, f *feed.File) {
+		t.Helper()
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", sig, "", "", f, nil, false, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index("s1", f)
+	rerooted := withEpisode(f, "1111111111111111", "2026-10-26-1111111111.mp3", "Episode Four", "2026-10-26T21:00:00Z")
+	rerooted.Rerooted = true
+	index("s2", rerooted)
+	if got := log.take(); len(got) != 0 {
+		t.Fatalf("a re-rooted feed told %+v", got)
+	}
+	written := withEpisode(rerooted, "2222222222222222", "2026-10-27-2222222222.mp3", "Episode Five", "2026-10-27T21:00:00Z")
+	written.Rerooted = false
+	index("s3", written)
+	if got := log.take(); len(got) != 1 || !slices.Equal(got[0].EpisodeIDs, []string{"2222222222222222"}) {
+		t.Fatalf("the Bridge's own write told %+v", got)
+	}
+}
+
+// Denied: a quiet re-read (the feed.json a show's row was read from, read
+// again) tells nothing however much more it lists; the same growth indexed
+// otherwise is told.
+func TestPodcastQuietReReadTellsNoNews(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	c.now = func() time.Time { return time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC) }
+	log := listenNotices(c)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := podcastFixture(t)
+	index := func(sig string, f *feed.File, quiet bool) {
+		t.Helper()
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", sig, "", "", f, nil, quiet, quiet); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index("s1", f, false)
+	grown := withEpisode(f, "1111111111111111", "2026-10-26-1111111111.mp3", "Episode Four", "2026-10-26T21:00:00Z")
+	index("s2", grown, true)
+	if got := log.take(); len(got) != 0 {
+		t.Fatalf("a quiet re-read told %+v", got)
+	}
+	grown = withEpisode(grown, "2222222222222222", "2026-10-27-2222222222.mp3", "Episode Five", "2026-10-27T21:00:00Z")
+	index("s3", grown, false)
+	if got := log.take(); len(got) != 1 || !slices.Equal(got[0].EpisodeIDs, []string{"2222222222222222"}) {
+		t.Fatalf("the Bridge's own write told %+v", got)
+	}
+}
+
 // New episodes are told only for a show indexed before as the same show: an
 // unseen path published after its latest episode, once, in one notice per
 // show. A first index, a forced rescan, an older episode, a re-index of
@@ -75,7 +140,7 @@ func TestPodcastNewEpisodesNotice(t *testing.T) {
 	f := podcastFixture(t)
 	index := func(sig string, f *feed.File, force bool) {
 		t.Helper()
-		if _, err := c.IndexPodcastShow(ctx, lib.ID, show, sig, "", "", f, nil, force); err != nil {
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, show, sig, "", "", f, nil, force, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -175,7 +240,7 @@ func TestPodcastNewEpisodesAfterFutureDate(t *testing.T) {
 	}
 	index := func(sig string, f *feed.File) []PodcastNotice {
 		t.Helper()
-		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", sig, "", "", f, nil, false); err != nil {
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", sig, "", "", f, nil, false, false); err != nil {
 			t.Fatal(err)
 		}
 		return log.take()
@@ -231,7 +296,7 @@ func TestPodcastFeedNotices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", podcastFixture(t), nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", podcastFixture(t), nil, false, false); err != nil {
 		t.Fatal(err)
 	}
 	next := int64(0)
@@ -443,10 +508,10 @@ func TestPodcastNoticesMarkPrivateShows(t *testing.T) {
 	}
 	f := podcastFixture(t)
 	f.Private = true
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s1", "", "", f, nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s1", "", "", f, nil, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s2", "", "", withEpisode(f, "1111111111111111", "new.mp3", "New", "2026-12-01T00:00:00Z"), nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s2", "", "", withEpisode(f, "1111111111111111", "new.mp3", "New", "2026-12-01T00:00:00Z"), nil, false, false); err != nil {
 		t.Fatal(err)
 	}
 	for i, state := range []string{bridge.StateFailed, bridge.StateDone} {
@@ -473,13 +538,13 @@ func podcastShowsLib(t *testing.T, c *Catalog, ctx context.Context, others int) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", podcastFixture(t), nil, false); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", podcastFixture(t), nil, false, false); err != nil {
 		t.Fatal(err)
 	}
 	for i := range others {
 		f := podcastFixture(t)
 		f.ShowID = fmt.Sprintf("b%015d", i+1)
-		if _, err := c.IndexPodcastShow(ctx, lib.ID, fmt.Sprintf("Show %d", i+1), "s", "", "", f, nil, false); err != nil {
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, fmt.Sprintf("Show %d", i+1), "s", "", "", f, nil, false, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -982,7 +1047,7 @@ func TestPodcastNewEpisodesByGUID(t *testing.T) {
 	index := func(f *feed.File) []PodcastNotice {
 		t.Helper()
 		sig++
-		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", fmt.Sprint(sig), "", "", f, nil, false); err != nil {
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", fmt.Sprint(sig), "", "", f, nil, false, false); err != nil {
 			t.Fatal(err)
 		}
 		return log.take()
@@ -1041,7 +1106,7 @@ func TestPodcastStaleFeedFoldRefused(t *testing.T) {
 	}
 	index := func(f *feed.File, sig string, force bool) bool {
 		t.Helper()
-		changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", sig, "", "", f, nil, force)
+		changed, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", sig, "", "", f, nil, force, false)
 		if err != nil {
 			t.Fatal(err)
 		}

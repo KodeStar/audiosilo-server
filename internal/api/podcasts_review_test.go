@@ -78,7 +78,7 @@ func TestPodcastFollowDoesNotGrantReplacementShow(t *testing.T) {
 			followURL = privateFeed + "-replacement"
 			f.FeedURLSHA256 = feed.FeedURLHash(followURL)
 		}
-		if _, err := b.cat.IndexPodcastShow(ctx, b.lib.ID, "Example Show", f.ShowID, "", "", f, nil, true); err != nil {
+		if _, err := b.cat.IndexPodcastShow(ctx, b.lib.ID, "Example Show", f.ShowID, "", "", f, nil, true, false); err != nil {
 			t.Fatal(err)
 		}
 		check(sameIdentity)
