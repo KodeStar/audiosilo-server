@@ -558,7 +558,8 @@ func TestAudiblePolicyAfterPoll(t *testing.T) {
 }
 
 // A poll's final call is answered before its backups are queued: the Bridge
-// never waits for the queue, which runs on and is waited for at shutdown.
+// never waits for the queue, which runs on and is waited for at shutdown,
+// still able to write once the server's base context has ended.
 func TestAudiblePollAnswersBeforeQueueing(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
@@ -568,9 +569,13 @@ func TestAudiblePollAnswersBeforeQueueing(t *testing.T) {
 	if resp, out := b.do(t, "PUT", "/api/v1/bridge/audible/accounts/"+testAccount, b.bridgeTok, body); resp.StatusCode != http.StatusOK {
 		t.Fatalf("create: %d %s", resp.StatusCode, out)
 	}
-	release, queued := make(chan struct{}), make(chan string, 1)
+	base, stop := context.WithCancel(context.Background())
+	defer stop()
+	b.api.baseCtx = base
+	release, queued, ended := make(chan struct{}), make(chan string, 1), make(chan error, 1)
 	b.api.audibleAfterPoll = func(ctx context.Context, account string) (int, error) {
 		<-release
+		ended <- ctx.Err()
 		queued <- account
 		return 0, nil
 	}
@@ -584,10 +589,14 @@ func TestAudiblePollAnswersBeforeQueueing(t *testing.T) {
 		t.Fatal("queued before the answer")
 	default:
 	}
+	stop() // the server shutting down
 	close(release)
 	b.api.StopModules()
 	if got := <-queued; got != testAccount {
 		t.Fatalf("queued for %q", got)
+	}
+	if err := <-ended; err != nil {
+		t.Fatalf("the queue's context ended with the server's: %v", err)
 	}
 }
 

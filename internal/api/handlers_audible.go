@@ -432,7 +432,11 @@ func (a *API) afterAudiblePoll(account string) {
 		queue = a.audibleQueues().AfterPoll
 	}
 	a.audiblePollFolds.Go(func() {
-		ctx, cancel := context.WithTimeout(a.baseCtx, afterAudiblePollTimeout)
+		// Not ended with the server's base context: a shutdown has already
+		// cancelled it by the time StopModules waits, which would drop the
+		// queue mid-way (jobs queued, their titles unrecorded) rather than
+		// let it finish within the timeout.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(a.baseCtx), afterAudiblePollTimeout)
 		defer cancel()
 		if n, err := queue(ctx, account); err != nil {
 			a.log.Warn("audible: queueing a poll's backups failed", "account", account, "queued", n, "err", err)
