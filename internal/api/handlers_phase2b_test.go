@@ -143,7 +143,7 @@ func TestShareRulesBodyBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	huge := strings.Repeat("a", shareRulesBodyMax)
+	huge := strings.Repeat("a", selectionBodyMax)
 	for route, body := range map[string]string{
 		"/api/v1/admin/shares": `{"name":"Huge","description":"` + huge + `"}`,
 		"/api/v1/admin/shares/" + strconv.FormatInt(share.ID, 10) + "/paths": `{"rules":[{"library_id":` + lib + `,"path":"` + huge + `"}]}`,
@@ -164,18 +164,18 @@ func TestShareRulesBodyBound(t *testing.T) {
 	}
 }
 
-// A share's name is at most maxShareName characters, counted as characters,
+// A share's name is at most catalog.MaxShareName characters, counted as characters,
 // not bytes: a longer one is refused (400 invalid_name) on a create and a
 // rename before it is stored, audited or logged; one at the cap is kept.
 func TestShareNameBound(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
-	atCap := strings.Repeat("é", maxShareName) // twice as many bytes
+	atCap := strings.Repeat("é", catalog.MaxShareName) // twice as many bytes
 	over := atCap + "é"
 	resp, out := e.do(t, "POST", "/api/v1/admin/shares", adminTok, `{"name":"`+over+`"}`)
 	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, `"code":"`+codeInvalidName+`"`) {
-		t.Fatalf("a create with a name of %d characters = %d %s, want 400 invalid_name", maxShareName+1, resp.StatusCode, out)
+		t.Fatalf("a create with a name of %d characters = %d %s, want 400 invalid_name", catalog.MaxShareName+1, resp.StatusCode, out)
 	}
 	var made int
 	if err := e.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM shares`).Scan(&made); err != nil || made != 0 {
@@ -183,7 +183,7 @@ func TestShareNameBound(t *testing.T) {
 	}
 	resp, out = e.do(t, "POST", "/api/v1/admin/shares", adminTok, `{"name":"`+atCap+`"}`)
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("a create with a name of %d characters = %d %s, want 201", maxShareName, resp.StatusCode, out)
+		t.Fatalf("a create with a name of %d characters = %d %s, want 201", catalog.MaxShareName, resp.StatusCode, out)
 	}
 	shares, err := e.cat.ListShares(context.Background())
 	if err != nil || len(shares) != 1 {
@@ -192,7 +192,7 @@ func TestShareNameBound(t *testing.T) {
 	url := "/api/v1/admin/shares/" + strconv.FormatInt(shares[0].ID, 10)
 	resp, out = e.do(t, "PATCH", url, adminTok, `{"name":"`+over+`"}`)
 	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, `"code":"`+codeInvalidName+`"`) {
-		t.Fatalf("a rename to %d characters = %d %s, want 400 invalid_name", maxShareName+1, resp.StatusCode, out)
+		t.Fatalf("a rename to %d characters = %d %s, want 400 invalid_name", catalog.MaxShareName+1, resp.StatusCode, out)
 	}
 	if got, err := e.cat.GetShare(context.Background(), shares[0].ID); err != nil || got.Name != atCap {
 		t.Fatalf("after the refused rename the name is %q, %v", got.Name, err)

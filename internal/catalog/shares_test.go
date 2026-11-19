@@ -5,12 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // TestCleanRelPath pins the canonicalization every user-supplied rel path goes
@@ -568,20 +571,26 @@ func TestGrantWholeLibraryNeverAdoptsAnAdminShare(t *testing.T) {
 // An unmarked share that can only be an old grant (made before
 // whole_library_id): the grant's description and only the library's "" rule
 // (held or not), or no rule at all while nobody holds it (one an interrupted
-// grant left) - is still adopted, marked and healed, keeping its holders.
+// grant left) - is still adopted, marked and healed, keeping its holders. One
+// named after a library's long name whole, before wholeLibraryShareName cut
+// it, is adopted too.
 func TestGrantWholeLibraryAdoptsAnOldGrant(t *testing.T) {
 	t.Parallel()
+	long := strings.Repeat("Kids ", 60)
 	for _, tc := range []struct {
-		name  string
-		whole bool
-	}{{"whole rule, held", true}, {"no rule, unheld", false}} {
+		name, library string
+		whole         bool
+	}{
+		{"whole rule, held", "Kids", true}, {"no rule, unheld", "Kids", false},
+		{"long name, whole rule, held", long, true}, {"long name, no rule, unheld", long, false},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c, ctx := newTestCatalog(t)
-			kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+			kids, _ := c.CreateLibrary(ctx, Library{Name: tc.library, Root: "/tmp/kids"})
 			old := seedUserNamed(t, c, ctx, "old")
 			guest := seedUserNamed(t, c, ctx, "guest")
-			s := Share{Name: "Library: Kids", Description: wholeLibraryShareDescription}
+			s := Share{Name: "Library: " + tc.library, Description: wholeLibraryShareDescription}
 			if tc.whole {
 				s.Paths = []PathRule{{LibraryID: kids.ID, Path: ""}}
 			}
@@ -1226,5 +1235,58 @@ func TestScopesFilterFormsAgree(t *testing.T) {
 	}
 	if granted == 0 {
 		t.Fatal("no trial granted a row")
+	}
+}
+
+// A grant share's name fits MaxShareName however long the library's name is:
+// the library's name is cut, by characters (never inside one), so even the
+// longest name createWholeLibraryShare may give it, numbered past a taken
+// one, fits. A short name is kept whole.
+func TestWholeLibraryShareNameFits(t *testing.T) {
+	t.Parallel()
+	if got := wholeLibraryShareName("Kids", 7); got != "Library: Kids" {
+		t.Fatalf("a short name = %q, want it whole", got)
+	}
+	long := strings.Repeat("é", 300)
+	for _, id := range []int64{1, math.MaxInt64} {
+		name := wholeLibraryShareName(long, id)
+		if !utf8.ValidString(name) || !strings.HasPrefix(name, "Library: éé") {
+			t.Fatalf("library %d: name %q", id, name)
+		}
+		for i := range maxGrantNames {
+			if n := utf8.RuneCountInString(grantName(name, id, i)); n > MaxShareName {
+				t.Errorf("library %d: grant name %d has %d characters, want at most %d", id, i, n, MaxShareName)
+			}
+		}
+	}
+	room := MaxShareName - utf8.RuneCountInString(grantName("Library: ", 1, maxGrantNames-1))
+	if got := wholeLibraryShareName(strings.Repeat("a", room-1)+" "+long, 1); strings.HasSuffix(got, " ") || !strings.HasSuffix(got, "a") {
+		t.Errorf("a name cut at a space keeps it: %q", got)
+	}
+
+	// Two libraries whose long names share their start: both grants are made,
+	// the second under the numbered name, and both fit.
+	c, ctx := newTestCatalog(t)
+	uid := seedUser(t, c, ctx)
+	for i, root := range []string{"/tmp/one", "/tmp/two"} {
+		lib, err := c.CreateLibrary(ctx, Library{Name: long + strconv.Itoa(i), Root: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.GrantWholeLibrary(ctx, uid, lib.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shares, err := c.ListShares(ctx)
+	if err != nil || len(shares) != 2 {
+		t.Fatalf("shares = %v, %v", shares, err)
+	}
+	for _, s := range shares {
+		if n := utf8.RuneCountInString(s.Name); n > MaxShareName {
+			t.Errorf("grant share %q has %d characters, want at most %d", s.Name, n, MaxShareName)
+		}
+	}
+	if shares[0].Name == shares[1].Name {
+		t.Fatalf("both grants share the name %q", shares[0].Name)
 	}
 }

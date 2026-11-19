@@ -1036,9 +1036,29 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   refused before a route or credential check reads it (`capPathQuery`, server#359); a path in a body is the
   route's to check (`pathTooLong`, `refsTooLong` for a selection of books, a share's rules), and a body that
   names a path or two and little else is bounded (`pathBodyMax`). A body that carries a share's rules (`POST
-  /admin/shares`, `POST /admin/shares/{id}/paths`) takes 1000 of them at the cap (`shareRulesBodyMax`); past
-  it is the route's 400 `too_large`, as more rules are, and a share's name is at most 200 characters
-  (`maxShareName`, 400 `invalid_name` on a create or rename), its description at most the 1 MiB a
+  /admin/shares`, `POST /admin/shares/{id}/paths`) or a selection of books (`POST /admin/books/bulk`, with 1 MiB
+  more for its edit, `bulkEditBodyMax`; `POST`/`DELETE /admin/issues/ignore`) takes 1000 of them at the cap
+  (`selectionBodyMax`); past it is the route's 400 `too_large`, as more entries are: such a list is a
+  `boundedList`, read one entry at a time and refused at the first past 1000 (`errTooManyEntries`), so a body
+  of a million `{}` is never decoded whole. A route whose list has a lower cap of its own keeps its body's
+  size, counts its own after the decode and gives that cap's answer for `errTooManyEntries` too, never
+  `writeDecodeError`'s "at most 1000": `POST /admin/books/works` (<= 100), `POST /admin/covers` and `POST
+  /admin/meta/covers` (`thumbBatch`), a whole-list replace (`PUT /me/queue`, `PUT /me/collections/{id}/items`:
+  400 `too many items`, `listReplace`), a batch of listening events (400 `too_many_events`,
+  `decodeSyncEnvelope`), who a collection is shared with (`user_ids`, the 50-user 400) and a household
+  member's `collection_ids` (400 `invalid_collections`, `writeMemberDecodeError`). A new route that counts a list of small entries takes it as a `boundedList`. A list
+  with a cap of its own past 1000, or a map, is read the same way with that cap (`decodeBounded`;
+  `decodeBoundedMap` counts an object's entries, skipping each value, before decoding it): a chapter edit's
+  chapters (2000, `chapters_invalid` `too_many`) and its basis's files (`maxEditChapters`, the same answer),
+  the Bridge's Audible titles (`MaxAudibleTitles`, `catalog.ErrAudibleTooManyTitles`), and an edit's own
+  lists and maps (one-book and bulk alike: `set`, `revert` and the fields `add`/`remove` name at most
+  `maxEditFields`, each label list `maxEditLabels`, `chapters.set`/`chapters.revert` `maxEditChapters`;
+  past one is 400 `too_large`, `errEditTooLong`). A bulk
+  edit's body less its books is at most 1 MiB (`maxBulkEditBytes`, 400 `too_large`), measured before the
+  decode (`spanBytes`): the edit's own lists and maps (`revert`, `add`, `remove`) never get the room the
+  selection's paths have. A share's name is at most 200 characters
+  (`catalog.MaxShareName`, 400 `invalid_name` on a create or rename; a grant share's "Library: <name>" cuts
+  the library's name to fit, `wholeLibraryShareName`), its description at most the 1 MiB a
   rename's body carries (`maxShareDescription`, 400 `too_large` on a create). A scan never indexes a path past the cap
   (only a Windows library holds one): it skips the folder or file and logs it as unreadable (`overLong`), by the start of its path and its length (`loggedPath`). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
@@ -1730,8 +1750,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the share out: anything else (an admin's own share with the name, server#223, a narrowed grant, a
   rule-less share someone holds, a share marked for another library) keeps its rules and holders, and
   the grant gets a share of its own, "Library: <name> (<id>)" when the name is taken (then numbered
-  from 2, server#230), made whole and marked in one transaction that looks for the library's grant
-  share again first: write transactions run one at a time, so first grants sent together share one.
+  from 2, server#230; `<name>` cut so the longest of these fits a share name's 200 characters,
+  `wholeLibraryShareName`, an unmarked grant under the uncut name still adopted), made whole and
+  marked in one transaction that looks for the library's grant share again first: write transactions
+  run one at a time, so first grants sent together share one.
   A marked grant's rules change only by granting or revoking the library: `POST`/`DELETE
   /admin/shares/{id}/paths` on one is 409 `library_grant` (`catalog.ErrLibraryGrant`, read inside the
   edit's transaction; server#254), as the console never offers it. The mark stays only while the share
@@ -2837,7 +2859,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `cover_color` (the Series spines) and `matched` (the `matched=` filter's rule, `catalog.matchedExpr`: an
   ASIN or ISBN, or a recorded community match, `book_matches`, see Bulk matching), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection; a share created with `paths`
-  is held to the same 1000 (`tooManyRules`, 400 `too_large`).
+  is held to the same 1000 (`boundedList`, 400 `too_large`).
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
   `api/ratelimit.go`, values from `config.rate_limit.*` read at start through
   `RateLimitConfig.Effective`: a rate or burst left at 0 is the current default and is
@@ -4108,9 +4130,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   transaction, the library must be a books library (400 `not_books`, 404 `unknown_library`); DELETE cancels
   the account's open poll (`bridge.CancelAudibleRemoved`; both reasons are `IsCancelReason`'s and the
   console's `SERVER_CANCEL_REASONS`), 204 even when unknown); `PUT .../titles` (`{poll_id, final,
-  titles:[...]}`, strict JSON, up to `MaxAudibleTitles` a call, a call without its `titles` array 400, never
+  titles:[...]}`, strict JSON, up to `MaxAudibleTitles` a call (refused at the title past it as the list is
+  read), a call without its `titles` array 400, never
   "owns nothing"; free text cleaned and bounded, not refused: a title's authors and series past the first 20
-  and 10 are dropped; a match path is clean, or `.` for a `book` override on the library root, as the books
+  and 10 are dropped, and past the first 100 (`maxAudibleNamesRead`) are skipped unread; a match path is clean, or `.` for a `book` override on the library root, as the books
   list gives it; a match naming a missing or non-books library is stored as none; `final` marks every title
   this `poll_id` did not send `gone` and sets `last_poll_at`); `GET /bridge/libraries/{id}/books`
   (`{books:[{path, title, authors, narrators, series, asin, isbn, duration}], next}`, path cursor, up to
@@ -5086,6 +5109,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (1-200 bytes trimmed, no control character: `metadata.ListChapterTitle`, the chapters.json rule)|file_start}`; 409
   `chapters_basis` when the basis is not the book's files now (path, size, `duration_ms`, in play order); 409
   `not_book_library` in a podcast library; 404 no book; a body without `basis` or with an unknown field is 400.
+  Chapters past 2000, or a basis of more than `maxEditChapters` files, are `too_many` as the list is read,
+  before the book is looked up.
   `DELETE` the same URL reverts it (200, the book page; nothing audited when there was none). Book page: `chapter_edit`
   (`{state: applied|dormant, edited_by: username|null, edited_at}`, omitted with none) and `chapter_basis` (`{files:
   [{path, size, duration_ms}]}`, always); `chapter_source` and the player's `chapters_source` may be `"edited"` (an

@@ -353,6 +353,15 @@ func TestMembers_Create_Denied(t *testing.T) {
 	if status, b := m.add(t, m.adamTok, fmt.Sprintf(`{"name":"Evie","kind":"kid","access":"collections","collection_ids":[%d]}`, bobs)); status != http.StatusBadRequest || codeOf(b) != "invalid_collections" {
 		t.Errorf("bob's collection = %d %s", status, b)
 	}
+	// A list so long its decode stops reading it names collections that aren't
+	// adam's too (he owns far fewer), on a create and on a change.
+	long := `"collection_ids":[` + strings.Repeat("0,", maxBulkBooks) + `0]`
+	if status, b := m.add(t, m.adamTok, `{"name":"Evie","kind":"kid","access":"collections",`+long+`}`); status != http.StatusBadRequest || codeOf(b) != "invalid_collections" {
+		t.Errorf("a create with %d collection ids = %d %s", maxBulkBooks+1, status, b)
+	}
+	if resp, b := m.do(t, "PATCH", memberURL(1, ""), m.adamTok, `{`+long+`}`); resp.StatusCode != http.StatusBadRequest || codeOf(b) != "invalid_collections" {
+		t.Errorf("a change with %d collection ids = %d %s", maxBulkBooks+1, resp.StatusCode, b)
+	}
 	if n := len(m.list(t, m.adamTok).Members); n != 0 {
 		t.Fatalf("refused creates made %d members", n)
 	}

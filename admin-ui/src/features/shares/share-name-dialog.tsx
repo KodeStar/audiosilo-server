@@ -14,8 +14,8 @@ import { Input } from '@/components/ui/input';
 import { errorMessage, fieldMessage } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 
-// The server's cap on a share's name, in characters (handlers_shares.go
-// maxShareName), counted as it counts them (code points, not UTF-16 units).
+// The server's cap on a share's name, in characters (catalog/shares.go
+// MaxShareName), counted as it counts them (code points, not UTF-16 units).
 const MAX_SHARE_NAME = 200;
 
 const schema = z.object({

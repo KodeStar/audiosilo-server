@@ -54,14 +54,11 @@ func (a *API) handleCommunityCovers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		URLs []string `json:"urls"`
-		Size int      `json:"size"`
+		URLs boundedList[string] `json:"urls"`
+		Size int                 `json:"size"`
 	}
-	if err := decodeJSON(r, &req, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
-		return
-	}
-	if !thumbBatch(w, "urls", len(req.URLs), maxCommunityCovers, &req.Size) {
+	err := decodeJSON(r, &req, 0)
+	if !thumbBatch(w, err, "urls", len(req.URLs), maxCommunityCovers, &req.Size) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), communityCoversBudget)

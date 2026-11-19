@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/relpath"
@@ -919,8 +920,13 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 	if err != nil {
 		return err
 	}
-	name := "Library: " + lib.Name
+	name := wholeLibraryShareName(lib.Name, libraryID)
 	share, err := c.wholeLibraryShare(ctx, libraryID, name)
+	if whole := wholeLibrarySharePrefix + lib.Name; errors.Is(err, ErrNotFound) && name != whole {
+		// An unmarked grant an older version made under a long name's whole
+		// spelling, before wholeLibraryShareName cut it, is adopted as before.
+		share, err = c.wholeLibraryShare(ctx, libraryID, whole)
+	}
 	created := false
 	if errors.Is(err, ErrNotFound) {
 		share, created, err = c.createWholeLibraryShare(ctx, libraryID, name)
@@ -942,6 +948,27 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 		}
 	}
 	return c.GrantShare(ctx, userID, share.ID)
+}
+
+// MaxShareName is the longest share name, in characters: a name is stored,
+// listed, audited and logged, so the API refuses a longer one (400
+// invalid_name) and a grant share's is cut to fit (wholeLibraryShareName).
+const MaxShareName = 200
+
+// wholeLibrarySharePrefix starts a grant share's name: "Library: <name>".
+const wholeLibrarySharePrefix = "Library: "
+
+// wholeLibraryShareName is the name of libraryID's grant share, "Library:
+// <name>", with the library's name cut, by characters, so the longest name
+// createWholeLibraryShare may give it (grantName's last) is at most
+// MaxShareName: a library's own name is not bounded, a share's is. A cut
+// name loses any space it would end on.
+func wholeLibraryShareName(libraryName string, libraryID int64) string {
+	room := MaxShareName - utf8.RuneCountInString(grantName(wholeLibrarySharePrefix, libraryID, maxGrantNames-1))
+	if r := []rune(libraryName); len(r) > room {
+		libraryName = strings.TrimRightFunc(string(r[:room]), unicode.IsSpace)
+	}
+	return wholeLibrarySharePrefix + libraryName
 }
 
 // wholeLibraryShareDescription is the description GrantWholeLibrary has always

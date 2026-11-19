@@ -27,8 +27,8 @@ import (
 // the events (listen spans of no length at Audible's place, finishes), each
 // decoded on its own as a player's are.
 type audibleListeningRequest struct {
-	SentAt string            `json:"sent_at"`
-	Events []json.RawMessage `json:"events"`
+	SentAt string                       `json:"sent_at"`
+	Events boundedList[json.RawMessage] `json:"events"`
 }
 
 // writeAudibleSyncError answers a sync call's refusal: 404 unknown_account, 403

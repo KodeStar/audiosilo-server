@@ -224,10 +224,20 @@ func (a *API) handleSetCollectionShares(w http.ResponseWriter, r *http.Request) 
 	}
 	var in struct {
 		// A pointer, as listReplace's items: an absent or null list is a bad body,
-		// not "unshare everyone" (an explicit [] is that).
-		UserIDs *[]int64 `json:"user_ids"`
+		// not "unshare everyone" (an explicit [] is that). A boundedList, as its
+		// items too: half a million ids fit the body.
+		UserIDs *boundedList[int64] `json:"user_ids"`
 	}
-	if err := decodeJSON(r, &in, 0); err != nil {
+	u := userFrom(r.Context())
+	const op, generic = "set collection shares failed", "could not share the collection"
+	err := decodeJSON(r, &in, 0)
+	if errors.Is(err, errTooManyEntries) {
+		// Far past catalog.MaxCollectionShares, and answered as that is, here
+		// before who may change the collection is settled.
+		a.writeCollectionError(w, catalog.ErrTooManyShares, op, generic, "collection", id)
+		return
+	}
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
@@ -235,12 +245,11 @@ func (a *API) handleSetCollectionShares(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "user_ids is required")
 		return
 	}
-	u := userFrom(r.Context())
 	if err := a.cat.SetCollectionShares(r.Context(), id, u.ID, *in.UserIDs); err != nil {
 		if writeKidRefusal(w, err) {
 			return
 		}
-		a.writeCollectionError(w, err, "set collection shares failed", "could not share the collection", "collection", id)
+		a.writeCollectionError(w, err, op, generic, "collection", id)
 		return
 	}
 	a.writeCollection(w, r, id)

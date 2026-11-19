@@ -271,8 +271,12 @@ func TestCollectionSharesAndTargets(t *testing.T) {
 	for i := range ids {
 		ids[i] = strconv.Itoa(1000 + i)
 	}
-	if resp, _ := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, `{"user_ids":[`+strings.Join(ids, ",")+`]}`); resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("share with %d = %d, want 400", len(ids), resp.StatusCode)
+	// One past the cap, and a list so long its decode stops reading it: one answer.
+	for _, list := range []string{strings.Join(ids, ","), strings.Repeat("0,", maxBulkBooks) + "0"} {
+		resp, b := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, `{"user_ids":[`+list+`]}`)
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(b, `"error":"a collection can be shared with at most 50 users"`) {
+			t.Fatalf("share with %d = %d %s, want 400 at most 50 users", strings.Count(list, ",")+1, resp.StatusCode, b)
+		}
 	}
 
 	resp, body := l.do(t, "GET", "/api/v1/me/share-targets", l.oliveTok, "")

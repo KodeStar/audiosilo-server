@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -15,6 +16,10 @@ import (
 // listBodyMax caps a whole-list replace body: up to 1000 refs of long paths.
 const listBodyMax = 4 << 20
 
+// msgTooManyItems is the 400 for a whole-list replace of more entries than the
+// list holds (catalog.ErrTooManyItems), or than a boundedList takes.
+const msgTooManyItems = "too many items"
+
 // listAdd is the body of an add to a list (POST /me/queue, POST
 // /me/collections/{id}/items): a book and where to put it (a 0-based index in the
 // list as the caller sees it, as the GET answers it; absent = after the last
@@ -27,9 +32,11 @@ type listAdd struct {
 
 // listReplace is the body of a whole-list replace (PUT /me/queue, PUT
 // /me/collections/{id}/items). Items is a pointer so an absent or null key can be
-// told from an explicit [] (which clears the list).
+// told from an explicit [] (which clears the list), and a boundedList so a body
+// of a million empty entries (listBodyMax holds more) is refused at the first
+// past maxBulkBooks, more than either list holds, before the rest are decoded.
 type listReplace struct {
-	Items *[]catalog.Ref `json:"items"`
+	Items *boundedList[catalog.Ref] `json:"items"`
 }
 
 // decodeListReplace reads a listReplace body, answering 400 itself for a
@@ -38,7 +45,13 @@ type listReplace struct {
 // it" (a client's {} or {"items": null} would wipe the list, hidden entries too).
 func decodeListReplace(w http.ResponseWriter, r *http.Request) ([]catalog.Ref, bool) {
 	var in listReplace
-	if err := decodeJSON(r, &in, listBodyMax); err != nil {
+	err := decodeJSON(r, &in, listBodyMax)
+	if errors.Is(err, errTooManyEntries) {
+		// More than either list holds: catalog.ErrTooManyItems' answer.
+		writeError(w, http.StatusBadRequest, msgTooManyItems)
+		return nil, false
+	}
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return nil, false
 	}

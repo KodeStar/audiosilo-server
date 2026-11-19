@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,8 +26,33 @@ import (
 // in catalog (adminbooks.go, bookdetail.go, overrides.go, covers.go); match search
 // in meta.
 
-// maxBulkBooks caps one bulk edit; the console pages larger selections.
+// maxBulkBooks caps one bulk edit, and any list of paths one request carries
+// (boundedList); the console pages larger selections.
 const maxBulkBooks = 1000
+
+// selectionBodyMax bounds a body that carries up to maxBulkBooks paths (a
+// share's rules, a selection of books for a bulk edit or a Health ignore):
+// that many at catalog.MaxPathBytes, sent unescaped, with room for each one's
+// library id and the request's other fields. A longer body is 400 too_large
+// (decodeBody), as a longer list is (boundedList).
+const selectionBodyMax = maxBulkBooks*(catalog.MaxPathBytes+64) + 64<<10
+
+// bulkEditBodyMax is selectionBodyMax for a bulk edit, whose edit itself has
+// the 1 MiB a one-book edit's body carries (maxBulkEditBytes).
+const bulkEditBodyMax = selectionBodyMax + maxBulkEditBytes
+
+// maxBulkEditBytes bounds a bulk edit's body less its books: the edit, which
+// holds lists and maps of its own (revert, add, remove), so it never gets the
+// room the selection's paths have (handleAdminBulkEdit).
+const maxBulkEditBytes = 1 << 20
+
+// spanBytes counts the bytes of the JSON values decoded into it, keeping none.
+type spanBytes int64
+
+func (n *spanBytes) UnmarshalJSON(data []byte) error {
+	*n += spanBytes(len(data))
+	return nil
+}
 
 // maxFilterValues caps a repeatable filter (?format=, ?codec=); each value is an
 // SQL parameter, and a real library has a handful.
@@ -366,19 +393,20 @@ func (a *API) handleCheckCommunityChapters(w http.ResponseWriter, r *http.Reques
 }
 
 // editRequest is the body of a book edit (PATCH) and, without chapters, of a bulk
-// edit.
+// edit. Its lists and maps are each decoded only when they hold at most their
+// cap (editFields, editLabels, editChapterTitles, editChapterIndexes).
 type editRequest struct {
-	Set    map[string]string `json:"set"`
-	Revert []string          `json:"revert"`
+	Set    editFieldValues `json:"set"`
+	Revert editFields      `json:"revert"`
 	// Add and Remove change a label list (genres, tags) by name instead of
 	// setting it, so a bulk edit keeps each book's own labels
 	// (catalog.BookEdit.Add).
-	Add      map[string][]string `json:"add"`
-	Remove   map[string][]string `json:"remove"`
-	Source   string              `json:"source"`
+	Add      editLabels `json:"add"`
+	Remove   editLabels `json:"remove"`
+	Source   string     `json:"source"`
 	Chapters *struct {
-		Set    map[int]string `json:"set"`
-		Revert []int          `json:"revert"`
+		Set    editChapterTitles  `json:"set"`
+		Revert editChapterIndexes `json:"revert"`
 	} `json:"chapters"`
 	// ChapterSource picks where the chapters come from: "files", "community"
 	// or "auto" (catalog.BookEdit.ChapterSource).
@@ -391,6 +419,89 @@ type editRequest struct {
 	// for a library; a match naming no work ({} or a null work_id) is refused.
 	// One book at a time: a bulk edit refuses it.
 	Match *matchRequest `json:"match"`
+}
+
+// The caps on an edit's own lists and maps (editRequest), far past what the
+// console sends: the edit's 1 MiB alone would let a list of over three hundred
+// thousand empty entries be decoded before anything counted it. One past its
+// cap is errEditTooLong.
+const (
+	// maxEditFields caps the fields an edit sets, reverts, or adds labels to
+	// or removes them from (catalog.OverrideFields).
+	maxEditFields = 64
+	// maxEditLabels caps the labels one field's list adds or removes: a
+	// boundedList's.
+	maxEditLabels = maxBulkBooks
+	// maxEditChapters caps the chapter titles an edit sets and the chapters it
+	// reverts (a book's chapters from its files may be more than the
+	// metadata.MaxChapterListEntries an edited list holds), and the files a
+	// chapter edit's basis names.
+	maxEditChapters = 10_000
+)
+
+// errEditTooLong is a list or map of an edit past its cap: 400 too_large, on
+// the one-book edit and the bulk edit alike (writeDecodeError).
+var errEditTooLong = errors.New("a list in the edit holds too many entries")
+
+// editErr is err, or errEditTooLong for a list or map past its cap.
+func editErr(err error) error {
+	if errors.Is(err, errTooManyEntries) {
+		return errEditTooLong
+	}
+	return err
+}
+
+// editFields is the fields an edit reverts, at most maxEditFields.
+type editFields []string
+
+func (l *editFields) UnmarshalJSON(data []byte) (err error) {
+	*l, err = decodeBounded[string](bytes.NewReader(data), maxEditFields)
+	return editErr(err)
+}
+
+// editFieldValues is the values an edit sets, by field, at most maxEditFields.
+type editFieldValues map[string]string
+
+func (m *editFieldValues) UnmarshalJSON(data []byte) (err error) {
+	*m, err = decodeBoundedMap[string, string](data, maxEditFields)
+	return editErr(err)
+}
+
+// editLabels is the labels an edit adds or removes, by field: at most
+// maxEditFields fields, each list at most maxEditLabels.
+type editLabels map[string][]string
+
+func (m *editLabels) UnmarshalJSON(data []byte) error {
+	lists, err := decodeBoundedMap[string, boundedList[string]](data, maxEditFields)
+	if err != nil {
+		return editErr(err)
+	}
+	if lists == nil {
+		*m = nil
+		return nil
+	}
+	*m = make(editLabels, len(lists))
+	for field, labels := range lists {
+		(*m)[field] = labels
+	}
+	return nil
+}
+
+// editChapterTitles is the chapter titles an edit sets, by chapter index, at
+// most maxEditChapters.
+type editChapterTitles map[int]string
+
+func (m *editChapterTitles) UnmarshalJSON(data []byte) (err error) {
+	*m, err = decodeBoundedMap[int, string](data, maxEditChapters)
+	return editErr(err)
+}
+
+// editChapterIndexes is the chapters an edit reverts, at most maxEditChapters.
+type editChapterIndexes []int
+
+func (l *editChapterIndexes) UnmarshalJSON(data []byte) (err error) {
+	*l, err = decodeBounded[int](bytes.NewReader(data), maxEditChapters)
+	return editErr(err)
 }
 
 // matchRequest is an edit's community match (editRequest.Match). WorkID is a
@@ -482,6 +593,10 @@ func (a *API) handleAdminEditBook(w http.ResponseWriter, r *http.Request) {
 	}
 	var req editRequest
 	if err := decodeJSON(r, &req, 0); err != nil {
+		if errors.Is(err, errEditTooLong) {
+			writeDecodeError(w, err)
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
@@ -520,19 +635,37 @@ func (a *API) handleAdminEditBook(w http.ResponseWriter, r *http.Request) {
 // to many books in one transaction (all or nothing; chapter edits are refused).
 func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Books []catalog.Ref `json:"books"`
+		Books boundedList[catalog.Ref] `json:"books"`
 		editRequest
 	}
-	if err := decodeJSON(r, &req, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	// The body is read whole and measured before any of it becomes values:
+	// only its books may use the room past maxBulkEditBytes. The edit's own
+	// lists and maps have caps of their own (editRequest), but its values
+	// (a description, a label) are only bounded by the bytes they take.
+	body, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, bulkEditBodyMax))
+	if err != nil {
+		writeDecodeError(w, err)
+		return
+	}
+	var sel struct {
+		Books spanBytes `json:"books"`
+	}
+	// A body that doesn't decode here doesn't below either, and is answered there.
+	if dec := json.NewDecoder(bytes.NewReader(body)); dec.Decode(&sel) == nil &&
+		dec.InputOffset()-int64(sel.Books) > maxBulkEditBytes {
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+			fmt.Sprintf("the edit is larger than %d bytes", maxBulkEditBytes))
+		return
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeDecodeError(w, err)
 		return
 	}
 	switch {
 	case len(req.Books) == 0:
 		writeError(w, http.StatusBadRequest, "books is required")
-		return
-	case len(req.Books) > maxBulkBooks:
-		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, "too many books in one edit (at most 1000)")
 		return
 	case req.empty():
 		writeError(w, http.StatusBadRequest, "nothing to change")
@@ -628,20 +761,24 @@ func (a *API) handleAdminBookWorks(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
 		return
 	}
+	// maxWorkBooks paths at the cap fit decodeJSON's default 1 MiB; a longer
+	// body is 400 too_large (writeDecodeError), as a list past maxWorkBooks
+	// is, with one answer however far past (a boundedList stops at
+	// maxBulkBooks, which is past this route's cap too).
 	var req struct {
-		Books []catalog.Ref `json:"books"`
+		Books boundedList[catalog.Ref] `json:"books"`
 	}
-	if err := decodeJSON(r, &req, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
-		return
-	}
+	err := decodeJSON(r, &req, 0)
 	switch {
-	case len(req.Books) == 0:
-		writeError(w, http.StatusBadRequest, "books is required")
-		return
-	case len(req.Books) > maxWorkBooks:
+	case errors.Is(err, errTooManyEntries), err == nil && len(req.Books) > maxWorkBooks:
 		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
 			fmt.Sprintf("too many books in one request (at most %d)", maxWorkBooks))
+		return
+	case err != nil:
+		writeDecodeError(w, err)
+		return
+	case len(req.Books) == 0:
+		writeError(w, http.StatusBadRequest, "books is required")
 		return
 	case refsTooLong(w, req.Books):
 		return
