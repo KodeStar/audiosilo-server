@@ -22,6 +22,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -306,9 +307,9 @@ func TestRecordRestore(t *testing.T) {
 	cat := catalog.New(db, time.Now)
 	feed := func() string {
 		t.Helper()
-		var v string
-		if err := db.QueryRowContext(ctx, `SELECT value FROM server_state WHERE key = 'progress_feed'`).Scan(&v); err != nil {
-			t.Fatal(err)
+		v, err := store.GetState[string](ctx, db, "progress_feed")
+		if err != nil || v == "" {
+			t.Fatalf("progress feed = %q, %v", v, err)
 		}
 		return v
 	}

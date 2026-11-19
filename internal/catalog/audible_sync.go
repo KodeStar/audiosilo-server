@@ -301,34 +301,25 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 	return k, nil
 }
 
-// progressFeedKey is the server_state row naming this server's progress feed
-// (progressFeed).
+// progressFeedKey is the server_state row holding this server's progress feed
+// id: a random id every GET /bridge/progress cursor carries, so a cursor from
+// another feed (another server's, a database started afresh, or this one's
+// before a backup was restored here: RenewProgressFeed) is refused, never read
+// as a place in this feed (bridge#50).
 const progressFeedKey = "progress_feed"
-
-// progressFeed is server_state's value for progressFeedKey: a random id every
-// GET /bridge/progress cursor carries, so a cursor from another feed (another
-// server's, a database started afresh, or this one's before a backup was
-// restored here: RenewProgressFeed) is refused, never read as a place in this
-// feed (bridge#50).
-type progressFeed struct {
-	ID string `json:"id"`
-}
 
 // progressFeedID is the progress feed's id, made on first use.
 func (c *Catalog) progressFeedID(ctx context.Context) (string, error) {
-	st, err := getServerState[progressFeed](ctx, c.db, progressFeedKey)
-	if err != nil || st.ID != "" {
-		return st.ID, err
+	id, err := getServerState[string](ctx, c.db, progressFeedKey)
+	if err != nil || id != "" {
+		return id, err
 	}
-	var id string
 	err = c.db.WithTx(ctx, "progressFeedID", func(tx *sql.Tx) error {
-		cur, err := getServerState[progressFeed](ctx, tx, progressFeedKey)
-		if err != nil || cur.ID != "" {
-			id = cur.ID
+		if id, err = getServerState[string](ctx, tx, progressFeedKey); err != nil || id != "" {
 			return err
 		}
 		id = rand.Text()
-		return putServerState(ctx, tx, progressFeedKey, progressFeed{ID: id}, c.stamp())
+		return putServerState(ctx, tx, progressFeedKey, id, c.stamp())
 	})
 	return id, err
 }
@@ -338,7 +329,7 @@ func (c *Catalog) progressFeedID(ctx context.Context) (string, error) {
 // again from its start: the launcher's step after restoring a backup, whose
 // feed is behind the cursors the Bridge holds (a backup carries its id).
 func (c *Catalog) RenewProgressFeed(ctx context.Context) error {
-	return putServerState(ctx, c.db, progressFeedKey, progressFeed{ID: rand.Text()}, c.stamp())
+	return putServerState(ctx, c.db, progressFeedKey, rand.Text(), c.stamp())
 }
 
 // progressFrom reads since as a place in this server's feed (feed, its id):
@@ -348,7 +339,7 @@ func (c *Catalog) RenewProgressFeed(ctx context.Context) error {
 // hand (with its id, so the id can't tell): until the counter passes the
 // cursor again, the feed would answer nothing and the rows written since would
 // never reach Audible. A cursor from a server before 2.7.0 carries no id and
-// has only that check.
+// has only that check. The place comes back with feed as its id.
 func (c *Catalog) progressFrom(ctx context.Context, since, feed string) (progressCursor, error) {
 	from, err := decodeProgressCursor(since)
 	if err != nil || since == "" {
@@ -364,6 +355,7 @@ func (c *Catalog) progressFrom(ctx context.Context, since, feed string) (progres
 	if from.Seq > last {
 		return progressCursor{}, ErrInvalidCursor
 	}
+	from.Feed = feed
 	return from, nil
 }
 
@@ -425,7 +417,6 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 	}
 	if len(got) == 0 {
 		if since != "" {
-			from.Feed = feed
 			since = from.encode()
 		}
 		return []AudibleProgressRow{}, since, false, nil
