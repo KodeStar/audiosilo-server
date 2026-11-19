@@ -1941,7 +1941,11 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 // one given up on, each with that error (a share that stopped answering), or
 // with one whose lstat failed as a share does (metadata.ShareFault), its error made a
 // look given up on: the file listed a moment ago says nothing about whether it
-// is there, so its book is kept as stored rather than built without it.
+// is there, so its book is kept as stored rather than built without it. A
+// folder's error is one a retry may get past (not answered, a transient
+// fault) when any of its files has one, else a fault for good
+// (faultedForGood), whatever order the pool looks at them in: a caller who
+// asked (askedFault) never hears the lasting 404 for a share's hiccup.
 func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, timeout time.Duration) (gone int, unanswered map[string]error, err error) {
 	type dirFile struct {
 		dir string
@@ -1963,11 +1967,14 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, time
 			return
 		}
 		mu.Lock()
-		_, skip := unanswered[f.dir]
+		prev, seen := unanswered[f.dir]
 		mu.Unlock()
-		if skip {
+		if seen && !faultedForGood(prev) {
 			// Its folder is dropped anyway; on a share that stopped answering
-			// each look would wait out its time.
+			// each look would wait out its time. A folder with only a fault
+			// for good so far (which fails at once) is still looked at: a
+			// fault a retry may get past, on another of its files, is the
+			// folder's answer whichever the pool reaches first.
 			return
 		}
 		info, err := lstatAudio(ctx, f.f.abs, timeout) // the entry's Info, bounded
@@ -1975,7 +1982,7 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int, time
 		switch {
 		case metadata.GaveUp(err):
 			mu.Lock()
-			if _, ok := unanswered[f.dir]; !ok {
+			if prev, ok := unanswered[f.dir]; !ok || faultedForGood(prev) && !faultedForGood(err) {
 				unanswered[f.dir] = err
 			}
 			mu.Unlock()

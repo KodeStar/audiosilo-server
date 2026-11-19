@@ -99,6 +99,37 @@ func TestAskedBookPartFaultIsClassified(t *testing.T) {
 	}
 }
 
+// A folder with one part refused for good (a permission) and another failing
+// as a share that may come back (EIO) is a look given up on, whichever of the
+// two is looked at first: the transient fault wins, so the book is never
+// answered as gone for good on a share's hiccup. Not parallel: it swaps
+// lstatAudio.
+func TestStatAudioTransientFaultWinsInAFolder(t *testing.T) {
+	was := lstatAudio
+	t.Cleanup(func() { lstatAudio = was })
+	faults := map[string]syscall.Errno{"/lib/Book/01.mp3": syscall.EACCES, "/lib/Book/02.mp3": syscall.EIO}
+	lstatAudio = func(_ context.Context, p string, _ time.Duration) (fs.FileInfo, error) {
+		return nil, &fs.PathError{Op: "lstat", Path: p, Err: faults[p]}
+	}
+	for _, order := range [][]string{{"01.mp3", "02.mp3"}, {"02.mp3", "01.mp3"}} {
+		var audio []audioFile
+		for _, name := range order {
+			audio = append(audio, audioFile{abs: "/lib/Book/" + name})
+		}
+		// One at a time, so the files are looked at in this order.
+		_, unanswered, err := statAudio(t.Context(), map[string][]audioFile{"Book": audio}, 1, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := unanswered["Book"]; !metadata.GaveUp(got) || faultedForGood(got) || !errors.Is(got, syscall.EIO) {
+			t.Errorf("parts looked at as %v: the folder's error is %v, want the EIO a retry may get past", order, got)
+		}
+		if got := askedFault(unanswered); !metadata.GaveUp(got) || errors.As(got, new(lookRefused)) {
+			t.Errorf("parts looked at as %v: a caller who asked hears %v, want a look given up on", order, got)
+		}
+	}
+}
+
 // A disc of a joined book (a `book` override over a disc set) whose sibling
 // disc folder fails its listing hears the fault's class: the joined book
 // can't be read now (transient: a look given up on) or at all (any other: the
