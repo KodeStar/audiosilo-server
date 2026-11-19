@@ -217,10 +217,11 @@ func (st Status) Library(id int64) *LibraryStatus {
 }
 
 // KeepLibraries leaves st only the mappings of libraries the server has
-// (known), in a list of their own: the rest are never read (the console and the
-// jobs ask by a library of the server's), so storing them would let a heartbeat
-// fill the stored row, and each read of it, with up to maxLibraries mappings
-// of libraries that don't exist (server#445).
+// (known), in a list of their own, and its setup items only those libraries'
+// ids: the rest are never read (the console and the jobs ask by a library of
+// the server's), so storing them would let a heartbeat fill the stored row,
+// and each read of it, with up to maxLibraries mappings, and as many ids a
+// setup item, of libraries that don't exist (server#445).
 func (st *Status) KeepLibraries(known func(id int64) bool) {
 	kept := make([]LibraryStatus, 0, min(len(st.Libraries), 16))
 	for _, l := range st.Libraries {
@@ -229,6 +230,7 @@ func (st *Status) KeepLibraries(known func(id int64) bool) {
 		}
 	}
 	st.Libraries = kept
+	st.Setup.keepLibraries(known)
 }
 
 // Limits on a heartbeat: its body is the Bridge's, so the server bounds what it

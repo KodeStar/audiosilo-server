@@ -122,7 +122,7 @@ func TestStatusValidateCutsLibraries(t *testing.T) {
 }
 
 // A heartbeat is stored without the mappings of libraries the server doesn't
-// have, and as plain JSON (no HTML escaping, which would store a "<" as six
+// have, or their ids in a setup item, and as plain JSON (no HTML escaping, which would store a "<" as six
 // bytes): what a Bridge sends can't grow the stored row past its own body.
 func TestHeartbeatStoredSmall(t *testing.T) {
 	t.Parallel()
@@ -136,12 +136,27 @@ func TestHeartbeatStoredSmall(t *testing.T) {
 		}
 		st.Libraries = append(st.Libraries, LibraryStatus{LibraryID: id, MountPath: "/media/<books> & more", Mapped: true})
 	}
+	// A setup item's library ids are held to the server's libraries too: as
+	// many of them as a body holds, most repeated, are told apart without a
+	// scan of the ids kept for each.
+	ids := make([]int64, 0, 200_000)
+	for i := range cap(ids) {
+		ids = append(ids, int64(100000+i%(maxLibraries-2)))
+	}
+	ids[7] = q.lib // with the others, one under the bound: every id is looked at
+	st.Setup = &Setup{Items: []SetupItem{{ID: "libraries", LibraryIDs: ids}, {ID: "paired", Done: true}}}
 	if err := st.Validate(); err != nil {
 		t.Fatal(err)
+	}
+	if n := len(st.Setup.Items[0].LibraryIDs); n != maxLibraries-1 {
+		t.Fatalf("the setup item keeps %d library ids, want each once (%d)", n, maxLibraries-1)
 	}
 	st.KeepLibraries(func(id int64) bool { return id == q.lib })
 	if len(st.Libraries) != 1 || cap(st.Libraries) >= maxLibraries || st.Libraries[0].LibraryID != q.lib {
 		t.Fatalf("kept %d mappings (cap %d), want the server's one in a list of its own", len(st.Libraries), cap(st.Libraries))
+	}
+	if kept := st.Setup.Items[0].LibraryIDs; len(kept) != 1 || cap(kept) >= maxLibraries || kept[0] != q.lib || st.Setup.Items[1].LibraryIDs != nil {
+		t.Fatalf("setup items keep %v and %v, want the server's library alone", kept, st.Setup.Items[1].LibraryIDs)
 	}
 	if err := q.SaveHeartbeat(ctx, q.token, st); err != nil {
 		t.Fatal(err)

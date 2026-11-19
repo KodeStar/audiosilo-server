@@ -219,7 +219,8 @@ func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The libraries are read before the save: only the mappings of libraries
-	// the server has are stored (Status.KeepLibraries).
+	// the server has, and the setup items' ids of them, are stored
+	// (Status.KeepLibraries).
 	libs, err := a.cat.ListLibraries(r.Context())
 	if err == nil {
 		known := make(map[int64]bool, len(libs))

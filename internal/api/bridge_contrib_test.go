@@ -69,7 +69,10 @@ func TestBridgeHeartbeatSetup(t *testing.T) {
 
 	// The estimates say yes, the setup says no: no.
 	yes := `,"estimates":{"sidecars":{"can_contribute":true}}`
-	b.beatKinds(t, yes+`,"setup":`+setupBlock(false), bridge.KindVerify, bridge.KindSidecars)
+	// The libraries step names the env's library and one the server doesn't
+	// have: only the server's is kept (Status.KeepLibraries).
+	named := strings.Replace(setupBlock(false), `"library_ids":[3]`, fmt.Sprintf(`"library_ids":[%d,987654]`, b.lib.ID), 1)
+	b.beatKinds(t, yes+`,"setup":`+named, bridge.KindVerify, bridge.KindSidecars)
 	var admin struct {
 		Features []string      `json:"features"`
 		Setup    *bridge.Setup `json:"setup"`
@@ -78,7 +81,7 @@ func TestBridgeHeartbeatSetup(t *testing.T) {
 	decodeInto(t, body, &admin)
 	if admin.Setup == nil || admin.Setup.CanContribute || admin.Setup.GitHubLogin != "octocat" || len(admin.Setup.Items) != 3 ||
 		admin.Setup.GitHubState != "unrefreshed" || admin.Setup.AgentCredential != "world" ||
-		!slices.Equal(admin.Setup.Items[1].LibraryIDs, []int64{3}) || slices.Contains(admin.Features, bridge.FeatureContribute) {
+		!slices.Equal(admin.Setup.Items[1].LibraryIDs, []int64{b.lib.ID}) || slices.Contains(admin.Features, bridge.FeatureContribute) {
 		t.Fatalf("admin bridge (setup no): %s", body)
 	}
 	if capability(t, b.testEnv) {
