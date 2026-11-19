@@ -237,7 +237,8 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded","hint":"raise it"}}`},
 		{StateRunning, `{"step":"fact_pass"}`},
 		// The monthly budget resumes by itself next month, but a month is long
-		// enough to hear about: it was, once, so its retry parking again is not.
+		// enough to hear about, and under the book's budget's code it is a new
+		// wait (on a timer, not a person).
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded",` + later + `}}`},
 		{StateRunning, `{"step":"fact_pass"}`},
 		// A refused credential waits on a person, whatever its retry_at says.
@@ -255,6 +256,7 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 	}
 	want := []string{
 		"needs_attention>needs_attention:budget_exceeded",
+		"running>needs_attention:budget_exceeded",
 		"running>needs_attention:agent_credential_refused",
 		"running>done:",
 	}
@@ -354,6 +356,61 @@ func TestReparkAnnouncedOncePerOutage(t *testing.T) {
 	q.announcedMu.Unlock()
 	if left != 0 {
 		t.Fatalf("announced parks kept for ended jobs: %d", left)
+	}
+}
+
+// One code can wait on a person or on a timer (budget_exceeded: the book's
+// budget, then the month's), so a park that turns from one to the other is
+// news; and an announcement six hours old, which quiets nothing, is dropped
+// even for a job whose end the Service never hears about.
+func TestReparkTimedIsNewsAndOldEntriesGo(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	heard := q.heard()
+	claim := func(name string) *Job {
+		t.Helper()
+		job := q.verify(t, name, 0)
+		if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+			t.Fatal(err)
+		}
+		return job
+	}
+	job := claim("A")
+	repark := func(id int64, progress string) {
+		t.Helper()
+		for _, u := range []Update{
+			{Attempt: 1, State: ptr(StateRunning), Progress: json.RawMessage(`{"step":"fact_pass"}`)},
+			{Attempt: 1, State: ptr(StateNeedsAttention), Progress: json.RawMessage(progress)},
+		} {
+			if _, err := q.UpdateHeld(ctx, id, u); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	book := `{"step":"waiting","park":{"code":"budget_exceeded"}}`
+	month := `{"step":"waiting","park":{"code":"budget_exceeded","retry_at":"2026-11-01T00:00:00Z"}}`
+	repark(job.ID, book)
+	repark(job.ID, book)
+	repark(job.ID, month)
+	repark(job.ID, month)
+	q.advance(reannounceAfter)
+	other := claim("B")
+	repark(other.ID, book)
+	want := []string{
+		"running>needs_attention:budget_exceeded",
+		"running>needs_attention:budget_exceeded",
+		"running>needs_attention:budget_exceeded",
+	}
+	if !slices.Equal(*heard, want) {
+		t.Fatalf("heard = %v, want %v", *heard, want)
+	}
+	q.announcedMu.Lock()
+	_, kept := q.announced[job.ID]
+	left := len(q.announced)
+	q.announcedMu.Unlock()
+	if kept || left != 1 {
+		t.Fatalf("announced = %d entries, %v kept for the old park", left, kept)
 	}
 }
 

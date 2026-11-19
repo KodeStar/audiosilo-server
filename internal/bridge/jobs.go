@@ -1771,7 +1771,9 @@ const reannounceAfter = 6 * time.Hour
 // (its retry_at) and parks it again with the same code (contrib_unavailable
 // while GitHub is down) is announced once per outage, not every ten minutes:
 // a park is news again when its code changes to another that isn't transient
-// (a transient park in between changes nothing), on a new claim, or once
+// (a transient park in between changes nothing), when it turns from waiting on
+// a person to waiting on a timer or back under the same code (budget_exceeded:
+// the book's budget, then the month's), on a new claim, or once
 // reannounceAfter has passed since it was last announced. Any other Notable
 // move (done, failed) is always news. The console shows the park either way.
 func (s *Service) parkNews(j *Job) bool {
@@ -1779,15 +1781,34 @@ func (s *Service) parkNews(j *Job) bool {
 		return true
 	}
 	now := s.now()
-	seen := announcedPark{attempt: j.Attempts, code: j.ParkCode(), at: now}
+	seen := announcedPark{attempt: j.Attempts, code: j.ParkCode(), timed: parkTimed(j.Progress), at: now}
 	s.announcedMu.Lock()
 	defer s.announcedMu.Unlock()
-	if last, ok := s.announced[j.ID]; ok && last.attempt == seen.attempt && last.code == seen.code &&
+	last, ok := s.announced[j.ID]
+	if ok && last.attempt == seen.attempt && last.code == seen.code && last.timed == seen.timed &&
 		now.Sub(last.at) < reannounceAfter {
 		return false
 	}
+	// An entry past reannounceAfter quiets nothing: dropping it bounds the
+	// map by the parks announced in the last six hours, whatever ends unseen.
+	for id, p := range s.announced {
+		if now.Sub(p.at) >= reannounceAfter {
+			delete(s.announced, id)
+		}
+	}
 	s.announced[j.ID] = seen
 	return true
+}
+
+// parkTimed reports whether the park a progress names carries a retry_at: the
+// Bridge resumes it by itself then, where one without waits for a person.
+func parkTimed(progress json.RawMessage) bool {
+	var p struct {
+		Park *struct {
+			RetryAt string `json:"retry_at"`
+		} `json:"park"`
+	}
+	return json.Unmarshal(progress, &p) == nil && p.Park != nil && p.Park.RetryAt != ""
 }
 
 // forgetPark drops the park announced for a job that ended (parkNews).

@@ -4023,7 +4023,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ask the server about its share before filing, v2.7.0) whatever their `retry_at`, and counts a park whose code
   changes in place as news; a park is announced once per outage (`bridge.Service.parkNews`, in memory per open
   job): a timed retry that parks again with the same code (`contrib_unavailable` while GitHub is down) is not news
-  until the code changes, the job is claimed again or six hours have passed since it was announced;
+  until the code changes, the park turns from waiting on a person to waiting on its `retry_at` or back
+  (`budget_exceeded`: the book's budget, then the month's), the job is claimed again or six hours have passed
+  since it was announced (an entry that old is dropped, so the map holds only the last six hours' parks);
   a failure by an expired last lease is reported too, once its transaction commits; the job's `error`,
   the Bridge's own text that can name its folders, is the bell's `detail`, never sent out), and podcasts
   (server#232, admin only, through `catalog.SetPodcastNotice`: the event (`notify.PodcastEvent`) is recorded

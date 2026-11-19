@@ -89,18 +89,23 @@ type Service struct {
 	offlineSince time.Time
 
 	// announced is the park last announced per job (parkNews), under
-	// announcedMu, until the job ends (forgetPark). In memory only: a restart
-	// forgets it, so a park still on is announced once more. A parked job
-	// cancelled in SQL (cancelWaitingTx) keeps its small entry until then.
+	// announcedMu, until the job ends (forgetPark) or reannounceAfter passes
+	// (parkNews drops an entry that old: it quiets nothing any more, so a
+	// parked job cancelled in SQL, cancelWaitingTx, or one whose end was
+	// reported before its park was, leaves nothing behind for long). In memory
+	// only: a restart forgets it, so a park still on is announced once more.
 	announcedMu sync.Mutex
 	announced   map[int64]announcedPark
 }
 
-// announcedPark is the park code announced for a job, the claim (attempt) it
-// was announced on, and when.
+// announcedPark is the park announced for a job: its code, whether it named a
+// retry_at (timed: the Bridge goes on by itself, as a monthly budget does,
+// where the book's own budget waits for a person under the same code), the
+// claim (attempt) it was announced on, and when.
 type announcedPark struct {
 	attempt int
 	code    string
+	timed   bool
 	at      time.Time
 }
 
