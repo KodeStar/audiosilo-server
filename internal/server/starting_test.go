@@ -113,9 +113,58 @@ func TestStartListenErrorAndWait(t *testing.T) {
 	if err := s.Wait(); err != nil {
 		t.Fatalf("Wait = %v", err)
 	}
-	<-s.Done() // closed once Wait shut it down
+	select {
+	case <-s.Done():
+	default:
+		t.Fatal("Done still open after Wait shut the server down")
+	}
 	if err := s.Wait(); err != nil {
 		t.Fatalf("second Wait = %v", err)
+	}
+}
+
+// A server stopped the moment it started (a start that fails at its first
+// step) has closed its listener by the time Wait returns, whether or not serve
+// had reached it: Done is closed and the port can be taken again at once.
+func TestWaitReturnsWithTheListenerClosed(t *testing.T) {
+	t.Parallel()
+	log := slog.New(slog.DiscardHandler)
+	for range 50 {
+		cfg := &config.Config{Bind: freeAddr(t), TLS: config.TLSConfig{Mode: config.TLSOff}}
+		ctx, stop := context.WithCancel(t.Context())
+		s, err := Start(ctx, cfg, NewStartGate(nil), log)
+		if err != nil {
+			stop()
+			t.Fatal(err)
+		}
+		stop()
+		if err := s.Wait(); err != nil {
+			t.Fatalf("Wait = %v", err)
+		}
+		select {
+		case <-s.Done():
+		default:
+			t.Fatal("Done still open after Wait")
+		}
+		ln, err := net.Listen("tcp", cfg.Bind)
+		if err != nil {
+			t.Fatalf("the port is still taken after Wait: %v", err)
+		}
+		_ = ln.Close()
+	}
+}
+
+// A serve that failed on its own is Wait's answer even when the context has
+// ended too by the time Wait is asked.
+func TestWaitReportsServeFailureAfterContextEnds(t *testing.T) {
+	t.Parallel()
+	lost := errors.New("accept: listener lost")
+	ctx, stop := context.WithCancel(context.Background())
+	s := serveIn(ctx, &http.Server{}, func() error { return lost }, slog.New(slog.DiscardHandler))
+	<-s.Done()
+	stop()
+	if err := s.Wait(); !errors.Is(err, lost) {
+		t.Fatalf("Wait = %v, want %v", err, lost)
 	}
 }
 

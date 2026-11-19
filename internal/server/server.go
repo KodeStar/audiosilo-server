@@ -36,7 +36,8 @@ type Serving struct {
 func (s *Serving) Done() <-chan struct{} { return s.done }
 
 // Wait blocks until the server stops: ctx cancelled (connections then drain
-// gracefully, nil) or serving failed (its error). Every call returns the same.
+// gracefully, nil) or serving failed (its error). Done is closed and the port
+// free by the time it returns. Every call returns the same.
 func (s *Serving) Wait() error {
 	s.once.Do(func() { s.err = s.wait() })
 	return s.err
@@ -107,25 +108,30 @@ func Start(ctx context.Context, cfg *config.Config, handler http.Handler, log *s
 
 // serveIn runs serve (srv serving its listener) in the background, as Start's
 // Serving: Done closes when serve returns, and Wait shuts srv down once ctx
-// ends or returns serve's own failure.
+// ends or returns serve's own failure. Wait returns only once serve has: the
+// listener is closed and Done with it, also when ctx ended before serve got to
+// its listener (it then finds the server shut down and closes it). A serve
+// that failed on its own is Wait's answer even when ctx has ended too.
 func serveIn(ctx context.Context, srv *http.Server, serve func() error, log *slog.Logger) *Serving {
-	errCh := make(chan error, 1)
 	done := make(chan struct{})
-	go func() { errCh <- serve(); close(done) }()
+	var serveErr error // serve's answer, read only once done is closed
+	go func() { serveErr = serve(); close(done) }()
 
 	return &Serving{done: done, wait: func() error {
+		var err error
 		select {
 		case <-ctx.Done():
 			log.Info("shutting down")
 			shutCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			return srv.Shutdown(shutCtx)
-		case err := <-errCh:
-			if errors.Is(err, http.ErrServerClosed) {
-				return nil
-			}
-			return err
+			err = srv.Shutdown(shutCtx)
+			<-done // Shutdown closed the listener first, so serve returns even past shutCtx
+		case <-done:
 		}
+		if err == nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			err = serveErr
+		}
+		return err
 	}}
 }
 
