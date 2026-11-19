@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
@@ -88,36 +89,26 @@ type PodcastMove struct {
 func (c *Catalog) MovePodcastShows(ctx context.Context, lib int64, moves []PodcastMove) (int, error) {
 	applied := 0
 	err := c.db.WithTx(ctx, "MovePodcastShows", func(tx *sql.Tx) error {
-		applied = 0
-		live := make([]bool, len(moves))
-		for i, m := range moves {
-			var id string
-			err := tx.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, m.To).Scan(&id)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		var live []PodcastMove
+		for _, m := range moves {
+			id, err := podcastShowIDAt(ctx, tx, lib, m.To)
+			if err != nil {
 				return err
 			}
 			if id != m.ShowID || !feed.ShowPath(m.To) {
 				continue
 			}
-			live[i] = true
-			hold := movePlaceholder(i)
+			m.From = slices.DeleteFunc(slices.Clone(m.From), func(from string) bool { return from == m.To || !feed.ShowPath(from) })
+			hold := movePlaceholder(len(live))
 			for _, from := range m.From {
-				if from == m.To || !feed.ShowPath(from) {
-					continue
-				}
 				if err := liftShowRows(ctx, tx, lib, m.ShowID, from, hold); err != nil {
 					return err
 				}
 			}
+			live = append(live, m)
 		}
-		for i, m := range moves {
-			if !live[i] {
-				continue
-			}
+		for i, m := range live {
 			for _, from := range m.From {
-				if from == m.To || !feed.ShowPath(from) {
-					continue
-				}
 				if err := moveShowState(ctx, tx, lib, m.ShowID, from, m.To); err != nil {
 					return err
 				}
@@ -125,11 +116,21 @@ func (c *Catalog) MovePodcastShows(ctx context.Context, lib int64, moves []Podca
 			if err := placeShowRows(ctx, tx, lib, movePlaceholder(i), m.To); err != nil {
 				return err
 			}
-			applied++
 		}
+		applied = len(live)
 		return nil
 	})
 	return applied, err
+}
+
+// podcastShowIDAt is the show identity of show's index row, "" with none.
+func podcastShowIDAt(ctx context.Context, tx *sql.Tx, lib int64, show string) (string, error) {
+	var id string
+	err := tx.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, show).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }
 
 // movePlaceholder is where MovePodcastShows holds move i's follows and show
@@ -185,9 +186,10 @@ func moveShowState(ctx context.Context, tx *sql.Tx, lib int64, id, from, to stri
 		 ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET mode=excluded.mode,keep=excluded.keep,days=excluded.days,updated_at=excluded.updated_at
 		  WHERE excluded.updated_at>podcast_policies.updated_at`,
 		`DELETE FROM podcast_policies WHERE library_id=?1 AND show_path=?2 AND show_id=?4`,
+		// The episodes under from/: '0' sorts right after '/'.
 		`UPDATE OR IGNORE podcast_fetch_state SET rel_path=?3||substr(rel_path,length(?2)+1)
-		  WHERE library_id=?1 AND show_id=?4 AND substr(rel_path,1,length(?2)+1)=?2||'/'`,
-		`DELETE FROM podcast_fetch_state WHERE library_id=?1 AND show_id=?4 AND substr(rel_path,1,length(?2)+1)=?2||'/'`,
+		  WHERE library_id=?1 AND rel_path>=?2||'/' AND rel_path<?2||'0' AND show_id=?4`,
+		`DELETE FROM podcast_fetch_state WHERE library_id=?1 AND rel_path>=?2||'/' AND rel_path<?2||'0' AND show_id=?4`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, lib, from, to, id); err != nil {
 			return err
@@ -196,13 +198,13 @@ func moveShowState(ctx context.Context, tx *sql.Tx, lib int64, id, from, to stri
 	// The episode files: those listed at to, and those of from's own row while
 	// it is still id's (to's feed.json may not list them yet: one renamed by
 	// hand names the old folder until the Bridge takes it in).
-	var held string
-	if err := tx.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, from).Scan(&held); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	held, err := podcastShowIDAt(ctx, tx, lib, from)
+	if err != nil {
 		return err
 	}
 	stale := held == id
 	files, err := queryRows(ctx, tx, func(r *sql.Rows, p *string) error { return r.Scan(p) },
-		`SELECT b.rel_path FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=?1 AND (e.show_path=?2 OR ?3 AND e.show_path=?4)`, lib, to, stale, from)
+		`SELECT b.rel_path FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=?1 AND e.show_path IN (?2,CASE WHEN ?3 THEN ?4 END)`, lib, to, stale, from)
 	if err != nil {
 		return err
 	}

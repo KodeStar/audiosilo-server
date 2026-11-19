@@ -863,17 +863,17 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		if err != nil || n == 0 {
 			return err
 		}
-		// A field of the wrong type stays at its zero value rather than failing
-		// the fold, which the recovery sweep would retry on every tick; so do a
-		// subscribe's params that aren't JSON (a damaged row its claim ended),
-		// naming no show.
-		result, _ := bridge.PodcastOutcomeOf(j)
 		if j.Kind == bridge.KindPodcastFetch {
 			return c.foldPodcastFetch(ctx, tx, j)
 		}
 		if j.Kind == bridge.KindPodcastRetain || j.State == bridge.StateCancelled {
 			return nil
 		}
+		// A field of the wrong type stays at its zero value rather than failing
+		// the fold, which the recovery sweep would retry on every tick; so do a
+		// subscribe's params that aren't JSON (a damaged row its claim ended),
+		// naming no show.
+		result, _ := bridge.PodcastOutcomeOf(j)
 		show := j.Target()
 		if j.Kind == bridge.KindPodcastSubscribe {
 			var p bridge.SubscribeParams
