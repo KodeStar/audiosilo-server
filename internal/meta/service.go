@@ -333,7 +333,7 @@ type Service struct {
 
 // SetASINFound has the Service tell found each ASIN an identifier lookup finds
 // a work for (Service.lookup: a player's /meta, the upcoming job's work ids, the
-// chapter check), so the unknown-ASIN report learns at once that the community
+// chapter check; Candidates: the match dialog and a match run), so the unknown-ASIN report learns at once that the community
 // added one (server#392) rather than at its monthly recheck. found runs inside
 // the lookup and must be quick. Call it once, right after NewService and before
 // the Service is used.
@@ -531,10 +531,18 @@ func (s *Service) lookup(ctx context.Context, asin, isbn string) (*upstreamLooku
 		return nil, ErrNotFound
 	}
 	// The lookup asks by the ASIN alone when there is one (client.lookup).
+	s.foundASIN(ctx, asin)
+	return l, nil
+}
+
+// foundASIN tells SetASINFound's func that a request asking by asin found a
+// work: a lookup, or the match's works/match or search answering by the ASIN
+// (Candidates: the unknown-ASIN run's book found by its own ASIN, server#448).
+// Nothing for "" or without a func.
+func (s *Service) foundASIN(ctx context.Context, asin string) {
 	if asin != "" && s.asinFound != nil {
 		s.asinFound(ctx, asin)
 	}
-	return l, nil
 }
 
 // compose runs the uncached lookup -> work -> series fan-out. complete is false

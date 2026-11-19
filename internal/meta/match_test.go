@@ -216,6 +216,8 @@ type structuredMeta struct {
 	matchCode int
 	matchBody string
 	routeless bool
+	// lookupBody, when set, is lookup's answer (else a 404).
+	lookupBody string
 
 	mu                      sync.Mutex
 	gotMatch                url.Values
@@ -265,6 +267,10 @@ func (m *structuredMeta) service(t *testing.T) *Service {
 		m.mu.Lock()
 		m.lookupCalls++
 		m.mu.Unlock()
+		if m.lookupBody != "" {
+			_, _ = w.Write([]byte(m.lookupBody))
+			return
+		}
 		w.WriteHeader(http.StatusNotFound)
 	})
 	// Only the one work exists, so "match" read as a work id is a 404 - the
@@ -621,5 +627,44 @@ func TestCandidatesFollowARetiredSlug(t *testing.T) {
 	cands, err := NewService(srv.URL, nil).Candidates(context.Background(), MatchQuery{Title: "T", BookASIN: "B0OLD00001"})
 	if err != nil || len(cands) != 1 || cands[0].WorkID != "new-slug" || len(cands[0].Series) != 1 || cands[0].Series[0].Name != "Merged Series" {
 		t.Fatalf("candidates = %+v %v, want the merged record", cands, err)
+	}
+}
+
+// TestCandidatesTellsAFoundASIN (server#448): a match that found the work by the
+// ASIN it sent (works/match's identifier "asin", or the older search's lookup)
+// tells SetASINFound's func, so the unknown-ASIN report's row clears; a match
+// found by anything else, or an ISBN, tells nothing.
+func TestCandidatesTellsAFoundASIN(t *testing.T) {
+	t.Parallel()
+	q := MatchQuery{Title: "Sharpe's Eagle", Author: "Bernard Cornwell", BookASIN: "b002sq7kve", Limit: 2}
+	for name, tc := range map[string]struct {
+		m    *structuredMeta
+		want []string
+	}{
+		"by its asin": {&structuredMeta{matchCode: 200, matchBody: `{"results":[{"kind":"work","id":"sharpes-eagle","score":100,
+			"recording_id":"rupert-farley-2014","reasons":{"identifier":"asin"}}]}`}, []string{"B002SQ7KVE"}},
+		"by its title": {&structuredMeta{matchCode: 200, matchBody: sharpeMatch}, nil},
+		"by an isbn": {&structuredMeta{matchCode: 200, matchBody: `{"results":[{"kind":"work","id":"sharpes-eagle","score":100,
+			"reasons":{"identifier":"isbn"}}]}`}, nil},
+		"by an older metaserve's lookup": {&structuredMeta{routeless: true,
+			lookupBody: `{"work":{"id":"sharpes-eagle"},"recording_id":"rupert-farley-2014"}`}, []string{"B002SQ7KVE"}},
+		"not by an older metaserve's lookup": {&structuredMeta{routeless: true}, nil},
+	} {
+		s := tc.m.service(t)
+		var mu sync.Mutex
+		var found []string
+		s.SetASINFound(func(_ context.Context, asin string) {
+			mu.Lock()
+			found = append(found, asin)
+			mu.Unlock()
+		})
+		if _, err := s.Candidates(context.Background(), q); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		mu.Lock()
+		if !slices.Equal(found, tc.want) {
+			t.Errorf("%s: found = %v, want %v", name, found, tc.want)
+		}
+		mu.Unlock()
 	}
 }

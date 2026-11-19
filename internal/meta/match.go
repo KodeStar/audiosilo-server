@@ -626,6 +626,12 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 		switch {
 		case err == nil:
 			matched = true
+			byASIN := func(r upstreamMatchResult) bool {
+				return r.ID != "" && r.Reasons != nil && r.Reasons.Identifier == "asin"
+			}
+			if slices.ContainsFunc(res, byASIN) {
+				s.foundASIN(ctx, asin)
+			}
 			for _, r := range res {
 				if r.ID == "" {
 					continue
@@ -857,6 +863,7 @@ func (s *Service) searchHits(ctx context.Context, q MatchQuery, text, asin, isbn
 				by := "isbn"
 				if asin != "" {
 					by = "asin"
+					s.foundASIN(ctx, asin)
 				}
 				lookupHit = &matchHit{id: lookup.Work.ID, recordingID: lookup.RecordingID, cover: deref(lookup.Work.CoverURL),
 					score: 100, reasons: &MatchReasons{Identifier: by}}
