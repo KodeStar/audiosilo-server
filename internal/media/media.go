@@ -181,10 +181,62 @@ func ServeOpened(w http.ResponseWriter, r *http.Request, f *os.File, download bo
 	ServeOpenedAs(w, r, f, filepath.Base(f.Name()), info.ModTime(), download)
 }
 
-// SetAttachment makes the response a download saved as name (strconv.Quote
-// gives the quoted-string form browsers expect).
+// SetAttachment makes the response a download saved as name: its
+// quoted-string filename (strconv.Quote, which escapes only `"` and `\` in
+// printable ASCII) and, for a name with any other byte, an ASCII stand-in
+// there (an underscore for each other rune) with the name itself as RFC 6266's
+// filename* (RFC 8187's UTF-8 percent-encoding), which browsers prefer: a
+// quoted-string has no escape for a rune past ASCII (Quote's \u3000, an
+// ideographic space, is saved as "u3000"), and raw UTF-8 in one is no
+// standard's.
 func SetAttachment(h http.Header, name string) {
-	h.Set("Content-Disposition", "attachment; filename="+strconv.Quote(name))
+	const disposition = "attachment; filename="
+	if printableASCII(name) {
+		h.Set("Content-Disposition", disposition+strconv.Quote(name))
+		return
+	}
+	fallback := strings.Map(func(r rune) rune {
+		if r < ' ' || r > '~' {
+			return '_'
+		}
+		return r
+	}, name)
+	h.Set("Content-Disposition", disposition+strconv.Quote(fallback)+
+		"; filename*=UTF-8''"+extValue(strings.ToValidUTF8(name, "\uFFFD")))
+}
+
+// printableASCII reports whether s is printable ASCII only.
+func printableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < ' ' || s[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+// extValue is s as RFC 8187's value-chars: its attr-chars as they are, every
+// other byte percent-encoded.
+func extValue(s string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("!#$&+-.^_`|~", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hex[c>>4])
+		b.WriteByte(hex[c&0xF])
+	}
+	return b.String()
+}
+
+// StemName is the download name of a copy made from the file at path (a
+// remux, a rendition, a transcode): its file name with ext for its extension.
+func StemName(path, ext string) string {
+	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)) + ext
 }
 
 // ServeOpenedAs serves the open file f with Range under the name name (the
@@ -390,7 +442,7 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 	}
 	name := ""
 	if download {
-		name = strings.TrimSuffix(filepath.Base(logPath), filepath.Ext(logPath)) + transcodeExt
+		name = StemName(logPath, transcodeExt)
 	}
 	if r.Method == http.MethodHead {
 		// net/http discards a HEAD's body: answer its headers without running

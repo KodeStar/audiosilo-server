@@ -1174,12 +1174,6 @@ func (a *API) fsGiven(w http.ResponseWriter, r *http.Request, lib *catalog.Libra
 // one (audioFile).
 func noFile(abs string) string { return abs + "\x00" }
 
-// copyName is the download name of abs's cached copy: its stem with the
-// copy's extension.
-func copyName(abs, ext string) string {
-	return strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)) + ext
-}
-
 // serveCopy answers with a cached copy f (media.FileCache.Open) and closes it:
 // Range and the copy's strong etag, download an attachment named name. No
 // Last-Modified: the copy's mtime is the cache's LRU clock (moved on a hit), so
@@ -1308,7 +1302,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		a.serveTranscode(w, r, lib, rel, abs, deadline)
 		return true, deadline
 	}
-	serveCopy(w, r, f, etag, copyName(abs, a.remux.Ext()), download)
+	serveCopy(w, r, f, etag, media.StemName(abs, a.remux.Ext()), download)
 	return true, deadline
 }
 
