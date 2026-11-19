@@ -256,9 +256,7 @@ func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID in
 	}
 	// Among the caller's scopes, so granted: the library is read for itself.
 	lib, err := a.cat.GetLibrary(r.Context(), libraryID)
-	if errors.Is(err, catalog.ErrNotFound) {
-		lib = nil
-	} else if err != nil {
+	if err != nil && !errors.Is(err, catalog.ErrNotFound) {
 		return nil, "", scope, http.StatusInternalServerError, "could not load library"
 	}
 	lib, scope, status, msg := scopedLibrary(lib, scope, true)

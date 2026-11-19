@@ -113,7 +113,7 @@ func (a *API) mountPodcastTransfer(mux *http.ServeMux) {
 	// The artwork is an <img> source: the media equivalent (?token= allowed for
 	// a session or API key only, the media rate limit).
 	mux.Handle("GET /api/v1/podcasts/discovery/artwork", a.requireMediaAuth(notKid(notDemo(a.requireModule(bridge.ModulePodcasts, http.HandlerFunc(a.handleDiscoveryArtwork))))))
-	mux.Handle("POST /api/v1/podcasts/opml/import", listener(a.handleOPMLImport))
+	mux.Handle("POST "+opmlImportPath, listener(a.handleOPMLImport))
 	mux.Handle("GET /api/v1/podcasts/opml/export", a.requireAuth(notDemo(http.HandlerFunc(a.handleOPMLExport))))
 }
 

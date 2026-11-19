@@ -53,7 +53,7 @@ const (
 // feed's and Upcoming covers' (GET /me/upcoming itself is compressed).
 var compressExcluded = []string{
 	"/api/v1/auth/",
-	"/api/v1/bridge/",
+	bridgeRoutes,
 	"/api/v1/me/upcoming/",
 }
 

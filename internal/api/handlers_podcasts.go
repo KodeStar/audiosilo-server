@@ -226,7 +226,7 @@ func (a *API) podcastActionLibrary(w http.ResponseWriter, r *http.Request, id in
 	switch {
 	case err != nil:
 		a.writeCatalogError(w, err, "podcast access failed", "Could not check access.")
-	case lib == nil || !granted:
+	case !granted: // never with no such library
 		writeErrorCode(w, 403, "no_library_access", "No access to this library.")
 	case lib.Kind != catalog.KindPodcasts:
 		writeErrorCode(w, 409, "not_podcast_library", "This library holds books.")

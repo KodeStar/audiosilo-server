@@ -731,8 +731,9 @@ func (c *Catalog) PodcastWholeGrant(ctx context.Context, who Caller, lib int64) 
 	return s != nil && s.AllowAll, nil
 }
 func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, order string, limit int, cursor string, scope Scope) (*PodcastEpisodePage, error) {
-	if order != "newest" && order != "oldest" {
-		return nil, ErrInvalidCursor
+	dir, err := episodeDir(order)
+	if err != nil {
+		return nil, err
 	}
 	limit = min(max(limit, 1), 200)
 	q := `SELECT b.rel_path,b.title,e.published,b.duration,e.duration_source,e.season,e.episode,e.episode_type,e.explicit,b.description,e.present,b.size,e.removed_at<>'',e.generation,e.sha256,` + podcastTimelineSQL("e.") + ` FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=? AND e.show_path=?`
@@ -740,9 +741,9 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 	filter, filterArgs := pathFilterSQL("b.rel_path", scope)
 	q += " AND " + filter
 	args = append(args, filterArgs...)
-	dir, op := "DESC", "<"
-	if order == "oldest" {
-		dir, op = "ASC", ">"
+	op := "<"
+	if dir == "ASC" {
+		op = ">"
 	}
 	if cursor != "" {
 		k, ok := decodeEpisodeCursor(cursor, show, order)
@@ -776,13 +777,9 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 // and how many there are in all: a show's folder listing (library's
 // BrowsePodcasts), which reads one page, not every page (server#180).
 func (c *Catalog) PodcastEpisodeSlice(ctx context.Context, lib int64, show, order string, offset, limit int, scope Scope) ([]PodcastEpisode, int, error) {
-	dir := "DESC"
-	switch order {
-	case "newest":
-	case "oldest":
-		dir = "ASC"
-	default:
-		return nil, 0, ErrInvalidCursor
+	dir, err := episodeDir(order)
+	if err != nil {
+		return nil, 0, err
 	}
 	filter, filterArgs := pathFilterSQL("b.rel_path", scope)
 	from := ` FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=? AND e.show_path=? AND ` + filter
@@ -858,6 +855,18 @@ func episodeKeyCols(ep, bk string) []string {
 }
 
 var episodeKeySQL = strings.Join(episodeKeyCols("e.", "b."), ",")
+
+// episodeDir is the SQL direction of an episode order: "newest" DESC,
+// "oldest" ASC, any other ErrInvalidCursor.
+func episodeDir(order string) (string, error) {
+	switch order {
+	case "newest":
+		return "DESC", nil
+	case "oldest":
+		return "ASC", nil
+	}
+	return "", ErrInvalidCursor
+}
 
 func episodeOrderSQL(dir string) string { return episodeOrderOn("e.", "b.", dir) }
 
