@@ -36,18 +36,23 @@ type MetaCacheEntry struct {
 	// Payload is the cached answer's JSON; empty for a cached "no match".
 	Payload []byte
 	Expires time.Time
+	// StoredAt is when the row was written (stored_at): what retention keeps
+	// the newest by, and what internal/meta dates the answer by
+	// (meta.StoredEntry.StoredAt), so nothing but a new answer may move it.
+	StoredAt time.Time
 }
 
 // GetMetaCache returns key's row, nil when there is none.
 func (c *Catalog) GetMetaCache(ctx context.Context, key string) (*MetaCacheEntry, error) {
 	var (
-		e       MetaCacheEntry
-		payload string
-		expires int64
+		e        MetaCacheEntry
+		payload  string
+		expires  int64
+		storedAt int64
 	)
 	err := c.db.QueryRowContext(ctx,
-		`SELECT key, version, source, payload, expires_at FROM meta_cache WHERE key = ?`, key).
-		Scan(&e.Key, &e.Version, &e.Source, &payload, &expires)
+		`SELECT key, version, source, payload, expires_at, stored_at FROM meta_cache WHERE key = ?`, key).
+		Scan(&e.Key, &e.Version, &e.Source, &payload, &expires, &storedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -56,16 +61,22 @@ func (c *Catalog) GetMetaCache(ctx context.Context, key string) (*MetaCacheEntry
 	}
 	e.Payload = []byte(payload)
 	e.Expires = time.UnixMilli(expires)
+	e.StoredAt = time.UnixMilli(storedAt)
 	return &e, nil
 }
 
-// PutMetaCache inserts or replaces key's row, stamped now for retention.
+// PutMetaCache inserts or replaces key's row, stamped e.StoredAt (now when
+// zero) for retention.
 func (c *Catalog) PutMetaCache(ctx context.Context, e MetaCacheEntry) error {
+	stored := e.StoredAt
+	if stored.IsZero() {
+		stored = c.now()
+	}
 	_, err := c.db.ExecUserState(ctx,
 		`INSERT INTO meta_cache(key, version, source, payload, expires_at, stored_at) VALUES(?,?,?,?,?,?)
 		 ON CONFLICT(key) DO UPDATE SET version = excluded.version, source = excluded.source,
 		     payload = excluded.payload, expires_at = excluded.expires_at, stored_at = excluded.stored_at`,
-		e.Key, e.Version, e.Source, string(e.Payload), e.Expires.UnixMilli(), c.now().UnixMilli())
+		e.Key, e.Version, e.Source, string(e.Payload), e.Expires.UnixMilli(), stored.UnixMilli())
 	return err
 }
 

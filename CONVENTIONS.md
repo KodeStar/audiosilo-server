@@ -428,7 +428,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   not-found, incomplete) and positive works only - never transport errors, never
   work-id misses. A fresh row warms memory for its remaining TTL; a positive row
   however stale is served when the upstream fails (not on caller cancellation),
-  held in memory for errorTTL. Rows carry `storeVersion` and the metaserve
+  held in memory for errorTTL. An incomplete envelope is not saved over a stored complete
+  one (the fallback, every rail it had), but replaces an older incomplete row
+  (`storedIncomplete`: a row saved for no longer than errorTTL). Rows carry `storeVersion` and the metaserve
   `source`; others are ignored. Derived, rebuildable, nobody's durable state (its writes
   take the user-state path all the same, as no content cache reads it: see Content
   generation); the launcher's retention keeps the newest `catalog.MetaCacheRows` (20 000), works
@@ -544,7 +546,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   else the series position == the entry's numeric position on a series named like that
   view (a range entry "1-3" holds a book at that range; an entry at one number a book at it,
   else a book whose range starts there; `parseSpan`). A book with a known work id is never placed by index, bar one
-  matched in the console (`LocalBook.Matched`, from `catalog.WorkSources`) to a work the view doesn't list, which
+  matched in the console (`LocalBook.Matched`, from `catalog.MatchWorkIDs`) to a work the view doesn't list, which
   holds its own position as in upcoming (an ordering that lists its work places it there alone, not where the
   main view placed it by index); one book per entry
   as `local`, the pick (`pickRank`, server#241): the narrator of the requested book (the
@@ -2441,7 +2443,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`meta.Service.Coverages` by `/meta`'s rule: a recorded match's work first, `CoverageBook.Matched` from
   `catalog.WorkSources`, fetched by id, the identifiers' cached envelope standing when upstream no longer
   has that work; else the newer of the identifiers' cached answer (memory's envelope or lookup, else the
-  stored row, a "no match" only while fresh, `cachedAnswerOf`, dated when it was had: `cacheEntry.at`, a stored row's expiry less its TTL,
+  stored row, a "no match" only while fresh, `cachedAnswerOf`, dated when it was had: `cacheEntry.at`, a stored row's `meta_cache.stored_at` (`StoredEntry.StoredAt`),
   which a stale row held through an outage keeps, `cacheHoldStale`) and the work the upcoming job resolved
   (`upcoming_owned.checked_at`, `CoverageBook.ResolvedAt`), so a stored row older than the job's monthly
   recheck never wins after a restart, nor a month-old resolution over a lookup since) and the Bridge's book facts

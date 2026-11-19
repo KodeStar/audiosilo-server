@@ -195,7 +195,7 @@ type WorkSource struct {
 // WorkSources is each of refs' WorkSource, only for the indexed books with a
 // work key: what tells a match from a resolution (and how old that is) for a
 // reader that weighs the key against the metadata cache (the Bridge's
-// estimate and book facts, /meta's placement).
+// estimate and book facts).
 func (c *Catalog) WorkSources(ctx context.Context, refs []Ref) (map[Ref]WorkSource, error) {
 	out := map[Ref]WorkSource{}
 	type row struct {
@@ -217,6 +217,33 @@ func (c *Catalog) WorkSources(ctx context.Context, refs []Ref) (map[Ref]WorkSour
 			}
 			for _, m := range rows {
 				out[Ref{LibraryID: lib, Path: m.path}] = m.WorkSource
+			}
+		}
+	}
+	return out, nil
+}
+
+// MatchWorkIDs is each of refs' recorded match's work (WorkSource.MatchWorkID),
+// only for the indexed books with one: WorkSources without the resolution, for
+// a reader that only tells a match from a resolution (/meta's placement,
+// meta.LocalBook.Matched).
+func (c *Catalog) MatchWorkIDs(ctx context.Context, refs []Ref) (map[Ref]string, error) {
+	out := map[Ref]string{}
+	type row struct{ path, work string }
+	_, byLib := GroupRefs(refs)
+	for lib, paths := range byLib {
+		for chunk := range slices.Chunk(paths, 500) {
+			rows, err := queryRows(ctx, c.db, func(r *sql.Rows, m *row) error { return r.Scan(&m.path, &m.work) },
+				`SELECT path, matched FROM (
+				   SELECT b.rel_path AS path, `+matchWorkIDExpr("b")+` AS matched
+				     FROM books b WHERE b.library_id = ? AND b.rel_path IN (`+placeholders(len(chunk))+`))
+				  WHERE matched IS NOT NULL`,
+				slices.Concat([]any{lib}, anyOf(chunk))...)
+			if err != nil {
+				return nil, err
+			}
+			for _, m := range rows {
+				out[Ref{LibraryID: lib, Path: m.path}] = m.work
 			}
 		}
 	}

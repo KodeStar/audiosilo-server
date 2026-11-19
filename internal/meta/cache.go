@@ -110,9 +110,9 @@ type cacheEntry struct {
 	value  any
 	err    error
 	expiry time.Time
-	// at is when the answer was had, at the earliest: when it was put, or
-	// for a persisted row read back (cachePutUntil, cacheHoldStale) when that
-	// row was written (answeredAt).
+	// at is when the answer was had: when it was put, or for a persisted row
+	// read back (cachePutUntil, cacheHoldStale) when that row was written
+	// (StoredEntry.StoredAt).
 	at time.Time
 }
 
@@ -163,18 +163,6 @@ func cacheGetAt[T any](c *cache, key string) (result *T, at time.Time, hit bool,
 	return v, e.at, true, nil
 }
 
-// answeredAt is when a persisted row expiring at expiry was written, at the
-// earliest: its expiry less the TTL it was saved for, positiveTTL for a match
-// (an incomplete envelope, saved for errorTTL, so reads as older than it is),
-// notFoundTTL for a "no match". The TTLs are constants, so a row never outlives
-// a TTL other than the one it was written under.
-func answeredAt(expiry time.Time, match bool) time.Time {
-	if match {
-		return expiry.Add(-positiveTTL)
-	}
-	return expiry.Add(-notFoundTTL)
-}
-
 // cachePut caches a positive result for ttl (positiveTTL, or errorTTL for an
 // incomplete one). A nil result is a "no match" and is stored as such (see
 // payload).
@@ -183,20 +171,20 @@ func cachePut[T any](c *cache, key string, result *T, ttl time.Duration) {
 	c.store(key, cacheEntry{value: payload(result), expiry: now.Add(ttl), at: now})
 }
 
-// cachePutUntil caches a row read back from the persistent store, expiring at
-// expiry: it warms memory for what is left of ITS TTL, not a fresh one, so a
-// restart never stretches an answer's age past the policy above, and keeps the
-// row's age (answeredAt).
-func cachePutUntil[T any](c *cache, key string, result *T, expiry time.Time) {
-	c.store(key, cacheEntry{value: payload(result), expiry: expiry, at: answeredAt(expiry, result != nil)})
+// cachePutUntil caches a row read back from the persistent store, written at
+// at and expiring at expiry: it warms memory for what is left of ITS TTL, not a
+// fresh one, so a restart never stretches an answer's age past the policy
+// above, and keeps the row's age.
+func cachePutUntil[T any](c *cache, key string, result *T, expiry, at time.Time) {
+	c.store(key, cacheEntry{value: payload(result), expiry: expiry, at: at})
 }
 
-// cacheHoldStale holds a stale persisted positive answer (its row expiring at
-// expiry) in memory for errorTTL, the outage fallback (Enrich, Work,
+// cacheHoldStale holds a stale persisted positive answer (its row written at
+// at) in memory for errorTTL, the outage fallback (Enrich, Work,
 // keepStored): asked again soon, and dated by its row, so a reader weighing
 // its age (cachedAnswerOf) never takes a months-old answer for a new one.
-func cacheHoldStale[T any](c *cache, key string, stored *T, expiry time.Time) {
-	c.store(key, cacheEntry{value: payload(stored), expiry: c.now().Add(errorTTL), at: answeredAt(expiry, true)})
+func cacheHoldStale[T any](c *cache, key string, stored *T, at time.Time) {
+	c.store(key, cacheEntry{value: payload(stored), expiry: c.now().Add(errorTTL), at: at})
 }
 
 // get returns the live entry for key, or ok=false when it is absent or expired

@@ -261,7 +261,7 @@ func writeLookupFailed(w http.ResponseWriter) {
 // each recording, the same one (server#413). A book whose work the catalog
 // doesn't know takes the cache's (meta.Service.WithWorkIDs); one matched in
 // the console holds its own position on a rail that doesn't list its work, as
-// in upcoming (catalog.WorkSources, meta.LocalBook.Matched). Of a work's
+// in upcoming (catalog.MatchWorkIDs, meta.LocalBook.Matched). Of a work's
 // several recordings the pick (Local) is by meta's rule, which reads
 // requested's narrator and, only where the pick has a choice (meta.Contested),
 // the caller's progress (catalog.InProgress); the rest ride as LocalOthers.
@@ -325,7 +325,7 @@ func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta
 			numbered = append(numbered, catalog.Ref{LibraryID: books[i].LibraryID, Path: books[i].RelPath})
 		}
 	}
-	sources, err := a.cat.WorkSources(ctx, numbered)
+	matches, err := a.cat.MatchWorkIDs(ctx, numbered)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -338,7 +338,7 @@ func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta
 		ref := catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}
 		return meta.LocalBook{MetaLocal: meta.MetaLocal(ref),
 			ASIN: b.ASIN, ISBN: b.ISBN, WorkID: b.WorkID, Narrator: b.Narrator,
-			Matched:  b.WorkID != "" && sources[ref].MatchWorkID == b.WorkID,
+			Matched:  b.WorkID != "" && matches[ref] == b.WorkID,
 			Abridged: b.Abridged != nil && *b.Abridged}
 	}
 	cands = append(cands, cand(requested))

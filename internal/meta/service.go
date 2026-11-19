@@ -443,9 +443,9 @@ func (s *Service) enrich(ctx context.Context, key string, compose func(context.C
 	// Then the persistent store: a fresh row answers as memory would have (and
 	// warms it for the rest of its TTL); a stale positive row is held back as the
 	// fallback should the upstream fail below.
-	stored, expires, fresh := readStored[Enrichment](ctx, s, key)
+	stored, expires, at, fresh := readStored[Enrichment](ctx, s, key)
 	if fresh {
-		cachePutUntil(s.cache, key, stored, expires)
+		cachePutUntil(s.cache, key, stored, expires, at)
 		if stored == nil {
 			return nil, ErrNotFound
 		}
@@ -461,7 +461,7 @@ func (s *Service) enrich(ctx context.Context, key string, compose func(context.C
 	result, complete, err := compose(cctx)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		if keepStored(s, key, stored, expires, err) {
+		if keepStored(s, key, stored, at, err) {
 			return stored, nil
 		}
 		s.cache.putMiss(key, notFoundTTL)
@@ -483,7 +483,7 @@ func (s *Service) enrich(ctx context.Context, key string, compose func(context.C
 			// again soon, and the row itself is left as it was. An error is
 			// never persisted.
 			if stored != nil {
-				cacheHoldStale(s.cache, key, stored, expires)
+				cacheHoldStale(s.cache, key, stored, at)
 				return stored, nil
 			}
 			s.cache.putError(key, err)
@@ -499,10 +499,12 @@ func (s *Service) enrich(ctx context.Context, key string, compose func(context.C
 		// reasoning as the error branch above.
 		if ctx.Err() == nil {
 			cachePut(s.cache, key, result, errorTTL)
-			// Not over a stored positive answer, though: that one, stale but
+			// Not over a stored complete answer, though: that one, stale but
 			// with every rail it had, stays the outage fallback (a row that
-			// lives two minutes adds nothing to a restart).
-			if stored == nil {
+			// lives two minutes adds nothing to a restart). An older
+			// incomplete row is no such fallback, so the newer answer
+			// replaces it, rails and date.
+			if stored == nil || storedIncomplete(expires, at) {
 				saveStored(ctx, s, key, result, errorTTL)
 			}
 		}
@@ -637,9 +639,9 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 	}
 	// Then the persistent store, as in Enrich. A work is stored only once it was
 	// found, so a "no match" row is a stored work's later 404 (below).
-	stored, expires, fresh := readStored[MetaWork](ctx, s, key)
+	stored, expires, at, fresh := readStored[MetaWork](ctx, s, key)
 	if fresh {
-		cachePutUntil(s.cache, key, stored, expires)
+		cachePutUntil(s.cache, key, stored, expires, at)
 		if stored == nil {
 			return nil, ErrNotFound
 		}
@@ -655,7 +657,7 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 		// alone, that row would bring the work upstream no longer has back as
 		// the fallback of every later outage. When the local copy answered it
 		// (mirror mode) the stored answer is kept and served instead (keepStored).
-		if keepStored(s, key, stored, expires, err) {
+		if keepStored(s, key, stored, at, err) {
 			return stored, nil
 		}
 		s.cache.putMiss(key, notFoundTTL)
@@ -671,7 +673,7 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 		// Enrich, a persisted positive work outlives the outage.
 		if ctx.Err() == nil {
 			if stored != nil {
-				cacheHoldStale(s.cache, key, stored, expires)
+				cacheHoldStale(s.cache, key, stored, at)
 				return stored, nil
 			}
 			s.cache.putError(key, err)
@@ -694,11 +696,11 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 // A local copy's is not: one that lags, or a release that dropped a record by
 // mistake, must not erase what the cache knew and blank a companion that worked,
 // so the stored answer outlives it as it outlives an outage.
-func keepStored[T any](s *Service, key string, stored *T, expires time.Time, err error) bool {
+func keepStored[T any](s *Service, key string, stored *T, at time.Time, err error) bool {
 	if stored == nil || !errors.Is(err, errLocalNotFound) {
 		return false
 	}
-	cacheHoldStale(s.cache, key, stored, expires)
+	cacheHoldStale(s.cache, key, stored, at)
 	return true
 }
 

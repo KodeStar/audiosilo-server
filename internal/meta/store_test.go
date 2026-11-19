@@ -265,6 +265,39 @@ func TestStoreIncompletePersistedBriefly(t *testing.T) {
 	}
 }
 
+// TestStoreIncompleteDatedByItsWrite: an incomplete envelope's row, saved for
+// errorTTL, is dated by when it was written (StoredAt), not by its expiry less
+// a day, so read back after a restart it still wins over an upcoming recheck
+// older than it.
+func TestStoreIncompleteDatedByItsWrite(t *testing.T) {
+	e := newStoreEnv(t)
+	e.m.seriesFailing = map[string]bool{"mars": true}
+	e.m.failSeries.Store(true)
+	ctx := context.Background()
+	written := e.clk.now()
+	if _, err := e.service().Enrich(ctx, martianASIN, ""); err != nil {
+		t.Fatal(err)
+	}
+	if row, ok := e.store.row(nsASIN.key(martianASIN)); !ok || !row.StoredAt.Equal(written) {
+		t.Fatalf("incomplete row = %+v, %v; want stored at %v", row, ok, written)
+	}
+
+	e.clk.advance(time.Minute) // a restart, the row still fresh
+	recheck := CoverageBook{ASIN: martianASIN, WorkID: "older-work", ResolvedAt: written.Add(-2 * time.Hour)}
+	svc := e.service()
+	// Read from the row, then from the memory the row warmed (no second read
+	// of the store).
+	for _, from := range []string{"the row", "memory"} {
+		loads := e.store.loads.Load()
+		if got := svc.CachedWork(ctx, recheck); got != "the-martian" {
+			t.Fatalf("book facts from %s over an older recheck = %q, want the incomplete row's the-martian", from, got)
+		}
+		if read := e.store.loads.Load() - loads; (from == "memory") != (read == 0) {
+			t.Fatalf("book facts from %s read the store %d times", from, read)
+		}
+	}
+}
+
 // TestStoreIncompleteKeepsTheFallback: an incomplete envelope (a rail failed on
 // a flaky upstream) does not replace a stored complete one, which stays the
 // fallback a later outage serves, every rail included.
@@ -288,6 +321,51 @@ func TestStoreIncompleteKeepsTheFallback(t *testing.T) {
 	e.down.Store(true)
 	if env, err := e.service().Enrich(ctx, martianASIN, ""); err != nil || len(env.Series) != rails {
 		t.Fatalf("outage fallback = %+v, %v; want the stored envelope with its %d rails", env, err, rails)
+	}
+}
+
+// TestStoreIncompleteReplacesAnOlderIncomplete: a stored incomplete envelope
+// is no outage fallback worth keeping, so a newer incomplete answer replaces
+// it. Read back after a restart, the answer carries the newer write's date and
+// wins over an upcoming recheck made between the two. A row an older build
+// wrote, stamped a moment after its deadline was worked out, is replaced the
+// same.
+func TestStoreIncompleteReplacesAnOlderIncomplete(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		e := newStoreEnv(t)
+		e.m.seriesFailing = map[string]bool{"mars": true}
+		e.m.failSeries.Store(true)
+		ctx := context.Background()
+		key := nsASIN.key(martianASIN)
+		first := e.clk.now()
+		if _, err := e.service().Enrich(ctx, martianASIN, ""); err != nil {
+			t.Fatal(err)
+		}
+		row, ok := e.store.row(key)
+		if !ok || !row.StoredAt.Equal(first) {
+			t.Fatalf("legacy %v: first incomplete row stored at %v, %v; want %v", legacy, row.StoredAt, ok, first)
+		}
+		if legacy {
+			row.StoredAt = first.Add(40 * time.Millisecond)
+			e.store.put(row)
+		}
+
+		e.clk.advance(errorTTL + time.Minute) // the row is stale, and a restart
+		second := e.clk.now()
+		if _, err := e.service().Enrich(ctx, martianASIN, ""); err != nil {
+			t.Fatal(err)
+		}
+		row, ok = e.store.row(key)
+		if !ok || !row.StoredAt.Equal(second) || !row.Expires.Equal(second.Add(errorTTL)) {
+			t.Fatalf("legacy %v: row after a newer incomplete answer stored at %v until %v, %v; want %v for errorTTL",
+				legacy, row.StoredAt, row.Expires, ok, second)
+		}
+
+		e.clk.advance(time.Minute) // another restart
+		recheck := CoverageBook{ASIN: martianASIN, WorkID: "older-work", ResolvedAt: first.Add(time.Minute)}
+		if got := e.service().CachedWork(ctx, recheck); got != "the-martian" {
+			t.Fatalf("legacy %v: book facts over a recheck older than the newer answer = %q, want the-martian", legacy, got)
+		}
 	}
 }
 

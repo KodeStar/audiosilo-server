@@ -29,8 +29,16 @@ func TestMetaCacheRows(t *testing.T) {
 	}
 	got, err := c.GetMetaCache(ctx, "a:B0X")
 	if err != nil || got == nil || got.Key != in.Key || got.Version != 1 || got.Source != in.Source ||
-		string(got.Payload) != string(in.Payload) || !got.Expires.Equal(expires) {
+		string(got.Payload) != string(in.Payload) || !got.Expires.Equal(expires) || !got.StoredAt.Equal(now) {
 		t.Fatalf("round trip = %+v, %v", got, err)
+	}
+	// A row given its write time keeps it (internal/meta dates its answers by it).
+	written := now.Add(-time.Minute)
+	if err := c.PutMetaCache(ctx, MetaCacheEntry{Key: "a:B0Y", Version: 1, Expires: expires, StoredAt: written}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.GetMetaCache(ctx, "a:B0Y"); err != nil || !got.StoredAt.Equal(written) {
+		t.Fatalf("dated row = %+v, %v; want stored at %v", got, err, written)
 	}
 	// Replaced in place: a "no match" now.
 	if err := c.PutMetaCache(ctx, MetaCacheEntry{Key: "a:B0X", Version: 2, Source: in.Source, Expires: expires}); err != nil {
@@ -40,8 +48,8 @@ func TestMetaCacheRows(t *testing.T) {
 		t.Fatalf("replaced row = %+v", got)
 	}
 
-	// Five more rows, a minute apart; the replaced one (oldest write) and the
-	// next two go when three are kept.
+	// Five more rows, a minute apart; the two a: rows (the oldest writes) and
+	// the next two go when three are kept.
 	for i := range 5 {
 		now = now.Add(time.Minute)
 		if err := c.PutMetaCache(ctx, MetaCacheEntry{Key: "w:" + strconv.Itoa(i), Version: 1, Expires: expires}); err != nil {
@@ -54,10 +62,10 @@ func TestMetaCacheRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	n, err := c.PruneMetaCache(ctx, 3, 3)
-	if err != nil || n != 3 {
-		t.Fatalf("pruned %d, %v; want 3", n, err)
+	if err != nil || n != 4 {
+		t.Fatalf("pruned %d, %v; want 4", n, err)
 	}
-	for key, kept := range map[string]bool{"a:B0X": false, "w:0": true, "w:1": false, "w:2": false, "w:3": true, "w:4": true} {
+	for key, kept := range map[string]bool{"a:B0X": false, "a:B0Y": false, "w:0": true, "w:1": false, "w:2": false, "w:3": true, "w:4": true} {
 		if got, _ := c.GetMetaCache(ctx, key); (got != nil) != kept {
 			t.Errorf("%s kept = %v, want %v", key, got != nil, kept)
 		}

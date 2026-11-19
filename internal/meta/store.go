@@ -48,6 +48,10 @@ type StoredEntry struct {
 	Payload []byte
 	// Expires is when the entry stops being fresh (the memory TTL's expiry).
 	Expires time.Time
+	// StoredAt is when the entry was written (meta_cache.stored_at, set on
+	// every row since the table's first migration): when its answer was had,
+	// whatever TTL it was saved for.
+	StoredAt time.Time
 }
 
 // storeVersion is the format of a persisted payload: the JSON of this build's
@@ -80,28 +84,38 @@ const storeWriteTimeout = 250 * time.Millisecond
 func (s *Service) SetStore(st Store) { s.store = st }
 
 // readStored is the read-through step after a memory miss: key's persisted row
-// as a *T (nil for a persisted "no match"), its freshness deadline, and whether it
-// is still within it. A row past it is not served while the upstream answers; a
-// positive one is the fallback when the upstream fails. No store or row, a row of
-// another format version or source, and a payload that does not decode all read
-// as (nil, zero, false).
-func readStored[T any](ctx context.Context, s *Service, key string) (value *T, expires time.Time, fresh bool) {
+// as a *T (nil for a persisted "no match"), its freshness deadline, when it was
+// written (StoredEntry.StoredAt) and whether it is still within its deadline. A
+// row past it is not served while the upstream answers; a positive one is the
+// fallback when the upstream fails. No store or row, a row of another format
+// version or source, and a payload that does not decode all read as (nil, zero,
+// zero, false).
+func readStored[T any](ctx context.Context, s *Service, key string) (value *T, expires, at time.Time, fresh bool) {
 	if s.store == nil {
-		return nil, time.Time{}, false
+		return nil, time.Time{}, time.Time{}, false
 	}
 	lctx, cancel := context.WithTimeout(ctx, storeTimeout)
 	defer cancel()
 	e, ok := s.store.Load(lctx, key)
 	if !ok || e.Version != storeVersion || e.Source != s.baseURL {
-		return nil, time.Time{}, false
+		return nil, time.Time{}, time.Time{}, false
 	}
 	if len(e.Payload) > 0 {
 		value = new(T)
 		if err := json.Unmarshal(e.Payload, value); err != nil {
-			return nil, time.Time{}, false
+			return nil, time.Time{}, time.Time{}, false
 		}
 	}
-	return value, e.Expires, s.now().Before(e.Expires)
+	return value, e.Expires, e.StoredAt, s.now().Before(e.Expires)
+}
+
+// storedIncomplete reports whether a row with this freshness deadline, written
+// at at, holds an incomplete envelope: the one answer saved for errorTTL (a
+// complete one is saved for positiveTTL). No longer than errorTTL rather than
+// exactly it, since a row written before StoredAt was carried was stamped by
+// the catalog a moment after its deadline was worked out.
+func storedIncomplete(expires, at time.Time) bool {
+	return !at.IsZero() && expires.Sub(at) <= errorTTL
 }
 
 // saveStored persists key's answer for ttl: value's JSON, or a "no match" for a
@@ -122,11 +136,13 @@ func saveStored[T any](ctx context.Context, s *Service, key string, value *T, tt
 	}
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeWriteTimeout)
 	defer cancel()
+	now := s.now()
 	s.store.Save(sctx, StoredEntry{
-		Key:     key,
-		Version: storeVersion,
-		Source:  s.baseURL,
-		Payload: body,
-		Expires: s.now().Add(ttl),
+		Key:      key,
+		Version:  storeVersion,
+		Source:   s.baseURL,
+		Payload:  body,
+		Expires:  now.Add(ttl),
+		StoredAt: now,
 	})
 }
