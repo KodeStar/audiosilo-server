@@ -3317,6 +3317,7 @@
   "bridge.park.asr_decode_timeout": "A chapter took too long to transcribe.",
   "bridge.park.asr_worker_waiting": "Waiting for an ASR worker. The job carries on once one connects.",
   "bridge.park.contrib_unavailable": "The Bridge can't share with the community: it has no GitHub sign-in it can use. Sign in to GitHub on the Bridge's Accounts tab and the job carries on; if the Bridge is signed in already, retry the job there once GitHub can be reached.",
+  "bridge.park.share_unconfirmed": "The Bridge couldn't ask the server whether this book is still to be shared, so nothing has been filed. The job carries on by itself once it can.",
   "bridge.park.core_needed": "The community has no entry for this book yet. Add one on the Bridge to contribute.",
   "bridge.park.core_pending": "Waiting for the book's community entry to be accepted.",
   "bridge.park.ebook_unreadable": "The ebook couldn't be read. It may be copy-protected.",

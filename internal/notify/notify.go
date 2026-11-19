@@ -595,13 +595,15 @@ func bridgeJobBook(ev catalog.ServerEvent) string {
 
 // bridgeParkReason words a parked job's park code (the Bridge's
 // progress.park.code). A transient park (the agent's rate limit, a short
-// outage) is never announced (bridge.Job.Notable), so none is worded here. A
-// sentence says the job carries on by itself only where the Bridge resumes it
+// outage) is never announced (bridge.Job.Notable), so none is worded here but
+// share_unconfirmed (the server couldn't be asked about a share, a blip): its
+// sentence is the console's, so a bell that ever shows it never reads as a
+// fault. A sentence says the job carries on by itself only where the Bridge resumes it
 // with no Retry whatever the fix (a replaced agent credential, a raised or
 // reset budget), and names the Retry where one can still be needed: a Bridge
 // already signed in to GitHub parks contrib_unavailable too when GitHub couldn't
-// be reached, and only a new sign-in resumes that park by itself. The agent and
-// GitHub sentences are the console's (bridge.park.<code> in en.json), as the
+// be reached, and only a new sign-in resumes that park by itself. The agent,
+// GitHub and share sentences are the console's (bridge.park.<code> in en.json), as the
 // bell shows them. The Bridge's own page says more.
 func bridgeParkReason(code string) string {
 	switch code {
@@ -613,6 +615,8 @@ func bridgeParkReason(code string) string {
 		return "The agent's credential was refused. Replace it on the Bridge's Accounts tab, or in the agent container if it has one of its own, which it uses first; the job then carries on by itself."
 	case "contrib_unavailable":
 		return "The Bridge can't share with the community: it has no GitHub sign-in it can use. Sign in to GitHub on the Bridge's Accounts tab and the job carries on; if the Bridge is signed in already, retry the job there once GitHub can be reached."
+	case "share_unconfirmed":
+		return "The Bridge couldn't ask the server whether this book is still to be shared, so nothing has been filed. The job carries on by itself once it can."
 	case "core_needed":
 		return "The book needs a community record before it can be contributed."
 	case "chapters_not_detected":

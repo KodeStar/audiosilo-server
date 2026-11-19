@@ -3498,6 +3498,7 @@
   "bridge.park.asr_decode_timeout": "Un capitolo ha richiesto troppo tempo per la trascrizione.",
   "bridge.park.asr_worker_waiting": "In attesa di un worker ASR. Il lavoro riprende appena se ne collega uno.",
   "bridge.park.contrib_unavailable": "La Bridge non può condividere con la community: non ha effettuato l'accesso a GitHub, o non riesce a usarlo. Accedi a GitHub nella scheda Accounts della Bridge e il lavoro riprende; se la Bridge ha già effettuato l'accesso, rilancia lì il lavoro appena GitHub è raggiungibile.",
+  "bridge.park.share_unconfirmed": "La Bridge non è riuscita a chiedere al server se questo libro va ancora condiviso, quindi non è stato inviato nulla. Il lavoro riprende da solo appena possibile.",
   "bridge.park.core_needed": "La community non ha ancora una voce per questo libro. Aggiungine una sulla Bridge per contribuire.",
   "bridge.park.core_pending": "In attesa che la voce del libro nella community venga accettata.",
   "bridge.park.ebook_unreadable": "Non è stato possibile leggere l'ebook. Potrebbe essere protetto dalla copia.",

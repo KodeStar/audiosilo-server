@@ -465,8 +465,10 @@ func TestBridgeJobEnded(t *testing.T) {
 // job when the Bridge was signed in but couldn't reach GitHub (nothing resumes
 // that by itself); a spent budget fits the book's and the month's alike (one in
 // config.yaml or the environment takes a restart, the monthly one resets); a
-// book with no community record says it needs one; an unknown code points at
-// the page.
+// book with no community record says it needs one; a share the server couldn't
+// confirm (never announced, a transient park) says nothing was filed and that
+// it carries on by itself, never that a sign-in is missing; an unknown code
+// (an older server hearing a newer Bridge's park) points at the page.
 func TestBridgeParkReasons(t *testing.T) {
 	t.Parallel()
 	for code, want := range map[string]string{
@@ -474,6 +476,7 @@ func TestBridgeParkReasons(t *testing.T) {
 		"contrib_unavailable":      "The Bridge can't share with the community: it has no GitHub sign-in it can use. Sign in to GitHub on the Bridge's Accounts tab and the job carries on; if the Bridge is signed in already, retry the job there once GitHub can be reached.",
 		"budget_exceeded":          "The job reached a spending limit set on the Bridge. Raise it there (one set in its config.yaml or environment needs a restart), or wait for the monthly limit to reset; the job then carries on by itself.",
 		"core_needed":              "The book needs a community record before it can be contributed.",
+		"share_unconfirmed":        "The Bridge couldn't ask the server whether this book is still to be shared, so nothing has been filed. The job carries on by itself once it can.",
 		"something_new":            "See the job in Settings > Bridge.",
 	} {
 		if got := bridgeParkReason(code); got != want {

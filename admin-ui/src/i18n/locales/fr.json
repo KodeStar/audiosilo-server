@@ -3498,6 +3498,7 @@
   "bridge.park.asr_decode_timeout": "Un chapitre a mis trop de temps à être transcrit.",
   "bridge.park.asr_worker_waiting": "En attente d'un worker ASR. La tâche reprend dès qu'il s'en connecte un.",
   "bridge.park.contrib_unavailable": "La Bridge ne peut pas partager avec la communauté : elle n'a pas de connexion à GitHub qu'elle puisse utiliser. Connectez-vous à GitHub dans l'onglet Accounts de la Bridge et la tâche reprend ; si la Bridge est déjà connectée, relancez-y la tâche dès que GitHub est joignable.",
+  "bridge.park.share_unconfirmed": "La Bridge n'a pas pu demander au serveur si ce livre doit toujours être partagé, donc rien n'a été envoyé. La tâche reprend d'elle-même dès qu'elle le peut.",
   "bridge.park.core_needed": "La communauté n'a pas encore d'entrée pour ce livre. Ajoutez-en une sur la Bridge pour contribuer.",
   "bridge.park.core_pending": "En attente de l'acceptation de l'entrée communautaire du livre.",
   "bridge.park.ebook_unreadable": "L'ebook n'a pas pu être lu. Il est peut-être protégé contre la copie.",

@@ -4018,8 +4018,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   via `auth.ConsumePairing`'s code kind), `updates.Checker.OnAvailable`, `backup.Service.OnFailure`,
   the upcoming releases job (`book_released`, once a run finds releases not announced before: see Upcoming
   releases), `bridge.Service.OnTransition` (`bridge_job_finished` into done, `bridge_job_failed` into failed or into
-  a park that isn't transient: `bridge.Job.Notable`, which leaves out `agent_rate_limited` and
-  `agent_unavailable` whatever their `retry_at`, and counts a park whose code changes in place as news;
+  a park that isn't transient: `bridge.Job.Notable`, which leaves out `agent_rate_limited`,
+  `agent_unavailable`, `asr_worker_waiting` and `share_unconfirmed` (a generate-and-share job that couldn't
+  ask the server about its share before filing, v2.7.0) whatever their `retry_at`, and counts a park whose code changes in place as news;
   a failure by an expired last lease is reported too, once its transaction commits; the job's `error`,
   the Bridge's own text that can name its folders, is the bell's `detail`, never sent out), and podcasts
   (server#232, admin only, through `catalog.SetPodcastNotice`: the event (`notify.PodcastEvent`) is recorded

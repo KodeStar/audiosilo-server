@@ -198,7 +198,8 @@ func (q *testQueue) heard() *[]string {
 
 // UpdateHeld reports the moves an admin is told about (OnTransition, by
 // Notable): into done or failed, and into needs_attention unless the park is a
-// transient one (the agent's rate limit or a short outage), whatever its
+// transient one (the agent's rate limit, a short outage, a wait for an ASR
+// worker, a share the server couldn't confirm), whatever its
 // retry_at: a monthly budget that resumes next month, or a refused credential,
 // is news. A park that hardens in place (a transient one turning into one that
 // isn't, still parked) is news too, once; a keepalive never is.
@@ -226,6 +227,9 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 		{StateRunning, `{"step":"asr"}`},
 		{StateNeedsAttention, `{"step":"asr","park":{"code":"asr_worker_waiting"}}`},
 		{StateRunning, `{"step":"asr"}`},
+		// A share the server couldn't confirm before filing is a blip, not news.
+		{StateNeedsAttention, `{"step":"contributing","park":{"code":"share_unconfirmed",` + later + `}}`},
+		{StateRunning, `{"step":"contributing"}`},
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_rate_limited",` + later + `}}`},
 		// ...until, still parked, one turns into a park that isn't (its retry ran
 		// into the book's budget), once.
