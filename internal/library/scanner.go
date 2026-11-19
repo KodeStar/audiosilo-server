@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/fsaccess"
@@ -1720,6 +1721,25 @@ var maxIndexedPath = catalog.MaxPathBytes
 // overLong reports whether rel is past maxIndexedPath.
 func overLong(rel string) bool { return len(rel) > maxIndexedPath }
 
+// maxLoggedPath is how much of an overLong path the scan log and the server
+// log keep.
+const maxLoggedPath = 200
+
+// loggedPath is an overLong path as it is logged: its first maxLoggedPath
+// bytes (cut at a character) and its length, enough to find the folder. Kept
+// whole, each would put tens of kilobytes in the scan's stored log and the
+// console's reading of it (up to maxProblemEvents of them a scan).
+func loggedPath(rel string) string {
+	if len(rel) <= maxLoggedPath {
+		return rel
+	}
+	cut := maxLoggedPath
+	for cut > 0 && !utf8.RuneStart(rel[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s... (%d bytes)", rel[:cut], len(rel))
+}
+
 // errPathTooLong is the scan log's reason for a folder or file skipped as
 // overLong.
 var errPathTooLong = fmt.Errorf("the path is longer than the server allows (%d bytes), so it isn't indexed", catalog.MaxPathBytes)
@@ -1753,10 +1773,11 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 	}
 	// A folder past the path cap is logged once and never gone into (all
 	// below it is past the cap too); an audio file past it is logged and left
-	// out of its folder's book.
+	// out of its folder's book. Logged by the start of its path (loggedPath).
 	noteOverLong := func(rel string) {
-		log.Warn("skipping a path longer than the server allows", "library", lib.Name, "path", absOf(lib, rel), "bytes", len(rel))
-		rl.unreadable(rel, errPathTooLong)
+		short := loggedPath(rel)
+		log.Warn("skipping a path longer than the server allows", "library", lib.Name, "path", short, "bytes", len(rel))
+		rl.unreadable(short, errPathTooLong)
 	}
 	// The folders the walk goes into are listed ahead (walkDir), except by a
 	// capped walk (a setup preview, a folder listing's disc-set check), which may

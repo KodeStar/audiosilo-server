@@ -3,6 +3,7 @@ package library
 import (
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -11,7 +12,8 @@ import (
 // server#359: a path longer than any route takes (only a Windows library can
 // hold one) is not indexed, since every route would refuse it: the scan skips
 // the first folder or audio file on the way down to go past the cap, logs it
-// once as unreadable, and isn't partial for it (the rest is pruned as usual).
+// once as unreadable (a long path by its start and length, never whole), and
+// isn't partial for it (the rest is pruned as usual).
 // A book's own read of its folder (audioEntries) leaves the file out too.
 // Not parallel: it lowers the cap, as no disk the tests run on holds a path
 // past the real one.
@@ -21,7 +23,10 @@ func TestScanSkipsOverLongPaths(t *testing.T) {
 	cat, ctx := newHealthCatalog(t)
 	root := t.TempDir()
 	audio := testAudio(t)
+	// A folder whose path is past what the log keeps of one (maxLoggedPath).
+	deep := "Deep/" + strings.Repeat("é", 120)
 	for _, p := range []string{
+		deep + "/01.m4b",                       // the folder is over: logged by its start and length
 		"Short/Book/01.m4b",                    // indexed
 		"A folder past the cap/Book/01.m4b",    // the folder is over: skipped with all below it
 		"Mid/Book/01.m4b",                      // indexed
@@ -61,7 +66,9 @@ func TestScanSkipsOverLongPaths(t *testing.T) {
 		}
 	}
 	slices.Sort(logged)
-	if want := []string{"A folder past the cap", "Mid/Book/02 - a long name.m4b"}; !slices.Equal(logged, want) {
+	// 199 bytes of the long one: the cut never splits a character.
+	shortened := "Deep/" + strings.Repeat("é", 97) + "... (245 bytes)"
+	if want := []string{"A folder past the cap", shortened, "Mid/Book/02 - a long name.m4b"}; !slices.Equal(logged, want) {
 		t.Fatalf("logged %q, want %q", logged, want)
 	}
 	files, err := audioEntries(ctx, root, absOf(*lib, "Mid/Book"), nil, 0)

@@ -1001,7 +1001,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   refused before a route or credential check reads it (`capPathQuery`, server#359); a path in a body is the
   route's to check (`pathTooLong`, `refsTooLong` for a selection of books, a share's rules), and a body that
   names a path or two and little else is bounded (`pathBodyMax`). A scan never indexes a path past the cap
-  (only a Windows library holds one): it skips the folder or file and logs it as unreadable (`overLong`). `item`/`chapters`/
+  (only a Windows library holds one): it skips the folder or file and logs it as unreadable (`overLong`), by the start of its path and its length (`loggedPath`). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
   `GetBookByPath`, then the indexed folder book holding the path
   (`GetBookHolding`: a part, a disc folder of a joined book), then indexing on
