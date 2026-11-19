@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,8 +137,9 @@ func Run(ctx context.Context, opts Options) (err error) {
 	// never restarts a start mid-migration (server#217). A port already taken
 	// stops the start here, before any of it. The server stops when Run
 	// returns (stopServing), after the deferred work below it: it is deferred
-	// first.
-	gate := server.NewStartGate()
+	// first. The "starting" answer goes out under the API's CORS policy, so a
+	// player on an allowed origin reads it rather than a failed fetch.
+	gate := server.NewStartGate(func(h http.Handler) http.Handler { return api.CORS(cfg, h) })
 	serveCtx, stopServing := context.WithCancel(ctx)
 	serving, err := server.Start(serveCtx, cfg, gate, log)
 	if err != nil {

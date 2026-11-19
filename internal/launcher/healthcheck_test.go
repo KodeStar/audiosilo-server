@@ -129,7 +129,7 @@ func TestHealthcheckUnhealthy(t *testing.T) {
 // any other body (the database probe failed) is not (TestHealthcheckUnhealthy).
 func TestHealthcheckStarting(t *testing.T) {
 	t.Parallel()
-	starting := healthServer(t, false, server.NewStartGate().ServeHTTP)
+	starting := healthServer(t, false, server.NewStartGate(nil).ServeHTTP)
 	var out bytes.Buffer
 	if err := Healthcheck(context.Background(), healthDataDir(t, starting, config.TLSOff), &out); err != nil {
 		t.Fatalf("Healthcheck = %v, want a starting server healthy", err)
@@ -488,7 +488,7 @@ func TestRunHealthcheckAndSetupSkip(t *testing.T) {
 func TestRunAnswersStartingBeforeTheDatabase(t *testing.T) {
 	data := t.TempDir()
 	addr := freeAddr(t)
-	writeOffConfig(t, data, addr, "")
+	writeOffConfig(t, data, addr, "cors_origins: [\"http://localhost:8081\"]\n")
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	reached, release := make(chan struct{}), make(chan struct{})
@@ -524,6 +524,37 @@ func TestRunAnswersStartingBeforeTheDatabase(t *testing.T) {
 		!strings.Contains(string(body), `"status":"starting"`) {
 		t.Fatalf("API while starting = %d %q (Retry-After %q), want 503 starting", resp.StatusCode, body, resp.Header.Get("Retry-After"))
 	}
+	// The starting answer goes out under the API's CORS policy: an allowed
+	// origin's preflight passes and it may read the 503 and its Retry-After;
+	// another origin is granted nothing.
+	from := func(method, origin string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+"/api/v1/server", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Origin", origin)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp
+	}
+	if resp := from(http.MethodOptions, "http://localhost:8081"); resp.StatusCode != http.StatusNoContent ||
+		resp.Header.Get("Access-Control-Allow-Origin") != "http://localhost:8081" {
+		t.Errorf("an allowed origin's preflight while starting = %d %v, want 204 and the grant", resp.StatusCode, resp.Header)
+	}
+	if resp := from(http.MethodGet, "http://localhost:8081"); resp.StatusCode != http.StatusServiceUnavailable ||
+		resp.Header.Get("Access-Control-Allow-Origin") != "http://localhost:8081" ||
+		!strings.Contains(resp.Header.Get("Access-Control-Expose-Headers"), "Retry-After") {
+		t.Errorf("an allowed origin while starting = %d %v, want the 503 with the grant", resp.StatusCode, resp.Header)
+	}
+	if resp := from(http.MethodGet, "http://elsewhere.example"); resp.StatusCode != http.StatusServiceUnavailable ||
+		resp.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Errorf("another origin while starting = %d %v, want the 503 with no grant", resp.StatusCode, resp.Header)
+	}
+
 	close(release)
 	waitFor(t, "the started server", func() bool {
 		out.Reset()

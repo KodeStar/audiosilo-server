@@ -145,9 +145,20 @@ const corsExposeHeaders = "Retry-After, " + headerOPMLExported + ", " +
 // is configured, every answer (no Origin, a denied one, a preflight) carries
 // Vary: Origin, so a cache never reuses an answer made without the grant for
 // a granted origin's request, or the other way round.
-func (a *API) cors(next http.Handler) http.Handler {
+func (a *API) cors(next http.Handler) http.Handler { return corsBy(a.config, next) }
+
+// CORS is cors for a handler that answers before the API exists (the
+// launcher's "starting" answer, server.StartGate): the policy of a server
+// started with cfg, as New's own first live config reads it.
+func CORS(cfg *config.Config, next http.Handler) http.Handler {
+	live := newLiveConfig(cfg, cfg)
+	return corsBy(func() *liveConfig { return live }, next)
+}
+
+// corsBy is cors under the config live returns at each request.
+func corsBy(live func() *liveConfig, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg := a.config()
+		cfg := live()
 		if cfg.corsOn() {
 			w.Header().Add("Vary", "Origin")
 		}

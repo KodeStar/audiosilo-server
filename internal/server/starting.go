@@ -31,12 +31,23 @@ const startingRetry = "5"
 // while the database opens and migrates, which can take minutes on a large
 // library; after Open every request goes to that handler.
 type StartGate struct {
-	h       atomic.Pointer[http.Handler]
-	started time.Time
+	h        atomic.Pointer[http.Handler]
+	started  time.Time
+	starting http.Handler
 }
 
-// NewStartGate is the gate of a start that begins now.
-func NewStartGate() *StartGate { return &StartGate{started: time.Now()} }
+// NewStartGate is the gate of a start that begins now. wrap, when given, goes
+// around the starting answer only, never the handler Open is given: the
+// launcher passes the API's CORS policy (api.CORS), so a player on an allowed
+// origin can read the answer and its preflight passes.
+func NewStartGate(wrap func(http.Handler) http.Handler) *StartGate {
+	g := &StartGate{started: time.Now()}
+	g.starting = http.HandlerFunc(g.serveStarting)
+	if wrap != nil {
+		g.starting = wrap(g.starting)
+	}
+	return g
+}
 
 // Open sends every request from now on to h.
 func (g *StartGate) Open(h http.Handler) { g.h.Store(&h) }
@@ -46,7 +57,7 @@ func (g *StartGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		(*h).ServeHTTP(w, r)
 		return
 	}
-	g.serveStarting(w, r)
+	g.starting.ServeHTTP(w, r)
 }
 
 func (g *StartGate) serveStarting(w http.ResponseWriter, r *http.Request) {

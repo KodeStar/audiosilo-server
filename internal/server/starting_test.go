@@ -21,7 +21,7 @@ import (
 // answers.
 func TestStartGate(t *testing.T) {
 	t.Parallel()
-	g := NewStartGate()
+	g := NewStartGate(nil)
 	g.started = time.Now().Add(-90 * time.Second)
 	for _, path := range []string{"/healthz", "/api/v1/server", "/admin/"} {
 		rec := httptest.NewRecorder()
@@ -51,6 +51,29 @@ func TestStartGate(t *testing.T) {
 	}
 }
 
+// The wrapper NewStartGate is given goes around the starting answer only: the
+// handler Open is given answers bare.
+func TestStartGateWrapsOnlyTheStartingAnswer(t *testing.T) {
+	t.Parallel()
+	g := NewStartGate(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Wrapped", "1")
+			next.ServeHTTP(w, r)
+		})
+	})
+	rec := httptest.NewRecorder()
+	g.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("X-Wrapped") != "1" {
+		t.Errorf("while starting = %d %v, want the wrapped 503", rec.Code, rec.Header())
+	}
+	g.Open(http.NotFoundHandler())
+	rec = httptest.NewRecorder()
+	g.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusNotFound || rec.Header().Get("X-Wrapped") != "" {
+		t.Errorf("after Open = %d %v, want the handler's own answer", rec.Code, rec.Header())
+	}
+}
+
 // Start returns a listen error at once, serving nothing; a started server
 // answers until its context ends, Done closed only then, and Wait returns the
 // same nil every call.
@@ -69,7 +92,7 @@ func TestStartListenErrorAndWait(t *testing.T) {
 
 	cfg.Bind = freeAddr(t)
 	ctx, stop := context.WithCancel(t.Context())
-	s, err := Start(ctx, cfg, NewStartGate(), log)
+	s, err := Start(ctx, cfg, NewStartGate(nil), log)
 	if err != nil {
 		t.Fatal(err)
 	}
