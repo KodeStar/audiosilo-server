@@ -339,3 +339,44 @@ func TestRereadOnAHeldShareAnswersShareNotAnswering(t *testing.T) {
 		})
 	}
 }
+
+// A folder listing (/fs) on a share that stopped answering is a quick 503
+// share_not_answering, the listing a bounded look (fileWait) like the join
+// before it: it was a plain read that held the handler for good. The same
+// listing answers once the share does. Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
+func TestFolderListingOnAHeldShareAnswersQuickly(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "Author", "Book"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Author", "Book", "01.mp3"), []byte("not really audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Main", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.api.fileWait = 200 * time.Millisecond
+	listing := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + "/fs?path="
+	release := metadata.HoldOpensForTests(root)
+	t.Cleanup(release)
+	start := time.Now()
+	resp, body := e.do(t, "GET", listing, adminTok, "")
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) {
+		t.Errorf("the root listing on a held share = %d %s, want 503 %s", resp.StatusCode, body, codeShareNotAnswering)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("the root listing took %v, want it answered once the look is given up on", took)
+	}
+
+	release()
+	if resp, body := e.do(t, "GET", listing, adminTok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"Author"`) {
+		t.Errorf("the root listing once the share answers = %d %s, want the folder listed", resp.StatusCode, body)
+	}
+}

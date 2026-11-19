@@ -363,9 +363,12 @@ func resolveExisting(p string) string {
 
 // BrowseFS lists a directory within a library root with offset pagination: a
 // page of ListDir, its files with their Size and ModTime. relPath "" (or "/")
-// lists the root.
-func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string) bool, ignore *Ignore) (*Listing, error) {
-	entries, dirEntries, err := listDir(root, relPath, allow, ignore)
+// lists the root. Its looks are ListDir's, within timeout in all, the page's
+// file info among them (one Bounded call: given up on, the page lists without
+// sizes).
+func BrowseFS(ctx context.Context, root, relPath string, timeout time.Duration, offset, limit int, allow func(relPath string) bool, ignore *Ignore) (*Listing, error) {
+	deadline := time.Now().Add(timeout)
+	entries, dirEntries, err := listDir(ctx, root, relPath, timeout, allow, ignore)
 	if err != nil {
 		return nil, err
 	}
@@ -381,14 +384,21 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 	// a multi-second listing on a network mount. The directory read's own entry
 	// answers it (a stat on Linux and macOS, nothing at all on Windows, which
 	// lists it with the name).
-	for i := range page {
-		if page[i].IsDir {
-			continue
+	type info struct{ size, mod int64 }
+	infos, _ := metadata.Bounded(ctx, filepath.Join(root, filepath.FromSlash(relPath)), max(time.Until(deadline), time.Nanosecond), func() ([]info, error) {
+		out := make([]info, len(page))
+		for i := range page {
+			if page[i].IsDir {
+				continue
+			}
+			if fi, err := dirEntries[offset+i].Info(); err == nil {
+				out[i] = info{fi.Size(), fi.ModTime().Unix()}
+			}
 		}
-		if info, err := dirEntries[offset+i].Info(); err == nil {
-			page[i].Size = info.Size()
-			page[i].ModTime = info.ModTime().Unix()
-		}
+		return out, nil
+	}, nil)
+	for i := range infos {
+		page[i].Size, page[i].ModTime = infos[i].size, infos[i].mod
 	}
 	out := &Listing{Path: catalog.CleanRelPath(relPath), Entries: page, Total: total, Offset: offset}
 	if end < total {
@@ -404,21 +414,25 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 // the folder leaves out (shadowedMKA: beside a file of its name in another
 // format). Directories sort before files, each in natural name order
 // (naturalLess), so the files list in the order a book of the folder plays them
-// (sortFileOrder) and the order is stable for paging.
-func ListDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) ([]Entry, error) {
-	entries, _, err := listDir(root, relPath, allow, ignore)
+// (sortFileOrder) and the order is stable for paging. The join and the
+// listing are bounded looks (ctx, timeout in all, on the folder's mount): on a
+// share that stopped answering the error is a look given up on
+// (metadata.GaveUp).
+func ListDir(ctx context.Context, root, relPath string, timeout time.Duration, allow func(relPath string) bool, ignore *Ignore) ([]Entry, error) {
+	entries, _, err := listDir(ctx, root, relPath, timeout, allow, ignore)
 	return entries, err
 }
 
 // listDir is ListDir, with each entry's fs.DirEntry from the directory read,
 // in the same order.
-func listDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) ([]Entry, []fs.DirEntry, error) {
+func listDir(ctx context.Context, root, relPath string, timeout time.Duration, allow func(relPath string) bool, ignore *Ignore) ([]Entry, []fs.DirEntry, error) {
+	deadline := time.Now().Add(timeout)
 	// A hidden folder isn't listed, so it can't be opened by name either.
-	full, err := ContentJoin(root, relPath)
+	full, err := ContentJoinBounded(ctx, root, relPath, timeout)
 	if err != nil {
 		return nil, nil, err
 	}
-	dirEntries, err := os.ReadDir(full)
+	dirEntries, err := metadata.ReadDirBounded(ctx, full, max(time.Until(deadline), time.Nanosecond))
 	if err != nil {
 		return nil, nil, err
 	}

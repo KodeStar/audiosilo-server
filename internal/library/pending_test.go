@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 func entryNames(entries []Entry) []string {
@@ -39,14 +41,14 @@ func TestBrowseFSNaturalOrderAndShadowedMKA(t *testing.T) {
 		}
 	}
 	want := []string{"disc 1", "Disc 2", "Disc 10", "1 - a.mp3", "2 - b.mp3", "10 - c.mp3", "Book.m4b", "Solo.mka"}
-	listing, err := BrowseFS(root, "Book", 0, 100, nil, nil)
+	listing, err := BrowseFS(t.Context(), root, "Book", time.Minute, 0, 100, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := entryNames(listing.Entries); !slices.Equal(got, want) {
 		t.Fatalf("BrowseFS = %q, want %q", got, want)
 	}
-	all, err := ListDir(root, "Book", nil, nil)
+	all, err := ListDir(t.Context(), root, "Book", time.Minute, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +58,7 @@ func TestBrowseFSNaturalOrderAndShadowedMKA(t *testing.T) {
 
 	// An ignored m4b shadows nothing: the scanner doesn't see it, so the .mka is
 	// the book's file and is listed.
-	ignored, err := BrowseFS(root, "Book", 0, 100, nil, ParseIgnore([]string{"Book.m4b"}))
+	ignored, err := BrowseFS(t.Context(), root, "Book", time.Minute, 0, 100, nil, ParseIgnore([]string{"Book.m4b"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +121,7 @@ func TestMarkPendingBooks(t *testing.T) {
 		if scope != nil {
 			visible, allow = scope.VisibleInBrowse, scope.Allows
 		}
-		listing, err := BrowseFS(root, rel, 0, 200, visible, ignore)
+		listing, err := BrowseFS(t.Context(), root, rel, time.Minute, 0, 200, visible, ignore)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -194,5 +196,37 @@ func TestMarkPendingBooks(t *testing.T) {
 	cancel()
 	if got := pendingIn(ctx, "A", nil, nil); len(got) != 0 {
 		t.Errorf("with the request's context done: %v, want nothing marked", got)
+	}
+}
+
+// The pending pass's look at a folder's own audio is bounded: a folder on a
+// share that stopped answering is left unmarked once the pass's time is out,
+// rather than holding the listing for good (it was a plain read). The same
+// folder is marked once the share answers. Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
+func TestPendingPassLeavesAHeldFolderUnmarked(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "New/01.mp3", make([]byte, 1<<10))
+	lib := catalog.Library{Name: "L", Root: root}
+	mark := func() bool {
+		entries := []Entry{{Name: "New", Path: "New", IsDir: true}}
+		MarkPendingBooks(t.Context(), lib, entries, nil, nil, nil, nil)
+		return entries[0].PendingBook
+	}
+	release := metadata.HoldOpensForTests(filepath.Join(root, "New"))
+	defer release()
+	start := time.Now()
+	if mark() {
+		t.Error("a folder on a held share marked pending, want it unmarked")
+	}
+	if took := time.Since(start); took > pendingTime+2*time.Second {
+		t.Errorf("the pending pass took %v, want it within its time (%v)", took, pendingTime)
+	}
+	release()
+	if !mark() {
+		t.Error("the folder once the share answers is unmarked, want it pending")
 	}
 }

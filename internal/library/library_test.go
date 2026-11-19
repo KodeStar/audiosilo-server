@@ -54,7 +54,7 @@ func testdataRoot(t *testing.T) string {
 
 func TestBrowseFSInstant(t *testing.T) {
 	t.Parallel()
-	listing, err := BrowseFS(testdataRoot(t), "", 0, 100, nil, nil)
+	listing, err := BrowseFS(t.Context(), testdataRoot(t), "", time.Minute, 0, 100, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,7 +800,7 @@ func TestBrowseFSHidesNonAudio(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	listing, err := BrowseFS(root, "Book", 0, 100, nil, nil)
+	listing, err := BrowseFS(t.Context(), root, "Book", time.Minute, 0, 100, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -818,7 +818,7 @@ func TestBrowseFSHidesNonAudio(t *testing.T) {
 	}
 
 	// Directories remain navigable.
-	top, _ := BrowseFS(root, "", 0, 100, nil, nil)
+	top, _ := BrowseFS(t.Context(), root, "", time.Minute, 0, 100, nil, nil)
 	hasDir := false
 	for _, e := range top.Entries {
 		if e.IsDir && e.Name == "Subdir" {

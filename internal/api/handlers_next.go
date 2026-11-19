@@ -187,7 +187,7 @@ func (a *API) seriesNext(ctx context.Context, libraryID int64, scope catalog.Sco
 // scan has indexed yet) in the series' own folder (seriesFolder): a new book
 // that merely sorts next among an author's other books is not the series' next.
 func (a *API) folderNext(ctx context.Context, lib *catalog.Library, scope catalog.Scope, book *catalog.Book, pendingOnly bool) (*nextBook, error) {
-	e, b, folder, err := library.NextInFolder(ctx, a.cat, lib, scope, book.RelPath, a.log)
+	e, b, folder, err := library.NextInFolder(ctx, a.cat, lib, scope, book.RelPath, a.fileWait, a.log)
 	if e == nil || err != nil || (pendingOnly && (b != nil || !e.PendingBook || !seriesFolder(book, folder))) {
 		return nil, err
 	}

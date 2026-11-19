@@ -581,10 +581,14 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ignore := library.ParseIgnore(lib.IgnorePatterns)
-	listing, err := library.BrowseFS(lib.Root, dir,
+	listing, err := library.BrowseFS(r.Context(), lib.Root, dir, a.fileWait,
 		queryInt(r, "offset", 0), queryInt(r, "limit", 200), allow, ignore)
 	if errors.Is(err, library.ErrOutsideRoot) && !early {
 		writeError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	if metadata.GaveUp(err) {
+		writeShareNotAnswering(w)
 		return
 	}
 	if err != nil {
