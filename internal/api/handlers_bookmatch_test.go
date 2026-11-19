@@ -127,7 +127,8 @@ func TestAdminEditBookCommunityMatch(t *testing.T) {
 // the one an earlier match named. A console match to another work stores the
 // recording it names ("" for none: /meta then picks as a lookup naming none
 // would, the work's first), so the earlier work's recording is gone; the same
-// work accepted again, and an edit that names no match, keep the recording.
+// work and recording accepted again, and an edit that names no match, keep
+// the recording.
 func TestConsoleRematchRecording(t *testing.T) {
 	t.Parallel()
 	e := newMetaEnv(t, true, 0)

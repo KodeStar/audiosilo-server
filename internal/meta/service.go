@@ -818,7 +818,7 @@ func pickRecording(recs []upstreamRecording, recordingID string, matched bool) *
 	}
 	chosen := &recs[0]
 	if recordingID != "" {
-		if i := slices.IndexFunc(recs, func(r upstreamRecording) bool { return r.ID == recordingID }); i >= 0 {
+		if i := recordingIndex(recs, recordingID); i >= 0 {
 			chosen = &recs[i]
 		} else if matched {
 			return nil
@@ -835,6 +835,12 @@ func pickRecording(recs []upstreamRecording, recordingID string, matched bool) *
 		ChapterCount: chosen.ChapterCount,
 		Librivox:     librivoxOf(chosen),
 	}
+}
+
+// recordingIndex is the index of recording id among a work's recordings, -1
+// when the work doesn't list it (pickRecording, MatchChapters).
+func recordingIndex(recs []upstreamRecording, id string) int {
+	return slices.IndexFunc(recs, func(r upstreamRecording) bool { return r.ID == id })
 }
 
 // librivoxOf is a recording's LibriVox block: nil unless it names a LibriVox

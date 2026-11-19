@@ -3,7 +3,6 @@ package meta
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/pkg/match"
@@ -53,17 +52,19 @@ func (s *Service) RecordingChapters(ctx context.Context, asin, isbn string) (*Re
 // (catalog book_matches): recording recordingID of work workID, the admin's
 // choice over what the book's identifiers name (server#375). ErrNotFound when
 // it names no recording, or one the work doesn't list (a stale match, or one
-// of another work): never the work's first, as pickRecording's matched. Like
-// RecordingChapters it caches nothing.
+// of another work): never the work's first, as pickRecording's matched. The
+// ids are trimmed as EnrichMatch trims them. Like RecordingChapters it caches
+// nothing.
 func (s *Service) MatchChapters(ctx context.Context, workID, recordingID string) (*RecordingChapters, error) {
-	if strings.TrimSpace(workID) == "" || recordingID == "" {
+	workID, recordingID = strings.TrimSpace(workID), strings.TrimSpace(recordingID)
+	if workID == "" || recordingID == "" {
 		return nil, ErrNotFound
 	}
 	detail, err := s.workDetail(ctx, workID)
 	if err != nil {
 		return nil, err
 	}
-	if !slices.ContainsFunc(detail.Recordings, func(r upstreamRecording) bool { return r.ID == recordingID }) {
+	if recordingIndex(detail.Recordings, recordingID) < 0 {
 		return nil, ErrNotFound
 	}
 	return s.chaptersOf(ctx, detail.ID, recordingID)

@@ -156,18 +156,24 @@ func (c *Catalog) ChapterInputs(ctx context.Context, libraryID int64, path strin
 	in := &ChapterInputs{}
 	b := Book{RelPath: path}
 	var snapshot string
+	// The match in the same statement as the basis, so the check records the
+	// basis of the match it follows.
+	var work, recording, how, setAt sql.NullString
 	err := c.db.QueryRowContext(ctx,
-		`SELECT b.id, b.asin, b.isbn, b.duration, b.size, b.is_folder, b.scanned_chapters, `+chapterBasisExpr+`
-		   FROM books b WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, path).
-		Scan(&b.ID, &in.ASIN, &in.ISBN, &b.Duration, &b.Size, &b.IsFolder, &snapshot, &in.Basis)
+		`SELECT b.id, b.asin, b.isbn, b.duration, b.size, b.is_folder, b.scanned_chapters, `+chapterBasisExpr+`,
+		        bm.work_id, bm.recording_id, bm.how, bm.set_at
+		   FROM books b LEFT JOIN book_matches bm ON bm.library_id = b.library_id AND bm.path = b.rel_path
+		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, path).
+		Scan(&b.ID, &in.ASIN, &in.ISBN, &b.Duration, &b.Size, &b.IsFolder, &snapshot, &in.Basis,
+			&work, &recording, &how, &setAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	if in.Match, err = bookAnchor(ctx, c.db, libraryID, path); err != nil {
-		return nil, err
+	if work.Valid {
+		in.Match = &BookMatch{WorkID: work.String, RecordingID: recording.String, How: how.String, MatchedAt: setAt.String}
 	}
 	if in.Files, err = playFiles(ctx, c.db, &b); err != nil {
 		return nil, err
