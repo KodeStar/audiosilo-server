@@ -404,13 +404,13 @@ func TestWaitFlightBoundsOnlyTheRead(t *testing.T) {
 		if read {
 			close(r.done)
 		}
-		return &indexFlight{done: make(chan struct{}), scan: r}
+		return &indexFlight{done: make(chan struct{}), scan: r, progress: metadata.NewProgress()}
 	}
 
 	if err := s.waitFlight(t.Context(), flight(false)); !errors.Is(err, errReadLeft) {
 		t.Errorf("a read not returned: %v, want errReadLeft", err)
 	}
-	if err := s.waitFlight(t.Context(), &indexFlight{done: make(chan struct{})}); !errors.Is(err, errReadLeft) {
+	if err := s.waitFlight(t.Context(), &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}); !errors.Is(err, errReadLeft) {
 		t.Errorf("an on-demand read not returned: %v, want errReadLeft", err)
 	}
 	left := flight(false)
@@ -425,4 +425,47 @@ func TestWaitFlightBoundsOnlyTheRead(t *testing.T) {
 	if err := s.waitFlight(t.Context(), written); err != nil {
 		t.Errorf("a scan's read waiting for its write: %v, want it waited for", err)
 	}
+}
+
+// TestWaitFlightWaitsOnAReadThatMovesOn: a wait on another's read gives up on
+// one that has not moved on for a look's time, not on one that is slow: a read
+// whose calls keep returning (a big book on a slow share that answers) is
+// waited on past a look's time until it ends (server#360). One that then stops
+// moving on for the probe's time is given up on and marked stuck, so a later
+// waiter gives up on it at once.
+func TestWaitFlightWaitsOnAReadThatMovesOn(t *testing.T) {
+	t.Parallel()
+	s := &Scanner{probeTimeout: 60 * time.Millisecond}
+	f := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
+	stop := make(chan struct{})
+	go func() { // the read: progress every 20 ms, for five looks' time
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		for end := time.After(5 * s.probeTimeout); ; {
+			select {
+			case <-tick.C:
+				f.progress.Note()
+			case <-end:
+				close(f.done)
+				return
+			case <-stop:
+				return
+			}
+		}
+	}()
+	began := time.Now()
+	if err := s.waitFlight(t.Context(), f); err != nil || time.Since(began) < 4*s.probeTimeout {
+		t.Errorf("a slow read moving on: %v after %v, want it waited for until it ended", err, time.Since(began))
+	}
+
+	stalled := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
+	if err := s.waitFlight(t.Context(), stalled); !errors.Is(err, errReadLeft) || !stalled.stuck.Load() {
+		t.Errorf("a read that stopped moving on: %v, stuck %v; want errReadLeft, marked stuck", err, stalled.stuck.Load())
+	}
+	stalled.progress.Note() // it moves on again: a waiter already told it is stuck
+	began = time.Now()
+	if err := s.waitFlight(t.Context(), stalled); !errors.Is(err, errReadLeft) || time.Since(began) >= s.probeTimeout {
+		t.Errorf("a read marked stuck: %v after %v, want errReadLeft at once", err, time.Since(began))
+	}
+	close(stop)
 }

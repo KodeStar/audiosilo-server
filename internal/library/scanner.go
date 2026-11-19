@@ -852,7 +852,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				return // the scan stopped: writeNext sees it
 			}
 			r.flight = f
-			s.enrich(ctx, lib, b, slots)
+			s.enrich(metadata.WithProgress(ctx, f.progress), lib, b, slots)
 		}()
 	}
 	for len(pending) > 0 {
@@ -2469,6 +2469,14 @@ type indexFlight struct {
 	// the read it left under way (bookRead.left; Scanner.readsLeft), held in a
 	// call that may never return, so no later read waits for it.
 	scan *bookRead
+	// progress is when the flight's read last moved on (each open, block read
+	// or bounded look of it that returned in time: metadata.WithProgress on
+	// the read's context), so a waiter gives up on a read that stopped, not on
+	// one that is slow (waitFlight).
+	progress *metadata.Progress
+	// stuck is set once a waiter found the read had not moved on for a whole
+	// look's time (the probe's): no later waiter waits on it.
+	stuck atomic.Bool
 }
 
 // errReadLeft is waitFlight's error when another read of the book may never
@@ -2590,14 +2598,17 @@ func (s *Scanner) startFlight(ctx context.Context, key bookKey, scan *bookRead) 
 // in a call a share that stopped answering never returns from) is not waited
 // on for good, or a scan would stall at the book and a request wait out its
 // time: errReadLeft at once for one a stopped scan left under way
-// (bookRead.left), and for any other once a look's time (probeTimeout) has
-// passed with it not returned. A scan's read that has returned is waited on
-// until the scan writes its book.
+// (bookRead.left) or a waiter found stuck (indexFlight.stuck), and for any
+// other once a look's time (lookTimeout) has passed with it not returned and
+// not moved on (indexFlight.progress: a slow read that answers is waited on);
+// one that has not moved on for the probe's time is marked stuck. A scan's
+// read that has returned is waited on until the scan writes its book.
 func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
-	if f.scan != nil && f.scan.left.Load() {
+	if f.stuck.Load() || (f.scan != nil && f.scan.left.Load()) {
 		return errReadLeft
 	}
-	wait := time.NewTimer(s.lookTimeout(ctx))
+	look := s.lookTimeout(ctx)
+	wait := time.NewTimer(look)
 	defer wait.Stop()
 	expired := wait.C
 	for {
@@ -2607,10 +2618,20 @@ func (s *Scanner) waitFlight(ctx context.Context, f *indexFlight) error {
 		case <-f.done:
 			return nil
 		case <-expired:
-			if f.scan == nil || !f.scan.finished() {
-				return errReadLeft
+			if f.scan != nil && f.scan.finished() {
+				expired = nil // returned: waited on until the scan writes it
+				continue
 			}
-			expired = nil
+			// A read still moving on (a big book on a slow share that answers)
+			// is waited on a look's time from its last progress.
+			if idle := f.progress.Idle(); idle < look {
+				wait.Reset(look - idle)
+				continue
+			}
+			if f.progress.Idle() >= s.probeTimeout {
+				f.stuck.Store(true) // stopped for a whole look's time: left
+			}
+			return errReadLeft
 		}
 	}
 }
@@ -2623,7 +2644,7 @@ func (s *Scanner) claimFlight(key bookKey, scan *bookRead) (f *indexFlight, lead
 	if f, busy := s.flights[key]; busy {
 		return f, false
 	}
-	f = &indexFlight{key: key, done: make(chan struct{}), scan: scan}
+	f = &indexFlight{key: key, done: make(chan struct{}), scan: scan, progress: metadata.NewProgress()}
 	s.flights[key] = f
 	return f, true
 }
@@ -2669,7 +2690,7 @@ func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *cata
 		}
 		s.endFlight(f, err)
 	}()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), indexTimeout)
+	ctx, cancel := context.WithTimeout(metadata.WithProgress(context.WithoutCancel(ctx), f.progress), indexTimeout)
 	defer cancel()
 	if base := s.base.Load(); base != nil {
 		defer context.AfterFunc(*base, cancel)()
