@@ -123,11 +123,9 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 	}
 	if b.ReadCutShort {
 		if id, ok, err := recordReadProblem(ctx, tx, b); err != nil || ok {
-			switch {
-			case err != nil:
-			case b.LengthsRead:
+			if err == nil && b.LengthsRead {
 				err = recordLengths(ctx, tx, id, b)
-			case b.LengthOnly && !b.LengthUncounted:
+			} else if err == nil && b.LengthOnly && !b.LengthUncounted {
 				// Its other files read whole by today's revision, the book kept
 				// for a part that will read the same next time (a FIFO, a part
 				// that runs out of time): a read for the revision would only
@@ -333,7 +331,7 @@ func recordLengths(ctx context.Context, tx *sql.Tx, id int64, b *Book) error {
 	// The lengths are today's revision's (LengthsRead: none left uncounted).
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE books SET duration = ?, codec = ?, scanned_chapters = ?, chapters_hash = ?, chapters_source = '', chapters_fit = '',
-		        duration_rev = `+durationRev+`, duration_rev_indexed_at = indexed_at
+		        `+setDurationRev+`
 		  WHERE id = ?`, b.Duration, b.Codec, raw, chaptersHash(raw), id); err != nil {
 		return err
 	}
@@ -349,11 +347,13 @@ func recordLengths(ctx context.Context, tx *sql.Tx, id int64, b *Book) error {
 	return refreshEffective(ctx, tx, id)
 }
 
-// stampDurationRev records today's revision of the lengths' reading
-// (durationRev) on the row id, with its own indexed_at, its lengths as stored.
+// setDurationRev is the SET clause recording today's revision of the lengths'
+// reading (durationRev) on a row, with its own indexed_at.
+const setDurationRev = `duration_rev = ` + durationRev + `, duration_rev_indexed_at = indexed_at`
+
+// stampDurationRev records setDurationRev on the row id, its lengths as stored.
 func stampDurationRev(ctx context.Context, tx *sql.Tx, id int64) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE books SET duration_rev = `+durationRev+`, duration_rev_indexed_at = indexed_at WHERE id = ?`, id)
+	_, err := tx.ExecContext(ctx, `UPDATE books SET `+setDurationRev+` WHERE id = ?`, id)
 	return err
 }
 

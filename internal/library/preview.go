@@ -238,10 +238,7 @@ func (s *Scanner) previewSample(ctx context.Context, lib catalog.Library, b *cat
 	// The names alone: a header-less VBR MP3's frames are not counted, which
 	// reads the whole file in the preview's time (server#452).
 	ctx = metadata.WithoutFrameCount(ctx)
-	read := s.readFile
-	if read == nil {
-		read = extractFile
-	}
+	read := s.reader()
 	md := read(ctx, lib.Root, absOf(lib, primaryPath(b)), s.ffprobePath, metadata.ProbeTimeout)
 	own := PreviewBlanks{Tags: blanks(tagNames(md)), Path: blanks(namesOf(metadata.FromPathLayout(b.RelPath, b.IsFolder)))}
 	folders := *b

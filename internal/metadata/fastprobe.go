@@ -187,15 +187,13 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 		return nil, why, format == "mp3" && (timedOutReason(why) || ctx.Err() != nil)
 	}
 	uc, headerless := errors.AsType[*mp3Uncounted](err)
-	switch {
-	case !headerless || b.err != nil:
-	case !frameCountWanted(ctx):
-		// A read for the tags alone (WithoutFrameCount): the bitrate's
-		// estimate, no count, no ffprobe.
-		p, err = uc.estimated(), nil
-	default:
+	if headerless && b.err == nil {
 		var why string
-		if p, why = uc.count(ctx, b, timeout); why != "" {
+		if !frameCountWanted(ctx) {
+			// A read for the tags alone (WithoutFrameCount): the bitrate's
+			// estimate, no count, no ffprobe.
+			p, err = uc.estimated(), nil
+		} else if p, why = uc.count(ctx, b, timeout); why != "" {
 			// The deadline's own words last, so a count out of time reads as
 			// the probe's (timedOutReason): with no ffprobe, read again alone.
 			err = unsure(uc.Error() + "; frame count: " + why)

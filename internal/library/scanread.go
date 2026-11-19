@@ -36,13 +36,20 @@ func newReadSlots(n int, timeout time.Duration) *readSlots {
 }
 
 // readSlots is newReadSlots for this scanner's reads: probeTimeout each, through
-// its readFile when one is set.
+// its reader.
 func (s *Scanner) readSlots(n int) *readSlots {
 	slots := newReadSlots(n, s.probeTimeout)
-	if s.readFile != nil {
-		slots.readFile = s.readFile
-	}
+	slots.readFile = s.reader()
 	return slots
+}
+
+// reader is how this scanner reads an audio file: its readFile when one is set
+// (tests), else extractFile.
+func (s *Scanner) reader() readFunc {
+	if s.readFile != nil {
+		return s.readFile
+	}
+	return extractFile
 }
 
 // readFunc reads the audio file at absPath, under the library root root,
