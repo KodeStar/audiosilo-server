@@ -22,3 +22,9 @@ var platformTransientErrnos = []syscall.Errno{
 	1232, // ERROR_HOST_UNREACHABLE
 	1236, // ERROR_CONNECTION_ABORTED
 }
+
+// platformLastingErrnos are LastingFault's Windows codes: a name the share
+// refuses (EINVAL's on a POSIX share).
+var platformLastingErrnos = []syscall.Errno{
+	123, // ERROR_INVALID_NAME
+}

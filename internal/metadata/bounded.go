@@ -94,6 +94,33 @@ func TransientFault(err error) bool {
 	return false
 }
 
+// LastingFault reports whether err is a share's refusal a retry would only
+// meet again (lastingErrnos, an explicit list): a permission (EACCES, EPERM,
+// fs.ErrPermission), the device gone (ENXIO), a link loop (ELOOP), a name the
+// share refuses (EINVAL; on Windows ERROR_INVALID_NAME). A route answers it
+// with its lasting answer (a 404), never as a share that stopped answering
+// (TransientFault) nor as the server's own failure (a 500). Not a limit of
+// the server's own (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY), nor any error on
+// neither list: a route answers those as it did before the share-fault rule.
+func LastingFault(err error) bool {
+	if err == nil || TransientFault(err) {
+		return false
+	}
+	if errors.Is(err, fs.ErrPermission) {
+		return true
+	}
+	for _, errno := range lastingErrnos {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
+}
+
+// lastingErrnos are LastingFault's beside fs.ErrPermission, Windows' own code
+// for a name refused among them there (platformLastingErrnos).
+var lastingErrnos = append([]syscall.Errno{syscall.ENXIO, syscall.ELOOP, syscall.EINVAL}, platformLastingErrnos...)
+
 // transientErrnos are TransientFault's, Windows' own codes for the same
 // faults among them there (platformTransientErrnos).
 var transientErrnos = append([]syscall.Errno{

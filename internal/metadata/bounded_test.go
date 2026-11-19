@@ -161,6 +161,42 @@ func TestNamesListed(t *testing.T) {
 	}
 }
 
+// LastingFault is a refusal a retry would only meet again (a permission, the
+// device gone, a link loop, a name refused), the share-fault rule's second
+// class, whose answer is a route's lasting one; never a fault a retry may get
+// past (TransientFault), the file gone, a limit of the server's own or a
+// context's.
+func TestLastingFault(t *testing.T) {
+	t.Parallel()
+	pathErr := func(errno syscall.Errno) error { return &fs.PathError{Op: "open", Path: "/x", Err: errno} }
+	for _, c := range []struct {
+		err     error
+		lasting bool
+	}{
+		{nil, false},
+		{pathErr(syscall.EACCES), true},
+		{pathErr(syscall.EPERM), true},
+		{pathErr(syscall.ENXIO), true},
+		{pathErr(syscall.ELOOP), true},
+		{pathErr(syscall.EINVAL), true},
+		{pathErr(syscall.EIO), false},
+		{pathErr(syscall.ESTALE), false},
+		{pathErr(syscall.ENOTCONN), false},
+		{pathErr(syscall.ENOENT), false},
+		{pathErr(syscall.EMFILE), false},
+		{pathErr(syscall.ENFILE), false},
+		{pathErr(syscall.ENOMEM), false},
+		{pathErr(syscall.EAGAIN), false},
+		{pathErr(syscall.EBUSY), false},
+		{ErrNotAnswered, false},
+		{context.Canceled, false},
+	} {
+		if got := LastingFault(c.err); got != c.lasting {
+			t.Errorf("LastingFault(%v) = %v, want %v", c.err, got, c.lasting)
+		}
+	}
+}
+
 // ShareFault is every error a look at a file a share answers with but the
 // file gone (ENOENT, ENOTDIR), a look given up on already or a context's;
 // AsGaveUp makes one a look given up on with the share's own message, and

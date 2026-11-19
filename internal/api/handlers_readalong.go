@@ -38,9 +38,12 @@ const (
 // now (never trusting the indexed head for the bytes it sends): a map whose
 // head fails its checks, a book with no ebook or no map, a part's path or a
 // podcast library is 404 no_readalong; a map made from another ebook or other
-// audio is 409 readalong_stale; one outside scope 403; a file that can't be
-// read now 500, logged, but the map's read or the ebook's look or hash given
-// up on (fileWait: a share that stopped answering) 503 share_not_answering.
+// audio is 409 readalong_stale; one outside scope 403. The map's read or the
+// ebook's look or hash given up on (fileWait: a share that stopped answering),
+// or failing as a share does that a retry may get past (metadata.TransientFault),
+// is 503 share_not_answering; one refused for good (metadata.LastingFault: a
+// permission, the device gone) 404 no_readalong, as for a file gone; any other
+// (a limit of the server's own) 500, logged.
 func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 	lib, rel, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
@@ -70,11 +73,11 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 	}, nil)
 	data, info := m.data, m.info
 	switch {
-	case errors.Is(err, library.ErrNoReadalong):
-		writeErrorCode(w, http.StatusNotFound, codeNoReadalong, msgNoReadalong)
-		return
-	case metadata.GaveUp(err):
+	case metadata.GaveUp(err) || metadata.TransientFault(err):
 		writeShareNotAnswering(w)
+		return
+	case errors.Is(err, library.ErrNoReadalong), metadata.LastingFault(err):
+		writeErrorCode(w, http.StatusNotFound, codeNoReadalong, msgNoReadalong)
 		return
 	case err != nil:
 		a.log.Warn("read read-along failed", "library", lib.ID, "path", book.RelPath, "err", err)
@@ -94,7 +97,12 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 		digest, err = a.scanner.EbookDigestNow(ctx, *lib, idx, book.RelPath, book.Ebook.Path, book.IsFolder, a.fileWait)
 	}
 	switch {
-	case errors.Is(err, library.ErrNoEbook), errors.Is(err, fs.ErrNotExist):
+	// Before the file gone: Go reads a Windows share whose server is down as
+	// fs.ErrNotExist (metadata.NotExist).
+	case metadata.TransientFault(err):
+		writeShareNotAnswering(w)
+		return
+	case errors.Is(err, library.ErrNoEbook), errors.Is(err, fs.ErrNotExist), metadata.LastingFault(err):
 		writeErrorCode(w, http.StatusNotFound, codeNoReadalong, msgNoReadalong)
 		return
 	case err != nil:

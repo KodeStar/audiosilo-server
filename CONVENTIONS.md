@@ -1737,9 +1737,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
     `Retry-After` 30; nothing reads it as the file gone (a podcast episode is not fetched again, `podcastLookErr`;
     the Bridge's book files keep their indexed size, `statBookFiles`, each file's look given `fileWait`
     and all ending at the request's wait cap, `TestBridgeBookFilesEachGetALooksTime`).
-  - **Lasting** (a permission, EACCES or EPERM, `fs.ErrPermission`; the device gone, ENXIO; a link loop, ELOOP; a
-    name the share refuses, EINVAL, Windows' ERROR_INVALID_NAME): a retry would only meet it again. A route answers
-    the lasting answer it had (a 404; a route's own 422 stays), and the book stays indexed.
+  - **Lasting** (`metadata.LastingFault`: a permission, EACCES or EPERM, `fs.ErrPermission`; the device gone, ENXIO; a
+    link loop, ELOOP; a name the share refuses, EINVAL, Windows' ERROR_INVALID_NAME): a retry would only meet it
+    again. A route answers the lasting answer it had (a 404; a route's own 422 stays), the reader's ebook and
+    read-along map among them (`TestEbookLastingFaultIs404`, `TestReadalongLastingFaultIs404`), and the book stays
+    indexed.
   - **The server's own limits** (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY) and any error on neither list: no share's
     fault, never a 503 `share_not_answering`; a route answers it as it did before the rule (an asked read's
     `lookRefused` 404, a stream's missing file, a 500 where the route logs one).

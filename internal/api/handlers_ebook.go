@@ -33,8 +33,10 @@ const ebookCSP = "sandbox; default-src 'none'"
 // outside the caller's scope is 403. The open is a metadata.Bounded call
 // (streamWait, as the stream's looks): on a share that stopped answering, or
 // one failing as a share does that a retry may get past (EIO, ESTALE), it is a
-// 503 share_not_answering with Retry-After; any other file that can't be read
-// right now is 500, logged.
+// 503 share_not_answering with Retry-After; one refused for good
+// (metadata.LastingFault: a permission, the device gone) is the 404 a file
+// gone is, as the stream answers it; any other (a limit of the server's own,
+// too many open files) is 500, logged.
 func (a *API) handleEbook(w http.ResponseWriter, r *http.Request) {
 	// The bytes outlive the request timeout (isLibraryMedia), but the lookup
 	// before them is bounded like any request: a book indexed on demand waits for
@@ -66,7 +68,7 @@ func (a *API) handleEbook(w http.ResponseWriter, r *http.Request) {
 			writeShareNotAnswering(w)
 		}
 		return
-	case errors.Is(err, library.ErrNoEbook), errors.Is(err, fs.ErrNotExist):
+	case errors.Is(err, library.ErrNoEbook), errors.Is(err, fs.ErrNotExist), metadata.LastingFault(err):
 		writeError(w, http.StatusNotFound, msgNoEbook)
 		return
 	case err != nil && r.Context().Err() != nil:

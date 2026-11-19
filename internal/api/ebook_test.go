@@ -300,22 +300,35 @@ func TestEbookDenied(t *testing.T) {
 	}
 }
 
-// An ebook that is there but can't be read right now (a permission, a flaky
-// mount) is a 500, logged, never 404 "this book has no ebook", which the player
-// would show as gone until the next scan.
-func TestEbookUnreadableIs500(t *testing.T) {
+// An ebook refused for good (a permission on the file or on its folder:
+// metadata.LastingFault) is the 404 a file gone is, as the stream answers a
+// part refused so, never a 500: a retry would only meet the refusal again.
+// Allowed: the same book serves its ebook once the permission is back.
+func TestEbookLastingFaultIs404(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs POSIX permissions that bind (not root)")
 	}
 	t.Parallel()
 	e := newEbookEnv(t)
-	p := filepath.Join(e.root, filepath.FromSlash(ebookFile))
-	if err := os.Chmod(p, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(p, 0o644) })
-	if resp, body := e.do(t, "GET", e.at("ebook", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("an unreadable ebook = %d %.60s, want 500", resp.StatusCode, body)
+	for _, refused := range []string{ebookFile, ebookBook} {
+		p := filepath.Join(e.root, filepath.FromSlash(refused))
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		resp, body := e.do(t, "GET", e.at("ebook", ebookBook), e.annTok, "")
+		if err := os.Chmod(p, info.Mode().Perm()); err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, msgNoEbook) {
+			t.Errorf("an ebook with %s refused = %d %.60s, want 404 %q", refused, resp.StatusCode, body, msgNoEbook)
+		}
+		if resp, body := e.do(t, "GET", e.at("ebook", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusOK || body != string(e.epub) {
+			t.Errorf("the ebook with %s readable again = %d, want 200 and its bytes", refused, resp.StatusCode)
+		}
 	}
 }
 

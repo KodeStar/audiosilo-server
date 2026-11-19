@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -452,5 +453,36 @@ func TestReadalongOnAHeldShareAnswers(t *testing.T) {
 	e.api.fileWait = 10 * time.Second
 	if resp, body := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusOK || body != string(e.maps[ebookBook]) {
 		t.Errorf("GET readalong once the share answers = %d %.80s, want the map", resp.StatusCode, body)
+	}
+}
+
+// A map or an ebook refused for good (a permission: metadata.LastingFault) is
+// 404 no_readalong, as for a file gone, never a 500: a retry would only meet
+// the refusal again. The ebook is hashed now (its digest cleared), so its
+// open is reached. Allowed: the map is served once the permissions are back.
+func TestReadalongLastingFaultIs404(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX permissions that bind (not root)")
+	}
+	t.Parallel()
+	e := newReadalongEnv(t)
+	for _, refused := range []string{mapPaths[ebookBook], ebookFile} {
+		if _, err := e.db.ExecContext(context.Background(), `UPDATE books SET ebook_sha256 = '', ebook_hashed_sig = ''`); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(e.root, filepath.FromSlash(refused))
+		if err := os.Chmod(p, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		resp, body := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, "")
+		if err := os.Chmod(p, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, codeNoReadalong) {
+			t.Errorf("readalong with %s refused = %d %.80s, want 404 %s", refused, resp.StatusCode, body, codeNoReadalong)
+		}
+		if resp, body := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusOK || body != string(e.maps[ebookBook]) {
+			t.Errorf("readalong with %s readable again = %d %.80s, want the map", refused, resp.StatusCode, body)
+		}
 	}
 }
