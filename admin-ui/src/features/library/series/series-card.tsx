@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Trans, useTranslation } from 'react-i18next';
 import { CalendarClock, Sparkles } from 'lucide-react';
@@ -23,7 +23,6 @@ import {
   releaseState,
   seriesStatus,
   spineColors,
-  spineFitsLabel,
   spineHeight,
   spineRow,
   type Placed,
@@ -35,8 +34,6 @@ import { useInView } from '@/lib/use-in-view';
 export interface ShelfLayout {
   /** Wide enough for the fan of covers beside the spines (1024px and up). */
   wide: boolean;
-  /** A phone's width: the shelf is shorter (spineFitsLabel). */
-  phone: boolean;
 }
 
 /**
@@ -190,7 +187,7 @@ function Shelf({
   status,
   fmt,
   fan,
-  layout: { wide, phone },
+  layout: { wide },
 }: {
   name: string;
   /**
@@ -229,10 +226,6 @@ function Shelf({
             const stateWord = state
               ? `${t(state === 'preorder' ? 'series.preorder' : 'series.newRelease')} · `
               : '';
-            // The date runs in a line of its own beside the title; the state word
-            // leads it only where the whole line fits (else a small mark does, the
-            // spine's label saying all of it).
-            const showState = Boolean(stateWord) && spineFitsLabel(height, stateWord + date, phone);
             const label =
               state === 'preorder'
                 ? t('series.gapPreorder', values)
@@ -255,15 +248,7 @@ function Shelf({
                   {date ? (
                     <span className="spine-lines">
                       <span className="spine-title">{sp.entry.title}</span>
-                      <span className="spine-date" data-state={state}>
-                        {showState ? (
-                          stateWord
-                        ) : state ? (
-                          // Too short for the word: a mark says it, not the colour alone.
-                          <StateMark state={state} />
-                        ) : null}
-                        {date}
-                      </span>
+                      <SpineDate state={state} stateWord={stateWord} date={date} />
                     </span>
                   ) : (
                     <span className="spine-title">{sp.entry.title}</span>
@@ -332,6 +317,84 @@ function Shelf({
  * doesn't fit (WCAG 1.4.1: the date's colour is not the only sign). The spine's
  * label names the state in words.
  */
+/**
+ * A dated missing entry's date, in a line of its own beside the title: the
+ * state word leads it only where the whole line fits the spine (else a small
+ * mark does, the spine's label saying all of it). The fit is measured as laid
+ * out (server#279), not worked out from copies of the stylesheet's sizes: a
+ * hidden twin of the whole line, set in the same type, against the room the
+ * line has (useLineFits).
+ */
+function SpineDate({
+  state,
+  stateWord,
+  date,
+}: {
+  state?: 'preorder' | 'new';
+  /** The state's word and its separator ("Preorder · "), "" without a state. */
+  stateWord: string;
+  date: string;
+}) {
+  const line = useRef<HTMLSpanElement>(null);
+  const ruler = useRef<HTMLSpanElement>(null);
+  const fits = useLineFits(line, ruler, Boolean(stateWord));
+  return (
+    <>
+      <span ref={line} className="spine-date" data-state={state}>
+        {fits ? (
+          stateWord
+        ) : state ? (
+          // Too short for the word: a mark says it, not the colour alone.
+          <StateMark state={state} />
+        ) : null}
+        {date}
+      </span>
+      {stateWord ? (
+        <span ref={ruler} className="spine-date spine-ruler" aria-hidden="true">
+          {stateWord}
+          {date}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Whether the ruler's text (the whole line, out of the flow) fits the
+ * line's room: the line's inline size, which is vertical on a spine. Measured
+ * after layout, again whenever the line's size changes (the shelf's height on
+ * a phone, a font loading late) and once the page's fonts have loaded. Before
+ * any layout (no size at all, as in jsdom) it fits.
+ */
+function useLineFits(
+  line: RefObject<HTMLElement | null>,
+  ruler: RefObject<HTMLElement | null>,
+  enabled: boolean,
+): boolean {
+  const [fits, setFits] = useState(true);
+  useLayoutEffect(() => {
+    const el = line.current;
+    if (!enabled || !el) return;
+    const measure = () => {
+      const r = ruler.current;
+      if (!r) return;
+      const room = el.getBoundingClientRect().height;
+      const need = r.getBoundingClientRect().height;
+      setFits(room === 0 || need <= room);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    let live = true;
+    void document.fonts?.ready.then(() => live && measure());
+    return () => {
+      live = false;
+      ro.disconnect();
+    };
+  }, [line, ruler, enabled]);
+  return fits;
+}
+
 function StateMark({ state }: { state: 'preorder' | 'new' }) {
   const Icon = state === 'preorder' ? CalendarClock : Sparkles;
   return (

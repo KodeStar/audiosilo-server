@@ -20,7 +20,6 @@ import { SeriesCard, type ShelfLayout } from './series-card';
 import { SERIES_PAGE, filterSeries } from './series-model';
 import { useInView } from '@/lib/use-in-view';
 import { useMediaQuery } from '@/lib/use-media-query';
-import { useIsPhone } from '../books/use-layout';
 
 /**
  * Library > Series: one card per series with its books as spines, a page of
@@ -32,8 +31,7 @@ import { useIsPhone } from '../books/use-layout';
 export function SeriesPage() {
   // The shelves' widths, read once for the page: a listener per query, not per card.
   const wide = useMediaQuery('(min-width: 1024px)');
-  const phone = useIsPhone();
-  const layout = useMemo<ShelfLayout>(() => ({ wide, phone }), [wide, phone]);
+  const layout = useMemo<ShelfLayout>(() => ({ wide }), [wide]);
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const [library] = useLibraryParam();

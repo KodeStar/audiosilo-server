@@ -17,7 +17,6 @@ import {
   spanIn,
   seriesStatus,
   spineColors,
-  spineFitsLabel,
   spineHeight,
   spineRow,
 } from './series-model';
@@ -735,23 +734,5 @@ describe('dated entries', () => {
     expect(formatReleaseDate('2026-01-01', 'en-GB')).toBe('1 Jan 2026');
     expect(formatReleaseDate('2026-13', 'en-GB')).toBe('');
     expect(formatReleaseDate(undefined, 'en-GB')).toBe('');
-  });
-});
-
-describe('spineFitsLabel', () => {
-  it('keeps the state word only where its whole line fits the spine', () => {
-    const day = 'Preorder · Nov 24, 2026'; // 23 characters
-    // A wide shelf (232 px): 23 x 6.25 px needs 144 px of the spine's 65 px less.
-    expect(spineFitsLabel(95, day, false)).toBe(true); // 220 - 65 = 155
-    expect(spineFitsLabel(80, day, false)).toBe(false); // 186 - 65 = 121
-    // The dashed border counts: German's 25 characters (156 px) don't fit 95%'s 155.
-    expect(spineFitsLabel(95, 'Vorbestellung · Nov. 2026', false)).toBe(false);
-    // A phone's shelf (200 px, 9 px type): a day's 129 px of 125 at 95%.
-    expect(spineFitsLabel(95, day, true)).toBe(false);
-    expect(spineFitsLabel(95, 'Preorder · Mar 2099', true)).toBe(true);
-    expect(spineFitsLabel(80, 'New · Sep 18, 2026', true)).toBe(false);
-    expect(spineFitsLabel(90, 'New · Sep 18, 2026', true)).toBe(true);
-    // Every missing entry's spine (80-95%) holds a month or a recent date on a wide shelf.
-    expect(spineFitsLabel(80, 'Preorder · Mar 2099', false)).toBe(true);
   });
 });
