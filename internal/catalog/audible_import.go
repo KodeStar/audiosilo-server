@@ -134,6 +134,12 @@ const contestedSQL = `t.reason = '` + AudibleReasonContested + `'`
 var backupAllSQL = `t.state = 'available' AND t.match_path IS NULL AND t.rejected = 0 AND t.ignored = 0
 	AND NOT ` + contestedSQL + ` AND ` + retryImportSQL
 
+// backupAllQueuedSQL is a backupAllSQL title (aliased t) "Back up everything"
+// queues rather than skips: its stored destination still validates
+// (audible_dest_ok, audible.Queues.BackupAll's skip), so the accounts list's
+// backup_estimate counts the backups the batch queues.
+var backupAllQueuedSQL = backupAllSQL + ` AND audible_dest_ok(t.dest_path)`
+
 // preorderWaitingSQL is a title (aliased t) that keeps its account checked
 // hourly: a preorder released by the UTC date ?1 but not before ?2 (?1 less
 // AudiblePreorderWait) that a backup may wait for (preorderOverdue's): not on

@@ -4058,7 +4058,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   its label, else "person (STORE)", else the id), an empty `template` or `dest_path` in the console's audit
   details reading "Automatic". The
   accounts list adds `template`, `policy_since` and `backup_estimate {count, bytes}` (Back up everything's
-  titles, runtime at 8000 bytes a second, less those it skips for an invalid destination: `dropInvalidDests`); titles add `import`, `needs_attention`, `planned`, `contested` (see Audible
+  titles, runtime at 8000 bytes a second, less those it skips for an invalid destination: `backupAllQueuedSQL`, SQL function `audible_dest_ok`); titles add `import`, `needs_attention`, `planned`, `contested` (see Audible
   unmatched titles below) and `dest_invalid` (a stored `dest_path` `CheckAudibleDestPath` now refuses). The Bridge's account
   PUT sets `policy` on create only (the console owns it after). Removing an account cancels its open
   imports. **Console**: per title Back up (off while its account is paused), Not this book (and undo) and

@@ -442,7 +442,7 @@ func (c *Catalog) AudibleAccounts(ctx context.Context) ([]AudibleAccount, error)
 	counts, err := c.db.QueryContext(ctx, `SELECT t.account, COUNT(*),
 		    SUM(t.state = 'available'), SUM(t.state = 'preorder'), SUM(t.state = 'unavailable'), SUM(t.state = 'gone'),
 		    SUM(t.match_path IS NOT NULL AND t.rejected = 0),
-		    SUM(CASE WHEN `+backupAllSQL+` THEN 1 ELSE 0 END), SUM(CASE WHEN `+backupAllSQL+` THEN COALESCE(t.runtime_s, 0) ELSE 0 END)
+		    SUM(CASE WHEN `+backupAllQueuedSQL+` THEN 1 ELSE 0 END), SUM(CASE WHEN `+backupAllQueuedSQL+` THEN COALESCE(t.runtime_s, 0) ELSE 0 END)
 		  FROM audible_titles t GROUP BY t.account`)
 	if err != nil {
 		return nil, err
@@ -467,36 +467,7 @@ func (c *Catalog) AudibleAccounts(ctx context.Context) ([]AudibleAccount, error)
 	if err := counts.Err(); err != nil {
 		return nil, err
 	}
-	_ = counts.Close()
-	return out, c.dropInvalidDests(ctx, byID)
-}
-
-// dropInvalidDests takes the titles Back up everything skips for a stored
-// destination that no longer validates (audible.Queues.BackupAll's
-// bridge.CheckAudibleDestPath, which SQL can't run) out of each account's
-// BackupEstimate, so its confirm counts the backups it queues. Only a title
-// with a destination of its own can be one.
-func (c *Catalog) dropInvalidDests(ctx context.Context, byID map[string]*AudibleAccount) error {
-	rows, err := c.db.QueryContext(ctx, `SELECT t.account, t.dest_path, COALESCE(t.runtime_s, 0)
-		FROM audible_titles t WHERE t.dest_path <> '' AND `+backupAllSQL)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var (
-			id, dest string
-			seconds  int64
-		)
-		if err := rows.Scan(&id, &dest, &seconds); err != nil {
-			return err
-		}
-		if a := byID[id]; a != nil && bridge.CheckAudibleDestPath(dest) != nil {
-			a.BackupEstimate.Count--
-			a.BackupEstimate.Bytes -= seconds * audibleBytesPerSecond
-		}
-	}
-	return rows.Err()
+	return out, nil
 }
 
 // AudibleSeries is a title's place in one series, as Audible names it.
