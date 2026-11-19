@@ -191,9 +191,7 @@ func (p *Prefetcher) reconsider(who catalog.Caller, initial bool) {
 			settled = true
 			return
 		}
-		// Nor one in a show the share refuses for good (library.ShowRefused,
-		// the fetch routes' check): the Bridge's file would sit behind the
-		// same refusal.
+		// Nor one in a show the share refuses for good (library.ShowRefused).
 		if library.ShowRefused(ctx, byID[next.LibraryID], next.Path, StreamWait) != nil {
 			settled = true
 			return

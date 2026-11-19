@@ -144,16 +144,20 @@ func ShowRefused(ctx context.Context, lib catalog.Library, rel string, timeout t
 		return nil
 	}
 	_, err := metadata.Bounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(show)), timeout, func() (struct{}, error) {
-		dir, filename, feedInfo, err := podcastShowLooks(lib.Root, show)
-		if err == nil {
-			err = podcastBarrier(podcastLstat, dir, path.Base(rel))
+		dir, filename, _, err := podcastShowLooks(lib.Root, show)
+		if err != nil {
+			return struct{}{}, err
 		}
-		if err == nil {
-			if _, err = podcastFeeds.read(lib.Root, filename, show, feedInfo); err != nil {
-				err = podcastShowLookErr(err)
-			}
+		if err = podcastBarrier(podcastLstat, dir, path.Base(rel)); err != nil {
+			return struct{}{}, err
 		}
-		return struct{}{}, err
+		// Opened, not read: a refusal shows at the open, and a check made
+		// on every fetch ask and scheduler pass parses no feed.
+		f, err := metadata.OpenBelow(lib.Root, filename)
+		if err != nil {
+			return struct{}{}, podcastShowLookErr(err)
+		}
+		return struct{}{}, f.Close()
 	}, nil)
 	if errors.Is(err, ErrShowRefused) {
 		return err

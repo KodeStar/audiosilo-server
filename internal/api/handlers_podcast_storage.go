@@ -266,8 +266,7 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 			return
 		}
 		// An episode not downloaded yet in a show the share refuses for good
-		// is the 404 a refused one is: its fetch would sit behind the same
-		// refusal (library.ShowRefused).
+		// is the 404 a refused one is (library.ShowRefused).
 		if library.ShowRefused(r.Context(), *lib, rel, metadata.WaitLeft(deadline)) != nil {
 			writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 			return

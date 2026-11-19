@@ -106,7 +106,6 @@ func scheduleEpisodes(ctx context.Context, d modules.Deps, h *bridge.Heartbeat) 
 
 	fetches, retains := 0, 0
 	var errs []error
-	libs := map[int64]*catalog.Library{}
 	for _, show := range shows {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -123,15 +122,13 @@ func scheduleEpisodes(ctx context.Context, d modules.Deps, h *bridge.Heartbeat) 
 				continue
 			}
 			if len(candidates) > 0 {
-				refused, err := showRefused(ctx, d.Catalog, libs, show.LibraryID, candidates[0].Path)
+				lib, err := d.Catalog.GetLibrary(ctx, show.LibraryID)
 				if err != nil {
 					errs = append(errs, err)
 					continue
 				}
-				if refused {
-					// The Bridge's file would sit behind the same refusal, so
-					// every tick would download it again for nothing.
-					candidates = nil
+				if library.ShowRefused(ctx, *lib, candidates[0].Path, StreamWait) != nil {
+					candidates = nil // see library.ShowRefused
 				}
 			}
 			added := 0
@@ -169,19 +166,4 @@ func scheduleEpisodes(ctx context.Context, d modules.Deps, h *bridge.Heartbeat) 
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// showRefused reports whether the share refuses for good the show of the
-// episode at rel in library id (library.ShowRefused, the check the fetch
-// routes answer 409 show_unreadable by), libs the libraries read so far.
-func showRefused(ctx context.Context, cat *catalog.Catalog, libs map[int64]*catalog.Library, id int64, rel string) (bool, error) {
-	lib := libs[id]
-	if lib == nil {
-		var err error
-		if lib, err = cat.GetLibrary(ctx, id); err != nil {
-			return false, err
-		}
-		libs[id] = lib
-	}
-	return library.ShowRefused(ctx, *lib, rel, StreamWait) != nil, nil
 }
