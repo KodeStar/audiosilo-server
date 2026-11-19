@@ -43,9 +43,8 @@ type startMark struct {
 	began time.Time
 
 	mu     sync.Mutex
-	ended  bool // under mu: no write after end, so end's remove is the last word
-	warned bool // under mu: a failing write is logged once
-	stop   chan struct{}
+	warned bool          // under mu: a failing write is logged once
+	stop   chan struct{} // closed by end, under mu: no write after it, so end's remove is the last word
 }
 
 // markStart writes the marker of a start that begins now, over any marker an
@@ -81,7 +80,7 @@ func markStart(dataDir string, log *slog.Logger) *startMark {
 func (m *startMark) write() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.ended {
+	if m.ended() {
 		return
 	}
 	err := jsonfile.Write(m.path, startMarker{
@@ -107,13 +106,22 @@ func (m *startMark) write() {
 func (m *startMark) end() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.ended {
+	if m.ended() {
 		return
 	}
-	m.ended = true
 	close(m.stop)
 	if err := os.Remove(m.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		m.log.Warn("could not remove the start marker", "path", m.path, "err", err)
+	}
+}
+
+// ended reports whether end has run; the caller holds mu.
+func (m *startMark) ended() bool {
+	select {
+	case <-m.stop:
+		return true
+	default:
+		return false
 	}
 }
 
