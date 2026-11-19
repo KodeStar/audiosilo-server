@@ -156,6 +156,7 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"listening_stay":     true,                 // a sync listen's start "stay" (a Stay on another device's offer wins: 0080)
 		"renditions":         a.renditionsOn(),     // watch renditions: GET /stream?rendition=, POST/GET /libraries/{id}/renditions; the kinds in the top-level "renditions"
 		"oidc":               a.oidcOn(),           // Sign in with OpenID Connect: GET /auth/oidc/start; the button's name in auth.oidc
+		"unauthorized_mark":  true,                 // every 401 the server writes carries X-AudioSilo-Unauthorized (headerUnauthorized), so a 401 without it came from a proxy
 	}
 }
 

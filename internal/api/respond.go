@@ -71,7 +71,32 @@ func writeJSONBytes(w http.ResponseWriter, body []byte) {
 
 func jsonHeader(w http.ResponseWriter, status int) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if status == http.StatusUnauthorized && w.Header().Get(headerUnauthorized) == "" {
+		w.Header().Set(headerUnauthorized, unauthorizedPlain)
+	}
 	w.WriteHeader(status)
+}
+
+// headerUnauthorized marks every 401 the server itself writes (jsonHeader), so
+// a client behind a reverse proxy can tell the server refusing its token from
+// the proxy answering 401 itself or rewriting the server's body (server
+// WS-401-MARK). Its value is the body's "code" when the 401 carries one
+// (writeErrorCode, writeErrorReason), else unauthorizedPlain. Exposed to a
+// cross-origin page (corsExposeHeaders). Media fetches by <img> and <audio>
+// can't read it; they never needed to.
+const headerUnauthorized = "X-AudioSilo-Unauthorized"
+
+// unauthorizedPlain is headerUnauthorized's value on a 401 without a code: a
+// missing, refused or expired token, or wrong credentials (one uniform answer,
+// so it says no more than the body does).
+const unauthorizedPlain = "unauthorized"
+
+// markUnauthorized names code on a 401's headerUnauthorized (jsonHeader marks
+// one without a code).
+func markUnauthorized(w http.ResponseWriter, status int, code string) {
+	if status == http.StatusUnauthorized && code != "" {
+		w.Header().Set(headerUnauthorized, code)
+	}
 }
 
 // writeError writes a JSON error envelope.
@@ -165,12 +190,14 @@ const (
 
 // writeErrorCode writes the error envelope with a machine-readable code.
 func writeErrorCode(w http.ResponseWriter, status int, code, msg string) {
+	markUnauthorized(w, status, code)
 	writeJSON(w, status, map[string]string{"error": msg, "code": code})
 }
 
 // writeErrorReason writes the error envelope with a code and the reason that
 // narrows it (the console words it as errors.<code>.<reason>).
 func writeErrorReason(w http.ResponseWriter, status int, code, reason, msg string) {
+	markUnauthorized(w, status, code)
 	writeJSON(w, status, map[string]string{"error": msg, "code": code, "reason": reason})
 }
 

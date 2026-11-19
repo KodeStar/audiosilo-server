@@ -45,6 +45,7 @@
       "series_books": "boolean",
       "series_memberships": "boolean",
       "transcode": "boolean",
+      "unauthorized_mark": "boolean",
       "upcoming": "boolean",
       "upcoming_calendar": "boolean",
       "upcoming_covers": "boolean",
