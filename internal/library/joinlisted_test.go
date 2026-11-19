@@ -66,7 +66,7 @@ func TestSafeJoinListedVariantCostsWhatMissingDoes(t *testing.T) {
 			defer mu.Unlock()
 			got = append(got, op+" "+strings.TrimPrefix(p, root))
 		}
-		lk := boundedLooks(ctx, time.Now().Add(time.Second), names)
+		lk := boundedLooks(ctx, root, time.Now().Add(time.Second), names)
 		lstat, listed := lk.lstat, lk.listed
 		lk.lstat = func(p string) (fs.FileInfo, error) { note("lstat", p); return lstat(p) }
 		lk.listed = func(dir, name string) (bool, error) { note("list", dir); return listed(dir, name) }
@@ -163,6 +163,69 @@ func TestSafeJoinListedLinkOutOfRoot(t *testing.T) {
 	}
 }
 
+// TestSafeJoinListedLinkFaultOutOfRoot (security): a link out of the root
+// whose target's mount fails as a share does that a retry may get past (EIO,
+// ESTALE, ENOTCONN, met on a name out of the root, or with no path to tell
+// where) is a link that does not resolve, a name not there (the 404 it always
+// was), never a look given up on (a 503 share_not_answering), so the answer
+// tells nothing about what the link points to or how its mount fails. Denied
+// the 404: a link inside the root whose resolve faults on a name under the
+// root (its target, or the link itself) is a look given up on, as any look
+// there is. Not parallel: it swaps evalLook.
+func TestSafeJoinListedLinkFaultOutOfRoot(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, outside, "Book/01.mp3", []byte("x"))
+	writeFile(t, root, "Real/01.mp3", []byte("x"))
+	for link, to := range map[string]string{"Out": filepath.Join(outside, "Book"), "In": filepath.Join(root, "Real")} {
+		if err := os.Symlink(to, filepath.Join(root, link)); err != nil {
+			t.Skipf("symlinks unsupported on this platform: %v", err)
+		}
+	}
+	was := evalLook
+	t.Cleanup(func() { evalLook = was })
+	names := metadata.ReadDirNamesBounded
+	for _, c := range []struct {
+		name, rel string
+		fault     error // the link's resolve fails with it
+		gaveUp    bool
+	}{
+		{"out, its target's lstat EIO", "Out/01.mp3", &fs.PathError{Op: "lstat", Path: filepath.Join(outside, "Book"), Err: syscall.EIO}, false},
+		{"out, its target's readlink ESTALE", "Out", &fs.PathError{Op: "readlink", Path: outside, Err: syscall.ESTALE}, false},
+		{"out, ENOTCONN with no path", "Out/01.mp3", syscall.ENOTCONN, false},
+		{"in, its target's lstat EIO", "In/01.mp3", &fs.PathError{Op: "lstat", Path: filepath.Join(root, "Real"), Err: syscall.EIO}, true},
+		{"in, the link's own readlink ESTALE", "In", &fs.PathError{Op: "readlink", Path: filepath.Join(root, "In"), Err: syscall.ESTALE}, true},
+	} {
+		evalLook = func(ctx context.Context, p string, timeout time.Duration) (string, error) {
+			if filepath.Dir(p) == root && (filepath.Base(p) == "Out" || filepath.Base(p) == "In") {
+				return "", c.fault
+			}
+			return was(ctx, p, timeout)
+		}
+		_, there, err := SafeJoinListed(t.Context(), root, c.rel, time.Second, names)
+		switch {
+		case c.gaveUp && (!metadata.GaveUp(err) || !errors.Is(err, c.fault)):
+			t.Errorf("%s: there %v, err %v; want a look given up on, keeping the fault", c.name, there, err)
+		case !c.gaveUp && (err != nil || there):
+			t.Errorf("%s: there %v, err %v; want a name not there, as a link that does not resolve", c.name, there, err)
+		}
+	}
+	// The links answering: one out of the root is refused, one in it followed.
+	evalLook = was
+	if _, _, err := SafeJoinListed(t.Context(), root, "Out/01.mp3", time.Second, names); !errors.Is(err, ErrOutsideRoot) {
+		t.Errorf("a link out of the root answering: err %v, want ErrOutsideRoot", err)
+	}
+	if _, there, err := SafeJoinListed(t.Context(), root, "In/01.mp3", time.Second, names); err != nil || !there {
+		t.Errorf("a link in the root answering: there %v, err %v, want there", there, err)
+	}
+}
+
 // TestSafeJoinListedGivesUp: a listing given up on is the join's error
 // (metadata.GaveUp), never a path with nothing there.
 func TestSafeJoinListedGivesUp(t *testing.T) {
@@ -181,7 +244,8 @@ func TestSafeJoinListedGivesUp(t *testing.T) {
 // one given up on (metadata.GaveUp, the API's 503 share_not_answering), as the
 // scanner reads it, never a name not there (a 404 for a book on a share that
 // stopped answering). Denied the 503: a permission (EACCES, EPERM), which
-// stays until an admin changes it, and the name gone stay a name not there.
+// stays until an admin changes it, the device gone (ENXIO), and the name gone
+// stay a name not there.
 func TestSafeJoinListedReadsAShareFault(t *testing.T) {
 	t.Parallel()
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -196,6 +260,7 @@ func TestSafeJoinListedReadsAShareFault(t *testing.T) {
 	}{
 		{syscall.EIO, true}, {syscall.ESTALE, true}, {syscall.ENOTCONN, true},
 		{syscall.EACCES, false}, {syscall.EPERM, false}, {syscall.ENOENT, false},
+		{syscall.ENXIO, false}, // the device gone (a USB disk unplugged): lasting, as a permission is
 	} {
 		names := func(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
 			if dir == author {
@@ -215,7 +280,8 @@ func TestSafeJoinListedReadsAShareFault(t *testing.T) {
 
 // TestUnansweredLookReadsAShareFault: the book folder's own stat in
 // SafeJoinListed's walk is read by the same rule as a listing: EIO or ESTALE
-// a look given up on, a permission or the name gone none (a name not there).
+// a look given up on, a permission, the device gone (ENXIO) or the name gone
+// none (a name not there).
 func TestUnansweredLookReadsAShareFault(t *testing.T) {
 	t.Parallel()
 	stat := func(errno syscall.Errno) error {
@@ -226,7 +292,7 @@ func TestUnansweredLookReadsAShareFault(t *testing.T) {
 			t.Errorf("a stat failing %v: %v, want a look given up on", errno, err)
 		}
 	}
-	for _, errno := range []syscall.Errno{syscall.EACCES, syscall.EPERM, syscall.ENOENT, syscall.ENOTDIR} {
+	for _, errno := range []syscall.Errno{syscall.EACCES, syscall.EPERM, syscall.ENOENT, syscall.ENOTDIR, syscall.ENXIO} {
 		if err := unansweredLook(t.Context(), stat(errno)); err != nil {
 			t.Errorf("a stat failing %v: %v, want a name not there", errno, err)
 		}
