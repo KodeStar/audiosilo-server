@@ -16,7 +16,7 @@ import { generateAvailable } from '@/features/bridge/generate-model';
 import { pageOf } from '@/lib/pager';
 import { LibraryFilter } from '../library-filter';
 import { useLibraryBookCount, useLibraryParam, useSearchPage } from '../library-param';
-import { SeriesCard, type ShelfLayout } from './series-card';
+import { SeriesCard } from './series-card';
 import { SERIES_PAGE, filterSeries } from './series-model';
 import { useInView } from '@/lib/use-in-view';
 import { useMediaQuery } from '@/lib/use-media-query';
@@ -31,7 +31,6 @@ import { useMediaQuery } from '@/lib/use-media-query';
 export function SeriesPage() {
   // The shelves' widths, read once for the page: a listener per query, not per card.
   const wide = useMediaQuery('(min-width: 1024px)');
-  const layout = useMemo<ShelfLayout>(() => ({ wide }), [wide]);
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const [library] = useLibraryParam();
@@ -126,7 +125,7 @@ export function SeriesPage() {
                 library={library}
                 metadata={metadata}
                 generate={generate}
-                layout={layout}
+                wide={wide}
               />
             ))
           )}
@@ -147,13 +146,13 @@ function SeriesShelf({
   library,
   metadata,
   generate,
-  layout,
+  wide,
 }: {
   series: SeriesCount;
   library: number | undefined;
   metadata: boolean;
   generate: boolean;
-  layout: ShelfLayout;
+  wide: boolean;
 }) {
   const { t } = useTranslation();
   // Asked for once the card nears the viewport, like the cards' community rails.
@@ -185,7 +184,7 @@ function SeriesShelf({
           complete={loaded && (!hasNextPage || isError)}
           metadata={metadata}
           generate={generate}
-          layout={layout}
+          wide={wide}
         />
       )}
     </div>

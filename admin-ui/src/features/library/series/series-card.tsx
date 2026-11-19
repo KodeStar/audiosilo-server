@@ -30,12 +30,6 @@ import {
 } from './series-model';
 import { useInView } from '@/lib/use-in-view';
 
-/** The page's width, read once for every card (SeriesPage). */
-export interface ShelfLayout {
-  /** Wide enough for the fan of covers beside the spines (1024px and up). */
-  wide: boolean;
-}
-
 /**
  * One series: its name (a link to its books), author and what the server
  * holds, then the books as spines on a shelf (missing entries as dashed ghosts,
@@ -49,7 +43,7 @@ export function SeriesCard({
   complete,
   metadata,
   generate = false,
-  layout,
+  wide,
 }: {
   series: SeriesCount;
   /** The series' books loaded so far, in series order. */
@@ -60,7 +54,11 @@ export function SeriesCard({
   metadata: boolean;
   /** An online Bridge offers characters and recaps: Generate for the series. */
   generate?: boolean;
-  layout: ShelfLayout;
+  /**
+   * The page is wide enough for the fan of covers beside the spines (1024px and
+   * up), read once for every card (SeriesPage).
+   */
+  wide: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -159,7 +157,7 @@ export function SeriesCard({
       {books.length === 0 && !complete ? (
         <div className="skel h-[200px] rounded-lg" role="status" aria-label={t('common.loading')} />
       ) : (
-        <Shelf name={s.name} placed={placed} status={known} fmt={fmt} fan={seen} layout={layout} />
+        <Shelf name={s.name} placed={placed} status={known} fmt={fmt} fan={seen} wide={wide} />
       )}
     </section>
   );
@@ -187,7 +185,7 @@ function Shelf({
   status,
   fmt,
   fan,
-  layout: { wide },
+  wide,
 }: {
   name: string;
   /**
@@ -200,7 +198,7 @@ function Shelf({
   fmt: (n: number) => string;
   /** The card has come into view: its fan of covers may load. */
   fan: boolean;
-  layout: ShelfLayout;
+  wide: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -208,7 +206,7 @@ function Shelf({
   const now = new Date();
   // The server's own window for "new" (upcoming.window_days), as its job counts.
   const windowDays = useSettings().data?.metadata.upcoming_window_days;
-  // The fan only fits beside the spines on wide screens (layout.wide); elsewhere
+  // The fan only fits beside the spines on wide screens (wide); elsewhere
   // its covers aren't fetched.
   const spines = spineRow(placed, status?.missing ?? []);
   return (
@@ -313,11 +311,6 @@ function Shelf({
 }
 
 /**
- * A short gap spine's preorder or new-release mark, where the state's word
- * doesn't fit (WCAG 1.4.1: the date's colour is not the only sign). The spine's
- * label names the state in words.
- */
-/**
  * A dated missing entry's date, in a line of its own beside the title: the
  * state word leads it only where the whole line fits the spine (else a small
  * mark does, the spine's label saying all of it). The fit is measured as laid
@@ -395,6 +388,11 @@ function useLineFits(
   return fits;
 }
 
+/**
+ * A short gap spine's preorder or new-release mark, where the state's word
+ * doesn't fit (WCAG 1.4.1: the date's colour is not the only sign). The spine's
+ * label names the state in words.
+ */
 function StateMark({ state }: { state: 'preorder' | 'new' }) {
   const Icon = state === 'preorder' ? CalendarClock : Sparkles;
   return (
