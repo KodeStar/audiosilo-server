@@ -1840,9 +1840,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   of its own `.m4a` files, one encode at a time, 2 h timeout from its slot, the same 1 GiB disk guard (one
   reservation with the remux's: both under `<data>/cache`), `.part` synced then renamed, never cached when the
   source changed while read, ffmpeg's refusal (an exit status before anything was written, or a copy with no
-  audio track: ffmpeg exits 0 with one for an M4B whose index is at its end read through `pipe:0`, an ffmpeg
-  without the fd protocol; `metadata.MP4HasTrack`; or a short copy) remembered for an hour or until the file
-  changes. A failed run's error carries the first and last
+  audio track, `metadata.MP4HasTrack`; or a short copy) remembered for an hour or until the file
+  changes. A copy's run reads its source as a transcode does (`fileInput`): `fd:` on its stdin, else, on an
+  ffmpeg older than 6.1, `metadata.ToolInput`'s seekable `/dev/fd/3` link (the re-checked path on Windows),
+  never `pipe:0`, through which an M4B whose index sits at its end gave a copy with no track, the book's watch
+  rendition a 422 "holds no audio" and its MKA remux a refusal, for good (server#498's regression,
+  `TestRenditionWithoutFDReadsAnIndexAtTheEnd`, `TestFileCacheInputWithoutFD`). A failed run's error carries the first and last
   2 KiB of ffmpeg's log. The remux is unchanged (same dir, keys, ETags). `GET
   /libraries/{id}/stream?path=<file>&rendition=watch[&download=1]` (same auth as the stream: session, API key,
   `?token=`, a cast token for its book) is checked in this order: scope (403/404), kind (400 code `bad_rendition`

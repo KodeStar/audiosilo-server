@@ -221,10 +221,10 @@ func TestFileCacheSourceThroughTheRoot(t *testing.T) {
 	m, _ := fakeRenditions(t, nil, func(out string) error { return os.WriteFile(out, []byte("m4a"), 0o600) })
 	var read atomic.Value
 	run := m.run
-	m.run = func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error {
-		b, _ := io.ReadAll(stdin)
+	m.run = func(ctx context.Context, ffmpegPath string, args []string, in inputSpec) error {
+		b, _ := io.ReadAll(inputOf(in))
 		read.Store(string(b))
-		return run(ctx, ffmpegPath, args, stdin)
+		return run(ctx, ffmpegPath, args, in)
 	}
 	ctx := context.Background()
 	f, _, err := m.Open(ctx, ctx, "ffmpeg", root, abs)
@@ -312,4 +312,13 @@ func TestFileCacheRunOpenFaultsByKind(t *testing.T) {
 	if n := runs.Load(); n != 0 {
 		t.Errorf("ffmpeg ran %d times on a source that could not be opened, want none", n)
 	}
+}
+
+// inputOf is the file a run's in hands ffmpeg: its stdin (fd:, pipe:0) or the
+// descriptor metadata.ToolInput passes on (an ffmpeg without fd:).
+func inputOf(in inputSpec) *os.File {
+	if in.file != nil {
+		return in.file
+	}
+	return in.extra[0]
 }

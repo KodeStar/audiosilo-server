@@ -216,7 +216,7 @@ func fakeRenditions(t *testing.T, gate chan struct{}, run func(out string) error
 	m.spec.check = nil
 	var runs atomic.Int32
 	ended := make(chan struct{})
-	m.run = func(ctx context.Context, _ string, args []string, _ *os.File) error {
+	m.run = func(ctx context.Context, _ string, args []string, _ inputSpec) error {
 		runs.Add(1)
 		if gate != nil {
 			select {
@@ -337,11 +337,13 @@ func TestRenditionQueueBounded(t *testing.T) {
 	}
 }
 
-// TestRenditionNoAudioRefused: an M4B whose index sits at its end, read
-// through pipe:0 (an ffmpeg without the fd protocol), makes ffmpeg exit 0 with
-// an MP4 holding no track. That copy is never cached: the file is refused, and
-// remembered, as an exit status would be.
-func TestRenditionNoAudioRefused(t *testing.T) {
+// TestRenditionWithoutFDReadsAnIndexAtTheEnd (server#498's regression): an
+// M4B whose index sits at its end, on an ffmpeg without the fd protocol (older
+// than 6.1), is read seekably through metadata.ToolInput's /dev/fd/3 link, as
+// a transcode reads it, so its watch copy holds the book's audio; read through
+// pipe:0, as it was, ffmpeg wrote an MP4 with no track and the book answered
+// 422 "holds no audio" for good.
+func TestRenditionWithoutFDReadsAnIndexAtTheEnd(t *testing.T) {
 	t.Parallel()
 	src := nonFaststartM4A(t)
 	ffmpeg := pipeOnlyFFmpeg(t)
@@ -350,17 +352,73 @@ func TestRenditionNoAudioRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var proto atomic.Value
+	run := m.run
+	m.run = func(ctx context.Context, ffmpegPath string, args []string, in inputSpec) error {
+		proto.Store(in.proto)
+		return run(ctx, ffmpegPath, args, in)
+	}
 	t.Cleanup(m.Wait)
 	ctx := context.Background()
-	if _, _, err := m.Open(ctx, ctx, ffmpeg, filepath.Dir(src), src); !errors.Is(err, ErrRefused) || errors.Is(err, ErrNoSource) {
-		t.Fatalf("open = %v, want ffmpeg's refusal", err)
+	f, _, err := m.Open(ctx, ctx, ffmpeg, filepath.Dir(src), src)
+	if err != nil {
+		t.Fatalf("open = %v, want the copy made", err)
 	}
-	if st, _, _ := m.Status(filepath.Dir(src), src); st != CacheFailed {
-		t.Fatalf("status = %s, want failed (remembered)", st)
+	defer f.Close()
+	if got := proto.Load(); got != "file" {
+		t.Fatalf("the run read its input by %v, want the file protocol (no fd: here)", got)
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
-		t.Fatalf("cache holds %d files, want none", len(entries))
+	info, err := f.Stat()
+	if err != nil || !metadata.MP4HasTrack(f, info.Size()) {
+		t.Fatalf("the copy holds no audio track (%v)", err)
 	}
+}
+
+// TestFileCacheInputWithoutFD: a copy's run on an ffmpeg without the fd
+// protocol is handed the opened source as a transcode is (fileInput), never
+// stdin through pipe:0: the file protocol alone, its input the descriptor
+// passed on, which is the library file's own bytes. With fd: it stays the
+// descriptor on stdin.
+func TestFileCacheInputWithoutFD(t *testing.T) {
+	t.Parallel()
+	noFD := fakeProbedFFmpeg(t, false)
+	withFD := fakeProbedFFmpeg(t, true)
+	src := srcFile(t, "a.m4b")
+	for name, c := range map[string]struct {
+		ffmpeg, proto string
+	}{"no fd:": {noFD, "file"}, "fd:": {withFD, "fd"}} {
+		m, _ := fakeRenditions(t, nil, func(out string) error { return os.WriteFile(out, []byte("m4a"), 0o600) })
+		var got atomic.Value
+		run := m.run
+		m.run = func(ctx context.Context, ffmpegPath string, args []string, in inputSpec) error {
+			b, _ := io.ReadAll(inputOf(in))
+			got.Store([]string{in.proto, string(b), strings.Join(args, " ")})
+			return run(ctx, ffmpegPath, args, in)
+		}
+		ctx := context.Background()
+		f, _, err := m.Open(ctx, ctx, c.ffmpeg, filepath.Dir(src), src)
+		if err != nil {
+			t.Fatalf("%s: open = %v", name, err)
+		}
+		f.Close()
+		want, _ := os.ReadFile(src)
+		g := got.Load().([]string)
+		if g[0] != c.proto || g[1] != string(want) || !strings.Contains(g[2], "-protocol_whitelist "+c.proto+" ") || strings.Contains(g[2], "pipe:0") {
+			t.Fatalf("%s: the run read %q by %s (args %s), want the source's bytes by %s", name, g[1], g[0], g[2], c.proto)
+		}
+	}
+}
+
+// fakeProbedFFmpeg is a path no other test uses whose fd probe answered fd
+// (inputFor's answer), for a run that never starts it (fakeRenditions).
+func fakeProbedFFmpeg(t *testing.T, fd bool) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ffmpeg")
+	p := &fdProbe{ran: true, fd: fd}
+	p.once.Do(func() {})
+	fdSupport.Store(path, p)
+	t.Cleanup(func() { fdSupport.Delete(path) })
+	return path
 }
 
 // pipeOnlyFFmpeg is the installed ffmpeg under a path of its own whose fd
@@ -515,12 +573,12 @@ func TestRenditionShortRemembered(t *testing.T) {
 	var runs atomic.Int32
 	cut.Store(true)
 	run := m.run
-	m.run = func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error {
+	m.run = func(ctx context.Context, ffmpegPath string, args []string, in inputSpec) error {
 		runs.Add(1)
 		if cut.Load() { // the encode ends 15 s early and exits 0
 			args = append(append(slices.Clone(args[:len(args)-1]), "-t", "5"), args[len(args)-1])
 		}
-		return run(ctx, ffmpegPath, args, stdin)
+		return run(ctx, ffmpegPath, args, in)
 	}
 	ctx := context.Background()
 	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Dir(src), src); !errors.Is(err, ErrRefused) || !errors.Is(err, errShortCopy) {

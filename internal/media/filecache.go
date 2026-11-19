@@ -112,7 +112,7 @@ type FileCache struct {
 	// freeSpace reads the free space on dir's disk (diskspace.Of); run starts
 	// ffmpeg. Fields so tests can fake the disk and count the runs.
 	freeSpace func(path string) (uint64, bool)
-	run       func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error
+	run       func(ctx context.Context, ffmpegPath string, args []string, in inputSpec) error
 	// now is the refusals' clock (a field so tests can move it).
 	now func() time.Time
 	// openWait bounds a run's open of its source (sourceWait; a field so a
@@ -200,14 +200,14 @@ func (m *FileCache) HoldRunsForTests(gate <-chan struct{}) (held <-chan struct{}
 	reached := make(chan struct{})
 	noteHeld := sync.OnceFunc(func() { close(reached) })
 	run := m.run
-	m.run = func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error {
+	m.run = func(ctx context.Context, ffmpegPath string, args []string, in inputSpec) error {
 		noteHeld()
 		select {
 		case <-gate:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		return run(ctx, ffmpegPath, args, stdin)
+		return run(ctx, ffmpegPath, args, in)
 	}
 	return reached
 }
@@ -658,8 +658,11 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, root, abs stri
 	// leaves a run past its time to be refused as one (timedOut), not failed
 	// as the server going away. It is opened through the library's root
 	// (openBelow, as a stream's), so a link out of the library swapped in since
-	// the look is refused, never followed; ffmpeg reads the descriptor, never
-	// the path (fd: or pipe:0).
+	// the look is refused, never followed; ffmpeg reads that file, never the
+	// path: the descriptor through fd:, else as a transcode hands it over
+	// (fileInput: metadata.ToolInput's /dev/fd/3 link, read seekably, so an
+	// MP4 whose index sits at its end demuxes on an ffmpeg older than 6.1,
+	// where pipe:0 read none of its audio).
 	src, _, err := openBelow(runCtx, root, abs, m.openWait)
 	if err != nil {
 		return openFault(err)
@@ -668,6 +671,13 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, root, abs stri
 	if !unchanged(src, info) {
 		return ErrUnavailable
 	}
+	in, release, err := fileInput(runCtx, ffmpegPath, src, root, abs, m.openWait)
+	if err != nil {
+		// Windows' look at the path again: a share that stopped answering
+		// since the open, or a path that no longer leads to the file opened.
+		return openFault(err)
+	}
+	defer release()
 
 	tmp, err := os.CreateTemp(m.dir, key+".*.part")
 	if err != nil {
@@ -676,7 +686,7 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, root, abs stri
 	tmpName := tmp.Name()
 	_ = tmp.Close()
 	defer func() { _ = os.Remove(tmpName) }() // gone after the rename; a failed run's leftover
-	if err := m.run(ctx, ffmpegPath, m.spec.args(inputFor(ffmpegPath), tmpName), src); err != nil {
+	if err := m.run(ctx, ffmpegPath, m.spec.args(in, tmpName), in); err != nil {
 		if m.timedOut(ctx, runCtx) {
 			return m.refuse(src.Name(), fmt.Errorf("ffmpeg ran past %s: %w", m.spec.timeout, ctx.Err()))
 		}
@@ -799,11 +809,11 @@ func syncFile(path string) error {
 	return err
 }
 
-// runFFmpeg runs ffmpegPath with args and stdin under ctx; the error carries
-// the start and end of its stderr (stderrLog).
-func runFFmpeg(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error {
+// runFFmpeg runs ffmpegPath with args under ctx, in's descriptors handed to it
+// (setInput); the error carries the start and end of its stderr (stderrLog).
+func runFFmpeg(ctx context.Context, ffmpegPath string, args []string, in inputSpec) error {
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
-	cmd.Stdin = stdin
+	setInput(cmd, in)
 	var stderr stderrLog
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
