@@ -146,18 +146,23 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 	if err := checkMetadataSource(existing); err != nil {
 		return nil, false, err
 	}
-	// An edit that keeps the root compares it as written only: its links were
-	// judged when it was set, and a pair a link made since is the warning at
-	// start (RootOverlaps), not a refusal of a rename.
+	// Only a new root is checked for overlaps: the kind never changes, so an
+	// edit keeping its root (a rename, a setting, config sync's every start)
+	// keeps the pairs it was stored with, and a pair stored before the check
+	// knew links, case or volume roots, or made by a link since, is the warning
+	// at start (RootOverlaps) rather than a refusal of every other edit.
+	moved := existing.Root != before.Root
 	var resolved map[string]string
-	if existing.Root != before.Root {
+	if moved {
 		if resolved, err = c.resolveRoots(ctx, *existing); err != nil {
 			return nil, false, err
 		}
 	}
 	err = c.db.WithTx(ctx, "UpdateLibrary", func(tx *sql.Tx) error {
-		if _, err := checkLibraryRoot(ctx, tx, *existing, resolved); err != nil {
-			return err
+		if moved {
+			if _, err := checkLibraryRoot(ctx, tx, *existing, resolved); err != nil {
+				return err
+			}
 		}
 		var stored string
 		if err := tx.QueryRowContext(ctx, `SELECT metadata_source FROM libraries WHERE id = ?`, id).

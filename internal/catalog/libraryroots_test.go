@@ -60,7 +60,8 @@ func TestPathOverlapsUnicodeSpellings(t *testing.T) {
 // and on an edit (denied), its folder not there yet included; a link that
 // leads elsewhere is no overlap (allowed). A pair stored before a link made
 // them overlap is listed by RootOverlaps, the launcher's start warning, and
-// an edit keeping either root is not refused for it.
+// an edit keeping either root is not refused for it, nor for a pair that
+// overlaps as written (one stored before the check knew case or volume roots).
 func TestPodcastRootOverlapThroughLinks(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	base := t.TempDir()
@@ -124,5 +125,14 @@ func TestPodcastRootOverlapThroughLinks(t *testing.T) {
 		if _, _, err := c.UpdateLibrary(ctx, id, LibraryPatch{ScanSchedule: new(string)}); err != nil {
 			t.Errorf("an edit of library %d keeping its root: %v", id, err)
 		}
+	}
+	if _, err := c.db.ExecContext(ctx, `UPDATE libraries SET root=? WHERE id=?`, filepath.Join(booksDir, "Stored"), pods.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.UpdateLibrary(ctx, pods.ID, LibraryPatch{Name: "Pods renamed"}); err != nil {
+		t.Errorf("a rename of a podcast library stored inside the books: %v", err)
+	}
+	if _, _, err := c.UpdateLibrary(ctx, pods.ID, LibraryPatch{Root: filepath.Join(booksDir, "Moved")}); !errors.Is(err, ErrRootOverlaps) {
+		t.Errorf("a move of it to another folder inside the books: %v", err)
 	}
 }
