@@ -428,7 +428,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   not-found, incomplete) and positive works only - never transport errors, never
   work-id misses. A fresh row warms memory for its remaining TTL; a positive row
   however stale is served when the upstream fails (not on caller cancellation),
-  held in memory for errorTTL. Rows carry `storeVersion` and the metaserve
+  held in memory for errorTTL. An incomplete envelope is not saved over a stored complete
+  one (the fallback, every rail it had), but replaces an older incomplete row
+  (`storedIncomplete`: a row saved for no longer than errorTTL). Rows carry `storeVersion` and the metaserve
   `source`; others are ignored. Derived, rebuildable, nobody's durable state (its writes
   take the user-state path all the same, as no content cache reads it: see Content
   generation); the launcher's retention keeps the newest `catalog.MetaCacheRows` (20 000), works

@@ -109,6 +109,15 @@ func readStored[T any](ctx context.Context, s *Service, key string) (value *T, e
 	return value, e.Expires, e.StoredAt, s.now().Before(e.Expires)
 }
 
+// storedIncomplete reports whether a row with this freshness deadline, written
+// at at, holds an incomplete envelope: the one answer saved for errorTTL (a
+// complete one is saved for positiveTTL). No longer than errorTTL rather than
+// exactly it, since a row written before StoredAt was carried was stamped by
+// the catalog a moment after its deadline was worked out.
+func storedIncomplete(expires, at time.Time) bool {
+	return !at.IsZero() && expires.Sub(at) <= errorTTL
+}
+
 // saveStored persists key's answer for ttl: value's JSON, or a "no match" for a
 // nil value. The write runs detached from the caller's cancellation (the answer
 // is already in memory either way, and a player navigating away must not lose

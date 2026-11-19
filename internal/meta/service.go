@@ -499,10 +499,12 @@ func (s *Service) enrich(ctx context.Context, key string, compose func(context.C
 		// reasoning as the error branch above.
 		if ctx.Err() == nil {
 			cachePut(s.cache, key, result, errorTTL)
-			// Not over a stored positive answer, though: that one, stale but
+			// Not over a stored complete answer, though: that one, stale but
 			// with every rail it had, stays the outage fallback (a row that
-			// lives two minutes adds nothing to a restart).
-			if stored == nil {
+			// lives two minutes adds nothing to a restart). An older
+			// incomplete row is no such fallback, so the newer answer
+			// replaces it, rails and date.
+			if stored == nil || storedIncomplete(expires, at) {
 				saveStored(ctx, s, key, result, errorTTL)
 			}
 		}

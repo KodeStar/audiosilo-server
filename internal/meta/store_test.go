@@ -324,6 +324,51 @@ func TestStoreIncompleteKeepsTheFallback(t *testing.T) {
 	}
 }
 
+// TestStoreIncompleteReplacesAnOlderIncomplete: a stored incomplete envelope
+// is no outage fallback worth keeping, so a newer incomplete answer replaces
+// it. Read back after a restart, the answer carries the newer write's date and
+// wins over an upcoming recheck made between the two. A row an older build
+// wrote, stamped a moment after its deadline was worked out, is replaced the
+// same.
+func TestStoreIncompleteReplacesAnOlderIncomplete(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		e := newStoreEnv(t)
+		e.m.seriesFailing = map[string]bool{"mars": true}
+		e.m.failSeries.Store(true)
+		ctx := context.Background()
+		key := nsASIN.key(martianASIN)
+		first := e.clk.now()
+		if _, err := e.service().Enrich(ctx, martianASIN, ""); err != nil {
+			t.Fatal(err)
+		}
+		row, ok := e.store.row(key)
+		if !ok || !row.StoredAt.Equal(first) {
+			t.Fatalf("legacy %v: first incomplete row stored at %v, %v; want %v", legacy, row.StoredAt, ok, first)
+		}
+		if legacy {
+			row.StoredAt = first.Add(40 * time.Millisecond)
+			e.store.put(row)
+		}
+
+		e.clk.advance(errorTTL + time.Minute) // the row is stale, and a restart
+		second := e.clk.now()
+		if _, err := e.service().Enrich(ctx, martianASIN, ""); err != nil {
+			t.Fatal(err)
+		}
+		row, ok = e.store.row(key)
+		if !ok || !row.StoredAt.Equal(second) || !row.Expires.Equal(second.Add(errorTTL)) {
+			t.Fatalf("legacy %v: row after a newer incomplete answer stored at %v until %v, %v; want %v for errorTTL",
+				legacy, row.StoredAt, row.Expires, ok, second)
+		}
+
+		e.clk.advance(time.Minute) // another restart
+		recheck := CoverageBook{ASIN: martianASIN, WorkID: "older-work", ResolvedAt: first.Add(time.Minute)}
+		if got := e.service().CachedWork(ctx, recheck); got != "the-martian" {
+			t.Fatalf("legacy %v: book facts over a recheck older than the newer answer = %q, want the-martian", legacy, got)
+		}
+	}
+}
+
 // TestStoreWorks: a positive work is persisted and served after a restart, and
 // outlives an outage; a work-id miss is never persisted (the id is the caller's
 // choice).
