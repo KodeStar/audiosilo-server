@@ -269,40 +269,20 @@ func TestPodcastCopyBesideAnInvalidFeedMovesNothing(t *testing.T) {
 // shows, the listener following each keeping both.
 func TestPodcastRescanSwapsTwoFolders(t *testing.T) {
 	b := newRenameBed(t)
-	other := bytes.ReplaceAll(b.feed, []byte(renameShowID), []byte("0123456789abcdef"))
-	other = bytes.ReplaceAll(other, []byte(`"Example Show/`), []byte(`"Other/`))
-	// Its own episode files (their names carry the episode's id).
-	other = bytes.ReplaceAll(other, []byte(`/2026-`), []byte(`/2025-`))
-	other = bytes.ReplaceAll(other, []byte(`/undated-`), []byte(`/undated-other-`))
-	if err := os.MkdirAll(filepath.Join(b.root, "Other"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(b.root, "Other", "feed.json"), other, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.cat.FollowPodcast(b.ctx, b.user, b.lib.ID, "Other", "0123456789abcdef"); err != nil {
-		t.Fatal(err)
-	}
+	named := b.addOther(t)
 	// Swap the names, then the Bridge takes in both folders.
-	for _, mv := range [][2]string{{"Example Show", "tmp"}, {"Other", "Example Show"}, {"tmp", "Other"}} {
-		if err := os.Rename(filepath.Join(b.root, mv[0]), filepath.Join(b.root, mv[1])); err != nil {
-			t.Fatal(err)
-		}
-	}
+	b.renameEach(t, [2]string{"Example Show", "tmp"}, [2]string{"Other", "Example Show"}, [2]string{"tmp", "Other"})
 	b.writeShow(t, "Other", "Other")
-	if err := os.WriteFile(filepath.Join(b.root, "Example Show", "feed.json"), bytes.ReplaceAll(other, []byte(`"Other/`), []byte(`"Example Show/`)), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(b.root, "Example Show", "feed.json"), named("Example Show"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Other"); err != nil {
 		t.Fatal(err)
 	}
 	b.checkFollowed(t, "Other")
-	got, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Example Show", b.user)
-	if err != nil || !got.Following || got.ShowID != "0123456789abcdef" || got.Retention.Mode != "keep" {
-		t.Fatalf("the other show: %+v %v", got, err)
+	b.checkOther(t, "Example Show")
+	if got, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Example Show", b.user); err != nil || got.Retention.Mode != "keep" {
+		t.Fatalf("the other show took this one's policy: %+v %v", got, err)
 	}
 	if p, err := b.cat.GetProgress(b.ctx, b.user, catalog.Ref{LibraryID: b.lib.ID, Path: "Example Show/" + renameEpisode}); err != nil || p != nil {
 		t.Fatalf("a place left at the other show's folder: %+v %v", p, err)
