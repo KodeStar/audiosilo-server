@@ -388,8 +388,8 @@ type Status struct {
 	LastRunAt string `json:"last_run_at,omitempty"`
 	LastSent  int    `json:"last_sent"`
 	// NextRunAt is when the schedule runs the report next, while it is on
-	// (absent while it is off, or before the schedule has started): the
-	// console polls the status around it rather than guessing the schedule
+	// (absent while it is off, or before the schedule has started), so the
+	// console can poll the status around it rather than guess the schedule
 	// (server#448). A run due now may still be skipped (a run within the day,
 	// the quiet week) or held for the mirror's copy.
 	NextRunAt string `json:"next_run_at,omitempty"`

@@ -1002,6 +1002,8 @@ export interface ReportStatus {
   last_run_at?: string;
   /** How many ASINs the last run's accepted reports held. */
   last_sent: number;
+  /** When the schedule runs the report next, while it is on (server#448). */
+  next_run_at?: string;
 }
 
 /** Event kinds a destination can be sent (notify.Kinds, in the server's order). */
