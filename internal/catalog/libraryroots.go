@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -25,26 +26,25 @@ import (
 // its root compared as written.
 const rootResolveWait = 2 * time.Second
 
-// resolveRoots resolves, outside the writer, the links of lib's root and of
-// every other library's (absolute form -> resolved, only those that resolve
-// to another path), when a podcast library is one of them: the overlap check
-// compares only pairs with one (checkLibraryRoot). A root that doesn't resolve
-// in time, or at all (not there yet, a share gone), is left out.
+// resolveRoots resolves, outside the writer, the links of the roots the
+// overlap check compares lib's against (absolute form -> resolved, only those
+// that resolve to another path): lib's and every other library's when lib is
+// a podcast library, else lib's and the podcast libraries' (checkLibraryRoot
+// compares only pairs with one); nil when there is no such pair. A root that
+// doesn't resolve in time, or at all (not there yet, a share gone), is left
+// out.
 func (c *Catalog) resolveRoots(ctx context.Context, lib Library) (map[string]string, error) {
 	libs, err := c.ListLibraries(ctx)
 	if err != nil {
 		return nil, err
 	}
-	podcasts := lib.Kind == KindPodcasts
 	roots := []string{lib.Root}
 	for _, l := range libs {
-		if l.ID == lib.ID {
-			continue
+		if l.ID != lib.ID && (lib.Kind == KindPodcasts || l.Kind == KindPodcasts) {
+			roots = append(roots, l.Root)
 		}
-		podcasts = podcasts || l.Kind == KindPodcasts
-		roots = append(roots, l.Root)
 	}
-	if !podcasts {
+	if len(roots) == 1 {
 		return nil, nil
 	}
 	return resolveRootLinks(ctx, roots), nil
@@ -155,15 +155,15 @@ func (c *Catalog) RootOverlaps(ctx context.Context) ([]RootOverlap, error) {
 			return nil, fmt.Errorf("library %q root: %w", l.Name, err)
 		}
 	}
-	var resolved map[string]string
+	if !slices.ContainsFunc(libs, func(l Library) bool { return l.Kind == KindPodcasts }) {
+		return nil, nil
+	}
+	resolved := resolveRootLinks(ctx, roots)
 	var out []RootOverlap
 	for i := range libs {
 		for j := i + 1; j < len(libs); j++ {
 			if libs[i].Kind != KindPodcasts && libs[j].Kind != KindPodcasts {
 				continue
-			}
-			if resolved == nil {
-				resolved = resolveRootLinks(ctx, roots)
 			}
 			if formsOverlap(roots[i], roots[j], resolved) {
 				out = append(out, RootOverlap{Library: libs[i], Other: libs[j]})
