@@ -1,8 +1,8 @@
 -- server#452: revision 2 of the scan's reading of a book's lengths
 -- (catalog.durationRev, 0082's books.duration_rev) counts the frames of more
 -- MP3s: a header-less one whose sampled frames share its MPEG version's lowest
--- bitrate (a VBR encoder writes silence at it) or vary where the denser
--- sampling looks, one whose Xing header gives no frame count, and one whose
+-- bitrate (a VBR encoder writes silence at it) with another bitrate in its
+-- first 2 MiB, or vary where the denser sampling looks, one whose Xing header gives no frame count, and one whose
 -- sample rate changes, each frame at its own rate. A book holding an MP3 is
 -- indexed once more by the next scan, as for revision 1. A book with no MP3
 -- reads the same by both, so one 0082 or an index since started at revision 1
