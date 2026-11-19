@@ -13,6 +13,7 @@ import (
 	"log"
 	"math/big"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,39 +56,50 @@ var noSNILogEnd = []byte(": " + noSNIRefusal)
 // the client's address after it.
 var handshakeErrorFrom = []byte("http: TLS handshake error from ")
 
-// autocertErrorLog is the http.Server's error log under autocert: the standard
-// logger, less the handshake error for a hello from a loopback address that
-// names no host. The image's healthcheck sends one every 30 seconds before a
-// certificate is cached (launcher.Healthcheck); autocert refuses it before any
-// order, and the line says nothing an owner could fix. The same refusal for
-// any other client is still logged: something on the network asking the
-// address without a name.
-func autocertErrorLog() *log.Logger {
-	return log.New(quietNoSNI{log.Writer()}, log.Prefix(), log.Flags())
+// autocertErrorLog is the http.Server's error log under autocert, for a
+// server bound to bind: the standard logger, less the handshake error for a
+// hello that names no host from this machine (a loopback address, or bind's own
+// host when it names an address: the healthcheck asks there). The image's
+// healthcheck sends one every 30 seconds before a certificate is cached
+// (launcher.Healthcheck); autocert refuses it before any order, and the line
+// says nothing an owner could fix. The same refusal for any other client is
+// still logged: something on the network asking the address without a name.
+func autocertErrorLog(bind string) *log.Logger {
+	q := quietNoSNI{w: log.Writer()}
+	if host, _, err := net.SplitHostPort(bind); err == nil {
+		if ip, err := netip.ParseAddr(host); err == nil && !ip.IsUnspecified() {
+			q.self = ip.Unmap()
+		}
+	}
+	return log.New(q, log.Prefix(), log.Flags())
 }
 
-// quietNoSNI passes each log line to w but the loopback no-SNI handshake error.
-type quietNoSNI struct{ w io.Writer }
+// quietNoSNI passes each log line to w but the no-SNI handshake error from
+// this machine: a loopback address or self (the bind address's host, when set).
+type quietNoSNI struct {
+	w    io.Writer
+	self netip.Addr
+}
 
 func (q quietNoSNI) Write(p []byte) (int, error) {
 	line := bytes.TrimRight(p, "\n")
 	if rest, ok := bytes.CutSuffix(line, noSNILogEnd); ok {
-		if i := bytes.Index(rest, handshakeErrorFrom); i >= 0 && loopbackAddr(string(rest[i+len(handshakeErrorFrom):])) {
+		if i := bytes.Index(rest, handshakeErrorFrom); i >= 0 && q.fromHere(string(rest[i+len(handshakeErrorFrom):])) {
 			return len(p), nil
 		}
 	}
 	return q.w.Write(p)
 }
 
-// loopbackAddr reports whether hostport (a client's "ip:port") is a loopback
-// address.
-func loopbackAddr(hostport string) bool {
-	host, _, err := net.SplitHostPort(hostport)
+// fromHere reports whether hostport (a client's "ip:port") is a loopback
+// address or q.self.
+func (q quietNoSNI) fromHere(hostport string) bool {
+	ap, err := netip.ParseAddrPort(hostport)
 	if err != nil {
 		return false
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	ip := ap.Addr().Unmap()
+	return ip.IsLoopback() || q.self.IsValid() && ip == q.self
 }
 
 // certValidMargin is how long past now a cached certificate must stay valid
