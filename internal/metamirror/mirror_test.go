@@ -522,7 +522,10 @@ func TestFormatBytes(t *testing.T) {
 func TestMirrorStopsWhenDisabled(t *testing.T) {
 	art := mirrortest.Fixture(t, 0)
 	gh := releasetest.NewGitHub(t, mirrortest.Releases(art, "data-v2026.10.09-ccccccc-ddddddd")...)
-	gh.Throttle(len(art[release.DataAsset])/20+1, 200*time.Millisecond) // about four seconds
+	// About ten seconds (scaled to the build): twice the wait for the stop
+	// below, so a download that only ended at its end is not taken for one
+	// that stopped.
+	gh.Throttle(len(art[release.DataAsset])/20+1, testwait.Scaled(500*time.Millisecond))
 	var on atomic.Bool
 	on.Store(true)
 	dir := t.TempDir()
