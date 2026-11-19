@@ -1478,10 +1478,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   taken (its writer refuses every write after it) and gives its response a 1 s write deadline
   (`transcodeTakeoverGrace`, `http.ResponseController` from the taking goroutine), so a handler blocked writing to
   a client that stopped reading fails, reaps its ffmpeg (`exec.Cmd.WaitDelay` 5 s on top) and lets go of the
-  connection. A stream that ran to
-  its end before the takeover came (`media.Transcode` reports `ended`: ffmpeg's output came to its end while the
-  request was live) is not aborted, and its kept-alive connection loses that deadline. A HEAD runs no ffmpeg and takes no slot: it answers as a GET would now (200 when
-  a slot is free, its ask holds one or its token is at its cap, else the busy 503), with `X-AudioSilo-Transcode-Sent: <bytes>` when the same
+  connection. Its abort puts that deadline back first (the editor's idle copy clears its own as it ends,
+  `copyIdle`), so net/http's flush as it closes the connection never waits on that client. A stream that ran to its
+  end before the takeover came (`media.Transcode` reports `ended`: ffmpeg's output came to its end while the request
+  was live) is not aborted: it flushes what it still buffers under the deadline, and its kept-alive connection then
+  loses it. A HEAD runs no ffmpeg and takes no slot: it answers as a GET would now (200 when a slot is free, its ask
+  holds one or its token is at its cap, else the busy 503), with `X-AudioSilo-Transcode-Sent: <bytes>` when the same
   ask's GET is running (what it has written so far; never another token's, exposed to CORS), the chapter editor's
   check after a failed or stalled load (`lookAtTranscode`). A HEAD of an MP3-in-MKA starts no remux either
   (`FileCache.Cached`): the cached copy's headers, else the transcode's. The console's chapter

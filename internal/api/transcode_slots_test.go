@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -289,6 +291,25 @@ func TestTranscodeUnkeyedAsksNeverTakeOver(t *testing.T) {
 	}
 }
 
+// standInFFmpeg writes a stand-in ffmpeg that sends bytes until it is killed,
+// each run noting its pid on a line of pids.
+func standInFFmpeg(t *testing.T) (ffmpeg, pids string) {
+	t.Helper()
+	dir := t.TempDir()
+	pids = filepath.Join(dir, "pids")
+	ffmpeg = filepath.Join(dir, "ffmpeg")
+	script := "#!/bin/sh\necho $$ >> '" + pids + "'\nexec cat /dev/zero\n"
+	// Written under ForkLock: a parallel test's fork must not inherit its open
+	// write descriptor, or exec fails with ETXTBSY (golang/go#22315).
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(ffmpeg, []byte(script), 0o755)
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ffmpeg, pids
+}
+
 // TestStreamTranscodeRepeatAsk: over HTTP, with one slot free, a repeat GET of
 // the same transcode URL with the same token plays and the earlier one's
 // stream breaks off (an error, not an end); the same URL with another user's
@@ -302,23 +323,11 @@ func TestStreamTranscodeRepeatAsk(t *testing.T) {
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
 	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
-	// A stand-in ffmpeg that sends MP3 bytes until it is killed, counting its runs.
-	dir := t.TempDir()
-	runs := filepath.Join(dir, "runs")
-	ffmpeg := filepath.Join(dir, "ffmpeg")
-	script := "#!/bin/sh\necho run >> '" + runs + "'\nexec cat /dev/zero\n"
-	// Written under ForkLock: a parallel test's fork must not inherit its open
-	// write descriptor, or exec fails with ETXTBSY (golang/go#22315).
-	syscall.ForkLock.RLock()
-	err := os.WriteFile(ffmpeg, []byte(script), 0o755)
-	syscall.ForkLock.RUnlock()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ffmpeg, runs := standInFFmpeg(t)
 	e.api.ffmpeg = ffmpeg
 	countRuns := func() int {
 		b, _ := os.ReadFile(runs)
-		return len(b) / len("run\n")
+		return bytes.Count(b, []byte("\n"))
 	}
 	for range cap(e.api.transcodeSem) - 1 {
 		e.api.transcodeSem <- struct{}{}
@@ -509,6 +518,79 @@ func TestTranscodeGlobalCapAcrossTokens(t *testing.T) {
 	}
 }
 
+// deadlineRecorder is a recorder that notes the write deadlines set on it
+// (http.ResponseController's SetWriteDeadline) and its flushes.
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	mu        sync.Mutex
+	deadlines []time.Time
+	flushes   int
+}
+
+func (d *deadlineRecorder) SetWriteDeadline(at time.Time) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.deadlines = append(d.deadlines, at)
+	return nil
+}
+
+func (d *deadlineRecorder) FlushError() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.flushes++
+	return nil
+}
+
+// last is the write deadline set last (zero when none was).
+func (d *deadlineRecorder) last() time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.deadlines) == 0 {
+		return time.Time{}
+	}
+	return d.deadlines[len(d.deadlines)-1]
+}
+
+// TestTranscodeTakeoverWriteDeadline: a takeover gives the response it takes
+// the slot from a write deadline transcodeTakeoverGrace on. That response's
+// abort puts the deadline back after media's idle copy cleared it (copyIdle,
+// at its end), so net/http's flush as it closes the connection meets it; one
+// whose stream had run to its end flushes under it, then leaves its kept-alive
+// connection with none.
+func TestTranscodeTakeoverWriteDeadline(t *testing.T) {
+	t.Parallel()
+	for _, ended := range []bool{false, true} {
+		a := slotAPI(1, 1)
+		ask := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka"}
+		w := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+		first, _ := a.takeTranscodeSlot(w, slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+		before := time.Now()
+		if h, _ := takeSlot(a, http.MethodGet, ask); h == nil {
+			t.Fatal("the repeat ask got no slot")
+		}
+		set := w.last()
+		if set.Before(before.Add(transcodeTakeoverGrace)) || set.After(time.Now().Add(transcodeTakeoverGrace)) {
+			t.Fatalf("ended %v: the takeover's write deadline is %v, want %v on", ended, set, transcodeTakeoverGrace)
+		}
+		if !ended {
+			// The chapter editor's idle copy clears its deadline as it ends
+			// (copyIdle); the web player's has none to clear.
+			_ = http.NewResponseController(first.writer(w)).SetWriteDeadline(time.Time{})
+		}
+		first.ended = ended
+		if aborted := endTaken(a, first); aborted == ended {
+			t.Fatalf("ended %v: aborted %v", ended, aborted)
+		}
+		want, flushes := set, 0
+		if ended {
+			want, flushes = time.Time{}, 1
+		}
+		if got := w.last(); !got.Equal(want) || w.flushes != flushes {
+			t.Fatalf("ended %v: left with write deadline %v after %d flushes, want %v after %d", ended, got, w.flushes, want, flushes)
+		}
+	}
+}
+
 // TestStreamTranscodeTakeoverStuckWriter: over HTTP, a transcode whose client
 // stopped reading (its handler blocked writing) and whose slot a repeat ask
 // takes over ends promptly, its ffmpeg reaped, rather than waiting for the
@@ -519,17 +601,7 @@ func TestStreamTranscodeTakeoverStuckWriter(t *testing.T) {
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
 	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
-	// A stand-in ffmpeg that sends MP3 bytes until it is killed, noting its pid.
-	dir := t.TempDir()
-	pids := filepath.Join(dir, "pids")
-	ffmpeg := filepath.Join(dir, "ffmpeg")
-	script := "#!/bin/sh\necho $$ >> '" + pids + "'\nexec cat /dev/zero\n"
-	syscall.ForkLock.RLock() // as TestStreamTranscodeRepeatAsk (golang/go#22315)
-	err := os.WriteFile(ffmpeg, []byte(script), 0o755)
-	syscall.ForkLock.RUnlock()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ffmpeg, pids := standInFFmpeg(t)
 	e.api.ffmpeg = ffmpeg
 	mine, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
 	at := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + "/stream?transcode=1&t=5&path=" +

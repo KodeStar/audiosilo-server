@@ -62,6 +62,9 @@ type transcodeHold struct {
 	// taken is set by a takeover, before its write deadline: the holder's
 	// writer refuses every write after it.
 	taken atomic.Bool
+	// deadline is the takeover's write deadline, set with taken under
+	// transcodeMu, for endTranscode to put back before its abort.
+	deadline time.Time
 	// sent counts the bytes the holder has written to its response (writer).
 	sent atomic.Int64
 	// ended is set by the holder once its stream ran to its end
@@ -210,9 +213,10 @@ func (a *API) tokenOldestAtCap(token int64) *transcodeHold {
 // lets go of the connection. The caller holds transcodeMu, so endTranscode
 // sees the deadline set.
 func (h *transcodeHold) takeOver() {
+	h.deadline = time.Now().Add(transcodeTakeoverGrace)
 	h.taken.Store(true)
 	h.end()
-	_ = h.rc.SetWriteDeadline(time.Now().Add(transcodeTakeoverGrace)) // ErrNotSupported: none
+	_ = h.rc.SetWriteDeadline(h.deadline) // ErrNotSupported: none
 }
 
 // transcodeSlotFree reports whether ask would get a slot now (a free one, one
@@ -236,10 +240,14 @@ func (a *API) transcodeSlotFree(ask transcodeAsk) (free bool, running *transcode
 // ask's now: the request is aborted instead (http.ErrAbortHandler), so its
 // client sees a broken stream, never one that ended (which a player would
 // take for the file's end), unless its stream had run to its end (h.ended)
-// before the takeover came, which then cut nothing (its connection, kept
-// alive, loses the takeover's write deadline). Deferred by the request's
-// handler: a panic of its own goes on as it was, never hidden behind the abort
-// (which net/http does not log).
+// before the takeover came, which then cut nothing: what it still buffers is
+// flushed under the takeover's write deadline, and its connection, kept
+// alive, then loses that deadline. An abort puts the deadline back first
+// (media's idle copy moves its own before every write and clears it at its
+// end: copyIdle), so net/http's flush as it closes the connection never
+// waits on a client that stopped reading. Deferred by the request's handler:
+// a panic of its own goes on as it was, never hidden behind the abort (which
+// net/http does not log).
 func (a *API) endTranscode(h *transcodeHold) {
 	if h == nil || h.end == nil {
 		return
@@ -254,13 +262,17 @@ func (a *API) endTranscode(h *transcodeHold) {
 		<-a.transcodeSem
 	}
 	a.transcodeMu.Unlock()
-	if taken && h.ended {
+	if !taken {
+		return
+	}
+	if h.ended {
+		_ = h.rc.Flush() // a failure closes the connection: net/http keeps none alive after one
 		_ = h.rc.SetWriteDeadline(time.Time{})
+		return
 	}
-	if taken && !h.ended {
-		if p := recover(); p != nil {
-			panic(p)
-		}
-		panic(http.ErrAbortHandler)
+	_ = h.rc.SetWriteDeadline(h.deadline)
+	if p := recover(); p != nil {
+		panic(p)
 	}
+	panic(http.ErrAbortHandler)
 }
