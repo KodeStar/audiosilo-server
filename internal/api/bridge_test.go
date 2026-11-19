@@ -718,8 +718,9 @@ func TestBridgeReportOnCancelledParkedJob(t *testing.T) {
 	if resp.StatusCode != http.StatusConflict || got.Code != "not_held" || got.Reason != "cancelled" {
 		t.Fatalf("report after the cancel: %d %s, want 409 not_held reason cancelled", resp.StatusCode, body)
 	}
-	// Another claim's report on it carries no reason.
-	resp, body = b.do(t, "PATCH", path, b.bridgeTok, `{"attempt":2,"state":"running"}`)
+	// Another claim's report on it carries no reason (two attempts past the
+	// job's: one past is a claim the server released as undelivered).
+	resp, body = b.do(t, "PATCH", path, b.bridgeTok, `{"attempt":3,"state":"running"}`)
 	if resp.StatusCode != http.StatusConflict || strings.Contains(body, "reason") {
 		t.Fatalf("another claim's report: %d %s, want 409 with no reason", resp.StatusCode, body)
 	}
