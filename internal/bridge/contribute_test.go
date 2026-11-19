@@ -953,6 +953,34 @@ func TestClaimHandsAShareAlongJobToABridgeThatKeepsItLocal(t *testing.T) {
 	}
 }
 
+// A claim's answer carries share_off only for a generate job that shares
+// along while the Contributions module is off: not with the module on, and
+// never for a generate job that keeps its results local (server#218).
+func TestClaimAnswersShareOffOnlyWhenItApplies(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	q := newTestQueue(t)
+	q.beatSetup(t, true, true, KindSidecars)
+	on := true
+	q.ModuleOn = func(id string) bool { return id != ModuleContributions || on }
+	share, _, err := q.sidecars(`{"contribute":"issue"}`, ptr("Author/One"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, _, err := q.sidecars(`{"contribute":"local"}`, ptr("Author/Two"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opt := ClaimOptions{ShareOff: true}
+	if j, err := q.ClaimWith(ctx, q.token, nil, 0, opt); err != nil || j == nil || j.ID != share.ID || j.ShareOff {
+		t.Fatalf("module on: %+v, %v; want the share job, no share_off", j, err)
+	}
+	on = false
+	if j, err := q.ClaimWith(ctx, q.token, nil, 0, opt); err != nil || j == nil || j.ID != local.ID || j.ShareOff {
+		t.Fatalf("a local generate job, module off: %+v, %v; want it, no share_off", j, err)
+	}
+}
+
 // ModuleFor: the community kinds need contributions, and so does a generate
 // job only when it contributes.
 func TestModuleFor(t *testing.T) {
