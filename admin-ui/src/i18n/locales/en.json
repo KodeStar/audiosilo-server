@@ -3922,6 +3922,8 @@
   "audible.backupAll.point.size": "The size is an estimate. The library needs about that much free space.",
   "audible.backupAll.done_one": "{{count}} backup queued for {{name}}",
   "audible.backupAll.done_other": "{{count}} backups queued for {{name}}",
+  "audible.backupAll.skipped_one": "{{count}} title skipped: its destination is no longer valid. Set it again with Destination...",
+  "audible.backupAll.skipped_other": "{{count}} titles skipped: their destination is no longer valid. Set it again with Destination...",
   "audible.settings.action": "Account settings...",
   "audible.settings.title": "Settings for {{name}}",
   "audible.settings.description": "What this account backs up by itself after each check, where it goes, and whether its listening places sync with Audible.",

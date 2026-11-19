@@ -310,9 +310,10 @@ export function useBackups() {
 
   /** Throws for the confirm to show. */
   const backUpAll = async (account: AudibleAccount) => {
-    const { queued } = await api.backupAllAudible(account.id);
+    const { queued, skipped = 0 } = await api.backupAllAudible(account.id);
     toast.add({
       title: t('audible.backupAll.done', { count: queued, name: accountName(t, account) }),
+      description: skipped > 0 ? t('audible.backupAll.skipped', { count: skipped }) : undefined,
       type: 'success',
     });
     settle(undefined);

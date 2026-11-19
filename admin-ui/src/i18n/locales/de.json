@@ -3922,6 +3922,8 @@
   "audible.backupAll.point.size": "Die Größe ist eine Schätzung. Die Bibliothek braucht etwa so viel freien Speicher.",
   "audible.backupAll.done_one": "{{count}} Sicherung für {{name}} eingereiht",
   "audible.backupAll.done_other": "{{count}} Sicherungen für {{name}} eingereiht",
+  "audible.backupAll.skipped_one": "{{count}} Titel übersprungen: sein Ziel ist nicht mehr gültig. Lege es mit Ziel... neu fest.",
+  "audible.backupAll.skipped_other": "{{count}} Titel übersprungen: ihr Ziel ist nicht mehr gültig. Lege es mit Ziel... neu fest.",
   "audible.settings.action": "Kontoeinstellungen...",
   "audible.settings.title": "Einstellungen für {{name}}",
   "audible.settings.description": "Was dieses Konto nach jeder Prüfung von selbst sichert, wohin, und ob seine Hörpositionen mit Audible abgeglichen werden.",

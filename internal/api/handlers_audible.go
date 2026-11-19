@@ -536,17 +536,19 @@ func (a *API) handleAdminAudibleBackup(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminAudibleBackupAll serves POST /admin/audible/accounts/{account}/
 // backup-all: "Back up everything" (every title available, not here, not
-// marked "Not this book" and with no backup open). 200 {"queued": N}; 404
-// unknown_account; 409 account_paused, kind_unavailable, library_not_writable
-// (nothing queued: the Bridge can't take them).
+// marked "Not this book" and with no backup open). 200 {"queued": N,
+// "skipped": M}, M the titles left out because their stored destination no
+// longer validates (the rest are queued); 404 unknown_account; 409
+// account_paused, kind_unavailable, library_not_writable (nothing queued: the
+// Bridge can't take them).
 func (a *API) handleAdminAudibleBackupAll(w http.ResponseWriter, r *http.Request) {
 	account, ok := audibleAccountID(w, r)
 	if !ok {
 		return
 	}
-	n, err := a.audibleQueues().BackupAll(r.Context(), account, userFrom(r.Context()).ID)
+	n, skipped, err := a.audibleQueues().BackupAll(r.Context(), account, userFrom(r.Context()).ID)
 	if n > 0 {
-		a.audit(r, "bridge.audible.backup_all", "", map[string]any{"account": account, "queued": n})
+		a.audit(r, "bridge.audible.backup_all", "", map[string]any{"account": account, "queued": n, "skipped": skipped})
 	}
 	if err != nil && n == 0 {
 		a.writeAudibleBackupError(w, err, "audible backup all failed")
@@ -555,7 +557,10 @@ func (a *API) handleAdminAudibleBackupAll(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		a.log.Warn("audible backup all stopped early", "account", account, "queued", n, "err", err)
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"queued": n})
+	if skipped > 0 {
+		a.log.Warn("audible backup all skipped titles whose destination no longer validates", "account", account, "skipped", skipped)
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"queued": n, "skipped": skipped})
 }
 
 // handleAdminAudibleTitle serves PATCH /admin/audible/titles/{account}/{asin}

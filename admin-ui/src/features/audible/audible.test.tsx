@@ -958,6 +958,29 @@ describe('audible backups', () => {
     expect(calls.some((c) => c.method === 'POST' && c.path.endsWith('/backup-all'))).toBe(true);
   });
 
+  it('says how many titles everything skipped for a destination no longer valid', async () => {
+    mockFetch(
+      routes(true, {
+        'POST /admin/audible/accounts/acct0001/backup-all': { body: { queued: 11, skipped: 2 } },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const heading = await screen.findByRole('heading', { name: 'Audible accounts' });
+    const card = heading.closest('section') as HTMLElement;
+    const user = userEvent.setup();
+    await user.click(await within(card).findByRole('button', { name: 'Back up everything...' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Back up everything from Chris (US)?',
+    });
+    await user.click(within(dialog).getByRole('button', { name: 'Back up 13 books' }));
+    expect(await screen.findByText('11 backups queued for Chris (US)')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '2 titles skipped: their destination is no longer valid. Set it again with Destination...',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('is off with nothing to back up or a paused account', async () => {
     mockFetch(
       routes(true, {

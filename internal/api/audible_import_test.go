@@ -442,10 +442,10 @@ func TestAudibleBackupAll(t *testing.T) {
 		t.Fatalf("one first: %d %s", resp.StatusCode, out)
 	}
 	resp, out = b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, "")
-	if resp.StatusCode != http.StatusOK || out != `{"queued":1}`+"\n" {
+	if resp.StatusCode != http.StatusOK || out != `{"queued":1,"skipped":0}`+"\n" {
 		t.Fatalf("backup-all: %d %q", resp.StatusCode, out)
 	}
-	if resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, ""); out != `{"queued":0}`+"\n" {
+	if resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, ""); out != `{"queued":0,"skipped":0}`+"\n" {
 		t.Fatalf("backup-all again: %d %q", resp.StatusCode, out)
 	}
 	var n int
@@ -477,6 +477,31 @@ func TestAudibleBackupAll(t *testing.T) {
 	}
 	if resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/unknown01/backup-all", b.adminTok, ""); resp.StatusCode != http.StatusNotFound || codeOf(out) != "unknown_account" {
 		t.Fatalf("unknown account: %d %s", resp.StatusCode, out)
+	}
+}
+
+// Back up everything skips a title whose stored destination no longer
+// validates (a rule tightened after it was saved) and queues the rest, rather
+// than stop the batch at it; the answer counts the titles skipped.
+func TestAudibleBackupAllSkipsInvalidDestination(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t,
+		title("B000000001", "A first", "available", 0, ""),
+		title("B000000002", "B second", "available", 0, ""),
+		title("B000000003", "C third", "available", 0, ""))
+	// The first title by order, so a batch that stops at it queues nothing.
+	if _, err := b.db.ExecContext(context.Background(),
+		`UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE asin = 'B000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, "")
+	if resp.StatusCode != http.StatusOK || out != `{"queued":2,"skipped":1}`+"\n" {
+		t.Fatalf("backup-all: %d %q", resp.StatusCode, out)
+	}
+	for asin, queued := range map[string]bool{"B000000001": false, "B000000002": true, "B000000003": true} {
+		if x := b.audibleTitle(t, asin); (x.ImportJobID != nil) != queued {
+			t.Fatalf("%s backed up = %v, want %v", asin, x.ImportJobID != nil, queued)
+		}
 	}
 }
 

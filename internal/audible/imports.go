@@ -55,22 +55,33 @@ func (q Queues) Backup(ctx context.Context, account, asin string, requestedBy in
 
 // BackupAll is "Back up everything" for account: every title
 // catalog.AudibleBackupAll names, queued and recorded on its title in one
-// transaction (bridge.EnqueueAll); queued counts the new jobs. A refusal of
-// the queue (a Bridge that can't take them: none will be taken) stops it at
-// the title refused, with the titles before it queued; any other failure
-// queues none.
-func (q Queues) BackupAll(ctx context.Context, account string, requestedBy int64) (queued int, err error) {
+// transaction (bridge.EnqueueAll); queued counts the new jobs. A title whose
+// params the queue would refuse (a stored destination that no longer
+// validates: bridge.AudibleImportParams.Check) is skipped, as AfterPoll
+// skips one, and counted in skipped. A refusal of the queue (a Bridge that
+// can't take them: none will be taken) stops it at the title refused, with
+// the titles before it queued; any other failure queues none.
+func (q Queues) BackupAll(ctx context.Context, account string, requestedBy int64) (queued, skipped int, err error) {
 	all, err := q.Catalog.AudibleBackupAll(ctx, account)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	jobs := make([]bridge.NewJob, len(all))
-	for i, p := range all {
+	valid := make([]bridge.AudibleImportParams, 0, len(all))
+	for _, p := range all {
+		if p.Check() != nil {
+			skipped++
+			continue
+		}
+		valid = append(valid, p)
+	}
+	jobs := make([]bridge.NewJob, len(valid))
+	for i, p := range valid {
 		jobs[i] = bridge.AudibleImport(p, requestedBy, bridge.PriorityBulk)
 	}
-	return q.Bridge.EnqueueAll(ctx, jobs, func(tx *sql.Tx, i int, jobID int64) error {
-		return q.Catalog.SetAudibleImportTx(ctx, tx, all[i].Account, all[i].ASIN, jobID)
+	queued, err = q.Bridge.EnqueueAll(ctx, jobs, func(tx *sql.Tx, i int, jobID int64) error {
+		return q.Catalog.SetAudibleImportTx(ctx, tx, valid[i].Account, valid[i].ASIN, jobID)
 	})
+	return queued, skipped, err
 }
 
 // AfterPoll queues what a completed poll of account asks for

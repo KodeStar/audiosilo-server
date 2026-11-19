@@ -346,21 +346,32 @@ func audibleImportParams(raw json.RawMessage) (json.RawMessage, error) {
 	if err := decodeStrict(raw, &p); err != nil {
 		return nil, invalid("params: %v", err)
 	}
-	switch {
-	case !AudibleAccountPattern.MatchString(p.Account):
-		return nil, invalid("account must match %s", AudibleAccountPattern)
-	case !asinPattern.MatchString(p.ASIN):
-		return nil, invalid("asin must be an ASIN")
-	case p.LibraryID <= 0:
-		return nil, invalid("library_id is required")
-	}
-	if err := CheckAudibleDestPath(p.DestPath); err != nil {
-		return nil, invalid("dest_path: %v", err)
-	}
-	if err := CheckAudibleTemplate(p.Template); err != nil {
-		return nil, invalid("template: %v", err)
+	if err := p.Check(); err != nil {
+		return nil, err
 	}
 	return json.Marshal(p)
+}
+
+// Check is ErrInvalid when the queue would refuse p: an account or ASIN out of
+// pattern, no library, or a destination or template that no longer validates
+// (one stored before a rule tightened). A batch skips such a title rather
+// than stop at it (audible.Queues.BackupAll).
+func (p AudibleImportParams) Check() error {
+	switch {
+	case !AudibleAccountPattern.MatchString(p.Account):
+		return invalid("account must match %s", AudibleAccountPattern)
+	case !asinPattern.MatchString(p.ASIN):
+		return invalid("asin must be an ASIN")
+	case p.LibraryID <= 0:
+		return invalid("library_id is required")
+	}
+	if err := CheckAudibleDestPath(p.DestPath); err != nil {
+		return invalid("dest_path: %v", err)
+	}
+	if err := CheckAudibleTemplate(p.Template); err != nil {
+		return invalid("template: %v", err)
+	}
+	return nil
 }
 
 // audibleImportSuffix extends an audible.import's dedupe key with its account
