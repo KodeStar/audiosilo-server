@@ -42,3 +42,11 @@ const InputFormats = "mov,mp4,m4a,3gp,3g2,mj2,mp3,matroska,webm,ogg,flac,wav,aac
 // whitelist") on a file of any other format, nothing it names opened. Every
 // run of either on a library file passes them.
 func InputFormatArgs() []string { return []string{"-format_whitelist", InputFormats} }
+
+// SweepToolInputs removes the private folders ToolInput made for a tool's
+// input on Unix that an earlier run left in the temporary folder (a server
+// killed while ffprobe or ffmpeg ran never reached its cleanup), and returns
+// how many: only a folder that is one of them by its name, its owner (the
+// user the server runs as), its mode and what it holds, and old enough that
+// no running tool reads through it. Called once as the server starts.
+func SweepToolInputs() int { return sweepToolInputs() }

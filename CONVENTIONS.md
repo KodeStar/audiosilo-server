@@ -1396,7 +1396,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   input for ffprobe, before `-i` for ffmpeg), since FFmpeg picks a demuxer by the file's bytes and one shaped
   like a playlist (concat, hls, dash, sdp) under an audio name would have it open the files it lists
   (`TestProbeReadsNoPlaylist`, `TestDetectSilencesReadsNoPlaylist`); a new ffprobe or ffmpeg run on a library
-  file passes them too. A test's
+  file passes them too. A start removes the private folders an earlier run left in the temporary folder
+  (`metadata.SweepToolInputs`: `audiosilo-input-*`, the server's user's, 0700, over an hour old, holding only
+  the link; `TestSweepInputDirsRemovesOnlyItsOwn`). A test's
   ffprobe stand-in reads the path from `AUDIOSILO_TEST_INPUT`
   (`metadata.TestInputEnv`, set in a test binary only) (`TestIndexPathReadsThroughTheRootAfterASwap`,
   `TestScanReadsThroughTheRootAfterASwap`, `TestFFprobeReadsTheFileTheScanOpened`,

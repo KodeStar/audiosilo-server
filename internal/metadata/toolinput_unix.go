@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // toolInput is ToolInput by descriptor (inputLink). With no link made (no
@@ -29,7 +31,7 @@ const inheritedInput = "/dev/fd/3"
 // opens its own descriptor 3 (/dev/fd/3 resolves in the process that opens
 // it), and guesses its format by the name as by path's.
 func inputLink(path string) (link string, cleanup func(), err error) {
-	dir, err := os.MkdirTemp("", "audiosilo-input-")
+	dir, err := os.MkdirTemp("", inputDirPrefix)
 	if err != nil {
 		return "", nil, err
 	}
@@ -43,4 +45,63 @@ func inputLink(path string) (link string, cleanup func(), err error) {
 		return "", nil, err
 	}
 	return link, func() { _ = os.RemoveAll(dir) }, nil
+}
+
+// inputDirPrefix starts the name of every folder inputLink makes, in the
+// temporary folder.
+const inputDirPrefix = "audiosilo-input-"
+
+// inputDirStale is how old a folder of inputLink's is before a start takes it
+// for one an earlier run left (killed before its cleanup): far past the
+// longest a tool runs, so one in use by another server started by the same
+// user (or a test's) is never taken from under its tool.
+const inputDirStale = time.Hour
+
+// sweepToolInputs removes the folders inputLink left in the temporary folder
+// (SweepToolInputs), those of the user the server runs as.
+func sweepToolInputs() int {
+	return sweepInputDirs(os.TempDir(), uint32(os.Getuid()), time.Now().Add(-inputDirStale)) //nolint:gosec // G115: a uid is never negative on Unix
+}
+
+// sweepInputDirs removes from tmp each folder that is inputLink's by every
+// sign: named by inputDirPrefix, a folder itself (no link to one), owned by
+// uid and its owner's alone (0700, as os.MkdirTemp makes it), last changed
+// before the time before, and holding nothing but the one link ("input" and
+// an extension) or nothing. The link is unlinked and the folder removed
+// empty, never a tree: a folder that is anything else stays as it is.
+func sweepInputDirs(tmp string, uid uint32, before time.Time) (removed int) {
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		return 0
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), inputDirPrefix) {
+			continue
+		}
+		dir := filepath.Join(tmp, e.Name())
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 || !info.ModTime().Before(before) {
+			continue
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); !ok || st.Uid != uid {
+			continue
+		}
+		held, err := os.ReadDir(dir)
+		if err != nil || len(held) > 1 {
+			continue
+		}
+		if len(held) == 1 {
+			link := held[0]
+			if link.Type() != os.ModeSymlink || !strings.HasPrefix(link.Name(), "input") {
+				continue
+			}
+			if err := os.Remove(filepath.Join(dir, link.Name())); err != nil {
+				continue
+			}
+		}
+		if os.Remove(dir) == nil {
+			removed++
+		}
+	}
+	return removed
 }

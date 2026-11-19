@@ -44,3 +44,6 @@ func toolInput(f *os.File, root, path string) (string, []*os.File, func(), error
 	}
 	return real, nil, func() { _ = held.Close() }, nil
 }
+
+// sweepToolInputs: no folder is made for a tool's input here.
+func sweepToolInputs() int { return 0 }

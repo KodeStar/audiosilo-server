@@ -245,6 +245,14 @@ func Run(ctx context.Context, opts Options) (err error) {
 	var a *api.API
 	ntf := notify.New(cat, api.Version, func() notify.Server { return a.NotifyIdentity() }, log)
 
+	// The private folders an earlier run's ffprobe and ffmpeg inputs left in
+	// the temporary folder (a server killed while one ran), off the start's
+	// path: a temporary folder slow to list holds nothing up.
+	go func() {
+		if n := metadata.SweepToolInputs(); n > 0 {
+			log.Info("removed tool input folders an earlier run left", "folders", n)
+		}
+	}()
 	ffmpeg, ffprobe := resolveTools(ctx, abs, opts, log)
 	scanner := library.NewScanner(cat, ffprobe, log)
 	// The library folders kept open for the next read are closed as the
