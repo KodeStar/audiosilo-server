@@ -168,6 +168,11 @@ func TestClassifyMatchedUnlistedHoldsItsPosition(t *testing.T) {
 	// A match the series lists holds that work's entry, not its own number.
 	listed := []OwnedBook{{WorkID: "w1", Position: 1}, {WorkID: "w3", Matched: true, Position: 2}, {WorkID: "w4", Position: 4}}
 	check(t, Classify([]Series{s}, listed, now, 90), "w2=released")
+	// A match the series lists unnumbered (a novella) is listed too: it holds
+	// no slot, so the volume at its own number stays listed.
+	s.Members = append(s.Members, catalog.MetaSeriesMember{WorkID: "novella", Title: "Novella", ReleaseDate: "2011"})
+	unnumbered := []OwnedBook{{WorkID: "w1", Position: 1}, {WorkID: "novella", Matched: true, Position: 2}, {WorkID: "w4", Position: 4}}
+	check(t, Classify([]Series{s}, unnumbered, now, 90), "w2=released", "w3=missing")
 }
 
 func TestClassifySeveralSeries(t *testing.T) {

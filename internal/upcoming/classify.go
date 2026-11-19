@@ -28,7 +28,8 @@ import (
 // does a book matched in the console to a work the series doesn't list (an
 // edition the community files apart): that volume is the admin's, never
 // missing nor a release to announce, while the match still decides which work
-// the book is. A range
+// the book is. A matched work the series lists unnumbered is listed, so holds
+// no slot. A range
 // (a box set) is held too when every volume inside it is, one book each. Entries
 // are the console's railEntries: one per position, the first member there, and
 // a range entry ("1-3", an omnibus) only on a rail that numbers none of the
@@ -139,7 +140,9 @@ func classifyOne(s Series, owned []OwnedBook, ownedWorks map[string]bool, now ti
 	slots := entries(members)
 	// Each work's span on this series (its first numbered one).
 	workSpan := map[string]span{}
+	listed := map[string]bool{} // every work the series names, numbered or not
 	for _, m := range members {
+		listed[m.WorkID] = true
 		if _, ok := workSpan[m.WorkID]; ok {
 			continue
 		}
@@ -150,11 +153,11 @@ func classifyOne(s Series, owned []OwnedBook, ownedWorks map[string]bool, now ti
 	// Where the owned books sit.
 	var held []span
 	for _, b := range owned {
-		sp, listed := workSpan[b.WorkID]
+		sp, numbered := workSpan[b.WorkID]
 		switch {
-		case b.WorkID != "" && listed:
+		case b.WorkID != "" && numbered:
 			held = append(held, sp)
-		case b.Position > 0 && (b.WorkID == "" || b.Matched):
+		case b.Position > 0 && (b.WorkID == "" || (b.Matched && !listed[b.WorkID])):
 			held = append(held, span{b.Position, max(b.Position, b.PositionEnd)})
 		}
 	}
