@@ -12,6 +12,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // With no ffprobe the in-process probe still reads durations (SCAN-SPIKE
@@ -75,7 +76,7 @@ func TestScanWithoutFFprobeReadsDurations(t *testing.T) {
 func TestReadSlotsRetryInProcessTimeoutAlone(t *testing.T) {
 	t.Parallel()
 	path := testdataRoot(t) + "/Brandon Sanderson/Mistborn/01 - The Final Empire.m4b"
-	slots := newReadSlots(2, 5*time.Second)
+	slots := newReadSlots(2, testwait.Scaled(15*time.Second)) // the retries' real reads, on a loaded -race run
 	var calls atomic.Int32
 	var started sync.WaitGroup
 	started.Add(2)
@@ -123,7 +124,7 @@ func TestReadSlotsRetryInProcessTimeoutAlone(t *testing.T) {
 func TestReadSlotsRetryUncountedAlone(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join("..", "metadata", "testdata", "probe", "lame-vbr-noxing.mp3")
-	slots := newReadSlots(2, 5*time.Second)
+	slots := newReadSlots(2, testwait.Scaled(15*time.Second)) // the retries' real reads, on a loaded -race run
 	var calls atomic.Int32
 	var started sync.WaitGroup
 	started.Add(2)

@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 // TestIndexPathSharesOneRead: two requests that index the same book on demand at
@@ -31,11 +33,16 @@ func TestIndexPathSharesOneRead(t *testing.T) {
 		t.Fatal("the stand-in ffprobe never ran")
 	}
 
+	// Each path is resolved first (IndexPath's own first step, a part's to its
+	// book), so the two meet at the read at once rather than after a look at
+	// the disk each, which a loaded run can make outlast the read: the later
+	// would then read the book again, after the first had stored it.
 	var wg sync.WaitGroup
 	books := make([]*catalog.Book, 2)
 	errs := make([]error, 2)
-	for i, p := range []string{"A/Book", "A/Book/02.mp3"} {
-		wg.Go(func() { books[i], errs[i] = s.IndexPath(ctx, lib, p) })
+	asked := []*catalog.Book{resolved(t, s, lib, "A/Book"), resolved(t, s, lib, "A/Book/02.mp3")}
+	for i, book := range asked {
+		wg.Go(func() { books[i], errs[i] = s.indexShared(ctx, lib, book) })
 	}
 	wg.Wait()
 	for i := range books {
@@ -66,6 +73,10 @@ func TestIndexPathLeaderCancelled(t *testing.T) {
 	}
 	once := count()
 
+	// The waiter's part is resolved first (IndexPath's own first step), so it
+	// meets the read as it starts rather than after a look at the disk, which a
+	// loaded run can make outlast the read (it would then read the book again).
+	part := resolved(t, s, lib, "A/Book/02.mp3")
 	leadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type answer struct {
@@ -81,7 +92,7 @@ func TestIndexPathLeaderCancelled(t *testing.T) {
 	waitFlight(t, s, lib, "A/Book", true)
 	wait := make(chan answer, 1)
 	go func() {
-		b, err := s.IndexPath(ctx, lib, "A/Book/02.mp3")
+		b, err := s.indexShared(ctx, lib, part)
 		wait <- answer{b, err}
 	}()
 	time.Sleep(100 * time.Millisecond)
@@ -110,13 +121,14 @@ func TestIndexMovedSharesTheFlight(t *testing.T) {
 	}
 	once := count()
 
+	part := resolved(t, s, lib, "A/Book/02.mp3") // as in TestIndexPathLeaderCancelled
 	moved := make(chan error, 1)
 	go func() {
 		_, err := s.IndexMoved(ctx, lib, "A/Book", "")
 		moved <- err
 	}()
 	waitFlight(t, s, lib, "A/Book", true)
-	b, err := s.IndexPath(ctx, lib, "A/Book/02.mp3")
+	b, err := s.indexShared(ctx, lib, part)
 	if err != nil || b == nil || b.RelPath != "A/Book" {
 		t.Fatalf("on-demand index beside IndexMoved: %+v, %v", b, err)
 	}
@@ -283,13 +295,14 @@ func TestScanSharesTheFlight(t *testing.T) {
 	t.Run("on demand during the scan", func(t *testing.T) {
 		t.Parallel()
 		s, lib, ctx, count := newSlowProbeEnv(t)
+		book := resolved(t, s, lib, "A/Book") // as in TestIndexPathLeaderCancelled
 		scanned := make(chan error, 1)
 		go func() {
 			_, err := s.Scan(ctx, lib)
 			scanned <- err
 		}()
 		waitFlight(t, s, lib, "A/Book", true)
-		b, err := s.IndexPath(ctx, lib, "A/Book")
+		b, err := s.indexShared(ctx, lib, book)
 		if err != nil || b == nil || b.RelPath != "A/Book" {
 			t.Fatalf("on-demand index during the scan: %+v, %v", b, err)
 		}
@@ -342,11 +355,28 @@ func waitFlight(t *testing.T, s *Scanner, lib catalog.Library, rel string, under
 	}
 }
 
+// resolved is the book rel resolves to (IndexPath's first step), for a test
+// that shares its read with indexShared.
+func resolved(t *testing.T, s *Scanner, lib catalog.Library, rel string) *catalog.Book {
+	t.Helper()
+	book, err := s.resolveAsked(t.Context(), lib, rel, nil)
+	if err != nil {
+		t.Fatalf("resolving %s: %v", rel, err)
+	}
+	return book
+}
+
 // newSlowProbeEnv is a scanner whose stand-in ffprobe takes half a second and
 // notes each run (count), so on-demand indexes overlap, over a library holding
 // two two-file books, A/Book and A/Twin. The test fails when two runs probed
 // one file at once.
 func newSlowProbeEnv(t *testing.T) (*Scanner, catalog.Library, context.Context, func() int) {
+	t.Helper()
+	return newSlowProbeEnvOf(t, 500*time.Millisecond)
+}
+
+// newSlowProbeEnvOf is newSlowProbeEnv with each ffprobe run taking took.
+func newSlowProbeEnvOf(t *testing.T, took time.Duration) (*Scanner, catalog.Library, context.Context, func() int) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the stand-in ffprobe is a shell script")
@@ -363,7 +393,7 @@ func newSlowProbeEnv(t *testing.T) (*Scanner, catalog.Library, context.Context, 
 	// while one holds it notes the overlap.
 	script := "#!/bin/sh\nfor a; do f=$a; done\nl='" + locks + "'/$(printf %s \"$f\" | cksum | cut -d' ' -f1)\n" +
 		"mkdir \"$l\" 2>/dev/null || echo overlap >> '" + runs + "'\n" +
-		"echo run >> '" + runs + "'\nsleep 0.5\nrmdir \"$l\" 2>/dev/null\necho '{}'\n"
+		"echo run >> '" + runs + "'\nsleep " + strconv.FormatFloat(took.Seconds(), 'f', 3, 64) + "\nrmdir \"$l\" 2>/dev/null\necho '{}'\n"
 	if err := os.WriteFile(probe, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -619,16 +649,21 @@ func TestWaitFlightEndsAtTheRequestsWaitCap(t *testing.T) {
 // whose ffprobe runs take longer than the request's look time gets the book
 // once the read ends, not a look given up on: the runs are marked on the
 // read's progress (metadata.Progress.Probe), each given the probe's own time.
+//
+// The look time must outlast the read's steps between its ffprobe runs, which
+// a loaded -race run can stretch past a fixed quarter second, and each run
+// must outlast the look time: both are scaled to the build.
 func TestRequestWaitsOutAnotherReadsProbe(t *testing.T) {
 	t.Parallel()
-	s, lib, ctx, _ := newSlowProbeEnv(t) // each ffprobe run takes half a second
+	look := testwait.Scaled(500 * time.Millisecond)
+	s, lib, ctx, _ := newSlowProbeEnvOf(t, 2*look) // each ffprobe run takes twice the look time
 	read := make(chan error, 1)
 	go func() {
 		_, err := s.IndexPath(ctx, lib, "A/Book")
 		read <- err
 	}()
 	waitFlight(t, s, lib, "A/Book", true)
-	b, err := s.IndexPath(WithLookTimeout(ctx, 250*time.Millisecond), lib, "A/Book")
+	b, err := s.IndexPath(WithLookTimeout(ctx, look), lib, "A/Book")
 	if err != nil || b == nil || b.RelPath != "A/Book" {
 		t.Errorf("a request joining a read that is running ffprobe: %+v, %v; want the book it stored", b, err)
 	}

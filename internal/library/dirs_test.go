@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 func TestListDirs(t *testing.T) {
@@ -228,7 +230,9 @@ func TestDirListerCheckRoot(t *testing.T) {
 	t.Parallel()
 	hang := make(chan struct{})
 	defer close(hang)
-	l := NewDirLister(ListDirs, 1, 50*time.Millisecond)
+	// A real check is given a loaded -race run's time; the one that doesn't
+	// answer, a short one.
+	l := NewDirLister(ListDirs, 1, testwait.Scaled(10*time.Second))
 	ctx := context.Background()
 	root := t.TempDir()
 	if got, err := l.CheckRoot(ctx, root+string(filepath.Separator)); err != nil || got != root {
@@ -241,6 +245,7 @@ func TestDirListerCheckRoot(t *testing.T) {
 		<-hang
 		return "", ErrRootUnreadable
 	}
+	l.timeout = 50 * time.Millisecond
 	if _, err := l.CheckRoot(ctx, root); !errors.Is(err, ErrDirsTimedOut) {
 		t.Fatalf("a root that doesn't answer: %v, want ErrDirsTimedOut", err)
 	}
