@@ -146,6 +146,10 @@ describe('a run seen for what it found (server#307, server#352)', () => {
         holds: ['identifier_elsewhere', 'dramatization_only'],
       }),
     ).toEqual(['identifier_elsewhere', 'dramatization_only']);
+    // A stop cut its apply short at the cover: the reasons stay, a lone one too.
+    expect(holdReasons({ detail: 'cover_pending', holds: ['length_differs'] })).toEqual([
+      'length_differs',
+    ]);
     // An apply's detail, or none, is no reason to hold it.
     expect(holdReasons({ detail: 'cover_failed' })).toEqual([]);
     expect(holdReasons({})).toEqual([]);

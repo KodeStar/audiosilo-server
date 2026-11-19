@@ -2784,6 +2784,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `identifier_disagrees` or `identifier_elsewhere`, `dramatization_only`, `length_differs`
   (`matchrun.judge`; `MatchRunItem.Holds`, wire `holds` only with more than one, the detail column
   comma-separated, `detail` the first; server#352), which the review lists, a length with both lengths.
+  A stop that cuts an included item's apply short at its cover keeps them: `detail` is then
+  `cover_pending` and `holds` every reason, a lone one too (`catalog.MarkMatchItem`, the column
+  `cover_pending;` then the reasons, `itemDetail`); any other mark's detail replaces them.
   Calibrated on the LibraForge benchmark (the highest title value holding at most 0.2% of its right
   automatic matches: 3,806 auto-right / 4 auto-wrong before, 3,799 / 4 after, none of its wrong ones
   an identifier hit); a series conflict alone held 19 right ones (the renumbered series) and nothing

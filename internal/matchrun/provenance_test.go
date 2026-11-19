@@ -161,6 +161,54 @@ func TestMatchRecordsEveryHoldReason(t *testing.T) {
 	}
 }
 
+// TestStoppedReviewItemKeepsItsHolds (server#352): a review item the admin
+// included, its apply stopped in its cover, is still to apply (cover_pending)
+// and still says every reason the run held it for; the next apply takes its
+// cover and marks it applied.
+func TestStoppedReviewItemKeepsItsHolds(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/Both", "Both", "", no) // 634 min
+	both := cand("the-martian", 100, "https://c/rec.jpg")
+	title := 0.5
+	both.Reasons = &meta.MatchReasons{Identifier: "asin", Title: &title}
+	both.Recordings[0].RuntimeMin = 300
+	e.matcher.byTitle["Both"] = []meta.MatchCandidate{both}
+	holds := []string{DetailIdentifierDisagrees, DetailLengthDiffers}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	it := e.items(t, run, catalog.OutcomeReview)[0]
+	if !slices.Equal(it.Holds, holds) {
+		t.Fatalf("recorded = %q %v, want held for %v", it.Detail, it.Holds, holds)
+	}
+	apply := ApplyOptions{Scope: ScopeFill, Include: []int64{it.ID}, UserID: e.admin}
+	save := e.runner.saveCover
+	e.runner.saveCover = func(ctx context.Context, _ int64, _, _ string, _ int64, _ catalog.CoverExpect) error {
+		_, _ = e.runner.Cancel(context.Background(), run.ID)
+		return ctx.Err()
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, apply); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	it = e.items(t, run, catalog.OutcomeReview)[0]
+	if it.Applied != "" || it.Detail != DetailCoverPending || !slices.Equal(it.Holds, holds) ||
+		e.anchorOf(t, "A/Both").WorkID != "the-martian" {
+		t.Fatalf("after the stop: %q %q %v, want cover_pending still to apply, held for %v, its match in",
+			it.Applied, it.Detail, it.Holds, holds)
+	}
+	e.runner.saveCover = save
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, apply); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	if it = e.items(t, run, catalog.OutcomeReview)[0]; it.Applied != catalog.ItemApplied || it.Holds != nil || e.covers.Load() != 1 {
+		t.Fatalf("applied again: %q %q %v, covers %d; want applied with the cover taken",
+			it.Applied, it.Detail, it.Holds, e.covers.Load())
+	}
+}
+
 // TestMatchAsksAgainPastAWrongIdentifier (server#352 item 3): a hint whose work
 // the book disagrees with (a wrong volume's ASIN) is asked again without it,
 // and another work that query finds is the item, held for review with

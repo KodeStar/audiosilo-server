@@ -2563,7 +2563,9 @@ export interface MatchRunItem {
   /**
    * Every reason a review item is held for when there is more than one, `detail`
    * the first (identifier_disagrees or identifier_elsewhere, dramatization_only,
-   * length_differs, in that order). Absent for one reason or none.
+   * length_differs, in that order). Absent for one reason or none. Beside a
+   * `cover_pending` detail (a stop cut the item's apply short at its cover) it
+   * is every reason the item was held for, a lone one too.
    */
   holds?: string[];
   /** The book as it is now; duration in seconds (absent when unknown, or from an older server). */

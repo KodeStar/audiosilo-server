@@ -162,7 +162,9 @@ type MatchRunItem struct {
 	// order), Detail being the first: recorded in the detail column, comma
 	// separated (server#352). nil, and omitted, for an item with one reason or
 	// none, and once an apply marked the item (its detail then says what the
-	// apply did).
+	// apply did). The one mark that leaves an item still to apply keeps them (a
+	// stop cut its cover short: MarkMatchItem): Detail is then the mark's, and
+	// Holds every reason, a lone one too.
 	Holds []string `json:"holds,omitempty"`
 	// Unchanged is the scopes a refresh item had nothing to change under when
 	// the run recorded it (migration 0070): what the review showed as no change,
@@ -269,9 +271,47 @@ func (c *Catalog) BeginApply(ctx context.Context, runID int64, scope string, tot
 	})
 }
 
-// MarkMatchItem records what applying did to an item and counts it done.
+// markedSep parts the detail of a mark that left an item still to apply from
+// the reasons the run held it for, in the detail column (itemDetail).
+const markedSep = ";"
+
+// itemDetail reads a detail column: the item's detail, and its holds
+// (MatchRunItem.Holds). The column is one detail, or the reasons a run held the
+// item for, comma separated (RecordMatchItem), or the detail of a mark that
+// left it still to apply, markedSep, then those reasons (MarkMatchItem).
+func itemDetail(stored string) (detail string, holds []string) {
+	if mark, held, marked := strings.Cut(stored, markedSep); marked {
+		return mark, strings.Split(held, ",")
+	}
+	if strings.Contains(stored, ",") {
+		holds = strings.Split(stored, ",")
+		return holds[0], holds
+	}
+	return stored, nil
+}
+
+// MarkMatchItem records what applying did to an item and counts it done. A mark
+// that leaves the item still to apply (applied "": a stop cut its cover short,
+// matchrun's cover_pending) keeps the reasons the run held it for, behind its
+// own detail, so the review goes on saying why the admin was asked (server#352);
+// any other mark's detail replaces them, as what the apply did.
 func (c *Catalog) MarkMatchItem(ctx context.Context, runID, itemID int64, applied, detail string) error {
 	return c.db.WithTx(ctx, "MarkMatchItem", func(tx *sql.Tx) error {
+		if applied == "" && detail != "" {
+			var held string
+			err := tx.QueryRowContext(ctx,
+				`SELECT detail FROM match_run_items WHERE id = ? AND run_id = ?`, itemID, runID).Scan(&held)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			// Marked so before (a second stop): the reasons are behind that mark.
+			if _, reasons, marked := strings.Cut(held, markedSep); marked {
+				held = reasons
+			}
+			if held != "" && held != detail {
+				detail += markedSep + held
+			}
+		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE match_run_items SET applied = ?, detail = ? WHERE id = ? AND run_id = ?`,
 			applied, detail, itemID, runID); err != nil {
@@ -409,10 +449,7 @@ func scanMatchItem(rows *sql.Rows, it *MatchRunItem) error {
 	if unchanged != "" {
 		it.Unchanged = strings.Split(unchanged, ",")
 	}
-	if strings.Contains(it.Detail, ",") {
-		it.Holds = strings.Split(it.Detail, ",")
-		it.Detail = it.Holds[0]
-	}
+	it.Detail, it.Holds = itemDetail(it.Detail)
 	if err := json.Unmarshal([]byte(raw), &it.Proposal); err != nil {
 		return err
 	}
