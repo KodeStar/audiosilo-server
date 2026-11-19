@@ -81,9 +81,16 @@ type PodcastMove struct {
 //   - the feed state (the later check wins a clash) and the retention policy
 //     (the newer edit wins), both keyed by identity;
 //   - the episodes' fetch backoffs (podcast_fetch_state);
-//   - the listening state on the show folder (a show-folder heart) and on each
-//     episode, From/<file> to To/<file> (carryListeningState, a move's rule),
-//     for the files listed at To, at From's own index row and in Files;
+//   - the listening state on the show folder itself (a show-folder heart),
+//     which is keyed by path alone, so only while From's folder is not another
+//     show's own: From's index row is ShowID's or there is none, or the show
+//     it names has no follow, feed state or policy there (it was renamed into
+//     the folder by hand and its own move is still to come: names swapped, a
+//     chain of renames). The state on a folder an unrelated show holds under
+//     that name in its own right stays that show's;
+//   - the listening state on each episode, From/<file> to To/<file>
+//     (carryListeningState, a move's rule), for the files listed at To, at
+//     From's own index row and in Files;
 //   - From's index row and episodes, dropped when the row is ShowID's.
 //
 // Follows and the show folder's listening state go through a placeholder path
@@ -107,13 +114,26 @@ func (c *Catalog) MovePodcastShows(ctx context.Context, lib int64, moves []Podca
 			if len(m.From) == 0 {
 				continue
 			}
-			hold := movePlaceholder(len(live))
+			live = append(live, m)
+		}
+		// Whether each From folder's own listening state goes with its move,
+		// told before any row moves (a lift takes the follows this reads).
+		folders := make([][]bool, len(live))
+		for i, m := range live {
 			for _, from := range m.From {
-				if err := liftShowRows(ctx, tx, lib, m.ShowID, from, hold); err != nil {
+				folder, err := podcastFolderStateOf(ctx, tx, lib, from, m.ShowID)
+				if err != nil {
+					return err
+				}
+				folders[i] = append(folders[i], folder)
+			}
+		}
+		for i, m := range live {
+			for j, from := range m.From {
+				if err := liftShowRows(ctx, tx, lib, m.ShowID, from, movePlaceholder(i), folders[i][j]); err != nil {
 					return err
 				}
 			}
-			live = append(live, m)
 		}
 		for i, m := range live {
 			for _, from := range m.From {
@@ -141,14 +161,30 @@ func podcastShowIDAt(ctx context.Context, tx *sql.Tx, lib int64, show string) (s
 	return id, err
 }
 
+// podcastFolderStateOf reports whether the listening state on folder show
+// itself (keyed by path alone) can be taken for show id's: show's index row is
+// id's or there is none, or the show it names has no durable state there yet
+// (a follow, feed state or a policy), so it only arrived by a rename by hand.
+func podcastFolderStateOf(ctx context.Context, tx *sql.Tx, lib int64, show, id string) (bool, error) {
+	held, err := podcastShowIDAt(ctx, tx, lib, show)
+	if err != nil || held == "" || held == id {
+		return err == nil, err
+	}
+	var settled bool
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM podcast_follows WHERE library_id=?1 AND show_path=?2 AND show_id=?3)
+		 OR EXISTS(SELECT 1 FROM podcast_feed_state WHERE library_id=?1 AND show_path=?2 AND show_id=?3)
+		 OR EXISTS(SELECT 1 FROM podcast_policies WHERE library_id=?1 AND show_path=?2 AND show_id=?3)`, lib, show, held).Scan(&settled)
+	return !settled, err
+}
+
 // movePlaceholder is where MovePodcastShows holds move i's follows and show
 // folder state between its two passes: a hidden name, which no show folder can
 // have (feed.ShowPath), inside the transaction only.
 func movePlaceholder(i int) string { return fmt.Sprintf(".podcast-move-%d", i) }
 
-// liftShowRows moves id's follows at from, and the listening state on the
-// folder itself, to hold.
-func liftShowRows(ctx context.Context, tx *sql.Tx, lib int64, id, from, hold string) error {
+// liftShowRows moves id's follows at from to hold, and with folder the
+// listening state on the folder itself (MovePodcastShows says when).
+func liftShowRows(ctx context.Context, tx *sql.Tx, lib int64, id, from, hold string, folder bool) error {
 	// A listener following at two of a move's From paths keeps one follow,
 	// with the earlier date.
 	for _, q := range []string{
@@ -161,6 +197,9 @@ func liftShowRows(ctx context.Context, tx *sql.Tx, lib int64, id, from, hold str
 		if _, err := tx.ExecContext(ctx, q, lib, from, hold, id); err != nil {
 			return err
 		}
+	}
+	if !folder {
+		return nil
 	}
 	return carryListeningState(ctx, tx, lib, JoinPart{Path: from, Last: true}, hold, 0, moveCarry)
 }

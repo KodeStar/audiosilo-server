@@ -363,3 +363,38 @@ func TestPodcastRescanMovesAChainOfRenames(t *testing.T) {
 	b.checkFollowed(t, "Other")
 	b.checkOther(t, "Third")
 }
+
+// A chain of renames rescanned at its far end first (the other show's new
+// folder): the other show moves alone, with the heart on its old folder, which
+// this show holds by now only by the rename. This show's own rescan then moves
+// it there without touching either.
+func TestPodcastRescanOfAChainsFarEndTakesItsFolderHeart(t *testing.T) {
+	b := newRenameBed(t)
+	named := b.addOther(t)
+	if err := b.cat.AddFavourite(b.ctx, b.user, catalog.Ref{LibraryID: b.lib.ID, Path: "Other"}); err != nil {
+		t.Fatal(err)
+	}
+	b.renameEach(t, [2]string{"Other", "Third"}, [2]string{"Example Show", "Other"})
+	b.writeShow(t, "Other", "Other")
+	if err := os.WriteFile(filepath.Join(b.root, "Third", "feed.json"), named("Third"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hearted := func() {
+		t.Helper()
+		favs, err := b.cat.ListAllFavourites(b.ctx, b.user, []catalog.Scope{{LibraryID: b.lib.ID, AllowAll: true}})
+		if err != nil || len(favs) != 1 || favs[0].Path != "Third" {
+			t.Fatalf("the other show's heart %+v %v", favs, err)
+		}
+	}
+	if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Third"); err != nil {
+		t.Fatal(err)
+	}
+	b.checkOther(t, "Third")
+	hearted()
+	if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	b.checkFollowed(t, "Other")
+	b.checkOther(t, "Third")
+	hearted()
+}

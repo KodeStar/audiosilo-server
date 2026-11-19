@@ -195,6 +195,39 @@ func TestMovePodcastShowsRefusesAFolderHoldingAnotherShow(t *testing.T) {
 	}
 }
 
+// Denied: the heart on a folder an unrelated show now holds under the old name
+// in its own right (the name reused, that show followed there) is keyed by
+// path alone and stays that show's; the moving show's own rows, which name its
+// identity, still move.
+func TestMovePodcastShowsLeavesAnotherShowsFolderHeart(t *testing.T) {
+	fx := newRenameFixture(t)
+	other := "0123456789abcdef"
+	indexShowAt(t, fx.c, fx.ctx, fx.lib, "Example Show", other)
+	cat := seedUserNamed(t, fx.c, fx.ctx, "cat")
+	if err := fx.c.FollowPodcast(fx.ctx, cat, fx.lib, "Example Show", other); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.c.AddFavourite(fx.ctx, cat, Ref{LibraryID: fx.lib, Path: "Example Show"}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}})
+	if err != nil || n != 1 {
+		t.Fatalf("move %d %v", n, err)
+	}
+	favs, err := fx.c.ListAllFavourites(fx.ctx, cat, []Scope{{LibraryID: fx.lib, AllowAll: true}})
+	if err != nil || len(favs) != 1 || favs[0].Path != "Example Show" {
+		t.Fatalf("the other show's heart %+v %v", favs, err)
+	}
+	got, err := fx.c.PodcastShow(fx.ctx, fx.lib, "Renamed", fx.ann)
+	if err != nil || !got.Following || got.Retention.Mode != "archive" {
+		t.Fatalf("renamed show %+v %v", got, err)
+	}
+	kept, err := fx.c.PodcastShow(fx.ctx, fx.lib, "Example Show", cat)
+	if err != nil || !kept.Following || kept.ShowID != other {
+		t.Fatalf("the other show %+v %v", kept, err)
+	}
+}
+
 // Two folders whose names were swapped by hand trade their shows' state in one
 // call, a listener following both keeping both.
 func TestMovePodcastShowsSwapsTwoFolders(t *testing.T) {
@@ -215,11 +248,19 @@ func TestMovePodcastShowsSwapsTwoFolders(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A heart on the show at "A": it goes with the show, as the other one is
+	// in "A" only by the rename (its own follow and policy still at "B").
+	if err := c.AddFavourite(ctx, ann, Ref{LibraryID: lib.ID, Path: "A"}); err != nil {
+		t.Fatal(err)
+	}
 	indexShowAt(t, c, ctx, lib.ID, "A", y)
 	indexShowAt(t, c, ctx, lib.ID, "B", x)
 	n, err := c.MovePodcastShows(ctx, lib.ID, []PodcastMove{{ShowID: x, From: []string{"A"}, To: "B"}, {ShowID: y, From: []string{"B"}, To: "A"}})
 	if err != nil || n != 2 {
 		t.Fatalf("swap %d %v", n, err)
+	}
+	if favs, err := c.ListAllFavourites(ctx, ann, []Scope{{LibraryID: lib.ID, AllowAll: true}}); err != nil || len(favs) != 1 || favs[0].Path != "B" {
+		t.Fatalf("show heart %+v %v", favs, err)
 	}
 	for _, s := range []struct{ show, mode string }{{"A", "on_demand"}, {"B", "archive"}} {
 		got, err := c.PodcastShow(ctx, lib.ID, s.show, ann)
