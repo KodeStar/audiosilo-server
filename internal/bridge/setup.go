@@ -145,5 +145,8 @@ const AcceptSetup = "setup"
 const AcceptClaimMinPriority = "claim_min_priority"
 
 // HeartbeatAccepts advertises optional heartbeat blocks and claim options.
-// A Bridge sends an extension only after negotiation with this server.
+// A Bridge sends one of these only after negotiation with this server. A
+// claim's query flag that an older server can safely ignore needs none and is
+// not listed: share_off=1 (ClaimOptions.ShareOff), which leaves such a job
+// held there, as before.
 func HeartbeatAccepts() []string { return []string{AcceptSetup, AcceptClaimMinPriority} }

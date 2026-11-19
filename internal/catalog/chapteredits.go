@@ -388,7 +388,7 @@ func (c *Catalog) SaveChapterEdit(ctx context.Context, libraryID int64, path str
 			return err
 		}
 		// A detection queued or parked would find a list that sits dormant
-		// under the edit, as a new one is refused now (DetectRefused).
+		// under the edit, as a new one is refused now (DetectRefusal).
 		if err := bridge.CancelWaitingBookJob(ctx, tx, bridge.KindDetectChapters, libraryID, path, bridge.CancelChaptersEdited, c.now()); err != nil {
 			return err
 		}

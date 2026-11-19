@@ -75,6 +75,13 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
               : t('bridge.generate.noDescriptionPlain')}
           </p>
         ) : null}
+        {job.kind === KIND_GENERATE && r?.shareSkipped ? (
+          <p className="text-[12.5px] text-muted-foreground">
+            {t(`bridge.generate.shareSkipped.${r.shareSkipped}`, {
+              defaultValue: t('bridge.generate.shareSkippedPlain'),
+            })}
+          </p>
+        ) : null}
         {job.kind === KIND_CONTRIBUTE && r?.covered?.length ? (
           <p className="text-[12.5px] text-muted-foreground">
             {t('bridge.share.covered', {

@@ -3196,7 +3196,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `sidecars.generate` job is open for the book (that run finds them itself), 409 `describe_open`
   (`ErrDescribeOpen`) while a `sidecars.describe` job is (both rewrite the book's bridge.json on the Bridge;
   a describe is refused 409 `detect_open` while a detect job is open, the other way round), and 409
-  `chapters_chosen` (`ErrChaptersChosen`, answered by `catalog.DetectRefused`, the queue handler's one check)
+  `chapters_chosen` (`ErrChaptersChosen`, answered by `catalog.DetectRefusal`, the queue handler's one check, run in
+  `Enqueue`'s transaction as `NewJob.Check` so a choice or an edit saved meanwhile can't let one through, server#471)
   for a book whose chapter source an admin chose (files or community: a found list stands in only with no
   choice, so it would never be used), and 409 `chapters_edited` (`ErrChaptersEdited`) for a book whose edited
   chapters apply (Edited chapters); making such a choice or saving an edit cancels the book's detect job in
@@ -3225,7 +3226,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   nor raises a second park event. `dedupe_key`
   (kind|library|path) returns the open job on a second press (200, else 201; the console says when that
   job is one still stopping after a cancel, `cancel_requested`, as nothing new can be queued until it ends). `GET /bridge/jobs/next?wait=
-  &kind=` (`bridge.Service.ClaimFor`) long-polls (at most 25 s, woken by an enqueue; it ends with the
+  &kind=[&share_off=1]` (`bridge.Service.ClaimFor`, `ClaimWith`; `share_off`: Community jobs below) long-polls (at most 25 s, woken by an enqueue; it ends with the
   server's base context, so a stop isn't held by the claim a Bridge always has waiting: 204) for the
   highest-priority oldest queued job of the
   heartbeat's known kinds, narrowed by `kind=` (the Bridge's free lanes; none left answers 204 at once),
@@ -3391,10 +3392,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   that only file (`sidecars.contribute`, `meta.correct`: `Service.stopsShare`, the kind's own module), which
   write nothing: a claimed or running one is asked to stop at the Bridge's next report (`UpdateHeld` sets
   `cancel_requested` with the server's reason `CancelModuleOff`, "its module was turned off", in the
-  console's `SERVER_CANCEL_REASONS`; server#218), a parked one when it reports working again. A claimed
-  `sidecars.generate` job with `contribute: "issue"` is never asked: the Bridge would drop the characters
-  and recaps it is writing, and it files them itself at its end, a step the server has no part in. A
-  podcast or Audible job a claim handed out carries on with its module off too.
+  console's `SERVER_CANCEL_REASONS`; server#218), a parked one when it reports working again. A
+  `sidecars.generate` job with `contribute: "issue"` is never asked to stop (the Bridge would drop the
+  characters and recaps it is writing): while the module is off the Bridge's claim and report answers carry
+  `share_off: true` (`Job.ShareOff`, `Service.flagShareOff`, computed, never stored, omitted otherwise), and
+  a Bridge that honours it keeps the job's results local, filing nothing, and says so in its result
+  (`share_skipped`). Such a Bridge claims with `share_off=1` (`ClaimOptions.ShareOff`; an older server
+  ignores the parameter): a queued generate-and-share job is then handed to it flagged rather than held
+  (`sharesAlong`), while a claim without it (an older Bridge, which would share anyway) still finds the job
+  held. A podcast or Audible job a claim handed out carries on with its module off too.
   `sidecars.contribute` (family `sidecars`; "Share with the community" after a local run: the Bridge files
   what its engine book holds): a book `path`, params strict `{work_id?, dimensions?}` (`dimensions` from
   `characters`, `recaps`, each once, stored in that order; absent or empty = both; no `work_id` takes the
@@ -4717,7 +4723,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   asks again from where it was, playing if it was; a mint that fails says it can't play, asking nothing with the
   old token); the console offers no
   Edit chapters in a podcast library (`ChaptersCard` reads the library's kind). A `chapters.detect` job for a book
-  whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, `catalog.DetectRefused` from
+  whose edit applies is refused 409 `chapters_edited` (`bridge.ErrChaptersEdited`, `catalog.DetectRefusal` from
   the book's `chapters_source`; a dormant edit refuses nothing), as `chapters_chosen` is: a found list
   would sit under the edit, never used; saving an edit cancels a queued or parked one (`bridge.CancelChaptersEdited`;
   a claimed or running one finishes, its list a fallback: `bridge.CancelWaitingBookJob`). Only the console queues detect jobs (the player never does): Health's Detect

@@ -30,7 +30,7 @@ func TestIdleClaimLeavesGenerationAlone(t *testing.T) {
 	idle("empty queue", []string{KindVerify, KindPodcastPoll}, nil)
 
 	gen := q.db.ContentGeneration()
-	if j, err := q.waitClaim(ctx, q.token, []string{KindVerify}, 50*time.Millisecond); j != nil || err != nil {
+	if j, err := q.waitClaim(ctx, q.token, []string{KindVerify}, 50*time.Millisecond, ClaimOptions{}); j != nil || err != nil {
 		t.Fatalf("waiting claim = %+v, %v", j, err)
 	}
 	if got := q.db.ContentGeneration(); got != gen {

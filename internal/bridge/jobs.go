@@ -173,11 +173,13 @@ type kindSpec struct {
 	cancelsOpen map[string]string
 	// module is the managed module a job of the kind needs ("" for none): the
 	// api answers 404 module_off while it is off (ModuleFor), and a queued one
-	// is held meanwhile (Service.ModuleOn). A job that needs ModuleContributions
+	// is held meanwhile (Service.held; a generate job that shares along is not
+	// held from a claim that honours ShareOff). A job that needs ModuleContributions
 	// files to the community, so it also needs a Bridge that can
 	// (ErrCannotContribute), and one of a kind that only files (the kind's own
 	// module is ModuleContributions) is asked to stop at its next report once
-	// the module is off (Service.stopsShare).
+	// the module is off (Service.stopsShare); a sidecars.generate job that
+	// shares along is told to keep its results local instead (Job.ShareOff).
 	module string
 	// maxParams bounds the params as sent, in bytes (0: defaultParamsBytes).
 	maxParams int
@@ -252,13 +254,19 @@ const claimedStatesSQL = `('claimed', 'running')`
 // parked.
 const workingStatesSQL = `('queued', 'claimed', 'running')`
 
+// moduleOff reports whether the managed module id is off (with no ModuleOn
+// wired every module counts as on).
+func (s *Service) moduleOff(id string) bool {
+	return s.ModuleOn != nil && !s.ModuleOn(id)
+}
+
 // held reports whether a queued job of kind with params waits for a managed
-// module that is off (ModuleFor; with no ModuleOn wired every module counts as
-// on): no claim hands it out (nextQueued), and it refuses no new job that
-// cancels it (givesWay).
+// module that is off (ModuleFor, moduleOff): no claim hands it out
+// (nextQueued; but a claim that honours ShareOff is handed one held only for
+// its share, sharesAlong), and it refuses no new job that cancels it (givesWay).
 func (s *Service) held(kind string, params json.RawMessage) bool {
 	m := ModuleFor(kind, params)
-	return m != "" && s.ModuleOn != nil && !s.ModuleOn(m)
+	return m != "" && s.moduleOff(m)
 }
 
 // stopsShare reports whether a job of kind the Bridge works on is asked to
@@ -268,10 +276,25 @@ func (s *Service) held(kind string, params json.RawMessage) bool {
 // writes nothing, so its stop loses no work. Every other job a claim handed
 // out carries on with its module off: a podcast or Audible job, and a
 // sidecars.generate job that contributes, whose stop would throw away the
-// characters and recaps it is writing (it files them itself at its end; the
-// server has no part in that step to refuse).
+// characters and recaps it is writing: it is told to keep them local instead
+// (Job.ShareOff).
 func (s *Service) stopsShare(kind string) bool {
-	return kinds[kind].module == ModuleContributions && s.ModuleOn != nil && !s.ModuleOn(ModuleContributions)
+	return kinds[kind].module == ModuleContributions && s.moduleOff(ModuleContributions)
+}
+
+// sharesAlong reports whether a job of kind with params files to the community
+// only as a step of its own work: a sidecars.generate job with contribute
+// "issue", which ModuleFor gives ModuleContributions though its kind's own
+// module is none.
+func sharesAlong(kind string, params json.RawMessage) bool {
+	return kind == KindSidecars && contributes(params)
+}
+
+// flagShareOff sets j.ShareOff for the Bridge's answer: a job that shares
+// along (sharesAlong) while the Contributions module is off keeps its results
+// local, its work carried on (server#218).
+func (s *Service) flagShareOff(j *Job) {
+	j.ShareOff = s.moduleOff(ModuleContributions) && sharesAlong(j.Kind, j.Params)
 }
 
 // blocker is the open job that refuses a new job of kind for the book
@@ -379,9 +402,10 @@ func contributes(params json.RawMessage) bool {
 // (kindSpec.module), and for sidecars.generate, ModuleContributions when it
 // asks to contribute ("issue"). The api answers 404 module_off for such a job
 // while the module is off, before anything else about it is checked, and no
-// claim hands out a queued one meanwhile (nextQueued).
+// claim hands out a queued one meanwhile (nextQueued), but for a generate job
+// that shares along to a Bridge that honours ShareOff (ClaimOptions.ShareOff).
 func ModuleFor(kind string, params json.RawMessage) string {
-	if kind == KindSidecars && contributes(params) {
+	if sharesAlong(kind, params) {
 		return ModuleContributions
 	}
 	return kinds[kind].module
@@ -464,6 +488,13 @@ type Job struct {
 	// blanks a response (a whole job list); a claim ends such a job
 	// (claimPriority).
 	ParamsUnreadable bool `json:"params_unreadable,omitempty"`
+	// ShareOff tells the Bridge to keep a job's results local, filing nothing
+	// to the community: a sidecars.generate job with contribute "issue" while
+	// the Contributions module is off (Service.flagShareOff). Set only on the
+	// Bridge's claim and report answers, never stored: the Bridge reads it at
+	// each answer and, once heard, never shares for the job (server#218).
+	// Additive: omitted otherwise, and an older Bridge ignores it.
+	ShareOff bool `json:"share_off,omitempty"`
 }
 
 // Target is the job's book path for an audit entry ("" for a job about a whole
@@ -597,10 +628,16 @@ type NewJob struct {
 	Kind      string
 	LibraryID *int64
 	// Path is the book's indexed path (nil: the job is about the library itself).
-	Path         *string
-	Params       json.RawMessage
-	RequestedBy  int64
-	Priority     int
+	Path        *string
+	Params      json.RawMessage
+	RequestedBy int64
+	Priority    int
+	// Check, when set, refuses the job with its error, run in Enqueue's
+	// transaction once lapsed leases are ended (before the open job of the
+	// kind is looked up, so it refuses even when one is open), so a write
+	// that would refuse it can't land between the caller's own look and the
+	// insert: chapters.detect's catalog.DetectRefusal (server#471).
+	Check        func(context.Context, *sql.Tx) error
 	feedRedacted string
 	fetch        *FetchOptions
 	// adoptOnly: only an open job with the same dedupe key is returned;
@@ -655,14 +692,14 @@ var ErrDescribeOpen = errors.New("a description job is open for the book")
 // ErrChaptersChosen is a chapters.detect job for a book whose chapter source
 // an admin chose (the files' or the community's): the chapters it would find
 // stand in only when none was chosen, so they would never be used (a 409
-// chapters_chosen). catalog.DetectRefused answers it, as the catalog holds
+// chapters_chosen). catalog.DetectRefusal answers it, as the catalog holds
 // the choice; making one cancels a queued or parked job (CancelChaptersChosen).
 var ErrChaptersChosen = errors.New("an admin chose the book's chapter source")
 
 // ErrChaptersEdited is a chapters.detect job for a book whose chapters an
 // admin edited, while the edit applies (catalog.ChaptersFromEdited): an edit
 // stands over every other source, so a found list would sit dormant under it
-// (a 409 chapters_edited). catalog.DetectRefused answers it, as the catalog
+// (a 409 chapters_edited). catalog.DetectRefusal answers it, as the catalog
 // holds the edit; saving one cancels a queued or parked job (CancelChaptersEdited).
 var ErrChaptersEdited = errors.New("an admin edited the book's chapters")
 
@@ -736,6 +773,9 @@ func checkNew(j *NewJob) error {
 // job only while no open job of another kind refuses it (kindSpec's
 // refusedWhileOpen: ErrGenerateOpen, ErrDetectOpen, ErrDescribeOpen,
 // ErrContributeOpen, ErrReadalongOpen); the open job of its own kind is still returned either way.
+// j.Check, when set, refuses it in the insert's transaction once the kind is
+// known to run, ahead of the open job and the other refusals
+// (chapters.detect's catalog.DetectRefusal).
 // The caller has resolved the library and the book (j.Path is the book's
 // indexed path) and checked the job's module is on (ModuleFor).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (*Job, bool, error) {
@@ -778,6 +818,11 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 		var err error
 		if exp, err = expireTx(ctx, tx, now); err != nil {
 			return err
+		}
+		if j.Check != nil {
+			if err := j.Check(ctx, tx); err != nil {
+				return err
+			}
 		}
 		var id int64
 		err = tx.QueryRowContext(ctx,
@@ -1172,11 +1217,26 @@ var ErrNoHeartbeat = errors.New("the bridge hasn't reported yet")
 // poll outlives the request's authentication), no job is handed out on it
 // (ErrNotPaired).
 func (s *Service) ClaimFor(ctx context.Context, token int64, asked []string, wait time.Duration) (*Job, error) {
-	return s.ClaimForPriority(ctx, token, asked, wait, nil)
+	return s.ClaimWith(ctx, token, asked, wait, ClaimOptions{})
 }
 
-// ClaimForPriority applies the optional priority floor before a lease is issued.
-func (s *Service) ClaimForPriority(ctx context.Context, token int64, asked []string, wait time.Duration, minPriority *int32) (*Job, error) {
+// ClaimOptions are a claim's optional terms, each one the Bridge asked for.
+type ClaimOptions struct {
+	// MinPriority is the priority floor (min_priority, negotiated through the
+	// heartbeat's accepts): nil for none.
+	MinPriority *int32
+	// ShareOff: the Bridge honours a job's ShareOff (share_off=1), so a
+	// sidecars.generate job that would also share is handed out while the
+	// Contributions module is off, flagged to keep its results local, rather
+	// than held (nextQueued). An older Bridge sends none: such a job stays
+	// held for it, as it would share anyway. Unlike MinPriority it is sent
+	// without the heartbeat's accepts naming it: a server that ignores it
+	// holds the job and never answers share_off, as before.
+	ShareOff bool
+}
+
+// ClaimWith is ClaimFor with the claim's options (ClaimOptions).
+func (s *Service) ClaimWith(ctx context.Context, token int64, asked []string, wait time.Duration, opt ClaimOptions) (*Job, error) {
 	h, err := s.LastHeartbeat(ctx)
 	if err != nil {
 		return nil, err
@@ -1193,7 +1253,11 @@ func (s *Service) ClaimForPriority(ctx context.Context, token int64, asked []str
 	if len(ks) == 0 {
 		return nil, nil
 	}
-	return s.waitClaimPriority(ctx, token, ks, wait, minPriority)
+	job, err := s.waitClaim(ctx, token, ks, wait, opt)
+	if job != nil {
+		s.flagShareOff(job)
+	}
+	return job, err
 }
 
 // claim hands the Bridge holding token the next queued job of one of kinds
@@ -1201,8 +1265,8 @@ func (s *Service) ClaimForPriority(ctx context.Context, token int64, asked []str
 // Lease, or nil when there is none; ErrNotPaired once token is no longer the
 // paired Bridge's. An idle claim (claimDue false) answers from the reader pool
 // and writes nothing.
-func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
-	due, hand, err := s.claimDue(ctx, token, kinds, minPriority)
+func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, opt ClaimOptions) (*Job, error) {
+	due, hand, err := s.claimDue(ctx, token, kinds, opt)
 	if err != nil || !due {
 		return nil, err
 	}
@@ -1211,14 +1275,14 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 	// needs the fsync, its attempt number never handed out twice. The jobs it
 	// put back may be this claim's to lease, so it looks again.
 	if !hand {
-		if _, err := s.claimTx(ctx, s.db.WithTx, token, nil, nil, false); err != nil {
+		if _, err := s.claimTx(ctx, s.db.WithTx, token, nil, ClaimOptions{}, false); err != nil {
 			return nil, err
 		}
-		if id, err := s.nextQueued(ctx, s.db, kinds, minPriority); err != nil || id == 0 {
+		if id, err := s.nextQueued(ctx, s.db, kinds, opt); err != nil || id == 0 {
 			return nil, err
 		}
 	}
-	return s.claimTx(ctx, s.db.WithDurableTx, token, kinds, minPriority, true)
+	return s.claimTx(ctx, s.db.WithDurableTx, token, kinds, opt, true)
 }
 
 // claimTx is a claim's transaction, run by withTx: it ends the lapsed leases
@@ -1226,7 +1290,7 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 // leases the next queued job of kinds (nil when none). Each write has its check
 // in claimDue, or an idle claim skips it.
 func (s *Service) claimTx(ctx context.Context, withTx func(context.Context, string, func(*sql.Tx) error) error,
-	token int64, kinds []string, minPriority *int32, lease bool) (*Job, error) {
+	token int64, kinds []string, opt ClaimOptions, lease bool) (*Job, error) {
 	var exp expiry
 	var job *Job
 	err := withTx(ctx, "bridge.Claim", func(tx *sql.Tx) error {
@@ -1248,7 +1312,7 @@ func (s *Service) claimTx(ctx context.Context, withTx func(context.Context, stri
 		if !lease {
 			return nil
 		}
-		id, err := s.nextQueued(ctx, tx, kinds, minPriority)
+		id, err := s.nextQueued(ctx, tx, kinds, opt)
 		if err != nil || id == 0 {
 			return err
 		}
@@ -1277,7 +1341,7 @@ func (s *Service) claimTx(ctx context.Context, withTx func(context.Context, stri
 // claim's transaction repeats. A write landing after these reads is no loss: an
 // enqueue or requeue wakes the waiting claims (waitClaim takes its wake channel
 // before it claims), and a lease that lapses later is due at the next claim.
-func (s *Service) claimDue(ctx context.Context, token int64, kinds []string, minPriority *int32) (due, hand bool, err error) {
+func (s *Service) claimDue(ctx context.Context, token int64, kinds []string, opt ClaimOptions) (due, hand bool, err error) {
 	if err := bridgeTokenLive(ctx, s.db, token); err != nil {
 		return false, false, err
 	}
@@ -1285,7 +1349,7 @@ func (s *Service) claimDue(ctx context.Context, token int64, kinds []string, min
 	if err != nil {
 		return false, false, err
 	}
-	id, err := s.nextQueued(ctx, s.db, kinds, minPriority)
+	id, err := s.nextQueued(ctx, s.db, kinds, opt)
 	switch {
 	case err != nil:
 		return false, false, err
@@ -1413,11 +1477,13 @@ func (s *Service) settleUnsentClaim(ctx context.Context, claim *Job, op, update 
 // nextQueued is the id of the next queued job of one of kinds (highest
 // priority, then oldest), 0 for none, passing over a held one: a job that needs
 // a managed module that is off (held) waits, queued, until the module is on
-// again. The queue is short, so the kinds are matched as read (the statement
+// again. A generate job held only for its share (sharesAlong) is not held from
+// a claim that honours ShareOff (opt.ShareOff): it runs, its results kept
+// local. The queue is short, so the kinds are matched as read (the statement
 // stays a constant).
-func (s *Service) nextQueued(ctx context.Context, q rowsQuerier, kinds []string, minPriority *int32) (int64, error) {
+func (s *Service) nextQueued(ctx context.Context, q rowsQuerier, kinds []string, opt ClaimOptions) (int64, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT id, kind, params FROM bridge_jobs WHERE state = 'queued' AND (? IS NULL OR priority >= ?) ORDER BY priority DESC, id`, minPriority, minPriority)
+		`SELECT id, kind, params FROM bridge_jobs WHERE state = 'queued' AND (? IS NULL OR priority >= ?) ORDER BY priority DESC, id`, opt.MinPriority, opt.MinPriority)
 	if err != nil {
 		return 0, err
 	}
@@ -1434,27 +1500,24 @@ func (s *Service) nextQueued(ctx context.Context, q rowsQuerier, kinds []string,
 		if !slices.Contains(kinds, kind) {
 			continue
 		}
-		if !s.held(kind, params) {
+		if !s.held(kind, params) || opt.ShareOff && sharesAlong(kind, params) {
 			return id, rows.Close() // closed before the claim's update: one connection
 		}
 	}
 	return 0, rows.Err()
 }
 
-// waitClaim is claim that waits up to wait (at most MaxWait) for a job to be
+// waitClaim is claimPriority that waits up to wait (at most MaxWait) for a job to be
 // queued when there is none, returning nil when none came or ctx ended (the
 // caller left, or the server is stopping: a claim cut short by it committed
 // nothing).
-func (s *Service) waitClaim(ctx context.Context, token int64, kinds []string, wait time.Duration) (*Job, error) {
-	return s.waitClaimPriority(ctx, token, kinds, wait, nil)
-}
-func (s *Service) waitClaimPriority(ctx context.Context, token int64, kinds []string, wait time.Duration, minPriority *int32) (*Job, error) {
+func (s *Service) waitClaim(ctx context.Context, token int64, kinds []string, wait time.Duration, opt ClaimOptions) (*Job, error) {
 	wait = min(max(wait, 0), MaxWait)
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	for {
 		woken := s.wake.wait()
-		job, err := s.claimPriority(ctx, token, kinds, minPriority)
+		job, err := s.claimPriority(ctx, token, kinds, opt)
 		if err != nil && ctx.Err() != nil {
 			return nil, nil
 		}
@@ -1657,6 +1720,7 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 	}
 	s.settle(ctx, exp)
 	s.report(ctx, job, from, fromCode)
+	s.flagShareOff(job)
 	return job, nil
 }
 

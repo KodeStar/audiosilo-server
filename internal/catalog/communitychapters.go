@@ -444,23 +444,37 @@ func replaceChapters(ctx context.Context, tx *sql.Tx, bookID int64, chs []metada
 	return nil
 }
 
-// DetectRefused is why a chapters.detect job for book would find a list never
-// used: bridge.ErrChaptersChosen when an admin chose its chapter source,
-// bridge.ErrChaptersEdited while an edit of its chapters applies (a dormant
-// one, made on other files, is none: the book's chapters come from the next
-// source, a found list among them); nil when neither. book is as the caller
-// just read it (GetBookByPath), so only the choice is read here.
-func (c *Catalog) DetectRefused(ctx context.Context, book *Book) error {
-	var chosen bool
-	if err := c.db.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM chapter_choices WHERE library_id = ? AND path = ?)`,
-		book.LibraryID, book.RelPath).Scan(&chosen); err != nil {
+// DetectRefusal is the check of a chapters.detect job for the book at
+// (libraryID, path) that bridge.NewJob.Check runs in the job's enqueue
+// transaction (detectRefused): an edit or a choice saved after the request
+// read the book refuses the job, and one saved after the job is queued cancels
+// it (bridge.CancelWaitingBookJob in the same writer), so no detection slips
+// in between (server#471).
+func DetectRefusal(libraryID int64, path string) func(context.Context, *sql.Tx) error {
+	return func(ctx context.Context, tx *sql.Tx) error { return detectRefused(ctx, tx, libraryID, path) }
+}
+
+// detectRefused is why a chapters.detect job for the book at (libraryID,
+// path) would find a list never used, read through q: bridge.ErrChaptersChosen
+// when an admin chose its chapter source, bridge.ErrChaptersEdited while an
+// edit of its chapters applies (its chapters_source; a dormant one, made on
+// other files, is none: the book's chapters come from the next source, a found
+// list among them); nil when neither, and for a book no longer indexed there.
+func detectRefused(ctx context.Context, q querier, libraryID int64, path string) error {
+	var (
+		chosen bool
+		source string
+	)
+	if err := q.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM chapter_choices WHERE library_id = ?1 AND path = ?2),
+		        COALESCE((SELECT chapters_source FROM books WHERE library_id = ?1 AND rel_path = ?2), '')`,
+		libraryID, path).Scan(&chosen, &source); err != nil {
 		return err
 	}
 	switch {
 	case chosen:
 		return bridge.ErrChaptersChosen
-	case book.ChaptersSource == ChaptersFromEdited:
+	case source == ChaptersFromEdited:
 		return bridge.ErrChaptersEdited
 	}
 	return nil
@@ -469,7 +483,7 @@ func (c *Catalog) DetectRefused(ctx context.Context, book *Book) error {
 // setChapterChoice writes (or, for ChapterSourceAuto, removes) a book's choice of
 // chapter source. A choice cancels the book's chapters.detect job while it is
 // queued or parked (bridge.CancelChaptersChosen): the list it would find is
-// not used under the choice, as a new one is refused then (DetectRefused). A
+// not used under the choice, as a new one is refused then (DetectRefusal). A
 // claimed or running one finishes: its list stands in again if the choice is
 // undone.
 func (c *Catalog) setChapterChoice(ctx context.Context, tx *sql.Tx, ref Ref, source string, editor any, now string) error {
