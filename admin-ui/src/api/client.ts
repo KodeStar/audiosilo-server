@@ -450,12 +450,16 @@ export const api = {
   logout: (token?: string) => request<void>('POST', '/auth/logout', undefined, token),
   me: () => request<User>('GET', '/me'),
   /**
-   * Sets the signed-in account's own password (204). `current` is required
-   * while the account has one (401 WRONG_CURRENT_PASSWORD when wrong); the session making the change
-   * stays signed in, the others end.
+   * Sets the signed-in account's own password. `current` is required while the
+   * account has one (401 WRONG_CURRENT_PASSWORD when wrong); the session making
+   * the change stays signed in, the others end. Answers how many of the
+   * account's other sessions it ended (server#285, `{signed_out}`).
    */
   setOwnPassword: (password: string, current: string) =>
-    request<void>('POST', '/auth/password', { password, current_password: current }),
+    request<{ signed_out: number }>('POST', '/auth/password', {
+      password,
+      current_password: current,
+    }),
   /**
    * A single-use pairing token for the signed-in admin, which "Listen in
    * player" hands the web player (403 for an API key). `ttlSeconds` asks for a

@@ -304,7 +304,8 @@ function EndKeys({ user, keys, link }: { user: AdminUser; keys: number; link: bo
         onConfirm={async () => {
           const ended = await api.endKeys(user.id);
           invalidateDevices(qc);
-          void qc.invalidateQueries({ queryKey: queryKeys.user(user.id) }); // its calendar link
+          // The detail alone (its calendar link), not the keys under it (the listening).
+          void qc.invalidateQueries({ queryKey: queryKeys.user(user.id), exact: true });
           toast.add({ title: endedKeysToast(t, ended, user.username), type: 'success' });
         }}
       />
