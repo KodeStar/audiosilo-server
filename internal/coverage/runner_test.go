@@ -561,3 +561,49 @@ func TestWakeRunsWhenDue(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// Status says when the schedule runs the report next (server#448): an hour
+// after the start, or a day after the last run when that is later; nothing
+// while the report is off or once the schedule has stopped.
+func TestStatusNextRun(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	start := e.clock.now()
+	if err := e.cat.SaveUnknownASINReportState(context.Background(), catalog.UnknownASINReport{
+		State: StateOK, LastRunAt: stamp(start.Add(-2 * time.Hour)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := e.runner()
+	if st, _ := r.Status(context.Background()); st.NextRunAt != "" {
+		t.Fatalf("before the schedule: next_run_at = %q, want none", st.NextRunAt)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	want := stamp(start.Add(22 * time.Hour)) // a day after the last run, later than an hour on
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st, err := r.Status(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.NextRunAt == want {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("next_run_at = %q, want %q", st.NextRunAt, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	e.on.Store(false)
+	if st, _ := r.Status(context.Background()); st.NextRunAt != "" {
+		t.Fatalf("switched off: next_run_at = %q, want none", st.NextRunAt)
+	}
+	e.on.Store(true)
+	cancel()
+	<-done
+	if st, _ := r.Status(context.Background()); st.NextRunAt != "" {
+		t.Fatalf("after the schedule stopped: next_run_at = %q, want none", st.NextRunAt)
+	}
+}

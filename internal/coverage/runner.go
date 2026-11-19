@@ -30,6 +30,7 @@
 package coverage
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -111,6 +112,10 @@ type Runner struct {
 	offCheck time.Duration
 	// httpsLogged: the "needs an https URL" line is logged once a process.
 	httpsLogged bool
+	// nextMu guards next, when the schedule (Run) runs the report next; zero
+	// before Run has worked it out, and after it returns.
+	nextMu sync.Mutex
+	next   time.Time
 }
 
 // New returns a Runner; Run starts its schedule.
@@ -137,7 +142,9 @@ func (r *Runner) Wake() {
 // (or a day after the last run, when that is later), then daily with jitter.
 func (r *Runner) Run(ctx context.Context) {
 	next := r.firstRun(ctx)
+	defer r.setNext(time.Time{})
 	for {
+		r.setNext(next)
 		wait := next.Sub(r.opt.Now())
 		if !r.opt.On() {
 			// Looked at again in a minute (Wake runs it at once when it is
@@ -170,6 +177,13 @@ func (r *Runner) Run(ctx context.Context) {
 			next = r.opt.Now().Add(pool.Jittered(interval, jitter))
 		}
 	}
+}
+
+// setNext records when the schedule runs the report next (Status).
+func (r *Runner) setNext(at time.Time) {
+	r.nextMu.Lock()
+	r.next = at
+	r.nextMu.Unlock()
 }
 
 // firstRun is when the first run after the start is: an hour on, or a day
@@ -380,18 +394,28 @@ type Status struct {
 	State     string `json:"state"`
 	LastRunAt string `json:"last_run_at,omitempty"`
 	LastSent  int    `json:"last_sent"`
+	// NextRunAt is when the schedule runs the report next, while it is on
+	// (absent while it is off, or before the schedule has started): the
+	// console polls the status around it rather than guessing the schedule
+	// (server#448). A run due now may still be skipped (a run within the day,
+	// the quiet week) or held for the mirror's copy.
+	NextRunAt string `json:"next_run_at,omitempty"`
 }
 
-// Status reads the report's last run.
+// Status reads the report's last run, and when the next is due.
 func (r *Runner) Status(ctx context.Context) (Status, error) {
 	st, err := r.cat.UnknownASINReportState(ctx)
 	if err != nil {
 		return Status{}, err
 	}
-	if st.State == "" {
-		return Status{State: StateNever}, nil
+	out := Status{State: cmp.Or(st.State, StateNever), LastRunAt: st.LastRunAt, LastSent: st.LastSent}
+	r.nextMu.Lock()
+	next := r.next
+	r.nextMu.Unlock()
+	if !next.IsZero() && r.opt.On() {
+		out.NextRunAt = stamp(next)
 	}
-	return Status{State: st.State, LastRunAt: st.LastRunAt, LastSent: st.LastSent}, nil
+	return out, nil
 }
 
 // within reports whether the stamp at is less than age before now ("" never is).
