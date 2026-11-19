@@ -505,3 +505,27 @@ func TestFolderCacheNeverTakesAKeptFolderUnlookedAt(t *testing.T) {
 		t.Error("the read's own folder is still open after it")
 	}
 }
+
+// A folder not there is the answer for every name in it, at one look: the
+// root's folder stays kept and the name is not looked for a second way.
+func TestBelowFolderAnswersForAFolderNotThere(t *testing.T) {
+	root, _ := belowFixture(t)
+	if _, err := StatBelow(root, filepath.Join(root, "Book", "01.mp3")); err != nil {
+		t.Fatal(err)
+	}
+	top := keptNow(root, ".")
+	if top == nil {
+		t.Fatal("the root's folder is not kept")
+	}
+	for range 3 {
+		if info, err := LstatBelow(root, filepath.Join(root, "Book", ".audiosilo", "01.chapters.json")); !NotExist(err) {
+			t.Fatalf("a name in a folder not there: %v, %v", info, err)
+		}
+	}
+	if keptNow(root, ".") != top {
+		t.Error("a folder not there let the root's folder go")
+	}
+	if keptNow(root, filepath.Join("Book", ".audiosilo")) != nil {
+		t.Error("a folder not there is kept")
+	}
+}

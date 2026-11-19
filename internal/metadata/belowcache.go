@@ -286,7 +286,8 @@ func closeFolders(folders []*keptFolder) {
 // either way: a kept folder is the one opened below root and still at its
 // path (folderCache.current), and a link swapped in for the name is refused
 // as Below refuses it. A name not there is the answer (an episode with no
-// chapters file costs one look, the folders kept). A name the folder can't
+// chapters file costs one look, the folders kept), and so is its folder not
+// there (a show with no .audiosilo folder: one look through the root's). A name the folder can't
 // open (a link to a folder beside it, which the folder's own root refuses)
 // is opened through the root's kept folder, the whole path under it, and
 // failing that, the path resolved as Below does (Below itself answers: a
@@ -310,7 +311,9 @@ func belowFolder[T any](root, path string, followLast bool, open func(r *os.Root
 	try := func(dir, name string) (v T, answered bool, err error) {
 		f, err := belowFolders.get(rootAbs, dir)
 		if err != nil {
-			return zero, false, err
+			// No such folder under root: name is not there either, and
+			// that is the answer, at one look.
+			return zero, NotExist(err), err
 		}
 		v, err = open(f.r, name)
 		if staleHandle(err) {
