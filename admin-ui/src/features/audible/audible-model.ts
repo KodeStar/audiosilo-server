@@ -1,7 +1,7 @@
 import type { TFunction } from 'i18next';
-import type { AudibleAccount, AudibleTitle, AudibleTitleState } from '@/api/types';
+import type { AudibleAccount, AudibleTitle, AudibleTitleState, BridgeJob } from '@/api/types';
 import type { StatusTone } from '@/components/status-text';
-import { failureCode, isOpen } from '@/features/bridge/bridge-model';
+import { failureCode, num, text } from '@/features/bridge/bridge-model';
 
 // Audible (Bridge Phase 4a): the accounts the Bridge signed in to and the titles
 // each owns, read-only in the console (accounts are signed in and mapped on the
@@ -116,10 +116,39 @@ export function audibleJobReason(job: {
   return undefined;
 }
 
-/** Whether a title's backup is waiting or running (a pending request included). */
-export function importOpen(x: Pick<AudibleTitle, 'import'>): boolean {
-  const s = x.import?.state;
-  return s === 'pending' || (s !== undefined && isOpen(s));
+/**
+ * What an ended place sync (audible.sync) did, from its result (the Bridge's
+ * audiblesync.Result): nothing because Audible asked the Bridge to wait (until
+ * `until`, when it said) or the account's sync was off by then, else how many
+ * of the titles had a place on Audible and how many of those moved the place
+ * here. A failed sync's counts are what it did before it stopped (`partial`;
+ * a Bridge that sends them, bridge#80); undefined for another kind, a job
+ * still open, or a result without them.
+ */
+export type SyncSummary =
+  | { kind: 'waiting'; until?: string }
+  | { kind: 'off' }
+  | { kind: 'counts'; titles: number; heard: number; applied: number; partial: boolean };
+
+export function syncSummary(
+  job: Pick<BridgeJob, 'kind' | 'state'> & { result?: Record<string, unknown> | null },
+): SyncSummary | undefined {
+  const r = job.result;
+  if (job.kind !== 'audible.sync' || !r || (job.state !== 'done' && job.state !== 'failed'))
+    return undefined;
+  if (job.state === 'done' && r.waiting === true)
+    return { kind: 'waiting', until: text(r.wait_until) };
+  if (job.state === 'done' && r.sync_off === true) return { kind: 'off' };
+  const titles = num(r.titles);
+  const heard = num(r.heard);
+  if (titles === undefined || heard === undefined) return undefined;
+  return {
+    kind: 'counts',
+    titles,
+    heard,
+    applied: num(r.applied) ?? 0,
+    partial: job.state === 'failed',
+  };
 }
 
 /**
@@ -133,16 +162,18 @@ export function backupRunning(x: Pick<AudibleTitle, 'import'>): boolean {
 }
 
 /**
- * Whether "Back up" is offered for a title: one the account can download (or a
- * preorder, which waits for its release), not on this server (or marked "Not
- * this book", whose match isn't it), with no backup waiting or running.
+ * Whether "Not this book" is offered for a title: not on one whose match is its
+ * own backup (a done backup placed the title's own book), always to undo it.
  */
-export function canBackUp(x: AudibleTitle): boolean {
-  return (
-    (x.state === 'available' || x.state === 'preorder') &&
-    (!x.match || x.rejected) &&
-    !importOpen(x)
-  );
+export function canReject(x: Pick<AudibleTitle, 'match' | 'rejected'>): boolean {
+  return x.rejected || x.match?.how !== 'import';
+}
+
+/** Whether a title is on this server: a match not marked "Not this book". */
+export function onServer<T extends Pick<AudibleTitle, 'match' | 'rejected'>>(
+  x: T,
+): x is T & { match: NonNullable<T['match']> } {
+  return x.match !== null && !x.rejected;
 }
 
 /**
@@ -153,14 +184,7 @@ export function canBackUp(x: AudibleTitle): boolean {
  * switch is separate.
  */
 export function canSync(x: AudibleTitle): boolean {
-  return (
-    x.match !== null &&
-    !x.rejected &&
-    x.state !== 'gone' &&
-    x.state !== 'preorder' &&
-    !x.ignored &&
-    !x.no_sync
-  );
+  return onServer(x) && x.state !== 'gone' && x.state !== 'preorder' && !x.ignored && !x.no_sync;
 }
 
 /** How a title's backup reads: its i18n key, the status dot, and its code's words. */
@@ -171,7 +195,7 @@ export function importStatus(
   const imp = x.import;
   if (!imp) return null;
   const code = (IMPORT_CODES as readonly string[]).includes(imp.code)
-    ? `audible.code.${imp.code}`
+    ? importCodeKey(imp.code, imp.conflict)
     : undefined;
   switch (imp.state) {
     case 'pending':
@@ -190,6 +214,17 @@ export function importStatus(
     case 'cancelled':
       return { key: 'audible.import.cancelled', tone: 'off' };
   }
+}
+
+/**
+ * A backup's code worded: `exists` by what was in the way (a folder that is
+ * already a book, or holds audio, is no file at the destination); a conflict
+ * this console doesn't know reads as the file.
+ */
+function importCodeKey(code: string, conflict = ''): string {
+  if (code === 'exists' && (conflict === 'book' || conflict === 'audio'))
+    return `audible.code.exists.${conflict}`;
+  return `audible.code.${code}`;
 }
 
 /** A destination as typed: trimmed, without enclosing slashes ("" = the account's placement). */

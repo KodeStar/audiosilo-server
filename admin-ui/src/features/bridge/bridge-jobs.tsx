@@ -11,7 +11,7 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
 import { formatDateTime, formatNumber, formatRelative, formatTook } from '@/lib/format';
-import { audibleJobReason } from '@/features/audible/audible-model';
+import { audibleJobReason, syncSummary, type SyncSummary } from '@/features/audible/audible-model';
 import { fetchReason, librivoxProject, librivoxTitle } from '@/features/librivox/librivox-model';
 import { CardEmpty } from '@/features/settings/card-empty';
 import { cancelJob } from './bridge-actions';
@@ -163,6 +163,7 @@ function JobRow({
   const generate = isBookKind(job.kind);
   const progress: ReturnType<typeof listedProgress> = generate ? {} : listedProgress(job);
   const summary = generate ? null : resultSummary(job.result);
+  const sync = syncSummary(job);
   const asin = backupAsin(job);
   const show = podcastSubject(job);
   const project = librivoxProject(job);
@@ -313,6 +314,7 @@ function JobRow({
         </p>
       ) : null}
       {summary ? <ResultLine summary={summary} lang={lang} /> : null}
+      {sync ? <SyncLine sync={sync} lang={lang} /> : null}
       {open ? (
         <div className="flex flex-col gap-2">
           {hasContent(job.result) ? (
@@ -330,6 +332,34 @@ function JobRow({
       ) : null}
     </li>
   );
+}
+
+/**
+ * What a place sync did (syncSummary): a sync that only waited on Audible, or
+ * found the sync off, did nothing though it reads Done; otherwise the places
+ * Audible had and the ones that moved here, before it stopped when it failed.
+ */
+function SyncLine({ sync, lang }: { sync: SyncSummary; lang: string }) {
+  const { t } = useTranslation();
+  let line: string;
+  switch (sync.kind) {
+    case 'waiting':
+      line = sync.until
+        ? t('audible.syncResult.waitingUntil', { when: formatDateTime(sync.until, lang, true) })
+        : t('audible.syncResult.waiting');
+      break;
+    case 'off':
+      line = t('audible.syncResult.off');
+      break;
+    case 'counts':
+      line = t(sync.partial ? 'audible.syncResult.partial' : 'audible.syncResult.counts', {
+        count: sync.titles,
+        titles: formatNumber(sync.titles, lang),
+        heard: formatNumber(sync.heard, lang),
+        applied: formatNumber(sync.applied, lang),
+      });
+  }
+  return <p className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">{line}</p>;
 }
 
 /** A result's facts in a line ("4 files checked, all match · Can write · Took 1.2 s"). */

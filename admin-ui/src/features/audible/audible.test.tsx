@@ -18,7 +18,7 @@ import {
   accountName,
   audibleJobReason,
   backupRunning,
-  canBackUp,
+  canReject,
   canSync,
   chosenAccount,
   cleanDest,
@@ -26,10 +26,12 @@ import {
   lookList,
   matchedParam,
   needsLook,
+  onServer,
   plannedLine,
   plannedPlaceholder,
   pollTarget,
   reasonKey,
+  syncSummary,
   titleByline,
 } from './audible-model';
 
@@ -86,6 +88,7 @@ function title(over: Partial<AudibleTitle> = {}): AudibleTitle {
     needs_attention: false,
     planned: null,
     contested: null,
+    can_backup: false,
     ...over,
   };
 }
@@ -156,7 +159,9 @@ describe('Audible Bridge requirements', () => {
     const calls = mockFetch(
       routes(true, {
         'GET /admin/bridge': { body: unpaired },
-        'GET /admin/audible/titles': { body: { titles: [title({ match: null })], next: '' } },
+        'GET /admin/audible/titles': {
+          body: { titles: [title({ match: null, can_backup: true })], next: '' },
+        },
       }),
     );
     const { queryClient } = renderApp('/server?topic=audible');
@@ -190,7 +195,9 @@ describe('Audible Bridge requirements', () => {
       mockFetch(
         routes(true, {
           'GET /admin/bridge': { body: status },
-          'GET /admin/audible/titles': { body: { titles: [title({ match: null })], next: '' } },
+          'GET /admin/audible/titles': {
+            body: { titles: [title({ match: null, can_backup: true })], next: '' },
+          },
         }),
       );
       renderApp('/server?topic=audible');
@@ -739,20 +746,15 @@ describe('settings > audible', () => {
 });
 
 describe('audible backups', () => {
-  it('offers Back up only for a title it can download and nobody is backing up', () => {
-    const missing = title({ match: null });
-    expect(canBackUp(missing)).toBe(true);
-    expect(canBackUp(title())).toBe(false);
-    expect(canBackUp(title({ rejected: true }))).toBe(true);
-    expect(canBackUp(title({ match: null, state: 'preorder' }))).toBe(true);
-    expect(canBackUp(title({ match: null, state: 'unavailable' }))).toBe(false);
-    expect(canBackUp(title({ match: null, state: 'gone' }))).toBe(false);
-    for (const state of ['pending', 'queued', 'claimed', 'running', 'needs_attention'] as const) {
-      expect(canBackUp(title({ match: null, import: { job_id: 4, state, code: '' } }))).toBe(false);
-    }
-    expect(
-      canBackUp(title({ match: null, import: { job_id: 4, state: 'failed', code: 'exists' } })),
-    ).toBe(true);
+  it('offers Not this book except on a backup of its own, and reads a rejected match as not here', () => {
+    expect(canReject(title())).toBe(true);
+    expect(canReject(title({ match: null }))).toBe(true);
+    const own = { library_id: 1, path: 'Brandon Sanderson/Mistborn', how: 'import' } as const;
+    expect(canReject(title({ match: own }))).toBe(false);
+    expect(canReject(title({ match: own, rejected: true }))).toBe(true);
+    expect(onServer(title())).toBe(true);
+    expect(onServer(title({ rejected: true }))).toBe(false);
+    expect(onServer(title({ match: null }))).toBe(false);
     expect(cleanDest('  /A/B/C.m4b/ ')).toBe('A/B/C.m4b');
   });
 
@@ -829,7 +831,12 @@ describe('audible backups', () => {
         'GET /admin/audible/titles': {
           body: {
             titles: [
-              title({ asin: 'B000000002', title: 'The Well of Ascension', match: null }),
+              title({
+                asin: 'B000000002',
+                title: 'The Well of Ascension',
+                match: null,
+                can_backup: true,
+              }),
               title({
                 asin: 'B000000004',
                 title: 'The Bands of Mourning',
@@ -873,7 +880,9 @@ describe('audible backups', () => {
     mockFetch(
       routes(true, {
         'GET /admin/audible/accounts': { body: { accounts: [account({ paused: true })] } },
-        'GET /admin/audible/titles': { body: { titles: [title({ match: null })], next: '' } },
+        'GET /admin/audible/titles': {
+          body: { titles: [title({ match: null, can_backup: true })], next: '' },
+        },
       }),
     );
     renderApp('/server?topic=audible');
@@ -884,9 +893,11 @@ describe('audible backups', () => {
   it('marks a title Not this book and sets where it goes', async () => {
     const calls = mockFetch(
       routes(true, {
-        'GET /admin/audible/titles': { body: { titles: [title({ match: null })], next: '' } },
+        'GET /admin/audible/titles': {
+          body: { titles: [title({ match: null, can_backup: true })], next: '' },
+        },
         'PATCH /admin/audible/titles/acct0001/B000000001': (req) => ({
-          body: { title: title({ match: null, ...(req.body as object) }) },
+          body: title({ match: null, can_backup: true, ...(req.body as object) }),
         }),
       }),
     );
@@ -958,6 +969,122 @@ describe('audible backups', () => {
     for (const b of buttons) expect(b).toBeDisabled();
   });
 
+  it("updates a title's row from the server's answer, without reading every page again", async () => {
+    const one = title({ match: null, can_backup: true });
+    const calls = mockFetch(
+      routes(true, {
+        'GET /admin/audible/titles': { body: { titles: [one], next: '' } },
+        'POST /admin/audible/titles/acct0001/B000000001/backup': {
+          status: 202,
+          body: {
+            pending: false,
+            job_id: 12,
+            title: { ...one, can_backup: false, import: { job_id: 12, state: 'queued', code: '' } },
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=audible');
+    const list = await screen.findByRole('list', { name: 'Audible titles' });
+    const reads = () => calls.filter((c) => c.path === '/admin/audible/titles').length;
+    const before = reads();
+    const user = userEvent.setup();
+    await user.click(within(list).getByRole('button', { name: 'Back up' }));
+    expect(await within(list).findByText('Backup waiting')).toBeInTheDocument();
+    expect(within(list).queryByRole('button', { name: 'Back up' })).not.toBeInTheDocument();
+    expect(reads()).toBe(before);
+  });
+
+  it('keeps each row busy on its own while its Back up runs', async () => {
+    const releases: Record<string, () => void> = {};
+    const hold = (asin: string) => () =>
+      new Promise<MockReply>((resolve) => {
+        releases[asin] = () => resolve({ status: 202, body: { pending: false, job_id: 12 } });
+      });
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/titles': {
+          body: {
+            titles: [
+              title({ match: null, can_backup: true }),
+              title({
+                asin: 'B000000002',
+                title: 'The Well of Ascension',
+                match: null,
+                can_backup: true,
+              }),
+            ],
+            next: '',
+          },
+        },
+        'POST /admin/audible/titles/acct0001/B000000001/backup': hold('B000000001'),
+        'POST /admin/audible/titles/acct0001/B000000002/backup': hold('B000000002'),
+      }),
+    );
+    renderApp('/server?topic=audible');
+    const list = await screen.findByRole('list', { name: 'Audible titles' });
+    const rows = within(list).getAllByRole('listitem');
+    const backUp = (row: HTMLElement) => within(row).getByRole('button', { name: 'Back up' });
+    const user = userEvent.setup();
+    await user.click(backUp(rows[0]));
+    await user.click(backUp(rows[1]));
+    await waitFor(() => expect(backUp(rows[1])).toBeDisabled());
+    // The first is still running while the second started.
+    expect(backUp(rows[0])).toBeDisabled();
+    act(() => releases.B000000001());
+    await waitFor(() => expect(backUp(rows[0])).toBeEnabled());
+    expect(backUp(rows[1])).toBeDisabled();
+    act(() => releases.B000000002());
+    await waitFor(() => expect(backUp(rows[1])).toBeEnabled());
+  });
+
+  it('shows a title marked Not this book as not here, and offers no Not this book on its own backup', async () => {
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/titles': {
+          body: {
+            titles: [
+              title({ rejected: true, can_backup: true }),
+              title({
+                asin: 'B000000002',
+                title: 'The Well of Ascension',
+                match: { library_id: 1, path: 'Brandon Sanderson/Well', how: 'import' },
+                import: { job_id: 4, state: 'done', code: '' },
+              }),
+            ],
+            next: '',
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=audible');
+    const list = await screen.findByRole('list', { name: 'Audible titles' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(within(rows[0]).queryByRole('link', { name: 'On this server' })).not.toBeInTheDocument();
+    expect(within(rows[0]).getByText('Not here')).toBeInTheDocument();
+    expect(
+      within(rows[0]).getByRole('button', { name: 'Undo Not this book: The Final Empire' }),
+    ).toBeInTheDocument();
+    expect(within(rows[1]).getByRole('link', { name: 'On this server' })).toBeInTheDocument();
+    expect(
+      within(rows[1]).queryByRole('button', { name: /Not this book/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('says what was in the way of a backup that failed exists', () => {
+    const strings = en as Record<string, string>;
+    const failed = (conflict?: string) =>
+      importStatus(title({ import: { job_id: 4, state: 'failed', code: 'exists', conflict } }))
+        ?.code;
+    expect(failed()).toBe('audible.code.exists');
+    expect(failed('file')).toBe('audible.code.exists');
+    expect(failed('book')).toBe('audible.code.exists.book');
+    expect(failed('audio')).toBe('audible.code.exists.audio');
+    expect(failed('something_new')).toBe('audible.code.exists');
+    for (const key of ['audible.code.exists.book', 'audible.code.exists.audio'])
+      expect(strings[key]).toBeTruthy();
+  });
+
   it("saves an account's policy, template and sync", async () => {
     const calls = mockFetch(
       routes(true, {
@@ -1024,7 +1151,7 @@ describe('needs a look', () => {
 
 describe('unmatched titles, explained', () => {
   it('words a planned destination, its warnings and a stale template', () => {
-    expect(plannedLine(title({ match: null }), '')).toBeNull();
+    expect(plannedLine(title({ match: null, can_backup: true }), '')).toBeNull();
     expect(plannedLine(title({ match: null, planned: plan() }), '')).toEqual({
       key: 'audible.planned.seriesExisting',
       values: { path: plan().path, count: 7 },
@@ -1251,9 +1378,88 @@ describe('unmatched titles, explained', () => {
 });
 
 describe('audible sync', () => {
+  it('words what a place sync did: only waited, found the sync off, or the places read', () => {
+    const sync = (state: BridgeJob['state'], result: Record<string, unknown> | null) =>
+      syncSummary({ kind: 'audible.sync', state, result });
+    expect(sync('done', { titles: 4, waiting: true, wait_until: '2026-11-19T10:00:00Z' })).toEqual({
+      kind: 'waiting',
+      until: '2026-11-19T10:00:00Z',
+    });
+    expect(sync('done', { titles: 4, waiting: true })).toEqual({ kind: 'waiting' });
+    expect(sync('done', { titles: 4, sync_off: true })).toEqual({ kind: 'off' });
+    expect(sync('done', { titles: 4, heard: 3, applied: 1 })).toEqual({
+      kind: 'counts',
+      titles: 4,
+      heard: 3,
+      applied: 1,
+      partial: false,
+    });
+    // A failed sync's counts are what it did before it stopped.
+    expect(sync('failed', { code: 'audible', titles: 4, heard: 2, applied: 2 })).toMatchObject({
+      kind: 'counts',
+      partial: true,
+    });
+    expect(sync('failed', { code: 'audible', message: 'no answer' })).toBeUndefined();
+    expect(sync('running', { titles: 4, heard: 1 })).toBeUndefined();
+    expect(
+      syncSummary({ kind: 'audible.poll', state: 'done', result: { titles: 4, heard: 1 } }),
+    ).toBeUndefined();
+  });
+
+  it("says in the Bridge's jobs that a done sync only waited on Audible", async () => {
+    const ended = (id: number, state: BridgeJob['state'], result: Record<string, unknown>) =>
+      ({
+        id,
+        kind: 'audible.sync',
+        library_id: null,
+        path: null,
+        params: { account: 'acct0001' },
+        state,
+        progress: {},
+        result,
+        error: state === 'failed' ? 'Audible stopped answering' : '',
+        requested_by: null,
+        priority: -10,
+        attempts: 1,
+        lease_until: null,
+        cancel_requested: false,
+        created_at: '2026-11-19T09:00:00Z',
+        updated_at: '2026-11-19T09:01:00Z',
+        claimed_at: '2026-11-19T09:00:05Z',
+        finished_at: '2026-11-19T09:01:00Z',
+      }) as BridgeJob;
+    mockFetch(
+      routes(true, {
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              ended(1, 'done', { titles: 4, waiting: true }),
+              ended(2, 'done', { titles: 4, heard: 3, applied: 1 }),
+              ended(3, 'failed', { code: 'audible', titles: 4, heard: 2, applied: 2 }),
+            ],
+            next_before: 0,
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const jobs = await screen.findByRole('list', { name: 'Jobs' });
+    expect(
+      within(jobs).getByText('Audible asked the Bridge to wait, so nothing was synced.'),
+    ).toBeInTheDocument();
+    expect(
+      within(jobs).getByText('3 of 4 titles had a place on Audible; 1 moved the place here.'),
+    ).toBeInTheDocument();
+    expect(
+      within(jobs).getByText(
+        'Before it stopped: 2 of 4 titles had a place on Audible; 2 moved the place here.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('lets a title sync only while it is on this server and not left out', () => {
     expect(canSync(title())).toBe(true);
-    expect(canSync(title({ match: null }))).toBe(false);
+    expect(canSync(title({ match: null, can_backup: true }))).toBe(false);
     expect(canSync(title({ rejected: true }))).toBe(false);
     expect(canSync(title({ state: 'gone' }))).toBe(false);
     expect(canSync(title({ state: 'preorder' }))).toBe(false);
@@ -1338,7 +1544,9 @@ describe('audible sync', () => {
           },
         },
         'PATCH /admin/audible/titles/acct0001/B000000001': { body: title({ no_sync: true }) },
-        'PATCH /admin/audible/titles/acct0001/B000000002': { body: title({ no_sync: false }) },
+        'PATCH /admin/audible/titles/acct0001/B000000002': {
+          body: title({ asin: 'B000000002', title: 'Left Out', no_sync: false }),
+        },
       }),
     );
     renderApp('/server?topic=audible');
@@ -1356,7 +1564,8 @@ describe('audible sync', () => {
         ),
       ).toBe(true),
     );
-    expect(screen.getByText('Not synced')).toBeInTheDocument();
+    // The row takes the server's answer: both rows are left out now.
+    expect(screen.getAllByText('Not synced')).toHaveLength(2);
     await user.click(screen.getByRole('button', { name: 'Sync this book again: Left Out' }));
     await waitFor(() =>
       expect(

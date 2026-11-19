@@ -3340,6 +3340,8 @@ export interface AudibleImport {
   state: BridgeJobState | 'pending';
   /** A failed or parked backup's code: not_released, no_rights, exists, disk_full, ... */
   code: string;
+  /** What a backup that failed `exists` found in the way ('file' | 'book' | 'audio', as a plan's); "" otherwise. Absent from an older server. */
+  conflict?: string;
 }
 
 /** GET /admin/audible/accounts. */
@@ -3377,6 +3379,8 @@ export interface AudibleTitle {
   planned: AudiblePlan | null;
   /** For a title left unmatched as contested: the book it tied for and the account's other titles on it. */
   contested: AudibleContest | null;
+  /** Back up would queue its backup (or wait for a preorder's release); its account's pause aside. */
+  can_backup: boolean;
 }
 
 /** catalog.AudiblePlan: where the Bridge would place a title's backup (planned at its last check). */
