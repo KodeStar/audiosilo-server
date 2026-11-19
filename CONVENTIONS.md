@@ -1045,7 +1045,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`rescanPath`) is `ReindexPath` instead: it waits for the read under way, then reads the book itself, as what that
   read stored may be older than the change the admin wants picked up; one that kept the book as stored because a file
   did not answer (a look given up on, or its audio's read cut short: `ReadCutShort` with an `unreadable` problem,
-  recorded) is a look given up on too, 503 `share_not_answering`. The on-demand index takes a path only in its on-disk
+  recorded, `cutShort`; never a `LengthOnly` keep, a known bad part) is a look given up on too, 503
+  `share_not_answering`. An on-demand read whose library's folder changed while it ran writes nothing
+  (`Book.ReadRoot`, checked in the write's transaction: `catalog.ErrRootChanged`, a 404 `not_indexable`), nor
+  carries a moved book's state from a library whose folder changed (`indexBookFrom`). The on-demand index takes a path only in its on-disk
   spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a
   case-insensitive filesystem a case variant opens the same folder, and indexing it would add a
   duplicate book everyone sees, so it is a 404; the stream and `/fs` take a path only as the disk spells
@@ -1072,8 +1075,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   is not read from disk (`catalog.FoldersHoldingBooks`, two index seeks a folder), so only
   unindexed folders cost a directory read; such a folder that has audio of its own too is not
   flagged until a scan indexes it (opening one of its files indexes it on demand). The pass has
-  `pendingTime` (2 s, walks included) and the request's context: a folder it doesn't reach in
-  time stays unmarked. The player opens such a folder as a book (indexed on demand by
+  `pendingTime` (2 s, walks included) and the request's context, each folder's listing a bounded look
+  (`hasAudio`): a folder it doesn't reach in time, or on a share that stopped answering, stays unmarked. The player opens such a folder as a book (indexed on demand by
   `bookForPath`). Favouriting one indexes it too (server#211, `indexFavourite`, the caller's scope
   deciding as `bookForPath`'s does), detached from the request like a rescan (the probes don't stop
   for a context, so a request's deadline would only throw the read away at its last write): the
@@ -1372,7 +1375,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   while armed every read from the file, run on a goroutine of their own and are waited for only until
   the deadline (`metadata.await`: `openBlockFile`, `blockFile.waitRead`), so an open or a pread on a share
   that stopped answering costs a goroutine (and the file open) until it returns, never a stuck reader;
-  an open given up on is a tag read out of time. The file is opened `O_NONBLOCK` and must be a regular
+  an open given up on is a tag read out of time, with no ffprobe run after it (`Metadata.openHung`: its open
+  would hang the same way, and a Re-read would wait out a second probe's time). The file is opened `O_NONBLOCK` and must be a regular
   file (a FIFO is turned away at once, `OpenErr` `metadata.ErrNotRegular`, never waited for nor read as audio:
   a known bad file, not a read cut short, see `Book.LengthOnly` below).
   A scan's move fingerprint (`metadata.Fingerprint`, skipped after a read cut short) is bounded the same
@@ -1393,7 +1397,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and at most a timeout, counted on the path's mount when given up on, refused at once at the cap,
   made only with one of its mount's `maxAbandonedReads` slots held until it returns, so a burst on a
   share that just stopped answering (a page of covers) makes no more calls than the cap;
-  `StatBounded`, `LstatBounded`, `ReadDirBounded`; `metadata.GaveUp` names its two errors,
+  `StatBounded`, `LstatBounded`, `ReadDirBounded`, `EvalSymlinksBounded`, `LookBounded` (the looks, which
+  `HoldReadsForTests` lets answer); `metadata.GaveUp` names its two errors,
   `ErrNotAnswered` and `ErrReadRefused`; `HoldOpensForTests` holds them too): the files beside a
   book's audio (the ABS metadata.json read, the attachments' lstats and reads, the ebook check,
   `coverLook.find`'s stats and listing, `LookArt` (`ArtFile`'s `SafeJoin` and the stat) for the
@@ -1405,14 +1410,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   path's join, `library.SafeJoinBounded`; its open and stat, `media.ServeFile`, a regular file only,
   `metadata.OpenRegular`, so a FIFO is a 404 at once, never an open held and counted on its mount; a
   transcode's stat, `media.Transcode`; a remux's or rendition's look at its source, `media.Source`; a
-  podcast episode's checks and open, `library.OpenPodcast`), and the renditions listing's and `/item`'s
+  podcast episode's checks and open, `library.OpenPodcastBounded`, the download's presence check and an
+  on-demand fetch's waits too), `/fs`'s join, listing and page of file info (`library.BrowseFS`, `ListDir`,
+  the next-in-folder read's too), and the renditions listing's and `/item`'s
   remux warm joins, each given up on after `API.fileWait` (10 s; a stream's looks together after
   `API.streamWait`, 45 s from the request's start, `waitLeft`: past a sleeping disk's spin-up, under
   AVPlayer's 60 s resource timeout, as a 503 is no retry for it) as a 503 `share_not_answering` with
   `Retry-After` (`/item` answers the stored book instead, and once its warm's join went unanswered it looks at
   neither the ebook nor the read-along, `warmRemux`'s answer: each would wait out its own `fileWait` on the same
-  share, three of them the request's whole time). A file cache's background run opens its source unbounded (once the request's look
-  answered); its own stats of the source (`Open`, `Status`, `Queue`, `RefusedFor`, a warm's first look) are
+  share, three of them the request's whole time). A file cache's run opens its source as a bounded look
+  (`FileCache.openWait`, `sourceWait`), so a share that answered the stat but not the open frees the run's slot
+  rather than holding it and every run queued behind it; its own stats of the source (`Open`, `Status`, `Queue`, `RefusedFor`, a warm's first look) are
   given a scan's look time (`media.sourceWait`), never none, so one on a share that stopped answering since never
   holds its mount's slot for good. A stream that waited on a remux gives its next look (the live transcode's it
   falls back to, or the stored file's open once the remux refused the file) at least `API.fileWait`
@@ -1430,20 +1438,26 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `unreadable` problem on that file (over a lasting one), which `problemCleared` clears once the file
   answers the kind of bounded call that gave up (`sideAnswers`: a folder's listing, a cover image's
   stat, any other file's read of its last bytes, as a stat can answer from a cache while reads hang;
-  gone counts too); a backfill's given-up read keeps what is stored and
+  any answer counts, the file gone or a permission too: a permission met after a hang is then recorded as
+  itself); a backfill's given-up read keeps what is stored and
   records nothing. A scan stopped while a read is still under way (held in a call nothing bounds)
   waits for it up to `stopGrace` (2 s), then leaves it to end on its own, its book's flight with
   it, counted in `Scanner.readsLeft` and logged, so the scan ends and the next runs (`writeNext`
   waits on the scan's context too); no later read waits on that read's flight
   (`bookRead.left`, `errReadLeft`), and none waits on any other read of the book (a scan's
-  or an on-demand one, maybe stuck the same way) for more than a look's time (`lookTimeout`) while that read
-  has not returned (`waitFlight`; a scan's read that has returned is waited on until its batch
-  write): a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
+  or an on-demand one, maybe stuck the same way) for more than a look's time (`lookTimeout`) in which that
+  read made no progress (`waitFlight`: `metadata.Progress`, noted by each of the read's bounded calls that
+  answers in time, `WithProgress`; a read idle a probe's time is marked stuck, `indexFlight.stuck`, and no
+  later waiter waits on it; a scan's read that has returned is waited on until its batch write), so a big
+  book read slowly from a share that answers is waited for, never a false 503: a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
   rest; an on-demand read gives up as a look at a share that stopped answering (`metadata.GaveUp`,
   503 `share_not_answering`). The walk's own looks are bounded the same way (SRV-15c: `walkDir`'s root lstat and
   listings, a `.audiosilo` folder's listing, a metadata.json's lstat, `statAudio`'s lstat of each audio file, the
   probe's time each): a folder that won't list, or whose audio file's lstat is given up on or fails as a share
-  does (`shareFault`: any error but the file gone (ENOENT, ENOTDIR): EIO, ESTALE, ENOTCONN, a permission; `dropUnanswered`, with
+  does (`metadata.ShareFault`: any error but the file gone (ENOENT, ENOTDIR) or a name too long (ENAMETOOLONG):
+  EIO, ESTALE, ENOTCONN, a permission; `metadata.AsGaveUp` reads it as a look given up on, `Faulted` names its
+  cause; the same rule for every look a scan makes at a book: the walk's listings, a disc folder's, `resolveBook`'s
+  stat, `bookOnDisk`'s and `dirPresent`'s; `dropUnanswered`, with
   every disc folder directly in it or in a folder above it, so neither a book joined from a disc set nor the discs' split
   is built from the discs that answered, or from a set that is one only for want of the folder not looked at),
   is skipped for that run, which is then partial (its books kept
@@ -1472,7 +1486,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.sameFiles`: the paths in order, and each size but the timed-out or non-regular parts'
   own, `BookFile.LengthUnread`); with a part added, gone, renamed or changed the book is
   written whole with the part's problem (counted as updated), never held at a file list that is no
-  longer on disk. With no
+  longer on disk. A book whose only cut short reads are its tags, ffprobe having read every file's length
+  (`Book.LengthsRead`), keeps its names but takes the lengths, codec and chapters read (`catalog.recordLengths`,
+  only while its file paths are the stored ones). An existing book whose audio open fails as a share does
+  (EIO, a permission: `openFaulted`) is kept as stored with its problem, never rewritten without that file. With no
   ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules
   (`noFFprobeRules`, decision 2, server#269): a file it is unsure of has no duration and no
   `ProbeErr`; a read out of time says so (`Metadata.ProbeTimedOut`) and the scan reads it again
@@ -2026,8 +2043,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   generation), no rescan. `Catalog.ResolveSources` re-resolves them (`refreshEffective`) 200 books a
   transaction, starting a library again when a later change overtook its run, and clears the mark
   with the last batch, so a stop leaves it due for the next start (`API.StartSourceResolves`); a
-  book whose `scanned` snapshot doesn't decode is passed over with an `unreadable` read problem on
-  its first file (`recordScannedUnreadable`, over any other problem recorded, which may never clear), so it neither holds its
+  book whose `scanned` snapshot doesn't decode is passed over (in every batch re-resolve: a savepoint
+  per book, `skipUnreadable`, `eachPathBatch`, and the series, match and override passes) with an
+  `unreadable` read problem on its first file (`recordScannedUnreadable`, over any other problem recorded, which may never clear), so it neither holds its
   library due nor restarts each retry, and the next scan reads it again (`problemCleared`); a
   library that fails stays due and is reported without holding up the others in the pass, and the
   run is made again by itself after 1 minute, then twice as long each time, `resolveRetries` (6) times at
@@ -4222,7 +4240,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   A container started with `--user`
   (the entrypoint exports `AUDIOSILO_STARTED_AS_USER=1`; the image's `PUID` is in every container's
   environment, so it can't tell) gets `user: "<owner>"`, not PUID/PGID. A scan stops on a library root
-  it can stat but not list (`CheckRead`: unavailable, not an empty library scanned OK). The Docker
+  it can stat but not list (`CheckRead`: unavailable, not an empty library scanned OK); the root's stat, this
+  check and discovery's resolve of the root are bounded looks (the probe's time), so a root that stops
+  answering after the availability probe is unavailable too, never a scan worker held. The Docker
   entrypoint words the same as root (after the chown of `/data`: `find -xdev ... -exec chown -h`, each
   mount point inside it pruned by name from mountinfo, since a volume or bind mount from the same disk
   shares the device number `-xdev` reads (server#382), unless it is a regular file: a file mounted there
