@@ -284,29 +284,18 @@ func (r *Runner) Run(ctx context.Context) {
 // most readyWait; false when ctx ended first. Only the first run waits: once
 // loaded, a copy answers until the server stops. Run's goroutine alone calls it.
 func (r *Runner) waitReady(ctx context.Context) bool {
-	if r.readied || r.opt.Ready == nil || r.opt.Ready() {
-		r.readied = true
+	if r.readied || r.opt.Ready == nil {
 		return true
 	}
-	deadline := time.NewTimer(r.readyWait)
-	defer deadline.Stop()
-	poll := time.NewTicker(r.readyPoll)
-	defer poll.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-deadline.C:
-			r.log.Info("upcoming releases: the local copy of the metadata is not ready; running anyway", "waited", r.readyWait)
-			r.readied = true
-			return true
-		case <-poll.C:
-			if r.opt.Ready() {
-				r.readied = true
-				return true
-			}
-		}
+	isReady, live := pool.WaitReady(ctx, r.opt.Ready, r.readyWait, r.readyPoll)
+	if !live {
+		return false
 	}
+	if !isReady {
+		r.log.Info("upcoming releases: the local copy of the metadata is not ready; running anyway", "waited", r.readyWait)
+	}
+	r.readied = true
+	return true
 }
 
 // active reports whether a run may do anything now: the whole job (On), or
