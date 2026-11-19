@@ -1337,9 +1337,8 @@ func (c *Catalog) PlaceByTitles(ctx context.Context) (int, error) {
 			for _, id := range batch {
 				// A book a scan removed meanwhile has nothing to resolve; one whose
 				// stored scan doesn't decode is skipped and recorded
-				// (skipUnreadable).
-				skipped, err := skipUnreadable(ctx, tx, func() (int64, error) { return id, nil },
-					func() error { return refreshEffective(ctx, tx, id) })
+				// (refreshOrSkip).
+				skipped, err := refreshOrSkip(ctx, tx, id)
 				if errors.Is(err, sql.ErrNoRows) || skipped {
 					continue
 				} else if err != nil {

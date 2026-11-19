@@ -252,14 +252,7 @@ func (c *Catalog) resolveLibrary(ctx context.Context, lib, gen int64) error {
 				return err
 			}
 			for _, id := range ids {
-				if err := refreshEffective(ctx, tx, id); errors.Is(err, errScannedUnreadable) {
-					// Its snapshot fails to decode before anything of the book is
-					// written: the rest of the batch goes on.
-					err = recordScannedUnreadable(ctx, tx, id)
-					if err != nil {
-						return err
-					}
-				} else if err != nil {
+				if _, err := refreshOrSkip(ctx, tx, id); err != nil {
 					return err
 				}
 			}
@@ -311,6 +304,20 @@ func recordScannedUnreadable(ctx context.Context, tx *sql.Tx, id int64) error {
 		  WHERE id = ?4 AND NOT (scan_error = ?1 AND scan_error_file = ?2)`,
 		ProblemUnreadable, first, scannedUnreadableDetail, id)
 	return err
+}
+
+// refreshOrSkip re-resolves book id (refreshEffective) or, when its stored
+// scan doesn't decode, records its read problem instead
+// (recordScannedUnreadable), so a batch of many books goes on past it
+// (server#453). loadLayers finds that before anything of the book is written,
+// so no savepoint is needed (skipUnreadable is for writes made first).
+// skipped reports it.
+func refreshOrSkip(ctx context.Context, tx *sql.Tx, id int64) (skipped bool, err error) {
+	err = refreshEffective(ctx, tx, id)
+	if !errors.Is(err, errScannedUnreadable) {
+		return false, err
+	}
+	return true, recordScannedUnreadable(ctx, tx, id)
 }
 
 // skipSavepoint is the savepoint skipUnreadable writes one book under.
