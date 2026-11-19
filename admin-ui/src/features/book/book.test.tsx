@@ -1041,6 +1041,26 @@ describe('match with community metadata', () => {
     expect(screen.getByRole('dialog', { name: 'Compare with community metadata' })).toBeVisible();
   });
 
+  it('names the image when a community cover is refused for its size', async () => {
+    const detail = listingBook();
+    detail.book.has_cover = false;
+    mockFetch(
+      matchRoutes(detail, {
+        ...findsSameWork,
+        'PUT /admin/libraries/1/cover/community': {
+          status: 413,
+          body: { error: 'the image is larger than 5 MB', code: 'too_large' },
+        },
+      }),
+    );
+    const { user, compare } = await openCompare(MATCH_HERO);
+    await user.click(within(compare).getByRole('button', { name: 'Accept 1 field' }));
+
+    expect(
+      await screen.findByText('That image is larger than 5 MB. Pick a smaller one.'),
+    ).toBeInTheDocument();
+  });
+
   it('says so when the match after a taken cover fails, and closes', async () => {
     const detail = listingBook();
     detail.book.has_cover = false;
