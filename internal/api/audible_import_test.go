@@ -518,8 +518,39 @@ func TestAudibleBackupAllInvalidTemplateRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/backup-all", b.adminTok, "")
-	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, "template") {
+	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_template" || reasonOf(out) != "account" {
 		t.Fatalf("backup-all with an invalid template: %d %q", resp.StatusCode, out)
+	}
+	// One title's Back up refuses the same way.
+	resp, out = b.do(t, "POST", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001/backup", b.adminTok, "")
+	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_template" || reasonOf(out) != "account" {
+		t.Fatalf("backup with an invalid template: %d %q", resp.StatusCode, out)
+	}
+	for _, asin := range []string{"B000000001", "B000000002"} {
+		if x := b.audibleTitle(t, asin); x.ImportJobID != nil {
+			t.Fatalf("%s queued under an invalid template", asin)
+		}
+	}
+}
+
+// One title's Back up with a stored destination that no longer validates
+// refuses it as the title's (400 invalid_dest_path, reason title); a valid
+// one still queues.
+func TestAudibleBackupInvalidDestination(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t,
+		title("B000000001", "A first", "available", 0, ""),
+		title("B000000002", "B second", "available", 0, ""))
+	if _, err := b.db.ExecContext(context.Background(),
+		`UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE asin = 'B000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := b.do(t, "POST", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001/backup", b.adminTok, "")
+	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_dest_path" || reasonOf(out) != "title" {
+		t.Fatalf("backup with an invalid destination: %d %q", resp.StatusCode, out)
+	}
+	if resp, out := b.do(t, "POST", "/api/v1/admin/audible/titles/"+testAccount+"/B000000002/backup", b.adminTok, ""); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("backup with a valid destination: %d %q", resp.StatusCode, out)
 	}
 }
 

@@ -4180,6 +4180,8 @@
   "errors.librivoxInLibrary": "Essa gravação já está numa biblioteca.",
   "errors.invalidDestPath": "Isso não é um local dentro da biblioteca. Use pastas e um nome de ficheiro como Autor/Série/Título.m4b, sem pastas ocultas, barras invertidas nem \"..\".",
   "errors.invalidTemplate": "Esse modelo não funciona. Use as variáveis entre chavetas, como {Author}/{Series}/{Title}, e não ultrapasse os 500 caracteres.",
+  "errors.invalid_template.account": "O modelo de localização desta conta já não funciona. Corrija-o em Definições da conta... e volte a fazer a cópia.",
+  "errors.invalid_dest_path.title": "O destino deste título já não é válido. Defina-o de novo em Destino... e volte a fazer a cópia.",
   "librivox.title": "LibriVox",
   "librivox.description": "Encontre um audiolivro gratuito em domínio público no LibriVox e adicione-o a uma biblioteca. A Bridge o baixa, o coloca no lugar e o associa à gravação.",
   "librivox.metadataOff.title": "Os metadados da comunidade estão desativados",

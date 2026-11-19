@@ -111,6 +111,16 @@ func TestAudibleImportJobs(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	// Which rule a stored value broke stays readable: the console's routes
+	// answer invalid_dest_path / invalid_template for it.
+	for raw, want := range map[string]error{
+		`{"account":"acct0001","asin":"B000000001","library_id":1,"dest_path":"../x"}`:  ErrAudibleDestPath,
+		`{"account":"acct0001","asin":"B000000001","library_id":1,"template":"{Nope}"}`: ErrAudibleTemplate,
+	} {
+		if _, err := audibleImportParams(json.RawMessage(raw)); !errors.Is(err, want) {
+			t.Errorf("%s: %v, want %v", raw, err, want)
+		}
+	}
 	// Removing acct0001 cancels both of its backups, not acct0002's, whose
 	// stored params a damaged row has lost (ParamSQL: no failed read).
 	q.damageParams(t, third.ID)

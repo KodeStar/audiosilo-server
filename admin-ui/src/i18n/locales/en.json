@@ -3968,6 +3968,8 @@
   "errors.librivoxInLibrary": "That recording is already in a library.",
   "errors.invalidDestPath": "That isn't a place inside the library. Use folders and a file name such as Author/Series/Title.m4b, with no hidden folders, backslashes or \"..\".",
   "errors.invalidTemplate": "That template doesn't work. Use the variables in braces, such as {Author}/{Series}/{Title}, and keep it under 500 characters.",
+  "errors.invalid_template.account": "This account's placement template no longer works. Fix it in Account settings..., then back up again.",
+  "errors.invalid_dest_path.title": "This title's destination is no longer valid. Set it again with Destination..., then back up again.",
   "librivox.title": "LibriVox",
   "librivox.description": "Find a free public-domain audiobook on LibriVox and add it to a library. Your Bridge downloads it, places it and matches it to its recording.",
   "librivox.metadataOff.title": "Community metadata is off",

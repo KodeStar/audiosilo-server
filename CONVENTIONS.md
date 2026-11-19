@@ -3908,8 +3908,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `POST /admin/audible/titles/{account}/{asin}/backup` (202 `{pending:false, job_id, title}`, 200 `{pending:true,
   job_id:null, title}` for a preorder, `title` the row as it is now; 404 `unknown_title`, 409 `already_matched` (matched, not rejected),
   `import_open`, `not_available` (unavailable or gone), `account_paused`; the queue's
-  `kind_unavailable` / `library_not_writable`), `POST /admin/audible/accounts/{account}/backup-all`
-  (`{queued, skipped}`, `skipped` the titles left out because their params no longer validate (a stored `dest_path` from before a rule tightened: `CheckAudibleDestPath`; an invalid account template is still the queue's 400), the rest queued; `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, the
+  `kind_unavailable` / `library_not_writable`; a stored value that no longer validates 400 `invalid_template` reason
+  `account` / `invalid_dest_path` reason `title`, `writeAudibleBackupError`, the console's `errors.<code>.<reason>`), `POST /admin/audible/accounts/{account}/backup-all`
+  (`{queued, skipped}`, `skipped` the titles left out because their params no longer validate (a stored `dest_path` from before a rule tightened: `CheckAudibleDestPath`; an account template that no longer validates refuses the batch: 400 `invalid_template`, reason `account`), the rest queued; `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, the
   latest import not a `done` one whose book is still indexed (a refused fold, `ErrImportNotOwn`, isn't
   queued again; a done one whose book left the library is), a failed or cancelled one again; a console Back up of one contested or done title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
   `invalid_dest_path`, also for a disc folder ("CD 3") directly inside an indexed book or a folder with a

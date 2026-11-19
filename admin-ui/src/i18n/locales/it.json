@@ -4180,6 +4180,8 @@
   "errors.librivoxInLibrary": "Quella registrazione è già in una libreria.",
   "errors.invalidDestPath": "Non è un percorso dentro la libreria. Usa cartelle e un nome di file come Autore/Serie/Titolo.m4b, senza cartelle nascoste, barre rovesciate o \"..\".",
   "errors.invalidTemplate": "Questo modello non funziona. Usa le variabili tra parentesi graffe, come {Author}/{Series}/{Title}, e non superare i 500 caratteri.",
+  "errors.invalid_template.account": "Il modello di posizione di questo account non funziona più. Correggilo in Impostazioni account..., poi riprova il backup.",
+  "errors.invalid_dest_path.title": "La destinazione di questo titolo non è più valida. Impostala di nuovo con Destinazione..., poi riprova il backup.",
   "librivox.title": "LibriVox",
   "librivox.description": "Trova un audiolibro gratuito di pubblico dominio su LibriVox e aggiungilo a una libreria. La tua Bridge lo scarica, lo sistema e lo abbina alla sua registrazione.",
   "librivox.metadataOff.title": "I metadati della community sono disattivati",

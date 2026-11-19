@@ -3968,6 +3968,8 @@
   "errors.librivoxInLibrary": "Diese Aufnahme ist schon in einer Bibliothek.",
   "errors.invalidDestPath": "Das ist kein Ort in der Bibliothek. Verwende Ordner und einen Dateinamen wie Autor/Reihe/Titel.m4b, ohne versteckte Ordner, Backslashes oder \"..\".",
   "errors.invalidTemplate": "Diese Vorlage funktioniert nicht. Verwende die Variablen in geschweiften Klammern, etwa {Author}/{Series}/{Title}, und bleib unter 500 Zeichen.",
+  "errors.invalid_template.account": "Die Ablagevorlage dieses Kontos funktioniert nicht mehr. Korrigiere sie in Kontoeinstellungen... und sichere dann erneut.",
+  "errors.invalid_dest_path.title": "Das Ziel dieses Titels ist nicht mehr gültig. Lege es mit Ziel... neu fest und sichere dann erneut.",
   "librivox.title": "LibriVox",
   "librivox.description": "Finde ein freies, gemeinfreies Hörbuch auf LibriVox und füge es einer Bibliothek hinzu. Deine Bridge lädt es herunter, legt es ab und ordnet es seiner Aufnahme zu.",
   "librivox.metadataOff.title": "Community-Metadaten sind aus",

@@ -981,6 +981,36 @@ describe('audible backups', () => {
     ).toBeInTheDocument();
   });
 
+  it("points to Account settings when the account's stored template no longer works", async () => {
+    mockFetch(
+      routes(true, {
+        'POST /admin/audible/accounts/acct0001/backup-all': {
+          status: 400,
+          body: {
+            error: 'invalid: template: invalid template: unknown variable {Bogus}',
+            code: 'invalid_template',
+            reason: 'account',
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const heading = await screen.findByRole('heading', { name: 'Audible accounts' });
+    const card = heading.closest('section') as HTMLElement;
+    const user = userEvent.setup();
+    await user.click(await within(card).findByRole('button', { name: 'Back up everything...' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Back up everything from Chris (US)?',
+    });
+    await user.click(within(dialog).getByRole('button', { name: 'Back up 13 books' }));
+    expect(
+      await within(dialog).findByText(
+        "This account's placement template no longer works. Fix it in Account settings..., then back up again.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/unknown variable/)).toBeNull();
+  });
+
   it('is off with nothing to back up or a paused account', async () => {
     mockFetch(
       routes(true, {

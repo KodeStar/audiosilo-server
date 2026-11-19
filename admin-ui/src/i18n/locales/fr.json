@@ -4180,6 +4180,8 @@
   "errors.librivoxInLibrary": "Cet enregistrement est déjà dans une bibliothèque.",
   "errors.invalidDestPath": "Ce n'est pas un emplacement dans la bibliothèque. Utilisez des dossiers et un nom de fichier comme Auteur/Série/Titre.m4b, sans dossiers cachés, barres obliques inverses ni « .. ».",
   "errors.invalidTemplate": "Ce modèle ne fonctionne pas. Utilisez les variables entre accolades, comme {Author}/{Series}/{Title}, en moins de 500 caractères.",
+  "errors.invalid_template.account": "Le modèle d'emplacement de ce compte ne fonctionne plus. Corrigez-le dans Réglages du compte..., puis relancez la sauvegarde.",
+  "errors.invalid_dest_path.title": "La destination de ce titre n'est plus valide. Redéfinissez-la avec Destination..., puis relancez la sauvegarde.",
   "librivox.title": "LibriVox",
   "librivox.description": "Trouvez un livre audio gratuit du domaine public sur LibriVox et ajoutez-le à une bibliothèque. Votre Bridge le télécharge, le range et l'associe à son enregistrement.",
   "librivox.metadataOff.title": "Les métadonnées communautaires sont désactivées",
