@@ -386,6 +386,23 @@ func TestHeaderlessCBRWithATrailingTagIsNotCounted(t *testing.T) {
 	}
 }
 
+// A read for the tags alone whose probe runs out of time is not uncounted:
+// read again alone it would count nothing either.
+func TestWithoutFrameCountIsNeverUncounted(t *testing.T) {
+	t.Parallel()
+	data := vbrFrames(3000)
+	b := newBlockFile(bytes.NewReader(data), int64(len(data)))
+	b.ff = ff8
+	if _, reason, uncounted := fastProbe(WithoutFrameCount(t.Context()), b, "mp3", time.Nanosecond); !timedOutReason(reason) || uncounted {
+		t.Errorf("reason %q uncounted %t, want out of time and not uncounted", reason, uncounted)
+	}
+	b = newBlockFile(bytes.NewReader(data), int64(len(data)))
+	b.ff = ff8
+	if _, reason, uncounted := fastProbe(t.Context(), b, "mp3", time.Nanosecond); !timedOutReason(reason) || !uncounted {
+		t.Errorf("a read for the length: reason %q uncounted %t, want out of time and uncounted", reason, uncounted)
+	}
+}
+
 // A VBR file with a Xing header is never counted: its frame count is the
 // header's, and the frames are not read.
 func TestXingFileIsNotCounted(t *testing.T) {

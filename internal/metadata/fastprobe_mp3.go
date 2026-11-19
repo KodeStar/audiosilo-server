@@ -858,8 +858,7 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 	}
 	uncounted := func(skip int64) error {
 		// fastProbe counts its frames, under bounds of its own.
-		return &mp3Uncounted{d: d, chaps: ex.chaps, off: off, first: binary.BigEndian.Uint32(first),
-			skip: skip, estimate: estimate(fh.bitRate)}
+		return &mp3Uncounted{d: d, chaps: ex.chaps, off: off, first: binary.BigEndian.Uint32(first), skip: skip}
 	}
 
 	var durUS int64
@@ -871,6 +870,12 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 		}
 		stDur := rescale(samples, 14112000, int64(sr))
 		durUS = tbToUS(stDur, 1, 14112000)
+	case b.ctx != nil && !frameCountWanted(b.ctx):
+		// A read for the tags alone (WithoutFrameCount): the first frame's
+		// bitrate's estimate whether or not the stream is constant, or a Xing
+		// header has no frame count, so it is neither sampled nor counted. Not
+		// Counted: a length not to be stored.
+		durUS = estimate(fh.bitRate)
 	case haveVBR:
 		// A Xing header with the audio's bytes but no frame count: ffprobe
 		// estimates its length from the first frame's bitrate, so its frames
@@ -878,11 +883,6 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 		// the decoder skips at the start (the encoder delay and its own 529
 		// samples; the padding at the end is only cut with a frame count).
 		return nil, uncounted(skip)
-	case b.ctx != nil && !frameCountWanted(b.ctx):
-		// A read for the tags alone (WithoutFrameCount): the first frame's
-		// bitrate's estimate whether or not the stream is constant, so it is
-		// not sampled.
-		return nil, uncounted(0)
 	default:
 		br, cbr := mp3ConstantBitrate(b, off, fh)
 		if !cbr {
@@ -925,19 +925,9 @@ type mp3Uncounted struct {
 	// frame's rate (a Xing header's encoder delay and the decoder's own 529:
 	// start_skip_samples), none with no encoder tag.
 	skip int64
-	// estimate is the length the first frame's bitrate estimates, in
-	// microseconds: the answer of a read that asked for no count
-	// (WithoutFrameCount), which wants the tags, not the length.
-	estimate int64
 }
 
 func (u *mp3Uncounted) Error() string { return reasonUncounted }
-
-// estimated is u's answer with the bitrate's estimate for its length, not
-// Counted.
-func (u *mp3Uncounted) estimated() *probeResult {
-	return result(u.estimate, "mp3", u.d, mp3Chapters(u.chaps, u.estimate))
-}
 
 // countSlack is what a frame count may read past the file's size: the few
 // bytes each of its windows overlaps the last, and the trailing tag's checks.
