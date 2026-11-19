@@ -377,11 +377,17 @@ func TestStoredHeartbeatReadLeniently(t *testing.T) {
 		len(h.Libraries) != 1 || !h.Libraries[0].Mapped || len(h.Workers) != 1 || h.Workers[0].Name != "gpu" {
 		t.Fatalf("read back = %+v", h.Status)
 	}
-	// On the wire, the same body is refused: the strictness is the input's.
-	dec := json.NewDecoder(strings.NewReader(stored))
-	dec.DisallowUnknownFields()
-	var st Status
-	if dec.Decode(&st) == nil {
-		t.Fatal("the wire's decode took a key it doesn't know")
+	// On the wire, a key it doesn't know inside a mapping or a worker is still
+	// refused: the strictness is the input's.
+	for _, body := range []string{
+		`{"libraries":[{"library_id":1,"newer":1}]}`,
+		`{"workers":[{"name":"gpu","newer":true}]}`,
+	} {
+		dec := json.NewDecoder(strings.NewReader(body))
+		dec.DisallowUnknownFields()
+		var st Status
+		if dec.Decode(&st) == nil {
+			t.Errorf("the wire's decode took %s", body)
+		}
 	}
 }

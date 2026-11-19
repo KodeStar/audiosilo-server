@@ -272,7 +272,8 @@ func readList[T any](b []byte, strict bool) ([]T, error) {
 }
 
 // kindList, libraryList and workerList are a heartbeat's kinds, mappings and
-// workers, read bounded (readList).
+// workers, read bounded (readList). A strict list of objects is also shadowed
+// by readStoredStatus, which reads the stored row leniently.
 type (
 	kindList    []string
 	libraryList []LibraryStatus
@@ -325,14 +326,7 @@ func invalid(format string, args ...any) error {
 // tells it apart from a block this server can't read.
 var ErrTooLarge = errors.New("too large")
 
-// tooLargeError is an ErrInvalid rejection that is also ErrTooLarge.
-type tooLargeError struct{ err error }
-
-func (e tooLargeError) Error() string        { return e.err.Error() }
-func (e tooLargeError) Unwrap() error        { return e.err }
-func (e tooLargeError) Is(target error) bool { return target == ErrTooLarge }
-
-func tooLarge(what string) error { return tooLargeError{invalid("%s", what)} }
+func tooLarge(what string) error { return fmt.Errorf("%w: %w: %s", ErrInvalid, ErrTooLarge, what) }
 
 // Validate checks a heartbeat before it is stored: kinds are well formed and
 // listed once, libraries listed once by a positive id (past maxLibraries the
@@ -628,9 +622,8 @@ func readHeartbeat(ctx context.Context, q interface {
 func readStoredStatus(body []byte, st *Status) error {
 	var stored struct {
 		Status
-		// The lists, read as plain slices: they shadow Status's bounded,
-		// strict ones.
-		Kinds     []string        `json:"kinds"`
+		// The lists of objects, read as plain slices: they shadow Status's
+		// strict ones (a list of strings has no key to refuse).
 		Libraries []LibraryStatus `json:"libraries"`
 		Workers   []Worker        `json:"workers"`
 	}
@@ -638,7 +631,7 @@ func readStoredStatus(body []byte, st *Status) error {
 		return err
 	}
 	*st = stored.Status
-	st.Kinds, st.Libraries, st.Workers = stored.Kinds, stored.Libraries, stored.Workers
+	st.Libraries, st.Workers = stored.Libraries, stored.Workers
 	return nil
 }
 

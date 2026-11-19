@@ -58,7 +58,7 @@ func (a *API) handleGetShare(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 	var s catalog.Share
-	if !decodeShareRules(w, r, &s) {
+	if !decodeBody(w, r, &s, shareRulesBodyMax) {
 		return
 	}
 	if s.Name == "" {
@@ -145,28 +145,11 @@ func shareNameTooLong(w http.ResponseWriter, name string) bool {
 	return true
 }
 
-// shareRulesBodyMax bounds a body that carries a share's rules: maxBulkBooks
-// of them with paths at catalog.MaxPathBytes, sent unescaped, and room for each
-// rule's library id and the share's other fields. A longer body is the route's
-// 400 too_large, as more rules are (decodeShareRules).
+// shareRulesBodyMax bounds a body that carries a share's rules (a create, an
+// add of rules): maxBulkBooks of them with paths at catalog.MaxPathBytes, sent
+// unescaped, and room for each rule's library id and the share's other fields.
+// A longer body is 400 too_large (decodeBody), as more rules are.
 const shareRulesBodyMax = maxBulkBooks*(catalog.MaxPathBytes+64) + 64<<10
-
-// decodeShareRules decodes a body that carries a share's rules into v (true):
-// one over shareRulesBodyMax answers 400 too_large, one that doesn't decode
-// 400 invalid request.
-func decodeShareRules(w http.ResponseWriter, r *http.Request, v any) bool {
-	err := decodeJSON(r, v, shareRulesBodyMax)
-	if err == nil {
-		return true
-	}
-	if tooBig := (*http.MaxBytesError)(nil); errors.As(err, &tooBig) {
-		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
-			fmt.Sprintf("the request is larger than %d bytes", shareRulesBodyMax))
-		return false
-	}
-	writeError(w, http.StatusBadRequest, "invalid request")
-	return false
-}
 
 // tooManyRules answers 400 too_large for more rules than one request may hold
 // (true): a share created with its rules, or rules added to one, writes each in
@@ -198,7 +181,7 @@ func (a *API) handleAddSharePath(w http.ResponseWriter, r *http.Request) {
 		sharePathReq
 		Rules []sharePathReq `json:"rules"`
 	}
-	if !decodeShareRules(w, r, &req) {
+	if !decodeBody(w, r, &req, shareRulesBodyMax) {
 		return
 	}
 	rules := req.Rules

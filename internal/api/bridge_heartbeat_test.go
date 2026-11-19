@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 )
 
 // heartbeatWith is a heartbeat body mapping n libraries, the env's first and
@@ -112,7 +114,7 @@ func TestBridgeHeartbeatTooLarge(t *testing.T) {
 	}
 	workers := "[" + strings.Repeat(`{"name":"w"},`, 64) + `{"name":"w"}]`
 	for name, body := range map[string]string{
-		"body":    `{"version":"` + strings.Repeat("x", 2<<20) + `"}`,
+		"body":    `{"version":"` + strings.Repeat("x", bridge.MaxStatusBytes) + `"}`,
 		"kinds":   `{"version":"0.6.0","kinds":[` + strings.Join(kinds, ",") + `]}`,
 		"workers": `{"version":"0.6.0","workers":` + workers + `}`,
 	} {

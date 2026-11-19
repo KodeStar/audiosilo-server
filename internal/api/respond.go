@@ -314,6 +314,23 @@ func decodeJSON(r *http.Request, v any, maxBytes int64) error {
 	return dec.Decode(v)
 }
 
+// decodeBody decodes a JSON body of at most maxBytes into v (true): a longer
+// one answers 400 too_large, so a client tells a body refused for its size
+// apart from one that doesn't decode (400 invalid request).
+func decodeBody(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) bool {
+	err := decodeJSON(r, v, maxBytes)
+	if err == nil {
+		return true
+	}
+	if tooBig := (*http.MaxBytesError)(nil); errors.As(err, &tooBig) {
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+			fmt.Sprintf("the request is larger than %d bytes", tooBig.Limit))
+		return false
+	}
+	writeError(w, http.StatusBadRequest, "invalid request")
+	return false
+}
+
 // decodeJSONOptional is decodeJSON for endpoints whose body is optional: an
 // absent/empty body leaves v at its zero value and returns nil, but a body that
 // is present and malformed (or carries an unknown field) is still an error -

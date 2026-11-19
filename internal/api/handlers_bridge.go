@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -213,13 +212,7 @@ func (a *API) adminBridgeBook(w http.ResponseWriter, r *http.Request, libraryID 
 // the Bridge tells it apart from a block this server can't read (a plain 400).
 func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 	var st bridge.Status
-	if err := decodeJSON(r, &st, bridge.MaxStatusBytes); err != nil {
-		if tooBig := (*http.MaxBytesError)(nil); errors.As(err, &tooBig) {
-			writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
-				fmt.Sprintf("the status is larger than %d bytes", bridge.MaxStatusBytes))
-			return
-		}
-		writeError(w, http.StatusBadRequest, "invalid status")
+	if !decodeBody(w, r, &st, bridge.MaxStatusBytes) {
 		return
 	}
 	if err := st.Validate(); err != nil {
