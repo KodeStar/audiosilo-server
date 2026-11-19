@@ -241,3 +241,39 @@ func TestRunnerMatchedUnlistedWorkHoldsItsSlot(t *testing.T) {
 		t.Fatalf("items %v, announced %v, want neither", got, f2.announcedIDs())
 	}
 }
+
+// Unlinking the match of a series' only book with a work, a match-only book
+// (no ASIN or ISBN), leaves nothing to resolve the series by: it is none, and
+// the items the match found go, rather than standing for good.
+func TestRunnerMatchOnlyUnlinkDropsTheSeries(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newFixture(t)
+	f.expanse("2011", "2012", "2013")
+	f.matchOnly(t, f.lib, "The Expanse/3", "The Expanse", 3, "e3")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.items(t), []string{"e1=missing", "e2=missing"}; !slices.Equal(got, want) {
+		t.Fatalf("matched: items = %v, want %v", got, want)
+	}
+	f.clock = f.clock.Add(time.Hour)
+	if err := f.cat.EditBook(ctx, f.lib.ID, "The Expanse/3", catalog.BookEdit{
+		Match: &catalog.MatchAnchor{}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.RunOnce(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.cat.UpcomingSeriesAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].SeriesID != "" || rows[0].ResolvedAt == "" {
+		t.Fatalf("after the unlink: series = %+v, want resolved to none", rows)
+	}
+	if got := f.items(t); len(got) != 0 {
+		t.Fatalf("after the unlink: items = %v, want none", got)
+	}
+}

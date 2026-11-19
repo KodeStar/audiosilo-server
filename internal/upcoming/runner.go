@@ -735,7 +735,15 @@ func (r *Runner) resolveSeries(ctx context.Context, locals []*localSeries, works
 			}
 		}
 		if len(ids) == 0 {
-			continue // nothing to ask by yet: a later run, once a book resolves
+			// Nothing to ask by yet: a later run, once a book resolves. A series
+			// an unlink set due (resolved_at emptied, catalog.setMatchedSeriesDue)
+			// whose books now have no work, a match-only book's, is none.
+			if prior := have[k]; len(prior) > 0 && prior[0].ResolvedAt == "" {
+				if err := r.cat.SetUpcomingSeries(ctx, l.libraryID, l.key, l.name, len(l.books), nil, stamp(now)); err != nil {
+					return failed, fmt.Errorf("saving a series: %w", err)
+				}
+			}
+			continue
 		}
 		found, ok := r.seriesOf(ctx, l.name, ids)
 		if !ok {
