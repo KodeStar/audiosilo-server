@@ -322,11 +322,15 @@ func TestRenditionRefusals(t *testing.T) {
 
 // TestCraftedPlaylistIsNoInput (security): a library file under an audio name
 // that is an HLS playlist or an ffconcat script naming another of the
-// library's files is no input to ffmpeg (metadata.InputFormats, the one list
-// a transcode and a rendition take with the probe): its transcode sends none
-// of the audio it names, and its watch rendition is 422 rendition_failed (a
-// refusal, remembered), not that file's audio encoded. Allowed: the file it
-// names transcodes.
+// library's files is no input to ffmpeg: its transcode sends none of the
+// audio it names, and its watch rendition is 422 rendition_failed (a refusal,
+// remembered), not that file's audio encoded. Allowed: the file it names
+// transcodes. This holds the API's answers only: on an ffmpeg with fd: the
+// protocol list refuses what these name whatever the demuxer, and a current
+// ffmpeg refuses an HLS playlist under an audio name and an absolute ffconcat
+// name by itself, so the test passes without the demuxer list too; the list
+// (metadata.InputFormats) is shown, against a control run without it, by
+// media's TestTranscodeOpensNoOtherInput.
 func TestCraftedPlaylistIsNoInput(t *testing.T) {
 	t.Parallel()
 	r := newRenditionEnv(t)
