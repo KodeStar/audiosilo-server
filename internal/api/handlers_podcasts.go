@@ -42,6 +42,26 @@ func (a *API) showSpelled(w http.ResponseWriter, r *http.Request, lib int64, sho
 	return spelled, true
 }
 
+// visibleShow is show, a show path a client sent, in the index's spelling
+// among the shows s lets the caller see, or false with 404 show_not_found
+// answered (a path no show folder could have, one s hides, or a failed
+// lookup's error).
+func (a *API) visibleShow(w http.ResponseWriter, r *http.Request, lib int64, s catalog.Scope, show string) (string, bool) {
+	if !feed.ShowPath(show) {
+		writeShowNotFound(w)
+		return "", false
+	}
+	show, ok := a.showSpelled(w, r, lib, show, s.VisibleInBrowse)
+	if !ok {
+		return "", false
+	}
+	if !s.VisibleInBrowse(show) {
+		writeShowNotFound(w)
+		return "", false
+	}
+	return show, true
+}
+
 func writeShowNotFound(w http.ResponseWriter) {
 	writeErrorCode(w, http.StatusNotFound, "show_not_found", "Show not found.")
 }
@@ -101,16 +121,8 @@ func (a *API) handlePodcastEpisodes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	show := r.URL.Query().Get("show")
-	if !feed.ShowPath(show) {
-		writeShowNotFound(w)
-		return
-	}
-	if show, ok = a.showSpelled(w, r, lib.ID, show, s.VisibleInBrowse); !ok {
-		return
-	}
-	if !s.VisibleInBrowse(show) {
-		writeShowNotFound(w)
+	show, ok := a.visibleShow(w, r, lib.ID, s, r.URL.Query().Get("show"))
+	if !ok {
 		return
 	}
 	if _, err := a.cat.PodcastShow(r.Context(), lib.ID, show, userFrom(r.Context()).ID); err != nil {
@@ -247,15 +259,7 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "podcast scope failed", "Could not check access.")
 		return
 	}
-	if !feed.ShowPath(p) {
-		writeShowNotFound(w)
-		return
-	}
-	if p, ok = a.showSpelled(w, r, lib.ID, p, s.VisibleInBrowse); !ok {
-		return
-	}
-	if !s.VisibleInBrowse(p) {
-		writeShowNotFound(w)
+	if p, ok = a.visibleShow(w, r, lib.ID, s, p); !ok {
 		return
 	}
 	show, err := a.cat.PodcastShow(r.Context(), lib.ID, p, user)

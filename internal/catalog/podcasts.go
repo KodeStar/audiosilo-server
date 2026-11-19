@@ -601,19 +601,13 @@ func (c *Catalog) PodcastShow(ctx context.Context, lib int64, p string, user int
 }
 
 // PodcastShowSpelling is the index's spelling of p, a show path a client sent,
-// by Spelling's rule for a book (server#210): p itself when it has no other
-// Unicode spelling, when a show is indexed at p as given, or when no show reads
-// as it; else the one show indexed in another spelling of p (its NFC form is
-// p's) that allow admits (nil: every one). A show folder renamed to its other
-// spelling on disk (server#495) moves its row there, and an older client or a
-// saved link still names the old one. Two shows allow admits that both read as
-// p (an NFC and an NFD folder side by side on a disk that keeps them apart)
-// leave p as given, and so does a p that is an entry of its own on the disk
-// (ownEntry: a folder in that spelling no scan has indexed yet), so it never
-// guesses and a show not indexed yet is never taken for the one beside it.
-// A p left as given that the index holds as no show then finds none, so a
-// show outside allow is never reached. Only Unicode form, never case: a
-// book's path does not meet another case either.
+// by Spelling's rule for a book (server#210) over podcast_shows: the one show
+// whose NFC form is p's that allow admits (nil: every one), so a show folder
+// renamed by hand to its other spelling (server#495) is still found by the
+// old one. p as given when a show is indexed there, when none or two read as
+// it (it never guesses), and when p is an entry of its own on the disk
+// (ownEntry: a folder in that spelling no scan has indexed yet). Only Unicode
+// form, never case, as for a book.
 func (c *Catalog) PodcastShowSpelling(ctx context.Context, lib int64, p string, allow func(string) bool) (string, error) {
 	if !HasOtherSpelling(p) {
 		return p, nil
@@ -637,11 +631,10 @@ func (c *Catalog) PodcastShowSpelling(ctx context.Context, lib int64, p string, 
 			m.add(s)
 		}
 	}
-	s, found := m.one(p)
-	if !found || s == p || c.ownEntry(ctx, lib, p) {
+	if len(m.in) != 1 || c.ownEntry(ctx, lib, p) {
 		return p, nil
 	}
-	return s, nil
+	return m.in[0], nil
 }
 
 func (c *Catalog) PodcastShowByHash(ctx context.Context, lib int64, hash string, user int64) (*PodcastShow, error) {

@@ -8,7 +8,6 @@ import (
 	"image"
 	"image/png"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -986,11 +985,7 @@ func TestPodcastShowRoutesMeetTheOtherSpelling(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "feed.json"), []byte(mustJSON(t, empty)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	var art bytes.Buffer
-	if err := png.Encode(&art, image.NewRGBA(image.Rect(0, 0, 8, 8))); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "cover.png"), art.Bytes(), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "cover.png"), bandedPNG(t, 8, 8), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := b.api.scanner.IndexPodcastPath(ctx, *b.lib, zoeNFD); err != nil {
@@ -1015,17 +1010,11 @@ func TestPodcastPrivateShowNotReachedByTheOtherSpelling(t *testing.T) {
 	h := podcastHeaders()
 	ctx := context.Background()
 	q := url.QueryEscape(nfc)
-	denied := func(name string, resp *http.Response, out string) {
-		t.Helper()
-		if resp.StatusCode != 404 || !strings.Contains(out, "show_not_found") {
-			t.Fatalf("%s %d %s", name, resp.StatusCode, out)
-		}
-	}
 	for _, show := range []string{nfc, nfd} {
 		resp, out := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "podcasts/episodes?show="+url.QueryEscape(show)), b.userTok, "", h)
-		denied("episodes "+show, resp, out)
+		wantCode(t, "episodes "+show, resp, out, 404, "show_not_found")
 		resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, show), h)
-		denied("follow "+show, resp, out)
+		wantCode(t, "follow "+show, resp, out, 404, "show_not_found")
 	}
 	// Another listener follows it; this caller's unfollow by the other
 	// spelling is theirs alone.
