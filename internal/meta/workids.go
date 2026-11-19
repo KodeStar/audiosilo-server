@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -72,7 +73,7 @@ func (s *Service) WorkIDs(ctx context.Context, books []BookIDs) []WorkID {
 			m.at = append(m.at, i)
 			continue
 		}
-		if w, hit := s.cachedWorkID(key); hit {
+		if w, _, _, hit := s.cachedWorkID(key); hit {
 			out[i] = w
 			continue
 		}
@@ -98,20 +99,21 @@ func (s *Service) WorkIDs(ctx context.Context, books []BookIDs) []WorkID {
 // cached "no match" is a miss), else its own "l:" entry. hit is false when
 // neither holds an answer. A cached enrichment failure is not an answer: it may
 // have come from the work or series fetch rather than the lookup, so the lookup
-// entry (or a lookup of its own) decides.
-func (s *Service) cachedWorkID(key string) (w WorkID, hit bool) {
-	if e, hit, err := cacheGet[Enrichment](s.cache, key); hit {
+// entry (or a lookup of its own) decides. env is the enrichment when it is what
+// answered with a match (cachedAnswerOf's), until the answering entry's expiry.
+func (s *Service) cachedWorkID(key string) (w WorkID, env *Enrichment, until time.Time, hit bool) {
+	if e, until, hit, err := cacheGetUntil[Enrichment](s.cache, key); hit {
 		switch {
 		case err == nil && e.Work != nil && e.Work.ID != "":
-			return WorkID{ID: e.Work.ID}, true
+			return WorkID{ID: e.Work.ID}, e, until, true
 		case errors.Is(err, ErrNotFound):
-			return WorkID{}, true
+			return WorkID{}, nil, until, true
 		}
 	}
-	if l, hit, err := cacheGet[upstreamLookup](s.cache, nsLookup.key(key)); hit {
-		return workIDOf(l, err), true
+	if l, until, hit, err := cacheGetUntil[upstreamLookup](s.cache, nsLookup.key(key)); hit {
+		return workIDOf(l, err), nil, until, true
 	}
-	return WorkID{}, false
+	return WorkID{}, nil, time.Time{}, false
 }
 
 // lookupFlight is one WorkIDs lookup in flight upstream, shared by every caller
@@ -247,7 +249,7 @@ func (s *Service) CachedWorkID(ctx context.Context, asin, isbn string) (id strin
 	if key == "" {
 		return "", false
 	}
-	if w, hit := s.cachedWorkID(key); hit && !w.Failed {
+	if w, _, _, hit := s.cachedWorkID(key); hit && !w.Failed {
 		return w.ID, true
 	}
 	return s.storedWorkID(ctx, key)

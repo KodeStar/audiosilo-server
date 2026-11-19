@@ -11,8 +11,8 @@ import (
 )
 
 // cachedAnswer is an identifier's answer from the cache alone, never the
-// upstream: memory's enrichment, else memory's lookup (WorkIDs'), else the
-// enrichment's persisted row, fresh or stale, as CachedWorkID reads them. env
+// upstream: memory (cachedWorkID: the enrichment, else WorkIDs' lookup), else
+// the enrichment's persisted row, fresh or stale, as CachedWorkID reads them. env
 // is the enrichment when one answered with a match (nil for a lookup's answer
 // and a "no match"; shared with the cache: never modify it), id its work ("" for
 // a "no match"), at when it was had (answeredAt: at the earliest) and ok
@@ -34,21 +34,8 @@ func (s *Service) cachedAnswerOf(ctx context.Context, asin, isbn string) cachedA
 	if key == "" {
 		return cachedAnswer{}
 	}
-	if e, until, hit, err := cacheGetUntil[Enrichment](s.cache, key); hit {
-		switch {
-		case err == nil && e.Work != nil && e.Work.ID != "":
-			return cachedAnswer{env: e, id: e.Work.ID, at: answeredAt(until, true), ok: true}
-		case errors.Is(err, ErrNotFound):
-			return cachedAnswer{at: answeredAt(until, false), ok: true}
-		}
-	}
-	if l, until, hit, err := cacheGetUntil[upstreamLookup](s.cache, nsLookup.key(key)); hit {
-		switch {
-		case err == nil && l.Work != nil && l.Work.ID != "":
-			return cachedAnswer{id: l.Work.ID, at: answeredAt(until, true), ok: true}
-		case errors.Is(err, ErrNotFound):
-			return cachedAnswer{at: answeredAt(until, false), ok: true}
-		}
+	if w, env, until, hit := s.cachedWorkID(key); hit && !w.Failed {
+		return cachedAnswer{env: env, id: w.ID, at: answeredAt(until, w.ID != ""), ok: true}
 	}
 	stored, expires, fresh := readStored[Enrichment](ctx, s, key)
 	switch {

@@ -272,18 +272,24 @@ func newPlacer(currentWork string, requested MetaLocal, books []LocalBook) *plac
 			if !slices.ContainsFunc(p.byWork[b.WorkID], func(o LocalBook) bool { return o.MetaLocal == b.MetaLocal }) {
 				p.byWork[b.WorkID] = append(p.byWork[b.WorkID], b)
 			}
-			if b.Matched && b.SeriesIndex > 0 {
-				if k := match.SeriesKey(b.Series); k != "" {
-					p.byIndex[k] = append(p.byIndex[k], b)
-				}
+			if b.Matched {
+				p.index(b)
 			}
-		case b.SeriesIndex > 0:
-			if k := match.SeriesKey(b.Series); k != "" {
-				p.byIndex[k] = append(p.byIndex[k], b)
-			}
+		default:
+			p.index(b)
 		}
 	}
 	return p
+}
+
+// index adds b to byIndex under its series' key, when it is numbered there.
+func (p *placer) index(b LocalBook) {
+	if b.SeriesIndex <= 0 {
+		return
+	}
+	if k := match.SeriesKey(b.Series); k != "" {
+		p.byIndex[k] = append(p.byIndex[k], b)
+	}
 }
 
 // pickRank is which of a work's recordings the caller is given first, lower
