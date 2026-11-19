@@ -100,10 +100,17 @@ func TestSelectionRoutesRefuseHugeLists(t *testing.T) {
 	// past maxBulkBooks too.
 	huge := "[" + strings.Repeat("{},", (selectionBodyMax-1024)/3) + "{}]"
 	works := "[" + strings.Repeat("{},", 300_000) + "{}]"
+	// A bulk edit's own lists are held to the 1 MiB an edit has, not the room
+	// its books have: one that would fill the body is refused before it is read.
+	labels := "[" + strings.Repeat(`"",`, (bulkEditBodyMax-1024)/3) + `""]`
+	oneBook := `"books":[{"library_id":1,"path":"p"}]`
 	for _, tc := range []struct{ method, route, body string }{
 		{"POST", "/api/v1/admin/shares", `{"name":"Huge","paths":` + huge + `}`},
 		{"POST", "/api/v1/admin/shares/" + strconv.FormatInt(share.ID, 10) + "/paths", `{"rules":` + huge + `}`},
 		{"POST", "/api/v1/admin/books/bulk", `{"set":{"narrator":"x"},"books":` + huge + `}`},
+		{"POST", "/api/v1/admin/books/bulk", `{` + oneBook + `,"revert":` + labels + `}`},
+		{"POST", "/api/v1/admin/books/bulk", `{"add":{"tags":` + labels + `},` + oneBook + `}`},
+		{"POST", "/api/v1/admin/books/bulk", `{"chapters":{"revert":` + labels + `},` + oneBook + `,"books":[]}`},
 		{"POST", "/api/v1/admin/issues/ignore", `{"kind":"transcode","books":` + huge + `}`},
 		{"DELETE", "/api/v1/admin/issues/ignore", `{"kind":"transcode","books":` + huge + `}`},
 		{"POST", "/api/v1/admin/books/works", `{"books":` + works + `}`},

@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -36,8 +38,21 @@ const maxBulkBooks = 1000
 const selectionBodyMax = maxBulkBooks*(catalog.MaxPathBytes+64) + 64<<10
 
 // bulkEditBodyMax is selectionBodyMax for a bulk edit, whose edit itself has
-// the 1 MiB a one-book edit's body carries.
-const bulkEditBodyMax = selectionBodyMax + 1<<20
+// the 1 MiB a one-book edit's body carries (maxBulkEditBytes).
+const bulkEditBodyMax = selectionBodyMax + maxBulkEditBytes
+
+// maxBulkEditBytes bounds a bulk edit's body less its books: the edit, which
+// holds lists and maps of its own (revert, add, remove), so it never gets the
+// room the selection's paths have (handleAdminBulkEdit).
+const maxBulkEditBytes = 1 << 20
+
+// spanBytes counts the bytes of the JSON values decoded into it, keeping none.
+type spanBytes int64
+
+func (n *spanBytes) UnmarshalJSON(data []byte) error {
+	*n += spanBytes(len(data))
+	return nil
+}
 
 // maxFilterValues caps a repeatable filter (?format=, ?codec=); each value is an
 // SQL parameter, and a real library has a handful.
@@ -535,7 +550,29 @@ func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 		Books boundedList[catalog.Ref] `json:"books"`
 		editRequest
 	}
-	if !decodeBody(w, r, &req, bulkEditBodyMax) {
+	// The body is read whole and measured before any of it becomes values:
+	// only its books may use the room past maxBulkEditBytes. The edit's own
+	// lists and maps are not boundedLists, and one filling the whole body with
+	// empty entries would be decoded before anything counted it.
+	body, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, bulkEditBodyMax))
+	if err != nil {
+		writeDecodeError(w, err)
+		return
+	}
+	var sel struct {
+		Books spanBytes `json:"books"`
+	}
+	// A body that doesn't decode here doesn't below either, and is answered there.
+	if dec := json.NewDecoder(bytes.NewReader(body)); dec.Decode(&sel) == nil &&
+		dec.InputOffset()-int64(sel.Books) > maxBulkEditBytes {
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+			fmt.Sprintf("the edit is larger than %d bytes", maxBulkEditBytes))
+		return
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeDecodeError(w, err)
 		return
 	}
 	switch {
