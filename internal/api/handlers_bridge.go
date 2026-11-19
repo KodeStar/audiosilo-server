@@ -804,17 +804,22 @@ func (a *API) handleAdminBridge(w http.ResponseWriter, r *http.Request) {
 	if p.CodeExpiresAt != "" {
 		out.Pairing = &bridgePairing{ExpiresAt: p.CodeExpiresAt}
 	}
+	// The mappings by library, read once: a heartbeat holds thousands
+	// (server#445), and a lookup per library (Status.Library) would scan them all.
+	var mappings map[int64]*bridge.LibraryStatus
 	if h != nil {
 		out.Online = h.Online(time.Now())
 		out.HeartbeatAt = h.At.UTC().Format(time.RFC3339)
 		out.Version, out.Kinds, out.Features, out.Workers, out.UIURL = h.Version, h.Kinds, h.Features(), h.Workers, h.UIURL
 		out.Estimates, out.Setup = h.Estimates, h.Setup
+		mappings = make(map[int64]*bridge.LibraryStatus, len(h.Libraries))
+		for i := range h.Libraries {
+			mappings[h.Libraries[i].LibraryID] = &h.Libraries[i]
+		}
 	}
 	for _, l := range libs {
 		al := adminBridgeLibrary{bridgeLibrary: bridgeLibrary{Kind: l.Kind, ID: l.ID, Name: l.Name, Root: l.Root}}
-		if h != nil {
-			al.Mapping = h.Library(l.ID)
-		}
+		al.Mapping = mappings[l.ID]
 		out.Libraries = append(out.Libraries, al)
 	}
 	writeJSON(w, http.StatusOK, out)
