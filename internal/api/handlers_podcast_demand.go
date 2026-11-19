@@ -61,7 +61,10 @@ func (a *API) podcastPresent(ctx context.Context, lib *catalog.Library, rel stri
 		_ = f.Close()
 		return true, nil
 	}
-	if !errors.Is(err, library.ErrEpisodeRefused) && (errors.Is(err, library.ErrNotIndexable) || errors.Is(err, catalog.ErrNotFound)) {
+	if errors.Is(err, library.ErrEpisodeRefused) {
+		return false, err // ErrNotIndexable too, but no absent episode
+	}
+	if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, catalog.ErrNotFound) {
 		return false, nil
 	}
 	return false, err

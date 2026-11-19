@@ -348,6 +348,19 @@ func TestPodcastStreamMarksCoverEveryMediaBranch(t *testing.T) {
 	}
 }
 
+// getPodcastStream is the admin's GET of stream (an episode's stream route)
+// from a client that sees podcasts, answered in process.
+func getPodcastStream(b *bridgeEnv, stream string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", stream, nil)
+	r.Header.Set("Authorization", "Bearer "+b.adminTok)
+	for k, v := range podcastHeaders() {
+		r.Header.Set(k, v)
+	}
+	b.api.Handler().ServeHTTP(w, r)
+	return w
+}
+
 // An episode's open on a share that stopped answering (OpenPodcast's checks
 // and open, SRV-15c) is given up on at the stream's bound: a 503
 // share_not_answering with Retry-After, not a handler held for good; once the
@@ -359,14 +372,7 @@ func TestPodcastStreamOnAHeldShareAnswers(t *testing.T) {
 	u := podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(f.Episodes[0].Path))
 	release := metadata.HoldOpensForTests(filepath.Join(b.lib.Root, "Fixture Show"))
 	t.Cleanup(release)
-	get := func() *httptest.ResponseRecorder {
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest("GET", u, nil)
-		r.Header.Set("Authorization", "Bearer "+b.adminTok)
-		r.Header.Set(auth.ClientHeader, "AudioSilo/dev (web)") // a client that sees podcasts
-		b.api.Handler().ServeHTTP(w, r)
-		return w
-	}
+	get := func() *httptest.ResponseRecorder { return getPodcastStream(b, u) }
 	start := time.Now()
 	if w := get(); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), codeShareNotAnswering) || w.Header().Get("Retry-After") != "30" {
 		t.Errorf("an episode on a held share = %d %s, want 503 %s", w.Code, w.Body, codeShareNotAnswering)
@@ -397,14 +403,7 @@ func TestPodcastStreamRefusedFolderIs404(t *testing.T) {
 	dir := filepath.Join(b.lib.Root, "Fixture Show")
 	ep := f.Episodes[0]
 	stream := podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(ep.Path))
-	get := func() *httptest.ResponseRecorder {
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest("GET", stream, nil)
-		r.Header.Set("Authorization", "Bearer "+b.adminTok)
-		r.Header.Set(auth.ClientHeader, "AudioSilo/dev (web)") // a client that sees podcasts
-		b.api.Handler().ServeHTTP(w, r)
-		return w
-	}
+	get := func() *httptest.ResponseRecorder { return getPodcastStream(b, stream) }
 	fetches := func() (n int) {
 		t.Helper()
 		if err := b.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM bridge_jobs WHERE kind = ?`, bridge.KindPodcastFetch).Scan(&n); err != nil {
