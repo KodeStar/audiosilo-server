@@ -1579,6 +1579,14 @@ export interface UserDetail {
   owner_is_admin?: boolean;
   /** The person's linked single sign-ons (absent before server#235). */
   identities?: OIDCIdentity[] | null;
+  /** Whether the person has a calendar feed link, and since when (absent before server#285). */
+  calendar_link?: { active: boolean; created_at?: string };
+}
+
+/** POST /admin/users/{id}/end-keys (server#285): what it ended. */
+export interface EndedKeys {
+  api_keys: number;
+  calendar_link: boolean;
 }
 
 /**
@@ -1701,6 +1709,13 @@ export interface AdminBook {
    * narration stand in only with none, so Detect chapters isn't offered then.
    */
   chapter_choice?: ChapterChoice;
+  /**
+   * The book's newest `chapters.detect` job, whatever its state: only on a row
+   * of Health's books without chapters (`?issue=no_chapters`, not the ignored
+   * ones), absent when the book has none or the server knows no Bridge
+   * (server#273).
+   */
+  detect_job?: BridgeJob;
   /**
    * The book's ebook (catalog.Ebook): the .epub beside its audio the player's
    * reader opens, library-relative, with its size in bytes when last scanned.

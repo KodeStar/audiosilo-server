@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
 	"github.com/kodestar/audiosilo-server/internal/media"
@@ -88,7 +89,12 @@ func (a *API) handleAdminListBooks(w http.ResponseWriter, r *http.Request) {
 	// every book), so it is kept like the player's lists (server#245). Only a
 	// first page: one admin scrolling a large library through every cursor page
 	// would otherwise push the player's lists out of the shared cache.
-	write := a.cachedList(w, r, gen, cacheable && opt.Cursor == "", nil, f.IssueOff)
+	//
+	// Health's books without chapters carry each book's chapter detection
+	// (detectRows), which a Bridge's reports move without a content write: that
+	// list is read each time.
+	detect := a.bridge != nil && f.Issue == catalog.IssueNoChapters && !f.IssueIgnored
+	write := a.cachedList(w, r, gen, cacheable && opt.Cursor == "" && !detect, nil, f.IssueOff)
 	if write == nil {
 		return
 	}
@@ -97,7 +103,54 @@ func (a *API) handleAdminListBooks(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "admin list books failed", "could not list books")
 		return
 	}
-	write(page)
+	if !detect {
+		write(page)
+		return
+	}
+	rows, err := a.detectRows(r.Context(), page)
+	if err != nil {
+		a.log.Warn("admin list books failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not list books")
+		return
+	}
+	write(rows)
+}
+
+// detectRow is a row of Health's books without chapters: the book, and its
+// newest chapters.detect job when it has one (queued, working, parked or
+// ended), so the row says what became of a detection and offers no second one
+// while one is open (server#273).
+type detectRow struct {
+	catalog.AdminBook
+	DetectJob *bridge.Job `json:"detect_job,omitempty"`
+}
+
+// detectPage is an AdminPage of detectRows.
+type detectPage struct {
+	Books      []detectRow `json:"books"`
+	NextCursor string      `json:"next_cursor,omitempty"`
+}
+
+// detectRows is page with each book's newest chapters.detect job, read once
+// for the page's books (bridge.LatestForBooks), never per row and never from
+// the newest jobs alone: a book queued among hundreds still shows its own.
+func (a *API) detectRows(ctx context.Context, page *catalog.AdminPage) (detectPage, error) {
+	keys := make([]bridge.BookKey, len(page.Books))
+	for i, b := range page.Books {
+		keys[i] = bridge.BookKey{LibraryID: b.LibraryID, Path: b.Path}
+	}
+	jobs, err := a.bridge.LatestForBooks(ctx, bridge.KindDetectChapters, keys)
+	if err != nil {
+		return detectPage{}, err
+	}
+	out := detectPage{Books: make([]detectRow, len(page.Books)), NextCursor: page.NextCursor}
+	for i, b := range page.Books {
+		out.Books[i].AdminBook = b
+		if j, ok := jobs[keys[i]]; ok {
+			out.Books[i].DetectJob = &j
+		}
+	}
+	return out, nil
 }
 
 // handleAdminBookFacets serves GET /admin/books/facets: the facet counts for the

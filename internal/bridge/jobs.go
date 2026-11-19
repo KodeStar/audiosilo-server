@@ -1232,6 +1232,56 @@ func (s *Service) List(ctx context.Context, f Filter) (jobs []Job, nextBefore in
 	return jobs, nextBefore, nil
 }
 
+// BookKey names a book a job is about: its library and the book's path.
+type BookKey struct {
+	LibraryID int64
+	Path      string
+}
+
+// LatestForBooks returns the newest job of kind for each of books that has
+// one, as List answers a job, after expiring lapsed leases. One read for the
+// whole list, however many jobs there are: a page of Health's books without
+// chapters reads its chapter detections this way, so a book queued among
+// hundreds still shows its job (server#273).
+func (s *Service) LatestForBooks(ctx context.Context, kind string, books []BookKey) (map[BookKey]Job, error) {
+	out := make(map[BookKey]Job, len(books))
+	if len(books) == 0 {
+		return out, nil
+	}
+	if err := s.expireDue(ctx); err != nil {
+		return nil, err
+	}
+	pairs := make([][2]any, len(books))
+	for i, b := range books {
+		pairs[i] = [2]any{b.LibraryID, b.Path}
+	}
+	list, err := json.Marshal(pairs)
+	if err != nil {
+		return nil, err
+	}
+	// Each book's jobs through idx_bridge_jobs_book, the newest of the kind kept.
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+`
+		 WHERE j.id IN (SELECT MAX(x.id) FROM json_each(?1) r
+		                  JOIN bridge_jobs x ON x.library_id = json_extract(r.value, '$[0]')
+		                                    AND x.rel_path = json_extract(r.value, '$[1]')
+		                 WHERE x.kind = ?2 GROUP BY x.library_id, x.rel_path)`, string(list), kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		if j.LibraryID == nil || j.Path == nil {
+			continue
+		}
+		out[BookKey{LibraryID: *j.LibraryID, Path: *j.Path}] = RedactedJob(*j)
+	}
+	return out, rows.Err()
+}
+
 // lapsedSQL picks the jobs whose lease ran out (?1 is now).
 const lapsedSQL = `state IN ` + claimedStatesSQL + ` AND lease_until < ?1`
 

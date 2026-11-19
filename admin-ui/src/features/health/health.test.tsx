@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { onTestFinished } from 'vitest';
 import { setToken } from '@/api/token';
@@ -604,6 +604,186 @@ describe('library health', () => {
       await waitFor(() => expect(screen.queryByRole('dialog', confirm)).not.toBeInTheDocument());
       // The bar's selection was queued, so it is done with.
       expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
+    });
+
+    // A detection as it comes on its book's row (the book's newest job).
+    const rowJob = (path: string, over: Partial<BridgeJob>): BridgeJob => ({
+      ...(queuedJob(path) as { body: BridgeJob }).body,
+      path,
+      ...over,
+    });
+
+    it("shows each row's detection, holding Detect back while one is open (BRIDGE-08)", async () => {
+      let state: BridgeJob['state'] = 'queued';
+      const calls = mockFetch(
+        detectRoutes({
+          'GET /admin/books': (req) => ({
+            body: {
+              books:
+                req.query.get('issue') === 'no_chapters'
+                  ? [
+                      { ...plain[0], detect_job: rowJob(plain[0].path, { id: 7, state }) },
+                      {
+                        ...plain[1],
+                        detect_job: rowJob(plain[1].path, {
+                          id: 6,
+                          state: 'failed',
+                          error: 'transcription failed',
+                        }),
+                      },
+                    ]
+                  : [],
+            },
+          }),
+        }),
+      );
+      const user = userEvent.setup();
+      const { queryClient } = renderApp('/health?issue=no_chapters');
+      const gate = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      const past = screen.getByRole('link', { name: 'Past Tense' }).closest('li')!;
+      // The queued one says so, with no second Detect; the failed one says why, and offers it again.
+      expect(await within(gate).findByText('Chapter detection')).toBeInTheDocument();
+      expect(within(gate).queryByRole('button', { name: 'Detect chapters' })).toBeNull();
+      expect(within(past).getByText('transcription failed')).toBeInTheDocument();
+      expect(within(past).getByRole('button', { name: 'Detect chapters' })).toBeInTheDocument();
+      // The rows carry them: no job list is read for the list, whatever its size.
+      expect(calls.some((c) => c.path === '/admin/bridge/jobs')).toBe(false);
+      // The bar's Detect leaves the open one out.
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      const bar = await screen.findByRole('toolbar');
+      await user.click(within(bar).getByRole('button', { name: 'Detect chapters' }));
+      // One book: the dialog names it (two would be counted).
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Past Tense')).toBeInTheDocument();
+      await user.keyboard('{Escape}');
+      // The job ends: the row offers Detect again, and the counts are read
+      // again, as the book may have its chapters now.
+      const before = calls.filter((c) => c.path === '/admin/issues').length;
+      state = 'done';
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'books', 'list'] });
+      await waitFor(() =>
+        expect(calls.filter((c) => c.path === '/admin/issues').length).toBeGreaterThan(before),
+      );
+      expect(
+        await within(gate).findByRole('button', { name: 'Detect chapters' }),
+      ).toBeInTheDocument();
+    });
+
+    it('offers Detect again beside a detection that is being cancelled (BRIDGE-08)', async () => {
+      mockFetch(
+        detectRoutes({
+          'GET /admin/books': (req) => ({
+            body: {
+              books:
+                req.query.get('issue') === 'no_chapters'
+                  ? [
+                      {
+                        ...plain[0],
+                        detect_job: rowJob(plain[0].path, {
+                          id: 7,
+                          state: 'running',
+                          cancel_requested: true,
+                        }),
+                      },
+                    ]
+                  : [],
+            },
+          }),
+        }),
+      );
+      renderApp('/health?issue=no_chapters');
+      const gate = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      // The stopping job still shows; the server ends it for a new request.
+      expect(await within(gate).findByText('Chapter detection')).toBeInTheDocument();
+      expect(within(gate).getByRole('button', { name: 'Detect chapters' })).toBeInTheDocument();
+    });
+
+    it('keeps the rows when reading the list again fails', async () => {
+      let down = false;
+      mockFetch(
+        detectRoutes({
+          'GET /admin/books': (req) =>
+            down
+              ? { status: 503, body: { error: 'starting' } }
+              : { body: { books: req.query.get('issue') === 'no_chapters' ? plain : [] } },
+        }),
+      );
+      const { queryClient } = renderApp('/health?issue=no_chapters');
+      expect(await screen.findByRole('link', { name: 'The Black Gate' })).toBeInTheDocument();
+      down = true;
+      await queryClient.refetchQueries({ queryKey: ['admin', 'books', 'list'] });
+      await waitFor(() =>
+        expect(
+          queryClient.getQueryCache().findAll({ queryKey: ['admin', 'books', 'list'] })[0]?.state
+            .status,
+        ).toBe('error'),
+      );
+      expect(screen.getByRole('link', { name: 'The Black Gate' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Past Tense' })).toBeInTheDocument();
+    });
+
+    it('reads the list again once a detection is queued, so its row says so (BRIDGE-08)', async () => {
+      let queued = false;
+      mockFetch(
+        detectRoutes({
+          'GET /admin/books': (req) => ({
+            body: {
+              books:
+                req.query.get('issue') === 'no_chapters'
+                  ? [
+                      queued
+                        ? { ...plain[0], detect_job: rowJob(plain[0].path, { id: 5 }) }
+                        : plain[0],
+                      plain[1],
+                    ]
+                  : [],
+            },
+          }),
+          'POST /admin/bridge/jobs': (req) => {
+            queued = true;
+            return queuedJob((req.body as { path: string }).path);
+          },
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      const gate = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      expect(within(gate).queryByText('Chapter detection')).not.toBeInTheDocument();
+      await user.click(within(gate).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      expect(await within(gate).findByText('Chapter detection')).toBeInTheDocument();
+      await waitFor(() =>
+        expect(within(gate).queryByRole('button', { name: 'Detect chapters' })).toBeNull(),
+      );
+    });
+
+    it('shows no detection on the ignored list, though the list before it had one (BRIDGE-08)', async () => {
+      mockFetch(
+        detectRoutes({
+          'GET /admin/books': (req) => ({
+            body: {
+              books:
+                req.query.get('issue') !== 'no_chapters'
+                  ? []
+                  : req.query.get('issue_ignored') === 'true'
+                    ? [plain[1]]
+                    : [{ ...plain[0], detect_job: rowJob(plain[0].path, { id: 7 }) }],
+            },
+          }),
+        }),
+      );
+      const { router } = renderApp('/health?issue=no_chapters');
+      const gate = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      expect(await within(gate).findByText('Chapter detection')).toBeInTheDocument();
+      await act(() =>
+        router.navigate({
+          to: '/health',
+          search: { issue: 'no_chapters', ignored: true },
+        } as never),
+      );
+      expect(await screen.findAllByRole('button', { name: 'Show again' })).not.toHaveLength(0);
+      expect(screen.queryByText('Chapter detection')).not.toBeInTheDocument();
     });
 
     it('offers no fix while the Bridge does not offer chapter detection', async () => {

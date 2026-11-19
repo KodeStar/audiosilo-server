@@ -20,10 +20,13 @@ import {
 import {
   FITTED_STATUSES,
   type AdminBook,
+  type BridgeJob,
   type IssueCount,
   type IssueKind,
   type IssuesSummary,
 } from '@/api/types';
+import { isOpen } from '@/features/bridge/bridge-model';
+import { generatePollMs } from '@/features/bridge/generate-model';
 import type { Phrase } from '@/lib/phrase';
 import { relBaseName, relParent } from '@/lib/paths';
 
@@ -112,6 +115,44 @@ export function detectChosenNote(
   if (fix !== 'detect') return undefined;
   if (b.chapters_source === 'edited') return 'health.detect.edited';
   return b.chapter_choice ? `health.detect.chosen.${b.chapter_choice}` : undefined;
+}
+
+/**
+ * How soon Health's books without chapters are read again, from the detections
+ * on their rows (`detect_job`, BRIDGE-08): about every 10 s while one is queued
+ * or working, every minute while one is parked, else not at all
+ * (generatePollMs), so a row follows its job to the end.
+ */
+export function detectPollMs(books: readonly Pick<AdminBook, 'detect_job'>[]): number | false {
+  return generatePollMs(books.flatMap((b) => (b.detect_job ? [b.detect_job] : [])));
+}
+
+/**
+ * The detections on books' rows that are still open (queued, working or
+ * parked), by job id: when one is no longer among them, its job ended (or its
+ * book left the list) and the category's count may have moved.
+ */
+export function openDetections(books: readonly Pick<AdminBook, 'detect_job'>[]): Set<number> {
+  return new Set(
+    books.flatMap((b) => (b.detect_job && isOpen(b.detect_job.state) ? [b.detect_job.id] : [])),
+  );
+}
+
+/**
+ * What a row without chapters shows of its book's newest chapter detection
+ * (BRIDGE-08): one queued, working or parked (`open`), or how the last one
+ * ended (none found, or failed), so the row says why it is still listed. A
+ * cancelled one shows nothing. `holds` is whether it holds the row's Detect
+ * chapters back: while open and not being cancelled (a second click would only
+ * find the same job; one asked to stop ends for a new request, as the server's
+ * queue has it, so Detect is offered again at once).
+ */
+export function detectRowJob(
+  job: BridgeJob | undefined,
+): { job: BridgeJob; open: boolean; holds: boolean } | undefined {
+  if (!job || job.state === 'cancelled') return undefined;
+  const open = isOpen(job.state);
+  return { job, open, holds: open && !job.cancel_requested };
 }
 
 /**

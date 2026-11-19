@@ -569,6 +569,131 @@ describe('a person', () => {
     );
   });
 
+  it('ends their API keys and calendar link, saying what it ended (server#285)', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/users/2': {
+          body: samDetail({
+            calendar_link: { active: true, created_at: '2026-11-01T10:00:00.000Z' },
+          }),
+        },
+        'GET /admin/devices': {
+          body: { devices: [device(), device({ id: 3, kind: 'api', name: 'Home Assistant' })] },
+        },
+        'POST /admin/users/2/end-keys': { body: { api_keys: 1, calendar_link: true } },
+      }),
+    );
+    renderApp('/people/user/2?tab=devices');
+    const user = userEvent.setup();
+    const link = await screen.findByRole('region', { name: 'Calendar link' });
+    expect(within(link).getByText(/follow their upcoming releases/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'End API keys and calendar link' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: "End sam's API key and calendar link?",
+    });
+    expect(
+      within(dialog).getByText(/^Every API key sam made and their calendar link stop working/),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/stay signed in/)).toBeInTheDocument();
+    await user.click(
+      within(dialog).getByRole('button', { name: 'End API keys and calendar link' }),
+    );
+    expect(await screen.findByText("Ended sam's API key and calendar link")).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'POST' && c.path === '/admin/users/2/end-keys')).toBe(
+      true,
+    );
+    // Their sessions stay: no sign-out was asked for.
+    expect(calls.some((c) => c.path === '/admin/users/2/sign-out')).toBe(false);
+  });
+
+  it('offers End calendar link alone when they have no API key', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/users/2': { body: samDetail({ calendar_link: { active: true } }) },
+        'GET /admin/devices': { body: { devices: [device()] } },
+      }),
+    );
+    renderApp('/people/user/2?tab=devices');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'End calendar link' }));
+    // The dialog names the link alone: they have no key to end.
+    const dialog = await screen.findByRole('dialog', { name: "End sam's calendar link?" });
+    expect(
+      within(dialog).getByText(/^sam's calendar link stops working at once\..*a new link\.$/),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/API key/)).not.toBeInTheDocument();
+  });
+
+  it('names the keys alone in End API keys when they have no calendar link', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/users/2': { body: samDetail({ calendar_link: { active: false } }) },
+        'GET /admin/devices': {
+          body: { devices: [device(), device({ id: 3, kind: 'api', name: 'Home Assistant' })] },
+        },
+      }),
+    );
+    renderApp('/people/user/2?tab=devices');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'End API keys' }));
+    const dialog = await screen.findByRole('dialog', { name: "End sam's API key?" });
+    expect(
+      within(dialog).getByText(/^Every API key sam made stops working at once\..*new keys\.$/),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/calendar link/)).not.toBeInTheDocument();
+  });
+
+  it('says your keys in the End keys dialog and toast for your own account', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/users/1': {
+          body: {
+            user: admin,
+            accessible_libraries: [],
+            shares: [],
+            auth_codes: [],
+            calendar_link: { active: true },
+          },
+        },
+        'GET /admin/devices': {
+          body: {
+            devices: [
+              device({ id: 9, user_id: 1, username: 'admin', name: 'Console', current: true }),
+              device({ id: 3, user_id: 1, username: 'admin', kind: 'api', name: 'Home Assistant' }),
+            ],
+          },
+        },
+        'POST /admin/users/1/end-keys': { body: { api_keys: 1, calendar_link: true } },
+      }),
+    );
+    renderApp('/people/user/1?tab=devices');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'End API keys and calendar link' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'End your API key and calendar link?',
+    });
+    expect(
+      within(dialog).getByText(/^Every API key you made and your calendar link stop working/),
+    ).toBeInTheDocument();
+    await user.click(
+      within(dialog).getByRole('button', { name: 'End API keys and calendar link' }),
+    );
+    expect(await screen.findByText('Ended your API key and calendar link')).toBeInTheDocument();
+  });
+
+  it('offers no End API keys with nothing to end', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/users/2': { body: samDetail({ calendar_link: { active: false } }) },
+        'GET /admin/devices': { body: { devices: [device()] } },
+      }),
+    );
+    renderApp('/people/user/2?tab=devices');
+    expect(await screen.findByText("Sam's iPhone")).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^End / })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Calendar link' })).not.toBeInTheDocument();
+  });
+
   it("offers no sign out everywhere when the console's own session is the only one", async () => {
     mockFetch(
       routes({

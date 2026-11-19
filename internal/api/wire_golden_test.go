@@ -455,6 +455,25 @@ func wireCases(t *testing.T) []wireCase {
 		{name: "upcoming", route: "GET /api/v1/me/upcoming", body: call(u.testEnv, "GET", upcomingPath, adminSession(t, u.testEnv), "")},
 		{name: "household-listening", route: "GET /api/v1/household/listening (sharing, one other person listening)",
 			body: call(h.testEnv, "GET", "/api/v1/household/listening", h.patTok, "")},
+		// Last, and on an account of its own: the change signs that account's
+		// other device out, which no case before it may see.
+		{name: "auth-password", route: "POST /api/v1/auth/password (a change, one other device signed out)",
+			body: func(t *testing.T) string {
+				ctx := context.Background()
+				u, err := m.auth.CreateUser(ctx, "wire-password", "old-password", auth.RoleUser)
+				if err != nil {
+					t.Fatal(err)
+				}
+				phone, err := m.auth.IssueToken(ctx, u.ID, auth.KindSession, "Wire phone", 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := m.auth.IssueToken(ctx, u.ID, auth.KindSession, "Wire laptop", 0); err != nil {
+					t.Fatal(err)
+				}
+				return wireOK(t, m.testEnv, "POST", "/api/v1/auth/password", phone,
+					`{"password":"new-password","current_password":"old-password"}`)
+			}},
 	}
 }
 

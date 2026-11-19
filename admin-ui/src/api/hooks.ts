@@ -841,7 +841,12 @@ export function useShares(enabled = true, staleTime?: number) {
  * previous result stays on screen while a new filter loads, so the grid doesn't
  * flash empty on every keystroke.
  */
-export function useAdminBooks(params: Omit<BookListParams, 'cursor'>, enabled = true) {
+export function useAdminBooks(
+  params: Omit<BookListParams, 'cursor'>,
+  enabled = true,
+  /** How soon the loaded pages are read again, from their books (false: not at all). */
+  pollMs?: (books: AdminBook[]) => number | false,
+) {
   return useInfiniteQuery({
     queryKey: keys.bookList(params),
     queryFn: ({ pageParam }) => api.adminBooks({ ...params, cursor: pageParam }),
@@ -849,6 +854,9 @@ export function useAdminBooks(params: Omit<BookListParams, 'cursor'>, enabled = 
     getNextPageParam: (last) => last.next_cursor || undefined,
     placeholderData: keepPreviousData,
     enabled,
+    refetchInterval: pollMs
+      ? (q) => pollMs(q.state.data?.pages.flatMap((p) => p.books ?? []) ?? [])
+      : false,
   });
 }
 

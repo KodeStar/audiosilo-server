@@ -1,8 +1,9 @@
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff } from 'lucide-react';
-import { useAdminBooks, useLibraryRoots, useServerInfo } from '@/api/hooks';
+import { keys, useAdminBooks, useLibraryRoots, useServerInfo } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { BulkAction, BulkBar } from '@/components/bulk-bar';
@@ -20,16 +21,21 @@ import { addBookUrl } from '@/lib/meta-site';
 import { joinLibraryPath } from '@/lib/paths';
 import { AddItLink } from '@/features/book/add-to-community';
 import { detectAvailable } from '@/features/bridge/generate-model';
+import { GenerateStatus } from '@/features/bridge/generate-status';
+import { useBridgeLink } from '@/features/bridge/use-generate';
 import { AllClear } from './all-clear';
 import { DetectChaptersDialog } from './detect-chapters-dialog';
 import {
   FIX_LOOK,
   chaptersCheckNote,
   detectChosenNote,
+  detectPollMs,
+  detectRowJob,
   fixFor,
   footKey,
   issueDetail,
   issueReason,
+  openDetections,
   rowFix,
   say,
   type BookIssueKind,
@@ -49,14 +55,35 @@ const PAGE = 50;
 export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: boolean }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const list = useAdminBooks({
-    issue: kind,
-    issue_ignored: ignored || undefined,
-    sort: 'added',
-    order: 'desc',
-    limit: PAGE,
-  });
+  // The books' chapter detections (BRIDGE-08) come on their rows (`detect_job`,
+  // each book's newest, however many jobs there are), only on the list of books
+  // without chapters: shown there alone (another list's rows stand in while
+  // this one loads), and the list is read again while one is open.
+  const detections = kind === 'no_chapters' && !ignored;
+  const list = useAdminBooks(
+    {
+      issue: kind,
+      issue_ignored: ignored || undefined,
+      sort: 'added',
+      order: 'desc',
+      limit: PAGE,
+    },
+    true,
+    detections ? detectPollMs : undefined,
+  );
   const books = useMemo(() => list.data?.pages.flatMap((p) => p.books ?? []) ?? [], [list.data]);
+  // A detection that ended may have given its book chapters: the counts are
+  // read again (the list just was).
+  const qc = useQueryClient();
+  const openBefore = useRef<ReadonlySet<number> | undefined>(undefined);
+  useEffect(() => {
+    const before = openBefore.current;
+    const now = detections && !list.isPlaceholderData ? openDetections(books) : undefined;
+    openBefore.current = now;
+    if (before && now && [...before].some((id) => !now.has(id))) {
+      void qc.invalidateQueries({ queryKey: keys.issues });
+    }
+  }, [books, detections, list.isPlaceholderData, qc]);
   // The list as shown, for Shift-click ranges.
   const selection = useSelection(books);
   // The books Detect chapters asks about (its confirmation is open while set),
@@ -68,6 +95,10 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
   const roots = useLibraryRoots();
   const server = useServerInfo().data;
   const fix = ignored ? null : fixFor(kind, detectAvailable(server));
+  const rowJob = (b: AdminBook) => (detections ? detectRowJob(b.detect_job) : undefined);
+  const bridgeLink = useBridgeLink(
+    detections && books.some((b) => b.detect_job?.state === 'needs_attention'),
+  );
   // Rendered whatever the list shows, keyed so each branch's fragment keeps the
   // same instance: a refetch that fails or empties the list mustn't take an
   // open confirmation (or a run it is queueing) away.
@@ -81,7 +112,10 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
     />
   );
 
-  if (list.isError) {
+  // Only with no rows to show: a re-read that fails (the list is read again
+  // while a detection is open, and on focus) keeps the rows it had, and the
+  // next one puts them right.
+  if (list.isError && !list.data) {
     return (
       <>
         <QueryError
@@ -123,8 +157,9 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
   // its own row has left the list but stays selected).
   const listed = new Set(books.map(refKey));
   const selectedListed = selection.books.filter((b) => listed.has(refKey(b)));
-  // The selected books Detect chapters can be asked for (rowFix).
-  const detectable = selectedListed.filter((b) => rowFix(fix, b) === 'detect');
+  // The selected books Detect chapters can be asked for (rowFix), none whose
+  // detection holds it back.
+  const detectable = selectedListed.filter((b) => rowFix(fix, b) === 'detect' && !rowJob(b)?.holds);
   const chosenBooks = () => {
     selection.clear();
     return selectedListed;
@@ -146,7 +181,8 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
         {books.map((b) => {
           const checkNote = chaptersCheckNote(kind, b);
           const chosenNote = detectChosenNote(fix, b);
-          const ownFix = rowFix(fix, b);
+          const detection = rowJob(b);
+          const ownFix = detection?.holds ? null : rowFix(fix, b);
           const detail = issueDetail(kind, b);
           return (
             <li
@@ -193,6 +229,14 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
                   <span className="text-[12px] text-subtle-foreground [overflow-wrap:anywhere]">
                     {t(chosenNote)}
                   </span>
+                ) : null}
+                {detection ? (
+                  <div className="mt-1.5 flex flex-col gap-1">
+                    <span className="text-[12px] font-semibold">
+                      {t('book.chapters.detectJob')}
+                    </span>
+                    <GenerateStatus job={detection.job} uiUrl={bridgeLink} />
+                  </div>
                 ) : null}
                 <span className="truncate font-mono text-[11.5px] text-subtle-foreground max-md:hidden">
                   {joinLibraryPath(roots[b.library_id], b.path)}

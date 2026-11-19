@@ -179,7 +179,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the user's other still-redeemable invites; `redeemed_at` records
   acceptance (first successful exchange) but the console buckets invites by whether
   they are still redeemable, not by `redeemed_at`. **Self-
-  service password**: `POST /auth/password` reuses `SetPassword`; setting a first
+  service password**: `POST /auth/password` calls `ChangePassword` (`SetPassword` answering the count below); setting a first
   password needs no challenge, but changing an existing one requires `current_password`
   (`CheckPassword`), an empty password is rejected (clearing is admin-only), and the
   admin-must-keep-a-password guard still holds.
@@ -190,7 +190,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   their own, keeps the device it was done on), in the same durable transaction (`endSessions`). The
   admin's **Sign out everywhere** (`POST /admin/users/{id}/sign-out`, `auth.SignOutEverywhere`,
   answers `{"signed_out": n}`, audit `user.sign_out_everywhere`) does the same without a password
-  change, and forgets the person's browsers. With the sessions go the ways back in a session can make
+  change, and forgets the person's browsers. The self-service change answers the same way (200
+  `{"signed_out": n}`, server#285, `auth.ChangePassword`; a server before v2.7.0 answered 204): the
+  caller's own other sessions it ended, 0 for a first password, never the members' sign-ins it ended
+  with them (nothing about another person), so the player names it without reading its devices. With the sessions go the ways back in a session can make
   without the password, which the person can neither see nor revoke: their open pairing codes
   (unlinked `pairing` tokens, `POST /auth/pair`), a single sign-on not yet finished (`oidc` tokens)
   and their recovery code (its linked pairing tokens
@@ -209,8 +212,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   editor token (`POST /cast/token`: dead as minted otherwise). A member's own paired device stays, with what was
   made on it, and `signed_out` counts the person's sessions only. The person's own API keys stay (listed
   and revoked on their own: the device lists, `/auth/tokens`), and so
-  do their calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`; the console has no
-  lever for it) and Bridge tokens (the Bridge's); an invite is the admin's (listed and revoked in the
+  do their calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`) and Bridge tokens
+  (the Bridge's). The admin's lever for the first two is **End API keys and calendar link**
+  (`POST /admin/users/{id}/end-keys`, `auth.EndKeys`, server#285: every live key revoked and the feed
+  row deleted in one durable write, sessions kept; answers `{"api_keys": n, "calendar_link": bool}`,
+  audit `user.end_keys`; `GET /admin/users/{id}` says whether there is a link, `calendar_link
+  {active, created_at}`, never the secret); an invite is the admin's (listed and revoked in the
   console). A cast token needs no write (its parent is checked on every request, `castGrant`). The
   write moves the content generation, so the token cache refuses an ended token on the very next
   request, media `?token=` included. A password sign-in racing the change gets no session:
@@ -974,7 +981,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   use it (no per-listener field on a list book, and nothing a user-state rule lets
   through); a handler that adds one must leave the cache. The admin console's `GET /admin/books` first pages and
   `/admin/books/facets` use it too (keyed like a list, no scopes: an admin sees
-  every book), and so does the Health summary `GET /admin/issues` (server#245),
+  every book; not `?issue=no_chapters`, whose rows carry Bridge job state: see Health issues), and so does the Health summary `GET /admin/issues` (server#245),
   whose key also takes `cachedList`'s extra inputs: the kinds it counts, the listener
   generation (a new or removed progress row: Content generation) and the
   offline libraries (a filesystem probe made before the lookup, so a root going
@@ -3073,7 +3080,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   request (the summary is kept in the list cache until the next content write, see List cache); each book kind is one SQL predicate (`issuePredicates`) shared by the counts and by
   `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h; the console's fix is the Bridge's Detect
-  chapters, see The Bridge), `unmatched` (no ASIN, ISBN or recorded community match: `NOT matchedExpr`; left
+  chapters, see The Bridge; each row of that list, not the ignored one, carries `detect_job`, the book's
+  newest `chapters.detect` job in any state, read once for the page's books (`api.detectRows`,
+  `bridge.LatestForBooks`), so a book queued among hundreds shows its own and the console reads no job
+  list for it; a Bridge's reports are no content write, so that list is never kept in the list cache;
+  server#273), `unmatched` (no ASIN, ISBN or recorded community match: `NOT matchedExpr`; left
   out of the summary while metadata is off), `unknown_asin` (the book's own ASIN is one the unknown-ASIN report
   found unknown: `unknownASINExpr`, see Unknown ASIN report; still matched by `matchedExpr`, so Match
   automatically passes it by: the category's own card starts an `unknown_asin` match run (see Bulk matching);
