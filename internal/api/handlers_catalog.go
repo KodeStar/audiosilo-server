@@ -47,7 +47,7 @@ func (a *API) handleAdminListBooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	a.issueOff(r.Context(), &f)
+	a.issueOff(&f)
 	opt := catalog.AdminListOptions{Filter: f, Sort: q.Get("sort"), Cursor: q.Get("cursor"), Limit: queryInt(r, "limit", 0)}
 	switch q.Get("order") {
 	case "", "asc":
@@ -82,7 +82,7 @@ func (a *API) handleAdminBookFacets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	a.issueOff(r.Context(), &f)
+	a.issueOff(&f)
 	// Counted over every matching book (about 100 ms at 5,000), and like a page
 	// the database's answer to the query string alone: kept until the next content write.
 	write := a.cachedList(w, r, gen, cacheable, nil, f.IssueOff)
@@ -162,11 +162,13 @@ func bookFilterFromQuery(q url.Values) (catalog.BookFilter, string) {
 	return f, ""
 }
 
-// issueOff marks f's ?issue= as listing nothing when Health doesn't list its
-// kind now (unknown_asin: unknownASINListed), so a direct link shows no stale
-// rows. Part of the list cache's key: the answer depends on it.
-func (a *API) issueOff(ctx context.Context, f *catalog.BookFilter) {
-	f.IssueOff = f.Issue == catalog.IssueUnknownASIN && !a.unknownASINListed(ctx)
+// issueOff marks f's ?issue= as listing nothing while its kind isn't kept
+// current (unknown_asin with the report off), so a direct link shows no stale
+// rows. Before the report's first answers its rows are none anyway, so this
+// needs none of unknownASINListed's reads. Part of the list cache's key: the
+// answer depends on it.
+func (a *API) issueOff(f *catalog.BookFilter) {
+	f.IssueOff = f.Issue == catalog.IssueUnknownASIN && !a.reportUnknownOn()
 }
 
 // parseOptionalID reads an optional id query value (?library_id=, ?user_id=, a

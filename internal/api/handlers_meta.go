@@ -201,20 +201,26 @@ const metaComposeShare = 20 * time.Second
 // leaves the identifiers' answer standing. err is the lookup's outcome
 // (meta.ErrNotFound when nothing matches); matchErr a failure to read the
 // recorded match. The match is read only when Book.WorkID (the recorded work
-// first) differs from the identifiers' work. When the cache already knows the
-// identifiers' work and it isn't Book.WorkID, the match is composed first and
-// the identifiers only when it fails, so their answer is not composed only to
-// be set aside (server#447).
+// first) differs from the identifiers' work. When the cache already knows that
+// it does, the match is composed first and the identifiers only when it fails,
+// so their answer is not composed only to be set aside (server#447).
 func (a *API) bookEnrichment(ctx context.Context, book *catalog.Book) (env *meta.Enrichment, err, matchErr error) {
 	ctx = meta.WithSharedBudget(ctx, metaComposeShare)
+	var m *catalog.BookMatch
+	matchRead := false
 	if book.WorkID != "" {
 		if id, ok := a.meta.CachedWorkID(ctx, book.ASIN, book.ISBN); ok && id != book.WorkID {
-			m, matchErr := a.cat.BookMatchAt(ctx, book.LibraryID, book.RelPath)
-			if matchErr != nil {
+			if m, matchErr = a.cat.BookMatchAt(ctx, book.LibraryID, book.RelPath); matchErr != nil {
 				return nil, nil, matchErr
 			}
+			matchRead = true
 			if m != nil {
-				return a.matchFirst(ctx, book, m)
+				menv, merr := a.meta.EnrichMatch(ctx, m.WorkID, m.RecordingID)
+				if merr == nil {
+					return menv, nil, nil
+				}
+				env, err = a.meta.Enrich(ctx, book.ASIN, book.ISBN)
+				return matchOrIdentifiers(menv, merr, env, err)
 			}
 		}
 	}
@@ -222,25 +228,15 @@ func (a *API) bookEnrichment(ctx context.Context, book *catalog.Book) (env *meta
 	if book.WorkID == "" || (err == nil && env.Work != nil && env.Work.ID == book.WorkID) {
 		return env, err, nil
 	}
-	m, matchErr := a.cat.BookMatchAt(ctx, book.LibraryID, book.RelPath)
+	if !matchRead {
+		m, matchErr = a.cat.BookMatchAt(ctx, book.LibraryID, book.RelPath)
+	}
 	if matchErr != nil || m == nil {
 		// No recorded match: the work id is the upcoming job's, from these
 		// same identifiers.
 		return env, err, matchErr
 	}
 	menv, merr := a.meta.EnrichMatch(ctx, m.WorkID, m.RecordingID)
-	return matchOrIdentifiers(menv, merr, env, err)
-}
-
-// matchFirst is bookEnrichment for a book whose identifiers' work the cache
-// knows to be another than its recorded match's: the match's answer, else
-// (it failed, or the community no longer knows the work) the identifiers'.
-func (a *API) matchFirst(ctx context.Context, book *catalog.Book, m *catalog.BookMatch) (*meta.Enrichment, error, error) {
-	menv, merr := a.meta.EnrichMatch(ctx, m.WorkID, m.RecordingID)
-	if merr == nil {
-		return menv, nil, nil
-	}
-	env, err := a.meta.Enrich(ctx, book.ASIN, book.ISBN)
 	return matchOrIdentifiers(menv, merr, env, err)
 }
 
