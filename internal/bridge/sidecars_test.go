@@ -296,28 +296,26 @@ func TestReparkAnnouncedOncePerOutage(t *testing.T) {
 		}
 	}
 	running := `{"step":"contributing"}`
-	step(job.ID, 1, StateRunning, running)
+	// repark is a timed retry that runs, then parks for code.
+	repark := func(id int64, attempt int, code string) {
+		t.Helper()
+		step(id, attempt, StateRunning, running)
+		step(id, attempt, StateNeedsAttention, park(code))
+	}
 	// GitHub is down: the first park is news; six retries that park again are not.
-	step(job.ID, 1, StateNeedsAttention, park("contrib_unavailable"))
+	repark(job.ID, 1, "contrib_unavailable")
 	for range 6 {
-		step(job.ID, 1, StateRunning, running)
-		step(job.ID, 1, StateNeedsAttention, park("contrib_unavailable"))
+		repark(job.ID, 1, "contrib_unavailable")
 	}
 	// Another job parked for the same reason is its own news.
-	step(other.ID, 1, StateRunning, running)
-	step(other.ID, 1, StateNeedsAttention, park("contrib_unavailable"))
+	repark(other.ID, 1, "contrib_unavailable")
 	// A transient park in between changes nothing.
-	step(job.ID, 1, StateRunning, running)
-	step(job.ID, 1, StateNeedsAttention, park("agent_rate_limited"))
-	step(job.ID, 1, StateRunning, running)
-	step(job.ID, 1, StateNeedsAttention, park("contrib_unavailable"))
+	repark(job.ID, 1, "agent_rate_limited")
+	repark(job.ID, 1, "contrib_unavailable")
 	// A new reason is news, and so is the old one coming back after it.
-	step(job.ID, 1, StateRunning, running)
-	step(job.ID, 1, StateNeedsAttention, park("agent_credential_refused"))
-	step(job.ID, 1, StateRunning, running)
-	step(job.ID, 1, StateNeedsAttention, park("agent_credential_refused"))
-	step(job.ID, 1, StateRunning, running)
-	step(job.ID, 1, StateNeedsAttention, park("contrib_unavailable"))
+	repark(job.ID, 1, "agent_credential_refused")
+	repark(job.ID, 1, "agent_credential_refused")
+	repark(job.ID, 1, "contrib_unavailable")
 	// The Bridge stops reporting on a run: the job is queued again, and its
 	// next claim parking for the same reason is news.
 	step(job.ID, 1, StateRunning, running)
@@ -325,10 +323,8 @@ func TestReparkAnnouncedOncePerOutage(t *testing.T) {
 	if j, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || j == nil || j.ID != job.ID {
 		t.Fatalf("claim = %+v, %v", j, err)
 	}
-	step(job.ID, 2, StateRunning, running)
-	step(job.ID, 2, StateNeedsAttention, park("contrib_unavailable"))
-	step(job.ID, 2, StateRunning, running)
-	step(job.ID, 2, StateNeedsAttention, park("contrib_unavailable"))
+	repark(job.ID, 2, "contrib_unavailable")
+	repark(job.ID, 2, "contrib_unavailable")
 	step(job.ID, 2, StateRunning, running)
 	step(job.ID, 2, StateDone, "")
 	if _, err := q.Cancel(ctx, other.ID); err != nil {

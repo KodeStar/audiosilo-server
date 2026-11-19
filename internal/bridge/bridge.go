@@ -88,11 +88,10 @@ type Service struct {
 	offlineMu    sync.Mutex
 	offlineSince time.Time
 
-	// announced is the park last announced (parkNews) per open job, under
-	// announcedMu: a Bridge that resumes a parked job on a timer and parks it
-	// again for the same reason (GitHub down, a credential still refused) is
-	// told to admins once per outage, not on every retry. In memory only: a
-	// restart forgets it, so a park still on is announced once more.
+	// announced is the park last announced per job (parkNews), under
+	// announcedMu, until the job ends (forgetPark). In memory only: a restart
+	// forgets it, so a park still on is announced once more. A parked job
+	// cancelled in SQL (cancelWaitingTx) keeps its small entry until then.
 	announcedMu sync.Mutex
 	announced   map[int64]announcedPark
 }
