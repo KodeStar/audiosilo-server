@@ -477,6 +477,13 @@ func listsInputProtocol(out, name string) bool {
 	return false
 }
 
+// inputArgs starts every ffmpeg command line that reads in, its demuxer
+// guessed (transcodeArgs, renditionArgs): in's protocol the only one ffmpeg
+// may open, an audio container (metadata.InputFormatArgs) the only input.
+func inputArgs(in inputSpec) []string {
+	return append([]string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", in.proto}, metadata.InputFormatArgs()...)
+}
+
 // transcodeArgs is the ffmpeg command line that re-encodes in to MP3 on
 // stdout from startSec. A seekable input (fd:, /dev/fd/3, a path) seeks on the
 // input side (-ss before -i: ffmpeg jumps near startSec before decoding);
@@ -488,7 +495,7 @@ func listsInputProtocol(out, name string) bool {
 // inputs (DASH, HLS, ffconcat), which the file protocol would open: another
 // library's audio, transcoded to whoever could stream the crafted file.
 func transcodeArgs(in inputSpec, startSec float64) []string {
-	args := append([]string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", in.proto}, metadata.InputFormatArgs()...)
+	args := inputArgs(in)
 	var seek []string
 	if startSec > 0 {
 		seek = []string{"-ss", strconv.FormatFloat(startSec, 'f', 3, 64)}

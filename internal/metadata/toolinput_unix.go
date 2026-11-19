@@ -56,9 +56,12 @@ func inputLink(path string) (link string, cleanup func(), err error) {
 const inputDirPrefix = "audiosilo-input-"
 
 // inputDirStale is how old a folder of inputLink's is before a start takes it
-// for one an earlier run left (killed before its cleanup): far past the
-// longest a tool runs, so one in use by another server started by the same
-// user (or a test's) is never taken from under its tool.
+// for one an earlier run left (killed before its cleanup). A tool opens the
+// link once, as it starts, and reads its descriptor from then on, so a folder
+// is needed only that long; an hour is far past it, so one another server
+// started by the same user (or a test) just made is never taken from under
+// its tool, and one a long transcode still runs on (a stream paced by its
+// listener runs for hours) is no longer read.
 const inputDirStale = time.Hour
 
 // sweepToolInputs removes the folders inputLink left in the temporary folder

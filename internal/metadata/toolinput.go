@@ -32,8 +32,8 @@ func ToolInput(f *os.File, root, path string) (input string, extra []*os.File, c
 
 // ToolInputBounded is ToolInput for a request's tool run (media's transcode
 // on an ffmpeg without the fd: protocol): where it looks at the share (path's
-// links resolved and the file opened once more, on Windows) it is a
-// LookBounded call (ctx, at most timeout), given up on (GaveUp) on a share
+// links resolved and the file opened once more, on Windows) it is a Bounded
+// call (ctx, at most timeout; an open, not a look), given up on (GaveUp) on a share
 // that stopped answering since the file's open, and what a late answer holds
 // let go then; on Unix it looks at nothing there, so it is ToolInput.
 func ToolInputBounded(ctx context.Context, f *os.File, root, path string, timeout time.Duration) (input string, extra []*os.File, cleanup func(), err error) {
@@ -43,16 +43,16 @@ func ToolInputBounded(ctx context.Context, f *os.File, root, path string, timeou
 	return boundedToolInput(ctx, path, timeout, func() (string, []*os.File, func(), error) { return toolInput(f, root, path) })
 }
 
-// boundedToolInput runs look, a ToolInput on the share at path, as a
-// LookBounded call whose late answer, once given up on, is cleaned up (its
-// held handle closed) when it arrives.
+// boundedToolInput runs look, a ToolInput on the share at path, as a Bounded
+// call whose late answer, once given up on, is cleaned up (its held handle
+// closed) when it arrives.
 func boundedToolInput(ctx context.Context, path string, timeout time.Duration, look func() (string, []*os.File, func(), error)) (string, []*os.File, func(), error) {
 	type handed struct {
 		input   string
 		extra   []*os.File
 		cleanup func()
 	}
-	h, err := bounded(ctx, path, timeout, true, func() (handed, error) {
+	h, err := Bounded(ctx, path, timeout, func() (handed, error) {
 		input, extra, cleanup, err := look()
 		return handed{input, extra, cleanup}, err
 	}, func(h handed) { h.cleanup() })
