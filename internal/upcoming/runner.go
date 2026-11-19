@@ -409,13 +409,13 @@ func (r *Runner) runOnce(ctx context.Context, full bool) (whole bool, err error)
 // run's series step. r.mu is held.
 func (r *Runner) resolveOnly(ctx context.Context, full bool, now time.Time) error {
 	_, _, changed, err := r.resolveOwned(ctx, full, now)
-	added := false
+	n := len(r.pending)
 	for ref, c := range changed {
-		if c && !r.pending[ref] {
-			r.pending[ref], added = true, true
+		if c {
+			r.pending[ref] = true
 		}
 	}
-	if added {
+	if len(r.pending) != n {
 		r.savePending(ctx)
 	}
 	return err

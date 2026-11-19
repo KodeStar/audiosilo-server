@@ -18,10 +18,10 @@ func (c *Catalog) UpcomingPending(ctx context.Context) ([]Ref, error) {
 	return getServerState[[]Ref](ctx, c.db, upcomingPendingKey)
 }
 
-// SaveUpcomingPending replaces the upcoming job's pending books with refs (in a
-// stable order).
+// SaveUpcomingPending replaces the upcoming job's pending books with refs,
+// sorting refs in place (a stable order).
 func (c *Catalog) SaveUpcomingPending(ctx context.Context, refs []Ref) error {
-	refs = slices.SortedFunc(slices.Values(refs), func(a, b Ref) int {
+	slices.SortFunc(refs, func(a, b Ref) int {
 		return cmp.Or(cmp.Compare(a.LibraryID, b.LibraryID), cmp.Compare(a.Path, b.Path))
 	})
 	return putServerState(ctx, c.db, upcomingPendingKey, refs, c.stamp())

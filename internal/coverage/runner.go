@@ -37,6 +37,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -68,7 +69,7 @@ type Options struct {
 // The run's states (the console's status line).
 const (
 	StateNever      = "never"
-	StateOK         = "ok"
+	StateOK         = catalog.UnknownASINReportOK
 	StateNotOffered = "not_offered"
 	StateFailed     = "failed"
 )
@@ -112,10 +113,9 @@ type Runner struct {
 	offCheck time.Duration
 	// httpsLogged: the "needs an https URL" line is logged once a process.
 	httpsLogged bool
-	// nextMu guards next, when the schedule (Run) runs the report next; zero
-	// before Run has worked it out, and after it returns.
-	nextMu sync.Mutex
-	next   time.Time
+	// next is when the schedule (Run) runs the report next, in Unix
+	// nanoseconds; 0 before Run has worked it out, and after it returns.
+	next atomic.Int64
 }
 
 // New returns a Runner; Run starts its schedule.
@@ -142,9 +142,9 @@ func (r *Runner) Wake() {
 // (or a day after the last run, when that is later), then daily with jitter.
 func (r *Runner) Run(ctx context.Context) {
 	next := r.firstRun(ctx)
-	defer r.setNext(time.Time{})
+	defer r.next.Store(0)
 	for {
-		r.setNext(next)
+		r.next.Store(next.UnixNano())
 		wait := next.Sub(r.opt.Now())
 		if !r.opt.On() {
 			// Looked at again in a minute (Wake runs it at once when it is
@@ -177,13 +177,6 @@ func (r *Runner) Run(ctx context.Context) {
 			next = r.opt.Now().Add(pool.Jittered(interval, jitter))
 		}
 	}
-}
-
-// setNext records when the schedule runs the report next (Status).
-func (r *Runner) setNext(at time.Time) {
-	r.nextMu.Lock()
-	r.next = at
-	r.nextMu.Unlock()
 }
 
 // firstRun is when the first run after the start is: an hour on, or a day
@@ -409,11 +402,8 @@ func (r *Runner) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	out := Status{State: cmp.Or(st.State, StateNever), LastRunAt: st.LastRunAt, LastSent: st.LastSent}
-	r.nextMu.Lock()
-	next := r.next
-	r.nextMu.Unlock()
-	if !next.IsZero() && r.opt.On() {
-		out.NextRunAt = stamp(next)
+	if next := r.next.Load(); next != 0 && r.opt.On() {
+		out.NextRunAt = stamp(time.Unix(0, next))
 	}
 	return out, nil
 }
