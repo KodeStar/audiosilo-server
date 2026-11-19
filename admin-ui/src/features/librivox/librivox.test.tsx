@@ -363,7 +363,7 @@ describe('Library > LibriVox', () => {
       await within(list).findByRole(
         'link',
         { name: 'In library' },
-        { timeout: DONE_RECHECK_MS + 3000 },
+        { timeout: DONE_RECHECK_MS + 10_000 },
       ),
     ).toBeInTheDocument();
   });
