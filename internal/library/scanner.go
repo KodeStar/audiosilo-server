@@ -2806,10 +2806,8 @@ func (s *Scanner) flightWaitCap(ctx context.Context) (time.Duration, bool) {
 	if _, asked := ctx.Value(lookTimeoutKey{}).(time.Duration); !asked {
 		return 0, false
 	}
-	if at, ok := ctx.Value(waitCapKey{}).(time.Time); ok {
-		if left := time.Until(at); left < s.probeTimeout {
-			return max(left, 0), true
-		}
+	if left, ok := waitCapLeft(ctx); ok {
+		return min(left, s.probeTimeout), true
 	}
 	return s.probeTimeout, true
 }
@@ -3075,7 +3073,7 @@ func askedFault(errs map[string]error) error {
 		case !faultedForGood(err):
 			return err
 		case refused == nil:
-			refused = refusedForGood(err)
+			refused = lookRefused{err}
 		}
 	}
 	return refused

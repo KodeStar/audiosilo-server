@@ -410,9 +410,9 @@ const (
 // that stopped answering, or one that fails a stat as a share does (EIO,
 // ESTALE, a permission), says nothing about whether the file is there
 // (filesUnknown), so a hiccup never tells the Bridge a book went missing. The
-// looks are metadata.Bounded calls; once one is given up on, or fails as a share that may come back does, the
-// rest keep their indexed values unlooked at (each would wait out its time on
-// the same share). The looks are bounded by deadline together (a.fileWait
+// looks are metadata.Bounded calls; once one is given up on, or fails as a
+// share that may come back does, the rest keep their indexed values unlooked
+// at (each would wait out its time on the same share). The looks are bounded by deadline together (a.fileWait
 // from the request's start: the mapping check's sample shares one).
 func (a *API) statBookFiles(ctx context.Context, lib *catalog.Library, book *catalog.Book, deadline time.Time) ([]bridgeFile, filesState) {
 	indexed := book.Files
@@ -424,26 +424,26 @@ func (a *API) statBookFiles(ctx context.Context, lib *catalog.Library, book *cat
 	files := make([]bridgeFile, 0, len(indexed))
 	state, stopped := filesWhole, false
 	for _, f := range indexed {
-		files = append(files, bridgeFile{Path: f.RelPath, Size: f.Size, Duration: f.Duration})
-		if stopped {
-			continue // the share stopped answering: the indexed values
-		}
-		abs, err := library.SafeJoinBounded(ctx, lib.Root, f.RelPath, metadata.WaitLeft(deadline))
-		var info fs.FileInfo
-		if err == nil {
-			info, err = bridgeStatLook(ctx, abs, metadata.WaitLeft(deadline))
-		}
-		switch {
-		case err == nil:
-			files[len(files)-1].Size, files[len(files)-1].ModTime = info.Size(), info.ModTime().Unix()
-		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, library.ErrOutsideRoot):
-			if state == filesWhole {
-				state = filesGone
+		bf := bridgeFile{Path: f.RelPath, Size: f.Size, Duration: f.Duration}
+		if !stopped { // once the share stopped answering: the indexed values
+			abs, err := library.SafeJoinBounded(ctx, lib.Root, f.RelPath, metadata.WaitLeft(deadline))
+			var info fs.FileInfo
+			if err == nil {
+				info, err = bridgeStatLook(ctx, abs, metadata.WaitLeft(deadline))
 			}
-		default:
-			state = filesUnknown
-			stopped = metadata.Unanswered(ctx, err) || metadata.TransientFault(err)
+			switch {
+			case err == nil:
+				bf.Size, bf.ModTime = info.Size(), info.ModTime().Unix()
+			case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, library.ErrOutsideRoot):
+				if state == filesWhole {
+					state = filesGone
+				}
+			default:
+				state = filesUnknown
+				stopped = metadata.Unanswered(ctx, err) || metadata.TransientFault(err)
+			}
 		}
+		files = append(files, bf)
 	}
 	return files, state
 }
