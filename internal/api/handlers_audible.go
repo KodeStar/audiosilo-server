@@ -438,10 +438,7 @@ func (a *API) afterAudiblePoll(account string) {
 	a.audiblePollMu.Lock()
 	defer a.audiblePollMu.Unlock()
 	if a.audiblePollStopped {
-		if !a.audiblePollStopLogged {
-			a.audiblePollStopLogged = true
-			a.log.Debug("audible: a poll ended after shutdown began, its backups are left for the next poll", "account", account)
-		}
+		a.log.Debug("audible: a poll ended after shutdown began, its backups are left for the next poll", "account", account)
 		return
 	}
 	a.audiblePollFolds.Go(func() {
