@@ -258,11 +258,13 @@ func probeError(err error) error {
 	}
 	var parts []string
 	last := ""
+	offList := false // a line said the format is not on the list
 	for _, l := range strings.Split(string(exit.Stderr), "\n") {
 		l = strings.TrimSpace(l)
 		if l != "" {
 			last = l
 		}
+		offList = offList || strings.Contains(l, notOnWhitelist)
 		// ffprobe prefixes the input path ("/srv/books/x.m4b: Invalid data..."); the
 		// Health page shows the file separately.
 		if i := strings.LastIndex(l, ": "); i >= 0 && strings.ContainsAny(l[:i], "/\\") {
@@ -283,7 +285,7 @@ func probeError(err error) error {
 	if len(msg) > maxProbeMessage {
 		msg = strings.ToValidUTF8(msg[:maxProbeMessage], "")
 	}
-	refused := strings.HasSuffix(last, invalidArgument) && strings.Contains(string(exit.Stderr), notOnWhitelist)
+	refused := offList && strings.HasSuffix(last, invalidArgument)
 	return &probeMessage{msg: msg, rejected: strings.HasSuffix(last, invalidData) || refused}
 }
 
