@@ -63,6 +63,11 @@ type PodcastMove struct {
 	ShowID string
 	From   []string
 	To     string
+	// Files are the episode file names To's feed.json lists, whatever folder
+	// its paths name (one renamed by hand names its old folder until the
+	// Bridge takes it in). When that old name now holds another show (two
+	// names swapped, or one reused) neither index row lists them any more.
+	Files []string
 }
 
 // MovePodcastShows applies moves in one transaction and answers how many it
@@ -78,7 +83,7 @@ type PodcastMove struct {
 //   - the episodes' fetch backoffs (podcast_fetch_state);
 //   - the listening state on the show folder (a show-folder heart) and on each
 //     episode, From/<file> to To/<file> (carryListeningState, a move's rule),
-//     for the files listed at To and at From's own index row;
+//     for the files listed at To, at From's own index row and in Files;
 //   - From's index row and episodes, dropped when the row is ShowID's.
 //
 // Follows and the show folder's listening state go through a placeholder path
@@ -112,7 +117,7 @@ func (c *Catalog) MovePodcastShows(ctx context.Context, lib int64, moves []Podca
 		}
 		for i, m := range live {
 			for _, from := range m.From {
-				if err := moveShowState(ctx, tx, lib, m.ShowID, from, m.To); err != nil {
+				if err := moveShowState(ctx, tx, lib, m.ShowID, from, m.To, m.Files); err != nil {
 					return err
 				}
 			}
@@ -176,7 +181,8 @@ func placeShowRows(ctx context.Context, tx *sql.Tx, lib int64, hold, to string) 
 
 // moveShowState moves id's feed state, policy, fetch backoffs and episodes'
 // listening state from from to to, and drops from's index row when it is id's.
-func moveShowState(ctx context.Context, tx *sql.Tx, lib int64, id, from, to string) error {
+// listed are episode file names to's feed.json lists (PodcastMove.Files).
+func moveShowState(ctx context.Context, tx *sql.Tx, lib int64, id, from, to string, listed []string) error {
 	for _, q := range []string{
 		`INSERT INTO podcast_feed_state(library_id,show_path,show_id,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,secret_missing,failures,next_poll_at,feed_failures,feed_network_failures,failing_announced,failing_code)
 		 SELECT library_id,?3,show_id,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,secret_missing,failures,next_poll_at,feed_failures,feed_network_failures,failing_announced,failing_code
@@ -202,9 +208,11 @@ func moveShowState(ctx context.Context, tx *sql.Tx, lib int64, id, from, to stri
 			return err
 		}
 	}
-	// The episode files: those listed at to, and those of from's own row while
-	// it is still id's (to's feed.json may not list them yet: one renamed by
-	// hand names the old folder until the Bridge takes it in).
+	// The episode files: those listed at to, those of from's own row while it
+	// is still id's (to's index may not list them yet: a feed.json renamed by
+	// hand names the old folder until the Bridge takes it in), and those to's
+	// feed.json lists under any folder name (listed: from's row may already be
+	// another show's).
 	held, err := podcastShowIDAt(ctx, tx, lib, from)
 	if err != nil {
 		return err
@@ -216,9 +224,9 @@ func moveShowState(ctx context.Context, tx *sql.Tx, lib int64, id, from, to stri
 		return err
 	}
 	seen := map[string]bool{}
-	for _, f := range files {
+	for _, f := range slices.Concat(files, listed) {
 		base := path.Base(f)
-		if seen[base] {
+		if seen[base] || !feed.ShowPath(base) {
 			continue
 		}
 		seen[base] = true

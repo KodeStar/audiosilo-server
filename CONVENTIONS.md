@@ -3674,14 +3674,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   state at another (`catalog.PodcastIdentityPaths`), and the scanner (`library.movePodcastShows`)
   reads each path's feed.json: when exactly one listed folder holds the identity, the index knows it
   there, and every other path is known not to (gone, no feed.json, invalid, another show's),
-  `catalog.MovePodcastShows` moves, in one transaction, every listener's follow (one already at the
-  new folder keeps the earlier date), the feed state (the later check wins), the policy (the newer
+  `catalog.MovePodcastShows` moves, in one transaction, every listener's follow (two of them keep the
+  earlier date), the feed state (the later check wins), the policy (the newer
   edit wins), the episodes' fetch backoffs and the listening state on the folder and each episode file
-  (`carryListeningState`, a move's rule), then drops the old row and its episodes. A copy (two folders
+  (`carryListeningState`, a move's rule; the files the new folder's index, the old row and the new
+  folder's feed.json list, the last under whatever folder name its paths still give), then drops the
+  old row and its episodes. A copy (two folders
   holding it), an unreadable path (an I/O error, a newer feed.json version) or a holder not indexed yet
   moves nothing. A folder whose row names the moving show while it holds another (names swapped by
   hand) is indexed again first, so both move in one call (follows and folder state through a hidden
-  placeholder path). On a case-insensitive file system only the spelling the root lists is the folder.
+  placeholder path); a rescan about to move a show also indexes the listed folders with no row yet
+  first (another show renamed out of the way to a new name), so a chain of renames moves in one call
+  too. On a case-insensitive file system only the spelling the root lists, read fresh, is the folder.
   A poll's or fetch's fold whose queued folder (episode) no longer holds its identity folds at the
   outcome's `show_path` (`path`) when that holds it; a copy keeps its own outcome. Bridge jobs and
   grants stay where they were. The Bridge's

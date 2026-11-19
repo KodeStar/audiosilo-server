@@ -271,3 +271,95 @@ func TestPodcastRescanSwapsTwoFolders(t *testing.T) {
 		t.Fatalf("a place left at the other show's folder: %+v %v", p, err)
 	}
 }
+
+const otherShowID = "0123456789abcdef"
+
+// otherEpisode is the other show's first episode file (otherFeed's names).
+const otherEpisode = "2025-10-19-03fd13fa08.mp3"
+
+// addOther adds a second show at "Other" (its own id and episode files),
+// scanned and followed by the bed's listener, with a place in its first
+// episode, and answers its feed.json as it names folder.
+func (b renameBed) addOther(t *testing.T) func(folder string) []byte {
+	t.Helper()
+	other := bytes.ReplaceAll(b.feed, []byte(renameShowID), []byte(otherShowID))
+	// Its own episode files (their names carry the episode's id).
+	other = bytes.ReplaceAll(other, []byte(`/2026-`), []byte(`/2025-`))
+	other = bytes.ReplaceAll(other, []byte(`/undated-`), []byte(`/undated-other-`))
+	named := func(folder string) []byte {
+		return bytes.ReplaceAll(other, []byte(`"Example Show/`), []byte(`"`+folder+`/`))
+	}
+	if err := os.MkdirAll(filepath.Join(b.root, "Other"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(b.root, "Other", "feed.json"), named("Other"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.FollowPodcast(b.ctx, b.user, b.lib.ID, "Other", otherShowID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.cat.SaveProgress(b.ctx, b.user, catalog.Progress{Ref: catalog.Ref{LibraryID: b.lib.ID, Path: "Other/" + otherEpisode}, Position: 77, Duration: 1720, UpdatedAt: "2026-11-01T10:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	return named
+}
+
+// checkOther checks the other show is followed at at, with its episode place.
+func (b renameBed) checkOther(t *testing.T, at string) {
+	t.Helper()
+	got, err := b.cat.PodcastShow(b.ctx, b.lib.ID, at, b.user)
+	if err != nil || !got.Following || got.ShowID != otherShowID {
+		t.Fatalf("the other show at %s: %+v %v", at, got, err)
+	}
+	p, err := b.cat.GetProgress(b.ctx, b.user, catalog.Ref{LibraryID: b.lib.ID, Path: at + "/" + otherEpisode})
+	if err != nil || p == nil || p.Position != 77 {
+		t.Fatalf("the other show's episode progress at %s: %+v %v", at, p, err)
+	}
+}
+
+func (b renameBed) renameEach(t *testing.T, moves ...[2]string) {
+	t.Helper()
+	for _, mv := range moves {
+		if err := os.Rename(filepath.Join(b.root, mv[0]), filepath.Join(b.root, mv[1])); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Two folder names swapped by hand before the Bridge took either in (each
+// feed.json still naming the other folder, so no index row lists either
+// show's episodes once the scan indexed both again): a scan moves both shows
+// with their episodes' places, read off each new folder's feed.json.
+func TestPodcastScanSwapsTwoFoldersNotTakenIn(t *testing.T) {
+	b := newRenameBed(t)
+	b.addOther(t)
+	b.renameEach(t, [2]string{"Example Show", "tmp"}, [2]string{"Other", "Example Show"}, [2]string{"tmp", "Other"})
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	b.checkFollowed(t, "Other")
+	b.checkOther(t, "Example Show")
+}
+
+// A chain of renames by hand: the other show to a new name, then this one to
+// the other's old name. The Bridge's rescan of this show's new folder comes
+// first, the other's new folder not indexed yet: it indexes that one too, so
+// both move in one call and the listener following both keeps both follows
+// (the move doesn't put this show's follow over the other's) and places.
+func TestPodcastRescanMovesAChainOfRenames(t *testing.T) {
+	b := newRenameBed(t)
+	named := b.addOther(t)
+	b.renameEach(t, [2]string{"Other", "Third"}, [2]string{"Example Show", "Other"})
+	b.writeShow(t, "Other", "Other")
+	if err := os.WriteFile(filepath.Join(b.root, "Third", "feed.json"), named("Other"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	b.checkFollowed(t, "Other")
+	b.checkOther(t, "Third")
+}
