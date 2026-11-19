@@ -1416,7 +1416,7 @@ func (l coverLook) find(dir string, anyImage bool) string {
 		return filepath.ToSlash(rel)
 	}
 	// A look failing as a share does that a retry may get past (EIO, ENOTCONN:
-	// transientGaveUp) is a look given up on, never "no cover", which would
+	// unansweredLook) is a look given up on, never "no cover", which would
 	// drop the stored one.
 	for _, name := range coverNames {
 		p := filepath.Join(dir, name)
@@ -1424,7 +1424,7 @@ func (l coverLook) find(dir string, anyImage bool) string {
 		if err == nil {
 			return relOf(p)
 		}
-		if err = transientGaveUp(err); metadata.Unanswered(l.ctx, err) {
+		if err = unansweredLook(l.ctx, err); err != nil {
 			l.gaveUp.note(relOf(p), err)
 			return ""
 		}

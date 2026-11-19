@@ -232,12 +232,12 @@ type belowLooks struct {
 	listed func(dir, name string) (bool, error)
 }
 
-// unansweredLook is err, a bounded look's (one of SafeJoinListed's), when it
+// unansweredLook is err, a bounded look's (SafeJoinListed's, coverLook's), when it
 // is no answer about the name, else nil (a name not there): a look given up
 // on, ctx ended (its error ctx's), or a look failing as a share does that a
 // retry may get past (transientFault: EIO, ESTALE, a mount that dropped, made
-// one given up on, transientGaveUp), as the scanner's own looks read it
-// (resolveBook), so a book on a share that stopped answering is a 503
+// one given up on, transientGaveUp), as the scanner's cover look reads it
+// (coverLook.find), so a book on a share that stopped answering is a 503
 // share_not_answering, never a 404. A permission (EACCES, EPERM) stays a name
 // not there, the lasting answer it had, as does the name gone.
 func unansweredLook(ctx context.Context, err error) error {
@@ -252,26 +252,25 @@ func unansweredLook(ctx context.Context, err error) error {
 // each failure read by unansweredLook.
 func boundedLooks(ctx context.Context, deadline time.Time,
 	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) belowLooks {
-	answered := func(err error) error { return unansweredLook(ctx, err) }
 	return belowLooks{
 		lstat: func(p string) (fs.FileInfo, error) {
 			fi, err := metadata.LstatBounded(ctx, p, metadata.WaitLeft(deadline))
 			if err != nil {
-				return nil, answered(err)
+				return nil, unansweredLook(ctx, err)
 			}
 			return fi, nil
 		},
 		eval: func(p string) (string, error) {
 			r, err := metadata.EvalSymlinksBounded(ctx, p, metadata.WaitLeft(deadline))
 			if err != nil {
-				return "", answered(err)
+				return "", unansweredLook(ctx, err)
 			}
 			return r, nil
 		},
 		listed: func(dir, name string) (bool, error) {
 			ns, err := names(ctx, dir, metadata.WaitLeft(deadline))
 			if err != nil {
-				return false, answered(err)
+				return false, unansweredLook(ctx, err)
 			}
 			return slices.Contains(ns, name), nil
 		},
