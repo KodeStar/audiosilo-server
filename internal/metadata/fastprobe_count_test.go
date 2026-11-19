@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -353,6 +354,35 @@ func TestHeaderlessCBRIsNotCounted(t *testing.T) {
 				t.Errorf("read %d of %d bytes, want at most %d", read, len(data), tc.maxRead)
 			}
 		})
+	}
+}
+
+// A header-less CBR MP3 with a large trailing APEv2 tag (a cover) is sampled
+// over its audio, not into the tag, where no frame is found: it keeps the
+// bitrate's estimate rather than being counted whole.
+func TestHeaderlessCBRWithATrailingTagIsNotCounted(t *testing.T) {
+	t.Parallel()
+	stream := bytes.Repeat(mp3Frame(9), 5000) // ~2 MB
+	items := bytes.Repeat([]byte{0x41}, len(stream)/10)
+	apeHead := func(header bool) []byte {
+		f := make([]byte, 32)
+		copy(f, "APETAGEX")
+		binary.LittleEndian.PutUint32(f[8:], 2000)
+		binary.LittleEndian.PutUint32(f[12:], uint32(len(items)+32))
+		flags := uint32(1 << 31) // it has a header
+		if header {
+			flags |= 1 << 29
+		}
+		binary.LittleEndian.PutUint32(f[20:], flags)
+		return f
+	}
+	data := slices.Concat(stream, apeHead(true), items, apeHead(false))
+	p, reason, read := probeBytes(t, t.Context(), data, maxProbeTime)
+	if reason != "" || p.Counted {
+		t.Fatalf("reason %q counted %v, want the estimate", reason, p != nil && p.Counted)
+	}
+	if read >= int64(len(stream)) {
+		t.Errorf("read %d of %d bytes, want the sampled frames only", read, len(data))
 	}
 }
 

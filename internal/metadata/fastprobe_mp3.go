@@ -1171,8 +1171,9 @@ const mp3LowRateWalk = 2 << 20
 
 // mp3ConstantBitrate reports whether the stream at off looks constant-bitrate,
 // and its bitrate: its first 64 frames, and a run of up to mp3SampleRun frames
-// found at each of mp3SamplePoints places spread evenly over the file, all
-// share the first frame's bitrate and sample rate. A stream whose first frame
+// found at each of mp3SamplePoints places spread evenly over its audio (to its
+// trailing tags: mp3AudioEnd), all share the first frame's bitrate and sample
+// rate. A stream whose first frame
 // has the lowest bitrate of its MPEG version (32 kbit/s, 8 for MPEG 2 and 2.5)
 // has every frame in its first mp3LowRateWalk bytes, or to its audio's end,
 // share them too, its frames in a row (one lost is no constant bitrate: the
@@ -1200,7 +1201,10 @@ func mp3ConstantBitrate(b *blockFile, off int64, fh mpaHeader) (int, bool) {
 	if !run(off, 64) {
 		return 0, false
 	}
-	span := b.size - off
+	// Spread over the audio, not the trailing ID3v1/APEv2 tags: a place in a
+	// tag (an APE cover) finds no frames, and a CBR file would be counted.
+	audioEnd := mp3AudioEnd(b, off)
+	span := max(audioEnd-off, 0)
 	for k := range int64(mp3SamplePoints) {
 		pos := off + span*(k+1)/(mp3SamplePoints+1)
 		found := false
@@ -1223,7 +1227,7 @@ func mp3ConstantBitrate(b *blockFile, off int64, fh mpaHeader) (int, bool) {
 		}
 	}
 	if fh.bitRate == mpaBitrates[fh.lsf][2][1]*1000 {
-		end := min(mp3AudioEnd(b, off), off+mp3LowRateWalk)
+		end := min(audioEnd, off+mp3LowRateWalk)
 		for at := off; at < end; {
 			fs, h := mp3Check(b, at)
 			if fs <= 0 || !same(h) {
