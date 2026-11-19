@@ -1673,12 +1673,14 @@ var ErrNotHeld = errors.New("the job is not held by this claim")
 // cancelled (by an admin, or by the server itself: Cancel*, cancelsOpen), which
 // ends at once, as does a held one whose book moved onto another open job of
 // its kind (MoveJobs), a working one whose lease ran out after the cancel was
-// asked for, one this claim lost to a lapsed lease and that was cancelled
+// asked for, one whose failure or park after the cancel was stored cancelled
+// (UpdateHeld: the same report sent again, its answer lost, or a parked job's
+// next report), one this claim lost to a lapsed lease and that was cancelled
 // while queued again, or one whose claim the server released as undelivered
-// though the Bridge read it (ReleaseUnsentClaim) and that was cancelled then or
-// while queued again (cancelledUnder). The 409 not_held then carries reason "cancelled", so the
-// Bridge records the job cancelled rather than lost, which is how it ended
-// (bridge#35, BRIDGE-04). errors.Is reads it as ErrNotHeld too.
+// though the Bridge read it (ReleaseUnsentClaim) and that was cancelled then
+// or while queued again (cancelledUnder). The 409 not_held then carries reason
+// "cancelled", so the Bridge records the job cancelled rather than lost, which
+// is how it ended (bridge#35, BRIDGE-04). errors.Is reads it as ErrNotHeld too.
 var ErrCancelledWhileHeld = fmt.Errorf("%w: it was cancelled", ErrNotHeld)
 
 // cancelledUnder reports whether job cur ended cancelled with no claim later
@@ -1729,9 +1731,9 @@ func checkUpdate(u *Update) error {
 // one it may report; a claimed or running job's lease is renewed, a parked
 // one's dropped, a finished one's ended. It returns the job as stored, whose
 // CancelRequested tells the Bridge an admin, or the server (a share whose
-// module was turned off: stopsShare), asked it to stop; a failure it reports
-// after that ends the job cancelled. A move into a state an admin hears about
-// is reported (OnTransition) once it commits.
+// module was turned off: stopsShare), asked it to stop; a failure or a park it
+// reports after that ends the job cancelled. A move into a state an admin hears
+// about is reported (OnTransition) once it commits.
 func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, error) {
 	if err := checkUpdate(&u); err != nil {
 		return nil, err
@@ -1741,8 +1743,9 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		from     string
 		fromCode string
 		exp      expiry
-		// failedCancel: the report's failure was stored as a cancel.
-		failedCancel bool
+		// stopped: the state the report named (failed or needs_attention) when it
+		// was stored as a cancel, else "".
+		stopped string
 	)
 	// A user-state transaction (server#258): a report that renews the lease or
 	// reports progress (a running job's keepalive, its step and message)
@@ -1785,13 +1788,15 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 			}
 			state = *u.State
 		}
-		// A job that fails once it was asked to stop ends cancelled, as a lapsed
-		// or unsent claim does (expireSQL, failUnsentClaim): the failure may be
-		// the stop itself (a cancel after the Bridge's last check, or an older
-		// Bridge that never checks). The log keeps the failure.
-		failedCancel = state == StateFailed && cur.CancelRequested
-		if failedCancel {
-			state = StateCancelled
+		// A job that fails or parks once it was asked to stop ends cancelled, as
+		// a lapsed or unsent claim does (expireSQL, failUnsentClaim): the failure
+		// may be the stop itself (a cancel after the Bridge's last check, or an
+		// older Bridge that never checks), and a park would hold open, for a
+		// person to see to, a job that was asked to end. The log keeps what the
+		// Bridge said.
+		stopped = ""
+		if cur.CancelRequested && (state == StateFailed || state == StateNeedsAttention) {
+			stopped, state = state, StateCancelled
 		}
 		var lease, finished any
 		switch state {
@@ -1833,12 +1838,15 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		}
 		// The server's reason for a cancel it asked for (cancelOpenTx) stays
 		// through the Bridge's reports, which always send their own error, while
-		// the job works and when it ends cancelled (a failure included, above).
-		// A job that finishes or parks anyway carries the Bridge's own error (or
-		// none), never the reason.
+		// the job works and when it ends cancelled. A failure or a park stored as
+		// a cancel (above) keeps the error the job had, as a lapsed lease does
+		// (expireSQL): the server's reason, never the Bridge's failure text. A
+		// job that finishes anyway carries the Bridge's own error (or none),
+		// never the reason.
 		serverCancel := cur.CancelRequested && IsCancelReason(cur.Error)
 		switch {
-		case serverCancel && (state == StateDone || state == StateNeedsAttention):
+		case stopped != "":
+		case serverCancel && state == StateDone:
 			errText = ""
 			if u.Error != nil {
 				errText = *u.Error
@@ -1858,13 +1866,13 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 	if err != nil {
 		return nil, err
 	}
-	if failedCancel {
-		var failure string
+	if stopped != "" {
+		var said string
 		if u.Error != nil {
-			failure = *u.Error
+			said = *u.Error
 		}
-		s.Log.Info("bridge: a job failed once it was asked to stop; stored as cancelled",
-			"job", job.ID, "kind", job.Kind, "err", failure)
+		s.Log.Info("bridge: a job failed or parked once it was asked to stop; stored as cancelled",
+			"job", job.ID, "kind", job.Kind, "reported", stopped, "err", said)
 	}
 	s.settle(ctx, exp)
 	s.report(ctx, job, from, fromCode)

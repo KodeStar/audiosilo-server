@@ -655,7 +655,8 @@ func AudibleAccountOf(j Job) (account string, err error) {
 // with, "" for none: the result's "code", else an error starting with
 // SyncAudibleRefused. A cancelled one names only its result's code: a failure
 // reported once it was asked to stop is stored cancelled (UpdateHeld) with
-// the Bridge's result, while its error may be the server's cancel reason.
+// the Bridge's result, while its error is the one it had (the server's reason
+// for a cancel of its own), never the Bridge's.
 func AudibleRefusalCode(j Job) string {
 	switch j.State {
 	case StateFailed:
