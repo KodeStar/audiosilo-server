@@ -825,6 +825,13 @@ describe('audible backups', () => {
     expect(
       audibleJobReason({ kind: 'audible.import', result: {}, error: 'something else' }),
     ).toBeUndefined();
+    // An exists the Bridge names the conflict of reads as the title's row does.
+    expect(
+      audibleJobReason({ kind: 'audible.import', result: { code: 'exists', conflict: 'book' } }),
+    ).toBe('audible.code.exists.book');
+    expect(audibleJobReason({ kind: 'audible.import', result: { code: 'exists' } })).toBe(
+      'audible.code.exists',
+    );
   });
 
   it('backs a title up, and says a preorder waits for its release', async () => {

@@ -98,7 +98,9 @@ export const POLL_CODES = ['audible_refused', 'audible_sign_in'] as const;
  * i18n key), undefined for a job of another kind or a code the console
  * doesn't know (its error is shown as the Bridge wrote it). The code is the
  * result's, else (a backup's, as the server's bridge.AudibleImportCode reads
- * it) one its error starts with ("drm_free: ...").
+ * it) one its error starts with ("drm_free: ..."). A backup's `exists` is
+ * worded by the result's `conflict`, when the Bridge sends one (the title's
+ * row has the server's reading, catalog.importConflict).
  */
 export function audibleJobReason(job: {
   kind: string;
@@ -107,7 +109,7 @@ export function audibleJobReason(job: {
 }): string | undefined {
   if (job.kind === 'audible.import') {
     const code = failureCode(job, IMPORT_CODES);
-    return code ? `audible.code.${code}` : undefined;
+    return code ? importCodeKey(code, text(job.result?.conflict)) : undefined;
   }
   if (job.kind === 'audible.poll' || job.kind === 'audible.sync') {
     const code = failureCode(job, POLL_CODES);
