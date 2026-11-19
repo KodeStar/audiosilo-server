@@ -7,12 +7,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
+	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
 // OpenPodcast pins an opened committed generation. It never probes or hashes
@@ -168,7 +168,7 @@ func OpenPodcastBounded(ctx context.Context, cat *catalog.Catalog, lib catalog.L
 // file system's timestamp granularity could keep the size and mtime the memo
 // checks. Nor is a copy whose episodes were re-rooted against the folder's
 // listing (feed.File.Rerooted): a file added since would not be in it.
-var podcastFeeds feedMemo
+var podcastFeeds = feedMemo{feeds: store.GenMap[string, *feedCopy]{Max: maxFeedMemo}}
 
 const (
 	// maxFeedMemo bounds the remembered copies: one per show streamed lately.
@@ -179,11 +179,15 @@ const (
 	feedRacyWindow = 2 * time.Second
 )
 
-// feedMemo is the copies remembered, by feed.json's path.
+// feedMemo is the copies remembered, by feed.json's path, at one generation
+// (feedMemoGen): a copy is current while its file is the one read (holds),
+// never by the index's content generation, which a write to any library moves.
 type feedMemo struct {
-	mu    sync.Mutex
-	feeds map[string]*feedCopy
+	feeds store.GenMap[string, *feedCopy]
 }
+
+// feedMemoGen is the one generation feedMemo puts and gets at.
+const feedMemoGen = 0
 
 // feedCopy is one feed.json copy's downloaded episodes, by path (a path names
 // one episode: feed.ReadFile keeps the first).
@@ -211,10 +215,8 @@ func (c *feedCopy) holds(rel, showID, id string, fetch feed.Fetch) bool {
 // read; feed.ReadFile's error otherwise.
 // before is filename's Lstat, taken by the caller before the call.
 func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, error) {
-	m.mu.Lock()
-	c := m.feeds[filename]
-	m.mu.Unlock()
-	if c != nil && sameFeedFile(c.info, before) {
+	c, ok := m.feeds.Get(feedMemoGen, filename)
+	if ok && sameFeedFile(c.info, before) {
 		return c, nil
 	}
 	// Asked before the read: a write that lands while it runs, or between it
@@ -237,12 +239,7 @@ func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, e
 	// episodes against the disk too (feed.File.Rerooted), which the file's
 	// identity doesn't vouch for.
 	if after, err := os.Lstat(filename); settled && !f.Rerooted && err == nil && sameFeedFile(before, after) {
-		m.mu.Lock()
-		if _, held := m.feeds[filename]; m.feeds == nil || (!held && len(m.feeds) >= maxFeedMemo) {
-			m.feeds = map[string]*feedCopy{}
-		}
-		m.feeds[filename] = c
-		m.mu.Unlock()
+		m.feeds.Put(feedMemoGen, filename, c)
 	}
 	return c, nil
 }

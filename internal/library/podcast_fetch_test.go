@@ -260,10 +260,8 @@ func TestPodcastFeedMemo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	podcastFeeds.mu.Lock()
-	remembered := podcastFeeds.feeds[real]
-	podcastFeeds.mu.Unlock()
-	if remembered == nil || remembered.showID != f.ShowID {
+	remembered, ok := podcastFeeds.feeds.Get(feedMemoGen, real)
+	if !ok || remembered.showID != f.ShowID {
 		t.Fatal("the feed copy read was not remembered")
 	}
 	// Another file, same size and mtime (so the pin's feed signature still

@@ -14,8 +14,8 @@ import "sync"
 // read that began before a Delete may hold what the Delete removed, and is
 // dropped.
 type GenMap[K comparable, V any] struct {
-	// Max is how many entries the map holds before it starts again empty (0:
-	// no bound).
+	// Max is how many entries the map holds before a new key starts it again
+	// empty (0: no bound); a key it holds is put again in place.
 	Max int
 
 	mu   sync.Mutex
@@ -67,7 +67,8 @@ func (m *GenMap[K, V]) put(gen uint64, k K, v V) {
 	if gen < m.gen {
 		return
 	}
-	if gen > m.gen || m.rows == nil || (m.Max > 0 && len(m.rows) >= m.Max) {
+	_, held := m.rows[k]
+	if gen > m.gen || m.rows == nil || (m.Max > 0 && !held && len(m.rows) >= m.Max) {
 		m.gen, m.rows = gen, map[K]V{}
 	}
 	m.rows[k] = v
