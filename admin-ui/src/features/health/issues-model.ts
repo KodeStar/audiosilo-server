@@ -20,10 +20,13 @@ import {
 import {
   FITTED_STATUSES,
   type AdminBook,
+  type BridgeJob,
   type IssueCount,
   type IssueKind,
   type IssuesSummary,
 } from '@/api/types';
+import { isOpen } from '@/features/bridge/bridge-model';
+import { refKey } from '@/lib/book-route';
 import type { Phrase } from '@/lib/phrase';
 import { relBaseName, relParent } from '@/lib/paths';
 
@@ -112,6 +115,35 @@ export function detectChosenNote(
   if (fix !== 'detect') return undefined;
   if (b.chapters_source === 'edited') return 'health.detect.edited';
   return b.chapter_choice ? `health.detect.chosen.${b.chapter_choice}` : undefined;
+}
+
+/**
+ * The newest job of each book among jobs (newest first, as the server lists
+ * them), by refKey; a job naming no book is left out. Health's books without
+ * chapters read their chapter detections this way (BRIDGE-08).
+ */
+export function newestJobByBook(jobs: readonly BridgeJob[] | undefined): Map<string, BridgeJob> {
+  const out = new Map<string, BridgeJob>();
+  for (const j of jobs ?? []) {
+    if (j.library_id === null || j.path === null) continue;
+    const key = refKey({ library_id: j.library_id, path: j.path });
+    if (!out.has(key)) out.set(key, j);
+  }
+  return out;
+}
+
+/**
+ * What a row without chapters shows of its book's newest chapter detection
+ * (BRIDGE-08): one queued, working or parked (`open`, which holds the row's
+ * Detect chapters back: a second click would only find the same job), or how
+ * the last one ended (none found, or failed), so the row says why it is still
+ * listed. A cancelled one shows nothing.
+ */
+export function detectRowJob(
+  job: BridgeJob | undefined,
+): { job: BridgeJob; open: boolean } | undefined {
+  if (!job || job.state === 'cancelled') return undefined;
+  return { job, open: isOpen(job.state) };
 }
 
 /**

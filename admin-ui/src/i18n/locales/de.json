@@ -729,6 +729,8 @@
   "book.chapters.revertHintCommunity": "Community: {{title}}",
   "book.chapters.generated": "Auf diesem Server in der Erzählung gefunden.",
   "book.chapters.detectJob": "Kapitelerkennung",
+  "book.chapters.detectOffer": "Über zwei Stunden mit weniger als zwei Kapiteln. Die Bridge kann die Kapitel in der Erzählung finden.",
+  "book.chapters.detectCancelAria": "Kapitelerkennung abbrechen",
   "book.chapters.useAuto": "Automatisch verwenden",
   "book.chapters.chosen.files": "Für dieses Buch wurden die Kapitel der Datei gewählt.",
   "book.chapters.chosen.community": "Für dieses Buch wurden die Community-Kapitel gewählt, sie passen aber gerade nicht.",

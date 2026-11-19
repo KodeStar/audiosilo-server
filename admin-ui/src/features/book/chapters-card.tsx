@@ -11,9 +11,11 @@ import { Notice } from '@/components/notice';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
-import { detectJobsKnown, KIND_DETECT } from '@/features/bridge/generate-model';
+import { detectAvailable, detectJobsKnown, KIND_DETECT } from '@/features/bridge/generate-model';
+import { JobActions } from '@/features/bridge/generate-parts';
 import { GenerateStatus } from '@/features/bridge/generate-status';
 import { useBookGenerateJob, useBridgeLink } from '@/features/bridge/use-generate';
+import { DetectChaptersDialog } from '@/features/health/detect-chapters-dialog';
 import { toastError } from '@/lib/errors';
 import { formatClock, formatDateTime, formatDuration } from '@/lib/format';
 import { isBookLibrary } from '@/lib/library-kind';
@@ -23,6 +25,7 @@ import {
   chapterProblem,
   chapterSourceAction,
   communityState,
+  detectCard,
   fileStrip,
   ribbonSegments,
 } from './book-model';
@@ -50,18 +53,24 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const b = detail.book;
+  const server = useServerInfo().data;
+  // An episode's chapters are its feed's: the server refuses an edit in a
+  // podcast library (409 not_book_library), so none is offered there.
+  const library = useLibraries().data?.find((l) => l.id === b.library_id);
+  const podcast = library !== undefined && !isBookLibrary(library);
   // The book's chapter detection: when its job ends the book is fetched again
   // (useBookGenerateJob), so the chapters it found show here, metadata or not.
-  // A parked one says why here (waiting for an ASR worker, say: BRIDGE-10), as
-  // it no longer holds the Community card's Generate back.
-  const detect = useBookGenerateJob(
-    b.library_id,
-    b.path,
-    detectJobsKnown(useServerInfo().data),
-    KIND_DETECT,
-  ).job;
-  const parkedDetect = detect?.state === 'needs_attention' ? detect : undefined;
-  const bridgeLink = useBridgeLink(parkedDetect !== undefined);
+  // Its state shows here while it is open or ended without chapters (a parked
+  // one says why: waiting for an ASR worker, say, BRIDGE-10), with Detect
+  // chapters offered as Health offers it (BRIDGE-08).
+  const detect = useBookGenerateJob(b.library_id, b.path, detectJobsKnown(server), KIND_DETECT).job;
+  const detection = detectCard(
+    detail,
+    detect,
+    detectAvailable(server) && library !== undefined && !podcast,
+  );
+  const bridgeLink = useBridgeLink(detection?.job?.state === 'needs_attention');
+  const [detecting, setDetecting] = useState(false);
   const chapters = detail.chapters ?? [];
   const files = detail.files ?? [];
   const [active, setActive] = useState<number | null>(null);
@@ -71,10 +80,6 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   const [reverting, setReverting] = useState(false);
   const edited = detail.chapter_source === 'edited';
   const chapterEdit = detail.chapter_edit;
-  // An episode's chapters are its feed's: the server refuses an edit in a
-  // podcast library (409 not_book_library), so none is offered there.
-  const library = useLibraries().data?.find((l) => l.id === b.library_id);
-  const podcast = library !== undefined && !isBookLibrary(library);
   // The chapter a ribbon click asked for: its row scrolls into view.
   const [jump, setJump] = useState<number | null>(null);
   const problem = chapterProblem(chapters, b.duration);
@@ -224,12 +229,30 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
             {revertButton}
           </div>
         ) : null}
-        {parkedDetect ? (
+        {detection ? (
           <div className="flex flex-col gap-1.5">
             <p className="text-[13px] font-semibold">{t('book.chapters.detectJob')}</p>
-            <GenerateStatus job={parkedDetect} uiUrl={bridgeLink} />
+            {detection.job ? (
+              <GenerateStatus job={detection.job} uiUrl={bridgeLink} />
+            ) : (
+              <p className="text-[12.5px] text-muted-foreground">
+                {t('book.chapters.detectOffer')}
+              </p>
+            )}
+            <JobActions job={detection.job} cancelAria={t('book.chapters.detectCancelAria')}>
+              {detection.offer ? (
+                <Button variant="outline" size="sm" onClick={() => setDetecting(true)}>
+                  <AudioLines aria-hidden="true" />
+                  {t('health.fix.detect')}
+                </Button>
+              ) : null}
+            </JobActions>
           </div>
         ) : null}
+        <DetectChaptersDialog
+          books={detecting ? [b] : null}
+          onOpenChange={(open) => setDetecting(open)}
+        />
         <CommunityChapters detail={detail} />
         {detail.chapter_source === 'generated' || sourceAction ? (
           <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">

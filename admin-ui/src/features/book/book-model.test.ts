@@ -1,7 +1,8 @@
-import type { AdminChapter, AdminFile } from '@/api/types';
+import type { AdminBookDetail, AdminChapter, AdminFile, BridgeJob } from '@/api/types';
 import { bookDetail } from '@/test/library-fixtures';
 import {
   chapterProblem,
+  detectCard,
   checkField,
   commitDraft,
   coverFileProblem,
@@ -197,6 +198,65 @@ describe('chapter ribbon', () => {
     expect(chapterProblem([chapters[0]], 3 * 3600)).toBe('single');
     expect(chapterProblem([chapters[0]], 3600)).toBeUndefined();
     expect(chapterProblem(chapters, 3 * 3600)).toBeUndefined();
+  });
+});
+
+const detectJob = (over: Partial<BridgeJob> = {}): BridgeJob => ({
+  id: 1,
+  kind: 'chapters.detect',
+  library_id: 1,
+  path: 'Mosse/The Black Gate',
+  params: {},
+  state: 'queued',
+  progress: {},
+  result: {},
+  error: '',
+  requested_by: null,
+  priority: 0,
+  attempts: 0,
+  lease_until: null,
+  cancel_requested: false,
+  created_at: '2026-11-19T09:00:00Z',
+  updated_at: '2026-11-19T09:00:00Z',
+  claimed_at: null,
+  finished_at: null,
+  ...over,
+});
+
+describe('detectCard (BRIDGE-08)', () => {
+  const long = (over: Partial<AdminBookDetail> = {}) => {
+    const d = bookDetail(over);
+    return { ...d, book: { ...d.book, duration: 3 * 3600 }, chapters: d.chapters.slice(0, 1) };
+  };
+
+  it('offers Detect chapters as Health does: long, under two chapters, nothing chosen or edited', () => {
+    expect(detectCard(long(), undefined, true)).toEqual({ job: undefined, offer: true });
+    // No Bridge offering detection, a short book, or chapters enough: nothing.
+    expect(detectCard(long(), undefined, false)).toBeUndefined();
+    const short = long();
+    expect(
+      detectCard({ ...short, book: { ...short.book, duration: 3600 } }, undefined, true),
+    ).toBeUndefined();
+    expect(detectCard(bookDetail({ book: { ...long().book } }), undefined, true)).toBeUndefined();
+    expect(detectCard(long({ chapter_choice: 'files' }), undefined, true)).toBeUndefined();
+    expect(detectCard(long({ chapter_source: 'edited' }), undefined, true)).toBeUndefined();
+  });
+
+  it("shows the job while it's open, holding the offer back, and how it ended while chapters are still missing", () => {
+    const queued = detectJob();
+    expect(detectCard(long(), queued, true)).toEqual({ job: queued, offer: false });
+    const parked = detectJob({ state: 'needs_attention' });
+    expect(detectCard(long(), parked, false)).toEqual({ job: parked, offer: false });
+    const failed = detectJob({ state: 'failed', error: 'no audio' });
+    expect(detectCard(long(), failed, true)).toEqual({ job: failed, offer: true });
+    const done = detectJob({ state: 'done' });
+    expect(detectCard(long(), done, true)).toEqual({ job: done, offer: true });
+    // Done with the chapters in place: nothing to say. Cancelled: only the offer.
+    expect(detectCard(bookDetail({ book: { ...long().book } }), done, true)).toBeUndefined();
+    expect(detectCard(long(), detectJob({ state: 'cancelled' }), true)).toEqual({
+      job: undefined,
+      offer: true,
+    });
   });
 });
 

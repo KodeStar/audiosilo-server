@@ -1,3 +1,4 @@
+import type { BridgeJob } from '@/api/types';
 import en from '@/i18n/locales/en.json';
 import { adminBook } from '@/test/library-fixtures';
 import { issuesSummary } from '@/test/fixtures';
@@ -5,13 +6,56 @@ import {
   attentionTotal,
   chaptersCheckNote,
   detectChosenNote,
+  detectRowJob,
   fixFor,
   footKey,
   issueDetail,
   issueReason,
+  newestJobByBook,
   pickCategory,
   rowFix,
 } from './issues-model';
+
+const detectJob = (over: Partial<BridgeJob> = {}): BridgeJob => ({
+  id: 1,
+  kind: 'chapters.detect',
+  library_id: 1,
+  path: 'Mosse/The Black Gate',
+  params: {},
+  state: 'queued',
+  progress: {},
+  result: {},
+  error: '',
+  requested_by: null,
+  priority: 0,
+  attempts: 0,
+  lease_until: null,
+  cancel_requested: false,
+  created_at: '2026-11-19T09:00:00Z',
+  updated_at: '2026-11-19T09:00:00Z',
+  claimed_at: null,
+  finished_at: null,
+  ...over,
+});
+
+it("reads each book's newest detection, and what its row shows of it (BRIDGE-08)", () => {
+  const newest = detectJob({ id: 9, state: 'running' });
+  const byBook = newestJobByBook([
+    newest,
+    detectJob({ id: 8, state: 'failed' }),
+    detectJob({ id: 7, path: 'Mosse/Past Tense', state: 'cancelled' }),
+    detectJob({ id: 6, library_id: null, path: null }),
+  ]);
+  expect([...byBook.values()].map((j) => j.id)).toEqual([9, 7]);
+  expect(newestJobByBook(undefined).size).toBe(0);
+  // Open (queued, working, parked) holds the row's Detect back; how one ended shows beside it.
+  expect(detectRowJob(newest)).toEqual({ job: newest, open: true });
+  expect(detectRowJob(detectJob({ state: 'needs_attention' }))?.open).toBe(true);
+  expect(detectRowJob(detectJob({ state: 'failed' }))?.open).toBe(false);
+  expect(detectRowJob(detectJob({ state: 'done' }))?.open).toBe(false);
+  expect(detectRowJob(detectJob({ state: 'cancelled' }))).toBeUndefined();
+  expect(detectRowJob(undefined)).toBeUndefined();
+});
 
 it('offers Detect chapters only for a book with no chosen source and no edited chapters', () => {
   expect(rowFix('detect', adminBook())).toBe('detect');

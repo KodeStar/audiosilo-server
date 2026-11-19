@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
@@ -312,6 +312,104 @@ describe('generated chapters on the book page', () => {
     ended = true;
     await act(() => queryClient.invalidateQueries({ queryKey: jobsKey }));
     expect(await screen.findByText('Found in the narration on this server.')).toBeInTheDocument();
+  });
+});
+
+describe('chapter detection on the book page (BRIDGE-08)', () => {
+  const bridgeServer = {
+    ...serverInfo,
+    capabilities: { ...serverInfo.capabilities, bridge: true },
+    bridge: { version: '0.18.0', features: ['bridge', 'chapters'] },
+  };
+  // Over two hours in one chapter: a book Health lists as without chapters.
+  const longOne = () => {
+    const d = bookDetail();
+    return { ...d, book: { ...d.book, duration: 5 * 3600 }, chapters: d.chapters.slice(0, 1) };
+  };
+  const queued: BridgeJob = {
+    id: 42,
+    kind: 'chapters.detect',
+    library_id: 1,
+    path: BOOK_PATH,
+    params: {},
+    state: 'queued',
+    progress: {},
+    result: {},
+    error: '',
+    requested_by: { id: 1, username: 'chris' },
+    priority: 0,
+    attempts: 0,
+    lease_until: null,
+    cancel_requested: false,
+    created_at: '2026-11-19T09:00:00Z',
+    updated_at: '2026-11-19T09:00:00Z',
+    claimed_at: null,
+    finished_at: null,
+  };
+
+  it('offers Detect chapters, queues it, then shows the job in place of the offer', async () => {
+    let jobs: BridgeJob[] = [];
+    const calls = mockFetch(
+      routes(longOne(), {
+        'GET /server': { body: bridgeServer },
+        'GET /admin/bridge/jobs': () => ({ body: { jobs } }),
+        'GET /admin/bridge': {
+          body: {
+            paired: true,
+            online: true,
+            workers: [],
+            estimates: {},
+            libraries: [
+              {
+                id: 1,
+                name: 'Audiobooks',
+                root: '/books',
+                mapping: {
+                  library_id: 1,
+                  mount_path: '/media/books',
+                  mapped: true,
+                  writable: true,
+                  checked_path: '',
+                  error: '',
+                },
+              },
+            ],
+          },
+        },
+        'POST /admin/bridge/jobs': () => {
+          jobs = [queued];
+          return { status: 201, body: queued };
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Detect chapters' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+    expect(await screen.findByText('Finding the chapters of 1 book')).toBeInTheDocument();
+    expect(
+      calls.filter((c) => c.method === 'POST' && c.path === '/admin/bridge/jobs'),
+    ).toHaveLength(1);
+    // The job read again: its state, Cancel, and no second Detect.
+    expect(
+      await screen.findByRole('button', { name: 'Cancel the chapter detection' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Detect chapters' })).not.toBeInTheDocument();
+  });
+
+  it('offers nothing for a book with its chapters, nor without a Bridge that detects them', async () => {
+    mockFetch(routes(bookDetail(), { 'GET /server': { body: bridgeServer } }));
+    renderApp(URL);
+    await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' });
+    expect(screen.queryByRole('button', { name: 'Detect chapters' })).not.toBeInTheDocument();
+  });
+
+  it('offers nothing while the Bridge does not offer chapter detection', async () => {
+    mockFetch(routes(longOne()));
+    renderApp(URL);
+    await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' });
+    expect(screen.queryByRole('button', { name: 'Detect chapters' })).not.toBeInTheDocument();
   });
 });
 

@@ -606,6 +606,55 @@ describe('library health', () => {
       expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
     });
 
+    it("shows each row's detection, holding Detect back while one is open (BRIDGE-08)", async () => {
+      const job = (path: string, over: Partial<BridgeJob>): BridgeJob => ({
+        ...(queuedJob(path) as { body: BridgeJob }).body,
+        path,
+        ...over,
+      });
+      let state: BridgeJob['state'] = 'queued';
+      const calls = mockFetch(
+        detectRoutes({
+          'GET /admin/bridge/jobs': () => ({
+            body: {
+              jobs: [
+                job('Mosse/The Black Gate', { id: 7, state }),
+                job('Mosse/Past Tense', { id: 6, state: 'failed', error: 'transcription failed' }),
+              ],
+            },
+          }),
+        }),
+      );
+      const user = userEvent.setup();
+      const { queryClient } = renderApp('/health?issue=no_chapters');
+      const gate = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      const past = screen.getByRole('link', { name: 'Past Tense' }).closest('li')!;
+      // The queued one says so, with no second Detect; the failed one says why, and offers it again.
+      expect(await within(gate).findByText('Chapter detection')).toBeInTheDocument();
+      expect(within(gate).queryByRole('button', { name: 'Detect chapters' })).toBeNull();
+      expect(within(past).getByText('transcription failed')).toBeInTheDocument();
+      expect(within(past).getByRole('button', { name: 'Detect chapters' })).toBeInTheDocument();
+      // The jobs are read once for the list, by kind, not per row.
+      const reads = calls.filter((c) => c.path === '/admin/bridge/jobs');
+      expect(reads.every((c) => c.query.get('kind') === 'chapters.detect')).toBe(true);
+      expect(reads.some((c) => c.query.has('path'))).toBe(false);
+      // The bar's Detect leaves the open one out.
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      const bar = await screen.findByRole('toolbar');
+      await user.click(within(bar).getByRole('button', { name: 'Detect chapters' }));
+      // One book: the dialog names it (two would be counted).
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Past Tense')).toBeInTheDocument();
+      await user.keyboard('{Escape}');
+      // The job ends: the list is read again, as the book may have its chapters now.
+      const before = calls.filter((c) => c.path === '/admin/books').length;
+      state = 'done';
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'bridge', 'jobs'] });
+      await waitFor(() =>
+        expect(calls.filter((c) => c.path === '/admin/books').length).toBeGreaterThan(before),
+      );
+    });
+
     it('offers no fix while the Bridge does not offer chapter detection', async () => {
       mockFetch(detectRoutes({ 'GET /server': { body: serverInfo } }));
       renderApp('/health?issue=no_chapters');

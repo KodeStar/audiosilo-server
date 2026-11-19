@@ -761,6 +761,8 @@
   "book.chapters.revertHintCommunity": "Community: {{title}}",
   "book.chapters.generated": "Trovati nella narrazione su questo server.",
   "book.chapters.detectJob": "Rilevamento dei capitoli",
+  "book.chapters.detectOffer": "Oltre due ore con meno di due capitoli. La Bridge può trovare i capitoli nella narrazione.",
+  "book.chapters.detectCancelAria": "Annulla il rilevamento dei capitoli",
   "book.chapters.useAuto": "Usa automatico",
   "book.chapters.chosen.files": "Per questo libro sono stati scelti i capitoli del file.",
   "book.chapters.chosen.community": "Per questo libro sono stati scelti i capitoli della community, ma ora non corrispondono.",

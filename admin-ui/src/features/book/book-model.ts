@@ -6,6 +6,7 @@ import {
   type AdminChapter,
   type AdminFile,
   type BookEditRequest,
+  type BridgeJob,
   type BookRef,
   type CommunityChaptersDetail,
   type FieldSource,
@@ -14,6 +15,7 @@ import {
   type OverrideField,
   type PairToken,
 } from '@/api/types';
+import { isOpen } from '@/features/bridge/bridge-model';
 import { hasIdentifier } from '@/features/library/series/series-model';
 import { formatSeriesPosition } from '@/lib/format';
 import { checkLabels, labelsText } from '@/lib/labels';
@@ -394,6 +396,38 @@ export function chapterProblem(
   if (chapters.length === 0) return 'none';
   if (chapters.length === 1 && duration > 2 * 3600) return 'single';
   return undefined;
+}
+
+/**
+ * How long a book with fewer than two chapters runs before Health lists it under
+ * books without chapters: catalog/issues.go's longWithoutChapters, two hours.
+ */
+export const LONG_WITHOUT_CHAPTERS = 2 * 3600;
+
+/**
+ * The Chapters card's chapter detection (BRIDGE-08), as the read-along card
+ * shows its job: the book's newest `chapters.detect` job while it is queued,
+ * working or parked, or how it ended (failed, or done while the book still
+ * lacks chapters: none were found, or they don't stand), and Detect chapters,
+ * offered as Health offers it for the same book (`canDetect`: an online Bridge
+ * that detects chapters, a book library): a book over two hours with fewer than
+ * two chapters, no chapter source chosen and no chapters edited (the server
+ * refuses those: chapters_chosen, chapters_edited), and no detection open.
+ * Undefined when there is neither a job to show nor an offer.
+ */
+export function detectCard(
+  detail: Pick<AdminBookDetail, 'book' | 'chapters' | 'chapter_source' | 'chapter_choice'>,
+  job: BridgeJob | undefined,
+  canDetect: boolean,
+): { job?: BridgeJob; offer: boolean } | undefined {
+  const lacking =
+    detail.book.duration > LONG_WITHOUT_CHAPTERS && (detail.chapters ?? []).length < 2;
+  const open = job !== undefined && isOpen(job.state);
+  const shown =
+    job && (open || job.state === 'failed' || (job.state === 'done' && lacking)) ? job : undefined;
+  const offer =
+    canDetect && lacking && !open && detail.chapter_source !== 'edited' && !detail.chapter_choice;
+  return shown || offer ? { job: shown, offer } : undefined;
 }
 
 // ---- community chapters ----

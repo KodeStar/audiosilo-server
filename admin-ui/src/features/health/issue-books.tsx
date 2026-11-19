@@ -19,13 +19,16 @@ import { counted } from '@/lib/format';
 import { addBookUrl } from '@/lib/meta-site';
 import { joinLibraryPath } from '@/lib/paths';
 import { AddItLink } from '@/features/book/add-to-community';
-import { detectAvailable } from '@/features/bridge/generate-model';
+import { detectAvailable, detectJobsKnown } from '@/features/bridge/generate-model';
+import { GenerateStatus } from '@/features/bridge/generate-status';
+import { useBridgeLink } from '@/features/bridge/use-generate';
 import { AllClear } from './all-clear';
 import { DetectChaptersDialog } from './detect-chapters-dialog';
 import {
   FIX_LOOK,
   chaptersCheckNote,
   detectChosenNote,
+  detectRowJob,
   fixFor,
   footKey,
   issueDetail,
@@ -35,6 +38,7 @@ import {
   type BookIssueKind,
   type IssueFix,
 } from './issues-model';
+import { useDetectJobs } from './use-detect-jobs';
 import { useIssueActions } from './use-issue-actions';
 
 /** How many books a page of an issue list loads. */
@@ -68,6 +72,14 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
   const roots = useLibraryRoots();
   const server = useServerInfo().data;
   const fix = ignored ? null : fixFor(kind, detectAvailable(server));
+  // The books' chapter detections (BRIDGE-08), shown on their rows: followed
+  // whenever the server knows the Bridge, so a job queued before it went
+  // offline still shows.
+  const detectJobs = useDetectJobs(kind === 'no_chapters' && !ignored && detectJobsKnown(server));
+  const rowJob = (b: AdminBook) => detectRowJob(detectJobs?.get(refKey(b)));
+  const bridgeLink = useBridgeLink(
+    [...(detectJobs?.values() ?? [])].some((j) => j.state === 'needs_attention'),
+  );
   // Rendered whatever the list shows, keyed so each branch's fragment keeps the
   // same instance: a refetch that fails or empties the list mustn't take an
   // open confirmation (or a run it is queueing) away.
@@ -123,8 +135,9 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
   // its own row has left the list but stays selected).
   const listed = new Set(books.map(refKey));
   const selectedListed = selection.books.filter((b) => listed.has(refKey(b)));
-  // The selected books Detect chapters can be asked for (rowFix).
-  const detectable = selectedListed.filter((b) => rowFix(fix, b) === 'detect');
+  // The selected books Detect chapters can be asked for (rowFix), none whose
+  // detection is already open.
+  const detectable = selectedListed.filter((b) => rowFix(fix, b) === 'detect' && !rowJob(b)?.open);
   const chosenBooks = () => {
     selection.clear();
     return selectedListed;
@@ -146,7 +159,8 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
         {books.map((b) => {
           const checkNote = chaptersCheckNote(kind, b);
           const chosenNote = detectChosenNote(fix, b);
-          const ownFix = rowFix(fix, b);
+          const detection = rowJob(b);
+          const ownFix = detection?.open ? null : rowFix(fix, b);
           const detail = issueDetail(kind, b);
           return (
             <li
@@ -193,6 +207,14 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
                   <span className="text-[12px] text-subtle-foreground [overflow-wrap:anywhere]">
                     {t(chosenNote)}
                   </span>
+                ) : null}
+                {detection ? (
+                  <div className="mt-1.5 flex flex-col gap-1">
+                    <span className="text-[12px] font-semibold">
+                      {t('book.chapters.detectJob')}
+                    </span>
+                    <GenerateStatus job={detection.job} uiUrl={bridgeLink} />
+                  </div>
                 ) : null}
                 <span className="truncate font-mono text-[11.5px] text-subtle-foreground max-md:hidden">
                   {joinLibraryPath(roots[b.library_id], b.path)}

@@ -729,6 +729,8 @@
   "book.chapters.revertHintCommunity": "Community: {{title}}",
   "book.chapters.generated": "Found in the narration on this server.",
   "book.chapters.detectJob": "Chapter detection",
+  "book.chapters.detectOffer": "Over two hours with fewer than two chapters. The Bridge can find the chapters in the narration.",
+  "book.chapters.detectCancelAria": "Cancel the chapter detection",
   "book.chapters.useAuto": "Use automatic",
   "book.chapters.chosen.files": "The file’s chapters were chosen for this book.",
   "book.chapters.chosen.community": "The community’s chapters were chosen for this book, but they don’t fit it now.",
