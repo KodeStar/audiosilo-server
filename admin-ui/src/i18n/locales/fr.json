@@ -3591,7 +3591,7 @@
   "bridge.generate.descriptionMade": "une description",
   "bridge.generate.noDescription": "Pas de description cette fois : {{reason}}",
   "bridge.generate.noDescriptionPlain": "Pas de description cette fois.",
-  "bridge.generate.shareSkipped.contributions_off": "Non partagé avec la communauté : le module Contributions a été désactivé, les résultats restent sur ce serveur.",
+  "bridge.generate.shareSkipped.contributions_off": "Non partagé avec la communauté : le module Contributions a été désactivé, donc les résultats restent sur ce serveur.",
   "bridge.generate.shareSkippedPlain": "Non partagé avec la communauté.",
   "bridge.describe.title": "Description",
   "bridge.describe.noteAt": "Générée sur ce serveur {{when}}.",

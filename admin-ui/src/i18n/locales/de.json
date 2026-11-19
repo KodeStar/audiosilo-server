@@ -3404,7 +3404,7 @@
   "bridge.generate.descriptionMade": "eine Beschreibung",
   "bridge.generate.noDescription": "Diesmal keine Beschreibung: {{reason}}",
   "bridge.generate.noDescriptionPlain": "Diesmal keine Beschreibung.",
-  "bridge.generate.shareSkipped.contributions_off": "Nicht mit der Community geteilt: Das Modul Beiträge wurde ausgeschaltet, die Ergebnisse bleiben auf diesem Server.",
+  "bridge.generate.shareSkipped.contributions_off": "Nicht mit der Community geteilt: Das Modul Beiträge wurde ausgeschaltet, daher bleiben die Ergebnisse auf diesem Server.",
   "bridge.generate.shareSkippedPlain": "Nicht mit der Community geteilt.",
   "bridge.describe.title": "Beschreibung",
   "bridge.describe.noteAt": "Auf diesem Server erstellt, {{when}}.",
