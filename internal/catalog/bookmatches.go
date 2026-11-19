@@ -145,8 +145,8 @@ var ErrMatchedSince = errors.New("the book's community match changed since it wa
 // came from the recording it names, which is carried over the write
 // (checkIsOf). The caller rebuilds the book (refreshEffective), which takes a
 // check left stale out of its chapters.
-func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, editor any, now string) error {
-	a, err := withoutOwnOffered(ctx, tx, ref, a)
+func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, bookID int64, a, was *MatchAnchor, editor any, now string) error {
+	a, err := withoutOwnOffered(ctx, tx, bookID, a)
 	if err != nil {
 		return err
 	}
@@ -165,21 +165,14 @@ func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, 
 	return stampChapterBasis(ctx, tx, ref)
 }
 
-// withoutOwnOffered is a with each offered identifier the book at ref already
+// withoutOwnOffered is a with each offered identifier the book bookID already
 // holds of its own left out (MatchAnchor): its value now, before the edit, the
 // same, from any layer but a community override. a itself is not changed.
-func withoutOwnOffered(ctx context.Context, tx *sql.Tx, ref Ref, a *MatchAnchor) (*MatchAnchor, error) {
+func withoutOwnOffered(ctx context.Context, tx *sql.Tx, bookID int64, a *MatchAnchor) (*MatchAnchor, error) {
 	if a.OfferedASIN == "" && a.OfferedISBN == "" {
 		return a, nil
 	}
-	id, err := bookIDByPath(ctx, tx, ref.LibraryID, ref.Path)
-	if errors.Is(err, ErrNotFound) {
-		return a, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	l, err := loadLayers(ctx, tx, id)
+	l, err := loadLayers(ctx, tx, bookID)
 	if err != nil {
 		return nil, err
 	}

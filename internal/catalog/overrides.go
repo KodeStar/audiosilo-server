@@ -1018,8 +1018,7 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		// first (a series swap, labels, chapters) reads it rebuilt.
 		pick := oneBook(at)
 		pick.noRebuild = (len(edit.Set) > 0 || len(edit.Revert) > 0) && !touches(edit, FieldSeries) &&
-			len(edit.Add) == 0 && len(edit.Remove) == 0 &&
-			edit.ChapterSource == "" && len(edit.ChapterSet) == 0 && len(edit.ChapterRevert) == 0
+			len(edit.Add) == 0 && len(edit.Remove) == 0 && !edit.editsChapters()
 		cleared, _, err := clearCommunity(ctx, tx, pick)
 		if err != nil {
 			return err
@@ -1027,12 +1026,13 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		if cleared > 0 {
 			// The runs that applied its match no longer show it standing. By
 			// run, outcome and applied first, which idx_match_run_items_counts
-			// covers (the kept runs' applied items), then the book.
+			// covers (the applied items of the runs covering its library),
+			// then the book.
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE match_run_items SET detail = ?
-				  WHERE run_id IN (SELECT id FROM match_runs) AND outcome IN (?, ?) AND applied = ?
-				    AND library_id = ? AND path = ?`,
-				ItemDetailUnlinked, OutcomeAuto, OutcomeReview, ItemApplied, ref.LibraryID, path); err != nil {
+				  WHERE run_id IN (SELECT id FROM match_runs WHERE library_id IS NULL OR library_id = ?)
+				    AND outcome IN (?, ?) AND applied = ? AND library_id = ? AND path = ?`,
+				ItemDetailUnlinked, ref.LibraryID, OutcomeAuto, OutcomeReview, ItemApplied, ref.LibraryID, path); err != nil {
 				return err
 			}
 		}
@@ -1064,7 +1064,7 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 				return ErrMatchedSince
 			}
 		}
-		if err := writeAnchor(ctx, tx, at, edit.Match, edit.MatchIf, editor, now); err != nil {
+		if err := writeAnchor(ctx, tx, at, bookID, edit.Match, edit.MatchIf, editor, now); err != nil {
 			return err
 		}
 	}
@@ -1088,7 +1088,7 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	if len(swapRevert) > 0 || len(labelRevert) > 0 {
 		revert = slices.Concat(edit.Revert, swapRevert, labelRevert)
 	}
-	if len(set) == 0 && len(revert) == 0 && edit.ChapterSource == "" && len(edit.ChapterSet) == 0 && len(edit.ChapterRevert) == 0 {
+	if len(set) == 0 && len(revert) == 0 && !edit.editsChapters() {
 		if edit.Match != nil && edit.Match.WorkID != "" {
 			// An anchor alone: the match is part of the book's community
 			// chapter basis, so a check it leaves stale goes out of the
@@ -1312,6 +1312,12 @@ func (l *bookLayers) unedited(fields ...string) map[string]FieldValue {
 		delete(c.overrides, f)
 	}
 	return c.resolve()
+}
+
+// editsChapters reports whether the edit changes the book's chapters (their
+// source, or an admin's chapter edit set or reverted).
+func (e BookEdit) editsChapters() bool {
+	return e.ChapterSource != "" || len(e.ChapterSet) > 0 || len(e.ChapterRevert) > 0
 }
 
 // touches reports whether an edit sets or reverts field.
