@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -249,12 +250,19 @@ func writeLookupFailed(w http.ResponseWriter) {
 	writeError(w, http.StatusBadGateway, "metadata service unavailable")
 }
 
-// localRails is env's rails placed for the caller (meta.Service.PlaceOwned), and
-// the books it placed them from: the caller's books in every library they reach
-// in a series named like a rail, their main one or another (catalog.SeriesBooks
-// over their UserScopes). Of a work's several recordings the pick (Local) is by
-// meta's rule, which reads requested's narrator and the caller's progress
-// (catalog.InProgress); the rest ride as LocalOthers.
+// localRails is env's rails placed for the caller (meta.PlaceLocal), and the
+// books it placed them from: the caller's books in every library they reach in
+// a series named like a rail, their main one or another (catalog.SeriesBooks
+// over their UserScopes), and every book whose work key is a rail's work
+// (catalog.WorkBooks: a recording filed in no series, or under another name,
+// as /item finds it, server#412), those after the series' books. The current
+// work's other recordings, when requested's own work key is that work, are
+// /item's other_recordings (catalog.OtherRecordings), so both name one copy of
+// each recording, the same one (server#413). A book whose work the catalog
+// doesn't know takes the cache's (meta.Service.WithWorkIDs). Of a work's
+// several recordings the pick (Local) is by meta's rule, which reads
+// requested's narrator and, only where the pick has a choice (meta.Contested),
+// the caller's progress (catalog.InProgress); the rest ride as LocalOthers.
 // requested is the book env is for. env is shared and never modified.
 func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta.Enrichment) ([]meta.MetaSeries, []catalog.Book, error) {
 	if len(env.Series) == 0 {
@@ -268,39 +276,82 @@ func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta
 	if err != nil {
 		return nil, nil, err
 	}
-	refs := make([]catalog.Ref, len(books))
-	for i, b := range books {
-		refs[i] = catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}
+	me := meta.MetaLocal{LibraryID: requested.LibraryID, Path: requested.RelPath}
+	current := ""
+	if env.Work != nil {
+		current = env.Work.ID
 	}
-	// The started books only break ties between recordings: failing to read
-	// them, the pick goes on without them rather than losing every placement.
-	started, err := a.cat.InProgress(ctx, userFrom(ctx).ID, refs)
-	if err != nil {
-		if ctx.Err() != nil {
+	works := meta.RailWorks(env.Series)
+	if current != "" && requested.WorkID == current {
+		others, err := a.cat.OtherRecordings(ctx, scopes, requested)
+		if err != nil {
 			return nil, nil, err
 		}
-		a.log.Warn("read started books for the pick failed", "err", err, "library", requested.LibraryID, "path", requested.RelPath)
+		books = slices.DeleteFunc(books, func(b catalog.Book) bool {
+			return b.WorkID == current && !(b.LibraryID == me.LibraryID && b.RelPath == me.Path)
+		})
+		books = append(books, others...)
+		works = slices.DeleteFunc(works, func(w string) bool { return w == current })
 	}
-	me := meta.MetaLocal{LibraryID: requested.LibraryID, Path: requested.RelPath}
-	// A book in several series is a candidate in each, at its position there.
-	// requested is one too, outside every series when none named it, so the pick
-	// knows its narrator.
+	more, err := a.cat.WorkBooks(ctx, scopes, works)
+	if err != nil {
+		return nil, nil, err
+	}
+	have := make(map[catalog.Ref]bool, len(books))
+	for _, b := range books {
+		have[catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}] = true
+	}
+	for _, b := range more {
+		if !have[catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}] {
+			books = append(books, b)
+		}
+	}
+	// A book in several series is a candidate in each, at its position there,
+	// and one in none a candidate by its work alone. requested is one too,
+	// outside every series when none named it, so the pick knows its narrator;
+	// its own work id is never read (it is placed on env's work's entry).
 	cands := make([]meta.LocalBook, 0, len(books)+1)
 	cand := func(b *catalog.Book) meta.LocalBook {
-		return meta.LocalBook{MetaLocal: meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
+		c := meta.LocalBook{MetaLocal: meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
 			ASIN: b.ASIN, ISBN: b.ISBN, WorkID: b.WorkID, Narrator: b.Narrator,
-			Started:  started[catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}],
 			Abridged: b.Abridged != nil && *b.Abridged}
+		if c.MetaLocal == me {
+			c.WorkID = ""
+		}
+		return c
 	}
 	cands = append(cands, cand(requested))
 	for i := range books {
-		for _, s := range books[i].AllSeries() {
+		all := books[i].AllSeries()
+		if len(all) == 0 {
+			cands = append(cands, cand(&books[i]))
+		}
+		for _, s := range all {
 			c := cand(&books[i])
 			c.Series, c.SeriesIndex, c.SeriesIndexEnd = s.Name, s.Position, s.PositionEnd
 			cands = append(cands, c)
 		}
 	}
-	return a.meta.PlaceOwned(ctx, env, me, cands), books, nil
+	cands = a.meta.WithWorkIDs(ctx, me, cands)
+	if contested := meta.Contested(me, cands); len(contested) > 0 {
+		refs := make([]catalog.Ref, len(contested))
+		for i, l := range contested {
+			refs[i] = catalog.Ref(l)
+		}
+		// The started books only break ties between recordings: failing to read
+		// them, the pick goes on without them rather than losing every placement.
+		started, err := a.cat.InProgress(ctx, userFrom(ctx).ID, refs)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, err
+			}
+			a.log.Warn("read started books for the pick failed", "err", err, "library", requested.LibraryID, "path", requested.RelPath)
+		}
+		for i := range cands {
+			cands[i].Started = started[catalog.Ref(cands[i].MetaLocal)]
+		}
+	}
+	return meta.PlaceLocal(env.Series, current, me, cands), books, nil
 }
 
 // listeningChapter is where the caller is in book, for spoilers=hide: the

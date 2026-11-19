@@ -272,10 +272,10 @@ func TestSeriesNames(t *testing.T) {
 	}
 }
 
-// TestPlaceOwned: a book the cache knows is placed by its work (here a novella
+// TestWithWorkIDs: a book the cache knows is placed by its work (here a novella
 // numbered like volume 2 holds no slot), the rest by series index; the books
 // given are not modified.
-func TestPlaceOwned(t *testing.T) {
+func TestWithWorkIDs(t *testing.T) {
 	svc := NewService("http://meta.invalid", nil)
 	cachePut(svc.cache, nsASIN.key("B0NOVELLA"), &Enrichment{Matched: true, Work: &MetaWork{ID: "novella"}}, positiveTTL)
 	env := &Enrichment{Work: &MetaWork{ID: "one"}, Series: []MetaSeries{named("S", "1", "one@1", "two@2", "novella@2.5")}}
@@ -283,12 +283,16 @@ func TestPlaceOwned(t *testing.T) {
 		{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/novella"}, Series: "S", SeriesIndex: 2, ASIN: "B0NOVELLA"},
 		{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/2"}, Series: "S", SeriesIndex: 2},
 	}
-	got := locals(svc.PlaceOwned(context.Background(), env, MetaLocal{LibraryID: 1, Path: "S/1"}, books)[0].Works)
+	placeOwned := func(svc *Service, books []LocalBook) []string {
+		requested := MetaLocal{LibraryID: 1, Path: "S/1"}
+		return locals(PlaceLocal(env.Series, env.Work.ID, requested, svc.WithWorkIDs(context.Background(), requested, books))[0].Works)
+	}
+	got := placeOwned(svc, books)
 	if want := []string{"S/1", "S/2", "S/novella"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("placed = %q, want %q", got, want)
 	}
 	if books[0].WorkID != "" || env.Series[0].Works[0].Local != nil {
-		t.Fatal("PlaceOwned modified its input")
+		t.Fatal("WithWorkIDs modified its input")
 	}
 
 	// After a restart the memory is empty, but the novella's enrichment is in
@@ -298,7 +302,7 @@ func TestPlaceOwned(t *testing.T) {
 		Payload: []byte(`{"matched":true,"work":{"id":"novella"}}`), Expires: time.Now().Add(time.Hour)})
 	restarted := NewService("http://meta.invalid", nil)
 	restarted.SetStore(store)
-	got = locals(restarted.PlaceOwned(context.Background(), env, MetaLocal{LibraryID: 1, Path: "S/1"}, books)[0].Works)
+	got = placeOwned(restarted, books)
 	if want := []string{"S/1", "S/2", "S/novella"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("placed after a restart = %q, want %q", got, want)
 	}
@@ -309,7 +313,7 @@ func TestPlaceOwned(t *testing.T) {
 	fresh.SetStore(store)
 	loads := store.loads.Load()
 	mine := []LocalBook{{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/1"}, Series: "S", SeriesIndex: 1, ASIN: "B0REQUESTED"}}
-	got = locals(fresh.PlaceOwned(context.Background(), env, MetaLocal{LibraryID: 1, Path: "S/1"}, mine)[0].Works)
+	got = placeOwned(fresh, mine)
 	if want := []string{"S/1", "", ""}; !reflect.DeepEqual(got, want) || store.loads.Load() != loads {
 		t.Fatalf("requested: placed %q (want %q), store reads %d", got, want, store.loads.Load()-loads)
 	}
@@ -591,5 +595,54 @@ func TestPlaceLocalOthersOneEach(t *testing.T) {
 	}
 	if l := works[0].LocalOthers[0]; l.LibraryID != 1 {
 		t.Fatalf("copy kept = %+v, want the requested library's", l)
+	}
+}
+
+// TestContested (server#413): the caller's progress is read only for the books
+// the pick chooses between: two or more of one work, or with no work two or
+// more numbered books of one series; requested never, and none at all for the
+// usual envelope, one book a work.
+func TestContested(t *testing.T) {
+	requested := MetaLocal{LibraryID: 1, Path: "S/1"}
+	one := []LocalBook{
+		mine(1, "S/1", "S", 1, "one"),
+		mine(1, "S/1 copy", "S", 1, "one"), // the current work's one other book: no choice
+		mine(1, "S/2", "S", 2, "two"),
+		mine(1, "S/2", "Other", 4, "two"), // one book in two series
+		mine(1, "S/3", "S", 3, ""),
+	}
+	if got := Contested(requested, one); len(got) != 0 {
+		t.Fatalf("one book a work: contested %v, want none", got)
+	}
+	two := append(slices.Clone(one), mine(2, "S/2 b", "S", 2, "two"), mine(1, "S/3 b", " s ", 3, ""))
+	want := []MetaLocal{{LibraryID: 1, Path: "S/2"}, {LibraryID: 2, Path: "S/2 b"}, {LibraryID: 1, Path: "S/3"}, {LibraryID: 1, Path: "S/3 b"}}
+	if got := Contested(requested, two); !reflect.DeepEqual(got, want) {
+		t.Fatalf("contested %v, want %v", got, want)
+	}
+}
+
+// TestPlaceLocalCopyOfRequested (server#413): a copy of the requested book
+// (its ASIN, or its ISBN with no ASIN) is placed on no entry, though its own
+// work id names another: the requested book is that recording's one handle.
+// Another recording of that work still holds the entry.
+func TestPlaceLocalCopyOfRequested(t *testing.T) {
+	requested := MetaLocal{LibraryID: 1, Path: "S/1"}
+	books := []LocalBook{
+		identified(1, "S/1", "one", "B0ONE", "9780000000011"),
+		identified(1, "S/1 copy", "two", " b0one ", ""), // matched to "two" by its ASIN's resolution
+		identified(1, "S/1 print", "two", "", "978-0-00-000001-1"),
+		identified(1, "S/2", "two", "B0TWO", ""),
+	}
+	works := placeIdentified(requested, books...)
+	if got, want := locals(works), []string{"S/1", "S/2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("locals = %q, want %q", got, want)
+	}
+	if got := others(works); got[1] != nil {
+		t.Fatalf("entry two others = %q, want none", got[1])
+	}
+	// Without the real recording, the copy holds nothing either.
+	works = placeIdentified(requested, books[:3]...)
+	if got, want := locals(works), []string{"S/1", ""}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("copies only: locals = %q, want %q", got, want)
 	}
 }

@@ -531,7 +531,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `orderings[].works[]`, carries `local` `{library_id, path}` when the CALLER owns
   that work. Resolved per request AFTER the cache, on a copy of the rails (never
   stored: the cached envelope is shared): `api.localRails` fetches the caller's
-  candidates (`catalog.SeriesBooks` over their `UserScopes`, scope-filtered: books
+  candidates (`catalog.SeriesBooks` over their `UserScopes`, then every book whose work key is a rail's
+  work, `catalog.WorkBooks`, so a recording filed in no series is placed too, server#412; scope-filtered: books
   whose series - the main one (`books.series_key`), or one their `more_series` names
   (`seriesMembers`, over `book_more_series`, migration 0041) - folds to a
   rail/ordering name by `match.SeriesKey`, the console's `seriesKey` - NFKD, case,
@@ -556,9 +557,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   seen first never hides an ASIN recording sharing its print ISBN (server#412; one sorted after
   such a recording is its copy); the first copy in that order is kept, a book with neither never merged); an entry only
   ever lists recordings of its own work, so no book is on two entries: the current work's entry
-  holds the requested book as `local` beside the envelope's work's other books, which match
-  `/item`'s `other_recordings` of the rail's series books (a recording filed in no series, or one
-  only the cache has resolved, can still differ); an entry placed by its index
+  holds the requested book as `local` beside the envelope's work's other books, which are
+  `/item`'s `other_recordings` themselves when the requested book's work key is that work (the same
+  copy of each recording; one only the cache has resolved can still differ); a copy of the requested
+  book is placed on no entry (`meta.copyOf`: one recording, one handle, server#413); the caller's
+  progress is read only for the books the pick chooses between (`meta.Contested`); an entry placed by its index
   has none; per request like `local`, never on a cached envelope. A book's
   work key is `book_matches.work_id`, else a non-empty `upcoming_owned.work_id` while that
   row's `id_key` is the book's identifiers' (`meta.IDKey`, in SQL `idKeyExpr`: a retag or an
