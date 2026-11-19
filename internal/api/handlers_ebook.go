@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"net/http"
 	"path"
 
@@ -61,14 +60,12 @@ func (a *API) handleEbook(w http.ResponseWriter, r *http.Request) {
 	}
 	f, info, err := library.OpenEbookBounded(r.Context(), lib.Root, book.Ebook.Path, book.IsFolder, a.streamWait)
 	switch {
-	// Before the file gone: Go reads a Windows share whose server is down as
-	// fs.ErrNotExist (metadata.NotExist).
 	case metadata.GaveUp(err) || metadata.TransientFault(err):
 		if r.Context().Err() == nil {
 			writeShareNotAnswering(w)
 		}
 		return
-	case errors.Is(err, library.ErrNoEbook), errors.Is(err, fs.ErrNotExist), metadata.LastingFault(err):
+	case errors.Is(err, library.ErrNoEbook), metadata.NotExist(err), metadata.LastingFault(err):
 		writeError(w, http.StatusNotFound, msgNoEbook)
 		return
 	case err != nil && r.Context().Err() != nil:

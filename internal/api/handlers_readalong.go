@@ -97,12 +97,10 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 		digest, err = a.scanner.EbookDigestNow(ctx, *lib, idx, book.RelPath, book.Ebook.Path, book.IsFolder, a.fileWait)
 	}
 	switch {
-	// Before the file gone: Go reads a Windows share whose server is down as
-	// fs.ErrNotExist (metadata.NotExist).
 	case metadata.TransientFault(err):
 		writeShareNotAnswering(w)
 		return
-	case errors.Is(err, library.ErrNoEbook), errors.Is(err, fs.ErrNotExist), metadata.LastingFault(err):
+	case errors.Is(err, library.ErrNoEbook), metadata.NotExist(err), metadata.LastingFault(err):
 		writeErrorCode(w, http.StatusNotFound, codeNoReadalong, msgNoReadalong)
 		return
 	case err != nil:
