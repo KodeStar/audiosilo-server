@@ -82,7 +82,8 @@ func TestCachedAnswer(t *testing.T) {
 		t.Fatalf("cached lookup = %+v", c)
 	}
 	store.put(StoredEntry{Key: nsASIN.key("B0STALE"), Version: storeVersion, Source: srv.URL,
-		Payload: []byte(`{"matched":true,"work":{"id":"stale","recaps":[{"through":{"chapter":1},"text":"x"}]}}`), Expires: now.Add(-time.Hour)})
+		Payload: []byte(`{"matched":true,"work":{"id":"stale","recaps":[{"through":{"chapter":1},"text":"x"}]}}`),
+		Expires: now.Add(-time.Hour), StoredAt: now.Add(-time.Hour - positiveTTL)})
 	store.put(StoredEntry{Key: nsASIN.key("B0FRESH"), Version: storeVersion, Source: srv.URL,
 		Payload: []byte(`{"matched":true,"work":{"id":"fresh","characters":[{"id":"c","name":"C","reveal":{"chapter":1}}]}}`), Expires: now.Add(time.Hour)})
 	store.put(StoredEntry{Key: nsASIN.key("B0NOMATCH"), Version: storeVersion, Source: srv.URL, Expires: now.Add(time.Hour)})
@@ -130,7 +131,8 @@ func TestCachedWorkNewestWins(t *testing.T) {
 	// The stored row, written five days ago (expired four days ago): an old
 	// work, merged into the-martian upstream since.
 	store.put(StoredEntry{Key: nsASIN.key("B00FLIJJSY"), Version: storeVersion, Source: srv.URL,
-		Payload: []byte(`{"matched":true,"work":{"id":"old-work"}}`), Expires: now.Add(-5*24*time.Hour + positiveTTL)})
+		Payload: []byte(`{"matched":true,"work":{"id":"old-work"}}`),
+		Expires: now.Add(-5*24*time.Hour + positiveTTL), StoredAt: now.Add(-5 * 24 * time.Hour)})
 	svc := NewService(srv.URL, func() time.Time { return now }) // a restarted server: nothing in memory
 	svc.SetStore(store)
 	ctx := context.Background()
@@ -167,8 +169,10 @@ func TestCachedWorkNoMatchOnlyWhileFresh(t *testing.T) {
 	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
 	const src = "http://meta.invalid"
-	store.put(StoredEntry{Key: nsASIN.key("B0FRESHMISS"), Version: storeVersion, Source: src, Expires: now.Add(30 * time.Minute)})
-	store.put(StoredEntry{Key: nsASIN.key("B0STALEMISS"), Version: storeVersion, Source: src, Expires: now.Add(-30 * time.Minute)})
+	store.put(StoredEntry{Key: nsASIN.key("B0FRESHMISS"), Version: storeVersion, Source: src,
+		Expires: now.Add(30 * time.Minute), StoredAt: now.Add(30*time.Minute - notFoundTTL)})
+	store.put(StoredEntry{Key: nsASIN.key("B0STALEMISS"), Version: storeVersion, Source: src,
+		Expires: now.Add(-30 * time.Minute), StoredAt: now.Add(-30*time.Minute - notFoundTTL)})
 	svc := NewService(src, func() time.Time { return now })
 	svc.SetStore(store)
 	ctx := context.Background()
@@ -193,7 +197,8 @@ func TestCachedWorkStaleFallbackKeepsItsAge(t *testing.T) {
 	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
 	store.put(StoredEntry{Key: nsASIN.key("B00FLIJJSY"), Version: storeVersion, Source: srv.URL,
-		Payload: []byte(`{"matched":true,"work":{"id":"old-work"}}`), Expires: now.Add(-5*24*time.Hour + positiveTTL)})
+		Payload: []byte(`{"matched":true,"work":{"id":"old-work"}}`),
+		Expires: now.Add(-5*24*time.Hour + positiveTTL), StoredAt: now.Add(-5 * 24 * time.Hour)})
 	svc := NewService(srv.URL, func() time.Time { return now })
 	svc.SetStore(store)
 	ctx := context.Background()

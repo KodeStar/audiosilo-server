@@ -16,7 +16,7 @@ import (
 // while fresh. env is the enrichment when one answered with a match (nil for a
 // lookup's answer and a "no match"; shared with the cache: never modify it), id
 // its work ("" for a "no match"), at when it was had (cacheEntry.at, a row's
-// answeredAt: at the earliest) and ok whether there is an answer at all (a
+// StoredAt) and ok whether there is an answer at all (a
 // miss, a cached failure and no identifier are none). A fresh row warms memory
 // for the rest of its TTL, as Enrich's read of it does.
 type cachedAnswer struct {
@@ -37,9 +37,9 @@ func (s *Service) cachedAnswerOf(ctx context.Context, asin, isbn string) cachedA
 	if w, env, at, hit := s.cachedWorkID(key); hit && !w.Failed {
 		return cachedAnswer{env: env, id: w.ID, at: at, ok: true}
 	}
-	stored, expires, fresh := readStored[Enrichment](ctx, s, key)
+	stored, expires, at, fresh := readStored[Enrichment](ctx, s, key)
 	if fresh {
-		cachePutUntil(s.cache, key, stored, expires)
+		cachePutUntil(s.cache, key, stored, expires, at)
 	}
 	switch {
 	case expires.IsZero(): // no row, or none this build reads
@@ -50,11 +50,11 @@ func (s *Service) cachedAnswerOf(ctx context.Context, asin, isbn string) cachedA
 		// not hide the upcoming job's work until the job's monthly recheck.
 		return cachedAnswer{}
 	case stored == nil:
-		return cachedAnswer{at: answeredAt(expires, false), ok: true}
+		return cachedAnswer{at: at, ok: true}
 	case stored.Work == nil || stored.Work.ID == "":
 		return cachedAnswer{}
 	}
-	return cachedAnswer{env: stored, id: stored.Work.ID, at: answeredAt(expires, true), ok: true}
+	return cachedAnswer{env: stored, id: stored.Work.ID, at: at, ok: true}
 }
 
 // Coverage is what a book's community work carries: characters and a recap
