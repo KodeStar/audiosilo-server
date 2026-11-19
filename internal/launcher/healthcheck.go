@@ -172,11 +172,11 @@ func getHealthz(ctx context.Context, addr, host string, tlsOn bool, w io.Writer)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-	switch {
-	case resp.StatusCode == http.StatusOK:
+	switch resp.StatusCode {
+	case http.StatusOK:
 		_, _ = fmt.Fprintln(w, "ok:", target)
 		return nil
-	case resp.StatusCode == http.StatusServiceUnavailable:
+	case http.StatusServiceUnavailable:
 		if running, ok := startingFor(body); ok {
 			if running >= stuckStartAfter {
 				return fmt.Errorf("the start is stuck: %s has answered \"starting\" for %s (a start gets %s)",
