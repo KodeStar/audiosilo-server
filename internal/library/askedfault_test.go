@@ -188,8 +188,9 @@ func TestAwaitFlightCapsTheLeadsWait(t *testing.T) {
 	t.Parallel()
 	s := &Scanner{probeTimeout: 3 * time.Second}
 	f := &indexFlight{done: make(chan struct{}), progress: metadata.NewProgress()}
-	capped := WithWaitCap(WithLookTimeout(t.Context(), 100*time.Millisecond), time.Now().Add(300*time.Millisecond))
+	// began is read first: the cap is 300ms from a moment no earlier than it.
 	began := time.Now()
+	capped := WithWaitCap(WithLookTimeout(t.Context(), 100*time.Millisecond), time.Now().Add(300*time.Millisecond))
 	_, err := s.awaitFlight(capped, f, false)
 	if took := time.Since(began); !errors.Is(err, errReadUnfinished) || !metadata.GaveUp(err) || took < 300*time.Millisecond || took >= s.probeTimeout {
 		t.Errorf("the lead's wait capped at 300ms: %v after %v, want errReadUnfinished at the cap", err, took)
