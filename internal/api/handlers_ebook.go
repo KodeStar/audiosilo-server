@@ -67,6 +67,8 @@ func (a *API) handleEbook(w http.ResponseWriter, r *http.Request) {
 			writeShareNotAnswering(w)
 		}
 		return
+	case err != nil && r.Context().Err() != nil:
+		return // the client left during the open (its context's error): no one to answer, nothing to log
 	case err != nil:
 		a.log.Warn("open ebook failed", "library", lib.ID, "path", book.Ebook.Path, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not load the ebook")
