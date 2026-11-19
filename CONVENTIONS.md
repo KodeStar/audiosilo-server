@@ -3376,9 +3376,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   answers its own shape, below; any other kind is a
   400); 409 `kind_unavailable`. With a `path`, `GET /bridge/libraries/{id}/book` also answers a `book` block
   (title, authors and narrators split by `names.Split`, series, `series_index`, asin, isbn, duration,
-  `work_id`, by the estimate's order (`meta.Service.CachedWork`: its recorded match, else its identifiers'
-  cached answer, `CachedWorkID`, else the upcoming job's resolution; cache only, "" when none or the match
-  can't be read), and Phase 3c's `ebook {path, size}`, omitted
+  `work_id`, by the estimate's order (`meta.Service.CachedWork`: its recorded match, else the newer of its
+  identifiers' cached answer and the upcoming job's resolution; cache only, "" when none; a 500 when the
+  match can't be read, so the Bridge asks again), and Phase 3c's `ebook {path, size}`, omitted
   with none), never on the sample-book answer; each `files[]` entry carries its indexed `duration`
   (Phase 3c, additive; a single-file book's is the book's).
   Settings > Bridge in `admin-ui` (`features/bridge/`: the topic shows the heartbeat's estimates and

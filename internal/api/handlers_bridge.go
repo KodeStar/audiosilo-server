@@ -317,7 +317,12 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 	if p != "" {
 		// What a job about the book reads (a path was asked for: never the
 		// mapping check's sample).
-		out["book"] = a.bridgeBookFacts(r.Context(), book)
+		facts, err := a.bridgeBookFacts(r.Context(), book)
+		if err != nil {
+			a.writeCatalogError(w, err, "bridge book failed", "could not load the book")
+			return
+		}
+		out["book"] = facts
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -345,28 +350,26 @@ type bridgeBook struct {
 // bridgeBookFacts is book's bridgeBook. The work id is the one /meta and the
 // estimate ask about (meta.Service.CachedWork over coverageBooks): its
 // recorded match (so a book matched in the console with no ASIN or ISBN has
-// one, server#375), else its identifiers' cached answer, else the upcoming
-// job's resolution of them, which can be a month older. Never an upstream
-// call: the Bridge asks this for every job, and a book nobody has looked up
-// yet simply has none, as has one whose match can't be read right now.
-func (a *API) bridgeBookFacts(ctx context.Context, book *catalog.Book) bridgeBook {
+// one, server#375), else the newer of its identifiers' cached answer and the
+// upcoming job's resolution of them. Never an upstream call: the Bridge asks
+// this for every job, and a book nobody has looked up yet simply has none. A
+// failure to read the match is the error, so the Bridge asks again rather than
+// take "no work" for an answer.
+func (a *API) bridgeBookFacts(ctx context.Context, book *catalog.Book) (bridgeBook, error) {
 	out := bridgeBook{
 		Title: book.Title, Authors: orEmpty(names.Split(book.Author)), Narrators: orEmpty(names.Split(book.Narrator)),
 		Series: book.Series, SeriesIndex: catalog.FormatSeriesRange(book.SeriesIndex, book.SeriesIndexEnd),
 		ASIN: book.ASIN, ISBN: book.ISBN, Duration: book.Duration, Ebook: book.Ebook,
 	}
 	if !a.metadataOn() {
-		return out
+		return out, nil
 	}
 	ids, err := a.coverageBooks(ctx, []*catalog.Book{book})
 	if err != nil {
-		if ctx.Err() == nil {
-			a.log.Warn("read the book's match for the bridge book facts failed", "err", err, "library", book.LibraryID, "path", book.RelPath)
-		}
-		return out
+		return bridgeBook{}, err
 	}
 	out.WorkID = a.meta.CachedWork(ctx, ids[0])
-	return out
+	return out, nil
 }
 
 // orEmpty is ss, or an empty list for none (the wire's lists are never null).

@@ -761,6 +761,41 @@ func TestBridgeEstimateMatchOnly(t *testing.T) {
 	}
 }
 
+// A book's match that can't be read is an error the Bridge retries (500, the
+// SQL never in the body), never a book with no work; the allowed case is the
+// same book's facts with the store whole (TestBridgeEstimateStaleWork).
+func TestBridgeBookFactsMatchReadFails(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnvOn(t, newMetaEnv(t, true, 0))
+	ctx := context.Background()
+	const path = "Mars/1"
+	if _, err := b.cat.UpsertBook(ctx, &catalog.Book{LibraryID: b.lib.ID, RelPath: path, Title: path, AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.EditBook(ctx, b.lib.ID, path, catalog.BookEdit{
+		Match: &catalog.MatchAnchor{WorkID: "the-martian"}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.factsWorkID(t, b.lib.ID, path); got != "the-martian" {
+		t.Fatalf("work_id = %q, want the-martian", got)
+	}
+	// The book still reads (its work key's columns stand); its work's source
+	// (catalog.WorkSources, upcoming_owned.checked_at) does not.
+	for _, q := range []string{
+		`ALTER TABLE upcoming_owned RENAME TO upcoming_owned_gone`,
+		`CREATE VIEW upcoming_owned AS SELECT library_id, path, id_key, work_id FROM upcoming_owned_gone`,
+	} {
+		if _, err := b.db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book?path=%s", b.lib.ID, url.QueryEscape(path)), b.bridgeTok, "")
+	if resp.StatusCode != http.StatusInternalServerError || strings.Contains(body, "upcoming_owned") || strings.Contains(body, "work_id") {
+		t.Fatalf("book facts with the match unreadable: %d %s", resp.StatusCode, body)
+	}
+}
+
 // factsWorkID is the work id of the Bridge's book facts for the book at path.
 func (b *bridgeEnv) factsWorkID(t *testing.T, libraryID int64, path string) string {
 	t.Helper()
