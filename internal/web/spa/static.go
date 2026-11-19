@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"io"
 	"io/fs"
+	"iter"
 	"net/http"
 	"path"
 	"strconv"
@@ -366,17 +367,8 @@ func ETagListMatches(list, etag string) bool {
 // x-gzip) with a non-zero q, or not listed while "*" is.
 func AcceptsGzip(header string) bool {
 	gzipQ, starQ := -1.0, -1.0
-	for _, part := range strings.Split(header, ",") {
-		coding, params, _ := strings.Cut(part, ";")
-		q := 1.0
-		for _, p := range strings.Split(params, ";") {
-			if k, v, ok := strings.Cut(strings.TrimSpace(p), "="); ok && strings.EqualFold(strings.TrimSpace(k), "q") {
-				if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
-					q = f
-				}
-			}
-		}
-		switch strings.ToLower(strings.TrimSpace(coding)) {
+	for coding, q := range Qualities(header) {
+		switch coding {
 		case "gzip", "x-gzip":
 			gzipQ = q
 		case "*":
@@ -387,4 +379,26 @@ func AcceptsGzip(header string) bool {
 		return gzipQ > 0
 	}
 	return starQ > 0
+}
+
+// Qualities yields each entry of an Accept-style header value (Accept,
+// Accept-Encoding) with its q: the entry lowercased without its parameters, q
+// 1 when it names none (or one that doesn't parse).
+func Qualities(header string) iter.Seq2[string, float64] {
+	return func(yield func(string, float64) bool) {
+		for part := range strings.SplitSeq(header, ",") {
+			entry, params, _ := strings.Cut(part, ";")
+			q := 1.0
+			for p := range strings.SplitSeq(params, ";") {
+				if k, v, ok := strings.Cut(p, "="); ok && strings.EqualFold(strings.TrimSpace(k), "q") {
+					if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+						q = f
+					}
+				}
+			}
+			if !yield(strings.ToLower(strings.TrimSpace(entry)), q) {
+				return
+			}
+		}
+	}
 }

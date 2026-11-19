@@ -401,6 +401,12 @@ type rowQuerier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+// querier is rowQuerier that also reads many rows (as catalog's querier).
+type querier interface {
+	rowQuerier
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 // memberOf reads owner's member id, or ErrNotMember when id is anyone else (or
 // no one).
 func (s *Service) memberOf(ctx context.Context, q rowQuerier, owner, id int64) (Member, error) {

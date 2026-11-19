@@ -256,29 +256,25 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
-// startRun runs Run for cfg until the test ends, waiting until it accepts.
+// startRun starts cfg's server until the test ends: listening once Start
+// returns.
 func startRun(t *testing.T, cfg *config.Config) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- Run(ctx, cfg, protoHandler, slog.New(slog.DiscardHandler)) }()
+	s, err := Start(ctx, cfg, protoHandler, slog.New(slog.DiscardHandler))
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		cancel()
-		if err := <-done; err != nil {
-			t.Errorf("Run = %v, want nil after a graceful shutdown", err)
+		if err := s.Wait(); err != nil {
+			t.Errorf("Wait = %v, want nil after a graceful shutdown", err)
 		}
 	})
-	for range 100 {
-		if c, err := net.Dial("tcp", cfg.Bind); err == nil {
-			_ = c.Close()
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatal("server never accepted")
 }
 
-// Run on a self-signed server with home HTTP: the port serves both protocols
+// Start on a self-signed server with home HTTP: the port serves both protocols
 // (the loopback client is home), and shuts down gracefully on ctx.
 func TestRunHomeHTTP(t *testing.T) {
 	t.Parallel()

@@ -225,12 +225,29 @@ func TestAutocertNoSNILogDropped(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	quiet := quietNoSNI{&out}
+	// A server bound to 192.0.2.7: its healthcheck asks from that address.
+	quiet := autocertErrorLog("192.0.2.7:443").Writer().(quietNoSNI)
+	quiet.w = &out
 	if _, err := quiet.Write([]byte(raw.String())); err != nil || out.Len() != 0 {
 		t.Errorf("quietNoSNI passed %q (%v), want it dropped", out.String(), err)
 	}
-	other := "2026/11/17 10:00:00 http: TLS handshake error from 127.0.0.1:5000: EOF\n"
-	if _, err := quiet.Write([]byte(other)); err != nil || out.String() != other {
-		t.Errorf("quietNoSNI wrote %q (%v), want %q", out.String(), err, other)
+	if _, err := quiet.Write([]byte("2026/11/17 10:00:00 http: TLS handshake error from [::1]:5000: " + noSNIRefusal + "\n")); err != nil || out.Len() != 0 {
+		t.Errorf("quietNoSNI passed %q (%v) from ::1, want it dropped", out.String(), err)
+	}
+	if _, err := quiet.Write([]byte("2026/11/17 10:00:00 http: TLS handshake error from 192.0.2.7:5000: " + noSNIRefusal + "\n")); err != nil || out.Len() != 0 {
+		t.Errorf("quietNoSNI passed %q (%v) from the bind address, want it dropped", out.String(), err)
+	}
+	// Every other line is kept, the same refusal from an address off this
+	// machine included (something on the network asking without a name).
+	for _, other := range []string{
+		"2026/11/17 10:00:00 http: TLS handshake error from 127.0.0.1:5000: EOF\n",
+		"2026/11/17 10:00:00 http: TLS handshake error from 203.0.113.5:5000: " + noSNIRefusal + "\n",
+		"2026/11/17 10:00:00 http: TLS handshake error from [2001:db8::1]:5000: " + noSNIRefusal + "\n",
+		"2026/11/17 10:00:00 something else: " + noSNIRefusal + "\n",
+	} {
+		out.Reset()
+		if _, err := quiet.Write([]byte(other)); err != nil || out.String() != other {
+			t.Errorf("quietNoSNI wrote %q (%v), want %q", out.String(), err, other)
+		}
 	}
 }

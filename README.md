@@ -187,18 +187,30 @@ server or the bundled player - is always a new image:
 `audiosilo --data <folder> healthcheck` on the data folder the container was started
 with (its `--data`, `/data` by default), which asks the server's own `/healthz` on the
 port and TLS mode from `config.yaml` and the `AUDIOSILO_*` environment, and exits 0
-when the database answers (`docker ps` shows `healthy`). Docker only marks the
-container `unhealthy`; to restart a stuck server (an NFS hard mount that stopped
-answering) pair it with an orchestrator liveness probe or an autoheal sidecar such as
-`willfarrell/autoheal` (see the comment in `docker-compose.yml`). The check allows a
-ten-minute start period, so an upgrade's migrations on a large library finish before a
-failed check can count and autoheal restart the container part way through. A bind or
-TLS change saved in the console counts from the next start, and the check asks the
-saved address, so restart after one. With `tls.mode: autocert` the check never asks
-`/healthz`: a request naming your host would start a certificate order whenever none
-is issued, and failed orders count against Let's Encrypt's limits. It sends a TLS
-hello naming no host instead, which autocert refuses without ordering, so it shows
-that the server is listening and answering, not that the database is.
+when the database answers (`docker ps` shows `healthy`). The server listens before it
+opens the database, and while it restores a backup, copies the database for an upgrade
+or runs the migrations it answers every request with `503` and `"status": "starting"`,
+which the check counts as healthy, so autoheal never restarts the container part way
+through an upgrade's migrations on a large library. The answer also says how long the
+start has run (`"starting_for_seconds"`), and a start that has run thirty minutes is
+counted as stuck and reads unhealthy. `/healthz` is not
+rate limited, so a busy reverse proxy on the same host never makes the check read
+`429`. Docker only marks the container `unhealthy`; to restart a stuck server (an NFS
+hard mount that stopped answering) pair it with an orchestrator liveness probe or an
+autoheal sidecar such as `willfarrell/autoheal` (see the comment in
+`docker-compose.yml`). The check also allows a ten-minute start period. A bind or TLS
+change saved in the console counts from the next start, and the check asks the saved
+address, so restart after one. With `tls.mode: autocert` the check asks `/healthz`
+naming your host only while a valid certificate for it is cached and not yet due for
+renewal: otherwise a request naming your host would start a certificate order, and
+failed orders count against Let's Encrypt's limits. It then sends a TLS hello naming
+no host, which autocert refuses without ordering, so it shows that the server is
+listening and answering, not that the database is. For the start it reads
+`starting.json` in the data folder instead, which the server keeps there while it
+starts (replacing one a crashed start left behind, and removing it once it answers),
+so a start that has run thirty minutes reads unhealthy under autocert too. A browser
+that opens the console or the player while the server starts gets a short "AudioSilo
+is starting" page that reloads itself every five seconds.
 
 ## Testing & CI
 

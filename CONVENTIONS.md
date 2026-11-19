@@ -2656,7 +2656,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   requests spend from the address's bucket (`allowCredential`: anyone can mint a demo
   session, so a per-token budget would be none); everything else (public routes, the
   Bridge's `/api/v1/bridge/*`, and `/api/v1/auth/*` with or without a token: sign-in,
-  pairing, password, API keys) spends from `ipLimiter` (~50/s, burst 200, per IP).
+  pairing, password, API keys) spends from `ipLimiter` (~50/s, burst 200, per IP), but `/healthz` and
+  `/api/v1/healthz` (`healthPatterns`), which spend nothing: a container's healthcheck asks from the loopback
+  address an untrusted proxy on the same host shares with everyone, and one probe answers every request
+  within `healthReuse` (a second; one ping at a time, detached from the request), server#217.
   Each limiter's idle TTL is two refills, from a minute up to a day. rateLimit
   marks a request it charged (`addressCharged`), so requireAuth never charges it
   again and limits per credential any request rateLimit didn't. The brute-force
@@ -2990,7 +2993,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `member_disabled` for a member the admin disabled, whose tokens would never work), `GET
   {id}/devices` (a bare `[MyDevice]`; a grown-up's `last_ip` is `""`, a kid's shown: `auth.MemberDevices`
   reads the member and the devices in one snapshot, and a switch to kid forgets the addresses recorded before
-  it, server#190), `DELETE {id}/devices/{device_id}`, `PATCH {id} {name?, kind?,
+  it, server#190; a request read before the switch whose touch lands after it writes no address, as the touch
+  records one only while the member kind is the one the request was read under, `touchRowSQL`, server#217), `DELETE {id}/devices/{device_id}`, `PATCH {id} {name?, kind?,
   access?, collection_ids?}` (`{}` 400), `DELETE {id}`. Only adding checks the switches (the server's
   `household.members_enabled`, the person's `can_add_members`) and the cap (`household.max_members`,
   1-50, default 6); the other routes keep working on existing members. `collection_ids` is the full set

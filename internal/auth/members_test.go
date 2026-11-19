@@ -689,6 +689,67 @@ func TestMemberNameAllowsScriptsAndEmoji(t *testing.T) {
 	}
 }
 
+// A grown-up's request read before a switch to kid whose touch lands after it
+// (server#217's millisecond window) never writes the grown-up's address back
+// for the owner to see; a request read as the kid records the kid's.
+func TestMemberTouchAfterTheKidSwitch(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	gwen := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Gwen", Kind: MemberGrownup, Access: MemberAll})
+	tok, err := s.IssueToken(ctx, gwen.ID, KindSession, "tablet", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastIP := func() string {
+		t.Helper()
+		var ip string
+		if err := s.db.QueryRowContext(ctx, `SELECT last_ip FROM tokens WHERE token_hash = ?`, hashSecret(tok)).Scan(&ip); err != nil {
+			t.Fatal(err)
+		}
+		return ip
+	}
+	if _, _, err := s.ResolveRequest(ctx, tok, Presence{IP: "192.0.2.9"}, KindSession); err != nil {
+		t.Fatal(err)
+	}
+	asGrownup, row, err := s.checkToken(ctx, hashSecret(tok), nil, []string{KindSession}) // the late request's read
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := MemberKid
+	if _, _, err := s.UpdateMember(ctx, adam.ID, gwen.ID, MemberUpdate{Kind: &kid}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.touch(ctx, row.id, row.kind, Presence{IP: "192.0.2.10"}, "", asGrownup.MemberKind); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastIP(); got != "" {
+		t.Fatalf("address after a grown-up's late touch = %q, want none", got)
+	}
+	asKid, row, err := s.checkToken(ctx, hashSecret(tok), nil, []string{KindSession})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.touch(ctx, row.id, row.kind, Presence{IP: "192.0.2.11"}, "", asKid.MemberKind); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastIP(); got != "192.0.2.11" {
+		t.Fatalf("address after the kid's touch = %q, want it recorded", got)
+	}
+	// Someone in no household (member kind NULL) records theirs as before.
+	adamTok, err := s.IssueToken(ctx, adam.ID, KindSession, "laptop", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ResolveRequest(ctx, adamTok, Presence{IP: "192.0.2.12"}, KindSession); err != nil {
+		t.Fatal(err)
+	}
+	var adamIP string
+	if err := s.db.QueryRowContext(ctx, `SELECT last_ip FROM tokens WHERE user_id = ?`, adam.ID).Scan(&adamIP); err != nil || adamIP != "192.0.2.12" {
+		t.Fatalf("an independent account's address = %q, %v; want it recorded", adamIP, err)
+	}
+}
+
 // An owner sees a kid's device addresses but never a grown-up member's
 // (server#190); switching the kid to a grown-up hides them at the next read.
 func TestMemberDevicesHideAGrownupsAddress(t *testing.T) {

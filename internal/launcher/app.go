@@ -8,6 +8,7 @@
 package launcher
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -16,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,6 +63,12 @@ type Options struct {
 	// metaReleases, set only by tests, is where the metadata mirror lists and
 	// downloads data releases (a fake GitHub); zero means GitHub's real one.
 	metaReleases releaseSource
+	// listening, set only by tests, runs once the listener is up, before the
+	// database opens: a long migration's stand-in.
+	listening func()
+	// banners, set only by tests, takes the first-run banners in place of
+	// standard output.
+	banners io.Writer
 }
 
 // dataFiles are the files in the data folder the server opens to write at
@@ -70,10 +78,11 @@ type Options struct {
 // console fails.
 var dataFiles = []string{"audiosilo.db", "audiosilo.db-wal", "audiosilo.db-shm"}
 
-// Run loads configuration from opts.DataDir, opens the store, wires the services,
-// performs first-run bootstrap (admin + auth code banner), starts the background
-// scan, and serves HTTP(S) until ctx is cancelled. It blocks until shutdown.
-func Run(ctx context.Context, opts Options) error {
+// Run loads configuration from opts.DataDir, listens (answering "starting"
+// until the rest is done), opens the store, wires the services, performs
+// first-run bootstrap (admin + auth code banner), starts the background scan,
+// and serves HTTP(S) until ctx is cancelled. It blocks until shutdown.
+func Run(ctx context.Context, opts Options) (err error) {
 	log := opts.Log
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -112,6 +121,68 @@ func Run(ctx context.Context, opts Options) error {
 	// install that predates server_id). Persisted to config.yaml below so it survives
 	// a database rebuild; clients key their per-server state on it.
 	mintedServerID := ensureServerID(cfg)
+
+	// Persist a default config the first time (when none existed yet), or when we
+	// just minted a server_id for an install that predates it: before the
+	// listener, as the healthcheck reads the address there (Healthcheck).
+	if firstRun || mintedServerID {
+		if err := cfg.Save(); err != nil {
+			// A read-only config.yaml starts only when it already names the
+			// server_id: say which file refused the write (and, when the system
+			// refused permission, the fix).
+			return unusable(fsaccess.Wrap(config.Path(abs), true, err))
+		}
+	}
+
+	// Listen now, before the database opens: a restore, the upgrade's copy, the
+	// migrations and the re-keying below can take minutes on a large library,
+	// and until gate opens every request (/healthz too) is answered 503
+	// "starting", which the healthcheck reads as healthy, so an orchestrator
+	// never restarts a start mid-migration (server#217). A port already taken
+	// stops the start here, before any of it. The server stops when Run
+	// returns (stopServing), after the deferred work below it: it is deferred
+	// first. The "starting" answer goes out under the API's CORS policy, so a
+	// player on an allowed origin reads it rather than a failed fetch.
+	// The start marker (markStart) is written before the listener opens, over
+	// any an earlier start left, and removed once the gate opens or the start
+	// fails: a healthcheck that can only send a nameless TLS hello (autocert)
+	// reads from it how long the start has run.
+	mark := markStart(abs, log)
+	defer mark.end()
+	gate := server.NewStartGate(func(h http.Handler) http.Handler { return api.CORS(cfg, h) })
+	serveCtx, stopServing := context.WithCancel(ctx)
+	serving, err := server.Start(serveCtx, cfg, gate, log)
+	if err != nil {
+		stopServing()
+		return err
+	}
+	defer func() {
+		// Serving that stopped on its own (Done before Run's end asked it to)
+		// is why the start or the run ended: its error is Run's.
+		select {
+		case <-serving.Done():
+			if serr := serving.Wait(); serr != nil {
+				err = serr
+			}
+		default:
+		}
+		stopServing()
+		_ = serving.Wait()
+	}()
+	// A serve failure mid-start (the listener lost) ends the start there, not
+	// only at its end: the rest runs under a context that ends with serving.
+	ctx, endStart := context.WithCancel(ctx)
+	defer endStart()
+	go func() {
+		select {
+		case <-serving.Done():
+			endStart()
+		case <-ctx.Done():
+		}
+	}()
+	if opts.listening != nil {
+		opts.listening()
+	}
 
 	// A restore an admin asked for replaces the database before anything opens it.
 	dbPath := filepath.Join(abs, "audiosilo.db")
@@ -173,17 +244,6 @@ func Run(ctx context.Context, opts Options) error {
 	cat.SetPodcastNotice(ntf.PodcastListener())
 	scanner.SetConcurrency(cfg.Scan.Concurrency)
 
-	// Persist a default config the first time (when none existed yet), or when we
-	// just minted a server_id for an install that predates it.
-	if firstRun || mintedServerID {
-		if err := cfg.Save(); err != nil {
-			// A read-only config.yaml starts only when it already names the
-			// server_id: say which file refused the write (and, when the system
-			// refused permission, the fix).
-			return unusable(fsaccess.Wrap(config.Path(abs), true, err))
-		}
-	}
-
 	// First-run bootstrap - two mutually-exclusive paths:
 	//   - default (headless/docker): auto-create the admin + print the one-time
 	//     credentials banner, keyed off the database (not config-file existence).
@@ -191,6 +251,18 @@ func Run(ctx context.Context, opts Options) error {
 	//     when none exists yet, mint a one-time setup token and enable /setup.
 	// Either way, a later start while the admin the banner named has never
 	// signed in says so again, with the way to a new password (server#369).
+	//
+	// Each banner names an address on this server, so it is printed once the
+	// gate opens (a link followed at once would be answered "starting"): the
+	// two written here are held until then, or until a start that fails
+	// returns, as the credentials banner is the only place the admin's
+	// password is ever printed.
+	stdout := opts.banners
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+	banners := &heldWriter{w: stdout}
+	defer banners.release()
 	var setupToken string
 	created := false
 	if opts.Setup {
@@ -201,11 +273,11 @@ func Run(ctx context.Context, opts Options) error {
 		if !exists {
 			setupToken = randomSecret(18)
 		}
-	} else if created, err = ensureAdmin(ctx, cfg, authSvc, os.Stdout, log); err != nil {
+	} else if created, err = ensureAdmin(ctx, cfg, authSvc, banners, log); err != nil {
 		return err
 	}
 	if !created {
-		signInHint(ctx, cfg, authSvc, os.Stdout, log)
+		signInHint(ctx, cfg, authSvc, banners, log)
 	}
 
 	// Sync libraries declared in config into the database, then scan them in the
@@ -326,10 +398,41 @@ func Run(ctx context.Context, opts Options) error {
 	ntf.Run(ctx)
 	if setupToken != "" {
 		a.EnableSetup(setupToken)
-		setupBanner(cfg, setupToken)
 	}
 
-	return server.Run(ctx, cfg, a.Handler(), log)
+	gate.Open(a.Handler())
+	mark.end()
+	// The banners' links answer from here on.
+	banners.release()
+	if setupToken != "" {
+		setupBanner(stdout, cfg, setupToken)
+	}
+	return serving.Wait()
+}
+
+// heldWriter keeps what is written to it until release, which writes it to w;
+// later writes go straight there.
+type heldWriter struct {
+	w        io.Writer
+	held     bytes.Buffer
+	released bool
+}
+
+func (h *heldWriter) Write(p []byte) (int, error) {
+	if h.released {
+		return h.w.Write(p)
+	}
+	return h.held.Write(p)
+}
+
+// release writes what was held, once: a second call writes nothing.
+func (h *heldWriter) release() {
+	if h.released {
+		return
+	}
+	h.released = true
+	_, _ = h.w.Write(h.held.Bytes())
+	h.held.Reset()
 }
 
 // logRingSize is how many log lines the admin console's log viewer keeps.
@@ -351,7 +454,7 @@ func baseURL(cfg *config.Config) string {
 	if err != nil {
 		host, port = "localhost", "8080"
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
+	if unspecifiedHost(host) {
 		host = "localhost"
 	}
 	return scheme + "://" + net.JoinHostPort(host, port)
@@ -359,15 +462,16 @@ func baseURL(cfg *config.Config) string {
 
 // setupBanner prints where to finish first-run setup (the token rides in the URL
 // fragment, so it never reaches request logs).
-func setupBanner(cfg *config.Config, token string) {
-	fmt.Println("\n========================================================")
-	fmt.Println(" AudioSilo first-run setup")
-	fmt.Println("========================================================")
-	fmt.Println(" Open this URL in your browser to finish setting up:")
-	fmt.Printf("   %s/setup#token=%s\n", baseURL(cfg), token)
-	fmt.Println("--------------------------------------------------------")
-	fmt.Println(" You'll choose an admin password, then the console walks you through the rest.")
-	fmt.Println("========================================================")
+func setupBanner(w io.Writer, cfg *config.Config, token string) {
+	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
+	p("\n========================================================\n")
+	p(" AudioSilo first-run setup\n")
+	p("========================================================\n")
+	p(" Open this URL in your browser to finish setting up:\n")
+	p("   %s/setup#token=%s\n", baseURL(cfg), token)
+	p("--------------------------------------------------------\n")
+	p(" You'll choose an admin password, then the console walks you through the rest.\n")
+	p("========================================================\n")
 }
 
 // resolveTools picks the ffmpeg/ffprobe paths to use. For each enabled tool it

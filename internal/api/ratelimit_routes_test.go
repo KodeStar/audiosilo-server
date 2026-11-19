@@ -102,10 +102,11 @@ func TestRateLimitSkipsStaticFiles(t *testing.T) {
 	if code := e.get(ip, "/api/v1/server", ""); code == http.StatusTooManyRequests {
 		t.Fatal("static requests used up the API's budget")
 	}
-	// Anything not a static file is limited, outside /api/ too (the health check
-	// and the setup page read the database; an unknown path is the catch-all's 404).
-	// Each from its own address, so each path has to spend the burst itself.
-	for i, path := range []string{"/api/v1/server", "/healthz", "/setup", "/wp-login.php"} {
+	// Anything not a static file is limited, outside /api/ too (the setup page
+	// reads the database; an unknown path is the catch-all's 404), but /healthz
+	// (TestRateLimitSkipsHealthz). Each from its own address, so each path has to
+	// spend the burst itself.
+	for i, path := range []string{"/api/v1/server", "/setup", "/wp-login.php"} {
 		ip := "198.51.100." + strconv.Itoa(i+1)
 		limited := false
 		for range 250 {
@@ -255,6 +256,73 @@ func TestRateLimitGeneralBurst(t *testing.T) {
 	}
 	if code := e.get("192.0.2.41", "/api/v1/server", ""); code != http.StatusOK {
 		t.Fatalf("API call from another address = %d, want 200", code)
+	}
+}
+
+// The healthcheck asks from the loopback address, which an untrusted reverse
+// proxy on the same host shares with everyone it forwards (server#217): with
+// that address's bucket empty, every other public route is refused while
+// /healthz (both forms, HEAD included) still answers, and spends nothing.
+func TestRateLimitSkipsHealthz(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	const ip = "127.0.0.1"
+	e.api.ipLimiter.burst = 2
+	for range 2 {
+		if code := e.get(ip, "/api/v1/server", ""); code != http.StatusOK {
+			t.Fatalf("API call within the burst = %d, want 200", code)
+		}
+	}
+	if code := e.get(ip, "/api/v1/server", ""); code != http.StatusTooManyRequests {
+		t.Fatalf("API call with the address's bucket empty = %d, want 429", code)
+	}
+	for range 20 {
+		for _, path := range []string{"/healthz", "/api/v1/healthz"} {
+			for _, method := range []string{http.MethodGet, http.MethodHead} {
+				if code := e.serve(ip, method, path, "", ""); code != http.StatusOK {
+					t.Fatalf("%s %s with the address's bucket empty = %d, want 200", method, path, code)
+				}
+			}
+		}
+	}
+	if !e.api.ipLimiter.Ready("192.0.2.42") {
+		t.Fatal("a fresh address is not ready")
+	}
+	for range 40 {
+		_ = e.get("192.0.2.42", "/healthz", "")
+	}
+	if code := e.get("192.0.2.42", "/api/v1/server", ""); code != http.StatusOK {
+		t.Fatalf("API call after 40 /healthz = %d, want 200: /healthz spent the bucket", code)
+	}
+}
+
+// One /healthz probe answers every request within healthReuse of it, and the
+// next one after that asks the database again: a database gone since reads 503.
+func TestHealthProbeReused(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	if err := e.api.probeHealth(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.api.health.mu.Lock()
+	first := e.api.health.at
+	e.api.health.mu.Unlock()
+	if err := e.api.probeHealth(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.api.health.mu.Lock()
+	again := e.api.health.at
+	e.api.health.at = time.Now().Add(-healthReuse) // past reuse: the next asks again
+	e.api.health.mu.Unlock()
+	if !again.Equal(first) {
+		t.Fatal("a probe within healthReuse asked the database again")
+	}
+	if err := e.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := e.do(t, http.MethodGet, "/healthz", "", "")
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("/healthz with the database closed = %d %s, want 503", resp.StatusCode, body)
 	}
 }
 

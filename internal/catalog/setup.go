@@ -81,13 +81,8 @@ func (c *Catalog) UpdateSetupState(ctx context.Context, p SetupPatch) (SetupStat
 			return SetupState{}, fmt.Errorf("%w: %q must be %q or %q", ErrInvalidSetupStep, id, SetupStepDone, SetupStepSkipped)
 		}
 	}
-	var st SetupState
-	err := c.db.WithTx(ctx, "UpdateSetupState", func(tx *sql.Tx) error {
-		var err error
-		if st, err = readSetupState(ctx, tx); err != nil {
-			return err
-		}
-		finishing := p.Finished != nil && *p.Finished && !st.Finished
+	return c.changeSetupState(ctx, "UpdateSetupState", func(st *SetupState) (store, finishing bool) {
+		finishing = p.Finished != nil && *p.Finished && !st.Finished
 		if p.Finished != nil {
 			st.Finished = *p.Finished
 		}
@@ -95,6 +90,42 @@ func (c *Catalog) UpdateSetupState(ctx context.Context, p SetupPatch) (SetupStat
 			st.Dismissed = *p.Dismissed
 		}
 		maps.Copy(st.Steps, p.Steps)
+		return true, finishing
+	})
+}
+
+// SkipSetup finishes and dismisses the flow for a server whose config skips it
+// (setup.skip, server#184: a scripted install, a demo), marking each step
+// without an outcome as finishing it does. One transaction; a finished flow is
+// left as it is (skipped false), so a later start never undoes an admin's
+// reopened card.
+func (c *Catalog) SkipSetup(ctx context.Context) (skipped bool, err error) {
+	_, err = c.changeSetupState(ctx, "SkipSetup", func(st *SetupState) (store, finishing bool) {
+		if st.Finished {
+			return false, false
+		}
+		st.Finished, st.Dismissed = true, true
+		skipped = true
+		return true, true
+	})
+	return skipped && err == nil, err
+}
+
+// changeSetupState reads the flow's progress, lets change edit it and stores
+// the result, in one transaction, returning the progress as it left it.
+// change says whether to store anything, and whether the edit finishes the
+// flow, which marks every step still without an outcome (fillUnmarkedSteps).
+func (c *Catalog) changeSetupState(ctx context.Context, op string, change func(*SetupState) (store, finishing bool)) (SetupState, error) {
+	var st SetupState
+	err := c.db.WithTx(ctx, op, func(tx *sql.Tx) error {
+		var err error
+		if st, err = readSetupState(ctx, tx); err != nil {
+			return err
+		}
+		store, finishing := change(&st)
+		if !store {
+			return nil
+		}
 		if finishing {
 			if err := fillUnmarkedSteps(ctx, tx, st.Steps); err != nil {
 				return err
@@ -106,27 +137,6 @@ func (c *Catalog) UpdateSetupState(ctx context.Context, p SetupPatch) (SetupStat
 		return SetupState{}, err
 	}
 	return st, nil
-}
-
-// SkipSetup finishes and dismisses the flow for a server whose config skips it
-// (setup.skip, server#184: a scripted install, a demo), marking each step
-// without an outcome as finishing it does. One transaction; a finished flow is
-// left as it is (skipped false), so a later start never undoes an admin's
-// reopened card.
-func (c *Catalog) SkipSetup(ctx context.Context) (skipped bool, err error) {
-	err = c.db.WithTx(ctx, "SkipSetup", func(tx *sql.Tx) error {
-		st, err := readSetupState(ctx, tx)
-		if err != nil || st.Finished {
-			return err
-		}
-		st.Finished, st.Dismissed = true, true
-		if err := fillUnmarkedSteps(ctx, tx, st.Steps); err != nil {
-			return err
-		}
-		skipped = true
-		return putServerState(ctx, tx, setupKey, st, c.stamp())
-	})
-	return skipped && err == nil, err
 }
 
 // fillUnmarkedSteps gives every step in steps without an outcome the one

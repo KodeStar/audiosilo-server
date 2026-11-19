@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/config"
@@ -21,12 +22,35 @@ import (
 // first byte (splitListener's peek).
 const readHeaderTimeout = 10 * time.Second
 
-// Run starts the server and blocks until ctx is cancelled, then drains
-// connections gracefully.
-func Run(ctx context.Context, cfg *config.Config, handler http.Handler, log *slog.Logger) error {
+// Serving is a server Start left running.
+type Serving struct {
+	wait func() error
+	done chan struct{}
+	once sync.Once
+	err  error
+}
+
+// Done is closed once the server stops accepting: when Wait shuts it down, or
+// on its own when serving failed (Wait then returns why), so a caller still
+// starting up can stop there rather than only at its end.
+func (s *Serving) Done() <-chan struct{} { return s.done }
+
+// Wait blocks until the server stops: ctx cancelled (connections then drain
+// gracefully, nil) or serving failed (its error). Done is closed and the port
+// free by the time it returns. Every call returns the same.
+func (s *Serving) Wait() error {
+	s.once.Do(func() { s.err = s.wait() })
+	return s.err
+}
+
+// Start listens on the address cfg describes and serves handler there in the
+// background until ctx is cancelled (Serving.Wait). A listen error (the port
+// taken, a certificate that won't load) is returned at once, before anything
+// is served.
+func Start(ctx context.Context, cfg *config.Config, handler http.Handler, log *slog.Logger) (*Serving, error) {
 	tlsCfg, err := tlsConfig(cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// autocert (ACME TLS-ALPN-01/HTTP-01) only validates when Let's Encrypt can
 	// reach this server on port 443. The default bind is :8080, so warn loudly
@@ -53,45 +77,62 @@ func Run(ctx context.Context, cfg *config.Config, handler http.Handler, log *slo
 		IdleTimeout: 120 * time.Second,
 	}
 	if cfg.TLS.Mode == config.TLSAutocert {
-		srv.ErrorLog = autocertErrorLog()
+		srv.ErrorLog = autocertErrorLog(cfg.Bind)
 	}
 
-	errCh := make(chan error, 1)
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Bind)
+	if err != nil {
+		return nil, err
+	}
+	var serve func() error
 	switch {
 	case cfg.ServesHomeHTTP():
 		// One port, both protocols: the TLS connections get the certificate here
 		// (so ALPN must offer HTTP/2 itself, as ServeTLS would), and the plain ones
 		// pass homeHTTPGate.
-		ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Bind)
-		if err != nil {
-			return err
-		}
 		tlsCfg.NextProtos = []string{"h2", "http/1.1"}
 		srv.Handler = homeHTTPGate(handler)
 		log.Info("listening", "addr", cfg.Bind, "tls", cfg.TLS.Mode)
 		log.Info("plain HTTP is served on the same port to home-network clients (tls.home_http); "+
 			"other plain HTTP clients are redirected to https", "addr", cfg.Bind)
-		go func() { errCh <- srv.Serve(newSplitListener(ln, tlsCfg, readHeaderTimeout)) }()
+		serve = func() error { return srv.Serve(newSplitListener(ln, tlsCfg, readHeaderTimeout)) }
 	case tlsCfg != nil:
 		log.Info("listening", "addr", cfg.Bind, "tls", cfg.TLS.Mode)
-		go func() { errCh <- srv.ListenAndServeTLS("", "") }() // certs come from TLSConfig
+		serve = func() error { return srv.ServeTLS(ln, "", "") } // certs come from TLSConfig
 	default:
 		log.Info("listening", "addr", cfg.Bind, "tls", "off")
-		go func() { errCh <- srv.ListenAndServe() }()
+		serve = func() error { return srv.Serve(ln) }
 	}
+	return serveIn(ctx, srv, serve, log), nil
+}
 
-	select {
-	case <-ctx.Done():
-		log.Info("shutting down")
-		shutCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		return srv.Shutdown(shutCtx)
-	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+// serveIn runs serve (srv serving its listener) in the background, as Start's
+// Serving: Done closes when serve returns, and Wait shuts srv down once ctx
+// ends or returns serve's own failure. Wait returns only once serve has: the
+// listener is closed and Done with it, also when ctx ended before serve got to
+// its listener (it then finds the server shut down and closes it). A serve
+// that failed on its own is Wait's answer even when ctx has ended too.
+func serveIn(ctx context.Context, srv *http.Server, serve func() error, log *slog.Logger) *Serving {
+	done := make(chan struct{})
+	var serveErr error // serve's answer, read only once done is closed
+	go func() { serveErr = serve(); close(done) }()
+
+	return &Serving{done: done, wait: func() error {
+		var err error
+		select {
+		case <-ctx.Done():
+			log.Info("shutting down")
+			shutCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			err = srv.Shutdown(shutCtx)
+			<-done // Shutdown closed the listener first, so serve returns even past shutCtx
+		case <-done:
+		}
+		if err == nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			err = serveErr
 		}
 		return err
-	}
+	}}
 }
 
 // pemBlock PEM-encodes DER bytes under the given type.

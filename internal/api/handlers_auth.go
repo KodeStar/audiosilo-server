@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -161,19 +162,54 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 // when the writer is stalled (the reader pool answers it).
 const healthTimeout = 2 * time.Second
 
+// healthReuse is how long one /healthz probe answers every request: the route
+// is not rate limited (healthPatterns), so a flood of them costs the database
+// one probe a second.
+const healthReuse = time.Second
+
+// healthPatterns are the probe's routes. rateLimit leaves them out: a
+// container's healthcheck asks from the loopback address, which an untrusted
+// reverse proxy on the same host shares with everyone it forwards, so a busy
+// proxy would empty that address's bucket and the healthcheck would read 429
+// (server#217).
+var healthPatterns = []string{"GET /healthz", "GET /api/v1/healthz"}
+
+// healthProbe is the last /healthz database probe and when it ran.
+type healthProbe struct {
+	mu  sync.Mutex
+	at  time.Time
+	err error
+}
+
 // handleHealth reports whether the database is reachable for reads. Public and
 // unauthenticated so it can back a container/orchestrator healthcheck (a wedged
 // backend then restarts itself). It probes the reader pool under a short,
 // independent deadline, so it stays green while reads serve and only fails when
 // the database is genuinely unreachable.
 func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), healthTimeout)
-	defer cancel()
-	if err := a.cat.Ping(ctx); err != nil {
+	if err := a.probeHealth(r.Context()); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// probeHealth pings the database, or answers with the last ping when it is
+// under healthReuse old. One ping at a time: callers meanwhile wait for its
+// answer. The ping is detached from the asking request, so a caller that goes
+// away can't leave a failure for the others.
+func (a *API) probeHealth(ctx context.Context) error {
+	p := &a.health
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if time.Since(p.at) < healthReuse {
+		return p.err
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), healthTimeout)
+	defer cancel()
+	p.err = a.cat.Ping(ctx)
+	p.at = time.Now()
+	return p.err
 }
 
 // handleRedeem validates an auth code and returns a pairing token plus a QR
