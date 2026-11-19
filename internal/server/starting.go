@@ -1,8 +1,12 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -27,7 +31,7 @@ const startingRetry = "5"
 
 // StartGate is the server's handler from the moment it listens: until Open
 // hands it the app's handler, every request is answered 503 with a
-// StartingAnswer, so the listener is up (and the healthcheck says "starting")
+// StartingAnswer (a browser opening a page gets startingPage instead), so the listener is up (and the healthcheck says "starting")
 // while the database opens and migrates, which can take minutes on a large
 // library; after Open every request goes to that handler.
 type StartGate struct {
@@ -60,12 +64,26 @@ func (g *StartGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.starting.ServeHTTP(w, r)
 }
 
+// serveStarting answers a request while the start runs: a StartingAnswer, or
+// for a browser opening a page (Accept prefers text/html: /admin, /web, /) the
+// same 503 and Retry-After with startingPage, which reloads itself, rather than
+// raw JSON. API clients (a JSON Accept, */* or none) always get the JSON.
 func (g *StartGate) serveStarting(w http.ResponseWriter, r *http.Request) {
 	hdr := w.Header()
-	hdr.Set("Content-Type", "application/json")
 	hdr.Set("Cache-Control", "no-store")
 	hdr.Set("X-Content-Type-Options", "nosniff")
 	hdr.Set("Retry-After", startingRetry)
+	hdr.Add("Vary", "Accept")
+	if prefersHTML(r.Header.Values("Accept")) {
+		hdr.Set("Content-Type", "text/html; charset=utf-8")
+		hdr.Set("Content-Security-Policy", startingPageCSP)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write([]byte(startingPage))
+		}
+		return
+	}
+	hdr.Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusServiceUnavailable)
 	if r.Method != http.MethodHead {
 		_ = json.NewEncoder(w).Encode(StartingAnswer{
@@ -77,4 +95,72 @@ func (g *StartGate) serveStarting(w http.ResponseWriter, r *http.Request) {
 			StartingForSeconds: int64(time.Since(g.started) / time.Second),
 		})
 	}
+}
+
+// startingStyle is startingPage's one style sheet, allowed by its hash in
+// startingPageCSP (no inline script, nothing loaded from anywhere).
+const startingStyle = `body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;` +
+	`font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f6f5f2;color:#1f1d1a}` +
+	`main{max-width:28rem;padding:2rem;text-align:center}h1{font-size:1.5rem;margin:0 0 1rem}` +
+	`p{margin:.5rem 0;line-height:1.5;color:#55514b}` +
+	`@media (prefers-color-scheme:dark){body{background:#171614;color:#f2efe9}p{color:#b8b2a8}}`
+
+// startingPage is what a browser opening a page sees while the server starts:
+// self-contained, reloaded by its meta refresh after startingRetry seconds.
+const startingPage = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="` + startingRetry + `">
+<title>AudioSilo is starting</title>
+<style>` + startingStyle + `</style>
+</head>
+<body>
+<main>
+<h1>AudioSilo is starting</h1>
+<p>After an upgrade the server updates its database before it answers, which can take a while on a large library.</p>
+<p>This page reloads by itself every few seconds.</p>
+</main>
+</body>
+</html>
+`
+
+// startingPageCSP lets startingPage apply its own style sheet and nothing
+// else: no script, no fetch, no frame, no form.
+var startingPageCSP = func() string {
+	sum := sha256.Sum256([]byte(startingStyle))
+	return "default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) +
+		"'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+}()
+
+// prefersHTML reports whether an Accept header (its values, as Header.Values
+// gives them) asks for an HTML page before JSON: text/html or
+// application/xhtml+xml listed with a quality above zero and above
+// application/json's. A browser's navigation does; fetch's default */*, a JSON
+// Accept and no Accept at all do not.
+func prefersHTML(accept []string) bool {
+	html, jsonQ := 0.0, 0.0
+	for _, value := range accept {
+		for part := range strings.SplitSeq(value, ",") {
+			mediaType, params, _ := strings.Cut(part, ";")
+			q := 1.0
+			for param := range strings.SplitSeq(params, ";") {
+				k, v, ok := strings.Cut(param, "=")
+				if !ok || !strings.EqualFold(strings.TrimSpace(k), "q") {
+					continue
+				}
+				if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+					q = f
+				}
+			}
+			switch strings.ToLower(strings.TrimSpace(mediaType)) {
+			case "text/html", "application/xhtml+xml":
+				html = max(html, q)
+			case "application/json":
+				jsonQ = max(jsonQ, q)
+			}
+		}
+	}
+	return html > 0 && html > jsonQ
 }

@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,5 +181,88 @@ func TestServingFailureClosesDone(t *testing.T) {
 	<-s.Done()
 	if err := s.Wait(); !errors.Is(err, lost) {
 		t.Fatalf("Wait = %v, want %v", err, lost)
+	}
+}
+
+// A browser opening a page while the server starts gets the same 503 and
+// Retry-After as a page that reloads itself, under a CSP that allows its own
+// style sheet and nothing else; an API client (a JSON Accept, fetch's */*, no
+// Accept) keeps the JSON answer.
+func TestStartGateAnswersBrowsersWithAPage(t *testing.T) {
+	t.Parallel()
+	g := NewStartGate(nil)
+	const browser = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+	for _, path := range []string{"/", "/admin/", "/web/"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Accept", browser)
+		rec := httptest.NewRecorder()
+		g.ServeHTTP(rec, req)
+		h := rec.Header()
+		body := rec.Body.String()
+		if rec.Code != http.StatusServiceUnavailable || h.Get("Retry-After") != startingRetry ||
+			!strings.HasPrefix(h.Get("Content-Type"), "text/html") || h.Get("Cache-Control") != "no-store" ||
+			!strings.Contains(h.Get("Vary"), "Accept") {
+			t.Errorf("%s from a browser = %d %v, want the 503 page", path, rec.Code, h)
+		}
+		if !strings.Contains(body, "AudioSilo is starting") ||
+			!strings.Contains(body, `<meta http-equiv="refresh" content="`+startingRetry+`">`) ||
+			strings.Contains(body, "<script") || strings.Contains(body, "http://") || strings.Contains(body, "https://") {
+			t.Errorf("%s page = %q, want a self-contained page that reloads itself", path, body)
+		}
+	}
+
+	// The CSP allows exactly the page's style sheet: its hash, no script.
+	sum := sha256.Sum256([]byte(startingStyle))
+	csp := startingPageCSP
+	if !strings.Contains(csp, "default-src 'none'") || strings.Contains(csp, "script-src") ||
+		!strings.Contains(csp, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'") ||
+		!strings.Contains(startingPage, "<style>"+startingStyle+"</style>") {
+		t.Errorf("CSP %q does not admit the page's own style sheet alone", csp)
+	}
+
+	head := httptest.NewRequest(http.MethodHead, "/admin/", nil)
+	head.Header.Set("Accept", browser)
+	rec := httptest.NewRecorder()
+	g.ServeHTTP(rec, head)
+	if rec.Code != http.StatusServiceUnavailable || rec.Body.Len() != 0 {
+		t.Errorf("HEAD from a browser = %d %q, want 503 with no body", rec.Code, rec.Body)
+	}
+
+	for _, accept := range []string{"", "*/*", "application/json", "application/json, text/plain, */*"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/server", nil)
+		if accept != "" {
+			req.Header.Set("Accept", accept)
+		}
+		rec := httptest.NewRecorder()
+		g.ServeHTTP(rec, req)
+		var v StartingAnswer
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Content-Type") != "application/json" ||
+			json.Unmarshal(rec.Body.Bytes(), &v) != nil || v.Code != "server_starting" {
+			t.Errorf("Accept %q = %d %q, want the JSON answer", accept, rec.Code, rec.Body)
+		}
+	}
+}
+
+func TestPrefersHTML(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		accept []string
+		want   bool
+	}{
+		{nil, false},
+		{[]string{"*/*"}, false},
+		{[]string{"application/json"}, false},
+		{[]string{"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}, true},
+		{[]string{"application/xhtml+xml"}, true},
+		{[]string{"TEXT/HTML"}, true},
+		{[]string{"text/html;q=0"}, false},
+		{[]string{"text/html;q=0.5, application/json"}, false},
+		{[]string{"text/html", "application/json;q=0.5"}, true},
+		{[]string{"application/json, text/html"}, false},
+		{[]string{"text/html ; q = 0.9, application/json;q=0.1"}, true},
+	} {
+		if got := prefersHTML(tc.accept); got != tc.want {
+			t.Errorf("prefersHTML(%q) = %v, want %v", tc.accept, got, tc.want)
+		}
 	}
 }
