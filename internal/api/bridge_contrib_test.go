@@ -272,14 +272,16 @@ func TestBridgeClaimShareOff(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || claimed.ID != job.ID || !strings.Contains(body, `"share_off":true`) {
 		t.Fatalf("claim with share_off=1: %d %s", resp.StatusCode, body)
 	}
-	resp, body = b.do(t, "PATCH", fmt.Sprintf("/api/v1/bridge/jobs/%d", job.ID), b.bridgeTok,
-		fmt.Sprintf(`{"attempt":%d,"state":"running"}`, claimed.Attempts))
+	report := func() (*http.Response, string) {
+		return b.do(t, "PATCH", fmt.Sprintf("/api/v1/bridge/jobs/%d", job.ID), b.bridgeTok,
+			fmt.Sprintf(`{"attempt":%d,"state":"running"}`, claimed.Attempts))
+	}
+	resp, body = report()
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"share_off":true`) || strings.Contains(body, `"cancel_requested":true`) {
 		t.Fatalf("report with the module off: %d %s, want share_off, no cancel", resp.StatusCode, body)
 	}
 	setModule(t, b.testEnv, b.adminTok, true)
-	resp, body = b.do(t, "PATCH", fmt.Sprintf("/api/v1/bridge/jobs/%d", job.ID), b.bridgeTok,
-		fmt.Sprintf(`{"attempt":%d,"state":"running"}`, claimed.Attempts))
+	resp, body = report()
 	if resp.StatusCode != http.StatusOK || strings.Contains(body, `"share_off"`) {
 		t.Fatalf("report with the module on: %d %s, want no share_off", resp.StatusCode, body)
 	}

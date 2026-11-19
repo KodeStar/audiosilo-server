@@ -207,6 +207,25 @@ func (b *bridgeEnv) adminBook(path string) string {
 	return fmt.Sprintf("/api/v1/admin/libraries/%d/book?path=%s", b.lib.ID, url.QueryEscape(path))
 }
 
+// editWholeBook saves an admin's edit of the book at path to one chapter, "The
+// whole book", on the files the page reads now, and returns the edit's URL
+// (DELETE on it reverts the edit).
+func (b *bridgeEnv) editWholeBook(t *testing.T, path string) string {
+	t.Helper()
+	_, body := b.do(t, "GET", b.adminBook(path), b.adminTok, "")
+	var page struct {
+		Basis json.RawMessage `json:"chapter_basis"`
+	}
+	decodeInto(t, body, &page)
+	editURL := strings.Replace(b.adminBook(path), "/book?", "/book/chapters?", 1)
+	edit := `{"basis":` + string(page.Basis) + `,"chapters":[{"start":0,"title":"The whole book"}]}`
+	if resp, body := b.do(t, "PUT", editURL, b.adminTok, edit); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(body, `"chapter_source":"edited"`) {
+		t.Fatalf("edit: %d %s", resp.StatusCode, body)
+	}
+	return editURL
+}
+
 // TestBridgeDetectRefusedForChosenChapters: the chapters a detect job finds
 // stand in only when no chapter source was chosen, so a book whose admin chose
 // the files' (or the community's) is refused (409 chapters_chosen), and admin
@@ -250,17 +269,7 @@ func TestBridgeDetectRefusedForEditedChapters(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
 	b.beatDetect(t, true)
-	_, body := b.do(t, "GET", b.adminBook(mistbornBook), b.adminTok, "")
-	var page struct {
-		Basis json.RawMessage `json:"chapter_basis"`
-	}
-	decodeInto(t, body, &page)
-	editURL := strings.Replace(b.adminBook(mistbornBook), "/book?", "/book/chapters?", 1)
-	edit := `{"basis":` + string(page.Basis) + `,"chapters":[{"start":0,"title":"The whole book"}]}`
-	if resp, body := b.do(t, "PUT", editURL, b.adminTok, edit); resp.StatusCode != http.StatusOK ||
-		!strings.Contains(body, `"chapter_source":"edited"`) {
-		t.Fatalf("edit: %d %s", resp.StatusCode, body)
-	}
+	editURL := b.editWholeBook(t, mistbornBook)
 	// Denied: the edit applies.
 	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusConflict ||
 		!strings.Contains(body, `"code":"chapters_edited"`) {
@@ -302,9 +311,7 @@ func TestBridgeDetectRefusedForEditedChapters(t *testing.T) {
 	decodeInto(t, body, &job)
 	// An edit saved while it waits cancels it: the list it would find sits
 	// under the edit.
-	if resp, body := b.do(t, "PUT", editURL, b.adminTok, edit); resp.StatusCode != http.StatusOK {
-		t.Fatalf("edit again: %d %s", resp.StatusCode, body)
-	}
+	b.editWholeBook(t, mistbornBook)
 	if got, err := b.api.bridge.Job(ctx, job.ID); err != nil || got.State != bridge.StateCancelled ||
 		got.Error != bridge.CancelChaptersEdited {
 		t.Fatalf("detect queued before the edit: %+v, %v; want cancelled by the edit", got, err)
@@ -451,16 +458,7 @@ func TestBridgeDetectRefusalInTheEnqueue(t *testing.T) {
 			t.Fatalf("%s: open detect job %+v, %v; want none", what, j, err)
 		}
 	}
-	_, body := b.do(t, "GET", b.adminBook(mistbornBook), b.adminTok, "")
-	var page struct {
-		Basis json.RawMessage `json:"chapter_basis"`
-	}
-	decodeInto(t, body, &page)
-	editURL := strings.Replace(b.adminBook(mistbornBook), "/book?", "/book/chapters?", 1)
-	edit := `{"basis":` + string(page.Basis) + `,"chapters":[{"start":0,"title":"The whole book"}]}`
-	if resp, body := b.do(t, "PUT", editURL, b.adminTok, edit); resp.StatusCode != http.StatusOK {
-		t.Fatalf("edit: %d %s", resp.StatusCode, body)
-	}
+	editURL := b.editWholeBook(t, mistbornBook)
 	if book.ChaptersSource == catalog.ChaptersFromEdited {
 		t.Fatal("the book as read already holds the edit: no gap to test")
 	}
