@@ -1755,8 +1755,9 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 	skipped := func(d fs.DirEntry, rel string) bool {
 		return isHidden(d.Name()) || (!ignore.Empty() && ignore.Match(rel, true))
 	}
-	// A folder or audio file that is the first on its way down to go past the
-	// path cap is logged, once: nothing under it is walked.
+	// A folder past the path cap is logged once and never gone into (all
+	// below it is past the cap too); an audio file past it is logged and left
+	// out of its folder's book.
 	noteOverLong := func(rel string) {
 		log.Warn("skipping a path longer than the server allows", "library", lib.Name, "path", absOf(lib, rel), "bytes", len(rel))
 		rl.unreadable(rel, errPathTooLong)

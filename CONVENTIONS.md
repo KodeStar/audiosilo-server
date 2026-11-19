@@ -942,7 +942,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the rest) and `upcoming_owned` (`checked_at`: the list books' `work_id` reads the
   rest, server#241), which columns an UPDATE may change by value (the hook reads a row only up to
   the rule's last watched column, `watchedChanged`, so a freed column after them, the
-  heartbeat's up to 64 KiB `status`, is never copied; S263-HOOK). Anything else on a listed table
+  heartbeat's up to 2 MiB `status` (server#445), is never copied; S263-HOOK). Anything else on a listed table
   moves the generation; a table the list doesn't name is a misfiling (logged; a panic in a
   test binary), and a rule's table or column a newer server's schema lacks (a rollback) only
   makes more writes content. Durability (`WithDurableTx`) is orthogonal. The user-state
@@ -997,7 +997,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `pathInScope` (`authorizedPath`/`authorizedScope`/`scopedPath*`, which take it through `spelledPathInScope`: see
   Path spelling; not the browse, the list-remove, the podcast or
   the admin folder-override route, which takes its path on its own) checks it first: over `catalog.MaxPathBytes` (4096 bytes as sent) is 400 `path is too
-  long`, before it is cleaned, looked up or stored (server#289). `item`/`chapters`/
+  long`, before it is cleaned, looked up or stored (server#289). Any `/api/` request's `?path=` over it is
+  refused before a route or credential check reads it (`capPathQuery`, server#359); a path in a body is the
+  route's to check (`pathTooLong`, `refsTooLong` for a selection of books, a share's rules), and a body that
+  names a path or two and little else is bounded (`pathBodyMax`). A scan never indexes a path past the cap
+  (only a Windows library holds one): it skips the folder or file and logs it as unreadable (`overLong`). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
   `GetBookByPath`, then the indexed folder book holding the path
   (`GetBookHolding`: a part, a disc folder of a joined book), then indexing on
