@@ -3251,6 +3251,7 @@
   "bridge.jobs.details": "Details",
   "bridge.jobs.result": "Ergebnis",
   "bridge.jobs.params": "Optionen",
+  "bridge.jobs.paramsUnreadable": "Der Server konnte die Optionen dieses Auftrags nicht lesen.",
   "bridge.result.filesOk_one": "{{n}} Datei geprüft, sie stimmt",
   "bridge.result.filesOk_other": "{{n}} Dateien geprüft, alle stimmen",
   "bridge.result.filesBad_one": "{{n}} Datei geprüft, sie stimmt nicht",

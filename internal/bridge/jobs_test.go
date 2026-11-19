@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -90,6 +92,14 @@ func (q *testQueue) verify(t *testing.T, path string, priority int) *Job {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// damageParams stores params that are not JSON on job id, as a damaged row has.
+func (q *testQueue) damageParams(t *testing.T, id int64) {
+	t.Helper()
+	if _, err := q.db.ExecContext(context.Background(), `UPDATE bridge_jobs SET params = '{' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestEnqueueDedupesOpenJobs(t *testing.T) {
 	t.Parallel()
@@ -838,5 +848,72 @@ func TestServerCancelReasonOutlivesReports(t *testing.T) {
 		if err != nil || j.State != end.state || j.Error != end.want {
 			t.Fatalf("%s after the server's cancel = %+v, %v; want error %q", end.state, j, err, end.want)
 		}
+	}
+}
+
+// A claimed job of any kind whose stored params are not JSON (a damaged row)
+// can never be handed out: answered as it is, its encoding would fail after the
+// 200 and the empty claim would put it back at the front of the queue. Its
+// first claim ends it with the server's own reason (paramsUnread), logs one
+// warning, and hands out the job behind it, or none.
+func TestClaimUnreadableParamsFailed(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	logged := logTo(q)
+	damaged := q.verify(t, "Author/Damaged", 0)
+	behind := q.verify(t, "Author/Behind", 0)
+	q.damageParams(t, damaged.ID)
+	if got, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || got == nil || got.ID != behind.ID {
+		t.Fatalf("claim = %+v, %v; want the job behind it", got, err)
+	}
+	if stored, err := q.Job(ctx, damaged.ID); err != nil || stored.State != StateFailed || stored.Attempts != 1 ||
+		stored.Error != paramsUnread {
+		t.Fatalf("damaged job = %+v, %v; want it failed at its first claim, naming its options", stored, err)
+	}
+	if out := logged.String(); strings.Count(out, "\n") != 1 || !strings.Contains(out, "level=WARN") ||
+		!strings.Contains(out, fmt.Sprintf("job=%d", damaged.ID)) || !strings.Contains(out, "kind="+KindVerify) {
+		t.Fatalf("logged = %q; want one warning naming the job", out)
+	}
+	if got, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || got != nil {
+		t.Fatalf("claim = %+v, %v; want none", got, err)
+	}
+}
+
+// ParamSQL reads a job's param as NULL from a row whose params are not JSON,
+// where json_extract alone fails the whole statement.
+func TestParamSQLPassesDamagedRows(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	damaged := q.verify(t, "Author/Damaged", 0)
+	q.verify(t, "Author/Fine", 0)
+	q.damageParams(t, damaged.ID)
+	var n int
+	if err := q.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE json_extract(params, '$.x') IS NULL`).Scan(&n); err == nil {
+		t.Fatal("json_extract read a damaged row; the guard is no longer needed")
+	}
+	if err := q.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE `+ParamSQL("params", "$.x")+` IS NULL`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("guarded read = %d, %v; want both rows, no error", n, err)
+	}
+}
+
+// A queued job whose stored progress or result is not JSON (a damaged row) is
+// still handed out, those read as null (readableJob), so the claim's answer
+// encodes rather than going out as an empty 200 the Bridge would take again.
+func TestClaimDamagedProgressEncodes(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	damaged := q.verify(t, "Author/Damaged", 0)
+	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET progress = '{', result = 'x' WHERE id = ?`, damaged.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := q.claim(ctx, q.token, []string{KindVerify})
+	if err != nil || got == nil || got.ID != damaged.ID || got.ParamsUnreadable || got.Progress != nil || got.Result != nil {
+		t.Fatalf("claim = %+v, %v; want the job, its progress and result null", got, err)
+	}
+	if _, err := json.Marshal(got); err != nil {
+		t.Fatalf("the claim's answer doesn't encode: %v", err)
 	}
 }

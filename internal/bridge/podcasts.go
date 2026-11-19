@@ -515,12 +515,14 @@ func (s *Service) offlineLasted(offline bool) bool {
 // server doesn't hold (it restarted since they were asked for), or whose
 // requester's account was deleted since (requested_by is set NULL: a private
 // feed is that person's credential, never followed for nobody), read through q.
+// One whose params can't be read is passed by (ParamSQL): its claim ends it (claimPriority), where a
+// malformed row here would fail every claim.
 func (s *Service) lostPrivateRequests(ctx context.Context, q rowsQuerier) ([]int64, error) {
 	type request struct {
 		id       int64
 		orphaned bool
 	}
-	rows, err := q.QueryContext(ctx, `SELECT id, requested_by IS NULL FROM bridge_jobs WHERE kind=? AND state=? AND json_extract(params,'$.private')=1`, KindPodcastSubscribe, StateQueued)
+	rows, err := q.QueryContext(ctx, `SELECT id, requested_by IS NULL FROM bridge_jobs WHERE kind=? AND state=? AND `+ParamSQL("params", "$.private")+`=1`, KindPodcastSubscribe, StateQueued)
 	if err != nil {
 		return nil, err
 	}
@@ -629,7 +631,8 @@ func redactPodcastJSON(raw json.RawMessage) json.RawMessage {
 }
 
 // RedactedJob is suitable for console and listener responses; claim injection is
-// the sole response path that carries a private credential.
+// the sole response path that carries a private credential. Stored JSON that
+// can't be read (a damaged row) already reads as null (scanJob, readableJob).
 func RedactedJob(j Job) Job {
 	if !IsPodcast(j.Kind) {
 		return j
@@ -759,13 +762,27 @@ func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job,
 
 // claimPriority claims the next job (claimSecret), then gives a claimed
 // audible.sync its titles (fillAudibleSync) outside the podcast secrets' lock.
-// A sync the fill ended instead (failed, so never claimed again) hands out the
-// job behind it.
+// A job of any kind whose stored params can't be read (ParamsUnreadable: not
+// the JSON its queueing stored, or for a podcast.subscribe not its params) can
+// never be handed out, so its first claim ends it (paramsUnreadReason) rather
+// than handing the Bridge a job with no options. A job ended so (failed,
+// never claimed again) hands out the job behind it.
 func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
 	for {
 		j, err := s.claimSecret(ctx, token, kinds, minPriority)
-		if err != nil || j == nil || j.Kind != KindAudibleSync || s.ClaimAudibleSync == nil {
+		if err != nil || j == nil {
 			return j, err
+		}
+		if j.ParamsUnreadable {
+			if err := s.endUnfillableClaim(ctx, j, paramsUnreadReason(j.Kind),
+				fmt.Errorf("%s %d: stored params unreadable", j.Kind, j.ID),
+				"bridge: a claimed job ended, its stored params unreadable", "kind", j.Kind); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if j.Kind != KindAudibleSync || s.ClaimAudibleSync == nil {
+			return j, nil
 		}
 		if j, err = s.fillAudibleSync(ctx, j); j != nil || err != nil {
 			return j, err
@@ -773,8 +790,30 @@ func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string
 	}
 }
 
+// paramsUnread is the error of a job ended at its claim because the params
+// stored when it was queued can't be read (claimPriority); a podcast.subscribe
+// and an audible.sync name what they lost.
+const (
+	paramsUnread          = "The server could not read this job's options."
+	subscribeParamsUnread = "The server could not read which feed this subscription is for."
+)
+
+// paramsUnreadReason is the error a job of kind ends with when its claim finds
+// its stored params unreadable.
+func paramsUnreadReason(kind string) string {
+	switch kind {
+	case KindPodcastSubscribe:
+		return subscribeParamsUnread
+	case KindAudibleSync:
+		return syncParamsUnread
+	}
+	return paramsUnread
+}
+
 // claimSecret claims the next job, a private podcast.subscribe with its feed
-// URL put back from memory, under secretFlowMu.
+// URL put back from memory, under secretFlowMu. A podcast.subscribe whose
+// params can't be read comes back as stored, flagged (ParamsUnreadable), for
+// claimPriority to end outside the lock.
 func (s *Service) claimSecret(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
@@ -785,7 +824,8 @@ func (s *Service) claimSecret(ctx context.Context, token int64, kinds []string, 
 	if j.Kind == KindPodcastSubscribe {
 		var p SubscribeParams
 		if err := json.Unmarshal(j.Params, &p); err != nil {
-			return nil, err
+			j.ParamsUnreadable = true
+			return j, nil
 		}
 		if p.Private {
 			s.secretMu.Lock()

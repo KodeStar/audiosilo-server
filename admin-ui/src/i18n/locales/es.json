@@ -3430,6 +3430,7 @@
   "bridge.jobs.details": "Detalles",
   "bridge.jobs.result": "Resultado",
   "bridge.jobs.params": "Opciones",
+  "bridge.jobs.paramsUnreadable": "El servidor no pudo leer las opciones de este trabajo.",
   "bridge.result.filesOk_one": "{{n}} archivo comprobado, coincide",
   "bridge.result.filesOk_many": "{{n}} archivos comprobados, todos coinciden",
   "bridge.result.filesOk_other": "{{n}} archivos comprobados, todos coinciden",

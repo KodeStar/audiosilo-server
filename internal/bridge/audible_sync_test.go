@@ -312,9 +312,7 @@ func TestAudibleSyncClaimUnreadableParamsFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_jobs SET params = '{' WHERE id = ?`, job.ID); err != nil {
-		t.Fatal(err)
-	}
+	q.damageParams(t, job.ID)
 	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got == nil || got.ID != behind.ID {
 		t.Fatalf("claim = %+v, %v; want the sync behind it", got, err)
 	}
@@ -325,6 +323,30 @@ func TestAudibleSyncClaimUnreadableParamsFailed(t *testing.T) {
 	if out := logged.String(); strings.Count(out, "\n") != 1 || !strings.Contains(out, "level=WARN") ||
 		!strings.Contains(out, fmt.Sprintf("job=%d", job.ID)) {
 		t.Fatalf("logged = %q; want one warning naming the job", out)
+	}
+}
+
+// A queued audible.sync whose stored params are not JSON (a damaged row) runs
+// with the next request's (a promoting kind's queued job takes the newest
+// params): the queue's answer carries them, no longer flagged unreadable, and
+// the claim hands the job out rather than ending it.
+func TestAudibleSyncEnqueueReplacesUnreadableParams(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	q.beat(t, KindVerify, KindAudibleSync)
+	job, _, err := q.Enqueue(ctx, AudibleSync("acct0001", -10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.damageParams(t, job.ID)
+	again, created, err := q.Enqueue(ctx, AudibleSync("acct0001", -10))
+	if err != nil || created || again.ID != job.ID || again.ParamsUnreadable || string(again.Params) != `{"account":"acct0001"}` {
+		t.Fatalf("queued again = %+v, %v, %v; want the open sync with the new params, unflagged", again, created, err)
+	}
+	if got, err := q.claim(ctx, q.token, []string{KindAudibleSync}); err != nil || got == nil || got.ID != job.ID ||
+		got.State != StateClaimed {
+		t.Fatalf("claim = %+v, %v; want the repaired sync handed out", got, err)
 	}
 }
 

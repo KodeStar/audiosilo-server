@@ -34,6 +34,22 @@ const (
 // migration 0047's partial index names the same four).
 const OpenStatesSQL = `('queued', 'claimed', 'running', 'needs_attention')`
 
+// sqlLiteral is SQL text written in the source. A function that takes one
+// (ParamSQL) can only be handed string constants: a string read at run time
+// doesn't convert to it without naming the type, which no other package can
+// and this one never does, so nothing a request or a row carries can reach
+// the statement it is written into.
+type sqlLiteral string
+
+// ParamSQL is SQL reading path ('$.account') from col, a bridge_jobs JSON
+// column (params, result), as NULL when what it stores is not JSON (a damaged row):
+// json_extract on one fails the whole statement, and SQLite does not
+// short-circuit a json_valid beside it in an AND. Both are written into the
+// statement as they are, so they are constants by their type (sqlLiteral).
+func ParamSQL(col, path sqlLiteral) string {
+	return "CASE WHEN json_valid(" + string(col) + ") THEN json_extract(" + string(col) + ",'" + string(path) + "') END"
+}
+
 // IsOpenState reports whether state is one of OpenStatesSQL's.
 func IsOpenState(state string) bool {
 	switch state {
@@ -443,6 +459,11 @@ type Job struct {
 	UpdatedAt       string     `json:"updated_at"`
 	ClaimedAt       *string    `json:"claimed_at"`
 	FinishedAt      *string    `json:"finished_at"`
+	// ParamsUnreadable marks a job whose stored params are not JSON (a damaged
+	// row), read as params null (scanJob, readableJob), so one such row never
+	// blanks a response (a whole job list); a claim ends such a job
+	// (claimPriority).
+	ParamsUnreadable bool `json:"params_unreadable,omitempty"`
 }
 
 // Target is the job's book path for an audit entry ("" for a job about a whole
@@ -492,7 +513,28 @@ func scanJob(row rowScanner) (*Job, error) {
 	}
 	j.Params, j.Progress, j.Result = json.RawMessage(params), json.RawMessage(progress), json.RawMessage(result)
 	j.LeaseUntil, j.ClaimedAt, j.FinishedAt = nullable(lease), nullable(claimed), nullable(finished)
+	j = readableJob(j)
 	return &j, nil
+}
+
+// readableJob is j with its stored params, progress and result that aren't
+// JSON (a damaged row) set to null, and its params flagged so
+// (ParamsUnreadable): encoding a json.RawMessage that isn't JSON fails, and a
+// handler that has written its 200 by then answers an empty body. Every job
+// read (scanJob) goes through it, so no response path (the console's list,
+// the estimate's open job, a queue's dedupe answer, the Bridge's claim) can
+// carry one; a claim ends a job so flagged (claimPriority).
+func readableJob(j Job) Job {
+	if j.Params != nil && !json.Valid(j.Params) {
+		j.Params, j.ParamsUnreadable = nil, true
+	}
+	if j.Progress != nil && !json.Valid(j.Progress) {
+		j.Progress = nil
+	}
+	if j.Result != nil && !json.Valid(j.Result) {
+		j.Result = nil
+	}
+	return j
 }
 
 func nullable(s sql.NullString) *string {
@@ -787,7 +829,9 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 					if n, err := res.RowsAffected(); err != nil {
 						return err
 					} else if n > 0 {
-						job.Params, job.UpdatedAt = j.Params, now
+						// Params that couldn't be read (a damaged row) are
+						// replaced with them: the job is no longer flagged.
+						job.Params, job.UpdatedAt, job.ParamsUnreadable = j.Params, now, false
 					}
 				}
 				return nil
@@ -1314,6 +1358,21 @@ func (s *Service) failUnsentClaim(ctx context.Context, claim *Job, reason string
 		 state=CASE WHEN cancel_requested=1 THEN 'cancelled' ELSE 'failed' END,
 		 error=CASE WHEN cancel_requested=1 THEN error ELSE ? END,
 		 lease_until=NULL,updated_at=?,finished_at=?`+unsentClaimSQL, reason, now, now)
+}
+
+// endUnfillableClaim ends claim, a job no claim could fill now (an
+// audible.sync, fillAudibleSync, or any job whose params can't be read,
+// claimPriority), with
+// reason (failUnsentClaim) and logs its read error (readErr) at warn with msg
+// and attrs, once it has ended. A settle that fails leaves the claim to its
+// lease and answers both errors, so the claim's own error reports them.
+func (s *Service) endUnfillableClaim(ctx context.Context, claim *Job, reason string, readErr error, msg string,
+	attrs ...any) error {
+	if err := s.failUnsentClaim(ctx, claim, reason); err != nil {
+		return errors.Join(readErr, err)
+	}
+	s.Log.Warn(msg, append([]any{"job", claim.ID, "err", readErr}, attrs...)...)
+	return nil
 }
 
 // unsentClaimSQL picks an undelivered claim (its id, attempts, lease and claim

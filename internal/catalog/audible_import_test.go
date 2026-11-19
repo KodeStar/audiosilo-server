@@ -688,11 +688,17 @@ func TestAudibleBackupAllSkipsDone(t *testing.T) {
 	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: f.lib.ID, RelPath: "A/Joined", Title: "Joined"}); err != nil {
 		t.Fatal(err)
 	}
+	// The last done backup's stored result is not JSON (a damaged row): its
+	// book can't be known, so it is tried again, and no read fails.
 	for i, job := range []struct{ state, path string }{
 		{bridge.StateDone, "A/Joined"}, {bridge.StateDone, "A/Deleted"}, {bridge.StateFailed, ""}, {bridge.StateCancelled, ""},
+		{bridge.StateDone, "!damaged"},
 	} {
 		id := int64(i + 1)
 		result := fmt.Sprintf(`{"library_id":%d,"path":%q}`, f.lib.ID, job.path)
+		if job.path == "!damaged" {
+			result = `{`
+		}
 		if _, err := f.c.db.ExecContext(f.ctx, `INSERT INTO bridge_jobs(id,kind,state,params,result,dedupe_key,created_at,updated_at) VALUES(?,?,?,'{}',?,?,'t','t')`,
 			id, bridge.KindAudibleImport, job.state, result, fmt.Sprintf("k%d", id)); err != nil {
 			t.Fatal(err)
@@ -746,5 +752,23 @@ func TestAudibleIgnoredAndNoSyncBackups(t *testing.T) {
 	}
 	if x := f.title(t, "B000000002"); !x.Ignored {
 		t.Fatalf("a poll dropped ignored: %+v", x)
+	}
+}
+
+// The orphan sweep passes by an open Audible job whose stored params are not
+// JSON (a damaged row names no account), even with no account left, where
+// NULL NOT IN the empty list is true and its NULL would fail the whole sweep,
+// and still finds the orphaned account beside it.
+func TestCancelOrphanAudibleJobsPassesDamagedParams(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	for i, params := range []string{`{`, `{"account":"acct0009"}`} {
+		if _, err := c.db.ExecContext(ctx, `INSERT INTO bridge_jobs(kind, params, dedupe_key, created_at, updated_at)
+			VALUES(?, ?, ?, 't', 't')`, bridge.KindAudibleSync, params, fmt.Sprintf("orphan%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := c.CancelOrphanAudibleJobs(ctx); err != nil || n != 1 {
+		t.Fatalf("sweep = %d, %v; want the one orphaned account, no error", n, err)
 	}
 }

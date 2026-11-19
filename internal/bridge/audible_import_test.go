@@ -110,7 +110,9 @@ func TestAudibleImportJobs(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	// Removing acct0001 cancels both of its backups, not acct0002's.
+	// Removing acct0001 cancels both of its backups, not acct0002's, whose
+	// stored params a damaged row has lost (ParamSQL: no failed read).
+	q.damageParams(t, third.ID)
 	if err := q.db.WithTx(ctx, "t", func(tx *sql.Tx) error {
 		return CancelAudibleImports(ctx, tx, "acct0001", CancelAudibleRemoved, *q.now)
 	}); err != nil {

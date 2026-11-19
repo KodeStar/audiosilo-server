@@ -85,10 +85,11 @@ const openImportSQL = `EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.id = t.import_
 // still indexed (a refused fold, ErrImportNotOwn, leaves the title unmatched
 // beside the book its file joined, so it isn't queued again every time; a
 // console Back up still does). A failed or cancelled one is tried again, and a
-// done one whose book has since left the library (deleted or moved) too.
-const retryImportSQL = `NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.id = t.import_job_id
+// done one whose book has since left the library (deleted or moved) too, as
+// is a done one whose stored result is not JSON (a damaged row, ParamSQL).
+var retryImportSQL = `NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.id = t.import_job_id
 	AND (j.state IN ` + bridge.OpenStatesSQL + ` OR j.state = '` + bridge.StateDone + `' AND EXISTS(SELECT 1 FROM books b
-	     WHERE b.library_id = json_extract(j.result, '$.library_id') AND b.rel_path = json_extract(j.result, '$.path'))))`
+	     WHERE b.library_id = ` + bridge.ParamSQL("j.result", "$.library_id") + ` AND b.rel_path = ` + bridge.ParamSQL("j.result", "$.path") + `)))`
 
 // contestedSQL is a title (aliased t) the Bridge left unmatched because
 // another title claimed the same book (AudibleReasonContested).
@@ -98,7 +99,7 @@ const contestedSQL = `t.reason = '` + AudibleReasonContested + `'`
 // not on this server, not marked "Not this book" or ignored, not contested
 // (on this server under another title), and no backup open or refused
 // (retryImportSQL).
-const backupAllSQL = `t.state = 'available' AND t.match_path IS NULL AND t.rejected = 0 AND t.ignored = 0
+var backupAllSQL = `t.state = 'available' AND t.match_path IS NULL AND t.rejected = 0 AND t.ignored = 0
 	AND NOT ` + contestedSQL + ` AND ` + retryImportSQL
 
 // preorderWaitingSQL is a title (aliased t) that keeps its account checked

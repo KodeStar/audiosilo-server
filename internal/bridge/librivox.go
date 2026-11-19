@@ -159,7 +159,7 @@ func (s *Service) OpenLibrivoxFetches(ctx context.Context, ids []int) (map[int]*
 	raw, _ := json.Marshal(ids)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind = ? AND j.finished_at IS NULL
 		AND j.state IN `+OpenStatesSQL+`
-		AND json_extract(j.params, '$.librivox_id') IN (SELECT value FROM json_each(?)) ORDER BY j.id`,
+		AND `+ParamSQL("j.params", "$.librivox_id")+` IN (SELECT value FROM json_each(?)) ORDER BY j.id`,
 		KindLibrivoxFetch, string(raw))
 	if err != nil {
 		return nil, err

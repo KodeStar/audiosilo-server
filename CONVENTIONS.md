@@ -3210,6 +3210,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   can announce it. `List` returns its
   own `next_before` (it reads one row past the page). Cancel (`POST
   /admin/bridge/jobs/{id}/cancel`) ends a queued or parked job at once, else sets `cancel_requested`.
+  A job of any kind whose stored params can't be read (a damaged row, not JSON) ends at its first claim,
+  "The server could not read this job's options." (an audible.sync or a podcast.subscribe names what it
+  lost), and the claim goes on to the job behind it (`claimPriority`, `endUnfillableClaim`: one warning
+  with its kind, never an empty 200 the Bridge would take again); every read of a job (`scanJob`,
+  `readableJob`) answers such params as null with `params_unreadable` (progress and result that aren't
+  JSON as null), so no response (the console's list, the estimate's `open_job`, a queue's answer, a
+  claim) is an empty 200, and the console's list and detail log it once per row per process
+  (`logUnreadableJobs`). SQL that reads a field of a job's params or result goes through `bridge.ParamSQL`
+  (`json_valid` first, in a CASE), so one damaged row never fails a whole query (a NULL it reads is
+  passed by, `IS NOT NULL` where a `NOT IN` would keep it: `CancelOrphanAudibleJobs`). Its column and
+  path are written into the statement as they are, so they are string constants by their type
+  (`sqlLiteral`: no other package can pass it a string read at run time). A queued job of a promoting kind
+  takes the next request's params in place of ones that can't be read, and is no longer flagged.
   `GET /bridge/libraries/{id}/book[?path=]` gives an INDEXED book's files with the size and mtime the
   server sees now (a single-file book, which has no file rows, is listed as its own file; no path: the
   first whole book of the library's first five by title, the mapping check's sample; 404 `no_book`; never an
@@ -3460,7 +3473,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   an empty URL (a follow that restores a private show's URL is private, whatever its flag says),
   display labels are redacted, a restart expires unclaimed requests (so does deleting the
   requester's account, `requested_by` NULL: `lostPrivateRequests`, server#179), and deleting a library keeps only
-  the URLs of open subscribes (`bridge.PruneSecrets`, under Subscribe's lock, run to the end). Podcast
+  the URLs of open subscribes (`bridge.PruneSecrets`, under Subscribe's lock, run to the end). A subscribe
+  whose stored params can't be read (a damaged row; `lostPrivateRequests` passes it by) ends at its first
+  claim, "The server could not read which feed this subscription is for.", as any job's does (see the job
+  queue above). Podcast
   errors, progress and results are redacted before storage; their notifications carry codes and show names
   only (see Backups, audit log, notifications: `podcast_feed_failing`). The module scheduler
   folds ended outcomes idempotently, wakes on job endings and sweeps every minute, then queues
@@ -4684,7 +4700,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   could not read this account's titles." rather than the lapsed lease's Bridge one, and a sync whose stored params
   can't be read ends at its first claim, "The server could not read which Audible account this sync is for."; a
   claim that ended a sync so goes on to the job behind it (`claimPriority`: 200 that job, else 204 or its wait),
-  never a 500, and logs the read's error once at warn once the job has ended (`endUnfillableSync`, `bridge.Service.Log`: job, the account when read; the ending's fold reads no params, `FoldAudibleSync`); the job as stored keeps `{account}`, as a private feed URL is injected at claim),
+  never a 500, and logs the read's error once at warn once the job has ended (`endUnfillableClaim`, `bridge.Service.Log`: job, the account when read; the ending's fold reads no params, `FoldAudibleSync`); the job as stored keeps `{account}`, as a private feed URL is injected at claim),
   internal, quiet, `ModuleFor` audible, deduped per account, `promotes`, only the newest ended kept
   (`pruneAudibleEnded`). A console change to which titles sync (`PATCH .../titles/...` `{rejected}` or `{no_sync}`)
   or turning sync on queues the account's sync at once (`audible.SyncNow`, `catalog.AudibleSyncQueueable`: the same

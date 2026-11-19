@@ -170,7 +170,7 @@ function JobRow({
   // An Audible, LibriVox or podcast job's known failure code, worded (the Bridge's own text otherwise).
   const keyed = audibleJobReason(job) ?? fetchReason(job);
   const reason = podcastJobReason(job) ?? (keyed ? { key: keyed } : undefined);
-  const details = hasContent(job.result) || hasContent(job.params);
+  const details = hasContent(job.result) || hasContent(job.params) || job.params_unreadable;
 
   const meta = [
     job.requested_by
@@ -320,6 +320,11 @@ function JobRow({
           ) : null}
           {hasContent(job.params) ? (
             <Json label={t('bridge.jobs.params')} value={job.params} />
+          ) : null}
+          {job.params_unreadable ? (
+            <p className="text-[12.5px] text-muted-foreground">
+              {t('bridge.jobs.paramsUnreadable')}
+            </p>
           ) : null}
         </div>
       ) : null}
