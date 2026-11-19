@@ -181,7 +181,7 @@ func (a *API) handleRemoveSharePath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req sharePathReq
-	if err := decodeJSON(r, &req, 0); err != nil || req.LibraryID == 0 {
+	if err := decodeJSON(r, &req, pathBodyMax); err != nil || req.LibraryID == 0 {
 		writeError(w, http.StatusBadRequest, "library_id is required")
 		return
 	}

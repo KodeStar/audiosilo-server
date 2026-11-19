@@ -321,7 +321,7 @@ func (w *userStateWatch) change(d *preUpdate) {
 // watchedChanged reports whether an UPDATE changes any of the watched columns'
 // values (or the values can't be read), reading the row only up to the last
 // watched column (watched is in the table's order, never empty), so a freed
-// column after every watched one (bridge_status.status, up to 64 KiB a
+// column after every watched one (bridge_status.status, up to 2 MiB a
 // heartbeat) is never copied.
 func watchedChanged(d *preUpdate, watched []int) bool {
 	n := min(d.count(), watched[len(watched)-1]+1)
