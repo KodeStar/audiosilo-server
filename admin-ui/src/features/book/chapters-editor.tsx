@@ -1009,6 +1009,9 @@ function Scrubber({
     if (!a) return;
     clearTimeout(preview.current);
     previewing.current = transcoded;
+    // During a busy stream's wait this asks at once: the wait's own ask again
+    // would load the element over the preview.
+    if (waiting) stopRetry();
     // A transcode already asked for from the row's start and not played yet
     // plays at once, in this click; else it is asked for from there.
     if (transcoded && (from !== offset || pending.current !== null || a.currentTime > 0)) {

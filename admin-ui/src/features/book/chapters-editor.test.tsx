@@ -842,6 +842,21 @@ describe('the chapter editor', () => {
       expect(play).toHaveBeenCalledTimes(1);
     });
 
+    it('asks at once on Play 5 s during the wait, and the wait asks nothing after', async () => {
+      const { user, audio } = await listen({ ...busy, headers: { 'Retry-After': '0.2' } });
+      fireEvent.play(audio);
+      fireEvent.error(audio);
+      await screen.findByText('The server is busy. Trying again in a moment.');
+      await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
+      expect(screen.queryByText(/The server is busy/)).not.toBeInTheDocument();
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+      // The wait's own ask again would load the element over the preview.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+    });
+
     it('loads again on Play after a failed load that left the audio unpaused', async () => {
       // Chrome leaves paused false after a failed load: Play must not pause it.
       const { user, audio } = await listen({ ...busy, headers: { 'Retry-After': '0.4' } });
