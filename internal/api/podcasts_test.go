@@ -1137,3 +1137,46 @@ func TestPodcastPrivateShowNotReachedByTheOtherSpelling(t *testing.T) {
 		t.Fatalf("followed check %d %s", resp.StatusCode, out)
 	}
 }
+
+// A show indexed at the path as given is that show on every route, its cover
+// included, whatever reads as it beside it: here one with no episode rows and
+// no cover, its folder not listed (a share that didn't answer the look),
+// beside a show with episodes and a cover in the other spelling.
+func TestPodcastShowAtThePathGivenIsNotTheOneBesideIt(t *testing.T) {
+	nfc, nfd := "Caf\u00e9 Show", "Cafe\u0301 Show"
+	b, _, f := podcastEnvAt(t, false, nfd)
+	h := podcastHeaders()
+	ctx := context.Background()
+	if err := os.WriteFile(filepath.Join(b.lib.Root, nfd, "cover.png"), bandedPNG(t, 8, 8), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.api.scanner.IndexPodcastPath(ctx, *b.lib, nfd); err != nil {
+		t.Fatal(err)
+	}
+	cover := func(show string) (int, string) {
+		t.Helper()
+		resp, out := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "cover?path="+url.QueryEscape(show)), b.userTok, "", h)
+		return resp.StatusCode, out
+	}
+	// Alone, the show with episodes is found by either spelling.
+	for _, show := range []string{nfd, nfc} {
+		if status, out := cover(show); status != 200 {
+			t.Fatalf("cover %+q %d %s", show, status, out)
+		}
+	}
+	empty := *f
+	empty.ShowID, empty.Episodes = "0123456789abcdef", nil
+	if _, err := b.cat.IndexPodcastShow(ctx, b.lib.ID, nfc, "sig", "", "", &empty, nil, true, false); err != nil {
+		t.Fatal(err)
+	}
+	if status, out := cover(nfd); status != 200 {
+		t.Fatalf("cover %+q %d %s", nfd, status, out)
+	}
+	if status, out := cover(nfc); status != 404 || !strings.Contains(out, "no cover") {
+		t.Fatalf("cover of the show at the path given %d %s", status, out)
+	}
+	resp, out := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "fs?path="+url.QueryEscape(nfc)), b.userTok, "", h)
+	if resp.StatusCode != 200 || !strings.Contains(out, `"path":"`+nfc+`"`) || !strings.Contains(out, `"entries":[]`) {
+		t.Fatalf("fs of the show at the path given %d %s", resp.StatusCode, out)
+	}
+}

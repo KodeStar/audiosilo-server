@@ -1261,7 +1261,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `annotateWithBooks` finds). A show path (the podcast routes naming a show: `/podcasts/episodes`'s
   `show`, `POST`/`DELETE /podcasts/follow` and `/podcasts/check`'s `path`, the console's and the Bridge's
   `/podcasts/retention`, `/fs` in a podcast library, and a `?path=` naming a show there, its cover:
-  `spelledPath`, before the scope is checked, as a show with no episode rows is no folder holding books)
+  `spelledPath`, in place of `Spelling` and before the scope is checked, as a show with no episode rows
+  is no folder holding books, and one indexed at the path as given is never the show beside it,
+  `TestPodcastShowAtThePathGivenIsNotTheOneBesideIt`)
   is spelled by the same rule from `podcast_shows`
   (`Catalog.PodcastShowSpelling`, the API's `showSpelled`, server#495's follow-up): the show at the path as given,
   else the one show whose NFC form is the path's that the caller's scope admits (`VisibleInBrowse`;

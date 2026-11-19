@@ -387,12 +387,18 @@ func (a *API) spelledPath(ctx context.Context, lib *catalog.Library, scope catal
 	if status != 0 {
 		return nil, "", scope, false, status, msg
 	}
-	rel, refused, err := a.spelledIn(ctx, lib.ID, scope.Allows, rel)
-	if err == nil && !refused && lib.Kind == catalog.KindPodcasts && feed.ShowPath(rel) {
-		// A show's own path (its cover): one with no episode rows is no folder
-		// holding books, so Spelling leaves it; podcast_shows spells it, among
-		// the shows the scope admits, before the scope is checked on it.
+	var refused bool
+	var err error
+	if lib.Kind == catalog.KindPodcasts && feed.ShowPath(rel) {
+		// A show's own path (its cover) is spelled from podcast_shows, as the
+		// podcast routes spell it, among the shows the scope admits and before
+		// the scope is checked on it: never by Spelling, which leaves a show
+		// with no episode rows (no folder holding books) and would read one
+		// indexed at the path as given as the show beside it that has some.
+		// Never refused: no route opens a show's folder by the path.
 		rel, err = a.cat.PodcastShowSpelling(ctx, lib.ID, rel, scope.Allows)
+	} else {
+		rel, refused, err = a.spelledIn(ctx, lib.ID, scope.Allows, rel)
 	}
 	if err != nil {
 		a.log.Warn("resolve path spelling failed", "library", lib.ID, "err", err)
