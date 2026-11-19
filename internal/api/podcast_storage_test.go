@@ -381,6 +381,65 @@ func TestPodcastStreamOnAHeldShareAnswers(t *testing.T) {
 	}
 }
 
+// TestPodcastStreamRefusedFolderIs404 (seen live): an episode whose show
+// folder the share refuses for good (chmod 000: a permission, a lasting
+// fault) is the 404 an episode gone is, on the stream and the download
+// route, and no fetch is asked of the Bridge, which would meet the same
+// refusal (it was a fetch, and with a feed's episode ids it couldn't queue, a
+// 500). Allowed: the folder readable again, the episode streams; an episode
+// file gone is still fetched again. Not parallel only for the chmod: the
+// folder is this test's own.
+func TestPodcastStreamRefusedFolderIs404(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a folder whatever its mode")
+	}
+	b, f := podcastStorageEnv(t)
+	dir := filepath.Join(b.lib.Root, "Fixture Show")
+	ep := f.Episodes[0]
+	stream := podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(ep.Path))
+	get := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", stream, nil)
+		r.Header.Set("Authorization", "Bearer "+b.adminTok)
+		r.Header.Set(auth.ClientHeader, "AudioSilo/dev (web)") // a client that sees podcasts
+		b.api.Handler().ServeHTTP(w, r)
+		return w
+	}
+	fetches := func() (n int) {
+		t.Helper()
+		if err := b.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM bridge_jobs WHERE kind = ?`, bridge.KindPodcastFetch).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if w := get(); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "episode_not_found") {
+		t.Errorf("an episode in a folder refused for good = %d %s, want 404 episode_not_found", w.Code, w.Body)
+	}
+	resp, out := b.do(t, "POST", fmt.Sprintf("/api/v1/admin/libraries/%d/podcasts/fetch", b.lib.ID), b.adminTok, fmt.Sprintf(`{"path":%q}`, ep.Path))
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(out, "episode_not_found") {
+		t.Errorf("a download of an episode in a folder refused for good = %d %s, want 404 episode_not_found", resp.StatusCode, out)
+	}
+	if n := fetches(); n != 0 {
+		t.Errorf("%d fetches asked of the Bridge for an episode the share refuses, want none", n)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if w := get(); w.Code != http.StatusOK || w.Body.Len() == 0 {
+		t.Errorf("the episode once its folder reads = %d %s, want it streamed", w.Code, w.Body)
+	}
+	if err := os.Remove(filepath.Join(b.lib.Root, filepath.FromSlash(ep.Path))); err != nil {
+		t.Fatal(err)
+	}
+	if w := get(); w.Code == http.StatusNotFound || fetches() == 0 {
+		t.Errorf("an episode file gone = %d %s with %d fetches, want it fetched again", w.Code, w.Body, fetches())
+	}
+}
+
 // The download's presence check (podcastPresent: OpenPodcast's checks and
 // open) on a share that stopped answering is a bounded look too (fileWait): a
 // 503 share_not_answering, where it was a plain open that held the handler

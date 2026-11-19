@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,7 +22,9 @@ import (
 // fails as a share does that a retry may get past (metadata.TransientFault:
 // EIO, ESTALE) is a look given up on instead (podcastLookErr: the stream's 503
 // share_not_answering), never the episode absent, so a share's hiccup never
-// asks the Bridge for an episode the library holds.
+// asks the Bridge for an episode the library holds; and one the share refuses
+// for good (metadata.LastingFault: a permission, the device gone) is
+// ErrEpisodeRefused (the stream's 404), which no fetch would get past either.
 func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library, rel string) (*os.File, *feed.Fetch, error) {
 	show := path.Dir(rel)
 	if !feed.EpisodePath(show, rel) {
@@ -36,11 +39,10 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 			return nil, nil, ErrNotIndexable
 		}
 		dir, err := ContentJoin(lib.Root, show)
-		if metadata.GaveUp(err) {
-			return nil, nil, err // the join's look a share failed: never the episode absent
-		}
 		if err != nil {
-			return nil, nil, ErrNotIndexable
+			// The join's look a share failed is never the episode absent; a
+			// link out of the root, a name no show has, are.
+			return nil, nil, podcastLookErr(err)
 		}
 		st, err := podcastLstat(filepath.Join(lib.Root, show))
 		if err != nil {
@@ -115,14 +117,27 @@ var podcastLstat = os.Lstat
 
 // podcastLookErr is OpenPodcast's answer for a look that failed with err: a
 // share's fault a retry may get past (metadata.TransientFault) is a look given
-// up on (metadata.AsGaveUp), never the episode absent; any other
-// ErrNotIndexable, the episode not there as pinned.
+// up on (metadata.AsGaveUp), never the episode absent; a refusal a retry would
+// only meet again (metadata.LastingFault) ErrEpisodeRefused, with err; any
+// other ErrNotIndexable, the episode not there as pinned.
 func podcastLookErr(err error) error {
 	if err = transientGaveUp(err); metadata.GaveUp(err) {
 		return err
 	}
+	if metadata.LastingFault(err) {
+		return fmt.Errorf("%w: %w", ErrEpisodeRefused, err)
+	}
 	return ErrNotIndexable
 }
+
+// ErrEpisodeRefused is OpenPodcast's for an episode whose show folder,
+// feed.json, publish barrier or file the share refuses for good (a
+// permission, the device gone: metadata.LastingFault): the library holds it,
+// so a stream answers 404 rather than asking the Bridge to fetch it again,
+// which would meet the same refusal. It is ErrNotIndexable too (errors.Is),
+// so a scan, and every caller that only tells an episode there from one not,
+// reads it as before.
+var ErrEpisodeRefused = fmt.Errorf("%w: the share refuses the episode", ErrNotIndexable)
 
 // OpenPodcastBounded is OpenPodcast as one metadata.Bounded call (ctx, at most
 // timeout, on the episode's mount): its looks and open, on a share that
