@@ -1,5 +1,6 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type { AdminBookDetail, ChapterEditRequest } from '@/api/types';
 import { mockFetch, type MockReply, type MockRequest, type MockRoute } from '@/test/fetch-mock';
@@ -37,6 +38,17 @@ async function streamed(container: HTMLElement) {
   await waitFor(() => expect(container.querySelector('audio')?.getAttribute('src')).toBeTruthy());
   return container.querySelector('audio')!;
 }
+
+// Lets what a step set going run to its end without waiting on the clock:
+// the mocked replies (promises), the query cache telling its observers (a
+// zero timeout), React's commit and effects (the Scheduler's setImmediate
+// under Node, and what they start inside act). A test then says something
+// did not happen.
+const settled = () =>
+  act(async () => {
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setImmediate(r));
+  });
 
 beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
@@ -521,7 +533,9 @@ describe('the chapter editor', () => {
     const calls = mockFetch(routes(mkaDetail(true)));
     renderApp(URL);
     await openEditor();
-    await act(() => new Promise((r) => setTimeout(r, 50)));
+    // The editor decides on its warm as it opens, and asks at once.
+    await screen.findByRole('button', { name: 'Save chapters' });
+    await settled();
     expect(calls.filter((c) => c.query.get('warm') === '1')).toHaveLength(0);
   });
 
@@ -588,7 +602,7 @@ describe('the chapter editor', () => {
     const calls = mockFetch(routes(d, { 'GET /admin/libraries/1/book': () => ({ body: d }) }));
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     try {
-      const { container } = renderApp(URL);
+      const { container, queryClient } = renderApp(URL);
       const user = await openEditor();
       await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
       const audio = await streamed(container);
@@ -600,8 +614,10 @@ describe('the chapter editor', () => {
       d.files = d.files.map((f) => ({ ...f, direct_playable: false, remux_cached: undefined }));
       act(() => vi.advanceTimersByTime(5000));
       await waitFor(() => expect(reads()).toBe(before + 1));
-      // The answer lands (the page's query takes it) before the next tick.
-      await act(() => new Promise((r) => setTimeout(r, 50)));
+      // The answer lands (the page's query takes it), and the editor renders it.
+      const page = () => queryClient.getQueryData<AdminBookDetail>(keys.book(1, BOOK_PATH));
+      await waitFor(() => expect(page()?.files?.some((f) => f.remux_cached === false)).toBe(false));
+      await settled();
       act(() => vi.advanceTimersByTime(15_000));
       expect(reads()).toBe(before + 1);
       expect(audio.getAttribute('src')).toContain('transcode=1');
@@ -613,7 +629,7 @@ describe('the chapter editor', () => {
   it('keeps the page and the draft when a read for the remux fails', async () => {
     let fail = false;
     const d = mkaDetail(false);
-    mockFetch(
+    const calls = mockFetch(
       routes(d, {
         'GET /admin/libraries/1/book': () =>
           fail ? { status: 403, body: { error: 'forbidden' } } : { body: d },
@@ -625,10 +641,16 @@ describe('the chapter editor', () => {
       const user = await openEditor();
       await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
       await streamed(container);
+      const reads = () => calls.filter((c) => c.path === '/admin/libraries/1/book').length;
+      const before = reads();
       fail = true;
-      for (let i = 0; i < 3; i++) {
+      // Three reads fail, each let go before the next tick (one while a read
+      // is still answering is skipped): each tick makes a read, and the
+      // fourth's says the third was let go.
+      for (let n = 1; n <= 4; n++) {
         act(() => vi.advanceTimersByTime(5000));
-        await act(() => new Promise((r) => setTimeout(r, 50)));
+        await waitFor(() => expect(reads()).toBe(before + n));
+        await settled();
       }
       expect(screen.getByRole('button', { name: 'Save chapters' })).toBeInTheDocument();
     } finally {
@@ -751,8 +773,8 @@ describe('the chapter editor', () => {
       fireEvent.play(audio);
       fireEvent.pause(audio);
       fireEvent.error(audio);
+      // Played, it would be with the load, in the same step.
       await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
-      await new Promise((r) => setTimeout(r, 50));
       expect(play).not.toHaveBeenCalled();
     });
 
@@ -1047,7 +1069,7 @@ describe('the chapter editor', () => {
       fireEvent.pause(audio);
       fireEvent.error(audio);
       await waitFor(() => expect(srcParams(audio).get('token')).toBe('media-tok-2'));
-      await new Promise((r) => setTimeout(r, 50));
+      await settled(); // the new ask's effect, which would play it
       expect(play).not.toHaveBeenCalled();
     });
 
@@ -1107,7 +1129,7 @@ describe('the chapter editor', () => {
       const started = await stall(busy);
       fireEvent.playing(started.audio);
       started.wait();
-      await new Promise((r) => setTimeout(r, 50));
+      await settled();
       expect(started.looks()).toHaveLength(0);
     });
 
@@ -1163,7 +1185,7 @@ describe('the chapter editor', () => {
       await waitFor(() => expect(looks()).toHaveLength(1));
       Object.defineProperty(audio, 'readyState', { value: 4, configurable: true });
       answer({ status: 200, raw: '' });
-      await new Promise((r) => setTimeout(r, 50));
+      await settled();
       expect(load).not.toHaveBeenCalled();
       expect(play).not.toHaveBeenCalled();
       expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();

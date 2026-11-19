@@ -116,15 +116,3 @@ func Remote(tb testing.TB) (*httptest.Server, *atomic.Int32) {
 	tb.Cleanup(srv.Close)
 	return srv, &hits
 }
-
-// Eventually polls cond until it holds, failing the test after timeout.
-func Eventually(tb testing.TB, what string, timeout time.Duration, cond func() bool) {
-	tb.Helper()
-	deadline := time.Now().Add(timeout)
-	for !cond() {
-		if time.Now().After(deadline) {
-			tb.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}

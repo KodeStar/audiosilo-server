@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/oidc"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 func TestClean(t *testing.T) {
@@ -126,19 +128,10 @@ func newFakeDest(t *testing.T) *fakeDest {
 
 func (f *fakeDest) wait(t *testing.T, n int) []received {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		f.mu.Lock()
-		if len(f.got) >= n {
-			out := append([]received(nil), f.got...)
-			f.mu.Unlock()
-			return out
-		}
-		f.mu.Unlock()
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("got %d deliveries, want %d", len(f.got), n)
-	return nil
+	testwait.Eventually(t, fmt.Sprintf("%d deliveries", n), 5*time.Second, func() bool { return f.count() >= n })
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]received(nil), f.got...)
 }
 
 func (f *fakeDest) count() int {
@@ -208,8 +201,8 @@ func TestWebhookDelivery(t *testing.T) {
 	if data := got.body["data"].(map[string]any); data["device"] != "Sam's iPhone" {
 		t.Fatalf("data = %v", data)
 	}
-	time.Sleep(50 * time.Millisecond)
-	if len(unsubscribed.got) != 0 || len(off.got) != 0 {
+	waitQuiet(t, s) // every send the event made has ended
+	if unsubscribed.count() != 0 || off.count() != 0 {
 		t.Fatal("sent to an unsubscribed or disabled destination")
 	}
 	// The outcome is recorded on the destination.
@@ -223,15 +216,13 @@ func TestWebhookDelivery(t *testing.T) {
 
 func waitRecorded(t *testing.T, cat *catalog.Catalog, id int64) *catalog.NotifyTarget {
 	t.Helper()
-	for range 200 {
-		tg, err := cat.GetNotifyTarget(context.Background(), id)
-		if err == nil && tg.LastAt != nil {
-			return tg
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("delivery never recorded")
-	return nil
+	var tg *catalog.NotifyTarget
+	testwait.Eventually(t, "the delivery to be recorded", 5*time.Second, func() bool {
+		got, err := cat.GetNotifyTarget(context.Background(), id)
+		tg = got
+		return err == nil && got.LastAt != nil
+	})
+	return tg
 }
 
 func TestNtfyAndDiscordBodies(t *testing.T) {
@@ -579,7 +570,7 @@ func TestRetryFollowsTheDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	next.wait(t, 1)
-	time.Sleep(100 * time.Millisecond)
+	waitQuiet(t, s) // the switched-off one's retry has ended too
 	old.mu.Lock()
 	off.mu.Lock()
 	defer old.mu.Unlock()

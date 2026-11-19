@@ -23,6 +23,7 @@ import (
 	"github.com/kodestar/audiosilo-meta/pkg/release/releasetest"
 
 	"github.com/kodestar/audiosilo-server/internal/mirrortest"
+	"github.com/kodestar/audiosilo-server/internal/testwait"
 )
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -75,10 +76,11 @@ func copies(t *testing.T, dir string) []string {
 	return matches
 }
 
-// eventually polls cond for up to five seconds.
+// eventually polls cond for up to five seconds, scaled to the build (a
+// download and swap under -race on a loaded machine).
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	mirrortest.Eventually(t, what, 5*time.Second, cond)
+	testwait.Eventually(t, what, 5*time.Second, cond)
 }
 
 func TestMirrorDownloadsAndSwaps(t *testing.T) {
@@ -520,7 +522,10 @@ func TestFormatBytes(t *testing.T) {
 func TestMirrorStopsWhenDisabled(t *testing.T) {
 	art := mirrortest.Fixture(t, 0)
 	gh := releasetest.NewGitHub(t, mirrortest.Releases(art, "data-v2026.10.09-ccccccc-ddddddd")...)
-	gh.Throttle(len(art[release.DataAsset])/20+1, 200*time.Millisecond) // about four seconds
+	// About ten seconds (scaled to the build): twice the wait for the stop
+	// below, so a download that only ended at its end is not taken for one
+	// that stopped.
+	gh.Throttle(len(art[release.DataAsset])/20+1, testwait.Scaled(500*time.Millisecond))
 	var on atomic.Bool
 	on.Store(true)
 	dir := t.TempDir()
@@ -535,7 +540,7 @@ func TestMirrorStopsWhenDisabled(t *testing.T) {
 	on.Store(false)
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testwait.Scaled(5 * time.Second)):
 		t.Fatal("turning metadata off must stop the download")
 	}
 	st := m.Status()

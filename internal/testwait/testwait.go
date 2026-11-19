@@ -9,7 +9,10 @@
 // it asserts, hold.
 package testwait
 
-import "time"
+import (
+	"testing"
+	"time"
+)
 
 // raceFactor is how many times longer a wait is under the race detector.
 const raceFactor = 4
@@ -20,4 +23,18 @@ func Scaled(d time.Duration) time.Duration {
 		return d * raceFactor
 	}
 	return d
+}
+
+// Eventually polls cond until it holds, failing the test once Scaled(base) has
+// passed: a wait for something a test set going, which only ends a test that
+// has already failed.
+func Eventually(tb testing.TB, what string, base time.Duration, cond func() bool) {
+	tb.Helper()
+	deadline := time.Now().Add(Scaled(base))
+	for !cond() {
+		if time.Now().After(deadline) {
+			tb.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }

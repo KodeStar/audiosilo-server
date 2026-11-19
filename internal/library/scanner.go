@@ -2767,6 +2767,9 @@ type indexFlight struct {
 	// look's time (the probe's): no later waiter waits on it, but for a
 	// scan's read that has returned since (waitFlight).
 	stuck atomic.Bool
+	// joined counts the callers that found the read under way (claimFlight)
+	// and wait on it: a test waits on it rather than for a time.
+	joined atomic.Int32
 }
 
 // errReadLeft is waitFlight's error when another read of the book may never
@@ -3035,6 +3038,7 @@ func (s *Scanner) claimFlight(key bookKey, scan *bookRead) (f *indexFlight, lead
 	s.flightMu.Lock()
 	defer s.flightMu.Unlock()
 	if f, busy := s.flights[key]; busy {
+		f.joined.Add(1)
 		return f, false
 	}
 	f = &indexFlight{key: key, done: make(chan struct{}), scan: scan, progress: metadata.NewProgress()}
