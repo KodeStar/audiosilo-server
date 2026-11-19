@@ -81,32 +81,35 @@ func TestCachedAnswer(t *testing.T) {
 	if c := svc.cachedAnswerOf(ctx, "B0LOOKUP", ""); !c.ok || c.id != "looked-up" || c.env != nil || !c.at.Equal(now) {
 		t.Fatalf("cached lookup = %+v", c)
 	}
+	// Each row is written at a time its expiry doesn't give (not its expiry less
+	// the TTL, nor now), so an answer dated by anything but StoredAt fails.
+	staleAt, freshAt, missAt := now.Add(-30*time.Hour), now.Add(-10*time.Minute), now.Add(-20*time.Minute)
 	store.put(StoredEntry{Key: nsASIN.key("B0STALE"), Version: storeVersion, Source: srv.URL,
 		Payload: []byte(`{"matched":true,"work":{"id":"stale","recaps":[{"through":{"chapter":1},"text":"x"}]}}`),
-		Expires: now.Add(-time.Hour), StoredAt: now.Add(-time.Hour - positiveTTL)})
+		Expires: now.Add(-time.Hour), StoredAt: staleAt})
 	store.put(StoredEntry{Key: nsASIN.key("B0FRESH"), Version: storeVersion, Source: srv.URL,
 		Payload: []byte(`{"matched":true,"work":{"id":"fresh","characters":[{"id":"c","name":"C","reveal":{"chapter":1}}]}}`),
-		Expires: now.Add(time.Hour), StoredAt: now.Add(time.Hour - positiveTTL)})
+		Expires: now.Add(time.Hour), StoredAt: freshAt})
 	store.put(StoredEntry{Key: nsASIN.key("B0NOMATCH"), Version: storeVersion, Source: srv.URL,
-		Expires: now.Add(time.Hour), StoredAt: now.Add(time.Hour - notFoundTTL)})
+		Expires: now.Add(time.Hour), StoredAt: missAt})
 	store.put(StoredEntry{Key: nsASIN.key("B0OTHER"), Version: storeVersion + 1, Source: srv.URL,
 		Payload: []byte(`{"matched":true,"work":{"id":"other"}}`), Expires: now.Add(time.Hour)})
 	if c := svc.cachedAnswerOf(ctx, "B0STALE", ""); c.env == nil || c.id != "stale" || !coverageOf(c.env).Recaps ||
-		coverageOf(c.env).Characters || !c.at.Equal(now.Add(-time.Hour-positiveTTL)) {
+		coverageOf(c.env).Characters || !c.at.Equal(staleAt) {
 		t.Fatalf("stale stored row = %+v", c)
 	}
 	if _, hit, _ := cacheGet[Enrichment](svc.cache, nsASIN.key("B0STALE")); hit {
 		t.Error("a stale row warmed memory")
 	}
 	if c := svc.cachedAnswerOf(ctx, "B0FRESH", ""); c.env == nil || c.id != "fresh" || !coverageOf(c.env).Characters ||
-		!c.at.Equal(now.Add(time.Hour-positiveTTL)) {
+		!c.at.Equal(freshAt) {
 		t.Fatalf("fresh stored row = %+v", c)
 	}
 	if e, at, hit, err := cacheGetAt[Enrichment](svc.cache, nsASIN.key("B0FRESH")); !hit || err != nil || e.Work.ID != "fresh" ||
-		!at.Equal(now.Add(time.Hour-positiveTTL)) {
+		!at.Equal(freshAt) {
 		t.Errorf("the fresh row didn't warm memory with its age: %+v, %v, %v, %v", e, at, hit, err)
 	}
-	if c := svc.cachedAnswerOf(ctx, "B0NOMATCH", ""); !c.ok || c.id != "" || c.env != nil || !c.at.Equal(now.Add(time.Hour-notFoundTTL)) {
+	if c := svc.cachedAnswerOf(ctx, "B0NOMATCH", ""); !c.ok || c.id != "" || c.env != nil || !c.at.Equal(missAt) {
 		t.Fatalf("stored no match = %+v", c)
 	}
 	if c := svc.cachedAnswerOf(ctx, "B0OTHER", ""); c.ok {
