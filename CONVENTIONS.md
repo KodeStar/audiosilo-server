@@ -3183,7 +3183,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   only since the console links it, are refused otherwise; a body up to `bridge.MaxStatusBytes` (2 MiB) and
   4096 mappings, a longer list cut, never refused (server#445), its lists of objects (`libraries`, `workers`,
   the setup `items`) read to a bounded length whatever the body holds (`readList`), and only the mappings of libraries the
-  server has are stored, and of a setup item's `library_ids` only theirs (`Status.KeepLibraries`, the row written without HTML escaping), so the row a
+  server has are stored, and of a setup item's `library_ids` only theirs (`Status.KeepLibraries`, the row written without HTML escaping; a beat whose library list can't be read is saved as sent, Validate-bounded, and answered with the fault, so a catalog read fault never shows the Bridge offline), so the row a
   heartbeat rewrites stays the size of the server's own libraries; free text is cleaned to printable bounded text,
   `cleanText`, never refused, as is a job report's `error` (line breaks kept): it is partly the outside
   world's, and a refused report is retried for ever while its job is re-run; one row, never a history)

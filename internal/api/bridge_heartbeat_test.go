@@ -60,3 +60,32 @@ func TestBridgeHeartbeatManyLibraries(t *testing.T) {
 		}
 	}
 }
+
+// A heartbeat whose library list can't be read is still saved, as sent: a
+// catalog read fault answers the beat with the fault but never takes a
+// healthy Bridge offline (its mappings stay as Validate bounded them).
+func TestBridgeHeartbeatSavedWhenLibrariesUnreadable(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	ctx := context.Background()
+	if _, err := b.db.ExecContext(ctx, `UPDATE bridge_status SET heartbeat_at = '2000-01-01T00:00:00Z', status = '{}' WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.db.ExecContext(ctx, `ALTER TABLE libraries RENAME TO libraries_away`); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := b.do(t, "PUT", "/api/v1/bridge/status", b.bridgeTok, b.heartbeatWith(2))
+	if _, err := b.db.ExecContext(ctx, `ALTER TABLE libraries_away RENAME TO libraries`); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("heartbeat with the libraries unreadable = %d %s, want the read's fault", resp.StatusCode, out)
+	}
+	var at, stored string
+	if err := b.db.QueryRowContext(ctx, `SELECT heartbeat_at, status FROM bridge_status WHERE id = 1`).Scan(&at, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(at, "2000") || strings.Count(stored, `"library_id"`) != 2 {
+		t.Fatalf("the beat was not saved as sent: at %s, status %.300s", at, stored)
+	}
+}

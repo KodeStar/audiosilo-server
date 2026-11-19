@@ -220,17 +220,18 @@ func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// The libraries are read before the save: only the mappings of libraries
 	// the server has, and the setup items' ids of them, are stored
-	// (Status.KeepLibraries).
-	libs, err := a.cat.ListLibraries(r.Context())
-	if err == nil {
+	// (Status.KeepLibraries). A list that can't be read still saves the beat,
+	// as sent (Validate bounded it), so a passing catalog fault never shows a
+	// healthy Bridge offline; the reply then answers the fault.
+	libs, listErr := a.cat.ListLibraries(r.Context())
+	if listErr == nil {
 		known := make(map[int64]bool, len(libs))
 		for _, l := range libs {
 			known[l.ID] = true
 		}
 		st.KeepLibraries(func(id int64) bool { return known[id] })
-		err = a.bridge.SaveHeartbeat(r.Context(), credentialFrom(r.Context()).ID, st)
 	}
-	if err != nil {
+	if err := a.bridge.SaveHeartbeat(r.Context(), credentialFrom(r.Context()).ID, st); err != nil {
 		if errors.Is(err, bridge.ErrNotPaired) {
 			writeError(w, http.StatusUnauthorized, "invalid or expired token")
 			return
@@ -239,6 +240,10 @@ func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 		// 503, a passing fault the Bridge's next heartbeat tries again.
 		a.log.Warn("bridge heartbeat failed", "err", err)
 		writeError(w, http.StatusServiceUnavailable, "could not save the status, try again")
+		return
+	}
+	if listErr != nil {
+		a.writeCatalogError(w, listErr, "bridge heartbeat failed", "could not list libraries")
 		return
 	}
 	out := make([]bridgeLibrary, 0, len(libs))
