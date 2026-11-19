@@ -1451,11 +1451,11 @@ describe('audible sync', () => {
       within(jobs).getByText('Audible asked the Bridge to wait, so nothing was synced.'),
     ).toBeInTheDocument();
     expect(
-      within(jobs).getByText('3 of 4 titles had a place on Audible; 1 moved the place here.'),
+      within(jobs).getByText('4 titles checked · 3 with a place on Audible · 1 moved here.'),
     ).toBeInTheDocument();
     expect(
       within(jobs).getByText(
-        'Before it stopped: 2 of 4 titles had a place on Audible; 2 moved the place here.',
+        'Before it stopped: 4 titles checked · 2 with a place on Audible · 2 moved here.',
       ),
     ).toBeInTheDocument();
   });
