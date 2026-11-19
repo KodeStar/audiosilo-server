@@ -206,8 +206,8 @@ func TestLibrivoxFetchFlow(t *testing.T) {
 // how its book is matched now, after the fold: matched as the recording, kept
 // (the Bridge adopted a book an admin matched to something else, which stays),
 // or unmatched (the fold failed: a path that is no indexed book); a fetch that
-// placed no book, or named a path past the cap, is named by the work it was
-// adding.
+// placed no book, or named one the fold refused (a path past the cap, another
+// project), is named by the work it was adding.
 func TestLibrivoxFetchNotifications(t *testing.T) {
 	t.Parallel()
 	b := librivoxEnv(t, nil)
@@ -290,6 +290,15 @@ func TestLibrivoxFetchNotifications(t *testing.T) {
 	}
 	if raw, _ := json.Marshal(done[0].Data); len(raw) > 1024 {
 		t.Fatalf("over-long path's event is %d bytes", len(raw))
+	}
+
+	// So is one naming another project's book, which the fold refused too:
+	// the event never names the indexed book at that path.
+	b.finish(t, add(51), bridge.StateDone, result(52, mistbornBook, ""), "")
+	done = events(notify.KindBridgeJobFinished)
+	if len(done) != 6 || done[0].Data["title"] != "The Martian" || done[0].Data["path"] != "" ||
+		done[0].Data["librivox_match"] != catalog.LibrivoxUnmatched {
+		t.Fatalf("another project's result event = %+v", done)
 	}
 }
 
