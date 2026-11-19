@@ -223,8 +223,8 @@ func writeCachedCert(t *testing.T, cacheDir, key, name string, rsaKey bool, notA
 // Under autocert, once a valid ECDSA certificate for a host is cached, the
 // check asks /healthz naming that host (so a database that doesn't answer reads
 // unhealthy) and autocert answers from its cache, ordering nothing (an order
-// fails here). With none it can use (expired, about to, RSA only, another host)
-// it sends only the hello naming no host.
+// fails here). With none it can use (expired, about to, due for renewal, RSA
+// only, another host) it sends only the hello naming no host.
 func TestHealthcheckAutocertCachedCert(t *testing.T) {
 	t.Parallel()
 	const host = "books.example.com"
@@ -243,6 +243,9 @@ func TestHealthcheckAutocertCachedCert(t *testing.T) {
 		{name: "second host", hosts: []string{"other.example.com", host}, key: host, notAfter: 60 * day, wantNamed: true},
 		{name: "expired", hosts: []string{host}, key: host, notAfter: -time.Hour},
 		{name: "about to expire", hosts: []string{host}, key: host, notAfter: 10 * time.Minute},
+		// In the last third of its 30 hours (writeCachedCert starts it a day
+		// ago): autocert would order it again at the hello that names it.
+		{name: "due for renewal", hosts: []string{host}, key: host, notAfter: 6 * time.Hour},
 		{name: "rsa only", hosts: []string{host}, key: host + "+rsa", rsa: true, notAfter: 60 * day},
 		{name: "another host's", hosts: []string{host}, key: host, certFor: "other.example.com", notAfter: 60 * day},
 		{name: "none for this host", hosts: []string{"other.example.com"}, key: host, notAfter: 60 * day},

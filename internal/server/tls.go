@@ -102,19 +102,24 @@ func (q quietNoSNI) fromHere(hostport string) bool {
 	return ip.IsLoopback() || q.self.IsValid() && ip == q.self
 }
 
-// certValidMargin is how long past now a cached certificate must stay valid
-// for CachedCertName to name its host: one about to expire would be ordered
-// again by the handshake that names it.
-const certValidMargin = time.Hour
+// renewWindow is how long before leaf's end autocert renews it: a third of its
+// life, thirty days at most (autocert's own rule while Manager.RenewBefore is
+// unset, as tlsConfig leaves it). A certificate autocert loads from its cache
+// inside that window is ordered again at once, in the background, by the first
+// handshake that names it after each start.
+func renewWindow(leaf *x509.Certificate) time.Duration {
+	return min(leaf.NotAfter.Sub(leaf.NotBefore)/3, 30*24*time.Hour)
+}
 
 // CachedCertName is the first of tls.hosts whose certificate autocert would
-// answer a hello naming it with from its cache, valid until past
-// certValidMargin, so the handshake can't start an order: the ECDSA one
+// answer a hello naming it with from its cache, and not yet due for renewal
+// (renewWindow), so the handshake starts no order: the ECDSA one
 // (autocert's cache key is the bare host name for the ECDSA certificate any Go
 // client is given, host+"+rsa" for RSA), its key matching, the host on it. ""
-// when none is: none issued yet, one expired, a host that isn't plain ASCII
-// (autocert keys its IDNA form, which this does not compute) or a cache this
-// process may not read. The healthcheck names it to ask /healthz itself.
+// when none is: none issued yet, one expired or due for renewal, a host that
+// isn't plain ASCII (autocert keys its IDNA form, which this does not compute)
+// or a cache this process may not read. The healthcheck names it to ask
+// /healthz itself.
 func CachedCertName(ctx context.Context, cfg *config.Config, now time.Time) string {
 	cache := autocert.DirCache(cfg.TLS.CacheDir)
 	for _, host := range cfg.TLS.Hosts {
@@ -132,7 +137,7 @@ func CachedCertName(ctx context.Context, cfg *config.Config, now time.Time) stri
 		}
 		leaf := pair.Leaf
 		if _, ecdsaKey := leaf.PublicKey.(*ecdsa.PublicKey); !ecdsaKey ||
-			now.Before(leaf.NotBefore) || now.Add(certValidMargin).After(leaf.NotAfter) ||
+			now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter.Add(-renewWindow(leaf))) ||
 			leaf.VerifyHostname(name) != nil {
 			continue
 		}

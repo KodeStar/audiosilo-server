@@ -201,11 +201,11 @@ autoheal sidecar such as `willfarrell/autoheal` (see the comment in
 `docker-compose.yml`). The check also allows a ten-minute start period. A bind or TLS
 change saved in the console counts from the next start, and the check asks the saved
 address, so restart after one. With `tls.mode: autocert` the check asks `/healthz`
-naming your host only once a valid certificate for it is cached: before that a request
-naming your host would start a certificate order, and failed orders count against
-Let's Encrypt's limits. Until then it sends a TLS hello naming no host, which autocert
-refuses without ordering, so it shows that the server is listening and answering, not
-that the database is.
+naming your host only while a valid certificate for it is cached and not yet due for
+renewal: otherwise a request naming your host would start a certificate order, and
+failed orders count against Let's Encrypt's limits. It then sends a TLS hello naming
+no host, which autocert refuses without ordering, so it shows that the server is
+listening and answering, not that the database is.
 
 ## Testing & CI
 

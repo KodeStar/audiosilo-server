@@ -53,17 +53,18 @@ const stuckStartAfter = 30 * time.Minute
 // the server asking itself, it sends nothing secret, and a self-signed
 // certificate must not make a live server look dead.
 //
-// Under autocert it names a host only once autocert holds a valid certificate
-// for it in its cache (server.CachedCertName): a handshake naming one of
-// tls.hosts starts an issuance whenever that host has no valid certificate,
-// and every failed one counts against Let's Encrypt's failed-validation limit,
-// while the check would read unhealthy for a state no restart fixes. With one
-// cached it asks /healthz on the listener naming that host, as any client
-// would. With none it connects to the listener and sends a TLS hello naming no
-// host, which autocert refuses at once, before its cache or any order; the
-// refusal (a TLS alert) or a finished handshake is healthy, since the server
-// accepted the connection and answered the hello. That proves the server is up
-// and serving, not that its database answers.
+// Under autocert it names a host only while autocert holds a valid certificate
+// for it in its cache, not yet due for renewal (server.CachedCertName): a
+// handshake naming one of tls.hosts starts an issuance whenever that host has
+// no valid certificate, and a renewal the first time after a start that it
+// finds one due, and every failed one counts against Let's Encrypt's
+// failed-validation limit, while the check would read unhealthy for a state no
+// restart fixes. With one cached it asks /healthz on the listener naming that
+// host, as any client would. With none it connects to the listener and sends
+// a TLS hello naming no host, which autocert refuses at once, before its cache
+// or any order; the refusal (a TLS alert) or a finished handshake is healthy,
+// since the server accepted the connection and answered the hello. That proves
+// the server is up and serving, not that its database answers.
 //
 // A bind or TLS change saved in the console takes effect at the next start, so
 // until then this asks the new address (the saved one) and fails: a restart

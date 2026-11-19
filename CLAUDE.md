@@ -41,7 +41,7 @@ before the command, `audiosilo --data /data reset-admin`; see First-run setup in
 env give, exit 0 on 200 or a 503 `"status":"starting"` (the launcher listens before the database
 opens, `server.StartGate` answering until the start is done, under the API's CORS policy (`api.CORS`) and with
 `starting_for_seconds`: past `stuckStartAfter`, 30 minutes, the start is stuck and the check fails), else 1; under autocert it names a host
-only once its valid certificate is cached (`server.CachedCertName`), else a TLS hello naming no host,
+only while its certificate is cached, valid and not yet due for renewal (`server.CachedCertName`), else a TLS hello naming no host,
 never one that could start an order; the Dockerfile's `HEALTHCHECK` via `docker-entrypoint.sh healthcheck`, which
 reads the start's recorded `--data`, server#217).
 
