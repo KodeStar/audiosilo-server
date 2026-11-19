@@ -86,6 +86,9 @@ func (b CoverageBook) workOf(cached string) string {
 // upstream (workOf over CachedWorkID): Coverages' order, for a caller that
 // needs only the id (the Bridge's book facts). "" when none is known.
 func (s *Service) CachedWork(ctx context.Context, b CoverageBook) string {
+	if b.Matched && b.WorkID != "" {
+		return b.WorkID
+	}
 	cached, _ := s.CachedWorkID(ctx, b.ASIN, b.ISBN)
 	return b.workOf(cached)
 }

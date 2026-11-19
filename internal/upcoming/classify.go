@@ -154,8 +154,7 @@ func classifyOne(s Series, owned []OwnedBook, ownedWorks map[string]bool, now ti
 		switch {
 		case b.WorkID != "" && listed:
 			held = append(held, sp)
-		case b.WorkID != "" && !b.Matched:
-		case b.Position > 0:
+		case b.Position > 0 && (b.WorkID == "" || b.Matched):
 			held = append(held, span{b.Position, max(b.Position, b.PositionEnd)})
 		}
 	}
