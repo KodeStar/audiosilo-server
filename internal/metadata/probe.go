@@ -109,7 +109,9 @@ var ffprobeKillGrace = 5 * time.Second
 // answer. The file is opened through root (openBlockFile, bounded as a tag
 // read's open is) and handed to ffprobe opened (ToolInput), so ffprobe never
 // opens the path itself: a link swapped in along it since it was checked
-// can't lead ffprobe out of the library. -select_streams a:0
+// can't lead ffprobe out of the library, and it reads the file
+// as an audio container only (InputFormatArgs), never as a playlist of other
+// files. -select_streams a:0
 // limits -show_streams to the first audio stream so we read the codec that
 // actually needs (or doesn't need) transcoding. One killed at its time-out
 // that has not ended ffprobeKillGrace later (stuck in a read the kernel won't
@@ -161,15 +163,15 @@ func runFFprobe(parent context.Context, root, path, ffprobePath string, timeout 
 			release()
 		}
 	}()
-	cmd := exec.CommandContext(ctx, ffprobePath,
+	args := append([]string{
 		"-v", "error", // errors only, on stderr: what the Health page shows for a file ffprobe can't read
 		"-print_format", "json",
 		"-show_format",
 		"-show_chapters",
 		"-show_streams",
 		"-select_streams", "a:0",
-		input,
-	)
+	}, InputFormatArgs()...)
+	cmd := exec.CommandContext(ctx, ffprobePath, append(args, input)...)
 	cmd.ExtraFiles = extra
 	if testing.Testing() {
 		// A test's ffprobe stand-in tells the files it is handed apart by

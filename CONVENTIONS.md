@@ -1387,7 +1387,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`TestToolInputWithNoTempFolder`); on Windows it is given the path resolved, checked to be under the root
   and the very file opened (`os.SameFile`) through a second handle held until the tool is done: opened
   without delete sharing, it keeps the file from being renamed or replaced meanwhile (the os.Root open
-  shares deletion), and a folder along it can't be renamed while a file in it is open there. A test's
+  shares deletion), and a folder along it can't be renamed while a file in it is open there. The tool reads
+  the file as an audio container only: every run on a library file passes `metadata.InputFormatArgs()`
+  (`-format_whitelist` `metadata.InputFormats`: mov/mp4, mp3, matroska/webm, ogg, flac, wav, aac; before the
+  input for ffprobe, before `-i` for ffmpeg), since FFmpeg picks a demuxer by the file's bytes and one shaped
+  like a playlist (concat, hls, dash, sdp) under an audio name would have it open the files it lists
+  (`TestProbeReadsNoPlaylist`, `TestDetectSilencesReadsNoPlaylist`); a new ffprobe or ffmpeg run on a library
+  file passes them too. A test's
   ffprobe stand-in reads the path from `AUDIOSILO_TEST_INPUT`
   (`metadata.TestInputEnv`, set in a test binary only) (`TestIndexPathReadsThroughTheRootAfterASwap`,
   `TestScanReadsThroughTheRootAfterASwap`, `TestFFprobeReadsTheFileTheScanOpened`,

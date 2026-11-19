@@ -24,3 +24,21 @@ import "os"
 func ToolInput(f *os.File, root, path string) (input string, extra []*os.File, cleanup func(), err error) {
 	return toolInput(f, root, path)
 }
+
+// InputFormats is the demuxers ffprobe and ffmpeg may read a library file
+// with (FFmpeg's -format_whitelist, each by the name ffmpeg -demuxers gives
+// it): the containers of the files the server indexes and serves
+// (AudioExtensions: MP4 and its family, MP3, Matroska, Ogg with Opus in it,
+// FLAC) and the plain audio ones a file of theirs may hold under another
+// name (WAV, ADTS AAC). None of them opens another input. A file is read by
+// what its bytes are, not by its name, so without the list one shaped like a
+// playlist (concat, hls, dash, sdp) under an audio name would have the tool
+// open the files or addresses it lists: other files on the server.
+const InputFormats = "mov,mp4,m4a,3gp,3g2,mj2,mp3,matroska,webm,ogg,flac,wav,aac"
+
+// InputFormatArgs is the arguments that hold ffprobe or ffmpeg to
+// InputFormats for a library file: before the input for ffprobe, before its
+// -i for ffmpeg (an input option). The tool fails ("Format not on
+// whitelist") on a file of any other format, nothing it names opened. Every
+// run of either on a library file passes them.
+func InputFormatArgs() []string { return []string{"-format_whitelist", InputFormats} }
