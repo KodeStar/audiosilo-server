@@ -812,11 +812,14 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 		}
 		// A title gone from the account is backed up nowhere: its plan goes,
 		// with a request waiting for its release (a refunded preorder bought
-		// again is asked for again) and the contest it was left out by.
+		// again is asked for again) and the contest it was left out by. One
+		// that went gone before a request or contest was dropped (v2.6) loses
+		// it now.
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE audible_titles SET state = 'gone', planned = '', import_pending = 0,
 			     contest_library_id = NULL, contest_path = '', updated_at = ?
-			  WHERE account = ? AND poll_id <> ? AND state <> 'gone'`,
+			  WHERE account = ? AND poll_id <> ?
+			    AND (state <> 'gone' OR import_pending = 1 OR contest_library_id IS NOT NULL OR contest_path <> '')`,
 			now, account, pollID); err != nil {
 			return err
 		}

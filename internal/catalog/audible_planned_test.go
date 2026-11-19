@@ -287,6 +287,15 @@ func TestAudibleContestGoneAndRemapped(t *testing.T) {
 		AND (import_pending = 1 OR contest_library_id IS NOT NULL OR contest_path <> '')`).Scan(&stale); err != nil || stale != 0 {
 		t.Fatalf("gone titles keeping a request or contest = %d, %v", stale, err)
 	}
+	// A title that went gone keeping its request (before a gone title dropped
+	// it) loses it at the next complete poll.
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET import_pending = 1 WHERE asin = 'B000000004'`); err != nil {
+		t.Fatal(err)
+	}
+	f.poll(t, "p2b", a)
+	if err := f.c.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM audible_titles WHERE state = 'gone' AND import_pending = 1`).Scan(&stale); err != nil || stale != 0 {
+		t.Fatalf("gone titles keeping an older request = %d, %v", stale, err)
+	}
 	// Bought again: no request left over to back it up.
 	f.poll(t, "p3", a, AudibleTitleInput{ASIN: "B000000004", Title: "Soon", State: AudibleAvailable})
 	if x := f.title(t, "B000000004"); x.Import != nil || !x.CanBackup {
