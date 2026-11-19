@@ -548,7 +548,8 @@ func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
 
 // notifyBridgeJob reports a job that just finished, failed or parked
 // (notify.BridgeJobEnded), naming its book: the title as indexed now, else its
-// path. Best effort: a book or library that can't be read is reported by path.
+// path (a librivox.fetch result's only when within catalog.MaxPathBytes). Best
+// effort: a book or library that can't be read is reported by path.
 func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 	ev := notify.BridgeJob{ID: job.ID, Kind: job.Kind, State: job.State, Path: job.Target(),
 		Code: job.ParkCode(), Error: job.Error, SharedNothing: job.SharedNothing()}
@@ -569,12 +570,16 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 		// Until then (a fetch that placed no book, a done job whose result can't
 		// be read) it is named by the work it was adding: the params' title.
 		ev.Title = p.Title
-		if err == nil {
+		// A result path past the cap (the Bridge's result may run to 64 KiB) is
+		// no book's: the fold refused it, and it is neither looked up nor put in
+		// the notification's text.
+		if err == nil && len(r.Path) <= catalog.MaxPathBytes {
 			ev.Path = cmp.Or(ev.Path, r.Path)
-			if job.State == bridge.StateDone {
-				// The fold (OnEnded) ran before this, so the match is settled.
-				ev.LibrivoxMatch = a.cat.LibrivoxFetchMatch(ctx, p, r)
-			}
+		}
+		if err == nil && job.State == bridge.StateDone {
+			// The fold (OnEnded) ran before this, so the match is settled
+			// (LibrivoxUnmatched for an over-long path, which it refused).
+			ev.LibrivoxMatch = a.cat.LibrivoxFetchMatch(ctx, p, r)
 		}
 	}
 	if job.LibraryID != nil {
