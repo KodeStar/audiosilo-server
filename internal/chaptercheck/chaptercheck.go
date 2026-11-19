@@ -1,7 +1,7 @@
 // Package chaptercheck checks books against the community's chapter lists in the
 // background: for each book with an ASIN or ISBN it fetches the matched recording's
-// chapters (meta.Service.RecordingChapters, or MatchChapters for a book with a
-// recorded match), fits them onto the book's audio
+// chapters (meta.Service.RecordingChapters, or MatchChapters for a book whose
+// recorded match names a recording), fits them onto the book's audio
 // (chapteralign, with ffmpeg finding the pauses) and records the outcome
 // (catalog.SaveCommunityChapters), which puts the community chapters in place when
 // they should be. A book is checked again when what the check saw changes (a new
@@ -401,8 +401,14 @@ func (r *Runner) check(ctx context.Context, ref catalog.Ref, refit bool) (*catal
 // admin's, or a match run's) names the recording over the identifiers
 // (server#375): its recording's list, none when the work doesn't list it, and,
 // when it names no recording, the identifiers' list only when they name its
-// work. A book without one has its identifiers' recording's.
+// work. A book without one has its identifiers' recording's. A book with
+// neither identifier has none, match or not: only one with an identifier is
+// ever due (catalog.DueChapterChecks), so a check asked of another (Start)
+// would never be renewed.
 func (r *Runner) chapters(ctx context.Context, in *catalog.ChapterInputs) (*meta.RecordingChapters, error) {
+	if in.ASIN == "" && in.ISBN == "" {
+		return nil, meta.ErrNotFound
+	}
 	m := in.Match
 	if m != nil && m.RecordingID != "" {
 		return r.src.MatchChapters(ctx, m.WorkID, m.RecordingID)

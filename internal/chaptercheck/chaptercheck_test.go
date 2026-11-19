@@ -195,6 +195,28 @@ func TestCheckFollowsTheRecordedMatch(t *testing.T) {
 	}
 }
 
+// TestCheckNeedsAnIdentifierWithAMatch: a book with neither an ASIN nor an
+// ISBN is never due, so a check asked of it (the console's) finds nothing even
+// when its recorded match names a recording, and asks the service nothing: a
+// fit it found would never be renewed.
+func TestCheckNeedsAnIdentifierWithAMatch(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	const path = "A/LibriVox.m4b"
+	e.book(t, path, "", 3600)
+	e.src.byMatch["w2/r2"] = chapters(4, 900)
+	if err := e.cat.EditBook(ctx, e.lib.ID, path, catalog.BookEdit{
+		Match: &catalog.MatchAnchor{WorkID: "w2", RecordingID: "r2"}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := New(e.cat, e.src, "", on, nil, nil)
+	cc, err := r.Check(ctx, catalog.Ref{LibraryID: e.lib.ID, Path: path})
+	if err != nil || cc.Status != catalog.CommunityNoMatch || e.src.calls.Load() != 0 {
+		t.Fatalf("check %+v, %v with %d calls; want no_match and none", cc, err, e.src.calls.Load())
+	}
+}
+
 func TestPassStopsWhenTheServiceFails(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
