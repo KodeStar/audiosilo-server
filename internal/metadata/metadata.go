@@ -135,6 +135,15 @@ func (m *Metadata) ProbeTimedOut() bool { return m != nil && m.timedOut }
 // the duration and its own container tags.
 func (m *Metadata) TagsUnread() bool { return m != nil && m.tagsUnread }
 
+// LengthRead reports whether the file's length was read, its codec and
+// chapters with it: a duration, no probe error, no read out of time. With its
+// tags unread (TagsUnread: the in-process read cut short) that is ffprobe's
+// answer, given once the share answered again: a scan keeps it
+// (catalog.Book.LengthsRead), its tags still unknown.
+func (m *Metadata) LengthRead() bool {
+	return m != nil && m.OpenErr == nil && m.ProbeErr == nil && !m.timedOut && !m.readRefused && m.Duration > 0
+}
+
 // ReadRefused reports whether the file was not read at all, not even opened,
 // because maxAbandonedReads earlier reads from its mount have not returned (a
 // share that stopped answering); TagsUnread holds too.
@@ -412,6 +421,19 @@ func TimedOutForTests(path string) *Metadata {
 		panic("metadata.TimedOutForTests called outside a test binary")
 	}
 	return &Metadata{Format: fileFormat(path), timedOut: true}
+}
+
+// TagsUnreadForTests marks m's tags unread (TagsUnread) and returns it: for
+// tests of what a scan does with a file whose in-process tag read was cut
+// short but whose ffprobe run answered (LengthRead), which a real read gives
+// only on a share that answers ffprobe after the tag read's deadline. It
+// panics outside a test binary.
+func TagsUnreadForTests(m *Metadata) *Metadata {
+	if !testing.Testing() {
+		panic("metadata.TagsUnreadForTests called outside a test binary")
+	}
+	m.tagsUnread = true
+	return m
 }
 
 // UncountedForTests marks m as LengthUncounted (a header-less VBR MP3 whose

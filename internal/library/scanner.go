@@ -560,9 +560,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			})
 		}
 		switch {
-		case r.existed && b.ReadCutShort:
+		case r.existed && b.ReadCutShort && !b.LengthsRead:
 			// Kept whole: UpsertBook recorded only its read problem (counted
-			// above), nothing of the book was updated.
+			// above), nothing of the book was updated (its lengths are, when
+			// read: catalog.Book.LengthsRead).
 		case r.existed:
 			res.Updated++
 		case !movedTo[b.RelPath] && !joinsIndexed(b, sigs) && split[b.RelPath] == "":
@@ -1115,15 +1116,23 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// problem, rather than path-only names and no length, codec, chapters,
 	// cover, date or genres; a new book is written with what there is. A folder
 	// book's other parts count too (buildMultiFileChapters).
-	b.ReadCutShort = readCutShort(md)
+	// An open that failed as a share fails (openFaulted: EIO, a permission)
+	// knows as little of the file.
+	b.ReadCutShort = readCutShort(md) || openFaulted(md)
 	// Only a length out of time, with a part added, gone or changed since, is
 	// written whole after all (catalog.Book.LengthOnly); a folder book's parts
 	// say which it is (buildMultiFileChapters).
-	b.LengthOnly = b.ReadCutShort && !md.TagsUnread()
+	b.LengthOnly = b.ReadCutShort && !md.TagsUnread() && !openFaulted(md)
+	// Only the tags cut short, the length read all the same (ffprobe
+	// answered): the stored book keeps its names but takes the lengths read
+	// now (catalog.Book.LengthsRead); a folder book's parts say whether every
+	// one was.
+	b.LengthsRead = md.TagsUnread() && lengthKnown(md)
 	// A header-less VBR MP3 whose frames went uncounted (its length ffprobe's
 	// estimate) leaves the book's length revision unstamped, so the next scan
 	// reads it again; a folder book's other parts count too.
 	b.LengthUncounted = md.LengthUncounted()
+	b.LengthsRead = b.LengthsRead && !b.LengthUncounted
 	setNames(b, md, nil)
 	if md != nil {
 		b.Released = md.Released
@@ -1460,14 +1469,15 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 	idx := 0
 	parts := make([]partFacts, 0, len(b.Files))
 	mds := s.readFiles(ctx, lib, b.Files, first, slots)
-	tagsUnread := false
+	tagsUnread, lengthsKnown := false, true
 	for i := range b.Files {
 		f := &b.Files[i]
 		md := mds[i]
-		tagsUnread = tagsUnread || md.TagsUnread()
+		tagsUnread = tagsUnread || md.TagsUnread() || openFaulted(md)
+		lengthsKnown = lengthsKnown && lengthKnown(md)
 		b.LengthUncounted = b.LengthUncounted || md.LengthUncounted()
 		f.LengthUnread = lengthUnread(md)
-		if readCutShort(md) && !b.ReadCutShort {
+		if (readCutShort(md) || openFaulted(md)) && !b.ReadCutShort {
 			// Its length and chapters unknown: see enrich. The book is kept as
 			// stored, and what brings the next scan back to it is the problem
 			// recorded (problemCleared), so this part's goes over an earlier
@@ -1522,6 +1532,8 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 	}
 	b.Duration = cum
 	b.LengthOnly = b.ReadCutShort && !tagsUnread
+	// Some part's tags cut short, every length read all the same (enrich).
+	b.LengthsRead = b.ReadCutShort && tagsUnread && lengthsKnown
 	n := suspectParts(parts)
 	b.SuspectParts = &n
 	if len(mds) == 0 {
@@ -2427,7 +2439,7 @@ func (s *Scanner) readOwn(ctx context.Context, lib catalog.Library, book *catalo
 	go s.leadIndex(ctx, lib, book, f, from)
 	b, err := s.awaitFlight(ctx, f, false)
 	// book is the read's (leadIndex's), done with once the flight has ended.
-	if err == nil && book.ReadCutShort && book.ScanError == problemUnreadable {
+	if err == nil && book.ReadCutShort && book.ScanError == problemUnreadable && cutShort(book.ScanErrorDetail) {
 		return nil, fmt.Errorf("library: reading %q: %w", book.ScanErrorFile, metadata.ErrNotAnswered)
 	}
 	return b, err

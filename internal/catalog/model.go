@@ -220,6 +220,14 @@ type Book struct {
 	// added, gone, renamed or changed UpsertBook writes it whole, the part's
 	// problem with it, and clears ReadCutShort to say so.
 	LengthOnly bool `json:"-"`
+	// LengthsRead narrows ReadCutShort the other way: only tags went unread
+	// (the in-process read cut short) and every file's length was read all the
+	// same (ffprobe answered: metadata.Metadata.LengthRead), so the length,
+	// codec and chapters are known though the names are not. UpsertBook keeps
+	// the stored book's names, cover flag and file signatures (the next scan
+	// reads it again) but writes those lengths (recordLengths), while its files
+	// are the stored ones by path; it clears LengthsRead when it writes none.
+	LengthsRead bool `json:"-"`
 	// LengthUncounted: one of the book's files is a VBR MP3 with no Xing or
 	// VBRI header whose frames the scan could not count for now (a deadline, a
 	// read error: metadata.Metadata.LengthUncounted), its length ffprobe's

@@ -175,6 +175,7 @@ func TestShareFault(t *testing.T) {
 		{nil, false},
 		{pathErr(syscall.ENOENT), false},
 		{pathErr(syscall.ENOTDIR), false},
+		{pathErr(syscall.ENAMETOOLONG), false},
 		{ErrNotAnswered, false},
 		{ErrReadRefused, false},
 		{context.Canceled, false},

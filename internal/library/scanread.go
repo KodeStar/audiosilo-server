@@ -113,6 +113,25 @@ func lengthUnread(md *metadata.Metadata) bool {
 	return lengthTimedOut(md) || (md != nil && errors.Is(md.OpenErr, metadata.ErrNotRegular))
 }
 
+// openFaulted reports whether md's file could not be opened as a share fails
+// (metadata.ShareFault: EIO, ESTALE, a permission): an answer about the share,
+// not the file, so its book is kept as stored as for a read cut short, the
+// problem recorded (a permission put on a file a read once hung on included,
+// problemCleared). A file gone, or no regular file, is an answer.
+func openFaulted(md *metadata.Metadata) bool {
+	return md != nil && metadata.ShareFault(md.OpenErr) && !errors.Is(md.OpenErr, metadata.ErrNotRegular)
+}
+
+// lengthKnown reports whether md, one of a book's files' readings, leaves its
+// length known whatever became of its tags: opened, its length not unread
+// (lengthUnread), and read when the tags were cut short (ffprobe answered:
+// metadata.Metadata.LengthRead). A book all of whose files' lengths are known
+// but some tags not keeps its names as stored and takes its lengths
+// (catalog.Book.LengthsRead).
+func lengthKnown(md *metadata.Metadata) bool {
+	return md != nil && md.OpenErr == nil && !lengthUnread(md) && (!md.TagsUnread() || md.LengthRead())
+}
+
 // read is metadata.ExtractTimeout holding a slot, and whether another read ran
 // beside it; nil when ctx ends first.
 func (r *readSlots) read(ctx context.Context, absPath, ffprobePath string) (*metadata.Metadata, bool) {

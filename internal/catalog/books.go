@@ -106,6 +106,9 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 	}
 	if b.ReadCutShort {
 		if id, ok, err := recordReadProblem(ctx, tx, b); err != nil || ok {
+			if err == nil && b.LengthsRead {
+				err = recordLengths(ctx, tx, id, b)
+			}
 			return id, err
 		}
 	}
@@ -267,6 +270,53 @@ func recordReadProblem(ctx context.Context, tx *sql.Tx, b *Book) (id int64, ok b
 	}
 	b.ID = id
 	return id, true, nil
+}
+
+// recordLengths writes b's lengths over the stored row id that
+// recordReadProblem kept (Book.LengthsRead): its duration, codec and chapters
+// (the scan's own, books.scanned_chapters, with what stands over them put back
+// by refreshEffective, as UpsertBook does) and each file's duration and codec,
+// the rest of the row as stored. Only while b's files are the stored ones by
+// path, in order: a list that differs is the next scan's, which reads the
+// book whole once its tags answer, and b.LengthsRead is cleared to say nothing
+// was written.
+func recordLengths(ctx context.Context, tx *sql.Tx, id int64, b *Book) error {
+	stored, err := queryRows(ctx, tx, func(r *sql.Rows, p *string) error { return r.Scan(p) },
+		`SELECT rel_path FROM book_files WHERE book_id = ? ORDER BY seq, id`, id)
+	if err != nil {
+		return err
+	}
+	paths := make([]string, len(b.Files))
+	for i, f := range b.Files {
+		paths[i] = f.RelPath
+	}
+	if !slices.Equal(stored, paths) {
+		b.LengthsRead = false
+		return nil
+	}
+	ownChapters := b.Chapters
+	if ownChapters == nil {
+		ownChapters = []metadata.Chapter{}
+	}
+	raw, err := json.Marshal(ownChapters)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE books SET duration = ?, codec = ?, scanned_chapters = ?, chapters_hash = ?, chapters_source = '', chapters_fit = ''
+		  WHERE id = ?`, b.Duration, b.Codec, string(raw), chaptersHash(string(raw)), id); err != nil {
+		return err
+	}
+	for _, f := range b.Files {
+		if _, err := tx.ExecContext(ctx, `UPDATE book_files SET duration = ?, codec = ? WHERE book_id = ? AND rel_path = ?`,
+			f.Duration, f.Codec, id, f.RelPath); err != nil {
+			return err
+		}
+	}
+	if err := replaceChapters(ctx, tx, id, b.Chapters); err != nil {
+		return err
+	}
+	return refreshEffective(ctx, tx, id)
 }
 
 // sameFiles reports whether b's files are those of the stored row at its path:
@@ -456,9 +506,10 @@ type Signature struct {
 	// PathOK) that needs no read (not NamesCheck), which the next scan stamps
 	// with today's revision (StampScannedRev), so it is never tested again.
 	RevStamp bool
-	// ScanError and ScanErrorFile are the read problem the last indexing recorded
-	// (books.scan_error), so a scan can look at that file again.
-	ScanError, ScanErrorFile string
+	// ScanError, ScanErrorFile and ScanErrorDetail are the read problem the
+	// last indexing recorded (books.scan_error), so a scan can look at that file
+	// again, and tell a read cut short from a lasting problem.
+	ScanError, ScanErrorFile, ScanErrorDetail string
 	// SplitParent is books.split_parent as stored, so a scan records a change to it
 	// (a disc folder's sibling added or gone) without re-indexing the book.
 	SplitParent string
@@ -555,7 +606,7 @@ func fileOrderKey(joined string) uint64 {
 func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]Signature, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, cover_art, has_cover,
-		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
+		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, scan_error_detail, split_parent,
 		        released_checked = 0, genres_checked = 0, hints_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`,
 		        attachments_sig, `+attachmentsUncheckedExpr+`, `+fileOrderExpr+`, format,
 		        CASE WHEN is_folder AND `+fileOrderExpr+` IS NULL THEN
@@ -577,7 +628,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var revOlder, severalFiles bool
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.CoverArt, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
-			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
+			&sig.ScanError, &sig.ScanErrorFile, &sig.ScanErrorDetail, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.HintsUnchecked, &sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
 			&stored, &format, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &narrator, &revOlder, &severalFiles,
 			&sig.DurationStale); err != nil {

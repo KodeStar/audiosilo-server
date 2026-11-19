@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,7 +103,14 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 	s.noteRejected(abs, at, md)
 	// A read cut short again (readCutShort: its length still out of time
 	// included) has not cleared: the full re-index would only keep the book.
-	return md.OpenErr == nil && !readCutShort(md) && (!probe || md.ProbeErr == nil)
+	if md.OpenErr == nil && !readCutShort(md) && (!probe || md.ProbeErr == nil) {
+		return true
+	}
+	// A read cut short before (a share that hung) that is answered now with
+	// a lasting problem (a permission on a share that came back): the
+	// re-index records that one (the book kept as stored: openFaulted), so
+	// the time-out isn't left listed for good.
+	return cutShort(sig.ScanErrorDetail) && md.OpenErr != nil && !readCutShort(md)
 }
 
 // sideAnswers reports whether the file or folder at abs beside a book's audio,
@@ -115,8 +121,9 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 // small file, an EPUB's zip directory, where checkEbook reads). A stat
 // alone would not do for those: on NFS or FUSE it can answer from a cache
 // while reads still hang, and every scan would then read the whole book again
-// only to wait out the same read. Gone, or no longer a regular file or folder,
-// counts as answered: the re-index decides what it is.
+// only to wait out the same read. Any answer counts: gone, no longer a regular
+// file or folder, or a lasting error (a permission on a share that came back);
+// the re-index decides what it is.
 func sideAnswers(ctx context.Context, abs string, timeout time.Duration) bool {
 	// One bounded call, the stat and the look it leads to: a share that
 	// stopped answering costs timeout once, and holds one of its mount's slots.
@@ -139,7 +146,9 @@ func sideAnswers(ctx context.Context, abs string, timeout time.Duration) bool {
 		}
 		return struct{}{}, err
 	}, nil)
-	return err == nil || errors.Is(err, fs.ErrNotExist) || errors.Is(err, metadata.ErrNotRegular)
+	// Any answer counts (a permission on a share that came back included:
+	// the re-index records what it is), only a look given up on again doesn't.
+	return !metadata.Unanswered(ctx, err)
 }
 
 // sideProbeBytes is how much of a file beside the audio sideAnswers reads.
@@ -153,6 +162,11 @@ const (
 	tagsUnreadDetail  = "reading it timed out"
 	readRefusedDetail = "too many earlier reads from the same drive or share are stuck, so it wasn't tried"
 )
+
+// cutShort reports whether detail is a read problem's that says the file's
+// read was cut short or refused (tagsUnreadDetail, readRefusedDetail), not
+// what the file is: one a later read may answer otherwise.
+func cutShort(detail string) bool { return detail == tagsUnreadDetail || detail == readRefusedDetail }
 
 // fileState is a file's mtime (Unix seconds) and size: with its absolute path,
 // what a rejection of its data is remembered by (noteRejected). A scan that

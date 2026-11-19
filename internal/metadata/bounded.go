@@ -44,8 +44,8 @@ func Unanswered(ctx context.Context, err error) bool {
 // ShareFault reports whether err, a look's at a file or folder its parent
 // listed or a caller named (a stat, a listing, an open), is how a share fails
 // rather than an answer about the file: any error but the file gone (ENOENT,
-// ENOTDIR: a folder above it replaced), a look given up on already (GaveUp) or
-// a context's. EIO or ESTALE (a soft-mounted NFS share whose server stopped
+// ENOTDIR: a folder above it replaced; ENAMETOOLONG: a name no file can
+// have), a look given up on already (GaveUp) or a context's. EIO or ESTALE (a soft-mounted NFS share whose server stopped
 // answering, or a handle it lost), ENOTCONN or ETIMEDOUT (a FUSE pool or a
 // network mount that dropped), a permission (EACCES, EPERM: a share refusing a
 // look it allowed the listing) among them. Such a look says nothing about
@@ -53,7 +53,7 @@ func Unanswered(ctx context.Context, err error) bool {
 // given up on (AsGaveUp), never reads it as "none".
 func ShareFault(err error) bool {
 	return err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) &&
-		!GaveUp(err) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+		!errors.Is(err, syscall.ENAMETOOLONG) && !GaveUp(err) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
 // AsGaveUp is err made a look given up on (GaveUp reports it) when it is a
