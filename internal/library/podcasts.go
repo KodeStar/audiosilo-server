@@ -395,18 +395,26 @@ func unreadPodcastFolder(err error) bool {
 // holds a feed.json at all can't be told.
 var errFolderClosed = errors.New("podcast folder could not be looked into")
 
+// fileSystemFolders are the folders a file system or NAS keeps at a volume's
+// or share's root for itself, which its server user is often refused: never a
+// show folder a listener renamed by hand.
+var fileSystemFolders = []string{"lost+found", "$RECYCLE.BIN", "System Volume Information", "#recycle", "#snapshot", "@eaDir"}
+
 // strayPodcastFolder reports whether err, podcastFolderSig's for folder show,
-// is a root entry the server may not look into (a permission, which stays
-// until an admin changes it), where the index and the podcast state know
-// nothing (catalog.PodcastPathKnown): a root-owned lost+found, say.
-// indexPodcastShow, but for a forced rescan, takes such an entry for no show
-// folder (ErrNotIndexable), so it makes no scan partial (its prune would never
-// run, and a deleted show's leftover follow would hold a rename into its name
-// for ever) and is no unread folder. Any other fault (EIO, ESTALE, a timeout),
-// one on a folder the index knows, or one past a feed.json seen there (a
-// show's, unreadable) stays both.
+// is a file system's own folder (fileSystemFolders: a root-owned lost+found)
+// the server may not look into (a permission, which stays until an admin
+// changes it), where the index and the podcast state know nothing
+// (catalog.PodcastPathKnown). indexPodcastShow, but for a forced rescan, takes
+// such an entry for no show folder (ErrNotIndexable), so it makes no scan
+// partial (its prune would never run, and a deleted show's leftover follow
+// would hold a rename into its name for ever) and is no unread folder. Any
+// other name stays both, as a show renamed by hand into a folder the server
+// can't read looks just the same: the scan keeps its old row and state until
+// the folder reads again. So does any other fault (EIO, ESTALE, a timeout), one
+// on a folder the index knows, or one past a feed.json seen there.
 func (s *Scanner) strayPodcastFolder(ctx context.Context, lib catalog.Library, show string, err error) bool {
-	if !errors.Is(err, errFolderClosed) || !errors.Is(err, fs.ErrPermission) {
+	if !errors.Is(err, errFolderClosed) || !errors.Is(err, fs.ErrPermission) ||
+		!slices.ContainsFunc(fileSystemFolders, func(f string) bool { return strings.EqualFold(f, show) }) {
 		return false
 	}
 	known, err := s.cat.PodcastPathKnown(ctx, lib.ID, show)

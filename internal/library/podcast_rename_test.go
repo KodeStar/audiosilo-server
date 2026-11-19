@@ -430,6 +430,8 @@ func TestPodcastRescanOfAChainsFarEndTakesItsFolderHeart(t *testing.T) {
 // Denied: a chain of renames by hand whose other folder can't be read or used
 // for now (the other show renamed to "Third", this one to its old name):
 // unreadable, or its feed.json of a newer version or invalid (half written).
+// The folder itself may be one the server can't look into ("closed"): only a
+// file system's own folder (a lost+found) is a stray, so this one counts too.
 // That folder may be where the other show is, and a move to its old name would
 // put this show's follow over the other's for a listener following both:
 // nothing moves, on a scan (partial when it can't read the folder) or on the
@@ -438,7 +440,7 @@ func TestPodcastRenameChainWaitsOnAnUnreadableFolder(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs a file the server's user can't read")
 	}
-	for _, how := range []string{"unreadable", "newer", "invalid"} {
+	for _, how := range []string{"unreadable", "closed", "newer", "invalid"} {
 		for _, rescan := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/rescan=%v", how, rescan), func(t *testing.T) {
 				b := newRenameBed(t)
@@ -460,15 +462,26 @@ func TestPodcastRenameChainWaitsOnAnUnreadableFolder(t *testing.T) {
 					}
 					t.Cleanup(func() { _ = os.Chmod(third, 0o600) })
 				}
+				dir := filepath.Dir(third)
+				if how == "closed" {
+					if err := os.Chmod(dir, 0o000); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+				}
+				partial := how == "unreadable" || how == "closed"
 				if rescan {
 					if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Other"); err != nil {
 						t.Fatal(err)
 					}
-				} else if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || res.Partial != (how == "unreadable") {
+				} else if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || res.Partial != partial {
 					t.Fatalf("scan %+v %v", res, err)
 				}
 				if got, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Other", b.user); err != nil || got.Following {
 					t.Fatalf("moved over the other show's follow: %+v %v", got, err)
+				}
+				if err := os.Chmod(dir, 0o700); err != nil {
+					t.Fatal(err)
 				}
 				if err := os.Chmod(third, 0o600); err != nil {
 					t.Fatal(err)
@@ -610,6 +623,45 @@ func TestPodcastScanKeepsShowsItCannotStat(t *testing.T) {
 	}
 }
 
+// Denied: a show with only a place (no follow, feed state or policy), renamed
+// by hand into a folder the server can't look into under a name nothing knows,
+// is no stray: the scan is partial and keeps its old row, its one way back to
+// the place, so the place moves once the folder reads again.
+func TestPodcastScanKeepsAShowRenamedIntoAClosedFolder(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a folder the server's user can't read")
+	}
+	b := newRenameBed(t)
+	if err := b.cat.UnfollowPodcast(b.ctx, b.user, b.lib.ID, "Example Show"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.SetPodcastPolicy(b.ctx, b.lib.ID, "Example Show", renameShowID, nil); err != nil {
+		t.Fatal(err)
+	}
+	b.rename(t, "Renamed", true)
+	dir := filepath.Join(b.root, "Renamed")
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || !res.Partial {
+		t.Fatalf("scan %+v %v", res, err)
+	}
+	if got := b.shows(t); len(got) != 1 || got[0] != "Example Show" {
+		t.Fatalf("the renamed show's old row was pruned: %v", got)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || res.Partial {
+		t.Fatalf("scan %+v %v", res, err)
+	}
+	p, err := b.cat.GetProgress(b.ctx, b.user, catalog.Ref{LibraryID: b.lib.ID, Path: "Renamed/" + renameEpisode})
+	if err != nil || p == nil || p.Position != 42 {
+		t.Fatalf("the place: %+v %v", p, err)
+	}
+}
+
 // Only a refusal to look into a folder (EACCES, EPERM) makes it stray: a fault
 // a retry may get past (transientFault) or another errno does not, nor a
 // refusal past a feed.json seen there, nor any error that is no file system's.
@@ -636,9 +688,16 @@ func TestStrayPodcastFolderErrors(t *testing.T) {
 			t.Errorf("%v: stray %v, want %v", tc.err, got, tc.want)
 		}
 	}
-	// A refusal at a folder the index knows is no stray.
+	// A refusal at a folder the index knows is no stray, nor at any name but a
+	// file system's own: a show renamed by hand there looks just the same.
 	if b.s.strayPodcastFolder(b.ctx, *b.lib, "Example Show", closed(syscall.EACCES)) {
 		t.Error("a known show's folder taken for a stray")
+	}
+	if b.s.strayPodcastFolder(b.ctx, *b.lib, "Renamed", closed(syscall.EACCES)) {
+		t.Error("an unknown folder taken for a stray")
+	}
+	if !b.s.strayPodcastFolder(b.ctx, *b.lib, "System Volume Information", closed(syscall.EPERM)) {
+		t.Error("a file system's own folder not taken for a stray")
 	}
 }
 
