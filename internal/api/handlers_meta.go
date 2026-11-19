@@ -312,13 +312,9 @@ func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta
 	// its own work id is never read (it is placed on env's work's entry).
 	cands := make([]meta.LocalBook, 0, len(books)+1)
 	cand := func(b *catalog.Book) meta.LocalBook {
-		c := meta.LocalBook{MetaLocal: meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
+		return meta.LocalBook{MetaLocal: meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
 			ASIN: b.ASIN, ISBN: b.ISBN, WorkID: b.WorkID, Narrator: b.Narrator,
 			Abridged: b.Abridged != nil && *b.Abridged}
-		if c.MetaLocal == me {
-			c.WorkID = ""
-		}
-		return c
 	}
 	cands = append(cands, cand(requested))
 	for i := range books {
@@ -333,7 +329,7 @@ func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta
 		}
 	}
 	cands = a.meta.WithWorkIDs(ctx, me, cands)
-	if contested := meta.Contested(me, cands); len(contested) > 0 {
+	if contested := meta.Contested(current, me, cands); len(contested) > 0 {
 		refs := make([]catalog.Ref, len(contested))
 		for i, l := range contested {
 			refs[i] = catalog.Ref(l)

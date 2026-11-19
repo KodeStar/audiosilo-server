@@ -84,42 +84,31 @@ func (s *Service) WithWorkIDs(ctx context.Context, requested MetaLocal, books []
 }
 
 // Contested is the books (with their work ids, WithWorkIDs) the pick has to
-// choose between, each once: two or more books of one work id, or with no work
-// id two or more numbered books of one series (match.SeriesKey), requested left
-// out (it is placed by its work's entry alone). Only these need Started
-// (pickRank's second test), so the caller's progress is read for them alone,
-// and not at all for the usual envelope, one book a work (server#413).
-func Contested(requested MetaLocal, books []LocalBook) []MetaLocal {
-	groups := map[string][]MetaLocal{}
-	var order []string
-	for _, b := range books {
-		var k string
-		switch {
-		case b.MetaLocal == requested:
-			continue
-		case b.WorkID != "":
-			k = "w:" + b.WorkID
-		case b.SeriesIndex > 0 && match.SeriesKey(b.Series) != "":
-			k = "s:" + match.SeriesKey(b.Series)
-		default:
-			continue
-		}
-		if slices.Contains(groups[k], b.MetaLocal) {
-			continue
-		}
-		if groups[k] == nil {
-			order = append(order, k)
-		}
-		groups[k] = append(groups[k], b.MetaLocal)
-	}
-	var out []MetaLocal
-	for _, k := range order {
-		if g := groups[k]; len(g) > 1 {
-			for _, l := range g {
-				if !slices.Contains(out, l) {
-					out = append(out, l)
+// choose between, each once, in books' order: the books of a group of
+// PlaceLocal's (newPlacer: a work id, or with no work id a series' numbered
+// books, match.SeriesKey) that holds two or more. requested and its copies are
+// in none (requested is placed by its work's entry alone). Only these need
+// Started (pickRank's second test), so the caller's progress is read for them
+// alone, and not at all for the usual envelope, one book a work (server#413).
+func Contested(currentWork string, requested MetaLocal, books []LocalBook) []MetaLocal {
+	p := newPlacer(currentWork, requested, books)
+	contested := map[MetaLocal]bool{}
+	for _, groups := range []map[string][]LocalBook{p.byWork, p.byIndex} {
+		for _, g := range groups {
+			// One book alone leaves no choice (byIndex lists a book once per
+			// position it holds in the series).
+			if slices.ContainsFunc(g[1:], func(b LocalBook) bool { return b.MetaLocal != g[0].MetaLocal }) {
+				for _, b := range g {
+					contested[b.MetaLocal] = true
 				}
 			}
+		}
+	}
+	var out []MetaLocal
+	for _, b := range books {
+		if contested[b.MetaLocal] {
+			out = append(out, b.MetaLocal)
+			delete(contested, b.MetaLocal)
 		}
 	}
 	return out

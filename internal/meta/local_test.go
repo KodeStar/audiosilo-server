@@ -283,11 +283,11 @@ func TestWithWorkIDs(t *testing.T) {
 		{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/novella"}, Series: "S", SeriesIndex: 2, ASIN: "B0NOVELLA"},
 		{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/2"}, Series: "S", SeriesIndex: 2},
 	}
-	placeOwned := func(svc *Service, books []LocalBook) []string {
+	place := func(svc *Service, books []LocalBook) []string {
 		requested := MetaLocal{LibraryID: 1, Path: "S/1"}
 		return locals(PlaceLocal(env.Series, env.Work.ID, requested, svc.WithWorkIDs(context.Background(), requested, books))[0].Works)
 	}
-	got := placeOwned(svc, books)
+	got := place(svc, books)
 	if want := []string{"S/1", "S/2", "S/novella"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("placed = %q, want %q", got, want)
 	}
@@ -302,7 +302,7 @@ func TestWithWorkIDs(t *testing.T) {
 		Payload: []byte(`{"matched":true,"work":{"id":"novella"}}`), Expires: time.Now().Add(time.Hour)})
 	restarted := NewService("http://meta.invalid", nil)
 	restarted.SetStore(store)
-	got = placeOwned(restarted, books)
+	got = place(restarted, books)
 	if want := []string{"S/1", "S/2", "S/novella"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("placed after a restart = %q, want %q", got, want)
 	}
@@ -313,7 +313,7 @@ func TestWithWorkIDs(t *testing.T) {
 	fresh.SetStore(store)
 	loads := store.loads.Load()
 	mine := []LocalBook{{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/1"}, Series: "S", SeriesIndex: 1, ASIN: "B0REQUESTED"}}
-	got = placeOwned(fresh, mine)
+	got = place(fresh, mine)
 	if want := []string{"S/1", "", ""}; !reflect.DeepEqual(got, want) || store.loads.Load() != loads {
 		t.Fatalf("requested: placed %q (want %q), store reads %d", got, want, store.loads.Load()-loads)
 	}
@@ -611,13 +611,20 @@ func TestContested(t *testing.T) {
 		mine(1, "S/2", "Other", 4, "two"), // one book in two series
 		mine(1, "S/3", "S", 3, ""),
 	}
-	if got := Contested(requested, one); len(got) != 0 {
+	if got := Contested("one", requested, one); len(got) != 0 {
 		t.Fatalf("one book a work: contested %v, want none", got)
 	}
 	two := append(slices.Clone(one), mine(2, "S/2 b", "S", 2, "two"), mine(1, "S/3 b", " s ", 3, ""))
-	want := []MetaLocal{{LibraryID: 1, Path: "S/2"}, {LibraryID: 2, Path: "S/2 b"}, {LibraryID: 1, Path: "S/3"}, {LibraryID: 1, Path: "S/3 b"}}
-	if got := Contested(requested, two); !reflect.DeepEqual(got, want) {
+	want := []MetaLocal{{LibraryID: 1, Path: "S/2"}, {LibraryID: 1, Path: "S/3"}, {LibraryID: 2, Path: "S/2 b"}, {LibraryID: 1, Path: "S/3 b"}}
+	if got := Contested("one", requested, two); !reflect.DeepEqual(got, want) {
 		t.Fatalf("contested %v, want %v", got, want)
+	}
+	// A copy of requested on another work's entry is placed nowhere, so it is
+	// not one of that work's choices.
+	self := identified(1, "S/1", "one", "B0ONE", "")
+	copied := []LocalBook{self, identified(1, "S/1 copy", "two", "B0ONE", ""), identified(1, "S/2", "two", "B0TWO", "")}
+	if got := Contested("one", requested, copied); len(got) != 0 {
+		t.Fatalf("copy of requested: contested %v, want none", got)
 	}
 }
 
