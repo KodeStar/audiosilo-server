@@ -3701,6 +3701,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `transientFault`'s EIO, ESTALE or timeout) where the index and the podcast state know nothing (a
   root-owned `lost+found`: `strayPodcastFolder`, `catalog.PodcastPathKnown`) is neither: the scan is
   not partial for it, so a deleted show's leftover state holds no rename into its name for ever. A
+  rescan also counts as unread a listed folder whose row it does not index again but whose signature
+  changed (another show renamed into it by hand, the row's own gone), so the move waits for a scan. A
   place at the new folder holds nothing: the new folder's
   row is the moving show's by then, so a show whose only state there is keyed by path has nothing
   left to move it later, and the move carries only its own files' state. A scan keeps each planned

@@ -618,6 +618,46 @@ func TestStrayPodcastFolderErrors(t *testing.T) {
 	}
 }
 
+// Denied: a chain of renames by hand into a folder still indexed as a third
+// show's (that show deleted, its row not pruned yet): the other show renamed
+// to it, this one to the other's old name. The Bridge's rescan of this one's
+// new folder indexes no folder that has a row, so it can't find the other
+// show there; it takes that folder for unread, and the move waits rather than
+// put this show's follow over the other's. A scan then moves both.
+func TestPodcastRescanChainIntoAStaleRowFolderWaits(t *testing.T) {
+	b := newRenameBed(t)
+	named := b.addOther(t)
+	third := bytes.ReplaceAll(b.feed, []byte(renameShowID), []byte("fedcba9876543210"))
+	if err := os.MkdirAll(filepath.Join(b.root, "Third"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(b.root, "Third", "feed.json"), third, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Third"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(b.root, "Third")); err != nil {
+		t.Fatal(err)
+	}
+	b.renameEach(t, [2]string{"Other", "Third"}, [2]string{"Example Show", "Other"})
+	b.writeShow(t, "Other", "Other")
+	if err := os.WriteFile(filepath.Join(b.root, "Third", "feed.json"), named("Third"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Other", b.user); err != nil || got.Following {
+		t.Fatalf("moved over the other show's follow: %+v %v", got, err)
+	}
+	if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+		t.Fatal(err)
+	}
+	b.checkFollowed(t, "Other")
+	b.checkOther(t, "Third")
+}
+
 // Denied: a chain of renames whose other show can't move yet, as it is in two
 // folders (renamed to "Third", and copied to "Fourth"). This show, renamed to
 // the other's old name, waits too, so the follow of the other show stays; once

@@ -155,7 +155,9 @@ func (s *Scanner) movePodcastShows(ctx context.Context, lib catalog.Library, at 
 		// a new name, then this one to B's old name): its follows still sit
 		// at this move's folder, and a move without B's own would replace
 		// them. Index such folders first, as a scan does, so both move in
-		// one call.
+		// one call. B renamed into a folder still indexed as another show's
+		// is not indexed again here: such a folder counts as unread
+		// (indexNewPodcastFolders), so the move waits for a scan.
 		var n int
 		var skipped bool
 		if n, skipped, err = s.indexNewPodcastFolders(ctx, lib, &listed); err == nil && n > 0 {
@@ -196,7 +198,11 @@ func (s *Scanner) settledPodcastMoves(ctx context.Context, lib catalog.Library, 
 
 // indexNewPodcastFolders indexes the show folders the root lists that have no
 // index row yet, and answers how many it indexed and whether one was unread
-// (unreadPodcastFolder, a stray folder aside: strayPodcastFolder).
+// (unreadPodcastFolder, a stray folder aside: strayPodcastFolder) or holds what
+// its row no longer describes (a scan would index it again: another show
+// renamed into it by hand, the row's own gone). The rescan leaves such a row
+// as it is, so the show now in that folder is found by the next scan, and a
+// move over another show's state waits until then.
 func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Library, listed *map[string]bool) (n int, unread bool, err error) {
 	known, err := s.cat.PodcastSignatures(ctx, lib.ID)
 	if err != nil {
@@ -211,7 +217,12 @@ func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Librar
 		if err := ctx.Err(); err != nil {
 			return n, unread, err
 		}
-		if _, ok := known[name]; ok || !feed.ShowPath(name) {
+		if !feed.ShowPath(name) {
+			continue
+		}
+		if sig, ok := known[name]; ok {
+			_, _, now, err := podcastFolderSig(lib.Root, name)
+			unread = unread || err == nil && now != sig || unreadPodcastFolder(err)
 			continue
 		}
 		switch _, _, err := s.indexPodcastShow(ctx, lib, name, false); {
