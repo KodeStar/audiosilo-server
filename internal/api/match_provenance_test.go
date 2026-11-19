@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -108,6 +110,60 @@ func TestAdminBookShowsTheEnrichmentUnderAMatch(t *testing.T) {
 	}
 	if resp, _ := e.do(t, "GET", base+"/book?path="+escape(path), memberTok, ""); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("member book = %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestAdminMatchRunItemsSayEveryHold (server#352): the review's items carry
+// every reason a review item is held for (holds, its detail the first), and an
+// item with one reason (as every item stored before) has its detail alone.
+// Admin only.
+func TestAdminMatchRunItemsSayEveryHold(t *testing.T) {
+	t.Parallel()
+	e, adminTok, memberTok, libID := newMatchRunEnv(t, "uk")
+	ctx := context.Background()
+	runID, err := e.cat.StartMatchRun(ctx, catalog.MatchRun{Mode: catalog.MatchModeMatch, LibraryID: &libID, Total: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range []*catalog.MatchRunItem{
+		{LibraryID: libID, Path: "Andy Weir/The Martian", Outcome: catalog.OutcomeReview, Score: 95,
+			Detail: "identifier_disagrees", Holds: []string{"identifier_disagrees", "length_differs"},
+			Proposal: catalog.MatchProposal{WorkID: "the-martian", Values: map[string]string{}}},
+		{LibraryID: libID, Path: "Someone/Obscure", Outcome: catalog.OutcomeReview, Score: 90, Detail: "length_differs",
+			Proposal: catalog.MatchProposal{WorkID: "obscure", Values: map[string]string{}}},
+	} {
+		if err := e.cat.RecordMatchItem(ctx, runID, it); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.cat.FinishMatching(ctx, runID, catalog.MatchReady, ""); err != nil {
+		t.Fatal(err)
+	}
+	itemsURL := "/api/v1/admin/match-runs/" + strconv.FormatInt(runID, 10) + "/items?outcome=review"
+	resp, body := e.do(t, "GET", itemsURL, adminTok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("items = %d %s", resp.StatusCode, body)
+	}
+	var page struct {
+		Items []struct {
+			Path   string   `json:"path"`
+			Detail string   `json:"detail"`
+			Holds  []string `json:"holds"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(body), &page); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][2]string{}
+	for _, it := range page.Items {
+		got[it.Path] = [2]string{it.Detail, strings.Join(it.Holds, ",")}
+	}
+	if got["Andy Weir/The Martian"] != [2]string{"identifier_disagrees", "identifier_disagrees,length_differs"} ||
+		got["Someone/Obscure"] != [2]string{"length_differs", ""} || strings.Count(body, `"holds"`) != 1 {
+		t.Fatalf("items = %s, want both reasons on the first and holds omitted on the second", body)
+	}
+	if resp, _ := e.do(t, "GET", itemsURL, memberTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member items = %d, want 403", resp.StatusCode)
 	}
 }
 
