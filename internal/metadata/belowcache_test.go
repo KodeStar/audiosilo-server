@@ -394,16 +394,57 @@ func benchFile(b *testing.B) (root, file string) {
 	return root, file
 }
 
-// closeAll closes every folder kept and no read holds (a test's cleanup).
-func (c *folderCache) closeAll() {
-	c.mu.Lock()
-	var closing []*keptFolder
-	for k, f := range c.m {
-		if f.refs == 0 {
-			delete(c.m, k)
-			closing = append(closing, f)
+// CloseFolders lets go of every kept folder at once (a library removed, its
+// root changed, the server stopping): one no read holds is closed, one a
+// read holds is closed when that read puts it back, and the next read opens
+// its folder again.
+func TestCloseFoldersLetsEveryFolderGo(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for _, rel := range []string{"Idle", "Held"} {
+		if err := os.Mkdir(filepath.Join(root, rel), 0o755); err != nil {
+			t.Fatal(err)
 		}
 	}
+	c := &folderCache{m: map[folderKey]*keptFolder{}}
+	idle, err := c.get(root, "Idle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.put(idle)
+	held, err := c.get(root, "Held")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	top := c.m[folderKey{root, "."}]
 	c.mu.Unlock()
-	closeFolders(closing)
+	if top == nil {
+		t.Fatal("the root's folder is not kept")
+	}
+	c.closeAll()
+	if n := len(c.m); n != 0 {
+		t.Errorf("%d folders still kept, want none", n)
+	}
+	for name, f := range map[string]*keptFolder{"an idle folder": idle, "the root's folder": top} {
+		if _, err := f.r.Stat("."); err == nil {
+			t.Errorf("%s is still open", name)
+		}
+	}
+	if _, err := held.r.Stat("."); err != nil {
+		t.Errorf("a folder a read holds was closed under it: %v", err)
+	}
+	c.put(held)
+	if _, err := held.r.Stat("."); err == nil {
+		t.Error("a folder let go of while held is still open after its read")
+	}
+	again, err := c.get(root, "Held")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again == held {
+		t.Error("the folder let go of was handed out again")
+	}
+	c.put(again)
+	c.closeAll()
 }

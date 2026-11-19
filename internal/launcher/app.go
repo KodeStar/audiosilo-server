@@ -247,6 +247,9 @@ func Run(ctx context.Context, opts Options) (err error) {
 
 	ffmpeg, ffprobe := resolveTools(ctx, abs, opts, log)
 	scanner := library.NewScanner(cat, ffprobe, log)
+	// The library folders kept open for the next read are closed as the
+	// server stops (an embedding app's process lives on).
+	defer metadata.CloseFolders()
 	scanner.OnRunFinished = rekeyAfterScan(ctx, cat, log, ntf.ScanFinished)
 	cat.SetPodcastNotice(ntf.PodcastListener())
 	scanner.SetConcurrency(cfg.Scan.Concurrency)

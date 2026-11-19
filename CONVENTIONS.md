@@ -1375,7 +1375,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   answer, both folders kept (an episode with no chapters file costs one look,
   `TestBelowFolderKeepsItsFoldersForANameNotThere`), a folder whose handle went stale (ESTALE) is let go. On
   Windows no folder is kept past its read (`openOnly`: an open folder there blocks renaming the folders above
-  it, `TestFolderCacheOpenOnlyKeepsNothing`). A name its
+  it, `TestFolderCacheOpenOnlyKeepsNothing`). Every kept folder is let go at once when a library is removed
+  or its root (or ignore patterns) change, and as the server stops (`metadata.CloseFolders`: an unmount never
+  meets a folder held for a next read, only the read in progress; `TestLibraryGoneKeepsNoFolderOpen`,
+  `TestCloseFoldersLetsEveryFolderGo`). A name its
   folder can't open (a link to a folder beside it, an absolute target) is opened through the root's kept
   folder, then resolved as `Below` does (an lstat's up to its last name only, so `LstatBelow` is always the
   link's own: `TestLstatBelowIsTheLinksOwn`). An external tool is handed the file

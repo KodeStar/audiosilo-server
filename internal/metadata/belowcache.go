@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sync"
 	"syscall"
+	"testing"
 	"time"
 )
 
@@ -219,6 +220,49 @@ func (c *folderCache) sweep() {
 	}
 	c.mu.Unlock()
 	closeFolders(closing)
+}
+
+// closeAll stops keeping every folder: one no read holds is closed now, one
+// a read holds by that read's put.
+func (c *folderCache) closeAll() {
+	var closing []*keptFolder
+	c.mu.Lock()
+	for k, f := range c.m {
+		delete(c.m, k)
+		if f.gone = true; f.refs == 0 {
+			closing = append(closing, f)
+		}
+	}
+	c.mu.Unlock()
+	closeFolders(closing)
+}
+
+// CloseFolders closes the folders kept open for reads below the libraries'
+// roots (BelowFolder), every library's: called when a library is removed or
+// its root changes, and when the server stops, so a folder kept for the next
+// read never holds a share that is being unmounted (EBUSY) past the read in
+// progress. A read under way keeps its folder until it ends; a later read
+// opens its folder again.
+func CloseFolders() { belowFolders.closeAll() }
+
+// FoldersKeptForTests is how many folders are kept open under root (as
+// given, or resolved), for a test of what lets them go. It panics outside a
+// test binary.
+func FoldersKeptForTests(root string) int {
+	if !testing.Testing() {
+		panic("metadata.FoldersKeptForTests called outside a test binary")
+	}
+	abs, _ := filepath.Abs(root)
+	resolved, _ := filepath.EvalSymlinks(abs)
+	n := 0
+	belowFolders.mu.Lock()
+	defer belowFolders.mu.Unlock()
+	for k := range belowFolders.m {
+		if k.root == abs || k.root == resolved {
+			n++
+		}
+	}
+	return n
 }
 
 func closeFolders(folders []*keptFolder) {

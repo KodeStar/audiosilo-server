@@ -969,6 +969,9 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		Resolving bool         `json:"resolving,omitempty"`
 	}{Library: updated, Resolving: resolving}
 	if stale {
+		// The folders kept open under its old root are let go of at once,
+		// so that one can be unmounted.
+		metadata.CloseFolders()
 		job := a.startScan(r, *updated, library.TriggerChange)
 		resp.Job = &job
 	}
@@ -1180,6 +1183,9 @@ func (a *API) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	// Its scans have nothing left to index into; don't let them hold the queue.
 	a.scanner.CancelLibrary(id)
+	// Nor a folder of its kept open for the next read: its share can be
+	// unmounted at once.
+	metadata.CloseFolders()
 	// Its Bridge jobs went with it: so do the private feed URLs held for them.
 	if a.bridge != nil {
 		if err := a.bridge.PruneSecrets(r.Context()); err != nil {
