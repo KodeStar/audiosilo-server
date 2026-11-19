@@ -3356,8 +3356,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   no code, as `ParkCode` reads it) keeps the stored one (`carryPark`; the stored progress whole when the
   merge would pass the progress cap), so a Bridge resuming after a restart neither blanks the reason
   nor raises a second park event. `dedupe_key`
-  (kind|library|path) returns the open job on a second press (200, else 201; the console says when that
-  job is one still stopping after a cancel, `cancel_requested`, as nothing new can be queued until it ends). `GET /bridge/jobs/next?wait=
+  (kind|library|path) returns the open job on a second press (200, else 201), unless that job is one
+  still stopping after a cancel (`cancel_requested`): a request never joins a job about to end, so the
+  stopping job ends `cancelled` at once (`endStoppingTx`, as its lapsed lease would end it: one key holds
+  one open job, migration 0047's unique index) and the request queues its own (201); the Bridge hears 409
+  `not_held` `cancelled` at its next report on the old one. `EnqueueAll` does the same, and podcast Check's
+  look for an open poll (`OpenJob`) passes a stopping one on to `Enqueue`; a stopping podcast
+  job of another identity still answers `identity_changed` until it has stopped. `GET /bridge/jobs/next?wait=
   &kind=[&share_off=1]` (`bridge.Service.ClaimFor`, `ClaimWith`; `share_off`: Community jobs below) long-polls (at most 25 s, woken by an enqueue; it ends with the
   server's base context, so a stop isn't held by the claim a Bridge always has waiting: 204) for the
   highest-priority oldest queued job of the
@@ -3369,7 +3374,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
   library: 409 `not_held`; with `reason: "cancelled"` when the job ended cancelled with no later claim than
   this one, `ErrCancelledWhileHeld`, so the Bridge records it cancelled, not lost, bridge#35), renews the lease and
-  answers the job, whose `cancel_requested` asks the Bridge to stop.
+  answers the job, whose `cancel_requested` asks the Bridge to stop. A `failed` or `needs_attention`
+  report on a job with `cancel_requested` is stored `cancelled` (the failure may be the stop itself, a
+  cancel the Bridge's last check missed or an older Bridge; a park would hold a job that was asked to
+  end open for a person): the error the job had stays, as when a lease lapses (the server's reason for a
+  cancel of its own, never the Bridge's failure or park text, which is logged); a `done` report stays
+  done. Its result stays, so an Audible refusal still marks the account (`AudibleRefusalCode` reads a
+  cancelled job's result code) and a podcast job's failure still counts (`PodcastFailed`: the poll and
+  fetch folds, the fetch cooldown and `RecentSubscribeFailure` read a cancelled job's result code, but
+  only the feed's own answer counts: `cancelledFailureCodes` or an `http_NNN`, an allow-list, never
+  `timeout`, `network`, `dns`, `tls`, `bridge_lost` or a Bridge or library code, which a stopped job
+  may name for the stop itself, as a v0.6.0 Bridge's `network` does: BR-CANCEL-RACE).
   Claim responses retain the request deadline but bypass response buffering and flush before return;
   a wait the deadline ends still answers 503 `request timed out`, as the buffered timeout did.
   A claim ended before its reply was written, a failed 200 write, or a Bridge that left before the

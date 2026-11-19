@@ -379,6 +379,72 @@ func TestRecentSubscribeFailure(t *testing.T) {
 		t.Fatalf("expired %+v %v", got, err)
 	}
 	none("expired private request", secret, q.lib)
+	// A failure reported once the request was asked to stop is stored
+	// cancelled and still counts, by its result's code.
+	ends := func(feedURL, state, code string) int64 {
+		t.Helper()
+		j, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, feedURL, false, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		claimed, err := q.ClaimFor(ctx, q.token, nil, 0)
+		if err != nil || claimed == nil || claimed.ID != j.ID {
+			t.Fatalf("claim %+v %v", claimed, err)
+		}
+		if _, err := q.Cancel(ctx, j.ID); err != nil {
+			t.Fatal(err)
+		}
+		got, err := q.UpdateHeld(ctx, j.ID, Update{Attempt: claimed.Attempts, State: &state, Error: ptr("ended"), Result: json.RawMessage(`{"code":"` + code + `","message":"ended"}`)})
+		if err != nil || got.State != StateCancelled {
+			t.Fatalf("%s after a cancel = %+v %v, want cancelled", state, got, err)
+		}
+		return j.ID
+	}
+	gone := "https://example.com/gone.xml"
+	id := ends(gone, StateFailed, "gone")
+	if got, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, gone, time.Hour); err != nil || got == nil || got.ID != id {
+		t.Fatalf("a failure stored cancelled = %+v %v, want job %d", got, err, id)
+	}
+	// A request the Bridge stopped names the stop's own code: no failure.
+	stopped := "https://example.com/stopped.xml"
+	ends(stopped, StateCancelled, "timeout")
+	none("a stopped request", stopped, q.lib)
+	lostStop := "https://example.com/lost-stop.xml"
+	ends(lostStop, StateFailed, "bridge_lost")
+	none("a failure that may be the stop", lostStop, q.lib)
+}
+
+// An adopt-only request (an OPML row past its new-request budget) starts no
+// job over a stopping one either: it is refused, and the stopping job is left
+// to stop (the refusal undoes its end).
+func TestSubscribeAdoptOnlyLeavesAStoppingRequest(t *testing.T) {
+	t.Parallel()
+	q := podcastQueue(t)
+	ctx := context.Background()
+	feedURL := "https://example.com/feed.xml"
+	j, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, feedURL, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || claimed == nil || claimed.ID != j.ID {
+		t.Fatalf("claim %+v %v", claimed, err)
+	}
+	if _, err := q.Cancel(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: feedURL, AdoptOnly: true}); !errors.Is(err, ErrNoNewRequest) {
+		t.Fatalf("adopt-only over a stopping request = %v, want ErrNoNewRequest", err)
+	}
+	if got, err := q.Job(ctx, j.ID); err != nil || got.State != StateClaimed || !got.CancelRequested {
+		t.Fatalf("the stopping request = %+v %v, want it still stopping", got, err)
+	}
+	again, created, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, feedURL, false, "")
+	if err != nil || !created || again.ID == j.ID {
+		t.Fatalf("a new request over it = %+v %v %v, want a new job", again, created, err)
+	}
+	if got, err := q.Job(ctx, j.ID); err != nil || got.State != StateCancelled {
+		t.Fatalf("the stopped request = %+v %v, want cancelled", got, err)
+	}
 }
 
 // R-13: deleting a library cascades its jobs away; PruneSecrets then drops the
@@ -499,6 +565,34 @@ func TestFeedAnswered(t *testing.T) {
 		if FeedAnswered(code) {
 			t.Errorf("%q is counted as an answer", code)
 		}
+	}
+}
+
+// PodcastFailed counts a cancelled job only by the feed's own answer: a cancel
+// can end a fetch as a timeout or, on a v0.6.0 Bridge, as network
+// (BR-CANCEL-RACE), so no network-class or Bridge-side code counts then. A job
+// stored failed counts whatever its code, network too.
+func TestPodcastFailed(t *testing.T) {
+	job := func(state, code string) Job {
+		return Job{State: state, Result: json.RawMessage(`{"code":"` + code + `"}`)}
+	}
+	for _, code := range []string{"gone", "http_404", "http_503", "http_310", "redirect_loop", "invalid_feed_url", "blocked_address", "not_a_feed", "not_a_podcast", "too_large", "episode_not_found", "enclosure_missing", "invalid_audio", "unsupported_encoding"} {
+		if !PodcastFailed(job(StateCancelled, code)) {
+			t.Errorf("a cancelled job with %s is not counted", code)
+		}
+	}
+	for _, code := range []string{"", "network", "timeout", "dns", "tls", "bridge_lost", "write_failed", "library_not_writable", "identity_changed", "feed_secret_missing", "http_99", "http_600"} {
+		if PodcastFailed(job(StateCancelled, code)) {
+			t.Errorf("a cancelled job with %q is counted", code)
+		}
+	}
+	for _, code := range []string{"network", "timeout", "bridge_lost", "gone"} {
+		if !PodcastFailed(job(StateFailed, code)) {
+			t.Errorf("a failed job with %s is not counted", code)
+		}
+	}
+	if PodcastFailed(job(StateDone, "gone")) {
+		t.Error("a done job is counted")
 	}
 }
 

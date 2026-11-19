@@ -911,7 +911,7 @@ export function batchCheck(e: BridgeEstimate | undefined): BatchCheck {
   return {
     covered,
     // A job being cancelled ends without running, so it doesn't cover the book:
-    // queueing it again says it is still stopping (queueInOrder).
+    // queueing it again ends it and queues a new one (the server's Enqueue).
     open: Boolean(e.open_job && isOpen(e.open_job.state) && !e.open_job.cancel_requested),
     unknown: !covered && Boolean(e.has.community_unknown),
     notWritable: !e.writable,

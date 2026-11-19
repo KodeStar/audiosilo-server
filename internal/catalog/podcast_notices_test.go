@@ -761,6 +761,77 @@ func TestPodcastStalePollFoldIgnored(t *testing.T) {
 	}
 }
 
+// A poll that failed once it was asked to stop is stored cancelled with the
+// Bridge's result (bridge.UpdateHeld) and folds as the failure it was: its
+// code, its Retry-After, the run and the notice, with the result's message,
+// never the cancel's reason. A cancel alone, or one naming a code that isn't
+// the feed's answer (a stopped fetch reads as a timeout, or as network on a
+// v0.6.0 Bridge, a stopped handler as bridge_lost: BR-CANCEL-RACE), still
+// folds nothing, while a poll stored failed with network still counts.
+func TestPodcastPollFailureStoredCancelledFolds(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	now := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	log := listenNotices(c)
+	lib := podcastShowsLib(t, c, ctx, 0)
+	next := int64(0)
+	fold := func(result string) []PodcastNotice {
+		t.Helper()
+		next++
+		j := pollJob(lib.ID, next, bridge.StateCancelled, "")
+		j.Result, j.Error = json.RawMessage(result), bridge.CancelReplacedRequest
+		if err := c.FoldPodcastJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+		return log.take()
+	}
+	for _, result := range []string{`{}`, `{"code":"timeout"}`, `{"code":"bridge_lost"}`, `{"code":"network"}`, `{"code":"dns"}`, `{"code":"tls"}`, `{"code":"write_failed"}`} {
+		if got := fold(result); len(got) != 0 {
+			t.Fatalf("a cancelled poll with %s told %+v", result, got)
+		}
+		var n int
+		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM podcast_feed_state WHERE library_id=?`, lib.ID).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("a cancelled poll with %s folded a feed state (%d rows, %v)", result, n, err)
+		}
+	}
+	if got := fold(`{"code":"http_429","retry_after_seconds":3600}`); len(got) != 0 {
+		t.Fatalf("a first failure told %+v", got)
+	}
+	var code, msg string
+	var failures, run int
+	var due sql.NullString
+	state := func() {
+		t.Helper()
+		if err := c.db.QueryRowContext(ctx, `SELECT error_code,error,failures,feed_failures,next_poll_at FROM podcast_feed_state WHERE library_id=?`, lib.ID).
+			Scan(&code, &msg, &failures, &run, &due); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state()
+	if code != "http_429" || msg != "" || failures != 1 || run != 1 || due.String != now.Add(time.Hour).Format(time.RFC3339) {
+		t.Fatalf("a failure stored cancelled: code %q, error %q, failures %d, run %d, next poll %q; want http_429 backed off an hour",
+			code, msg, failures, run, due.String)
+	}
+	// Stored failed, network counts as today: a second failure in the run.
+	next++
+	if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, next, bridge.StateFailed, "network")); err != nil {
+		t.Fatal(err)
+	}
+	log.take()
+	state()
+	if code != "network" || failures != 2 || run != 2 {
+		t.Fatalf("a network failure: code %q, failures %d, run %d; want network, 2 and 2", code, failures, run)
+	}
+	got := fold(`{"code":"gone","message":"The feed has ended."}`)
+	if len(got) != 1 || got[0].Kind != PodcastFeedFailing || got[0].Code != "gone" {
+		t.Fatalf("gone after a cancel told %+v, want the feed failing", got)
+	}
+	state()
+	if code != "gone" || msg != "The feed has ended." || due.Valid {
+		t.Fatalf("gone after a cancel: code %q, error %q, next poll %q; want gone and no next poll", code, msg, due.String)
+	}
+}
+
 // A feed that ended (`gone`) stays ended when a follower's Check now of it
 // fails another way: the scheduled polls stay stopped (no next poll, still
 // `gone`), nothing is told again, and only a success brings it back.

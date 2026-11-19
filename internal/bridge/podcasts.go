@@ -120,6 +120,41 @@ type PodcastOutcome struct {
 	RetryAfterSeconds *int   `json:"retry_after_seconds"`
 }
 
+// cancelledFailureCodes are the failure codes that are an answer from the feed
+// (or the episode's host) itself: what it sent, its address as written or as
+// resolved (unsentFailures), what its body held. Only these count for a
+// cancelled podcast job (PodcastFailed): a cancel never causes them. Every
+// other code (network, timeout, tls, dns, bridge_lost, the Bridge's or the
+// library's own) may be the stop itself: a Bridge reads the job's ended
+// context as a timeout, and a v0.6.0 Bridge as network (BR-CANCEL-RACE). An
+// http_NNN code (HTTPStatus) is one too.
+var cancelledFailureCodes = []string{"gone", "redirect_loop", "invalid_feed_url", "blocked_address", "not_a_feed", "not_a_podcast", "too_large", "episode_not_found", "enclosure_missing", "invalid_audio", "unsupported_encoding"}
+
+// countsWhenCancelled reports whether code is one of cancelledFailureCodes or
+// an HTTP status. Unlike FeedAnswered it is an allow-list: a code it doesn't
+// know (a newer Bridge's) never counts after a cancel.
+func countsWhenCancelled(code string) bool {
+	_, status := HTTPStatus(code)
+	return status || slices.Contains(cancelledFailureCodes, code)
+}
+
+// PodcastFailed reports whether j, an ended podcast job, failed: stored
+// failed, or stored cancelled with the feed's answer as its result. A failure
+// reported once the job was asked to stop is stored cancelled with the
+// Bridge's result (UpdateHeld), and still says what the feed or the episode
+// answered (gone, a Retry-After): the folds, the fetch cooldown and
+// RecentSubscribeFailure count it. A cancel alone names no code, or one that
+// isn't the feed's answer (countsWhenCancelled), which is never counted.
+func PodcastFailed(j Job) bool {
+	switch j.State {
+	case StateFailed:
+		return true
+	case StateCancelled:
+		return countsWhenCancelled(failureCode(j, nil))
+	}
+	return false
+}
+
 // PodcastOutcomeOf decodes j's result. A failed job's code defaults to
 // bridge_lost (a lease that ran out with no result) and its message to the
 // job's error.
@@ -327,7 +362,7 @@ func FeedAnswered(code string) bool {
 }
 
 // RecentSubscribeFailure is user's last podcast.subscribe for norm in lib when
-// it failed within the last `within` (the Service's clock), else nil: an OPML
+// it failed (PodcastFailed) within the last `within` (the Service's clock), else nil: an OPML
 // import passes such a feed over instead of queueing it again. A failure that
 // isn't the feed's (notFeedFailures) never counts.
 func (s *Service) RecentSubscribeFailure(ctx context.Context, lib, user int64, norm string, within time.Duration) (*Job, error) {
@@ -344,7 +379,7 @@ func (s *Service) RecentSubscribeFailure(ctx context.Context, lib, user int64, n
 	if err != nil {
 		return nil, err
 	}
-	if j.State != StateFailed {
+	if !PodcastFailed(*j) {
 		return nil, nil
 	}
 	if o, _ := PodcastOutcomeOf(*j); !FeedFailure(o.Code) {

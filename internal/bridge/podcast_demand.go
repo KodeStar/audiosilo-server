@@ -84,17 +84,18 @@ func fetchCooling(ctx context.Context, tx *sql.Tx, j NewJob, now time.Time) (boo
 	}
 	// A terminal update can commit just before the outcome fold. It must not
 	// open a retry window between those transactions.
-	var state string
+	var state, result string
 	var finished sql.NullString
 	var id int64
-	err = tx.QueryRowContext(ctx, `SELECT id,state,finished_at FROM bridge_jobs WHERE kind='podcast.fetch' AND library_id=? AND rel_path=? AND `+ParamSQL("params", "$.show_id")+`=? AND `+ParamSQL("params", "$.episode_id")+`=? ORDER BY id DESC LIMIT 1`, j.LibraryID, j.Path, p.ShowID, p.EpisodeID).Scan(&id, &state, &finished)
+	err = tx.QueryRowContext(ctx, `SELECT id,state,finished_at,result FROM bridge_jobs WHERE kind='podcast.fetch' AND library_id=? AND rel_path=? AND `+ParamSQL("params", "$.show_id")+`=? AND `+ParamSQL("params", "$.episode_id")+`=? ORDER BY id DESC LIMIT 1`, j.LibraryID, j.Path, p.ShowID, p.EpisodeID).Scan(&id, &state, &finished, &result)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if state != StateFailed {
+	// A failure stored cancelled (reported after a cancel) cools as one.
+	if !PodcastFailed(Job{State: state, Result: json.RawMessage(result)}) {
 		return false, nil
 	}
 	var folded bool

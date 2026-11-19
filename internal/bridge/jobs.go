@@ -341,16 +341,24 @@ func openJob(ctx context.Context, q rowQuerier, key string) (*Job, error) {
 	return j, err
 }
 
-// openJobID is the id of the open job with dedupe key key, read in tx, 0 when
-// there is none (openJob's query, the id alone).
-func openJobID(ctx context.Context, tx *sql.Tx, key string) (int64, error) {
-	var id int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT id FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL, key).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
+// endStoppingTx ends job, an open one asked to stop (cancel_requested), as
+// cancelled inside tx, so a new request for its work starts a job of its own
+// rather than joining one about to end (the request would quietly do nothing):
+// one dedupe key holds one open job (migration 0047's unique index), so the
+// new job can only be queued once this one has ended. It ends as its lapsed
+// lease would end it (expireSQL): what it reported and its error (the server's
+// reason for a cancel of its own) stay, and the Bridge's next report on it is
+// told it was cancelled (ErrCancelledWhileHeld). Until then the Bridge may
+// still be on it, as it may be on a stopping job a new job of another kind
+// passes (givesWay): it ends without writing. It returns the job as ended, for
+// the caller to report (Service.report, from job.State) once tx commits.
+func endStoppingTx(ctx context.Context, tx *sql.Tx, job *Job, now string) (*Job, error) {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE bridge_jobs SET state = 'cancelled', lease_until = NULL, finished_at = ?1, updated_at = ?1
+		  WHERE id = ?2 AND cancel_requested = 1 AND state IN `+OpenStatesSQL, now, job.ID); err != nil {
+		return nil, err
 	}
-	return id, err
+	return getJob(ctx, tx, job.ID)
 }
 
 // sidecars.generate's param values (auto and local are the defaults),
@@ -776,8 +784,9 @@ func checkNew(j *NewJob) error {
 }
 
 // Enqueue queues j and returns it, or the open job with the same kind, library
-// and path when there is one (created false). The kind must be one the server
-// knows (ErrInvalid otherwise, as for bad params) and the paired Bridge runs
+// and path when there is one (created false), unless that job was already
+// asked to stop: it ends cancelled now (endStoppingTx) and j is queued. The
+// kind must be one the server knows (ErrInvalid otherwise, as for bad params) and the paired Bridge runs
 // (ErrKindUnavailable); it may be offline, and the job waits. A kind that writes
 // into the library is queued only when the last heartbeat reports the library
 // mapped and writable (ErrLibraryNotWritable), a job that files to the
@@ -819,8 +828,11 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 	key := jobKey(j)
 	var exp expiry
 	identityBusy, promoted := false, false
+	// stopping: the open job a cancel had asked to stop, ended for this request.
+	var stopping *transition
 	err = s.db.WithTx(ctx, "bridge.Enqueue", func(tx *sql.Tx) error {
 		now := s.ts()
+		stopping = nil
 		var err error
 		if exp, err = expireTx(ctx, tx, now); err != nil {
 			return err
@@ -832,6 +844,18 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 		}
 		if job, err = openJob(ctx, tx, key); err != nil {
 			return err
+		}
+		// The open job this request would join is already asked to stop: it
+		// ends here and the request goes on as with none open (every refusal
+		// below still applies, and undoes the end with the transaction). A
+		// stopping podcast job of another identity is left to the branch
+		// below (ErrIdentityChanged until it has stopped).
+		if job != nil && job.CancelRequested && (!podcastWork(j.Kind) || samePodcastIdentity(job.Params, j.Params)) {
+			ended, err := endStoppingTx(ctx, tx, job, now)
+			if err != nil {
+				return err
+			}
+			stopping, job = &transition{job: ended, from: job.State}, nil
 		}
 		var id int64
 		if job != nil {
@@ -982,6 +1006,9 @@ func (s *Service) enqueueChecked(ctx context.Context, j NewJob) (job *Job, creat
 		s.wake.fire()
 	}
 	s.settle(ctx, exp)
+	if stopping != nil {
+		s.report(ctx, stopping.job, stopping.from, "")
+	}
 	return job, created, nil
 }
 
@@ -1017,7 +1044,8 @@ var batchKinds = map[string]bool{KindAudibleImport: true}
 
 // EnqueueAll is Enqueue for many jobs of one kind at once, in one writer
 // transaction ("Back up everything" queues hundreds; one backup is a batch of
-// one): each queued, or the open job with its key found, then its id passed
+// one): each queued, or the open job with its key found (one already asked to
+// stop ends first and the job is queued, as Enqueue does), then its id passed
 // to record (with its index in jobs) in the same transaction, so what the
 // caller records of each commits with the queue or not at all. Only a kind that refuses,
 // cancels, promotes and prunes nothing qualifies (audible.import), else
@@ -1072,8 +1100,9 @@ func (s *Service) EnqueueAll(ctx context.Context, jobs []NewJob,
 		return 0, refused
 	}
 	var exp expiry
+	var stopping []transition // the open jobs asked to stop, ended for their new requests
 	err = s.db.WithTx(ctx, "bridge.EnqueueAll", func(tx *sql.Tx) error {
-		created = 0
+		created, stopping = 0, nil
 		now := s.ts()
 		var err error
 		if exp, err = expireTx(ctx, tx, now); err != nil {
@@ -1081,11 +1110,22 @@ func (s *Service) EnqueueAll(ctx context.Context, jobs []NewJob,
 		}
 		for i, j := range checked {
 			key := jobKey(j)
-			id, err := openJobID(ctx, tx, key)
+			open, err := openJob(ctx, tx, key)
 			if err != nil {
 				return err
 			}
-			if id == 0 {
+			// One already asked to stop is not joined (Enqueue's rule).
+			if open != nil && open.CancelRequested {
+				ended, err := endStoppingTx(ctx, tx, open, now)
+				if err != nil {
+					return err
+				}
+				stopping, open = append(stopping, transition{job: ended, from: open.State}), nil
+			}
+			var id int64
+			if open != nil {
+				id = open.ID
+			} else {
 				if id, err = insertJob(ctx, tx, j, key, now); err != nil {
 					return err
 				}
@@ -1104,6 +1144,9 @@ func (s *Service) EnqueueAll(ctx context.Context, jobs []NewJob,
 		s.wake.fire()
 	}
 	s.settle(ctx, exp)
+	for _, t := range stopping {
+		s.report(ctx, t.job, t.from, "")
+	}
 	return created, refused
 }
 
@@ -1673,12 +1716,16 @@ var ErrNotHeld = errors.New("the job is not held by this claim")
 // cancelled (by an admin, or by the server itself: Cancel*, cancelsOpen), which
 // ends at once, as does a held one whose book moved onto another open job of
 // its kind (MoveJobs), a working one whose lease ran out after the cancel was
-// asked for, one this claim lost to a lapsed lease and that was cancelled
-// while queued again, or one whose claim the server released as undelivered
-// though the Bridge read it (ReleaseUnsentClaim) and that was cancelled then or
-// while queued again (cancelledUnder). The 409 not_held then carries reason "cancelled", so the
-// Bridge records the job cancelled rather than lost, which is how it ended
-// (bridge#35, BRIDGE-04). errors.Is reads it as ErrNotHeld too.
+// asked for, one whose failure or park after the cancel was stored cancelled
+// (UpdateHeld: the same report sent again, its answer lost, or a parked job's
+// next report), one a new request for its work ended while it was stopping
+// (endStoppingTx), one this claim lost to a lapsed lease and that was
+// cancelled while queued again, or one whose claim the server released as
+// undelivered though the Bridge read it (ReleaseUnsentClaim) and that was
+// cancelled then or while queued again (cancelledUnder). The 409 not_held then
+// carries reason "cancelled", so the Bridge records the job cancelled rather
+// than lost, which is how it ended (bridge#35, BRIDGE-04). errors.Is reads it
+// as ErrNotHeld too.
 var ErrCancelledWhileHeld = fmt.Errorf("%w: it was cancelled", ErrNotHeld)
 
 // cancelledUnder reports whether job cur ended cancelled with no claim later
@@ -1729,8 +1776,9 @@ func checkUpdate(u *Update) error {
 // one it may report; a claimed or running job's lease is renewed, a parked
 // one's dropped, a finished one's ended. It returns the job as stored, whose
 // CancelRequested tells the Bridge an admin, or the server (a share whose
-// module was turned off: stopsShare), asked it to stop. A move into a state an
-// admin hears about is reported (OnTransition) once it commits.
+// module was turned off: stopsShare), asked it to stop; a failure or a park it
+// reports after that ends the job cancelled. A move into a state an admin hears
+// about is reported (OnTransition) once it commits.
 func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, error) {
 	if err := checkUpdate(&u); err != nil {
 		return nil, err
@@ -1740,6 +1788,9 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		from     string
 		fromCode string
 		exp      expiry
+		// stopped: the state the report named (failed or needs_attention) when it
+		// was stored as a cancel, else "".
+		stopped string
 	)
 	// A user-state transaction (server#258): a report that renews the lease or
 	// reports progress (a running job's keepalive, its step and message)
@@ -1782,6 +1833,16 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 			}
 			state = *u.State
 		}
+		// A job that fails or parks once it was asked to stop ends cancelled, as
+		// a lapsed or unsent claim does (expireSQL, failUnsentClaim): the failure
+		// may be the stop itself (a cancel after the Bridge's last check, or an
+		// older Bridge that never checks), and a park would hold open, for a
+		// person to see to, a job that was asked to end. The log keeps what the
+		// Bridge said.
+		stopped = ""
+		if cur.CancelRequested && (state == StateFailed || state == StateNeedsAttention) {
+			stopped, state = state, StateCancelled
+		}
 		var lease, finished any
 		switch state {
 		case StateClaimed, StateRunning:
@@ -1822,11 +1883,15 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		}
 		// The server's reason for a cancel it asked for (cancelOpenTx) stays
 		// through the Bridge's reports, which always send their own error, while
-		// the job works and when it ends cancelled. A job that finishes, fails or
-		// parks anyway carries the Bridge's own error (or none), never the reason.
+		// the job works and when it ends cancelled. A failure or a park stored as
+		// a cancel (above) keeps the error the job had, as a lapsed lease does
+		// (expireSQL): the server's reason, never the Bridge's failure text. A
+		// job that finishes anyway carries the Bridge's own error (or none),
+		// never the reason.
 		serverCancel := cur.CancelRequested && IsCancelReason(cur.Error)
 		switch {
-		case serverCancel && (state == StateDone || state == StateFailed || state == StateNeedsAttention):
+		case stopped != "":
+		case serverCancel && state == StateDone:
 			errText = ""
 			if u.Error != nil {
 				errText = *u.Error
@@ -1845,6 +1910,14 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 	})
 	if err != nil {
 		return nil, err
+	}
+	if stopped != "" {
+		var said string
+		if u.Error != nil {
+			said = *u.Error
+		}
+		s.Log.Info("bridge: a job failed or parked once it was asked to stop; stored as cancelled",
+			"job", job.ID, "kind", job.Kind, "reported", stopped, "err", said)
 	}
 	s.settle(ctx, exp)
 	s.report(ctx, job, from, fromCode)

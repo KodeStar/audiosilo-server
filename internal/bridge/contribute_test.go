@@ -809,6 +809,16 @@ func TestUpdateHeldStopsAShareOfAnOffModule(t *testing.T) {
 	if j := running(correction.ID); !j.CancelRequested || j.Error != CancelModuleOff {
 		t.Fatalf("a correction, module off: %+v, want asked to stop with %q", j, CancelModuleOff)
 	}
+	// One that fails before it stops ends cancelled, with the server's reason,
+	// and is no news to an admin.
+	heard := q.heard()
+	if j, err := q.UpdateHeld(ctx, correction.ID, Update{Attempt: 1, State: ptr(StateFailed), Error: ptr("context canceled")}); err != nil ||
+		j.State != StateCancelled || j.Error != CancelModuleOff {
+		t.Fatalf("a correction failing, module off = %+v, %v; want cancelled with %q", j, err, CancelModuleOff)
+	}
+	if len(*heard) != 0 {
+		t.Fatalf("heard %v, want no news for a share stopped by its module", *heard)
+	}
 	j := running(community.ID)
 	if !j.CancelRequested || j.Error != CancelModuleOff || j.State != StateRunning {
 		t.Fatalf("module off: %+v, want asked to stop with %q", j, CancelModuleOff)

@@ -496,6 +496,193 @@ func TestCancel(t *testing.T) {
 	}
 }
 
+// A job that fails once an admin asked it to stop ends cancelled, whichever
+// Bridge reports it (one that checks before its end and loses the race, or an
+// older one that never checks): the failure may be the stop itself. It keeps
+// the error it had, never the Bridge's failure text, is no news to an admin,
+// and the log keeps the failure. A failure with no cancel stays a failure, and
+// a job that finished before it heard the cancel stays done.
+func TestUpdateHeldFailedAfterCancelEndsCancelled(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	heard := q.heard()
+	logged := logTo(q)
+	held := func(path string) *Job {
+		t.Helper()
+		j := q.verify(t, path, 0)
+		if c, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || c == nil || c.ID != j.ID {
+			t.Fatalf("claim = %+v, %v; want job %d", c, err, j.ID)
+		}
+		return j
+	}
+
+	cancelled := held("A")
+	if _, err := q.Cancel(ctx, cancelled.ID); err != nil {
+		t.Fatal(err)
+	}
+	j, err := q.UpdateHeld(ctx, cancelled.ID, Update{Attempt: 1, State: ptr(StateFailed), Error: ptr("ffmpeg: signal: killed")})
+	if err != nil || j.State != StateCancelled || j.FinishedAt == nil || j.LeaseUntil != nil {
+		t.Fatalf("failed after a cancel = %+v, %v; want cancelled and ended", j, err)
+	}
+	if j.Error != "" {
+		t.Fatalf("error = %q, want the job's own (none), not the Bridge's failure", j.Error)
+	}
+	if !strings.Contains(logged.String(), "stored as cancelled") || !strings.Contains(logged.String(), "ffmpeg: signal: killed") {
+		t.Fatalf("log = %q, want the failure kept", logged.String())
+	}
+	if len(*heard) != 0 {
+		t.Fatalf("heard %v, want no news for a cancelled job", *heard)
+	}
+	// The same report sent again (its answer never arrived) is told the job
+	// ended cancelled, not lost, so the Bridge records it as the server has it.
+	resend := Update{Attempt: 1, State: ptr(StateFailed), Error: ptr("ffmpeg: signal: killed")}
+	if _, err := q.UpdateHeld(ctx, cancelled.ID, resend); !errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("the failed report sent again = %v, want ErrCancelledWhileHeld", err)
+	}
+
+	failed := held("B")
+	j, err = q.UpdateHeld(ctx, failed.ID, Update{Attempt: 1, State: ptr(StateFailed), Error: ptr("disk full")})
+	if err != nil || j.State != StateFailed || j.Error != "disk full" {
+		t.Fatalf("failed with no cancel = %+v, %v; want failed", j, err)
+	}
+	if _, err := q.UpdateHeld(ctx, failed.ID, Update{Attempt: 1, State: ptr(StateFailed), Error: ptr("disk full")}); !errors.Is(err, ErrNotHeld) || errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("a plain failure sent again = %v, want ErrNotHeld alone", err)
+	}
+
+	done := held("C")
+	if _, err := q.Cancel(ctx, done.ID); err != nil {
+		t.Fatal(err)
+	}
+	j, err = q.UpdateHeld(ctx, done.ID, Update{Attempt: 1, State: ptr(StateDone), Result: json.RawMessage(`{"ok":true}`)})
+	if err != nil || j.State != StateDone || !j.CancelRequested {
+		t.Fatalf("done after a cancel = %+v, %v; want done", j, err)
+	}
+	if want := []string{"claimed>failed:", "claimed>done:"}; !slices.Equal(*heard, want) {
+		t.Fatalf("heard %v, want %v", *heard, want)
+	}
+}
+
+// A job that parks once it was asked to stop ends cancelled too, a ParkError's
+// end and a park the handler keeps running under alike: parked, it would wait
+// on a person, an admin told of it, for a job that was asked to end. It keeps
+// the error it had (the server's reason for a cancel of its own), not the
+// park's message, which the log keeps. A park with no cancel still parks.
+func TestUpdateHeldParkedAfterCancelEndsCancelled(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	heard := q.heard()
+	logged := logTo(q)
+	held := func(path string) *Job {
+		t.Helper()
+		j := q.verify(t, path, 0)
+		if c, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || c == nil || c.ID != j.ID {
+			t.Fatalf("claim = %+v, %v; want job %d", c, err, j.ID)
+		}
+		return j
+	}
+	park := Update{Attempt: 1, State: ptr(StateNeedsAttention), Error: ptr("sign in to the agent again"),
+		Progress: json.RawMessage(`{"park":{"code":"agent_auth"}}`)}
+
+	byAdmin := held("A")
+	if _, err := q.Cancel(ctx, byAdmin.ID); err != nil {
+		t.Fatal(err)
+	}
+	j, err := q.UpdateHeld(ctx, byAdmin.ID, park)
+	if err != nil || j.State != StateCancelled || j.FinishedAt == nil || j.LeaseUntil != nil || !j.CancelRequested {
+		t.Fatalf("parked after a cancel = %+v, %v; want cancelled and ended", j, err)
+	}
+	if j.Error != "" {
+		t.Fatalf("error = %q, want the job's own (none), not the park's message", j.Error)
+	}
+	if got := logged.String(); !strings.Contains(got, "stored as cancelled") || !strings.Contains(got, "reported=needs_attention") ||
+		!strings.Contains(got, "sign in to the agent again") {
+		t.Fatalf("log = %q, want the park kept", got)
+	}
+	// The parked job's next report (a Bridge that read no state in the answer)
+	// is told it ended cancelled.
+	if _, err := q.UpdateHeld(ctx, byAdmin.ID, park); !errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("the park sent again = %v, want ErrCancelledWhileHeld", err)
+	}
+
+	// The server's own cancel: its reason stays.
+	byServer := held("B")
+	if err := q.db.WithTx(ctx, "test.cancel", func(tx *sql.Tx) error {
+		return cancelOpenTx(ctx, tx, DedupeKey(KindVerify, &q.lib, ptr("B")), q.ts(), CancelMoved)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	j, err = q.UpdateHeld(ctx, byServer.ID, park)
+	if err != nil || j.State != StateCancelled || j.Error != CancelMoved {
+		t.Fatalf("parked after the server's cancel = %+v, %v; want cancelled with %q", j, err, CancelMoved)
+	}
+	if len(*heard) != 0 {
+		t.Fatalf("heard %v, want no news for a cancelled job", *heard)
+	}
+
+	parked := held("C")
+	j, err = q.UpdateHeld(ctx, parked.ID, park)
+	if err != nil || j.State != StateNeedsAttention || j.Error != "sign in to the agent again" {
+		t.Fatalf("parked with no cancel = %+v, %v; want parked", j, err)
+	}
+	if want := []string{"claimed>needs_attention:agent_auth"}; !slices.Equal(*heard, want) {
+		t.Fatalf("heard %v, want %v", *heard, want)
+	}
+}
+
+// A request matching an open job that was already asked to stop does not join
+// it (it would quietly do nothing): the stopping job ends cancelled at once,
+// its error kept, its end reported, and the request queues a job of its own,
+// since a dedupe key holds one open job. The stopped job's Bridge is told it
+// was cancelled at its next report. An open job not asked to stop is still
+// joined.
+func TestEnqueueStartsANewJobOverAStoppingOne(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	var ended []string
+	q.OnEnded = func(_ context.Context, j Job) { ended = append(ended, fmt.Sprintf("%d:%s", j.ID, j.State)) }
+	ask := func() (*Job, bool) {
+		t.Helper()
+		j, created, err := q.Enqueue(ctx, NewJob{Kind: KindVerify, LibraryID: &q.lib, Path: ptr("A"), RequestedBy: q.admin})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return j, created
+	}
+	first, _ := ask()
+	if c, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || c == nil || c.ID != first.ID {
+		t.Fatalf("claim = %+v, %v", c, err)
+	}
+	if j, created := ask(); created || j.ID != first.ID {
+		t.Fatalf("a working job = %+v, created %v; want it joined", j, created)
+	}
+	if j, err := q.Cancel(ctx, first.ID); err != nil || j.State != StateClaimed || !j.CancelRequested {
+		t.Fatalf("cancel = %+v, %v; want a request", j, err)
+	}
+	next, created := ask()
+	if !created || next.ID == first.ID || next.State != StateQueued || next.CancelRequested {
+		t.Fatalf("over a stopping job = %+v, created %v; want a new queued job", next, created)
+	}
+	old, err := q.Job(ctx, first.ID)
+	if err != nil || old.State != StateCancelled || old.FinishedAt == nil || old.LeaseUntil != nil {
+		t.Fatalf("the stopping job = %+v, %v; want cancelled and ended", old, err)
+	}
+	if want := []string{fmt.Sprintf("%d:cancelled", first.ID)}; !slices.Equal(ended, want) {
+		t.Fatalf("ended %v, want %v", ended, want)
+	}
+	if _, err := q.UpdateHeld(ctx, first.ID, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrCancelledWhileHeld) {
+		t.Fatalf("the stopped job's report = %v, want ErrCancelledWhileHeld", err)
+	}
+	if c, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || c == nil || c.ID != next.ID {
+		t.Fatalf("claim = %+v, %v; want the new job %d", c, err, next.ID)
+	}
+	if j, created := ask(); created || j.ID != next.ID {
+		t.Fatalf("the new job = %+v, created %v; want it joined", j, created)
+	}
+}
+
 func TestListFilters(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
@@ -829,15 +1016,18 @@ func TestServerCancelReasonOutlivesReports(t *testing.T) {
 		t.Fatalf("admin-then-server cancel ended with %q, want the Bridge's error", j.Error)
 	}
 
-	// The server asked, but the job failed or finished first: the Bridge's
-	// error (or none), never the cancel reason, on a job that wasn't cancelled.
+	// The server asked, but the job finished first: the Bridge's error (or
+	// none), never the cancel reason, on a job that wasn't cancelled. One that
+	// failed instead ends cancelled, with the reason (the failure may be the
+	// stop itself).
 	for _, end := range []struct {
 		path, state string
 		err         *string
+		wantState   string
 		want        string
 	}{
-		{"Author/Failed", StateFailed, ptr("agent: out of credit"), "agent: out of credit"},
-		{"Author/Done", StateDone, nil, ""},
+		{"Author/Failed", StateFailed, ptr("agent: out of credit"), StateCancelled, reason},
+		{"Author/Done", StateDone, nil, StateDone, ""},
 	} {
 		if _, _, err := q.describe("", ptr(end.path)); err != nil {
 			t.Fatal(err)
@@ -847,8 +1037,8 @@ func TestServerCancelReasonOutlivesReports(t *testing.T) {
 			t.Fatal(err)
 		}
 		j, err := q.UpdateHeld(ctx, w.ID, Update{Attempt: w.Attempts, State: ptr(end.state), Error: end.err})
-		if err != nil || j.State != end.state || j.Error != end.want {
-			t.Fatalf("%s after the server's cancel = %+v, %v; want error %q", end.state, j, err, end.want)
+		if err != nil || j.State != end.wantState || j.Error != end.want {
+			t.Fatalf("%s after the server's cancel = %+v, %v; want %s with error %q", end.state, j, err, end.wantState, end.want)
 		}
 	}
 }

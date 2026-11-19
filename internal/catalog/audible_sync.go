@@ -564,7 +564,8 @@ func (c *Catalog) MarkAudibleSyncQueued(ctx context.Context, account string) err
 // account: a sync that read Audible's places (bridge.AudibleSynced: done,
 // neither waiting on Audible nor finding the sync off) is the account's last
 // sync (last_sync_at); either failing because Audible refused the account
-// (bridge.SyncAudibleRefused) marks it refused, so no sync is queued and the
+// (bridge.SyncAudibleRefused, a refusal reported after a cancel, stored
+// cancelled, included) marks it refused, so no sync is queued and the
 // console's accounts card asks for a sign-in again (bridge#40), until the
 // Bridge maps the account again or polls it whole (PutAudibleTitles: Audible
 // answered the account), unless the refusal ended in the job's claim's second

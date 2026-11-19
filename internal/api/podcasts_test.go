@@ -595,6 +595,52 @@ func TestPodcastCheckRequiresFollowAndThrottles(t *testing.T) {
 	}
 }
 
+// A Check now while the show's poll is asked to stop does not join it (it ends
+// without checking): the poll ends cancelled and a new one is queued.
+func TestPodcastCheckOverAStoppingPoll(t *testing.T) {
+	b, uid, f := podcastEnv(t, false)
+	ctx := context.Background()
+	if err := b.cat.FollowPodcast(ctx, uid, b.lib.ID, "Example Show", f.ShowID); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"library_id":%d,"path":"Example Show"}`, b.lib.ID)
+	check := func() int64 {
+		t.Helper()
+		resp, out := b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, body, podcastHeaders())
+		if resp.StatusCode != 202 {
+			t.Fatalf("check = %d %s", resp.StatusCode, out)
+		}
+		var got struct {
+			Request struct {
+				ID int64 `json:"id"`
+			} `json:"request"`
+		}
+		decodeInto(t, out, &got)
+		return got.Request.ID
+	}
+	first := check()
+	held := b.claim(t, bridge.KindPodcastPoll)
+	if held.ID != first {
+		t.Fatalf("claimed %d, want the queued poll %d", held.ID, first)
+	}
+	if again := check(); again != first {
+		t.Fatalf("a check over a running poll = %d, want it joined (%d)", again, first)
+	}
+	if _, err := b.api.bridge.Cancel(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	next := check()
+	if next == first {
+		t.Fatalf("a check over a stopping poll joined it (%d)", first)
+	}
+	if old, err := b.api.bridge.Job(ctx, first); err != nil || old.State != bridge.StateCancelled {
+		t.Fatalf("the stopping poll = %+v, %v; want it ended cancelled", old, err)
+	}
+	if open, err := b.api.bridge.OpenJob(ctx, bridge.KindPodcastPoll, b.lib.ID, "Example Show"); err != nil || open == nil || open.ID != next || open.CancelRequested {
+		t.Fatalf("open poll = %+v, %v; want the new one %d", open, err, next)
+	}
+}
+
 // TestPodcastCheckDuringResubscribe: a Check now whose show is given a new
 // identity (a re-subscribe) between the handler's reads and the queue's check is
 // asked for again with the identity the show has now, and queued (server#219).

@@ -200,6 +200,55 @@ func TestEnsurePodcastFetchUnavailableAndCooldown(t *testing.T) {
 		}
 	}
 }
+
+// A fetch that fails once it was asked to stop is stored cancelled and still
+// cools down, by its result's code, until the fold backs it off; one the
+// Bridge stopped (a timeout, or a v0.6.0 Bridge's network) cools nothing.
+func TestFetchCooldownCountsAFailureStoredCancelled(t *testing.T) {
+	for _, c := range []struct {
+		name, state, code string
+		cooling           bool
+	}{
+		{"failed after a cancel", StateFailed, "too_large", true},
+		{"stopped by the Bridge", StateCancelled, "timeout", false},
+		{"stopped by a v0.6.0 Bridge", StateCancelled, "network", false},
+		{"gone after a cancel", StateCancelled, "gone", true},
+		{"cancelled, no code", StateCancelled, "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			q := fetchQueue(t)
+			ctx := context.Background()
+			j, _, err := q.EnsurePodcastFetch(ctx, demandJob(q, 100), FetchOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			held, err := q.ClaimFor(ctx, q.token, nil, 0)
+			if err != nil || held == nil || held.ID != j.ID {
+				t.Fatalf("claim %+v %v", held, err)
+			}
+			if _, err := q.Cancel(ctx, j.ID); err != nil {
+				t.Fatal(err)
+			}
+			u := Update{Attempt: held.Attempts, State: &c.state}
+			if c.code != "" {
+				u.Result = json.RawMessage(`{"code":"` + c.code + `"}`)
+			}
+			if got, err := q.UpdateHeld(ctx, j.ID, u); err != nil || got.State != StateCancelled {
+				t.Fatalf("end = %+v %v, want cancelled", got, err)
+			}
+			next, created, err := q.EnsurePodcastFetch(ctx, demandJob(q, 100), FetchOptions{})
+			if c.cooling {
+				if !errors.Is(err, ErrFetchCooldown) {
+					t.Fatalf("after a failure stored cancelled = %+v %v, want ErrFetchCooldown", next, err)
+				}
+				return
+			}
+			if err != nil || !created || next.ID == j.ID {
+				t.Fatalf("after a cancel = %+v %v %v, want a new fetch", next, created, err)
+			}
+		})
+	}
+}
 func wire2b(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
 	raw, err := os.ReadFile("../podcast/testdata/phase2c2/wire-2b.json")

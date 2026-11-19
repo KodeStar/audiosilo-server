@@ -64,7 +64,8 @@ type Service struct {
 	ClaimAudibleSync func(ctx context.Context, account string) (json.RawMessage, error)
 	// Log, when set (at wiring, before the first request), hears what a claim
 	// settles without answering an error (endUnfillableClaim ending a job it
-	// can't fill); New leaves it discarding.
+	// can't fill) and a failure or a park UpdateHeld stores as a cancel; New
+	// leaves it discarding.
 	Log *slog.Logger
 	// syncFills counts, per Audible account, the claims in a row that failed
 	// to read its audible.sync's titles (fillAudibleSync), under syncFillMu.

@@ -327,7 +327,8 @@ func (a *API) handleAdminAudibleTitles(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminAudiblePoll serves POST /admin/audible/accounts/{account}/poll:
 // Check now. Queues the account's audible.poll (201), or answers its open one
-// (200), raised to a person's priority when the scheduler queued it; 404
+// (200), raised to a person's priority when the scheduler queued it (one
+// already asked to stop ends, and a new poll is queued: bridge.Enqueue); 404
 // unknown_account, 409 account_paused, 409 kind_unavailable.
 func (a *API) handleAdminAudiblePoll(w http.ResponseWriter, r *http.Request) {
 	id, ok := audibleAccountID(w, r)

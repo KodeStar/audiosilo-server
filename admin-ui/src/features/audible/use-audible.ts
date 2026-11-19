@@ -116,9 +116,9 @@ export function useTitlesAfterPolls(accounts: readonly AudibleAccount[] | undefi
 }
 
 /**
- * Check now: queues an account's poll and says so (queued, already waiting, or
- * still stopping: the open poll that came back is being cancelled, so nothing
- * runs until it has stopped), refreshing the accounts (the queued time) and the
+ * Check now: queues an account's poll and says so (queued, or already waiting:
+ * an open poll being cancelled never comes back, the server ends it and queues
+ * a new one), refreshing the accounts (the queued time) and the
  * Bridge's jobs; the titles change once the poll lands (useTitlesAfterPolls). A
  * refusal is a toast.
  */
@@ -130,7 +130,7 @@ export function useCheckNow() {
     setBusy(account.id);
     const name = accountName(t, account);
     try {
-      const { job, created } = await api.pollAudible(account.id);
+      const { created } = await api.pollAudible(account.id);
       toast.add(
         created
           ? {
@@ -138,16 +138,10 @@ export function useCheckNow() {
               description: t('audible.check.doneBody'),
               type: 'success',
             }
-          : job.cancel_requested
-            ? {
-                title: t('audible.check.stopping', { name }),
-                description: t('audible.check.stoppingBody'),
-                type: 'warning',
-              }
-            : {
-                title: t('audible.check.already', { name }),
-                description: t('audible.check.alreadyBody'),
-              },
+          : {
+              title: t('audible.check.already', { name }),
+              description: t('audible.check.alreadyBody'),
+            },
       );
     } catch (err) {
       toastError(t('audible.check.failed'), err);

@@ -550,10 +550,10 @@ describe('settings > bridge > audible accounts', () => {
     expect(await within(card).findByText('No Audible accounts yet')).toBeInTheDocument();
   });
 
-  it('says a poll being cancelled is still stopping, and words an account gone since', async () => {
+  it('says a poll already open is being checked, and words an account gone since', async () => {
     let reply: MockReply = {
       status: 200,
-      body: { id: 9, kind: 'audible.poll', cancel_requested: true } as Partial<BridgeJob>,
+      body: { id: 9, kind: 'audible.poll', state: 'running' } as Partial<BridgeJob>,
     };
     mockFetch(routes(true, { 'POST /admin/audible/accounts/acct0001/poll': () => reply }));
     renderApp('/server?topic=bridge');
@@ -561,9 +561,7 @@ describe('settings > bridge > audible accounts', () => {
     const card = heading.closest('section') as HTMLElement;
     const user = userEvent.setup();
     await user.click(await within(card).findByRole('button', { name: 'Check now' }));
-    expect(
-      await screen.findByText('The check of Chris (US) is still stopping'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Chris (US) is already being checked')).toBeInTheDocument();
     reply = {
       status: 404,
       body: { error: 'no such Audible account', code: 'unknown_account' },
