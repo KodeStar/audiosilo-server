@@ -3870,9 +3870,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   are the account's at queue time), the row's `library_id` set, deduped per `|account|asin`. Priorities (`bridge`'s bands, `priority.go`): a console Back up 0
   (a preorder's pending request too, when a poll queues it, with no requester), a policy -10 with no
   requester (as the podcast scheduler's fetches), Back up everything -20 (below new episodes: a bulk backup
-  in the Bridge's one download slot never holds them back). `SetAudibleImport` records the job on the title
-  (`import_job_id`); the open one comes back on a repeat. Back up everything queues and records its whole
-  batch in one writer transaction (`bridge.EnqueueAll`, `batchKinds`; `SetAudibleImportTx`). **On this server** is a match not marked Not this
+  in the Bridge's one download slot never holds them back). `SetAudibleImportTx` records the job on the title
+  (`import_job_id`) in the transaction that queued it (`bridge.EnqueueAll`, `batchKinds`), so a job is never
+  queued without its title's record: a console Back up and each backup a poll asks for as a batch of one
+  (`audible.Queues.queue`), Back up everything its whole batch in one writer transaction; the open one comes back on a repeat. **On this server** is a match not marked Not this
   book (rejected): Back up, the policy's pending drop, the titles' `matched` filter and the accounts'
   `matched` count read it so. **Done** (`FoldAudibleImport` from `OnEnded`): the
   result (`{library_id, path, files:[{path,size}], bytes, enriched}`; `enriched:false` is no ASIN added: one

@@ -21,30 +21,36 @@ type Queues struct {
 }
 
 // queue queues p's backup at priority for requestedBy (0: the server) and
-// records it on the title. The open backup of the title, if there is one, is
-// returned instead (created false) and recorded too: a job queued before a
-// crash that lost its record is found by its dedupe key. A job queued whose
-// record failed comes back with the error (created true).
-func (q Queues) queue(ctx context.Context, p bridge.AudibleImportParams, requestedBy int64, priority int) (*bridge.Job, bool, error) {
-	job, created, err := q.Bridge.Enqueue(ctx, bridge.AudibleImport(p, requestedBy, priority))
+// records it on the title in the queue's transaction (bridge.EnqueueAll, a
+// batch of one): a job is never queued without its title's record, nor the
+// record written for a job that didn't commit. The open backup of the title,
+// if there is one, is recorded instead (created false): one a concurrent ask
+// queued first, or one from before the two committed together.
+func (q Queues) queue(ctx context.Context, p bridge.AudibleImportParams, requestedBy int64, priority int) (jobID int64, created bool, err error) {
+	n, err := q.Bridge.EnqueueAll(ctx, []bridge.NewJob{bridge.AudibleImport(p, requestedBy, priority)},
+		func(tx *sql.Tx, _ int, id int64) error {
+			jobID = id
+			return q.Catalog.SetAudibleImportTx(ctx, tx, p.Account, p.ASIN, id)
+		})
 	if err != nil {
-		return nil, false, err
+		return 0, false, err
 	}
-	return job, created, q.Catalog.SetAudibleImport(ctx, p.Account, p.ASIN, job.ID)
+	return jobID, n > 0, nil
 }
 
-// Backup is the console's "Back up" of one title: the job queued (created), or
-// for a preorder pending true and no job (queued once a poll says it is
-// available). The catalog's refusals (catalog.RequestAudibleBackup) and the
-// queue's (bridge.Enqueue: ErrKindUnavailable, ErrLibraryNotWritable) come
-// back as they are.
-func (q Queues) Backup(ctx context.Context, account, asin string, requestedBy int64) (job *bridge.Job, created, pending bool, err error) {
+// Backup is the console's "Back up" of one title: its queued job's id
+// (created, or the open one a concurrent ask queued first), or for a preorder
+// pending true and no job (queued once a poll says it is available). The
+// catalog's refusals (catalog.RequestAudibleBackup) and the queue's
+// (bridge.EnqueueAll: ErrKindUnavailable, ErrLibraryNotWritable) come back as
+// they are.
+func (q Queues) Backup(ctx context.Context, account, asin string, requestedBy int64) (jobID int64, created, pending bool, err error) {
 	p, pending, err := q.Catalog.RequestAudibleBackup(ctx, account, asin)
 	if err != nil || pending {
-		return nil, false, pending, err
+		return 0, false, pending, err
 	}
-	job, created, err = q.queue(ctx, *p, requestedBy, bridge.PriorityAsked)
-	return job, created, false, err
+	jobID, created, err = q.queue(ctx, *p, requestedBy, bridge.PriorityAsked)
+	return jobID, created, false, err
 }
 
 // BackupAll is "Back up everything" for account: every title

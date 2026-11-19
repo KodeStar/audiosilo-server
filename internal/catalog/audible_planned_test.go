@@ -70,7 +70,7 @@ func TestAudiblePlanned(t *testing.T) {
 	if tt := f.title(t, "B000000002"); tt.Planned == nil || tt.Contested == nil {
 		t.Fatalf("before the backup = %+v", tt)
 	}
-	if err := f.c.SetAudibleImport(f.ctx, "acct0001", "B000000002", 9); err != nil {
+	if err := f.setImport("acct0001", "B000000002", 9); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: f.lib.ID, RelPath: "A/Other", IsFolder: true, Title: "Other",

@@ -493,14 +493,12 @@ func (a *API) handleAdminAudibleBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	by := userFrom(r.Context()).ID
-	job, created, pending, err := a.audibleQueues().Backup(r.Context(), account, asin, by)
-	if created {
-		// Queued, even when recording it on the title failed (a repeat finds
-		// it by its dedupe key and records it then).
-		a.audit(r, "bridge.job", "", map[string]any{"job": job.ID, "kind": job.Kind, "account": account, "asin": asin})
-	}
+	jobID, created, pending, err := a.audibleQueues().Backup(r.Context(), account, asin, by)
 	if !a.writeAudibleBackupError(w, err, "audible backup failed") {
 		return
+	}
+	if created {
+		a.audit(r, "bridge.job", "", map[string]any{"job": jobID, "kind": bridge.KindAudibleImport, "account": account, "asin": asin})
 	}
 	out := map[string]any{"pending": pending, "job_id": nil}
 	if t, err := a.cat.AudibleTitle(r.Context(), account, asin); err == nil {
@@ -513,7 +511,7 @@ func (a *API) handleAdminAudibleBackup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	out["job_id"] = job.ID
+	out["job_id"] = jobID
 	writeJSON(w, http.StatusAccepted, out)
 }
 

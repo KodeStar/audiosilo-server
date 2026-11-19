@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,6 +66,14 @@ type audibleFixture struct {
 	lib   *Library
 	user  int64
 	clock time.Time
+}
+
+// setImport records job as the title's backup, in a transaction of its own
+// (the queue's, outside these tests: bridge.EnqueueAll).
+func (f *audibleFixture) setImport(account, asin string, job int64) error {
+	return f.c.db.WithTx(f.ctx, "test.setImport", func(tx *sql.Tx) error {
+		return f.c.SetAudibleImportTx(f.ctx, tx, account, asin, job)
+	})
 }
 
 func newAudibleFixture(t *testing.T, policy string) *audibleFixture {
@@ -166,7 +175,7 @@ func TestAudiblePolicySince(t *testing.T) {
 		t.Fatalf("p3 queues %+v, want B000000004 with the template", ps)
 	}
 	// Once queued it is not asked for again.
-	if err := f.c.SetAudibleImport(f.ctx, "acct0001", "B000000004", 1); err != nil {
+	if err := f.setImport("acct0001", "B000000004", 1); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.policyImports(t); len(got) != 0 {
@@ -255,7 +264,7 @@ func TestAudiblePendingBackup(t *testing.T) {
 	if ps, err := f.c.AudiblePolicyImports(f.ctx, "acct0001"); err != nil || len(ps) != 1 || ps[0].ASIN != "B000000001" || !ps[0].Requested {
 		t.Fatalf("available now: %+v, %v; want the pending one only, as a request", ps, err)
 	}
-	if err := f.c.SetAudibleImport(f.ctx, "acct0001", "B000000001", 7); err != nil {
+	if err := f.setImport("acct0001", "B000000001", 7); err != nil {
 		t.Fatal(err)
 	}
 	if tt, _ := f.c.AudibleTitle(f.ctx, "acct0001", "B000000001"); tt.Import != nil || *tt.ImportJobID != 7 {
@@ -397,7 +406,7 @@ func TestFoldAudibleImport(t *testing.T) {
 	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000001", AudibleTitlePatch{Rejected: new(true)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.c.SetAudibleImport(f.ctx, "acct0001", "B000000001", 5); err != nil {
+	if err := f.setImport("acct0001", "B000000001", 5); err != nil {
 		t.Fatal(err)
 	}
 	lib := f.lib.ID
@@ -703,7 +712,7 @@ func TestAudibleBackupAllSkipsDone(t *testing.T) {
 			id, bridge.KindAudibleImport, job.state, result, fmt.Sprintf("k%d", id)); err != nil {
 			t.Fatal(err)
 		}
-		if err := f.c.SetAudibleImport(f.ctx, "acct0001", titles[i].ASIN, id); err != nil {
+		if err := f.setImport("acct0001", titles[i].ASIN, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -799,7 +808,7 @@ func TestAudibleCanBackup(t *testing.T) {
 			id, bridge.KindAudibleImport, job.state, fmt.Sprintf("k%d", id)); err != nil {
 			t.Fatal(err)
 		}
-		if err := f.c.SetAudibleImport(f.ctx, "acct0001", job.asin, id); err != nil {
+		if err := f.setImport("acct0001", job.asin, id); err != nil {
 			t.Fatal(err)
 		}
 	}

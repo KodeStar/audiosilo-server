@@ -1019,15 +1019,15 @@ func insertJob(ctx context.Context, tx *sql.Tx, j NewJob, key, now string) (int6
 var batchKinds = map[string]bool{KindAudibleImport: true}
 
 // EnqueueAll is Enqueue for many jobs of one kind at once, in one writer
-// transaction ("Back up everything" queues hundreds): each queued, or the open
-// job with its key found, then its id passed to record (with its index in
-// jobs) in the same transaction, so what the caller records
-// of each commits with the queue or not at all. Only a kind that refuses,
+// transaction ("Back up everything" queues hundreds; one backup is a batch of
+// one): each queued, or the open job with its key found, then its id passed
+// to record (with its index in jobs) in the same transaction, so what the
+// caller records of each commits with the queue or not at all. Only a kind that refuses,
 // cancels, promotes and prunes nothing qualifies (audible.import), else
 // ErrInvalid. The queue's refusals (ErrKindUnavailable, heartbeatRefusal's,
-// a job's ErrInvalid) stop it at the first job refused, with the jobs before
-// it queued, the count of those created, and the refusal; any other error
-// queues none.
+// a job's ErrInvalid, a library of the wrong kind) stop it at the first job
+// refused, with the jobs before it queued, the count of those created, and
+// the refusal; any other error queues none.
 func (s *Service) EnqueueAll(ctx context.Context, jobs []NewJob,
 	record func(tx *sql.Tx, i int, jobID int64) error) (created int, err error) {
 	if len(jobs) == 0 {

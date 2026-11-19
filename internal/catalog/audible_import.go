@@ -598,21 +598,12 @@ func (o *seriesOwner) any(ctx context.Context, series []AudibleSeries) (bool, er
 	return false, nil
 }
 
-// setAudibleImportSQL records a job as a title's backup (job, now, account, asin).
-const setAudibleImportSQL = `UPDATE audible_titles SET import_job_id = ?, import_pending = 0, updated_at = ?
-	  WHERE account = ? AND asin = ?`
-
-// SetAudibleImport records job as the backup of account's title asin (a
-// pending request is now queued). A user-state write.
-func (c *Catalog) SetAudibleImport(ctx context.Context, account, asin string, job int64) error {
-	_, err := c.db.ExecUserState(ctx, setAudibleImportSQL, job, c.ts(), account, asin)
-	return err
-}
-
-// SetAudibleImportTx is SetAudibleImport in tx, the transaction that queued
-// the job (bridge.EnqueueAll).
+// SetAudibleImportTx records job as the backup of account's title asin (a
+// pending request is now queued), in tx: the transaction that queued the job
+// (bridge.EnqueueAll), so a job and its title's record commit together.
 func (c *Catalog) SetAudibleImportTx(ctx context.Context, tx *sql.Tx, account, asin string, job int64) error {
-	_, err := tx.ExecContext(ctx, setAudibleImportSQL, job, c.ts(), account, asin)
+	_, err := tx.ExecContext(ctx, `UPDATE audible_titles SET import_job_id = ?, import_pending = 0, updated_at = ?
+		  WHERE account = ? AND asin = ?`, job, c.ts(), account, asin)
 	return err
 }
 

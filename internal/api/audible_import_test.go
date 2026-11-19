@@ -600,6 +600,56 @@ func TestAudiblePollAnswersBeforeQueueing(t *testing.T) {
 	}
 }
 
+// A backup's job and its record on the title commit together: a record that
+// fails queues no job, for the console's Back up and for the backups a poll
+// asks for (a job with no title record ran with nothing showing it).
+func TestAudibleBackupQueuedWithItsRecord(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t, title("B000000001", "One", "available", 0, ""), title("B000000002", "Two", "preorder", 0, ""))
+	ctx := context.Background()
+	if resp, out := b.do(t, "POST", backupPath("B000000002"), b.adminTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("the preorder's request: %d %s", resp.StatusCode, out)
+	}
+	jobs := func() (n int) {
+		t.Helper()
+		if err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE kind = ?`, bridge.KindAudibleImport).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	// Recording a job on a title fails from here on.
+	if _, err := b.db.ExecContext(ctx, `CREATE TRIGGER record_fails BEFORE UPDATE OF import_job_id ON audible_titles
+		BEGIN SELECT RAISE(ABORT, 'record failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if resp, out := b.do(t, "POST", backupPath("B000000001"), b.adminTok, ""); resp.StatusCode != http.StatusInternalServerError || jobs() != 0 {
+		t.Fatalf("Back up with a failing record: %d %s, %d jobs; want a 500 and none queued", resp.StatusCode, out, jobs())
+	}
+	// The preorder is out: the poll queues its request, whose record fails too.
+	out := []string{title("B000000001", "One", "available", 0, ""), title("B000000002", "Two", "available", 0, "")}
+	if code, body := b.putTitles(t, testAccount, "p2", true, out...); code != http.StatusOK || jobs() != 0 {
+		t.Fatalf("a poll with a failing record: %d %s, %d jobs; want none queued", code, body, jobs())
+	}
+	if x := b.audibleTitle(t, "B000000002"); x.Import == nil || x.Import.State != catalog.AudibleImportPending {
+		t.Fatalf("the request after the failed record = %+v, want it still pending", x.Import)
+	}
+	if _, err := b.db.ExecContext(ctx, `DROP TRIGGER record_fails`); err != nil {
+		t.Fatal(err)
+	}
+	// Both go through once the record can be written, each on its title.
+	if resp, out := b.do(t, "POST", backupPath("B000000001"), b.adminTok, ""); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("Back up: %d %s", resp.StatusCode, out)
+	}
+	if code, body := b.putTitles(t, testAccount, "p3", true, out...); code != http.StatusOK || jobs() != 2 {
+		t.Fatalf("the next poll: %d %s, %d jobs; want both queued", code, body, jobs())
+	}
+	for _, asin := range []string{"B000000001", "B000000002"} {
+		if x := b.audibleTitle(t, asin); x.Import == nil || x.Import.JobID == nil || x.Import.State != bridge.StateQueued {
+			t.Fatalf("%s = %+v, want its queued job recorded", asin, x.Import)
+		}
+	}
+}
+
 // A backup's match moves with its book (MoveDurableState), as a poll's does.
 func TestAudibleImportMatchMoves(t *testing.T) {
 	t.Parallel()
