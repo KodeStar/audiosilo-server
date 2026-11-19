@@ -128,7 +128,7 @@ var ErrMatchedSince = errors.New("the book's community match changed since it wa
 // leave the series resolved by the old match's until the monthly recheck.
 func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, editor any, now string) error {
 	if was == nil || was.WorkID != "" { // an insert-only write replaces no match
-		if err := setMatchedSeriesDue(ctx, tx, rematched(ref, a.WorkID)); err != nil {
+		if err := setMatchedSeriesDue(ctx, tx, oneBook(ref), a.WorkID); err != nil {
 			return err
 		}
 	}
@@ -208,8 +208,7 @@ func (c *Catalog) WorkSources(ctx context.Context, refs []Ref) (map[Ref]WorkSour
 			rows, err := queryRows(ctx, c.db, func(r *sql.Rows, m *row) error { return r.Scan(&m.path, &m.MatchWorkID, &m.ResolvedAt) },
 				`SELECT path, matched, resolved FROM (
 				   SELECT b.rel_path AS path, COALESCE(`+matchWorkIDExpr("b")+`, '') AS matched,
-				          COALESCE((SELECT wo.checked_at FROM upcoming_owned wo WHERE wo.library_id = b.library_id
-				             AND wo.path = b.rel_path AND wo.work_id <> '' AND wo.id_key = `+idKeyExpr("b")+`), '') AS resolved
+				          COALESCE(`+ownedExpr("b", "checked_at")+`, '') AS resolved
 				     FROM books b WHERE b.library_id = ? AND b.rel_path IN (`+placeholders(len(chunk))+`))
 				  WHERE matched <> '' OR resolved <> ''`,
 				slices.Concat([]any{lib}, anyOf(chunk))...)

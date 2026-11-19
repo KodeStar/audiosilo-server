@@ -950,9 +950,15 @@ const derivedBookCols = bookBaseCols + `, work_id`
 // books from the other side, by the work id indexes (idx_book_matches_work,
 // idx_upcoming_owned_work).
 func workIDExpr(t string) string {
-	return `COALESCE(` + matchWorkIDExpr(t) + `,
-		(SELECT wo.work_id FROM upcoming_owned wo WHERE wo.library_id = ` + t + `.library_id AND wo.path = ` + t + `.rel_path AND wo.work_id <> ''
-		   AND wo.id_key = ` + idKeyExpr(t) + `), '')`
+	return `COALESCE(` + matchWorkIDExpr(t) + `, ` + ownedExpr(t, "work_id") + `, '')`
+}
+
+// ownedExpr is the SQL of col of book t's upcoming_owned row while it holds a
+// work its identifiers still name (workIDExpr's second answer), NULL for none:
+// its work_id, or when it was checked (catalog.WorkSources).
+func ownedExpr(t, col string) string {
+	return `(SELECT wo.` + col + ` FROM upcoming_owned wo WHERE wo.library_id = ` + t + `.library_id AND wo.path = ` + t + `.rel_path
+		   AND wo.work_id <> '' AND wo.id_key = ` + idKeyExpr(t) + `)`
 }
 
 // matchWorkIDExpr is the SQL of book t's recorded match's work id

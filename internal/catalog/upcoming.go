@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -203,17 +204,24 @@ func (c *Catalog) SetUpcomingSeries(ctx context.Context, libraryID int64, key, n
 // work its book's identifiers resolved to (upcoming_owned) stood in for
 // nothing, so its going changes no series (the job's own rule when a match is
 // set): a library's Clear matches over tagged books sets none due. The
-// series' items stay until that run.
-func setMatchedSeriesDue(ctx context.Context, tx *sql.Tx, pick clearPick) error {
+// series' items stay until that run. With except (writeAnchor's new work),
+// only a match naming another work counts: a re-match to the same work
+// changes nothing.
+func setMatchedSeriesDue(ctx context.Context, tx *sql.Tx, pick clearPick, except string) error {
 	// pick.where is clearPick's own SQL, never a caller's.
 	matched := `SELECT library_id AS lib, path AS p, work_id AS w FROM book_matches WHERE ` + pick.where
+	args := pick.args
+	if except != "" {
+		args = append(slices.Clip(args), except)
+		matched += ` AND work_id <> ?` + strconv.Itoa(len(args))
+	}
 	_, err := tx.ExecContext(ctx, `WITH x AS (`+matched+`), m AS (
 		  SELECT b.id, b.library_id, b.series_key FROM x JOIN books b ON b.library_id = x.lib AND b.rel_path = x.p
 		   WHERE NOT EXISTS (SELECT 1 FROM upcoming_owned o WHERE o.library_id = x.lib AND o.path = x.p AND o.work_id = x.w))
 		UPDATE upcoming_series SET resolved_at = ''
 		 WHERE resolved_at <> '' AND (library_id, series_key) IN (
 		       SELECT library_id, series_key FROM m WHERE series_key <> ''
-		       UNION SELECT s.library_id, s.series_key FROM m JOIN book_more_series s ON s.book_id = m.id)`, pick.args...)
+		       UNION SELECT s.library_id, s.series_key FROM m JOIN book_more_series s ON s.book_id = m.id)`, args...)
 	return err
 }
 
