@@ -249,6 +249,41 @@ func TestPodcastFetchFoldIsolationAndBackoff(t *testing.T) {
 	}
 }
 
+// A fetch that failed once it was asked to stop is stored cancelled with the
+// Bridge's result and backs the episode off as any failure does; a cancel
+// alone, or one naming the stop's own code, folds nothing.
+func TestPodcastFetchFailureStoredCancelledFolds(t *testing.T) {
+	c, ctx, lib, f := indexedFetchFixture(t)
+	ep := f.Episodes[0]
+	p := ep.Path
+	now := time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: f.ShowID, EpisodeID: ep.ID})
+	j := bridge.Job{ID: 20, Kind: bridge.KindPodcastFetch, LibraryID: &lib.ID, Path: &p, Params: raw, State: bridge.StateCancelled}
+	for _, result := range []string{`{}`, `{"code":"timeout"}`, `{"code":"bridge_lost"}`} {
+		j.ID++
+		j.Result = json.RawMessage(result)
+		if err := c.FoldPodcastJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := c.db.QueryRowContext(ctx, `SELECT count(*) FROM podcast_fetch_state`).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("a cancelled fetch with %s folded %d rows, %v", result, n, err)
+		}
+	}
+	j.ID++
+	j.Result = json.RawMessage(`{"code":"invalid_audio"}`)
+	if err := c.FoldPodcastJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	var next, code string
+	var failures int
+	if err := c.db.QueryRowContext(ctx, `SELECT next_attempt_at,error_code,failures FROM podcast_fetch_state`).Scan(&next, &code, &failures); err != nil ||
+		next != now.Add(30*time.Minute).Format(time.RFC3339) || code != "invalid_audio" || failures != 1 {
+		t.Fatalf("a failure stored cancelled: next %s, code %s, failures %d, %v; want backed off 30 min", next, code, failures, err)
+	}
+}
+
 func TestPodcastRetentionWireGolden(t *testing.T) {
 	c, ctx, lib, f := indexedFetchFixture(t)
 	raw, err := os.ReadFile("../podcast/testdata/phase2c2/wire-2a.json")

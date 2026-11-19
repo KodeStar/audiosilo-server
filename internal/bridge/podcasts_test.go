@@ -379,6 +379,39 @@ func TestRecentSubscribeFailure(t *testing.T) {
 		t.Fatalf("expired %+v %v", got, err)
 	}
 	none("expired private request", secret, q.lib)
+	// A failure reported once the request was asked to stop is stored
+	// cancelled and still counts, by its result's code.
+	ends := func(feedURL, state, code string) int64 {
+		t.Helper()
+		j, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, feedURL, false, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		claimed, err := q.ClaimFor(ctx, q.token, nil, 0)
+		if err != nil || claimed == nil || claimed.ID != j.ID {
+			t.Fatalf("claim %+v %v", claimed, err)
+		}
+		if _, err := q.Cancel(ctx, j.ID); err != nil {
+			t.Fatal(err)
+		}
+		got, err := q.UpdateHeld(ctx, j.ID, Update{Attempt: claimed.Attempts, State: &state, Error: ptr("ended"), Result: json.RawMessage(`{"code":"` + code + `","message":"ended"}`)})
+		if err != nil || got.State != StateCancelled {
+			t.Fatalf("%s after a cancel = %+v %v, want cancelled", state, got, err)
+		}
+		return j.ID
+	}
+	gone := "https://example.com/gone.xml"
+	id := ends(gone, StateFailed, "gone")
+	if got, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, gone, time.Hour); err != nil || got == nil || got.ID != id {
+		t.Fatalf("a failure stored cancelled = %+v %v, want job %d", got, err, id)
+	}
+	// A request the Bridge stopped names the stop's own code: no failure.
+	stopped := "https://example.com/stopped.xml"
+	ends(stopped, StateCancelled, "timeout")
+	none("a stopped request", stopped, q.lib)
+	lostStop := "https://example.com/lost-stop.xml"
+	ends(lostStop, StateFailed, "bridge_lost")
+	none("a failure that may be the stop", lostStop, q.lib)
 }
 
 // R-13: deleting a library cascades its jobs away; PruneSecrets then drops the

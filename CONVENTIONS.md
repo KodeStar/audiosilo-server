@@ -3375,7 +3375,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   end open for a person): the error the job had stays, as when a lease lapses (the server's reason for a
   cancel of its own, never the Bridge's failure or park text, which is logged); a `done` report stays
   done. Its result stays, so an Audible refusal still marks the account (`AudibleRefusalCode` reads a
-  cancelled job's result code).
+  cancelled job's result code) and a podcast job's failure still counts (`PodcastFailed`: the poll and
+  fetch folds, the fetch cooldown and `RecentSubscribeFailure` read a cancelled job's result code, but
+  never `timeout` or `bridge_lost`, which a job the Bridge stopped names for the stop itself).
   Claim responses retain the request deadline but bypass response buffering and flush before return;
   a wait the deadline ends still answers 503 `request timed out`, as the buffered timeout did.
   A claim ended before its reply was written, a failed 200 write, or a Bridge that left before the

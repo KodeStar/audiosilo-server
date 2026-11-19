@@ -866,7 +866,9 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		if j.Kind == bridge.KindPodcastFetch {
 			return c.foldPodcastFetch(ctx, tx, j)
 		}
-		if j.Kind == bridge.KindPodcastRetain || j.State == bridge.StateCancelled {
+		// A cancel tells nothing of the feed; a failure stored cancelled (one
+		// reported once the job was asked to stop, bridge.PodcastFailed) does.
+		if j.Kind == bridge.KindPodcastRetain || j.State == bridge.StateCancelled && !bridge.PodcastFailed(j) {
 			return nil
 		}
 		// A field of the wrong type stays at its zero value rather than failing
@@ -874,6 +876,13 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		// subscribe's params that aren't JSON (a damaged row its claim ended),
 		// naming no show.
 		result, _ := bridge.PodcastOutcomeOf(j)
+		// From here such a failure folds as any other: its code, its
+		// Retry-After and the run's count. (Read first: the outcome of a job
+		// stored failed takes the job's error as its message, and this one's
+		// error is the cancel's.)
+		if j.State == bridge.StateCancelled {
+			j.State = bridge.StateFailed
+		}
 		show := j.Target()
 		if j.Kind == bridge.KindPodcastSubscribe {
 			var p bridge.SubscribeParams

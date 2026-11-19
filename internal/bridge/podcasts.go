@@ -120,6 +120,30 @@ type PodcastOutcome struct {
 	RetryAfterSeconds *int   `json:"retry_after_seconds"`
 }
 
+// stopCodes are the failure codes a cancelled podcast job's result may name
+// for the stop itself: the Bridge reports a job it stopped as cancelled with
+// its handler's result, and a handler reads its ended context as a timeout
+// inside a fetch and as bridge_lost outside one.
+var stopCodes = []string{"timeout", "bridge_lost"}
+
+// PodcastFailed reports whether j, an ended podcast job, failed: stored
+// failed, or stored cancelled with a failure's code as its result. A failure
+// reported once the job was asked to stop is stored cancelled with the
+// Bridge's result (UpdateHeld), and still says what the feed or the episode
+// answered (gone, a Retry-After): the folds, the fetch cooldown and
+// RecentSubscribeFailure count it. A cancel alone names no code, or one of
+// stopCodes, which is never counted.
+func PodcastFailed(j Job) bool {
+	switch j.State {
+	case StateFailed:
+		return true
+	case StateCancelled:
+		code := failureCode(j, nil)
+		return code != "" && !slices.Contains(stopCodes, code)
+	}
+	return false
+}
+
 // PodcastOutcomeOf decodes j's result. A failed job's code defaults to
 // bridge_lost (a lease that ran out with no result) and its message to the
 // job's error.
@@ -327,7 +351,7 @@ func FeedAnswered(code string) bool {
 }
 
 // RecentSubscribeFailure is user's last podcast.subscribe for norm in lib when
-// it failed within the last `within` (the Service's clock), else nil: an OPML
+// it failed (PodcastFailed) within the last `within` (the Service's clock), else nil: an OPML
 // import passes such a feed over instead of queueing it again. A failure that
 // isn't the feed's (notFeedFailures) never counts.
 func (s *Service) RecentSubscribeFailure(ctx context.Context, lib, user int64, norm string, within time.Duration) (*Job, error) {
@@ -344,7 +368,7 @@ func (s *Service) RecentSubscribeFailure(ctx context.Context, lib, user int64, n
 	if err != nil {
 		return nil, err
 	}
-	if j.State != StateFailed {
+	if !PodcastFailed(*j) {
 		return nil, nil
 	}
 	if o, _ := PodcastOutcomeOf(*j); !FeedFailure(o.Code) {

@@ -14,8 +14,10 @@ import (
 )
 
 // foldPodcastFetch never touches feed polling state, validators or secrets.
+// A cancelled fetch folds nothing, unless it is a failure stored cancelled
+// (bridge.PodcastFailed), which backs the episode off as any failure does.
 func (c *Catalog) foldPodcastFetch(ctx context.Context, tx *sql.Tx, j bridge.Job) error {
-	if j.State == bridge.StateCancelled {
+	if j.State == bridge.StateCancelled && !bridge.PodcastFailed(j) {
 		return nil
 	}
 	var params bridge.EpisodeParams

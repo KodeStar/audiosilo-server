@@ -420,7 +420,7 @@ func AudibleImportCode(j Job) string {
 	return failureCode(j, AudibleImportCodes)
 }
 
-// failureCode is the code an ended audible job failed with, "" for none: the
+// failureCode is the code an ended job failed with, "" for none: the
 // result's "code" (the Bridge reports a failure as {"code","message"}),
 // cleaned and bounded, else one of codes its error starts with ("exists: ...").
 func failureCode(j Job, codes []string) string {
