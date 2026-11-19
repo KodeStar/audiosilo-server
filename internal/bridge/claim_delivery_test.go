@@ -168,14 +168,17 @@ func TestReleasedClaimHearsCancel(t *testing.T) {
 			if err != nil || claim == nil {
 				t.Fatalf("claim %+v, %v", claim, err)
 			}
-			for i, step := range []func(q *testQueue, ctx context.Context, id int64) error{
-				tc.before, func(q *testQueue, ctx context.Context, _ int64) error { return q.ReleaseUnsentClaim(ctx, claim) }, tc.after,
-			} {
-				if step == nil {
-					continue
+			if tc.before != nil {
+				if err := tc.before(q, ctx, queued.ID); err != nil {
+					t.Fatalf("before the release: %v", err)
 				}
-				if err := step(q, ctx, queued.ID); err != nil {
-					t.Fatalf("step %d: %v", i, err)
+			}
+			if err := q.ReleaseUnsentClaim(ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+			if tc.after != nil {
+				if err := tc.after(q, ctx, queued.ID); err != nil {
+					t.Fatalf("after the release: %v", err)
 				}
 			}
 			_, err = q.UpdateHeld(ctx, queued.ID, Update{Attempt: claim.Attempts, State: ptr(StateRunning)})

@@ -62,8 +62,8 @@ func (q Queues) BackupAll(ctx context.Context, account string, requestedBy int64
 	for i, p := range all {
 		jobs[i] = bridge.AudibleImport(p, requestedBy, bridge.PriorityBulk)
 	}
-	return q.Bridge.EnqueueAll(ctx, jobs, func(tx *sql.Tx, i int, job *bridge.Job, _ bool) error {
-		return q.Catalog.SetAudibleImportTx(ctx, tx, all[i].Account, all[i].ASIN, job.ID)
+	return q.Bridge.EnqueueAll(ctx, jobs, func(tx *sql.Tx, i int, jobID int64) error {
+		return q.Catalog.SetAudibleImportTx(ctx, tx, all[i].Account, all[i].ASIN, jobID)
 	})
 }
 

@@ -164,7 +164,7 @@ func TestEnqueueAll(t *testing.T) {
 		p := AudibleImportParams{Account: "acct0001", ASIN: fmt.Sprintf("B%09d", i+1), LibraryID: q.lib}
 		batch[i] = AudibleImport(p, q.admin, PriorityBulk)
 	}
-	none := func(*sql.Tx, int, *Job, bool) error { return nil }
+	none := func(*sql.Tx, int, int64) error { return nil }
 	if _, err := q.EnqueueAll(ctx, batch, none); !errors.Is(err, ErrKindUnavailable) {
 		t.Fatalf("no Bridge offering it: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestEnqueueAll(t *testing.T) {
 		return c
 	}
 	failing := errors.New("record failed")
-	if created, err := q.EnqueueAll(ctx, batch, func(_ *sql.Tx, i int, _ *Job, _ bool) error {
+	if created, err := q.EnqueueAll(ctx, batch, func(_ *sql.Tx, i int, _ int64) error {
 		if i == n-1 {
 			return failing
 		}
@@ -193,26 +193,27 @@ func TestEnqueueAll(t *testing.T) {
 	}); created != 0 || !errors.Is(err, failing) || count() != 1 {
 		t.Fatalf("a failed record = %d, %v, %d jobs: want none queued", created, err, count())
 	}
-	got := make([]*Job, n)
-	fresh := 0
-	created, err := q.EnqueueAll(ctx, batch, func(tx *sql.Tx, i int, job *Job, isNew bool) error {
+	ids := make([]int64, n)
+	created, err := q.EnqueueAll(ctx, batch, func(tx *sql.Tx, i int, id int64) error {
+		// The job is in record's transaction.
 		var state string
-		if err := tx.QueryRowContext(ctx, `SELECT state FROM bridge_jobs WHERE id = ?`, job.ID).Scan(&state); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM bridge_jobs WHERE id = ?`, id).Scan(&state); err != nil {
 			return err
 		}
-		got[i] = job
-		if isNew {
-			fresh++
-		}
+		ids[i] = id
 		return nil
 	})
-	if err != nil || created != n-1 || fresh != n-1 || count() != n {
-		t.Fatalf("batch = %d (%d new), %v, %d jobs", created, fresh, err, count())
+	if err != nil || created != n-1 || count() != n {
+		t.Fatalf("batch = %d, %v, %d jobs", created, err, count())
 	}
-	if got[1].ID != open.ID {
-		t.Fatalf("the open job = %d, want %d", got[1].ID, open.ID)
+	if ids[1] != open.ID {
+		t.Fatalf("the open job = %d, want %d", ids[1], open.ID)
 	}
-	for i, j := range got {
+	for i, id := range ids {
+		j, err := q.Job(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var p AudibleImportParams
 		if err := json.Unmarshal(j.Params, &p); err != nil || p.ASIN != fmt.Sprintf("B%09d", i+1) ||
 			j.Priority != PriorityBulk || j.State != StateQueued {
