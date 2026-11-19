@@ -693,9 +693,9 @@ func oneBook(ref Ref) clearPick {
 // (book_matches) of the books pick names, keeping an admin's own edits and
 // uploads, and rebuilds each such indexed book's effective metadata and cover
 // art, in tx; the upcoming job's series of a book whose match goes are due
-// again (setMatchedSeriesDue). It returns how many indexed books had any and how many community
-// covers went: ClearCommunityMatches for a library, an unlink (BookEdit.Match with no
-// work) for one book.
+// again (setMatchedSeriesDue). It returns how many indexed books had any and
+// how many community covers went: ClearCommunityMatches for a library, an
+// unlink (BookEdit.Match with no work) for one book.
 func clearCommunity(ctx context.Context, tx *sql.Tx, pick clearPick) (books, covers int, err error) {
 	where, args := pick.where, pick.args
 	// First, while the community series and the matches still stand.
