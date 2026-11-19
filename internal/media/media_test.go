@@ -303,12 +303,13 @@ func TestTranscodeArgs(t *testing.T) {
 		want []string
 	}{
 		// The seekable inputs (a descriptor, /dev/fd/3, a re-checked path)
-		// seek on the input side, each the only protocol ffmpeg may open.
-		{"fd", fdInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "fd", "-ss", "8.500", "-i", "fd:"}},
-		{"dev fd", inputSpec{proto: "file", url: "/dev/fd/3"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-ss", "8.500", "-i", "/dev/fd/3"}},
-		{"path", inputSpec{proto: "file", url: "file:/b/x.m4b"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-ss", "8.500", "-i", "file:/b/x.m4b"}},
+		// seek on the input side, each the only protocol ffmpeg may open, an
+		// audio container the only input.
+		{"fd", fdInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "fd", "-format_whitelist", audioDemuxers, "-ss", "8.500", "-i", "fd:"}},
+		{"dev fd", inputSpec{proto: "file", url: "/dev/fd/3"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-format_whitelist", audioDemuxers, "-ss", "8.500", "-i", "/dev/fd/3"}},
+		{"path", inputSpec{proto: "file", url: "file:/b/x.m4b"}, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "file", "-format_whitelist", audioDemuxers, "-ss", "8.500", "-i", "file:/b/x.m4b"}},
 		// A pipe can't seek: -ss after -i decodes up to it.
-		{"pipe", pipeInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "pipe", "-i", "pipe:0", "-ss", "8.500"}},
+		{"pipe", pipeInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "pipe", "-format_whitelist", audioDemuxers, "-i", "pipe:0", "-ss", "8.500"}},
 	} {
 		if got := transcodeArgs(tc.in, 8.5); !slices.Equal(got, append(tc.want, tail...)) {
 			t.Errorf("%s: transcodeArgs = %q\nwant %q", tc.name, got, append(tc.want, tail...))

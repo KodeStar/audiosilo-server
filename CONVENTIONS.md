@@ -1650,9 +1650,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   protocol, an ffmpeg older than 6.1, the child's descriptor 3 as `/dev/fd/3` on Unix, seekable too, so an
   input `-ss` and an MP4 whose index sits at its end still work, or the re-checked resolved path elsewhere;
   `TestTranscodeSeeksTheDescriptor`), the input's protocol the only one it may open (`-protocol_whitelist`:
-  through `fd:` no other file, through `/dev/fd/3` or a path the `file` protocol, so a library file that probes
-  as a playlist reaches no network but may name other local files, as when ffmpeg was handed the path; a HEAD
-  runs no ffmpeg, its probe included, a podcast episode's too);
+  through `fd:` no other file; through `/dev/fd/3` or a path the `file` protocol, which opens any local file),
+  and an audio container the only input (`-format_whitelist` `audioDemuxers`, on every input whose demuxer
+  ffmpeg guesses: the transcode's, a podcast episode's and the watch rendition's; the remux names its own): a
+  file that probes as a manifest or a playlist, DASH, HLS or ffconcat, is refused, where through the `file`
+  protocol ffmpeg opened the files it names and transcoded them to whoever could stream it
+  (`TestTranscodeOpensNoOtherInput`; a new container is added to the list and to
+  `TestAllowListReadsEveryLibraryFormat`); a HEAD
+  runs no ffmpeg, its probe included, a podcast episode's too;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
   re-request). Direct serving + Range stays the default. With `&download=1` it is an attachment named
   `<stem>.mp3` (every audio download's `Content-Disposition`, and the library export's, is `media.SetAttachment`'s: a name past printable ASCII

@@ -383,7 +383,8 @@ func fileInput(ctx context.Context, ffmpegPath string, f *os.File, wait time.Dur
 // link resolved (filepath.EvalSymlinks), so ffmpeg follows none, and only
 // when it names f itself (os.SameFile with the open file, which was opened
 // through the library's root). What is left is the moment between this check
-// and ffmpeg's open. The input may be a file only (-protocol_whitelist).
+// and ffmpeg's open. The input may be a file only (-protocol_whitelist), and
+// an audio container only (transcodeArgs: audioDemuxers).
 func recheckedInput(f *os.File) (inputSpec, error) {
 	opened, err := f.Stat()
 	if err != nil {
@@ -493,15 +494,31 @@ func listsInputProtocol(out, name string) bool {
 	return false
 }
 
+// audioDemuxers are the demuxers ffmpeg may read a library file or a podcast
+// episode with, its -format_whitelist on every input whose demuxer it guesses
+// (transcodeArgs, renditionArgs; the remux names its own, -f matroska): the
+// containers the library's extensions name (metadata.AudioExtensions: MP4 as
+// mov, MP3, FLAC, Ogg, Matroska) and the plain audio files one of them may be
+// under another's name (ADTS AAC, WAV and the like). Each reads its one input
+// and opens no other. Without the list a file that probes as a manifest or a
+// playlist (DASH, HLS, ffconcat) had ffmpeg open what it names: through the
+// file protocol (/dev/fd/3, a re-checked path: an ffmpeg older than 6.1),
+// which opens any local file, another library's audio, transcoded to whoever
+// could stream the crafted one. fd: and pipe:0 leave such a demuxer nothing to
+// open (-protocol_whitelist); the list is on them all the same, so no input
+// rests on the protocol alone.
+const audioDemuxers = "mov,mp3,flac,ogg,matroska,aac,wav,w64,aiff,asf,ac3,eac3,ape,wv,caf,amr"
+
 // transcodeArgs is the ffmpeg command line that re-encodes in to MP3 on
 // stdout from startSec. A seekable input (fd:, /dev/fd/3, a path) seeks on the
 // input side (-ss before -i: ffmpeg jumps near startSec before decoding);
 // pipe:0 can't seek, so there -ss follows -i and decodes up to it. The input's
 // protocol is the only one ffmpeg may open (-protocol_whitelist): never the
-// network, and through fd: or pipe:0 no other file either, so publisher bytes
-// that probe as a playlist may not open secondary local files.
+// network, and through fd: or pipe:0 no other file either. The input may only
+// be an audio container (-format_whitelist, audioDemuxers), never a manifest
+// or a playlist naming other inputs, which the file protocol would open.
 func transcodeArgs(in inputSpec, startSec float64) []string {
-	args := []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", in.proto}
+	args := []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", in.proto, "-format_whitelist", audioDemuxers}
 	var seek []string
 	if startSec > 0 {
 		seek = []string{"-ss", strconv.FormatFloat(startSec, 'f', 3, 64)}

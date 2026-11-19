@@ -25,7 +25,7 @@ import (
 func TestRenditionArgs(t *testing.T) {
 	t.Parallel()
 	got := renditionArgs(fdInput, "/cache/k.1.part")
-	want := []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "fd", "-i", "fd:",
+	want := []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "fd", "-format_whitelist", audioDemuxers, "-i", "fd:",
 		"-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1",
 		"-c:a", "aac", "-b:a", "48k", "-ac", "1", "-ar", "44100",
 		"-fflags", "+bitexact", "-flags:a", "+bitexact",
