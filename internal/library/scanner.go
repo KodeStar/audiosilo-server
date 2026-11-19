@@ -711,7 +711,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		if existed && old.MTime == b.MTime && old.Size == b.Size &&
 			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) && !old.DurationStale &&
 			((s.ffprobePath == "" && !s.rereadUnprobed(lib.ID, b)) || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
-			(old.CoverPath != "" || !b.CoverSeen) && !s.problemCleared(ctx, lib, old, slots) {
+			(old.CoverPath != "" || !b.CoverSeen || cutShort(old.ScanErrorDetail)) && !s.problemCleared(ctx, lib, old, slots) {
 			// Unchanged since last scan, its files in the order stored (a book
 			// indexed in byte order before #160 is read again in natural order),
 			// its lengths read by today's revision (an MP3 book indexed before
@@ -723,7 +723,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// file has a read problem that problemCleared just found still there:
 			// reading the book again would find the same. One stored with no
 			// sidecar cover is read again once the walk lists an image beside
-			// it (coversOfWalk).
+			// it (coversOfWalk), unless its last read was cut short: that read
+			// looked for no cover, and problemCleared, one file's read, says
+			// when a read would, rather than every part waiting out a share
+			// that still doesn't answer on every scan.
 			// Whether it is a disc of a split book turns on its siblings, so it can
 			// change while the book doesn't (and starts unset before migration 0022).
 			if old.SplitParent != b.SplitParent {
