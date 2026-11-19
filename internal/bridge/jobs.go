@@ -1741,10 +1741,8 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		from     string
 		fromCode string
 		exp      expiry
-		// failedCancel: the report's failure was stored as a cancel; failedAs
-		// is the Bridge's error on it, for the log.
+		// failedCancel: the report's failure was stored as a cancel.
 		failedCancel bool
-		failedAs     string
 	)
 	// A user-state transaction (server#258): a report that renews the lease or
 	// reports progress (a running job's keepalive, its step and message)
@@ -1787,18 +1785,13 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 			}
 			state = *u.State
 		}
-		// A job that fails once it was asked to stop ends cancelled: the
-		// failure may be the stop itself (a cancel asked for after the Bridge's
-		// last check, or an older Bridge that never checks), and the job was
-		// to end anyway. The server's reason stays, as below; an admin's cancel
-		// keeps the Bridge's text, as a cancelled report's own error does
-		// (never shown on a cancelled job). The log keeps the failure.
+		// A job that fails once it was asked to stop ends cancelled, as a lapsed
+		// or unsent claim does (expireSQL, failUnsentClaim): the failure may be
+		// the stop itself (a cancel after the Bridge's last check, or an older
+		// Bridge that never checks). The log keeps the failure.
 		failedCancel = state == StateFailed && cur.CancelRequested
 		if failedCancel {
 			state = StateCancelled
-			if u.Error != nil {
-				failedAs = *u.Error
-			}
 		}
 		var lease, finished any
 		switch state {
@@ -1866,8 +1859,12 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		return nil, err
 	}
 	if failedCancel {
+		var failure string
+		if u.Error != nil {
+			failure = *u.Error
+		}
 		s.Log.Info("bridge: a job failed once it was asked to stop; stored as cancelled",
-			"job", job.ID, "kind", job.Kind, "err", failedAs)
+			"job", job.ID, "kind", job.Kind, "err", failure)
 	}
 	s.settle(ctx, exp)
 	s.report(ctx, job, from, fromCode)
