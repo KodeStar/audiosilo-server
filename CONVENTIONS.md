@@ -3687,7 +3687,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   first (another show renamed out of the way to a new name), so a chain of renames moves in one call
   too. On a case-insensitive file system only the spelling the root lists, read fresh, is the folder.
   A poll's or fetch's fold whose queued folder (episode) no longer holds its identity folds at the
-  outcome's `show_path` (`path`) when that holds it; a copy keeps its own outcome. Bridge jobs and
+  outcome's `show_path` (`path`) when that holds it; a copy keeps its own outcome. A fetch done in
+  another folder while its queued episode's show is still there (no scan has moved it yet, or a copy)
+  leaves that episode cooling down (`next_attempt_at`, failures and error as they were), never cleared:
+  else the scheduler queues it again at once and the Bridge answers with the same reuse. Bridge jobs and
   grants stay where they were. The Bridge's
   marker route validates `.audiosilo/library.json` without symlinks (4 KiB, version, id, nonce),
   and podcast rescans accept only shows or indexed episodes. Admins cannot enqueue podcast kinds;

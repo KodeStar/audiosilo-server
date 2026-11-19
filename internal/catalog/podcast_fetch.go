@@ -68,6 +68,17 @@ func (c *Catalog) foldPodcastFetch(ctx context.Context, tx *sql.Tx, j bridge.Job
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+	if j.State == bridge.StateDone && result.Path != "" && result.Path != at {
+		// Installed in another folder (renamed by hand, or a copy) that the
+		// index has not moved this show to: the episode here is still absent,
+		// and clearing its backoff would have the scheduler queue it again at
+		// once, a fetch the Bridge answers with the same reuse every time. It
+		// cools down instead, its failures and error as they were, until a
+		// scan moves the show (MovePodcastShows).
+		next := c.now().UTC().Add(time.Duration(min(1800<<min(failures, 6), 86400)) * time.Second).Format(time.RFC3339)
+		_, err = tx.ExecContext(ctx, `INSERT INTO podcast_fetch_state(library_id,rel_path,show_id,last_job_id,next_attempt_at) VALUES(?,?,?,?,?) ON CONFLICT(library_id,rel_path,show_id) DO UPDATE SET last_job_id=excluded.last_job_id,next_attempt_at=excluded.next_attempt_at`, j.LibraryID, at, current, j.ID, next)
+		return err
+	}
 	var next any
 	if j.State == bridge.StateDone {
 		failures = 0

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path"
+	"slices"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
@@ -313,5 +314,51 @@ func TestMovePodcastShowsKeepsTheEarliestFollow(t *testing.T) {
 	var at string
 	if err := fx.c.db.QueryRowContext(fx.ctx, `SELECT COUNT(*),MIN(created_at) FROM podcast_follows WHERE user_id=?`, fx.ann).Scan(&n, &at); err != nil || n != 1 || at != "2026-01-01T00:00:00Z" {
 		t.Fatalf("follows %d %s %v", n, at, err)
+	}
+}
+
+// A fetch of a show folder renamed by hand, before any scan has moved the show:
+// the Bridge finds the episode in the new folder and answers done with its path
+// there. The queued episode is still absent, so clearing its backoff had the
+// scheduler queue it again at once, a burst of fetches the Bridge answered
+// with the same reuse (57 in a second in the live run). The done fold leaves
+// it cooling down, its failures as they were.
+func TestPodcastFetchDoneInAnotherFolderDoesNotRequeue(t *testing.T) {
+	fx := newRenameFixture(t)
+	show := PodcastWorkShow{Ref: Ref{LibraryID: fx.lib, Path: "Example Show"}, ShowID: fx.id, Policy: Policy{Mode: "archive"}}
+	f := showAt(t, "Example Show", "")
+	var episode string
+	for _, e := range f.Episodes {
+		if e.Path == fx.oldEpisode {
+			episode = e.ID
+		}
+	}
+	queued := func() bool {
+		t.Helper()
+		got, err := fx.c.PodcastFetchCandidates(fx.ctx, show)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(got, func(c PodcastFetchCandidate) bool { return c.Path == fx.oldEpisode })
+	}
+	if !queued() {
+		t.Fatal("the absent episode is not a fetch candidate before the fold")
+	}
+	old := fx.oldEpisode
+	for id := int64(20); id < 23; id++ {
+		done := bridge.Job{ID: id, Kind: bridge.KindPodcastFetch, LibraryID: &fx.lib, Path: &old, State: bridge.StateDone,
+			Params: json.RawMessage(`{"show_id":"` + fx.id + `","episode_id":"` + episode + `"}`),
+			Result: json.RawMessage(`{"path":"Renamed/` + fx.ep + `","show_id":"` + fx.id + `","episode_id":"` + episode + `","reused":true}`)}
+		if err := fx.c.FoldPodcastJob(fx.ctx, done); err != nil {
+			t.Fatal(err)
+		}
+		if queued() {
+			t.Fatalf("job %d: the old folder's episode is queued again at once", id)
+		}
+	}
+	var failures int
+	var code string
+	if err := fx.c.db.QueryRowContext(fx.ctx, `SELECT failures,error_code FROM podcast_fetch_state WHERE library_id=? AND rel_path=? AND show_id=?`, fx.lib, fx.oldEpisode, fx.id).Scan(&failures, &code); err != nil || failures != 2 || code != "timeout" {
+		t.Fatalf("fetch state %d %q %v", failures, code, err)
 	}
 }
