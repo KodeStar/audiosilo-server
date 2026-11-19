@@ -215,7 +215,7 @@ func (a *API) bookEnrichment(ctx context.Context, book *catalog.Book) (env *meta
 	}
 	if !matchFirst {
 		env, err = a.meta.Enrich(ctx, book.ASIN, book.ISBN)
-		if book.WorkID == "" || (err == nil && env.Work != nil && env.Work.ID == book.WorkID) {
+		if book.WorkID == "" || (err == nil && env.OfWork(book.WorkID)) {
 			return env, err, nil
 		}
 	}

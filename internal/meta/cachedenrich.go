@@ -79,15 +79,14 @@ func (s *Service) Coverages(ctx context.Context, books []CoverageBook) []Coverag
 		ask []BookIDs
 		at  []int
 	)
-	works := map[int]string{} // book index -> the work to fetch by id
+	works := map[string][]int{} // a work to fetch by id -> the books it answers
 	for i, b := range books {
-		if env := s.CachedEnrichment(ctx, b.ASIN, b.ISBN); env != nil &&
-			(b.WorkID == "" || (env.Work != nil && env.Work.ID == b.WorkID)) {
+		if env := s.CachedEnrichment(ctx, b.ASIN, b.ISBN); env != nil && (b.WorkID == "" || env.OfWork(b.WorkID)) {
 			out[i] = coverageOf(env)
 			continue
 		}
 		if b.WorkID != "" {
-			works[i] = b.WorkID
+			works[b.WorkID] = append(works[b.WorkID], i)
 			continue
 		}
 		ask, at = append(ask, BookIDs{ASIN: b.ASIN, ISBN: b.ISBN}), append(at, i)
@@ -99,20 +98,27 @@ func (s *Service) Coverages(ctx context.Context, books []CoverageBook) []Coverag
 			case id.ID == "":
 				out[at[j]] = Coverage{Known: true}
 			default:
-				works[at[j]] = id.ID
+				works[id.ID] = append(works[id.ID], at[j])
 			}
 		}
 	}
 	var wg sync.WaitGroup
-	for i, id := range works {
-		// Each goroutine writes only its own book's entry.
+	for id, wanted := range works {
+		// Each work is fetched once, its goroutine writing only its books'
+		// entries.
 		wg.Go(func() {
 			w, err := s.Work(ctx, id)
+			var c Coverage
 			switch {
 			case errors.Is(err, ErrNotFound):
-				out[i] = Coverage{Known: true}
+				c = Coverage{Known: true}
 			case err == nil:
-				out[i] = coverageOf(&Enrichment{Work: w})
+				c = coverageOf(&Enrichment{Work: w})
+			default: // unknown: left as the zero Coverage
+				return
+			}
+			for _, i := range wanted {
+				out[i] = c
 			}
 		})
 	}

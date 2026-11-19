@@ -289,6 +289,13 @@ type Enrichment struct {
 	Previous []*MetaWork `json:"previous,omitempty"`
 }
 
+// OfWork reports whether e is an envelope of community work id (false for a
+// nil envelope or one of no work): a book's known work (Book.WorkID) is the
+// one rule its envelope is checked by.
+func (e *Enrichment) OfWork(id string) bool {
+	return e != nil && e.Work != nil && e.Work.ID == id
+}
+
 // Service composes book enrichments from the metadata API, with a bounded TTL
 // cache in front so a repeated lookup (and a down upstream) is cheap. A nil
 // *Service means the feature is off; callers must guard on that.
