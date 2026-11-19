@@ -90,6 +90,9 @@ func ebookOnDisk(root, relPath string, folder bool) catalog.EbookReading {
 // list right now.
 func ebookListed(root, relPath string, folder bool) catalog.EbookReading {
 	full, err := ContentJoin(root, sidecarDir(relPath, folder))
+	if metadata.GaveUp(err) {
+		return catalog.EbookReading{Unread: true} // the join's look a share failed
+	}
 	if err != nil {
 		return catalog.EbookReading{}
 	}
@@ -185,6 +188,9 @@ func ebookCandidate(root, relPath string, folder bool, epubs []fs.DirEntry) cata
 // nothing is there, Unread when it can't be looked up right now.
 func ebookNamed(root, dir, name string) catalog.EbookReading {
 	full, err := ContentJoin(root, dir)
+	if metadata.GaveUp(err) {
+		return catalog.EbookReading{Unread: true} // the join's look a share failed
+	}
 	if err != nil {
 		return catalog.EbookReading{}
 	}
@@ -289,6 +295,22 @@ func OpenEbook(root, rel string, noLink bool) (*os.File, fs.FileInfo, error) {
 	return openEbook(root, rel, noLink, openEbookFile)
 }
 
+// OpenEbookBounded is OpenEbook as one metadata.Bounded call (ctx, at most
+// timeout, counted on the ebook's mount): its looks and open, on a share that
+// stopped answering, are given up on (metadata.GaveUp) rather than holding the
+// caller, a file opened after that closed.
+func OpenEbookBounded(ctx context.Context, root, rel string, noLink bool, timeout time.Duration) (*os.File, fs.FileInfo, error) {
+	type opened struct {
+		f    *os.File
+		info fs.FileInfo
+	}
+	o, err := metadata.Bounded(ctx, filepath.Join(root, filepath.FromSlash(rel)), timeout, func() (opened, error) {
+		f, info, err := OpenEbook(root, rel, noLink)
+		return opened{f, info}, err
+	}, func(o opened) { _ = o.f.Close() })
+	return o.f, o.info, err
+}
+
 // openEbook is OpenEbook opening the file it found with open (a test's swaps the
 // file as it is opened).
 func openEbook(root, rel string, noLink bool, open func(full string) (*os.File, error)) (*os.File, fs.FileInfo, error) {
@@ -325,6 +347,9 @@ func openEbookFile(full string) (*os.File, error) {
 // rules: its joined path and its info (a link's target's, unless noLink).
 func lookEbook(root, rel string, noLink bool) (string, fs.FileInfo, error) {
 	full, err := ContentJoin(root, rel)
+	if metadata.GaveUp(err) {
+		return "", nil, err // the join's look a share failed: not known, never no ebook
+	}
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: %w", ErrNoEbook, err)
 	}

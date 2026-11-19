@@ -108,10 +108,15 @@ func OpenRegularBounded(ctx context.Context, path string, timeout time.Duration)
 // writer when it is a FIFO (openFlags), and stats it: an error when it is no
 // regular file.
 func openRegular(path string) (*os.File, os.FileInfo, error) {
+	return openRegularWith(path, func() (*os.File, error) { return os.OpenFile(path, openFlags, 0) })
+}
+
+// openRegularWith is openRegular of path, opened by open (with openFlags).
+func openRegularWith(path string, open func() (*os.File, error)) (*os.File, os.FileInfo, error) {
 	if hook := heldOpens.Load(); hook != nil {
 		(*hook)(path, false)
 	}
-	f, err := os.OpenFile(path, openFlags, 0)
+	f, err := open()
 	if err != nil {
 		return nil, nil, err
 	}

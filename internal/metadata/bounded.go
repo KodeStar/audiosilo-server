@@ -44,17 +44,90 @@ func Unanswered(ctx context.Context, err error) bool {
 // ShareFault reports whether err, a look's at a file or folder its parent
 // listed or a caller named (a stat, a listing, an open), is how a share fails
 // rather than an answer about the file: any error but the file gone (ENOENT,
-// ENOTDIR: a folder above it replaced; ENAMETOOLONG: a name no file can
+// NotExist; ENOTDIR: a folder above it replaced; ENAMETOOLONG: a name no file can
 // have), a look given up on already (GaveUp) or a context's. EIO or ESTALE (a soft-mounted NFS share whose server stopped
 // answering, or a handle it lost), ENOTCONN or ETIMEDOUT (a FUSE pool or a
 // network mount that dropped), a permission (EACCES, EPERM: a share refusing a
 // look it allowed the listing) among them. Such a look says nothing about
 // whether the file is there: its caller keeps what it knows, as for a look
-// given up on (AsGaveUp), never reads it as "none".
+// given up on (AsGaveUp), never reads it as "none". A limit of the server's
+// own (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY) is one too, for that reason
+// alone: a scan keeps the book as stored. Broad on purpose, it decides what is
+// kept, never how a route answers: only a TransientFault is a share that
+// stopped answering (503 share_not_answering); every other fault is the
+// lasting answer (a 404) or the route's own error.
 func ShareFault(err error) bool {
-	return err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) &&
+	return err != nil && !NotExist(err) && !errors.Is(err, syscall.ENOTDIR) &&
 		!errors.Is(err, syscall.ENAMETOOLONG) && !GaveUp(err) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
+
+// NotExist reports whether err says the file or folder is not there
+// (fs.ErrNotExist) and is no TransientFault. Go reads Windows'
+// ERROR_BAD_NETPATH, a share whose server is down, as fs.ErrNotExist, and a
+// share that dropped says nothing about whether the file is there: a look
+// whose error may be a share's asks this, never errors.Is(err,
+// fs.ErrNotExist) alone, before it reads the file as gone. Everywhere else
+// the two are the same.
+func NotExist(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) && !TransientFault(err)
+}
+
+// TransientFault reports whether err is a share's fault that trying again may
+// get past (transientErrnos, an explicit list): EIO, ESTALE, ENOTCONN,
+// ETIMEDOUT, a host or network down or unreachable, a connection reset,
+// aborted or refused (an SMB or NFS session that dropped; on Windows its own
+// codes for these, a network name deleted or unreachable, a semaphore
+// timeout: transient_windows.go). A route answers it
+// as a share that stopped answering (503 share_not_answering with
+// Retry-After), never as the file gone. Not a lasting refusal, which a retry
+// would only meet again (a permission, EACCES or EPERM; the device gone,
+// ENXIO; a link loop, ELOOP; a name the share refuses, EINVAL or Windows'
+// ERROR_INVALID_NAME), whose answer is the lasting one (a 404); nor a limit
+// of the server's own (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY), which is no
+// share's fault at all; nor any error not on the list.
+func TransientFault(err error) bool {
+	for _, errno := range transientErrnos {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
+}
+
+// LastingFault reports whether err is a share's refusal a retry would only
+// meet again (lastingErrnos, an explicit list): a permission (EACCES, EPERM,
+// fs.ErrPermission), the device gone (ENXIO), a link loop (ELOOP), a name the
+// share refuses (EINVAL; on Windows ERROR_INVALID_NAME). A route answers it
+// with its lasting answer (a 404), never as a share that stopped answering
+// (TransientFault) nor as the server's own failure (a 500). Not a limit of
+// the server's own (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY), nor any error on
+// neither list: a route answers those as it did before the share-fault rule.
+func LastingFault(err error) bool {
+	if err == nil || TransientFault(err) {
+		return false
+	}
+	if errors.Is(err, fs.ErrPermission) {
+		return true
+	}
+	for _, errno := range lastingErrnos {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
+}
+
+// lastingErrnos are LastingFault's beside fs.ErrPermission, Windows' own code
+// for a name refused among them there (platformLastingErrnos).
+var lastingErrnos = append([]syscall.Errno{syscall.ENXIO, syscall.ELOOP, syscall.EINVAL}, platformLastingErrnos...)
+
+// transientErrnos are TransientFault's, Windows' own codes for the same
+// faults among them there (platformTransientErrnos).
+var transientErrnos = append([]syscall.Errno{
+	syscall.EIO, syscall.ESTALE, syscall.ENOTCONN, syscall.ETIMEDOUT,
+	syscall.EHOSTDOWN, syscall.EHOSTUNREACH, syscall.ENETDOWN, syscall.ENETUNREACH,
+	syscall.ECONNRESET, syscall.ECONNABORTED, syscall.ECONNREFUSED,
+}, platformTransientErrnos...)
 
 // AsGaveUp is err made a look given up on (GaveUp reports it) when it is a
 // ShareFault, keeping the share's own message (a permission is not "did not
@@ -196,6 +269,13 @@ func LstatBounded(ctx context.Context, path string, timeout time.Duration) (fs.F
 // under one name), and a link met on the way.
 func EvalSymlinksBounded(ctx context.Context, path string, timeout time.Duration) (string, error) {
 	return bounded(ctx, path, timeout, true, func() (string, error) { return filepath.EvalSymlinks(path) }, nil)
+}
+
+// ReadlinkBounded is os.Readlink of path as a Bounded call: one link's own
+// target, nothing it names looked at (library.SafeJoinListed's resolve, one
+// hop at a time).
+func ReadlinkBounded(ctx context.Context, path string, timeout time.Duration) (string, error) {
+	return bounded(ctx, path, timeout, true, func() (string, error) { return os.Readlink(path) }, nil)
 }
 
 // LookBounded is Bounded for a call that only looks at path (its links, a

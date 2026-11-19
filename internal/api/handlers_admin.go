@@ -15,6 +15,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // adminUser is an account as the admin console shows it: the /me fields plus the
@@ -1087,7 +1088,10 @@ func (a *API) handleSetFolderOverride(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
-	if _, err := library.ContentJoin(lib.Root, path); err != nil {
+	if _, err := library.ContentJoin(lib.Root, path); metadata.GaveUp(err) {
+		writeShareNotAnswering(w) // the join's look a share failed: no answer about the path
+		return
+	} else if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}

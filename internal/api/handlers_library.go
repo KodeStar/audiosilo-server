@@ -491,14 +491,25 @@ func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catal
 // a folder it has would cost a stat and the folders' listings where a missing
 // path costs one failed look; here the two take the same steps, so how long
 // the 404 takes never tells a rule spelled in another case that the folder is
-// there, on any route that resolves a book (bookAt, a favourite).
+// there, on any route that resolves a book (bookAt, a favourite). A path
+// through a link out of the root (library.ErrOutsideRoot: path is cleaned, so
+// its names never climb out) is a path with nothing there too, the 404 the
+// stream and /fs answer it with, never a 400 that would tell the link is one.
 func (a *API) indexOnDemand(ctx context.Context, lib *catalog.Library, path string, allow func(string) bool) (*catalog.Book, error) {
-	if _, there, err := library.SafeJoinListed(ctx, lib.Root, path, a.fileWait, a.listed.Names); err != nil {
+	_, there, err := library.SafeJoinListed(ctx, lib.Root, path, a.fileWait, a.listed.Names)
+	switch {
+	case errors.Is(err, library.ErrOutsideRoot):
+		return nil, library.ErrNotIndexable
+	case err != nil:
 		return nil, err
-	} else if !there {
+	case !there:
 		return nil, library.ErrNotIndexable
 	}
-	return a.indexPath(a.lookCtx(ctx), *lib, path, allow)
+	b, err := a.indexPath(a.lookCtx(ctx), *lib, path, allow)
+	if errors.Is(err, library.ErrOutsideRoot) { // a link put there since the look above
+		return nil, library.ErrNotIndexable
+	}
+	return b, err
 }
 
 // lookCtx is ctx for a read of a book a request asked for (an on-demand index,
@@ -1112,7 +1123,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := media.ServeFile(w, r, abs, download, metadata.WaitLeft(deadline)); err != nil {
+	if err := media.ServeFile(w, r, lib.Root, abs, download, metadata.WaitLeft(deadline)); err != nil {
 		writeShareNotAnswering(w)
 	}
 }
@@ -1145,9 +1156,11 @@ func lookAtSource(w http.ResponseWriter, r *http.Request, abs string, deadline t
 }
 
 // audioFile is the stream's guard on rel (scope-checked already): its absolute
-// path, or false having written 404 for a file that isn't recognized audio, 400
-// for a path that escapes the root, and 503 share_not_answering for a join
-// whose looks (bounded, up to deadline) were given up on. The scope check
+// path, or false having written 404 for a file that isn't recognized audio and
+// 503 share_not_answering for a join whose looks (bounded, up to deadline)
+// were given up on. A path through a link out of the root is one no file has
+// (noFile), every form of the stream answering it as a missing file whatever
+// the link points to. The scope check
 // bounds a stream to the caller's grant, but the library root can also hold
 // non-audio sidecar files (.nfo, .jpg, a stray .env/backup); BrowseFS hides
 // those from listings, and cover art has its own endpoint, so serving them
@@ -1167,11 +1180,13 @@ func (a *API) audioFile(w http.ResponseWriter, r *http.Request, lib *catalog.Lib
 	if err == nil && held {
 		abs, err = library.SafeJoinBounded(r.Context(), lib.Root, rel, metadata.WaitLeft(deadline))
 	}
-	switch {
-	case errors.Is(err, library.ErrOutsideRoot):
-		writeError(w, http.StatusBadRequest, "invalid path")
-		return "", false
-	case err != nil:
+	if errors.Is(err, library.ErrOutsideRoot) {
+		// rel is cleaned (its names never climb out of the root), so only a
+		// link out of the root leads here: answered as a missing file whatever
+		// it points to, its target never looked at (library.SafeJoinListed).
+		abs, refused, err = filepath.Join(lib.Root, filepath.FromSlash(rel)), true, nil
+	}
+	if err != nil {
 		a.writeJoinError(w, r, err, lib, "check a stream's path failed", "Could not load the file.")
 		return "", false
 	}

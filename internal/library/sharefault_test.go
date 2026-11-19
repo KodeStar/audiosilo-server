@@ -16,12 +16,18 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
-// failLooks makes readDirLook and statLook fail at the paths in fail, each
-// with its errno, until the test ends. Not for parallel tests.
+// failLooks makes readDirLook, statLook and lstatLook fail at the paths in
+// fail, each with its errno, until the test ends. Not for parallel tests.
 func failLooks(t *testing.T, fail map[string]syscall.Errno) {
 	t.Helper()
-	wasDir, wasStat := readDirLook, statLook
-	t.Cleanup(func() { readDirLook, statLook = wasDir, wasStat })
+	wasDir, wasStat, wasLstat := readDirLook, statLook, lstatLook
+	t.Cleanup(func() { readDirLook, statLook, lstatLook = wasDir, wasStat, wasLstat })
+	lstatLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+		if errno, ok := fail[p]; ok {
+			return nil, &fs.PathError{Op: "lstat", Path: p, Err: errno}
+		}
+		return wasLstat(ctx, p, timeout)
+	}
 	readDirLook = func(ctx context.Context, p string, timeout time.Duration) ([]fs.DirEntry, error) {
 		if errno, ok := fail[p]; ok {
 			return nil, &fs.PathError{Op: "open", Path: p, Err: errno}
@@ -193,7 +199,7 @@ func TestAskedBookRefusedForGoodIsNotIndexable(t *testing.T) {
 		{"EACCES", syscall.EACCES, true},
 		{"EPERM", syscall.EPERM, true},
 		{"ENXIO", syscall.ENXIO, true}, // the device gone: lasting
-		{"ELOOP", syscall.ELOOP, true}, // a link loop: any fault not transientFault is
+		{"ELOOP", syscall.ELOOP, true}, // a link loop: any fault not metadata.TransientFault is
 		{"EIO", syscall.EIO, false},
 		{"ESTALE", syscall.ESTALE, false},
 	} {

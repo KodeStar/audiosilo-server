@@ -15,7 +15,13 @@ import (
 )
 
 // OpenPodcast pins an opened committed generation. It never probes or hashes
-// during a media request, and never opens a path after the final checks.
+// during a media request, and never opens a path after the final checks. An
+// episode not there (or not the generation the index pinned) is
+// ErrNotIndexable, which a stream answers by fetching it again; a look that
+// fails as a share does that a retry may get past (metadata.TransientFault:
+// EIO, ESTALE) is a look given up on instead (podcastLookErr: the stream's 503
+// share_not_answering), never the episode absent, so a share's hiccup never
+// asks the Bridge for an episode the library holds.
 func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library, rel string) (*os.File, *feed.Fetch, error) {
 	show := path.Dir(rel)
 	if !feed.EpisodePath(show, rel) {
@@ -30,42 +36,92 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 			return nil, nil, ErrNotIndexable
 		}
 		dir, err := ContentJoin(lib.Root, show)
+		if metadata.GaveUp(err) {
+			return nil, nil, err // the join's look a share failed: never the episode absent
+		}
 		if err != nil {
 			return nil, nil, ErrNotIndexable
 		}
-		st, err := os.Lstat(filepath.Join(lib.Root, show))
-		if err != nil || !st.IsDir() {
+		st, err := podcastLstat(filepath.Join(lib.Root, show))
+		if err != nil {
+			return nil, nil, podcastLookErr(err)
+		}
+		if !st.IsDir() {
 			return nil, nil, ErrNotIndexable
 		}
 		filename := filepath.Join(dir, "feed.json")
-		feedInfo, err := os.Lstat(filename)
-		if err != nil || feedSignature(feedInfo) != pin.FeedSig || podcastBarrier(dir, path.Base(rel)) != nil {
+		feedInfo, err := podcastLstat(filename)
+		if err != nil {
+			return nil, nil, podcastLookErr(err)
+		}
+		if feedSignature(feedInfo) != pin.FeedSig {
 			return nil, nil, ErrNotIndexable
 		}
+		if err := podcastBarrier(podcastLstat, dir, path.Base(rel)); err != nil {
+			return nil, nil, err
+		}
 		current, err := podcastFeeds.read(filename, show, feedInfo)
-		if err != nil || !current.holds(rel, pin.ShowID, pin.EpisodeID, *pin.Fetch) {
+		if err != nil {
+			return nil, nil, podcastLookErr(err)
+		}
+		if !current.holds(rel, pin.ShowID, pin.EpisodeID, *pin.Fetch) {
 			return nil, nil, ErrNotIndexable
 		}
 		abs := filepath.Join(dir, path.Base(rel))
-		before, err := os.Lstat(abs)
-		if err != nil || !before.Mode().IsRegular() {
+		before, err := podcastLstat(abs)
+		if err != nil {
+			return nil, nil, podcastLookErr(err)
+		}
+		if !before.Mode().IsRegular() {
 			return nil, nil, ErrNotIndexable
 		}
 		f, err := os.Open(abs)
 		if err != nil {
-			return nil, nil, ErrNotIndexable
+			return nil, nil, podcastLookErr(err)
 		}
+		// The final checks, after the open, each made once the one before it
+		// answered: a share's fault a retry may get past on any of them is a
+		// look given up on, as on the looks before.
 		opened, err := f.Stat()
-		named, nerr := os.Lstat(abs)
-		if err == nil && nerr == nil && opened.Mode().IsRegular() && named.Mode().IsRegular() && opened.Size() == pin.Fetch.Bytes && os.SameFile(before, opened) && os.SameFile(opened, named) && podcastBarrier(dir, path.Base(rel)) == nil && feedSignatureMust(filename) == pin.FeedSig {
+		var named, feedNow os.FileInfo
+		if err == nil {
+			named, err = podcastLstat(abs)
+		}
+		if err == nil {
+			err = podcastBarrier(podcastLstat, dir, path.Base(rel))
+		}
+		if err == nil {
+			feedNow, err = podcastLstat(filename)
+		}
+		if err == nil && opened.Mode().IsRegular() && named.Mode().IsRegular() &&
+			opened.Size() == pin.Fetch.Bytes && os.SameFile(before, opened) && os.SameFile(opened, named) && feedSignature(feedNow) == pin.FeedSig {
 			return f, pin.Fetch, nil
 		}
 		_ = f.Close()
+		if err = transientGaveUp(err); metadata.GaveUp(err) {
+			return nil, nil, err
+		}
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return nil, nil, ctx.Err()
 		}
 	}
 	return nil, nil, ErrNotIndexable
+}
+
+// podcastLstat is OpenPodcast's and a scan's (podcastFolderSig,
+// podcastBarrier) look at a show's folder, its feed.json, its publish barrier
+// and an episode: a test injects a share's errors through it.
+var podcastLstat = os.Lstat
+
+// podcastLookErr is OpenPodcast's answer for a look that failed with err: a
+// share's fault a retry may get past (metadata.TransientFault) is a look given
+// up on (metadata.AsGaveUp), never the episode absent; any other
+// ErrNotIndexable, the episode not there as pinned.
+func podcastLookErr(err error) error {
+	if err = transientGaveUp(err); metadata.GaveUp(err) {
+		return err
+	}
+	return ErrNotIndexable
 }
 
 // OpenPodcastBounded is OpenPodcast as one metadata.Bounded call (ctx, at most

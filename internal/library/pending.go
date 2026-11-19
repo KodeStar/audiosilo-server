@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"path"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -79,7 +80,7 @@ func pendingBook(ctx context.Context, lib catalog.Library, rel string, overrides
 	if overrides[rel] == catalog.OverrideCollection {
 		return false
 	}
-	own := hasAudio(ctx, absOf(lib, rel), rel, ignore)
+	own := hasAudio(ctx, lib.Root, rel, ignore)
 	if root, ok := joinRoot(overrides, rel, func(p string) bool {
 		if p == rel {
 			return !own && isDiscSet(p)
@@ -91,18 +92,31 @@ func pendingBook(ctx context.Context, lib catalog.Library, rel string, overrides
 	return own
 }
 
-// hasAudio reports whether the folder abs (at library-relative rel) directly
-// holds an audio file discovery reads (isAudioEntry, not overLong): audioEntries' question
+// hasAudio reports whether the folder at library-relative rel in the library
+// at root directly holds an audio file discovery reads (isAudioEntry, not
+// overLong, no link out of the library: linkOut): audioEntries' question
 // without building, filtering or sorting the list (a shadowed .mka has its
-// shadowing file beside it, so any audio entry answers it). The listing is a
-// bounded look, within ctx (the pass's time): one given up on is no audio.
-func hasAudio(ctx context.Context, abs, rel string, ignore *Ignore) bool {
-	entries, err := metadata.ReadDirBounded(ctx, abs, pendingTime)
+// shadowing file beside it, so any audio entry answers it). The listing and a
+// link's look are bounded looks, within ctx (the pass's time): one given up
+// on is no audio. A link is looked at only when no plain file answers.
+func hasAudio(ctx context.Context, root, rel string, ignore *Ignore) bool {
+	entries, err := metadata.ReadDirBounded(ctx, filepath.Join(root, filepath.FromSlash(rel)), pendingTime)
 	if err != nil {
 		return false
 	}
-	return slices.ContainsFunc(entries, func(de fs.DirEntry) bool {
+	var links []fs.DirEntry
+	for _, de := range entries {
 		p := path.Join(rel, de.Name())
-		return isAudioEntry(de, p, ignore) && !overLong(p)
+		if !isAudioEntry(de, p, ignore) || overLong(p) {
+			continue
+		}
+		if link, _ := linkKind(de.Type()); !link {
+			return true
+		}
+		links = append(links, de)
+	}
+	return slices.ContainsFunc(links, func(de fs.DirEntry) bool {
+		out, err := linkOut(ctx, root, path.Join(rel, de.Name()), de.Type(), pendingTime)
+		return err == nil && !out
 	})
 }

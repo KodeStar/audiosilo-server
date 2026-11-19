@@ -1257,12 +1257,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   disk has it as given (`asGiven`: a path the index holds byte for byte, `catalog.IndexHolds`, joined by
   `SafeJoinBounded`, else `library.SafeJoinListed`: `resolveBelow` with its looks bounded, each
   name looked for in its folder's listing through `API.listed`, names only, before it is `Lstat`ed), else
-  answer as for a missing path (a listing or `Lstat` given up on, or failing as a share does that a retry may get
-  past, `transientFault`'s EIO, ESTALE, ENOTCONN and the network errnos, as the scanner reads them: 503
-  `share_not_answering` with `Retry-After`, the stream, `/fs` and `/item`'s on-demand index alike for a path the
-  index does not hold; any other fault, a permission (EACCES, EPERM) or the device gone (ENXIO) among them, stays
-  the missing path's 404; for a path the index holds, the stream and `/fs` answer a failing stat, open or listing,
-  EIO included, with the 404 they always had). A missing path and a
+  answer as for a missing path. A fault reads by whether the index holds the path. For a path it does not hold,
+  a listing or `Lstat` of the join given up on, or failing as a share does that a retry may get past
+  (`metadata.TransientFault`, the share-fault rule below), is a 503 `share_not_answering` with `Retry-After`, the
+  stream, `/fs` and `/item`'s on-demand index alike, and any other fault (a lasting refusal, a limit of the
+  server's own) the missing path's 404. For a path the index holds (no listing made), the stream and `/fs` give
+  the 503 only for a look given up on (a hang past its bound); a stat, open or listing that fails, EIO
+  included, is the 404 they always had. A missing path and a
   case variant take the same steps (the same listings and `Lstat`s up to the first name not listed, none
   past it), and the listings are kept a few seconds (`metadata.DirNames`, one per server,
   `Catalog.DirNames`, which `Spelling`'s `ownEntry` reads too: `dirNamesTTL` 3 s from the read's start, at
@@ -1271,12 +1272,59 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   invalidation), so the check's time never tells a rule spelled in another case that the folder is there,
   and missing paths in a loop read a folder once in the TTL (`TestCaseVariantCostsWhatMissingDoes`,
   `TestSafeJoinListedVariantCostsWhatMissingDoes`; a folder whose names pass the bound once a request). A
-  link out of the root ends the walk where it is met, nothing below it listed or looked at: the stream's
-  400 `invalid path`, `/fs`'s "directory not found" whatever the folder it points to holds
-  (`TestFSLinkOutOfRootIsMissing`). `resolveBelow` returns such a link's own target, never joined with
+  link is read (`Readlink`), never followed: `followLink` walks its target one name at a time, from the
+  link's folder or the filesystem's root, through the root and the folders above it unlooked at (the root is
+  resolved: no link in them), each name under the root looked at and a link among them read the same way (at
+  most `maxLinkHops`, a loop past it a name not there), and ends at the first name out of the root without
+  looking at it. An absolute target that names the root as configured (a root that is itself a link,
+  `/data/books` to `/mnt/books`, or macOS's `/var`) is walked from the resolved root, as the OS opens it
+  (`throughRootAs`); one through any other link above the root is out of it. A Windows junction (Lstat's
+  irregular entry that is no folder since Go 1.23, neither a link nor a folder) is read as a link
+  (`linkKind`), and another reparse point that doesn't read as one is a plain name
+  (`TestJoinLinkThroughTheRootAsConfigured`, `TestResolveBelowJunction`). A link or junction that is there and
+  can't be read (a permission, a junction another process holds) is `ErrOutsideRoot` too (`linkRead`): where
+  it points is not known, so no path through it is accepted, by `SafeJoin` (which had read it as a name not
+  there and joined the path) or by `SafeJoinListed`, nor is it walked as a plain folder. `SafeJoin`'s own
+  looks (`plainLooks`) read a fault a retry may get past (the root's, a name's lstat, a link's read) as a look
+  given up on, as `SafeJoinListed`'s do, so a caller that reads a join's error as "none" checks
+  `metadata.GaveUp` first (`ArtFile`, `ebookListed`, `lookEbook`, `OpenPodcast`;
+  `TestSafeJoinRefusesALinkItCannotCheck`). So a link out of the root ends the walk where it is met, nothing below it listed and its
+  target never looked at: the stream answers a file through it in every form as a missing file (`noFile`),
+  `/fs` "directory not found", a route that resolves a book on demand (`/item`: `indexOnDemand`) "no book at
+  that path", whatever it points to, there or not, on a mount that answers, hangs or fails
+  (`TestFSLinkOutOfRootIsMissing`, `TestStreamLinkOutOfRootOnAHeldShare`,
+  `TestSafeJoinListedLinkFaultOutOfRoot`); the 400 `invalid path` is left to a path that climbs out by its names,
+  as `/fs` can be sent (`BrowseFS` joins the path as sent; the stream's is cleaned first, `relpath.Clean`,
+  and never climbs). `resolveBelow` returns such a link's own target, never joined with
   the names after it, so `SafeJoin` too refuses every path through it: joined, a link to a folder above
   the root (`up/<root>/Book/link/x`) read as a path back inside the root, a link out of it further down
-  never looked at (`TestResolveBelowIsResolveExisting`). `/fs` looks before it reads the folder (after,
+  never looked at (`TestResolveBelowIsResolveExisting`). A join is a check, and the open that follows it
+  is a second look at the same path: a name along it swapped for a link out of the root between the two
+  (by whoever can write to the library, or a share that serves one) would be followed. So the routes that
+  open what a request named open it through an `os.Root` at the library's root (`metadata.Below`): the
+  stream's stored file and a sidecar cover (`media.ServeFile`, `metadata.OpenRegularBelow`), a cover's
+  embedded art and its thumbnail read (`media.EmbeddedCoverBelow`, `readSidecar`), and `/fs`'s listing
+  with its page of file info, read through the open folder (`metadata.ReadDirBelow`, `DirBelow.Info`); the
+  open refuses a link out of the root wherever it then is (a 404, a missing folder). `os.Root` also
+  refuses a link a join allows, one that stays in the root by an absolute target or by climbing above it
+  and back, so `Below` opens the resolved path through the root then
+  (`TestOpenRegularBelowNeverLeavesTheRoot`, `TestReadDirBelowNeverLeavesTheRoot`,
+  `TestStreamOpensThroughTheRootAfterASwap`). The reader's ebook and a podcast episode check the open file
+  against the path again instead (`OpenEbook`, `OpenPodcast`: `os.SameFile`). Still a check and then a look
+  by path: a transcode (ffmpeg opens the path), a remux's or a rendition's source (`media.FileCache`,
+  `media.Source`), an asked book's read (`resolveBook`, the probes), the Bridge's file stats
+  (`statBookFiles`), `LookArt`'s stat and the looks under `.audiosilo/`. The scan takes no link out of the root
+  either, by the same rule (`linkOut`: `SafeJoin` of each link the walk lists, looked at once the walk ends,
+  width at a time, `linksInRoot`; a plain file never looked at again): a file or folder link out in a book
+  folder is never a part, nor a cover (`coverLook.find`, which looks at a cover's own entry before any stat,
+  so never through such a link), nor an image that has a book read again for its cover (`imageSeen`), nor
+  audio a pending book is marked for (`hasAudio`), so nothing is read from where it leads, and a part that
+  becomes one leaves the book on the next scan as a part gone does; a link inside the root is a part as ever,
+  and one whose look a share failed, or whose read failed at all (a permission, a limit of the server's own:
+  where it leads is not known), keeps its folder's book as stored, never pruned
+  (`TestScanSkipsLinksOutOfTheRoot`, `TestScanDropsAPartNowALinkOut`, `TestCoverSkipsLinksOutOfTheRoot`,
+  `TestScanKeepsABookWhoseLinkDidNotAnswer`, `TestScanIgnoresAnImageLinkOutOfTheRoot`,
+  `TestHasAudioSkipsLinksOutOfTheRoot`, `TestCoverNeverStatsALinkOutOfTheRoot`). `/fs` looks before it reads the folder (after,
   for a path that climbs out of the root by its names, so it keeps its 400; a leading slash is no climb,
   `/Author` is looked at first as `Author` is), and answers a folder outside the caller's share
   rules (`VisibleInBrowse`) as a missing one before any listing (`TestFSOutsideScopeIsMissing`). Every
@@ -1428,8 +1476,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `API.fileWait` and answering with the stored ebook past it: the probe's time is the request's own),
   every cover (full, thumbnail, a
   show's: `serveArt`, `coverArt`, `readSidecar`) and every look a stream makes at its file (SRV-15c: the
-  path's join, `library.SafeJoinBounded`; its open and stat, `media.ServeFile`, a regular file only,
-  `metadata.OpenRegular`, so a FIFO is a 404 at once, never an open held and counted on its mount; a
+  path's join, `library.SafeJoinBounded`; its open and stat, `media.ServeFile`, through the library's root
+  (`metadata.OpenRegularBelow`) and a regular file only, so a FIFO is a 404 at once, never an open held and counted on its mount; a
   transcode's stat, `media.Transcode`; a remux's or rendition's look at its source, `media.Source`; a
   podcast episode's checks and open, `library.OpenPodcastBounded`, the download's presence check and an
   on-demand fetch's waits too), `/fs`'s join, listing and page of file info (`library.BrowseFS`, `ListDir`,
@@ -1475,7 +1523,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `Probing`; a request's waits, under `WithLookTimeout`, end at `API.lookCtx`'s `library.WithWaitCap`, a time,
   `API.flightWaitEnd` (`flightWaitMargin`, 5 s, before the request's deadline, or `timeoutDur` from now on a context
   detached from it, so its coded 503 with `Retry-After` is written before the request timeout's bare one whatever
-  its looks took first), in all however the read moves on, `flightWaitCap`, where a scan's has no such cap), so a big
+  its looks took first), in all however the read moves on, `flightWaitCap`, where a scan's has no such cap; the
+  request that leads the read, its own, waits up to its `WithWaitCap` and no longer, `awaitFlight`'s
+  `errReadUnfinished`, the read going on to store the book; and `resolveAsked`'s looks end together at the same
+  cap, not only each at its look time, `waitCapLeft`; a caller with no cap is bounded by its context alone), so a big
   book read slowly from a share that answers is waited for, never a false 503 within that time: a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
   rest; an on-demand read gives up as a look at a share that stopped answering (`metadata.GaveUp`,
   503 `share_not_answering`). The walk's own looks are bounded the same way (SRV-15c: `walkDir`'s root lstat and
@@ -1485,9 +1536,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   EIO, ESTALE, ENOTCONN, a permission; `metadata.AsGaveUp` reads it as a look given up on, `Faulted` names its
   cause; the same rule for every look a scan makes at a book: the walk's listings, a disc folder's, `resolveBook`'s
   stat, `bookOnDisk`'s and `dirPresent`'s; a caller who asked for the book (`resolveAsked`: an on-demand index, an
-  admin's Re-read, `IndexMoved`) hears a permission on the path's stat or its folder's listing as
-  `ErrNotIndexable`, the 404 it always was and no 503 to try again (`lookRefused`; `bookOnDisk` still reads it
-  as the book present); `dropUnanswered`, with
+  admin's Re-read, `IndexMoved`) hears such a look by the share-fault rule (below): a fault not transient on the
+  path's stat, its folder's listing, a part's lstat or a disc folder's listing is `ErrNotIndexable`, the 404 it
+  always was and no 503 to try again (`lookRefused`, `askedFault`, a transient one first whatever the map's order;
+  `bookOnDisk` still reads it as the book present), and a disc folder beside the asked disc refused so counts as
+  the disc its name says (`splitParentOf`), so a healthy disc reads with its split parent; `dropUnanswered`, with
   every disc folder directly in it or in a folder above it, so neither a book joined from a disc set nor the discs' split
   is built from the discs that answered, or from a set that is one only for want of the folder not looked at),
   is skipped for that run, which is then partial (its books kept
@@ -1685,13 +1738,40 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   holds that library's `""` rule: `DeleteLibrary` clears it on a grant share it leaves (one that also
   holds another library's folders), and `0081` cleared the marks older versions left on a narrowed or
   rule-less share, so such a share is an ordinary one whose folders can be changed.
+- **Share faults**: how a look's error at a library file reads, one rule for the scan and every route (server#360,
+  SRV-MEDIA). Three classes, the first an explicit list in code, the others what is not on it:
+  - **Transient** (`metadata.TransientFault`: EIO, ESTALE, ENOTCONN, ETIMEDOUT, EHOSTDOWN, EHOSTUNREACH, ENETDOWN,
+    ENETUNREACH, ECONNRESET, ECONNABORTED, ECONNREFUSED; on Windows, whose calls never return those, its own codes
+    for a share that dropped, `transient_windows.go`: ERROR_NETNAME_DELETED, ERROR_BAD_NETPATH, ERROR_SEM_TIMEOUT,
+    ERROR_UNEXP_NET_ERR and the network's unreachable, refused or aborted): a share that stopped answering and may come back, as is a
+    look given up on (`metadata.GaveUp`, a hang past its bound). A route answers 503 `share_not_answering` with
+    `Retry-After` 30; nothing reads it as the file gone (a podcast episode is not fetched again, `podcastLookErr`;
+    the Bridge's book files keep their indexed size, `statBookFiles`, each file's look given `fileWait`
+    and all ending at the request's wait cap, `TestBridgeBookFilesEachGetALooksTime`).
+  - **Lasting** (`metadata.LastingFault`: a permission, EACCES or EPERM, `fs.ErrPermission`; the device gone, ENXIO; a
+    link loop, ELOOP; a name the share refuses, EINVAL, Windows' ERROR_INVALID_NAME): a retry would only meet it
+    again. A route answers the lasting answer it had (a 404; a route's own 422 stays), the reader's ebook and
+    read-along map among them (`TestEbookLastingFaultIs404`, `TestReadalongLastingFaultIs404`), and the book stays
+    indexed.
+  - **The server's own limits** (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY) and any error on neither list: no share's
+    fault, never a 503 `share_not_answering`; a route answers it as it did before the rule (an asked read's
+    `lookRefused` 404, a stream's missing file, a 500 where the route logs one).
+  `metadata.ShareFault` stays broad on purpose (any error but the file gone, ENOENT or ENOTDIR, or ENAMETOOLONG): it
+  decides what a scan keeps (a book kept as stored, a run partial, a move not carried), never an answer. Only ENOENT
+  or ENOTDIR is ever "gone", read by `metadata.NotExist`, never `errors.Is(err, fs.ErrNotExist)` alone, where a
+  share's fault may be the error: Go reads Windows' ERROR_BAD_NETPATH (a share whose server is down, on the transient
+  list) as `fs.ErrNotExist`, so a route checks the transient fault first (`TestBadNetpathIsNoFileGone`). Every look is a `metadata.Bounded` call, the reader's ebook open (`OpenEbookBounded`)
+  and a podcast scan's among them: its root listing and each look at a show after it (`podcastLooks`: the
+  folder, `feed.json`, the listing and each entry's info, the publish barriers, a chapter attachment), so a
+  share that stops answering mid-scan leaves its shows unread and the run partial
+  (`TestPodcastScanBoundsAShowsLooks`). `OpenPodcast`'s looks stay plain inside its one bounded call.
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). After a partial discovery (a folder unreadable, or
   given up on: a share that stopped answering) a book not found is not known gone, so each old path a new
   book matches is looked at first (`bookOnDisk`, bounded, erring toward present; a look given up on, or one
-  failed as a share does that a retry may get past (`transientFault`: EIO, ESTALE, ENOTCONN, ETIMEDOUT,
-  EHOSTDOWN), is `diskUnknown`, never gone; a permission counts as present) and only one gone from disk
+  failed as a share does that a retry may get past (`metadata.TransientFault`: EIO, ESTALE, ENOTCONN, ETIMEDOUT,
+  the network errnos), is `diskUnknown`, never gone; any other fault counts as present) and only one gone from disk
   moves: a copy of a stuck book never takes its state. A folder book's fingerprint is its
   first file's; one indexed in byte order before #160 still matches by the file that order
   put first (`byteFirstFingerprint`, in `detectMoves` and `IndexMoved`). The on-demand index of a

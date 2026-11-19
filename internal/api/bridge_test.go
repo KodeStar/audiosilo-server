@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -322,8 +325,13 @@ func TestBridgeBookForMappingCheck(t *testing.T) {
 func TestBridgeSampleBookSkipsAMissingBook(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
-	root := copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b",
-		"Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b")
+	// Resolved, as statBookFiles' joins name the files its stat is injected
+	// for (macOS's temp folder is under a link, /var to /private/var).
+	root, err := filepath.EvalSymlinks(copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b",
+		"Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := b.db.ExecContext(context.Background(), `UPDATE libraries SET root = ? WHERE id = ?`, root, b.lib.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -343,6 +351,128 @@ func TestBridgeSampleBookSkipsAMissingBook(t *testing.T) {
 	}
 	if next := sample(); next == first || next == "" {
 		t.Fatalf("the sample after %q's files went = %q, want another book", first, next)
+	}
+}
+
+// A share hiccup never tells the Bridge a book's files are gone (server data
+// loss guard): a file whose stat fails as a share that may come back does
+// (EIO, ESTALE), or for good (a permission), keeps its indexed size with no
+// modification time, the wire's shape for a file not read, and the mapping
+// check's sample takes such a book (its files can't be told now) over one
+// whose files are gone (ENOENT), which it takes only when no other is left.
+// Not parallel: it swaps bridgeStatLook.
+func TestBridgeBookFilesOnAShareFault(t *testing.T) {
+	b := newBridgeEnv(t)
+	// Resolved, as statBookFiles' joins name the files its stat is injected
+	// for (macOS's temp folder is under a link, /var to /private/var).
+	root, err := filepath.EvalSymlinks(copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b",
+		"Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.db.ExecContext(context.Background(), `UPDATE libraries SET root = ? WHERE id = ?`, root, b.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		Path  string
+		Files []bridgeFile
+	}
+	get := func(path string) answer {
+		t.Helper()
+		u := fmt.Sprintf("/api/v1/bridge/libraries/%d/book", b.lib.ID)
+		if path != "" {
+			u += "?path=" + url.QueryEscape(path)
+		}
+		resp, body := b.do(t, "GET", u, b.bridgeTok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", u, resp.StatusCode, body)
+		}
+		var out answer
+		decodeInto(t, body, &out)
+		return out
+	}
+	first := get("")
+	if len(first.Files) == 0 || first.Files[0].ModTime == 0 {
+		t.Fatalf("the sample with every file answering = %+v, want its files read", first)
+	}
+	was := bridgeStatLook
+	t.Cleanup(func() { bridgeStatLook = was })
+	under := func(p, book string) bool {
+		return strings.HasPrefix(p, filepath.Join(root, filepath.FromSlash(book))+string(filepath.Separator)) ||
+			p == filepath.Join(root, filepath.FromSlash(book))
+	}
+	for _, errno := range []syscall.Errno{syscall.EIO, syscall.ESTALE, syscall.EACCES} {
+		// The first book's files gone, every other's stat failing with errno.
+		bridgeStatLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+			if under(p, first.Path) {
+				return nil, &fs.PathError{Op: "stat", Path: p, Err: syscall.ENOENT}
+			}
+			return nil, &fs.PathError{Op: "stat", Path: p, Err: errno}
+		}
+		got := get("")
+		if got.Path == first.Path || got.Path == "" {
+			t.Errorf("the sample with %q gone and the rest %v = %q, want a book whose files can't be told, never the gone one", first.Path, errno, got.Path)
+			continue
+		}
+		for _, f := range append(got.Files, get(got.Path).Files...) {
+			if f.ModTime != 0 || f.Size == 0 {
+				t.Errorf("a file whose stat failed %v = %+v, want its indexed size and no modification time", errno, f)
+			}
+		}
+	}
+	// Every book gone: the first is still the sample, as before.
+	bridgeStatLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+		return nil, &fs.PathError{Op: "stat", Path: p, Err: syscall.ENOENT}
+	}
+	if got := get(""); got.Path != first.Path {
+		t.Errorf("the sample with every book gone = %q, want the first, %q", got.Path, first.Path)
+	}
+}
+
+// A book's files are each given a look's time (fileWait), not one between
+// them: a book with more files than one look's time covers, on a slow share
+// that answers every look, is read whole, each file with its modification
+// time, never cut off with its last files unread. Not parallel: it swaps
+// bridgeStatLook.
+func TestBridgeBookFilesEachGetALooksTime(t *testing.T) {
+	b := newBridgeEnv(t)
+	root := copyFixtures(t, "Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b")
+	ctx := context.Background()
+	lib, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Slow", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.SetFolderOverride(ctx, lib.ID, "Will Wight/Cradle", catalog.OverrideBook); err != nil {
+		t.Fatal(err)
+	}
+	scanFixture(t, b.testEnv, lib)
+	// Each stat takes most of a look's time and answers, as a bounded look
+	// does: within its timeout, else given up on.
+	const slow = 300 * time.Millisecond
+	b.api.fileWait = 400 * time.Millisecond
+	was := bridgeStatLook
+	t.Cleanup(func() { bridgeStatLook = was })
+	bridgeStatLook = func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+		if timeout < slow {
+			time.Sleep(timeout)
+			return nil, fmt.Errorf("%s: %w", p, metadata.ErrNotAnswered)
+		}
+		time.Sleep(slow)
+		return was(ctx, p, timeout)
+	}
+	resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book?path=%s", lib.ID, url.QueryEscape("Will Wight/Cradle")), b.bridgeTok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET the book: %d %s", resp.StatusCode, body)
+	}
+	var out struct{ Files []bridgeFile }
+	decodeInto(t, body, &out)
+	if len(out.Files) != 2 {
+		t.Fatalf("the book's files = %+v, want its two parts", out.Files)
+	}
+	for _, f := range out.Files {
+		if f.ModTime == 0 {
+			t.Errorf("%s was not looked at (no modification time): a look's time is each file's, not the book's", f.Path)
+		}
 	}
 }
 

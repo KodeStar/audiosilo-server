@@ -124,7 +124,7 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 // only to wait out the same read. Any lasting answer counts: gone, no longer a
 // regular file or folder, or a lasting error (a permission on a share that came
 // back); the re-index decides what it is. A fault a retry may get past
-// (transientFault: EIO, ENOTCONN) is no answer: the re-index would meet it on
+// (metadata.TransientFault: EIO, ENOTCONN) is no answer: the re-index would meet it on
 // the same look, and a cover look reading it as "no cover" would drop the
 // stored one.
 func sideAnswers(ctx context.Context, abs string, timeout time.Duration) bool {
@@ -152,7 +152,7 @@ func sideAnswers(ctx context.Context, abs string, timeout time.Duration) bool {
 	// Any lasting answer counts (a permission on a share that came back
 	// included: the re-index records what it is); a look given up on again,
 	// or a share's fault a retry may get past, doesn't.
-	return !metadata.Unanswered(ctx, err) && !transientFault(err)
+	return !metadata.Unanswered(ctx, err) && !metadata.TransientFault(err)
 }
 
 // sideProbeBytes is how much of a file beside the audio sideAnswers reads.

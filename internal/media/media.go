@@ -137,8 +137,12 @@ func audioContentType(ext string) string {
 	}
 }
 
-// ServeFile streams absPath to the client with Range support. When download is
+// ServeFile streams absPath, a file its caller joined and checked under the
+// library root root, to the client with Range support. When download is
 // true a Content-Disposition attachment header is set so browsers save the file.
+// The file is opened through root (metadata.OpenRegularBelow), so the open
+// can't leave the library whatever changed on disk since the caller's check
+// (a folder or the file swapped for a link out of it): that is a 404.
 // Its open and stat are one metadata.Bounded call (the request's context, at
 // most wait, the per-mount cap of a scan's reads): a file on a share that
 // stopped answering is given up on, never a handler held for good (the reads
@@ -148,8 +152,8 @@ func audioContentType(ext string) string {
 // (metadata.OpenRegular): a FIFO named as audio is a 404 at once, never an open
 // waiting for a writer, given up on and counted on its mount for good. A 404
 // carries no Cache-Control a caller set for the file it expected.
-func ServeFile(w http.ResponseWriter, r *http.Request, absPath string, download bool, wait time.Duration) error {
-	f, _, err := metadata.OpenRegularBounded(r.Context(), absPath, wait)
+func ServeFile(w http.ResponseWriter, r *http.Request, root, absPath string, download bool, wait time.Duration) error {
+	f, info, err := metadata.OpenRegularBelowBounded(r.Context(), root, absPath, wait)
 	switch {
 	case metadata.GaveUp(err):
 		return err
@@ -159,7 +163,8 @@ func ServeFile(w http.ResponseWriter, r *http.Request, absPath string, download 
 		return nil
 	}
 	defer f.Close()
-	ServeOpened(w, r, f, download)
+	// Named as asked for: a link's file opens under its own name.
+	ServeOpenedAs(w, r, f, filepath.Base(absPath), info.ModTime(), download)
 	return nil
 }
 
@@ -593,12 +598,25 @@ func coverMIME(data []byte) (string, bool) {
 // (metadata.GaveUp), never a caller held for good; a FIFO is turned away at
 // once (metadata.OpenRegular), never waited on for a writer.
 func EmbeddedCover(ctx context.Context, absPath string, timeout time.Duration) (data []byte, mime string, err error) {
+	return embeddedCover(ctx, absPath, timeout, func() (*os.File, os.FileInfo, error) { return metadata.OpenRegular(absPath) })
+}
+
+// EmbeddedCoverBelow is EmbeddedCover of absPath, a file a request named
+// that its caller joined and checked under the library root root, opened
+// through root (metadata.OpenRegularBelow): the open can't leave the library
+// whatever changed on disk since the check.
+func EmbeddedCoverBelow(ctx context.Context, root, absPath string, timeout time.Duration) (data []byte, mime string, err error) {
+	return embeddedCover(ctx, absPath, timeout, func() (*os.File, os.FileInfo, error) { return metadata.OpenRegularBelow(root, absPath) })
+}
+
+// embeddedCover is EmbeddedCover with the file's open.
+func embeddedCover(ctx context.Context, absPath string, timeout time.Duration, open func() (*os.File, os.FileInfo, error)) (data []byte, mime string, err error) {
 	type art struct {
 		data []byte
 		mime string
 	}
 	a, err := metadata.Bounded(ctx, absPath, timeout, func() (art, error) {
-		f, _, err := metadata.OpenRegular(absPath)
+		f, _, err := open()
 		if err != nil {
 			return art{}, err
 		}

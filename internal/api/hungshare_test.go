@@ -214,6 +214,30 @@ func TestItemWithAnEbookOnAHeldShareAnswers(t *testing.T) {
 	}
 }
 
+// The reader's ebook on a share that stopped answering answers 503
+// share_not_answering with Retry-After once its open is given up on
+// (streamWait, as the stream's looks), not a handler held for good; the same
+// ask is served once the share answers. Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
+func TestEbookOnAHeldShareAnswersShareNotAnswering(t *testing.T) {
+	e := newEbookEnv(t)
+	e.api.streamWait = 200 * time.Millisecond
+	release := metadata.HoldOpensForTests(filepath.Join(e.root, filepath.FromSlash(ebookFile)))
+	t.Cleanup(release)
+	start := time.Now()
+	resp, body := e.do(t, "GET", e.at("ebook", ebookBook), e.annTok, "")
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, codeShareNotAnswering) || resp.Header.Get("Retry-After") != "30" {
+		t.Errorf("the ebook on a held share = %d %s, want 503 %s with Retry-After 30", resp.StatusCode, body, codeShareNotAnswering)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("the ebook on a held share took %v, want it answered at the open's bound", took)
+	}
+	release()
+	if resp, body := e.do(t, "GET", e.at("ebook", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusOK || len(body) != len(e.epub) {
+		t.Errorf("the ebook once the share answers = %d (%d bytes), want the file", resp.StatusCode, len(body))
+	}
+}
+
 // Every look a stream makes at its file on a share that stopped answering is
 // bounded (SRV-15c): the path's join (SafeJoin's Lstats, which ran before the
 // open's bound began, adding 71 s to one stream on a frozen share), and the

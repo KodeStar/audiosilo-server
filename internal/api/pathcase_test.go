@@ -442,7 +442,7 @@ func TestFSLinkOutOfRootIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTree(t, outside, "present/01.mp3")
-	for link, to := range map[string]string{"Out": outside, "In": filepath.Join(c.lib.Root, pcAuthor)} {
+	for link, to := range map[string]string{"Out": outside, "Gone": filepath.Join(outside, "nope"), "In": filepath.Join(c.lib.Root, pcAuthor)} {
 		if err := os.Symlink(to, filepath.Join(c.lib.Root, link)); err != nil {
 			t.Skipf("symlinks unsupported on this platform: %v", err)
 		}
@@ -463,7 +463,18 @@ func TestFSLinkOutOfRootIsMissing(t *testing.T) {
 	for _, p := range []string{"Out", "Out/present", "Out/absent", "/Out", "/Out/present"} {
 		c.same(t, c.samTok, "GET", c.get("fs"), p, "Nowhere")
 	}
-	c.same(t, c.samTok, "GET", c.get("stream"), "Out/present/01.mp3", "Out/absent/01.mp3")
+	// The stream, in every form, answers a file through a link out of the
+	// library as a missing one, whether the link's target is there or not.
+	for _, form := range streamForms {
+		for _, p := range []string{"Out/present/01.mp3", "Out/absent/01.mp3", "Gone/01.mp3"} {
+			c.same(t, c.samTok, "GET", c.get("stream", form), p, "Nowhere/01.mp3")
+		}
+	}
+	// So does a route that resolves a book (/item, read on demand): the 404
+	// of a path with nothing there, never a 400 telling the link is one.
+	for _, p := range []string{"Out", "Out/present", "Out/present/01.mp3", "Gone"} {
+		c.same(t, c.samTok, "GET", c.get("item"), p, "Nowhere")
+	}
 	mu.Lock()
 	for _, d := range dirs {
 		if strings.HasPrefix(d, outside) {
@@ -479,6 +490,95 @@ func TestFSLinkOutOfRootIsMissing(t *testing.T) {
 	if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "stream", "In/Germinal/01.mp3"), c.samTok, ""); resp.StatusCode != http.StatusOK ||
 		!strings.HasPrefix(body, "placeholder ") {
 		t.Errorf("stream through a link inside the library = %d %.80q, want the file", resp.StatusCode, body)
+	}
+}
+
+// TestStreamLinkOutOfRootOnAHeldShare (security): a file through a link out of
+// the library whose target's share stopped answering is answered at once as a
+// missing file, as a link to a target that answers is, never a 503
+// share_not_answering after the look's time: the link's target is never looked
+// at, so the answer tells nothing about where it points. Allowed: a file
+// through a link inside the library streams. Not parallel:
+// metadata.HoldOpensForTests swaps the mount lookup.
+func TestStreamLinkOutOfRootOnAHeldShare(t *testing.T) {
+	c := newCaseEnv(t)
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTree(t, outside, "present/01.mp3")
+	for link, to := range map[string]string{"Out": outside, "In": filepath.Join(c.lib.Root, pcAuthor)} {
+		if err := os.Symlink(to, filepath.Join(c.lib.Root, link)); err != nil {
+			t.Skipf("symlinks unsupported on this platform: %v", err)
+		}
+	}
+	c.api.fileWait, c.api.streamWait = time.Second, time.Second
+	release := metadata.HoldOpensForTests(outside)
+	t.Cleanup(release)
+	for _, form := range streamForms {
+		start := time.Now()
+		c.same(t, c.samTok, "GET", c.get("stream", form), "Out/present/01.mp3", "Nowhere/01.mp3")
+		if took := time.Since(start); took > c.api.streamWait {
+			t.Errorf("stream%s through a link to a held share took %v, want it answered at once", form, took)
+		}
+	}
+	release()
+	if resp, body := c.do(t, "GET", bookURL(c.lib.ID, "stream", "In/Germinal/01.mp3"), c.samTok, ""); resp.StatusCode != http.StatusOK ||
+		!strings.HasPrefix(body, "placeholder ") {
+		t.Errorf("stream through a link inside the library = %d %.80q, want the file", resp.StatusCode, body)
+	}
+}
+
+// TestStreamOpensThroughTheRootAfterASwap (security): the stream's open can't
+// leave the library even when the path changes after its check. With the
+// file's open held, its folder is swapped for a link to a folder out of the
+// library holding a file of the same name; once the open goes on it answers
+// as a missing file, never with that file's bytes (a plain open of the
+// checked path follows the link). Allowed: the same request before the swap
+// streams the file. Not parallel: metadata.HoldReadsForTests swaps the mount
+// lookup.
+func TestStreamOpensThroughTheRootAfterASwap(t *testing.T) {
+	c := newCaseEnv(t)
+	root, err := filepath.EvalSymlinks(c.lib.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "01.mp3"), []byte("a file out of the library"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	at := bookURL(c.lib.ID, "stream", pcUnindexedT)
+	if resp, body := c.do(t, "GET", at, c.samTok, ""); resp.StatusCode != http.StatusOK || !strings.HasPrefix(body, "placeholder ") {
+		t.Fatalf("stream before the swap = %d %.80q, want the file", resp.StatusCode, body)
+	}
+	// The path's check (its listings and lstats) answers; the open waits.
+	release := metadata.HoldReadsForTests(filepath.Join(root, filepath.FromSlash(pcUnindexedT)))
+	t.Cleanup(release)
+	type answer struct {
+		status int
+		body   string
+	}
+	done := make(chan answer, 1)
+	go func() {
+		resp, body := c.do(t, "GET", at, c.samTok, "")
+		done <- answer{resp.StatusCode, body}
+	}()
+	time.Sleep(500 * time.Millisecond) // the request has checked its path and waits on the open
+	folder := filepath.Join(root, filepath.FromSlash(pcUnindexed))
+	if err := os.Rename(folder, folder+".aside"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, folder); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+	release()
+	got := <-done
+	if got.status != http.StatusNotFound || strings.Contains(got.body, "out of the library") {
+		t.Errorf("stream after its folder was swapped for a link out of the library = %d %.80q, want a 404 and none of that file",
+			got.status, got.body)
 	}
 }
 
