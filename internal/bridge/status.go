@@ -32,9 +32,9 @@ type Status struct {
 	Kinds []string `json:"kinds"`
 	// Libraries is the Bridge's mapping of each server library to its own mount,
 	// checked on every heartbeat.
-	Libraries []LibraryStatus `json:"libraries"`
+	Libraries libraryList `json:"libraries"`
 	// Workers are the ASR workers connected to it (Phase 1b).
-	Workers []Worker `json:"workers"`
+	Workers workerList `json:"workers"`
 	// UIURL is the Bridge's own LAN page, linked from the console.
 	UIURL string `json:"ui_url"`
 	// Estimates are the Bridge's figures for costing a job before it is queued
@@ -231,6 +231,61 @@ func (st *Status) KeepLibraries(known func(id int64) bool) {
 	}
 	st.Libraries = kept
 	st.Setup.keepLibraries(known)
+}
+
+// maxListRead is how many elements of a heartbeat's list of objects are read:
+// one more than the longest any is kept at (maxLibraries), so Validate still
+// sees a list over its bound.
+const maxListRead = maxLibraries + 1
+
+// readList reads the JSON list b into at most maxListRead elements, leaving the
+// rest unread: a heartbeat's body is bounded in bytes (MaxStatusBytes), but a
+// list of empty objects takes three bytes an element and some twenty times
+// that in memory, so read whole, a body of 2 MiB would be hundreds of
+// megabytes of structs to throw away (server#445). strict refuses a key T
+// doesn't have, as the heartbeat's own decoder does. b is one JSON value,
+// already checked (the decoder that calls an UnmarshalJSON has scanned it).
+func readList[T any](b []byte, strict bool) ([]T, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if strict {
+		dec.DisallowUnknownFields()
+	}
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if tok == nil {
+		return nil, nil // null
+	}
+	if tok != json.Delim('[') {
+		return nil, errors.New("bridge: not a list")
+	}
+	out := []T{}
+	for dec.More() && len(out) < maxListRead {
+		var v T
+		if err := dec.Decode(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// libraryList and workerList are a heartbeat's mappings and workers, read
+// bounded (readList).
+type (
+	libraryList []LibraryStatus
+	workerList  []Worker
+)
+
+func (l *libraryList) UnmarshalJSON(b []byte) (err error) {
+	*l, err = readList[LibraryStatus](b, true)
+	return err
+}
+
+func (l *workerList) UnmarshalJSON(b []byte) (err error) {
+	*l, err = readList[Worker](b, true)
+	return err
 }
 
 // Limits on a heartbeat: its body is the Bridge's, so the server bounds what it

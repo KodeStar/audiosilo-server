@@ -18,7 +18,7 @@ type Setup struct {
 	// Items are the checklist's steps in the Bridge's order. An id the server
 	// doesn't know is kept: the Bridge owns the list and the console words the
 	// ids it knows.
-	Items []SetupItem `json:"items"`
+	Items setupItems `json:"items"`
 	// CanContribute: the Bridge can file contributions now (a GitHub sign-in
 	// resolves). It wins over estimates.sidecars.can_contribute
 	// (Status.CanContribute).
@@ -65,6 +65,15 @@ type SetupItem struct {
 	// Workers tab (bridge#28). An older Bridge sends none: the console then
 	// reads its detail text as before.
 	NeedsWorker bool `json:"needs_worker,omitempty"`
+}
+
+// setupItems is a setup block's items, read bounded like the heartbeat's other
+// lists (readList), and leniently like the block: an unknown key is ignored.
+type setupItems []SetupItem
+
+func (l *setupItems) UnmarshalJSON(b []byte) (err error) {
+	*l, err = readList[SetupItem](b, false)
+	return err
 }
 
 // Bounds on a setup block.

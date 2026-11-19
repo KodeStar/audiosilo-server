@@ -2,7 +2,9 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -270,5 +272,73 @@ func TestLastHeartbeatSharesOneRead(t *testing.T) {
 	close(release)
 	if err := <-leaderErr; err != nil {
 		t.Fatalf("the read it left = %v", err)
+	}
+}
+
+// A heartbeat's lists of objects are read to a bounded length, whatever the
+// body holds: a list of empty objects is three bytes an element in a body and
+// some twenty times that as structs, so 2 MiB of them read whole would be
+// hundreds of megabytes (server#445). What is read is still checked as before.
+func TestHeartbeatListsAreReadBounded(t *testing.T) {
+	t.Parallel()
+	read := func(body string) (Status, error) {
+		var st Status
+		dec := json.NewDecoder(strings.NewReader(body)) // as the API reads it
+		dec.DisallowUnknownFields()
+		return st, dec.Decode(&st)
+	}
+	many := "[" + strings.Repeat("{},", 100_000) + "{}]"
+	st, err := read(`{"version":"0.6.0","libraries":` + many + `,"workers":` + many + `,"setup":{"items":` + many + `}}`)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(st.Libraries) != maxListRead || len(st.Workers) != maxListRead || len(st.Setup.Items) != maxListRead {
+		t.Fatalf("read %d libraries, %d workers, %d setup items; want %d of each", len(st.Libraries), len(st.Workers), len(st.Setup.Items), maxListRead)
+	}
+	// Over its bound, a list is still seen as over it.
+	if st, _ := read(`{"workers":` + many + `}`); !errors.Is(st.Validate(), ErrInvalid) {
+		t.Fatal("a heartbeat with too many workers passed Validate")
+	}
+	lib := func(i int) string { return fmt.Sprintf(`{"library_id":%d,"mount_path":"/m"}`, i+1) }
+	libs := make([]string, maxLibraries+50)
+	for i := range libs {
+		libs[i] = lib(i)
+	}
+	st, err = read(`{"libraries":[` + strings.Join(libs, ",") + `]}`)
+	if err != nil || st.Validate() != nil || len(st.Libraries) != maxLibraries || st.Libraries[maxLibraries-1].LibraryID != maxLibraries {
+		t.Fatalf("a list past the cap: %d libraries, %v; want the first %d", len(st.Libraries), err, maxLibraries)
+	}
+	// The shapes a list may take, and the ones refused, are the decoder's own.
+	for body, want := range map[string]int{
+		`{"libraries":[]}`:   0,
+		`{"libraries":null}`: 0,
+		`{}`:                 0,
+		`{"libraries":[` + lib(0) + `],"workers":[{"name":"gpu"}]}`: 1,
+	} {
+		st, err := read(body)
+		if err != nil || st.Validate() != nil || st.Libraries == nil || len(st.Libraries) != want || st.Workers == nil {
+			t.Errorf("%s: %+v, %v; want %d libraries in a list", body, st, err, want)
+		}
+	}
+	for _, body := range []string{
+		`{"libraries":{}}`,
+		`{"libraries":"all"}`,
+		`{"libraries":[1]}`,
+		`{"libraries":[{"library_id":1,"mount":"/m"}]}`, // a key the server doesn't know
+		`{"workers":[{"name":"gpu","gpu":true}]}`,
+	} {
+		if _, err := read(body); err == nil {
+			t.Errorf("%s was read, want it refused", body)
+		}
+	}
+	// A setup block stays lenient: an item's unknown key is ignored, and a
+	// list of the wrong shape drops the block, never the heartbeat.
+	st, err = read(`{"setup":{"items":[{"id":"paired","done":true,"later":1}],"can_contribute":true}}`)
+	if err != nil || st.Validate() != nil || st.Setup == nil || len(st.Setup.Items) != 1 || !st.Setup.Items[0].Done || !st.Setup.CanContribute {
+		t.Fatalf("a setup item with a key the server doesn't know: %+v, %v", st.Setup, err)
+	}
+	st, err = read(`{"setup":{"items":{"id":"paired"}}}`)
+	if err != nil || st.Validate() != nil || st.Setup != nil {
+		t.Fatalf("a setup block whose items aren't a list: %+v, %v; want it dropped", st.Setup, err)
 	}
 }

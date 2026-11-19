@@ -3181,7 +3181,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   decode or is out of its bounds dropped, never refusing the heartbeat, since a refused heartbeat takes
   the Bridge offline; bounded and checked: `family.name` kinds, library ids, and `ui_url` http(s)
   only since the console links it, are refused otherwise; a body up to `bridge.MaxStatusBytes` (2 MiB) and
-  4096 mappings, a longer list cut, never refused (server#445), and only the mappings of libraries the
+  4096 mappings, a longer list cut, never refused (server#445), its lists of objects (`libraries`, `workers`,
+  the setup `items`) read to a bounded length whatever the body holds (`readList`), and only the mappings of libraries the
   server has are stored, and of a setup item's `library_ids` only theirs (`Status.KeepLibraries`, the row written without HTML escaping), so the row a
   heartbeat rewrites stays the size of the server's own libraries; free text is cleaned to printable bounded text,
   `cleanText`, never refused, as is a job report's `error` (line breaks kept): it is partly the outside
