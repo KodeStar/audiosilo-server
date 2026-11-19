@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/meta"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -35,9 +37,12 @@ type mockMetaserve struct {
 	// series, when set, is the body of series/{id} (else the two-book Mars rail).
 	series string
 	// work, when set, is the body of works/the-martian (else martianWorkBody).
-	work     string
-	mu       sync.Mutex
-	gotMatch url.Values
+	work string
+	// lookupWork, when set, is the work id lookup answers (else the-martian).
+	lookupWork string
+	mu         sync.Mutex
+	gotMatch   url.Values
+	lookups    int // lookup requests answered
 }
 
 // martianWorkBody is the mock's works/the-martian answer.
@@ -59,11 +64,14 @@ func (m *mockMetaserve) handler() http.Handler {
 		})
 	}
 	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, _ *http.Request) {
+		m.mu.Lock()
+		m.lookups++
+		m.mu.Unlock()
 		if m.lookupCode != 0 {
 			w.WriteHeader(m.lookupCode)
 			return
 		}
-		_, _ = w.Write([]byte(`{"work":{"id":"the-martian","title":"The Martian","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null},"recording_id":"rec1"}`))
+		_, _ = w.Write([]byte(`{"work":{"id":"` + cmp.Or(m.lookupWork, "the-martian") + `","title":"The Martian","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null},"recording_id":"rec1"}`))
 	})
 	// Only "the-martian" exists upstream; any other id 404s, so the work-id
 	// handler's unknown-work path is exercised with a real upstream 404.
@@ -851,6 +859,44 @@ func TestMetaRecordedMatch(t *testing.T) {
 			t.Fatalf("out-of-scope meta = %d %s, want 403", resp.StatusCode, body)
 		}
 	})
+}
+
+// TestMetaMatchFirstWhenTheCacheKnows (server#447): a book whose identifiers'
+// work the cache already knows to be another than its recorded match's answers
+// the match without composing the identifiers' envelope it would set aside
+// (no second lookup); with the match gone upstream the identifiers' answer, or
+// their failure, still stands.
+func TestMetaMatchFirstWhenTheCacheKnows(t *testing.T) {
+	t.Parallel()
+	m := &mockMetaserve{lookupWork: "artemis"}
+	e := newMetaEnvMock(t, true, m)
+	libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
+	anchorMatch(t, e, libID, "Andy Weir/The Martian", "the-martian", "rec1")
+	// The ASIN's work id, cached by a lookup of its own (the Series cards').
+	if w := e.api.meta.WorkIDs(context.Background(), []meta.BookIDs{{ASIN: "B00FLIJJSY"}}); len(w) != 1 || w[0].ID != "artemis" {
+		t.Fatalf("seeded work ids = %+v", w)
+	}
+	body := getGenerated(t, e, libID, "Andy Weir/The Martian", "", adminSession(t, e)).raw
+	if !strings.Contains(body, `"matched":true,"work":{"id":"the-martian"`) {
+		t.Fatalf("meta = %s, want the recorded match", body)
+	}
+	m.mu.Lock()
+	lookups := m.lookups
+	m.mu.Unlock()
+	if lookups != 1 {
+		t.Fatalf("lookups = %d, want only the seeding one (the identifiers' envelope not composed)", lookups)
+	}
+
+	// The recorded work gone upstream: the identifiers are asked (artemis is
+	// unknown to the mock too, so theirs is a failure, the 502).
+	other := newMetaEnvMock(t, true, &mockMetaserve{lookupWork: "artemis"})
+	otherLib := seedBook(t, other, "Andy Weir/Artemis", "B00FLIJJSY")
+	anchorMatch(t, other, otherLib, "Andy Weir/Artemis", "gone-work", "")
+	other.api.meta.WorkIDs(context.Background(), []meta.BookIDs{{ASIN: "B00FLIJJSY"}})
+	resp, _ := other.do(t, "GET", "/api/v1/libraries/"+strconv.FormatInt(otherLib, 10)+"/meta?path="+escape("Andy Weir/Artemis"), adminSession(t, other), "")
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("match gone, identifiers failing = %d, want 502", resp.StatusCode)
+	}
 }
 
 // TestMetaClearsUnknownASIN (server#392): a /meta lookup that finds an ASIN the

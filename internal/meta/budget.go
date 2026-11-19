@@ -14,7 +14,12 @@ import (
 // would spend a book's 15 s and record it as "couldn't be checked" though the
 // service answered it once asked again (server#447). The budget still bounds the
 // reads themselves, and the waits stay bounded by rateLimitRetries.
+//
+// Under WithSharedBudget a budget ends no later than the shared one.
 func withBudget(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if end, ok := ctx.Value(sharedKey{}).(time.Time); ok {
+		d = min(d, time.Until(end))
+	}
 	if pacerOf(ctx) == nil {
 		return context.WithTimeout(ctx, d)
 	}
@@ -28,6 +33,18 @@ func withBudget(ctx context.Context, d time.Duration) (context.Context, context.
 }
 
 type budgetKey struct{}
+
+type sharedKey struct{}
+
+// WithSharedBudget has the reads under ctx share one budget of d: each compose
+// (Enrich, EnrichMatch) still has its own, but none runs past d from now, so a
+// request that composes twice (/meta's identifiers, then the book's recorded
+// match) spends at most d on both, well inside the API's request budget
+// (server#447). Unlike a deadline on ctx, a compose that runs out of it is the
+// upstream's failure, cached as one, not a caller that went away.
+func WithSharedBudget(ctx context.Context, d time.Duration) context.Context {
+	return context.WithValue(ctx, sharedKey{}, time.Now().Add(d))
+}
 
 // runBudget is a bulk run's budget (withBudget): a timer that ends its context,
 // stopped while any read under it sits out a wait (holdBudgets).

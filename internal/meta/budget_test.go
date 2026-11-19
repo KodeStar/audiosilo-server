@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -83,5 +84,42 @@ func TestRunRateLimitWaitsOutsideTheBudget(t *testing.T) {
 	n.Store(0)
 	if _, err := s.Candidates(context.Background(), q); err == nil {
 		t.Fatal("the dialog under a 429 its budget can't wait out: want the error")
+	}
+}
+
+// TestSharedBudget (server#447): under WithSharedBudget a compose ends with the
+// shared budget, however much of its own it has left, so two composes for one
+// request can't take the API's whole request budget; and running out of it is
+// the upstream's failure, cached as one (the caller is still there).
+func TestSharedBudget(t *testing.T) {
+	t.Parallel()
+	var lookups atomic.Int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lookups.Add(1)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	s := NewService(srv.URL, nil)
+	s.composeBudget = time.Hour
+
+	ctx := WithSharedBudget(context.Background(), 50*time.Millisecond)
+	start := time.Now()
+	if _, err := s.Enrich(ctx, "B00SLOW001", ""); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("Enrich past the shared budget = %v, want a failure", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("Enrich took %v, want it ended by the shared budget", took)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("the caller's context ended")
+	}
+	if _, err := s.Enrich(context.Background(), "B00SLOW001", ""); err == nil || lookups.Load() != 1 {
+		t.Fatalf("again = %v after %d lookups, want the cached failure", err, lookups.Load())
 	}
 }
