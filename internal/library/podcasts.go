@@ -30,8 +30,14 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 	if err != nil {
 		return res, err
 	}
-	entries, err := os.ReadDir(lib.Root)
+	// The root's listing is bounded as every look of a scan is (the probe's
+	// time, on the root's mount): a share that stopped answering is the
+	// library unavailable, never a scan held for good.
+	entries, err := metadata.ReadDirBounded(ctx, lib.Root, s.probeTimeout)
 	if err != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			return res, cerr
+		}
 		return res, ErrLibraryUnavailable
 	}
 	if len(entries) == 0 && len(old) > 0 {
@@ -426,7 +432,8 @@ func (s *Scanner) strayPodcastFolder(ctx context.Context, lib catalog.Library, s
 // row of the folder records. err is ErrNotIndexable where no show folder or
 // feed.json is, errFeedUnusable where the feed.json is no regular file, and
 // wraps errFolderClosed where the folder can't be looked into (the folder
-// itself not statable is the bare error: unread, never stray).
+// itself not statable is the bare error: unread, never stray; a look given up
+// on, transientGaveUp, for a fault a retry may get past).
 func podcastFolderSig(root, show string) (dir string, info os.FileInfo, sig string, err error) {
 	dir, err = ContentJoin(root, show)
 	if err != nil {
@@ -436,12 +443,12 @@ func podcastFolderSig(root, show string) (dir string, info os.FileInfo, sig stri
 	// remain inside the root. The Bridge owns only this one directory level.
 	// Only a folder that is gone is no show's: one the server can't stat (a
 	// share that dropped, a root it may list but not search) may still be one.
-	fi, err := os.Lstat(filepath.Join(root, show))
+	fi, err := podcastLstat(filepath.Join(root, show))
 	if errors.Is(err, os.ErrNotExist) || err == nil && !fi.IsDir() {
 		return "", nil, "", ErrNotIndexable
 	}
 	if err != nil {
-		return "", nil, "", err
+		return "", nil, "", transientGaveUp(err) // a share's hiccup: a look given up on
 	}
 	info, err = os.Lstat(filepath.Join(dir, "feed.json"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -526,7 +533,10 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 		if !ok {
 			continue
 		}
-		if podcastBarrier(dir, base) != nil {
+		if berr := podcastBarrier(dir, base); berr != nil {
+			if metadata.GaveUp(berr) {
+				return 0, false, berr // unknown, never the episode unpublished
+			}
 			delete(present, base)
 			continue
 		}
@@ -659,27 +669,30 @@ func podcastShowSignature(dir string, info os.FileInfo) (string, error) {
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
-func feedSignatureMust(filename string) string {
-	st, err := os.Lstat(filename)
-	if err != nil {
-		return ""
-	}
-	return feedSignature(st)
-}
+
+// podcastBarrier is nil when an episode is published: no publish marker beside
+// it in the show's .audiosilo folder. A look that fails as a share does that a
+// retry may get past is a look given up on (podcastLookErr); any other answer
+// but no marker is ErrNotIndexable.
 func podcastBarrier(dir, base string) error {
 	side := filepath.Join(dir, metadata.AttachmentsDir)
-	st, err := os.Lstat(side)
-	if errors.Is(err, os.ErrNotExist) {
+	st, err := podcastLstat(side)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
 		return nil
-	}
-	if err != nil || !st.IsDir() {
+	case err != nil:
+		return podcastLookErr(err)
+	case !st.IsDir():
 		return ErrNotIndexable
 	}
-	_, err = os.Lstat(filepath.Join(side, stemOf(base)+".publish.json"))
-	if !errors.Is(err, os.ErrNotExist) {
-		return ErrNotIndexable
+	_, err = podcastLstat(filepath.Join(side, stemOf(base)+".publish.json"))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return podcastLookErr(err)
 	}
-	return nil
+	return ErrNotIndexable
 }
 func podcastChapters(dir, base string, f *feed.Fetch) (*metadata.ChapterList, error) {
 	if !feed.ValidFetch(f) || f.DeletedAt != "" {

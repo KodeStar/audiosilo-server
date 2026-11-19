@@ -3,16 +3,20 @@ package library
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
@@ -337,5 +341,117 @@ func setFeedTime(t testing.TB, filename string, at time.Time) {
 	t.Helper()
 	if err := os.Chtimes(filename, at, at); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestOpenPodcastReadsAShareFault: an episode whose look (its show's folder,
+// feed.json, the publish barrier, the episode itself) fails as a share does
+// that a retry may get past (EIO, ESTALE) is a look given up on (the stream's
+// 503 share_not_answering), never the episode absent (ErrNotIndexable), which
+// would ask the Bridge to fetch an episode the library holds. Denied the 503:
+// a permission, and the file gone, stay ErrNotIndexable. Allowed: with every
+// look answering the episode opens. Not parallel: it swaps podcastLstat.
+func TestOpenPodcastReadsAShareFault(t *testing.T) {
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
+	ep := f.Episodes[0]
+	audio := filepath.Join(lib.Root, filepath.FromSlash(ep.Path))
+	writePodcastFixture(t, audio, "chap-v24-reverse.mp3")
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	was := podcastLstat
+	t.Cleanup(func() { podcastLstat = was })
+	for _, at := range []string{dir, filepath.Join(dir, "feed.json"), filepath.Join(dir, ".audiosilo"), audio} {
+		for _, c := range []struct {
+			errno  syscall.Errno
+			gaveUp bool
+		}{{syscall.EIO, true}, {syscall.ESTALE, true}, {syscall.EACCES, false}, {syscall.ENOENT, false}} {
+			if at == filepath.Join(dir, ".audiosilo") && c.errno == syscall.ENOENT {
+				continue // no barrier folder: published
+			}
+			podcastLstat = func(p string) (os.FileInfo, error) {
+				if p == at {
+					return nil, &fs.PathError{Op: "lstat", Path: p, Err: c.errno}
+				}
+				return was(p)
+			}
+			opened, _, err := OpenPodcast(ctx, cat, *lib, ep.Path)
+			if opened != nil {
+				opened.Close()
+				t.Errorf("%s failing %v: opened", at, c.errno)
+			}
+			if c.gaveUp && (!metadata.GaveUp(err) || errors.Is(err, ErrNotIndexable)) {
+				t.Errorf("%s failing %v: %v, want a look given up on", at, c.errno, err)
+			}
+			if !c.gaveUp && !errors.Is(err, ErrNotIndexable) {
+				t.Errorf("%s failing %v: %v, want ErrNotIndexable", at, c.errno, err)
+			}
+		}
+	}
+	podcastLstat = was
+	opened, _, err := OpenPodcast(ctx, cat, *lib, ep.Path)
+	if err != nil {
+		t.Fatalf("every look answering: %v", err)
+	}
+	opened.Close()
+}
+
+// TestPodcastScanKeepsAShowOnAShareFault: a podcast scan whose look at a show
+// (its folder, an episode's publish barrier) fails as a share does that a
+// retry may get past is partial, the show and its episodes kept as indexed,
+// never pruned or unpublished; one whose root listing is given up on (a share
+// that stopped answering) is the library unavailable at once, nothing pruned.
+// Allowed: the same scan with every look answering keeps the show. Not
+// parallel: it swaps podcastLstat and the mount lookup.
+func TestPodcastScanKeepsAShowOnAShareFault(t *testing.T) {
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
+	ep := f.Episodes[0]
+	writePodcastFixture(t, filepath.Join(lib.Root, filepath.FromSlash(ep.Path)), "chap-v24-reverse.mp3")
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	downloaded := func() bool {
+		t.Helper()
+		b, err := cat.GetBookByPath(ctx, lib.ID, ep.Path)
+		return err == nil && b.Episode != nil && b.Episode.Downloaded
+	}
+	if !downloaded() {
+		t.Fatal("the fixture's episode is not indexed as downloaded")
+	}
+	was := podcastLstat
+	t.Cleanup(func() { podcastLstat = was })
+	for _, at := range []string{dir, filepath.Join(dir, ".audiosilo")} {
+		podcastLstat = func(p string) (os.FileInfo, error) {
+			if p == at {
+				return nil, &fs.PathError{Op: "lstat", Path: p, Err: syscall.EIO}
+			}
+			return was(p)
+		}
+		// force: a show whose feed.json is unchanged is skipped before its barrier.
+		if _, _, err := s.IndexPodcastPath(ctx, *lib, "Fixture Show"); !metadata.GaveUp(err) {
+			t.Errorf("the Bridge's rescan with %s failing EIO: %v, want a look given up on", at, err)
+		}
+		res, err := s.Scan(ctx, *lib)
+		if at == dir && (err != nil || !res.Partial) {
+			t.Errorf("a scan with the show's folder failing EIO: %+v %v, want a partial run", res, err)
+		}
+		if !downloaded() {
+			t.Errorf("with %s failing EIO the episode is no longer downloaded", at)
+		}
+	}
+	podcastLstat = was
+
+	release := metadata.HangMountForTests(lib.Root)
+	t.Cleanup(release)
+	began := time.Now()
+	if _, err := s.Scan(ctx, *lib); !errors.Is(err, ErrLibraryUnavailable) || time.Since(began) > 10*time.Second {
+		t.Errorf("a scan of a root on a share that stopped answering: %v after %v, want ErrLibraryUnavailable at once", err, time.Since(began))
+	}
+	release()
+	if !downloaded() {
+		t.Error("the episode is gone after a scan of a hung root")
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil || !downloaded() {
+		t.Errorf("a scan with every look answering: %v, downloaded %v", err, downloaded())
 	}
 }
