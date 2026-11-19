@@ -3695,11 +3695,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   can't be told; else that folder's heart would go to the moving show). A folder the
   scan (partial, it prunes nothing) or a rescan (the listed folders with no row) can't read, or whose
   feed.json is invalid or of a newer version, may be that other show's: then a move whose new folder
-  carries another show's follow, feed state, policy or place (a progress row on a file the moving
-  show doesn't list) waits too, unless that show moves off it in the same call; a plain rename beside
-  an unrelated unreadable folder (a root-owned `lost+found`) still moves (the `unread` flag through
-  `MovePodcastShows`). A scan keeps each planned move's old folders' rows through its prune, so a
-  held show whose only state there is a place is found again once the hold clears. On a
+  carries another show's follow, feed state or policy waits too, unless that show moves off it in the
+  same call; a plain rename beside an unrelated unreadable folder (a root-owned `lost+found`) still
+  moves (the `unread` flag through `MovePodcastShows`). A place there holds nothing: the new folder's
+  row is the moving show's by then, so a show whose only state there is keyed by path has nothing
+  left to move it later, and the move carries only its own files' state. A scan keeps each planned
+  move's old folders' rows through its prune, so a held show whose only state there is a place is
+  found again once the hold clears. On a
   case-insensitive file system only the spelling the root lists, read fresh, is the folder.
   A poll's or fetch's fold whose queued folder (episode) no longer holds its identity folds at the
   outcome's `show_path` (`path`) when that holds it; a copy keeps its own outcome. A fetch done in

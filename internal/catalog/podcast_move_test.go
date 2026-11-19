@@ -415,13 +415,14 @@ func TestPodcastFetchDoneInAnotherFolderDoesNotRequeue(t *testing.T) {
 }
 
 // With unread (the caller could not read every folder the root lists), a move
-// to a folder carrying another identity's follow, feed state, policy or place
-// waits: the folder not read may be where that show is now, and its own move
-// still to come. Without unread it applies (that show is gone: its follow at
-// the folder is replaced); a place in the moving show's own episode never
-// holds it.
+// to a folder carrying another identity's follow, feed state or policy waits:
+// the folder not read may be where that show is now, and its own move still to
+// come. Without unread it applies (that show is gone: its follow at the folder
+// is replaced). A place there holds nothing, another show's (it stays on its
+// file) or the moving show's own.
 func TestMovePodcastShowsWithUnreadHoldsAMoveOverAnotherShowsState(t *testing.T) {
 	other := "0123456789abcdef"
+	const otherPlace = "Renamed/2025-01-01-other.mp3"
 	for _, tc := range []struct {
 		name string
 		seed func(fx renameFixture) error
@@ -439,9 +440,9 @@ func TestMovePodcastShowsWithUnreadHoldsAMoveOverAnotherShowsState(t *testing.T)
 			return err
 		}, true},
 		{"place", func(fx renameFixture) error {
-			_, err := fx.c.SaveProgress(fx.ctx, fx.bob, Progress{Ref: Ref{LibraryID: fx.lib, Path: "Renamed/2025-01-01-other.mp3"}, Position: 9, Duration: 100, UpdatedAt: "2026-11-01T10:00:00Z"})
+			_, err := fx.c.SaveProgress(fx.ctx, fx.bob, Progress{Ref: Ref{LibraryID: fx.lib, Path: otherPlace}, Position: 9, Duration: 100, UpdatedAt: "2026-11-01T10:00:00Z"})
 			return err
-		}, true},
+		}, false},
 		{"own place", func(fx renameFixture) error {
 			_, err := fx.c.SaveProgress(fx.ctx, fx.bob, Progress{Ref: Ref{LibraryID: fx.lib, Path: "Renamed/" + fx.ep}, Position: 9, Duration: 1720, UpdatedAt: "2026-11-01T10:00:00Z"})
 			return err
@@ -461,6 +462,12 @@ func TestMovePodcastShowsWithUnreadHoldsAMoveOverAnotherShowsState(t *testing.T)
 				t.Fatalf("unread move %d %v; want %d", n, err, want)
 			}
 			if !tc.held {
+				if tc.name == "place" {
+					fx.checkMoved(t)
+					if p, err := fx.c.GetProgress(fx.ctx, fx.bob, Ref{LibraryID: fx.lib, Path: otherPlace}); err != nil || p == nil || p.Position != 9 {
+						t.Fatalf("the other show's place %+v %v", p, err)
+					}
+				}
 				return
 			}
 			if got, err := fx.c.PodcastShow(fx.ctx, fx.lib, "Example Show", fx.ann); err != nil || !got.Following {

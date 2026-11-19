@@ -79,9 +79,12 @@ type PodcastMove struct {
 // be told; any of the three keeps To's show-folder heart that identity's,
 // podcastFolderStateOf) and, with unread (the caller could not read every
 // folder the root lists, one of which may hold that identity now), any of the
-// three or a place there of another identity. Either is passed over when that
-// identity is lifted from To in the same call (names swapped, a chain of
-// renames). Of a From path it moves only ShowID's rows:
+// three there of another identity. Either is passed over when that identity is
+// lifted from To in the same call (names swapped, a chain of renames). A
+// listener's place in To holds nothing: To's index row is ShowID's by now, so
+// a show whose only state there is keyed by path alone has no identity left
+// there for a later move of its own, and the move carries only its own files'
+// state. Of a From path it moves only ShowID's rows:
 //
 //   - every listener's follow (one at To already for the same identity keeps
 //     the earlier date; a follow at To of another identity that is indexed
@@ -163,15 +166,15 @@ func (c *Catalog) MovePodcastShows(ctx context.Context, lib int64, moves []Podca
 	return applied, err
 }
 
-// unheldPodcastMoves are the moves podcastTo.held holds none of, looked at
+// unheldPodcastMoves are the moves podcastMoveHeld holds none of, looked at
 // until no more is held: a held move lifts nothing from its From paths, so a
-// move to one of those may be held in turn. Each To is read once (podcastTo):
-// only what is lifted changes from one look to the next.
+// move to one of those may be held in turn. Each To is read once
+// (podcastOthersAt): only what is lifted changes from one look to the next.
 func unheldPodcastMoves(ctx context.Context, tx *sql.Tx, lib int64, moves []PodcastMove, unread bool) ([]PodcastMove, error) {
-	at := make([]podcastTo, len(moves))
+	others := make([][]podcastOther, len(moves))
 	for i, m := range moves {
 		var err error
-		if at[i], err = readPodcastTo(ctx, tx, lib, m, unread); err != nil {
+		if others[i], err = podcastOthersAt(ctx, tx, lib, m); err != nil {
 			return nil, err
 		}
 	}
@@ -183,87 +186,47 @@ func unheldPodcastMoves(ctx context.Context, tx *sql.Tx, lib int64, moves []Podc
 			}
 		}
 		var keptMoves []PodcastMove
-		var keptAt []podcastTo
+		var keptOthers [][]podcastOther
 		for i, m := range moves {
-			if !at[i].held(m.To, lifted, unread) {
-				keptMoves, keptAt = append(keptMoves, m), append(keptAt, at[i])
+			if !podcastMoveHeld(m.To, others[i], lifted, unread) {
+				keptMoves, keptOthers = append(keptMoves, m), append(keptOthers, others[i])
 			}
 		}
 		if len(keptMoves) == len(moves) {
 			return moves, nil
 		}
-		moves, at = keptMoves, keptAt
+		moves, others = keptMoves, keptOthers
 	}
 }
 
-// podcastTo is what a move's To carries of other identities: each one with a
-// follow, feed state or policy there and, read only with unread, whether a
-// listener has a place there in a file that is not the move's show's
-// (podcastOtherPlaces).
-type podcastTo struct {
-	others []podcastOther
-	places bool
-}
-
-// podcastOther is an identity with state at a move's To; indexed, the
-// identity is indexed somewhere in the library.
+// podcastOther is an identity with a follow, feed state or policy at a move's
+// To; indexed, the identity is indexed somewhere in the library.
 type podcastOther struct {
 	id      string
 	indexed bool
 }
 
-func readPodcastTo(ctx context.Context, tx *sql.Tx, lib int64, m PodcastMove, unread bool) (podcastTo, error) {
-	var to podcastTo
-	var err error
-	to.others, err = queryRows(ctx, tx, func(r *sql.Rows, o *podcastOther) error { return r.Scan(&o.id, &o.indexed) },
+// podcastOthersAt are the identities other than m's with state at m.To.
+func podcastOthersAt(ctx context.Context, tx *sql.Tx, lib int64, m PodcastMove) ([]podcastOther, error) {
+	return queryRows(ctx, tx, func(r *sql.Rows, o *podcastOther) error { return r.Scan(&o.id, &o.indexed) },
 		`WITH ids(show_id) AS (
 		   SELECT show_id FROM podcast_follows WHERE library_id=?1 AND show_path=?2 AND show_id<>?3
 		   UNION SELECT show_id FROM podcast_feed_state WHERE library_id=?1 AND show_path=?2 AND show_id<>?3
 		   UNION SELECT show_id FROM podcast_policies WHERE library_id=?1 AND show_path=?2 AND show_id<>?3)
 		 SELECT show_id,EXISTS(SELECT 1 FROM podcast_shows s WHERE s.library_id=?1 AND s.show_id=ids.show_id)
 		   FROM ids`, lib, m.To, m.ShowID)
-	if err == nil && unread {
-		to.places, err = podcastOtherPlaces(ctx, tx, lib, m)
-	}
-	return to, err
 }
 
-// held reports whether a move to to waits (MovePodcastShows says when): to
-// carries the state of another identity not lifted from to in this call (by
-// lifted, {show_id, path}).
-func (t podcastTo) held(to string, lifted map[[2]string]bool, unread bool) bool {
-	liftedHere := false
-	for _, o := range t.others {
-		if lifted[[2]string{o.id, to}] {
-			liftedHere = true
-			continue
-		}
-		if unread || o.indexed {
+// podcastMoveHeld reports whether a move to to waits (MovePodcastShows says
+// when): one of others, not lifted from to in this call (by lifted,
+// {show_id, path}), is indexed elsewhere or, with unread, may be.
+func podcastMoveHeld(to string, others []podcastOther, lifted map[[2]string]bool, unread bool) bool {
+	for _, o := range others {
+		if !lifted[[2]string{o.id, to}] && (unread || o.indexed) {
 			return true
 		}
 	}
-	return unread && !liftedHere && t.places
-}
-
-// podcastOtherPlaces reports whether a listener has a place in an episode file
-// in m.To that is not m's show's: neither To's index nor To's feed.json
-// (m.Files) lists it, so it is the show's that held the folder before.
-func podcastOtherPlaces(ctx context.Context, tx *sql.Tx, lib int64, m PodcastMove) (bool, error) {
-	lo, hi := belowRange(m.To)
-	paths, err := queryRows(ctx, tx, func(r *sql.Rows, p *string) error { return r.Scan(p) },
-		`SELECT DISTINCT p.rel_path FROM progress p
-		  WHERE p.library_id=?1 AND p.rel_path>=?3 AND p.rel_path<?4
-		    AND NOT EXISTS (SELECT 1 FROM books b JOIN podcast_episodes e ON e.book_id=b.id
-		                     WHERE b.library_id=?1 AND b.rel_path=p.rel_path AND e.show_path=?2)`, lib, m.To, lo, hi)
-	if err != nil {
-		return false, err
-	}
-	for _, p := range paths {
-		if !slices.Contains(m.Files, path.Base(p)) {
-			return true, nil
-		}
-	}
-	return false, nil
+	return false
 }
 
 // podcastShowIDAt is the show identity of show's index row, "" with none.
