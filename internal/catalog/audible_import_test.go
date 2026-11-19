@@ -304,6 +304,36 @@ func TestAudiblePendingRejectedMatch(t *testing.T) {
 	}
 }
 
+// A preorder's request made before a rule tightened its stored destination
+// isn't queued on release (the queue would refuse it at every poll): it waits,
+// still requested, until the console sets the destination again.
+func TestAudiblePendingInvalidDest(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	pre := AudibleTitleInput{ASIN: "B000000001", Title: "Soon", State: AudiblePreorder, ReleaseDate: "2026-11-10"}
+	f.poll(t, "p1", pre)
+	if _, pending, err := f.c.RequestAudibleBackup(f.ctx, "acct0001", "B000000001"); err != nil || !pending {
+		t.Fatalf("back up = %t, %v", pending, err)
+	}
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE asin = 'B000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	pre.State = AudibleAvailable
+	f.poll(t, "p2", pre)
+	if got := f.policyImports(t); len(got) != 0 {
+		t.Fatalf("released with an invalid destination: %v", got)
+	}
+	if tt := f.title(t, "B000000001"); tt.Import == nil || tt.Import.State != AudibleImportPending || !tt.DestInvalid {
+		t.Fatalf("the request = %+v, dest_invalid %t", tt.Import, tt.DestInvalid)
+	}
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000001", AudibleTitlePatch{DestPath: new("Author/A.m4b")}); err != nil {
+		t.Fatal(err)
+	}
+	if ps, err := f.c.AudiblePolicyImports(f.ctx, "acct0001"); err != nil || len(ps) != 1 || !ps[0].Requested {
+		t.Fatalf("set again: %+v, %v; want the request", ps, err)
+	}
+}
+
 // Preorder clock: a preorder released by the UTC date and not yet available
 // makes its account due hourly instead of every poll_hours, for 14 days; then
 // it needs attention and the account goes back to its interval.
@@ -861,6 +891,9 @@ func TestAudibleCanBackup(t *testing.T) {
 		_, _, err := f.c.RequestAudibleBackup(f.ctx, "acct0001", asin)
 		if can[asin] != w || (err == nil) != w {
 			t.Errorf("%s: can_backup %t, Back up %v; want %t", asin, can[asin], err, w)
+		}
+		if invalid := asin == "B000000009" || asin == "B000000010"; invalid && !errors.Is(err, bridge.ErrAudibleDestPath) {
+			t.Errorf("%s: Back up %v, want an invalid destination", asin, err)
 		}
 	}
 }

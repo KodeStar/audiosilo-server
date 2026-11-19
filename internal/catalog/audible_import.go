@@ -365,7 +365,7 @@ func importParams(acct *AudibleAccount, asin, dest string) bridge.AudibleImportP
 // ErrAudibleNotAvailable for an unavailable or gone title; a
 // bridge.ErrAudibleDestPath or ErrAudibleTemplate for a stored destination or
 // template that no longer validates (saved before a rule tightened), a
-// preorder's too: its request would be refused by the queue at every poll.
+// preorder's too: its request would never be queued.
 func (c *Catalog) RequestAudibleBackup(ctx context.Context, account, asin string) (*bridge.AudibleImportParams, bool, error) {
 	acct, err := c.AudibleAccount(ctx, account)
 	if err != nil {
@@ -487,7 +487,8 @@ type AudiblePolicyImport struct {
 // requests whose preorder is now available, and the new purchases its policy
 // covers. None for a paused account, or one mapped to a person it may no
 // longer be (disabled, made a kid). A pending request for a title now on this
-// server (a match not marked "Not this book") is dropped.
+// server (a match not marked "Not this book") is dropped; a title whose stored
+// destination no longer validates is left out (its request kept).
 func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]AudiblePolicyImport, error) {
 	acct, err := c.AudibleAccount(ctx, account)
 	if err != nil {
@@ -539,6 +540,13 @@ func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]A
 	var owned *seriesOwner
 	out := []AudiblePolicyImport{}
 	for _, x := range cands {
+		// A destination stored before a rule tightened (AudibleTitle.DestInvalid,
+		// as Back up everything skips it): the queue would refuse it at every
+		// poll, so it waits, a pending request with it, until the console sets
+		// it again.
+		if bridge.CheckAudibleDestPath(x.dest) != nil {
+			continue
+		}
 		// Ask wants first as if the person had the series, so the series are
 		// looked up only for a title that turns on them.
 		x.SeriesOwned = true
