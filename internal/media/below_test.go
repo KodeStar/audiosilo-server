@@ -177,6 +177,37 @@ func TestOpenFaultsAnswerByKind(t *testing.T) {
 	}
 }
 
+// TestInputFaultsAnswerByKind: where ffmpeg is handed the file as
+// metadata.ToolInputBounded hands it (an ffmpeg without fd:), a look of its
+// that fails as a share does that a retry may get past (EIO, ESTALE: Windows'
+// re-check of the path on a share that dropped) is returned with nothing
+// written, the caller's 503 share_not_answering; a lasting refusal (a
+// permission) and the file gone are the 404. Not parallel: it swaps
+// toolInputBounded.
+func TestInputFaultsAnswerByKind(t *testing.T) {
+	root := t.TempDir()
+	abs := filepath.Join(root, "a.mp3")
+	if err := os.WriteFile(abs, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ffmpeg := echoFFmpeg(t) // no fd: protocol, so the file goes through toolInputBounded
+	was := toolInputBounded
+	t.Cleanup(func() { toolInputBounded = was })
+	for _, c := range shareFaults {
+		toolInputBounded = func(context.Context, *os.File, string, string, time.Duration) (string, []*os.File, func(), error) {
+			return "", nil, nil, &fs.PathError{Op: "open", Path: abs, Err: c.errno}
+		}
+		rec := httptest.NewRecorder()
+		_, err := Transcode(rec, httptest.NewRequest(http.MethodGet, "/", nil), root, abs, ffmpeg, 0, false, time.Minute, 0, nil)
+		switch {
+		case c.transient && (!metadata.GaveUp(err) || !errors.Is(err, c.errno) || rec.Body.Len() != 0):
+			t.Errorf("Transcode with its input's look failing %v = %v (%d written), want the fault returned given up on, nothing written", c.errno, err, rec.Body.Len())
+		case !c.transient && (err != nil || rec.Code != http.StatusNotFound):
+			t.Errorf("Transcode with its input's look failing %v = %v, %d, want a 404", c.errno, err, rec.Code)
+		}
+	}
+}
+
 // TestFileCacheSourceThroughTheRoot (security): a copy's source is looked at
 // and opened through the library's root, so a folder swapped for a link out
 // of the library between the look (Source) and the run's open is refused

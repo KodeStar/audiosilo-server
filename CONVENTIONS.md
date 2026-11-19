@@ -1306,8 +1306,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   included, is the 404 they always had. The stream's open of the file itself (`media.ServeFile`,
   `media.Transcode`, a copy's look at its source, `media.Source`) follows the share-fault rule whatever the
   index holds: a transient fault is the 503, a lasting one the 404 (`TestOpenFaultsAnswerByKind`,
-  `TestSourceTransientFaultIsUnanswered`), a copy's run included, whose open of a source that stats but is
-  refused for good is no source (`openFault`: a rendition's 404, not a 503 `rendition_error` asked again for
+  `TestSourceTransientFaultIsUnanswered`), a transcode's re-check of the path on an ffmpeg without `fd:`
+  included (Windows: `media.fileInput`, `TestInputFaultsAnswerByKind`), and a copy's run, whose open of a
+  source that stats but is refused for good is no source (`openFault`: a rendition's 404, not a 503 `rendition_error` asked again for
   good; never remembered as ffmpeg's refusal, `TestFileCacheRunOpenFaultsByKind`). A missing path and a
   case variant take the same steps (the same listings and `Lstat`s up to the first name not listed, none
   past it), and the listings are kept a few seconds (`metadata.DirNames`, one per server,

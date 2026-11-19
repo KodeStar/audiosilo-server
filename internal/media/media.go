@@ -300,12 +300,13 @@ func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 // download its client stopped reading; 0 never ends a stream for that). log
 // may be nil. The file is opened through root as ServeFile opens it
 // (metadata.OpenRegularBelow, one metadata.Bounded call: the request's
-// context, at most wait) and ffmpeg reads that descriptor (fileInput), never
-// the path: a name along it swapped for a link out of the library after the
-// caller's check is refused (a 404), never followed by ffmpeg's own open. An
-// open given up on (openLibraryFile), or the path's re-check where ffmpeg is
-// handed one (fileInput), is returned with nothing written, for the caller to
-// answer (ServeFile's rule);
+// context, at most wait) and ffmpeg reads that descriptor (fileInput) or,
+// where none can be handed over (Windows without fd:), the path checked to
+// lead to it and held so: a name along it swapped for a link out of the
+// library after the caller's check is refused (a 404), never followed by
+// ffmpeg's own open. An open given up on (openLibraryFile), or the path's
+// re-check where ffmpeg is handed one (fileInput), is returned with nothing
+// written, for the caller to answer (ServeFile's rule);
 // every other outcome is answered here and returns nil. ended reports a
 // stream that ran to its end (transcodeInput).
 // download makes the stream an attachment named for the file (its stem with
@@ -382,12 +383,17 @@ func fileInput(ctx context.Context, ffmpegPath string, f *os.File, root, path st
 		in.file = f
 		return in, func() {}, nil
 	}
-	input, extra, cleanup, err := metadata.ToolInputBounded(ctx, f, root, path, wait)
+	input, extra, cleanup, err := toolInputBounded(ctx, f, root, path, wait)
 	if err != nil {
 		return inputSpec{}, nil, transientGaveUp(err)
 	}
 	return inputSpec{proto: "file", url: "file:" + input, extra: extra}, cleanup, nil
 }
+
+// toolInputBounded is fileInput's metadata.ToolInputBounded, a test's to
+// inject a share's errors: only Windows' re-check of the path looks at the
+// share, so no other platform meets them.
+var toolInputBounded = metadata.ToolInputBounded
 
 // inputSpec is how ffmpeg reads its input: the descriptor file handed over as
 // its stdin through the fd: protocol (seekable) or pipe:0 (not seekable, for
