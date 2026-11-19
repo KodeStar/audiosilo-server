@@ -131,9 +131,13 @@ func (a *API) StartModules(ctx context.Context) {
 // StopModules ends every module's background work and waits for it to return,
 // and for a poll's backups being queued (afterAudiblePoll). The launcher defers
 // it after StartModules, so it runs before the database closes; a settings
-// save starts nothing after it.
+// save starts nothing after it, nor a poll's final titles call that is still
+// being served (audiblePollStopped).
 func (a *API) StopModules() {
 	a.moduleRuns.Stop()
+	a.audiblePollMu.Lock()
+	a.audiblePollStopped = true
+	a.audiblePollMu.Unlock()
 	a.audiblePollFolds.Wait()
 }
 

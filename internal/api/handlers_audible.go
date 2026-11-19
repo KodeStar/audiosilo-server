@@ -423,7 +423,10 @@ const afterAudiblePollTimeout = 10 * time.Second
 // (audible.Queues.AfterPoll) while the module is on, in the background once
 // the Bridge's final titles call has its answer: the titles have landed
 // whatever happens here, so the Bridge doesn't wait for the queue, and a
-// failure is logged and the next poll asks again. StopModules waits for it.
+// failure is logged and the next poll asks again. StopModules waits for it;
+// once it has begun to (a titles call that outlived the shutdown timeout),
+// nothing is queued: the database may be closing, and the next poll after a
+// start asks again.
 func (a *API) afterAudiblePoll(account string) {
 	if a.bridge == nil || !a.moduleOn(bridge.ModuleAudible) {
 		return
@@ -431,6 +434,15 @@ func (a *API) afterAudiblePoll(account string) {
 	queue := a.audibleAfterPoll
 	if queue == nil {
 		queue = a.audibleQueues().AfterPoll
+	}
+	a.audiblePollMu.Lock()
+	defer a.audiblePollMu.Unlock()
+	if a.audiblePollStopped {
+		if !a.audiblePollStopLogged {
+			a.audiblePollStopLogged = true
+			a.log.Debug("audible: a poll ended after shutdown began, its backups are left for the next poll", "account", account)
+		}
+		return
 	}
 	a.audiblePollFolds.Go(func() {
 		// Past the request, a panic is no longer net/http's to contain: it is

@@ -600,6 +600,28 @@ func TestAudiblePollAnswersBeforeQueueing(t *testing.T) {
 	}
 }
 
+// A poll's final call served once shutdown has begun waiting (a request that
+// outlived the shutdown timeout) queues nothing: the wait may have returned and
+// the database be closing. One served before it still queues.
+func TestAudiblePollAfterStopQueuesNothing(t *testing.T) {
+	t.Parallel()
+	b := backupEnv(t)
+	asked := 0
+	b.api.audibleAfterPoll = func(context.Context, string) (int, error) { asked++; return 0, nil }
+	if code, out := b.putTitles(t, testAccount, "p2", true); code != http.StatusOK || asked != 1 {
+		t.Fatalf("before shutdown: %d %s, queueing asked %d times", code, out, asked)
+	}
+	b.api.StopModules()
+	for _, poll := range []string{"p3", "p4"} {
+		if code, out := b.putTitles(t, testAccount, poll, true); code != http.StatusOK {
+			t.Fatalf("after shutdown: %d %s", code, out)
+		}
+	}
+	if asked != 1 {
+		t.Fatalf("queueing asked %d times after shutdown began", asked-1)
+	}
+}
+
 // A panic while a poll's backups are queued, past the Bridge's request, is
 // that pass's failure: the server carries on and the next poll queues again.
 func TestAudiblePollQueuePanicIsContained(t *testing.T) {

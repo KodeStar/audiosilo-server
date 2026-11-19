@@ -258,10 +258,16 @@ type API struct {
 	moduleRuns modules.Runner
 	// audiblePollFolds are the backups a poll asked for being queued past the
 	// Bridge's titles call (afterAudiblePoll); StopModules waits for them.
-	// audibleAfterPoll queues them: audible.Queues.AfterPoll when nil, a field
-	// so tests can hold it.
-	audiblePollFolds sync.WaitGroup
-	audibleAfterPoll func(ctx context.Context, account string) (int, error)
+	// audiblePollStopped, set by StopModules before it waits, starts no more
+	// (a titles call that outlived the shutdown timeout), under
+	// audiblePollMu with each start, so none is added once the wait began;
+	// audiblePollStopLogged says so once. audibleAfterPoll queues them:
+	// audible.Queues.AfterPoll when nil, a field so tests can hold it.
+	audiblePollFolds      sync.WaitGroup
+	audiblePollMu         sync.Mutex
+	audiblePollStopped    bool
+	audiblePollStopLogged bool
+	audibleAfterPoll      func(ctx context.Context, account string) (int, error)
 
 	// discovery is podcast directory search and its artwork proxy (Bridge Phase
 	// 2c-3), nil when podcasts.discovery.enabled was off at start; opml holds
