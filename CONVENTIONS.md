@@ -1802,7 +1802,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
     indexed. A podcast episode the share refuses so (its show folder, `feed.json`, publish barrier or file) is
     `library.ErrEpisodeRefused`: the stream's 404 `episode_not_found`, never a fetch asked of the Bridge by it,
     which would meet the same refusal (`TestPodcastStreamRefusedFolderIs404`). A fetch asked for by name reads
-    it as absent, as before the stream told the two apart (shipped players use these routes, CROSS-REPO §15): a
+    it as absent (shipped players use these routes, CROSS-REPO §15): a
     listener's `GET /libraries/{id}/podcasts/fetch` answers its fetch status and `POST` queues it (202), an
     admin's download (`POST /admin/libraries/{id}/podcasts/fetch`) too; the Bridge writes a new file where one
     the server can't open stands (`TestPodcastAdminDownloadFetchesARefusedEpisode`,
