@@ -85,8 +85,11 @@ var bridgeKinds = []string{auth.KindBridge}
 // database) is a 503, which it retries at once. A 401 also pays into its
 // address's general bucket, as a refused token does on any other route
 // (authLimited): rateLimit spent the request from bridgeLimiter, so without
-// it the Bridge's routes would give an address a second budget of token
-// lookups, and one refused elsewhere could keep trying tokens here. A paired
+// it the Bridge's routes would give an address a second rate of token
+// lookups beside the general one. Paid, the tokens tried here use up the
+// general bucket's refill, so the two together sustain one bucket's rate
+// (their bursts still add: these routes are never refused for an empty
+// general bucket, which is the point of a bucket of their own). A paired
 // Bridge's own requests never pay it.
 func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
