@@ -594,17 +594,15 @@ func bridgeJobBook(ev catalog.ServerEvent) string {
 }
 
 // bridgeParkReason words a parked job's park code (the Bridge's
-// progress.park.code). A transient park (the agent's rate limit, a short
-// outage) is never announced (bridge.Job.Notable), so none is worded here but
-// share_unconfirmed (the server couldn't be asked about a share, a blip): its
-// sentence is the console's, so a bell that ever shows it never reads as a
-// fault. A sentence says the job carries on by itself only where the Bridge resumes it
-// with no Retry whatever the fix (a replaced agent credential, a raised or
-// reset budget, a GitHub sign-in, or GitHub answering again: a Bridge already
-// signed in parks contrib_unavailable too when its sign-in couldn't be
-// refreshed, and tries again on its own every few minutes). The agent,
-// GitHub and share sentences are the console's (bridge.park.<code> in en.json), as the
-// bell shows them. The Bridge's own page says more.
+// progress.park.code). A transient park (bridge's transientParks) is never
+// announced (bridge.Job.Notable); share_unconfirmed is worded all the same, so
+// a bell that ever shows it never reads as the GitHub fault. A sentence says
+// the job carries on by itself only where the Bridge resumes it with no Retry
+// whatever the fix (a replaced agent credential, a raised or reset budget, a
+// GitHub sign-in, or GitHub answering a signed-in Bridge again). The agent,
+// GitHub and share sentences are the console's (bridge.park.<code> in en.json,
+// TestBridgeParkReasonsMatchConsole), as the bell shows them. The Bridge's own
+// page says more.
 func bridgeParkReason(code string) string {
 	switch code {
 	case "book_not_writable":
