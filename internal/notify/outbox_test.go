@@ -121,7 +121,7 @@ func TestOwedPodcastNoticeIsSentAtTheNextStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	show := "Example Show"
-	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", show, nil)
+	f, err := feed.ReadFile("../podcast/testdata", "../podcast/testdata/feed-v1.json", show, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

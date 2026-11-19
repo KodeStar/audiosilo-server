@@ -62,7 +62,7 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 		if err := podcastBarrier(podcastLstat, dir, path.Base(rel)); err != nil {
 			return nil, nil, err
 		}
-		current, err := podcastFeeds.read(filename, show, feedInfo)
+		current, err := podcastFeeds.read(lib.Root, filename, show, feedInfo)
 		if err != nil {
 			return nil, nil, podcastLookErr(err)
 		}
@@ -77,7 +77,10 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 		if !before.Mode().IsRegular() {
 			return nil, nil, ErrNotIndexable
 		}
-		f, err := os.Open(abs)
+		// Opened through the library's root, as every library file is: a
+		// show folder swapped for a link out of the library since its look
+		// above is refused, never followed.
+		f, err := metadata.OpenBelow(lib.Root, abs)
 		if err != nil {
 			return nil, nil, podcastLookErr(err)
 		}
@@ -206,11 +209,12 @@ func (c *feedCopy) holds(rel, showID, id string, fetch feed.Fetch) bool {
 	return ok && c.showID == showID && ep.id == id && ep.fetch == fetch
 }
 
-// read is filename's copy (show's feed.json), remembered (once its mtime is
-// past feedRacyWindow) while the file is the one read, at the size and mtime
-// read; feed.ReadFile's error otherwise.
+// read is filename's copy (show's feed.json, under the library root root and
+// read through it), remembered (once its mtime is past feedRacyWindow) while
+// the file is the one read, at the size and mtime read; feed.ReadFile's error
+// otherwise.
 // before is filename's Lstat, taken by the caller before the call.
-func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, error) {
+func (m *feedMemo) read(root, filename, show string, before os.FileInfo) (*feedCopy, error) {
 	m.mu.Lock()
 	c := m.feeds[filename]
 	m.mu.Unlock()
@@ -220,7 +224,7 @@ func (m *feedMemo) read(filename, show string, before os.FileInfo) (*feedCopy, e
 	// Asked before the read: a write that lands while it runs, or between it
 	// and the stat below, must fall outside the mtime's granule to be seen.
 	settled := time.Since(before.ModTime()) >= feedRacyWindow
-	f, err := feed.ReadFile(filename, show, nil)
+	f, err := feed.ReadFile(root, filename, show, nil)
 	if err != nil {
 		return nil, err
 	}

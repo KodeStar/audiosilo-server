@@ -33,7 +33,7 @@ func TestPodcastSchedulerBoundsFairnessAndPolicies(t *testing.T) {
 	}
 	for i := range 8 {
 		show := fmt.Sprintf("Show %d", i)
-		f, err := feed.ReadFile("testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+		f, err := feed.ReadFile("testdata/phase2c2", "testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
 		if err != nil {
 			t.Fatal(err)
 		}

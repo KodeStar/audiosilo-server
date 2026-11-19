@@ -1,6 +1,7 @@
 package library
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,7 +37,7 @@ func podcastDiskFixture(t testing.TB) (context.Context, *catalog.Catalog, *catal
 	if err := os.MkdirAll(filepath.Join(dir, ".audiosilo"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("../podcast/testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata/phase2c2", "../podcast/testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -724,5 +725,89 @@ func TestPodcastScanBoundsAShowsLooks(t *testing.T) {
 	release()
 	if res, err := s.Scan(ctx, *lib); err != nil || res.Partial || !downloaded() {
 		t.Errorf("a scan with every look answering: %+v %v, downloaded %v", res, err, downloaded())
+	}
+}
+
+// TestOpenPodcastThroughTheRootAfterASwap (security): an episode's feed.json
+// and file are read through the library's root, so a show folder swapped,
+// after the folder's own look, for a link to a copy out of the library (its
+// feed.json and episode at the size and times the pin names, so every look by
+// path, which follows the link, matches) is never read: the episode is not
+// opened. Plain reads by path followed the link and opened the copy's file.
+// Allowed: in place the episode opens to its own bytes. Not parallel: it
+// swaps podcastLstat.
+func TestOpenPodcastThroughTheRootAfterASwap(t *testing.T) {
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
+	ep := f.Episodes[0]
+	audio := filepath.Join(lib.Root, filepath.FromSlash(ep.Path))
+	writePodcastFixture(t, audio, "chap-v24-reverse.mp3")
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	inside, err := os.ReadFile(audio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func() ([]byte, error) {
+		t.Helper()
+		opened, _, err := OpenPodcast(ctx, cat, *lib, ep.Path)
+		if err != nil {
+			return nil, err
+		}
+		defer opened.Close()
+		return io.ReadAll(opened)
+	}
+	if got, err := read(); err != nil || !bytes.Equal(got, inside) {
+		t.Fatalf("the episode in place = %v, want its own bytes", err)
+	}
+
+	// A copy out of the library: the same feed.json, an episode of the same
+	// size whose bytes are not the library's, each at the original's times.
+	copyDir := filepath.Join(t.TempDir(), "Fixture Show")
+	if err := os.MkdirAll(filepath.Join(copyDir, ".audiosilo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{
+		"feed.json":          nil,
+		filepath.Base(audio): bytes.Repeat([]byte("x"), len(inside)),
+	} {
+		src := filepath.Join(dir, name)
+		if body == nil {
+			if body, err = os.ReadFile(src); err != nil {
+				t.Fatal(err)
+			}
+		}
+		st, err := os.Stat(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dst := filepath.Join(copyDir, name)
+		if err := os.WriteFile(dst, body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		setFeedTime(t, dst, st.ModTime())
+	}
+	was := podcastLstat
+	t.Cleanup(func() { podcastLstat = was })
+	swapped := false
+	podcastLstat = func(p string) (os.FileInfo, error) {
+		if p == filepath.Join(dir, "feed.json") && !swapped {
+			// The folder's look answered: now it becomes the link.
+			swapped = true
+			if err := os.Rename(dir, dir+".aside"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(copyDir, dir); err != nil {
+				t.Skipf("symlinks unsupported here: %v", err)
+			}
+		}
+		return was(p)
+	}
+	got, err := read()
+	if !swapped {
+		t.Fatal("the swap never ran")
+	}
+	if err == nil || bytes.Equal(got, bytes.Repeat([]byte("x"), len(inside))) {
+		t.Fatalf("the episode after its show folder became a link out of the library = %d bytes, %v; want it refused", len(got), err)
 	}
 }

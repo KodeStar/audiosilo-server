@@ -1396,8 +1396,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `metadata.ToolInput` hands every tool one, below; `TestTranscodeOpensThroughTheRoot`), and a remux's or a
   rendition's source: its look (`media.Source`, a stat through the root) and its run's open
   (`FileCache.make`), whose descriptor ffmpeg reads (`TestFileCacheSourceThroughTheRoot`). A podcast episode
-  checks the open file against the path again instead (`OpenPodcast`: `os.SameFile`); the reader's ebook does both (`OpenEbook`: opened through the root,
-  `metadata.OpenBelow`, then `os.SameFile`). The scan's reads and an asked book's (`resolveBook`, then
+  is read through the root too, its show's `feed.json` (`feed.ReadFile`, given the library's root, its looks
+  at the folders beside the show's included) and its file (`metadata.OpenBelow`), then checked against the path
+  again (`OpenPodcast`: `os.SameFile`; `TestOpenPodcastThroughTheRootAfterASwap`, `TestReadFileThroughTheRoot`);
+  the reader's ebook does both (`OpenEbook`: opened through the root, `metadata.OpenBelow`, then `os.SameFile`),
+  and so does a library's `library.json` marker (`ReadLibraryMarker`: `metadata.LstatBelow` and
+  `metadata.ReadRegularFile`, which always takes the library's root). The scan's reads and an asked book's (`resolveBook`, then
   `indexBook`) go through the root too, so a name swapped for a link out of it after the walk's or the join's
   check is never followed: the audio read, tags and the in-process probe (`metadata.ExtractTimeout` and
   `ExtractTags`, given the library's root), the fingerprint (`metadata.Fingerprint`), the files beside the
@@ -1454,9 +1458,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestAttachmentsReadThroughTheRootAfterASwap`, `TestReadalongMapReadThroughTheRootAfterASwap`,
   `TestLookArtStatsThroughTheRootAfterASwap`, `TestBridgeBookFilesStatThroughTheRoot`,
   `TestProberHandsFFmpegTheFileItOpened`, `TestBelowFolderNeverLeavesTheRoot`, `TestToolInputIsTheOpenedFile`).
-  Still a check and then a look by path: a podcast show's `feed.json` and a library's `library.json`
-  (`metadata.ReadRegularFile`: an lstat, an open and `os.SameFile`, all by path), and the looks (listings,
-  lstats) that only decide what a scan reads. The scan takes no link out of the root
+  Still a check and then a look by path: the looks (listings, lstats) that only decide what a scan reads. The scan takes no link out of the root
   either, by the same rule (`linkOut`: `SafeJoin` of each link the walk lists, looked at once the walk ends,
   width at a time, `linksInRoot`; a plain file never looked at again): a file or folder link out in a book
   folder is never a part, nor a cover (`coverLook.find`, which looks at a cover's own entry before any stat,

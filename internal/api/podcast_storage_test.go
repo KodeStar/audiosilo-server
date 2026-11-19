@@ -30,7 +30,7 @@ func podcastStorageEnv(t *testing.T) (*bridgeEnv, *feed.File) {
 	if err := os.MkdirAll(filepath.Join(dir, ".audiosilo"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("../podcast/testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata/phase2c2", "../podcast/testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

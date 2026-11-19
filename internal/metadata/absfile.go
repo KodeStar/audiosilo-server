@@ -118,35 +118,33 @@ func ReadABSFile(root, path string) (*ABSFile, error) {
 	return ParseABSFile(data)
 }
 
-// ReadRegularFile reads the file at path, at most limit bytes: a regular file
-// only, never through a link, including one swapped in after the file was
-// looked at (os.SameFile on the opened file), so a link can't make the scan read
-// a file outside the library. A link or anything else but a regular file is
-// notRegular, a file over limit tooLarge; any other error is a read that may work
-// later. A podcast's feed.json and library.json are read so; the metadata
-// files the scan reads beside a book's audio (ABS's metadata.json, the
-// Bridge's .audiosilo/ attachments) are read so through the library's root
-// too (readRegularFileInfo).
-func ReadRegularFile(path string, limit int, notRegular, tooLarge error) ([]byte, error) {
-	data, _, err := readRegularFileInfo("", path, limit, notRegular, tooLarge)
+// ReadRegularFile reads the file at path under root, at most limit bytes: a
+// regular file only, never through a link, including one swapped in after
+// the file was looked at (os.SameFile on the opened file), looked at and
+// opened through root (readRegularFileInfo), so neither a link at the file
+// nor one swapped in for a folder along its path makes it read a file
+// outside the library. A link or anything else but a regular file is
+// notRegular, a file over limit tooLarge, a path not under root an error;
+// any other error is a read that may work later. A podcast's feed.json and
+// library.json are read so, as the metadata files the scan reads beside a
+// book's audio are (ABS's metadata.json, the Bridge's .audiosilo/
+// attachments).
+func ReadRegularFile(root, path string, limit int, notRegular, tooLarge error) ([]byte, error) {
+	data, _, err := readRegularFileInfo(root, path, limit, notRegular, tooLarge)
 	return data, err
 }
 
 // readRegularFileInfo is ReadRegularFile with the opened file's info (its size
 // and modification time as read), the file at path looked at and opened
-// through root (BelowFolder) when root is not "": a name along the path
-// swapped for a link out of root since it was checked is never followed,
-// where the os.SameFile check alone would follow it for both looks. A file
-// replaced while being opened (the Bridge renaming a new version into place,
-// server#265) is read once more (retrySwap), so every attachment, feed.json
-// and library.json read meets the rename with the new file rather than
-// failing.
+// through root (BelowFolder): a name along the path swapped for a link out of
+// root since it was checked is never followed, where the os.SameFile check
+// alone would follow it for both looks. A file replaced while being opened
+// (the Bridge renaming a new version into place, server#265) is read once
+// more (retrySwap), so every attachment, feed.json and library.json read
+// meets the rename with the new file rather than failing.
 func readRegularFileInfo(root, path string, limit int, notRegular, tooLarge error) ([]byte, fs.FileInfo, error) {
-	lstat, open := os.Lstat, func(p string) (*os.File, error) { return os.Open(p) }
-	if root != "" {
-		lstat = func(p string) (fs.FileInfo, error) { return LstatBelow(root, p) }
-		open = func(p string) (*os.File, error) { return OpenBelow(root, p) }
-	}
+	lstat := func(p string) (fs.FileInfo, error) { return LstatBelow(root, p) }
+	open := func(p string) (*os.File, error) { return OpenBelow(root, p) }
 	return retrySwap(func() ([]byte, fs.FileInfo, error) {
 		return readRegularFileOnce(path, lstat, open, limit, notRegular, tooLarge)
 	})

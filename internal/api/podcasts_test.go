@@ -42,7 +42,7 @@ func podcastEnvAt(t *testing.T, private bool, show string) (*bridgeEnv, int64, *
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	f, err := feed.ReadFile("../podcast/testdata", "../podcast/testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

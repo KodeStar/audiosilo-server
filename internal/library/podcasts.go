@@ -72,9 +72,10 @@ func (l podcastLooks) join(root, show string) (string, error) {
 	return ContentJoinBounded(l.ctx, root, show, l.timeout)
 }
 
-// readFeed is feed.ReadFile of a show's feed.json.
-func (l podcastLooks) readFeed(filename, show string, log *slog.Logger) (*feed.File, error) {
-	return readAt(l, filename, func() (*feed.File, error) { return feed.ReadFile(filename, show, log) })
+// readFeed is feed.ReadFile of a show's feed.json, filename under the library
+// root root, read through it.
+func (l podcastLooks) readFeed(root, filename, show string, log *slog.Logger) (*feed.File, error) {
+	return readAt(l, filename, func() (*feed.File, error) { return feed.ReadFile(root, filename, show, log) })
 }
 
 func feedSignature(info os.FileInfo) string {
@@ -473,7 +474,7 @@ func podcastFeedFiles(l podcastLooks, root, show string) (files []string, ok boo
 		return nil, false
 	}
 	raw, err := readAt(l, filepath.Join(dir, "feed.json"), func() ([]byte, error) {
-		return metadata.ReadRegularFile(filepath.Join(dir, "feed.json"), feed.MaxReadBytes, feed.ErrInvalidFeed, feed.ErrInvalidFeed)
+		return metadata.ReadRegularFile(root, filepath.Join(dir, "feed.json"), feed.MaxReadBytes, feed.ErrInvalidFeed, feed.ErrInvalidFeed)
 	})
 	if err != nil {
 		return nil, false
@@ -523,7 +524,7 @@ func podcastHeldID(l podcastLooks, root, show string) (id string, ok bool) {
 	if !fi.IsDir() {
 		return "", true
 	}
-	f, err := l.readFeed(filepath.Join(dir, "feed.json"), show, nil)
+	f, err := l.readFeed(root, filepath.Join(dir, "feed.json"), show, nil)
 	switch {
 	case metadata.NotExist(err):
 		return "", true
@@ -662,7 +663,7 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 			}
 		}
 	}
-	f, err := l.readFeed(filename, show, log)
+	f, err := l.readFeed(lib.Root, filename, show, log)
 	if errors.Is(err, feed.ErrInvalidFeed) || errors.Is(err, feed.ErrVersion) {
 		s.log.Warn("skipping invalid or unsupported podcast feed.json", "library", lib.ID)
 		return 0, false, errFeedUnusable
@@ -827,14 +828,17 @@ func (s *Scanner) BrowsePodcasts(ctx context.Context, lib catalog.Library, scope
 }
 
 // ReadLibraryMarker reads only a small regular file beneath a real .audiosilo
-// directory. A symlink cannot make the server attest another library's marker.
+// directory, looked at and read through the library's root as every library
+// file is (metadata.LstatBelow, ReadRegularFile). A link, there or swapped in
+// for the folder since its look, cannot make the server attest another
+// library's marker.
 func ReadLibraryMarker(root string, id int64) (string, error) {
 	dir := filepath.Join(root, metadata.AttachmentsDir)
-	st, err := os.Lstat(dir)
+	st, err := metadata.LstatBelow(root, dir)
 	if err != nil || !st.IsDir() {
 		return "", ErrNotIndexable
 	}
-	raw, err := metadata.ReadRegularFile(filepath.Join(dir, "library.json"), 4096, ErrNotIndexable, ErrNotIndexable)
+	raw, err := metadata.ReadRegularFile(root, filepath.Join(dir, "library.json"), 4096, ErrNotIndexable, ErrNotIndexable)
 	if err != nil {
 		return "", ErrNotIndexable
 	}

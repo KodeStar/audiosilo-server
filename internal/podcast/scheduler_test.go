@@ -28,7 +28,7 @@ func TestSchedulerDueAndWritableBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("testdata/feed-v1.json", "Example Show", nil)
+	f, err := feed.ReadFile("testdata", "testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestSchedulerPassesOverAFailingShow(t *testing.T) {
 	}
 	for _, show := range []string{"A Show", "B Show"} {
 		// The fixture's episodes name another show, so these index none.
-		f, err := feed.ReadFile("testdata/feed-v1.json", show, nil)
+		f, err := feed.ReadFile("testdata", "testdata/feed-v1.json", show, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

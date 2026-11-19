@@ -40,7 +40,7 @@ func TestPhase2c2FixtureManifest(t *testing.T) {
 	}
 }
 func TestPhase2c2ChapterGoldens(t *testing.T) {
-	f, err := feed.ReadFile("testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+	f, err := feed.ReadFile("testdata/phase2c2", "testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

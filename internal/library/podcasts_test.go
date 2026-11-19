@@ -94,9 +94,10 @@ func TestPodcastScanner(t *testing.T) {
 	}
 }
 func TestPodcastMarker(t *testing.T) {
-	for _, test := range []string{"valid", "wrong_id", "symlink_dir", "symlink_file", "oversize", "bad_nonce"} {
+	for _, test := range []string{"valid", "root_link", "wrong_id", "symlink_dir", "symlink_file", "oversize", "bad_nonce"} {
 		t.Run(test, func(t *testing.T) {
 			root := t.TempDir()
+			given := root // the library's root as configured
 			dir := filepath.Join(root, ".audiosilo")
 			_ = os.Mkdir(dir, 0700)
 			filename := filepath.Join(dir, "library.json")
@@ -120,8 +121,14 @@ func TestPodcastMarker(t *testing.T) {
 				_ = os.Rename(dir, target)
 				_ = os.Symlink(target, dir)
 			}
-			_, err := ReadLibraryMarker(root, 3)
-			if (err == nil) != (test == "valid") {
+			if test == "root_link" {
+				// A root configured through a link: read through it, as every
+				// library file is.
+				given = filepath.Join(t.TempDir(), "library")
+				_ = os.Symlink(root, given)
+			}
+			_, err := ReadLibraryMarker(given, 3)
+			if (err == nil) != (test == "valid" || test == "root_link") {
 				t.Fatalf("marker %v", err)
 			}
 		})

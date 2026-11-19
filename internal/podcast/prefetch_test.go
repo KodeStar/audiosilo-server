@@ -46,7 +46,7 @@ func TestPrefetchSkipsFetchLimitAndRetriesAfterSlotFreed(t *testing.T) {
 	if err = jobs.SaveHeartbeat(ctx, 1, bridge.Status{Kinds: []string{bridge.KindPodcastFetch}, Libraries: []bridge.LibraryStatus{{LibraryID: lib.ID, Mapped: true, Writable: true}}}); err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+	f, err := feed.ReadFile("testdata/phase2c2", "testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 	if err = jobs.SaveHeartbeat(ctx, 1, bridge.Status{Kinds: []string{bridge.KindPodcastFetch}, Libraries: []bridge.LibraryStatus{{LibraryID: lib.ID, Mapped: true, Writable: true}}}); err != nil {
 		t.Fatal(err)
 	}
-	f, err := feed.ReadFile("testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+	f, err := feed.ReadFile("testdata/phase2c2", "testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
