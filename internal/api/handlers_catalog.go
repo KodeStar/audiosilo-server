@@ -806,7 +806,10 @@ func (a *API) recordedCandidate(ctx context.Context, libraryID int64, path strin
 		a.log.Warn("load recorded match for match search failed", "err", err, "library", libraryID, "path", path)
 		return nil
 	}
-	if m == nil || slices.ContainsFunc(cands, func(c meta.MatchCandidate) bool { return c.WorkID == m.WorkID }) {
+	listed := func(workID string) bool {
+		return slices.ContainsFunc(cands, func(c meta.MatchCandidate) bool { return c.WorkID == workID })
+	}
+	if m == nil || listed(m.WorkID) {
 		return nil
 	}
 	// The book's facts stay beside the id, as a refresh's work lookup keeps
@@ -821,7 +824,7 @@ func (a *API) recordedCandidate(ctx context.Context, libraryID int64, path strin
 	}
 	// A retired id follows its redirect: the work it was merged into may be
 	// listed already.
-	if len(found) == 0 || slices.ContainsFunc(cands, func(c meta.MatchCandidate) bool { return c.WorkID == found[0].WorkID }) {
+	if len(found) == 0 || listed(found[0].WorkID) {
 		return nil
 	}
 	c := found[0]

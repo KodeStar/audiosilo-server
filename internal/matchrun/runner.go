@@ -495,8 +495,9 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 	}
 	item.Proposal, item.Outcome, item.Score, item.RunnerUp = m.proposal, m.outcome, m.score, m.runnerUp
 	switch {
-	case item.Outcome == catalog.OutcomeReview && len(m.holds) > 0:
-		// Every reason it is held for, the first its detail (server#352).
+	case len(m.holds) > 0:
+		// A review item: every reason it is held for, the first its detail
+		// (server#352).
 		item.Detail = m.holds[0]
 		if len(m.holds) > 1 {
 			item.Holds = m.holds
