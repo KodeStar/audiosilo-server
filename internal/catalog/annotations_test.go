@@ -8,6 +8,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -38,11 +39,84 @@ func newAnnotationFixture(t *testing.T) *annotationFixture {
 
 func (f *annotationFixture) bookmark(t *testing.T, user int64, p string, pos float64, note, label string) *Bookmark {
 	t.Helper()
-	b, err := f.c.AddBookmark(t.Context(), user, Bookmark{Ref: f.ref(p), Position: pos, Note: note, Label: label})
+	b, _, err := f.c.AddBookmark(t.Context(), user, Bookmark{Ref: f.ref(p), Position: pos, Note: note, Label: label})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// AddBookmark with a ClientID: concurrent adds of one id save one bookmark and
+// every caller gets it back (one of them told it created it); the id rides on
+// the lists; a bookmark without one stores NULL, so any number may; another
+// user's same id and a deleted bookmark's are free; the id on another book is
+// ErrClientIDConflict and a malformed one ErrInvalidClientID, saving nothing.
+func TestAddBookmarkClientID(t *testing.T) {
+	t.Parallel()
+	f := newAnnotationFixture(t)
+	ctx := t.Context()
+	const id = "6F9619FF-8B86-D011-B42D-00C04FC964FF"
+	in := Bookmark{Ref: f.ref(annBookA), Position: 7, Note: "n", ClientID: id}
+
+	const n = 8
+	got := make([]*Bookmark, n)
+	created := make([]bool, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() { got[i], created[i], errs[i] = f.c.AddBookmark(ctx, f.ann, in) })
+	}
+	wg.Wait()
+	firsts := 0
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("add %d: %v", i, errs[i])
+		}
+		if *got[i] != *got[0] || got[i].ClientID != id {
+			t.Fatalf("add %d = %+v, want %+v", i, got[i], got[0])
+		}
+		if created[i] {
+			firsts++
+		}
+	}
+	if firsts != 1 {
+		t.Fatalf("%d adds said they created it, want 1", firsts)
+	}
+	list, err := f.c.ListBookmarks(ctx, f.ann, f.ref(annBookA))
+	if err != nil || len(list) != 1 || list[0] != *got[0] {
+		t.Fatalf("ann's bookmarks = %+v %v, want only %+v", list, err, got[0])
+	}
+	page, err := f.c.ListMyBookmarks(ctx, f.ann, f.all, PageOptions{})
+	if err != nil || len(page.Bookmarks) != 1 || page.Bookmarks[0].ClientID != id {
+		t.Fatalf("ann's all-books list = %+v %v, want the id on the row", page, err)
+	}
+
+	if _, _, err := f.c.AddBookmark(ctx, f.ann, Bookmark{Ref: f.ref(annBookB), ClientID: id}); !errors.Is(err, ErrClientIDConflict) {
+		t.Fatalf("the id on another book = %v, want ErrClientIDConflict", err)
+	}
+	for _, bad := range []string{"x", id + "0", strings.ToLower(id)[:35], "{" + id + "}"} {
+		if _, _, err := f.c.AddBookmark(ctx, f.ann, Bookmark{Ref: f.ref(annBookB), ClientID: bad}); !errors.Is(err, ErrInvalidClientID) {
+			t.Fatalf("client id %q = %v, want ErrInvalidClientID", bad, err)
+		}
+	}
+	if list, _ := f.c.ListBookmarks(ctx, f.ann, f.ref(annBookB)); len(list) != 0 {
+		t.Fatalf("refused adds saved %+v", list)
+	}
+
+	if bobs, made, err := f.c.AddBookmark(ctx, f.bob, in); err != nil || !made || bobs.ID == got[0].ID {
+		t.Fatalf("bob's add of ann's id = %+v %v %v, want a bookmark of his own", bobs, made, err)
+	}
+	for range 2 {
+		if b, made, err := f.c.AddBookmark(ctx, f.ann, Bookmark{Ref: f.ref(annBookB)}); err != nil || !made || b.ClientID != "" {
+			t.Fatalf("an add without an id = %+v %v %v", b, made, err)
+		}
+	}
+	if err := f.c.DeleteBookmark(ctx, f.ann, got[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if again, made, err := f.c.AddBookmark(ctx, f.ann, in); err != nil || !made || again.ID == got[0].ID {
+		t.Fatalf("the add after a delete = %+v %v %v, want a new bookmark", again, made, err)
+	}
 }
 
 func (f *annotationFixture) note(t *testing.T, user int64, p string, pos float64, body string) *Note {
@@ -85,7 +159,7 @@ func TestCheckBookmarkAndNoteBounds(t *testing.T) {
 	// The adds check too, and store nothing they refuse.
 	f := newAnnotationFixture(t)
 	ctx := t.Context()
-	if _, err := f.c.AddBookmark(ctx, f.ann, Bookmark{Ref: f.ref(annBookA), Label: "Nope"}); !errors.Is(err, ErrInvalidLabel) {
+	if _, _, err := f.c.AddBookmark(ctx, f.ann, Bookmark{Ref: f.ref(annBookA), Label: "Nope"}); !errors.Is(err, ErrInvalidLabel) {
 		t.Fatalf("AddBookmark with a bad label = %v", err)
 	}
 	if _, err := f.c.AddNote(ctx, f.ann, Note{Ref: f.ref(annBookA), Body: strings.Repeat("a", MaxNoteBody+1)}); !errors.Is(err, ErrNoteBodyTooLong) {
@@ -573,7 +647,7 @@ func TestBookmarkPositionRule(t *testing.T) {
 	t.Parallel()
 	f := newAnnotationFixture(t)
 	for _, p := range []float64{-1, math.NaN(), math.Inf(1), math.Inf(-1)} {
-		if _, err := f.c.AddBookmark(t.Context(), f.ann, Bookmark{Ref: f.ref(annBookA), Position: p}); !errors.Is(err, ErrInvalidPosition) {
+		if _, _, err := f.c.AddBookmark(t.Context(), f.ann, Bookmark{Ref: f.ref(annBookA), Position: p}); !errors.Is(err, ErrInvalidPosition) {
 			t.Errorf("AddBookmark at %v = %v, want ErrInvalidPosition", p, err)
 		}
 	}

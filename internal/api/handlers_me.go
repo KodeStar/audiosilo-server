@@ -183,6 +183,12 @@ func (a *API) handleListBookmarks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"bookmarks": items})
 }
 
+// handleAddBookmark saves a bookmark on the book the path keys (timelinePath):
+// 201 with the row. A body's optional client_id (capability bookmark_client_id,
+// a UUID) makes the add idempotent: one the caller already holds on this book
+// answers 200 with that bookmark, saving nothing (an outbox replay whose first
+// answer was lost); on another book it is 409 client_id_conflict, a malformed
+// one 400 invalid_request.
 func (a *API) handleAddBookmark(w http.ResponseWriter, r *http.Request) {
 	lib, path, _, ok := a.timelineKey(w, r, "could not save bookmark")
 	if !ok {
@@ -194,12 +200,16 @@ func (a *API) handleAddBookmark(w http.ResponseWriter, r *http.Request) {
 	}
 	bm.Ref = catalog.Ref{LibraryID: lib.ID, Path: path}
 	u := userFrom(r.Context())
-	saved, err := a.cat.AddBookmark(r.Context(), u.ID, bm)
+	saved, created, err := a.cat.AddBookmark(r.Context(), u.ID, bm)
 	if err != nil {
 		a.writeCatalogError(w, err, "add bookmark failed", "could not save bookmark", "library", lib.ID, "path", path)
 		return
 	}
-	writeJSON(w, http.StatusCreated, saved)
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, saved)
 }
 
 func (a *API) handleDeleteBookmark(w http.ResponseWriter, r *http.Request) {

@@ -106,7 +106,7 @@ func TestAnnotationsBookPathDenied(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The kid's bookmark on the book, from when they had it.
-	if _, err := e.cat.AddBookmark(ctx, kid, catalog.Bookmark{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: pBook}, Position: 999}); err != nil {
+	if _, _, err := e.cat.AddBookmark(ctx, kid, catalog.Bookmark{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: pBook}, Position: 999}); err != nil {
 		t.Fatal(err)
 	}
 	for _, endpoint := range []string{"bookmarks", "notes"} {

@@ -80,7 +80,7 @@ func TestPodcastGenerationIndexPreservesListeningState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bm, err := c.AddBookmark(ctx, user, Bookmark{Ref: ref, Position: 1, Note: "keep"})
+	bm, _, err := c.AddBookmark(ctx, user, Bookmark{Ref: ref, Position: 1, Note: "keep"})
 	if err != nil {
 		t.Fatal(err)
 	}

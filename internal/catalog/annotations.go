@@ -34,7 +34,16 @@ var (
 	ErrInvalidPosition = errors.New("invalid position")
 	// ErrNothingToChange is an edit that names no field.
 	ErrNothingToChange = errors.New("nothing to change")
+	// ErrInvalidClientID is a bookmark client id that isn't a UUID (clientIDPattern).
+	ErrInvalidClientID = errors.New("client_id must be a UUID")
+	// ErrClientIDConflict is a bookmark client id the user already holds on
+	// another book.
+	ErrClientIDConflict = errors.New("client_id names a bookmark on another book")
 )
+
+// clientIDPattern is a bookmark client id's shape: a UUID in its 36-character
+// hyphenated form, any version, either case (stored and compared as sent).
+var clientIDPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 
 // labelPattern is a label's shape: a lowercase machine key. The server does not
 // know the player's keys (quote, favourite, fell_asleep, ...), so a newer player

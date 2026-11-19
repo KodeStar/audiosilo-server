@@ -1106,6 +1106,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   another key. Rows old clients already wrote under a track path, another spelling or (the
   book-level ones) a disc folder move to the book at the start and after each scan (the re-key, see
   Move-tracking). `POST /cast/token` grants the book's path (`bookAt`).
+  **Bookmark client ids** (capability `bookmark_client_id`, migration 0088): a bookmark `POST`
+  may carry `client_id`, a UUID in its hyphenated form (`catalog.clientIDPattern`, stored and
+  echoed as sent; anything else 400 `invalid_request`, `""` or null is no id), which makes the
+  add idempotent for the player's outbox: `bookmarks.client_id` is unique per user where not
+  NULL (`idx_bookmarks_client_id`), and `catalog.AddBookmark` inserts `ON CONFLICT DO NOTHING`
+  then reads the held row in the same writer transaction, so a replay whose first answer was
+  lost gets 200 with the stored bookmark (not the replay's body) and saves nothing, 201 being a
+  fresh save. The held id on another book is 409 `client_id_conflict`. Another user's same id
+  is theirs; a deleted bookmark's id is free again, so an Undo posting it once more saves anew.
+  The row carries `client_id` (omitempty) on every bookmark answer. The flag exists because the
+  body decodes strictly: an older server refuses the field, so the player sends it only where
+  the flag is true.
   **The ebook** (Bridge Phase 3b, capability `ebooks`, `api/handlers_ebook.go`): `GET
   /libraries/{id}/ebook?path=<the book's own path>` serves the file the scan recorded for the book
   (`books.ebook_path`, see Auto book/folder detection), opened fresh by `library.OpenEbook`: joined

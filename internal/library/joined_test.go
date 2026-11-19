@@ -142,7 +142,7 @@ func TestJoinedDiscFolders(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := cat.AddBookmark(ctx, ann, catalog.Bookmark{Ref: ref("Cowell/Dragonese/CD2"), Position: 2}); err != nil {
+	if _, _, err := cat.AddBookmark(ctx, ann, catalog.Bookmark{Ref: ref("Cowell/Dragonese/CD2"), Position: 2}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -699,7 +699,7 @@ func TestJoinCarriesListeningState(t *testing.T) {
 	save(users["ann"], "A/Book/CD1", 4, false)
 	save(users["ann"], "A/Book/CD2", 1.5, false) // further on
 	save(users["bob"], "A/Book/CD3", 2, true)    // finished the last disc
-	if _, err := cat.AddBookmark(ctx, users["ann"], catalog.Bookmark{Ref: ref("A/Book/CD2"), Position: 2}); err != nil {
+	if _, _, err := cat.AddBookmark(ctx, users["ann"], catalog.Bookmark{Ref: ref("A/Book/CD2"), Position: 2}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := cat.AddNote(ctx, users["ann"], catalog.Note{Ref: ref("A/Book/CD3"), Position: 1, Body: "end"}); err != nil {

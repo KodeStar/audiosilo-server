@@ -141,6 +141,7 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"progress_edit":      true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
 		"my_devices":         true,                 // own devices (GET /me/devices, DELETE /me/devices/{id})
 		"annotations":        true,                 // bookmark labels, PATCH /bookmarks|notes/{id}, GET /me/bookmarks|notes, paged /me/history with books
+		"bookmark_client_id": true,                 // an idempotent bookmark POST: client_id (a UUID) on the body and the row, a replay answering 200
 		"addresses":          true,                 // home/away addresses on pairing, exchange and login; GET /addresses
 		"household":          true,                 // listening in the house (GET/PUT /me/household, GET /household/listening)
 		"cast":               true,                 // cast tokens for a receiver (POST /cast/token; ?token= on a book's cover/stream)

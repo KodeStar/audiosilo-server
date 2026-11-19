@@ -232,7 +232,9 @@ an edit checks only the fields it sets). Their `created_at`, a note's `updated_a
 `started_at`/`ended_at` are fixed-width UTC milliseconds (`c.stamp`; a client's span times are
 normalised, an unparsable one replaced by the server's; `0031` rewrites the rows stored before it),
 since the lists order by them as text. The
-per-book `GET /libraries/{id}/bookmarks|notes|history` answer `[]` when empty (`null` before). `0034` adds listening imports
+per-book `GET /libraries/{id}/bookmarks|notes|history` answer `[]` when empty (`null` before). `0088` adds
+`bookmarks.client_id` (NULL for none, unique per user where set: an idempotent bookmark `POST`, capability
+`bookmark_client_id`; see Bookmark client ids in CONVENTIONS.md). `0034` adds listening imports
 (`internal/importer`, `catalog/imports.go`): `imports` (one per source user and AudioSilo user; status,
 cutoff, the gzipped fetched payload, the review's summary and unmatched list; never a credential),
 `import_id` on `listening_sessions`, `listening_daily`, `bookmarks` and `listening_history` (0 = recorded
@@ -475,7 +477,7 @@ keep this index in step (one line per topic).
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`, `other_recordings`,
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
-`user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
+`user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `bookmark_client_id`, `addresses`, `household`, `cast`,
 `household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`, `readalong`, `upcoming`,
 `upcoming_calendar`, `upcoming_covers`, `listening_sync`, `listening_stay`, `renditions`, `oidc`), plus one flag per managed module (`contributions`, `podcasts`, `audible`); flip them on
 as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with

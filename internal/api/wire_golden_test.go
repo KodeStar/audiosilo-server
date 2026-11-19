@@ -521,7 +521,7 @@ func newWireMainEnv(t *testing.T) *wireMainEnv {
 		t.Fatal(err)
 	}
 	wireOK(t, e, "PUT", bookURL(lib.ID, "progress", cradleBook), samTok, `{"position":42,"duration":120}`)
-	wireOK(t, e, "POST", bookURL(lib.ID, "bookmarks", cradleBook), samTok, `{"position":12,"note":"here","label":"favourite"}`)
+	wireOK(t, e, "POST", bookURL(lib.ID, "bookmarks", cradleBook), samTok, `{"position":12,"note":"here","label":"favourite","client_id":"0f8c2c1e-5a3b-4c6d-9e7f-1a2b3c4d5e6f"}`)
 	member, _, _, err := e.auth.CreateMember(ctx, e.adminID, auth.NewMember{Name: "Pip", Kind: auth.MemberGrownup,
 		Access: auth.MemberAll}, auth.MemberPolicy{Enabled: true, Max: 5})
 	if err != nil {

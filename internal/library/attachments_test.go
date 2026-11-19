@@ -520,7 +520,7 @@ func TestIndexPathFollowsAMove(t *testing.T) {
 	if _, err := cat.SaveProgress(ctx, uid, catalog.Progress{Ref: old, Position: 42}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cat.AddBookmark(ctx, uid, catalog.Bookmark{Ref: old, Position: 7, Note: "here"}); err != nil {
+	if _, _, err := cat.AddBookmark(ctx, uid, catalog.Bookmark{Ref: old, Position: 7, Note: "here"}); err != nil {
 		t.Fatal(err)
 	}
 	state := func(p string) (*catalog.Progress, []catalog.Bookmark) {

@@ -142,6 +142,8 @@ const (
 	codeReportOff                = "report_off" // an unknown_asin match run while the unknown-ASIN report is off
 	codeMatchRunNotReady         = "match_run_not_ready"
 	codeMatchRunNotRunning       = "match_run_not_running"
+	codeInvalidRequest           = "invalid_request"    // a malformed field the message names (a bookmark's client_id)
+	codeClientIDConflict         = "client_id_conflict" // 409: a bookmark client_id the caller holds on another book
 	// Listening imports (handlers_import.go); the ABS failures carry importer.Code*.
 	codeInvalidURL       = "invalid_url"
 	codeInvalidImport    = "invalid_import"
@@ -290,6 +292,10 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		errors.Is(err, catalog.ErrNoteBodyTooLong), errors.Is(err, catalog.ErrInvalidPosition),
 		errors.Is(err, catalog.ErrNothingToChange):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, catalog.ErrInvalidClientID):
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	case errors.Is(err, catalog.ErrClientIDConflict):
+		writeErrorCode(w, http.StatusConflict, codeClientIDConflict, err.Error())
 	case errors.Is(err, library.ErrStopping):
 		// A read of the book the server's stop ended (the request was still
 		// waiting for it): try again once the server is back.
