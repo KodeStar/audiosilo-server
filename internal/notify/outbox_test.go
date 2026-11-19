@@ -3,7 +3,6 @@ package notify
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"testing"
 	"time"
@@ -21,7 +20,7 @@ func serviceRun(t *testing.T, cat *catalog.Catalog, delays ...time.Duration) (s 
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	s = New(cat, "1.2.3", func() Server { return Server{Name: "Hearthside"} }, slog.New(slog.DiscardHandler))
+	s = newTestService(cat)
 	if len(delays) > 0 {
 		s.delays = delays
 	}
@@ -31,18 +30,23 @@ func serviceRun(t *testing.T, cat *catalog.Catalog, delays ...time.Duration) (s 
 
 // stoppedService records events but never sends: the server stopped between
 // the record and the delivery.
-func stoppedService(t *testing.T, cat *catalog.Catalog) *Service {
+func stoppedService(cat *catalog.Catalog) *Service { return newTestService(cat) }
+
+// waitOwedNone waits until the outbox owes nothing: every delivery queued has
+// ended (delivered, failed or skipped), not just reached its destination.
+func waitOwedNone(t *testing.T, cat *catalog.Catalog) {
 	t.Helper()
-	return New(cat, "1.2.3", func() Server { return Server{Name: "Hearthside"} }, slog.New(slog.DiscardHandler))
+	for range 500 {
+		if owed, err := cat.PendingDeliveries(context.Background(), 0); err == nil && len(owed) == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the outbox still owes deliveries")
 }
 
-func (f *fakeDest) count() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.got)
-}
-
-// settle waits for the deliveries in flight, then says how many dest has had.
+// settle gives a delivery that should not happen time to arrive, then says
+// how many dest has had.
 func settle(f *fakeDest) int {
 	time.Sleep(150 * time.Millisecond)
 	return f.count()
@@ -59,7 +63,7 @@ func TestOwedNoticeIsSentAtTheNextStart(t *testing.T) {
 	addTarget(t, cat, TargetNtfy, push.srv.URL+"/t", "", KindScanFailed)
 	addTarget(t, cat, TargetWebhook, other.srv.URL, "", KindBookAdded)
 
-	stoppedService(t, cat).ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
+	stoppedService(cat).ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
 	if hook.count() != 0 {
 		t.Fatal("a stopped server sent it")
 	}
@@ -69,6 +73,7 @@ func TestOwedNoticeIsSentAtTheNextStart(t *testing.T) {
 		t.Fatalf("redelivered %v", got.body)
 	}
 	push.wait(t, 1)
+	waitOwedNone(t, cat) // ended, not cut short by the stop
 	stop()
 	serviceRun(t, cat) // and another start
 	if n, m, o := settle(hook), push.count(), other.count(); n != 1 || m != 1 || o != 0 {
@@ -85,7 +90,7 @@ func TestOwedNoticeIsSentAtTheNextStart(t *testing.T) {
 func TestOwedPodcastNoticeIsSentAtTheNextStart(t *testing.T) {
 	ctx := context.Background()
 	cat := catalog.New(storetest.Open(t), time.Now)
-	cat.SetPodcastNotice(stoppedService(t, cat).PodcastListener())
+	cat.SetPodcastNotice(stoppedService(cat).PodcastListener())
 	hook := newFakeDest(t)
 	addTarget(t, cat, TargetWebhook, hook.srv.URL, "", KindPodcastFeedFailing)
 	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Pods", Root: t.TempDir(), Kind: catalog.KindPodcasts})
@@ -117,6 +122,7 @@ func TestOwedPodcastNoticeIsSentAtTheNextStart(t *testing.T) {
 	if got := hook.wait(t, 1)[0]; got.body["event"] != KindPodcastFeedFailing {
 		t.Fatalf("redelivered %v", got.body)
 	}
+	waitOwedNone(t, cat)
 	stop()
 	serviceRun(t, cat)
 	if n := settle(hook); n != 1 {
@@ -136,8 +142,7 @@ func TestFailingDestinationRetriesOnABound(t *testing.T) {
 	// The first attempt fails, and its retry is due long after the stop.
 	s, stop := serviceRun(t, cat, time.Hour, time.Hour)
 	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
-	failing.wait(t, 1)
-	time.Sleep(50 * time.Millisecond) // the attempt is counted before it is sent; let the worker finish
+	failing.wait(t, 1) // counted before it was sent
 	stop()
 
 	// The next start makes the two attempts left, and no more.
@@ -161,16 +166,14 @@ func TestOwedNoticeFollowsTheDestination(t *testing.T) {
 	cat := catalog.New(storetest.Open(t), time.Now)
 	dest := newFakeDest(t)
 	tg := addTarget(t, cat, TargetWebhook, dest.srv.URL, "", KindScanFailed)
-	stoppedService(t, cat).ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
+	stoppedService(cat).ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
 	tg.Enabled = false
 	if _, err := cat.SaveNotifyTarget(ctx, *tg); err != nil {
 		t.Fatal(err)
 	}
 	serviceRun(t, cat)
-	if n := settle(dest); n != 0 {
+	waitOwedNone(t, cat)
+	if n := dest.count(); n != 0 {
 		t.Fatalf("sent %d to a switched-off destination", n)
-	}
-	if owed, _ := cat.PendingDeliveries(ctx, 0); len(owed) != 0 {
-		t.Fatalf("still owed: %+v", owed)
 	}
 }

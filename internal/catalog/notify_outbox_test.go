@@ -94,8 +94,7 @@ func TestNotifyOutbox(t *testing.T) {
 // A destination's deletion takes its owed deliveries with it.
 func TestNotifyOutboxFollowsTheDestination(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	c := New(storetest.Open(t), time.Now)
+	c, ctx := newTestCatalog(t)
 	tg, err := c.CreateNotifyTarget(ctx, NotifyTarget{Kind: "webhook", Name: "w", URL: "http://x", Enabled: true, Events: []string{"book_added"}})
 	if err != nil {
 		t.Fatal(err)
