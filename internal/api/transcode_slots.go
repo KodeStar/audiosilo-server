@@ -4,7 +4,16 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 )
+
+// headerTranscodeSent is a transcode HEAD's word on the same ask's GET that
+// is running: the bytes it has written to its response so far. Absent when no
+// GET of the ask runs (none was asked for, it ended, or it was dropped). A
+// client whose stream stalls looks twice: a count that grows is a slow
+// transcode still producing, to wait for, where asking again would take its
+// slot over and end it. Only ever the caller's own ask's (its token's).
+const headerTranscodeSent = "X-AudioSilo-Transcode-Sent"
 
 // transcodeAsk is what a transcode streams and for whom: the credential's
 // token, the file, the ?t= start and whether it is a download. Safari asks for
@@ -32,6 +41,46 @@ type transcodeHold struct {
 	ask transcodeAsk
 	// end ends the holder's request (and its ffmpeg with it).
 	end context.CancelFunc
+	// sent counts the bytes the holder has written to its response (writer).
+	sent atomic.Int64
+	// ended is set by the holder once its stream ran to its end
+	// (media.Transcode), before endTranscode: a takeover then ended nothing.
+	ended bool
+	// running is, for a HEAD's hold of none, the GET of the same ask holding
+	// a slot then (nil when none does), whose sent it reports.
+	running *transcodeHold
+}
+
+// writer is w counting what the holder writes to it into h.sent (w itself
+// for a HEAD's hold of none). It unwraps to w, so http.ResponseController's
+// flushes and write deadlines (media's idle end) reach the connection.
+func (h *transcodeHold) writer(w http.ResponseWriter) http.ResponseWriter {
+	if h.end == nil {
+		return w
+	}
+	return sentWriter{ResponseWriter: w, sent: &h.sent}
+}
+
+// sentWriter is a transcodeHold's writer.
+type sentWriter struct {
+	http.ResponseWriter
+	sent *atomic.Int64
+}
+
+func (s sentWriter) Write(p []byte) (int, error) {
+	n, err := s.ResponseWriter.Write(p)
+	s.sent.Add(int64(n))
+	return n, err
+}
+
+func (s sentWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// describe sets h's word on the same ask's running GET on a HEAD's answer
+// (headerTranscodeSent), when h is a HEAD's and one runs.
+func (h *transcodeHold) describe(w http.ResponseWriter) {
+	if h.running != nil {
+		w.Header().Set(headerTranscodeSent, strconv.FormatInt(h.running.sent.Load(), 10))
+	}
 }
 
 // transcodeAskOf is r's ask for the transcode of rel in library lib. A start
@@ -58,13 +107,15 @@ func transcodeAskOf(r *http.Request, lib int64, rel string) transcodeAsk {
 // returns nil when no slot is free for it, else the hold and r with a context
 // a later takeover ends. An ask with no token takes a free slot only, and is
 // never taken over. A HEAD, which starts no ffmpeg, takes none: it gets a
-// hold of no slot when a GET would get one (transcodeSlotFree).
+// hold of no slot when a GET would get one (transcodeSlotFree), naming the
+// same ask's GET that runs, if one does.
 func (a *API) takeTranscodeSlot(r *http.Request, ask transcodeAsk) (*transcodeHold, *http.Request) {
 	if r.Method == http.MethodHead {
-		if !a.transcodeSlotFree(ask) {
+		free, running := a.transcodeSlotFree(ask)
+		if !free {
 			return nil, r
 		}
-		return &transcodeHold{ask: ask}, r
+		return &transcodeHold{ask: ask, running: running}, r
 	}
 	keyed := ask.keyed()
 	a.transcodeMu.Lock()
@@ -89,24 +140,27 @@ func (a *API) takeTranscodeSlot(r *http.Request, ask transcodeAsk) (*transcodeHo
 }
 
 // transcodeSlotFree reports whether ask would get a slot now (a free one, or
-// one a same ask holds), taking none: a HEAD's answer, so a client can ask
-// whether its transcode would run without starting one.
-func (a *API) transcodeSlotFree(ask transcodeAsk) bool {
+// one a same ask holds, running), taking none: a HEAD's answer, so a client
+// can ask whether its transcode would run without starting one.
+func (a *API) transcodeSlotFree(ask transcodeAsk) (free bool, running *transcodeHold) {
 	a.transcodeMu.Lock()
 	defer a.transcodeMu.Unlock()
-	if ask.keyed() && a.transcodeHolds[ask] != nil {
-		return true
+	if ask.keyed() {
+		if h := a.transcodeHolds[ask]; h != nil {
+			return true, h
+		}
 	}
-	return len(a.transcodeSem) < cap(a.transcodeSem)
+	return len(a.transcodeSem) < cap(a.transcodeSem), nil
 }
 
 // endTranscode lets go of h's slot, once its request is done with it (nil, or
 // a HEAD's hold of none, holds nothing). One a later same ask took over is
 // that ask's now: the request is aborted instead (http.ErrAbortHandler), so
 // its client sees a broken stream, never one that ended (which a player would
-// take for the file's end). Deferred by the request's handler: a panic of
-// its own goes on as it was, never hidden behind the abort (which net/http
-// does not log).
+// take for the file's end), unless its stream had run to its end (h.ended)
+// before the takeover came, which then cut nothing. Deferred by the request's
+// handler: a panic of its own goes on as it was, never hidden behind the abort
+// (which net/http does not log).
 func (a *API) endTranscode(h *transcodeHold) {
 	if h == nil || h.end == nil {
 		return
@@ -122,7 +176,7 @@ func (a *API) endTranscode(h *transcodeHold) {
 		<-a.transcodeSem
 	}
 	a.transcodeMu.Unlock()
-	if taken {
+	if taken && !h.ended {
 		if p := recover(); p != nil {
 			panic(p)
 		}

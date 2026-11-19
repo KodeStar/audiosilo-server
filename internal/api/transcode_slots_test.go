@@ -73,14 +73,92 @@ func TestTranscodeRepeatAskTakesOverSlot(t *testing.T) {
 	if len(a.transcodeSem) != 2 {
 		t.Fatal("the taken-over request's end freed the slot its successor holds")
 	}
-	if !a.transcodeSlotFree(ask) {
-		t.Fatal("a HEAD of the held ask was told busy: a GET would take its slot over")
+	if free, running := a.transcodeSlotFree(ask); !free || running != second {
+		t.Fatal("a HEAD of the held ask was told busy, or not of its running GET: a GET would take its slot over")
 	}
 	if endTaken(a, second) {
 		t.Fatal("the slot's holder was aborted at its own end")
 	}
 	if len(a.transcodeSem) != 1 || len(a.transcodeHolds) != 0 {
 		t.Fatalf("after the holder's end: %d slots taken, %d holds, want 1 and 0", len(a.transcodeSem), len(a.transcodeHolds))
+	}
+}
+
+// TestTranscodeTakeoverAfterItsEnd: a stream that ran to its end before a
+// repeat ask took its slot over (between its last byte and its handler's end)
+// is not aborted: the takeover cut nothing. Its end lets go of no slot, the
+// successor's being the same one.
+func TestTranscodeTakeoverAfterItsEnd(t *testing.T) {
+	t.Parallel()
+	a := slotAPI(2, 1)
+	ask := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka"}
+	first, _ := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+	first.ended = true
+	second, _ := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+	if second == nil {
+		t.Fatal("the repeat ask got no slot")
+	}
+	if endTaken(a, first) {
+		t.Fatal("a stream that ran to its end was aborted by a takeover after it")
+	}
+	if len(a.transcodeSem) != 2 || a.transcodeHolds[ask] != second {
+		t.Fatal("the ended stream's end let go of the slot its successor holds")
+	}
+	if endTaken(a, second) || len(a.transcodeSem) != 1 || len(a.transcodeHolds) != 0 {
+		t.Fatal("the successor's end did not let go of the slot")
+	}
+}
+
+// TestTranscodeHeadSaysWhatItsAskSent: a HEAD of an ask whose GET runs says
+// how much that GET has written (headerTranscodeSent), through the writer its
+// handler is given; a HEAD of the same file and start by another token, or by
+// none, is told only whether a slot is free, never of another's stream.
+func TestTranscodeHeadSaysWhatItsAskSent(t *testing.T) {
+	t.Parallel()
+	a := slotAPI(2, 2)
+	ask := transcodeAsk{token: 7, lib: 1, rel: "Book/01.mka", start: 12.5}
+	h, _ := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: 7}), ask)
+	rec := httptest.NewRecorder()
+	w := h.writer(rec)
+	if _, err := w.Write(make([]byte, 1500)); err != nil {
+		t.Fatal(err)
+	}
+	// The connection's flushes and deadlines reach it (media's idle end).
+	if err := http.NewResponseController(w).Flush(); err != nil || !rec.Flushed {
+		t.Fatalf("flush through the counting writer = %v (flushed %v)", err, rec.Flushed)
+	}
+
+	look := func(cred auth.Credential, ask transcodeAsk) http.Header {
+		t.Helper()
+		head, _ := a.takeTranscodeSlot(slotRequest(http.MethodHead, cred), ask)
+		if head == nil {
+			t.Fatal("a HEAD was told busy with a slot free")
+		}
+		rec := httptest.NewRecorder()
+		head.describe(rec)
+		if head.writer(rec) != http.ResponseWriter(rec) {
+			t.Fatal("a HEAD's writer counts")
+		}
+		return rec.Header()
+	}
+	if got := look(auth.Credential{ID: 7}, ask).Get(headerTranscodeSent); got != "1500" {
+		t.Fatalf("HEAD of the running ask: %s %q, want 1500", headerTranscodeSent, got)
+	}
+	other := ask
+	other.token = 8
+	if got := look(auth.Credential{ID: 8}, other).Values(headerTranscodeSent); got != nil {
+		t.Fatalf("another token's HEAD of the same stream was told of it: %q", got)
+	}
+	none := ask
+	none.token = 0
+	if got := look(auth.Credential{}, none).Values(headerTranscodeSent); got != nil {
+		t.Fatalf("a tokenless HEAD of the same stream was told of it: %q", got)
+	}
+	if endTaken(a, h) {
+		t.Fatal("the holder was aborted")
+	}
+	if got := look(auth.Credential{ID: 7}, ask).Values(headerTranscodeSent); got != nil {
+		t.Fatalf("HEAD after the GET ended still told of it: %q", got)
 	}
 }
 
@@ -151,8 +229,8 @@ func TestTranscodeOtherAsksCountSeparately(t *testing.T) {
 			if h == nil {
 				t.Fatal("the held ask got no slot")
 			}
-			if a.transcodeSlotFree(other) {
-				t.Fatal("a HEAD of another ask was told a slot is free with none")
+			if free, running := a.transcodeSlotFree(other); free || running != nil {
+				t.Fatal("a HEAD of another ask was told a slot is free with none, or of the holder's stream")
 			}
 			if o, _ := a.takeTranscodeSlot(slotRequest(http.MethodGet, auth.Credential{ID: other.token}), other); o != nil {
 				t.Fatal("another ask got a slot with none free")
@@ -297,11 +375,20 @@ func TestStreamTranscodeRepeatAsk(t *testing.T) {
 	refused("another user's same ask", at, theirs)
 	refused("another start", stream+"&t=40", mine)
 	ran := countRuns()
-	if got := status("HEAD", at, mine); got != http.StatusOK {
-		t.Fatalf("HEAD of the held ask = %d, want 200", got)
+	// A HEAD says what the same ask's running GET has sent (its client read
+	// 4 KiB of it by now), and never of another user's stream.
+	head := func(token string) (int, string) {
+		t.Helper()
+		resp := open("HEAD", at, token)
+		_ = resp.Body.Close()
+		return resp.StatusCode, resp.Header.Get("X-AudioSilo-Transcode-Sent")
 	}
-	if got := status("HEAD", at, theirs); got != http.StatusServiceUnavailable {
-		t.Fatalf("HEAD of another user's ask = %d, want 503", got)
+	code, sent := head(mine)
+	if n, err := strconv.Atoi(sent); code != http.StatusOK || err != nil || n < 4096 {
+		t.Fatalf("HEAD of the held ask = %d with %q sent, want 200 and at least what was read", code, sent)
+	}
+	if code, sent := head(theirs); code != http.StatusServiceUnavailable || sent != "" {
+		t.Fatalf("HEAD of another user's ask = %d with %q sent, want 503 and none", code, sent)
 	}
 	if countRuns() != ran {
 		t.Fatal("a HEAD ran ffmpeg")
@@ -318,6 +405,9 @@ func TestStreamTranscodeRepeatAsk(t *testing.T) {
 	}
 	if got := status("HEAD", at, theirs); got != http.StatusOK {
 		t.Fatalf("HEAD with the slot free = %d, want 200", got)
+	}
+	if code, sent := head(mine); code != http.StatusOK || sent != "" {
+		t.Fatalf("HEAD of the closed ask = %d with %q sent, want 200 and none running", code, sent)
 	}
 	if len(e.api.transcodeSem) != cap(e.api.transcodeSem)-1 || len(e.api.transcodeHolds) != 0 {
 		t.Fatal("a HEAD with the slot free took it")

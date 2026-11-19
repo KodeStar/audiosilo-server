@@ -642,3 +642,35 @@ func TestFileCacheTimeoutIsARefusal(t *testing.T) {
 		t.Fatalf("a shutdown was remembered for %v", left)
 	}
 }
+
+// TestFileCacheCachedStartsNothing: Cached (a HEAD's look) answers a cold
+// copy ErrUnavailable with no run started, and the copy once a run made it.
+func TestFileCacheCachedStartsNothing(t *testing.T) {
+	t.Parallel()
+	var runs atomic.Int32
+	m, src := fakeRemuxer(t, func(_, out string) error {
+		runs.Add(1)
+		return os.WriteFile(out, []byte("mp3 bytes"), 0o644)
+	})
+	ctx := context.Background()
+	if _, _, err := m.Cached(ctx, src); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Cached of a cold copy = %v, want ErrUnavailable", err)
+	}
+	m.Wait()
+	if runs.Load() != 0 {
+		t.Fatal("Cached started a run")
+	}
+	f, _, err := m.Open(ctx, ctx, "ffmpeg", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	f, etag, err := m.Cached(ctx, src)
+	if err != nil || etag == "" {
+		t.Fatalf("Cached of a made copy = %q, %v, want the copy", etag, err)
+	}
+	f.Close()
+	if runs.Load() != 1 {
+		t.Fatalf("%d runs, want the one Open started", runs.Load())
+	}
+}

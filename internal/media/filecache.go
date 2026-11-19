@@ -273,11 +273,8 @@ const sourceWait = metadata.ProbeTimeout
 // spec's queueMax runs are in flight), runCtx's, or a failure to read abs, run
 // ffmpeg or write the cache.
 func (m *FileCache) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os.File, string, error) {
-	info, err := Source(ctx, abs, sourceWait)
+	info, err := openSource(ctx, abs)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, "", fmt.Errorf("%w: %w", ErrPending, ctx.Err())
-		}
 		return nil, "", err
 	}
 	key := m.key(abs, info)
@@ -302,6 +299,33 @@ func (m *FileCache) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*
 		return nil, "", ErrUnavailable
 	}
 	return m.opened(key, f, nil)
+}
+
+// Cached is Open for a request that is to start nothing (a HEAD): abs's copy
+// and its ETag when it is cached (marked used), Open's errors for a source
+// that is no regular file or a known refusal, else ErrUnavailable, with no
+// run started and none waited for.
+func (m *FileCache) Cached(ctx context.Context, abs string) (*os.File, string, error) {
+	info, err := openSource(ctx, abs)
+	if err != nil {
+		return nil, "", err
+	}
+	key := m.key(abs, info)
+	f, _, err := m.begin(ctx, "", key, abs, info, false)
+	if f == nil && err == nil {
+		return nil, "", ErrUnavailable
+	}
+	return m.opened(key, f, err)
+}
+
+// openSource is Open's and Cached's look at abs (Source): ErrPending wrapping
+// ctx's error when ctx ended first.
+func openSource(ctx context.Context, abs string) (os.FileInfo, error) {
+	info, err := Source(ctx, abs, sourceWait)
+	if err != nil && ctx.Err() != nil {
+		return nil, fmt.Errorf("%w: %w", ErrPending, ctx.Err())
+	}
+	return info, err
 }
 
 // opened is Open's answer for key's open copy f (or err): f with its ETag.
