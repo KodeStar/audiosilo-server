@@ -191,14 +191,17 @@ func (m *FileCache) FakeFreeSpaceForTests(free uint64) {
 }
 
 // HoldRunsForTests makes every run wait for gate to close before ffmpeg
-// starts, for tests of a request that finds its copy cold. It panics outside a
-// test binary.
-func (m *FileCache) HoldRunsForTests(gate <-chan struct{}) {
+// starts, for tests of a request that finds its copy cold. held closes when the
+// first run reaches the gate. It panics outside a test binary.
+func (m *FileCache) HoldRunsForTests(gate <-chan struct{}) (held <-chan struct{}) {
 	if !testing.Testing() {
 		panic("media.HoldRunsForTests called outside a test binary")
 	}
+	reached := make(chan struct{})
+	noteHeld := sync.OnceFunc(func() { close(reached) })
 	run := m.run
 	m.run = func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error {
+		noteHeld()
 		select {
 		case <-gate:
 		case <-ctx.Done():
@@ -206,6 +209,7 @@ func (m *FileCache) HoldRunsForTests(gate <-chan struct{}) {
 		}
 		return run(ctx, ffmpegPath, args, stdin)
 	}
+	return reached
 }
 
 // ShareDiskGuard makes other's disk guard count m's runs still writing, and m's
