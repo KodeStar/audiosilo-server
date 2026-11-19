@@ -666,7 +666,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.UpcomingPending`, path-keyed) so a restart keeps them (server#447). It makes no call while
   `metadataOn()` is false, and a run in flight stops within a second when switched off (`pool.WhileOn`,
   `errSwitchedOff`: a cancellation, no status recorded, no retry). In mirror mode every call goes to the
-  local copy. A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
+  local copy, and the schedule's first run (kicked or timed) waits for it to load (`Options.Ready`,
+  `api.mirrorReady`, at most 10 min, as the chapter checks: server#454). A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
   path-keyed, no FK to `books`, cascaded with the library, written through the user-state path; no
   content cache reads them but `upcoming_owned`'s rows, `work_id` and `id_key`, the list books' `work_id`,
   so a new or removed row, a changed work or a re-keyed one moves the content generation, a re-check does not):
