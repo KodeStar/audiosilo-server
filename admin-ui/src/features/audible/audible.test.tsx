@@ -1151,7 +1151,7 @@ describe('needs a look', () => {
 
 describe('unmatched titles, explained', () => {
   it('words a planned destination, its warnings and a stale template', () => {
-    expect(plannedLine(title({ match: null, can_backup: true }), '')).toBeNull();
+    expect(plannedLine(title({ match: null }), '')).toBeNull();
     expect(plannedLine(title({ match: null, planned: plan() }), '')).toEqual({
       key: 'audible.planned.seriesExisting',
       values: { path: plan().path, count: 7 },
@@ -1459,7 +1459,7 @@ describe('audible sync', () => {
 
   it('lets a title sync only while it is on this server and not left out', () => {
     expect(canSync(title())).toBe(true);
-    expect(canSync(title({ match: null, can_backup: true }))).toBe(false);
+    expect(canSync(title({ match: null }))).toBe(false);
     expect(canSync(title({ rejected: true }))).toBe(false);
     expect(canSync(title({ state: 'gone' }))).toBe(false);
     expect(canSync(title({ state: 'preorder' }))).toBe(false);

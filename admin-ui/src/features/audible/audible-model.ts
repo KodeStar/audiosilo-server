@@ -116,6 +116,12 @@ export function audibleJobReason(job: {
   return undefined;
 }
 
+/** What an ended place sync did (syncSummary). */
+export type SyncSummary =
+  | { kind: 'waiting'; until?: string }
+  | { kind: 'off' }
+  | { kind: 'counts'; titles: number; heard: number; applied: number; partial: boolean };
+
 /**
  * What an ended place sync (audible.sync) did, from its result (the Bridge's
  * audiblesync.Result): nothing because Audible asked the Bridge to wait (until
@@ -125,11 +131,6 @@ export function audibleJobReason(job: {
  * a Bridge that sends them, bridge#80); undefined for another kind, a job
  * still open, or a result without them.
  */
-export type SyncSummary =
-  | { kind: 'waiting'; until?: string }
-  | { kind: 'off' }
-  | { kind: 'counts'; titles: number; heard: number; applied: number; partial: boolean };
-
 export function syncSummary(
   job: Pick<BridgeJob, 'kind' | 'state'> & { result?: Record<string, unknown> | null },
 ): SyncSummary | undefined {

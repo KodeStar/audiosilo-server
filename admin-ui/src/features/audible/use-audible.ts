@@ -169,14 +169,15 @@ const titleKey = (x: Pick<AudibleTitle, 'account' | 'asin'>) => `${x.account}/${
  */
 export function storeTitle(qc: QueryClient, x: AudibleTitle) {
   const key = titleKey(x);
+  const holds = (p: AudibleTitlePage) => p.titles.some((t) => titleKey(t) === key);
+  // A list (or page) without the title is left as it is: its rows don't render again.
   qc.setQueriesData<InfiniteData<AudibleTitlePage>>({ queryKey: keys.audibleTitleLists }, (data) =>
-    data
+    data?.pages.some(holds)
       ? {
           ...data,
-          pages: data.pages.map((p) => ({
-            ...p,
-            titles: p.titles.map((t) => (titleKey(t) === key ? x : t)),
-          })),
+          pages: data.pages.map((p) =>
+            holds(p) ? { ...p, titles: p.titles.map((t) => (titleKey(t) === key ? x : t)) } : p,
+          ),
         }
       : data,
   );
@@ -208,20 +209,17 @@ export function useBackups() {
       return next;
     });
   const isBusy = (x: AudibleTitle) => busy.has(titleKey(x));
-  const refreshOthers = () => {
-    void qc.invalidateQueries({ queryKey: keys.audibleAccounts });
-    void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
-  };
-  const refresh = () => {
-    void qc.invalidateQueries({ queryKey: keys.audibleTitleLists });
-    refreshOthers();
-  };
-  /** The title the server answered into its row, else (no answer) every page read again. */
-  const settle = (x: AudibleTitle | undefined) => {
-    if (x) {
-      storeTitle(qc, x);
-      refreshOthers();
-    } else refresh();
+  /**
+   * The title the server answered into its row, else (no answer) every page
+   * read again; then, unless `others` is false, the accounts and the jobs.
+   */
+  const settle = (x: AudibleTitle | undefined, others = true) => {
+    if (x) storeTitle(qc, x);
+    else void qc.invalidateQueries({ queryKey: keys.audibleTitleLists });
+    if (others) {
+      void qc.invalidateQueries({ queryKey: keys.audibleAccounts });
+      void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
+    }
   };
 
   const backUp = async (x: AudibleTitle) => {
@@ -274,10 +272,9 @@ export function useBackups() {
 
   /** "Don't sync this book" and its undo (Phase 4c): it changes no estimate or job, only the title's row. */
   const setNoSync = (x: AudibleTitle, noSync: boolean) =>
-    patchTitle(x, { no_sync: noSync }, t('audible.nosync.failed'), (answered) => {
-      if (answered) storeTitle(qc, answered);
-      else void qc.invalidateQueries({ queryKey: keys.audibleTitleLists });
-    });
+    patchTitle(x, { no_sync: noSync }, t('audible.nosync.failed'), (answered) =>
+      settle(answered, false),
+    );
 
   /** Throws for the dialog to show. */
   const setDest = async (x: AudibleTitle, dest: string) => {
@@ -291,7 +288,7 @@ export function useBackups() {
       title: t('audible.backupAll.done', { count: queued, name: accountName(t, account) }),
       type: 'success',
     });
-    refresh();
+    settle(undefined);
   };
 
   /** Throws for the dialog to show. */
