@@ -113,9 +113,9 @@ func (a *API) handleAdminPodcastRetention(w http.ResponseWriter, r *http.Request
 // admin's download of the episode at path, 200 downloaded when its committed
 // generation opens, else its fetch asked of the Bridge (202). An episode the
 // share refuses the server for good (library.ErrEpisodeRefused: a file whose
-// permissions a copy or a restore left wrong) is fetched too: the stream is
-// the 404, queuing nothing, but this is the admin asking for the file again,
-// and the Bridge writes a new one in its place.
+// permissions a copy or a restore left wrong) is fetched too (podcastPresent
+// reads it as absent): the stream is the 404, queuing nothing, but this is the
+// admin asking for the file again, and the Bridge writes a new one in its place.
 func (a *API) handleAdminPodcastFetch(w http.ResponseWriter, r *http.Request) {
 	lib, ok := a.podcastStorageLibrary(w, r)
 	if !ok {
@@ -134,9 +134,6 @@ func (a *API) handleAdminPodcastFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	present, err := a.podcastPresent(r.Context(), lib, req.Path, pin)
-	if errors.Is(err, library.ErrEpisodeRefused) {
-		present, err = false, nil // not one the server can open: fetched again
-	}
 	if err != nil {
 		if r.Context().Err() != nil {
 			return // the client left during the checks: no one to answer

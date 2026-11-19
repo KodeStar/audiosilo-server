@@ -1800,11 +1800,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
     again. A route answers the lasting answer it had (a 404; a route's own 422 stays), the reader's ebook and
     read-along map among them (`TestEbookLastingFaultIs404`, `TestReadalongLastingFaultIs404`), and the book stays
     indexed. A podcast episode the share refuses so (its show folder, `feed.json`, publish barrier or file) is
-    `library.ErrEpisodeRefused`: the stream's 404 `episode_not_found`, and a listener's fetch routes'
-    (`/libraries/{id}/podcasts/fetch`), never a fetch asked of the Bridge by them, which would meet the same
-    refusal (`TestPodcastStreamRefusedFolderIs404`). An admin's download
-    (`POST /admin/libraries/{id}/podcasts/fetch`) asks the Bridge for it all the same: it writes a new file where
-    one the server can't open stands (`TestPodcastAdminDownloadFetchesARefusedEpisode`).
+    `library.ErrEpisodeRefused`: the stream's 404 `episode_not_found`, never a fetch asked of the Bridge by it,
+    which would meet the same refusal (`TestPodcastStreamRefusedFolderIs404`). A fetch asked for by name reads
+    it as absent, as before the stream told the two apart (shipped players use these routes, CROSS-REPO §15): a
+    listener's `GET /libraries/{id}/podcasts/fetch` answers its fetch status and `POST` queues it (202), an
+    admin's download (`POST /admin/libraries/{id}/podcasts/fetch`) too; the Bridge writes a new file where one
+    the server can't open stands (`TestPodcastAdminDownloadFetchesARefusedEpisode`,
+    `TestPodcastListenerFetchQueuesARefusedEpisode`).
   - **The server's own limits** (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY) and any error on neither list: no share's
     fault, never a 503 `share_not_answering`; a route answers it as it did before the rule (an asked read's
     `lookRefused` 404, a stream's missing file, a 500 where the route logs one).

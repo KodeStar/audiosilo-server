@@ -468,6 +468,53 @@ func TestPodcastAdminDownloadFetchesARefusedEpisode(t *testing.T) {
 	}
 }
 
+// TestPodcastListenerFetchQueuesARefusedEpisode: a listener's fetch routes
+// read an episode whose file the share refuses for good (chmod 000) as absent,
+// as they did before the stream told the two apart (shipped players use them):
+// GET answers its fetch status (200, nothing queued) and POST queues its fetch
+// (202, one job), while the stream is the 404 and queues none, before and
+// after. Not parallel only for the chmod: the file is this test's own.
+func TestPodcastListenerFetchQueuesARefusedEpisode(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file whatever its mode")
+	}
+	b, f := podcastStorageEnv(t)
+	ep := f.Episodes[0].Path
+	file := filepath.Join(b.lib.Root, filepath.FromSlash(ep))
+	if err := os.Chmod(file, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(file, 0o644) })
+	stream := podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(ep))
+	if w := getPodcastStream(b, stream); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "episode_not_found") || podcastFetches(t, b) != 0 {
+		t.Fatalf("the stream of an episode whose file is refused for good = %d %s with %d fetches, want 404 episode_not_found and none",
+			w.Code, w.Body, podcastFetches(t, b))
+	}
+	fetchState := func(method string, want int) string {
+		t.Helper()
+		resp, out := b.doHeaders(t, method, fetchRoute(b.lib.ID, ep), b.userTok, fetchBody(ep), podcastHeaders())
+		var got struct {
+			Fetch *bridge.FetchStatus `json:"fetch"`
+		}
+		if resp.StatusCode != want || json.Unmarshal([]byte(out), &got) != nil || got.Fetch == nil {
+			t.Fatalf("a listener's %s fetch of that episode = %d %s, want %d and its fetch status", method, resp.StatusCode, out, want)
+		}
+		return got.Fetch.State
+	}
+	if st := fetchState("GET", http.StatusOK); st == "ready" || podcastFetches(t, b) != 0 {
+		t.Fatalf("a listener's GET of that episode = state %q with %d fetches, want it not ready and none queued", st, podcastFetches(t, b))
+	}
+	if st := fetchState("POST", http.StatusAccepted); st == "ready" || podcastFetches(t, b) != 1 {
+		t.Fatalf("a listener's POST of that episode = state %q with %d fetches, want its fetch queued", st, podcastFetches(t, b))
+	}
+	if st := fetchState("GET", http.StatusOK); st != "queued" {
+		t.Errorf("a listener's GET after that POST = state %q, want queued", st)
+	}
+	if w := getPodcastStream(b, stream); w.Code != http.StatusNotFound || podcastFetches(t, b) != 1 {
+		t.Errorf("the stream after that fetch = %d %s with %d fetches, want 404 and none of its own", w.Code, w.Body, podcastFetches(t, b))
+	}
+}
+
 // The download's presence check (podcastPresent: OpenPodcast's checks and
 // open) on a share that stopped answering is a bounded look too (fileWait): a
 // 503 share_not_answering, where it was a plain open that held the handler
