@@ -980,9 +980,10 @@ const remuxDownloadWait = 45 * time.Second
 
 // handleStream serves an audio file by path. By default it streams the file with
 // Range support (?download=1 forces a download). With ?transcode=1 it re-encodes
-// to MP3 via ffmpeg for codecs browsers can't decode; ?t=<seconds> starts that
-// transcode mid-file (transcoded output is not byte-seekable, so seeking is by
-// re-requesting). An .mka holding MP3 is served, at this same URL, as its
+// to MP3 via ffmpeg for codecs browsers can't decode (with ?download=1 an
+// attachment named <stem>.mp3); ?t=<seconds> starts that transcode mid-file
+// (transcoded output is not byte-seekable, so seeking is by re-requesting).
+// An .mka holding MP3 is served, at this same URL, as its
 // lossless remux to plain MP3 (server#174: no browser and no iOS player opens
 // Matroska) while ffmpeg is configured, unless ?original=1 asks for the stored
 // bytes; one ffmpeg can't remux (another codec inside) is served as stored, and
@@ -1022,11 +1023,11 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	download := r.URL.Query().Get("download") == "1"
 	if r.URL.Query().Get("transcode") == "1" {
-		a.serveTranscode(w, r, lib.ID, rel, abs, "", deadline)
+		a.serveTranscode(w, r, lib.ID, rel, abs, transcodeDownloadName(abs, download), deadline)
 		return
 	}
-	download := r.URL.Query().Get("download") == "1"
 	if a.remuxOn() && strings.EqualFold(filepath.Ext(rel), ".mka") && r.URL.Query().Get("original") != "1" {
 		var served bool
 		if served, deadline = a.serveRemuxed(w, r, lib.ID, rel, abs, download, deadline); served {
@@ -1179,6 +1180,16 @@ func copyName(abs, ext string) string {
 	return strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)) + ext
 }
 
+// transcodeDownloadName is the name a download of abs's transcode is saved as
+// (its stem with the MP3 extension), "" when the request is no download: a
+// plain download's attachment, named for what it holds.
+func transcodeDownloadName(abs string, download bool) string {
+	if !download {
+		return ""
+	}
+	return copyName(abs, media.TranscodeExt)
+}
+
 // serveCopy answers with a cached copy f (media.FileCache.Open) and closes it:
 // Range and the copy's strong etag, download an attachment named name. No
 // Last-Modified: the copy's mtime is the cache's LRU clock (moved on a hit), so
@@ -1305,10 +1316,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		case !errors.Is(err, media.ErrUnavailable):
 			a.log.Warn("remux failed: transcoding Matroska instead", "path", abs, "err", err)
 		}
-		downloadName := ""
-		if download {
-			downloadName = name
-		}
+		downloadName := transcodeDownloadName(abs, download)
 		if held != nil {
 			a.noteTranscode(r, lib, rel)
 			a.transcodeHeld(w, r, held, abs, downloadName, deadline)
@@ -1324,7 +1332,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 // beginTranscode admits one ?transcode=1 request for the file at rel: 503 when
 // ffmpeg isn't configured or no slot is free for it (Retry-After 5), else its
 // hold (takeTranscodeSlot: a repeat ask takes its earlier one's over, a token
-// past its cap its oldest's), for
+// past its cap one of its streams', never a download's), for
 // endTranscode once served, and r with the slot's context (a takeover ends
 // it), the device's session marked transcoded (noteTranscode). A HEAD takes
 // no slot and is answered as a GET would be, the 503 included, with no ffmpeg

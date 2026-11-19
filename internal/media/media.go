@@ -485,6 +485,10 @@ func (d deadlineWriter) Write(p []byte) (int, error) {
 	return d.w.Write(p)
 }
 
+// TranscodeExt is a transcode's file extension (it is MP3), for a download's
+// name.
+const TranscodeExt = ".mp3"
+
 // writeTranscodeHeader sends a transcode's status and headers: MP3, never
 // cached, and no Accept-Ranges since the stream is not byte-seekable.
 func writeTranscodeHeader(w http.ResponseWriter) {

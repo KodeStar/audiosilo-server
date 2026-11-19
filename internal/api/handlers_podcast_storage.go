@@ -278,6 +278,9 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 			return
 		}
 		defer a.endTranscode(h)
+		if name := transcodeDownloadName(f.Name(), r.URL.Query().Get("download") == "1"); name != "" {
+			media.SetAttachment(w.Header(), name)
+		}
 		h.ended = media.TranscodeOpened(h.writer(w), r, f, a.ffmpeg, h.ask.start, transcodeIdleFor(r), a.log)
 		return
 	}

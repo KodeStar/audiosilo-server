@@ -1462,7 +1462,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **Transcoding**: `GET /libraries/{id}/stream?path=…&transcode=1` pipes the file
   through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
-  re-request). Direct serving + Range stays the default. A podcast episode's verified descriptor
+  re-request). Direct serving + Range stays the default. With `&download=1` it is an attachment named
+  `<stem>.mp3` (`transcodeDownloadName`, `media.TranscodeExt`; a podcast episode's too), as a plain download is
+  named for its file. A podcast episode's verified descriptor
   (`media.TranscodeOpened`, server#181) is ffmpeg's stdin read seekably as `fd:` (input seek, and a
   non-faststart m4a demuxes) when the ffmpeg lists the fd input protocol (`inputFor`: probed once
   per ffmpeg path, `-protocols`, 5 s, asked again after a probe that couldn't run), else the old
@@ -1473,8 +1475,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rather than needing a slot of its own, since Safari asks for one stream two or three times and plays only the
   last; a token is one user's, so a takeover never ends another user's or device's transcode. A token holds at most
   2 slots (`maxTranscodesPerToken`): its third ask (asks differing only in `?t=`, the web player's overlapping seek
-  re-asks) takes over its own oldest one's slot the same way rather than being refused, so one client (a demo
-  visitor included) can't hold all 4; another token's slots are never touched. A takeover also marks the old hold
+  re-asks) takes over one of its own slots the same way rather than being refused (`tokenHoldToTake`: the same file's
+  earliest ask, so a seek in one tab leaves another tab's stream on the same token playing, else its oldest; never a
+  download, whose saved file would be cut short, so a token at its cap with only downloads is busy, the 503, though
+  slots are free; a repeat of a download's own ask still takes it over), so one client (a demo
+  visitor included) can't hold all 4; another token's slots are never touched. A HEAD's answer comes from the same
+  pick (`holdToTake`). A takeover also marks the old hold
   taken (its writer refuses every write after it) and gives its response a 1 s write deadline
   (`transcodeTakeoverGrace`, `http.ResponseController` from the taking goroutine), so a handler blocked writing to
   a client that stopped reading fails, reaps its ffmpeg (`exec.Cmd.WaitDelay` 5 s on top) and lets go of the
@@ -4708,9 +4714,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   copy from the playhead once it is made and the audio is not playing (never by the `<audio>`'s duration, which
   Safari may report finite for a live stream). An ask a seek was made since leaves that seek waiting (`seeks`),
   and Play after a failed load loads again (Chrome leaves `paused` false then). Its `<audio>` failing is
-  looked at before a new token is minted (`lookAtTranscode` sends a HEAD of the same URL, which starts no ffmpeg): a 503
+  looked at before a new token is minted (`lookAtTranscode` sends a HEAD of the same URL, which starts no ffmpeg,
+  with `cache: 'no-store'`: Chromium answered a look at the URL its `<audio>` is fetching 20 s late, behind that
+  fetch's cache lock): a 503
   with `Retry-After` (no transcode slot free) is asked for again after that wait and played, up to three times
-  per row (`BUSY_TRIES`), with no mint, the player saying the server is busy while it waits (a pause then is one
+  per row (`BUSY_TRIES`), with no mint, the player saying the server is busy while it waits, its Play button a
+  "Stop trying again" (Pause icon) then, which ends the wait with nothing asked again (Play after asks at once,
+  with fresh tries) (a pause then is one
   meant, though WebKit keeps the element's `error` set: only a pause with an error no error event has come for yet,
   or within `FAILED_PAUSE_MS` of that event, Chrome's own, still means to play); a transcode asked to play that has
   not started after `STALL_MS` (Safari's, with no error) is looked at the same way: one whose own GET still runs and
