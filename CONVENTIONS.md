@@ -57,6 +57,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   use argon2id (`auth/hash.go`). Never log or persist plaintext secrets; the
   first-run banner prints them once and is the only place they appear (`reset-admin` prints a
   new admin password once, the same way; the later starts' reminder never prints a secret).
+- **The server's own 401s are marked (WS-401-MARK)**: every 401 the server writes carries
+  `X-AudioSilo-Unauthorized` (`headerUnauthorized`, `respond.go`), its value the body's `code` when the
+  401 has one (`invite_used`, `oidc_no_sign_in`, `current_password_incorrect`, ...), else `unauthorized`.
+  It is set in the one place every JSON answer goes through (`jsonHeader`, plus `markUnauthorized` in
+  `writeErrorCode`/`writeErrorReason`), so the middleware's (`requireAuth`, `mediaAuth`,
+  `requireFeedAuth`, `requireBridge`), the sign-in, pairing, OIDC and `writeSessionEnded` 401s all have
+  it; a new 401 must go through `writeError`/`writeErrorCode`/`writeJSON`, never `w.WriteHeader`.
+  `cors` exposes it (`corsExposeHeaders`). The player reads it to tell the server refusing its token
+  from an auth proxy's own 401, or a proxy that rewrote the server's body; additive, the body is
+  unchanged. `TestUnauthorizedMarked` covers every site.
 - **Connect / invite / pairing flow** (`internal/web` connect page + `api/qr.go`):
   the admin's **Copy invite** button mints an auth code and shares
   `<base>/connect#code=...` - the code rides in the URL **fragment** so it never

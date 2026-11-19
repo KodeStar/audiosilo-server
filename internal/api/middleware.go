@@ -141,9 +141,11 @@ const corsAllowHeaders = "Authorization, Content-Type, " + auth.ClientHeader + "
 // Retry-After, which every 429 sends (the rate limits, the sign-in lockouts,
 // the OPML and discovery budgets) and some 503s (a busy transcode, an episode
 // on its way; the request timeout sends none), the OPML export's counts, and
-// what a transcode's HEAD says of the same ask's running stream.
+// what a transcode's HEAD says of the same ask's running stream, and the mark
+// on the server's own 401s (headerUnauthorized).
 const corsExposeHeaders = "Retry-After, " + headerOPMLExported + ", " +
-	headerOPMLOmittedPrivate + ", " + headerOPMLOmittedUnavailable + ", " + headerTranscodeSent
+	headerOPMLOmittedPrivate + ", " + headerOPMLOmittedUnavailable + ", " + headerTranscodeSent + ", " +
+	headerUnauthorized
 
 // cors applies a strict allow-list CORS policy. With no configured origins,
 // cross-origin browser requests are simply not granted CORS headers (the API
