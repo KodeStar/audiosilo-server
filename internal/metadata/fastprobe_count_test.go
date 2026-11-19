@@ -123,23 +123,65 @@ func TestCountsHeaderlessVBRFrames(t *testing.T) {
 	}
 }
 
-// A header-less VBR MP3 whose sample rate changes half way (two files at 44.1
-// and 48 kHz joined) is not counted: the frames at the second rate are no
-// junk to skip, and the first rate's length would leave them out. ffprobe
-// reads it, as before SRV-16.
-func TestRateChangeIsNotCounted(t *testing.T) {
-	t.Parallel()
-	data := vbrFrames(1000)
-	for i := range 1000 {
-		h := uint32(0xFFFB0000) | uint32([]byte{9, 11, 10}[i%3])<<12 | 1<<10 // 48 kHz
-		m, ok := decodeMPA(h)
-		if !ok {
-			t.Fatal("bad frame header")
-		}
-		f := make([]byte, m.frameSize)
-		binary.BigEndian.PutUint32(f, h)
-		data = append(data, f...)
+// mp3Frame48 is mp3Frame at 48 kHz.
+func mp3Frame48(bi byte) []byte {
+	h := uint32(0xFFFB0000) | uint32(bi)<<12 | 1<<10
+	m, ok := decodeMPA(h)
+	if !ok {
+		panic("bad frame header")
 	}
+	f := make([]byte, m.frameSize)
+	binary.BigEndian.PutUint32(f, h)
+	return f
+}
+
+// A header-less VBR MP3 whose sample rate changes (files at 44.1 and 48 kHz
+// joined) has each frame counted at its own rate (server#452): half and half,
+// and a short run at the other rate, under the eighth a count skips as junk,
+// which it once was (20.04 s read for 21.65 s).
+func TestRateChangeIsCountedAtEachRate(t *testing.T) {
+	t.Parallel()
+	other := func(n int) []byte {
+		var out []byte
+		for i := range n {
+			out = append(out, mp3Frame48([]byte{9, 11, 10}[i%3])...)
+		}
+		return out
+	}
+	seconds := func(n44, n48 int) float64 {
+		return printTime(rescale(int64(n44)*1152, 1000000, 44100)+rescale(int64(n48)*1152, 1000000, 48000), 1, 1000000)
+	}
+	for _, tc := range []struct {
+		name     string
+		data     []byte
+		n44, n48 int
+	}{
+		{"half and half", append(vbrFrames(1000), other(1000)...), 1000, 1000},
+		{"a short run", append(append(vbrFrames(1500), other(100)...), vbrFrames(1500)...), 3000, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p, reason, _ := probeBytes(t, t.Context(), tc.data, maxProbeTime)
+			if reason != "" {
+				t.Fatalf("left to ffprobe: %s", reason)
+			}
+			if want := seconds(tc.n44, tc.n48); !p.Counted || math.Abs(p.Duration-want) > 2e-6 {
+				t.Errorf("duration %v counted %t, want %v counted", p.Duration, p.Counted, want)
+			}
+		})
+	}
+}
+
+// A count that finds over an eighth of the audio is no frame (free-format
+// frames, damage) gives up: ffprobe reads the file, and it is not marked
+// uncounted, as a count that gave up reads the same every time.
+func TestJunkPastAnEighthIsNotCounted(t *testing.T) {
+	t.Parallel()
+	stream := vbrFrames(1000)
+	var data []byte
+	data = append(data, stream[:len(stream)/2]...)
+	data = append(data, bytes.Repeat([]byte{0x55}, len(stream)/4)...)
+	data = append(data, stream[len(stream)/2:]...)
 	b := newBlockFile(bytes.NewReader(data), int64(len(data)))
 	b.ff = ff8
 	p, reason, uncounted := fastProbe(t.Context(), b, "mp3", maxProbeTime)
@@ -148,6 +190,129 @@ func TestRateChangeIsNotCounted(t *testing.T) {
 	}
 	if uncounted {
 		t.Error("marked uncounted: a count given up reads the same every time, so the scan would read the book on every run")
+	}
+}
+
+// A header-less VBR MP3 whose frames differ only where the probe's old four
+// samples (20% to 80% of the file) did not look, or whose first frame is at
+// the lowest bitrate (a VBR encoder's silence: server#452, a silence-heavy file
+// read as 86 s for 60 s), is counted, not taken for a constant bitrate.
+func TestVBRSampledAsCBRIsCounted(t *testing.T) {
+	t.Parallel()
+	frames := func(base, other byte, n, from, to int) []byte {
+		var out []byte
+		for i := range n {
+			bi := base
+			if i >= from && i < to {
+				bi = other
+			}
+			out = append(out, mp3Frame(bi)...)
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		// 128 kbit/s but for 192 kbit/s frames around the middle.
+		{"varies between the old samples", frames(9, 11, 6000, 2900, 3100)},
+		// 32 kbit/s (silence) but for a burst of 128 kbit/s frames no sample hits.
+		{"silence at the lowest bitrate", frames(1, 9, 6000, 1000, 1010)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p, reason, _ := probeBytes(t, t.Context(), tc.data, maxProbeTime)
+			if reason != "" {
+				t.Fatalf("left to ffprobe: %s", reason)
+			}
+			if want := framesSeconds(6000); !p.Counted || p.Duration != want {
+				t.Errorf("duration %v counted %t, want %v counted", p.Duration, p.Counted, want)
+			}
+		})
+	}
+}
+
+// A real encoder's VBR file that is mostly silence, its first frame and most
+// sampled ones silence at the lowest bitrate, reads as the length it decodes
+// to (server#452); skipped without ffmpeg and libmp3lame.
+func TestSilenceHeavyVBRReadsAsDecoded(t *testing.T) {
+	t.Parallel()
+	path, decoded := encodeMP3(t, "sine=frequency=440:duration=60,volume='if(gt(mod(t,10),8.5),1,0)':eval=frame",
+		"-q:a", "2", "-write_xing", "0")
+	md, err := Extract(path, "")
+	if err != nil || math.Abs(md.Duration-decoded) > 1152.0/44100 {
+		t.Errorf("%v duration %v, want %v within a frame", err, md.Duration, decoded)
+	}
+}
+
+// A Xing header that gives the audio's bytes but no frame count has its
+// frames counted (server#452), where ffprobe estimates from the first frame's
+// bitrate: every frame past the Xing frame, less what the decoder skips at
+// the start when an encoder tag gives its delay.
+func TestXingWithoutFrameCountIsCounted(t *testing.T) {
+	t.Parallel()
+	const n = 3000
+	stream := vbrFrames(n)
+	xing := mp3Frame(9)
+	at := 4 + 32 // MPEG-1 stereo: the Xing tag's offset in its frame
+	copy(xing[at:], "Xing")
+	binary.BigEndian.PutUint32(xing[at+4:], 2) // flags: bytes
+	binary.BigEndian.PutUint32(xing[at+8:], uint32(len(stream)+len(xing)))
+	p, reason, _ := probeBytes(t, t.Context(), append(xing, stream...), maxProbeTime)
+	if reason != "" {
+		t.Fatalf("left to ffprobe: %s", reason)
+	}
+	if want := framesSeconds(n); !p.Counted || p.Duration != want {
+		t.Errorf("duration %v counted %t, want %v counted", p.Duration, p.Counted, want)
+	}
+
+	// A real encoder's, its frame count taken out: the length it decodes to.
+	path, _ := encodeMP3(t, "sine=frequency=440:duration=20", "-q:a", "4")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := 0
+	if string(data[:3]) == "ID3" {
+		off = 10 + int(syncsafeToSize(binary.BigEndian.Uint32(data[6:])))
+	}
+	m, ok := decodeMPA(binary.BigEndian.Uint32(data[off:]))
+	if !ok {
+		t.Fatal("no first frame")
+	}
+	end := off + m.frameSize
+	i := off + bytes.Index(data[off:end], []byte("Xing"))
+	if i < off || binary.BigEndian.Uint32(data[i+4:])&1 == 0 {
+		t.Fatal("no Xing frame count to take out")
+	}
+	binary.BigEndian.PutUint32(data[i+4:], binary.BigEndian.Uint32(data[i+4:])&^1)
+	copy(data[i+8:end], data[i+12:end])
+	clear(data[end-4 : end])
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	decoded := decodedSeconds(t, path)
+	md, err := Extract(path, "")
+	if err != nil || math.Abs(md.Duration-decoded) > 1e-6 {
+		t.Errorf("an encoder's: %v duration %v, want %v", err, md.Duration, decoded)
+	}
+}
+
+// A read for the tags alone (WithoutFrameCount: the setup preview's samples,
+// a scan's tag backfill) counts no frames: a header-less VBR MP3 takes the
+// bitrate's estimate, and only the probe's few blocks are read.
+func TestWithoutFrameCountReadsNoFrames(t *testing.T) {
+	t.Parallel()
+	data := vbrFrames(20000) // ~8 MiB
+	p, reason, read := probeBytes(t, WithoutFrameCount(t.Context()), data, maxProbeTime)
+	if reason != "" || p.Counted || p.Duration <= 0 {
+		t.Fatalf("reason %q answer %+v, want the estimate", reason, p)
+	}
+	if read > int64(len(data))/4 {
+		t.Errorf("read %d of %d bytes, want the probe's blocks only", read, len(data))
+	}
+	if _, _, read := probeBytes(t, t.Context(), data, maxProbeTime); read < int64(len(data)) {
+		t.Errorf("a count read %d of %d bytes, want the whole file", read, len(data))
 	}
 }
 
@@ -317,22 +482,37 @@ func TestCountStopsAtAReadError(t *testing.T) {
 // and the length ffmpeg decodes it to; skipped without ffmpeg and libmp3lame.
 func encodeHeaderless(t *testing.T, seconds int) (string, float64) {
 	t.Helper()
+	src := "sine=frequency=440:duration=" + strconv.Itoa(seconds) + "[a];anoisesrc=d=" + strconv.Itoa(seconds) + ":a=0.3[n];[a][n]amix"
+	return encodeMP3(t, src, "-q:a", "4", "-write_xing", "0")
+}
+
+// encodeMP3 writes the filter graph src as an MP3 at 44.1 kHz (libmp3lame,
+// with args), and returns its path and the length ffmpeg decodes it to;
+// skipped without ffmpeg and libmp3lame.
+func encodeMP3(t *testing.T, src string, args ...string) (string, float64) {
+	t.Helper()
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		t.Skip("no ffmpeg on PATH")
 	}
-	path := filepath.Join(t.TempDir(), "vbr.mp3")
-	src := "sine=frequency=440:duration=" + strconv.Itoa(seconds) + "[a];anoisesrc=d=" + strconv.Itoa(seconds) + ":a=0.3[n];[a][n]amix"
-	out, err := exec.CommandContext(t.Context(), ffmpeg, "-v", "error", "-filter_complex", src,
-		"-ar", "44100", "-c:a", "libmp3lame", "-q:a", "4", "-write_xing", "0", path).CombinedOutput()
+	path := filepath.Join(t.TempDir(), "enc.mp3")
+	cmd := append([]string{"-v", "error", "-filter_complex", src, "-ar", "44100", "-c:a", "libmp3lame"}, args...)
+	out, err := exec.CommandContext(t.Context(), ffmpeg, append(cmd, path)...).CombinedOutput()
 	if err != nil {
 		t.Skipf("ffmpeg can't write the fixture (libmp3lame?): %v %s", err, out)
 	}
-	pcm, err := exec.CommandContext(t.Context(), ffmpeg, "-v", "error", "-i", path, "-f", "s16le", "-ac", "1", "-").Output()
+	return path, decodedSeconds(t, path)
+}
+
+// decodedSeconds is the length ffmpeg decodes the MP3 at path to (its samples
+// over 44.1 kHz).
+func decodedSeconds(t *testing.T, path string) float64 {
+	t.Helper()
+	pcm, err := exec.CommandContext(t.Context(), "ffmpeg", "-v", "error", "-i", path, "-f", "s16le", "-ac", "1", "-").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return path, float64(len(pcm)/2) / 44100
+	return float64(len(pcm)/2) / 44100
 }
 
 // A real encoder's header-less VBR file reads as the length it decodes to,
@@ -359,6 +539,17 @@ func TestHeaderlessVBRReadsAsDecoded(t *testing.T) {
 	md, _ = Extract(fixture("lame-cbr-noxing.mp3"), probe)
 	if md.Duration != 1 {
 		t.Errorf("header-less CBR with an unknown ffprobe: duration %v, want ffprobe's", md.Duration)
+	}
+	// One that ffprobe fails on keeps the count, the probe's answer standing
+	// for ffprobe's (server#452), never none.
+	failing, _ := fakeFFprobe(t, "6.1.1", true)
+	md, err = Extract(path, failing)
+	if err != nil || md.ProbeErr != nil || math.Abs(md.Duration-decoded) > frame || md.Codec != "mp3" {
+		t.Errorf("an unknown ffprobe failing: %v %v duration %v codec %q, want %v counted", err, md.ProbeErr, md.Duration, md.Codec, decoded)
+	}
+	md, _ = Extract(fixture("lame-cbr-noxing.mp3"), failing)
+	if md.ProbeErr == nil {
+		t.Error("header-less CBR with an unknown ffprobe failing: no ProbeErr, want ffprobe's")
 	}
 }
 

@@ -106,10 +106,11 @@ type Metadata struct {
 	// openHung: the file's open did not answer in its time, so ffprobe was not
 	// run on it (ExtractTimeout).
 	openHung bool
-	// counted: a VBR MP3 with no Xing or VBRI header, read with the probe off,
-	// has its frames counted (readFile's count): its length in seconds, which
-	// replaces ffprobe's estimate. 0 for any other file.
-	counted float64
+	// counted: a VBR MP3 with no Xing or VBRI frame count, read with the probe
+	// off, has its frames counted (readFile's count): the probe's answer by
+	// noFFprobeRules, whose length replaces ffprobe's estimate, and which
+	// stands for ffprobe's answer when ffprobe fails. nil for any other file.
+	counted *probeResult
 	// uncounted: a VBR MP3 with no Xing or VBRI header whose frames a read
 	// given time may count, or an MP3 whose probe ran out of time before it
 	// could tell (LengthUncounted).
@@ -121,8 +122,8 @@ type Metadata struct {
 // caller's context ended or a read failed), or an MP3 whose probe ran out of
 // time before it could tell, so its Duration may be ffprobe's estimate from a
 // bitrate, or none (SRV-16). A scan reads the book again
-// (catalog.Book.LengthUncounted). A count that gave up (frames of another
-// stream) or found no frames is not: it reads the same every time.
+// (catalog.Book.LengthUncounted). A count that gave up (over an eighth of the
+// audio no frame) or found no frames is not: it reads the same every time.
 func (m *Metadata) LengthUncounted() bool { return m != nil && m.uncounted }
 
 // ProbeTimedOut reports whether, with no ffprobe configured, the file's read
@@ -219,10 +220,12 @@ func Extract(path, ffprobePath string) (*Metadata, error) {
 // a file it is unsure of then has no duration, and no ProbeErr, as before.
 // A file whose open did not answer, or whose mount's reads hang already, is
 // not given to ffprobe either: it would hang there too.
-// A VBR MP3 with no Xing or VBRI header, whose length ffprobe only estimates,
-// has its frames counted (SRV-16): by the probe, or, when the probe is off, in
-// readFile's one read of the file, over ffprobe's estimate; a count cut short
-// leaves the estimate.
+// A VBR MP3 with no frame count in a Xing or VBRI header, whose length
+// ffprobe only estimates, has its frames counted (SRV-16, server#452): by the
+// probe, or, when the probe is off, in readFile's one read of the file, over
+// ffprobe's estimate, and in place of ffprobe's answer when ffprobe fails; a
+// count cut short leaves the estimate. Under WithoutFrameCount (a read for the
+// tags alone) none is counted.
 func ExtractTimeout(ctx context.Context, root, path, ffprobePath string, timeout time.Duration) (*Metadata, error) {
 	m := &Metadata{Format: fileFormat(path)}
 	ff, forced := ffNone, ffprobeForced(ffprobePath)
@@ -248,14 +251,20 @@ func ExtractTimeout(ctx context.Context, root, path, ffprobePath string, timeout
 		applyProbe(m, p)
 	case ffprobePath != "":
 		// ffprobe for duration + chapters + richer container tags (best-effort).
-		if p, err := probe(ctx, root, path, ffprobePath, timeout); err == nil {
-			if m.counted > 0 {
+		switch p, err := probe(ctx, root, path, ffprobePath, timeout); {
+		case err == nil:
+			if m.counted != nil {
 				// The probe is off for this ffprobe's release, but its estimate of a
-				// VBR MP3 with no Xing/VBRI header is no better: the frames counted.
-				p.Duration = m.counted
+				// VBR MP3 with no Xing/VBRI frame count is no better: the frames counted.
+				p.Duration = m.counted.Duration
 			}
 			applyProbe(m, p)
-		} else {
+		case m.counted != nil:
+			// ffprobe failed on a file the probe read whole, its frames
+			// counted: the probe's answer, as with no ffprobe, not none
+			// (server#452).
+			applyProbe(m, m.counted)
+		default:
 			m.ProbeErr = err
 		}
 	default:
@@ -357,11 +366,11 @@ func readFile(ctx context.Context, m *Metadata, root, path string, ff ffRules, c
 		m.Narrator, m.narratorExplicit = narrator, true
 	}
 	if ff == ffNone {
-		if count && m.Format == "mp3" {
+		if count && m.Format == "mp3" && frameCountWanted(ctx) {
 			b.ff = noFFprobeRules
 			p, why, uncounted := fastProbe(ctx, b, m.Format, timeout)
 			if why == "" && p.Counted {
-				m.counted = p.Duration
+				m.counted = p
 			}
 			m.uncounted = uncounted
 		}

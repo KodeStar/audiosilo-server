@@ -13,7 +13,8 @@ package metadata
 // the file goes to ffprobe as before: parity is the contract, and the fixture
 // corpus in testdata/probe checks it (probe_golden_test.go, and against a live
 // ffprobe, probe_live_test.go). Its one exception is the length of a VBR MP3
-// with no Xing or VBRI header: counted, never ffprobe's estimate (SRV-16).
+// with no frame count in a Xing or VBRI header: counted, never ffprobe's
+// estimate (SRV-16, server#452).
 
 import (
 	"context"
@@ -153,14 +154,16 @@ func timedOutReason(reason string) bool {
 // maxProbeTime) and ctx, and maxProbeBytes. A bound passed, a reader's panic, a
 // read error and an answer with no duration are all reasons.
 //
-// The one answer that is not ffprobe's is a VBR MP3's with no Xing or VBRI
-// header: ffprobe estimates its length from a bitrate (up to ~7% off, SRV-16),
-// so its frames are counted instead (mp3Uncounted.count, with bounds of its
-// own: the whole file is read), and the result is Counted. One whose count
-// may yet succeed (out of time, the caller's context ended, a read that
-// failed) is uncounted, as is an MP3 whose probe ran out of time before it
-// could tell: the scan reads it again. A count that gave up (frames of another
-// stream) or found no frames reads the same every time, so it is not.
+// The one answer that is not ffprobe's is a VBR MP3's with no frame count in
+// a Xing or VBRI header: ffprobe estimates its length from a bitrate (up to
+// ~7% off, SRV-16; 43% for one mostly silence, server#452), so its frames are
+// counted instead (mp3Uncounted.count, with bounds of its own: the whole file
+// is read), and the result is Counted; under WithoutFrameCount the estimate
+// answers, not Counted. One whose count may yet succeed (out of time, the
+// caller's context ended, a read that failed) is uncounted, as is an MP3
+// whose probe ran out of time before it could tell: the scan reads it again.
+// A count that gave up (over an eighth of the audio no frame) or found no
+// frames reads the same every time, so it is not.
 func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Duration) (p *probeResult, reason string, uncounted bool) {
 	pctx, cancel := context.WithTimeoutCause(ctx, min(timeout, maxProbeTime), errProbeDeadline)
 	defer cancel()
@@ -184,7 +187,13 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 		return nil, why, format == "mp3" && (timedOutReason(why) || ctx.Err() != nil)
 	}
 	uc, headerless := errors.AsType[*mp3Uncounted](err)
-	if headerless && b.err == nil {
+	switch {
+	case !headerless || b.err != nil:
+	case !frameCountWanted(ctx):
+		// A read for the tags alone (WithoutFrameCount): the bitrate's
+		// estimate, no count, no ffprobe.
+		p, err = uc.estimated(), nil
+	default:
 		var why string
 		if p, why = uc.count(ctx, b, timeout); why != "" {
 			// The deadline's own words last, so a count out of time reads as
@@ -197,6 +206,22 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 	p, reason = probeAnswer(b, p, err)
 	return p, reason, headerless && reason != "" && (b.err != nil || timedOutReason(reason) || ctx.Err() != nil)
 }
+
+// noFrameCount is the context key WithoutFrameCount sets.
+type noFrameCount struct{}
+
+// WithoutFrameCount is ctx for a read that wants a file's tags, not its
+// length (the setup preview's samples, a scan's backfill of tags into books it
+// found unchanged): a VBR MP3 with no frame count in a header then takes the
+// first frame's bitrate's estimate rather than having its frames counted,
+// which reads the whole file (server#452). The length so read is not to be
+// stored: it is not Counted, and may be off.
+func WithoutFrameCount(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noFrameCount{}, true)
+}
+
+// frameCountWanted reports whether ctx is not WithoutFrameCount's.
+func frameCountWanted(ctx context.Context) bool { return ctx.Value(noFrameCount{}) == nil }
 
 // probeAnswer is fastProbe's answer from a reader's: p, or why there is none.
 func probeAnswer(b *blockFile, p *probeResult, err error) (*probeResult, string) {
