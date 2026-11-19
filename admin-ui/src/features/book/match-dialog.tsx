@@ -188,10 +188,14 @@ function MatchBody({
   const [busy, setBusy] = useState(false);
   const search = useMatchCandidates(b.library_id, b.path, by, true);
   const candidates = search.data ?? [];
-  // The book's recorded match: its work starts picked when the search finds it.
+  // The book's recorded match: its work starts picked when the search finds it,
+  // else the candidate the server added for it (`recorded`: under the work it
+  // was merged into when its id was retired).
   const current = detail.community_match;
   const picked =
-    candidates.find((c) => c.work_id === (pickId ?? current?.work_id)) ?? candidates[0];
+    candidates.find((c) => c.work_id === (pickId ?? current?.work_id)) ??
+    (pickId === undefined ? candidates.find((c) => c.recorded) : undefined) ??
+    candidates[0];
   // The recording chosen here, else the recorded one while its work still lists it,
   // else the likeliest.
   const recordingOf = (c: MatchCandidate, id = recId) => {

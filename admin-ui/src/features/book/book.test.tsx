@@ -1267,6 +1267,32 @@ describe('match with community metadata', () => {
     ).toHaveTextContent(/\d+% match/);
   });
 
+  it('starts from the recorded match listed under the work its retired id merged into', async () => {
+    const merged: MatchCandidate = {
+      ...candidate,
+      work_id: 'the-way-of-kings-merged',
+      title: 'The Way of Kings, Merged',
+      score: 100,
+      recorded: true,
+    };
+    const detail = bookDetail();
+    detail.community_match = {
+      work_id: 'the-way-of-kings-retired',
+      how: 'accepted',
+      matched_at: '2026-11-01T00:00:00Z',
+    };
+    mockFetch(
+      matchRoutes(detail, {
+        'GET /admin/libraries/1/book/match': { body: { candidates: [candidate, merged] } },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Match with community metadata' });
+    expect(await within(dialog).findByRole('radio', { name: /Merged/ })).toBeChecked();
+  });
+
   it("leaves a cover the server couldn't preview unticked", async () => {
     const detail = bookDetail();
     detail.book.has_cover = false;
