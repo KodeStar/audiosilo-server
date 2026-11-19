@@ -196,18 +196,23 @@ func (c *Catalog) RecordServerEvent(ctx context.Context, kind string, data map[s
 		return ServerEvent{}, err
 	}
 	// Round-trip the data so the caller sees what a reader will (numbers as float64).
-	ev := ServerEvent{ID: id, At: at, Kind: kind, Data: map[string]any{}}
-	_ = json.Unmarshal(b, &ev.Data)
-	return ev, nil
+	return ServerEvent{ID: id, At: at, Kind: kind, Data: eventData(b)}, nil
+}
+
+// eventData decodes an event's stored data (an empty map when it can't be read).
+func eventData(b []byte) map[string]any {
+	data := map[string]any{}
+	_ = json.Unmarshal(b, &data)
+	return data
 }
 
 // NotifyOutboxRetention is how long an event's outbox rows are kept: a
 // delivery still pending then (a server stopped that long) is not made.
 const NotifyOutboxRetention = 7 * 24 * time.Hour
 
-// Outbox delivery states (notify_outbox.state).
+// Outbox delivery states (notify_outbox.state), which starts 'pending' (written
+// as a literal in the queries, so the pending rows' partial index serves them).
 const (
-	DeliveryPending   = "pending"
 	DeliveryDelivered = "delivered"
 	// DeliveryFailed: the attempts ran out, or the destination refused it.
 	DeliveryFailed = "failed"
@@ -230,19 +235,18 @@ type OutboxDelivery struct {
 func (c *Catalog) PendingDeliveries(ctx context.Context, eventID int64) ([]OutboxDelivery, error) {
 	q := `SELECT o.id, o.target_id, o.attempts, e.id, e.at, e.kind, e.data
 		FROM notify_outbox o JOIN server_events e ON e.id = o.event_id
-		WHERE o.state = ? AND e.at >= ?`
-	args := []any{DeliveryPending, formatSessionTime(c.now().Add(-NotifyOutboxRetention))}
+		WHERE o.state = 'pending' AND e.at >= ?`
+	args := []any{formatSessionTime(c.now().Add(-NotifyOutboxRetention))}
 	if eventID != 0 {
 		q += ` AND o.event_id = ?`
 		args = append(args, eventID)
 	}
 	return queryRows(ctx, c.db, func(rows *sql.Rows, d *OutboxDelivery) error {
-		var data string
+		var data []byte
 		if err := rows.Scan(&d.ID, &d.TargetID, &d.Attempts, &d.Event.ID, &d.Event.At, &d.Event.Kind, &data); err != nil {
 			return err
 		}
-		d.Event.Data = map[string]any{}
-		_ = json.Unmarshal([]byte(data), &d.Event.Data)
+		d.Event.Data = eventData(data)
 		return nil
 	}, q+` ORDER BY o.id`, args...)
 }
@@ -253,8 +257,8 @@ func (c *Catalog) PendingDeliveries(ctx context.Context, eventID int64) ([]Outbo
 // queue a new row) or it is no longer pending.
 func (c *Catalog) ClaimDelivery(ctx context.Context, id int64, attempts int) (bool, error) {
 	res, err := c.db.ExecUserState(ctx,
-		`UPDATE notify_outbox SET attempts = attempts + 1 WHERE id = ? AND state = ? AND attempts = ?`,
-		id, DeliveryPending, attempts)
+		`UPDATE notify_outbox SET attempts = attempts + 1 WHERE id = ? AND state = 'pending' AND attempts = ?`,
+		id, attempts)
 	if err != nil {
 		return false, err
 	}
@@ -266,8 +270,8 @@ func (c *Catalog) ClaimDelivery(ctx context.Context, id int64, attempts int) (bo
 // skipped), with the failure's short reason.
 func (c *Catalog) FinishDelivery(ctx context.Context, id int64, state, errText string) error {
 	_, err := c.db.ExecUserState(ctx,
-		`UPDATE notify_outbox SET state = ?, last_error = ? WHERE id = ? AND state = ?`,
-		state, errText, id, DeliveryPending)
+		`UPDATE notify_outbox SET state = ?, last_error = ? WHERE id = ? AND state = 'pending'`,
+		state, errText, id)
 	return err
 }
 
@@ -316,12 +320,11 @@ func (c *Catalog) ListServerEvents(ctx context.Context, before int64, limit int,
 	q += ` ORDER BY id DESC LIMIT ?`
 	args = append(args, limit+1)
 	events, err := queryRows(ctx, c.db, func(rows *sql.Rows, e *ServerEvent) error {
-		var data string
+		var data []byte
 		if err := rows.Scan(&e.ID, &e.At, &e.Kind, &data); err != nil {
 			return err
 		}
-		e.Data = map[string]any{}
-		_ = json.Unmarshal([]byte(data), &e.Data)
+		e.Data = eventData(data)
 		return nil
 	}, q, args...)
 	if err != nil {

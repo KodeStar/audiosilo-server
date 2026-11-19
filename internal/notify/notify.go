@@ -116,7 +116,7 @@ type Service struct {
 	log     *slog.Logger
 	version string
 	server  func() Server
-	queue   chan delivery
+	queue   chan catalog.OutboxDelivery
 	delays  []time.Duration
 	now     func() time.Time // the clock (tests)
 
@@ -141,14 +141,6 @@ type oidcPendingTaken struct {
 	from string
 }
 
-// delivery is one outbox row on its way: the event owed to a destination.
-type delivery struct {
-	id      int64 // the outbox row
-	target  int64
-	event   catalog.ServerEvent
-	attempt int // the attempts begun before this one (0 for the first)
-}
-
 // New returns a service; Run delivers. server reports the server's name and
 // public address at the time of sending.
 func New(cat *catalog.Catalog, version string, server func() Server, log *slog.Logger) *Service {
@@ -164,7 +156,7 @@ func New(cat *catalog.Catalog, version string, server func() Server, log *slog.L
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 		log: log, version: version, server: server,
-		queue:  make(chan delivery, queueSize),
+		queue:  make(chan catalog.OutboxDelivery, queueSize),
 		delays: retryDelays,
 		now:    time.Now,
 	}
@@ -192,8 +184,8 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 // Emit records an event in the feed and queues it for every enabled destination
-// subscribed to its kind. It never blocks on sending; a full queue drops the
-// delivery (logged).
+// subscribed to its kind. It never blocks on sending; a full queue leaves the
+// delivery owed until the next start (logged).
 func (s *Service) Emit(ctx context.Context, e Event) {
 	s.emit(ctx, e, nil)
 }
@@ -228,7 +220,7 @@ func (s *Service) Deliver(ctx context.Context, ev catalog.ServerEvent) {
 	}
 	for _, o := range owed {
 		select {
-		case s.queue <- delivery{id: o.ID, target: o.TargetID, event: ev, attempt: o.Attempts}:
+		case s.queue <- o:
 		default:
 			s.log.Warn("notification queue full; a delivery waits for the next start", "target", o.TargetID, "kind", ev.Kind)
 		}
@@ -253,7 +245,7 @@ func (s *Service) redeliver(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case s.queue <- delivery{id: o.ID, target: o.TargetID, event: o.Event, attempt: o.Attempts}:
+		case s.queue <- o:
 		}
 	}
 }
@@ -302,9 +294,9 @@ func (s *Service) Test(ctx context.Context, t catalog.NotifyTarget) string {
 // time, never the others' deliveries. The attempt is counted in the outbox
 // before it is made, so a stop while it is under way leaves the row owed with
 // one fewer to go, and the bound holds across restarts.
-func (s *Service) deliver(ctx context.Context, d delivery) {
+func (s *Service) deliver(ctx context.Context, d catalog.OutboxDelivery) {
 	bg := context.WithoutCancel(ctx)
-	if d.attempt >= s.maxAttempts() {
+	if d.Attempts >= s.maxAttempts() {
 		// Its last attempt began before a stop, which cut it short.
 		s.finish(bg, d, catalog.DeliveryFailed, "failed")
 		return
@@ -313,38 +305,38 @@ func (s *Service) deliver(ctx context.Context, d delivery) {
 	// it is deleted (its rows go with it), switched off or unsubscribed, and to
 	// its new address and secret after a change (a leaked one is rotated, not
 	// used again).
-	t, err := s.cat.GetNotifyTarget(bg, d.target)
+	t, err := s.cat.GetNotifyTarget(bg, d.TargetID)
 	if err != nil {
 		if !errors.Is(err, catalog.ErrNotFound) {
-			s.log.Warn("loading a notification destination failed", "target", d.target, "err", err)
+			s.log.Warn("loading a notification destination failed", "target", d.TargetID, "err", err)
 		}
 		return
 	}
-	if !t.Enabled || !slices.Contains(t.Events, d.event.Kind) {
+	if !t.Enabled || !slices.Contains(t.Events, d.Event.Kind) {
 		s.finish(bg, d, catalog.DeliverySkipped, "")
 		return
 	}
-	if mine, err := s.cat.ClaimDelivery(bg, d.id, d.attempt); err != nil || !mine {
+	if mine, err := s.cat.ClaimDelivery(bg, d.ID, d.Attempts); err != nil || !mine {
 		if err != nil {
-			s.log.Warn("claiming a notification delivery failed", "target", d.target, "err", err)
+			s.log.Warn("claiming a notification delivery failed", "target", d.TargetID, "err", err)
 		}
 		return
 	}
-	reason := s.send(ctx, *t, d.event)
+	reason := s.send(ctx, *t, d.Event)
 	if reason != "" && ctx.Err() != nil {
 		return // cut short by the stop: the row stays owed for the next start
 	}
-	if reason != "" && retryable(reason) && d.attempt+1 < s.maxAttempts() {
+	if reason != "" && retryable(reason) && d.Attempts < len(s.delays) {
 		next := d
-		next.attempt++
-		time.AfterFunc(s.delays[d.attempt], func() {
+		next.Attempts++
+		time.AfterFunc(s.delays[d.Attempts], func() {
 			if ctx.Err() != nil {
 				return
 			}
 			select {
 			case s.queue <- next:
 			default:
-				s.log.Warn("notification queue full; a retry waits for the next start", "target", d.target, "kind", d.event.Kind)
+				s.log.Warn("notification queue full; a retry waits for the next start", "target", d.TargetID, "kind", d.Event.Kind)
 			}
 		})
 		return
@@ -352,16 +344,16 @@ func (s *Service) deliver(ctx context.Context, d delivery) {
 	state := catalog.DeliveryDelivered
 	if reason != "" {
 		state = catalog.DeliveryFailed
-		s.log.Info("notification not delivered", "target", d.target, "kind", d.event.Kind, "reason", reason)
+		s.log.Info("notification not delivered", "target", d.TargetID, "kind", d.Event.Kind, "reason", reason)
 	}
 	s.finish(bg, d, state, reason)
-	s.record(ctx, d.target, reason)
+	s.record(bg, d.TargetID, reason)
 }
 
 // finish ends a delivery's outbox row.
-func (s *Service) finish(ctx context.Context, d delivery, state, reason string) {
-	if err := s.cat.FinishDelivery(ctx, d.id, state, reason); err != nil {
-		s.log.Warn("recording a delivery failed", "target", d.target, "err", err)
+func (s *Service) finish(ctx context.Context, d catalog.OutboxDelivery, state, reason string) {
+	if err := s.cat.FinishDelivery(ctx, d.ID, state, reason); err != nil {
+		s.log.Warn("ending a notification delivery failed", "target", d.TargetID, "err", err)
 	}
 }
 
