@@ -3,6 +3,7 @@ package library
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -337,6 +338,17 @@ func (b renameBed) checkOther(t *testing.T, at string) {
 	}
 }
 
+// chain renames by hand the other show (addOther) to "Third", then this one to
+// the other's old name, the Bridge having taken this one in, and answers the
+// other's feed.json as it names folder (the caller writes Third's).
+func (b renameBed) chain(t *testing.T) func(folder string) []byte {
+	t.Helper()
+	named := b.addOther(t)
+	b.renameEach(t, [2]string{"Other", "Third"}, [2]string{"Example Show", "Other"})
+	b.writeShow(t, "Other", "Other")
+	return named
+}
+
 func (b renameBed) renameEach(t *testing.T, moves ...[2]string) {
 	t.Helper()
 	for _, mv := range moves {
@@ -368,9 +380,7 @@ func TestPodcastScanSwapsTwoFoldersNotTakenIn(t *testing.T) {
 // (the move doesn't put this show's follow over the other's) and places.
 func TestPodcastRescanMovesAChainOfRenames(t *testing.T) {
 	b := newRenameBed(t)
-	named := b.addOther(t)
-	b.renameEach(t, [2]string{"Other", "Third"}, [2]string{"Example Show", "Other"})
-	b.writeShow(t, "Other", "Other")
+	named := b.chain(t)
 	if err := os.WriteFile(filepath.Join(b.root, "Third", "feed.json"), named("Other"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -429,48 +439,48 @@ func TestPodcastRenameChainWaitsOnAnUnreadableFolder(t *testing.T) {
 	}
 	for _, how := range []string{"unreadable", "newer", "invalid"} {
 		for _, rescan := range []bool{false, true} {
-			b := newRenameBed(t)
-			named := b.addOther(t)
-			b.renameEach(t, [2]string{"Other", "Third"}, [2]string{"Example Show", "Other"})
-			b.writeShow(t, "Other", "Other")
-			third := filepath.Join(b.root, "Third", "feed.json")
-			raw := named("Third")
-			switch how {
-			case "newer":
-				raw = []byte(`{"version":2}`)
-			case "invalid":
-				raw = raw[:len(raw)/2]
-			}
-			if err := os.WriteFile(third, raw, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if how == "unreadable" {
-				if err := os.Chmod(third, 0o000); err != nil {
+			t.Run(fmt.Sprintf("%s/rescan=%v", how, rescan), func(t *testing.T) {
+				b := newRenameBed(t)
+				named := b.chain(t)
+				third := filepath.Join(b.root, "Third", "feed.json")
+				raw := named("Third")
+				switch how {
+				case "newer":
+					raw = []byte(`{"version":2}`)
+				case "invalid":
+					raw = raw[:len(raw)/2]
+				}
+				if err := os.WriteFile(third, raw, 0o600); err != nil {
 					t.Fatal(err)
 				}
-				t.Cleanup(func() { _ = os.Chmod(third, 0o600) })
-			}
-			if rescan {
-				if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Other"); err != nil {
+				if how == "unreadable" {
+					if err := os.Chmod(third, 0o000); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(third, 0o600) })
+				}
+				if rescan {
+					if _, _, err := b.s.IndexPodcastPath(b.ctx, *b.lib, "Other"); err != nil {
+						t.Fatal(err)
+					}
+				} else if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || res.Partial != (how == "unreadable") {
+					t.Fatalf("scan %+v %v", res, err)
+				}
+				if got, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Other", b.user); err != nil || got.Following {
+					t.Fatalf("moved over the other show's follow: %+v %v", got, err)
+				}
+				if err := os.Chmod(third, 0o600); err != nil {
 					t.Fatal(err)
 				}
-			} else if res, err := b.s.Scan(b.ctx, *b.lib); err != nil || res.Partial != (how == "unreadable") {
-				t.Fatalf("%s: scan %+v %v", how, res, err)
-			}
-			if got, err := b.cat.PodcastShow(b.ctx, b.lib.ID, "Other", b.user); err != nil || got.Following {
-				t.Fatalf("%s, rescan %v: moved over the other show's follow: %+v %v", how, rescan, got, err)
-			}
-			if err := os.Chmod(third, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(third, named("Third"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
-				t.Fatal(err)
-			}
-			b.checkFollowed(t, "Other")
-			b.checkOther(t, "Third")
+				if err := os.WriteFile(third, named("Third"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := b.s.Scan(b.ctx, *b.lib); err != nil {
+					t.Fatal(err)
+				}
+				b.checkFollowed(t, "Other")
+				b.checkOther(t, "Third")
+			})
 		}
 	}
 }
@@ -510,9 +520,7 @@ func TestPodcastRenameMovesBesideAnUnreadableFolder(t *testing.T) {
 // the copy goes, both move in one call.
 func TestPodcastRenameChainWaitsOnACopiedPartner(t *testing.T) {
 	b := newRenameBed(t)
-	named := b.addOther(t)
-	b.renameEach(t, [2]string{"Other", "Third"}, [2]string{"Example Show", "Other"})
-	b.writeShow(t, "Other", "Other")
+	named := b.chain(t)
 	for _, f := range []string{"Third", "Fourth"} {
 		if err := os.MkdirAll(filepath.Join(b.root, f), 0o700); err != nil {
 			t.Fatal(err)

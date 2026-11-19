@@ -37,9 +37,8 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 		return res, ErrLibraryUnavailable
 	}
 	keep := map[string]bool{}
-	// partial: a show folder could not be read; unread: that, or a folder's
-	// feed.json can't be used for now (errFeedUnusable). Either folder may be
-	// where another show renamed by hand is now.
+	// partial: a show folder could not be read; unread: that, or its feed.json
+	// can't be used for now (unreadPodcastFolder).
 	partial, unread := false, false
 	for _, e := range entries {
 		if err := ctx.Err(); err != nil {
@@ -49,9 +48,7 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 			continue
 		}
 		n, changed, err := s.indexPodcastShow(ctx, lib, e.Name(), false)
-		if errors.Is(err, errFeedUnusable) {
-			unread = true
-		}
+		unread = unread || unreadPodcastFolder(err)
 		if errors.Is(err, ErrNotIndexable) {
 			continue
 		}
@@ -74,11 +71,10 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 	res.Partial = partial
 	// Before the prune: a folder renamed by hand leaves its show's row at the
 	// old name until then, and the move takes that row's episodes' listening
-	// state along. A folder this scan could not read or use may be where
-	// another show renamed by hand is now, so a move to a folder holding
-	// another show's state waits (catalog.MovePodcastShows' unread); a plain
-	// rename does not, whatever else the root holds (a lost+found).
-	s.movePodcastShows(ctx, lib, "", partial || unread)
+	// state along. With a folder unread, a move over another show's state
+	// waits (catalog.MovePodcastShows); a plain rename does not, whatever else
+	// the root holds (a lost+found).
+	s.movePodcastShows(ctx, lib, "", unread)
 	if !partial {
 		var gone []string
 		for show := range old {
@@ -133,11 +129,10 @@ func (s *Scanner) IndexPodcastPath(ctx context.Context, lib catalog.Library, p s
 // folder whose row names the moving show while it holds another (two folder
 // names swapped by hand) is indexed again first, so both shows move in one
 // call. unread (a scan's) is that a folder the root lists could not be read
-// or its feed.json used; a rescan finds that out itself
-// (indexNewPodcastFolders). Such a folder may hold another show, so then a
-// move to a folder carrying another show's state waits
-// (catalog.MovePodcastShows). Failures are logged: the next scan or rescan
-// looks again.
+// or its feed.json used (unreadPodcastFolder); a rescan finds that out itself
+// (indexNewPodcastFolders). It goes to catalog.MovePodcastShows, which then
+// holds a move over another show's state. Failures are logged: the next scan
+// or rescan looks again.
 func (s *Scanner) movePodcastShows(ctx context.Context, lib catalog.Library, at string, unread bool) {
 	// The root's folder names, read when first needed (fresh, not a scan's
 	// listing from before its indexing: a copy made since is a folder too).
@@ -185,9 +180,8 @@ func (s *Scanner) settledPodcastMoves(ctx context.Context, lib catalog.Library, 
 }
 
 // indexNewPodcastFolders indexes the show folders the root lists that have no
-// index row yet, and answers how many it indexed and whether one could not be
-// read or its feed.json used (unread): it may be the folder the other show is
-// in, so a move over that show's state waits.
+// index row yet, and answers how many it indexed and whether one was unread
+// (unreadPodcastFolder).
 func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Library, listed *map[string]bool) (n int, unread bool, err error) {
 	known, err := s.cat.PodcastSignatures(ctx, lib.ID)
 	if err != nil {
@@ -205,7 +199,7 @@ func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Librar
 		switch _, _, err := s.indexPodcastShow(ctx, lib, name, false); {
 		case err == nil:
 			n++
-		case errors.Is(err, errFeedUnusable) || !errors.Is(err, ErrNotIndexable):
+		case unreadPodcastFolder(err):
 			unread = true
 		}
 	}
@@ -360,9 +354,15 @@ func podcastHeldID(root, show string) (id string, ok bool) {
 
 // errFeedUnusable is a show folder's feed.json that is invalid, too large, no
 // regular file or of a newer version: not indexable, but it may be a show's
-// own, half written or damaged for now, so the move guard counts its folder
-// as one it could not read (movePodcastShows' unread).
+// own, half written or damaged for now (unreadPodcastFolder).
 var errFeedUnusable = fmt.Errorf("%w: unusable feed.json", ErrNotIndexable)
+
+// unreadPodcastFolder reports whether err, indexPodcastShow's, is that the
+// folder could not be read or its feed.json used for now: it may be where
+// another show renamed by hand is now (movePodcastShows' unread).
+func unreadPodcastFolder(err error) bool {
+	return err != nil && (errors.Is(err, errFeedUnusable) || !errors.Is(err, ErrNotIndexable))
+}
 
 func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, show string, force bool) (int, bool, error) {
 	dir, err := ContentJoin(lib.Root, show)
