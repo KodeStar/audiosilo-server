@@ -1270,3 +1270,46 @@ func TestRunnerResolveOnlyKeepsChanged(t *testing.T) {
 		t.Fatalf("series after the change = %+v, %v, want expanse-v2", rows, err)
 	}
 }
+
+// TestRunnerPendingSurvivesRestart (server#447): the books a step-1-alone run
+// found a new work for are stored, so a server restarted before the next full
+// run still has their series looked at again by it, and that run forgets them.
+func TestRunnerPendingSurvivesRestart(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	var resolve atomic.Bool
+	resolve.Store(true)
+	f.r.opt.Resolve = resolve.Load
+	f.expanse("2011", "2012")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	f.md.workRefs["x1"] = []meta.SeriesRef{{ID: "expanse-v2", Name: "The Expanse"}}
+	f.md.series["expanse-v2"] = &meta.SeriesRecord{ID: "expanse-v2", Name: "The Expanse",
+		Members: []meta.SeriesMember{{WorkID: "x1", Position: "1", Title: "X1"}}}
+	f.book(t, f.lib, "The Expanse", 1, "A9", "x1")
+	f.off.Store(true)
+	if err := f.r.RunOnce(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if refs, err := f.cat.UpcomingPending(ctx); err != nil || len(refs) != 1 {
+		t.Fatalf("stored pending = %+v, %v; want the retagged book", refs, err)
+	}
+
+	// The restart: a new runner over the same database, switched on again.
+	opt := f.r.opt
+	f.r = New(f.cat, f.md, opt)
+	f.off.Store(false)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.cat.UpcomingSeriesAll(ctx)
+	if err != nil || len(rows) != 1 || rows[0].SeriesID != "expanse-v2" {
+		t.Fatalf("series after the restart = %+v, %v, want expanse-v2", rows, err)
+	}
+	if refs, err := f.cat.UpcomingPending(ctx); err != nil || len(refs) != 0 {
+		t.Fatalf("stored pending after the full run = %+v, %v; want none", refs, err)
+	}
+}
