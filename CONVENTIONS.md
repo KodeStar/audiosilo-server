@@ -1706,7 +1706,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **Share faults**: how a look's error at a library file reads, one rule for the scan and every route (server#360,
   SRV-MEDIA). Three classes, the first an explicit list in code, the others what is not on it:
   - **Transient** (`metadata.TransientFault`: EIO, ESTALE, ENOTCONN, ETIMEDOUT, EHOSTDOWN, EHOSTUNREACH, ENETDOWN,
-    ENETUNREACH, ECONNRESET, ECONNABORTED, ECONNREFUSED): a share that stopped answering and may come back, as is a
+    ENETUNREACH, ECONNRESET, ECONNABORTED, ECONNREFUSED; on Windows, whose calls never return those, its own codes
+    for a share that dropped, `transient_windows.go`: ERROR_NETNAME_DELETED, ERROR_BAD_NETPATH, ERROR_SEM_TIMEOUT,
+    ERROR_UNEXP_NET_ERR and the network's unreachable, refused or aborted): a share that stopped answering and may come back, as is a
     look given up on (`metadata.GaveUp`, a hang past its bound). A route answers 503 `share_not_answering` with
     `Retry-After` 30; nothing reads it as the file gone (a podcast episode is not fetched again, `podcastLookErr`;
     the Bridge's book files keep their indexed size, `statBookFiles`).

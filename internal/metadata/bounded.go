@@ -64,7 +64,9 @@ func ShareFault(err error) bool {
 // TransientFault reports whether err is a share's fault that trying again may
 // get past (transientErrnos, an explicit list): EIO, ESTALE, ENOTCONN,
 // ETIMEDOUT, a host or network down or unreachable, a connection reset,
-// aborted or refused (an SMB or NFS session that dropped). A route answers it
+// aborted or refused (an SMB or NFS session that dropped; on Windows its own
+// codes for these, a network name deleted or unreachable, a semaphore
+// timeout: transient_windows.go). A route answers it
 // as a share that stopped answering (503 share_not_answering with
 // Retry-After), never as the file gone. Not a lasting refusal, which a retry
 // would only meet again (a permission, EACCES or EPERM; the device gone,
@@ -81,12 +83,13 @@ func TransientFault(err error) bool {
 	return false
 }
 
-// transientErrnos are TransientFault's.
-var transientErrnos = []syscall.Errno{
+// transientErrnos are TransientFault's, Windows' own codes for the same
+// faults among them there (platformTransientErrnos).
+var transientErrnos = append([]syscall.Errno{
 	syscall.EIO, syscall.ESTALE, syscall.ENOTCONN, syscall.ETIMEDOUT,
 	syscall.EHOSTDOWN, syscall.EHOSTUNREACH, syscall.ENETDOWN, syscall.ENETUNREACH,
 	syscall.ECONNRESET, syscall.ECONNABORTED, syscall.ECONNREFUSED,
-}
+}, platformTransientErrnos...)
 
 // AsGaveUp is err made a look given up on (GaveUp reports it) when it is a
 // ShareFault, keeping the share's own message (a permission is not "did not
