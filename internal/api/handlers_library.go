@@ -1023,11 +1023,11 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	download := r.URL.Query().Get("download") == "1"
 	if r.URL.Query().Get("transcode") == "1" {
-		a.serveTranscode(w, r, lib.ID, rel, abs, transcodeDownloadName(abs, download), deadline)
+		a.serveTranscode(w, r, lib.ID, rel, abs, deadline)
 		return
 	}
+	download := r.URL.Query().Get("download") == "1"
 	if a.remuxOn() && strings.EqualFold(filepath.Ext(rel), ".mka") && r.URL.Query().Get("original") != "1" {
 		var served bool
 		if served, deadline = a.serveRemuxed(w, r, lib.ID, rel, abs, download, deadline); served {
@@ -1180,16 +1180,6 @@ func copyName(abs, ext string) string {
 	return strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)) + ext
 }
 
-// transcodeDownloadName is the name a download of abs's transcode is saved as
-// (its stem with the MP3 extension), "" when the request is no download: a
-// plain download's attachment, named for what it holds.
-func transcodeDownloadName(abs string, download bool) string {
-	if !download {
-		return ""
-	}
-	return copyName(abs, media.TranscodeExt)
-}
-
 // serveCopy answers with a cached copy f (media.FileCache.Open) and closes it:
 // Range and the copy's strong etag, download an attachment named name. No
 // Last-Modified: the copy's mtime is the cache's LRU clock (moved on a hit), so
@@ -1203,29 +1193,24 @@ func serveCopy(w http.ResponseWriter, r *http.Request, f *os.File, etag, name st
 }
 
 // serveTranscode answers with the live MP3 transcode of the library file abs
-// (rel in library lib) from ?t=, in one of the transcode slots; a non-empty
-// downloadName makes it an attachment of that name.
-func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, rel, abs, downloadName string, deadline time.Time) {
+// (rel in library lib) from ?t=, in one of the transcode slots.
+func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, deadline time.Time) {
 	h, r := a.beginTranscode(w, r, lib, rel)
 	if h == nil {
 		return
 	}
 	defer a.endTranscode(h)
-	a.transcodeHeld(w, r, h, abs, downloadName, deadline)
+	a.transcodeHeld(w, r, h, abs, deadline)
 }
 
 // transcodeHeld is serveTranscode once h is taken (the caller ends it): the
 // transcode from h's start, written through h's writer, h.ended set once it
-// ran to its end. Its look at abs given up on at the stream's deadline is a
-// 503 share_not_answering.
-func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, h *transcodeHold, abs, downloadName string, deadline time.Time) {
-	if downloadName != "" {
-		media.SetAttachment(w.Header(), downloadName)
-	}
-	ended, err := media.Transcode(h.writer(w), r, abs, a.ffmpeg, h.ask.start, waitLeft(deadline), transcodeIdleFor(r), a.log)
+// ran to its end; with ?download=1 an attachment named <stem>.mp3. Its look
+// at abs given up on at the stream's deadline is a 503 share_not_answering.
+func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, h *transcodeHold, abs string, deadline time.Time) {
+	ended, err := media.Transcode(h.writer(w), r, abs, a.ffmpeg, h.ask.start, h.ask.download, waitLeft(deadline), transcodeIdleFor(r), a.log)
 	h.ended = ended
 	if err != nil {
-		w.Header().Del("Content-Disposition")
 		writeShareNotAnswering(w)
 	}
 }
@@ -1276,7 +1261,6 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		defer cancel()
 		f, etag, err = a.remux.Open(wait, a.baseCtx, a.ffmpeg, abs)
 	}
-	name := copyName(abs, a.remux.Ext())
 	var held *transcodeHold // a transcode slot taken while the remux runs on
 	// Still remuxing when the wait ran out (it goes on): not a failure to warn of.
 	running := r.Context().Err() == nil && errors.Is(err, media.ErrPending)
@@ -1316,16 +1300,15 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		case !errors.Is(err, media.ErrUnavailable):
 			a.log.Warn("remux failed: transcoding Matroska instead", "path", abs, "err", err)
 		}
-		downloadName := transcodeDownloadName(abs, download)
 		if held != nil {
 			a.noteTranscode(r, lib, rel)
-			a.transcodeHeld(w, r, held, abs, downloadName, deadline)
+			a.transcodeHeld(w, r, held, abs, deadline)
 			return true, deadline
 		}
-		a.serveTranscode(w, r, lib, rel, abs, downloadName, deadline)
+		a.serveTranscode(w, r, lib, rel, abs, deadline)
 		return true, deadline
 	}
-	serveCopy(w, r, f, etag, name, download)
+	serveCopy(w, r, f, etag, copyName(abs, a.remux.Ext()), download)
 	return true, deadline
 }
 

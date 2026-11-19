@@ -1463,8 +1463,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
   re-request). Direct serving + Range stays the default. With `&download=1` it is an attachment named
-  `<stem>.mp3` (`transcodeDownloadName`, `media.TranscodeExt`; a podcast episode's too), as a plain download is
-  named for its file. A podcast episode's verified descriptor
+  `<stem>.mp3` (`media.Transcode`/`TranscodeOpened`'s `download`, set with the stream's own 200 only, never on
+  an error's answer; a podcast episode's too), as a plain download is named for its file. A podcast episode's verified descriptor
   (`media.TranscodeOpened`, server#181) is ffmpeg's stdin read seekably as `fd:` (input seek, and a
   non-faststart m4a demuxes) when the ffmpeg lists the fd input protocol (`inputFor`: probed once
   per ffmpeg path, `-protocols`, 5 s, asked again after a probe that couldn't run), else the old
