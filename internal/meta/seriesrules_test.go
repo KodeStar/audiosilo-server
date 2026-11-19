@@ -386,13 +386,13 @@ func TestEnrichForeignRailSpendsNoSlot(t *testing.T) {
 
 // TestEnrichEditionRailsNeedTheRecording: an edition's rail is the book's only
 // when the lookup named its recording, never because pickRecording fell back
-// to the work's first one.
+// to the work's first one (also for a named recording the work doesn't list).
 func TestEnrichEditionRailsNeedTheRecording(t *testing.T) {
 	t.Parallel()
 	work := `{"id":"w","title":"T","language":"en","authors":[],"series":[
 		{"id":"discworld","name":"Discworld","position":"1"},{"id":"discworld-abridged","name":"Discworld (abridged)","position":"1"}],
 		"recordings":[{"id":"short","abridged":true,"narrators":[]},{"id":"full","narrators":[]}]}`
-	for recording, want := range map[string]int{"": 1, "short": 2, "full": 1} {
+	for recording, want := range map[string]int{"": 1, "short": 2, "full": 1, "gone": 1} {
 		m := &mockMeta{
 			lookupJSON: `{"work":{"id":"w","title":"T","authors":[]},"recording_id":"` + recording + `"}`,
 			workJSON:   work,

@@ -821,6 +821,30 @@ func TestMetaRecordedMatch(t *testing.T) {
 			t.Fatalf("unmatched book's cover = %d %s, want 404", resp.StatusCode, body)
 		}
 	})
+	t.Run("a recording the work doesn't list", func(t *testing.T) {
+		t.Parallel()
+		// A row recorded before server#375's rule, or one the community has
+		// since moved: the match's recording is not one of its work's. /meta
+		// answers the work with no recording, never the work's first one (a
+		// retail narrator and cover on a LibriVox book), and that recording's
+		// cover is not handed out.
+		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
+		e.api.fetchCover = func(context.Context, string, int64) ([]byte, error) { return nil, errors.New("no fetch in this test") }
+		libID := seedBook(t, e, "LibriVox/The Martian", "")
+		anchorMatch(t, e, libID, "LibriVox/The Martian", "the-martian", "rec-of-another-work")
+		body := get(t, e, libID, "LibriVox/The Martian")
+		if !strings.Contains(body, `"matched":true,"work":{"id":"the-martian"`) {
+			t.Fatalf("meta = %s, want the recorded work", body)
+		}
+		for _, leak := range []string{`"recording"`, `"librivox"`, "R. C. Bray"} {
+			if strings.Contains(body, leak) {
+				t.Fatalf("meta carries %s of a recording the match isn't: %s", leak, body)
+			}
+		}
+		if resp, body := e.do(t, "GET", metaCoverPath(libID, "LibriVox/The Martian", "https://c/1.jpg", ""), adminSession(t, e), ""); resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("another recording's cover = %d %s, want 404", resp.StatusCode, body)
+		}
+	})
 	t.Run("a recorded work upstream lacks keeps the ASIN's", func(t *testing.T) {
 		t.Parallel()
 		e := newMetaEnvMock(t, true, &mockMetaserve{})

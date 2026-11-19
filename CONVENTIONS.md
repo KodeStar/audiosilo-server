@@ -348,7 +348,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   shared by `bookEnvelope` and `/next`'s `communityNext`, so both follow `/item`'s
   `catalog.workIDExpr`) through `meta.Service.EnrichMatch` (works/{id} via
   `workDetail`, `fetchWork`'s read without its `workSem` slot (the id comes from a book the server
-  holds, as `compose`'s), the recording it names treated as a lookup-named one, no lookup), cached
+  holds, as `compose`'s), the recording it names treated as a lookup-named one, except that one the
+  work doesn't list is no recording, never the first (`pickRecording`'s `matched`: a stale or
+  mismatched row never lends the book another recording's narrators or cover, server#375), no lookup), cached
   exactly as `Enrich` (shared `enrich`) under its own key space `m:<work id>/<recording id>` (each part
   `url.PathEscape`d); the row is read only when `Book.WorkID` (the recorded work first) differs
   from the identifiers' work, and a recorded work upstream lacks (or can't answer) leaves the
