@@ -1106,6 +1106,38 @@ describe('the chapter editor', () => {
       expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
     });
 
+    // A busy answer's wait loads the stream again with no new ask: what the
+    // last stream had sent is not the new one's, whose first look waits for it.
+    it('waits on a stream loaded again after a busy answer, whatever the last one had sent', async () => {
+      const replies: MockReply[] = [
+        { status: 200, raw: '', headers: { 'X-AudioSilo-Transcode-Sent': '5000' } },
+        { status: 503, raw: '', headers: { 'Retry-After': '0.2' } },
+        { status: 200, raw: '', headers: { 'X-AudioSilo-Transcode-Sent': '100' } },
+      ];
+      let n = 0;
+      const { audio, looks } = await stall(() => replies[n++]);
+      act(() => vi.advanceTimersByTime(6000));
+      await settle();
+      expect(looks()).toHaveLength(1);
+      // Its transcode gone and every slot taken: loaded again after the wait.
+      act(() => vi.advanceTimersByTime(6000));
+      await settle();
+      expect(looks()).toHaveLength(2);
+      act(() => vi.advanceTimersByTime(200));
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+
+      // The new stream has sent less than the last one had: still its first look.
+      fireEvent.loadStart(audio);
+      fireEvent.play(audio);
+      act(() => vi.advanceTimersByTime(6000));
+      await settle();
+      expect(looks()).toHaveLength(3);
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
+    });
+
     // Chrome, after a stall's look said busy: the element's load fails, its
     // pause before the error event. That pause is the failure's, not the user's.
     it('counts a failed load’s pause as none after a stall’s look said busy', async () => {

@@ -4699,8 +4699,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   meant, though WebKit keeps the element's `error` set: only a pause with an error no error event has come for yet,
   or within `FAILED_PAUSE_MS` of that event, Chrome's own, still means to play); a transcode asked to play that has
   not started after `STALL_MS` (Safari's, with no error) is looked at the same way: one whose own GET still runs and
-  has sent more since the last look (`X-AudioSilo-Transcode-Sent`, or at the first look) is a slow transcode, looked
-  at again after another `STALL_MS` and never asked for again (that would take its slot over and end it), and one
+  has sent more since the last look (`X-AudioSilo-Transcode-Sent`, or at a load's first look: the count is that
+  load's stream's, forgotten at `loadstart`) is a slow transcode, looked at again after another `STALL_MS` and
+  never asked for again (that would take its slot over and end it), and one
   the server would play now with none running, or sending no more, still stalled, is loaded again once (WebKit
   dropped the stream it was given), then "didn't load"; any other answer
   mints once, as a stored file's failure does (a transcode asks for no stream with the old token meanwhile, then

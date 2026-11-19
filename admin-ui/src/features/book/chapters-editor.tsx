@@ -612,6 +612,7 @@ function Scrubber({
   const restalled = useRef(false);
   // What the stalled transcode's stream had sent when it was last looked at,
   // still running (lookAtStream): one that has sent more since is on its way.
+  // The count is its load's: every load is a new stream, counted from nothing.
   const producing = useRef<number | undefined>(undefined);
   // A new ask's stall is looked at afresh.
   const freshStall = () => {
@@ -933,7 +934,6 @@ function Scrubber({
             return;
           }
           restalled.current = true;
-          producing.current = undefined;
           a.load();
           void a.play().catch(() => {});
           return;
@@ -1078,8 +1078,10 @@ function Scrubber({
           // A new source (another file, or a transcode asked again) plays only
           // when told to: play() may have run before its load began (asked), so
           // the element says whether it plays, not the event.
+          // What the last stream had sent (producing) is not this load's.
           onLoadStart={(e) => {
             broken.current = false;
+            producing.current = undefined;
             setPlaying(!e.currentTarget.paused);
           }}
           onLoadedMetadata={(e) => {
