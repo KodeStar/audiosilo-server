@@ -391,7 +391,8 @@ func TestPodcastStreamOnAHeldShareAnswers(t *testing.T) {
 // folder the share refuses for good (chmod 000: a permission, a lasting
 // fault) is the 404 an episode gone is on the stream, and no fetch is asked
 // of the Bridge, which would meet the same refusal (it was a fetch, and with
-// a feed's episode ids it couldn't queue, a 500). Allowed: the folder
+// a feed's episode ids it couldn't queue, a 500); a listener's fetch status
+// reads it absent, as for any episode not there. Allowed: the folder
 // readable again, the episode streams; an episode file gone is still fetched
 // again. Not parallel only for the chmod: the folder is this test's own.
 func TestPodcastStreamRefusedFolderIs404(t *testing.T) {
@@ -409,6 +410,10 @@ func TestPodcastStreamRefusedFolderIs404(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 	if w := get(); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "episode_not_found") {
 		t.Errorf("an episode in a folder refused for good = %d %s, want 404 episode_not_found", w.Code, w.Body)
+	}
+	resp, out := b.doHeaders(t, "GET", fetchRoute(b.lib.ID, ep.Path), b.userTok, "", podcastHeaders())
+	if resp.StatusCode != http.StatusOK || !strings.Contains(out, `"state":"absent"`) {
+		t.Errorf("a listener's fetch status of that episode = %d %s, want 200 absent", resp.StatusCode, out)
 	}
 	if n := podcastFetches(t, b); n != 0 {
 		t.Errorf("%d fetches asked of the Bridge for an episode the share refuses, want none", n)
@@ -479,8 +484,8 @@ func TestPodcastAdminDownloadFetchesARefusedEpisode(t *testing.T) {
 
 // TestPodcastListenerFetchQueuesARefusedEpisode: a listener's fetch routes
 // read an episode whose file the share refuses for good (chmod 000) as absent
-// (shipped players use them, CROSS-REPO.md section 15): GET answers its fetch
-// status (200, nothing queued) and POST queues its fetch (202, one job), while
+// (shipped players use them, CROSS-REPO.md section 15): GET answers it absent
+// (200, nothing queued) and POST queues its fetch (202, one job), while
 // the stream is the 404 and queues none, before and after.
 func TestPodcastListenerFetchQueuesARefusedEpisode(t *testing.T) {
 	b, ep, stream := refusedEpisode(t)
@@ -495,10 +500,10 @@ func TestPodcastListenerFetchQueuesARefusedEpisode(t *testing.T) {
 		}
 		return got.Fetch.State
 	}
-	if st := fetchState("GET", http.StatusOK); st == "ready" || podcastFetches(t, b) != 0 {
-		t.Fatalf("a listener's GET of that episode = state %q with %d fetches, want it not ready and none queued", st, podcastFetches(t, b))
+	if st := fetchState("GET", http.StatusOK); st != "absent" || podcastFetches(t, b) != 0 {
+		t.Fatalf("a listener's GET of that episode = state %q with %d fetches, want absent and none queued", st, podcastFetches(t, b))
 	}
-	if st := fetchState("POST", http.StatusAccepted); st == "ready" || podcastFetches(t, b) != 1 {
+	if st := fetchState("POST", http.StatusAccepted); st != "queued" || podcastFetches(t, b) != 1 {
 		t.Fatalf("a listener's POST of that episode = state %q with %d fetches, want its fetch queued", st, podcastFetches(t, b))
 	}
 	if st := fetchState("GET", http.StatusOK); st != "queued" {

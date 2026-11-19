@@ -1804,9 +1804,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
     which would meet the same refusal (`TestPodcastStreamRefusedFolderIs404`). A fetch asked for by name reads
     it as absent (shipped players use these routes, CROSS-REPO §15): a
     listener's `GET /libraries/{id}/podcasts/fetch` answers its fetch status and `POST` queues it (202), an
-    admin's download (`POST /admin/libraries/{id}/podcasts/fetch`) too; the Bridge writes a new file where one
-    the server can't open stands (`TestPodcastAdminDownloadFetchesARefusedEpisode`,
-    `TestPodcastListenerFetchQueuesARefusedEpisode`).
+    admin's download (`POST /admin/libraries/{id}/podcasts/fetch`) too. A refused file is mended so (the Bridge
+    writes a new one in its place: `TestPodcastAdminDownloadFetchesARefusedEpisode`,
+    `TestPodcastListenerFetchQueuesARefusedEpisode`); a refused show folder, `feed.json` or barrier is not, the
+    new file sitting behind the same refusal (`TestPodcastStreamRefusedFolderIs404` checks its fetch status).
   - **The server's own limits** (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY) and any error on neither list: no share's
     fault, never a 503 `share_not_answering`; a route answers it as it did before the rule (an asked read's
     `lookRefused` 404, a stream's missing file, a 500 where the route logs one).
