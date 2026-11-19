@@ -1060,6 +1060,65 @@ describe('the chapter editor', () => {
       expect(play).not.toHaveBeenCalled();
       expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
     });
+
+    // The look's answers settle on promises alone: let them, timers still fake.
+    const settle = () =>
+      act(async () => {
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+      });
+
+    // A slow transcode, its own ask holding the slot: asked for again, it would
+    // be ended (the new ask takes its slot over), so it is waited for while it
+    // sends more between looks, and loaded again only once it sends no more.
+    it('waits on a slow stream while its transcode sends more, and loads it again once it stops', async () => {
+      const sent = ['1000', '5000', '5000', '100'];
+      let n = 0;
+      const { audio, looks } = await stall(() => ({
+        status: 200,
+        raw: '',
+        headers: { 'X-AudioSilo-Transcode-Sent': sent[n++] },
+      }));
+      act(() => vi.advanceTimersByTime(6000));
+      await settle();
+      expect(looks()).toHaveLength(1);
+      // Still sending: looked at again after another wait, not asked for again.
+      act(() => vi.advanceTimersByTime(6000));
+      await settle();
+      expect(looks()).toHaveLength(2);
+      expect(load).not.toHaveBeenCalled();
+      expect(play).not.toHaveBeenCalled();
+      expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
+
+      // It sent nothing more: dropped as far as the <audio> goes, loaded again.
+      act(() => vi.advanceTimersByTime(6000));
+      await settle();
+      expect(looks()).toHaveLength(3);
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledTimes(1);
+
+      // The stream loaded again is its own: its first look waits for it.
+      fireEvent.loadStart(audio);
+      fireEvent.play(audio);
+      act(() => vi.advanceTimersByTime(6000));
+      await settle();
+      expect(looks()).toHaveLength(4);
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
+    });
+
+    // Chrome, after a stall's look said busy: the element's load fails, its
+    // pause before the error event. That pause is the failure's, not the user's.
+    it('counts a failed load’s pause as none after a stall’s look said busy', async () => {
+      const { audio, wait } = await stall({ ...busy, headers: { 'Retry-After': '0.2' } });
+      wait();
+      await screen.findByText('The server is busy. Trying again in a moment.');
+      Object.defineProperty(audio, 'paused', { value: true, configurable: true });
+      failed(audio);
+      at(audio, 'pause', 9000);
+      at(audio, 'error', 9001);
+      await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+      expect(play.mock.contexts[0]).toBe(audio);
+    });
   });
 
   it('plays the stored file when the server can’t transcode', async () => {

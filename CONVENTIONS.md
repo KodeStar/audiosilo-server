@@ -1471,9 +1471,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `?t=` start, `download=1`): a repeat GET of the same ask takes over the slot the earlier one holds, ending that
   request's ffmpeg and aborting its response (`http.ErrAbortHandler`, a broken stream, never one that ended),
   rather than needing a slot of its own, since Safari asks for one stream two or three times and plays only the
-  last; a token is one user's, so a takeover never ends another user's or device's transcode. A HEAD runs no
-  ffmpeg and takes no slot: it answers as a GET would now (200 when a slot is free or its ask holds one, else the
-  busy 503), the chapter editor's check after a failed or stalled load (`transcodeRetryAfter`). The console's chapter
+  last; a token is one user's, so a takeover never ends another user's or device's transcode. A stream that ran to
+  its end before the takeover came (`media.Transcode` reports `ended`: ffmpeg's output came to its end while the
+  request was live) is not aborted. A HEAD runs no ffmpeg and takes no slot: it answers as a GET would now (200 when
+  a slot is free or its ask holds one, else the busy 503), with `X-AudioSilo-Transcode-Sent: <bytes>` when the same
+  ask's GET is running (what it has written so far; never another token's, exposed to CORS), the chapter editor's
+  check after a failed or stalled load (`lookAtTranscode`). A HEAD of an MP3-in-MKA starts no remux either
+  (`FileCache.Cached`): the cached copy's headers, else the transcode's. The console's chapter
   editor's transcode (its cast token, `auth.Credential.Editor`) that it has read nothing of for 10 minutes
   (`media.TranscodeIdle`: each write gets a write deadline, `copyIdle`) is ended with its ffmpeg, freeing its slot:
   a paused `<audio>` keeps its connection open while it reads nothing, and the editor asks for its stream again
@@ -4689,12 +4693,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   copy from the playhead once it is made and the audio is not playing (never by the `<audio>`'s duration, which
   Safari may report finite for a live stream). An ask a seek was made since leaves that seek waiting (`seeks`),
   and Play after a failed load loads again (Chrome leaves `paused` false then). Its `<audio>` failing is
-  looked at before a new token is minted (`transcodeRetryAfter` sends a HEAD of the same URL, which starts no ffmpeg): a 503
+  looked at before a new token is minted (`lookAtTranscode` sends a HEAD of the same URL, which starts no ffmpeg): a 503
   with `Retry-After` (no transcode slot free) is asked for again after that wait and played, up to three times
   per row (`BUSY_TRIES`), with no mint, the player saying the server is busy while it waits (a pause then is one
-  meant, though WebKit keeps the element's `error` set: only a pause within `FAILED_PAUSE_MS` of the failure, Chrome's
-  own, still means to play); a transcode asked to play that has not started after `STALL_MS` (Safari's, with no error)
-  is looked at the same way, and one the server would play now that is still stalled is loaded again once (WebKit
+  meant, though WebKit keeps the element's `error` set: only a pause with an error no error event has come for yet,
+  or within `FAILED_PAUSE_MS` of that event, Chrome's own, still means to play); a transcode asked to play that has
+  not started after `STALL_MS` (Safari's, with no error) is looked at the same way: one whose own GET still runs and
+  has sent more since the last look (`X-AudioSilo-Transcode-Sent`, or at the first look) is a slow transcode, looked
+  at again after another `STALL_MS` and never asked for again (that would take its slot over and end it), and one
+  the server would play now with none running, or sending no more, still stalled, is loaded again once (WebKit
   dropped the stream it was given), then "didn't load"; any other answer
   mints once, as a stored file's failure does (a transcode asks for no stream with the old token meanwhile, then
   asks again from where it was, playing if it was; a mint that fails says it can't play, asking nothing with the
