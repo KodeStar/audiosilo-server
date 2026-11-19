@@ -159,6 +159,28 @@ func TestCachedWorkNewestWins(t *testing.T) {
 	}
 }
 
+// A cached "no match" newer than the upcoming job's resolution is no work
+// while it is fresh; once stale (Enrich would ask again) it is no answer, so a
+// miss upstream that has passed never hides the job's work until its recheck.
+func TestCachedWorkNoMatchOnlyWhileFresh(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	store := newMemStore()
+	const src = "http://meta.invalid"
+	store.put(StoredEntry{Key: nsASIN.key("B0FRESHMISS"), Version: storeVersion, Source: src, Expires: now.Add(30 * time.Minute)})
+	store.put(StoredEntry{Key: nsASIN.key("B0STALEMISS"), Version: storeVersion, Source: src, Expires: now.Add(-30 * time.Minute)})
+	svc := NewService(src, func() time.Time { return now })
+	svc.SetStore(store)
+	ctx := context.Background()
+	resolved := now.Add(-24 * time.Hour)
+	if got := svc.CachedWork(ctx, CoverageBook{ASIN: "B0FRESHMISS", WorkID: "w", ResolvedAt: resolved}); got != "" {
+		t.Fatalf("under a fresh newer no match = %q, want none", got)
+	}
+	if got := svc.CachedWork(ctx, CoverageBook{ASIN: "B0STALEMISS", WorkID: "w", ResolvedAt: resolved}); got != "w" {
+		t.Fatalf("under a stale no match = %q, want the job's w", got)
+	}
+}
+
 // An upstream failure serves a stale stored answer from memory for a while
 // (the outage fallback): it keeps its row's age, so an upcoming recheck since
 // that row still names the work, though the fallback was put in memory now.

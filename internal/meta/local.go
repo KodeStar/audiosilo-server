@@ -3,6 +3,7 @@ package meta
 import (
 	"cmp"
 	"context"
+	"maps"
 	"math"
 	"slices"
 
@@ -231,6 +232,9 @@ type placer struct {
 	// ones (LocalBook.Matched, for a view that doesn't list their work), by
 	// series key, in preference order.
 	byIndex map[string][]LocalBook
+	// matched is the work of each matched book in byIndex, for an alternate
+	// ordering that lists the work its main view didn't (view).
+	matched map[MetaLocal]string
 }
 
 // placement is the books an entry is placed on: Local and LocalOthers.
@@ -254,7 +258,8 @@ func newPlacer(currentWork string, requested MetaLocal, books []LocalBook) *plac
 		ordered[i] = ranked{b, pickRank(b, requested, narrator)}
 	}
 	slices.SortStableFunc(ordered, func(a, b ranked) int { return cmp.Compare(a.rank, b.rank) })
-	p := &placer{current: currentWork, self: self, byWork: map[string][]LocalBook{}, byIndex: map[string][]LocalBook{}}
+	p := &placer{current: currentWork, self: self, byWork: map[string][]LocalBook{}, byIndex: map[string][]LocalBook{},
+		matched: map[MetaLocal]string{}}
 	listed := currentOthers(currentWork, self, books)
 	for _, o := range ordered {
 		b := o.book
@@ -274,6 +279,7 @@ func newPlacer(currentWork string, requested MetaLocal, books []LocalBook) *plac
 			}
 			if b.Matched {
 				p.index(b)
+				p.matched[b.MetaLocal] = b.WorkID
 			}
 		default:
 			p.index(b)
@@ -322,11 +328,22 @@ func (p *placer) view(works []MetaSeriesWork, name string, mains map[string]plac
 	if works == nil {
 		return nil, nil
 	}
+	listed := func(id string) bool {
+		return slices.ContainsFunc(works, func(w MetaSeriesWork) bool { return w.ID == id })
+	}
+	// A matched book whose work this view lists is placed by that work alone:
+	// never by its index here, nor where the main view placed it by its index
+	// (an ordering listing a novella the main view doesn't), so it is on one
+	// entry only.
 	byIndex := p.byIndex[match.SeriesKey(name)]
 	if slices.ContainsFunc(byIndex, func(b LocalBook) bool { return b.WorkID != "" }) {
-		// A matched book whose work this view lists is placed by that work alone.
-		byIndex = slices.DeleteFunc(slices.Clone(byIndex), func(b LocalBook) bool {
-			return b.WorkID != "" && slices.ContainsFunc(works, func(w MetaSeriesWork) bool { return w.ID == b.WorkID })
+		byIndex = slices.DeleteFunc(slices.Clone(byIndex), func(b LocalBook) bool { return b.WorkID != "" && listed(b.WorkID) })
+	}
+	if len(mains) > 0 && len(p.matched) > 0 {
+		mains = maps.Clone(mains)
+		maps.DeleteFunc(mains, func(id string, pl placement) bool {
+			w, ok := p.matched[pl.local]
+			return ok && w != id && listed(w)
 		})
 	}
 	out := make([]MetaSeriesWork, len(works))

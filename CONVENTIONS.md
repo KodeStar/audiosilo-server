@@ -545,7 +545,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   view (a range entry "1-3" holds a book at that range; an entry at one number a book at it,
   else a book whose range starts there; `parseSpan`). A book with a known work id is never placed by index, bar one
   matched in the console (`LocalBook.Matched`, from `catalog.WorkSources`) to a work the view doesn't list, which
-  holds its own position as in upcoming; one book per entry
+  holds its own position as in upcoming (an ordering that lists its work places it there alone, not where the
+  main view placed it by index); one book per entry
   as `local`, the pick (`pickRank`, server#241): the narrator of the requested book (the
   one just finished, for Next), then a book the caller started and hasn't finished
   (`catalog.InProgress`), then the requested book's library, then not known to be
@@ -2394,7 +2395,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`meta.Service.Coverages` by `/meta`'s rule: a recorded match's work first, `CoverageBook.Matched` from
   `catalog.WorkSources`, fetched by id, the identifiers' cached envelope standing when upstream no longer
   has that work; else the newer of the identifiers' cached answer (memory's envelope or lookup, else the
-  stored row, `cachedAnswerOf`, dated when it was had: `cacheEntry.at`, a stored row's expiry less its TTL,
+  stored row, a "no match" only while fresh, `cachedAnswerOf`, dated when it was had: `cacheEntry.at`, a stored row's expiry less its TTL,
   which a stale row held through an outage keeps, `cacheHoldStale`) and the work the upcoming job resolved
   (`upcoming_owned.checked_at`, `CoverageBook.ResolvedAt`), so a stored row older than the job's monthly
   recheck never wins after a restart, nor a month-old resolution over a lookup since) and the Bridge's book facts

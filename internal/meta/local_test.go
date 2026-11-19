@@ -192,6 +192,26 @@ func TestPlaceLocalOrderings(t *testing.T) {
 	}
 }
 
+// A book matched in the console to a work the main view doesn't list holds
+// its own position there; an ordering listing that work (a novella) places it
+// by its work alone, never also where the main view placed it by its index.
+func TestPlaceLocalMatchedOnOneEntry(t *testing.T) {
+	t.Parallel()
+	r := named("S", "1", "one@1", "two@2", "three@3")
+	r.Orderings = []MetaSeriesOrdering{{ID: "chrono", Name: "S (Chronological)", Works: []MetaSeriesWork{
+		{ID: "one", Position: "1"}, {ID: "novella", Position: "2"}, {ID: "two", Position: "3"}, {ID: "three", Position: "4"},
+	}}}
+	special := mine(1, "S/2 novella", "S", 2, "novella")
+	special.Matched = true
+	out := PlaceLocal([]MetaSeries{r}, "one", MetaLocal{LibraryID: 1, Path: "S/1"}, []LocalBook{special})
+	if got, want := locals(out[0].Works), []string{"S/1", "S/2 novella", ""}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("main = %q, want %q", got, want)
+	}
+	if got, want := locals(out[0].Orderings[0].Works), []string{"S/1", "S/2 novella", "", ""}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("chronological = %q, want %q", got, want)
+	}
+}
+
 func TestPlaceLocalDoesNotMutate(t *testing.T) {
 	r := named("S", "1", "one@1", "two@2")
 	r.Orderings = []MetaSeriesOrdering{{ID: "o", Name: "S", Works: []MetaSeriesWork{{ID: "two", Position: "1"}}}}
