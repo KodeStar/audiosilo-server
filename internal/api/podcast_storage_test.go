@@ -381,6 +381,30 @@ func TestPodcastStreamOnAHeldShareAnswers(t *testing.T) {
 	}
 }
 
+// The download's presence check (podcastPresent: OpenPodcast's checks and
+// open) on a share that stopped answering is a bounded look too (fileWait): a
+// 503 share_not_answering, where it was a plain open that held the handler
+// for good; once the share answers the episode reads as downloaded. Not
+// parallel: metadata.HoldOpensForTests swaps the mount lookup.
+func TestPodcastDownloadOnAHeldShareAnswers(t *testing.T) {
+	b, f := podcastStorageEnv(t)
+	b.api.fileWait = 200 * time.Millisecond
+	route := fmt.Sprintf("/api/v1/admin/libraries/%d/podcasts/fetch", b.lib.ID)
+	body := fmt.Sprintf(`{"path":%q}`, f.Episodes[0].Path)
+	release := metadata.HoldOpensForTests(filepath.Join(b.lib.Root, "Fixture Show"))
+	t.Cleanup(release)
+	start := time.Now()
+	if resp, out := b.do(t, "POST", route, b.adminTok, body); resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(out, codeShareNotAnswering) {
+		t.Errorf("a download on a held share = %d %s, want 503 %s", resp.StatusCode, out, codeShareNotAnswering)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("the download took %v, want it answered at the open's bound", took)
+	}
+	release()
+	resp, out := b.do(t, "POST", route, b.adminTok, body)
+	wantDownloaded(t, "the episode once the share answers", resp, out)
+}
+
 func TestPodcastStorageMappingLibraryAndFailureErrors(t *testing.T) {
 	b, f := podcastStorageEnv(t)
 	ctx := context.Background()

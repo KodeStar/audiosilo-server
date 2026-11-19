@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
@@ -65,6 +66,22 @@ func OpenPodcast(ctx context.Context, cat *catalog.Catalog, lib catalog.Library,
 		}
 	}
 	return nil, nil, ErrNotIndexable
+}
+
+// OpenPodcastBounded is OpenPodcast as one metadata.Bounded call (ctx, at most
+// timeout, on the episode's mount): its looks and open, on a share that
+// stopped answering, are given up on (metadata.GaveUp) rather than holding the
+// caller, a file opened after that closed.
+func OpenPodcastBounded(ctx context.Context, cat *catalog.Catalog, lib catalog.Library, rel string, timeout time.Duration) (*os.File, *feed.Fetch, error) {
+	type opened struct {
+		f   *os.File
+		pin *feed.Fetch
+	}
+	o, err := metadata.Bounded(ctx, filepath.Join(lib.Root, filepath.FromSlash(rel)), timeout, func() (opened, error) {
+		f, pin, err := OpenPodcast(ctx, cat, lib, rel)
+		return opened{f, pin}, err
+	}, func(o opened) { _ = o.f.Close() })
+	return o.f, o.pin, err
 }
 
 // The downloaded episodes of the feed.json copies OpenPodcast read last

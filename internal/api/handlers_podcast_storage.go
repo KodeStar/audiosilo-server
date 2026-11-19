@@ -4,9 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"path"
-	"path/filepath"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
@@ -221,15 +219,7 @@ func writePodcastIdentityBusy(w http.ResponseWriter) {
 func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *catalog.Library, rel string, deadline time.Time) {
 	release := a.cat.MarkPodcastStream(catalog.Ref{LibraryID: lib.ID, Path: rel})
 	defer release()
-	type opened struct {
-		f   *os.File
-		pin *feed.Fetch
-	}
-	o, err := metadata.Bounded(r.Context(), filepath.Join(lib.Root, filepath.FromSlash(rel)), waitLeft(deadline), func() (opened, error) {
-		f, pin, err := library.OpenPodcast(r.Context(), a.cat, *lib, rel)
-		return opened{f, pin}, err
-	}, func(o opened) { _ = o.f.Close() })
-	f, pin := o.f, o.pin
+	f, pin, err := library.OpenPodcastBounded(r.Context(), a.cat, *lib, rel, waitLeft(deadline))
 	if metadata.GaveUp(err) {
 		writeShareNotAnswering(w)
 		return

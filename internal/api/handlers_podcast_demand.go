@@ -48,12 +48,14 @@ func (a *API) podcastFetchStatuses(r *http.Request, lib int64, paths []string) (
 // podcastPresent reports whether the episode's committed generation opens.
 // Only an indexed, committed pin can be a present file worth opening:
 // OpenPodcast answers ErrNotIndexable or ErrNotFound for every other one, and
-// those mean absent; any other open failure is returned.
+// those mean absent; any other open failure is returned, a share that stopped
+// answering among them (the open a bounded look within fileWait,
+// metadata.GaveUp: a 503 share_not_answering).
 func (a *API) podcastPresent(ctx context.Context, lib *catalog.Library, rel string, pin catalog.PodcastPin) (bool, error) {
 	if !pin.Present || !feed.ValidFetch(pin.Fetch) || pin.Fetch.DeletedAt != "" {
 		return false, nil
 	}
-	f, _, err := library.OpenPodcast(ctx, a.cat, *lib, rel)
+	f, _, err := library.OpenPodcastBounded(ctx, a.cat, *lib, rel, a.fileWait)
 	if err == nil {
 		_ = f.Close()
 		return true, nil
