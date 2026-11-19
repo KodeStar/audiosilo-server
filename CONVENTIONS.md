@@ -1736,8 +1736,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rule-less share someone holds, a share marked for another library) keeps its rules and holders, and
   the grant gets a share of its own, "Library: <name> (<id>)" when the name is taken (then numbered
   from 2, server#230; `<name>` cut so the longest of these fits a share name's 200 characters,
-  `wholeLibraryShareName`), made whole and marked in one transaction that looks for the library's grant
-  share again first: write transactions run one at a time, so first grants sent together share one.
+  `wholeLibraryShareName`, an unmarked grant under the uncut name still adopted), made whole and
+  marked in one transaction that looks for the library's grant share again first: write transactions
+  run one at a time, so first grants sent together share one.
   A marked grant's rules change only by granting or revoking the library: `POST`/`DELETE
   /admin/shares/{id}/paths` on one is 409 `library_grant` (`catalog.ErrLibraryGrant`, read inside the
   edit's transaction; server#254), as the console never offers it. The mark stays only while the share

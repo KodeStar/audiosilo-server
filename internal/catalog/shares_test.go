@@ -571,20 +571,26 @@ func TestGrantWholeLibraryNeverAdoptsAnAdminShare(t *testing.T) {
 // An unmarked share that can only be an old grant (made before
 // whole_library_id): the grant's description and only the library's "" rule
 // (held or not), or no rule at all while nobody holds it (one an interrupted
-// grant left) - is still adopted, marked and healed, keeping its holders.
+// grant left) - is still adopted, marked and healed, keeping its holders. One
+// named after a library's long name whole, before wholeLibraryShareName cut
+// it, is adopted too.
 func TestGrantWholeLibraryAdoptsAnOldGrant(t *testing.T) {
 	t.Parallel()
+	long := strings.Repeat("Kids ", 60)
 	for _, tc := range []struct {
-		name  string
-		whole bool
-	}{{"whole rule, held", true}, {"no rule, unheld", false}} {
+		name, library string
+		whole         bool
+	}{
+		{"whole rule, held", "Kids", true}, {"no rule, unheld", "Kids", false},
+		{"long name, whole rule, held", long, true}, {"long name, no rule, unheld", long, false},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c, ctx := newTestCatalog(t)
-			kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+			kids, _ := c.CreateLibrary(ctx, Library{Name: tc.library, Root: "/tmp/kids"})
 			old := seedUserNamed(t, c, ctx, "old")
 			guest := seedUserNamed(t, c, ctx, "guest")
-			s := Share{Name: "Library: Kids", Description: wholeLibraryShareDescription}
+			s := Share{Name: "Library: " + tc.library, Description: wholeLibraryShareDescription}
 			if tc.whole {
 				s.Paths = []PathRule{{LibraryID: kids.ID, Path: ""}}
 			}
