@@ -263,7 +263,9 @@ func TestMetaLocalOthers(t *testing.T) {
 // holding a copy of the book sharing its ASIN. A book matched in the console to
 // another work than its ASIN's keeps them together: /item and /meta both follow
 // the match (server#412), and each rail entry lists only recordings of its own
-// work, so no book is on two entries.
+// work, so no book is on two entries. A book matched to a work the rail doesn't
+// list holds its own position there, as in upcoming; one matched to a work the
+// rail lists is placed by that work alone.
 func TestItemAndMetaAgree(t *testing.T) {
 	t.Parallel()
 	e := recordingsEnv(t, true)
@@ -271,12 +273,21 @@ func TestItemAndMetaAgree(t *testing.T) {
 	addBooks(t, e.testEnv, e.lib.ID,
 		&catalog.Book{RelPath: "Saga/2 copy", Series: "Saga", SeriesIndex: 2, ASIN: "b0two", Narrator: "Bray"},
 		&catalog.Book{RelPath: "Saga/3", Series: "Saga", SeriesIndex: 3, ASIN: "B0THREE", Narrator: "Lee"},
+		&catalog.Book{RelPath: "Saga/4 one", Series: "Saga", SeriesIndex: 4},
+		&catalog.Book{RelPath: "Saga/4 special", Series: "Saga", SeriesIndex: 4},
 	)
 	if err := e.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{
 		{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/2 copy"}, IDKey: "a:B0TWO", WorkID: "two", CheckedAt: "now"},
 		{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/3"}, IDKey: "a:B0THREE", WorkID: "three", CheckedAt: "now"},
 	}, nil); err != nil {
 		t.Fatal(err)
+	}
+	for path, work := range map[string]string{"Saga/4 one": "one", "Saga/4 special": "special"} {
+		if err := e.cat.EditBook(ctx, e.lib.ID, path, catalog.BookEdit{
+			Match: &catalog.MatchAnchor{WorkID: work}, Source: catalog.SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// rail checks /meta for Saga/2: about work and placed as want, each path
 	// on one entry only.
@@ -299,7 +310,11 @@ func TestItemAndMetaAgree(t *testing.T) {
 		}
 	}
 	two := railEntry{local: "Saga/2", others: []string{"Saga/2 Abe", "Saga/2 Kemper"}}
-	adminRail := map[string]railEntry{"one": {local: "Saga/1"}, "two": two, "three": {local: "Saga/3"}, "four": {}}
+	// Saga/4 special holds four (its work, special, is not on the rail); Saga/4
+	// one is a recording of one, never at four.
+	one := railEntry{local: "Saga/1", others: []string{"Saga/4 one"}}
+	special := railEntry{local: "Saga/4 special"}
+	adminRail := map[string]railEntry{"one": one, "two": two, "three": {local: "Saga/3"}, "four": special}
 	item(e.adminTok, "two", two.others)
 	rail(e.adminTok, "two", adminRail)
 	// Denied: the member's grant (Saga/1, Saga/2, Saga/2 Abe) holds neither
@@ -320,9 +335,9 @@ func TestItemAndMetaAgree(t *testing.T) {
 		t.Fatal(err)
 	}
 	item(e.adminTok, "three", []string{"Saga/3"})
-	rail(e.adminTok, "three", map[string]railEntry{"one": {local: "Saga/1"},
+	rail(e.adminTok, "three", map[string]railEntry{"one": one,
 		"two":   {local: "Saga/2 Abe", others: []string{"Saga/2 Kemper"}},
-		"three": {local: "Saga/2", others: []string{"Saga/3"}}, "four": {}})
+		"three": {local: "Saga/2", others: []string{"Saga/3"}}, "four": special})
 	item(e.memberTok, "three", nil)
 	rail(e.memberTok, "three", map[string]railEntry{"one": {local: "Saga/1"},
 		"two": {local: "Saga/2 Abe"}, "three": {local: "Saga/2"}, "four": {}})

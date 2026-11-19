@@ -259,7 +259,9 @@ func writeLookupFailed(w http.ResponseWriter) {
 // work's other recordings, when requested's own work key is that work, are
 // /item's other_recordings (catalog.OtherRecordings), so both name one copy of
 // each recording, the same one (server#413). A book whose work the catalog
-// doesn't know takes the cache's (meta.Service.WithWorkIDs). Of a work's
+// doesn't know takes the cache's (meta.Service.WithWorkIDs); one matched in
+// the console holds its own position on a rail that doesn't list its work, as
+// in upcoming (catalog.WorkSources, meta.LocalBook.Matched). Of a work's
 // several recordings the pick (Local) is by meta's rule, which reads
 // requested's narrator and, only where the pick has a choice (meta.Contested),
 // the caller's progress (catalog.InProgress); the rest ride as LocalOthers.
@@ -314,14 +316,29 @@ func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta
 		}
 	}
 	books = append(books, others...)
+	// A book matched in the console holds its own position on a rail that
+	// doesn't list its work (meta.LocalBook.Matched), so which books are
+	// matched is read for those with a work and a position.
+	var numbered []catalog.Ref
+	for i := range books {
+		if books[i].WorkID != "" && slices.ContainsFunc(books[i].AllSeries(), func(s catalog.SeriesRef) bool { return s.Position > 0 }) {
+			numbered = append(numbered, catalog.Ref{LibraryID: books[i].LibraryID, Path: books[i].RelPath})
+		}
+	}
+	sources, err := a.cat.WorkSources(ctx, numbered)
+	if err != nil {
+		return nil, nil, err
+	}
 	// A book in several series is a candidate in each, at its position there,
 	// and one in none a candidate by its work alone. requested is one too,
 	// outside every series when none named it, so the pick knows its narrator;
 	// its own work id is never read (it is placed on env's work's entry).
 	cands := make([]meta.LocalBook, 0, len(books)+1)
 	cand := func(b *catalog.Book) meta.LocalBook {
-		return meta.LocalBook{MetaLocal: meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
+		ref := catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}
+		return meta.LocalBook{MetaLocal: meta.MetaLocal(ref),
 			ASIN: b.ASIN, ISBN: b.ISBN, WorkID: b.WorkID, Narrator: b.Narrator,
+			Matched:  b.WorkID != "" && sources[ref].MatchWorkID == b.WorkID,
 			Abridged: b.Abridged != nil && *b.Abridged}
 	}
 	cands = append(cands, cand(requested))

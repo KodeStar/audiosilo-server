@@ -543,7 +543,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `CachedWorkID` knows); else (orderings) the main view's book for that work;
   else the series position == the entry's numeric position on a series named like that
   view (a range entry "1-3" holds a book at that range; an entry at one number a book at it,
-  else a book whose range starts there; `parseSpan`). A book with a known work id is never placed by index; one book per entry
+  else a book whose range starts there; `parseSpan`). A book with a known work id is never placed by index, bar one
+  matched in the console (`LocalBook.Matched`, from `catalog.WorkSources`) to a work the view doesn't list, which
+  holds its own position as in upcoming; one book per entry
   as `local`, the pick (`pickRank`, server#241): the narrator of the requested book (the
   one just finished, for Next), then a book the caller started and hasn't finished
   (`catalog.InProgress`), then the requested book's library, then not known to be

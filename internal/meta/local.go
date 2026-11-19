@@ -34,6 +34,10 @@ type LocalBook struct {
 	SeriesIndexEnd float64
 	ASIN, ISBN     string
 	WorkID         string
+	// Matched: WorkID is the book's recorded console match's, so on a view
+	// that doesn't list that work the book holds its own position (an edition
+	// the community files apart), as upcoming's slot holding does.
+	Matched bool
 	// Narrator is the book's narrator credit.
 	Narrator string
 	// Started: the caller has started the book and not finished it.
@@ -173,8 +177,10 @@ func RailWorks(rails []MetaSeries) []string {
 //
 // A book whose work id is known is placed by that id only, never by its index:
 // a book that is another work (a novella numbered like the next volume) holds
-// no slot. requested is placed by rule 1 only; when it is among books, its
-// narrator is the one the pick prefers. Of several books of one work id (other
+// no slot. One matched in the console (Matched) to a work a view doesn't list
+// is placed by its index there too, by rule 4, as upcoming holds its slot.
+// requested is placed by rule 1 only; when it is among books, its narrator is
+// the one the pick prefers. Of several books of one work id (other
 // recordings: another narrator, an abridgement, a copy in another library) the
 // pick is Local by pickRank and the rest, in that order, LocalOthers, one per
 // recording: never a copy of the pick or of a book before it
@@ -221,8 +227,9 @@ type placer struct {
 	// (pickRank); of the current work's, only those its entry lists
 	// (currentOthers).
 	byWork map[string][]LocalBook
-	// byIndex are the numbered books with no known work id, by series key, in
-	// preference order.
+	// byIndex are the numbered books with no known work id, and the matched
+	// ones (LocalBook.Matched, for a view that doesn't list their work), by
+	// series key, in preference order.
 	byIndex map[string][]LocalBook
 }
 
@@ -265,6 +272,11 @@ func newPlacer(currentWork string, requested MetaLocal, books []LocalBook) *plac
 			if !slices.ContainsFunc(p.byWork[b.WorkID], func(o LocalBook) bool { return o.MetaLocal == b.MetaLocal }) {
 				p.byWork[b.WorkID] = append(p.byWork[b.WorkID], b)
 			}
+			if b.Matched && b.SeriesIndex > 0 {
+				if k := match.SeriesKey(b.Series); k != "" {
+					p.byIndex[k] = append(p.byIndex[k], b)
+				}
+			}
 		case b.SeriesIndex > 0:
 			if k := match.SeriesKey(b.Series); k != "" {
 				p.byIndex[k] = append(p.byIndex[k], b)
@@ -305,6 +317,12 @@ func (p *placer) view(works []MetaSeriesWork, name string, mains map[string]plac
 		return nil, nil
 	}
 	byIndex := p.byIndex[match.SeriesKey(name)]
+	if slices.ContainsFunc(byIndex, func(b LocalBook) bool { return b.WorkID != "" }) {
+		// A matched book whose work this view lists is placed by that work alone.
+		byIndex = slices.DeleteFunc(slices.Clone(byIndex), func(b LocalBook) bool {
+			return b.WorkID != "" && slices.ContainsFunc(works, func(w MetaSeriesWork) bool { return w.ID == b.WorkID })
+		})
+	}
 	out := make([]MetaSeriesWork, len(works))
 	placed := map[string]placement{}
 	for i, w := range works {
