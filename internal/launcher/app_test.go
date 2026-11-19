@@ -234,20 +234,14 @@ func TestStartupScansWarnAndContinue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline := time.Now().Add(startWait)
-	for {
-		runs, _ := cat.ListScanRuns(ctx, 0, 0, 10)
-		if len(runs) == 2 && runs[0].FinishedAt != nil && runs[1].FinishedAt != nil {
-			status := map[int64]string{runs[0].LibraryID: runs[0].Status, runs[1].LibraryID: runs[1].Status}
-			if status[missing.ID] != catalog.RunUnavailable || status[goodLib.ID] != catalog.RunOK {
-				t.Fatalf("statuses = %v", status)
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the startup scans never finished: %+v", runs)
-		}
-		time.Sleep(20 * time.Millisecond)
+	var runs []catalog.ScanRun
+	waitFor(t, "the startup scans to finish", func() bool {
+		runs, _ = cat.ListScanRuns(ctx, 0, 0, 10)
+		return len(runs) == 2 && runs[0].FinishedAt != nil && runs[1].FinishedAt != nil
+	})
+	status := map[int64]string{runs[0].LibraryID: runs[0].Status, runs[1].LibraryID: runs[1].Status}
+	if status[missing.ID] != catalog.RunUnavailable || status[goodLib.ID] != catalog.RunOK {
+		t.Fatalf("statuses = %v", status)
 	}
 	counts, err := cat.CountBooksByLibrary(ctx)
 	if err != nil {
