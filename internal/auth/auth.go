@@ -575,7 +575,7 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	if row.kind == KindCast {
 		slideTo = s.castExpiry(row.grant)
 	}
-	_ = s.touch(ctx, row.id, row.kind, p, slideTo)
+	_ = s.touch(ctx, row.id, row.kind, p, slideTo, u.MemberKind)
 	return u, cred, nil
 }
 
@@ -586,8 +586,16 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 // never writes back the stale app; and a cast token's sliding expiry (?7, ""
 // for none: castExpiry), which never shortens it and never revives one already
 // past (?8, now as s.ts() writes it; expires_at is RFC3339 UTC, so it compares
-// as text). A token signed out since its read is left as it is.
-const touchRowSQL = `UPDATE tokens SET last_seen = ?1, last_ip = COALESCE(NULLIF(?2, ''), last_ip),
+// as text). A token signed out since its read is left as it is. The address is
+// written only while the account's member kind is still the one the request
+// was read under (?9, NULL for no household member): a grown-up switched to a
+// kid between a request's read and its touch has their addresses forgotten
+// (clearKidCredentials), and the touch must not write back the one the
+// grown-up's request came from for their owner to see (server#217). The next
+// request, read as a kid, records it.
+const touchRowSQL = `UPDATE tokens SET last_seen = ?1,
+        last_ip = CASE WHEN ?2 <> '' AND (SELECT member_kind FROM users WHERE id = tokens.user_id) IS ?9
+                       THEN ?2 ELSE last_ip END,
         client_app = CASE WHEN ?3 = '' THEN client_app ELSE ?3 END,
         client_version = CASE WHEN ?3 = '' THEN client_version ELSE ?4 END,
         client_platform = CASE WHEN ?3 = '' THEN client_platform ELSE ?5 END,
@@ -595,17 +603,23 @@ const touchRowSQL = `UPDATE tokens SET last_seen = ?1, last_ip = COALESCE(NULLIF
   WHERE id = ?6 AND revoked = 0`
 
 // touch writes token id's touch (touchRowSQL), of kind, as p reports the
-// request and moving a cast token's expiry to slideTo ("" leaves it). It is
+// request and moving a cast token's expiry to slideTo ("" leaves it), the
+// address only while the account's member kind is still readAs (the User the
+// request was read as: its MemberKind). It is
 // user state: it leaves the content generation, and so every cache keyed on
 // it, where it was (store.DB.ExecUserState); a caller holding the token's
 // cached row drops it. A cast token's last_seen is in milliseconds (castStamp).
-func (s *Service) touch(ctx context.Context, id int64, kind string, p Presence, slideTo string) error {
+func (s *Service) touch(ctx context.Context, id int64, kind string, p Presence, slideTo string, readAs *string) error {
 	stamp := s.ts()
 	if kind == KindCast {
 		stamp = s.castStamp()
 	}
+	var memberKind any // NULL: no household member
+	if readAs != nil {
+		memberKind = *readAs
+	}
 	_, err := s.db.ExecUserState(ctx, touchRowSQL,
-		stamp, p.IP, p.Client.App, p.Client.Version, p.Client.Platform, id, slideTo, s.ts())
+		stamp, p.IP, p.Client.App, p.Client.Version, p.Client.Platform, id, slideTo, s.ts(), memberKind)
 	return err
 }
 
