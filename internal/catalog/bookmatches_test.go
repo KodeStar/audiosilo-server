@@ -879,13 +879,11 @@ func TestAnchorWrittenOnlyIfStillItsASIN(t *testing.T) {
 		t.Fatalf("an ISBN gained since: %+v (%v), want the match written beside the ISBN", st, err)
 	}
 	// Denied: another ASIN set since.
-	for p, asin := range map[string]string{"A/Other": "B0NOPE0002"} {
-		if err := edit(p, asin); !errors.Is(err, ErrMatchedSince) {
-			t.Fatalf("%s: err = %v, want ErrMatchedSince", p, err)
-		}
-		if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "" || title(p) == "Matched" {
-			t.Fatalf("%s: match %+v, title %q, want nothing written", p, a, title(p))
-		}
+	if err := edit("A/Other", "B0NOPE0002"); !errors.Is(err, ErrMatchedSince) {
+		t.Fatalf("another ASIN since: err = %v, want ErrMatchedSince", err)
+	}
+	if a := anchorOf(t, c, ctx, lib.ID, "A/Other"); a.WorkID != "" || title("A/Other") == "Matched" {
+		t.Fatalf("another ASIN since: match %+v, title %q, want nothing written", a, title("A/Other"))
 	}
 	// Denied: a lookup found the ASIN since (the community knows it now, so it
 	// names the book's record), or the report holds nothing about it.

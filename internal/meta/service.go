@@ -334,8 +334,9 @@ type Service struct {
 
 // SetASINFound has the Service tell found each ASIN an identifier lookup finds
 // a work for (Service.lookup: a player's /meta, the upcoming job's work ids, the
-// chapter check; Candidates: the match dialog and a match run), so the unknown-ASIN report learns at once that the community
-// added one (server#392) rather than at its monthly recheck. found runs inside
+// chapter check; Candidates: the match dialog and a match run), so the
+// unknown-ASIN report learns at once that the community added one (server#392)
+// rather than at its monthly recheck. found runs inside
 // the lookup and must be quick. Call it once, right after NewService and before
 // the Service is used.
 func (s *Service) SetASINFound(found func(ctx context.Context, asin string)) { s.asinFound = found }

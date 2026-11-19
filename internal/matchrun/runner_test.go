@@ -1574,16 +1574,15 @@ func TestUnknownASINRun(t *testing.T) {
 func TestUnknownASINRunTakesABookWithAnISBN(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	for _, p := range []string{"A/ISBN", "A/Gained"} {
-		b := &catalog.Book{LibraryID: e.lib, RelPath: p, IsFolder: true, Title: p[2:], Author: "Andy Weir",
-			ASIN: "B0NOPE00" + map[string]string{"A/ISBN": "01", "A/Gained": "02"}[p], Duration: 634 * 60, AddedAt: "2020-01-01"}
-		if p == "A/ISBN" {
-			b.ISBN = "9780553418026"
-		}
-		if _, err := e.cat.UpsertBook(ctx, b); err != nil {
+	for _, b := range []struct{ title, asin, isbn string }{
+		{"ISBN", "B0NOPE0001", "9780553418026"},
+		{"Gained", "B0NOPE0002", ""},
+	} {
+		if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: e.lib, RelPath: "A/" + b.title, IsFolder: true, Title: b.title,
+			Author: "Andy Weir", ASIN: b.asin, ISBN: b.isbn, Duration: 634 * 60, AddedAt: "2020-01-01"}); err != nil {
 			t.Fatal(err)
 		}
-		e.matcher.byTitle[p[2:]] = []meta.MatchCandidate{cand("the-martian", 97, "")}
+		e.matcher.byTitle[b.title] = []meta.MatchCandidate{cand("the-martian", 97, "")}
 	}
 	if err := e.cat.SaveASINChecks(ctx, []catalog.ASINCheck{{ASIN: "B0NOPE0001", Unknown: true}, {ASIN: "B0NOPE0002", Unknown: true}},
 		"2026-11-01T00:00:00.000Z"); err != nil {

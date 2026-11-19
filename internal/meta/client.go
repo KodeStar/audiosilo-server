@@ -85,9 +85,9 @@ func ownTransport(base http.RoundTripper) http.RoundTripper {
 // capped at maxRetryAfter (defaultRetryAfter when it gives none), so a burst a
 // bulk match makes slows down instead of failing books (server#247). A wait the
 // caller's deadline would cut short isn't started; a bulk run's budget has no
-// deadline and stops its clock for the wait (withBudget, server#447). A bulk run (a Pacer in the
-// context) waits out a 503 the same way: metaserve answers one past a match's budget,
-// and books failing in a row stop a run. Anyone else's 503 is the outage it reports at
+// deadline and stops its clock for the wait (withBudget, server#447). A bulk run
+// (a Pacer in the context) waits out a 503 the same way: metaserve answers one
+// past a match's budget, and books failing in a row stop a run. Anyone else's 503 is the outage it reports at
 // once: an admin or a listener is waiting on the answer.
 const (
 	rateLimitRetries  = 3

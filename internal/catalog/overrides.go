@@ -832,8 +832,9 @@ type BookEdit struct {
 	// when it is matched by it alone (an unknown_asin run's book: its own ASIN
 	// the community doesn't know): the edit writes only while the book still
 	// has this ASIN, with an ISBN or none (/meta never asks by an ISBN beside
-	// an ASIN), and, as for any zero MatchIf, no recorded match, while the unknown-ASIN report still holds that ASIN as unknown
-	// (once the community knows it, it names the book's record, which a match
+	// an ASIN), and, as for any zero MatchIf, no recorded match, while the
+	// unknown-ASIN report still holds that ASIN as unknown (once the community
+	// knows it, it names the book's record, which a match
 	// found by the title must not outrank or replace), and, when it sets the
 	// ASIN, while that ASIN is no admin's own edit (one typed in since, the
 	// same value), else ErrMatchedSince. "" keeps the zero MatchIf's rule.

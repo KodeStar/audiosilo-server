@@ -626,12 +626,7 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 		switch {
 		case err == nil:
 			matched = true
-			byASIN := func(r upstreamMatchResult) bool {
-				return r.ID != "" && r.Reasons != nil && r.Reasons.Identifier == "asin"
-			}
-			if slices.ContainsFunc(res, byASIN) {
-				s.foundASIN(ctx, asin)
-			}
+			byASIN := false
 			for _, r := range res {
 				if r.ID == "" {
 					continue
@@ -643,7 +638,11 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 				if h.reasons.Identifier != "" {
 					h.recordingID = r.RecordingID
 				}
+				byASIN = byASIN || h.reasons.Identifier == "asin"
 				hits = append(hits, h)
+			}
+			if byASIN {
+				s.foundASIN(ctx, asin)
 			}
 		case ctx.Err() == nil && routeMissing(err):
 			s.matchUnsupportedUntil.Store(s.now().Add(matchUnsupportedTTL).UnixNano())
