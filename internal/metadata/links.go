@@ -84,8 +84,10 @@ func walkLinks(path string, lstat func(string) (fs.FileInfo, error), readlink fu
 			continue
 		}
 		to, err := readlink(next)
-		if maybe && err != nil && NotALink(err) {
-			// Another reparse point: a plain name, as it always was.
+		if maybe && err != nil && (NotALink(err) || NotExist(err)) {
+			// Another reparse point: a plain name, as it always was (Go
+			// reads one that is neither a link nor a junction as ENOENT,
+			// as the library's linkRead does).
 			dest = next
 			continue
 		}

@@ -76,6 +76,17 @@ func TestWalkLinksFollowsJunctions(t *testing.T) {
 	if got, err := walk(placeholder); err != nil || got != placeholder {
 		t.Fatalf("a reparse point that is no link = %q, %v; want it as a plain name", got, err)
 	}
+	// Go on Windows reads a reparse point that is neither a link nor a
+	// junction as ENOENT (os.Readlink), not EINVAL: a plain name too.
+	enoent := func(p string) (string, error) {
+		if p == placeholder {
+			return "", &fs.PathError{Op: "readlink", Path: p, Err: syscall.ENOENT}
+		}
+		return os.Readlink(p)
+	}
+	if got, err := walkLinks(placeholder, lstat, enoent); err != nil || got != placeholder {
+		t.Fatalf("a reparse point Go reads as ENOENT = %q, %v; want it as a plain name", got, err)
+	}
 	if _, err := walk(filepath.Join(placeholder, "x")); !errors.Is(err, syscall.ENOTDIR) {
 		t.Fatalf("a path through a file = %v, want ENOTDIR", err)
 	}
