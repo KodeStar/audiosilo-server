@@ -1710,6 +1710,13 @@ export interface AdminBook {
    */
   chapter_choice?: ChapterChoice;
   /**
+   * The book's newest `chapters.detect` job, whatever its state: only on a row
+   * of Health's books without chapters (`?issue=no_chapters`, not the ignored
+   * ones), absent when the book has none or the server knows no Bridge
+   * (server#273).
+   */
+  detect_job?: BridgeJob;
+  /**
    * The book's ebook (catalog.Ebook): the .epub beside its audio the player's
    * reader opens, library-relative, with its size in bytes when last scanned.
    * Absent when it has none.

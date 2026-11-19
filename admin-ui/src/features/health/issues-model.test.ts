@@ -5,33 +5,36 @@ import {
   attentionTotal,
   chaptersCheckNote,
   detectChosenNote,
+  detectPollMs,
   detectRowJob,
   fixFor,
   footKey,
   issueDetail,
   issueReason,
-  newestJobByBook,
+  openDetections,
   pickCategory,
   rowFix,
 } from './issues-model';
 
-it("reads each book's newest detection, and what its row shows of it (BRIDGE-08)", () => {
-  const newest = bridgeJob({ id: 9, state: 'running' });
-  const byBook = newestJobByBook([
-    newest,
-    bridgeJob({ id: 8, state: 'failed' }),
-    bridgeJob({ id: 7, path: 'Mosse/Past Tense', state: 'cancelled' }),
-    bridgeJob({ id: 6, library_id: null, path: null }),
-  ]);
-  expect([...byBook.values()].map((j) => j.id)).toEqual([9, 7]);
-  expect(newestJobByBook(undefined).size).toBe(0);
+it("reads the rows' detections: what a row shows, and how soon the list is read again (BRIDGE-08)", () => {
+  const running = bridgeJob({ id: 9, state: 'running' });
   // Open (queued, working, parked) holds the row's Detect back; how one ended shows beside it.
-  expect(detectRowJob(newest)).toEqual({ job: newest, open: true });
+  expect(detectRowJob(running)).toEqual({ job: running, open: true });
   expect(detectRowJob(bridgeJob({ state: 'needs_attention' }))?.open).toBe(true);
   expect(detectRowJob(bridgeJob({ state: 'failed' }))?.open).toBe(false);
   expect(detectRowJob(bridgeJob({ state: 'done' }))?.open).toBe(false);
   expect(detectRowJob(bridgeJob({ state: 'cancelled' }))).toBeUndefined();
   expect(detectRowJob(undefined)).toBeUndefined();
+  // The list follows an open detection: every 10 s while one works, every
+  // minute while the only open ones are parked, not at all once all ended.
+  const parked = adminBook({ detect_job: bridgeJob({ id: 8, state: 'needs_attention' }) });
+  const ended = adminBook({ detect_job: bridgeJob({ id: 7, state: 'failed' }) });
+  expect(detectPollMs([adminBook(), ended])).toBe(false);
+  expect(detectPollMs([ended, parked])).toBe(60_000);
+  expect(detectPollMs([parked, adminBook({ detect_job: running })])).toBe(10_000);
+  expect([
+    ...openDetections([adminBook(), ended, parked, adminBook({ detect_job: running })]),
+  ]).toEqual([8, 9]);
 });
 
 it('offers Detect chapters only for a book with no chosen source and no edited chapters', () => {

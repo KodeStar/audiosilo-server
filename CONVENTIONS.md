@@ -981,7 +981,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   use it (no per-listener field on a list book, and nothing a user-state rule lets
   through); a handler that adds one must leave the cache. The admin console's `GET /admin/books` first pages and
   `/admin/books/facets` use it too (keyed like a list, no scopes: an admin sees
-  every book), and so does the Health summary `GET /admin/issues` (server#245),
+  every book; not `?issue=no_chapters`, whose rows carry Bridge job state: see Health issues), and so does the Health summary `GET /admin/issues` (server#245),
   whose key also takes `cachedList`'s extra inputs: the kinds it counts, the listener
   generation (a new or removed progress row: Content generation) and the
   offline libraries (a filesystem probe made before the lookup, so a root going
@@ -3080,7 +3080,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   request (the summary is kept in the list cache until the next content write, see List cache); each book kind is one SQL predicate (`issuePredicates`) shared by the counts and by
   `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h; the console's fix is the Bridge's Detect
-  chapters, see The Bridge), `unmatched` (no ASIN, ISBN or recorded community match: `NOT matchedExpr`; left
+  chapters, see The Bridge; each row of that list, not the ignored one, carries `detect_job`, the book's
+  newest `chapters.detect` job in any state, read once for the page's books (`api.detectRows`,
+  `bridge.LatestForBooks`), so a book queued among hundreds shows its own and the console reads no job
+  list for it; a Bridge's reports are no content write, so that list is never kept in the list cache;
+  server#273), `unmatched` (no ASIN, ISBN or recorded community match: `NOT matchedExpr`; left
   out of the summary while metadata is off), `unknown_asin` (the book's own ASIN is one the unknown-ASIN report
   found unknown: `unknownASINExpr`, see Unknown ASIN report; still matched by `matchedExpr`, so Match
   automatically passes it by: the category's own card starts an `unknown_asin` match run (see Bulk matching);

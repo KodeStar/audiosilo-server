@@ -26,7 +26,7 @@ import {
   type IssuesSummary,
 } from '@/api/types';
 import { isOpen } from '@/features/bridge/bridge-model';
-import { refKey } from '@/lib/book-route';
+import { generatePollMs } from '@/features/bridge/generate-model';
 import type { Phrase } from '@/lib/phrase';
 import { relBaseName, relParent } from '@/lib/paths';
 
@@ -118,18 +118,24 @@ export function detectChosenNote(
 }
 
 /**
- * The newest job of each book among jobs (newest first, as the server lists
- * them), by refKey; a job naming no book is left out. Health's books without
- * chapters read their chapter detections this way (BRIDGE-08).
+ * How soon Health's books without chapters are read again, from the detections
+ * on their rows (`detect_job`, BRIDGE-08): about every 10 s while one is queued
+ * or working, every minute while one is parked, else not at all
+ * (generatePollMs), so a row follows its job to the end.
  */
-export function newestJobByBook(jobs: readonly BridgeJob[] | undefined): Map<string, BridgeJob> {
-  const out = new Map<string, BridgeJob>();
-  for (const j of jobs ?? []) {
-    if (j.library_id === null || j.path === null) continue;
-    const key = refKey({ library_id: j.library_id, path: j.path });
-    if (!out.has(key)) out.set(key, j);
-  }
-  return out;
+export function detectPollMs(books: readonly Pick<AdminBook, 'detect_job'>[]): number | false {
+  return generatePollMs(books.flatMap((b) => (b.detect_job ? [b.detect_job] : [])));
+}
+
+/**
+ * The detections on books' rows that are still open (queued, working or
+ * parked), by job id: when one is no longer among them, its job ended (or its
+ * book left the list) and the category's count may have moved.
+ */
+export function openDetections(books: readonly Pick<AdminBook, 'detect_job'>[]): Set<number> {
+  return new Set(
+    books.flatMap((b) => (b.detect_job && isOpen(b.detect_job.state) ? [b.detect_job.id] : [])),
+  );
 }
 
 /**

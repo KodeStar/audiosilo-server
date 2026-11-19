@@ -1,8 +1,9 @@
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff } from 'lucide-react';
-import { useAdminBooks, useLibraryRoots, useServerInfo } from '@/api/hooks';
+import { keys, useAdminBooks, useLibraryRoots, useServerInfo } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { BulkAction, BulkBar } from '@/components/bulk-bar';
@@ -19,7 +20,7 @@ import { counted } from '@/lib/format';
 import { addBookUrl } from '@/lib/meta-site';
 import { joinLibraryPath } from '@/lib/paths';
 import { AddItLink } from '@/features/book/add-to-community';
-import { detectAvailable, detectJobsKnown } from '@/features/bridge/generate-model';
+import { detectAvailable } from '@/features/bridge/generate-model';
 import { GenerateStatus } from '@/features/bridge/generate-status';
 import { useBridgeLink } from '@/features/bridge/use-generate';
 import { AllClear } from './all-clear';
@@ -28,17 +29,18 @@ import {
   FIX_LOOK,
   chaptersCheckNote,
   detectChosenNote,
+  detectPollMs,
   detectRowJob,
   fixFor,
   footKey,
   issueDetail,
   issueReason,
+  openDetections,
   rowFix,
   say,
   type BookIssueKind,
   type IssueFix,
 } from './issues-model';
-import { useDetectJobs } from './use-detect-jobs';
 import { useIssueActions } from './use-issue-actions';
 
 /** How many books a page of an issue list loads. */
@@ -53,14 +55,35 @@ const PAGE = 50;
 export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: boolean }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const list = useAdminBooks({
-    issue: kind,
-    issue_ignored: ignored || undefined,
-    sort: 'added',
-    order: 'desc',
-    limit: PAGE,
-  });
+  // The books' chapter detections (BRIDGE-08) come on their rows (`detect_job`,
+  // each book's newest, however many jobs there are), only on the list of books
+  // without chapters: shown there alone (another list's rows stand in while
+  // this one loads), and the list is read again while one is open.
+  const detections = kind === 'no_chapters' && !ignored;
+  const list = useAdminBooks(
+    {
+      issue: kind,
+      issue_ignored: ignored || undefined,
+      sort: 'added',
+      order: 'desc',
+      limit: PAGE,
+    },
+    true,
+    detections ? detectPollMs : undefined,
+  );
   const books = useMemo(() => list.data?.pages.flatMap((p) => p.books ?? []) ?? [], [list.data]);
+  // A detection that ended may have given its book chapters: the counts are
+  // read again (the list just was).
+  const qc = useQueryClient();
+  const openBefore = useRef<ReadonlySet<number> | undefined>(undefined);
+  useEffect(() => {
+    const before = openBefore.current;
+    const now = detections && !list.isPlaceholderData ? openDetections(books) : undefined;
+    openBefore.current = now;
+    if (before && now && [...before].some((id) => !now.has(id))) {
+      void qc.invalidateQueries({ queryKey: keys.issues });
+    }
+  }, [books, detections, list.isPlaceholderData, qc]);
   // The list as shown, for Shift-click ranges.
   const selection = useSelection(books);
   // The books Detect chapters asks about (its confirmation is open while set),
@@ -72,13 +95,9 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
   const roots = useLibraryRoots();
   const server = useServerInfo().data;
   const fix = ignored ? null : fixFor(kind, detectAvailable(server));
-  // The books' chapter detections (BRIDGE-08), shown on their rows: followed
-  // whenever the server knows the Bridge, so a job queued before it went
-  // offline still shows.
-  const detectJobs = useDetectJobs(kind === 'no_chapters' && !ignored && detectJobsKnown(server));
-  const rowJob = (b: AdminBook) => detectRowJob(detectJobs?.get(refKey(b)));
+  const rowJob = (b: AdminBook) => (detections ? detectRowJob(b.detect_job) : undefined);
   const bridgeLink = useBridgeLink(
-    [...(detectJobs?.values() ?? [])].some((j) => j.state === 'needs_attention'),
+    detections && books.some((b) => b.detect_job?.state === 'needs_attention'),
   );
   // Rendered whatever the list shows, keyed so each branch's fragment keeps the
   // same instance: a refetch that fails or empties the list mustn't take an

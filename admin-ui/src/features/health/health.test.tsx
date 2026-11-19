@@ -606,21 +606,33 @@ describe('library health', () => {
       expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
     });
 
+    // A detection as it comes on its book's row (the book's newest job).
+    const rowJob = (path: string, over: Partial<BridgeJob>): BridgeJob => ({
+      ...(queuedJob(path) as { body: BridgeJob }).body,
+      path,
+      ...over,
+    });
+
     it("shows each row's detection, holding Detect back while one is open (BRIDGE-08)", async () => {
-      const job = (path: string, over: Partial<BridgeJob>): BridgeJob => ({
-        ...(queuedJob(path) as { body: BridgeJob }).body,
-        path,
-        ...over,
-      });
       let state: BridgeJob['state'] = 'queued';
       const calls = mockFetch(
         detectRoutes({
-          'GET /admin/bridge/jobs': () => ({
+          'GET /admin/books': (req) => ({
             body: {
-              jobs: [
-                job('Mosse/The Black Gate', { id: 7, state }),
-                job('Mosse/Past Tense', { id: 6, state: 'failed', error: 'transcription failed' }),
-              ],
+              books:
+                req.query.get('issue') === 'no_chapters'
+                  ? [
+                      { ...plain[0], detect_job: rowJob(plain[0].path, { id: 7, state }) },
+                      {
+                        ...plain[1],
+                        detect_job: rowJob(plain[1].path, {
+                          id: 6,
+                          state: 'failed',
+                          error: 'transcription failed',
+                        }),
+                      },
+                    ]
+                  : [],
             },
           }),
         }),
@@ -634,10 +646,8 @@ describe('library health', () => {
       expect(within(gate).queryByRole('button', { name: 'Detect chapters' })).toBeNull();
       expect(within(past).getByText('transcription failed')).toBeInTheDocument();
       expect(within(past).getByRole('button', { name: 'Detect chapters' })).toBeInTheDocument();
-      // The jobs are read once for the list, by kind, not per row.
-      const reads = calls.filter((c) => c.path === '/admin/bridge/jobs');
-      expect(reads.every((c) => c.query.get('kind') === 'chapters.detect')).toBe(true);
-      expect(reads.some((c) => c.query.has('path'))).toBe(false);
+      // The rows carry them: no job list is read for the list, whatever its size.
+      expect(calls.some((c) => c.path === '/admin/bridge/jobs')).toBe(false);
       // The bar's Detect leaves the open one out.
       await user.click(screen.getByRole('button', { name: 'Select all' }));
       const bar = await screen.findByRole('toolbar');
@@ -646,18 +656,70 @@ describe('library health', () => {
       const dialog = await screen.findByRole('dialog');
       expect(within(dialog).getByText('Past Tense')).toBeInTheDocument();
       await user.keyboard('{Escape}');
-      // The job ends: the list is read again, as the book may have its chapters now.
-      const before = calls.filter((c) => c.path === '/admin/books').length;
+      // The job ends: the row offers Detect again, and the counts are read
+      // again, as the book may have its chapters now.
+      const before = calls.filter((c) => c.path === '/admin/issues').length;
       state = 'done';
-      await queryClient.invalidateQueries({ queryKey: ['admin', 'bridge', 'jobs'] });
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'books', 'list'] });
       await waitFor(() =>
-        expect(calls.filter((c) => c.path === '/admin/books').length).toBeGreaterThan(before),
+        expect(calls.filter((c) => c.path === '/admin/issues').length).toBeGreaterThan(before),
+      );
+      expect(
+        await within(gate).findByRole('button', { name: 'Detect chapters' }),
+      ).toBeInTheDocument();
+    });
+
+    it('reads the list again once a detection is queued, so its row says so (BRIDGE-08)', async () => {
+      let queued = false;
+      mockFetch(
+        detectRoutes({
+          'GET /admin/books': (req) => ({
+            body: {
+              books:
+                req.query.get('issue') === 'no_chapters'
+                  ? [
+                      queued
+                        ? { ...plain[0], detect_job: rowJob(plain[0].path, { id: 5 }) }
+                        : plain[0],
+                      plain[1],
+                    ]
+                  : [],
+            },
+          }),
+          'POST /admin/bridge/jobs': (req) => {
+            queued = true;
+            return queuedJob((req.body as { path: string }).path);
+          },
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      const gate = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      expect(within(gate).queryByText('Chapter detection')).not.toBeInTheDocument();
+      await user.click(within(gate).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      expect(await within(gate).findByText('Chapter detection')).toBeInTheDocument();
+      await waitFor(() =>
+        expect(within(gate).queryByRole('button', { name: 'Detect chapters' })).toBeNull(),
       );
     });
 
-    it('shows no detection on the ignored list, though the jobs are cached (BRIDGE-08)', async () => {
-      const open = { ...(queuedJob('Mosse/The Black Gate') as { body: BridgeJob }).body, id: 7 };
-      mockFetch(detectRoutes({ 'GET /admin/bridge/jobs': { body: { jobs: [open] } } }));
+    it('shows no detection on the ignored list, though the list before it had one (BRIDGE-08)', async () => {
+      mockFetch(
+        detectRoutes({
+          'GET /admin/books': (req) => ({
+            body: {
+              books:
+                req.query.get('issue') !== 'no_chapters'
+                  ? []
+                  : req.query.get('issue_ignored') === 'true'
+                    ? [plain[1]]
+                    : [{ ...plain[0], detect_job: rowJob(plain[0].path, { id: 7 }) }],
+            },
+          }),
+        }),
+      );
       const { router } = renderApp('/health?issue=no_chapters');
       const gate = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
       expect(await within(gate).findByText('Chapter detection')).toBeInTheDocument();

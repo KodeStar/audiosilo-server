@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -252,5 +253,55 @@ func TestDescribeAndDetectExcludeEachOther(t *testing.T) {
 	}
 	if _, created, err := q.describe("", book); err != nil || !created {
 		t.Fatalf("describe once the detect ended: %v, %v", created, err)
+	}
+}
+
+// LatestForBooks answers each asked book's newest job of the kind, however
+// many newer jobs other books have: a book queued among hundreds still shows
+// its own (server#273). A book with none, a job of another kind and a book not
+// asked about are left out.
+func TestLatestForBooks(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	q.beatLibrary(t, true, true, KindVerify, KindSidecars, KindDetectChapters)
+	ctx := context.Background()
+	old, _, err := q.detect("", ptr("Author/Book"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Cancel(ctx, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	newest, _, err := q.detect("", ptr("Author/Book"))
+	if err != nil || newest.ID == old.ID {
+		t.Fatalf("a second detect = %+v, %v", newest, err)
+	}
+	// Another kind's newer job for the same book, and more jobs than a page of
+	// the job list holds for other books.
+	q.verify(t, "Author/Book", 0)
+	for i := range MaxListLimit + 5 {
+		if _, _, err := q.detect("", ptr("Other/Book "+strconv.Itoa(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	quoted, _, err := q.detect("", ptr("Author/It's \"quoted\""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := []BookKey{
+		{LibraryID: q.lib, Path: "Author/Book"},
+		{LibraryID: q.lib, Path: "Author/It's \"quoted\""},
+		{LibraryID: q.lib, Path: "Author/No Job"},
+		{LibraryID: q.lib + 1, Path: "Author/Book"},
+	}
+	got, err := q.LatestForBooks(ctx, KindDetectChapters, asked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[asked[0]].ID != newest.ID || got[asked[0]].State != StateQueued || got[asked[1]].ID != quoted.ID {
+		t.Fatalf("LatestForBooks = %+v, want jobs %d and %d", got, newest.ID, quoted.ID)
+	}
+	if got, err := q.LatestForBooks(ctx, KindDetectChapters, nil); err != nil || len(got) != 0 {
+		t.Fatalf("no books = %+v, %v", got, err)
 	}
 }
