@@ -33,6 +33,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/jsonfile"
 	"github.com/kodestar/audiosilo-server/internal/server"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
@@ -558,6 +559,23 @@ func TestRunAnswersStartingBeforeTheDatabase(t *testing.T) {
 		resp.Header.Get("Access-Control-Allow-Origin") != "" {
 		t.Errorf("another origin while starting = %d %v, want the 503 with no grant", resp.StatusCode, resp.Header)
 	}
+	// A browser opening the console is answered the same 503 as a page.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/admin/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+	if resp, err := http.DefaultClient.Do(req); err != nil {
+		t.Fatal(err)
+	} else {
+		page, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" ||
+			!strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") ||
+			!strings.Contains(string(page), "AudioSilo is starting") {
+			t.Errorf("a browser while starting = %d %v %q, want the 503 page", resp.StatusCode, resp.Header, page)
+		}
+	}
 	if banner.wrote() {
 		t.Error("the first-run banner was printed before the start reached the database")
 	}
@@ -638,6 +656,7 @@ func TestRunPortTakenStopsBeforeTheDatabase(t *testing.T) {
 	t.Cleanup(func() { _ = taken.Close() })
 	data := t.TempDir()
 	writeOffConfig(t, data, taken.Addr().String(), "")
+	writeStartMarker(t, data, 0, time.Now().Add(-2*time.Hour)) // a crashed start's
 	reached := false
 	err = Run(context.Background(), Options{DataDir: data, Log: discardLog(), listening: func() { reached = true }})
 	if err == nil || !strings.Contains(err.Error(), "address already in use") && !strings.Contains(err.Error(), "bind") {
@@ -649,4 +668,127 @@ func TestRunPortTakenStopsBeforeTheDatabase(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(data, "audiosilo.db")); !os.IsNotExist(err) {
 		t.Errorf("the database was opened on a taken port: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(data, startMarkerFile)); !os.IsNotExist(err) {
+		t.Errorf("a failed start left a start marker: %v", err)
+	}
+}
+
+// writeStartMarker writes dir's start marker as a server would have: a start
+// that had run running at updated.
+func writeStartMarker(t *testing.T, dir string, running time.Duration, updated time.Time) {
+	t.Helper()
+	if err := jsonfile.Write(filepath.Join(dir, startMarkerFile), startMarker{
+		StartedAt:          updated.Add(-running),
+		StartingForSeconds: int64(running / time.Second),
+		UpdatedAt:          updated,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Under autocert with no certificate it may name, the check's hello can't tell
+// a finished start from a hung one, so it reads the start marker: a start
+// under way is healthy ("starting"), one that has run stuckStartAfter (on the
+// server's clock, or with its marker not rewritten for that long: a hung data
+// folder) is stuck. A marker dated ahead (the clock set back) or unreadable
+// counts no age. A marker is no answer: with nothing listening the check fails
+// on that, not on the marker.
+func TestHealthcheckAutocertStartMarker(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	addr, _ := autocertServer(t, t.TempDir())
+	for name, tc := range map[string]struct {
+		running time.Duration
+		updated time.Time
+		stuck   bool
+	}{
+		"under way":            {5 * time.Minute, now, false},
+		"run for 30 minutes":   {stuckStartAfter, now, true},
+		"not rewritten for 30": {0, now.Add(-stuckStartAfter), true},
+		"run plus unwritten":   {20 * time.Minute, now.Add(-10 * time.Minute), true},
+		"clock set back":       {time.Minute, now.Add(time.Hour), false},
+	} {
+		dir := healthDataDir(t, addr, config.TLSAutocert)
+		writeStartMarker(t, dir, tc.running, tc.updated)
+		var out bytes.Buffer
+		err := Healthcheck(context.Background(), dir, &out)
+		switch {
+		case tc.stuck && (err == nil || !strings.Contains(err.Error(), "the start is stuck")):
+			t.Errorf("%s: Healthcheck = %v, want stuck", name, err)
+		case !tc.stuck && (err != nil || !strings.HasPrefix(out.String(), "starting: ")):
+			t.Errorf("%s: Healthcheck = %v, %q; want healthy, starting", name, err, out.String())
+		}
+	}
+
+	dir := healthDataDir(t, addr, config.TLSAutocert)
+	if err := os.WriteFile(filepath.Join(dir, startMarkerFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Healthcheck(context.Background(), dir, &out); err != nil || !strings.HasPrefix(out.String(), "ok: ") {
+		t.Errorf("unreadable marker: Healthcheck = %v, %q; want ok", err, out.String())
+	}
+
+	dir = healthDataDir(t, freeAddr(t), config.TLSAutocert)
+	writeStartMarker(t, dir, time.Minute, now)
+	if err := Healthcheck(context.Background(), dir, io.Discard); err == nil || !strings.Contains(err.Error(), "no answer") {
+		t.Errorf("nothing listening: Healthcheck = %v, want no answer", err)
+	}
+}
+
+// Where the check asks /healthz, the answer says whether the start finished:
+// a 200 is healthy whatever marker the data folder holds.
+func TestHealthcheckAnswerOutranksStartMarker(t *testing.T) {
+	t.Parallel()
+	dir := healthDataDir(t, healthServer(t, false, healthz(http.StatusOK)), config.TLSOff)
+	writeStartMarker(t, dir, time.Hour, time.Now())
+	var out bytes.Buffer
+	if err := Healthcheck(context.Background(), dir, &out); err != nil || !strings.HasPrefix(out.String(), "ok: ") {
+		t.Fatalf("Healthcheck = %v, %q; want ok", err, out.String())
+	}
+}
+
+// A real start under autocert: a marker a crashed start left two hours ago
+// never reads as this start stuck, as the start writes its own before it
+// listens; the check reads "starting" while the start holds, and "ok" with the
+// marker gone once it finishes.
+func TestRunStartMarkerUnderAutocert(t *testing.T) {
+	data := t.TempDir()
+	addr := freeAddr(t)
+	cfgYAML := fmt.Sprintf("bind: %q\ntls:\n  mode: autocert\n  hosts: [books.example.com]\nupdate_check: false\n", addr)
+	if err := os.WriteFile(config.Path(data), []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeStartMarker(t, data, 0, time.Now().Add(-2*time.Hour))
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	reached, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{DataDir: data, Log: discardLog(), banners: io.Discard, listening: func() {
+			close(reached)
+			<-release
+		}})
+	}()
+	select {
+	case <-reached:
+	case err := <-done:
+		t.Fatalf("Run = %v before it listened", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run never listened")
+	}
+	var out bytes.Buffer
+	if err := Healthcheck(ctx, data, &out); err != nil || !strings.HasPrefix(out.String(), "starting: ") {
+		t.Fatalf("Healthcheck while starting = %v, %q; want healthy, starting", err, out.String())
+	}
+	close(release)
+	waitFor(t, "the started server", func() bool {
+		out.Reset()
+		return Healthcheck(ctx, data, &out) == nil && strings.HasPrefix(out.String(), "ok: ")
+	})
+	if _, err := os.Stat(filepath.Join(data, startMarkerFile)); !os.IsNotExist(err) {
+		t.Errorf("the start marker outlived the start: %v", err)
+	}
+	stop()
+	waitRun(t, done)
 }

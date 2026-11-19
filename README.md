@@ -205,7 +205,12 @@ naming your host only while a valid certificate for it is cached and not yet due
 renewal: otherwise a request naming your host would start a certificate order, and
 failed orders count against Let's Encrypt's limits. It then sends a TLS hello naming
 no host, which autocert refuses without ordering, so it shows that the server is
-listening and answering, not that the database is.
+listening and answering, not that the database is. For the start it reads
+`starting.json` in the data folder instead, which the server keeps there while it
+starts (replacing one a crashed start left behind, and removing it once it answers),
+so a start that has run thirty minutes reads unhealthy under autocert too. A browser
+that opens the console or the player while the server starts gets a short "AudioSilo
+is starting" page that reloads itself every five seconds.
 
 ## Testing & CI
 

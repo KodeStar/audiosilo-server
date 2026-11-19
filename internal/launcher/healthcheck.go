@@ -42,11 +42,11 @@ const stuckStartAfter = 30 * time.Minute
 // for ever.
 // It backs `audiosilo healthcheck`, the Docker image's HEALTHCHECK (server#217):
 // nil is healthy, an error says why not. It opens nothing in the data folder
-// but config.yaml (and under autocert the certificate cache), writes nothing
-// and needs no curl in the image. A data folder without a config.yaml is
-// unhealthy: a server saves one before it listens, so none there means no
-// server is running from that folder (a --data that isn't the server's), never
-// the defaults guessed at.
+// but config.yaml (and under autocert the certificate cache and the start
+// marker), writes nothing and needs no curl in the image. A data folder
+// without a config.yaml is unhealthy: a server saves one before it listens, so
+// none there means no server is running from that folder (a --data that isn't
+// the server's), never the defaults guessed at.
 //
 // An unspecified bind host (0.0.0.0, ::, empty) is asked on 127.0.0.1. With
 // tls.mode selfsigned it speaks https without checking the certificate: it is
@@ -64,7 +64,13 @@ const stuckStartAfter = 30 * time.Minute
 // a TLS hello naming no host, which autocert refuses at once, before its cache
 // or any order; the refusal (a TLS alert) or a finished handshake is healthy,
 // since the server accepted the connection and answered the hello. That proves
-// the server is up and serving, not that its database answers.
+// the server is up and serving, not that its database answers, nor that its
+// start has finished: for that it reads the start marker (startMarkerFile),
+// which a server keeps in its data folder from before it listens until its
+// start ends, and a start it says has run stuckStartAfter is unhealthy here
+// too. The marker is read only after the hello is answered, and a server
+// writes its own over any earlier start's before it listens, so one a crashed
+// start left behind never stands for a later server.
 //
 // A bind or TLS change saved in the console takes effect at the next start, so
 // until then this asks the new address (the saved one) and fails: a restart
@@ -90,6 +96,15 @@ func Healthcheck(ctx context.Context, dataDir string, w io.Writer) error {
 		}
 		if err := helloWithoutName(ctx, addr); err != nil {
 			return err
+		}
+		// Read only once a server answered: it wrote its own marker over
+		// any earlier start's before it listened (markStart).
+		if running, ok := startMarked(abs, time.Now()); ok {
+			if running >= stuckStartAfter {
+				return stuckStart("the server at "+addr+" has been starting", running)
+			}
+			_, _ = fmt.Fprintln(w, "starting: TLS listener at", addr)
+			return nil
 		}
 		_, _ = fmt.Fprintln(w, "ok: TLS listener at", addr)
 		return nil
@@ -179,14 +194,20 @@ func getHealthz(ctx context.Context, addr, host string, tlsOn bool, w io.Writer)
 	case http.StatusServiceUnavailable:
 		if running, ok := startingFor(body); ok {
 			if running >= stuckStartAfter {
-				return fmt.Errorf("the start is stuck: %s has answered \"starting\" for %s (a start gets %s)",
-					target, running.Truncate(time.Minute), stuckStartAfter)
+				return stuckStart(target+` has answered "starting"`, running)
 			}
 			_, _ = fmt.Fprintln(w, "starting:", target)
 			return nil
 		}
 	}
 	return fmt.Errorf("%s answered %s", target, resp.Status)
+}
+
+// stuckStart is the healthcheck's answer for a start that has run
+// stuckStartAfter: what has been starting, and for how long.
+func stuckStart(what string, running time.Duration) error {
+	return fmt.Errorf("the start is stuck: %s for %s (a start gets %s)",
+		what, running.Truncate(time.Minute), stuckStartAfter)
 }
 
 // startingFor reads body as a starting server's answer (server.StartGate): how

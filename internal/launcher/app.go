@@ -143,6 +143,12 @@ func Run(ctx context.Context, opts Options) (err error) {
 	// returns (stopServing), after the deferred work below it: it is deferred
 	// first. The "starting" answer goes out under the API's CORS policy, so a
 	// player on an allowed origin reads it rather than a failed fetch.
+	// The start marker (markStart) is written before the listener opens, over
+	// any an earlier start left, and removed once the gate opens or the start
+	// fails: a healthcheck that can only send a nameless TLS hello (autocert)
+	// reads from it how long the start has run.
+	mark := markStart(abs, log)
+	defer mark.end()
 	gate := server.NewStartGate(func(h http.Handler) http.Handler { return api.CORS(cfg, h) })
 	serveCtx, stopServing := context.WithCancel(ctx)
 	serving, err := server.Start(serveCtx, cfg, gate, log)
@@ -395,6 +401,7 @@ func Run(ctx context.Context, opts Options) (err error) {
 	}
 
 	gate.Open(a.Handler())
+	mark.end()
 	// The banners' links answer from here on.
 	banners.release()
 	if setupToken != "" {

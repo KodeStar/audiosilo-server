@@ -106,7 +106,8 @@ EXPOSE 8080
 # Liveness: the server asks its own /healthz on the bind address and TLS mode
 # config.yaml and the AUDIOSILO_* environment give it (no curl needed;
 # server#217; under tls.mode autocert, without a cached certificate not yet due
-# for renewal, only that its TLS listener answers, see launcher.Healthcheck).
+# for renewal, only that its TLS listener answers and how long the start under
+# way has run, from the data folder's starting.json, see launcher.Healthcheck).
 # The entrypoint's healthcheck mode runs it on the data folder the start
 # resolved from the command's --data, as PUID:PGID: Docker starts a check as
 # root, past the entrypoint, and root may not read config.yaml (an NFS share
