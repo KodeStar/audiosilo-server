@@ -285,7 +285,8 @@ func (k progressCursor) encode() string {
 // or {} is no position, never the start), which the route answers 400
 // invalid_cursor so the Bridge reads the feed again from its start
 // (bridge#50). A cursor names a row once read, and every row's change_seq is
-// at least 1.
+// at least 1, or is the end of a feed no row was written to yet: (0,
+// progressEndASIN), progressFrom's answer to a cursor past it.
 func decodeProgressCursor(s string) (progressCursor, error) {
 	if s == "" {
 		return progressCursor{}, nil
@@ -295,7 +296,7 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 		return progressCursor{}, ErrInvalidCursor
 	}
 	var k progressCursor
-	if json.Unmarshal(raw, &k) != nil || k.Seq < 1 || k.ASIN == "" {
+	if json.Unmarshal(raw, &k) != nil || k.ASIN == "" || k.Seq < 0 || (k.Seq == 0 && k.ASIN != progressEndASIN) {
 		return progressCursor{}, ErrInvalidCursor
 	}
 	return k, nil
@@ -304,8 +305,9 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 // progressFeedKey is the server_state row holding this server's progress feed
 // id: a random id every GET /bridge/progress cursor carries, so a cursor from
 // another feed (another server's, a database started afresh, or this one's
-// before a backup was restored here: RenewProgressFeed) is refused, never read
-// as a place in this feed (bridge#50).
+// before a backup was restored here: RenewProgressFeed) is refused to a Bridge
+// that asks (refuse_stale=1), never read as a place in this feed (bridge#50;
+// an older Bridge's is read as before 2.7.0: progressFrom).
 const progressFeedKey = "progress_feed"
 
 // progressFeedID is the progress feed's id, made on first use.
@@ -329,8 +331,9 @@ func (c *Catalog) progressFeedID(ctx context.Context) (string, error) {
 const progressFeedRestoreKey = "progress_feed_restore"
 
 // RenewProgressFeed gives the progress feed a new id, so every cursor handed
-// out before is refused (400 invalid_cursor) and the Bridge reads the feed
-// again from its start: the launcher's step after restoring a backup, whose
+// out before is refused (400 invalid_cursor, to a Bridge sending
+// refuse_stale=1: progressFrom) and the Bridge reads the feed again from its
+// start: the launcher's step after restoring a backup, whose
 // feed is behind the cursors the Bridge holds (a backup carries its id). Once
 // for a restore (restore names it: when it was applied), which the database
 // records with the new id, so the launcher asks at every start and a start
@@ -350,9 +353,10 @@ func (c *Catalog) RenewProgressFeed(ctx context.Context, restore string) (renewe
 // number the change counter gave) is below mark, the end the launcher last
 // wrote down outside the database: the database went back with no restore
 // recorded, a backup put in place by hand or commits a power cut lost, and it
-// kept its feed id. A cursor past end is refused already (progressFrom), but
-// only until the counter passes it again, after which it would page on past
-// the places written in between; with a new id it is refused for good.
+// kept its feed id. A cursor past end is refused already (progressFrom, with
+// refuse_stale=1), but only until the counter passes it again, after which it
+// would page on past the places written in between; with a new id it is
+// refused for good.
 func (c *Catalog) RenewProgressFeedBehind(ctx context.Context, mark int64) (end int64, renewed bool, err error) {
 	if end, err = c.ProgressFeedEnd(ctx); err != nil || end >= mark {
 		return end, false, err
@@ -396,9 +400,9 @@ func (c *Catalog) ProgressFeedEnd(ctx context.Context) (int64, error) {
 // cursor for ever and so would push no place again) both are read as before
 // 2.7.0, a cursor from another feed as a place in this one, except that one
 // past the end is read as the feed's end (progressEndASIN), so the page is
-// empty and its next reads the rows written from now on. In a feed no row was
-// ever written to (the counter at 0) there is no such place and since stays
-// as it is. The place comes back with feed as its id.
+// empty and its next reads the rows written from now on (with the counter at
+// 0, a feed no row was written to, from its first). The place comes back with
+// feed as its id.
 func (c *Catalog) progressFrom(ctx context.Context, since, feed string, refuseStale bool) (progressCursor, error) {
 	from, err := decodeProgressCursor(since)
 	if err != nil || since == "" {
@@ -415,17 +419,15 @@ func (c *Catalog) progressFrom(ctx context.Context, since, feed string, refuseSt
 		if refuseStale {
 			return progressCursor{}, ErrInvalidCursor
 		}
-		if end > 0 {
-			from = progressCursor{Seq: end, ASIN: progressEndASIN}
-		}
+		from = progressCursor{Seq: end, ASIN: progressEndASIN}
 	}
 	from.Feed = feed
 	return from, nil
 }
 
 // progressEndASIN is a progress cursor's ASIN after every title's (an ASIN is
-// ten upper-case letters and digits, bridge's asinPattern): a cursor at a row
-// number with it is past all of that number's rows, so the feed's end.
+// ten upper-case letters and digits, ValidASIN): a cursor at a row number with
+// it is past all of that number's rows, so the feed's end.
 const progressEndASIN = "~"
 
 // AudibleProgress is a page of the places of a's person that the Bridge may

@@ -5059,8 +5059,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   that sends `refuse_stale=1` (it reads the feed again from its start; an older server ignores the flag, like a
   claim's `share_off=1`): a v0.6.0 Bridge retries any 400 with the same cursor for ever, so without the flag the answer
   is the one before 2.7.0, a cursor from another feed paging on as a place in this one and one past the end answering
-  no rows with the feed's end as `next` (`(end, "~")`, `progressEndASIN`, after every ASIN; `since` with this feed's id in a feed
-  no row was ever written to), so the places written from then on still reach Audible. `ErrInvalidCursor` has one transport mapping, `writeCatalogError`'s 400
+  no rows with the feed's end as `next` (`(end, "~")`, `progressEndASIN`, after every ASIN; `(0, "~")` in a feed no row
+  was ever written to, the one cursor at row 0 `decodeProgressCursor` takes), so the places written from then on still reach Audible. `ErrInvalidCursor` has one transport mapping, `writeCatalogError`'s 400
   `invalid_cursor` (every route's cursor: `GET /bridge/libraries/{id}/books?after=` and the console's Audible titles
   `after` too, which answered `invalid_request` before 2.7.0). `progress.change_seq` (`0066`, `idx_progress_user_change`) is the order
   this server wrote the rows in: drawn from the one-row `progress_change_counter` (strictly increasing, never
