@@ -407,8 +407,9 @@ export function chapterProblem(
 /**
  * The Chapters card's chapter detection (BRIDGE-08), as the read-along card
  * shows its job: the book's newest `chapters.detect` job while it is queued,
- * working or parked, or how it ended (failed, or done while the book still
- * lacks chapters: none were found, or they don't stand), and Detect chapters,
+ * working or parked, or how it ended (failed, or done: none were found, or
+ * they don't stand) while the book still lacks chapters, so an old failure
+ * says nothing once chapters came another way, and Detect chapters,
  * offered as Health offers it for the same book (`canDetect`: an online Bridge
  * that detects chapters, a book library): a book over two hours with fewer than
  * two chapters, no chapter source chosen and no chapters edited (the server
@@ -422,10 +423,10 @@ export function detectCard(
 ): { job?: BridgeJob; offer: boolean } | undefined {
   const lacking =
     detail.book.duration > LONG_WITHOUT_CHAPTERS && (detail.chapters ?? []).length < 2;
-  // Health's row rules (detectRowJob, detectChosenNote), with a done job shown
-  // only while the book still lacks chapters.
+  // Health's row rules (detectRowJob, detectChosenNote), with an ended job
+  // shown only while the book still lacks chapters (Health lists only those).
   const row = detectRowJob(job);
-  const shown = row && (row.job.state !== 'done' || lacking) ? row.job : undefined;
+  const shown = row && (row.open || lacking) ? row.job : undefined;
   const chosen = detectChosenNote('detect', {
     chapters_source: detail.chapter_source,
     chapter_choice: detail.chapter_choice || undefined,
