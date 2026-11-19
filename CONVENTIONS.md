@@ -3833,7 +3833,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   re-rooting, list their episodes at the next scan, and a renamed folder whose old folder holds the
   show again lists them no more: its listing and a stream (which reads feed.json the same way)
   agree. A look of the rerooter's that fails for now (`metadata.TransientFault`: EIO, ESTALE) is no
-  answer either way (`feed.rerooter`'s `fault`): the read lists no episode it might have read in
+  answer either way (`feed.rerooter`'s `fault`), and a folder named is gone only by `metadata.NotExist`
+  (Windows' ERROR_BAD_NETPATH, a share whose server is down, which Go reads as not there, is such a
+  fault, never a folder renamed away): the read lists no episode it might have read in
   the show's folder and is `feed.File.Unsure`. Such a read of a show with an index row keeps the
   row exactly as it was, however it comes (a quiet re-read, a folder changed since, the Bridge's
   forced rescan: no re-index, no episode dropped, no notice, no `cover_version` change), and the
