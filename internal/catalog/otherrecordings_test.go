@@ -390,18 +390,24 @@ func TestOtherRecordingsPlan(t *testing.T) {
 		"every library":        f.all(),
 	} {
 		q, args := otherRecordingsQuery(scopes, me)
-		joined := strings.Join(queryPlan(t, f.c, q, args), "\n")
-		for _, want := range []string{
-			"SEARCH book_matches USING INDEX idx_book_matches_work (work_id=?)",
-			"SEARCH upcoming_owned USING COVERING INDEX idx_upcoming_owned_work (work_id=?",
-			"SEARCH b USING INDEX sqlite_autoindex_books_1 (library_id=? AND rel_path=?)",
-			// Each candidate's own work key (workIDExpr, its id_key check too) by
-			// the book's key on both sides.
-			"SEARCH wm USING INDEX sqlite_autoindex_book_matches_1 (library_id=? AND path=?)",
-			"SEARCH wo USING PRIMARY KEY (library_id=? AND path=?)",
-		} {
-			if !strings.Contains(joined, want) {
-				t.Errorf("%s: plan does not use %s:\n%s", name, want, joined)
+		// WorkBooks and UpcomingOwnedWorks: several works at once, where
+		// upcoming_owned, unpinned, was read by a library's whole key prefix.
+		from, wargs := workBooksFrom(scopes, false, []string{"w-one", "w-two", "w-three"})
+		for i, plan := range [][]string{queryPlan(t, f.c, q, args), queryPlan(t, f.c, `SELECT b.id`+from, wargs)} {
+			joined := strings.Join(plan, "\n")
+			name := fmt.Sprintf("%s (%d)", name, i)
+			for _, want := range []string{
+				"SEARCH book_matches USING INDEX idx_book_matches_work (work_id=?)",
+				"SEARCH upcoming_owned USING COVERING INDEX idx_upcoming_owned_work (work_id=?",
+				"SEARCH b USING INDEX sqlite_autoindex_books_1 (library_id=? AND rel_path=?)",
+				// Each candidate's own work key (workIDExpr, its id_key check too) by
+				// the book's key on both sides.
+				"SEARCH wm USING INDEX sqlite_autoindex_book_matches_1 (library_id=? AND path=?)",
+				"SEARCH wo USING PRIMARY KEY (library_id=? AND path=?)",
+			} {
+				if !strings.Contains(joined, want) {
+					t.Errorf("%s: plan does not use %s:\n%s", name, want, joined)
+				}
 			}
 		}
 	}

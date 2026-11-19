@@ -100,19 +100,18 @@ func notCopyOfSQL(t, asin, isbn string) (string, []any) {
 // indexes on both sides (idx_book_matches_work, idx_upcoming_owned_work) and
 // each kept only when its own work key is one of works, so a book whose
 // recorded match names another work is not one of them whatever its
-// identifiers resolved to. INDEXED BY on the recorded matches: a caller
-// reaching one library has its library_id pushed down into both candidate
-// reads, and SQLite (no ANALYZE statistics here) then reads every recorded
-// match of that library by the primary key's prefix rather than the work's few
-// by idx_book_matches_work. upcoming_owned needs no hint: its work index covers
-// both columns.
+// identifiers resolved to. INDEXED BY on both: a caller reaching one library
+// has its library_id pushed down into both candidate reads, and SQLite (no
+// ANALYZE statistics here) then reads every row of that library by the primary
+// key's prefix rather than the works' few by their work index (upcoming_owned
+// too once works holds more than one: a /meta's rail works).
 func workBooksFrom(scopes []Scope, all bool, works []string) (string, []any) {
 	in := `(` + placeholders(len(works)) + `)`
 	ids := anyOf(works)
 	q := ` FROM (
 		    SELECT library_id, path FROM book_matches INDEXED BY idx_book_matches_work WHERE work_id IN ` + in + `
 		    UNION
-		    SELECT library_id, path FROM upcoming_owned WHERE work_id IN ` + in + `
+		    SELECT library_id, path FROM upcoming_owned INDEXED BY idx_upcoming_owned_work WHERE work_id IN ` + in + `
 		  ) w
 		  CROSS JOIN books b ON b.library_id = w.library_id AND b.rel_path = w.path
 		  CROSS JOIN libraries l ON l.id = b.library_id
