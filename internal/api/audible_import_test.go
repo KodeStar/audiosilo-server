@@ -137,6 +137,13 @@ func TestAudibleBackupFlow(t *testing.T) {
 		  AND details LIKE '%B000000001%' AND details LIKE '%New/One.m4b%'`).Scan(&audited); err != nil || audited != 1 {
 		t.Fatalf("the destination was audited %d times (%v), want once", audited, err)
 	}
+	// The row's target names the account, its details keep its id, for the log's reader.
+	for _, action := range []string{"bridge.audible.account", "bridge.audible.title"} {
+		if err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_events WHERE action = ?
+			  AND details LIKE '%"account":"`+testAccount+`"%' AND target = 'Chris (US)'`, action).Scan(&audited); err != nil || audited != 1 {
+			t.Fatalf("%s audited by name %d times (%v), want once", action, audited, err)
+		}
+	}
 	resp, out := b.do(t, "POST", backupPath("B000000001"), b.adminTok, "")
 	var queued struct {
 		JobID int64                 `json:"job_id"`
@@ -558,6 +565,17 @@ func TestAudibleBackupInvalidDestination(t *testing.T) {
 	if _, err := b.db.ExecContext(context.Background(),
 		`UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE asin IN ('B000000001', 'B000000003')`); err != nil {
 		t.Fatal(err)
+	}
+	// The title says so, for the console to word (dest_invalid), and its Back
+	// up is off (can_backup); a valid or empty destination doesn't.
+	if _, err := b.db.ExecContext(context.Background(),
+		`UPDATE audible_titles SET dest_path = 'Author/B.m4b' WHERE asin = 'B000000002'`); err != nil {
+		t.Fatal(err)
+	}
+	for asin, invalid := range map[string]bool{"B000000001": true, "B000000002": false} {
+		if x := b.audibleTitle(t, asin); x.DestInvalid != invalid || x.CanBackup == invalid {
+			t.Fatalf("%s dest_invalid = %v, can_backup = %v, want dest_invalid %v", asin, x.DestInvalid, x.CanBackup, invalid)
+		}
 	}
 	resp, out := b.do(t, "POST", "/api/v1/admin/audible/titles/"+testAccount+"/B000000001/backup", b.adminTok, "")
 	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_dest_path" || reasonOf(out) != "title" {

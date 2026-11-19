@@ -3531,7 +3531,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   characters and recaps it is writing): while the module is off the Bridge's claim and report answers carry
   `share_off: true` (`Job.ShareOff`, `Service.flagShareOff`, computed, never stored, omitted otherwise), and
   a Bridge that honours it keeps the job's results local, filing nothing, and says so in its result
-  (`share_skipped`). Such a Bridge claims with `share_off=1` (`ClaimOptions.ShareOff`; an older server
+  (`share_skipped`: `contributions_off`, or `no_share_job` for a book no share job followed any more, each
+  worded by the console as `bridge.generate.shareSkipped.<reason>`). Such a Bridge claims with `share_off=1` (`ClaimOptions.ShareOff`; an older server
   ignores the parameter): a queued generate-and-share job is then handed to it flagged rather than held
   (`sharesAlong`), while a claim without it (an older Bridge, which would share anyway) still finds the job
   held. A podcast or Audible job a claim handed out carries on with its module off too.
@@ -4024,11 +4025,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`import {job_id, state, code, conflict}`, `state` a job state or `pending`; `conflict` is what an `exists`
   failure found in the way, `file`/`book`/`audio` as a plan's, from the result's `conflict`, else the
   Bridge's message: `importConflict`). A title's `can_backup` is Back up allowed (`backupRefusal`, the
-  account's pause aside), so the console never derives it. A title going gone drops its plan, its contest,
+  account's pause aside; false while `dest_invalid`), so the console never derives it. A title going gone drops its plan, its contest,
   a pending request and its reason (a preorder's "Not released yet"). **Policy** (`AudiblePolicyImports`,
   after each final titles PUT while the module is on and a Bridge offers the kind, past the PUT's answer
   (`afterAudiblePoll`, waited for by `StopModules`; a final call served once it began waiting queues nothing, the next poll asks again); `autoImport.wants`, a
-  table test): available, not on this server, not ignored, nothing open; a pending request always; otherwise not
+  table test; a title whose stored destination no longer validates is left out, its request kept, as Back up
+  everything skips it): available, not on this server, not ignored, nothing open; a pending request always; otherwise not
   rejected, not `contested` (`AudibleReasonContested`: the Bridge left it unmatched because another title
   claimed the same book, so the book is here under that title), never attempted, first seen after `policy_since`, and `all`, or `series` with a book in one of
   its series the account's person can see (`seriesOwner`, by series key, `book_more_series` too).
@@ -4052,10 +4054,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `book` override, which the scan would join into it: `checkDestOwnFolder`, `metadata.IsDiscFolder`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
   `invalid_policy` / `invalid_template`), audited: a queued Back up `bridge.job` (kind `audible.import`; also
   when recording it on the title failed), a pending one `bridge.audible.backup`, then `bridge.audible.backup_all`
-  / `title` / `account` (the audit guard reads `moduleRoutes.Admin` routes too). The
+  / `title` / `account` (the audit guard reads `moduleRoutes.Admin` routes too), each with the account's id
+  in its details and its name as the row's target, as `bridge.audible.remove` has it (`audibleAccountName`:
+  its label, else "person (STORE)", else the id), an empty `template` or `dest_path` in the console's audit
+  details reading "Automatic". The
   accounts list adds `template`, `policy_since` and `backup_estimate {count, bytes}` (Back up everything's
-  titles, runtime at 8000 bytes a second); titles add `import`, `needs_attention`, `planned` and `contested` (see Audible
-  unmatched titles below). The Bridge's account
+  titles, runtime at 8000 bytes a second, less those it skips for an invalid destination: `backupAllQueuedSQL`, SQL function `audible_dest_ok`); titles add `import`, `needs_attention`, `planned`, `contested` (see Audible
+  unmatched titles below) and `dest_invalid` (a stored `dest_path` `CheckAudibleDestPath` now refuses). The Bridge's account
   PUT sets `policy` on create only (the console owns it after). Removing an account cancels its open
   imports. **Console**: per title Back up (off while its account is paused), Not this book (and undo) and
   Destination... (`title-actions.tsx`), the import state and code (`importStatus`; the loaded titles are asked
@@ -4093,7 +4098,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   folder (`state` `new`: a new author folder with the automatic placement, a new folder with a template) or a
   new series (`series_new`), where the Bridge most likely missed one the library has under another spelling
   (server#372), a note when the plan's template differs from
-  the account's now, and "Your destination is checked when the backup starts" instead while a `dest_path` is set;
+  the account's now, and "Your destination is checked when the backup starts" instead while a `dest_path` is set,
+  or, in warning tone and in Needs a look (`needsLook`), that it is no longer valid while `dest_invalid`;
   Destination...'s placeholder is the planned path, never its value (`plannedPlaceholder`). `ReasonNote`: `contested`
   explained with the other titles and the book linked (`bookRoute`), a plain sentence without data (this title isn't
   shown as here: the other may well be, when the Bridge kept it as the better match); a reason that is
@@ -4181,10 +4187,29 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the API shows `notify.Redact`'s address and `has_secret`), `server_events` (the bell's feed, 90 days,
   `dedup_key` announces an event once while it is in the feed, an update once per version: the check
   and the record one step under `dedupMu`, so two emits at once announce it once,
-  server#408). `notify.Service.Emit` records the event and queues one
-  delivery per enabled subscribed destination (4 workers, queue 256, drop + log when full); a delivery is
+  server#408). `notify.Service.Emit` records the event and queues each
+  enabled subscribed destination (4 workers, queue 256, left owed + logged when full); a delivery is
   retried twice on timeout/unreachable/429/5xx (queued again after its delay, never waited out on a
-  worker), never follows a redirect, and records only a short reason
+  worker), three attempts in all, restarts included. Every delivery is kept in the **outbox**
+  (`notify_outbox`, `0089`, server#465): `catalog.RecordServerEvent` writes one row per enabled subscribed
+  destination in the transaction that records the event, `notify.Service.Run` queues every destination
+  with a row still `pending` at the start and every 5 minutes after (`sweepEvery`; an event newer than
+  `catalog.NotifyOutboxRetention`, 7 days, which the daily retention prunes). A destination has one
+  **lane** per run (`Service.lanes`, `open`/`idle`/`drop`): what is queued is the destination, and a worker
+  sends what it is owed one at a time, oldest event first (`Service.drain` over `catalog.NextDelivery`, by
+  event id), so a later notice waits while an earlier one is still owed, its retries included (up to 70 s
+  per notice ahead of it), and a destination never hears a feed recovered before it hears it failing; an
+  event's own `Deliver` only opens the lane, so it can't overtake an older owed row, and the sweep and
+  `Deliver` can't send one row twice. Destinations don't wait for each other. Each attempt is counted on
+  its row before it is made
+  (`catalog.ClaimDelivery`, a compare-and-swap on `attempts`), then the row
+  ends `delivered`, `failed` or `skipped` (the destination switched off or unsubscribed first; a deleted
+  one takes its rows). So a notice owed when the server stopped goes to each destination once at the next
+  start (again only when it arrived as the server stopped, before its row ended: at least once, and a
+  webhook's `id` tells the two apart; a worker handed a destination once the stop began leaves its rows
+  owed, no attempt counted), and the bell, the event itself, is never written again. A destination left
+  behind by a full queue, or whose lane stopped on an outbox error, waits
+  for the next sweep. It never follows a redirect, and records only a short reason
   (`timeout`, `unreachable`, `http_<status>`, `failed`), never the URL or the answer. Webhooks POST JSON
   with `X-AudioSilo-Event` and, with a secret, `X-AudioSilo-Timestamp` + `X-AudioSilo-Signature: sha256=`
   HMAC of `<timestamp>.<body>` (`notify.Sign`); ntfy is a JSON publish to the server root (Bearer token
@@ -4206,10 +4231,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a failure by an expired last lease is reported too, once its transaction commits; the job's `error`,
   the Bridge's own text that can name its folders, is the bell's `detail`, never sent out), and podcasts
   (server#232, admin only, through `catalog.SetPodcastNotice`: the event (`notify.PodcastEvent`) is recorded
-  in the same transaction as the write that found the news, its dedup key checked there too, and delivered
-  after the commit (`notify.Service.Deliver`), so a crash can't lose the feed's record of a notice whose flag
-  committed; the destinations aren't sent it again after a crash between the two, there being no per-event
-  delivery record, server#403):
+  in the same transaction as the write that found the news, its dedup key checked there too, with its
+  outbox rows, and delivered after the commit (`notify.Service.Deliver`), so a crash can't lose the notice
+  of a flag that committed, for the bell or the destinations (server#403, server#465)):
   `podcast_episodes_new`, one per show per index (`catalog.IndexPodcastShow`: episodes new to a show indexed
   before under the same `show_id`, its rows all there: a path, GUID and episode id not indexed, not
   published before the show's previous `latest_published` (the same date, a date-only twin, or no date is

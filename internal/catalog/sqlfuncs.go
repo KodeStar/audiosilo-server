@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"unicode"
 
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
@@ -34,6 +35,16 @@ func init() {
 				return int64(1), nil
 			}
 			return int64(0), nil
+		})
+	// audible_dest_ok(dest_path): whether an Audible title's stored destination
+	// still validates (bridge.CheckAudibleDestPath, "" the automatic one), which
+	// "Back up everything" skips a title for (backupAllQueuedSQL).
+	store.RegisterFunction("audible_dest_ok", 1,
+		func(args []driver.Value) (driver.Value, error) {
+			if bridge.CheckAudibleDestPath(sqlText(args[0])) != nil {
+				return int64(0), nil
+			}
+			return int64(1), nil
 		})
 }
 

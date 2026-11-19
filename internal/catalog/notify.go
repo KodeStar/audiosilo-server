@@ -162,7 +162,11 @@ type ServerEvent struct {
 }
 
 // RecordServerEvent appends an event, stamped now, and returns it. dedupKey, when
-// not empty, is what ServerEventSeen looks for.
+// not empty, is what ServerEventSeen looks for. In the same transaction it
+// queues the event in the outbox for every enabled destination subscribed to
+// its kind (server#465), so a delivery still owed when the server stops is made
+// at the next start (PendingDeliveries). On a snapshot (onSnapshot) both join
+// the caller's transaction: the write that raised the event.
 func (c *Catalog) RecordServerEvent(ctx context.Context, kind string, data map[string]any, dedupKey string) (ServerEvent, error) {
 	if data == nil {
 		data = map[string]any{}
@@ -172,19 +176,144 @@ func (c *Catalog) RecordServerEvent(ctx context.Context, kind string, data map[s
 		return ServerEvent{}, err
 	}
 	at := formatSessionTime(c.now())
-	res, err := c.db.ExecUserState(ctx,
-		`INSERT INTO server_events(at, kind, data, dedup_key) VALUES(?,?,?,?)`, at, kind, string(b), dedupKey)
-	if err != nil {
-		return ServerEvent{}, err
-	}
-	id, err := res.LastInsertId()
+	var id int64
+	err = c.db.WithUserStateTx(ctx, "RecordServerEvent", func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO server_events(at, kind, data, dedup_key) VALUES(?,?,?,?)`, at, kind, string(b), dedupKey)
+		if err != nil {
+			return err
+		}
+		if id, err = res.LastInsertId(); err != nil {
+			return err
+		}
+		// json_valid first (CASE fixes the order): json_each raises on events
+		// that aren't JSON, which would lose the event, and on a snapshot the
+		// write that raised it, where scanTarget reads them as no events.
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO notify_outbox(event_id, target_id)
+			 SELECT ?, id FROM notification_targets
+			 WHERE enabled = 1 AND CASE WHEN json_valid(events)
+			   THEN EXISTS (SELECT 1 FROM json_each(events) WHERE value = ?) ELSE 0 END`, id, kind)
+		return err
+	})
 	if err != nil {
 		return ServerEvent{}, err
 	}
 	// Round-trip the data so the caller sees what a reader will (numbers as float64).
-	ev := ServerEvent{ID: id, At: at, Kind: kind, Data: map[string]any{}}
-	_ = json.Unmarshal(b, &ev.Data)
-	return ev, nil
+	return ServerEvent{ID: id, At: at, Kind: kind, Data: eventData(b)}, nil
+}
+
+// eventData decodes an event's stored data (an empty map when it can't be read).
+func eventData(b []byte) map[string]any {
+	data := map[string]any{}
+	_ = json.Unmarshal(b, &data)
+	return data
+}
+
+// NotifyOutboxRetention is how long an event's outbox rows are kept: a
+// delivery still pending then (a server stopped that long) is not made.
+const NotifyOutboxRetention = 7 * 24 * time.Hour
+
+// Outbox delivery states (notify_outbox.state), which starts 'pending' (written
+// as a literal in the queries, so the pending rows' partial index serves them).
+const (
+	DeliveryDelivered = "delivered"
+	// DeliveryFailed: the attempts ran out, or the destination refused it.
+	DeliveryFailed = "failed"
+	// DeliverySkipped: the destination was switched off or unsubscribed first.
+	DeliverySkipped = "skipped"
+)
+
+// OutboxDelivery is one event owed to one destination. Attempts counts the
+// sends begun, across restarts.
+type OutboxDelivery struct {
+	ID       int64
+	TargetID int64
+	Attempts int
+	Event    ServerEvent
+}
+
+// pendingDeliveries reads the deliveries still owed (state pending) whose event
+// is newer than NotifyOutboxRetention; scanDelivery reads one.
+const pendingDeliveries = `SELECT o.id, o.target_id, o.attempts, e.id, e.at, e.kind, e.data
+	FROM notify_outbox o JOIN server_events e ON e.id = o.event_id
+	WHERE o.state = 'pending' AND e.at >= ?`
+
+func scanDelivery(scan func(...any) error, d *OutboxDelivery) error {
+	var data []byte
+	if err := scan(&d.ID, &d.TargetID, &d.Attempts, &d.Event.ID, &d.Event.At, &d.Event.Kind, &data); err != nil {
+		return err
+	}
+	d.Event.Data = eventData(data)
+	return nil
+}
+
+// PendingDeliveries returns the deliveries still owed (state pending) for one
+// event, or for every event when eventID is 0 (the start's redelivery), oldest
+// event first. An event older than NotifyOutboxRetention is passed over.
+func (c *Catalog) PendingDeliveries(ctx context.Context, eventID int64) ([]OutboxDelivery, error) {
+	q := pendingDeliveries
+	args := []any{formatSessionTime(c.now().Add(-NotifyOutboxRetention))}
+	if eventID != 0 {
+		q += ` AND o.event_id = ?`
+		args = append(args, eventID)
+	}
+	return queryRows(ctx, c.db, func(rows *sql.Rows, d *OutboxDelivery) error {
+		return scanDelivery(rows.Scan, d)
+	}, q+` ORDER BY o.event_id, o.id`, args...)
+}
+
+// NextDelivery returns the delivery a destination is owed first: its pending
+// row with the oldest event (the lowest event id, which is the order the
+// events were recorded in; never the clock's at, which can step back). False
+// when it is owed nothing. notify.Service sends a destination's notices in
+// this order, one at a time.
+func (c *Catalog) NextDelivery(ctx context.Context, targetID int64) (OutboxDelivery, bool, error) {
+	var d OutboxDelivery
+	err := scanDelivery(c.db.QueryRowContext(ctx,
+		pendingDeliveries+` AND o.target_id = ? ORDER BY o.event_id LIMIT 1`,
+		formatSessionTime(c.now().Add(-NotifyOutboxRetention)), targetID).Scan, &d)
+	if errors.Is(err, sql.ErrNoRows) {
+		return OutboxDelivery{}, false, nil
+	}
+	return d, err == nil, err
+}
+
+// ClaimDelivery counts one more attempt at a pending delivery that has had
+// attempts so far, and reports whether this caller has it: false when another
+// counted that attempt first (a stale copy) or it is no longer pending. It
+// orders the attempts; it doesn't stop a copy read after another's claim from
+// sending again (within a run, notify.Service's one lane per destination does).
+func (c *Catalog) ClaimDelivery(ctx context.Context, id int64, attempts int) (bool, error) {
+	res, err := c.db.ExecUserState(ctx,
+		`UPDATE notify_outbox SET attempts = attempts + 1 WHERE id = ? AND state = 'pending' AND attempts = ?`,
+		id, attempts)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// FinishDelivery ends a pending delivery in state (delivered, failed or
+// skipped), with the failure's short reason.
+func (c *Catalog) FinishDelivery(ctx context.Context, id int64, state, errText string) error {
+	_, err := c.db.ExecUserState(ctx,
+		`UPDATE notify_outbox SET state = ?, last_error = ? WHERE id = ? AND state = 'pending'`,
+		state, errText, id)
+	return err
+}
+
+// PruneNotifyOutbox deletes the outbox rows of events older than cutoff,
+// whatever their state.
+func (c *Catalog) PruneNotifyOutbox(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := c.db.ExecUserState(ctx,
+		`DELETE FROM notify_outbox WHERE event_id IN (SELECT id FROM server_events WHERE at < ?)`,
+		formatSessionTime(cutoff))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // ServerEventSeen reports whether an event of this kind and key was recorded (and
@@ -220,12 +349,11 @@ func (c *Catalog) ListServerEvents(ctx context.Context, before int64, limit int,
 	q += ` ORDER BY id DESC LIMIT ?`
 	args = append(args, limit+1)
 	events, err := queryRows(ctx, c.db, func(rows *sql.Rows, e *ServerEvent) error {
-		var data string
+		var data []byte
 		if err := rows.Scan(&e.ID, &e.At, &e.Kind, &data); err != nil {
 			return err
 		}
-		e.Data = map[string]any{}
-		_ = json.Unmarshal([]byte(data), &e.Data)
+		e.Data = eventData(data)
 		return nil
 	}, q, args...)
 	if err != nil {

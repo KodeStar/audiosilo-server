@@ -719,10 +719,9 @@ func renewProgressFeed(ctx context.Context, cat *catalog.Catalog, dataDir string
 // up into per-day totals (dropping their device, app and time of day), blanks the
 // address of signed-out devices, deletes dead cast tokens (expired, or their
 // sender signed out) with the book each was for and spent or expired pairing
-// tokens, drops audit events and feed
-// events past their retention, deletes listening sync events past
-// catalog.SyncRetention, and trims the community metadata cache to its newest
-// rows.
+// tokens, drops audit events, feed events and the notification outbox past
+// their retention, deletes listening sync events past catalog.SyncRetention,
+// and trims the community metadata cache to its newest rows.
 func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service, sessions func() time.Duration, log *slog.Logger) {
 	prune := func() {
 		now := time.Now()
@@ -731,6 +730,9 @@ func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service,
 		}
 		if _, err := cat.PruneServerEvents(ctx, now.Add(-catalog.ServerEventRetention)); err != nil && ctx.Err() == nil {
 			log.Warn("event feed retention failed", "err", err)
+		}
+		if _, err := cat.PruneNotifyOutbox(ctx, now.Add(-catalog.NotifyOutboxRetention)); err != nil && ctx.Err() == nil {
+			log.Warn("notification outbox retention failed", "err", err)
 		}
 		if err := authSvc.ForgetRevokedAddresses(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("forgetting signed-out device addresses failed", "err", err)

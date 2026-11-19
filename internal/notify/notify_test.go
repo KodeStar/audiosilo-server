@@ -141,14 +141,24 @@ func (f *fakeDest) wait(t *testing.T, n int) []received {
 	return nil
 }
 
+func (f *fakeDest) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.got)
+}
+
+// newTestService is a service over cat, not yet running.
+func newTestService(cat *catalog.Catalog) *Service {
+	return New(cat, "1.2.3", func() Server { return Server{Name: "Hearthside", PublicURL: "https://books.example.com"} },
+		slog.New(slog.DiscardHandler))
+}
+
 func newService(t *testing.T) (*Service, *catalog.Catalog, context.Context) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	db := storetest.Open(t)
-	cat := catalog.New(db, time.Now)
-	s := New(cat, "1.2.3", func() Server { return Server{Name: "Hearthside", PublicURL: "https://books.example.com"} },
-		slog.New(slog.DiscardHandler))
+	cat := catalog.New(storetest.Open(t), time.Now)
+	s := newTestService(cat)
 	s.delays = []time.Duration{time.Millisecond, time.Millisecond}
 	s.Run(ctx)
 	return s, cat, ctx

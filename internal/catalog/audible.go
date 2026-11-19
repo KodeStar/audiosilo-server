@@ -442,7 +442,7 @@ func (c *Catalog) AudibleAccounts(ctx context.Context) ([]AudibleAccount, error)
 	counts, err := c.db.QueryContext(ctx, `SELECT t.account, COUNT(*),
 		    SUM(t.state = 'available'), SUM(t.state = 'preorder'), SUM(t.state = 'unavailable'), SUM(t.state = 'gone'),
 		    SUM(t.match_path IS NOT NULL AND t.rejected = 0),
-		    SUM(CASE WHEN `+backupAllSQL+` THEN 1 ELSE 0 END), SUM(CASE WHEN `+backupAllSQL+` THEN COALESCE(t.runtime_s, 0) ELSE 0 END)
+		    SUM(CASE WHEN `+backupAllQueuedSQL+` THEN 1 ELSE 0 END), SUM(CASE WHEN `+backupAllQueuedSQL+` THEN COALESCE(t.runtime_s, 0) ELSE 0 END)
 		  FROM audible_titles t GROUP BY t.account`)
 	if err != nil {
 		return nil, err
@@ -569,8 +569,13 @@ type AudibleTitle struct {
 	Ignored  bool `json:"ignored"`
 	// NoSync is the console's "Don't sync this book" (Phase 4c): neither
 	// direction of the account's sync touches its book. Backups don't read it.
-	NoSync      bool   `json:"no_sync"`
-	DestPath    string `json:"dest_path"`
+	NoSync   bool   `json:"no_sync"`
+	DestPath string `json:"dest_path"`
+	// DestInvalid: a DestPath stored before a rule tightened that
+	// bridge.CheckAudibleDestPath now refuses, so its backup would be refused
+	// (CanBackup is false; Back up everything skips it and its estimate leaves
+	// it out): the console says to set it again.
+	DestInvalid bool   `json:"dest_invalid"`
 	FirstSeen   string `json:"first_seen"`
 	UpdatedAt   string `json:"updated_at"`
 	ImportJobID *int64 `json:"import_job_id"`
@@ -1097,7 +1102,8 @@ func scanAudibleTitle(row rowScanner, now time.Time) (*AudibleTitle, error) {
 		t.Import = &AudibleImport{JobID: &j.ID, State: j.State, Code: code, Conflict: importConflict(j, code)}
 	}
 	t.NeedsAttention = preorderOverdue(&t, pending, now)
-	t.CanBackup = t.backupRefusal() == nil
+	t.DestInvalid = bridge.CheckAudibleDestPath(t.DestPath) != nil
+	t.CanBackup = t.backupRefusal() == nil // false while DestInvalid
 	return &t, nil
 }
 

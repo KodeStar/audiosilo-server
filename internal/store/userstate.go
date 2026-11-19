@@ -82,6 +82,11 @@ var userStateTables = map[string]tableRule{
 	"reading_progress":   {rows: true},
 	"server_events":      {rows: true},
 	"meta_cache":         {rows: true},
+
+	// The notification outbox (migration 0089): what each destination is still
+	// owed, read only by internal/notify.
+	"notify_outbox": {rows: true},
+
 	// Upcoming releases (internal/upcoming, migration 0059): derived from the
 	// books and the community metadata, read only by GET /me/upcoming and the
 	// job itself, never by a content cache. The daily run rewrites them

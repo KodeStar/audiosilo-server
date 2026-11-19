@@ -322,14 +322,20 @@ function TitleRow({
  * Where an unmatched title's backup would go, as the Bridge planned it at its
  * last check: a warning when the place is taken or the plan failed, a note
  * when the account's template changed since. With a destination of the
- * admin's own, that is checked when the backup starts instead. None for a
- * title that can't be backed up (unavailable, or gone from the account).
+ * admin's own, that is checked when the backup starts instead, or a warning
+ * that it is no longer valid (dest_invalid: stored before a rule tightened).
+ * None for a title that can't be backed up (unavailable, or gone from the
+ * account).
  */
 function PlannedNote({ title: x, template }: { title: AudibleTitle; template?: string }) {
   const { t } = useTranslation();
   if (x.state === 'unavailable' || x.state === 'gone') return null;
   if (x.dest_path && (!x.match || x.rejected))
-    return (
+    return x.dest_invalid ? (
+      <StatusText tone="warn" colored className="text-[12.5px]">
+        {t('audible.planned.destInvalid')}
+      </StatusText>
+    ) : (
       <span className="text-[12.5px] text-muted-foreground">{t('audible.planned.override')}</span>
     );
   const line = plannedLine(x, template);

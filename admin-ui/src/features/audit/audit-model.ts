@@ -95,6 +95,7 @@ export function valueText(v: unknown, t: Translate, fmt: Formatters): string {
 export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): DetailLine[] {
   const out: DetailLine[] = [];
   const label = (key: string) => t(`audit.detail.${key}`, { defaultValue: key });
+  const audible = e.action.startsWith('bridge.audible.');
   for (const [key, v] of Object.entries(e.details)) {
     if (key === 'changes' && Array.isArray(v)) {
       for (const c of v as { setting?: unknown; from?: unknown; to?: unknown }[]) {
@@ -138,13 +139,16 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
       continue;
     }
     let value: string;
-    if (key === 'kind' && e.action.startsWith('issue.') && typeof v === 'string')
+    // An empty placement template or destination is the automatic placement.
+    if (audible && (key === 'template' || key === 'dest_path') && v === '')
+      value = t('audit.value.automatic');
+    else if (key === 'kind' && e.action.startsWith('issue.') && typeof v === 'string')
       value = t(`health.kind.${v}`, { defaultValue: v });
     // A Bridge job's kind ("bridge.verify") by the name the Bridge page gives it.
     else if (key === 'kind' && e.action.startsWith('bridge.') && typeof v === 'string')
       value = t(`bridge.kind.${v}`, { defaultValue: v });
     // An Audible account's backup policy by the words its settings give it.
-    else if (key === 'policy' && e.action.startsWith('bridge.audible.') && typeof v === 'string')
+    else if (key === 'policy' && audible && typeof v === 'string')
       value = t(`audible.policy.${v}`, { defaultValue: v });
     else if (Object.hasOwn(ENUMS, key) && typeof v === 'string')
       value = t(`audit.enum.${ENUMS[key]}.${v}`, { defaultValue: v });

@@ -304,6 +304,36 @@ func TestAudiblePendingRejectedMatch(t *testing.T) {
 	}
 }
 
+// A preorder's request made before a rule tightened its stored destination
+// isn't queued on release (the queue would refuse it at every poll): it waits,
+// still requested, until the console sets the destination again.
+func TestAudiblePendingInvalidDest(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	pre := AudibleTitleInput{ASIN: "B000000001", Title: "Soon", State: AudiblePreorder, ReleaseDate: "2026-11-10"}
+	f.poll(t, "p1", pre)
+	if _, pending, err := f.c.RequestAudibleBackup(f.ctx, "acct0001", "B000000001"); err != nil || !pending {
+		t.Fatalf("back up = %t, %v", pending, err)
+	}
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE asin = 'B000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	pre.State = AudibleAvailable
+	f.poll(t, "p2", pre)
+	if got := f.policyImports(t); len(got) != 0 {
+		t.Fatalf("released with an invalid destination: %v", got)
+	}
+	if tt := f.title(t, "B000000001"); tt.Import == nil || tt.Import.State != AudibleImportPending || !tt.DestInvalid {
+		t.Fatalf("the request = %+v, dest_invalid %t", tt.Import, tt.DestInvalid)
+	}
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000001", AudibleTitlePatch{DestPath: new("Author/A.m4b")}); err != nil {
+		t.Fatal(err)
+	}
+	if ps, err := f.c.AudiblePolicyImports(f.ctx, "acct0001"); err != nil || len(ps) != 1 || !ps[0].Requested {
+		t.Fatalf("set again: %+v, %v; want the request", ps, err)
+	}
+}
+
 // Preorder clock: a preorder released by the UTC date and not yet available
 // makes its account due hourly instead of every poll_hours, for 14 days; then
 // it needs attention and the account goes back to its interval.
@@ -604,6 +634,31 @@ func TestAudibleBackupRequests(t *testing.T) {
 	}
 }
 
+// "Back up everything"'s estimate leaves out a title whose stored destination
+// no longer validates (the batch skips it), so its confirm counts what it
+// queues; a valid destination of the title's own is counted.
+func TestAudibleEstimateSkipsInvalidDest(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	timed := func(asin string, s int64) AudibleTitleInput {
+		x := avail(asin, "")
+		x.RuntimeS = s
+		return x
+	}
+	f.poll(t, "p1", timed("B000000001", 3600), timed("B000000002", 60), timed("B000000003", 7200))
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000002", AudibleTitlePatch{DestPath: new("Author/B.m4b")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET dest_path = '.hidden/C.m4b' WHERE asin = 'B000000003'`); err != nil {
+		t.Fatal(err)
+	}
+	accts, err := f.c.AudibleAccounts(f.ctx)
+	if err != nil || accts[0].BackupEstimate == nil ||
+		*accts[0].BackupEstimate != (AudibleEstimate{Count: 2, Bytes: 3660 * audibleBytesPerSecond}) {
+		t.Fatalf("estimate = %+v, %v, want the invalid destination left out", accts[0].BackupEstimate, err)
+	}
+}
+
 func contested(asin, series string) AudibleTitleInput {
 	t := avail(asin, series)
 	t.Reason = AudibleReasonContested
@@ -798,8 +853,14 @@ func TestAudibleCanBackup(t *testing.T) {
 	}
 	f.poll(t, "p1", avail("B000000001", ""), AudibleTitleInput{ASIN: "B000000002", State: AudiblePreorder},
 		AudibleTitleInput{ASIN: "B000000003", State: AudibleUnavailable}, matched("B000000004"), matched("B000000005"),
-		avail("B000000006", ""), avail("B000000007", ""), AudibleTitleInput{ASIN: "B000000008", State: AudiblePreorder})
+		avail("B000000006", ""), avail("B000000007", ""), AudibleTitleInput{ASIN: "B000000008", State: AudiblePreorder},
+		avail("B000000009", ""), AudibleTitleInput{ASIN: "B000000010", State: AudiblePreorder})
 	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000005", AudibleTitlePatch{Rejected: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	// A destination stored before a rule tightened (the patch refuses it now).
+	if _, err := f.c.db.ExecContext(f.ctx,
+		`UPDATE audible_titles SET dest_path = '.hidden/A.m4b' WHERE asin IN ('B000000009', 'B000000010')`); err != nil {
 		t.Fatal(err)
 	}
 	for i, job := range []struct{ asin, state string }{{"B000000006", bridge.StateQueued}, {"B000000007", bridge.StateFailed}} {
@@ -816,15 +877,23 @@ func TestAudibleCanBackup(t *testing.T) {
 		t.Fatalf("the preorder's request = %t, %v", pending, err)
 	}
 	want := map[string]bool{"B000000001": true, "B000000002": true, "B000000003": false, "B000000004": false,
-		"B000000005": true, "B000000006": false, "B000000007": true, "B000000008": false}
+		"B000000005": true, "B000000006": false, "B000000007": true, "B000000008": false,
+		"B000000009": false, "B000000010": false}
 	can := map[string]bool{}
 	for asin := range want {
-		can[asin] = f.title(t, asin).CanBackup
+		x := f.title(t, asin)
+		can[asin] = x.CanBackup
+		if invalid := asin == "B000000009" || asin == "B000000010"; x.DestInvalid != invalid {
+			t.Errorf("%s: dest_invalid %t, want %t", asin, x.DestInvalid, invalid)
+		}
 	}
 	for asin, w := range want {
 		_, _, err := f.c.RequestAudibleBackup(f.ctx, "acct0001", asin)
 		if can[asin] != w || (err == nil) != w {
 			t.Errorf("%s: can_backup %t, Back up %v; want %t", asin, can[asin], err, w)
+		}
+		if invalid := asin == "B000000009" || asin == "B000000010"; invalid && !errors.Is(err, bridge.ErrAudibleDestPath) {
+			t.Errorf("%s: Back up %v, want an invalid destination", asin, err)
 		}
 	}
 }

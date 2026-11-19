@@ -645,7 +645,7 @@ describe('generate characters and recaps', () => {
     renderApp(URL);
     expect(
       await screen.findByText(
-        "The Bridge couldn't ask the server whether this book is still to be shared, so nothing has been filed. The job carries on by itself once it can.",
+        'Waiting to confirm this book is still to be shared. Nothing more is shared until then. The job carries on by itself once it can.',
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/waiting for you/)).toBeNull();

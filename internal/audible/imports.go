@@ -58,7 +58,8 @@ func (q Queues) Backup(ctx context.Context, account, asin string, requestedBy in
 // transaction (bridge.EnqueueAll); queued counts the new jobs. A title whose
 // stored destination no longer validates (one saved before a rule tightened:
 // bridge.CheckAudibleDestPath) is skipped and counted in skipped, so it
-// doesn't stop the batch; only that title-level reason is skipped, so an
+// doesn't stop the batch (the accounts list's estimate leaves out the same
+// titles: catalog's audible_dest_ok); only that title-level reason is skipped, so an
 // account-level one (its template, a bridge.ErrAudibleTemplate) refuses the
 // batch, checked before the titles' destinations.
 // A refusal of the queue (a Bridge that can't take them: none will be taken)

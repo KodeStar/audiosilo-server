@@ -376,16 +376,30 @@ func (a *API) handleAdminAudibleAccountDelete(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if acct != nil {
-		// Named, not just by its opaque id, for an admin reading the log
-		// (server#294): its label, else "person (STORE)", else (an account
-		// read without its person) the id.
-		name := acct.Label
-		if name == "" && acct.User.DisplayName != "" {
-			name = fmt.Sprintf("%s (%s)", acct.User.DisplayName, strings.ToUpper(acct.Marketplace))
-		}
-		a.audit(r, "bridge.audible.remove", cmp.Or(name, id), map[string]any{"account": id})
+		a.audit(r, "bridge.audible.remove", audibleAccountName(acct), map[string]any{"account": id})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// audibleAccountName is an Audible audit row's target: the account named, not
+// just by its opaque id, for an admin reading the log (server#294). Its label,
+// else "person (STORE)", else (an account read without its person) its id.
+func audibleAccountName(acct *catalog.AudibleAccount) string {
+	if acct.Label == "" && acct.User.DisplayName != "" {
+		return fmt.Sprintf("%s (%s)", acct.User.DisplayName, strings.ToUpper(acct.Marketplace))
+	}
+	return cmp.Or(acct.Label, acct.ID)
+}
+
+// auditAudible records an Audible action on account: its details name it by
+// its id, the row's target by its name when it can be read (audibleAccountName).
+func (a *API) auditAudible(r *http.Request, action, account string, details map[string]any) {
+	details["account"] = account
+	target := account
+	if acct, err := a.cat.AudibleAccount(r.Context(), account); err == nil {
+		target = audibleAccountName(acct)
+	}
+	a.audit(r, action, target, details)
 }
 
 // Bridge Phase 4b: backing up Audible titles (internal/audible's Queues, the
@@ -528,7 +542,7 @@ func (a *API) handleAdminAudibleBackup(w http.ResponseWriter, r *http.Request) {
 		a.log.Warn("audible backup: read the title back failed", "account", account, "asin", asin, "err", err)
 	}
 	if pending {
-		a.audit(r, "bridge.audible.backup", "", map[string]any{"account": account, "asin": asin, "pending": true})
+		a.auditAudible(r, "bridge.audible.backup", account, map[string]any{"asin": asin, "pending": true})
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
@@ -551,7 +565,7 @@ func (a *API) handleAdminAudibleBackupAll(w http.ResponseWriter, r *http.Request
 	}
 	n, skipped, err := a.audibleQueues().BackupAll(r.Context(), account, userFrom(r.Context()).ID)
 	if n > 0 {
-		a.audit(r, "bridge.audible.backup_all", "", map[string]any{"account": account, "queued": n, "skipped": skipped})
+		a.auditAudible(r, "bridge.audible.backup_all", account, map[string]any{"queued": n, "skipped": skipped})
 	}
 	if err != nil && n == 0 {
 		a.writeAudibleBackupError(w, err, "audible backup all failed")
@@ -585,7 +599,7 @@ func (a *API) handleAdminAudibleTitle(w http.ResponseWriter, r *http.Request) {
 		a.writeAudibleError(w, err, "patch audible title failed")
 		return
 	}
-	details := map[string]any{"account": account, "asin": asin}
+	details := map[string]any{"asin": asin}
 	if p.Rejected != nil {
 		details["rejected"] = *p.Rejected
 	}
@@ -595,7 +609,7 @@ func (a *API) handleAdminAudibleTitle(w http.ResponseWriter, r *http.Request) {
 	if p.NoSync != nil {
 		details["no_sync"] = *p.NoSync
 	}
-	a.audit(r, "bridge.audible.title", "", details)
+	a.auditAudible(r, "bridge.audible.title", account, details)
 	if p.Rejected != nil || p.NoSync != nil {
 		a.audibleSyncNow(r, account, true)
 	}
@@ -632,7 +646,7 @@ func (a *API) handleAdminAudibleAccount(w http.ResponseWriter, r *http.Request) 
 	if p.Sync != nil {
 		details["sync"] = *p.Sync
 	}
-	a.audit(r, "bridge.audible.account", "", details)
+	a.audit(r, "bridge.audible.account", audibleAccountName(acct), details)
 	if p.Sync != nil && *p.Sync {
 		a.audibleSyncNow(r, id, false)
 	}

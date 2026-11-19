@@ -936,6 +936,44 @@ describe('audible backups', () => {
     );
   });
 
+  it("says when a title's own destination is no longer valid, with no Back up", async () => {
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/titles': {
+          body: {
+            titles: [
+              title({
+                match: null,
+                can_backup: false,
+                dest_path: '.hidden/A.m4b',
+                dest_invalid: true,
+              }),
+              title({
+                asin: 'B000000002',
+                title: 'Well of Ascension',
+                match: null,
+                can_backup: true,
+                dest_path: 'Sanderson/Well.m4b',
+              }),
+            ],
+            next: '',
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=audible');
+    expect(
+      await screen.findByText(
+        'Your destination is no longer valid, so its backup would be refused. Set it again with Destination.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('Your destination is checked when the backup starts.')).toHaveLength(
+      1,
+    );
+    const list = screen.getByRole('list', { name: 'Audible titles' });
+    expect(within(list).getAllByRole('button', { name: 'Back up' })).toHaveLength(1);
+  });
+
   it('backs everything up after saying how many and how much', async () => {
     const calls = mockFetch(
       routes(true, {
@@ -1005,7 +1043,7 @@ describe('audible backups', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Back up 13 books' }));
     expect(
       await within(dialog).findByText(
-        "This account's placement template no longer works. Fix it in Account settings..., then back up again.",
+        "This account's placement template no longer works. Fix it in Account settings and back up again.",
       ),
     ).toBeInTheDocument();
     expect(within(dialog).queryByText(/unknown variable/)).toBeNull();
@@ -1197,6 +1235,13 @@ describe('needs a look', () => {
       false,
     );
     // A destination of the admin's own isn't the plan's to warn about.
+    // An own destination no longer valid needs a look whatever was planned.
+    expect(
+      needsLook(
+        title({ match: null, planned: quiet, dest_path: '.Mine/Book', dest_invalid: true }),
+        '',
+      ),
+    ).toBe(true);
     expect(needsLook(title({ match: null, planned: newAuthor, dest_path: 'Mine/Book' }), '')).toBe(
       false,
     );
