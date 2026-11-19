@@ -297,13 +297,27 @@ func TestDemoReaperSweepsThenExits(t *testing.T) {
 }
 
 // A restore applied at start is in the audit log of the database it put in place,
-// as the server's own act; a refused one too, with why.
+// as the server's own act; a refused one too, with why. Only an applied one
+// renews the Bridge's progress feed, so the cursor the Bridge holds is refused
+// (bridge#50).
 func TestRecordRestore(t *testing.T) {
 	ctx := context.Background()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
+	feed := func() string {
+		t.Helper()
+		var v string
+		if err := db.QueryRowContext(ctx, `SELECT value FROM server_state WHERE key = 'progress_feed'`).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
 	recordRestore(ctx, cat, &backup.RestoreResult{Name: "audiosilo-a.db", RequestedBy: "chris", OK: true, SafetyCopy: "audiosilo-b.db"}, slog.Default())
+	renewed := feed()
 	recordRestore(ctx, cat, &backup.RestoreResult{Name: "audiosilo-c.db", RequestedBy: "chris", Error: "newer"}, slog.Default())
+	if feed() != renewed {
+		t.Fatal("a refused restore renewed the progress feed")
+	}
 	events, _, err := cat.ListAudit(ctx, catalog.AuditFilter{})
 	if err != nil || len(events) != 2 {
 		t.Fatalf("audit = %+v, %v", events, err)

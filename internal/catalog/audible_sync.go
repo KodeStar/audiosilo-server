@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -266,10 +267,12 @@ const (
 )
 
 // progressCursor is a GET /bridge/progress position: the last row's
-// (change_seq, asin), opaque on the wire (base64url JSON).
+// (change_seq, asin) and the feed that made it (progressFeedID; none in a
+// cursor from a server before 2.7.0), opaque on the wire (base64url JSON).
 type progressCursor struct {
 	Seq  int64  `json:"q"`
 	ASIN string `json:"s"`
+	Feed string `json:"f,omitempty"`
 }
 
 func (k progressCursor) encode() string {
@@ -278,9 +281,11 @@ func (k progressCursor) encode() string {
 }
 
 // decodeProgressCursor reads AudibleProgress's since ("" from the start).
-// ErrInvalidCursor for one it can't read, which the route answers 400
+// ErrInvalidCursor for one it can't read, or one naming no row (a JSON null
+// or {} is no position, never the start), which the route answers 400
 // invalid_cursor so the Bridge reads the feed again from its start
-// (bridge#50).
+// (bridge#50). A cursor names a row once read, and every row's change_seq is
+// at least 1.
 func decodeProgressCursor(s string) (progressCursor, error) {
 	if s == "" {
 		return progressCursor{}, nil
@@ -290,10 +295,76 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 		return progressCursor{}, ErrInvalidCursor
 	}
 	var k progressCursor
-	if json.Unmarshal(raw, &k) != nil {
+	if json.Unmarshal(raw, &k) != nil || k.Seq < 1 || k.ASIN == "" {
 		return progressCursor{}, ErrInvalidCursor
 	}
 	return k, nil
+}
+
+// progressFeedKey is the server_state row naming this server's progress feed
+// (progressFeed).
+const progressFeedKey = "progress_feed"
+
+// progressFeed is server_state's value for progressFeedKey: a random id every
+// GET /bridge/progress cursor carries, so a cursor from another feed (another
+// server's, a database started afresh, or this one's before a backup was
+// restored here: RenewProgressFeed) is refused, never read as a place in this
+// feed (bridge#50).
+type progressFeed struct {
+	ID string `json:"id"`
+}
+
+// progressFeedID is the progress feed's id, made on first use.
+func (c *Catalog) progressFeedID(ctx context.Context) (string, error) {
+	st, err := getServerState[progressFeed](ctx, c.db, progressFeedKey)
+	if err != nil || st.ID != "" {
+		return st.ID, err
+	}
+	var id string
+	err = c.db.WithTx(ctx, "progressFeedID", func(tx *sql.Tx) error {
+		cur, err := getServerState[progressFeed](ctx, tx, progressFeedKey)
+		if err != nil || cur.ID != "" {
+			id = cur.ID
+			return err
+		}
+		id = rand.Text()
+		return putServerState(ctx, tx, progressFeedKey, progressFeed{ID: id}, c.stamp())
+	})
+	return id, err
+}
+
+// RenewProgressFeed gives the progress feed a new id, so every cursor handed
+// out before is refused (400 invalid_cursor) and the Bridge reads the feed
+// again from its start: the launcher's step after restoring a backup, whose
+// feed is behind the cursors the Bridge holds (a backup carries its id).
+func (c *Catalog) RenewProgressFeed(ctx context.Context) error {
+	return putServerState(ctx, c.db, progressFeedKey, progressFeed{ID: rand.Text()}, c.stamp())
+}
+
+// progressFrom reads since as a place in this server's feed (feed, its id):
+// the start for "", else ErrInvalidCursor for a cursor that isn't one
+// (decodeProgressCursor), one from another feed, or one past the last number
+// the change counter gave. That last is a database restored from a backup by
+// hand (with its id, so the id can't tell): until the counter passes the
+// cursor again, the feed would answer nothing and the rows written since would
+// never reach Audible. A cursor from a server before 2.7.0 carries no id and
+// has only that check.
+func (c *Catalog) progressFrom(ctx context.Context, since, feed string) (progressCursor, error) {
+	from, err := decodeProgressCursor(since)
+	if err != nil || since == "" {
+		return from, err
+	}
+	if from.Feed != "" && from.Feed != feed {
+		return progressCursor{}, ErrInvalidCursor
+	}
+	var last int64
+	if err := c.db.QueryRowContext(ctx, `SELECT seq FROM progress_change_counter WHERE id = 1`).Scan(&last); err != nil {
+		return progressCursor{}, err
+	}
+	if from.Seq > last {
+		return progressCursor{}, ErrInvalidCursor
+	}
+	return from, nil
 }
 
 // AudibleProgress is a page of the places of a's person that the Bridge may
@@ -310,10 +381,16 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 // feed's cursor, kept for the next poll) and more whether a full page was read
 // (ask again with next now; a page may carry fewer rows than it read, a row
 // whose title's runtime disagrees with the book's length left out).
-// ErrInvalidCursor for a cursor not made here.
+// A cursor carries the feed's id (progressFeedID): one from before 2.7.0 that
+// is still good comes back as next with it. ErrInvalidCursor for a cursor not
+// made by this feed, or past its end (progressFrom).
 func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, scopes []Scope, since string, limit int) (
 	rows []AudibleProgressRow, next string, more bool, err error) {
-	from, err := decodeProgressCursor(since)
+	feed, err := c.progressFeedID(ctx)
+	if err != nil {
+		return nil, "", false, err
+	}
+	from, err := c.progressFrom(ctx, since, feed)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -347,6 +424,10 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 		return nil, "", false, err
 	}
 	if len(got) == 0 {
+		if since != "" {
+			from.Feed = feed
+			since = from.encode()
+		}
 		return []AudibleProgressRow{}, since, false, nil
 	}
 	// A row whose title's runtime disagrees with the book's length (the
@@ -359,7 +440,7 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 		if audibleRuntimeAgrees(x.runtimeS, x.length) {
 			rows = append(rows, x.AudibleProgressRow)
 		}
-		next = progressCursor{Seq: x.seq, ASIN: x.ASIN}.encode()
+		next = progressCursor{Seq: x.seq, ASIN: x.ASIN, Feed: feed}.encode()
 	}
 	return rows, next, len(got) == limit, nil
 }

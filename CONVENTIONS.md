@@ -5028,7 +5028,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the account paused: no library), 403 `user_unavailable` (the person disabled, a kid or a demo since:
   `ErrAudibleSyncUser`), 404 `unknown_account` (none, a bad id, or its person deleted: the account cascades). **Here to Audible**: `GET /bridge/progress?account=&since=&limit=` (default 200,
   at most 500; the same 403s and 404, 400 `invalid_request` for no account or a bad limit, 400 `invalid_cursor` for a
-  `since` it can't read, so the Bridge reads the feed from its start for that alone, bridge#50) answers
+  `since` it can't read (a base64url JSON null or `{}` too: never the start), one from another feed or past the feed's
+  end, so the Bridge reads the feed from its start for that alone, bridge#50) answers
   `{rows:[{library_id, path, asin, position, duration, finished, updated_at, device_id, version}], next, more,
   server_time}` (`server_time`: the server's clock, which the Bridge's baseline reads `updated_at` against, bridge#50):
   the person's progress rows on the synced titles' books inside their scopes, one per title (two titles on one book
@@ -5036,8 +5037,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   with the book's length left out (`audibleRuntimeAgrees`, the listening route's `duration_mismatch` checked per
   title: the indexed duration, else the row's stored one, both unknown agreeing; the Bridge checks no length of its
   own), keyset by `(change_seq, asin)` after the opaque cursor `since` (base64url JSON); `next` is
-  the last row read, one left out too (since again when none), a feed cursor the Bridge keeps between polls; `more`
-  a full page read (its rows may be fewer). `progress.change_seq` (`0066`, `idx_progress_user_change`) is the order
+  the last row read, one left out too (since again when none, with the feed's id added to a cursor from before
+  2.7.0), a feed cursor the Bridge keeps between polls; `more` a full page read (its rows may be fewer). A cursor
+  carries the feed's id (`f`: `server_state` `progress_feed`, a random id made on first use; `catalog.progressFrom`):
+  one naming another feed (another server's, a database started afresh, or this one's before the launcher restored a
+  backup, which renews the id: `RenewProgressFeed`, as a backup carries it) is refused, and so is any cursor past the
+  change counter (a database restored by hand keeps its id: until the counter passed the cursor again, the feed would
+  answer nothing and the places written in the gap never reach Audible). A cursor without the id (a server before
+  2.7.0's) has only the counter check. `ErrInvalidCursor` has one transport mapping, `writeCatalogError`'s 400
+  `invalid_cursor` (every route's cursor: `GET /bridge/libraries/{id}/books?after=` and the console's Audible titles
+  `after` too, which answered `invalid_request` before 2.7.0). `progress.change_seq` (`0066`, `idx_progress_user_change`) is the order
   this server wrote the rows in: drawn from the one-row `progress_change_counter` (strictly increasing, never
   reused, so a deleted row can't hand its number to the next write), set by two triggers on every insert and every
   UPDATE OF position, duration, finished, version, device_id or updated_at (so no write path can miss it; free in

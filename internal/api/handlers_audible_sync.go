@@ -167,8 +167,10 @@ func (a *API) handleBridgeAudibleListening(w http.ResponseWriter, r *http.Reques
 // whether to ask again at once, server_time the server's clock (RFC 3339),
 // which the Bridge reads the rows' updated_at against rather than its own
 // (bridge#50). 400 invalid_request (no account, a bad limit), 400
-// invalid_cursor (a since this server can't read: the Bridge reads the feed
-// again from its start, bridge#50; a server before 2.7.0 answered
+// invalid_cursor (a since this server can't read, one from another feed (its
+// id: another server's, or this one's before a backup was restored), or one
+// past the feed's end (a database restored by hand): the Bridge reads the
+// feed again from its start, bridge#50; a server before 2.7.0 answered
 // invalid_request); 403 sync_off, user_unavailable; 404 unknown_account.
 func (a *API) handleBridgeProgress(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()

@@ -661,11 +661,17 @@ func demoReaper(ctx context.Context, authSvc *auth.Service, idleTTL time.Duratio
 }
 
 // recordRestore puts a restore applied (or refused) at this start in the audit log
-// of the database the server now runs on.
+// of the database the server now runs on. One applied renews the Bridge's
+// progress feed (catalog.RenewProgressFeed): the backup's feed is behind the
+// cursor the Bridge holds, which must be refused rather than read as a place
+// in it (bridge#50).
 func recordRestore(ctx context.Context, cat *catalog.Catalog, r *backup.RestoreResult, log *slog.Logger) {
 	action, details := "backup.restore_applied", map[string]any{"requested_by": r.RequestedBy}
 	if r.OK {
 		details["safety_copy"] = r.SafetyCopy
+		if err := cat.RenewProgressFeed(ctx); err != nil {
+			log.Warn("renewing the Bridge's progress feed after the restore failed", "err", err)
+		}
 	} else {
 		action, details["error"] = "backup.restore_failed", r.Error
 	}
