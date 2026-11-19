@@ -4133,7 +4133,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   titles:[...]}`, strict JSON, up to `MaxAudibleTitles` a call (refused at the title past it as the list is
   read), a call without its `titles` array 400, never
   "owns nothing"; free text cleaned and bounded, not refused: a title's authors and series past the first 20
-  and 10 are dropped; a match path is clean, or `.` for a `book` override on the library root, as the books
+  and 10 are dropped, and past the first 100 (`maxAudibleNamesRead`) are skipped unread; a match path is clean, or `.` for a `book` override on the library root, as the books
   list gives it; a match naming a missing or non-books library is stored as none; `final` marks every title
   this `poll_id` did not send `gone` and sets `last_poll_at`); `GET /bridge/libraries/{id}/books`
   (`{books:[{path, title, authors, narrators, series, asin, isbn, duration}], next}`, path cursor, up to

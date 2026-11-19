@@ -334,3 +334,45 @@ func TestEditAndTitleListsStopAtTheirCaps(t *testing.T) {
 		}
 	}
 }
+
+// A title's authors and series are read no further than maxAudibleNamesRead
+// entries each: the rest are skipped, never decoded (here they couldn't be:
+// numbers, not names), and the catalog keeps the first 20 and 10 as before.
+// null, absent and [] lists still read as they did.
+func TestAudibleTitleListsReadTheirFirstEntries(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	setAudible(t, b.testEnv, b.adminTok, true)
+	if code, out := b.putAccount(t, testAccount, b.adminID, b.lib.ID); code != http.StatusOK {
+		t.Fatalf("put account: %d %s", code, out)
+	}
+	names := func(n int, entry func(int) string) string {
+		list := make([]string, n)
+		for i := range list {
+			list[i] = entry(i)
+		}
+		return strings.Join(list, ",")
+	}
+	tail := "," + names(100_000, func(int) string { return "1" })
+	authors := names(maxAudibleNamesRead, func(i int) string { return fmt.Sprintf(`"Author %03d"`, i) }) + tail
+	series := names(maxAudibleNamesRead, func(i int) string { return fmt.Sprintf(`{"name":"Series %03d"}`, i) }) + tail
+	long := fmt.Sprintf(`{"asin":"B000000010","title":"Long","authors":[%s],"series":[%s],"state":"available"}`, authors, series)
+	if code, out := b.putTitles(t, testAccount, "p1", false, long,
+		`{"asin":"B000000011","title":"Null","authors":null,"series":[],"state":"available"}`,
+		`{"asin":"B000000012","title":"Absent","state":"available"}`); code != http.StatusOK {
+		t.Fatalf("titles: %d %.300s", code, out)
+	}
+	got := adminTitles(t, b, "q=long").Titles
+	if len(got) != 1 || len(got[0].Authors) != 20 || got[0].Authors[19] != "Author 019" ||
+		len(got[0].Series) != 10 || got[0].Series[9].Name != "Series 009" {
+		t.Fatalf("long = %+v", got)
+	}
+	// Within the first entries a bad one is still refused, as is an unknown
+	// field in a series.
+	for _, bad := range []string{`"authors":[1]`, `"series":[{"name":"S","nope":1}]`, `"authors":{}`} {
+		code, out := b.putTitles(t, testAccount, "p1", false, `{"asin":"B000000013","title":"Bad",`+bad+`,"state":"available"}`)
+		if code != http.StatusBadRequest || !strings.Contains(out, "invalid JSON body") {
+			t.Errorf("%s: %d %.300s, want 400 invalid JSON body", bad, code, out)
+		}
+	}
+}

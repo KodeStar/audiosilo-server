@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -147,9 +148,78 @@ type audibleTitlesRequest struct {
 // catalog.MaxAudibleTitles (else errTooManyEntries, at the title past it).
 type audibleTitles []catalog.AudibleTitleInput
 
-func (l *audibleTitles) UnmarshalJSON(data []byte) (err error) {
-	*l, err = decodeBounded[catalog.AudibleTitleInput](bytes.NewReader(data), catalog.MaxAudibleTitles)
-	return err
+func (l *audibleTitles) UnmarshalJSON(data []byte) error {
+	titles, err := decodeBounded[audibleTitle](bytes.NewReader(data), catalog.MaxAudibleTitles)
+	if err != nil || titles == nil {
+		*l = nil
+		return err
+	}
+	*l = make(audibleTitles, len(titles))
+	for i, t := range titles {
+		(*l)[i] = catalog.AudibleTitleInput(t)
+	}
+	return nil
+}
+
+// maxAudibleNamesRead is how many of a title's authors, and of its series, a
+// titles call reads: the catalog keeps the first 20 and 10 it can use and
+// drops the rest (PutAudibleTitles), so the entries past these are skipped,
+// never decoded. The call's 8 MiB alone holds millions of empty ones.
+const maxAudibleNamesRead = 100
+
+// audibleTitle is one title of a titles call, its authors and series read no
+// further than maxAudibleNamesRead entries each.
+type audibleTitle catalog.AudibleTitleInput
+
+func (t *audibleTitle) UnmarshalJSON(data []byte) error {
+	type fields catalog.AudibleTitleInput // its fields, without this method
+	var in struct {
+		fields
+		Authors audibleFirst[string]                `json:"authors"`
+		Series  audibleFirst[catalog.AudibleSeries] `json:"series"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		return err
+	}
+	*t = audibleTitle(in.fields)
+	t.Authors, t.Series = in.Authors, in.Series
+	return nil
+}
+
+// audibleFirst is a JSON array of which the first maxAudibleNamesRead entries
+// are decoded and the rest skipped. null reads as no list.
+type audibleFirst[T any] []T
+
+func (l *audibleFirst[T]) UnmarshalJSON(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	tok, err := dec.Token()
+	if err != nil || tok == nil {
+		*l = nil
+		return err
+	}
+	if tok != json.Delim('[') {
+		return errors.New("not a list")
+	}
+	list := audibleFirst[T]{}
+	for dec.More() {
+		if len(list) == maxAudibleNamesRead {
+			var skip spanBytes
+			if err := dec.Decode(&skip); err != nil {
+				return err
+			}
+			continue
+		}
+		var v T
+		if err := dec.Decode(&v); err != nil {
+			return err
+		}
+		list = append(list, v)
+	}
+	*l = list
+	return nil
 }
 
 // handleBridgeAudibleTitles serves PUT /bridge/audible/accounts/{account}/
