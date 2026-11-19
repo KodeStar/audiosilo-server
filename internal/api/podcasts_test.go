@@ -964,6 +964,11 @@ func TestPodcastShowRoutesMeetTheOtherSpelling(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("Bridge retention %d %s", resp.StatusCode, out)
 	}
+	// A follow of the caller's kept at the path as given (no show row there)
+	// goes with the unfollow too, as it did before the other spelling was read.
+	if err := b.cat.FollowPodcast(ctx, uid, b.lib.ID, nfc, f.ShowID); err != nil {
+		t.Fatal(err)
+	}
 	resp, out = b.doHeaders(t, "DELETE", fmt.Sprintf("/api/v1/podcasts/follow?library_id=%d&path=%s", b.lib.ID, q), b.userTok, "", h)
 	if resp.StatusCode != 204 {
 		t.Fatalf("unfollow %d %s", resp.StatusCode, out)
