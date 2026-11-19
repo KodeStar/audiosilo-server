@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -129,8 +130,19 @@ type Listing struct {
 
 // SafeJoin resolves relPath against root, guaranteeing the result stays within
 // root. It defends against ".." traversal, absolute-path injection, and symlinks
-// inside the root that point outside it.
+// inside the root that point outside it. A link it can't check is never
+// accepted: one that can't be read is ErrOutsideRoot (whatever it points to,
+// the path through it is refused), and a look failing as a share does that a
+// retry may get past (metadata.TransientFault: the root's, a name's lstat, a
+// link's read) is a look given up on (metadata.GaveUp), as SafeJoinListed's
+// is, the name's link, if it is one, not known.
 func SafeJoin(root, relPath string) (string, error) {
+	return safeJoin(root, relPath, plainLooks)
+}
+
+// safeJoin is SafeJoin with its looks at the names below the root (lk:
+// plainLooks; a test's, to inject a share's errors).
+func safeJoin(root, relPath string, lk belowLooks) (string, error) {
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
@@ -141,6 +153,8 @@ func SafeJoin(root, relPath string) (string, error) {
 	resolved, rerr := filepath.EvalSymlinks(rootAbs)
 	if rerr == nil {
 		rootAbs = resolved
+	} else if err := unansweredLook(context.Background(), rerr); err != nil {
+		return "", err
 	}
 	full := filepath.Join(rootAbs, filepath.FromSlash(relPath))
 	// Lexical containment first: reject ".." traversal. An absolute relPath is
@@ -156,7 +170,9 @@ func SafeJoin(root, relPath string) (string, error) {
 	// links in it) only the names under it need looking at (resolveBelow).
 	var target string
 	if rerr == nil {
-		target, _, _ = resolveBelow(rootAbs, rootAs, full, plainLooks)
+		if target, _, err = resolveBelow(rootAbs, rootAs, full, lk); err != nil {
+			return "", err
+		}
 	} else {
 		target = resolveExisting(full)
 	}
@@ -187,7 +203,8 @@ func SafeJoin(root, relPath string) (string, error) {
 // (metadata.GaveUp: one that did not answer in time, or failed as a share does
 // that a retry may get past, metadata.TransientFault's EIO, ESTALE, ENOTCONN, as the
 // scanner reads them) or ctx's; a listing or look that fails otherwise (the
-// name gone, a permission) is a name not there.
+// name gone, a permission) is a name not there, but for a link that can't be
+// read (linkRead), which is ErrOutsideRoot: where it points is not known.
 func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Duration,
 	names func(ctx context.Context, dir string, timeout time.Duration) ([]string, error)) (abs string, there bool, err error) {
 	deadline := time.Now().Add(timeout)
@@ -230,8 +247,10 @@ type belowLooks struct {
 	// one failing as a share does that a retry may get past too).
 	lstat func(path string) (fs.FileInfo, error)
 	// readlink is a link's own target as stored (relative or absolute), ""
-	// when it can't be read; err as lstat's.
-	readlink func(path string) (string, error)
+	// when the name is gone or is no link (maybe: linkKind's name that may be
+	// one); err as lstat's, or ErrOutsideRoot for a link that can't be read
+	// (linkRead).
+	readlink func(path string, maybe bool) (string, error)
 	// listed, when not nil, reports whether name is in dir's listing as given;
 	// err as lstat's. Not nil: a name not listed ends the walk unlooked at.
 	listed func(dir, name string) (bool, error)
@@ -279,12 +298,14 @@ func boundedLooks(ctx context.Context, deadline time.Time,
 			}
 			return fi, nil
 		},
-		readlink: func(p string) (string, error) {
+		readlink: func(p string, maybe bool) (string, error) {
 			to, err := raw.readlink(ctx, p, metadata.WaitLeft(deadline))
 			if err != nil {
-				return "", unansweredLook(ctx, err)
+				if err := unansweredLook(ctx, err); err != nil {
+					return "", err
+				}
 			}
-			return to, nil
+			return linkRead(to, err, maybe)
 		},
 		listed: func(dir, name string) (bool, error) {
 			ns, err := names(ctx, dir, metadata.WaitLeft(deadline))
@@ -297,21 +318,56 @@ func boundedLooks(ctx context.Context, deadline time.Time,
 }
 
 // plainLooks are SafeJoin's: os.Lstat and os.Readlink, no listing.
-var plainLooks = belowLooks{
-	lstat: func(p string) (fs.FileInfo, error) {
-		fi, err := os.Lstat(p)
-		if err != nil {
-			return nil, nil //nolint:nilerr // a name not there ends the walk, as any failed look does
-		}
-		return fi, nil
-	},
-	readlink: func(p string) (string, error) {
-		to, err := os.Readlink(p)
-		if err != nil {
-			return "", nil //nolint:nilerr // a link that can't be read resolves to nothing
-		}
+var plainLooks = plainLooksOver(os.Lstat, os.Readlink)
+
+// plainLooksOver are SafeJoin's looks over lstat and readlink (os.Lstat and
+// os.Readlink; a test's, to inject a share's errors), each failure read as
+// boundedLooks reads its own: a fault a retry may get past is a look given up
+// on (unansweredLook), any other lstat a name not there, which ends the walk,
+// and any other read of a link linkRead's answer.
+func plainLooksOver(lstat func(string) (fs.FileInfo, error), readlink func(string) (string, error)) belowLooks {
+	return belowLooks{
+		lstat: func(p string) (fs.FileInfo, error) {
+			fi, err := lstat(p)
+			if err != nil {
+				return nil, unansweredLook(context.Background(), err)
+			}
+			return fi, nil
+		},
+		readlink: func(p string, maybe bool) (string, error) {
+			to, err := readlink(p)
+			if err := unansweredLook(context.Background(), err); err != nil {
+				return "", err
+			}
+			return linkRead(to, err, maybe)
+		},
+	}
+}
+
+// linkRead is a look's answer from a link's read (os.Readlink's to and err,
+// one that went unanswered or failed as a share does that a retry may get
+// past already the look's error): the target; "" for a name gone since its
+// lstat, and for one that may be a link (maybe: linkKind) and is none
+// (notALink; Go reads a Windows reparse point that is neither a link nor a
+// junction as ENOENT); else ErrOutsideRoot. A link that is there and can't
+// be read (a permission, a junction another process holds open) points
+// nobody knows where: every path through it is refused, as one through a
+// link out of the root is, never walked as a plain name nor read as a name
+// not there, which SafeJoin would accept and an open would then follow.
+func linkRead(to string, err error, maybe bool) (string, error) {
+	switch {
+	case err == nil:
 		return to, nil
-	},
+	case metadata.NotExist(err), maybe && notALink(err):
+		return "", nil
+	}
+	return "", fmt.Errorf("%w: a link that can't be read: %w", ErrOutsideRoot, err)
+}
+
+// notALink reports whether err is a read of a link's (os.Readlink's) saying
+// the name is no link: EINVAL, or Windows' ERROR_NOT_A_REPARSE_POINT (4390).
+func notALink(err error) bool {
+	return errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.Errno(4390))
 }
 
 // maxLinkHops is how many links one path's resolve follows (resolveBelow), as
@@ -334,7 +390,8 @@ const maxLinkHops = 255
 // share or a FUSE pool (Unraid's /mnt/user) is a round trip each, on every
 // cover and stream request, and would follow a link out of the root to its
 // target, whose mount's faults (a hang, EIO) would then tell what it points
-// to. err is a look's that went unanswered.
+// to. err is a look's that went unanswered, or ErrOutsideRoot for a link that
+// can't be read (linkRead).
 func resolveBelow(rootAbs, rootAs, p string, lk belowLooks) (target string, there bool, err error) {
 	rel, err := filepath.Rel(rootAbs, p)
 	if err != nil || rel == "." {
@@ -417,15 +474,15 @@ func isPathSep(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) }
 // same whatever its target is, there or not, on a mount that answers, hangs
 // or fails. A target that resolves to a folder above the root is returned as
 // it is (out of the root too). "" for a link that resolves to nothing (a name
-// along its target not there, a link that can't be read, more than
+// along its target not there, a link gone since it was looked at, more than
 // maxLinkHops links: a loop); link itself for a name that may be a link
 // (maybe: linkKind) and does not read as one. err is a look's that went
-// unanswered.
+// unanswered, or ErrOutsideRoot for a link that can't be read (linkRead).
 func followLink(w *linkWalk, dir, link string, maybe bool) (string, error) {
 	if w.hops++; w.hops > maxLinkHops {
 		return "", nil
 	}
-	to, err := w.lk.readlink(link)
+	to, err := w.lk.readlink(link, maybe)
 	switch {
 	case err != nil:
 		return "", err
@@ -435,9 +492,9 @@ func followLink(w *linkWalk, dir, link string, maybe bool) (string, error) {
 		return "", nil
 	}
 	cur, names := dir, strings.FieldsFunc(to, isPathSep)
-	if vol := filepath.VolumeName(to); vol != "" || os.IsPathSeparator(to[0]) {
-		vol = cmp.Or(vol, filepath.VolumeName(w.rootAbs))
-		cur, names = vol+string(filepath.Separator), strings.FieldsFunc(to[len(filepath.VolumeName(to)):], isPathSep)
+	if own := filepath.VolumeName(to); own != "" || os.IsPathSeparator(to[0]) {
+		vol := cmp.Or(own, filepath.VolumeName(w.rootAbs))
+		cur, names = vol+string(filepath.Separator), strings.FieldsFunc(to[len(own):], isPathSep)
 		if below, ok := w.throughRootAs(vol, names); ok {
 			cur, names = w.rootAbs, below
 		}

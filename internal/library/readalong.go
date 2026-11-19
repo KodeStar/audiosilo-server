@@ -145,6 +145,9 @@ func ReadReadalongMap(lib catalog.Library, bookPath string, folder bool) ([]byte
 	b := &catalog.Book{RelPath: bookPath, IsFolder: folder}
 	dir, prefix := attachmentsPlace(b)
 	full, err := ContentJoin(lib.Root, dir)
+	if metadata.GaveUp(err) {
+		return nil, nil, err // the join's look a share failed: not known, never no map
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ErrNoReadalong, err)
 	}

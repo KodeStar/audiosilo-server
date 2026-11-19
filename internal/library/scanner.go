@@ -1285,17 +1285,28 @@ func (s *Scanner) keepLeft(ctx context.Context, lib catalog.Library, b *catalog.
 // ArtFile is the file a book's own art (no custom cover) is read from, the one
 // rule the cover handler serves and versions it by: its sidecar image (CoverPath) inside root,
 // else the audio file embedded art lives in. kind is catalog.ArtSidecar or
-// catalog.ArtEmbedded; ok is false when neither path is inside root.
-func ArtFile(root string, src catalog.CoverSource) (kind, abs string, ok bool) {
+// catalog.ArtEmbedded; err is fs.ErrNotExist when neither path is inside
+// root, and a join's look given up on (metadata.GaveUp: a share's fault a
+// retry may get past, which says nothing of the art) as it is, never read as
+// no art nor as the other file's turn.
+func ArtFile(root string, src catalog.CoverSource) (kind, abs string, err error) {
 	if src.CoverPath != "" {
-		if abs, err := SafeJoin(root, src.CoverPath); err == nil {
-			return catalog.ArtSidecar, abs, true
+		abs, err := SafeJoin(root, src.CoverPath)
+		if err == nil {
+			return catalog.ArtSidecar, abs, nil
+		}
+		if metadata.GaveUp(err) {
+			return "", "", err
 		}
 	}
-	if abs, err := SafeJoin(root, src.AudioPath); err == nil {
-		return catalog.ArtEmbedded, abs, true
+	abs, err = SafeJoin(root, src.AudioPath)
+	if err == nil {
+		return catalog.ArtEmbedded, abs, nil
 	}
-	return "", "", false
+	if metadata.GaveUp(err) {
+		return "", "", err
+	}
+	return "", "", fs.ErrNotExist
 }
 
 // Art is a book's own art file (ArtFile) as LookArt found it: its kind
@@ -1322,9 +1333,9 @@ func (a Art) Version() string {
 func LookArt(ctx context.Context, root string, src catalog.CoverSource, timeout time.Duration) (Art, error) {
 	at := filepath.Join(root, filepath.FromSlash(cmp.Or(src.CoverPath, src.AudioPath)))
 	return metadata.Bounded(ctx, at, timeout, func() (Art, error) {
-		kind, abs, ok := ArtFile(root, src)
-		if !ok {
-			return Art{}, fs.ErrNotExist
+		kind, abs, err := ArtFile(root, src)
+		if err != nil {
+			return Art{}, err
 		}
 		info, err := os.Stat(abs)
 		return Art{Kind: kind, Abs: abs, Info: info}, err

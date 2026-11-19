@@ -1281,7 +1281,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`throughRootAs`); one through any other link above the root is out of it. A Windows junction (Lstat's
   irregular entry that is no folder since Go 1.23, neither a link nor a folder) is read as a link
   (`linkKind`), and another reparse point that doesn't read as one is a plain name
-  (`TestJoinLinkThroughTheRootAsConfigured`, `TestResolveBelowJunction`). So a link out of the root ends the walk where it is met, nothing below it listed and its
+  (`TestJoinLinkThroughTheRootAsConfigured`, `TestResolveBelowJunction`). A link or junction that is there and
+  can't be read (a permission, a junction another process holds) is `ErrOutsideRoot` too (`linkRead`): where
+  it points is not known, so no path through it is accepted, by `SafeJoin` (which had read it as a name not
+  there and joined the path) or by `SafeJoinListed`, nor is it walked as a plain folder. `SafeJoin`'s own
+  looks (`plainLooks`) read a fault a retry may get past (the root's, a name's lstat, a link's read) as a look
+  given up on, as `SafeJoinListed`'s do, so a caller that reads a join's error as "none" checks
+  `metadata.GaveUp` first (`ArtFile`, `ebookListed`, `lookEbook`, `OpenPodcast`;
+  `TestSafeJoinRefusesALinkItCannotCheck`). So a link out of the root ends the walk where it is met, nothing below it listed and its
   target never looked at: the stream answers a file through it in every form as a missing file (`noFile`),
   `/fs` "directory not found", a route that resolves a book on demand (`/item`: `indexOnDemand`) "no book at
   that path", whatever it points to, there or not, on a mount that answers, hangs or fails

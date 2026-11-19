@@ -368,6 +368,9 @@ func TestResolveBelowJunction(t *testing.T) {
 		{"out of the root", outside, nil, "out"},
 		{"into the root", filepath.Join(root, "Real"), nil, "there"},
 		{"not a link", "", &fs.PathError{Op: "readlink", Path: junction, Err: syscall.ENOENT}, "there"},
+		{"not a reparse point", "", &fs.PathError{Op: "readlink", Path: junction, Err: syscall.Errno(4390)}, "there"},
+		{"that can't be read", "", &fs.PathError{Op: "readlink", Path: junction, Err: syscall.EACCES}, "refused"},
+		{"whose read a share fails", "", &fs.PathError{Op: "readlink", Path: junction, Err: syscall.EIO}, "gaveUp"},
 	} {
 		var (
 			mu     sync.Mutex
@@ -406,12 +409,114 @@ func TestResolveBelowJunction(t *testing.T) {
 			if err != nil || !there || !withinRoot(root, target) {
 				t.Errorf("a junction %s: target %q, there %v, err %v; want it there in the root", c.name, target, there, err)
 			}
+		case "refused":
+			// Never walked through as a plain folder: its target is not known.
+			if !errors.Is(err, ErrOutsideRoot) || there {
+				t.Errorf("a junction %s: target %q, there %v, err %v; want ErrOutsideRoot", c.name, target, there, err)
+			}
+		case "gaveUp":
+			if !metadata.GaveUp(err) || there {
+				t.Errorf("a junction %s: target %q, there %v, err %v; want a look given up on", c.name, target, there, err)
+			}
 		}
 		for _, p := range looked {
 			if !withinRoot(root, p) {
 				t.Errorf("a junction %s: looked at %q, out of the root", c.name, p)
 			}
 		}
+	}
+}
+
+// TestSafeJoinRefusesALinkItCannotCheck (security): SafeJoin never accepts a
+// path through a link it could not read. A link there whose read fails for
+// good (a permission) is ErrOutsideRoot, as a link out of the root is; a read
+// or a name's lstat failing as a share does that a retry may get past (EIO)
+// is a look given up on, never a name not there, which an open made once the
+// share answers again would follow wherever the link points. Allowed: a link
+// into the root that reads is followed, and a name whose lstat is refused for
+// good is a name not there, as it was (no open gets through it either).
+func TestSafeJoinRefusesALinkItCannotCheck(t *testing.T) {
+	t.Parallel()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "Real/01.mp3", []byte("x"))
+	writeFile(t, outside, "01.mp3", []byte("x"))
+	// Out points out of the root: with its read failing, only the refusal
+	// keeps a path through it from being accepted.
+	for link, to := range map[string]string{"In": filepath.Join(root, "Real"), "Out": outside} {
+		if err := os.Symlink(to, filepath.Join(root, link)); err != nil {
+			t.Skipf("symlinks unsupported on this platform: %v", err)
+		}
+	}
+	for _, c := range []struct {
+		name, rel string
+		op, at    string // the look that fails, and where
+		fault     syscall.Errno
+		want      string // "refused", "gaveUp", "joined"
+	}{
+		{"a link out of the root whose read is refused", "Out/01.mp3", "readlink", "Out", syscall.EACCES, "refused"},
+		{"a link whose read fails for another lasting reason", "Out/01.mp3", "readlink", "Out", syscall.ENXIO, "refused"},
+		{"a link into the root whose read is refused", "In/01.mp3", "readlink", "In", syscall.EACCES, "refused"},
+		{"a link whose read a share fails", "Out/01.mp3", "readlink", "Out", syscall.EIO, "gaveUp"},
+		{"a name whose lstat a share fails", "Out/01.mp3", "lstat", "Out", syscall.ESTALE, "gaveUp"},
+		{"a name under a link whose lstat a share fails", "In/01.mp3", "lstat", "Real/01.mp3", syscall.EIO, "gaveUp"},
+		{"a name whose lstat is refused for good", "Real/01.mp3", "lstat", "Real", syscall.EACCES, "joined"},
+		{"every look answering", "In/01.mp3", "", "", 0, "joined"},
+	} {
+		fail := func(op, p string) error {
+			if op == c.op && p == filepath.Join(root, filepath.FromSlash(c.at)) {
+				return &fs.PathError{Op: op, Path: p, Err: c.fault}
+			}
+			return nil
+		}
+		lk := plainLooksOver(
+			func(p string) (fs.FileInfo, error) {
+				if err := fail("lstat", p); err != nil {
+					return nil, err
+				}
+				return os.Lstat(p)
+			},
+			func(p string) (string, error) {
+				if err := fail("readlink", p); err != nil {
+					return "", err
+				}
+				return os.Readlink(p)
+			})
+		abs, err := safeJoin(root, c.rel, lk)
+		switch c.want {
+		case "refused":
+			if !errors.Is(err, ErrOutsideRoot) {
+				t.Errorf("%s: %q, err %v; want ErrOutsideRoot", c.name, abs, err)
+			}
+		case "gaveUp":
+			if !metadata.GaveUp(err) || errors.Is(err, ErrOutsideRoot) {
+				t.Errorf("%s: %q, err %v; want a look given up on", c.name, abs, err)
+			}
+		case "joined":
+			if err != nil || abs != filepath.Join(root, filepath.FromSlash(c.rel)) {
+				t.Errorf("%s: %q, err %v; want the path joined", c.name, abs, err)
+			}
+		}
+	}
+	// The same through SafeJoinListed's looks: an unreadable link is refused.
+	raw := rawLooks{
+		lstat: metadata.LstatBounded,
+		readlink: func(ctx context.Context, p string, timeout time.Duration) (string, error) {
+			if p == filepath.Join(root, "Out") {
+				return "", &fs.PathError{Op: "readlink", Path: p, Err: syscall.EACCES}
+			}
+			return metadata.ReadlinkBounded(ctx, p, timeout)
+		},
+	}
+	lk := boundedLooks(t.Context(), time.Now().Add(time.Second), metadata.ReadDirNamesBounded, raw)
+	if _, there, err := resolveBelow(root, root, filepath.Join(root, "Out", "01.mp3"), lk); !errors.Is(err, ErrOutsideRoot) || there {
+		t.Errorf("SafeJoinListed's looks at an unreadable link: there %v, err %v; want ErrOutsideRoot", there, err)
 	}
 }
 

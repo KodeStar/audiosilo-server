@@ -90,6 +90,9 @@ func ebookOnDisk(root, relPath string, folder bool) catalog.EbookReading {
 // list right now.
 func ebookListed(root, relPath string, folder bool) catalog.EbookReading {
 	full, err := ContentJoin(root, sidecarDir(relPath, folder))
+	if metadata.GaveUp(err) {
+		return catalog.EbookReading{Unread: true} // the join's look a share failed
+	}
 	if err != nil {
 		return catalog.EbookReading{}
 	}
@@ -185,6 +188,9 @@ func ebookCandidate(root, relPath string, folder bool, epubs []fs.DirEntry) cata
 // nothing is there, Unread when it can't be looked up right now.
 func ebookNamed(root, dir, name string) catalog.EbookReading {
 	full, err := ContentJoin(root, dir)
+	if metadata.GaveUp(err) {
+		return catalog.EbookReading{Unread: true} // the join's look a share failed
+	}
 	if err != nil {
 		return catalog.EbookReading{}
 	}
@@ -341,6 +347,9 @@ func openEbookFile(full string) (*os.File, error) {
 // rules: its joined path and its info (a link's target's, unless noLink).
 func lookEbook(root, rel string, noLink bool) (string, fs.FileInfo, error) {
 	full, err := ContentJoin(root, rel)
+	if metadata.GaveUp(err) {
+		return "", nil, err // the join's look a share failed: not known, never no ebook
+	}
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: %w", ErrNoEbook, err)
 	}
