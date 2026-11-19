@@ -1,6 +1,7 @@
 package library
 
 import (
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -66,5 +67,13 @@ func TestScanSkipsOverLongPaths(t *testing.T) {
 	files, err := audioEntries(ctx, root, absOf(*lib, "Mid/Book"), nil, 0)
 	if err != nil || len(files) != 1 || relPathOf(root, files[0].abs) != "Mid/Book/01.m4b" {
 		t.Fatalf("audioEntries(Mid/Book) = %v, %v; want only 01.m4b", files, err)
+	}
+	// The browse view's pending-book check (hasAudio) counts only the audio a
+	// scan indexes: a folder holding nothing but files past the cap is no book
+	// to come.
+	other := t.TempDir()
+	writeFile(t, other, "Only/02 - a long name.m4b", audio)
+	if hasAudio(filepath.Join(other, "Only"), "Only", nil) {
+		t.Fatal("hasAudio counts an audio file past the cap")
 	}
 }
