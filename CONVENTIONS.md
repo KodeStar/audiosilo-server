@@ -1276,7 +1276,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   link's folder or the filesystem's root, through the root and the folders above it unlooked at (the root is
   resolved: no link in them), each name under the root looked at and a link among them read the same way (at
   most `maxLinkHops`, a loop past it a name not there), and ends at the first name out of the root without
-  looking at it. So a link out of the root ends the walk where it is met, nothing below it listed and its
+  looking at it. An absolute target that names the root as configured (a root that is itself a link,
+  `/data/books` to `/mnt/books`, or macOS's `/var`) is walked from the resolved root, as the OS opens it
+  (`throughRootAs`); one through any other link above the root is out of it. A Windows junction (Lstat's
+  irregular entry that is no folder since Go 1.23, neither a link nor a folder) is read as a link
+  (`linkKind`), and another reparse point that doesn't read as one is a plain name
+  (`TestJoinLinkThroughTheRootAsConfigured`, `TestResolveBelowJunction`). So a link out of the root ends the walk where it is met, nothing below it listed and its
   target never looked at: the stream answers a file through it in every form as a missing file (`noFile`),
   `/fs` "directory not found", whatever it points to, there or not, on a mount that answers, hangs or fails
   (`TestFSLinkOutOfRootIsMissing`, `TestStreamLinkOutOfRootOnAHeldShare`,

@@ -70,7 +70,7 @@ func TestSafeJoinListedVariantCostsWhatMissingDoes(t *testing.T) {
 		lstat, listed := lk.lstat, lk.listed
 		lk.lstat = func(p string) (fs.FileInfo, error) { note("lstat", p); return lstat(p) }
 		lk.listed = func(dir, name string) (bool, error) { note("list", dir); return listed(dir, name) }
-		_, there, err := resolveBelow(root, filepath.Join(root, filepath.FromSlash(rel)), lk)
+		_, there, err := resolveBelow(root, root, filepath.Join(root, filepath.FromSlash(rel)), lk)
 		if err != nil {
 			t.Fatalf("%+q: %v", rel, err)
 		}
@@ -89,7 +89,7 @@ func TestSafeJoinListedVariantCostsWhatMissingDoes(t *testing.T) {
 		}
 	}
 	// SafeJoin's plain looks, with no listing, would look further at the variant.
-	if _, there, _ := resolveBelow(root, filepath.Join(root, "Émile Zola", "germinal", "01.mp3"), plainLooks); !there {
+	if _, there, _ := resolveBelow(root, root, filepath.Join(root, "Émile Zola", "germinal", "01.mp3"), plainLooks); !there {
 		t.Fatal("the fixture's disk does not answer to the variant")
 	}
 
@@ -238,7 +238,7 @@ func TestSafeJoinListedLinkFaultOutOfRoot(t *testing.T) {
 			},
 		}
 		lk := boundedLooks(t.Context(), time.Now().Add(time.Second), names, raw)
-		target, there, err := resolveBelow(root, filepath.Join(root, filepath.FromSlash(c.rel)), lk)
+		target, there, err := resolveBelow(root, root, filepath.Join(root, filepath.FromSlash(c.rel)), lk)
 		switch c.want {
 		case "out":
 			if err != nil || withinRoot(root, target) {
@@ -285,9 +285,132 @@ func TestResolveBelowLinkLoop(t *testing.T) {
 		}
 	}
 	for _, rel := range []string{"A", "A/x", "Self"} {
-		target, there, err := resolveBelow(root, filepath.Join(root, rel), plainLooks)
+		target, there, err := resolveBelow(root, root, filepath.Join(root, rel), plainLooks)
 		if err != nil || there || !withinRoot(root, target) {
 			t.Errorf("resolveBelow(%q) = %q, there %v, err %v; want a path in the root with nothing there", rel, target, there, err)
+		}
+	}
+}
+
+// TestJoinLinkThroughTheRootAsConfigured (security): with a root configured
+// through a link (alias, to the folder real), a link inside it whose absolute
+// target names a file through the configured path resolves inside the root,
+// as the OS opens it (SafeJoin and SafeJoinListed both). Denied: an absolute
+// target through any other link above the root, or through the configured
+// path and back out of it ("alias/../outside"), is out of the root.
+func TestJoinLinkThroughTheRootAsConfigured(t *testing.T) {
+	t.Parallel()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	real, alias, other := filepath.Join(base, "real"), filepath.Join(base, "alias"), filepath.Join(base, "other")
+	writeFile(t, real, "Real/01.mp3", []byte("x"))
+	writeFile(t, base, "outside/01.mp3", []byte("x"))
+	for link, to := range map[string]string{
+		alias: real, other: real,
+		filepath.Join(real, "ViaAlias"):   filepath.Join(alias, "Real"),
+		filepath.Join(real, "ViaOther"):   filepath.Join(other, "Real"),
+		filepath.Join(real, "AliasUpOut"): filepath.Join(alias, "..", "outside"),
+	} {
+		if err := os.Symlink(to, link); err != nil {
+			t.Skipf("symlinks unsupported on this platform: %v", err)
+		}
+	}
+	names := metadata.ReadDirNamesBounded
+	if _, err := SafeJoin(alias, "ViaAlias/01.mp3"); err != nil {
+		t.Errorf("SafeJoin through the configured root: %v, want it joined", err)
+	}
+	if _, there, err := SafeJoinListed(t.Context(), alias, "ViaAlias/01.mp3", time.Second, names); err != nil || !there {
+		t.Errorf("SafeJoinListed through the configured root: there %v, err %v; want there", there, err)
+	}
+	for _, rel := range []string{"ViaOther/01.mp3", "AliasUpOut/01.mp3"} {
+		if _, err := SafeJoin(alias, rel); !errors.Is(err, ErrOutsideRoot) {
+			t.Errorf("SafeJoin(%q): %v, want ErrOutsideRoot", rel, err)
+		}
+		if _, _, err := SafeJoinListed(t.Context(), alias, rel, time.Second, names); !errors.Is(err, ErrOutsideRoot) {
+			t.Errorf("SafeJoinListed(%q): %v, want ErrOutsideRoot", rel, err)
+		}
+	}
+}
+
+// irregularInfo is a name's Lstat as Windows reports a junction (a mount
+// point) since Go 1.23: irregular, neither a link nor a folder.
+type irregularInfo struct{ fs.FileInfo }
+
+func (irregularInfo) Mode() fs.FileMode { return fs.ModeIrregular }
+func (irregularInfo) IsDir() bool       { return false }
+
+// TestResolveBelowJunction (security): a name Lstat reports as irregular and
+// no folder (a Windows junction) is read as a link: one whose target is out of
+// the root is refused, nothing out of the root looked at, and one into the
+// root followed. Allowed: one that does not read as a link (another reparse
+// point, a cloud file's placeholder) is a plain name, walked as before.
+func TestResolveBelowJunction(t *testing.T) {
+	t.Parallel()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "J/01.mp3", []byte("x"))
+	writeFile(t, root, "Real/01.mp3", []byte("x"))
+	writeFile(t, outside, "01.mp3", []byte("x"))
+	junction := filepath.Join(root, "J")
+	for _, c := range []struct {
+		name, to string
+		readErr  error
+		want     string // "out", "there"
+	}{
+		{"out of the root", outside, nil, "out"},
+		{"into the root", filepath.Join(root, "Real"), nil, "there"},
+		{"not a link", "", &fs.PathError{Op: "readlink", Path: junction, Err: syscall.ENOENT}, "there"},
+	} {
+		var (
+			mu     sync.Mutex
+			looked []string
+		)
+		note := func(p string) {
+			mu.Lock()
+			looked = append(looked, p)
+			mu.Unlock()
+		}
+		raw := rawLooks{
+			lstat: func(ctx context.Context, p string, timeout time.Duration) (fs.FileInfo, error) {
+				note(p)
+				fi, err := metadata.LstatBounded(ctx, p, timeout)
+				if err == nil && p == junction {
+					return irregularInfo{fi}, nil
+				}
+				return fi, err
+			},
+			readlink: func(ctx context.Context, p string, timeout time.Duration) (string, error) {
+				note(p)
+				if p == junction {
+					return c.to, c.readErr
+				}
+				return metadata.ReadlinkBounded(ctx, p, timeout)
+			},
+		}
+		lk := boundedLooks(t.Context(), time.Now().Add(time.Second), metadata.ReadDirNamesBounded, raw)
+		target, there, err := resolveBelow(root, root, filepath.Join(root, "J", "01.mp3"), lk)
+		switch c.want {
+		case "out":
+			if err != nil || withinRoot(root, target) {
+				t.Errorf("a junction %s: target %q, there %v, err %v; want a path out of the root", c.name, target, there, err)
+			}
+		case "there":
+			if err != nil || !there || !withinRoot(root, target) {
+				t.Errorf("a junction %s: target %q, there %v, err %v; want it there in the root", c.name, target, there, err)
+			}
+		}
+		for _, p := range looked {
+			if !withinRoot(root, p) {
+				t.Errorf("a junction %s: looked at %q, out of the root", c.name, p)
+			}
 		}
 	}
 }

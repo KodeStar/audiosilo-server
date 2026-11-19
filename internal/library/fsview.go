@@ -137,6 +137,7 @@ func SafeJoin(root, relPath string) (string, error) {
 	}
 	// Resolve symlinks in the root itself so containment is checked against the
 	// real directory (the root is operator-configured and expected to exist).
+	rootAs := rootAbs
 	resolved, rerr := filepath.EvalSymlinks(rootAbs)
 	if rerr == nil {
 		rootAbs = resolved
@@ -155,7 +156,7 @@ func SafeJoin(root, relPath string) (string, error) {
 	// links in it) only the names under it need looking at (resolveBelow).
 	var target string
 	if rerr == nil {
-		target, _, _ = resolveBelow(rootAbs, full, plainLooks)
+		target, _, _ = resolveBelow(rootAbs, rootAs, full, plainLooks)
 	} else {
 		target = resolveExisting(full)
 	}
@@ -208,7 +209,7 @@ func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Dura
 	if rerr != nil {
 		return full, false, nil // no root to list: nothing there
 	}
-	target, there, err := resolveBelow(resolved, full, boundedLooks(ctx, deadline, names, metadataLooks))
+	target, there, err := resolveBelow(resolved, rootAbs, full, boundedLooks(ctx, deadline, names, metadataLooks))
 	switch {
 	case err != nil:
 		return "", false, err
@@ -319,7 +320,9 @@ const maxLinkHops = 255
 
 // resolveBelow is resolveExisting(p) for a path p under rootAbs, a root with no
 // symlinks in it (a path inside the root is; one out of it is some path out of
-// it): the names below the root are looked at one at a time (lk), a
+// it), rootAs the same folder as configured (absolute, its links unresolved:
+// a link's absolute target may name the root so): the names below the root
+// are looked at one at a time (lk), a
 // link resolved where it is met (followLink: one out of the root ends the walk there, a
 // path out of the root returned, nothing below it looked at:
 // every path through such a link is refused, one that would come back into
@@ -332,14 +335,14 @@ const maxLinkHops = 255
 // cover and stream request, and would follow a link out of the root to its
 // target, whose mount's faults (a hang, EIO) would then tell what it points
 // to. err is a look's that went unanswered.
-func resolveBelow(rootAbs, p string, lk belowLooks) (target string, there bool, err error) {
+func resolveBelow(rootAbs, rootAs, p string, lk belowLooks) (target string, there bool, err error) {
 	rel, err := filepath.Rel(rootAbs, p)
 	if err != nil || rel == "." {
 		return p, true, nil //nolint:nilerr // p is the root, or not under it: checked by the caller
 	}
 	names := strings.Split(rel, string(filepath.Separator))
 	cur := rootAbs
-	hops := 0
+	w := &linkWalk{rootAbs: rootAbs, rootAs: rootAs, lk: lk}
 	for i, name := range names {
 		rest := func() string { return filepath.Join(append([]string{cur}, names[i:]...)...) }
 		if lk.listed != nil {
@@ -352,8 +355,8 @@ func resolveBelow(rootAbs, p string, lk belowLooks) (target string, there bool, 
 		if err != nil || info == nil {
 			return rest(), false, err
 		}
-		if info.Mode()&fs.ModeSymlink != 0 {
-			resolved, err := followLink(rootAbs, cur, next, lk, &hops)
+		if link, maybe := linkKind(info); link {
+			resolved, err := followLink(w, cur, next, maybe)
 			if err != nil || resolved == "" {
 				return rest(), false, err
 			}
@@ -371,10 +374,42 @@ func resolveBelow(rootAbs, p string, lk belowLooks) (target string, there bool, 
 	return cur, true, nil
 }
 
+// linkWalk is one resolve's (resolveBelow's) state for followLink: the root,
+// resolved (rootAbs: no link in it or above it) and as configured (rootAs,
+// which the OS resolves to rootAbs), its looks, and the links followed so far.
+type linkWalk struct {
+	rootAbs, rootAs string
+	lk              belowLooks
+	hops            int
+}
+
+// linkKind is how resolveBelow and followLink read a name by its Lstat: a
+// symbolic link (link), or a name that may be one (link and maybe): Lstat's
+// irregular entry that is no folder, which on Windows is a junction (a mount
+// point: since Go 1.23 neither ModeSymlink nor ModeDir, so walking through it
+// as a folder would read its target's names, out of the root as it may be)
+// or another reparse point (a cloud file's placeholder). Such a name is read
+// (os.Readlink reads a junction's target) and followed as a link when it
+// reads as one, else walked as a plain name, as it always was.
+func linkKind(info fs.FileInfo) (link, maybe bool) {
+	switch m := info.Mode(); {
+	case m&fs.ModeSymlink != 0:
+		return true, false
+	case m&fs.ModeIrregular != 0 && !m.IsDir():
+		return true, true
+	}
+	return false, false
+}
+
+// isPathSep reports whether r separates the names of a path (a link's target).
+func isPathSep(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) }
+
 // followLink resolves the link at link, in the folder dir (resolved, under
-// rootAbs), one hop at a time: its target is read (lk.readlink) and walked
+// w.rootAbs), one hop at a time: its target is read (lk.readlink) and walked
 // name by name from dir (a relative one) or the filesystem's root (an
-// absolute one), ".." taking the folder above, each name under the root
+// absolute one; from the root itself when it names the root as configured,
+// w.rootAs, which the OS resolves there: throughRootAs), ".." taking the
+// folder above, each name under the root
 // looked at (lk.lstat) and a link among them followed the same way. dir and
 // the folders above it, the root's among them, are walked through unlooked at
 // (both are resolved: no link in any of them). The first name out of the root ends it,
@@ -383,21 +418,31 @@ func resolveBelow(rootAbs, p string, lk belowLooks) (target string, there bool, 
 // or fails. A target that resolves to a folder above the root is returned as
 // it is (out of the root too). "" for a link that resolves to nothing (a name
 // along its target not there, a link that can't be read, more than
-// maxLinkHops links: a loop); err is a look's that went unanswered.
-func followLink(rootAbs, dir, link string, lk belowLooks, hops *int) (string, error) {
-	if *hops++; *hops > maxLinkHops {
+// maxLinkHops links: a loop); link itself for a name that may be a link
+// (maybe: linkKind) and does not read as one. err is a look's that went
+// unanswered.
+func followLink(w *linkWalk, dir, link string, maybe bool) (string, error) {
+	if w.hops++; w.hops > maxLinkHops {
 		return "", nil
 	}
-	to, err := lk.readlink(link)
-	if err != nil || to == "" {
+	to, err := w.lk.readlink(link)
+	switch {
+	case err != nil:
 		return "", err
+	case to == "" && maybe:
+		return link, nil // no link after all: the name itself, a plain one
+	case to == "":
+		return "", nil
 	}
-	cur := dir
+	cur, names := dir, strings.FieldsFunc(to, isPathSep)
 	if vol := filepath.VolumeName(to); vol != "" || os.IsPathSeparator(to[0]) {
-		cur = cmp.Or(vol, filepath.VolumeName(rootAbs)) + string(filepath.Separator)
-		to = to[len(vol):]
+		vol = cmp.Or(vol, filepath.VolumeName(w.rootAbs))
+		cur, names = vol+string(filepath.Separator), strings.FieldsFunc(to[len(filepath.VolumeName(to)):], isPathSep)
+		if below, ok := w.throughRootAs(vol, names); ok {
+			cur, names = w.rootAbs, below
+		}
 	}
-	for _, name := range strings.FieldsFunc(to, func(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) }) {
+	for _, name := range names {
 		switch name {
 		case ".":
 			continue
@@ -410,16 +455,16 @@ func followLink(rootAbs, dir, link string, lk belowLooks, hops *int) (string, er
 		case withinRoot(next, dir):
 			cur = next // dir or a folder above it (the root's too): resolved, no link there
 			continue
-		case !withinRoot(rootAbs, next):
+		case !withinRoot(w.rootAbs, next):
 			return next, nil // out of the root: never looked at
 		}
-		info, err := lk.lstat(next)
+		info, err := w.lk.lstat(next)
 		if err != nil || info == nil {
 			return "", err
 		}
-		if info.Mode()&fs.ModeSymlink != 0 {
-			resolved, err := followLink(rootAbs, cur, next, lk, hops)
-			if err != nil || resolved == "" || !withinRoot(rootAbs, resolved) {
+		if link, maybe := linkKind(info); link {
+			resolved, err := followLink(w, cur, next, maybe)
+			if err != nil || resolved == "" || !withinRoot(w.rootAbs, resolved) {
 				return resolved, err
 			}
 			next = resolved
@@ -427,6 +472,25 @@ func followLink(rootAbs, dir, link string, lk belowLooks, hops *int) (string, er
 		cur = next
 	}
 	return cur, nil
+}
+
+// throughRootAs is names, an absolute link target's on volume vol, less the
+// root's names as configured (w.rootAs) when they lead it: the OS resolves
+// that spelling to w.rootAbs, as this resolve's EvalSymlinks of the root did,
+// so the names after it are walked from w.rootAbs (a root that is itself a
+// link, /data/books to /mnt/books, or macOS's /var to /private/var, whose
+// links name its files through the configured path). ok false when they do
+// not, or the root has no other spelling: a target through any other link
+// above the root is out of it, never followed.
+func (w *linkWalk) throughRootAs(vol string, names []string) (below []string, ok bool) {
+	if w.rootAs == "" || w.rootAs == w.rootAbs || vol != filepath.VolumeName(w.rootAs) {
+		return nil, false
+	}
+	as := strings.FieldsFunc(w.rootAs[len(vol):], isPathSep)
+	if len(as) == 0 || len(names) < len(as) || !slices.Equal(names[:len(as)], as) {
+		return nil, false
+	}
+	return names[len(as):], true
 }
 
 // withinRoot reports whether p is the root itself or nested under it.
