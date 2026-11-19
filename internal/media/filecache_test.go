@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // needFFmpeg skips without ffmpeg and ffprobe and returns ffprobe's path.
@@ -673,4 +675,34 @@ func TestFileCacheCachedStartsNothing(t *testing.T) {
 	if runs.Load() != 1 {
 		t.Fatalf("%d runs, want the one Open started", runs.Load())
 	}
+}
+
+// A run's open of its source is a bounded look: on a share whose stat answers
+// but whose open hangs (attributes cached, reads stopped), it is given up on
+// (metadata.GaveUp), freeing the run's slot, where a plain open held it and
+// every run queued behind it for good. Once the share answers the copy is
+// made. Not parallel: metadata.HoldReadsForTests swaps the mount lookup.
+func TestFileCacheRunGivesUpOnAHeldSourceOpen(t *testing.T) {
+	m, src := fakeRemuxer(t, func(_, out string) error { return os.WriteFile(out, []byte("ID3 copy"), 0o600) })
+	m.openWait = 200 * time.Millisecond
+	release := metadata.HoldReadsForTests(filepath.Dir(src))
+	t.Cleanup(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	if _, _, err := m.Open(ctx, context.Background(), "ffmpeg", src); !metadata.GaveUp(err) {
+		t.Errorf("a run on a held source = %v, want it given up on", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("the run took %v, want it given up on at its bound", took)
+	}
+	if len(m.sem) != 0 {
+		t.Errorf("%d run slots still held, want none", len(m.sem))
+	}
+	release()
+	f, _, err := m.Open(ctx, context.Background(), "ffmpeg", src)
+	if err != nil {
+		t.Fatalf("the run once the share answers = %v, want the copy", err)
+	}
+	f.Close()
 }
