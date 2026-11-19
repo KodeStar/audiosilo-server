@@ -492,26 +492,17 @@ func (a *API) writeAudibleBackupError(w http.ResponseWriter, err error, op strin
 		writeErrorCode(w, http.StatusConflict, "account_paused", "the account's library was deleted; map it again on the Bridge")
 	case errors.Is(err, bridge.ErrAudibleTemplate):
 		// The queue's check of the job's params refused what was stored (saved
-		// before a rule tightened): reason says whose setting to fix.
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "invalid_template",
-			"reason": audibleStoredAccount})
+		// before a rule tightened): the reason says whose setting to fix, the
+		// account's template or the title's destination (the account and title
+		// PATCHes answer the same codes with no reason, for the value just sent).
+		writeErrorReason(w, http.StatusBadRequest, "invalid_template", "account", err.Error())
 	case errors.Is(err, bridge.ErrAudibleDestPath):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "invalid_dest_path",
-			"reason": audibleStoredTitle})
+		writeErrorReason(w, http.StatusBadRequest, "invalid_dest_path", "title", err.Error())
 	default:
 		return a.writeBridgeError(w, err, op)
 	}
 	return false
 }
-
-// The reason a backup's 400 invalid_template / invalid_dest_path carries: the
-// account's stored template, or the title's stored destination, fails the
-// rule (the account and title PATCHes answer the same codes with no reason,
-// for the value just sent).
-const (
-	audibleStoredAccount = "account"
-	audibleStoredTitle   = "title"
-)
 
 // handleAdminAudibleBackup serves POST /admin/audible/titles/{account}/{asin}/
 // backup: "Back up" one title. 202 {"job_id": N} with its queued backup (the

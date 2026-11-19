@@ -162,6 +162,12 @@ func writeErrorCode(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg, "code": code})
 }
 
+// writeErrorReason writes the error envelope with a code and the reason that
+// narrows it (the console words it as errors.<code>.<reason>).
+func writeErrorReason(w http.ResponseWriter, status int, code, reason, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg, "code": code, "reason": reason})
+}
+
 // writeCatalogError maps a catalog/library error to an HTTP response. The
 // cross-cutting domain sentinels that don't need a handler-specific message get
 // a clean, leak-free 4xx; anything else is treated as an unexpected internal
