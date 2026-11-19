@@ -178,7 +178,7 @@ func TestOpenFaultsAnswerByKind(t *testing.T) {
 }
 
 // TestInputFaultsAnswerByKind: where ffmpeg is handed the file as
-// metadata.ToolInputBounded hands it (an ffmpeg without fd:), a look of its
+// metadata.ToolInput hands it (an ffmpeg without fd:), a look of its
 // that fails as a share does that a retry may get past (EIO, ESTALE: Windows'
 // re-check of the path on a share that dropped) is returned with nothing
 // written, the caller's 503 share_not_answering; a lasting refusal (a
