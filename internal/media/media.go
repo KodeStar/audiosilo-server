@@ -319,6 +319,11 @@ func Transcode(w http.ResponseWriter, r *http.Request, root, absPath, ffmpegPath
 		return false, nil
 	}
 	defer f.Close()
+	if r.Method == http.MethodHead {
+		// Answered with no ffmpeg run (transcodeInput): no probe for the input
+		// either.
+		return transcodeInput(w, r, inputSpec{}, absPath, ffmpegPath, startSec, download, idle, log), nil
+	}
 	in, err := fileInput(ffmpegPath, f)
 	if err != nil {
 		// The path no longer leads to the file opened (fileInput's re-check

@@ -526,6 +526,25 @@ func TestInputForRetriesAFailedProbe(t *testing.T) {
 	}
 }
 
+// TestTranscodeHeadRunsNoFFmpeg: a HEAD is answered with no ffmpeg run, its
+// input's protocols probe included.
+func TestTranscodeHeadRunsNoFFmpeg(t *testing.T) {
+	t.Parallel()
+	ffmpeg, runs := probeCountingFFmpeg(t, "exit 1")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.m4b")
+	if err := os.WriteFile(src, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	if _, err := Transcode(rec, httptest.NewRequest(http.MethodHead, "/", nil), dir, src, ffmpeg, 0, false, time.Minute, 0, nil); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("HEAD = %d (%v), want 200", rec.Code, err)
+	}
+	if n := runs(); n != 0 {
+		t.Fatalf("a HEAD ran ffmpeg %d times, want none", n)
+	}
+}
+
 // TestInputForAsksAgainAfterASlowProbe: a probe that ran out of time (a busy
 // host) is no answer to keep, so the next ask probes again and a cache run
 // gets fd: once the binary answers. Not parallel: it shortens fdProbeTimeout.
