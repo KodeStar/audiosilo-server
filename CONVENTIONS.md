@@ -1260,12 +1260,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`handleBrowseFS` lists the folder in the index's spelling, so the listing's paths match the books
   `annotateWithBooks` finds). A show path (the podcast routes naming a show: `/podcasts/episodes`'s
   `show`, `POST`/`DELETE /podcasts/follow` and `/podcasts/check`'s `path`, the console's and the Bridge's
-  `/podcasts/retention`, a show's own cover) is spelled by the same rule from `podcast_shows`
+  `/podcasts/retention`, `/fs` in a podcast library, and a `?path=` naming a show there, its cover:
+  `spelledPath`, before the scope is checked, as a show with no episode rows is no folder holding books)
+  is spelled by the same rule from `podcast_shows`
   (`Catalog.PodcastShowSpelling`, the API's `showSpelled`, server#495's follow-up): the show at the path as given,
   else the one show whose NFC form is the path's that the caller's scope admits (`VisibleInBrowse`;
-  the cover's `Allows`; the console and the Bridge every show), never two, never case, never a path
+  `spelledPath`'s `Allows`; the console and the Bridge every show), never two, never case, never a path
   that is an entry of its own on disk (`ownEntry`); no key column (one row per top-level folder,
-  read only on a miss of a name with another spelling). So an older client or a saved link naming a show
+  read only on a miss of a name with another spelling). An unfollow also drops the caller's own follow at
+  the path as given (one kept past its show's row). So an older client or a saved link naming a show
   folder renamed by hand to its other spelling still reaches it, and a private show it doesn't follow
   stays 404 `show_not_found` (`TestPodcastShowRoutesMeetTheOtherSpelling`,
   `TestPodcastPrivateShowNotReachedByTheOtherSpelling`). `spelledIn` passes the caller's scope (for `/fs`, `VisibleInBrowse`;

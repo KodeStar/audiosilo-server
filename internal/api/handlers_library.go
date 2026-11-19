@@ -17,6 +17,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 	"github.com/kodestar/audiosilo-server/internal/web/spa"
 )
 
@@ -387,6 +388,12 @@ func (a *API) spelledPath(ctx context.Context, lib *catalog.Library, scope catal
 		return nil, "", scope, false, status, msg
 	}
 	rel, refused, err := a.spelledIn(ctx, lib.ID, scope.Allows, rel)
+	if err == nil && !refused && lib.Kind == catalog.KindPodcasts && feed.ShowPath(rel) {
+		// A show's own path (its cover): one with no episode rows is no folder
+		// holding books, so Spelling leaves it; podcast_shows spells it, among
+		// the shows the scope admits, before the scope is checked on it.
+		rel, err = a.cat.PodcastShowSpelling(ctx, lib.ID, rel, scope.Allows)
+	}
 	if err != nil {
 		a.log.Warn("resolve path spelling failed", "library", lib.ID, "err", err)
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -564,7 +571,16 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lib.Kind == catalog.KindPodcasts {
-		listing, err := a.scanner.BrowsePodcasts(r.Context(), *lib, scope, userFrom(r.Context()).ID, r.URL.Query().Get("path"), queryInt(r, "offset", 0), queryInt(r, "limit", 200))
+		// A show asked for in another Unicode spelling is listed at the index's
+		// (showSpelled, as the podcast routes find it), among the shows the
+		// caller sees: one they can't is missing.
+		show := catalog.CleanRelPath(r.URL.Query().Get("path"))
+		if feed.ShowPath(show) {
+			if show, ok = a.showSpelled(w, r, lib.ID, show, scope.VisibleInBrowse); !ok {
+				return
+			}
+		}
+		listing, err := a.scanner.BrowsePodcasts(r.Context(), *lib, scope, userFrom(r.Context()).ID, show, queryInt(r, "offset", 0), queryInt(r, "limit", 200))
 		if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, catalog.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "directory not found")
 			return
@@ -1447,7 +1463,7 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lib.Kind == catalog.KindPodcasts {
-		a.servePodcastCover(w, r, lib, scope, path)
+		a.servePodcastCover(w, r, lib, path)
 		return
 	}
 

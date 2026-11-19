@@ -161,8 +161,8 @@ func (a *API) handleBridgePodcastRetention(w http.ResponseWriter, r *http.Reques
 		writeErrorCode(w, 400, "invalid_request", "A show path and identity are required.")
 		return
 	}
-	// The Bridge names a show at its feed.json's spelling, which a folder
-	// renamed by hand to the other Unicode spelling no longer has.
+	// A retain job names the show as the index spelled it when it was queued:
+	// a folder renamed by hand to the other Unicode spelling since is found.
 	if show, ok = a.showSpelled(w, r, lib.ID, show, nil); !ok {
 		return
 	}

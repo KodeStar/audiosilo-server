@@ -952,6 +952,15 @@ func TestPodcastShowRoutesMeetTheOtherSpelling(t *testing.T) {
 	if resp.StatusCode != 200 || strings.Contains(out, page.Episodes[0].Path) {
 		t.Fatalf("next page %d %s", resp.StatusCode, out)
 	}
+	// An older client's /fs listing of the show, at the index's spelling.
+	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "fs?path="+q), b.userTok, "", h)
+	var listing struct {
+		Path    string            `json:"path"`
+		Entries []json.RawMessage `json:"entries"`
+	}
+	if resp.StatusCode != 200 || json.Unmarshal([]byte(out), &listing) != nil || listing.Path != nfd || len(listing.Entries) != len(f.Episodes) {
+		t.Fatalf("fs %d %s", resp.StatusCode, out)
+	}
 	resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, nfc), h)
 	if resp.StatusCode != 202 {
 		t.Fatalf("check %d %s", resp.StatusCode, out)
@@ -996,12 +1005,37 @@ func TestPodcastShowRoutesMeetTheOtherSpelling(t *testing.T) {
 	if _, _, err := b.api.scanner.IndexPodcastPath(ctx, *b.lib, zoeNFD); err != nil {
 		t.Fatal(err)
 	}
-	for _, size := range []string{"", "&size=160"} {
-		resp, out := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "cover?path="+url.QueryEscape(zoeNFC)+size), b.userTok, "", h)
-		if resp.StatusCode != 200 {
-			t.Fatalf("cover %q %d %s", size, resp.StatusCode, out)
+	covers := func(when string) {
+		t.Helper()
+		for _, size := range []string{"", "&size=160"} {
+			resp, out := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "cover?path="+url.QueryEscape(zoeNFC)+size), b.userTok, "", h)
+			if resp.StatusCode != 200 {
+				t.Fatalf("cover %s %q %d %s", when, size, resp.StatusCode, out)
+			}
 		}
 	}
+	covers("whole library")
+	// A private show the caller doesn't follow narrows their scope to the
+	// shows they see, each by its path: the cover is still found by the
+	// other spelling, before that scope is checked on it.
+	hiddenDir := filepath.Join(b.lib.Root, "Hidden Show")
+	if err := os.Mkdir(hiddenDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	hidden := empty
+	hidden.ShowID, hidden.Private, hidden.FeedURL, hidden.Show.Link = "fedcba9876543210", true, "", ""
+	hidden.FeedURLSHA256 = feed.FeedURLHash("https://feeds.example.com/hidden?auth=OTHER")
+	if err := os.WriteFile(filepath.Join(hiddenDir, "feed.json"), []byte(mustJSON(t, hidden)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.api.scanner.IndexPodcastPath(ctx, *b.lib, "Hidden Show"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := b.cat.CallerScope(ctx, catalog.Caller{ID: uid, Podcasts: true}, b.lib.ID)
+	if err != nil || s.AllowAll || !slices.Contains(s.Paths, zoeNFD) || slices.Contains(s.Paths, "Hidden Show") {
+		t.Fatalf("narrowed scope %+v %v", s, err)
+	}
+	covers("shows seen")
 }
 
 // Denied: a private show in its NFD spelling that the caller does not follow
@@ -1020,6 +1054,10 @@ func TestPodcastPrivateShowNotReachedByTheOtherSpelling(t *testing.T) {
 		wantCode(t, "episodes "+show, resp, out, 404, "show_not_found")
 		resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, show), h)
 		wantCode(t, "follow "+show, resp, out, 404, "show_not_found")
+		resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "fs?path="+url.QueryEscape(show)), b.userTok, "", h)
+		if resp.StatusCode != 404 || !strings.Contains(out, "directory not found") {
+			t.Fatalf("fs %+q %d %s", show, resp.StatusCode, out)
+		}
 	}
 	// Another listener follows it; this caller's unfollow by the other
 	// spelling is theirs alone.
@@ -1049,6 +1087,10 @@ func TestPodcastPrivateShowNotReachedByTheOtherSpelling(t *testing.T) {
 	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "podcasts/episodes?show="+q), b.userTok, "", h)
 	if resp.StatusCode != 200 || !strings.Contains(out, `"path":"`+nfd+"/") {
 		t.Fatalf("followed episodes %d %s", resp.StatusCode, out)
+	}
+	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "fs?path="+q), b.userTok, "", h)
+	if resp.StatusCode != 200 || !strings.Contains(out, `"path":"`+nfd+`"`) {
+		t.Fatalf("followed fs %d %s", resp.StatusCode, out)
 	}
 	resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, nfc), h)
 	if resp.StatusCode != 202 {

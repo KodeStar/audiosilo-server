@@ -44,9 +44,9 @@ func (a *API) showSpelled(w http.ResponseWriter, r *http.Request, lib int64, sho
 }
 
 // visibleShow is show, a show path a client sent, in the index's spelling
-// among the shows s lets the caller see, or false with 404 show_not_found
-// answered (a path no show folder could have, one s hides, or a failed
-// lookup's error).
+// among the shows s lets the caller see, or false once answered: 404
+// show_not_found for a path no show folder could have or one s hides, a
+// failed lookup's error (showSpelled) otherwise.
 func (a *API) visibleShow(w http.ResponseWriter, r *http.Request, lib int64, s catalog.Scope, show string) (string, bool) {
 	if !feed.ShowPath(show) {
 		writeShowNotFound(w)
@@ -512,17 +512,12 @@ func (a *API) handleBridgeMarker(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]string{"nonce": nonce})
 }
-func (a *API) servePodcastCover(w http.ResponseWriter, r *http.Request, lib *catalog.Library, scope catalog.Scope, p string) {
-	showPath, _, episode := strings.Cut(p, "/")
-	// An episode's path is already the index's spelling (scopedPath); a show
-	// with no episode rows is no folder holding books there, so its own path
-	// is spelled as a show's.
-	if !episode {
-		var ok bool
-		if showPath, ok = a.showSpelled(w, r, lib.ID, showPath, scope.Allows); !ok {
-			return
-		}
-	}
+
+// servePodcastCover is a show's cover for p, a show's or an episode's path,
+// already in the index's spelling (spelledPath spells a show's own path from
+// podcast_shows).
+func (a *API) servePodcastCover(w http.ResponseWriter, r *http.Request, lib *catalog.Library, p string) {
+	showPath, _, _ := strings.Cut(p, "/")
 	show, err := a.cat.PodcastShow(r.Context(), lib.ID, showPath, userFrom(r.Context()).ID)
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "no cover")
