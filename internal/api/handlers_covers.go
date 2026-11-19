@@ -78,14 +78,11 @@ const maxCoverReads = 8
 // handleAdminCovers serves POST /admin/covers {"books":[{library_id,path}],"size"}.
 func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Books []catalog.Ref `json:"books"`
-		Size  int           `json:"size"`
+		Books boundedList[catalog.Ref] `json:"books"`
+		Size  int                      `json:"size"`
 	}
-	if err := decodeJSON(r, &req, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
-		return
-	}
-	if !thumbBatch(w, "books", len(req.Books), maxCoverBatch, &req.Size) || refsTooLong(w, req.Books) {
+	err := decodeJSON(r, &req, 0)
+	if !thumbBatch(w, err, "books", len(req.Books), maxCoverBatch, &req.Size) || refsTooLong(w, req.Books) {
 		return
 	}
 	ctx := r.Context()
@@ -385,17 +382,22 @@ func optThumbSize(w http.ResponseWriter, q url.Values) (int, bool) {
 	return thumbSizeParam(w, q.Get("size"))
 }
 
-// thumbBatch checks a thumbnail batch: its list (named field) holds 1 to max
-// entries, and its size is one of thumbSizes, an unset one defaulting to
-// defaultThumbSize; false when it wrote the 400.
-func thumbBatch(w http.ResponseWriter, field string, n, max int, size *int) bool {
+// thumbBatch checks a thumbnail batch as decodeJSON left it (err): its body
+// decoded, its list (named field, a boundedList) holds 1 to max entries, and
+// its size is one of thumbSizes, an unset one defaulting to defaultThumbSize;
+// false when it wrote the 400. A list the decode stopped reading
+// (errTooManyEntries) is past max too, and answered the same.
+func thumbBatch(w http.ResponseWriter, err error, field string, n, max int, size *int) bool {
 	switch {
-	case n == 0:
-		writeError(w, http.StatusBadRequest, field+" is required")
-		return false
-	case n > max:
+	case errors.Is(err, errTooManyEntries), err == nil && n > max:
 		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
 			fmt.Sprintf("too many covers in one request (at most %d)", max))
+		return false
+	case err != nil:
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return false
+	case n == 0:
+		writeError(w, http.StatusBadRequest, field+" is required")
 		return false
 	case *size == 0:
 		*size = defaultThumbSize

@@ -114,6 +114,8 @@ func TestSelectionRoutesRefuseHugeLists(t *testing.T) {
 		{"POST", "/api/v1/admin/issues/ignore", `{"kind":"transcode","books":` + huge + `}`},
 		{"DELETE", "/api/v1/admin/issues/ignore", `{"kind":"transcode","books":` + huge + `}`},
 		{"POST", "/api/v1/admin/books/works", `{"books":` + works + `}`},
+		{"POST", "/api/v1/admin/covers", `{"books":` + works + `}`},
+		{"POST", "/api/v1/admin/meta/covers", `{"urls":` + labels[:1+3*300_000] + `""]}`},
 	} {
 		resp, out := e.do(t, tc.method, tc.route, adminTok, tc.body)
 		wantCode(t, tc.method+" "+tc.route+" with a huge list", resp, out, http.StatusBadRequest, codeTooLarge)
@@ -192,6 +194,12 @@ func TestListRoutesKeepTheirOwnCap(t *testing.T) {
 		max                 int
 		want                string
 	}{
+		{"POST", "/api/v1/admin/books/works", `{"books":%s}`, ref, maxWorkBooks,
+			`"code":"too_large","error":"too many books in one request (at most 100)"`},
+		{"POST", "/api/v1/admin/covers", `{"books":%s}`, ref, maxCoverBatch,
+			`"code":"too_large","error":"too many covers in one request (at most 60)"`},
+		{"POST", "/api/v1/admin/meta/covers", `{"urls":%s}`, `"https://example.com/c.jpg"`, maxCommunityCovers,
+			`"code":"too_large","error":"too many covers in one request (at most 12)"`},
 		{"PUT", "/api/v1/me/queue", `{"items":%s}`, ref, catalog.MaxQueue, `"error":"too many items"`},
 		{"POST", "/api/v1/me/listening/sync", `{"device_id":"d","sent_at":"` + now + `","events":%s}`, `{}`, catalog.MaxSyncEvents,
 			`"code":"too_many_events"`},

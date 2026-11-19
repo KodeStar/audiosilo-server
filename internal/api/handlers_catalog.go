@@ -674,20 +674,23 @@ func (a *API) handleAdminBookWorks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// maxWorkBooks paths at the cap fit decodeJSON's default 1 MiB; a longer
-	// body, or a list past maxBulkBooks, is 400 too_large (decodeBody).
+	// body is 400 too_large (writeDecodeError), as a list past maxWorkBooks
+	// is, with one answer however far past (a boundedList stops at
+	// maxBulkBooks, which is past this route's cap too).
 	var req struct {
 		Books boundedList[catalog.Ref] `json:"books"`
 	}
-	if !decodeBody(w, r, &req, 0) {
-		return
-	}
+	err := decodeJSON(r, &req, 0)
 	switch {
-	case len(req.Books) == 0:
-		writeError(w, http.StatusBadRequest, "books is required")
-		return
-	case len(req.Books) > maxWorkBooks:
+	case errors.Is(err, errTooManyEntries), err == nil && len(req.Books) > maxWorkBooks:
 		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
 			fmt.Sprintf("too many books in one request (at most %d)", maxWorkBooks))
+		return
+	case err != nil:
+		writeDecodeError(w, err)
+		return
+	case len(req.Books) == 0:
+		writeError(w, http.StatusBadRequest, "books is required")
 		return
 	case refsTooLong(w, req.Books):
 		return
