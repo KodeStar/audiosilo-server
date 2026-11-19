@@ -123,3 +123,33 @@ func TestSharedBudget(t *testing.T) {
 		t.Fatalf("again = %v after %d lookups, want the cached failure", err, lookups.Load())
 	}
 }
+
+// In a run, a book waiting on another worker's read of the same series (which
+// may be sitting out a Retry-After) has its budget held for the wait too, so it
+// still gets the facts once that read lands (server#447).
+func TestSeriesFactsWaiterBudgetHeld(t *testing.T) {
+	t.Parallel()
+	s := NewService("http://127.0.0.1:1", nil)
+	flight := make(chan struct{})
+	s.flightMu.Lock()
+	s.seriesFlights["s1"] = flight
+	s.flightMu.Unlock()
+
+	ctx, cancel := withBudget(WithPacer(context.Background(), quietPacer(1000)), 30*time.Millisecond)
+	defer cancel()
+	got := make(chan *seriesFacts, 1)
+	go func() { got <- s.seriesFacts(ctx, "s1") }()
+	time.Sleep(120 * time.Millisecond) // four times the budget, all of it the other read's
+	if ctx.Err() != nil {
+		t.Fatal("the waiter's budget ran out while it waited on another worker's read")
+	}
+	want := &seriesFacts{}
+	s.flightMu.Lock()
+	cachePut(s.cache, nsSeries.key("s1"), want, positiveTTL)
+	delete(s.seriesFlights, "s1")
+	s.flightMu.Unlock()
+	close(flight)
+	if f := <-got; f != want {
+		t.Fatalf("facts = %v, want the landed read's", f)
+	}
+}
