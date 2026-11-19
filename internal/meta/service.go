@@ -45,7 +45,8 @@ const maxOrderingAlternates = 2
 // starve a rail of the budget).
 // Each call already has the client's 5s timeout, but sequentially those could
 // sum past the API's 30s request budget; this keeps the whole composition
-// comfortably under it. When THIS deadline
+// comfortably under it. In a bulk run the Retry-After waits are not counted
+// (withBudget). When THIS deadline
 // fires while the caller is still live, the parent ctx.Err() stays nil, so the
 // failure IS cached as a transport error for errorTTL - exactly the protective
 // behavior we want against a degraded-but-alive upstream (it is not re-hammered
@@ -446,7 +447,7 @@ func (s *Service) enrich(ctx context.Context, key string, compose func(context.C
 	// slow-but-alive upstream must not eat the API's whole request budget, and
 	// hitting THIS deadline (parent still live) is cached like any upstream
 	// failure below, so a degraded upstream is not re-hammered per cold book.
-	cctx, cancel := context.WithTimeout(ctx, s.composeBudget)
+	cctx, cancel := withBudget(ctx, s.composeBudget)
 	defer cancel()
 	result, complete, err := compose(cctx)
 	switch {
@@ -695,7 +696,7 @@ func keepStored[T any](s *Service, key string, stored *T, err error) bool {
 // workSlot takes a workSem slot for one uncached read, or gives up with ctx (its
 // error then); release gives it back. A bulk run (a Pacer in ctx) takes none: its
 // workers and Pacer bound what it asks, and its reads sit out the service's Retry-After
-// for as long as its compose budget lasts, which must not hold up a listener's read or
+// (outside its compose budget: withBudget), which must not hold up a listener's read or
 // the match dialog queued here.
 func (s *Service) workSlot(ctx context.Context) (release func(), err error) {
 	if pacerOf(ctx) != nil {

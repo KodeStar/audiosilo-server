@@ -84,7 +84,8 @@ func ownTransport(base http.RoundTripper) http.RoundTripper {
 // and asked again, rateLimitRetries times at most, each wait its Retry-After
 // capped at maxRetryAfter (defaultRetryAfter when it gives none), so a burst a
 // bulk match makes slows down instead of failing books (server#247). A wait the
-// caller's deadline would cut short isn't started. A bulk run (a Pacer in the
+// caller's deadline would cut short isn't started; a bulk run's budget has no
+// deadline and stops its clock for the wait (withBudget, server#447). A bulk run (a Pacer in the
 // context) waits out a 503 the same way: metaserve answers one past a match's budget,
 // and books failing in a row stop a run. Anyone else's 503 is the outage it reports at
 // once: an admin or a listener is waiting on the answer.
@@ -122,7 +123,11 @@ func (c *client) getJSON(ctx context.Context, path string, out any) error {
 		if p := pacerOf(ctx); p != nil {
 			p.noteWait(err, wait)
 		}
-		if c.sleep(ctx, wait) != nil {
+		// In a bulk run the wait is the run's, not the book's (withBudget).
+		release := holdBudgets(ctx)
+		slept := c.sleep(ctx, wait)
+		release()
+		if slept != nil {
 			return err
 		}
 	}

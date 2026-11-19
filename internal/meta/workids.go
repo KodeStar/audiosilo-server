@@ -53,7 +53,7 @@ type WorkID struct {
 // sharedLookup), and a book listed twice (two copies with one ASIN) is looked up
 // once.
 func (s *Service) WorkIDs(ctx context.Context, books []BookIDs) []WorkID {
-	cctx, cancel := context.WithTimeout(ctx, s.composeBudget)
+	cctx, cancel := withBudget(ctx, s.composeBudget)
 	defer cancel()
 
 	out := make([]WorkID, len(books))

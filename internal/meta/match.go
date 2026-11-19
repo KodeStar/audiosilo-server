@@ -595,7 +595,7 @@ func boundBytes(s string, n int) string {
 // empty list when nothing matches, and an error only when the community service
 // could not be reached.
 func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidate, error) {
-	ctx, cancel := context.WithTimeout(ctx, s.composeBudget)
+	ctx, cancel := withBudget(ctx, s.composeBudget)
 	defer cancel()
 
 	if id := strings.TrimSpace(q.WorkID); id != "" {

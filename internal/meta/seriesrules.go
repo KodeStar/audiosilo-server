@@ -364,7 +364,7 @@ func (s *Service) seriesFactsFor(ctx context.Context, works []*upstreamWorkDetai
 			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, seriesFactsTimeout)
+	ctx, cancel := withBudget(ctx, seriesFactsTimeout)
 	defer cancel()
 	facts := make([]*seriesFacts, len(ids))
 	var wg sync.WaitGroup
