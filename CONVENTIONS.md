@@ -3668,7 +3668,56 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   validator over a poll's 512-byte cap is dropped. Successful cadence clamps to 15 minutes..24 hours; failures back
   off, `gone` stops automatic checks. Secret loss is retained separately from the latest error:
   only a successful subscribe or poll clears it, so a follow by URL can still restore it after
-  another failure. Follows and feed status survive index pruning. The Bridge's
+  another failure. Follows and feed status survive index pruning. A show folder renamed by hand
+  keeps its feed.json, so its `show_id` turns up at the new folder: every scan (before its prune) and
+  every Bridge rescan (that show's identities only) finds an identity indexed at one path with rows or
+  state at another (`catalog.PodcastIdentityPaths`), and the scanner (`library.movePodcastShows`)
+  reads each path's feed.json: when exactly one listed folder holds the identity, the index knows it
+  there, and every other path is known not to (gone, no feed.json, another show's),
+  `catalog.MovePodcastShows` moves, in one transaction, every listener's follow (two of them keep the
+  earlier date), the feed state (the later check wins), the policy (the newer
+  edit wins), the episodes' fetch backoffs and the listening state on the folder and each episode file
+  (`carryListeningState`, a move's rule; the files the new folder's index, the old row and the new
+  folder's feed.json list, the last under whatever folder name its paths still give), then drops the
+  old row and its episodes. The folder's own state (a heart on the show) is keyed by path alone, so it
+  moves only while the old folder is not another show's own: its row is this show's or gone, or names
+  a show with no follow, feed state or policy there yet (renamed into it by hand, its own move still
+  to come); under an unrelated show followed or polled at that name it stays. A
+  copy (two folders holding it), a path that can't be told (an I/O error, a newer feed.json version,
+  an invalid or oversized feed.json, which may be the show's own, half written or damaged for now) or
+  a holder not indexed yet moves nothing. A folder whose row names the moving show while it holds
+  another (names swapped by
+  hand) is indexed again first, so both move in one call (follows and folder state through a hidden
+  placeholder path); a rescan about to move a show also indexes the listed folders with no row yet
+  first (another show renamed out of the way to a new name), so a chain of renames moves in one call
+  too. A move whose new folder carries a follow, feed state or policy of another show indexed
+  elsewhere waits while that show's own move is not in the same call (skipped: a copy, a path that
+  can't be told; else that folder's heart would go to the moving show). A folder the
+  scan (partial, it prunes nothing) or a rescan (the listed folders with no row) can't read, or whose
+  feed.json is invalid or of a newer version, may be that other show's: then a move whose new folder
+  carries another show's follow, feed state or policy waits too, unless that show moves off it in the
+  same call; a plain rename beside an unrelated unreadable folder still moves (the `unread` flag
+  through `MovePodcastShows`). A file system's own folder (`lost+found`, `$RECYCLE.BIN`, `#recycle`
+  and the like: `fileSystemFolders`) the scanner may not look into (EACCES or EPERM, which last until
+  an admin changes them; not EIO, ESTALE or a timeout) where the index and the podcast state know
+  nothing (`strayPodcastFolder`, `catalog.PodcastPathKnown`) is neither: the scan takes it for no
+  show folder, so a deleted show's leftover state holds no rename into its name for ever. Any other
+  name stays both: a show renamed by hand into a folder the server can't read looks the same, and
+  the partial scan keeps its old row, a place-only show's one way back. A show folder the scanner
+  can't even stat (a share dropping after its listing) is unread too, never gone. A rescan also counts as unread a listed folder whose row it does
+  not index again but whose signature changed (another show renamed into it by hand, the row's own
+  gone), so the move waits for a scan. A place at the new folder holds nothing: the new folder's
+  row is the moving show's by then, so a show whose only state there is keyed by path has nothing
+  left to move it later, and the move carries only its own files' state. A scan keeps each planned
+  move's old folders' rows through its prune, so a held show whose only state there is a place is
+  found again once the hold clears. On a
+  case-insensitive file system only the spelling the root lists, read fresh, is the folder.
+  A poll's or fetch's fold whose queued folder (episode) no longer holds its identity folds at the
+  outcome's `show_path` (`path`) when that holds it; a copy keeps its own outcome. A fetch done in
+  another folder while its queued episode's show is still there (no scan has moved it yet, or a copy)
+  leaves that episode cooling down (`next_attempt_at`, failures and error as they were), never cleared:
+  else the scheduler queues it again at once and the Bridge answers with the same reuse. Bridge jobs and
+  grants stay where they were. The Bridge's
   marker route validates `.audiosilo/library.json` without symlinks (4 KiB, version, id, nonce),
   and podcast rescans accept only shows or indexed episodes. Admins cannot enqueue podcast kinds;
   default job lists omit polls. Shared fixtures live in `internal/podcast/testdata` and the byte-identical

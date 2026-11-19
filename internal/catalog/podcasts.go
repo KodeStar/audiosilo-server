@@ -370,21 +370,28 @@ func (c *Catalog) PrunePodcastShows(ctx context.Context, lib int64, gone []strin
 	}
 	return c.db.WithTx(ctx, "PrunePodcastShows", func(tx *sql.Tx) error {
 		for _, show := range gone {
-			ids, err := queryRows(ctx, tx, func(r *sql.Rows, id *int64) error { return r.Scan(id) }, `SELECT book_id FROM podcast_episodes WHERE library_id=? AND show_path=?`, lib, show)
-			if err != nil {
-				return err
-			}
-			for _, id := range ids {
-				if err := deleteBook(ctx, tx, id); err != nil {
-					return err
-				}
-			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, show); err != nil {
+			if err := pruneShow(ctx, tx, lib, show); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+// pruneShow removes one show's index (its row, feed hashes and episodes),
+// never its durable follows, feed state or policy.
+func pruneShow(ctx context.Context, tx *sql.Tx, lib int64, show string) error {
+	ids, err := queryRows(ctx, tx, func(r *sql.Rows, id *int64) error { return r.Scan(id) }, `SELECT book_id FROM podcast_episodes WHERE library_id=? AND show_path=?`, lib, show)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := deleteBook(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, show)
+	return err
 }
 
 // nonEpisodeBooks is a podcast library's books rows that are not episodes:
@@ -856,15 +863,6 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		if err != nil || n == 0 {
 			return err
 		}
-		// A poll whose fold kept failing past pollInHandWindow can land after
-		// the next poll of its show has folded: its outcome is stale and would
-		// undo the newer one's (feed state, run, notices).
-		if j.Kind == bridge.KindPodcastPoll {
-			var newer bool
-			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs n JOIN podcast_folded f ON f.job_id=n.id WHERE n.library_id=? AND n.rel_path=? AND n.kind=? AND n.id>?)`, *j.LibraryID, j.Target(), bridge.KindPodcastPoll, j.ID).Scan(&newer); err != nil || newer {
-				return err
-			}
-		}
 		if j.Kind == bridge.KindPodcastFetch {
 			return c.foldPodcastFetch(ctx, tx, j)
 		}
@@ -907,12 +905,42 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		}
 		var current, title, library string
 		var private bool
-		err = tx.QueryRowContext(ctx, `SELECT s.show_id,s.title,s.private,l.name FROM podcast_shows s JOIN libraries l ON l.id=s.library_id WHERE s.library_id=? AND s.show_path=?`, *j.LibraryID, show).Scan(&current, &title, &private, &library)
-		if errors.Is(err, sql.ErrNoRows) {
+		lookup := func(show string) error {
+			err := tx.QueryRowContext(ctx, `SELECT s.show_id,s.title,s.private,l.name FROM podcast_shows s JOIN libraries l ON l.id=s.library_id WHERE s.library_id=? AND s.show_path=?`, *j.LibraryID, show).Scan(&current, &title, &private, &library)
+			if errors.Is(err, sql.ErrNoRows) {
+				current = ""
+				return nil
+			}
+			return err
+		}
+		if err := lookup(show); err != nil {
+			return err
+		}
+		// A poll of a show folder renamed by hand ran where the folder is now
+		// (the outcome's show_path). Once the index has moved the show there
+		// (MovePodcastShows) the queued folder holds it no more, and the outcome
+		// is the new folder's. A copy still holding the show keeps its own
+		// outcome: the Bridge answers a copy's poll with the folder it copies.
+		if j.Kind == bridge.KindPodcastPoll && current != expected && result.ShowPath != show && feed.ShowPath(result.ShowPath) {
+			if err := lookup(result.ShowPath); err != nil {
+				return err
+			}
+			if current == expected {
+				show = result.ShowPath
+			}
+		}
+		if current == "" {
 			return nil
 		}
-		if err != nil {
-			return err
+		// A poll whose fold kept failing past pollInHandWindow can land after
+		// the next poll of its show has folded: its outcome is stale and would
+		// undo the newer one's (feed state, run, notices). Folding at the
+		// folder the show was renamed to, the next poll may be queued there.
+		if j.Kind == bridge.KindPodcastPoll {
+			var newer bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs n JOIN podcast_folded f ON f.job_id=n.id WHERE n.library_id=? AND n.rel_path IN (?,?) AND n.kind=? AND n.id>?)`, *j.LibraryID, j.Target(), show, bridge.KindPodcastPoll, j.ID).Scan(&newer); err != nil || newer {
+				return err
+			}
 		}
 		if current != expected || result.ShowID != "" && result.ShowID != expected {
 			return nil

@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"path"
 	"slices"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
+	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
 // foldPodcastFetch never touches feed polling state, validators or secrets.
@@ -20,18 +22,8 @@ func (c *Catalog) foldPodcastFetch(ctx context.Context, tx *sql.Tx, j bridge.Job
 	if json.Unmarshal(j.Params, &params) != nil {
 		return nil
 	}
-	var current, episode string
-	err := tx.QueryRowContext(ctx, `SELECT s.show_id,e.episode_id FROM podcast_episodes e JOIN books b ON b.id=e.book_id JOIN podcast_shows s ON s.library_id=e.library_id AND s.show_path=e.show_path WHERE b.library_id=? AND b.rel_path=?`, j.LibraryID, j.Path).Scan(&current, &episode)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if current != params.ShowID || episode != params.EpisodeID {
-		return nil
-	}
 	var result struct {
+		Path      string `json:"path"`
 		ShowID    string `json:"show_id"`
 		EpisodeID string `json:"episode_id"`
 		Code      string `json:"code"`
@@ -39,16 +31,52 @@ func (c *Catalog) foldPodcastFetch(ctx context.Context, tx *sql.Tx, j bridge.Job
 		Retry     *int   `json:"retry_after_seconds"`
 	}
 	_ = json.Unmarshal(j.Result, &result)
+	var current, episode string
+	lookup := func(p string) error {
+		err := tx.QueryRowContext(ctx, `SELECT s.show_id,e.episode_id FROM podcast_episodes e JOIN books b ON b.id=e.book_id JOIN podcast_shows s ON s.library_id=e.library_id AND s.show_path=e.show_path WHERE b.library_id=? AND b.rel_path=?`, j.LibraryID, p).Scan(&current, &episode)
+		if errors.Is(err, sql.ErrNoRows) {
+			current, episode = "", ""
+			return nil
+		}
+		return err
+	}
+	at := j.Target()
+	if err := lookup(at); err != nil {
+		return err
+	}
+	// A fetch in a show folder renamed by hand installs the episode where the
+	// folder is now (the outcome's path): once the index has moved the show
+	// there (MovePodcastShows), the outcome is that episode's.
+	if (current != params.ShowID || episode != params.EpisodeID) && result.Path != at && feed.EpisodePath(path.Dir(result.Path), result.Path) {
+		if err := lookup(result.Path); err != nil {
+			return err
+		}
+		at = result.Path
+	}
+	if current == "" || current != params.ShowID || episode != params.EpisodeID {
+		return nil
+	}
 	if result.ShowID != "" && result.ShowID != current || result.EpisodeID != "" && result.EpisodeID != episode || result.Code == "identity_changed" {
 		return nil
 	}
 	var failures int
 	var last sql.NullInt64
-	err = tx.QueryRowContext(ctx, `SELECT failures,last_job_id FROM podcast_fetch_state WHERE library_id=? AND rel_path=? AND show_id=?`, j.LibraryID, j.Path, current).Scan(&failures, &last)
+	err := tx.QueryRowContext(ctx, `SELECT failures,last_job_id FROM podcast_fetch_state WHERE library_id=? AND rel_path=? AND show_id=?`, j.LibraryID, at, current).Scan(&failures, &last)
 	if last.Valid && last.Int64 >= j.ID {
 		return nil
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if j.State == bridge.StateDone && result.Path != "" && result.Path != at {
+		// Installed in another folder (renamed by hand, or a copy) that the
+		// index has not moved this show to: the episode here is still absent,
+		// and clearing its backoff would have the scheduler queue it again at
+		// once, a fetch the Bridge answers with the same reuse every time. It
+		// cools down instead, its failures and error as they were, until a
+		// scan moves the show (MovePodcastShows).
+		next := c.now().UTC().Add(time.Duration(min(1800<<min(failures, 6), 86400)) * time.Second).Format(time.RFC3339)
+		_, err = tx.ExecContext(ctx, `INSERT INTO podcast_fetch_state(library_id,rel_path,show_id,last_job_id,next_attempt_at) VALUES(?,?,?,?,?) ON CONFLICT(library_id,rel_path,show_id) DO UPDATE SET last_job_id=excluded.last_job_id,next_attempt_at=excluded.next_attempt_at`, j.LibraryID, at, current, j.ID, next)
 		return err
 	}
 	var next any
@@ -68,7 +96,7 @@ func (c *Catalog) foldPodcastFetch(ctx context.Context, tx *sql.Tx, j bridge.Job
 		}
 		result.Message = bridge.FetchErrorFor(result.Code).Message
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO podcast_fetch_state(library_id,rel_path,show_id,last_job_id,failures,next_attempt_at,error_code,error) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(library_id,rel_path,show_id) DO UPDATE SET last_job_id=excluded.last_job_id,failures=excluded.failures,next_attempt_at=excluded.next_attempt_at,error_code=excluded.error_code,error=excluded.error`, j.LibraryID, j.Path, current, j.ID, failures, next, result.Code, result.Message)
+	_, err = tx.ExecContext(ctx, `INSERT INTO podcast_fetch_state(library_id,rel_path,show_id,last_job_id,failures,next_attempt_at,error_code,error) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(library_id,rel_path,show_id) DO UPDATE SET last_job_id=excluded.last_job_id,failures=excluded.failures,next_attempt_at=excluded.next_attempt_at,error_code=excluded.error_code,error=excluded.error`, j.LibraryID, at, current, j.ID, failures, next, result.Code, result.Message)
 	return err
 }
 
