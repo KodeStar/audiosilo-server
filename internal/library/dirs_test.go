@@ -231,7 +231,8 @@ func TestDirListerCheckRoot(t *testing.T) {
 	hang := make(chan struct{})
 	defer close(hang)
 	// A real check is given a loaded -race run's time; the one that doesn't
-	// answer, a short one.
+	// answer, a short one, on a lister of its own (whose one slot is free, not
+	// still on its way back from the check before).
 	l := NewDirLister(ListDirs, 1, testwait.Scaled(10*time.Second))
 	ctx := context.Background()
 	root := t.TempDir()
@@ -241,15 +242,15 @@ func TestDirListerCheckRoot(t *testing.T) {
 	if _, err := l.CheckRoot(ctx, filepath.Join(root, "missing")); !errors.Is(err, ErrRootUnreadable) {
 		t.Fatalf("a missing root: %v, want ErrRootUnreadable", err)
 	}
-	l.check = func(string) (string, error) {
+	hung := NewDirLister(ListDirs, 1, 50*time.Millisecond)
+	hung.check = func(string) (string, error) {
 		<-hang
 		return "", ErrRootUnreadable
 	}
-	l.timeout = 50 * time.Millisecond
-	if _, err := l.CheckRoot(ctx, root); !errors.Is(err, ErrDirsTimedOut) {
+	if _, err := hung.CheckRoot(ctx, root); !errors.Is(err, ErrDirsTimedOut) {
 		t.Fatalf("a root that doesn't answer: %v, want ErrDirsTimedOut", err)
 	}
-	if _, err := l.CheckRoot(ctx, "relative"); !errors.Is(err, ErrNotAbsolute) {
+	if _, err := hung.CheckRoot(ctx, "relative"); !errors.Is(err, ErrNotAbsolute) {
 		t.Fatalf("a relative root with the one slot held: %v, want ErrNotAbsolute", err)
 	}
 }
