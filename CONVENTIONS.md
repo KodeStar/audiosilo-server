@@ -780,7 +780,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `sent_at` (even mid-stop, `WithoutCancel`); 404, 405, a 3xx or a 2xx without `accepted` is `not_offered` (one
   INFO line, no call for 7 days: `quiet_until`); 429, 5xx or anything else marks nothing (`failed`, next day). An
   `unknown` row a recheck finds known forgets its `sent_at`, as does one any other identifier lookup finds
-  (`meta.Service.SetASINFound`, wired to `catalog.ClearUnknownASIN`: a player's /meta, the upcoming job's
+  (`meta.Service.SetASINFound`, wired to `catalog.ClearUnknownASIN` by `api.clearFoundASIN`, which writes
+  outside the lookup's context under 3 s of its own, so a budget ending as the answer comes in doesn't drop
+  the clear, and logs a failure: a player's /meta, the upcoming job's
   work ids, the chapter check, and a match (`Candidates`: works/match finding the work by the ASIN it sent,
   or an older metaserve's lookup leg; the unknown_asin run's own ASIN, server#448)), so a book the community
   added leaves Health's list at once, not at the monthly recheck (server#392; a read first, so a lookup of

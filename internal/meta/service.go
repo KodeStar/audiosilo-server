@@ -337,7 +337,8 @@ type Service struct {
 // chapter check; Candidates: the match dialog and a match run), so the
 // unknown-ASIN report learns at once that the community added one (server#392)
 // rather than at its monthly recheck. found runs inside
-// the lookup and must be quick. Call it once, right after NewService and before
+// the lookup and must be quick; ctx is the lookup's, which may have ended as
+// its answer came in. Call it once, right after NewService and before
 // the Service is used.
 func (s *Service) SetASINFound(found func(ctx context.Context, asin string)) { s.asinFound = found }
 

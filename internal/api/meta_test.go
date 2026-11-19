@@ -899,6 +899,28 @@ func TestMetaMatchFirstWhenTheCacheKnows(t *testing.T) {
 	}
 }
 
+// TestFoundASINClearOutlivesTheLookup (server#447): the clear of an ASIN a
+// lookup found is written though the lookup's own context has ended (its budget
+// ran out, or its caller went away, as the answer came in): a dropped clear
+// would leave the ASIN held as unknown, which an unknown_asin match run reads.
+func TestFoundASINClearOutlivesTheLookup(t *testing.T) {
+	t.Parallel()
+	e := newMetaEnvMock(t, true, &mockMetaserve{})
+	if err := e.cat.SaveASINChecks(context.Background(), []catalog.ASINCheck{{ASIN: "B00FLIJJSY", Unknown: true}}, "2026-11-01T00:00:00.000Z"); err != nil {
+		t.Fatal(err)
+	}
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	clearFoundASIN(e.cat, e.api.log)(ended, "B00FLIJJSY")
+	rows, err := e.cat.UnknownASINRows(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows["B00FLIJJSY"].Unknown {
+		t.Fatal("the found ASIN is still held as unknown: the clear ended with the lookup's context")
+	}
+}
+
 // TestMetaClearsUnknownASIN (server#392): a /meta lookup that finds an ASIN the
 // unknown-ASIN report holds as unknown takes it off the report (and Health's
 // unknown_asin list) at once; one that finds nothing leaves it.

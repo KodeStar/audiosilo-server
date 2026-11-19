@@ -288,11 +288,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		metaSvc.SetStore(metaStore{cat: cat, log: log})
 		// An ASIN the unknown-ASIN report holds as unknown, found by a lookup:
 		// off Health's list now, not at the report's monthly recheck.
-		metaSvc.SetASINFound(func(ctx context.Context, asin string) {
-			if err := cat.ClearUnknownASIN(ctx, asin); err != nil && ctx.Err() == nil {
-				log.Warn("clearing a found ASIN from the unknown-ASIN report failed", "err", err, "asin", asin)
-			}
-		})
+		metaSvc.SetASINFound(clearFoundASIN(cat, log))
 	}
 	limits := cfg.RateLimit.Effective()
 	a := &API{
