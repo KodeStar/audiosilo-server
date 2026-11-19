@@ -182,7 +182,10 @@ func RailWorks(rails []MetaSeries) []string {
 // 1's entry lists currentWork's books but requested and its copies, whatever
 // requested's own WorkID, so no book is on two entries; and a copy of requested
 // is placed on no entry at all (its own recorded match may name another work),
-// so one recording never shows under two handles (server#413).
+// so one recording never shows under two handles (server#413). Rule 1's entry
+// tells the copies apart in /item's other_recordings' order, not the pick's
+// (currentOthers), so both list the same recordings, and lists them in the
+// pick's.
 // books are in preference order (library sort order, then path, as
 // catalog.SeriesBooks returns them), the pick's last tiebreak.
 func PlaceLocal(rails []MetaSeries, currentWork string, requested MetaLocal, books []LocalBook) []MetaSeries {
@@ -215,7 +218,8 @@ type placer struct {
 	// the current work's other books beside it (its copies left out).
 	self LocalBook
 	// byWork is every book of each known work id (each once), the pick first
-	// (pickRank).
+	// (pickRank); of the current work's, only those its entry lists
+	// (currentOthers).
 	byWork map[string][]LocalBook
 	// byIndex are the numbered books with no known work id, by series key, in
 	// preference order.
@@ -244,6 +248,7 @@ func newPlacer(currentWork string, requested MetaLocal, books []LocalBook) *plac
 	}
 	slices.SortStableFunc(ordered, func(a, b ranked) int { return cmp.Compare(a.rank, b.rank) })
 	p := &placer{current: currentWork, self: self, byWork: map[string][]LocalBook{}, byIndex: map[string][]LocalBook{}}
+	listed := currentOthers(currentWork, self, books)
 	for _, o := range ordered {
 		b := o.book
 		switch {
@@ -252,7 +257,9 @@ func newPlacer(currentWork string, requested MetaLocal, books []LocalBook) *plac
 		case b.WorkID != currentWork && copyOf(self, b):
 			// requested's recording again: requested is its one handle, so it
 			// is placed on no other entry, whatever its own work id. (On the
-			// current work's entry otherRecordings drops it, learning its ISBN.)
+			// current work's entry currentOthers drops it, learning its ISBN.)
+		case b.WorkID != "" && b.WorkID == currentWork && !listed[b.MetaLocal]:
+			// A copy of requested or of a recording the entry lists already.
 		case b.WorkID != "":
 			// A book in several series is a candidate in each: listed once.
 			if !slices.ContainsFunc(p.byWork[b.WorkID], func(o LocalBook) bool { return o.MetaLocal == b.MetaLocal }) {
@@ -319,7 +326,11 @@ func (p *placer) view(works []MetaSeriesWork, name string, mains map[string]plac
 func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]placement) (placement, bool) {
 	if w.ID != "" {
 		if w.ID == p.current {
-			return placement{local: p.self.MetaLocal, others: otherRecordings(p.byWork[p.current], p.self)}, true
+			var others []MetaLocal
+			for _, b := range p.byWork[p.current] {
+				others = append(others, b.MetaLocal)
+			}
+			return placement{local: p.self.MetaLocal, others: others}, true
 		}
 		if books := p.byWork[w.ID]; len(books) > 0 {
 			return placement{local: books[0].MetaLocal, others: otherRecordings(books[1:], books[0])}, true
@@ -356,6 +367,37 @@ func copyOf(self, b LocalBook) bool {
 	var seen match.Recordings
 	seen.Seen(self.ASIN, self.ISBN)
 	return seen.Seen(b.ASIN, b.ISBN)
+}
+
+// currentOthers is the books the current work's entry lists beside self (the
+// requested book): currentWork's books, one per recording (match.Recordings),
+// never self or a copy of it. The rule depends on the order (a book with an
+// ISBN alone is a copy of a recording seen before it that carries the ISBN,
+// never of one seen after), so it is run in catalog.OtherRecordings' order,
+// not the pick's: self's library first, then books' own order, which for a
+// book whose own work is currentWork is that list's (api.localRails). Every
+// recording /item lists is listed here, whichever the pick's order puts first.
+func currentOthers(currentWork string, self LocalBook, books []LocalBook) map[MetaLocal]bool {
+	listed := map[MetaLocal]bool{}
+	if currentWork == "" {
+		return listed
+	}
+	var seen match.Recordings
+	seen.Seen(self.ASIN, self.ISBN)
+	judged := map[MetaLocal]bool{self.MetaLocal: true}
+	for _, own := range []bool{true, false} {
+		for _, b := range books {
+			// A book in several series is a candidate in each: judged once.
+			if b.WorkID != currentWork || (b.LibraryID == self.LibraryID) != own || judged[b.MetaLocal] {
+				continue
+			}
+			judged[b.MetaLocal] = true
+			if !seen.Seen(b.ASIN, b.ISBN) {
+				listed[b.MetaLocal] = true
+			}
+		}
+	}
+	return listed
 }
 
 // otherRecordings is books as LocalOthers, one per recording: a book sharing

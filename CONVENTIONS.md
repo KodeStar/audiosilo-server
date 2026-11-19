@@ -559,7 +559,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ever lists recordings of its own work, so no book is on two entries: the current work's entry
   holds the requested book as `local` beside the envelope's work's other books, which are
   `/item`'s `other_recordings` themselves when the requested book's work key is that work (the same
-  copy of each recording; one only the cache has resolved can still differ); a copy of the requested
+  copy of each recording; one only the cache has resolved can still differ), their copies told apart
+  in that list's order and listed in the pick's (`meta.currentOthers`: the rule depends on the order,
+  so in the pick's it could drop a recording `/item` lists); a copy of the requested
   book is placed on no entry (`meta.copyOf`: one recording, one handle, server#413); the caller's
   progress is read only for the books the pick chooses between (`meta.Contested`); an entry placed by its index
   has none; per request like `local`, never on a cached envelope. A book's

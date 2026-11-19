@@ -461,3 +461,37 @@ func TestItemAndMetaKeepOneCopy(t *testing.T) {
 		t.Fatalf("/item others %q, /meta others %q, want %q on both", items, entries["two"].others, want)
 	}
 }
+
+// TestItemAndMetaListTheSameRecordings: a book with an ISBN alone is a copy of
+// a recording listed before it that carries the ISBN, never of one after, so
+// the answer depends on the order. /meta's entry for the book lists what /item
+// lists, though its pick order (the book's narrator first) would put the ASIN
+// book first and take the ISBN book for its copy.
+func TestItemAndMetaListTheSameRecordings(t *testing.T) {
+	t.Parallel()
+	e := recordingsEnv(t, true)
+	ctx := context.Background()
+	addBooks(t, e.testEnv, e.lib.ID,
+		&catalog.Book{RelPath: "Loose/A isbn", ISBN: "9780000000011", Narrator: "Zed"},
+		&catalog.Book{RelPath: "Loose/B both", ASIN: "B0TWOBOTH", ISBN: "978-0-00-000001-1", Narrator: "Bray"},
+	)
+	for _, p := range []string{"Loose/A isbn", "Loose/B both"} {
+		if err := e.cat.EditBook(ctx, e.lib.ID, p, catalog.BookEdit{
+			Match: &catalog.MatchAnchor{WorkID: "two"}, Source: catalog.SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, items, _ := itemRecordings(t, e, "Saga/2", e.adminTok)
+	if want := []string{"Loose/A isbn", "Loose/B both", "Saga/2 Abe", "Saga/2 Kemper"}; !reflect.DeepEqual(items, want) {
+		t.Fatalf("/item others = %q, want %q", items, want)
+	}
+	entries, _ := railEntries(t, e, "Saga/2", e.adminTok)
+	two := entries["two"]
+	if two.local != "Saga/2" || len(two.others) == 0 || two.others[0] != "Loose/B both" {
+		t.Fatalf("/meta entry = %+v, want Saga/2 with the Bray recording first", two)
+	}
+	if got := slices.Sorted(slices.Values(two.others)); !reflect.DeepEqual(got, items) {
+		t.Fatalf("/meta others = %q, want /item's %q", got, items)
+	}
+}

@@ -573,6 +573,27 @@ func TestPlaceLocalOthersDropCopies(t *testing.T) {
 	}
 }
 
+// TestPlaceLocalCurrentOthersInListOrder: the entry the envelope is for tells
+// a recording's copies apart in the order its books come in (/item's
+// other_recordings'), not the pick's. A book with an ISBN alone is a copy only
+// of a recording before it carrying that ISBN: the pick's order, which puts
+// requested's narrator first, would drop it though /item lists it.
+func TestPlaceLocalCurrentOthersInListOrder(t *testing.T) {
+	read := func(b LocalBook, narrator string) LocalBook {
+		b.Narrator = narrator
+		return b
+	}
+	works := placeIdentified(MetaLocal{LibraryID: 1, Path: "S/1"},
+		read(identified(1, "S/1", "one", "B0ONE", ""), "Bray"),
+		read(identified(1, "S/1 isbn", "one", "", "9780000000011"), "Abe"),
+		read(identified(1, "S/1 both", "one", "B0BOTH", "978-0-00-000001-1"), "Bray"),
+		read(identified(1, "S/1 isbn again", "one", "", "9780000000011"), "Bray"),
+	)
+	if got, want := others(works)[0], []string{"S/1 both", "S/1 isbn"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("others = %q, want %q", got, want)
+	}
+}
+
 // TestPlaceLocalOthersOneEach (server#241): local_others lists each other
 // recording once. Of copies of one (a shared ASIN, else ISBN, normalized) the
 // first in the pick's order is listed, the requested library's before
