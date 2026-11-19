@@ -2661,8 +2661,8 @@ var ErrStopping = errors.New("library: the server is stopping")
 // error when ctx ends first, the flight's when it stored none. A caller that
 // joined another's read (joined) waits on it only as waitFlight does. One that
 // leads the read (its own, leadIndex's) and asked for the book (a request:
-// WithLookTimeout) waits as long in all as a joined request may
-// (flightWaitCap: up to its WithWaitCap, ahead of its own timeout), then gives
+// WithLookTimeout) waits up to its WithWaitCap, ahead of its own timeout, as a
+// joined request does (waitCapLeft; no cap, no bound but ctx), then gives
 // up as a look not answered (errReadUnfinished, the API's 503
 // share_not_answering with Retry-After, never the request timeout's bare
 // 503); the read goes on and stores the book for the next ask.
@@ -2673,7 +2673,7 @@ func (s *Scanner) awaitFlight(ctx context.Context, f *indexFlight, joined bool) 
 		}
 	} else {
 		var capped <-chan time.Time
-		if d, ok := s.flightWaitCap(ctx); ok {
+		if d, ok := waitCapLeft(ctx); ok {
 			t := time.NewTimer(d)
 			defer t.Stop()
 			capped = t.C
@@ -2812,6 +2812,23 @@ func (s *Scanner) flightWaitCap(ctx context.Context) (time.Duration, bool) {
 		}
 	}
 	return s.probeTimeout, true
+}
+
+// waitCapLeft is the time left to ctx's WithWaitCap for a request (an
+// on-demand read given a look time: WithLookTimeout), none once it has passed;
+// ok false for a caller with no cap (a scan, a library caller), whose own
+// read and looks are bounded by their context alone. A request that leads its
+// book's read waits that long (awaitFlight), and its looks resolving the book
+// end there together (resolveAsked).
+func waitCapLeft(ctx context.Context) (time.Duration, bool) {
+	if _, asked := ctx.Value(lookTimeoutKey{}).(time.Duration); !asked {
+		return 0, false
+	}
+	at, ok := ctx.Value(waitCapKey{}).(time.Time)
+	if !ok {
+		return 0, false
+	}
+	return max(time.Until(at), 0), true
 }
 
 // claimFlight is the flight of key under way, or a new one registered for the
@@ -3022,12 +3039,12 @@ func faultedForGood(err error) bool {
 // that did not answer, is one. Nothing is written either way.
 //
 // A request's looks (WithLookTimeout) are bounded together too, not only each
-// on its own: they end with its waits (flightWaitCap, at its WithWaitCap), so
+// on its own: they end with its waits (waitCapLeft, at its WithWaitCap), so
 // a share that answers each look just inside its time never holds the request
 // past it; the look under way then is given up on (metadata.ErrNotAnswered).
 func (s *Scanner) resolveAsked(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
 	looks := ctx
-	if d, ok := s.flightWaitCap(ctx); ok {
+	if d, ok := waitCapLeft(ctx); ok {
 		var cancel context.CancelFunc
 		looks, cancel = context.WithTimeout(ctx, d)
 		defer cancel()

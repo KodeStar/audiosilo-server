@@ -1484,9 +1484,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `API.flightWaitEnd` (`flightWaitMargin`, 5 s, before the request's deadline, or `timeoutDur` from now on a context
   detached from it, so its coded 503 with `Retry-After` is written before the request timeout's bare one whatever
   its looks took first), in all however the read moves on, `flightWaitCap`, where a scan's has no such cap; the
-  request that leads the read, its own, waits as long and no longer, `awaitFlight`'s `errReadUnfinished`, the read
-  going on to store the book; and `resolveAsked`'s looks end together at the same cap, not only each at its look
-  time), so a big
+  request that leads the read, its own, waits up to its `WithWaitCap` and no longer, `awaitFlight`'s
+  `errReadUnfinished`, the read going on to store the book; and `resolveAsked`'s looks end together at the same
+  cap, not only each at its look time, `waitCapLeft`; a caller with no cap is bounded by its context alone), so a big
   book read slowly from a share that answers is waited for, never a false 503 within that time: a scan then keeps the book as stored with an `unreadable` problem (`keepLeft`) and scans the
   rest; an on-demand read gives up as a look at a share that stopped answering (`metadata.GaveUp`,
   503 `share_not_answering`). The walk's own looks are bounded the same way (SRV-15c: `walkDir`'s root lstat and

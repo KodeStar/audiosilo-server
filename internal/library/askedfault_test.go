@@ -180,10 +180,10 @@ func TestResolveAskedEndsAtTheRequestsWaitCap(t *testing.T) {
 
 // A request that leads the read of its book (its own Re-read, or the first
 // ask for a book not indexed yet) waits for it as long as a request joining
-// it may (flightWaitCap, at its WithWaitCap), then gives up as a look not
+// it may (waitCapLeft, at its WithWaitCap), then gives up as a look not
 // answered (errReadUnfinished: 503 share_not_answering with Retry-After)
 // rather than wait out the request's own time, the read left to go on. A
-// caller with no look time (a scan, a test) waits until its context ends.
+// caller with no cap (a scan, a library caller) waits until its context ends.
 func TestAwaitFlightCapsTheLeadsWait(t *testing.T) {
 	t.Parallel()
 	s := &Scanner{probeTimeout: 3 * time.Second}
@@ -197,7 +197,8 @@ func TestAwaitFlightCapsTheLeadsWait(t *testing.T) {
 	if f.stuck.Load() {
 		t.Error("the lead's own read was marked stuck")
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 400*time.Millisecond)
+	// A look time but no cap (a library caller): bounded by its context alone.
+	ctx, cancel := context.WithTimeout(WithLookTimeout(t.Context(), 100*time.Millisecond), 400*time.Millisecond)
 	defer cancel()
 	if _, err := s.awaitFlight(ctx, f, false); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("an uncapped lead's wait: %v, want its context's end", err)
