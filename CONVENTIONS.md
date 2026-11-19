@@ -795,8 +795,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   table is not kept current, and before the first run an empty card would read as all clear), and
   `/admin/books[/facets]?issue=unknown_asin` lists nothing then (`BookFilter.IssueOff`, in the list cache's key). **Wire**: GET /admin/settings
   `metadata.report_unknown` and read-only `metadata.report_status` = `{"state":"never|ok|not_offered|failed",
-  "last_run_at"?, "last_sent", "next_run_at"?}` (`next_run_at`: when the schedule runs it next, while it is on;
-  server#448) (both absent without the job: no service, or a demo server, so the console shows
+  "last_run_at"?, "last_sent", "next_run_at"?}` (`next_run_at`: when the schedule runs it next, while it is on,
+  now for a switch-on's `Wake` the schedule has yet to look at, `Runner.woken`; server#448) (both absent without the job: no service, or a demo server, so the console shows
   no switch there, server#314). The mounted Metadata topic polls status every 30 s (`pollsReport`) only while metadata and
   reporting are on and a run is near: one never ran, or a switch-on saved there in the last 10 minutes whose
   run is not recorded yet; a settled status changes once a day and is not polled (server#335). A `failed` run

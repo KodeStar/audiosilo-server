@@ -607,3 +607,55 @@ func TestStatusNextRun(t *testing.T) {
 		t.Fatalf("after the schedule stopped: next_run_at = %q, want none", st.NextRunAt)
 	}
 }
+
+// TestStatusNextRunAfterWake (server#448): a Wake the schedule has not looked
+// at yet (the report switched on, the settings answer built right after) is
+// already a run due now in Status, unless the report ran within the day; the
+// schedule then looks at it.
+func TestStatusNextRunAfterWake(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	start := e.clock.now()
+	r := e.runner()
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { r.Run(runCtx); close(done) }()
+	defer func() { cancel(); <-done }()
+	next := func() string {
+		t.Helper()
+		st, err := r.Status(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.NextRunAt
+	}
+	scheduled := stamp(start.Add(firstDelay))
+	for deadline := time.Now().Add(5 * time.Second); next() != scheduled; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("next_run_at = %q, want %q", next(), scheduled)
+		}
+	}
+	r.woken.Store(true) // a Wake, before the schedule has looked at it
+	if got := next(); got != stamp(start) {
+		t.Fatalf("woken, never run: next_run_at = %q, want now (%q)", got, stamp(start))
+	}
+	if err := e.cat.SaveUnknownASINReportState(ctx, catalog.UnknownASINReport{
+		State: StateOK, LastRunAt: stamp(start.Add(-2 * time.Hour)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(); got != scheduled {
+		t.Fatalf("woken, ran within the day: next_run_at = %q, want the schedule's %q", got, scheduled)
+	}
+	// The schedule looks at a Wake: not due, so its time stands.
+	r.Wake()
+	for deadline := time.Now().Add(5 * time.Second); r.woken.Load(); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the schedule never looked at the Wake")
+		}
+	}
+	if got := next(); got != scheduled {
+		t.Fatalf("after the Wake: next_run_at = %q, want %q", got, scheduled)
+	}
+}

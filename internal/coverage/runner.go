@@ -116,6 +116,9 @@ type Runner struct {
 	// next is when the schedule (Run) runs the report next, in Unix
 	// nanoseconds; 0 before Run has worked it out, and after it returns.
 	next atomic.Int64
+	// woken is a Wake the schedule has not looked at yet: until it has, and
+	// has stored the time it then runs at, Status answers for it.
+	woken atomic.Bool
 }
 
 // New returns a Runner; Run starts its schedule.
@@ -132,6 +135,7 @@ func New(cat *catalog.Catalog, md Metadata, opt Options) *Runner {
 // Wake makes the schedule look again at once (the report or metadata was
 // switched on): it runs now unless it ran within the day.
 func (r *Runner) Wake() {
+	r.woken.Store(true)
 	select {
 	case r.wake <- struct{}{}:
 	default:
@@ -162,6 +166,10 @@ func (r *Runner) Run(ctx context.Context) {
 			if r.opt.On() && r.due(ctx) {
 				next = r.opt.Now()
 			}
+			// Stored before the Wake counts as looked at, so Status never
+			// reads the time the schedule had before it.
+			r.next.Store(next.UnixNano())
+			r.woken.Store(false)
 			continue
 		case <-t.C:
 		}
@@ -390,8 +398,11 @@ type Status struct {
 	// NextRunAt is when the schedule runs the report next, while it is on
 	// (absent while it is off, or before the schedule has started), so the
 	// console can poll the status around it rather than guess the schedule
-	// (server#448). A run due now may still be skipped (a run within the day,
-	// the quiet week) or held for the mirror's copy.
+	// (server#448). It is now for a Wake the schedule has yet to look at
+	// that will run it (the answer to the request that switched it on), and
+	// the run's own start while one is running. A run due now may still be
+	// skipped (a run within the day, the quiet week) or held for the
+	// mirror's copy.
 	NextRunAt string `json:"next_run_at,omitempty"`
 }
 
@@ -403,7 +414,13 @@ func (r *Runner) Status(ctx context.Context) (Status, error) {
 	}
 	out := Status{State: cmp.Or(st.State, StateNever), LastRunAt: st.LastRunAt, LastSent: st.LastSent}
 	if next := r.next.Load(); next != 0 && r.opt.On() {
-		out.NextRunAt = stamp(time.Unix(0, next))
+		at := time.Unix(0, next)
+		// A Wake not looked at yet runs the report at once unless it ran
+		// within the day (Run, due): the schedule's own time is the old one.
+		if now := r.opt.Now(); r.woken.Load() && now.Before(at) && !within(st.LastRunAt, now, minGap) {
+			at = now
+		}
+		out.NextRunAt = stamp(at)
 	}
 	return out, nil
 }
