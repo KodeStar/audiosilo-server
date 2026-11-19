@@ -3382,7 +3382,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   done. Its result stays, so an Audible refusal still marks the account (`AudibleRefusalCode` reads a
   cancelled job's result code) and a podcast job's failure still counts (`PodcastFailed`: the poll and
   fetch folds, the fetch cooldown and `RecentSubscribeFailure` read a cancelled job's result code, but
-  never `timeout` or `bridge_lost`, which a job the Bridge stopped names for the stop itself).
+  only the feed's own answer counts: `cancelledFailureCodes` or an `http_NNN`, an allow-list, never
+  `timeout`, `network`, `dns`, `tls`, `bridge_lost` or a Bridge or library code, which a stopped job
+  may name for the stop itself, as a v0.6.0 Bridge's `network` does: BR-CANCEL-RACE).
   Claim responses retain the request deadline but bypass response buffering and flush before return;
   a wait the deadline ends still answers 503 `request timed out`, as the buffered timeout did.
   A claim ended before its reply was written, a failed 200 write, or a Bridge that left before the

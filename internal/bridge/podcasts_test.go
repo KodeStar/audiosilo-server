@@ -576,12 +576,12 @@ func TestPodcastFailed(t *testing.T) {
 	job := func(state, code string) Job {
 		return Job{State: state, Result: json.RawMessage(`{"code":"` + code + `"}`)}
 	}
-	for _, code := range []string{"gone", "http_404", "http_503", "http_310", "redirect_loop", "invalid_feed_url", "not_a_feed", "not_a_podcast", "too_large", "episode_not_found", "enclosure_missing", "invalid_audio", "unsupported_encoding"} {
+	for _, code := range []string{"gone", "http_404", "http_503", "http_310", "redirect_loop", "invalid_feed_url", "blocked_address", "not_a_feed", "not_a_podcast", "too_large", "episode_not_found", "enclosure_missing", "invalid_audio", "unsupported_encoding"} {
 		if !PodcastFailed(job(StateCancelled, code)) {
 			t.Errorf("a cancelled job with %s is not counted", code)
 		}
 	}
-	for _, code := range []string{"", "network", "timeout", "dns", "tls", "bridge_lost", "blocked_address", "write_failed", "library_not_writable", "identity_changed", "feed_secret_missing", "http_99", "http_600"} {
+	for _, code := range []string{"", "network", "timeout", "dns", "tls", "bridge_lost", "write_failed", "library_not_writable", "identity_changed", "feed_secret_missing", "http_99", "http_600"} {
 		if PodcastFailed(job(StateCancelled, code)) {
 			t.Errorf("a cancelled job with %q is counted", code)
 		}

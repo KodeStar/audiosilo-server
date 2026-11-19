@@ -121,13 +121,14 @@ type PodcastOutcome struct {
 }
 
 // cancelledFailureCodes are the failure codes that are an answer from the feed
-// (or the episode's host) itself: what it sent, its address, what its body held. Only
-// these count for a cancelled podcast job (PodcastFailed): a cancel never
-// causes them. Every other code (network, timeout, tls, dns, bridge_lost, the
-// Bridge's or the library's own) may be the stop itself: a Bridge reads the
-// job's ended context as a timeout, and a v0.6.0 Bridge as network
-// (BR-CANCEL-RACE). An http_NNN code (HTTPStatus) is one too.
-var cancelledFailureCodes = []string{"gone", "redirect_loop", "invalid_feed_url", "not_a_feed", "not_a_podcast", "too_large", "episode_not_found", "enclosure_missing", "invalid_audio", "unsupported_encoding"}
+// (or the episode's host) itself: what it sent, its address as written or as
+// resolved (unsentFailures), what its body held. Only these count for a
+// cancelled podcast job (PodcastFailed): a cancel never causes them. Every
+// other code (network, timeout, tls, dns, bridge_lost, the Bridge's or the
+// library's own) may be the stop itself: a Bridge reads the job's ended
+// context as a timeout, and a v0.6.0 Bridge as network (BR-CANCEL-RACE). An
+// http_NNN code (HTTPStatus) is one too.
+var cancelledFailureCodes = []string{"gone", "redirect_loop", "invalid_feed_url", "blocked_address", "not_a_feed", "not_a_podcast", "too_large", "episode_not_found", "enclosure_missing", "invalid_audio", "unsupported_encoding"}
 
 // countsWhenCancelled reports whether code is one of cancelledFailureCodes or
 // an HTTP status. Unlike FeedAnswered it is an allow-list: a code it doesn't
