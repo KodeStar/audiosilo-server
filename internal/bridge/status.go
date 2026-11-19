@@ -260,7 +260,8 @@ func (st *Status) Validate() error {
 		}
 	}
 	if len(st.Libraries) > maxLibraries {
-		st.Libraries = st.Libraries[:maxLibraries]
+		// A copy, so the heartbeat kept in memory doesn't hold the rest.
+		st.Libraries = slices.Clone(st.Libraries[:maxLibraries])
 	}
 	seen := make(map[int64]bool, len(st.Libraries))
 	for i := range st.Libraries {
