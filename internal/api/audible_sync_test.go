@@ -455,10 +455,12 @@ func TestAudibleSyncRefusals(t *testing.T) {
 		t.Errorf("progress without an account: %d %s", resp.StatusCode, out)
 	}
 	// A cursor the server can't read is its own code, so the Bridge reads the
-	// feed from the start for it alone (bridge#50); a valid base64 of no JSON
-	// too. Any other 400 is invalid_request.
-	for q, code := range map[string]string{"&since=not-a-cursor": "invalid_cursor", "&since=bm90LWpzb24": "invalid_cursor",
-		"&since=bm90LWpzb24&limit=0": "invalid_request", "&limit=0": "invalid_request", "&limit=x": "invalid_request"} {
+	// feed from the start for it alone (bridge#50): one that is no base64url,
+	// base64url of bytes that are no JSON ("not-a-cursor" decodes), and of
+	// text that is no JSON ("not-json"). Any other 400 is invalid_request.
+	for q, code := range map[string]string{"&since=not.a.cursor": "invalid_cursor", "&since=not-a-cursor": "invalid_cursor",
+		"&since=bm90LWpzb24": "invalid_cursor", "&since=bm90LWpzb24&limit=0": "invalid_request",
+		"&limit=0": "invalid_request", "&limit=x": "invalid_request"} {
 		if resp, out := s.do(t, "GET", "/api/v1/bridge/progress?account="+testAccount+q, s.bridgeTok, ""); resp.StatusCode != http.StatusBadRequest || codeOf(out) != code {
 			t.Errorf("progress%s: %d %s, want 400 %s", q, resp.StatusCode, out, code)
 		}
