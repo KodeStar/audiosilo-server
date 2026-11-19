@@ -347,6 +347,10 @@ func Transcode(w http.ResponseWriter, r *http.Request, root, absPath, ffmpegPath
 // download, idle and ended are Transcode's (the attachment named for f's
 // name).
 func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegPath string, startSec float64, download bool, idle time.Duration, log *slog.Logger) (ended bool) {
+	if r.Method == http.MethodHead {
+		// As Transcode's: no ffmpeg run, so no probe for the input either.
+		return transcodeInput(w, r, inputSpec{}, f.Name(), ffmpegPath, startSec, download, idle, log)
+	}
 	// The child shares this descriptor's offset: start it at the top.
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		http.Error(w, "transcode failed", http.StatusInternalServerError)

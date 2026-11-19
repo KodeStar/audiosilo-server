@@ -527,7 +527,8 @@ func TestInputForRetriesAFailedProbe(t *testing.T) {
 }
 
 // TestTranscodeHeadRunsNoFFmpeg: a HEAD is answered with no ffmpeg run, its
-// input's protocols probe included.
+// input's protocols probe included, a library file's (Transcode) and an
+// opened episode's (TranscodeOpened) alike.
 func TestTranscodeHeadRunsNoFFmpeg(t *testing.T) {
 	t.Parallel()
 	ffmpeg, runs := probeCountingFFmpeg(t, "exit 1")
@@ -539,6 +540,15 @@ func TestTranscodeHeadRunsNoFFmpeg(t *testing.T) {
 	rec := httptest.NewRecorder()
 	if _, err := Transcode(rec, httptest.NewRequest(http.MethodHead, "/", nil), dir, src, ffmpeg, 0, false, time.Minute, 0, nil); err != nil || rec.Code != http.StatusOK {
 		t.Fatalf("HEAD = %d (%v), want 200", rec.Code, err)
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	rec = httptest.NewRecorder()
+	if TranscodeOpened(rec, httptest.NewRequest(http.MethodHead, "/", nil), f, ffmpeg, 0, false, 0, nil); rec.Code != http.StatusOK {
+		t.Fatalf("HEAD of an opened file = %d, want 200", rec.Code)
 	}
 	if n := runs(); n != 0 {
 		t.Fatalf("a HEAD ran ffmpeg %d times, want none", n)
