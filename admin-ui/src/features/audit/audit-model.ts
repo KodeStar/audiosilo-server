@@ -143,6 +143,9 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
     // A Bridge job's kind ("bridge.verify") by the name the Bridge page gives it.
     else if (key === 'kind' && e.action.startsWith('bridge.') && typeof v === 'string')
       value = t(`bridge.kind.${v}`, { defaultValue: v });
+    // An Audible account's backup policy by the words its settings give it.
+    else if (key === 'policy' && e.action.startsWith('bridge.audible.') && typeof v === 'string')
+      value = t(`audible.policy.${v}`, { defaultValue: v });
     else if (Object.hasOwn(ENUMS, key) && typeof v === 'string')
       value = t(`audit.enum.${ENUMS[key]}.${v}`, { defaultValue: v });
     else if (key === 'events' && Array.isArray(v))

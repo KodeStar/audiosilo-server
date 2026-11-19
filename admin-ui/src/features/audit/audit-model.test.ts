@@ -139,6 +139,49 @@ describe('audit model', () => {
     ]);
   });
 
+  it('labels the Audible backup and settings details', () => {
+    const tr = i18n.getFixedT('en');
+    const all = ev('bridge.audible.backup_all', { account: 'acct0001', queued: 21, skipped: 1 });
+    expect(actionText(all, tr)).toBe('Backed up everything from an Audible account');
+    expect(detailLines(all, tr, fmt)).toEqual([
+      { label: 'Audible account', value: 'acct0001' },
+      { label: 'Backups queued', value: '21' },
+      { label: 'Titles skipped', value: '1' },
+    ]);
+    expect(
+      detailLines(ev('bridge.audible.backup', { asin: 'B000000001', pending: true }), tr, fmt),
+    ).toEqual([
+      { label: 'ASIN', value: 'B000000001' },
+      { label: 'Waits for its release', value: 'yes' },
+    ]);
+    expect(
+      detailLines(
+        ev('bridge.audible.account', {
+          policy: 'series',
+          template: '{Author}/{Title}',
+          sync: true,
+        }),
+        tr,
+        fmt,
+      ),
+    ).toEqual([
+      { label: 'Back up by itself', value: 'New books in series you have' },
+      { label: 'Placement template', value: '{Author}/{Title}' },
+      { label: 'Sync listening places with Audible', value: 'yes' },
+    ]);
+    expect(
+      detailLines(
+        ev('bridge.audible.title', { rejected: true, dest_path: 'A/B.m4b', no_sync: false }),
+        tr,
+        fmt,
+      ),
+    ).toEqual([
+      { label: 'Not this book', value: 'yes' },
+      { label: 'Destination', value: 'A/B.m4b' },
+      { label: 'Not synced', value: 'no' },
+    ]);
+  });
+
   it('words an answer to the support card', () => {
     const tr = i18n.getFixedT('en');
     const snooze = ev('settings.support', {
