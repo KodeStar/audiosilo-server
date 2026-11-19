@@ -129,10 +129,12 @@ func (m *startMark) ended() bool {
 // has run as of now, false when there is none (or it can't be read: the check
 // then says what it would without one). The age is the start's own reading at
 // its last rewrite plus the time since, which grows while a start too stuck to
-// rewrite its marker (its data folder hung) stays put.
+// rewrite its marker (its data folder hung) stays put. One with no updated_at
+// (a "null" or "{}") is unreadable too: its age from the zero time would
+// saturate, read as stuck, or overflow into a negative running time.
 func startMarked(dataDir string, now time.Time) (time.Duration, bool) {
 	m, err := jsonfile.Read[startMarker](filepath.Join(dataDir, startMarkerFile))
-	if err != nil || m == nil {
+	if err != nil || m == nil || m.UpdatedAt.IsZero() {
 		return 0, false
 	}
 	return time.Duration(m.StartingForSeconds)*time.Second + max(0, now.Sub(m.UpdatedAt)), true

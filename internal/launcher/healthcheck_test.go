@@ -720,16 +720,18 @@ func TestHealthcheckAutocertStartMarker(t *testing.T) {
 		}
 	}
 
-	dir := healthDataDir(t, addr, config.TLSAutocert)
-	if err := os.WriteFile(filepath.Join(dir, startMarkerFile), []byte("{"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := Healthcheck(context.Background(), dir, &out); err != nil || !strings.HasPrefix(out.String(), "ok: ") {
-		t.Errorf("unreadable marker: Healthcheck = %v, %q; want ok", err, out.String())
+	for _, bad := range []string{"{", "null", "{}", `{"starting_for_seconds":60}`} {
+		dir := healthDataDir(t, addr, config.TLSAutocert)
+		if err := os.WriteFile(filepath.Join(dir, startMarkerFile), []byte(bad), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if err := Healthcheck(context.Background(), dir, &out); err != nil || !strings.HasPrefix(out.String(), "ok: ") {
+			t.Errorf("unreadable marker %q: Healthcheck = %v, %q; want ok", bad, err, out.String())
+		}
 	}
 
-	dir = healthDataDir(t, freeAddr(t), config.TLSAutocert)
+	dir := healthDataDir(t, freeAddr(t), config.TLSAutocert)
 	writeStartMarker(t, dir, time.Minute, now)
 	if err := Healthcheck(context.Background(), dir, io.Discard); err == nil || !strings.Contains(err.Error(), "no answer") {
 		t.Errorf("nothing listening: Healthcheck = %v, want no answer", err)
