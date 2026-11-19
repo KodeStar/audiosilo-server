@@ -3,6 +3,8 @@ package bridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -123,6 +125,64 @@ func TestReleaseUnsentClaimHonorsCancellation(t *testing.T) {
 	got, err := q.Job(ctx, queued.ID)
 	if err != nil || got.State != StateCancelled || got.Attempts != 0 || got.FinishedAt == nil {
 		t.Fatalf("cancelled claim %+v, %v", got, err)
+	}
+}
+
+// A claim the server released as undelivered may still have reached the
+// Bridge (it read the reply, then the connection dropped before the server saw
+// it flushed): cancelled then, or while queued again, its report hears reason
+// cancelled, not a lost job (bridge#35), though the release gave the attempt
+// back. A job queued again and not cancelled, or claimed again and cancelled
+// under the later claim, is plain not held for an older claim.
+func TestReleasedClaimHearsCancel(t *testing.T) {
+	cancel := func(q *testQueue, ctx context.Context, id int64) error {
+		_, err := q.Cancel(ctx, id)
+		return err
+	}
+	for _, tc := range []struct {
+		name          string
+		before, after func(q *testQueue, ctx context.Context, id int64) error
+		cancelled     bool
+	}{
+		{name: "cancelled while held", before: cancel, cancelled: true},
+		{name: "cancelled once queued again", after: cancel, cancelled: true},
+		{name: "queued again"},
+		{name: "claimed again and cancelled", after: func(q *testQueue, ctx context.Context, id int64) error {
+			// Claimed again twice (the first lease lapsing): the released
+			// claim is now two attempts behind, then cancelled under the
+			// later claim.
+			for range 2 {
+				if c, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || c == nil {
+					return fmt.Errorf("claim again %+v, %v", c, err)
+				}
+				q.advance(Lease + time.Second)
+			}
+			return cancel(q, ctx, id)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := newTestQueue(t)
+			ctx := context.Background()
+			queued := q.verify(t, "Author/Book", 0)
+			claim, err := q.ClaimFor(ctx, q.token, nil, 0)
+			if err != nil || claim == nil {
+				t.Fatalf("claim %+v, %v", claim, err)
+			}
+			for i, step := range []func(q *testQueue, ctx context.Context, id int64) error{
+				tc.before, func(q *testQueue, ctx context.Context, _ int64) error { return q.ReleaseUnsentClaim(ctx, claim) }, tc.after,
+			} {
+				if step == nil {
+					continue
+				}
+				if err := step(q, ctx, queued.ID); err != nil {
+					t.Fatalf("step %d: %v", i, err)
+				}
+			}
+			_, err = q.UpdateHeld(ctx, queued.ID, Update{Attempt: claim.Attempts, State: ptr(StateRunning)})
+			if tc.cancelled != errors.Is(err, ErrCancelledWhileHeld) || !errors.Is(err, ErrNotHeld) {
+				t.Fatalf("the released claim's report: %v, want ErrNotHeld, cancelled %v", err, tc.cancelled)
+			}
+		})
 	}
 }
 

@@ -1403,7 +1403,8 @@ func checkOpenRequests(ctx context.Context, tx *sql.Tx, kind string, by int64, s
 }
 
 // ReleaseUnsentClaim returns an undelivered claim without spending an attempt.
-// A job whose cancel was asked for is cancelled instead.
+// A job whose cancel was asked for is cancelled instead. A Bridge that read the
+// claim after all still hears a cancel as one (cancelledUnder).
 func (s *Service) ReleaseUnsentClaim(ctx context.Context, claim *Job) error {
 	now := s.ts()
 	return s.settleUnsentClaim(ctx, claim, "bridge.ReleaseUnsentClaim", `UPDATE bridge_jobs SET
@@ -1556,11 +1557,23 @@ var ErrNotHeld = errors.New("the job is not held by this claim")
 // cancelled (by an admin, or by the server itself: Cancel*, cancelsOpen), which
 // ends at once, as does a held one whose book moved onto another open job of
 // its kind (MoveJobs), a working one whose lease ran out after the cancel was
-// asked for, or one this claim lost to a lapsed lease and that was cancelled
-// while queued again. The 409 not_held then carries reason "cancelled", so the
+// asked for, one this claim lost to a lapsed lease and that was cancelled
+// while queued again, or one whose claim the server released as undelivered
+// though the Bridge read it (ReleaseUnsentClaim) and that was cancelled then or
+// while queued again (cancelledUnder). The 409 not_held then carries reason "cancelled", so the
 // Bridge records the job cancelled rather than lost, which is how it ended
 // (bridge#35, BRIDGE-04). errors.Is reads it as ErrNotHeld too.
 var ErrCancelledWhileHeld = fmt.Errorf("%w: it was cancelled", ErrNotHeld)
+
+// cancelledUnder reports whether job cur ended cancelled with no claim later
+// than attempt (ErrCancelledWhileHeld). Attempt 0 is no claim: a job cancelled
+// before any took it. The job's attempts are the claim's own, or one fewer
+// when the server released the claim as undelivered (ReleaseUnsentClaim gives
+// the attempt back) though the Bridge had read it, and it was cancelled then
+// or while queued again: only a later claim takes the count past it.
+func cancelledUnder(cur *Job, attempt int) bool {
+	return cur.State == StateCancelled && attempt > 0 && (cur.Attempts == attempt || cur.Attempts == attempt-1)
+}
 
 // heldStates are the states the Bridge holds a job in (it may report on it);
 // reportable are the states it may report.
@@ -1634,8 +1647,7 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 			return err
 		}
 		if !slices.Contains(heldStates, cur.State) || cur.Attempts != u.Attempt {
-			// Attempt 0 is no claim: a job cancelled before any took it.
-			if cur.State == StateCancelled && cur.Attempts == u.Attempt && u.Attempt > 0 {
+			if cancelledUnder(cur, u.Attempt) {
 				return ErrCancelledWhileHeld
 			}
 			return ErrNotHeld
