@@ -312,3 +312,45 @@ func TestCoverNeverStatsALinkOutOfTheRoot(t *testing.T) {
 		t.Errorf("the cover link out of the root was stat'ed: %v", stats)
 	}
 }
+
+// TestScanKeepsABookWhoseLinkTargetDidNotAnswer: a link whose target can't
+// be looked at all the way (a name along it failing for good, or for a
+// limit of the server's own) leads nobody knows where: the scan keeps its
+// book as stored, as for a link that can't be read, and never reads
+// through it; SafeJoin refuses a path through it. Not parallel: it swaps
+// plainLooks.
+func TestScanKeepsABookWhoseLinkTargetDidNotAnswer(t *testing.T) {
+	for _, errno := range []syscall.Errno{syscall.EACCES, syscall.ENOMEM} {
+		t.Run(errno.Error(), func(t *testing.T) {
+			e := newLinkOutEnv(t)
+			e.scan(t)
+			want := []string{"Author/Book/01.m4b", "Author/Book/02.m4b"}
+			if got := e.files(t, "Author/Book"); !slices.Equal(got, want) {
+				t.Fatalf("before: the book's parts = %v, want %v", got, want)
+			}
+			was := plainLooks
+			t.Cleanup(func() { plainLooks = was })
+			// 02.m4b -> ../../Shared/in.m4b: Shared fails its look.
+			shared := filepath.Join(e.root, "Shared")
+			plainLooks = plainLooksOver(func(p string) (fs.FileInfo, error) {
+				if resolved, _ := filepath.EvalSymlinks(e.root); p == shared || p == filepath.Join(resolved, "Shared") {
+					return nil, &fs.PathError{Op: "lstat", Path: p, Err: errno}
+				}
+				return os.Lstat(p)
+			}, os.Readlink)
+			if _, err := SafeJoin(e.root, "Author/Book/02.m4b"); !errors.Is(err, ErrOutsideRoot) || !errors.Is(err, errLinkUnread) {
+				t.Errorf("SafeJoin through the link = %v, want it refused as a link that can't be read", err)
+			}
+			if err := os.Remove(filepath.Join(e.root, "Author", "Book", "01.m4b")); err != nil {
+				t.Fatal(err)
+			}
+			e.scan(t)
+			if got := e.files(t, "Author/Book"); !slices.Equal(got, want) {
+				t.Errorf("after a look along the link's target failed: the book's parts = %v, want it kept as stored %v", got, want)
+			}
+			if bad := e.readThrough("Author/Book/02.m4b"); len(bad) > 0 {
+				t.Errorf("the scan read through the link whose target was not looked at: %v", bad)
+			}
+		})
+	}
+}

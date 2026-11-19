@@ -1327,8 +1327,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   irregular entry that is no folder since Go 1.23, neither a link nor a folder) is read as a link
   (`linkKind`), and another reparse point that doesn't read as one is a plain name
   (`TestJoinLinkThroughTheRootAsConfigured`, `TestResolveBelowJunction`). A link or junction that is there and
-  can't be read (a permission, a junction another process holds) is `ErrOutsideRoot` too (`linkRead`): where
-  it points is not known, so no path through it is accepted, by `SafeJoin` (which had read it as a name not
+  can't be read (a permission, a junction another process holds) is `ErrOutsideRoot` too (`linkRead`), and so is
+  one with a name along its target whose look failed for anything but the name gone (a permission, a limit of
+  the server's own: `lookFailed`, which a name of the path itself still reads as a name not there), so the scan
+  keeps its book as stored (`TestScanKeepsABookWhoseLinkTargetDidNotAnswer`): where it points is not known, so no path through it is accepted, by `SafeJoin` (which had read it as a name not
   there and joined the path) or by `SafeJoinListed`, nor is it walked as a plain folder. `SafeJoin`'s own
   looks (`plainLooks`) read a fault a retry may get past (the root's, a name's lstat, a link's read) as a look
   given up on, as `SafeJoinListed`'s do, so a caller that reads a join's error as "none" checks
