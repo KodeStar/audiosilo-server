@@ -217,6 +217,22 @@ describe('end API keys (server#285)', () => {
       'sam had no API keys or calendar link left to end',
     );
   });
+
+  it('says your keys when the admin ended their own', () => {
+    const t = i18n.t;
+    expect(endedKeysToast(t, { api_keys: 2, calendar_link: true }, 'admin', true)).toBe(
+      'Ended your 2 API keys and calendar link',
+    );
+    expect(endedKeysToast(t, { api_keys: 1, calendar_link: false }, 'admin', true)).toBe(
+      'Ended your API key',
+    );
+    expect(endedKeysToast(t, { api_keys: 0, calendar_link: true }, 'admin', true)).toBe(
+      'Ended your calendar link',
+    );
+    expect(endedKeysToast(t, { api_keys: 0, calendar_link: false }, 'admin', true)).toBe(
+      'You had no API keys or calendar link left to end',
+    );
+  });
 });
 
 describe('groupDevices', () => {

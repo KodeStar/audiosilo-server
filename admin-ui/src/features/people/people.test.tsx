@@ -643,6 +643,44 @@ describe('a person', () => {
     expect(within(dialog).queryByText(/calendar link/)).not.toBeInTheDocument();
   });
 
+  it('says your keys in the End keys dialog and toast for your own account', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/users/1': {
+          body: {
+            user: admin,
+            accessible_libraries: [],
+            shares: [],
+            auth_codes: [],
+            calendar_link: { active: true },
+          },
+        },
+        'GET /admin/devices': {
+          body: {
+            devices: [
+              device({ id: 9, user_id: 1, username: 'admin', name: 'Console', current: true }),
+              device({ id: 3, user_id: 1, username: 'admin', kind: 'api', name: 'Home Assistant' }),
+            ],
+          },
+        },
+        'POST /admin/users/1/end-keys': { body: { api_keys: 1, calendar_link: true } },
+      }),
+    );
+    renderApp('/people/user/1?tab=devices');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'End API keys and calendar link' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'End your API key and calendar link?',
+    });
+    expect(
+      within(dialog).getByText(/^Every API key you made and your calendar link stop working/),
+    ).toBeInTheDocument();
+    await user.click(
+      within(dialog).getByRole('button', { name: 'End API keys and calendar link' }),
+    );
+    expect(await screen.findByText('Ended your API key and calendar link')).toBeInTheDocument();
+  });
+
   it('offers no End API keys with nothing to end', async () => {
     mockFetch(
       routes({

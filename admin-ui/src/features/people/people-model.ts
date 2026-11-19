@@ -163,14 +163,18 @@ export function endKeysWhat(keys: number, link: boolean): EndKeysWhat {
   return keys ? 'both' : 'link';
 }
 
-/** The toast after End API keys: what the server says it ended. */
-export function endedKeysToast(t: TFunction, ended: EndedKeys, name: string): string {
+/**
+ * The toast after End API keys: what the server says it ended, in the second
+ * person when self (the admin ended their own).
+ */
+export function endedKeysToast(t: TFunction, ended: EndedKeys, name: string, self = false): string {
+  const key = self ? 'user.devices.endedKeysSelf' : 'user.devices.endedKeys';
   if (ended.api_keys && ended.calendar_link) {
-    return t('user.devices.endedKeys.both', { count: ended.api_keys, name });
+    return t(`${key}.both`, { count: ended.api_keys, name });
   }
-  if (ended.api_keys) return t('user.devices.endedKeys.keys', { count: ended.api_keys, name });
-  if (ended.calendar_link) return t('user.devices.endedKeys.link', { name });
-  return t('user.devices.endedKeys.none', { name });
+  if (ended.api_keys) return t(`${key}.keys`, { count: ended.api_keys, name });
+  if (ended.calendar_link) return t(`${key}.link`, { name });
+  return t(`${key}.none`, { name });
 }
 
 /** Each person's paired devices (sessions, not API keys), by user id; undefined while loading. */
