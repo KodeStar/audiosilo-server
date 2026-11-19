@@ -93,7 +93,8 @@ func scanProgress(row interface{ Scan(...any) error }, p *Progress) error {
 }
 
 // Bookmark is a saved position with an optional note and label (a machine key
-// the player maps to its own text, "" for none; see checkBookmark).
+// the player maps to its own text, "" for none; see checkBookmark). ClientID is
+// the player's own id for it ("" for none; see AddBookmark).
 type Bookmark struct {
 	ID int64 `json:"id"`
 	Ref
@@ -101,13 +102,14 @@ type Bookmark struct {
 	Note      string  `json:"note"`
 	Label     string  `json:"label"`
 	CreatedAt string  `json:"created_at"`
+	ClientID  string  `json:"client_id,omitempty"`
 }
 
 // bookmarkColumns are the columns of a Bookmark, in scanBookmark's order.
-const bookmarkColumns = `id, library_id, rel_path, position, note, label, created_at`
+const bookmarkColumns = `id, library_id, rel_path, position, note, label, created_at, COALESCE(client_id, '')`
 
 func scanBookmark(row interface{ Scan(...any) error }, b *Bookmark) error {
-	return row.Scan(&b.ID, &b.LibraryID, &b.Path, &b.Position, &b.Note, &b.Label, &b.CreatedAt)
+	return row.Scan(&b.ID, &b.LibraryID, &b.Path, &b.Position, &b.Note, &b.Label, &b.CreatedAt, &b.ClientID)
 }
 
 // Note is free-form text attached to a book (optionally a position).
@@ -968,21 +970,50 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 	return refreshCoverArt(ctx, tx, libraryID, newPath)
 }
 
-// AddBookmark stores a bookmark and returns it with its ID. ErrInvalidPosition,
+// AddBookmark stores a bookmark and returns it with its ID, and true. With a
+// ClientID (capability bookmark_client_id) the add is idempotent: when the user
+// already holds a bookmark with that id on the same book, it is returned as
+// stored, with false, and nothing is saved (a replay whose first answer was
+// lost); on another book it is ErrClientIDConflict. A deleted bookmark's id is
+// free again. ErrInvalidClientID for an id that isn't a UUID, ErrInvalidPosition,
 // ErrBookmarkNoteTooLong or ErrInvalidLabel for a bookmark checkBookmark refuses.
-func (c *Catalog) AddBookmark(ctx context.Context, userID int64, b Bookmark) (*Bookmark, error) {
+func (c *Catalog) AddBookmark(ctx context.Context, userID int64, b Bookmark) (*Bookmark, bool, error) {
 	if err := checkBookmark(&b.Position, &b.Note, &b.Label); err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if b.ClientID != "" && !clientIDPattern.MatchString(b.ClientID) {
+		return nil, false, ErrInvalidClientID
 	}
 	b.CreatedAt = c.stamp() // fixed width: the all-books list orders by it as text
-	res, err := c.db.ExecUserState(ctx,
-		`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, label, created_at)
-		 VALUES(?,?,?,?,?,?,?)`, userID, b.LibraryID, b.Path, b.Position, b.Note, b.Label, b.CreatedAt)
+	created := true
+	// One writer transaction, so a concurrent delete of the held row can't fall
+	// between the insert that met it and the read of it.
+	err := c.db.WithUserStateTx(ctx, "AddBookmark", func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx,
+			`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, label, created_at, client_id)
+			 VALUES(?,?,?,?,?,?,?,NULLIF(?, ''))
+			 ON CONFLICT(user_id, client_id) WHERE client_id IS NOT NULL DO NOTHING
+			 RETURNING id`,
+			userID, b.LibraryID, b.Path, b.Position, b.Note, b.Label, b.CreatedAt, b.ClientID).Scan(&b.ID)
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err // nil: a fresh save
+		}
+		created = false
+		var held Bookmark
+		if err := scanBookmark(tx.QueryRowContext(ctx, `SELECT `+bookmarkColumns+` FROM bookmarks
+			WHERE user_id = ? AND client_id = ?`, userID, b.ClientID), &held); err != nil {
+			return err
+		}
+		if held.Ref != b.Ref {
+			return ErrClientIDConflict
+		}
+		b = held
+		return nil
+	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	b.ID, _ = res.LastInsertId()
-	return &b, nil
+	return &b, created, nil
 }
 
 // ListBookmarks returns a user's bookmarks for a book path ordered by position

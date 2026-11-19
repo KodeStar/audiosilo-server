@@ -79,7 +79,7 @@ func TestJoinDurableState(t *testing.T) {
 	save(dan, into, 260, false, "2026-01-05T10:00:00Z")
 	save(dan, cd2, 10, false, "2026-01-06T10:00:00Z")
 
-	if _, err := c.AddBookmark(ctx, ann, Bookmark{Ref: ref(cd2), Position: 12, Note: "dragon"}); err != nil {
+	if _, _, err := c.AddBookmark(ctx, ann, Bookmark{Ref: ref(cd2), Position: 12, Note: "dragon"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.AddNote(ctx, ann, Note{Ref: ref(cd3), Position: 5, Body: "ending"}); err != nil {
@@ -257,7 +257,7 @@ func TestJoinLeavesUnplacedPartState(t *testing.T) {
 		if _, err := c.SaveProgress(ctx, ann, Progress{Ref: ref(p), Position: 5}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := c.AddBookmark(ctx, ann, Bookmark{Ref: ref(p), Position: 2}); err != nil {
+		if _, _, err := c.AddBookmark(ctx, ann, Bookmark{Ref: ref(p), Position: 2}); err != nil {
 			t.Fatal(err)
 		}
 	}

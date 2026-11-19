@@ -97,6 +97,105 @@ func TestBookmarkLabelOnPost(t *testing.T) {
 	}
 }
 
+// POST with a client_id (capability bookmark_client_id) is idempotent per user:
+// a replay answers 200 with the bookmark the first POST made and saves nothing,
+// another user's same id is theirs, the same id on another book is 409, a
+// deleted bookmark's id saves anew (an Undo), and a malformed id is 400
+// invalid_request. Without one, every POST saves, as before.
+func TestBookmarkClientID(t *testing.T) {
+	t.Parallel()
+	l := newListsEnv(t)
+	var info struct {
+		Capabilities map[string]bool `json:"capabilities"`
+	}
+	if resp, body := l.do(t, "GET", "/api/v1/server", "", ""); json.Unmarshal([]byte(body), &info) != nil ||
+		!info.Capabilities["bookmark_client_id"] {
+		t.Fatalf("bookmark_client_id capability missing: %d %s", resp.StatusCode, body)
+	}
+
+	const id = "0f8c2c1e-5a3b-4c6d-9e7f-1a2b3c4d5e6f"
+	post := func(tok, path, body string, want int) catalog.Bookmark {
+		t.Helper()
+		return sendAs[catalog.Bookmark](t, l.testEnv, "POST", l.at("bookmarks", path), tok, body, want)
+	}
+	stored := func(user int64, path string) []catalog.Bookmark {
+		t.Helper()
+		bms, err := l.cat.ListBookmarks(t.Context(), user, catalog.Ref{LibraryID: l.libID, Path: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bms
+	}
+
+	first := post(l.oliveTok, cradleBook, `{"position":12,"note":"here","client_id":"`+id+`"}`, http.StatusCreated)
+	if first.ClientID != id || first.Note != "here" {
+		t.Fatalf("first POST = %+v, want client_id %s echoed", first, id)
+	}
+	// The replay answers what is stored, not what it sends.
+	if again := post(l.oliveTok, cradleBook, `{"position":99,"note":"retry","client_id":"`+id+`"}`, http.StatusOK); again != first {
+		t.Fatalf("replay = %+v, want the first bookmark %+v", again, first)
+	}
+	if got := stored(l.olive, cradleBook); len(got) != 1 || got[0] != first {
+		t.Fatalf("olive's bookmarks after the replay = %+v, want only %+v", got, first)
+	}
+
+	// Another user's same id is theirs: no collision, nothing of olive's shown.
+	sams := post(l.samTok, cradleBook, `{"position":5,"client_id":"`+id+`"}`, http.StatusCreated)
+	if sams.ID == first.ID || sams.Position != 5 {
+		t.Fatalf("sam's POST with olive's id = %+v, want a bookmark of sam's own", sams)
+	}
+	if got := stored(l.olive, cradleBook); len(got) != 1 {
+		t.Fatalf("sam's POST touched olive's bookmarks: %+v", got)
+	}
+
+	// The same id on another book is a conflict, saving nothing.
+	resp, body := l.do(t, "POST", l.at("bookmarks", mistbornBook), l.oliveTok, `{"position":1,"client_id":"`+id+`"}`)
+	wantCode(t, "the id on another book", resp, body, http.StatusConflict, "client_id_conflict")
+	if got := stored(l.olive, mistbornBook); len(got) != 0 {
+		t.Fatalf("a conflicting POST saved %+v", got)
+	}
+	// A caller the book is outside of is refused before the id is looked at.
+	resp, body = l.do(t, "POST", l.at("bookmarks", mistbornBook), l.kidTok, `{"position":1,"client_id":"`+id+`"}`)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("kid's POST on a book outside the share = %d %s, want 403", resp.StatusCode, body)
+	}
+
+	// Undo after a delete posts the same id again: a new bookmark.
+	if resp, body := l.do(t, "DELETE", "/api/v1/bookmarks/"+strconv.FormatInt(first.ID, 10), l.oliveTok, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE = %d %s", resp.StatusCode, body)
+	}
+	undone := post(l.oliveTok, cradleBook, `{"position":12,"note":"here","client_id":"`+id+`"}`, http.StatusCreated)
+	if undone.ID == first.ID || undone.ClientID != id {
+		t.Fatalf("Undo's POST = %+v, want a new bookmark carrying %s", undone, id)
+	}
+	post(l.oliveTok, cradleBook, `{"position":12,"client_id":"`+id+`"}`, http.StatusOK)
+
+	// Malformed ids are refused; an empty one, or null, is no id.
+	for _, bad := range []string{"not-a-uuid", strings.Repeat("a", 65), "0f8c2c1e5a3b4c6d9e7f1a2b3c4d5e6f",
+		"0f8c2c1e-5a3b-4c6d-9e7f-1a2b3c4d5e6g", " " + id, `{"x":1}`} {
+		b, _ := json.Marshal(bad)
+		resp, body := l.do(t, "POST", l.at("bookmarks", cradleBook), l.oliveTok, `{"position":1,"client_id":`+string(b)+`}`)
+		wantCode(t, "client_id "+bad, resp, body, http.StatusBadRequest, "invalid_request")
+	}
+	// One of the wrong type is refused the same way.
+	for _, bad := range []string{`7`, `true`, `["` + id + `"]`, `{"id":"` + id + `"}`} {
+		resp, body := l.do(t, "POST", l.at("bookmarks", cradleBook), l.oliveTok, `{"position":1,"client_id":`+bad+`}`)
+		wantCode(t, "client_id "+bad, resp, body, http.StatusBadRequest, "invalid_request")
+	}
+	if got := stored(l.olive, cradleBook); len(got) != 1 {
+		t.Fatalf("refused POSTs saved: %+v", got)
+	}
+	for _, none := range []string{`""`, `null`} {
+		resp, body := l.do(t, "POST", l.at("bookmarks", cradleBook), l.oliveTok, `{"position":30,"client_id":`+none+`}`)
+		if resp.StatusCode != http.StatusCreated || strings.Contains(body, "client_id") {
+			t.Fatalf("POST without an id = %d %s, want 201 and no client_id", resp.StatusCode, body)
+		}
+	}
+	if got := stored(l.olive, cradleBook); len(got) != 3 {
+		t.Fatalf("olive's bookmarks = %+v, want the Undo's and two without an id", got)
+	}
+}
+
 // PATCH /bookmarks/{id}: the owner's partial edit answers the whole bookmark;
 // another user's id, an unknown one and one whose book left the caller's access
 // are 404 and change nothing.

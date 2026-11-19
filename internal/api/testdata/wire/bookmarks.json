@@ -3,6 +3,7 @@
   "shape": {
     "bookmarks": [
       {
+        "client_id": "string",
         "created_at": "string",
         "id": "number",
         "label": "string",

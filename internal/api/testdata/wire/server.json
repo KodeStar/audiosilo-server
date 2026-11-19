@@ -13,6 +13,7 @@
       "annotations": "boolean",
       "api_keys": "boolean",
       "audible": "boolean",
+      "bookmark_client_id": "boolean",
       "bridge": "boolean",
       "browse_people": "boolean",
       "cast": "boolean",
