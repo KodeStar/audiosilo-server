@@ -85,7 +85,7 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if !thumbBatch(w, "books", len(req.Books), maxCoverBatch, &req.Size) {
+	if !thumbBatch(w, "books", len(req.Books), maxCoverBatch, &req.Size) || refsTooLong(w, req.Books) {
 		return
 	}
 	ctx := r.Context()

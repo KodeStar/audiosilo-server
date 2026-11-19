@@ -667,9 +667,7 @@ func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 		Mode      string  `json:"mode"`
 		From      *string `json:"from"`
 	}
-	// The body holds path and from each up to the cap, with room for JSON's
-	// escapes, so two paths at the cap get the route's answer, not a 400.
-	if err := decodeJSON(r, &req, 4*catalog.MaxPathBytes); err != nil || req.LibraryID <= 0 {
+	if err := decodeJSON(r, &req, pathBodyMax); err != nil || req.LibraryID <= 0 {
 		writeError(w, http.StatusBadRequest, "library_id and path are required")
 		return
 	}

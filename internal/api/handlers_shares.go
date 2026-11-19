@@ -65,6 +65,11 @@ func (a *API) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	for _, rule := range s.Paths {
+		if pathTooLong(w, rule.Path) {
+			return
+		}
+	}
 	// CreateShare inserts the share row and any supplied path rules atomically,
 	// so a failed rule rolls the whole thing back - no orphaned share to clean up
 	// from the transport layer.
@@ -156,6 +161,9 @@ func (a *API) handleAddSharePath(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "library_id is required")
 			return
 		}
+		if pathTooLong(w, rule.Path) {
+			return
+		}
 		add[i] = catalog.PathRule{LibraryID: rule.LibraryID, Path: rule.Path}
 	}
 	if err := a.cat.AddSharePaths(r.Context(), id, add); err != nil {
@@ -175,6 +183,9 @@ func (a *API) handleRemoveSharePath(w http.ResponseWriter, r *http.Request) {
 	var req sharePathReq
 	if err := decodeJSON(r, &req, 0); err != nil || req.LibraryID == 0 {
 		writeError(w, http.StatusBadRequest, "library_id is required")
+		return
+	}
+	if pathTooLong(w, req.Path) {
 		return
 	}
 	if err := a.cat.RemoveSharePath(r.Context(), id, catalog.PathRule{LibraryID: req.LibraryID, Path: req.Path}); err != nil {

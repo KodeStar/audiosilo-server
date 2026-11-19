@@ -537,6 +537,8 @@ func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 	case req.empty():
 		writeError(w, http.StatusBadRequest, "nothing to change")
 		return
+	case refsTooLong(w, req.Books):
+		return
 	}
 	if err := a.cat.EditBooks(r.Context(), req.Books, req.toEdit(userFrom(r.Context()).ID)); err != nil {
 		a.writeBookError(w, err, "bulk edit failed", "could not save the edit", "books", len(req.Books))
@@ -640,6 +642,8 @@ func (a *API) handleAdminBookWorks(w http.ResponseWriter, r *http.Request) {
 	case len(req.Books) > maxWorkBooks:
 		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
 			fmt.Sprintf("too many books in one request (at most %d)", maxWorkBooks))
+		return
+	case refsTooLong(w, req.Books):
 		return
 	}
 	found, err := a.cat.BooksByRefs(r.Context(), req.Books)
