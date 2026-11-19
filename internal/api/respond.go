@@ -435,7 +435,8 @@ func decodeBounded[T any](r io.Reader, limit int) ([]T, error) {
 // decodeBoundedMap is decodeBounded for a JSON object: its entries are
 // counted first, each value skipped and none kept, and it is decoded only when
 // there are at most limit (else errTooManyEntries, at the entry past limit).
-// null reads as no map.
+// null reads as no map. A value takes no unknown field, as decodeBounded's
+// entries don't.
 func decodeBoundedMap[K comparable, V any](data []byte, limit int) (map[K]V, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	if tok, err := dec.Token(); err == nil && tok == json.Delim('{') {
@@ -454,7 +455,9 @@ func decodeBoundedMap[K comparable, V any](data []byte, limit int) (map[K]V, err
 		}
 	}
 	var m map[K]V
-	if err := json.Unmarshal(data, &m); err != nil {
+	strict := json.NewDecoder(bytes.NewReader(data))
+	strict.DisallowUnknownFields()
+	if err := strict.Decode(&m); err != nil {
 		return nil, err
 	}
 	return m, nil
