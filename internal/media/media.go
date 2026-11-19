@@ -409,14 +409,21 @@ var (
 
 // fdSupport remembers, per ffmpeg path, whether its input protocols include
 // fd (an *fdProbe), so each binary is asked once per process, however many
-// first requests arrive together. A probe that couldn't run (its 5 s timeout,
-// a failed start) is no answer: it is dropped, and the next request asks again.
+// first requests arrive together, and no transcode or seek (each ?t= starts
+// one) runs a probe of its own. A probe that couldn't run (its 5 s timeout, a
+// failed start) is no answer: it is kept for fdProbeRetry (no fd:), so an
+// ffmpeg that won't answer is not asked again by every request, then asked
+// again.
 var fdSupport sync.Map
 
-// fdProbe is one ffmpeg binary's answer, settled once by probeFD.
+// fdProbeRetry is how long a probe that couldn't run stands as "no fd:".
+const fdProbeRetry = time.Minute
+
+// fdProbe is one ffmpeg binary's answer, settled once by probeFD at at.
 type fdProbe struct {
 	once    sync.Once
 	fd, ran bool
+	at      time.Time
 }
 
 // inputFor is the stdin input spec for ffmpegPath: fd: when that ffmpeg lists
@@ -424,8 +431,8 @@ type fdProbe struct {
 func inputFor(ffmpegPath string) inputSpec {
 	v, _ := fdSupport.LoadOrStore(ffmpegPath, &fdProbe{})
 	p := v.(*fdProbe)
-	p.once.Do(func() { p.fd, p.ran = probeFD(ffmpegPath) })
-	if !p.ran {
+	p.once.Do(func() { p.fd, p.ran = probeFD(ffmpegPath); p.at = time.Now() })
+	if !p.ran && time.Since(p.at) >= fdProbeRetry {
 		fdSupport.CompareAndDelete(ffmpegPath, p)
 	}
 	if p.fd {

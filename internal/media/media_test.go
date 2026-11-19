@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -483,15 +484,37 @@ func TestTranscodeDownloadAttachment(t *testing.T) {
 	}
 }
 
-// TestInputForRetriesAFailedProbe: a probe that couldn't run is no answer to
-// keep, so the path is asked again next time.
+// TestInputForRetriesAFailedProbe: a probe that couldn't run stands as no
+// fd: for fdProbeRetry, so the transcodes and seeks in between run no probe of
+// their own, and is asked again once that has passed.
 func TestInputForRetriesAFailedProbe(t *testing.T) {
 	t.Parallel()
-	missing := filepath.Join(t.TempDir(), "no-ffmpeg")
-	if in := inputFor(missing); in != pipeInput {
-		t.Fatalf("inputFor(missing) = %+v, want pipe:0", in)
+	dir := t.TempDir()
+	count := filepath.Join(dir, "probes")
+	failing := filepath.Join(dir, "ffmpeg")
+	syscall.ForkLock.RLock() // as fakeFFmpeg: no parallel fork inherits the write descriptor
+	err := os.WriteFile(failing, []byte("#!/bin/sh\necho x >> '"+count+"'\nexit 1\n"), 0o755)
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, kept := fdSupport.Load(missing); kept {
-		t.Fatal("a probe that couldn't run was kept")
+	probes := func() int {
+		b, _ := os.ReadFile(count)
+		return strings.Count(string(b), "x")
+	}
+	for range 3 {
+		if in := inputFor(failing); in != pipeInput {
+			t.Fatalf("inputFor(an ffmpeg that fails its probe) = %+v, want pipe:0", in)
+		}
+	}
+	if n := probes(); n != 1 {
+		t.Fatalf("%d probes for 3 asks within fdProbeRetry, want 1", n)
+	}
+	v, _ := fdSupport.Load(failing)
+	v.(*fdProbe).at = time.Now().Add(-fdProbeRetry)
+	inputFor(failing) // drops the stale answer
+	inputFor(failing)
+	if n := probes(); n != 2 {
+		t.Fatalf("%d probes once fdProbeRetry passed, want 2", n)
 	}
 }
