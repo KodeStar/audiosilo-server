@@ -193,8 +193,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await streamed(container);
-    const audio = container.querySelector('audio')!;
+    const audio = await streamed(container);
     const src = new window.URL(audio.getAttribute('src')!, 'http://admin.test');
     expect(src.pathname).toBe('/api/v1/libraries/1/stream');
     expect(src.searchParams.get('path')).toBe(`${BOOK_PATH}/01.m4b`);
@@ -341,8 +340,7 @@ describe('the chapter editor', () => {
         ).searchParams.get('t'),
       );
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await streamed(container);
-    fireEvent.loadedMetadata(container.querySelector('audio')!);
+    fireEvent.loadedMetadata(await streamed(container));
     await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
     await waitFor(() => expect(from()).toBe(1201));
     // Another row, then back: the move made on chapter 2 is forgotten.
@@ -406,8 +404,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await streamed(container);
-    const audio = container.querySelector('audio')!;
+    const audio = await streamed(container);
     const from = () =>
       Number(new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams.get('t'));
     // "Play 5 s" on a row just chosen plays its stream at once, in the click.
@@ -436,8 +433,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await streamed(container);
-    const audio = container.querySelector('audio')!;
+    const audio = await streamed(container);
     const from = () =>
       Number(new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams.get('t'));
     const play = vi.spyOn(HTMLMediaElement.prototype, 'play');
@@ -540,8 +536,7 @@ describe('the chapter editor', () => {
       const { container } = renderApp(URL);
       const user = await openEditor();
       await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-      await streamed(container);
-      const audio = container.querySelector('audio')!;
+      const audio = await streamed(container);
       const query = () =>
         new window.URL(audio.getAttribute('src')!, 'http://admin.test').searchParams;
       expect(query().get('transcode')).toBe('1');
@@ -596,8 +591,7 @@ describe('the chapter editor', () => {
       const { container } = renderApp(URL);
       const user = await openEditor();
       await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-      await streamed(container);
-      const audio = container.querySelector('audio')!;
+      const audio = await streamed(container);
       expect(audio.getAttribute('src')).toContain('transcode=1');
       const reads = () => calls.filter((c) => c.path === '/admin/libraries/1/book').length;
       const before = reads();
@@ -647,8 +641,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await streamed(container);
-    const audio = container.querySelector('audio')!;
+    const audio = await streamed(container);
     expect(audio.getAttribute('src')).not.toContain('transcode');
     fireEvent.loadedMetadata(audio);
     // A copy with a length: seeked in place, the row's start set at load.
@@ -712,14 +705,11 @@ describe('the chapter editor', () => {
     // runs it on a fake clock, which moves only when the test moves it: a
     // loaded run gets there however late, the wait not yet run out. Faked
     // before the first play, so the stall's wait is the fake clock's too.
-    // The look's answers settle on promises alone (settle); presses are
+    // The look's answers settle with the fake clock held still (settle); presses are
     // fireEvent's while it is fake (user-event and findBy wait on setTimeout).
     // The describe's afterEach puts the real clock back.
     const fakeClock = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const settle = () =>
-      act(async () => {
-        for (let i = 0; i < 20; i++) await Promise.resolve();
-      });
+    const settle = () => act(() => vi.advanceTimersByTimeAsync(0));
     afterEach(() => vi.useRealTimers());
 
     it('waits and asks again when the server is too busy, with no new token', async () => {
@@ -937,12 +927,12 @@ describe('the chapter editor', () => {
       await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
       // The third wait, the row's last try: busy once more after it gives up.
       fireEvent.error(audio);
-      await screen.findByText('The server is busy. Trying again in a moment.');
+      await screen.findByText(busyLine);
       await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
       expect(play).toHaveBeenCalledTimes(3);
       // Busy again, asked before the wait was over: waited for, not given up on.
       fireEvent.error(audio);
-      await screen.findByText('The server is busy. Trying again in a moment.');
+      await screen.findByText(busyLine);
       expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: 'Stop trying again' }));
     });
@@ -984,8 +974,7 @@ describe('the chapter editor', () => {
       const { container } = renderApp(URL);
       const user = await openEditor();
       await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-      await streamed(container);
-      const audio = container.querySelector('audio')!;
+      const audio = await streamed(container);
       // Playing: its stream would load at once if it came back.
       await user.click(screen.getByRole('button', { name: 'Play 5 s' }));
       fireEvent.error(audio);
@@ -1067,7 +1056,7 @@ describe('the chapter editor', () => {
     async function stall(stream: MockRoute) {
       const got = await listen(stream);
       Object.defineProperty(got.audio, 'paused', { value: false, configurable: true });
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      fakeClock();
       fireEvent.play(got.audio);
       return {
         ...got,
@@ -1136,7 +1125,7 @@ describe('the chapter editor', () => {
       expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
 
       // Loaded again, it stalls again: it didn't load, and lets go of the stream.
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      fakeClock();
       fireEvent.loadStart(audio);
       fireEvent.play(audio);
       act(() => vi.advanceTimersByTime(6000));
@@ -1157,7 +1146,7 @@ describe('the chapter editor', () => {
       // A seek asks for a new stream, which stalls too: loaded again, not given up on.
       await user.click(screen.getByRole('button', { name: 'Forward 1 second' }));
       await waitFor(() => expect(Number(srcParams(audio).get('t'))).toBe(1201));
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      fakeClock();
       fireEvent.loadStart(audio);
       fireEvent.play(audio);
       act(() => vi.advanceTimersByTime(6000));
@@ -1256,7 +1245,7 @@ describe('the chapter editor', () => {
     it('counts a failed load’s pause as none after a stall’s look said busy', async () => {
       const { audio, wait } = await stall({ ...busy, headers: { 'Retry-After': '0.2' } });
       wait();
-      await screen.findByText('The server is busy. Trying again in a moment.');
+      await screen.findByText(busyLine);
       Object.defineProperty(audio, 'paused', { value: true, configurable: true });
       failed(audio);
       at(audio, 'pause', 9000);
@@ -1279,8 +1268,7 @@ describe('the chapter editor', () => {
     const { container } = renderApp(URL);
     const user = await openEditor();
     await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
-    await streamed(container);
-    const src = container.querySelector('audio')!.getAttribute('src')!;
+    const src = (await streamed(container)).getAttribute('src')!;
     expect(src).not.toContain('transcode');
   });
 
