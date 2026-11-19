@@ -81,12 +81,16 @@ func (a *API) writeEdit(w http.ResponseWriter, saved any, err error, what string
 
 // decodePositioned answers a bookmark or note body's decode error (POST and
 // PATCH alike): a position of the wrong type ("12", true) is 400 invalid
-// position, anything else malformed 400 invalid request. It reports whether the body decoded.
+// position, a bookmark POST's client_id of the wrong type (7) 400
+// invalid_request as a string of the wrong shape is, anything else malformed
+// 400 invalid request. It reports whether the body decoded.
 func decodePositioned(w http.ResponseWriter, err error) bool {
 	var typeErr *json.UnmarshalTypeError
 	switch {
 	case errors.As(err, &typeErr) && typeErr.Field == "position":
 		writeError(w, http.StatusBadRequest, catalog.ErrInvalidPosition.Error())
+	case errors.As(err, &typeErr) && typeErr.Field == "client_id":
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidRequest, catalog.ErrInvalidClientID.Error())
 	case err != nil:
 		writeError(w, http.StatusBadRequest, "invalid request")
 	default:

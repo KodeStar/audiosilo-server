@@ -1108,7 +1108,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Move-tracking). `POST /cast/token` grants the book's path (`bookAt`).
   **Bookmark client ids** (capability `bookmark_client_id`, migration 0088): a bookmark `POST`
   may carry `client_id`, a UUID in its hyphenated form (`catalog.clientIDPattern`, stored and
-  echoed as sent; anything else 400 `invalid_request`, `""` or null is no id), which makes the
+  echoed as sent; anything else, a non-string too, 400 `invalid_request`, `""` or null is no id), which makes the
   add idempotent for the player's outbox: `bookmarks.client_id` is unique per user where not
   NULL (`idx_bookmarks_client_id`), and `catalog.AddBookmark` inserts `ON CONFLICT DO NOTHING`
   then reads the held row in the same writer transaction, so a replay whose first answer was

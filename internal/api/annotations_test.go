@@ -170,20 +170,23 @@ func TestBookmarkClientID(t *testing.T) {
 	}
 	post(l.oliveTok, cradleBook, `{"position":12,"client_id":"`+id+`"}`, http.StatusOK)
 
-	// Malformed ids are refused; an empty one is no id.
+	// Malformed ids are refused; an empty one, or null, is no id.
 	for _, bad := range []string{"not-a-uuid", strings.Repeat("a", 65), "0f8c2c1e5a3b4c6d9e7f1a2b3c4d5e6f",
 		"0f8c2c1e-5a3b-4c6d-9e7f-1a2b3c4d5e6g", " " + id, `{"x":1}`} {
 		b, _ := json.Marshal(bad)
 		resp, body := l.do(t, "POST", l.at("bookmarks", cradleBook), l.oliveTok, `{"position":1,"client_id":`+string(b)+`}`)
 		wantCode(t, "client_id "+bad, resp, body, http.StatusBadRequest, "invalid_request")
 	}
-	resp, body = l.do(t, "POST", l.at("bookmarks", cradleBook), l.oliveTok, `{"position":1,"client_id":7}`)
-	wantError(t, "a numeric client_id", resp, body, http.StatusBadRequest, "invalid request")
+	// One of the wrong type is refused the same way.
+	for _, bad := range []string{`7`, `true`, `["` + id + `"]`, `{"id":"` + id + `"}`} {
+		resp, body := l.do(t, "POST", l.at("bookmarks", cradleBook), l.oliveTok, `{"position":1,"client_id":`+bad+`}`)
+		wantCode(t, "client_id "+bad, resp, body, http.StatusBadRequest, "invalid_request")
+	}
 	if got := stored(l.olive, cradleBook); len(got) != 1 {
 		t.Fatalf("refused POSTs saved: %+v", got)
 	}
-	for range 2 {
-		resp, body := l.do(t, "POST", l.at("bookmarks", cradleBook), l.oliveTok, `{"position":30,"client_id":""}`)
+	for _, none := range []string{`""`, `null`} {
+		resp, body := l.do(t, "POST", l.at("bookmarks", cradleBook), l.oliveTok, `{"position":30,"client_id":`+none+`}`)
 		if resp.StatusCode != http.StatusCreated || strings.Contains(body, "client_id") {
 			t.Fatalf("POST without an id = %d %s, want 201 and no client_id", resp.StatusCode, body)
 		}
