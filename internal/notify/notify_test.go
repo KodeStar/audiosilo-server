@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -127,19 +128,10 @@ func newFakeDest(t *testing.T) *fakeDest {
 
 func (f *fakeDest) wait(t *testing.T, n int) []received {
 	t.Helper()
-	deadline := time.Now().Add(testwait.Scaled(5 * time.Second))
-	for time.Now().Before(deadline) {
-		f.mu.Lock()
-		if len(f.got) >= n {
-			out := append([]received(nil), f.got...)
-			f.mu.Unlock()
-			return out
-		}
-		f.mu.Unlock()
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("got %d deliveries, want %d", f.count(), n)
-	return nil
+	testwait.Eventually(t, fmt.Sprintf("%d deliveries", n), 5*time.Second, func() bool { return f.count() >= n })
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]received(nil), f.got...)
 }
 
 func (f *fakeDest) count() int {
