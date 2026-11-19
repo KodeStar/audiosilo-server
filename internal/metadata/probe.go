@@ -120,12 +120,11 @@ var ffprobeKillGrace = 5 * time.Second
 
 // runFFprobe runs ffprobe on the file at path under root and returns its
 // answer. The file is opened through root (openBlockFile, bounded as a tag
-// read's open is) and handed to ffprobe opened (ToolInput, bounded as the
-// open is), so ffprobe never
-// opens the path itself: a link swapped in along it since it was checked
-// can't lead ffprobe out of the library, and it reads the file
-// as an audio container only (InputFormatArgs), never as a playlist of other
-// files. -select_streams a:0
+// read's open is) and handed to ffprobe opened (ToolInput, within the probe's
+// time), so ffprobe never opens the path itself: a link swapped in along it
+// since it was checked can't lead ffprobe out of the library, and it reads
+// the file as an audio container only (InputFormatArgs), never as a playlist
+// of other files. -select_streams a:0
 // limits -show_streams to the first audio stream so we read the codec that
 // actually needs (or doesn't need) transcoding. One killed at its time-out
 // that has not ended ffprobeKillGrace later (stuck in a read the kernel won't
