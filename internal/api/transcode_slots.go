@@ -189,8 +189,8 @@ func (a *API) holdToTake(ask transcodeAsk) (h *transcodeHold, refused bool) {
 	if !ask.keyed() {
 		return nil, false
 	}
-	if h := a.transcodeHolds[ask]; h != nil {
-		return h, false
+	if same := a.transcodeHolds[ask]; same != nil {
+		return same, false
 	}
 	return a.tokenHoldToTake(ask)
 }
@@ -198,7 +198,8 @@ func (a *API) holdToTake(ask transcodeAsk) (h *transcodeHold, refused bool) {
 // tokenHoldToTake is, when ask's token holds maxTranscodesPerToken slots, the
 // one of its holds ask takes over: never a download (its saved file would be
 // cut short), and of the rest the same file's earliest ask (a seek in this
-// tab, so another tab's stream on the same token plays on), else the oldest.
+// tab, so another tab's stream of another file on the same token plays on;
+// two tabs on one file are told apart by nothing here), else the oldest.
 // refused when every hold of the token's is a download; nil and not refused
 // under the cap. The caller holds transcodeMu.
 func (a *API) tokenHoldToTake(ask transcodeAsk) (take *transcodeHold, refused bool) {

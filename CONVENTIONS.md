@@ -1478,7 +1478,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   last; a token is one user's, so a takeover never ends another user's or device's transcode. A token holds at most
   2 slots (`maxTranscodesPerToken`): its third ask (asks differing only in `?t=`, the web player's overlapping seek
   re-asks) takes over one of its own slots the same way rather than being refused (`tokenHoldToTake`: the same file's
-  earliest ask, so a seek in one tab leaves another tab's stream on the same token playing, else its oldest; never a
+  earliest ask, so a seek in one tab leaves another tab's stream of another file on the same token playing (two tabs
+  on one file are told apart by nothing), else its oldest; never a
   download, whose saved file would be cut short, so a token at its cap with only downloads is busy, the 503, though
   slots are free; a repeat of a download's own ask still takes it over), so one client (a demo
   visitor included) can't hold all 4; another token's slots are never touched. A HEAD's answer comes from the same
