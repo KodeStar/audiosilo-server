@@ -32,20 +32,7 @@ func TestRefusedBookFolderIsNoShareNotAnswering(t *testing.T) {
 			t.Parallel()
 			e := newTestEnv(t)
 			adminTok, _, _ := adminAndMember(t, e)
-			root, err := filepath.EvalSymlinks(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.MkdirAll(filepath.Join(root, "Author", "Book"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(root, "Author", "Book", "01.mp3"), make([]byte, 1<<10), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Refused", Root: root})
-			if err != nil {
-				t.Fatal(err)
-			}
+			root, lib := unindexedBook(t, e, "Refused")
 			dir := filepath.Join(root, filepath.FromSlash(refused))
 			if err := os.Chmod(dir, 0); err != nil {
 				t.Fatal(err)
@@ -99,20 +86,7 @@ func TestShareFaultOnAnUnindexedBookIsShareNotAnswering(t *testing.T) {
 			t.Parallel()
 			e := newTestEnv(t)
 			adminTok, _, _ := adminAndMember(t, e)
-			root, err := filepath.EvalSymlinks(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.MkdirAll(filepath.Join(root, "Author", "Book"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(root, "Author", "Book", "01.mp3"), make([]byte, 1<<10), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Faulty", Root: root})
-			if err != nil {
-				t.Fatal(err)
-			}
+			root, lib := unindexedBook(t, e, "Faulty")
 			author := filepath.Join(root, "Author")
 			var failing atomic.Bool
 			failing.Store(true)
@@ -150,4 +124,20 @@ func TestShareFaultOnAnUnindexedBookIsShareNotAnswering(t *testing.T) {
 			}
 		})
 	}
+}
+
+// unindexedBook is a library named name over a new folder holding one book no
+// scan has reached, Author/Book with its track 01.mp3: root is the folder.
+func unindexedBook(t *testing.T, e *testEnv, name string) (string, *catalog.Library) {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTree(t, root, "Author/Book/01.mp3")
+	lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: name, Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root, lib
 }
