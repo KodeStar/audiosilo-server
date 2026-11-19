@@ -39,7 +39,7 @@ type UpcomingBook struct {
 func (c *Catalog) UpcomingBooks(ctx context.Context) ([]UpcomingBook, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT b.library_id, b.rel_path, b.series, b.series_index,
 		       b.series_index_end, b.more_series, b.asin, b.isbn,
-		       COALESCE((SELECT m.work_id FROM book_matches m WHERE m.library_id = b.library_id AND m.path = b.rel_path), '')
+		       COALESCE(`+matchWorkIDExpr("b")+`, '')
 		  FROM books b JOIN libraries l ON l.id = b.library_id
 		 WHERE l.kind = 'books' AND (b.series <> '' OR b.more_series <> '[]' OR b.asin <> '' OR b.isbn <> '')
 		 ORDER BY l.sort_order, l.name, l.id, b.rel_path`)

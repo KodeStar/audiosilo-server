@@ -126,12 +126,9 @@ func workBooksFrom(scopes []Scope, all bool, works []string) (string, []any) {
 	return q, args
 }
 
-// maxWorkBooks bounds WorkBooks, as maxSeriesBooks bounds SeriesBooks.
-const maxWorkBooks = maxSeriesBooks
-
 // WorkBooks returns the books within scopes whose work key (Book.WorkID) is one
 // of works, books libraries only, in placement preference order (library sort
-// order, then path, as SeriesBooks), list shape, at most maxWorkBooks: what
+// order, then path, as SeriesBooks), list shape, at most maxSeriesBooks (as SeriesBooks): what
 // places a /meta envelope's rails on every recording the caller holds of their
 // works, one filed in no series or under another series name too, as /item's
 // other_recordings finds them (server#412).
@@ -141,7 +138,7 @@ func (c *Catalog) WorkBooks(ctx context.Context, scopes []Scope, works []string)
 	}
 	from, args := workBooksFrom(scopes, false, works)
 	return queryRows(ctx, c.db, scanBookRow, `SELECT `+prefixCols("b.")+from+`
-		 ORDER BY l.sort_order, l.name, l.id, b.rel_path LIMIT ?`, append(args, maxWorkBooks)...)
+		 ORDER BY l.sort_order, l.name, l.id, b.rel_path LIMIT ?`, append(args, maxSeriesBooks)...)
 }
 
 // InProgress reports which of refs the user has started and not finished

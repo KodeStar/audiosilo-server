@@ -950,9 +950,16 @@ const derivedBookCols = bookBaseCols + `, work_id`
 // books from the other side, by the work id indexes (idx_book_matches_work,
 // idx_upcoming_owned_work).
 func workIDExpr(t string) string {
-	return `COALESCE((SELECT wm.work_id FROM book_matches wm WHERE wm.library_id = ` + t + `.library_id AND wm.path = ` + t + `.rel_path AND wm.work_id <> ''),
+	return `COALESCE(` + matchWorkIDExpr(t) + `,
 		(SELECT wo.work_id FROM upcoming_owned wo WHERE wo.library_id = ` + t + `.library_id AND wo.path = ` + t + `.rel_path AND wo.work_id <> ''
 		   AND wo.id_key = ` + idKeyExpr(t) + `), '')`
+}
+
+// matchWorkIDExpr is the SQL of book t's recorded match's work id
+// (book_matches), NULL for none: workIDExpr's first answer, which wins over
+// whatever its identifiers resolve to.
+func matchWorkIDExpr(t string) string {
+	return `(SELECT wm.work_id FROM book_matches wm WHERE wm.library_id = ` + t + `.library_id AND wm.path = ` + t + `.rel_path AND wm.work_id <> '')`
 }
 
 // sqlSpace is the white space normASINSQL and normISBNSQL trim: every rune
