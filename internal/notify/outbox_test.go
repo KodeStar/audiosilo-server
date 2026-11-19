@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -175,5 +177,63 @@ func TestOwedNoticeFollowsTheDestination(t *testing.T) {
 	waitOwedNone(t, cat)
 	if n := dest.count(); n != 0 {
 		t.Fatalf("sent %d to a switched-off destination", n)
+	}
+}
+
+// An event raised before Run starts is both queued by its own Deliver and
+// owed to the start's redelivery: it goes once, even when the redelivery reads
+// the row while the first copy's send is still under way.
+func TestNoticeQueuedTwiceAtStartGoesOnce(t *testing.T) {
+	ctx := context.Background()
+	cat := catalog.New(storetest.Open(t), time.Now)
+	var (
+		mu  sync.Mutex
+		got int
+	)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		got++
+		mu.Unlock()
+		time.Sleep(200 * time.Millisecond) // the redelivery reads the row meanwhile
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(slow.Close)
+	addTarget(t, cat, TargetWebhook, slow.URL, "", KindScanFailed)
+
+	s := newTestService(cat)
+	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
+	runCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	s.Run(runCtx)
+	waitOwedNone(t, cat)
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if got != 1 {
+		t.Fatalf("sent %d times, want once", got)
+	}
+}
+
+// A delivery this run never queued (a full queue dropped it) goes out at the
+// next sweep, not the next start.
+func TestOwedNoticeGoesAtTheNextSweep(t *testing.T) {
+	ctx := context.Background()
+	cat := catalog.New(storetest.Open(t), time.Now)
+	dest := newFakeDest(t)
+	addTarget(t, cat, TargetWebhook, dest.srv.URL, "", KindScanFailed)
+	s := newTestService(cat)
+	s.sweep = 50 * time.Millisecond
+	runCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	s.Run(runCtx)
+	// Recorded after the start's read, by a service whose queue no one reads.
+	time.Sleep(20 * time.Millisecond)
+	stoppedService(cat).ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
+	if got := dest.wait(t, 1)[0]; got.body["event"] != KindScanFailed {
+		t.Fatalf("swept %v", got.body)
+	}
+	waitOwedNone(t, cat)
+	if n := settle(dest); n != 1 {
+		t.Fatalf("sent %d times, want once", n)
 	}
 }

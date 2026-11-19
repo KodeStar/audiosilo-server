@@ -253,8 +253,9 @@ func (c *Catalog) PendingDeliveries(ctx context.Context, eventID int64) ([]Outbo
 
 // ClaimDelivery counts one more attempt at a pending delivery that has had
 // attempts so far, and reports whether this caller has it: false when another
-// took it first (the start's redelivery and the event's own Deliver both
-// queue a new row) or it is no longer pending.
+// counted that attempt first (a stale copy) or it is no longer pending. It
+// orders the attempts; it doesn't stop a copy read after another's claim from
+// sending again (notify.Service.take does, within a run).
 func (c *Catalog) ClaimDelivery(ctx context.Context, id int64, attempts int) (bool, error) {
 	res, err := c.db.ExecUserState(ctx,
 		`UPDATE notify_outbox SET attempts = attempts + 1 WHERE id = ? AND state = 'pending' AND attempts = ?`,

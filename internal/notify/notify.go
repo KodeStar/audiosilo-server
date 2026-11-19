@@ -11,9 +11,10 @@
 //
 // Each event's deliveries are kept in the outbox (catalog.RecordServerEvent
 // writes them with the event), so what was still owed when the server stopped
-// goes out at the next start (Run), once per destination: the bell is the event
-// itself and is never written again, and a destination that had it is not sent
-// it twice. A failing one is tried maxAttempts times in all, restarts included.
+// goes out at the next start (Run), and one a full queue left behind at the
+// next sweep, once per destination: the bell is the event itself and is never
+// written again, and a destination that had it is not sent it twice. A failing
+// one is tried maxAttempts times in all, restarts included.
 package notify
 
 import (
@@ -108,6 +109,10 @@ const (
 // retryDelays are the waits before the second and third attempt.
 var retryDelays = []time.Duration{10 * time.Second, time.Minute}
 
+// sweepEvery is how often the outbox is read again for what is still owed (a
+// delivery a full queue left behind), after the start's read.
+const sweepEvery = 5 * time.Minute
+
 // Service records events and delivers them. A nil *Service does nothing, so
 // callers needn't check.
 type Service struct {
@@ -118,6 +123,7 @@ type Service struct {
 	server  func() Server
 	queue   chan catalog.OutboxDelivery
 	delays  []time.Duration
+	sweep   time.Duration    // how often the outbox is read again (sweepEvery; tests)
 	now     func() time.Time // the clock (tests)
 
 	mu sync.Mutex
@@ -132,6 +138,13 @@ type Service struct {
 	// so two at once (two callbacks for one waiting sign-in) announce it once
 	// (server#408). Dedup emits are rare; one lock for all keys is enough.
 	dedupMu sync.Mutex
+
+	// owned: the outbox rows queued, under way or waiting out a retry's delay
+	// in this run, so the sweep and an event's own Deliver queue each once. A
+	// second copy read while the first's send is under way would claim the
+	// next attempt and send it again: ClaimDelivery only orders the attempts.
+	ownedMu sync.Mutex
+	owned   map[int64]struct{}
 }
 
 // oidcPendingTaken is one oidc_pending notification raised: when, and the
@@ -158,12 +171,14 @@ func New(cat *catalog.Catalog, version string, server func() Server, log *slog.L
 		log: log, version: version, server: server,
 		queue:  make(chan catalog.OutboxDelivery, queueSize),
 		delays: retryDelays,
+		sweep:  sweepEvery,
 		now:    time.Now,
+		owned:  map[int64]struct{}{},
 	}
 }
 
 // Run delivers queued messages until ctx ends, starting with what the outbox
-// still owes from before the start.
+// still owes from before the start, then what it owes at each sweep.
 func (s *Service) Run(ctx context.Context) {
 	if s == nil {
 		return
@@ -185,7 +200,7 @@ func (s *Service) Run(ctx context.Context) {
 
 // Emit records an event in the feed and queues it for every enabled destination
 // subscribed to its kind. It never blocks on sending; a full queue leaves the
-// delivery owed until the next start (logged).
+// delivery owed until the next sweep (logged).
 func (s *Service) Emit(ctx context.Context, e Event) {
 	s.emit(ctx, e, nil)
 }
@@ -207,7 +222,7 @@ func (s *Service) emit(ctx context.Context, e Event, allow func() bool) {
 // Deliver queues an event already in the feed for the destinations its outbox
 // rows name (Emit's second half, and for an event recorded in the transaction
 // of the write that raised it: catalog.SetPodcastNotice). It never blocks on
-// sending: a full queue leaves the row owed until the next start.
+// sending: a full queue leaves the row owed until the next sweep.
 func (s *Service) Deliver(ctx context.Context, ev catalog.ServerEvent) {
 	if s == nil {
 		return
@@ -219,18 +234,37 @@ func (s *Service) Deliver(ctx context.Context, ev catalog.ServerEvent) {
 		return
 	}
 	for _, o := range owed {
+		if !s.take(o.ID) {
+			continue // the sweep has it
+		}
 		select {
 		case s.queue <- o:
 		default:
-			s.log.Warn("notification queue full; a delivery waits for the next start", "target", o.TargetID, "kind", ev.Kind)
+			s.release(o.ID)
+			s.log.Warn("notification queue full; a delivery waits for the next sweep", "target", o.TargetID, "kind", ev.Kind)
 		}
 	}
 }
 
-// redeliver queues what the outbox still owes when Run starts: deliveries the
-// previous run recorded and never finished. One the event's own Deliver queued
-// too goes once (catalog.ClaimDelivery).
+// redeliver queues what the outbox still owes, when Run starts (deliveries
+// the previous run recorded and never finished) and every sweepEvery after (a
+// delivery a full queue left behind). A row this run has queued already is
+// passed over (take).
 func (s *Service) redeliver(ctx context.Context) {
+	tick := time.NewTicker(s.sweep)
+	defer tick.Stop()
+	for {
+		s.sweepOwed(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+// sweepOwed queues every row the outbox owes that this run doesn't have already.
+func (s *Service) sweepOwed(ctx context.Context) {
 	owed, err := s.cat.PendingDeliveries(ctx, 0)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -238,16 +272,43 @@ func (s *Service) redeliver(ctx context.Context) {
 		}
 		return
 	}
-	if len(owed) > 0 {
-		s.log.Info("sending notifications owed from before the start", "count", len(owed))
-	}
+	n := 0
+	defer func() {
+		if n > 0 {
+			s.log.Info("sending notifications still owed", "count", n)
+		}
+	}()
 	for _, o := range owed {
+		if !s.take(o.ID) {
+			continue
+		}
 		select {
 		case <-ctx.Done():
+			s.release(o.ID)
 			return
 		case s.queue <- o:
+			n++
 		}
 	}
+}
+
+// take marks an outbox row as this run's until release, and reports false
+// when it is already (queued, under way or waiting out a retry's delay).
+func (s *Service) take(id int64) bool {
+	s.ownedMu.Lock()
+	defer s.ownedMu.Unlock()
+	if _, ok := s.owned[id]; ok {
+		return false
+	}
+	s.owned[id] = struct{}{}
+	return true
+}
+
+// release lets a later read of the outbox queue the row again.
+func (s *Service) release(id int64) {
+	s.ownedMu.Lock()
+	defer s.ownedMu.Unlock()
+	delete(s.owned, id)
 }
 
 // maxAttempts is how many times a delivery is tried in all.
@@ -293,8 +354,15 @@ func (s *Service) Test(ctx context.Context, t catalog.NotifyTarget) string {
 // here, so a destination that doesn't answer holds a worker for one attempt at a
 // time, never the others' deliveries. The attempt is counted in the outbox
 // before it is made, so a stop while it is under way leaves the row owed with
-// one fewer to go, and the bound holds across restarts.
+// one fewer to go, and the bound holds across restarts. The row is this
+// run's (take) until it ends here, or its retry is queued.
 func (s *Service) deliver(ctx context.Context, d catalog.OutboxDelivery) {
+	retrying := false
+	defer func() {
+		if !retrying {
+			s.release(d.ID)
+		}
+	}()
 	bg := context.WithoutCancel(ctx)
 	if d.Attempts >= s.maxAttempts() {
 		// Its last attempt began before a stop, which cut it short.
@@ -329,14 +397,17 @@ func (s *Service) deliver(ctx context.Context, d catalog.OutboxDelivery) {
 	if reason != "" && retryable(reason) && d.Attempts < len(s.delays) {
 		next := d
 		next.Attempts++
+		retrying = true
 		time.AfterFunc(s.delays[d.Attempts], func() {
 			if ctx.Err() != nil {
+				s.release(d.ID)
 				return
 			}
 			select {
 			case s.queue <- next:
 			default:
-				s.log.Warn("notification queue full; a retry waits for the next start", "target", d.TargetID, "kind", d.Event.Kind)
+				s.release(d.ID)
+				s.log.Warn("notification queue full; a retry waits for the next sweep", "target", d.TargetID, "kind", d.Event.Kind)
 			}
 		})
 		return

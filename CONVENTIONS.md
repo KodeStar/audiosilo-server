@@ -4190,13 +4190,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   worker), three attempts in all, restarts included. Every delivery is kept in the **outbox**
   (`notify_outbox`, `0089`, server#465): `catalog.RecordServerEvent` writes one row per enabled subscribed
   destination in the transaction that records the event, `notify.Service.Run` queues every row still
-  `pending` at the start (an event newer than `catalog.NotifyOutboxRetention`, 7 days, which the daily
-  retention prunes), and each attempt is counted on its row before it is made (`catalog.ClaimDelivery`,
-  which also lets only one of the start's redelivery and the event's own `Deliver` send it), then the row
+  `pending` at the start and every 5 minutes after (`sweepEvery`; an event newer than
+  `catalog.NotifyOutboxRetention`, 7 days, which the daily retention prunes), passing over a row this run
+  has queued, under way or waiting out a retry's delay (`Service.take`, so the sweep and the event's own
+  `Deliver` send it once), and each attempt is counted on its row before it is made
+  (`catalog.ClaimDelivery`, a compare-and-swap on `attempts`), then the row
   ends `delivered`, `failed` or `skipped` (the destination switched off or unsubscribed first; a deleted
   one takes its rows). So a notice owed when the server stopped goes to each destination once at the next
   start, and the bell, the event itself, is never written again. A delivery dropped on a full queue waits
-  for the next start. It never follows a redirect, and records only a short reason
+  for the next sweep. It never follows a redirect, and records only a short reason
   (`timeout`, `unreachable`, `http_<status>`, `failed`), never the URL or the answer. Webhooks POST JSON
   with `X-AudioSilo-Event` and, with a secret, `X-AudioSilo-Timestamp` + `X-AudioSilo-Signature: sha256=`
   HMAC of `<timestamp>.<body>` (`notify.Sign`); ntfy is a JSON publish to the server root (Bearer token

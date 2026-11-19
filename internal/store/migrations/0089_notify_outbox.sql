@@ -2,8 +2,8 @@
 -- written in the transaction that records the event (catalog.RecordServerEvent,
 -- inside the write that raised it for a podcast notice), so a notice due when
 -- the server stopped is still owed at the next start (notify.Service.Run
--- redelivers every pending row once). The bell is server_events itself, never
--- written again by a redelivery.
+-- queues every pending row then, and at each sweep). The bell is
+-- server_events itself, never written again by a redelivery.
 --
 -- state: pending, delivered, failed (the attempts ran out or the destination
 -- refused it) or skipped (the destination was switched off or unsubscribed
