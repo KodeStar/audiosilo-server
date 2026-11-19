@@ -129,16 +129,13 @@ func (s *Setup) validate() *Setup {
 		// as the heartbeat's body allows, and a scan of the ids kept for each
 		// would cost a second of CPU for one item (server#445).
 		var ids []int64
-		var seen map[int64]bool
+		seen := map[int64]bool{}
 		for _, id := range it.LibraryIDs {
 			if len(ids) == maxLibraries {
 				break
 			}
 			if id <= 0 || seen[id] {
 				continue
-			}
-			if seen == nil {
-				seen = map[int64]bool{}
 			}
 			seen[id] = true
 			ids = append(ids, id)

@@ -426,15 +426,11 @@ var ErrNotPaired = errors.New("no bridge is paired")
 // heartbeat that was authenticated before a pairing or an unpair never lands on
 // the pairing that replaced it.
 func (s *Service) SaveHeartbeat(ctx context.Context, token int64, st Status) error {
-	// Without HTML escaping: the row is only ever read back as JSON, and a
-	// status full of "<" would be stored at six times its size.
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(st); err != nil {
+	// Unescaped: a status full of "<" would be stored at six times its size.
+	body, err := marshalUnescaped(st)
+	if err != nil {
 		return err
 	}
-	body := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 	now := s.now()
 	gen := s.heartbeatGen() // before the write: a Forget after it wins (remember)
 	// A heartbeat is user state (server#258): a paired Bridge beats twice a
