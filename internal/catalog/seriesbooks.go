@@ -135,17 +135,9 @@ func (c *Catalog) seriesMembers(ctx context.Context, scopes []Scope, keys []stri
 	}
 	// Two ordered lists (or several chunks): one placement order, so a more_series
 	// book in an earlier library (or at an earlier path) is still preferred.
-	libs, err := c.ListBookLibraries(ctx)
-	if err != nil {
+	if err := c.InPlacementOrder(ctx, found); err != nil {
 		return nil, err
 	}
-	rank := make(map[int64]int, len(libs))
-	for i, l := range libs {
-		rank[l.ID] = i
-	}
-	slices.SortStableFunc(found, func(a, b Book) int {
-		return cmp.Or(cmp.Compare(rank[a.LibraryID], rank[b.LibraryID]), strings.Compare(a.RelPath, b.RelPath))
-	})
 	return found[:min(len(found), maxSeriesBooks)], nil
 }
 
