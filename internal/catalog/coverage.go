@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"slices"
 
 	"github.com/kodestar/audiosilo-server/pkg/match"
@@ -133,17 +134,31 @@ func (c *Catalog) SaveASINChecks(ctx context.Context, checks []ASINCheck, at str
 
 // ClearUnknownASIN records that a lookup found asin (normalized, as the report
 // stores it) known, when the report holds it as unknown: the book leaves Health's
-// unknown_asin list now (server#392), and the report sends it no more (a known
-// check, SaveASINChecks). Nothing is written for an ASIN the report doesn't hold
-// as unknown (the common case: a read first, so a lookup costs no write).
+// unknown_asin list now (server#392), and the report sends it no more (as a
+// known check, SaveASINChecks, would). Nothing is written for an ASIN the report
+// doesn't hold as unknown (the common case: a read first, so a lookup costs no
+// write and takes no write lock).
 func (c *Catalog) ClearUnknownASIN(ctx context.Context, asin string) error {
 	asin = match.NormalizeASIN(asin)
-	var held bool
-	err := c.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM unknown_asin_reports WHERE asin = ? AND unknown = 1)`, asin).Scan(&held)
-	if err != nil || !held {
+	var checkedAt string
+	err := c.db.QueryRowContext(ctx, `SELECT checked_at FROM unknown_asin_reports WHERE asin = ? AND unknown = 1`, asin).Scan(&checkedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
-	return c.SaveASINChecks(ctx, []ASINCheck{{ASIN: asin}}, FormatStamp(c.now()))
+	return c.clearHeldASIN(ctx, asin, checkedAt)
+}
+
+// clearHeldASIN is ClearUnknownASIN's write: the row as it was read (unknown,
+// checked at checkedAt) becomes known, its send forgotten. A row changed since
+// (the report rechecked it, or dropped it as no book holds it any more) is left
+// as it is, never made again (server#447).
+func (c *Catalog) clearHeldASIN(ctx context.Context, asin, checkedAt string) error {
+	_, err := c.db.ExecUserState(ctx, `UPDATE unknown_asin_reports SET checked_at = ?, unknown = 0, sent_at = NULL
+		WHERE asin = ? AND unknown = 1 AND checked_at = ?`, FormatStamp(c.now()), asin, checkedAt)
+	return err
 }
 
 // MarkASINsSent records that the metadata service accepted asins at at.
