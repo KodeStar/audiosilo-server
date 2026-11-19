@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -397,7 +396,9 @@ func (a *API) handlePodcastUnfollow(w http.ResponseWriter, r *http.Request) {
 	}
 	// The follow is stored at the show's spelling; one the caller can't see
 	// in another spelling is never taken for theirs. Their own follow at the
-	// path as given goes too (one kept past its show's row, as a follow is).
+	// path as given goes too (one kept past its show's row, as a follow is),
+	// and one of theirs at another spelling of it, kept past their access to
+	// the show (catalog.UnfollowPodcast reads only their rows for it).
 	s, err := a.cat.CallerScope(r.Context(), callerOf(r.Context()), id)
 	if err != nil {
 		a.writeCatalogError(w, err, "podcast scope failed", "Could not check access.")
@@ -407,11 +408,9 @@ func (a *API) handlePodcastUnfollow(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	for _, show := range slices.Compact([]string{p, spelled}) {
-		if err := a.cat.UnfollowPodcast(r.Context(), userFrom(r.Context()).ID, id, show); err != nil {
-			a.writeCatalogError(w, err, "unfollow podcast failed", "Could not unfollow show.")
-			return
-		}
+	if err := a.cat.UnfollowPodcast(r.Context(), userFrom(r.Context()).ID, id, p, spelled); err != nil {
+		a.writeCatalogError(w, err, "unfollow podcast failed", "Could not unfollow show.")
+		return
 	}
 	if a.bridge != nil {
 		a.bridge.WakePodcasts()

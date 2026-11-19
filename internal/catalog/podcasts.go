@@ -665,8 +665,40 @@ func (c *Catalog) FollowPodcast(ctx context.Context, user, lib int64, p, showID 
 	_, err := c.db.ExecContext(ctx, followPodcastSQL, user, lib, p, showID, c.ts())
 	return err
 }
-func (c *Catalog) UnfollowPodcast(ctx context.Context, user, lib int64, p string) error {
-	_, err := c.db.ExecContext(ctx, `DELETE FROM podcast_follows WHERE user_id=? AND library_id=? AND show_path=?`, user, lib, p)
+
+// UnfollowPodcast ends user's follow of the show at p, a show path a client
+// sent, in lib, in one statement: their rows at p, at each of spellings (the
+// show's spelling the caller's scope found for p: PodcastShowSpelling) and,
+// when none of those is a follow of theirs, at the one follow of theirs whose
+// path reads as p in another Unicode spelling (never two, and not when p is
+// an entry of its own on the disk, as PodcastShowSpelling's rule). A follow
+// outlives the caller's access to its show (a share removed, the show's
+// identity replaced), and their own rows still find it by the other
+// spelling; only their rows are read, so nothing is told of a show they
+// can't see.
+func (c *Catalog) UnfollowPodcast(ctx context.Context, user, lib int64, p string, spellings ...string) error {
+	at := append([]string{p}, spellings...)
+	if HasOtherSpelling(p) {
+		mine, err := queryRows(ctx, c.db, func(r *sql.Rows, s *string) error { return r.Scan(s) },
+			`SELECT show_path FROM podcast_follows WHERE user_id=? AND library_id=?`, user, lib)
+		if err != nil {
+			return err
+		}
+		k := unorm.NFC.String(p)
+		var reads []string
+		for _, s := range mine {
+			if unorm.NFC.String(s) == k {
+				reads = append(reads, s)
+			}
+		}
+		// p and each of spellings read as p, so a lone row reading as p that
+		// is none of them means none of them is a follow of theirs.
+		if len(reads) == 1 && !slices.Contains(at, reads[0]) && !c.ownEntry(ctx, lib, p) {
+			at = append(at, reads[0])
+		}
+	}
+	args := append([]any{user, lib}, anyOf(at)...)
+	_, err := c.db.ExecContext(ctx, `DELETE FROM podcast_follows WHERE user_id=? AND library_id=? AND show_path IN (`+placeholders(len(at))+`)`, args...)
 	return err
 }
 

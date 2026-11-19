@@ -1077,7 +1077,7 @@ func TestPodcastShowRoutesMeetTheOtherSpelling(t *testing.T) {
 // Allowed once the caller follows it by its URL.
 func TestPodcastPrivateShowNotReachedByTheOtherSpelling(t *testing.T) {
 	nfc, nfd := "Café Show", "Café Show"
-	b, _, _ := podcastEnvAt(t, true, nfd)
+	b, uid, _ := podcastEnvAt(t, true, nfd)
 	h := podcastHeaders()
 	ctx := context.Background()
 	q := url.QueryEscape(nfc)
@@ -1113,9 +1113,21 @@ func TestPodcastPrivateShowNotReachedByTheOtherSpelling(t *testing.T) {
 	if resp.StatusCode != 204 {
 		t.Fatalf("unfollow %d %s", resp.StatusCode, out)
 	}
-	var follows int
-	if err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM podcast_follows WHERE user_id=?`, other).Scan(&follows); err != nil || follows != 1 {
-		t.Fatalf("other's follow: %d %v", follows, err)
+	// It answers as a show that was never there does.
+	none, noneOut := b.doHeaders(t, "DELETE", fmt.Sprintf("/api/v1/podcasts/follow?library_id=%d&path=%s", b.lib.ID, url.QueryEscape("Zo\u00eb Nothing")), b.userTok, "", h)
+	if none.StatusCode != resp.StatusCode || noneOut != out {
+		t.Fatalf("unfollow %d %s, no show there %d %s", resp.StatusCode, out, none.StatusCode, noneOut)
+	}
+	follows := func(user int64) int {
+		t.Helper()
+		var n int
+		if err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM podcast_follows WHERE user_id=?`, user).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := follows(other); n != 1 {
+		t.Fatalf("other's follow: %d", n)
 	}
 
 	// Allowed: a follow by its URL proves access, and the NFC spelling then
@@ -1135,6 +1147,28 @@ func TestPodcastPrivateShowNotReachedByTheOtherSpelling(t *testing.T) {
 	resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, nfc), h)
 	if resp.StatusCode != 202 {
 		t.Fatalf("followed check %d %s", resp.StatusCode, out)
+	}
+
+	// The show's identity is replaced (a re-subscribe at the folder): the
+	// caller's follow no longer admits them, and stays until they unfollow,
+	// which the other spelling still does (their own follow is read for it).
+	if _, err := b.db.ExecContext(ctx, `UPDATE podcast_shows SET show_id=? WHERE library_id=? AND show_path=?`, "0000111122223333", b.lib.ID, nfd); err != nil {
+		t.Fatal(err)
+	}
+	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "podcasts/episodes?show="+q), b.userTok, "", h)
+	wantCode(t, "episodes once replaced", resp, out, 404, "show_not_found")
+	if n := follows(uid); n != 1 {
+		t.Fatalf("follow kept past access: %d", n)
+	}
+	resp, out = b.doHeaders(t, "DELETE", fmt.Sprintf("/api/v1/podcasts/follow?library_id=%d&path=%s", b.lib.ID, q), b.userTok, "", h)
+	if resp.StatusCode != 204 {
+		t.Fatalf("unfollow once replaced %d %s", resp.StatusCode, out)
+	}
+	if n := follows(uid); n != 0 {
+		t.Fatalf("follow after unfollow by the other spelling: %d", n)
+	}
+	if n := follows(other); n != 1 {
+		t.Fatalf("other's follow after: %d", n)
 	}
 }
 

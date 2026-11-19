@@ -1,8 +1,10 @@
 package catalog
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -78,5 +80,75 @@ func TestPodcastShowSpelling(t *testing.T) {
 	}
 	if got, err := c.PodcastShowSpelling(ctx, lib.ID, mixed, func(s string) bool { return s == "Café Café" }); err != nil || got != "Café Café" {
 		t.Errorf("one admitted of two: %+q %v", got, err)
+	}
+}
+
+// UnfollowPodcast reads the caller's own follows for a path's other Unicode
+// spelling: the one follow of theirs that reads as it goes (no show indexed
+// there, so none their scope could spell it by), never another user's, never
+// a guess between two, and never when the path as given is a folder of its
+// own on disk.
+func TestUnfollowPodcastByTheOtherSpelling(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nfc, nfd := "Café Show", "Café Show"
+	user, other := seedUserNamed(t, c, ctx, "u"), seedUserNamed(t, c, ctx, "o")
+	follows := func(lib, user int64) []string {
+		t.Helper()
+		rows, err := queryRows(ctx, c.db, func(r *sql.Rows, s *string) error { return r.Scan(s) },
+			`SELECT show_path FROM podcast_follows WHERE library_id=? AND user_id=? ORDER BY show_path`, lib, user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	for _, u := range []int64{user, other} {
+		if err := c.FollowPodcast(ctx, u, lib.ID, nfd, "0123456789abcdef"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.UnfollowPodcast(ctx, user, lib.ID, nfc); err != nil {
+		t.Fatal(err)
+	}
+	if got := follows(lib.ID, user); len(got) != 0 {
+		t.Errorf("own follow by the other spelling: %+q", got)
+	}
+	if got := follows(lib.ID, other); !slices.Equal(got, []string{nfd}) {
+		t.Errorf("another user's follow: %+q", got)
+	}
+
+	// Two follows of theirs that both read as a third spelling stay.
+	a, b := "Café Café", "Café Café"
+	for _, p := range []string{a, b} {
+		if err := c.FollowPodcast(ctx, user, lib.ID, p, "1111111111111111"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.UnfollowPodcast(ctx, user, lib.ID, "Café Café"); err != nil {
+		t.Fatal(err)
+	}
+	if got := follows(lib.ID, user); len(got) != 2 {
+		t.Errorf("two spellings: %+q", got)
+	}
+
+	// A folder of its own in the spelling given is not the followed one.
+	own, err := c.CreateLibrary(ctx, Library{Name: "Own", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(own.Root, nfc), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.FollowPodcast(ctx, user, own.ID, nfd, "0123456789abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.UnfollowPodcast(ctx, user, own.ID, nfc); err != nil {
+		t.Fatal(err)
+	}
+	if got := follows(own.ID, user); !slices.Equal(got, []string{nfd}) {
+		t.Errorf("own entry: %+q", got)
 	}
 }
