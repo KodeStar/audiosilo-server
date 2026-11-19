@@ -68,6 +68,11 @@ func (a *API) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 	if shareNameTooLong(w, s.Name) || tooManyRules(w, len(s.Paths)) {
 		return
 	}
+	if len(s.Description) > maxShareDescription {
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+			fmt.Sprintf("the description is at most %d bytes", maxShareDescription))
+		return
+	}
 	for _, rule := range s.Paths {
 		if pathTooLong(w, rule.Path) {
 			return
@@ -95,8 +100,7 @@ func (a *API) handleUpdateShare(w http.ResponseWriter, r *http.Request) {
 	// Pointer fields (see catalog.ShareUpdate) distinguish "omitted" from "set to
 	// empty" so a partial PATCH doesn't clear the fields it didn't mention.
 	var req catalog.ShareUpdate
-	if err := decodeJSON(r, &req, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeBody(w, r, &req, 0) {
 		return
 	}
 	if req.Name != nil && shareNameTooLong(w, *req.Name) {
@@ -133,6 +137,11 @@ func (a *API) handleDeleteShare(w http.ResponseWriter, r *http.Request) {
 // maxShareName is the longest share name, in characters: a name is stored,
 // listed, audited and logged, so it is bounded before any of those.
 const maxShareName = 200
+
+// maxShareDescription is the longest share description, in bytes: what a
+// rename's body (decodeJSON's default 1 MiB) can carry, so a create, whose body
+// is bounded for its rules (shareRulesBodyMax), takes no longer one.
+const maxShareDescription = 1 << 20
 
 // shareNameTooLong answers 400 invalid_name for a share name over maxShareName
 // characters (true).

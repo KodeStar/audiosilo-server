@@ -152,6 +152,12 @@ func TestShareRulesBodyBound(t *testing.T) {
 			t.Errorf("POST %s with a body past the bound = %d %.200s, want 400 too_large", route, resp.StatusCode, out)
 		}
 	}
+	// The body's room is for rules: a description past what a rename's body
+	// carries is refused too, and no share is made.
+	desc := `{"name":"Long description","description":"` + strings.Repeat("a", maxShareDescription+1) + `"}`
+	if resp, out := e.do(t, "POST", "/api/v1/admin/shares", adminTok, desc); resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, `"code":"`+codeTooLarge+`"`) {
+		t.Errorf("a create with a description past %d bytes = %d %.200s, want 400 too_large", maxShareDescription, resp.StatusCode, out)
+	}
 	// A body that doesn't decode stays a plain 400.
 	if resp, out := e.do(t, "POST", "/api/v1/admin/shares", adminTok, `{"name":`); resp.StatusCode != http.StatusBadRequest || strings.Contains(out, `"code"`) {
 		t.Errorf("a malformed body = %d %s, want a plain 400", resp.StatusCode, out)
