@@ -2996,14 +2996,21 @@ func (e lookRefused) Error() string { return e.err.Error() }
 func (e lookRefused) Unwrap() error { return e.err }
 
 // refusedForGood marks err, a look given up on (metadata.AsGaveUp), as
-// lookRefused when a share's fault a retry would only meet again is why (not
-// transientFault: a permission, EACCES or EPERM, the device gone, ENXIO, as
-// bookOnDisk reads them); any other err as it is.
+// lookRefused when it is faultedForGood; any other err as it is.
 func refusedForGood(err error) error {
-	if cause, faulted := metadata.Faulted(err); faulted && !transientFault(cause) {
+	if faultedForGood(err) {
 		return lookRefused{err}
 	}
 	return err
+}
+
+// faultedForGood reports whether err is a look given up on (metadata.AsGaveUp)
+// because of a share's fault a retry would only meet again (not
+// transientFault: a permission, EACCES or EPERM, the device gone, ENXIO, a
+// link loop): resolveBook's lookRefused, bookOnDisk's present.
+func faultedForGood(err error) bool {
+	cause, faulted := metadata.Faulted(err)
+	return faulted && !transientFault(cause)
 }
 
 // resolveAsked is resolveBook for a caller who asked for the book at relPath
@@ -3318,7 +3325,8 @@ type onDisk int
 
 const (
 	// diskPresent: a book resolves at the path, or the path can't be checked
-	// (a permission), so its state stays where it is.
+	// (a fault for good: a permission, the device gone), so its state stays
+	// where it is.
 	diskPresent onDisk = iota
 	// diskGone: no book is at the path any more.
 	diskGone
@@ -3334,9 +3342,9 @@ const (
 // case-insensitive disk counts as gone). It errs toward present: a path it
 // can't check keeps its state where it is. Its looks are metadata.Bounded
 // calls (ctx, at most lookTimeout): one given up on (a share that stopped
-// answering), or failed as a share does but for a permission (transientFault),
-// is diskUnknown, which no caller takes as gone either; one refused for good
-// (a permission) is present. Only a path gone (ENOENT, ENOTDIR) is diskGone
+// answering), or failed as a share does that a retry may get past
+// (transientFault), is diskUnknown, which no caller takes as gone either; one
+// refused for good (faultedForGood: a permission, the device gone) is present. Only a path gone (ENOENT, ENOTDIR) is diskGone
 // (metadata.ShareFault's rule).
 func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel string) onDisk {
 	// A path whose stat or listing fails as a share does (metadata.ShareFault)
@@ -3367,8 +3375,8 @@ func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel strin
 	case err == nil:
 		return diskPresent
 	}
-	if cause, faulted := metadata.Faulted(err); faulted && !transientFault(cause) {
-		return diskPresent // a look refused for good (a permission): it can't be checked
+	if faultedForGood(err) {
+		return diskPresent // a look refused for good (a permission, the device gone): it can't be checked
 	}
 	if metadata.Unanswered(ctx, err) {
 		return diskUnknown

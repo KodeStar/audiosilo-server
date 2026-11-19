@@ -1244,10 +1244,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `SafeJoinBounded`, else `library.SafeJoinListed`: `resolveBelow` with its looks bounded, each
   name looked for in its folder's listing through `API.listed`, names only, before it is `Lstat`ed), else
   answer as for a missing path (a listing or `Lstat` given up on, or failing as a share does that a retry may get
-  past, `transientFault`'s EIO, ESTALE, ENOTCONN and the network errnos, as the scanner reads them: 503 `share_not_answering` with
-  `Retry-After`, the stream, `/fs` and `/item`'s on-demand index alike for a path the index does not hold; for one
-  it holds, the stream and `/fs` answer a failing stat, open or listing, EIO included, with the 404 they always had; a permission, EACCES or
-  EPERM, or the device gone, ENXIO, stays the missing path's 404). A missing path and a
+  past, `transientFault`'s EIO, ESTALE, ENOTCONN and the network errnos, as the scanner reads them: 503
+  `share_not_answering` with `Retry-After`, the stream, `/fs` and `/item`'s on-demand index alike for a path the
+  index does not hold; any other fault, a permission (EACCES, EPERM) or the device gone (ENXIO) among them, stays
+  the missing path's 404; for a path the index holds, the stream and `/fs` answer a failing stat, open or listing,
+  EIO included, with the 404 they always had). A missing path and a
   case variant take the same steps (the same listings and `Lstat`s up to the first name not listed, none
   past it), and the listings are kept a few seconds (`metadata.DirNames`, one per server,
   `Catalog.DirNames`, which `Spelling`'s `ownEntry` reads too: `dirNamesTTL` 3 s from the read's start, at
