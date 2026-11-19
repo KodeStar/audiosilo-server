@@ -1556,8 +1556,9 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 	}
 	b.Duration = cum
 	b.LengthOnly = b.ReadCutShort && !tagsUnread
-	// Some part's tags cut short, every length read all the same (enrich).
-	b.LengthsRead = b.ReadCutShort && tagsUnread && lengthsKnown
+	// Some part's tags cut short, every length read all the same (enrich),
+	// none of them a header-less VBR MP3's uncounted estimate.
+	b.LengthsRead = b.ReadCutShort && tagsUnread && lengthsKnown && !b.LengthUncounted
 	n := suspectParts(parts)
 	b.SuspectParts = &n
 	if len(mds) == 0 {
