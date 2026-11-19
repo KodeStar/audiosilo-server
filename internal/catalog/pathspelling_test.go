@@ -373,7 +373,11 @@ func TestSpellingOwnEntry(t *testing.T) {
 	if _, outside := spell(nfdRule); !outside {
 		t.Fatal("NFD under an NFD rule, only the NFC folder on disk: not outside")
 	}
+	// Listings are kept dirNamesTTL; after each change on disk the test reads
+	// afresh rather than wait the TTL out.
+	relist := func() { c.listed = metadata.NewDirNames(metadata.ReadDirNamesBounded) }
 	err = os.MkdirAll(filepath.Join(root, filepath.FromSlash(nfd)), 0o755)
+	relist()
 	if fi1, _ := os.Stat(filepath.Join(root, filepath.FromSlash(nfd))); err != nil || fi1 == nil {
 		t.Fatalf("mkdir NFD: %v", err)
 	}
@@ -395,6 +399,7 @@ func TestSpellingOwnEntry(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(root, "E\u0301mile")); err != nil {
 		t.Fatal(err)
 	}
+	relist()
 	if got, _ := spell(nil); got != nfc {
 		t.Errorf("NFD once its folder is gone = %+q, want %+q", got, nfc)
 	}
