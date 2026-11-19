@@ -306,7 +306,7 @@ func TestSafeJoinListedGivesUp(t *testing.T) {
 }
 
 // TestSafeJoinListedReadsAShareFault: a listing or look failing as a share
-// does that a retry may get past (EIO, ESTALE, ENOTCONN: transientFault) is
+// does that a retry may get past (EIO, ESTALE, ENOTCONN: metadata.TransientFault) is
 // one given up on (metadata.GaveUp, the API's 503 share_not_answering), as the
 // scanner reads it, never a name not there (a 404 for a book on a share that
 // stopped answering). Denied the 503: a permission (EACCES, EPERM), which

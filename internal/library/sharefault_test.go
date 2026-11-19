@@ -193,7 +193,7 @@ func TestAskedBookRefusedForGoodIsNotIndexable(t *testing.T) {
 		{"EACCES", syscall.EACCES, true},
 		{"EPERM", syscall.EPERM, true},
 		{"ENXIO", syscall.ENXIO, true}, // the device gone: lasting
-		{"ELOOP", syscall.ELOOP, true}, // a link loop: any fault not transientFault is
+		{"ELOOP", syscall.ELOOP, true}, // a link loop: any fault not metadata.TransientFault is
 		{"EIO", syscall.EIO, false},
 		{"ESTALE", syscall.ESTALE, false},
 	} {

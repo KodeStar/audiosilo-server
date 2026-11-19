@@ -56,6 +56,33 @@ func ShareFault(err error) bool {
 		!errors.Is(err, syscall.ENAMETOOLONG) && !GaveUp(err) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
+// TransientFault reports whether err is a share's fault that trying again may
+// get past (transientErrnos, an explicit list): EIO, ESTALE, ENOTCONN,
+// ETIMEDOUT, a host or network down or unreachable, a connection reset,
+// aborted or refused (an SMB or NFS session that dropped). A route answers it
+// as a share that stopped answering (503 share_not_answering with
+// Retry-After), never as the file gone. Not a lasting refusal, which a retry
+// would only meet again (a permission, EACCES or EPERM; the device gone,
+// ENXIO; a link loop, ELOOP; a name the share refuses, EINVAL or Windows'
+// ERROR_INVALID_NAME), whose answer is the lasting one (a 404); nor a limit
+// of the server's own (EMFILE, ENFILE, ENOMEM, EAGAIN, EBUSY), which is no
+// share's fault at all; nor any error not on the list.
+func TransientFault(err error) bool {
+	for _, errno := range transientErrnos {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
+}
+
+// transientErrnos are TransientFault's.
+var transientErrnos = []syscall.Errno{
+	syscall.EIO, syscall.ESTALE, syscall.ENOTCONN, syscall.ETIMEDOUT,
+	syscall.EHOSTDOWN, syscall.EHOSTUNREACH, syscall.ENETDOWN, syscall.ENETUNREACH,
+	syscall.ECONNRESET, syscall.ECONNABORTED, syscall.ECONNREFUSED,
+}
+
 // AsGaveUp is err made a look given up on (GaveUp reports it) when it is a
 // ShareFault, keeping the share's own message (a permission is not "did not
 // answer in time" in a run's log); any other err as it is.

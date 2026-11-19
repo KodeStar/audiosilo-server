@@ -184,7 +184,7 @@ func SafeJoin(root, relPath string) (string, error) {
 // so the answer never tells what the folder it points to holds, nor whether it
 // is there, nor how its mount fails. err is that, or a look given up on
 // (metadata.GaveUp: one that did not answer in time, or failed as a share does
-// that a retry may get past, transientFault's EIO, ESTALE, ENOTCONN, as the
+// that a retry may get past, metadata.TransientFault's EIO, ESTALE, ENOTCONN, as the
 // scanner reads them) or ctx's; a listing or look that fails otherwise (the
 // name gone, a permission) is a name not there.
 func SafeJoinListed(ctx context.Context, root, relPath string, timeout time.Duration,
@@ -239,7 +239,7 @@ type belowLooks struct {
 // unansweredLook is err, a bounded look's (SafeJoinListed's, coverLook's), when it
 // is no answer about the name, else nil (a name not there): a look given up
 // on, ctx ended (its error ctx's), or a look failing as a share does that a
-// retry may get past (transientFault: EIO, ESTALE, a mount that dropped, made
+// retry may get past (metadata.TransientFault: EIO, ESTALE, a mount that dropped, made
 // one given up on, transientGaveUp), as the scanner's cover look reads it
 // (coverLook.find), so a book on a share that stopped answering is a 503
 // share_not_answering, never a 404. A lasting fault (a permission, the device
