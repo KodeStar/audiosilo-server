@@ -84,15 +84,16 @@ var issuePredicates = map[string]string{
 // doesn't know": the opt-in unknown-ASIN report (internal/coverage, 0068)
 // looked it up and the answer was a 404 (unknown_asin_reports.unknown, keyed by
 // the upper-cased ASIN, match.NormalizeASIN). Such a book counts as matched
-// (matchedExpr) and Match automatically skips it, yet /meta has nothing for it.
-// Only a book with nothing else to find it by: no ISBN (which the community may
-// know), no recorded community match (book_matches: /meta answers by that) and
-// an ASIN that isn't the community's own (a match gave it: book_overrides of
-// source community), so matching it by hand settles it. The table is filled
-// only while the report runs, so the Health summary lists the kind only then
-// (api.handleIssues). The ASIN is compared as match.NormalizeASIN (normASINSQL)
-// keys the table.
-var unknownASINExpr = `(` + normASINSQL("b.asin") + ` <> '' AND TRIM(b.isbn, ` + sqlSpace + `) = ''
+// (matchedExpr) and Match automatically skips it, yet /meta has nothing for it:
+// a lookup asks by the ASIN alone when the book has one, so an ISBN beside it
+// is never asked (meta.Service.Enrich), and a book with both is listed too
+// (server#392). Only a book with no recorded community match (book_matches:
+// /meta answers by that) and an ASIN that isn't the community's own (a match
+// gave it: book_overrides of source community), so matching it by hand settles
+// it. The table is filled only while the report runs, so the Health summary
+// lists the kind only then (api.handleIssues). The ASIN is compared as
+// match.NormalizeASIN (normASINSQL) keys the table.
+var unknownASINExpr = `(` + normASINSQL("b.asin") + ` <> ''
 	AND ` + asinHeldUnknownExpr + `
 	AND NOT EXISTS(SELECT 1 FROM book_matches m WHERE m.library_id = b.library_id AND m.path = b.rel_path)
 	AND NOT EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path

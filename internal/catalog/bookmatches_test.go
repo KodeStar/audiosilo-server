@@ -815,10 +815,11 @@ func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 
 // TestAnchorWrittenOnlyIfStillItsASIN: a zero MatchIf beside MatchIfASIN (an
 // unknown_asin run's book, matched by its own ASIN alone) records a match while
-// the book still has that ASIN (compared as normalized), no ISBN, and the
-// unknown-ASIN report still holds the ASIN as unknown; an ASIN or ISBN it gained
-// since is kept, as is an ASIN the community knows now, and nothing of the edit
-// goes in (server#392).
+// the book still has that ASIN (compared as normalized) and the unknown-ASIN
+// report still holds the ASIN as unknown; an ISBN it gained since changes
+// nothing (/meta asks by the ASIN alone, server#392), an ASIN it gained since is
+// kept, as is an ASIN the community knows now, and nothing of the edit goes in
+// (server#392).
 func TestAnchorWrittenOnlyIfStillItsASIN(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -869,8 +870,16 @@ func TestAnchorWrittenOnlyIfStillItsASIN(t *testing.T) {
 	if a := anchorOf(t, c, ctx, lib.ID, "A/Same"); a.WorkID != "the-work" || title("A/Same") != "Matched" {
 		t.Fatalf("still its ASIN: match %+v, title %q, want both written", a, title("A/Same"))
 	}
-	// Denied: another ASIN set since, or an ISBN gained since.
-	for p, asin := range map[string]string{"A/Other": "B0NOPE0002", "A/ISBN": "B0NOPE0003"} {
+	// Allowed: an ISBN gained since (the edit leaves it).
+	if err := edit("A/ISBN", "B0NOPE0003"); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := c.BookMatchState(ctx, lib.ID, "A/ISBN"); err != nil || st.Anchor.WorkID != "the-work" ||
+		st.Fields[FieldISBN].Value != "9780553418026" {
+		t.Fatalf("an ISBN gained since: %+v (%v), want the match written beside the ISBN", st, err)
+	}
+	// Denied: another ASIN set since.
+	for p, asin := range map[string]string{"A/Other": "B0NOPE0002"} {
 		if err := edit(p, asin); !errors.Is(err, ErrMatchedSince) {
 			t.Fatalf("%s: err = %v, want ErrMatchedSince", p, err)
 		}

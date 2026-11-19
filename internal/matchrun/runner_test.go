@@ -1567,6 +1567,51 @@ func TestUnknownASINRun(t *testing.T) {
 	}
 }
 
+// TestUnknownASINRunTakesABookWithAnISBN (server#392): a book whose own ASIN the
+// community doesn't know is the run's with an ISBN beside it too (a lookup asks
+// by the ASIN alone, so /meta never tries the ISBN), and one that gains an ISBN
+// after the run read it is not matched since: the match is recorded beside it.
+func TestUnknownASINRunTakesABookWithAnISBN(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	for _, p := range []string{"A/ISBN", "A/Gained"} {
+		b := &catalog.Book{LibraryID: e.lib, RelPath: p, IsFolder: true, Title: p[2:], Author: "Andy Weir",
+			ASIN: "B0NOPE00" + map[string]string{"A/ISBN": "01", "A/Gained": "02"}[p], Duration: 634 * 60, AddedAt: "2020-01-01"}
+		if p == "A/ISBN" {
+			b.ISBN = "9780553418026"
+		}
+		if _, err := e.cat.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+		e.matcher.byTitle[p[2:]] = []meta.MatchCandidate{cand("the-martian", 97, "")}
+	}
+	if err := e.cat.SaveASINChecks(ctx, []catalog.ASINCheck{{ASIN: "B0NOPE0001", Unknown: true}, {ASIN: "B0NOPE0002", Unknown: true}},
+		"2026-11-01T00:00:00.000Z"); err != nil {
+		t.Fatal(err)
+	}
+	run := e.start(t, catalog.MatchModeUnknownASIN, "uk")
+	if run.Total != 2 || run.Counts.Auto != 2 {
+		t.Fatalf("run = %+v, want both books matched", run)
+	}
+	if err := e.cat.EditBook(ctx, e.lib, "A/Gained", catalog.BookEdit{Set: map[string]string{catalog.FieldISBN: "9780804139021"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range e.items(t, run, catalog.OutcomeAuto) {
+		if it.MatchedSince {
+			t.Errorf("%s matched since, want not", it.Path)
+		}
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	for _, p := range []string{"A/ISBN", "A/Gained"} {
+		if st, err := e.cat.BookMatchState(ctx, e.lib, p); err != nil || st.Anchor.WorkID != "the-martian" {
+			t.Errorf("%s match = %+v (%v), want recorded", p, st.Anchor, err)
+		}
+	}
+}
+
 // TestUnknownASINRunFailedLookup: an unknown_asin run's book whose lookup failed
 // is recorded as the failure, never as matched since (its item carries the ASIN
 // it was taken with too).

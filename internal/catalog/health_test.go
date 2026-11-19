@@ -607,10 +607,10 @@ func TestDuplicateLengthsAndIgnoredView(t *testing.T) {
 // TestIssueUnknownASIN (server#370): a book whose own ASIN the unknown-ASIN
 // report found unknown is listed (any case or white space padding the ASIN, as
 // match.NormalizeASIN trims it: a tab and a no-break space too, server#413; an
-// ISBN of white space is none), and leaves
-// once it is known, a match is recorded or a community ASIN replaces it. A book
-// with an ISBN too, or with an ASIN the report never looked up or found known,
-// is not.
+// ISBN of white space is none), with an ISBN beside it too (a lookup asks by
+// the ASIN alone, so /meta never tries the ISBN: server#392), and leaves once
+// it is known, a match is recorded or a community ASIN replaces it. A book with
+// an ASIN the report never looked up or found known is not.
 func TestIssueUnknownASIN(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -642,15 +642,15 @@ func TestIssueUnknownASIN(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	if got, want := listed(), []string{"blank isbn", "community", "matched", "unknown"}; !slices.Equal(got, want) {
+	if got, want := listed(), []string{"blank isbn", "community", "isbn too", "matched", "unknown"}; !slices.Equal(got, want) {
 		t.Fatalf("listed = %v, want %v", got, want)
 	}
 	counts, err := c.IssueCounts(ctx, []string{IssueUnknownASIN, IssueUnmatched})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counts[0].Count != 4 || counts[1].Count != 1 {
-		t.Fatalf("counts = %+v, want 4 unknown ASINs and 1 unmatched (still counted as matched)", counts)
+	if counts[0].Count != 5 || counts[1].Count != 1 {
+		t.Fatalf("counts = %+v, want 5 unknown ASINs and 1 unmatched (still counted as matched)", counts)
 	}
 
 	// A hand match records the work; a community ASIN is one the community knows.
@@ -664,14 +664,14 @@ func TestIssueUnknownASIN(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := listed(), []string{"blank isbn", "unknown"}; !slices.Equal(got, want) {
+	if got, want := listed(), []string{"blank isbn", "isbn too", "unknown"}; !slices.Equal(got, want) {
 		t.Fatalf("after the matches: listed = %v, want %v", got, want)
 	}
 	// A later lookup that finds it known settles it too.
 	if err := c.SaveASINChecks(ctx, []ASINCheck{{ASIN: "B0UNKNOWN1"}}, "2026-11-15T00:00:00.000Z"); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := listed(), []string{"blank isbn"}; !slices.Equal(got, want) {
+	if got, want := listed(), []string{"blank isbn", "isbn too"}; !slices.Equal(got, want) {
 		t.Fatalf("after the ASIN became known: listed = %v, want %v", got, want)
 	}
 }
