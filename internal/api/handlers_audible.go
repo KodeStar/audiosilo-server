@@ -73,6 +73,13 @@ func (a *API) writeAudibleError(w http.ResponseWriter, err error, op string) {
 	switch {
 	case errors.Is(err, catalog.ErrAudibleInvalid):
 		writeErrorCode(w, http.StatusBadRequest, "invalid_request", err.Error())
+	case errors.Is(err, catalog.ErrInvalidCursor):
+		// Its own code, so the Bridge reads the feed from its start for this
+		// alone (bridge#50). Only catalog.AudibleProgress returns it here
+		// today (BridgeBooks and AudibleTitles answer a bad cursor of theirs
+		// invalid_request); worded for any route's cursor all the same, as
+		// this writer is shared by every Audible route.
+		writeErrorCode(w, http.StatusBadRequest, "invalid_cursor", "the cursor can't be read: read from the start")
 	case errors.Is(err, catalog.ErrAudiblePolicy):
 		writeErrorCode(w, http.StatusBadRequest, "invalid_policy", err.Error())
 	case errors.Is(err, catalog.ErrAudibleMarketplace):

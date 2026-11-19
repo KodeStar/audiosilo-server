@@ -277,17 +277,21 @@ func (k progressCursor) encode() string {
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
+// decodeProgressCursor reads AudibleProgress's since ("" from the start).
+// ErrInvalidCursor for one it can't read, which the route answers 400
+// invalid_cursor so the Bridge reads the feed again from its start
+// (bridge#50).
 func decodeProgressCursor(s string) (progressCursor, error) {
 	if s == "" {
 		return progressCursor{}, nil
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return progressCursor{}, audibleInvalid("bad cursor")
+		return progressCursor{}, ErrInvalidCursor
 	}
 	var k progressCursor
 	if json.Unmarshal(raw, &k) != nil {
-		return progressCursor{}, audibleInvalid("bad cursor")
+		return progressCursor{}, ErrInvalidCursor
 	}
 	return k, nil
 }
@@ -306,7 +310,7 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 // feed's cursor, kept for the next poll) and more whether a full page was read
 // (ask again with next now; a page may carry fewer rows than it read, a row
 // whose title's runtime disagrees with the book's length left out).
-// ErrAudibleInvalid for a cursor not made here.
+// ErrInvalidCursor for a cursor not made here.
 func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, scopes []Scope, since string, limit int) (
 	rows []AudibleProgressRow, next string, more bool, err error) {
 	from, err := decodeProgressCursor(since)
