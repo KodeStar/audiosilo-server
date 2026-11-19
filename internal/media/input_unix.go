@@ -2,7 +2,11 @@
 
 package media
 
-import "os"
+import (
+	"context"
+	"os"
+	"time"
+)
 
 // descriptorInput is fileInput's for an ffmpeg without the fd: protocol (older
 // than 6.1): f handed over as the child's descriptor 3 (setInput: ExtraFiles)
@@ -13,6 +17,8 @@ import "os"
 // as a playlist reaches no network, but may name other local files, as when
 // ffmpeg was handed the path (fd: and pipe:0 open none, which is why a
 // podcast episode, publisher bytes, never takes /dev/fd/3).
-func descriptorInput(f *os.File) (inputSpec, error) {
+// Nothing on disk is looked at for it: ctx and the wait bound the other
+// platforms' re-check.
+func descriptorInput(_ context.Context, f *os.File, _ time.Duration) (inputSpec, error) {
 	return inputSpec{proto: "file", url: "/dev/fd/3", file: f}, nil
 }

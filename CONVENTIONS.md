@@ -1334,7 +1334,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`TestOpenRegularBelowNeverLeavesTheRoot`, `TestReadDirBelowNeverLeavesTheRoot`,
   `TestStreamOpensThroughTheRootAfterASwap`). So does a transcode, whose ffmpeg reads the descriptor opened
   there, never the path (`media.Transcode`, `fileInput`: ffmpeg's stdin as `fd:`, else on Unix the child's
-  descriptor 3 read as `/dev/fd/3`, else the resolved path re-checked as the file opened, `recheckedInput`;
+  descriptor 3 read as `/dev/fd/3`, else the resolved path re-checked as the file opened, `recheckedInput`, a
+  bounded look;
   `TestTranscodeOpensThroughTheRoot`), and a remux's or a rendition's source: its look (`media.Source`, a stat
   through the root) and its run's open (`FileCache.make`), whose descriptor ffmpeg reads
   (`TestFileCacheSourceThroughTheRoot`). The reader's ebook and a podcast episode check the open file

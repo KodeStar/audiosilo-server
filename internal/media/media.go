@@ -303,8 +303,9 @@ func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 // context, at most wait) and ffmpeg reads that descriptor (fileInput), never
 // the path: a name along it swapped for a link out of the library after the
 // caller's check is refused (a 404), never followed by ffmpeg's own open. An
-// open given up on (openLibraryFile) is returned with nothing written, for the
-// caller to answer (ServeFile's rule);
+// open given up on (openLibraryFile), or the path's re-check where ffmpeg is
+// handed one (fileInput), is returned with nothing written, for the caller to
+// answer (ServeFile's rule);
 // every other outcome is answered here and returns nil. ended reports a
 // stream that ran to its end (transcodeInput).
 // download makes the stream an attachment named for the file (its stem with
@@ -324,8 +325,11 @@ func Transcode(w http.ResponseWriter, r *http.Request, root, absPath, ffmpegPath
 		// either.
 		return transcodeInput(w, r, inputSpec{}, absPath, ffmpegPath, startSec, download, idle, log), nil
 	}
-	in, err := fileInput(ffmpegPath, f)
-	if err != nil {
+	in, err := fileInput(r.Context(), ffmpegPath, f, wait)
+	switch {
+	case metadata.GaveUp(err):
+		return false, err // the re-check's looks, on a share that stopped answering
+	case err != nil:
 		// The path no longer leads to the file opened (fileInput's re-check
 		// where ffmpeg is handed a path): as a file gone.
 		http.Error(w, "not found", http.StatusNotFound)
@@ -359,13 +363,15 @@ func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegP
 // platform's: on Unix f handed over as the child's descriptor 3, read
 // seekably as /dev/fd/3, where pipe:0 could neither seek nor demux an MP4
 // whose index sits at its end; elsewhere the resolved path, re-checked as
-// the file opened). An error is a path that no longer leads to f.
-func fileInput(ffmpegPath string, f *os.File) (inputSpec, error) {
+// the file opened, its looks a metadata.Bounded call: ctx, at most wait). An
+// error is a path that no longer leads to f, or those looks given up on
+// (metadata.GaveUp).
+func fileInput(ctx context.Context, ffmpegPath string, f *os.File, wait time.Duration) (inputSpec, error) {
 	if in := inputFor(ffmpegPath); in == fdInput {
 		in.file = f
 		return in, nil
 	}
-	return descriptorInput(f)
+	return descriptorInput(ctx, f, wait)
 }
 
 // recheckedInput is f's resolved path for an ffmpeg that can be handed no
