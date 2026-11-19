@@ -1,6 +1,7 @@
 // Package chaptercheck checks books against the community's chapter lists in the
 // background: for each book with an ASIN or ISBN it fetches the matched recording's
-// chapters (meta.Service.RecordingChapters), fits them onto the book's audio
+// chapters (meta.Service.RecordingChapters, or MatchChapters for a book with a
+// recorded match), fits them onto the book's audio
 // (chapteralign, with ffmpeg finding the pauses) and records the outcome
 // (catalog.SaveCommunityChapters), which puts the community chapters in place when
 // they should be. A book is checked again when what the check saw changes (a new
@@ -64,9 +65,11 @@ const (
 	readyPoll = 2 * time.Second
 )
 
-// Source is the community's chapter lists (meta.Service.RecordingChapters).
+// Source is the community's chapter lists (meta.Service.RecordingChapters and
+// MatchChapters).
 type Source interface {
 	RecordingChapters(ctx context.Context, asin, isbn string) (*meta.RecordingChapters, error)
+	MatchChapters(ctx context.Context, workID, recordingID string) (*meta.RecordingChapters, error)
 }
 
 // Runner checks books' community chapters in the background, and one book on
@@ -350,7 +353,7 @@ func (r *Runner) check(ctx context.Context, ref catalog.Ref, refit bool) (*catal
 		return nil, err
 	}
 	cc := catalog.CommunityChapters{LibraryID: ref.LibraryID, Path: ref.Path, Basis: in.Basis}
-	rc, err := r.src.RecordingChapters(ctx, in.ASIN, in.ISBN)
+	rc, err := r.chapters(ctx, in)
 	switch {
 	case errors.Is(err, meta.ErrNotFound):
 		cc.Status = catalog.CommunityNoMatch
@@ -392,6 +395,23 @@ func (r *Runner) check(ctx context.Context, ref catalog.Ref, refit bool) (*catal
 		return nil, err
 	}
 	return &cc, nil
+}
+
+// chapters is the community list a check of in fits. A recorded match (the
+// admin's, or a match run's) names the recording over the identifiers
+// (server#375): its recording's list, none when the work doesn't list it, and,
+// when it names no recording, the identifiers' list only when they name its
+// work. A book without one has its identifiers' recording's.
+func (r *Runner) chapters(ctx context.Context, in *catalog.ChapterInputs) (*meta.RecordingChapters, error) {
+	m := in.Match
+	if m != nil && m.RecordingID != "" {
+		return r.src.MatchChapters(ctx, m.WorkID, m.RecordingID)
+	}
+	rc, err := r.src.RecordingChapters(ctx, in.ASIN, in.ISBN)
+	if err == nil && m != nil && rc.WorkID != m.WorkID {
+		return nil, meta.ErrNotFound
+	}
+	return rc, err
 }
 
 // prober finds pauses in the library's files with ffmpeg, through SafeJoin like

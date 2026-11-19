@@ -34,6 +34,37 @@ func TestRecordingChapters(t *testing.T) {
 	}
 }
 
+// TestMatchChapters: a recorded match's chapters are its recording's, read off
+// the work with no lookup; one naming no recording, or one the work doesn't
+// list, has none (server#375), and nothing is asked for.
+func TestMatchChapters(t *testing.T) {
+	m := fullMock()
+	mux := http.NewServeMux()
+	mux.Handle("/", m.handler())
+	var asked []string
+	mux.HandleFunc("GET /api/v1/works/{id}/recordings/{rid}/chapters", func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.PathValue("id")+"/"+r.PathValue("rid"))
+		_, _ = w.Write([]byte(`{"chapters":[{"title":"Sol 1","start_ms":0,"length_ms":60000}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	s := NewService(srv.URL, nil)
+	ctx := context.Background()
+
+	got, err := s.MatchChapters(ctx, "the-martian", "rec1")
+	if err != nil || got.WorkID != "the-martian" || got.RecordingID != "rec1" || len(got.Chapters) != 1 {
+		t.Fatalf("listed recording = %+v, %v", got, err)
+	}
+	for _, c := range [][2]string{{"the-martian", "rec-of-another-work"}, {"the-martian", ""}, {" ", "rec1"}} {
+		if got, err := s.MatchChapters(ctx, c[0], c[1]); !errors.Is(err, ErrNotFound) {
+			t.Errorf("MatchChapters(%q, %q) = %+v, %v; want ErrNotFound", c[0], c[1], got, err)
+		}
+	}
+	if len(asked) != 1 || asked[0] != "the-martian/rec1" || m.lookupHits.Load() != 0 {
+		t.Errorf("asked %v with %d lookups, want only the listed recording's and none", asked, m.lookupHits.Load())
+	}
+}
+
 func TestRecordingChaptersNeedsTheRecording(t *testing.T) {
 	m := fullMock()
 	m.lookupJSON = `{"work":{"id":"the-martian","title":"The Martian"},"recording_id":""}`

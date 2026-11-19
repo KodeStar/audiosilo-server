@@ -50,11 +50,17 @@ const (
 // play order; ” for a single-file book). A check whose basis differs is stale.
 // The paths are the book's own, not the library's, so a moved book (the same
 // audio) keeps its check, while a file renamed in place does not. (indexed_at
-// would not do: an unchanged book is re-indexed whenever its folder is.)
+// would not do: an unchanged book is re-indexed whenever its folder is.) A book
+// with a recorded match (book_matches) adds its work and recording, which the
+// check follows over the identifiers (ChapterInputs.Match), so a match made,
+// changed or unlinked since makes the check stale; a book without one keeps
+// the basis it had before matches counted.
 const chapterBasisExpr = `(b.asin || '|' || b.isbn || '|' || CAST(ROUND(b.duration * 1000) AS INTEGER)
 	|| '|' || b.chapters_hash
 	|| '|' || COALESCE((SELECT group_concat(substr(rel_path, length(b.rel_path) + 2), char(31)) FROM
-	       (SELECT bf.rel_path FROM book_files bf WHERE bf.book_id = b.id ORDER BY bf.seq)), ''))`
+	       (SELECT bf.rel_path FROM book_files bf WHERE bf.book_id = b.id ORDER BY bf.seq)), '')
+	|| COALESCE((SELECT char(30) || cm.work_id || '/' || cm.recording_id FROM book_matches cm
+	       WHERE cm.library_id = b.library_id AND cm.path = b.rel_path), ''))`
 
 // chaptersHash names a chapter list (its JSON): books.chapters_hash, and the fit
 // in a book's rows (books.chapters_fit).
@@ -130,12 +136,14 @@ func (c *Catalog) DueChapterChecks(ctx context.Context, staleBefore string, limi
 	    LIMIT ?`, staleBefore, limit)
 }
 
-// ChapterInputs is what a community chapter check fits: the book's identifiers,
+// ChapterInputs is what a community chapter check fits: the book's identifiers
+// and its recorded match (nil for none), which names the recording over them,
 // its files in play order (one for a single-file book) and the scan's own
 // chapters, with the basis to record.
 type ChapterInputs struct {
 	ASIN     string
 	ISBN     string
+	Match    *BookMatch
 	Basis    string
 	Files    []BookFile
 	Chapters []metadata.Chapter
@@ -156,6 +164,9 @@ func (c *Catalog) ChapterInputs(ctx context.Context, libraryID int64, path strin
 		return nil, ErrNotFound
 	}
 	if err != nil {
+		return nil, err
+	}
+	if in.Match, err = bookAnchor(ctx, c.db, libraryID, path); err != nil {
 		return nil, err
 	}
 	if in.Files, err = playFiles(ctx, c.db, &b); err != nil {

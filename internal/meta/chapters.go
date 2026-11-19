@@ -3,6 +3,8 @@ package meta
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -44,8 +46,33 @@ func (s *Service) RecordingChapters(ctx context.Context, asin, isbn string) (*Re
 	if l.RecordingID == "" {
 		return nil, ErrNotFound
 	}
-	out := &RecordingChapters{WorkID: l.Work.ID, RecordingID: l.RecordingID}
-	chs, err := s.client.recordingChapters(ctx, l.Work.ID, l.RecordingID)
+	return s.chaptersOf(ctx, l.Work.ID, l.RecordingID)
+}
+
+// MatchChapters is the chapter list of a book's recorded community match
+// (catalog book_matches): recording recordingID of work workID, the admin's
+// choice over what the book's identifiers name (server#375). ErrNotFound when
+// it names no recording, or one the work doesn't list (a stale match, or one
+// of another work): never the work's first, as pickRecording's matched. Like
+// RecordingChapters it caches nothing.
+func (s *Service) MatchChapters(ctx context.Context, workID, recordingID string) (*RecordingChapters, error) {
+	if strings.TrimSpace(workID) == "" || recordingID == "" {
+		return nil, ErrNotFound
+	}
+	detail, err := s.workDetail(ctx, workID)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.ContainsFunc(detail.Recordings, func(r upstreamRecording) bool { return r.ID == recordingID }) {
+		return nil, ErrNotFound
+	}
+	return s.chaptersOf(ctx, detail.ID, recordingID)
+}
+
+// chaptersOf fetches the chapters of recording recordingID of work workID.
+func (s *Service) chaptersOf(ctx context.Context, workID, recordingID string) (*RecordingChapters, error) {
+	out := &RecordingChapters{WorkID: workID, RecordingID: recordingID}
+	chs, err := s.client.recordingChapters(ctx, workID, recordingID)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return out, nil // a metaserve without the route: no chapters known

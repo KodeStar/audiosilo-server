@@ -21,10 +21,12 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
-// fakeSource answers RecordingChapters from a map by ASIN; err, when set,
-// answers every call, and failing answers the ASINs it names with an error.
+// fakeSource answers RecordingChapters from a map by ASIN, and MatchChapters
+// from one by "work/recording"; err, when set, answers every call, and failing
+// answers the ASINs it names with an error.
 type fakeSource struct {
 	byASIN  map[string]*meta.RecordingChapters
+	byMatch map[string]*meta.RecordingChapters
 	err     error
 	failing map[string]bool
 	calls   atomic.Int32
@@ -39,6 +41,17 @@ func (f *fakeSource) RecordingChapters(_ context.Context, asin, _ string) (*meta
 		return nil, errors.New("upstream error for " + asin)
 	}
 	if rc, ok := f.byASIN[asin]; ok {
+		return rc, nil
+	}
+	return nil, meta.ErrNotFound
+}
+
+func (f *fakeSource) MatchChapters(_ context.Context, workID, recordingID string) (*meta.RecordingChapters, error) {
+	f.calls.Add(1)
+	if f.err != nil {
+		return nil, f.err
+	}
+	if rc, ok := f.byMatch[workID+"/"+recordingID]; ok {
 		return rc, nil
 	}
 	return nil, meta.ErrNotFound
@@ -60,7 +73,8 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &env{db: db, cat: cat, lib: lib, src: &fakeSource{byASIN: map[string]*meta.RecordingChapters{}}}
+	return &env{db: db, cat: cat, lib: lib, src: &fakeSource{byASIN: map[string]*meta.RecordingChapters{},
+		byMatch: map[string]*meta.RecordingChapters{}}}
 }
 
 func (e *env) book(t *testing.T, path, asin string, duration float64) {
@@ -135,6 +149,49 @@ func TestCheckRecordsNoMatchAndAnotherEdition(t *testing.T) {
 	}
 	if b, _ := e.cat.GetBookByPath(ctx, e.lib.ID, "A/Abridged.m4b"); len(b.Chapters) != 0 {
 		t.Fatalf("another edition's chapters were used: %+v", b.Chapters)
+	}
+}
+
+// TestCheckFollowsTheRecordedMatch: a book's recorded match names the
+// recording its community chapters come from, over its ASIN's (server#375);
+// one its work doesn't list gives none, and one naming no recording takes the
+// ASIN's only when that is of its work. Each match made or changed makes the
+// book due again.
+func TestCheckFollowsTheRecordedMatch(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	const path = "A/Book.m4b"
+	e.book(t, path, "B000000001", 3600)
+	e.src.byASIN["B000000001"] = chapters(4, 900) // work "w", recording "r"
+	matched := chapters(4, 900)
+	matched.WorkID, matched.RecordingID = "w2", "r2"
+	e.src.byMatch["w2/r2"] = matched
+	r := New(e.cat, e.src, "", on, nil, nil)
+	r.pass(ctx)
+
+	for _, c := range []struct{ work, recording, status, from string }{
+		{"w2", "r2", "fill", "r2"},
+		{"w2", "gone", catalog.CommunityNoMatch, ""},
+		{"w", "", "fill", "r"},
+		{"w3", "", catalog.CommunityNoMatch, ""},
+	} {
+		if err := e.cat.EditBook(ctx, e.lib.ID, path, catalog.BookEdit{
+			Match: &catalog.MatchAnchor{WorkID: c.work, RecordingID: c.recording}, Source: catalog.SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		r.pass(ctx) // the match changed the basis: the book is due
+		cc, err := e.cat.GetCommunityChapters(ctx, e.lib.ID, path)
+		if err != nil || cc == nil || cc.Status != c.status || cc.RecordingID != c.from || cc.Stale {
+			t.Fatalf("match %s/%s: check %+v, %v; want %s from %q", c.work, c.recording, cc, err, c.status, c.from)
+		}
+		b, err := e.cat.GetBookByPath(ctx, e.lib.ID, path)
+		if err != nil || (b.ChaptersSource == catalog.ChaptersFromCommunity) != (c.status == "fill") {
+			t.Fatalf("match %s/%s: book chapters from %q, %v", c.work, c.recording, b.ChaptersSource, err)
+		}
+	}
+	if due, _ := e.cat.DueChapterChecks(ctx, "2000-01-01T00:00:00Z", 10); len(due) != 0 {
+		t.Fatalf("due %+v after the last check", due)
 	}
 }
 

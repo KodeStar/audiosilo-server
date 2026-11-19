@@ -2443,7 +2443,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`b.asin <> '' OR b.isbn <> '' OR EXISTS(book_matches by its key)`) is the list's `matched` and its
   facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire
   name stays), the series' naming and a refresh's `MatchedBooks`. What needs an identifier tests
-  asin/isbn itself and stays identifier-only: community chapters, the unknown-ASIN report,
+  asin/isbn itself and stays identifier-only: community chapters (due only with one, though
+  the recording they come from is then the match's, `chaptercheck`'s `chapters`), the unknown-ASIN report,
   a repick (`CommunityASINBooks`) and the console's chapter check,
   Series rail and Suggest corrections. Upcoming (a matched book is its work: it holds its slot, its own
   position's when the series doesn't list that work, and is a copy, `UpcomingBook.MatchWorkID`, `UpcomingOwnedWorks` by `workIDExpr`), the Bridge's estimate
@@ -4825,7 +4826,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `catalog/communitychapters.go`): a book with an ASIN/ISBN is checked against its
   EXACT community recording's chapter list (`meta.Service.RecordingChapters`: the
   lookup's `recording_id`, never `pickRecording`'s first-recording fallback; metaserve
-  `works/{id}/recordings/{rid}/chapters`, 404 = none known). The fit is anchored and
+  `works/{id}/recordings/{rid}/chapters`, 404 = none known). A recorded match (`book_matches`,
+  `ChapterInputs.Match`) names the recording over the identifiers (server#375):
+  `meta.Service.MatchChapters` (its recording, `no_match` when its work doesn't list it), or, for
+  one naming no recording, the lookup's only when it is of the match's work. The fit is anchored and
   piecewise (see the package doc): local chapter starts pair with community ones by
   title (numbering stripped, word containment, one-letter typos) within
   `max(120 s, 1%)`, file boundaries and untitled starts by time within 5 s of the
@@ -4838,7 +4842,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `4 s + drift`, starting 0.3 s before the speech. Outcome per book in
   `community_chapters` (path-keyed cache, no FK, moved by `MoveDurableState`; `basis` =
   asin|isbn|duration ms|`books.chapters_hash` (the scan's chapters)|the files in
-  play order relative to the book ('' for a single-file book), a different one makes
+  play order relative to the book ('' for a single-file book), then, only for a book with a recorded
+  match, `\x1e` + its work/recording, so a match made, changed or unlinked makes it stale; a different one makes
   it due; a month makes it stale; a check whose basis isn't the book's current one is
   never applied, and the admin page marks it `stale`, so a rescan of other audio,
   re-tagged chapters, files renamed in place or a removed match never brings back
