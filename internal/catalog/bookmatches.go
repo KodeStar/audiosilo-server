@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -171,6 +172,31 @@ func anchorWritten(res sql.Result, err error) error {
 // than the book's identifiers do, or they match nothing: api.bookEnrichment).
 func (c *Catalog) BookMatchAt(ctx context.Context, libraryID int64, path string) (*BookMatch, error) {
 	return bookAnchor(ctx, c.db, libraryID, path)
+}
+
+// MatchedWorks is the work each of refs was matched to (book_matches), only
+// for those with a recorded match naming one: the books whose work key
+// (Book.WorkID, workIDExpr) is their match's, not the upcoming job's
+// resolution of their identifiers.
+func (c *Catalog) MatchedWorks(ctx context.Context, refs []Ref) (map[Ref]string, error) {
+	out := map[Ref]string{}
+	type matched struct{ path, work string }
+	_, byLib := GroupRefs(refs)
+	for lib, paths := range byLib {
+		for chunk := range slices.Chunk(paths, 500) {
+			rows, err := queryRows(ctx, c.db, func(r *sql.Rows, m *matched) error { return r.Scan(&m.path, &m.work) },
+				`SELECT path, work_id FROM book_matches
+				  WHERE library_id = ? AND path IN (`+placeholders(len(chunk))+`) AND work_id <> ''`,
+				slices.Concat([]any{lib}, anyOf(chunk))...)
+			if err != nil {
+				return nil, err
+			}
+			for _, m := range rows {
+				out[Ref{LibraryID: lib, Path: m.path}] = m.work
+			}
+		}
+	}
+	return out, nil
 }
 
 // bookAnchor reads the anchor at (libraryID, path), nil when it has none.

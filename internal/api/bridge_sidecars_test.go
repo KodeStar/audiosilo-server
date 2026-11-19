@@ -771,3 +771,50 @@ func TestBridgeEstimateMatchOnly(t *testing.T) {
 		t.Fatalf("unmatched book facts work_id = %q, want none", got)
 	}
 }
+
+// The estimate reads a book's community content by /meta's work rule. A work
+// id the upcoming job resolved from the book's identifiers, since merged away
+// upstream, never answers for them: the identifiers' cached answer does (what
+// /meta shows), not "none", which would price a generation /meta then hides.
+// The same holds for a recorded match whose work upstream no longer has.
+func TestBridgeEstimateStaleWork(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnvOn(t, newMetaEnv(t, true, 0))
+	ctx := context.Background()
+	lib, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Mars", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const path = "Andy Weir/The Martian"
+	if _, err := b.cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: path, Title: "The Martian",
+		ASIN: "B00FLIJJSY", AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	// /meta caches the identifiers' answer: the-martian, characters and recaps.
+	if resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/libraries/%d/meta?path=%s", lib.ID, url.QueryEscape(path)), b.adminTok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"mark-watney"`) {
+		t.Fatalf("meta: %d %s", resp.StatusCode, body)
+	}
+	if err := b.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{
+		{Ref: catalog.Ref{LibraryID: lib.ID, Path: path}, IDKey: "a:B00FLIJJSY", WorkID: "merged-away", CheckedAt: "now"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	b.beatWith(t, true, true, sidecarsEstimates)
+	has := func(what string) {
+		t.Helper()
+		book, err := b.cat.GetBookByPath(ctx, lib.ID, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if est := b.briefEstimate(t, lib.ID, path); !est.Has.Community.Characters || !est.Has.Community.Recaps || est.Has.CommunityUnknown {
+			t.Fatalf("%s (work key %q): %+v, want the identifiers' characters and recaps", what, book.WorkID, est.Has)
+		}
+	}
+	has("a stale resolved work")
+	if err := b.cat.EditBook(ctx, lib.ID, path, catalog.BookEdit{
+		Match: &catalog.MatchAnchor{WorkID: "gone-upstream"}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	has("a match gone upstream")
+}

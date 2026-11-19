@@ -137,7 +137,7 @@ func TestCoveragesKnownWork(t *testing.T) {
 	svc := NewService(srv.URL, nil)
 	ctx := context.Background()
 
-	got := svc.Coverages(ctx, []CoverageBook{{WorkID: "the-martian"}})
+	got := svc.Coverages(ctx, []CoverageBook{{WorkID: "the-martian", Matched: true}})
 	if want := (Coverage{Characters: true, Recaps: true, Description: true, Known: true}); got[0] != want {
 		t.Fatalf("match-only book = %+v, want %+v", got[0], want)
 	}
@@ -145,15 +145,62 @@ func TestCoveragesKnownWork(t *testing.T) {
 		t.Fatalf("upstream: %d lookups, %d works; want 0, 1", m.lookupHits.Load(), m.workHits.Load())
 	}
 	// The identifiers' cached enrichment is of another work than the match:
-	// the match's work answers (here unknown upstream: nothing, known).
+	// the match's work answers, not the cached one (which has no recaps).
+	other := &Enrichment{Matched: true, Work: &MetaWork{ID: "other", Characters: []MetaCharacter{{Name: "X"}}}}
+	cachePut(svc.cache, nsASIN.key("B0OTHER"), other, positiveTTL)
+	got = svc.Coverages(ctx, []CoverageBook{{ASIN: "B0OTHER", WorkID: "the-martian", Matched: true}})
+	if !got[0].Recaps || !got[0].Known || m.workHits.Load() != 1 {
+		t.Fatalf("rematched = %+v after %d works, want the match's work (cached)", got[0], m.workHits.Load())
+	}
+	// A match's work upstream no longer has leaves the identifiers' cached
+	// enrichment standing, as on /meta; with none cached there is nothing.
 	gone := &mockMeta{workCode: http.StatusNotFound}
 	gsrv := httptest.NewServer(gone.handler())
 	defer gsrv.Close()
 	gsvc := NewService(gsrv.URL, nil)
-	cachePut(gsvc.cache, nsASIN.key("B0OTHER"), &Enrichment{Matched: true, Work: &MetaWork{ID: "other",
+	cachePut(gsvc.cache, nsASIN.key("B0OTHER"), other, positiveTTL)
+	got = gsvc.Coverages(ctx, []CoverageBook{
+		{ASIN: "B0OTHER", WorkID: "rematched", Matched: true},
+		{WorkID: "rematched", Matched: true},
+		{ASIN: "B0OTHER", WorkID: "other", Matched: true},
+	})
+	if want := (Coverage{Characters: true, Known: true}); got[0] != want || got[1] != (Coverage{Known: true}) || got[2] != want {
+		t.Fatalf("match gone upstream = %+v, none cached = %+v, cached work = %+v", got[0], got[1], got[2])
+	}
+	if gone.workHits.Load() != 1 {
+		t.Fatalf("%d work fetches, want 1 (one work, asked once)", gone.workHits.Load())
+	}
+}
+
+// TestCoveragesResolvedWork: a work id that is the upcoming job's resolution of
+// the book's identifiers (not a recorded match) answers only when those
+// identifiers have no cached enrichment. With one, of another work (the
+// resolution is up to a month old: the work merged away since), the cached
+// enrichment answers and the stale work is never asked for, where it read as
+// "no content".
+func TestCoveragesResolvedWork(t *testing.T) {
+	t.Parallel()
+	gone := &mockMeta{workCode: http.StatusNotFound}
+	srv := httptest.NewServer(gone.handler())
+	defer srv.Close()
+	svc := NewService(srv.URL, nil)
+	ctx := context.Background()
+	cachePut(svc.cache, nsASIN.key("B0MERGED"), &Enrichment{Matched: true, Work: &MetaWork{ID: "kept",
 		Characters: []MetaCharacter{{Name: "X"}}}}, positiveTTL)
-	got = gsvc.Coverages(ctx, []CoverageBook{{ASIN: "B0OTHER", WorkID: "rematched"}, {ASIN: "B0OTHER", WorkID: "other"}})
-	if got[0] != (Coverage{Known: true}) || !got[1].Characters {
-		t.Fatalf("rematched = %+v, cached work = %+v", got[0], got[1])
+	got := svc.Coverages(ctx, []CoverageBook{{ASIN: "B0MERGED", WorkID: "merged-away"}})
+	if want := (Coverage{Characters: true, Known: true}); got[0] != want {
+		t.Fatalf("stale resolution = %+v, want the identifiers' cached enrichment %+v", got[0], want)
+	}
+	if gone.workHits.Load() != 0 || gone.lookupHits.Load() != 0 {
+		t.Fatalf("upstream: %d works, %d lookups; want none", gone.workHits.Load(), gone.lookupHits.Load())
+	}
+
+	// Nothing cached for the identifiers: the resolved work is fetched by id.
+	m := fullMock()
+	fsrv := httptest.NewServer(m.handler())
+	defer fsrv.Close()
+	got = NewService(fsrv.URL, nil).Coverages(ctx, []CoverageBook{{ASIN: "B0NOTCACHED", WorkID: "the-martian"}})
+	if !got[0].Recaps || !got[0].Known || m.workHits.Load() != 1 || m.lookupHits.Load() != 0 {
+		t.Fatalf("resolved work = %+v after %d works, %d lookups", got[0], m.workHits.Load(), m.lookupHits.Load())
 	}
 }

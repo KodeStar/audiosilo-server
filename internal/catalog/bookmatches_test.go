@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -931,5 +932,28 @@ func TestAnchorWrittenOnlyIfStillItsASIN(t *testing.T) {
 	}
 	if a := anchorOf(t, c, ctx, lib.ID, "A/Pinned"); a.WorkID != "the-work" {
 		t.Fatalf("keeping an admin's ASIN: match %+v, want recorded", a)
+	}
+}
+
+// TestMatchedWorks: only a book with a recorded match has a matched work, its
+// match's, whatever its identifiers resolved to; one known by its identifiers
+// alone has none.
+func TestMatchedWorks(t *testing.T) {
+	t.Parallel()
+	f := newRecordingsFixture(t)
+	got, err := f.c.MatchedWorks(f.ctx, []Ref{
+		{LibraryID: f.main.ID, Path: "Bray/One"}, {LibraryID: f.main.ID, Path: "Rematched/Two"},
+		{LibraryID: f.main.ID, Path: "Kemper/One"}, {LibraryID: f.other.ID, Path: "Abridged/One"},
+		{LibraryID: f.other.ID, Path: "Copy/One"}, {LibraryID: f.main.ID, Path: "Nowhere"},
+	})
+	want := map[Ref]string{
+		{LibraryID: f.main.ID, Path: "Bray/One"}: "w-one", {LibraryID: f.main.ID, Path: "Rematched/Two"}: "w-two",
+		{LibraryID: f.other.ID, Path: "Abridged/One"}: "w-one",
+	}
+	if err != nil || !maps.Equal(got, want) {
+		t.Fatalf("matched works = %v, %v; want %v", got, err, want)
+	}
+	if got, err = f.c.MatchedWorks(f.ctx, nil); err != nil || len(got) != 0 {
+		t.Fatalf("no refs = %v, %v", got, err)
 	}
 }

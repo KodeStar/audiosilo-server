@@ -2378,8 +2378,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a repick (`CommunityASINBooks`) and the console's chapter check,
   Series rail and Suggest corrections. Upcoming (a matched book is its work: it holds its slot and
   is a copy, `UpcomingBook.MatchWorkID`, `UpcomingOwnedWorks` by `workIDExpr`), the Bridge's estimate
-  (`meta.CoverageBook.WorkID`, its work fetched by id) and the Bridge's book facts (`work_id`) read the
-  book's work key, the match first (server#375). `/meta` and `/next`'s community rail read the row when the book
+  (`meta.Service.Coverages` by `/meta`'s rule: a recorded match's work first, `CoverageBook.Matched` from
+  `catalog.MatchedWorks`, fetched by id, the identifiers' cached envelope standing when upstream no longer
+  has that work; else the identifiers' cached envelope; only then the work the upcoming job resolved, which
+  can be a month stale and never answers "none" over a cached envelope) and the Bridge's book facts
+  (`work_id`) read the book's work key, the match first (server#375). `/meta` and `/next`'s community rail read the row when the book
   has no identifier, its lookup is a not-found or fails, or the row names another work than its
   identifiers' (`bookEnrichment`, `meta.Service.EnrichMatch`, see Community metadata lookup). Path-keyed state: a move carries it with the book's edits as one
   set, a join copies the first part's, a rescan or rebuild keeps it, `ClearCommunityMatches` drops it
