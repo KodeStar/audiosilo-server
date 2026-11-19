@@ -202,3 +202,42 @@ func TestRunnerSeriesResolvedAgainOnAnUnlink(t *testing.T) {
 		t.Fatalf("after Clear matches: The Expanse = %+v, want resolved again to none", got)
 	}
 }
+
+// A book matched in the console to a work its community series doesn't list
+// holds its own position in that series: the volume is not missing, and a
+// recent release there is not announced; the match still decides its work,
+// so the series' own work for that volume is not a copy the server holds.
+func TestRunnerMatchedUnlistedWorkHoldsItsSlot(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expanse("2011", "2012", "2013")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	f.matchOnly(t, f.lib, "The Expanse/2 special", "The Expanse", 2, "special")
+	f.book(t, f.lib, "The Expanse", 3, "A3", "e3")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.items(t); len(got) != 0 {
+		t.Fatalf("items = %v, want none: the matched book holds slot 2", got)
+	}
+	if !f.holds(t, "special") || f.holds(t, "e2") {
+		t.Fatal("the matched book is its match's work, never the series' e2")
+	}
+
+	// A release at a slot so held is not announced: e2 a preorder, the book
+	// matched before its day.
+	f2 := newFixture(t)
+	f2.expanse("2011", "2026-11-12")
+	f2.book(t, f2.lib, "The Expanse", 1, "A1", "e1")
+	if err := f2.run(t); err != nil {
+		t.Fatal(err)
+	}
+	f2.matchOnly(t, f2.lib, "The Expanse/2 special", "The Expanse", 2, "special")
+	f2.clock = time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	if err := f2.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f2.items(t); len(got) != 0 || len(f2.announced) != 0 {
+		t.Fatalf("items %v, announced %v, want neither", got, f2.announcedIDs())
+	}
+}

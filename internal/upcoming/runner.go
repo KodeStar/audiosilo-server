@@ -1035,7 +1035,7 @@ func (r *Runner) classify(ctx context.Context, locals []*localSeries, works map[
 		}
 		owned := make([]OwnedBook, len(l.books))
 		for i, b := range l.books {
-			owned[i] = OwnedBook{WorkID: works[b.Ref], Position: b.Position, PositionEnd: b.PositionEnd}
+			owned[i] = OwnedBook{WorkID: works[b.Ref], Matched: b.MatchWorkID != "", Position: b.Position, PositionEnd: b.PositionEnd}
 		}
 		items := Classify(series, owned, now, window)
 		baseline := map[string]bool{}

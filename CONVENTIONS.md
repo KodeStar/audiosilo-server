@@ -642,7 +642,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   libraries hold, the community's preorders, recent releases and missing volumes, and `GET /me/upcoming`
   (requireAuth, notKid) reads what it stored for one caller. **Layout**: `upcoming/classify.go` is the pure
   `Classify` (slots by the console's `railEntries` rule; a book with a known work holds that work's span,
-  else its own position or range; kinds in order preorder (future at the date's own precision,
+  else its own position or range, as does a console-matched book whose work the series doesn't list
+  (`OwnedBook.Matched`: that volume is never missing nor announced, the match still its work); kinds in order preorder (future at the date's own precision,
   `releaseIsFuture`), released (within `upcoming.window_days`, counted from the date's first day), missing
   (a whole-number interior gap below the highest held, plus the first whole non-preorder slot after it;
   never a fractional position); a work in two series is the first's); `runner.go` is the job; `list.go` the
@@ -2381,8 +2382,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   name stays), the series' naming and a refresh's `MatchedBooks`. What needs an identifier tests
   asin/isbn itself and stays identifier-only: community chapters, the unknown-ASIN report,
   a repick (`CommunityASINBooks`) and the console's chapter check,
-  Series rail and Suggest corrections. Upcoming (a matched book is its work: it holds its slot and
-  is a copy, `UpcomingBook.MatchWorkID`, `UpcomingOwnedWorks` by `workIDExpr`), the Bridge's estimate
+  Series rail and Suggest corrections. Upcoming (a matched book is its work: it holds its slot, its own
+  position's when the series doesn't list that work, and is a copy, `UpcomingBook.MatchWorkID`, `UpcomingOwnedWorks` by `workIDExpr`), the Bridge's estimate
   (`meta.Service.Coverages` by `/meta`'s rule: a recorded match's work first, `CoverageBook.Matched` from
   `catalog.MatchedWorks`, fetched by id, the identifiers' cached envelope standing when upstream no longer
   has that work; else the identifiers' cached envelope; only then the work the upcoming job resolved, which

@@ -152,6 +152,24 @@ func TestClassifyOwnedByWorkOrPosition(t *testing.T) {
 	check(t, Classify([]Series{s}, []OwnedBook{{WorkID: "elsewhere", Position: 3}}, now, 90))
 }
 
+// A book matched in the console to a work the series doesn't list (an
+// edition the community files apart) holds its own position: that volume is
+// neither missing nor a release; the pair: one known by its identifiers to be
+// such a work holds nothing, so the volume stays listed.
+func TestClassifyMatchedUnlistedHoldsItsPosition(t *testing.T) {
+	t.Parallel()
+	s := Series{ID: "s", Members: []catalog.MetaSeriesMember{
+		member("1", "2010"), member("2", "2026-10-01"), member("3", "2012"), member("4", "2013"),
+	}}
+	held := []OwnedBook{{WorkID: "w1", Position: 1}, {WorkID: "special", Matched: true, Position: 2}, {WorkID: "w4", Position: 4}}
+	check(t, Classify([]Series{s}, held, now, 90), "w3=missing")
+	held[1].Matched = false
+	check(t, Classify([]Series{s}, held, now, 90), "w2=released", "w3=missing")
+	// A match the series lists holds that work's entry, not its own number.
+	listed := []OwnedBook{{WorkID: "w1", Position: 1}, {WorkID: "w3", Matched: true, Position: 2}, {WorkID: "w4", Position: 4}}
+	check(t, Classify([]Series{s}, listed, now, 90), "w2=released")
+}
+
 func TestClassifySeveralSeries(t *testing.T) {
 	t.Parallel()
 	a := Series{ID: "a", Members: []catalog.MetaSeriesMember{member("1", "2010"), member("2", "2011"), member("3", "2026-12-01")}}
