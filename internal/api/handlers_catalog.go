@@ -47,6 +47,7 @@ func (a *API) handleAdminListBooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	a.issueOff(r.Context(), &f)
 	opt := catalog.AdminListOptions{Filter: f, Sort: q.Get("sort"), Cursor: q.Get("cursor"), Limit: queryInt(r, "limit", 0)}
 	switch q.Get("order") {
 	case "", "asc":
@@ -60,7 +61,7 @@ func (a *API) handleAdminListBooks(w http.ResponseWriter, r *http.Request) {
 	// every book), so it is kept like the player's lists (server#245). Only a
 	// first page: one admin scrolling a large library through every cursor page
 	// would otherwise push the player's lists out of the shared cache.
-	write := a.cachedList(w, r, gen, cacheable && opt.Cursor == "", nil)
+	write := a.cachedList(w, r, gen, cacheable && opt.Cursor == "", nil, f.IssueOff)
 	if write == nil {
 		return
 	}
@@ -81,9 +82,10 @@ func (a *API) handleAdminBookFacets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	a.issueOff(r.Context(), &f)
 	// Counted over every matching book (about 100 ms at 5,000), and like a page
 	// the database's answer to the query string alone: kept until the next content write.
-	write := a.cachedList(w, r, gen, cacheable, nil)
+	write := a.cachedList(w, r, gen, cacheable, nil, f.IssueOff)
 	if write == nil {
 		return
 	}
@@ -158,6 +160,13 @@ func bookFilterFromQuery(q url.Values) (catalog.BookFilter, string) {
 		}
 	}
 	return f, ""
+}
+
+// issueOff marks f's ?issue= as listing nothing when Health doesn't list its
+// kind now (unknown_asin: unknownASINListed), so a direct link shows no stale
+// rows. Part of the list cache's key: the answer depends on it.
+func (a *API) issueOff(ctx context.Context, f *catalog.BookFilter) {
+	f.IssueOff = f.Issue == catalog.IssueUnknownASIN && !a.unknownASINListed(ctx)
 }
 
 // parseOptionalID reads an optional id query value (?library_id=, ?user_id=, a

@@ -184,6 +184,19 @@ func (c *Catalog) LastASINSentAt(ctx context.Context) (string, error) {
 	return at.String, err
 }
 
+// UnknownASINAnswered reports whether the report has answers to list: a row (a
+// lookup made) or a run recorded ok (coverage.StateOK: one that found nothing to
+// look up). Until then, as between switching it on and its
+// first run, an empty unknown_asin list would read as all clear (server#392).
+func (c *Catalog) UnknownASINAnswered(ctx context.Context) (bool, error) {
+	var rows bool
+	if err := c.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM unknown_asin_reports)`).Scan(&rows); err != nil || rows {
+		return rows, err
+	}
+	st, err := c.UnknownASINReportState(ctx)
+	return st.State == "ok", err
+}
+
 // unknownASINReportKey is the report's run status row in server_state.
 const unknownASINReportKey = "unknown_asin_report"
 
