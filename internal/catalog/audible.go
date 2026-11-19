@@ -888,7 +888,8 @@ type audibleCursor struct {
 
 // AudibleTitles lists titles by title (any case), then account and ASIN,
 // keyset-paged, each with its backup (AudibleImport) and whether it needs
-// attention.
+// attention. ErrInvalidCursor for an After that isn't one (a JSON null or {}
+// names no title: never the start).
 func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (AudibleTitlePage, error) {
 	limit := f.Limit
 	if limit <= 0 {
@@ -929,8 +930,8 @@ func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (Audi
 	if f.After != "" {
 		var cur audibleCursor
 		raw, err := base64.RawURLEncoding.DecodeString(f.After)
-		if err != nil || json.Unmarshal(raw, &cur) != nil {
-			return AudibleTitlePage{}, audibleInvalid("bad cursor")
+		if err != nil || json.Unmarshal(raw, &cur) != nil || cur.ASIN == "" {
+			return AudibleTitlePage{}, ErrInvalidCursor
 		}
 		// The leading range term lets the title index seek to the cursor; the
 		// row value keeps the exact order past it.
@@ -1161,7 +1162,8 @@ func (c *Catalog) MarkAudibleQueued(ctx context.Context, account string) error {
 // BridgeBooks is a page of a books library's indexed books by path, for the
 // Bridge's matching: the books after path after (""), at most limit, and the
 // cursor of the next page ("" at the end). ErrNotFound for no library,
-// ErrNotBookLibrary for a podcast library.
+// ErrNotBookLibrary for a podcast library, ErrInvalidCursor for an after that
+// isn't base64url.
 func (c *Catalog) BridgeBooks(ctx context.Context, libraryID int64, after string, limit int) ([]Book, string, error) {
 	lib, err := c.GetLibrary(ctx, libraryID)
 	if err != nil {
@@ -1177,7 +1179,7 @@ func (c *Catalog) BridgeBooks(ctx context.Context, libraryID int64, after string
 	if after != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(after)
 		if err != nil {
-			return nil, "", audibleInvalid("bad cursor")
+			return nil, "", ErrInvalidCursor
 		}
 		from = string(raw)
 	}
