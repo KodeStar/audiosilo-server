@@ -385,31 +385,49 @@ func (c *Catalog) ProgressFeedEnd(ctx context.Context) (int64, error) {
 
 // progressFrom reads since as a place in this server's feed (feed, its id):
 // the start for "", else ErrInvalidCursor for a cursor that isn't one
-// (decodeProgressCursor), one from another feed, or one past the feed's end
-// (ProgressFeedEnd). That last is a database that went back and kept its id
-// (RenewProgressFeedBehind renews it at the next start the launcher sees it
-// from): until the counter passes the cursor again, the feed would answer
-// nothing and the rows written since would never reach Audible. A cursor from
-// a server before 2.7.0 carries no id and has only that check. The place comes
-// back with feed as its id.
-func (c *Catalog) progressFrom(ctx context.Context, since, feed string) (progressCursor, error) {
-	from, err := decodeProgressCursor(since)
+// (decodeProgressCursor). With refuseStale (the Bridge asked for it:
+// AudibleProgress) it is ErrInvalidCursor too for one from another feed, or
+// one past the feed's end (ProgressFeedEnd). That last is a database that went
+// back and kept its id (RenewProgressFeedBehind renews it at the next start
+// the launcher sees it from): until the counter passes the cursor again, the
+// feed would answer nothing and the rows written since would never reach
+// Audible. A cursor from a server before 2.7.0 carries no id and has only that
+// check. Without refuseStale (v0.6.0 and older Bridges, which retry a refused
+// cursor for ever and so would push no place again) both are read as before
+// 2.7.0: a cursor from another feed as a place in this one, and one past the
+// end as no rows (pastEnd), from comes back as the feed's end then
+// (progressEndASIN; none in a feed no row was ever written to). The place
+// comes back with feed as its id.
+func (c *Catalog) progressFrom(ctx context.Context, since, feed string, refuseStale bool) (
+	from progressCursor, pastEnd bool, err error) {
+	from, err = decodeProgressCursor(since)
 	if err != nil || since == "" {
-		return from, err
+		return from, false, err
 	}
-	if from.Feed != "" && from.Feed != feed {
-		return progressCursor{}, ErrInvalidCursor
+	if refuseStale && from.Feed != "" && from.Feed != feed {
+		return progressCursor{}, false, ErrInvalidCursor
 	}
 	end, err := c.ProgressFeedEnd(ctx)
 	if err != nil {
-		return progressCursor{}, err
+		return progressCursor{}, false, err
 	}
 	if from.Seq > end {
-		return progressCursor{}, ErrInvalidCursor
+		if refuseStale {
+			return progressCursor{}, false, ErrInvalidCursor
+		}
+		if end < 1 {
+			return progressCursor{}, true, nil
+		}
+		return progressCursor{Seq: end, ASIN: progressEndASIN, Feed: feed}, true, nil
 	}
 	from.Feed = feed
-	return from, nil
+	return from, false, nil
 }
+
+// progressEndASIN is a progress cursor's ASIN after every title's (an ASIN is
+// ten upper-case letters and digits, bridge's asinPattern): a cursor at a row
+// number with it is past all of that number's rows, so the feed's end.
+const progressEndASIN = "~"
 
 // AudibleProgress is a page of the places of a's person that the Bridge may
 // push to Audible: the progress rows on the books of the account's synced
@@ -426,17 +444,28 @@ func (c *Catalog) progressFrom(ctx context.Context, since, feed string) (progres
 // (ask again with next now; a page may carry fewer rows than it read, a row
 // whose title's runtime disagrees with the book's length left out).
 // A cursor carries the feed's id (progressFeedID): one from before 2.7.0 that
-// is still good comes back as next with it. ErrInvalidCursor for a cursor not
-// made by this feed, or past its end (progressFrom).
-func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, scopes []Scope, since string, limit int) (
-	rows []AudibleProgressRow, next string, more bool, err error) {
+// is still good comes back as next with it. With refuseStale (the Bridge
+// handles the refusal by reading the feed again from its start: bridge#50),
+// ErrInvalidCursor for a cursor not made by this feed, or past its end;
+// without it (a Bridge v0.6.0 or older), the answer before 2.7.0: a cursor from
+// another feed pages on as a place in this one, and one past the end gets no
+// rows and the feed's end as next, so the places written from now on reach
+// Audible (progressFrom).
+func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, scopes []Scope, since string, limit int,
+	refuseStale bool) (rows []AudibleProgressRow, next string, more bool, err error) {
 	feed, err := c.progressFeedID(ctx)
 	if err != nil {
 		return nil, "", false, err
 	}
-	from, err := c.progressFrom(ctx, since, feed)
+	from, pastEnd, err := c.progressFrom(ctx, since, feed, refuseStale)
 	if err != nil {
 		return nil, "", false, err
+	}
+	if pastEnd {
+		if from.Seq < 1 {
+			return []AudibleProgressRow{}, since, false, nil
+		}
+		return []AudibleProgressRow{}, from.encode(), false, nil
 	}
 	if limit <= 0 {
 		limit = defaultAudibleProgress

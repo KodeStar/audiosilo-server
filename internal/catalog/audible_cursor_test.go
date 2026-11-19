@@ -89,3 +89,36 @@ func TestRenewProgressFeedBehind(t *testing.T) {
 		t.Fatalf("id behind the mark = %q, %v; want a new one", second, err)
 	}
 }
+
+// Without refuseStale (a v0.6.0 Bridge), a cursor past the feed's end reads as
+// the feed's end, a cursor after every row of the counter's last number; in a
+// feed no row was ever written to (the counter at 0) it is no place, and the
+// route answers since again. With refuseStale it is refused.
+func TestProgressFromPastEnd(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	feed, err := f.c.progressFeedID(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ahead := progressCursor{Seq: 9, ASIN: "B000000001", Feed: "another"}.encode()
+	if _, _, err := f.c.progressFrom(f.ctx, ahead, feed, true); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("refused: err = %v, want ErrInvalidCursor", err)
+	}
+	if from, pastEnd, err := f.c.progressFrom(f.ctx, ahead, feed, false); err != nil || !pastEnd || from != (progressCursor{}) {
+		t.Fatalf("counter at 0 = %+v, %v, %v; want no place past the end", from, pastEnd, err)
+	}
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE progress_change_counter SET seq = 7 WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	want := progressCursor{Seq: 7, ASIN: progressEndASIN, Feed: feed}
+	if from, pastEnd, err := f.c.progressFrom(f.ctx, ahead, feed, false); err != nil || !pastEnd || from != want {
+		t.Fatalf("counter at 7 = %+v, %v, %v; want %+v", from, pastEnd, err, want)
+	}
+	if from, pastEnd, err := f.c.progressFrom(f.ctx, want.encode(), feed, true); err != nil || pastEnd || from != want {
+		t.Fatalf("the feed's end, refusing = %+v, %v, %v; want it read as itself", from, pastEnd, err)
+	}
+	if !(progressEndASIN > "ZZZZZZZZZZ" && progressEndASIN > "9999999999") {
+		t.Fatalf("progressEndASIN %q sorts before an ASIN", progressEndASIN)
+	}
+}

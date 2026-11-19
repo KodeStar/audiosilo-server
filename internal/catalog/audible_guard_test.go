@@ -25,7 +25,7 @@ func TestAudibleDeviceGuard(t *testing.T) {
 	scopes := []Scope{{LibraryID: f.lib.ID, AllowAll: true}}
 	feed := func() []AudibleProgressRow {
 		t.Helper()
-		rows, _, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, "", 0)
+		rows, _, _, err := f.c.AudibleProgress(f.ctx, acct, scopes, "", 0, true)
 		if err != nil {
 			t.Fatal(err)
 		}

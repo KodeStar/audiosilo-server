@@ -566,18 +566,19 @@ func recursor(t *testing.T, c string, edit func(map[string]any)) string {
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
-// feedRefused asks for the feed after since and wants it refused, 400
-// invalid_cursor.
+// feedRefused asks for the feed after since as a Bridge that handles the
+// refusal (refuse_stale=1) and wants it refused, 400 invalid_cursor.
 func (s *audibleSyncEnv) feedRefused(t *testing.T, name, since string) {
 	t.Helper()
-	resp, out := s.do(t, "GET", "/api/v1/bridge/progress?account="+testAccount+"&since="+url.QueryEscape(since), s.bridgeTok, "")
+	resp, out := s.do(t, "GET", "/api/v1/bridge/progress?refuse_stale=1&account="+testAccount+"&since="+url.QueryEscape(since),
+		s.bridgeTok, "")
 	if resp.StatusCode != http.StatusBadRequest || codeOf(out) != "invalid_cursor" {
 		t.Fatalf("%s: %d %s, want 400 invalid_cursor", name, resp.StatusCode, out)
 	}
 }
 
-// A cursor the feed no longer holds is refused, never answered empty
-// (bridge#50): the server restored from a backup behind the Bridge's cursor
+// A cursor the feed no longer holds is refused to a Bridge that handles it
+// (refuse_stale=1), never answered empty (bridge#50): the server restored from a backup behind the Bridge's cursor
 // (by hand: past the change counter; or through the console: a new feed id),
 // or a cursor from another feed. The Bridge then reads from the start and
 // misses nothing written since. A cursor from a server before 2.7.0 (no feed
@@ -640,6 +641,50 @@ func TestBridgeProgressCursorFeed(t *testing.T) {
 		t.Fatalf("renewal behind the mark = %v, %v", renewed, err)
 	}
 	s.feedRefused(t, "a cursor the counter has passed, in a database behind its mark", all.Next)
+}
+
+// A Bridge that doesn't send refuse_stale=1 (v0.6.0) retries a refused cursor
+// for ever and would push no place again, so it keeps the answers from before
+// 2.7.0 after a renewal: a cursor past the feed's end gets 200 with no rows and
+// the feed's end as next, which then reads the places written after it, and a
+// cursor from another feed, or this one's before a restore, pages on. A cursor
+// it can't read is still 400 (TestAudibleSyncRefusals asks without the flag).
+func TestBridgeProgressCursorFeedOldBridge(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	wantSync(t, s.patListens(t, "pat-m", mistbornBook, 0, 20, "0"), "applied", "")
+	held := s.feed(t, "").Next
+
+	ahead := recursor(t, held, func(k map[string]any) { k["q"] = k["q"].(float64) + 5 })
+	for name, since := range map[string]string{"past the end": ahead,
+		"past the end, from before 2.7.0": recursor(t, ahead, func(k map[string]any) { delete(k, "f") })} {
+		end := s.feed(t, "&since="+url.QueryEscape(since))
+		if len(end.Rows) != 0 || end.More || end.Next == "" || end.Next == since {
+			t.Fatalf("%s: %+v, want no rows and the feed's end as next", name, end)
+		}
+		s.feedRefused(t, name+", with the flag", since) // the same cursor, from a Bridge that handles it
+	}
+	atEnd := s.feed(t, "&since="+url.QueryEscape(ahead)).Next
+	if f := s.feed(t, "&since="+url.QueryEscape(atEnd)); len(f.Rows) != 0 || f.Next != atEnd {
+		t.Fatalf("the feed's end = %+v, want no rows and itself as next", f)
+	}
+	wantSync(t, s.patListens(t, "pat-c", cradleBook, 0, 30, "0"), "applied", "")
+	f := s.feed(t, "&since="+url.QueryEscape(atEnd))
+	if len(f.Rows) != 1 || f.Rows[0].ASIN != cradleASIN || f.Rows[0].Position != 30 {
+		t.Fatalf("after the feed's end = %+v, want the place written since", f.Rows)
+	}
+
+	other := recursor(t, held, func(k map[string]any) { k["f"] = "another" })
+	if f := s.feed(t, "&since="+url.QueryEscape(other)); len(f.Rows) != 1 || f.Rows[0].ASIN != cradleASIN {
+		t.Fatalf("another feed's cursor = %+v, want it read as a place in this one", f.Rows)
+	}
+	if renewed, err := s.cat.RenewProgressFeed(context.Background(), "a restore"); err != nil || !renewed {
+		t.Fatalf("renewal = %v, %v", renewed, err)
+	}
+	s.feedRefused(t, "a cursor from before the restore, with the flag", held)
+	if f := s.feed(t, "&since="+url.QueryEscape(held)); len(f.Rows) != 1 || f.Rows[0].ASIN != cradleASIN {
+		t.Fatalf("a cursor from before the restore = %+v, want it read as before", f.Rows)
+	}
 }
 
 // The console's toggle: a new account syncs off whatever the Bridge sends, a
