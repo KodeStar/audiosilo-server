@@ -32,7 +32,7 @@ func TestSchedulerDueAndWritableBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cat.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+	if _, err := cat.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false, false); err != nil {
 		t.Fatal(err)
 	}
 	deps := modules.Deps{Log: slog.Default(), Catalog: cat, Bridge: queue}
@@ -138,7 +138,7 @@ func TestSchedulerPassesOverAFailingShow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := cat.IndexPodcastShow(ctx, lib.ID, show, "s", "", "", f, nil, false); err != nil {
+		if _, err := cat.IndexPodcastShow(ctx, lib.ID, show, "s", "", "", f, nil, false, false); err != nil {
 			t.Fatal(err)
 		}
 		if err := cat.FollowPodcast(ctx, 1, lib.ID, show, f.ShowID); err != nil {

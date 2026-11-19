@@ -1788,11 +1788,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
   a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new
   timeline, a listener's progress already at the new path merged by a strategy the caller
-  passes (`carryRule`: `moveCarry` or `joinCarry`), a favourite landing once, so a collision never fails a move. A
+  passes (`carryRule`: `moveCarry`, `joinCarry` or `showMoveCarry`), a favourite landing once, so a collision never fails a move. A
   **move** takes the newest save whole (`mergeNewest`: `updated_at`, then version; a row
   already at the new path is a removed book's, so its position or finish must not win by
   being further on); a **join** keeps the furthest (`mergeFurthest`: the rows are parts of one
-  book; finished over not, the newer save's stamp, the earlier start). Both take a version
+  book; finished over not, the newer save's stamp, the earlier start); a **show folder renamed
+  by hand** keeps the further place (`mergeUnseen`, below under Podcasts: the rows are one
+  episode's and never saw each other). All take a version
   above both rows. A favourite on a navigation folder (author, series) has no book to move:
   `detectMoves` re-keys it (`catalog.MoveFolderFavourites`) to the folder its moved books
   went to (`renamedFolders`), only when every move out of it agrees and it is gone from disk
@@ -3780,7 +3782,51 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   off, `gone` stops automatic checks. Secret loss is retained separately from the latest error:
   only a successful subscribe or poll clears it, so a follow by URL can still restore it after
   another failure. Follows and feed status survive index pruning. A show folder renamed by hand
-  keeps its feed.json, so its `show_id` turns up at the new folder: every scan (before its prune) and
+  keeps its feed.json, so its `show_id` turns up at the new folder. Until the Bridge's next poll
+  rewrites it, its episode paths name the old folder: `feed.ReadFile` reads a downloaded episode (a
+  valid fetch, not deleted) whose path names another single folder as the file of that name in the
+  show's own folder, while that folder holds it as a regular file of the fetch's size (the index's
+  rule for a download: a file still being copied in is none) and the folder named does not hold
+  the show too (a copy beside its original lists none of its episodes twice, and once the original
+  goes, lists them at the next scan; one that can't be told counts as
+  holding it; the same folder in another case does not) (`feed.rerooter`; the result must
+  pass `EpisodePath`). So the moved show lists its downloaded episodes and their places open at
+  once (a show nobody follows is never polled), and an episode not downloaded or with no file there
+  waits for the Bridge, so no fetch is asked for at a folder it has not taken in. What such a
+  feed.json lists depends on the folder it names, which the show's signature does not cover, so its
+  row records a hash of the episode paths read beside the signature (`rerootedSignature`). A scan
+  reads an unchanged folder with such a row, or whose row lists no episode, again
+  (`indexPodcastShow`, quietly) and indexes it only when it lists otherwise now. So a move done as
+  a copy and a delete with a scan in between, and a folder renamed under a server from before the
+  re-rooting, list their episodes at the next scan, and a renamed folder whose old folder holds the
+  show again lists them no more: its listing and a stream (which reads feed.json the same way)
+  agree. A look of the rerooter's that fails for now (`metadata.TransientFault`: EIO, ESTALE) is no
+  answer either way (`feed.rerooter`'s `fault`): the read lists no episode it might have read in
+  the show's folder and is `feed.File.Unsure`. Such a read of a show with an index row keeps the
+  row exactly as it was, however it comes (a quiet re-read, a folder changed since, the Bridge's
+  forced rescan: no re-index, no episode dropped, no notice, no `cover_version` change), and the
+  next read that can tell indexes the change, its news told as ever. Only a first read indexes
+  without those episodes, telling nothing, and the next read that can tell lists them, quietly,
+  telling nothing either (a quiet re-read's feed.json is the one its row was read from: nothing in
+  it is the Bridge's news). A Bridge rescan names the show folder at its feed.json's spelling (NFC,
+  or the case before a rename by hand), which a disk ignoring the difference (APFS, SMB) opens as
+  the folder it lists otherwise: `IndexPodcastPath` indexes the spelling the root lists when that
+  is the same folder (`listedShowFolder`, `os.SameFile`, its looks bounded), so the scan's row is
+  the folder's only one. An episode path whose folder is the show's in the other Unicode spelling
+  (NFC or NFD: a folder renamed to it, one name as the Bridge's `podcast.SameName` reads them) is
+  read at the folder's spelling on disk, every episode, downloaded or not, while that spelling
+  opens the folder itself (a disk that ignores the difference: nothing else is looked at) or is no folder
+  holding the show (gone, or another show's, on a disk that keeps the two apart, which counts as
+  re-rooted). One there holding the show too, or that can't be told, is the original of a copy,
+  which lists none of its episodes twice, as under any other name (`feed.inShow`). A path whose
+  folder differs from the show's only in case is read so too, but only while that spelling opens
+  the folder itself (a case-only rename on a disk that ignores case): on one that keeps them apart
+  they are two folders, never merged, and the old name is read as any other (`feed.rerooter`). A re-rooted
+  feed.json tells no new
+  episodes (`IndexPodcastShow`): the Bridge has not written it since the rename, so they were news
+  at the old folder. Such a copy of
+  feed.json (`feed.File.Rerooted`) depends on the folder's listing, so playback's feed memo never
+  remembers it. Every scan (before its prune) and
   every Bridge rescan (that show's identities only) finds an identity indexed at one path with rows or
   state at another (`catalog.PodcastIdentityPaths`), and the scanner (`library.movePodcastShows`)
   reads each path's feed.json: when exactly one listed folder holds the identity, the index knows it
@@ -3788,9 +3834,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `catalog.MovePodcastShows` moves, in one transaction, every listener's follow (two of them keep the
   earlier date), the feed state (the later check wins), the policy (the newer
   edit wins), the episodes' fetch backoffs and the listening state on the folder and each episode file
-  (`carryListeningState`, a move's rule; the files the new folder's index, the old row and the new
+  (`carryListeningState`; the files the new folder's index, the old row and the new
   folder's feed.json list, the last under whatever folder name its paths still give), then drops the
-  old row and its episodes. The folder's own state (a heart on the show) is keyed by path alone, so it
+  old row and its episodes. A place the listener already has at the new folder's file (it listed the
+  episode, with no place, while the move waited) and the carried one never saw each other, so they
+  merge as Sync v2 resolves a save made without seeing the stored row (`showMoveCarry`,
+  `mergeUnseen`: `ResolvePlace` on base 0): the further place is kept whole, a finished one over
+  any (a finish applies whatever place it saw), a tie keeps the new folder's, and the row takes the
+  newer save's stamp (`mergedOver`, as a join's). Never a move's newer save: a play from the start
+  at the new folder would replace the place the listener had got to. The folder's own state (a heart on the show) is keyed by path alone, so it
   moves only while the old folder is not another show's own: its row is this show's or gone, or names
   a show with no follow, feed state or policy there yet (renamed into it by hand, its own move still
   to come); under an unrelated show followed or polled at that name it stays. A
@@ -3808,16 +3860,25 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   feed.json is invalid or of a newer version, may be that other show's: then a move whose new folder
   carries another show's follow, feed state or policy waits too, unless that show moves off it in the
   same call; a plain rename beside an unrelated unreadable folder still moves (the `unread` flag
-  through `MovePodcastShows`). A file system's own folder (`lost+found`, `$RECYCLE.BIN`, `#recycle`
+  through `MovePodcastShows`). A rescan reads the indexed folders for it only when the index says a
+  move's new folder carries a show indexed nowhere (`catalog.PodcastMovesOverOthers`, asked outside
+  the move's transaction); when it reads none it passes `unread` all the same
+  (`library.stalePodcastRow`), which changes nothing unless such a show lost its row in between,
+  and then the move waits for the next look. A file system's own folder (`lost+found`, `$RECYCLE.BIN`, `#recycle`
   and the like: `fileSystemFolders`) the scanner may not look into (EACCES or EPERM, which last until
   an admin changes them; not EIO, ESTALE or a timeout) where the index and the podcast state know
   nothing (`strayPodcastFolder`, `catalog.PodcastPathKnown`) is neither: the scan takes it for no
   show folder, so a deleted show's leftover state holds no rename into its name for ever. Any other
   name stays both: a show renamed by hand into a folder the server can't read looks the same, and
   the partial scan keeps its old row, a place-only show's one way back. A show folder the scanner
-  can't even stat (a share dropping after its listing) is unread too, never gone. A rescan also counts as unread a listed folder whose row it does
-  not index again but whose signature changed (another show renamed into it by hand, the row's own
-  gone), so the move waits for a scan. A place at the new folder holds nothing: the new folder's
+  can't even stat (a share dropping after its listing) is unread too, never gone. A rescan whose move's
+  new folder carries a follow, feed state or policy of another show indexed nowhere
+  (`catalog.PodcastMovesOverOthers`; one indexed elsewhere holds the move anyway) also counts as unread
+  a listed folder whose row it does not index again but whose feed.json names another show_id now or
+  can't be told (another show renamed into it by hand, the row's own gone: `stalePodcastRow`), so the
+  move waits for a scan. Only the identity counts (a new episode is no other show), and no other
+  rescan reads the indexed folders: on a network share that sweep could outlast it. A place at the
+  new folder holds nothing: the new folder's
   row is the moving show's by then, so a show whose only state there is keyed by path has nothing
   left to move it later, and the move carries only its own files' state. A scan keeps each planned
   move's old folders' rows through its prune, so a held show whose only state there is a place is

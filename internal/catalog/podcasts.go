@@ -131,11 +131,13 @@ func stringOrNil(s string) any {
 // ahead of the clock, so one mistyped date hides nothing; one with the same
 // date or none counts) and first seen by the Bridge within NewEpisodeWindow. So
 // a show's first index, a forced rescan of a feed already indexed, a rebuilt
-// index, a show whose missing episodes are indexed again, and an index restored
-// from an old backup or written after a long outage (episodes the Bridge found
-// days ago) announce nothing (the Bridge's forced rescan after a poll that grew
-// the feed does announce).
-func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, cover, coverVersion string, f *feed.File, present map[string]PodcastFile, force bool) (bool, error) {
+// index, a show whose missing episodes are indexed again, a folder renamed by
+// hand the Bridge has not taken in (feed.File.Rerooted), a quiet re-read (the
+// feed.json its row was read from, read again: nothing it lists is the
+// Bridge's news), and an index restored from an old backup or written after a
+// long outage (episodes the Bridge found days ago) announce nothing (the
+// Bridge's forced rescan after a poll that grew the feed does announce).
+func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, cover, coverVersion string, f *feed.File, present map[string]PodcastFile, force, quiet bool) (bool, error) {
 	changed := false
 	var event *ServerEvent
 	err := c.db.WithTx(ctx, "IndexPodcastShow", func(tx *sql.Tx) error {
@@ -162,8 +164,13 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 		if err == nil && staleFeed(f.ReadAt, oldRead, c.now()) {
 			return nil
 		}
-		// News is told only of a show indexed before as this same show.
-		announce := err == nil && oldShowID == f.ShowID
+		// News is told only of a show indexed before as this same show, and
+		// never from a feed.json read in a folder its paths don't name
+		// (feed.File.Rerooted): the Bridge has not written it since the
+		// folder was renamed by hand, so what it lists was news at the old
+		// folder, however late its files turn up here (a move still copying,
+		// a copy whose original went).
+		announce := err == nil && oldShowID == f.ShowID && !f.Rerooted && !quiet
 		type oldEpisode struct {
 			book                  int64
 			path, guid, episodeID string
@@ -352,13 +359,17 @@ func seenSince(e feed.Episode, from string) bool {
 	return seen == "" || seen >= from
 }
 
-func (c *Catalog) PodcastSignatures(ctx context.Context, lib int64) (map[string]string, error) {
-	rows, err := queryRows(ctx, c.db, func(r *sql.Rows, v *[2]string) error { return r.Scan(&v[0], &v[1]) }, `SELECT show_path,feed_sig FROM podcast_shows WHERE library_id=?`, lib)
-	out := map[string]string{}
+// PodcastShowIDs is lib's indexed show folders, each with its row's show_id.
+func (c *Catalog) PodcastShowIDs(ctx context.Context, lib int64) (map[string]string, error) {
+	rows, err := queryRows(ctx, c.db, func(r *sql.Rows, v *[2]string) error { return r.Scan(&v[0], &v[1]) }, `SELECT show_path,show_id FROM podcast_shows WHERE library_id=?`, lib)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rows))
 	for _, r := range rows {
 		out[r[0]] = r[1]
 	}
-	return out, err
+	return out, nil
 }
 
 // PrunePodcastShows removes the named shows of a library with their episodes:

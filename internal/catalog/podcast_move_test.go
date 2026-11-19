@@ -8,6 +8,7 @@ import (
 	"path"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
@@ -34,7 +35,7 @@ func showAt(t *testing.T, show, id string) *feed.File {
 func indexShowAt(t *testing.T, c *Catalog, ctx context.Context, lib int64, show, id string) *feed.File {
 	t.Helper()
 	f := showAt(t, show, id)
-	if _, err := c.IndexPodcastShow(ctx, lib, show, show, "", "", f, nil, true); err != nil {
+	if _, err := c.IndexPodcastShow(ctx, lib, show, show, "", "", f, nil, true, false); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -176,6 +177,92 @@ func TestMovePodcastShowsMergesWithTheNewFolder(t *testing.T) {
 	if err := fx.c.db.QueryRowContext(fx.ctx, `SELECT COUNT(*),MIN(created_at) FROM podcast_follows WHERE user_id=?`, fx.ann).Scan(&n, &at); err != nil || n != 1 || at != since {
 		t.Fatalf("follows %d %s %v; want one since %s", n, at, err, since)
 	}
+}
+
+// A place the listener made at the new folder while the move waited (the
+// folder already listed the episode, with no place) and the one they had at the
+// old folder never saw each other: the further one is kept, a finished one over
+// any, whichever was saved last, and a tie keeps the new folder's. Denied: a
+// play from the start at the new folder, though the newer save, replaces
+// neither the place the listener had got to nor a finish.
+func TestMovePodcastShowsKeepsTheFurtherPlace(t *testing.T) {
+	const later = "2026-11-01T12:00:00Z" // after the old folder's save
+	for _, tc := range []struct {
+		name string
+		old  *Progress // the old folder's, when not the fixture's (42 s)
+		made Progress  // the new folder's
+		want Progress  // the place kept: position, finished and device
+	}{
+		{"a fresh start is behind", nil,
+			Progress{Position: 5, DeviceID: "tablet", UpdatedAt: later},
+			Progress{Position: 42, DeviceID: "phone"}},
+		{"further on at the new folder", nil,
+			Progress{Position: 900, DeviceID: "tablet", UpdatedAt: later},
+			Progress{Position: 900, DeviceID: "tablet"}},
+		{"the same place", nil,
+			Progress{Position: 42, DeviceID: "tablet", UpdatedAt: later},
+			Progress{Position: 42, DeviceID: "tablet"}},
+		{"a fresh start after a finish", &Progress{Position: 1720, Finished: true, DeviceID: "phone", UpdatedAt: "2026-11-01T11:00:00Z"},
+			Progress{Position: 5, DeviceID: "tablet", UpdatedAt: later},
+			Progress{Position: 1720, Finished: true, DeviceID: "phone"}},
+		{"marked played at the new folder", nil,
+			Progress{Position: 0, Finished: true, DeviceID: "tablet", UpdatedAt: later},
+			Progress{Position: 0, Finished: true, DeviceID: "tablet"}},
+		{"an older place at the new folder, further on", nil,
+			Progress{Position: 900, DeviceID: "tablet", UpdatedAt: "2026-10-01T10:00:00Z"},
+			Progress{Position: 900, DeviceID: "tablet"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newRenameFixture(t)
+			save := func(at string, p Progress) {
+				t.Helper()
+				p.Ref, p.Duration = Ref{LibraryID: fx.lib, Path: at}, 1720
+				if _, err := fx.c.SaveProgress(fx.ctx, fx.ann, p); err != nil {
+					t.Fatal(err)
+				}
+			}
+			old := Progress{Position: 42, DeviceID: "phone", UpdatedAt: "2026-11-01T10:30:00Z"}
+			if tc.old != nil {
+				old = *tc.old
+			}
+			save(fx.oldEpisode, old)
+			save("Renamed/"+fx.ep, tc.made)
+			if n, err := fx.c.MovePodcastShows(fx.ctx, fx.lib, []PodcastMove{{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}}, false); err != nil || n != 1 {
+				t.Fatalf("move %d %v", n, err)
+			}
+			got, err := fx.c.GetProgress(fx.ctx, fx.ann, Ref{LibraryID: fx.lib, Path: "Renamed/" + fx.ep})
+			if err != nil || got == nil {
+				t.Fatalf("the merged place: %+v %v", got, err)
+			}
+			if got.Position != tc.want.Position || got.Finished != tc.want.Finished || got.DeviceID != tc.want.DeviceID {
+				t.Fatalf("kept %v finished=%v by %s; want %v finished=%v by %s",
+					got.Position, got.Finished, got.DeviceID, tc.want.Position, tc.want.Finished, tc.want.DeviceID)
+			}
+			// Not older than either save it replaces: a save a device still
+			// holds of the place not kept is no newer than the row.
+			newest := max(old.UpdatedAt, tc.made.UpdatedAt)
+			if !sameInstant(t, got.UpdatedAt, newest) {
+				t.Fatalf("stamped %s; want the newer save's %s", got.UpdatedAt, newest)
+			}
+			if left, err := fx.c.GetProgress(fx.ctx, fx.ann, Ref{LibraryID: fx.lib, Path: fx.oldEpisode}); err != nil || left != nil {
+				t.Fatalf("a place left at the old folder: %+v %v", left, err)
+			}
+		})
+	}
+}
+
+// sameInstant reports whether two RFC3339 stamps are one time.
+func sameInstant(t *testing.T, a, b string) bool {
+	t.Helper()
+	at, err := time.Parse(time.RFC3339, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bt, err := time.Parse(time.RFC3339, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return at.Equal(bt)
 }
 
 // Denied: a move to a folder whose row is another show's (it changed since the
@@ -492,7 +579,7 @@ func TestMovePodcastShowsHoldsAMoveOverAnIndexedShowsFollow(t *testing.T) {
 	for i := range f.Episodes {
 		f.Episodes[i].Path = "Third/other-" + path.Base(f.Episodes[i].Path)
 	}
-	if _, err := fx.c.IndexPodcastShow(fx.ctx, fx.lib, "Third", "Third", "", "", f, nil, true); err != nil {
+	if _, err := fx.c.IndexPodcastShow(fx.ctx, fx.lib, "Third", "Third", "", "", f, nil, true, false); err != nil {
 		t.Fatal(err)
 	}
 	cat := seedUserNamed(t, fx.c, fx.ctx, "cat")
@@ -530,7 +617,7 @@ func TestMovePodcastShowsHoldsAMoveOverAnIndexedShowsFeedState(t *testing.T) {
 	for i := range f.Episodes {
 		f.Episodes[i].Path = "Third/other-" + path.Base(f.Episodes[i].Path)
 	}
-	if _, err := fx.c.IndexPodcastShow(fx.ctx, fx.lib, "Third", "Third", "", "", f, nil, true); err != nil {
+	if _, err := fx.c.IndexPodcastShow(fx.ctx, fx.lib, "Third", "Third", "", "", f, nil, true, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fx.c.db.ExecContext(fx.ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,etag) VALUES(?,'Renamed',?,'other')`, fx.lib, other); err != nil {
@@ -591,5 +678,45 @@ func TestPodcastPathKnown(t *testing.T) {
 	}
 	if known(fx.lib, "Example Show") {
 		t.Fatal("known with nothing left")
+	}
+}
+
+// PodcastMovesOverOthers answers for a move whose new folder carries the follow
+// of another identity indexed nowhere, and not for one carrying only its own
+// show's state, nothing, or another identity indexed elsewhere (which holds
+// the move whatever the caller could read).
+func TestPodcastMovesOverOthers(t *testing.T) {
+	fx := newRenameFixture(t)
+	c, ctx := fx.c, fx.ctx
+	over := func(m PodcastMove) bool {
+		t.Helper()
+		got, err := c.PodcastMovesOverOthers(ctx, fx.lib, []PodcastMove{m})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	// Its own follows at the new folder (a merge) and a fresh folder hold no other.
+	if over(PodcastMove{ShowID: fx.id, From: []string{"Renamed"}, To: "Example Show"}) ||
+		over(PodcastMove{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}) {
+		t.Fatal("over its own state")
+	}
+	if over(PodcastMove{ShowID: "fedcba9876543210", From: []string{"Elsewhere"}, To: "Example Show"}) {
+		t.Fatal("an identity indexed elsewhere counted")
+	}
+	if _, err := c.db.ExecContext(ctx, `INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at) VALUES(?,?,'Renamed','fedcba9876543210','2026-11-01T10:00:00Z')`, fx.ann, fx.lib); err != nil {
+		t.Fatal(err)
+	}
+	if !over(PodcastMove{ShowID: fx.id, From: []string{"Example Show"}, To: "Renamed"}) {
+		t.Fatal("another show's follow not seen")
+	}
+}
+
+// PodcastShowIDs names each indexed folder with its row's identity.
+func TestPodcastShowIDs(t *testing.T) {
+	fx := newRenameFixture(t)
+	ids, err := fx.c.PodcastShowIDs(fx.ctx, fx.lib)
+	if err != nil || len(ids) != 2 || ids["Example Show"] != fx.id || ids["Renamed"] != fx.id {
+		t.Fatalf("ids %v %v", ids, err)
 	}
 }

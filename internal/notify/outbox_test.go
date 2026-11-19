@@ -105,7 +105,7 @@ func TestOwedPodcastNoticeIsSentAtTheNextStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cat.IndexPodcastShow(ctx, lib.ID, show, "s1", "", "", f, nil, false); err != nil {
+	if _, err := cat.IndexPodcastShow(ctx, lib.ID, show, "s1", "", "", f, nil, false, false); err != nil {
 		t.Fatal(err)
 	}
 	for id := range int64(catalog.FeedFailingAfter) {

@@ -88,9 +88,9 @@ func TestPodcastScanner(t *testing.T) {
 	if _, err := s.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	sigs, err := cat.PodcastSignatures(ctx, lib.ID)
-	if err != nil || len(sigs) != 0 {
-		t.Fatalf("prune %+v %v", sigs, err)
+	ids, err := cat.PodcastShowIDs(ctx, lib.ID)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("prune %+v %v", ids, err)
 	}
 }
 func TestPodcastMarker(t *testing.T) {

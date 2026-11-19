@@ -323,6 +323,224 @@ func TestPodcastFeedMemoRacy(t *testing.T) {
 	}
 }
 
+// A show folder renamed by hand lists its downloaded episodes from a feed.json
+// naming the old folder (feed.ReadFile re-roots them against the folder's
+// listing), so the copy read depends on more than feed.json and is never
+// remembered: an episode file added to the folder after a stream read the copy
+// (a move by hand still copying) opens once the scan lists it.
+func TestPodcastFeedMemoRenamedFolder(t *testing.T) {
+	t.Parallel()
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
+	first, second := f.Episodes[0], f.Episodes[1] // the second's fetch is deleted in the fixture
+	filename := filepath.Join(dir, "feed.json")
+	raw, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, []byte(strings.Replace(string(raw), `"2026-10-21T07:00:00Z"`, `""`, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	renamed := filepath.Join(lib.Root, "Renamed")
+	if err := os.Rename(dir, renamed); err != nil {
+		t.Fatal(err)
+	}
+	setFeedTime(t, filepath.Join(renamed, "feed.json"), time.Now().Add(-time.Hour)) // past the racy window
+	writePodcastFixture(t, filepath.Join(renamed, path.Base(first.Path)), "chap-v24-reverse.mp3")
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	opened, _, err := OpenPodcast(ctx, cat, *lib, "Renamed/"+path.Base(first.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened.Close()
+	writePodcastFixture(t, filepath.Join(renamed, path.Base(second.Path)), "chap-v23.mp3")
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	opened, _, err = OpenPodcast(ctx, cat, *lib, "Renamed/"+path.Base(second.Path))
+	if err != nil {
+		t.Fatalf("an episode added since the copy was read: %v", err)
+	}
+	opened.Close()
+}
+
+// A renamed folder lists its downloaded episode from a feed.json naming the old
+// folder; once the old folder holds the show again (a copy put back, its
+// folder unchanged) the next scan reads the renamed one again, and its listing
+// and a stream agree: the episode is not there, never listed as present while
+// every stream of it is refused.
+func TestPodcastRenamedFolderListingFollowsItsOldFolder(t *testing.T) {
+	t.Parallel()
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
+	rel := "Renamed/" + path.Base(f.Episodes[0].Path)
+	writePodcastFixture(t, filepath.Join(dir, path.Base(f.Episodes[0].Path)), "chap-v24-reverse.mp3")
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(dir, filepath.Join(lib.Root, "Renamed")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	listedAndPlays := func() (listed, plays bool) {
+		t.Helper()
+		pin, err := cat.PodcastPin(ctx, lib.ID, rel)
+		listed = err == nil && pin.Present
+		opened, _, err := OpenPodcast(ctx, cat, *lib, rel)
+		if err == nil {
+			opened.Close()
+		}
+		return listed, err == nil
+	}
+	if listed, plays := listedAndPlays(); !listed || !plays {
+		t.Fatalf("renamed: listed %v, plays %v", listed, plays)
+	}
+	// Read again while nothing changed, it indexes nothing.
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Added+res.Updated != 0 {
+		t.Fatalf("an unchanged scan: %+v %v", res, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(lib.Root, "Renamed", "feed.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "feed.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if listed, plays := listedAndPlays(); listed || plays {
+		t.Fatalf("beside its old folder again: listed %v, plays %v", listed, plays)
+	}
+	// Once the old folder goes again, the next scan lists it once more.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if listed, plays := listedAndPlays(); !listed || !plays {
+		t.Fatalf("its old folder gone again: listed %v, plays %v", listed, plays)
+	}
+}
+
+// A show folder renamed by hand to its other Unicode spelling (NFC to NFD; a
+// disk may keep both) is the same folder: the scan lists every episode its
+// feed.json names in the first spelling, downloaded or not (so a new one is
+// asked for), at the spelling on disk, and the downloaded one streams.
+func TestPodcastFolderInAnotherSpellingListsAndStreams(t *testing.T) {
+	t.Parallel()
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
+	nfc, nfd := "Caf\u00e9 Show", "Cafe\u0301 Show"
+	raw, err := os.ReadFile(filepath.Join(dir, "feed.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(lib.Root, nfd)
+	if err := os.Rename(dir, moved); err != nil {
+		t.Fatal(err)
+	}
+	if names, err := os.ReadDir(lib.Root); err != nil || len(names) != 1 || names[0].Name() != nfd {
+		t.Skipf("the disk does not keep an NFD name as given: %v %v", names, err)
+	}
+	if err := os.WriteFile(filepath.Join(moved, "feed.json"), []byte(strings.ReplaceAll(string(raw), `"Fixture Show/`, `"`+nfc+`/`)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base := path.Base(f.Episodes[0].Path)
+	writePodcastFixture(t, filepath.Join(moved, base), "chap-v24-reverse.mp3")
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cat.PodcastEpisodeRows(ctx, lib.ID, nfd); err != nil || n != len(f.Episodes) {
+		t.Fatalf("episodes %d of %d, %v", n, len(f.Episodes), err)
+	}
+	opened, _, err := OpenPodcast(ctx, cat, *lib, nfd+"/"+base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened.Close()
+}
+
+// A show folder renamed by hand only in case on a disk that ignores case
+// (APFS, SMB) is the same folder: the next scan lists every episode its
+// feed.json names at the old spelling, downloaded or not, at the spelling on
+// disk, and the downloaded one streams at once, before the Bridge rewrites
+// feed.json. (A disk that keeps both names apart reads the old one as another
+// folder: TestReadFeedReadsACaseOnlyRename.)
+func TestPodcastCaseOnlyRenameListsAndStreams(t *testing.T) {
+	t.Parallel()
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
+	base := path.Base(f.Episodes[0].Path)
+	writePodcastFixture(t, filepath.Join(dir, base), "chap-v24-reverse.mp3")
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(lib.Root, "fixture show")
+	if err := os.Rename(dir, moved); err != nil {
+		t.Fatal(err)
+	}
+	if names, err := os.ReadDir(lib.Root); err != nil || len(names) != 1 || names[0].Name() != "fixture show" {
+		t.Fatalf("the rename: %v %v", names, err)
+	}
+	if st, err := os.Lstat(dir); err != nil || !st.IsDir() {
+		t.Skipf("the disk keeps names apart by case: %v", err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cat.PodcastEpisodeRows(ctx, lib.ID, "fixture show"); err != nil || n != len(f.Episodes) {
+		t.Fatalf("episodes %d of %d, %v", n, len(f.Episodes), err)
+	}
+	opened, _, err := OpenPodcast(ctx, cat, *lib, "fixture show/"+base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened.Close()
+}
+
+// Denied: a copy of a show folder made beside it in the other Unicode spelling
+// (a disk that keeps the NFC and NFD names apart) is a copy, as one under any
+// other name: it lists none of the show's episodes twice, so none is asked for
+// in a folder the Bridge takes for a copy.
+func TestPodcastCopyInAnotherSpellingListsNoEpisode(t *testing.T) {
+	t.Parallel()
+	ctx, cat, lib, s, f, dir := podcastDiskFixture(t)
+	nfc, nfd := "Caf\u00e9 Show", "Cafe\u0301 Show"
+	raw, err := os.ReadFile(filepath.Join(dir, "feed.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = []byte(strings.ReplaceAll(string(raw), `"Fixture Show/`, `"`+nfc+`/`))
+	base := path.Base(f.Episodes[0].Path)
+	for _, name := range []string{nfc, nfd} {
+		folder := filepath.Join(lib.Root, name)
+		if err := os.Mkdir(folder, 0o755); err != nil {
+			t.Skipf("the disk does not keep NFC and NFD names apart: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(folder, "feed.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		writePodcastFixture(t, filepath.Join(folder, base), "chap-v24-reverse.mp3")
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cat.PodcastEpisodeRows(ctx, lib.ID, nfc); err != nil || n != len(f.Episodes) {
+		t.Fatalf("the original: episodes %d of %d, %v", n, len(f.Episodes), err)
+	}
+	if n, err := cat.PodcastEpisodeRows(ctx, lib.ID, nfd); err != nil || n != 0 {
+		t.Fatalf("the copy: episodes %d, %v", n, err)
+	}
+}
+
 // regeneratedFeed is filename's feed.json with digest, an episode's fetch
 // digest, changed in its last hex digit: the same size, another generation.
 func regeneratedFeed(t *testing.T, filename, digest string) []byte {

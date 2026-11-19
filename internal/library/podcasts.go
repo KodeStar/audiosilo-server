@@ -4,9 +4,11 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -16,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -80,7 +84,7 @@ func feedSignature(info os.FileInfo) string {
 func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *ScanResult) (*ScanResult, error) {
 	// The shows known before the root is listed are the only ones this scan may
 	// prune: one the Bridge indexes meanwhile isn't in the listing yet.
-	old, err := s.cat.PodcastSignatures(ctx, lib.ID)
+	old, err := s.cat.PodcastShowIDs(ctx, lib.ID)
 	if err != nil {
 		return res, err
 	}
@@ -166,6 +170,8 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 
 // IndexPodcastPath is the Bridge's targeted rescan. Only show folders and an
 // already indexed episode can name a show; it never discovers arbitrary audio.
+// The show is indexed at the spelling the root lists (listedShowFolder), which
+// it answers.
 func (s *Scanner) IndexPodcastPath(ctx context.Context, lib catalog.Library, p string) (string, int, error) {
 	p = catalog.CleanRelPath(p)
 	show := p
@@ -179,11 +185,52 @@ func (s *Scanner) IndexPodcastPath(ctx context.Context, lib catalog.Library, p s
 	if lib.Kind != catalog.KindPodcasts || !feed.ShowPath(show) {
 		return "", 0, ErrNotIndexable
 	}
+	show = s.listedShowFolder(ctx, lib.Root, show)
 	n, _, err := s.indexPodcastShow(ctx, lib, show, true)
 	if err == nil {
 		s.movePodcastShows(ctx, lib, show, false)
 	}
 	return show, n, err
+}
+
+// listedShowFolder is show as the root of a library lists it. The Bridge asks
+// for a rescan at its feed.json's spelling (NFC, or the case a folder had
+// before a rename by hand), which a disk that ignores the difference (APFS,
+// SMB) opens as the folder it lists in another, and a scan indexes that one:
+// indexed at the spelling asked, the folder would have a second row, which
+// only a move would fold back. Only a listed name that differs from show in
+// Unicode normal form or case and is the same folder (os.SameFile) is taken;
+// show as given otherwise (listed itself, gone, two folders on a disk that
+// keeps the two apart, a root or folder that can't be read or did not answer
+// in time: indexPodcastShow answers those), nor a listed name no show folder
+// may have (feed.ShowPath: a scan skips it). The root is listed once (names
+// only, no stat of each), and only a name that matches is looked at, all of it
+// within one lookTimeout (metadata.ReadDirNamesBounded, LstatBounded).
+func (s *Scanner) listedShowFolder(ctx context.Context, root, show string) string {
+	deadline := time.Now().Add(s.lookTimeout(ctx))
+	names, err := metadata.ReadDirNamesBounded(ctx, root, metadata.WaitLeft(deadline))
+	if err != nil {
+		return show
+	}
+	nfc := norm.NFC.String(show)
+	var asked os.FileInfo
+	for _, name := range names {
+		if name == show {
+			return show
+		}
+		if !strings.EqualFold(norm.NFC.String(name), nfc) || !feed.ShowPath(name) {
+			continue
+		}
+		if asked == nil {
+			if asked, err = metadata.LstatBounded(ctx, filepath.Join(root, show), metadata.WaitLeft(deadline)); err != nil {
+				return show
+			}
+		}
+		if st, err := metadata.LstatBounded(ctx, filepath.Join(root, name), metadata.WaitLeft(deadline)); err == nil && st.IsDir() && os.SameFile(asked, st) {
+			return name
+		}
+	}
+	return show
 }
 
 // movePodcastShows moves the durable state of a show folder renamed by hand
@@ -200,8 +247,9 @@ func (s *Scanner) IndexPodcastPath(ctx context.Context, lib catalog.Library, p s
 // names swapped by hand) is indexed again first, so both shows move in one
 // call. unread (a scan's) is that a folder the root lists could not be read
 // or its feed.json used (unreadPodcastFolder); a rescan finds that out itself
-// (indexNewPodcastFolders). It goes to catalog.MovePodcastShows, which then
-// holds a move over another show's state. It answers the old folders of the
+// (indexNewPodcastFolders, stalePodcastRow). It goes to
+// catalog.MovePodcastShows, which then holds a move over another show's
+// state. It answers the old folders of the
 // moves it planned, applied or held. Failures are logged: the next scan or
 // rescan looks again.
 func (s *Scanner) movePodcastShows(ctx context.Context, lib catalog.Library, at string, unread bool) (from []string) {
@@ -216,13 +264,16 @@ func (s *Scanner) movePodcastShows(ctx context.Context, lib catalog.Library, at 
 		// at this move's folder, and a move without B's own would replace
 		// them. Index such folders first, as a scan does, so both move in
 		// one call (a folder whose row no longer describes it counts as
-		// unread instead: indexNewPodcastFolders).
+		// unread instead: stalePodcastRow).
 		var n int
 		var skipped bool
 		if n, skipped, err = s.indexNewPodcastFolders(ctx, lib, &listed); err == nil && n > 0 {
 			moves, err = s.settledPodcastMoves(ctx, lib, at, &listed)
 		}
 		unread = unread || skipped
+		if err == nil && !unread && len(moves) > 0 {
+			unread, err = s.stalePodcastRow(ctx, lib, moves, listed)
+		}
 	}
 	if err != nil {
 		s.log.Warn("podcasts: looking for renamed show folders failed", "library", lib.ID, "err", err)
@@ -257,13 +308,9 @@ func (s *Scanner) settledPodcastMoves(ctx context.Context, lib catalog.Library, 
 
 // indexNewPodcastFolders indexes the show folders the root lists that have no
 // index row yet, and answers how many it indexed and whether one was unread
-// (unreadPodcastFolder; a stray folder is not: strayPodcastFolder) or holds what
-// its row no longer describes (a scan would index it again: another show
-// renamed into it by hand, the row's own gone). The rescan leaves such a row
-// as it is, so the show now in that folder is found by the next scan, and a
-// move over another show's state waits until then.
+// (unreadPodcastFolder; a stray folder is not: strayPodcastFolder).
 func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Library, listed *map[string]bool) (n int, unread bool, err error) {
-	known, err := s.cat.PodcastSignatures(ctx, lib.ID)
+	known, err := s.cat.PodcastShowIDs(ctx, lib.ID)
 	if err != nil {
 		return 0, false, err
 	}
@@ -280,11 +327,7 @@ func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Librar
 		if !feed.ShowPath(name) {
 			continue
 		}
-		if sig, ok := known[name]; ok {
-			if !unread {
-				_, _, now, err := podcastFolderSig(l, lib.Root, name)
-				unread = err == nil && now != sig || unreadPodcastFolder(err)
-			}
+		if _, ok := known[name]; ok {
 			continue
 		}
 		switch _, _, err := s.indexPodcastShow(ctx, lib, name, false); {
@@ -295,6 +338,43 @@ func (s *Scanner) indexNewPodcastFolders(ctx context.Context, lib catalog.Librar
 		}
 	}
 	return n, unread, nil
+}
+
+// stalePodcastRow is a rescan's unread for catalog.MovePodcastShows: whether
+// an indexed folder the root lists (listed) holds a show other than its row's
+// or can't be told (podcastHeldID). The rescan leaves such a row as it is, and
+// the show now in it may be the one whose state sits at a move's new folder,
+// so the move waits as for an unread folder. Only the show identity counts,
+// and the folders are read only when a move's new folder carries the state of
+// another show indexed nowhere (catalog.PodcastMovesOverOthers), the only move
+// that can wait on it. With none it answers true unread: the index was asked
+// outside the move's transaction, and by then every other show at a new folder
+// is indexed elsewhere, which holds the move whatever unread says. So true
+// changes nothing unless such a show lost its row in between (a scan's prune,
+// a rescan), and then the move waits for the next look instead of applying
+// over state these folders were never read for.
+func (s *Scanner) stalePodcastRow(ctx context.Context, lib catalog.Library, moves []catalog.PodcastMove, listed map[string]bool) (bool, error) {
+	if over, err := s.cat.PodcastMovesOverOthers(ctx, lib.ID, moves); err != nil || !over {
+		return true, err
+	}
+	known, err := s.cat.PodcastShowIDs(ctx, lib.ID)
+	if err != nil {
+		return false, err
+	}
+	l := s.podcastLooks(ctx)
+	for name := range listed {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		id, ok := known[name]
+		if !ok {
+			continue
+		}
+		if now, ok := podcastHeldID(l, lib.Root, name); !ok || now != "" && now != id {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // planPodcastMoves is movePodcastShows' look at the disk. With reindex, a
@@ -548,33 +628,82 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 	}
 	filename := filepath.Join(dir, "feed.json")
 	feedSig := feedSignature(info)
+	// prior: the folder is unchanged since its row was written, but what its
+	// feed.json lists may not be: a re-rooted read (feed.File.Rerooted) depends
+	// on the folder its paths name too, so its row records the episodes read
+	// (rerootedSignature), and a row listing none may be a server's from before
+	// the re-rooting. Either is read again, quietly, and indexed only when it
+	// lists otherwise now and could tell (feed.File.Unsure; CONVENTIONS.md: a
+	// show folder renamed by hand).
+	prior, count, log, quiet := "", 0, s.log, false
 	if !force {
 		old, err := s.cat.PodcastShow(ctx, lib.ID, show, 0)
 		if err != nil && !errors.Is(err, catalog.ErrNotFound) {
 			return 0, false, err
 		}
-		if err == nil && old.FeedSig == sig {
+		if err == nil && (old.FeedSig == sig || strings.HasPrefix(old.FeedSig, sig+rerootedSep)) {
 			// An unchanged feed.json is skipped only while its episodes are
 			// still indexed: an older server run on this database (a rollback)
 			// scans the library as books and removes them, leaving the show.
-			rows, err := s.cat.PodcastEpisodeRows(ctx, lib.ID, show)
-			if err != nil {
-				return 0, false, err
+			rows := 0
+			if old.EpisodeCount > 0 {
+				if rows, err = s.cat.PodcastEpisodeRows(ctx, lib.ID, show); err != nil {
+					return 0, false, err
+				}
 			}
-			if rows >= old.EpisodeCount {
+			switch {
+			case rows < old.EpisodeCount:
+				s.log.Info("re-indexing a podcast show whose episodes are missing from the index", "library", lib.ID, "indexed", rows, "listed", old.EpisodeCount)
+				force = true
+			case old.FeedSig == sig && old.EpisodeCount > 0:
 				return old.EpisodeCount, false, nil
+			default:
+				prior, count, log = old.FeedSig, old.EpisodeCount, nil
 			}
-			s.log.Info("re-indexing a podcast show whose episodes are missing from the index", "library", lib.ID, "indexed", rows, "listed", old.EpisodeCount)
-			force = true
 		}
 	}
-	f, err := l.readFeed(filename, show, s.log)
+	f, err := l.readFeed(filename, show, log)
 	if errors.Is(err, feed.ErrInvalidFeed) || errors.Is(err, feed.ErrVersion) {
 		s.log.Warn("skipping invalid or unsupported podcast feed.json", "library", lib.ID)
 		return 0, false, errFeedUnusable
 	}
 	if err != nil {
 		return 0, false, err
+	}
+	if f.Rerooted {
+		sig = rerootedSignature(sig, f)
+	}
+	if f.Unsure {
+		// A read that could not tell what the disk lists (feed.File.Unsure: a
+		// share's fault on a folder its paths name) keeps an indexed row as it
+		// is, however the read came (a quiet re-read, a folder changed since,
+		// the Bridge's forced rescan): re-indexed, the episodes it left out
+		// would drop from the listing until a read could tell, the row's new
+		// signature would move its cover_version, and the next read, of the
+		// row it wrote, would be a quiet one, telling none of the news this
+		// feed.json brought. The next read that can tell indexes the change.
+		// Only a show with no row yet is indexed without them (a first index
+		// tells nothing anyway).
+		if prior != "" {
+			return count, false, nil
+		}
+		switch old, err := s.cat.PodcastShow(ctx, lib.ID, show, 0); {
+		case err == nil:
+			return old.EpisodeCount, false, nil
+		case !errors.Is(err, catalog.ErrNotFound):
+			return 0, false, err
+		}
+	}
+	if prior != "" {
+		if sig == prior && len(f.Episodes) == count {
+			return count, false, nil
+		}
+		force = true // the folder's signature is the row's: index it all the same
+		// Its feed.json is the one the row was read from, so nothing it lists
+		// is the Bridge's news, however it lists more (a folder its paths name
+		// changed, episodes a first index that could not tell left out):
+		// telling none.
+		quiet = true
 	}
 	entries, err := l.readDir(dir)
 	if err != nil {
@@ -625,8 +754,22 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 		}
 		present[base] = file
 	}
-	changed, err := s.cat.IndexPodcastShow(ctx, lib.ID, show, sig, cover, version, f, present, force)
+	changed, err := s.cat.IndexPodcastShow(ctx, lib.ID, show, sig, cover, version, f, present, force, quiet)
 	return len(f.Episodes), changed, err
+}
+
+// rerootedSep joins a show folder's signature (hex and digits, so never "+")
+// and the hash of the episode paths a re-rooted read of its feed.json listed:
+// the row's signature then changes when another folder changes what the read
+// lists (indexPodcastShow).
+const rerootedSep = "+"
+
+func rerootedSignature(sig string, f *feed.File) string {
+	h := sha256.New()
+	for _, ep := range f.Episodes {
+		_, _ = io.WriteString(h, ep.Path+"\n") // no episode path holds a line break (feed.ShowPath)
+	}
+	return sig + rerootedSep + hex.EncodeToString(h.Sum(nil))
 }
 
 // BrowsePodcasts reads only the index, so episodes without files remain visible

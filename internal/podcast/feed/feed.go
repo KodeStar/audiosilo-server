@@ -5,10 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
+	"sync"
+	"testing"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/relpath"
@@ -35,6 +41,16 @@ type File struct {
 	// ReadAt is when ReadFile began reading the file (zero for a File not
 	// read from disk): catalog.IndexPodcastShow orders its folds by it.
 	ReadAt time.Time `json:"-"`
+	// Rerooted is that an episode path named another folder, so ReadFile
+	// looked at the disk to read it (rerooter; inShow, but for show's own
+	// folder in another spelling): Episodes depends on more than this file,
+	// and a copy remembered by the file alone would go stale.
+	Rerooted bool `json:"-"`
+	// Unsure is that a look of the rerooter's failed as a share does when a
+	// retry may get past it (metadata.TransientFault: EIO, ESTALE), so an
+	// episode it would have read in show's folder may be left out of Episodes
+	// for this read only. Such a read is Rerooted too.
+	Unsure bool `json:"-"`
 }
 type Show struct {
 	Title       string   `json:"title"`
@@ -165,7 +181,9 @@ func timestamp(s string) string {
 }
 
 // ReadFile refuses links and non-regular files. Invalid episode paths are skipped;
-// diagnostics deliberately contain no feed data or enclosure URLs.
+// diagnostics deliberately contain no feed data or enclosure URLs. An episode
+// path naming show in another Unicode spelling or case is read as show's
+// (inShow), one naming a show folder renamed by hand in show (rerooter).
 func ReadFile(filename, show string, log *slog.Logger) (*File, error) {
 	if !ShowPath(show) {
 		return nil, ErrInvalidFeed
@@ -205,7 +223,10 @@ func ReadFile(filename, show string, log *slog.Logger) (*File, error) {
 	}
 	out := make([]Episode, 0, len(data.Episodes))
 	seen := map[string]bool{}
+	reroot := rerooter{dir: filepath.Dir(filename), show: show, nfc: norm.NFC.String(show), showID: data.ShowID}
 	for _, e := range data.Episodes {
+		e.Path = reroot.inShow(e.Path)
+		e.Path = reroot.path(e)
 		if !EpisodePath(show, e.Path) || seen[e.Path] {
 			if log != nil {
 				log.Warn("skipping invalid podcast episode path")
@@ -241,8 +262,215 @@ func ReadFile(filename, show string, log *slog.Logger) (*File, error) {
 		out = append(out, e)
 	}
 	data.Episodes = out
+	data.Rerooted, data.Unsure = reroot.looked, reroot.unsure
 	return &data, nil
 }
+
+// inShow is p with its folder spelled as show when the two differ only in
+// Unicode normal form (NFC or NFD) or in case: one name, as the Bridge reads
+// it, so every episode is read at the spelling on disk, a download or not. So
+// it is while that spelling opens dir itself (a disk that ignores the
+// difference: APFS, SMB; nothing else is looked at). A name in another normal
+// form is read so too while it is no folder holding the show (heldElsewhere:
+// gone, or another show's, on a disk that keeps the two apart); one that holds
+// the show too, or can't be told, is the original dir is a copy of, and the
+// rerooter lists none of the copy's episodes twice (nor, for this read, of a
+// name it could not look at for now: Unsure). But for dir itself, what
+// dir lists then depends on that other folder (looked). A name in another case
+// is read so only as dir itself: on a disk that keeps the two apart they are
+// two folders, never merged, and the rerooter reads it as any other name. Only
+// one leading segment that is a valid show folder name is replaced; any other
+// path is answered as given.
+func (r *rerooter) inShow(p string) string {
+	folder, file, ok := strings.Cut(p, "/")
+	if !ok || folder == r.show || !ShowPath(folder) {
+		return p
+	}
+	same, ok := r.same[folder]
+	if !ok {
+		if nfc := norm.NFC.String(folder); nfc == r.nfc {
+			same = r.sameName(folder, true)
+		} else {
+			same = strings.EqualFold(nfc, r.nfc) && r.sameName(folder, false)
+		}
+		if r.same == nil {
+			r.same = map[string]bool{}
+		}
+		r.same[folder] = same
+	}
+	if !same {
+		return p
+	}
+	return r.show + "/" + file
+}
+
+// sameName is inShow's look at folder, show in another normal form (form) or
+// case, beside dir: whether it is read as show. A look that fails for now
+// (metadata.TransientFault) is no answer: not read as show this time (Unsure).
+func (r *rerooter) sameName(folder string, form bool) bool {
+	other, err := lstat(filepath.Join(filepath.Dir(r.dir), folder))
+	if err == nil {
+		self, err := lstat(r.dir)
+		if err == nil && os.SameFile(self, other) {
+			return true
+		}
+		if r.fault(err) {
+			return false
+		}
+	}
+	if r.fault(err) || !form {
+		return false
+	}
+	r.looked = true
+	return !r.heldAt(folder)
+}
+
+// rerooter reads an episode path of the form "<other folder>/<file>" as
+// "<show>/<file>": a folder renamed by hand keeps its feed.json, which names
+// the old folder until the Bridge's next poll rewrites it. It does so only for
+// a downloaded episode (a valid fetch, not deleted) whose file dir, show's
+// folder, holds as a regular file of the fetch's size now (the index's own
+// rule for a download: one still being copied in, or changed by hand, is not
+// one), and only while the folder named does not hold the show too
+// (heldElsewhere: dir is a copy beside its original, whose episodes they
+// are). Only one leading segment that is a valid show
+// folder name is replaced, and the file name must make a valid episode path of
+// show, so nothing outside show's own folder is ever named; any other path is
+// answered as given, for EpisodePath to judge. An episode left out waits for
+// the Bridge to rewrite feed.json: listed in a folder the Bridge has not taken
+// in, one not downloaded there would be asked for there, a fetch the Bridge
+// can only fail. dir is listed once, on the first path that needs it. A look
+// that fails for now (metadata.TransientFault: dir's listing, the folder
+// named) reads no episode in show's folder that it might have, and makes the
+// read Unsure: its caller keeps what it knows rather than drop the episode.
+type rerooter struct {
+	dir, show, showID string
+	nfc               string           // show in NFC (inShow)
+	files             map[string]int64 // dir's regular files, each with its size
+	held              map[string]bool  // heldElsewhere, by folder named
+	same              map[string]bool  // inShow's answer, by folder named
+	looked            bool             // the disk was looked at (File.Rerooted)
+	unsure            bool             // a look failed for now (File.Unsure)
+}
+
+func (r *rerooter) path(e Episode) string {
+	folder, file, ok := strings.Cut(e.Path, "/")
+	if !ok || folder == r.show || !ShowPath(folder) || !EpisodePath(r.show, r.show+"/"+file) ||
+		!ValidFetch(e.Fetch) || e.Fetch.DeletedAt != "" {
+		return e.Path
+	}
+	r.looked = true
+	if r.files == nil {
+		r.files = map[string]int64{}
+		entries, err := os.ReadDir(r.dir)
+		r.fault(err)
+		for _, en := range entries {
+			if !en.Type().IsRegular() {
+				continue
+			}
+			info, err := en.Info()
+			if err == nil && info.Mode().IsRegular() {
+				r.files[en.Name()] = info.Size()
+			}
+			r.fault(err)
+		}
+	}
+	if size, ok := r.files[file]; !ok || size != e.Fetch.Bytes || r.heldAt(folder) {
+		return e.Path
+	}
+	return r.show + "/" + file
+}
+
+// fault reports whether err is a look's failure that a retry may get past
+// (metadata.TransientFault: EIO, ESTALE), and if so makes the read Unsure (and
+// Rerooted: its listing depended on the disk).
+func (r *rerooter) fault(err error) bool {
+	if !metadata.TransientFault(err) {
+		return false
+	}
+	r.looked, r.unsure = true, true
+	return true
+}
+
+// heldAt is heldElsewhere, asked once a folder.
+func (r *rerooter) heldAt(folder string) bool {
+	held, ok := r.held[folder]
+	if !ok {
+		held = r.heldElsewhere(folder)
+		if r.held == nil {
+			r.held = map[string]bool{}
+		}
+		r.held[folder] = held
+	}
+	return held
+}
+
+// heldElsewhere reports whether folder, beside dir in the library root, holds
+// the show too (its feed.json names showID: dir is a copy, and indexing its
+// episodes would list them twice), or that can't be told: while nothing
+// changes (a permission, an unusable feed.json), or for now (a look failing as
+// a share does that a retry may get past, metadata.TransientFault: EIO,
+// ESTALE, which makes the read Unsure, so its caller never takes the episodes
+// left out for gone). A folder that is gone, no directory or has no feed.json
+// holds nothing, nor does dir itself under another spelling (a rename only in
+// case or Unicode form, on a file system that ignores it; inShow reads most).
+func (r *rerooter) heldElsewhere(folder string) bool {
+	other := filepath.Join(filepath.Dir(r.dir), folder)
+	st, err := lstat(other)
+	switch {
+	case metadata.NotExist(err):
+		return false
+	case err != nil:
+		r.fault(err)
+		return true
+	case !st.IsDir():
+		return false
+	}
+	self, err := lstat(r.dir)
+	if r.fault(err) {
+		return true
+	}
+	if err == nil && os.SameFile(self, st) {
+		return false
+	}
+	raw, err := metadata.ReadRegularFile(filepath.Join(other, "feed.json"), MaxReadBytes, ErrInvalidFeed, ErrInvalidFeed)
+	if metadata.NotExist(err) {
+		return false
+	}
+	r.fault(err)
+	var f struct {
+		ShowID string `json:"show_id"`
+	}
+	return err != nil || json.Unmarshal(raw, &f) != nil || f.ShowID == r.showID
+}
+
+// lookFaults holds the paths FaultForTests named, each with its error.
+var lookFaults sync.Map
+
+// FaultForTests makes the rerooter's every stat of path fail with err (nil
+// clears it): for tests of a share's fault (EIO, ESTALE), which a test can't
+// make a disk give. Keyed by the path, so tests running side by side don't
+// touch each other's reads. It panics outside a test binary (as
+// metadata.ForceFFprobeForTests does).
+func FaultForTests(path string, err error) {
+	if !testing.Testing() {
+		panic("feed.FaultForTests called outside a test binary")
+	}
+	if err == nil {
+		lookFaults.Delete(path)
+		return
+	}
+	lookFaults.Store(path, err)
+}
+
+// lstat is the rerooter's os.Lstat, failing as FaultForTests asked.
+func lstat(name string) (os.FileInfo, error) {
+	if err, ok := lookFaults.Load(name); ok {
+		return nil, &os.PathError{Op: "lstat", Path: name, Err: err.(error)}
+	}
+	return os.Lstat(name)
+}
+
 func ValidHex(s string, n int) bool {
 	if len(s) != n {
 		return false
